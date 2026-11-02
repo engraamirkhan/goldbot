@@ -242,6 +242,8 @@ REASONS: dict[str, Reason] = {
     "instruments_db_unreadable": _r("The file holding this market's terms (state/instruments.db) can't be read",
                                     "See the Runbook: restore state/instruments.db from the backup or delete it so "
                                     "the engine rebuilds it; open trades keep closing.", "act"),
+    "account_notional_cap": _r("Enough open across all markets for the MT5 box's account-wide limit (6x equity)",
+                               f"{NOTHING}: a new entry is possible once exposure falls.", "wait"),
     "symbol_mismatch": _r("A trade was built for a different market than the one it would be sent to, so it was refused",
                           "Report it: the engine refused it before the broker; the Health tab names the market.",
                           "act"),
@@ -744,9 +746,10 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         state, headline = "partial", f"Can take new trades, except {', '.join(agent_label(str(a)) for a in held)}"
     else:
         state, headline = "open", "Can take new trades"
+    from goldbot.api.instruments_view import entry_symbols  # lazily: it reads the instrument registry
     return EntryStatus(state=state, headline=headline, blocks=found, notes=notes,
                        exits=EXITS_SILENT if silent and _open_at(sessions, now) is not False else EXITS_OK,
-                       as_of=_dt(reported), clears_at=_dt(clears))
+                       as_of=_dt(reported), clears_at=_dt(clears), symbols=entry_symbols(e))
 
 
 # ----------------------------------------------------------------------------- from the state directory

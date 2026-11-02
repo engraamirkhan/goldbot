@@ -58,7 +58,7 @@ log = logging.getLogger("goldbot.engine")
 # Engine attributes that belong to one instrument (read and written on the active book). Everything else on the
 # Engine is the account's. A test holds every name here set on a new book and none left on the Engine itself.
 BOOK_ATTRS: tuple[str, ...] = (
-    "cfg", "sessions", "agents", "models", "live_shares", "live_versions", "shadow", "shadow_models", "_tv",
+    "cfg", "sessions", "agents", "models", "live_shares", "live_versions", "shadow", "shadow_models",
     "probe", "exploration", "state_store",
     "ticks", "bars_1m", "history", "broker_m1", "last_bar_close", "_closed_through", "_history_through",
     "_ctx_cache", "_resamplers", "_bars_clean", "_last_tick", "_skew", "_unhealthy_at",
@@ -85,7 +85,8 @@ FRESH_SYMBOL_STATE: dict[str, Any] = {"last_tick_age_s": math.inf, "spread_point
                                       "clock_mismatch": False, "tier2_blackout": False, "reopen_window": False,
                                       "holiday_thin": False, "calendar_unavailable": False}
 UNVERIFIED = "instrument_unverified"   # a BookSpec.blocked reason: registry terms not confirmed (ops.services.engine)
-TERMS_READ_S = 60.0              # a book's instruments.db row is read again this often (a corruption is seen within it)
+TERMS_READ_S = 60.0
+NOTIONAL_HEADROOM = 0.95     # the account-wide ceiling keeps 5% under the bridge's (prices move between the two)              # a book's instruments.db row is read again this often (a corruption is seen within it)
 
 T = TypeVar("T")
 
@@ -473,7 +474,7 @@ def check(eng: Engine, intent: Intent, now: pd.Timestamp, **kw: Any) -> GateDeci
                   getattr(intent, "symbol", GOLD), sent)
         return GateDecision(allowed=False, reasons=["symbol_mismatch"])
     if book.primary:
-        return eng.gate.check(intent, eng.state, now, **kw)
+        return ceiling(eng, intent, eng.gate.check(intent, eng.state, now, **kw))
     spec = book.spec.instrument if book.spec is not None else None
     cap = getattr(spec, "max_spread_points", None) if spec is not None else eng.gate.limits.max_spread_points
     if cap is None:
@@ -481,9 +482,29 @@ def check(eng: Engine, intent: Intent, now: pd.Timestamp, **kw: Any) -> GateDeci
     limits = eng.gate.limits
     eng.gate.limits = limits.model_copy(update={"max_spread_points": float(cap)})
     try:
-        return eng.gate.check(intent, eng.state, now, **kw)
+        gd = eng.gate.check(intent, eng.state, now, **kw)
     finally:
         eng.gate.limits = limits
+    return ceiling(eng, intent, gd)
+
+
+def ceiling(eng: Engine, intent: Intent, gd: GateDecision) -> GateDecision:
+    """The bridge's own ceiling, account-wide (execution/bridge.py `MAX_NOTIONAL_EQUITY_MULT`, 6x equity over every
+    symbol): the gate's per-group caps add up to far more (FX alone is 9x), so on a multi-instrument account an
+    allowed entry that would take the account's notional (every group, account currency) past the bridge's multiple
+    is refused here (`account_notional_cap`), never sent for the bridge to refuse. Only ever refuses; gold alone:
+    unchanged. Unknown exposure is the gate's `exposure_unknown`."""
+    from goldbot.execution.bridge import MAX_NOTIONAL_EQUITY_MULT
+    from goldbot.risk.gate import GateDecision, profit_fx
+    st = eng.state
+    if not multi(eng) or not gd.allowed or st.group_notional is None:
+        return gd
+    fx = profit_fx(intent)
+    held = sum(st.group_notional.values())
+    add = gd.lots * intent.contract_oz * intent.price * (fx if fx is not None else math.inf)
+    if not math.isfinite(add) or held + add > MAX_NOTIONAL_EQUITY_MULT * st.equity * NOTIONAL_HEADROOM:
+        return GateDecision(allowed=False, reasons=["account_notional_cap"])
+    return gd
 
 
 def book(eng: Engine, intent: Intent, gd: GateDecision, res: Any = True) -> None:
@@ -577,6 +598,7 @@ def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
         eng.__dict__["_awaited"] = {k: t for k, t in awaited.items()
                                     if k not in seen and (wall - t).total_seconds() < AWAIT_REFRESH_S}
         st.unconfirmed_order = unconfirmed(eng)
+    eng.__dict__["_held"] = held           # the dashboard's lots and positions per group (`published`)
     st.open_positions = len(held)
     st.open_long = sum(1 for p in held if p.side > 0)
     st.open_short = sum(1 for p in held if p.side < 0)
@@ -644,14 +666,52 @@ def _usd_fx(eng: Engine, now: pd.Timestamp) -> float | None:
     return sizing.account_fx(currency, _profit_fx(eng, p, 1, tick.ask, contract, now))
 
 
+STATE_TEXT = {"can_enter": "can enter", "market_closed": "market closed", "stale": "no fresh prices",
+              "group_cap": "group exposure cap reached", "terms_missing": "terms not recorded",
+              "disabled": "terms not confirmed: no new trades"}
+
+
+def _symbol_state(eng: Engine, b: SymbolBook, s: dict[str, Any]) -> str:
+    """The dashboard's state of one book (goldbot/api/instruments_view.py InstrumentState), first that applies."""
+    why = problem(b)
+    if why == UNVERIFIED:
+        return "disabled"
+    if why is not None:
+        return "terms_missing"
+    if s.get("market_closed") or s.get("weekend"):
+        return "market_closed"
+    if s.get("stale_bars") or s.get("dq_error"):
+        return "stale"
+    group = b.spec.instrument.correlation_group if b.spec is not None and b.spec.instrument is not None else "gold"
+    cap = _group_cap(eng, group, b)
+    held = (eng.state.group_notional or {}).get(group, 0.0)
+    return "group_cap" if cap is not None and held >= cap else "can_enter"
+
+
+def _group_cap(eng: Engine, group: str, b: SymbolBook | None) -> float | None:
+    """The gate's notional cap of `group` (account currency), as `_sized_limits` computes it; None when unknown."""
+    st, L = eng.state, eng.gate.limits
+    spec = b.spec.instrument if b is not None and b.spec is not None else None
+    try:
+        lev = eng.gate.leverage(st, spec.leverage_class if spec is not None else "gold_index", group)
+        return float(L.max_combined_notional_frac * lev * (st.equity + st.other_equity))
+    except Exception:                         # noqa: BLE001 - display only
+        return None
+
+
 def published(eng: Engine) -> dict[str, Any]:
-    """Multi-book only: `books`, each instrument's own view (health, the dashboard), and the account's `group_notional`
-    (account currency; the supervisor's per-group combined caps, goldbot/risk/supervisor.py)."""
+    """Multi-book only, for health and the dashboard (lane L4's contract, goldbot/api/instruments_view.py): `books`
+    (each instrument's own view), `symbols` {symbol: state, text, clears_at, price, lot_value}, `groups` {group:
+    notional, cap, lots_by_symbol, open_n}, `heat_used` / `heat_limit` (the loss at every stop, its limit) and the
+    account's `group_notional` (account currency; the supervisor's per-group caps), null when unknown so the
+    supervisor halts (E4). Reporting only: no entry or exit reads it."""
     if not multi(eng):
         return {}
+    st = eng.state
     out: dict[str, Any] = {}
+    symbols: dict[str, Any] = {}
     for sym, b in eng.books.items():
-        d, s = b.__dict__, (eng.state.__dict__ if b is eng.__dict__["book"] else b.sym_state)
+        d, s = b.__dict__, (st.__dict__ if b is eng.__dict__["book"] else b.sym_state)
         last = d.get("_last_tick")
         out[sym] = {"instrument": d["cfg"].instrument, "store_symbol": d["cfg"].release_symbol,
                     "magic_base": d["cfg"].magic_base, "primary": b.primary, "price": d.get("_price"),
@@ -660,6 +720,23 @@ def published(eng: Engine) -> dict[str, Any]:
                     "foreign_positions": d.get("_foreign", []), "terms_problem": problem(b),
                     **{k: s.get(k) for k in ("spread_points", "last_tick_age_s", "market_closed", "stale_bars",
                                              "dq_error", "in_blackout", "weekend")}}
-    st = eng.state
-    return {"books": out, "exposure_unknown": st.exposure_unknown,
+        state = _symbol_state(eng, b, s)
+        fx = next((v for (_, side), v in sorted(b.fx.items(), key=lambda kv: kv[0][0]) if side == 1), None)
+        contract = d.get("_contract")
+        symbols[sym] = {"state": state, "text": STATE_TEXT[state], "clears_at": None, "price": d.get("_price"),
+                        "lot_value": fx * contract if fx is not None and contract is not None else None}
+    groups: dict[str, Any] = {}
+    by_symbol = {b.__dict__["cfg"].symbol: b for b in eng.books.values()}
+    for p in eng.__dict__.get("_held", []):
+        bk = by_symbol.get(p.symbol)
+        g = bk.spec.instrument.correlation_group if bk is not None and bk.spec is not None \
+            and bk.spec.instrument is not None else "gold"
+        row = groups.setdefault(g, {"notional": (st.group_notional or {}).get(g), "cap": _group_cap(eng, g, bk),
+                                    "lots_by_symbol": {}, "open_n": 0})
+        row["lots_by_symbol"][p.symbol] = round(row["lots_by_symbol"].get(p.symbol, 0.0) + p.lots, 6)
+        row["open_n"] += 1
+    heat = eng.gate.limits.heat
+    return {"books": out, "symbols": symbols, "groups": groups, "heat_used": st.open_risk,
+            "heat_limit": heat.max_open_risk * st.equity if heat.enabled else None,
+            "exposure_unknown": st.exposure_unknown,
             "group_notional": None if st.exposure_unknown or st.group_notional is None else dict(st.group_notional)}

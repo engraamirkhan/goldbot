@@ -14,6 +14,13 @@ trading enabled". The engine sizes from the terminal's own contract size (never 
 configuration error to fix before `enabled: true`, not something to trade through. It asks the terminal only
 `symbols_get` (when it has it: an older bridge does not) and `symbol_info`; it prints the swap and margin terms for the
 owner's record. It never places, modifies or closes anything.
+
+Per symbol (multi-instrument demo, lane L4; RUNBOOK "symbol_check per symbol"): every other instrument of the account's
+list (market_watch.account_symbols) is checked too: listed by the terminal, symbol_info readable, trading enabled, and
+its contract size, digits, minimum lot, lot step, profit currency and triple-swap day equal to config/instruments.yaml
+(a difference is a problem: the registry's terms are what the RiskGate sizes and rounds with). Its hours as the broker
+quotes them (MT5Broker.trading_sessions) against the instrument's session profile (calendar.profile_disagreement) are
+NOTES, never problems: the engine trades only where both are open.
 """
 from __future__ import annotations
 
@@ -21,7 +28,7 @@ import sys
 from typing import Any
 
 from goldbot.execution.broker import SymbolInfo
-from goldbot.instruments import InstrumentSpec, registry
+from goldbot.instruments import InstrumentSpec, load_instruments, registry
 from goldbot.ops import accounts
 
 TERM_TOLERANCE = 1e-9
@@ -84,27 +91,51 @@ def instrument_problems(spec: InstrumentSpec, name: str, info: SymbolInfo) -> li
     return out
 
 
-def check_instruments(acc: accounts.Account, broker: Any) -> dict[str, list[str]]:
+class SymbolReport(list):
+    """One instrument's check (lanes L1 and L4 merged): the list itself is its problems, which stop it being enabled
+    (`problems` names it too); `notes` are for the owner's record (hours that differ from its session profile)."""
+
+    def __init__(self, problems: list[str] | None = None) -> None:
+        super().__init__(problems or [])
+        self.notes: list[str] = []
+
+    @property
+    def problems(self) -> list[str]:
+        return self
+
+
+def check_instruments(acc: accounts.Account, broker: Any) -> dict[str, SymbolReport]:
     """Per instrument the account lists (accounts.yaml `instruments`, keys of config/instruments.yaml): why it cannot
-    be traded on `broker`'s terminal as declared; an empty list when it can. Reads `symbols_get` once and
-    `symbol_info` per symbol; never places, modifies or closes anything."""
+    be traded on `broker`'s terminal as declared (an empty report when it can), and how its broker hours differ from
+    its session profile (notes, never problems: the engine keeps the profile for entries). Reads `symbols_get` once,
+    then `symbol_info` and `trading_sessions` per symbol; never places, modifies or closes anything."""
     if not acc.instruments:
         return {}
-    reg = registry()
+    from goldbot.data.calendar import profile_disagreement, session_profile
+    reg = load_instruments()
     names = _listed(broker)
-    out: dict[str, list[str]] = {}
+    out: dict[str, SymbolReport] = {}
     for key in acc.instruments:
         spec = reg.get(key)
         name = spec.broker_symbols[acc.broker]
+        rep = out[key] = SymbolReport()
         if names is not None and name not in names:
-            out[key] = [f"{name} is not listed by the terminal of {acc.account_id} (wrong server or account type?)"]
+            rep.append(f"{name} is not listed by the terminal of {acc.account_id}")
             continue
         try:
             info = broker.symbol_info(name)
         except Exception as exc:              # noqa: BLE001 - symbol_info None raises in the adapter
-            out[key] = [f"{name}: symbol_info failed ({type(exc).__name__})"]
+            rep.append(f"{name}: symbol_info failed ({type(exc).__name__})")
             continue
-        out[key] = instrument_problems(spec, name, info)
+        rep += instrument_problems(spec, name, info)
+        sessions = getattr(broker, "trading_sessions", None)
+        if sessions is None:
+            continue
+        try:
+            rep.notes += profile_disagreement(session_profile(spec.session_profile, acc.server_tz), sessions(name))
+        except Exception as exc:              # noqa: BLE001 - reported, never a problem: the engine keeps the profile
+            rep.notes.append(f"{name}: sessions not read ({type(exc).__name__}: {exc}); the "
+                             f"{spec.session_profile} profile applies alone")
     return out
 
 
@@ -130,6 +161,7 @@ def main(argv: list[str]) -> int:
         print(f"no bridge configured for {acc.account_id} here (bridge-use) and not on the MT5 box")
         return 2
     terms: list[str] = []
+    per: dict[str, SymbolReport] = {}
     try:
         problems = check_symbol(acc, broker)
         info = broker.symbol_info(acc.symbol) if not problems else None
@@ -149,6 +181,9 @@ def main(argv: list[str]) -> int:
               f"{info.swap_short}, margin initial {info.margin_initial} maintenance {info.margin_maintenance}")
     for line in terms:
         print(line)
+    for key, rep in per.items():
+        for n in rep.notes:
+            print(f"  note ({key}): {n}")
     for p in problems:
         print(f"FAIL: {p}")
     print("ok" if not problems else f"{len(problems)} problem(s)")

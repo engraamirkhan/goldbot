@@ -69,7 +69,7 @@ def listing_item(d: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class FakeIdeasApi:
-    """The `TvNetwork` the collector talks to (GET only; a websocket is never opened)."""
+    """The `TvNetwork` the collector talks to (GET only)."""
 
     def __init__(self, ideas: list[dict[str, Any]]):
         self.ideas = list(ideas)
@@ -93,9 +93,6 @@ class FakeIdeasApi:
                     return json.dumps({k: v for k, v in d.items() if not k.startswith("_")})
             raise FakeHttpError("404 Not Found")
         raise FakeHttpError("404 Not Found")
-
-    def open_socket(self, url: str, headers: Mapping[str, str]) -> Any:  # pragma: no cover - never called
-        raise AssertionError("the ideas collector never opens a websocket")
 
     # ---- the listing
     def _listing(self, q: dict[str, str]) -> dict[str, Any]:

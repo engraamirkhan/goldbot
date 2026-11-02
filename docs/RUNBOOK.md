@@ -713,7 +713,7 @@ and the rest still arrives. It never contains account numbers or emails.
   failed` is harmless). Measured 2026-10-19 (b5b6c107): stable with fresh heartbeats after 34 s, engine down 3 s
   (was about 2 min 20 s with the fixed 90 s window).
   Health passes once every daemon has been active and un-restarted for 30 s, each service with a heartbeat
-  (supervisor, scheduler, telegram, news, api, webhook, tv-pull) has written a fresh one since its restart and
+  (supervisor, scheduler, telegram, news, api) has written a fresh one since its restart and
   `supervisor.json` is new (engines are judged by "active, not restarted", they write only on ticks). A restart in
   the first 90 s rolls back: before the report at once, after it by `goldbot-deploy-watch-*` (check
   `journalctl -u 'goldbot-deploy-watch-*'` and the last line of `deploys.jsonl` 90 s after a deploy). A manual
@@ -973,8 +973,7 @@ itself 5 seconds after a crash, starts automatically with Windows, and writes it
 | `goldbot-engine-icm` | `engine icm-demo` | Trading engine for the IC Markets demo account (terminal `C:\MT5\ICMarkets`). Proposes entries, manages open trades, runs the shadow book (IC Markets is the canonical-cost broker). |
 | `goldbot-engine-vantage` | `engine vantage-demo` | Trading engine for the Vantage demo account (terminal `C:\MT5\Vantage`). |
 | `goldbot-api` | `api` | The dashboard and its API on `http://localhost:8787` (only reachable from outside through the Cloudflare tunnel). |
-| `goldbot-webhook` | `webhook` | TradingView alert receiver on port 8443. |
-| `goldbot-scheduler` | `scheduler` | Runs the timed jobs below (costs, retraining, tournament, staff agents, calendar). |
+| `goldbot-scheduler` | `scheduler` | Runs the timed jobs below (costs, retraining, tournament, calendar). |
 | `goldbot-telegram` | `telegram` | The Telegram bot: sends proposals with Approve/Reject buttons, posts outcomes and staff-agent reports, answers `/status` and `/halt`. |
 | `goldbot-news` | `news` | Polls the RSS feeds in `config/settings.yaml` (`news.feeds`) every 300 s, scores gold-relevant headlines, feeds the news-shock blackout. |
 
@@ -1073,8 +1072,6 @@ Other secrets: each command asks `value for <key>` and hides what you type.
 | `telegram-bot-token` | `.\.venv\Scripts\python -m goldbot.ops.accounts set telegram-bot-token` | `goldbot-telegram` | The Telegram service stops at start with "no telegram-bot-token in the keyring". |
 | `anthropic-api-key` | `.\.venv\Scripts\python -m goldbot.ops.accounts set anthropic-api-key` | `goldbot-scheduler` (staff agents), `goldbot-news` (headline scoring) | Staff agents are off; headlines are kept but not scored, so there is no news-shock blackout (calendar blackouts still work). |
 | `github-token` | `.\.venv\Scripts\python -m goldbot.ops.accounts set github-token` | `goldbot-scheduler` (bar refresh from `data-v1`, shared trial registry on `research-v1`) | The trial registry stays local to the VPS. Use a GitHub token for `engraamirkhan/goldbot` that can read and write release assets (Contents: read and write). |
-| `tradingview-webhook-secret` | `.\.venv\Scripts\python -m goldbot.ops.accounts set tradingview-webhook-secret` | `goldbot-webhook` | The webhook service cannot start (it needs this value and has no window to ask in). Choose a long random string and use the same one in your TradingView alerts. |
-| `tradingview-sessionid`, `tradingview-sessionid-sign` | `python -m goldbot.ops.accounts set tradingview-sessionid` (and `... set tradingview-sessionid-sign`) | `tv-pull` (2.7c) | The direct pull does not run; health `tv_pull` WARNs once it is enabled. The browser cookies `sessionid` and `sessionid_sign`; they expire when TradingView signs you out. |
 
 `config/accounts.yaml` also names a key `tradingview-ideas-cookie`; no running code reads it yet, so skip it.
 
@@ -1169,201 +1166,11 @@ adds 360 px; `PYTHON`, `UI_SHOTS_PORT` (default 8795) and `PW_CHROMIUM_PATH` as 
    secret: type it on the VPS only.
 3. The dashboard enforces its own login (email, password, authenticator code) and roles on the public URL.
 
-The tunnel only carries the dashboard. TradingView alerts go to the webhook service, which listens on 127.0.0.1:8443
-only; see "TradingView alerts: reading your indicators" below.
-
-### 2.7b TradingView alerts: reading your indicators
-
-The webhook records every value your indicators plot, one alert per indicator per timeframe, so research and features can
-use them (opt-in, filter features only until proven). Each bar becomes rows in the `tv_indicators` dataset; a bar whose
-alert never arrives is simply missing (NaN in features). The alert is saved to `state/tv.db` before goldbot answers, and a
-failed save answers 503 so TradingView retries.
-
-1. On the Oracle brain, section 2.7d does this step (secret generated on your Mac and piped, never shown; Tailscale
-   Funnel on `/tv`). Elsewhere: store the shared secret (hidden prompt): `python -m goldbot.ops.accounts set
-   tradingview-webhook-secret`; start `goldbot-webhook`. It listens on 127.0.0.1 only; put your HTTPS reverse proxy (for
-   example Tailscale Funnel, path `/tv`) in front. Keep the public address private. If the proxy cannot pass
-   TradingView's address in `X-Forwarded-For`, set `GOLDBOT_TV_ENFORCE_IP=0` for the service: the secret then
-   authenticates alone.
-2. On the chart (XAUUSD, 15m and 1h first) create one alert per indicator: **Condition** = the indicator (or "Any alert()
-   function call" if that is all it offers), **Trigger** = **Once per bar close** (never "once per bar", which sends
-   half-formed bars), longest expiry, **Webhook URL** = your address, and this **Message** (every value is quoted because
-   TradingView writes `NaN` for an empty plot, which is not valid JSON; use `plot_0` to `plot_19` as far as the indicator
-   has plots, the Data Window lists them):
-
-```json
-{"indicator":"smc","version":"1.0","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
-```
-
-   Change `indicator` and `version` per indicator (they name the data: `smc@1.0`); type the secret into the alert
-   yourself, never into chat or a file. Alerts need a TradingView plan with webhooks and two-factor sign-in on.
-3. Check it: the dashboard endpoint `/api/tradingview` lists each indicator and timeframe with its last bar, alerts in the
-   last 24 h, plots seen and gaps (a market-closed stretch also counts as missing bars).
-
-4. History from a chart export (optional, lets research use the indicator before weeks of alerts have collected). On the
-   XAUUSD chart at the timeframe you want (15, 60, 240 or 1D), with the indicator visible and the chart scrolled back to
-   load all its bars, open the **chart's top-bar menu next to the layout name** (the ... or cloud menu) and choose
-   **Export chart data...** (time format ISO, all indicator plots ticked). Copy the file to the brain with one line from
-   your Mac (placeholders: your file, your brain's SSH name), then import it on the brain with one line:
-
-   ```
-   scp ~/Downloads/<file>.csv <brain-ssh-name>:~/goldbot/data/
-   ~/goldbot/.venv/bin/python -m goldbot.ops.run tv-import ~/goldbot/data/<file>.csv --indicator smc --version 1.0 --tf 15
-   ```
-
-   `--indicator` and `--version` must be spelled exactly as in the alert message; `--tf` is 15, 60, 240 or 1D. The
-   import refuses a file with no `time` column, times out of order, spacing that is not whole bars of that timeframe, a
-   bar in the future or a cell that is not a number, and writes nothing then. Repeating it is harmless. Imported bars are
-   marked `unvalidated (repaint risk)`: a chart export can differ from what the indicator showed live. After about
-   three weeks of live alerts (at least 200 bars both ways), export again, import again, and run
-   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-repaint-check --indicator smc --version 1.0 --tf 15`; it
-   prints the match per plot and marks the history validated only at 99 % or more. `/api/tradingview` shows each
-   indicator's imported bars and its repaint status.
-
-Limits: an invite-only script exposes only the plots and `alert()` calls its author allows. A series that is drawn
-(lines, boxes, labels) or computed but not plotted cannot be read, and a plot set to `display.none` may be missing from
-the alert; check each indicator once. Data stays in `data/` and `state/` (private), never in a public release.
-
-### 2.7c TradingView direct pull (your indicators without alerts; ADR 0030)
-
-goldbot reads your saved TradingView layouts, finds every indicator on them with the inputs you saved, and pulls their
-plots and the bars into `tv_indicators` from TradingView's own chart connection. It only reads: it never creates or
-changes an alert, a layout or anything else on your account. This is not an official TradingView interface; you
-accepted the terms risk (possible account suspension, loss of invite-only access) on 2026-10-18. Your one step:
-
-1. The two browser cookies `sessionid` and `sessionid_sign` go into the secret store as `tradingview-sessionid` and
-   `tradingview-sessionid-sign`. On the Oracle brain, section 2.7d step T1 copies them from your Mac's Keychain without
-   the values appearing anywhere. Elsewhere: in a browser signed in to TradingView, open the developer tools,
-   Application (Chrome) or Storage (Safari/Firefox) > Cookies > `https://www.tradingview.com`, copy each value and store
-   it at the hidden prompt of `python -m goldbot.ops.accounts set tradingview-sessionid` (and `... set
-   tradingview-sessionid-sign`).
-2. Claude switches `tv_pull.enabled: true` in `config/settings.local.yaml` and installs the unit (not part of the
-   bootstrap, not installed by `goldbot-deploy`): section 2.7d steps T2 to T5. `tv-pull follow` runs a pass after every
-   15m bar close; `tv-pull sync` runs one pass; `tv-pull status` shows the last one (bars received per timeframe, new
-   bars, repaints, studies) and reaches no network.
-
-One puller per TradingView account, and that is the brain. Two passes on one host never overlap (`state/tv_pull.lock`:
-the second is skipped with "another tv-pull pass is running"), but a pull on another machine cannot be seen: never run
-`tv-pull follow` on the Mac, and run the Mac probe (`scripts/tv_local`) only by hand, once, outside :01-:05, :16-:20,
-:31-:35 and :46-:50 UTC (the brain's pass minutes). Its requests are not counted in the brain's daily budget
-(`tv_pull.max_requests_per_day`).
-
-When TradingView signs the session out, health shows `tv_pull` WARN and you get one Telegram notice: sign in again in
-the browser, then repeat step 1 (2.7d T1 on the brain; a new cookie is tried at once). Alerts (2.7b) keep working
-whatever the pull does.
-
-### 2.7d TradingView on the Oracle brain: rollout, checks, rollback (Claude runs it)
-
-Order matters: each unit is enabled only after what it needs is in place, because an enabled unit that crash-loops
-(no secret, `tv_pull.enabled: false`) makes every later `goldbot-deploy` fail its 90 s health window and roll back.
-Both units are restarted by every deploy from then on, but their unit files are copies: when a release changes
-`goldbot-tv-pull.service` or `goldbot-webhook.service`, repeat its `install` line (T4 / W3). Root installs a unit only from its own fresh
-clone of the deployed commit `<SHA>` (public: the commit `goldbot-deploy` last recorded as deployed in
-`/var/lib/goldbot-deploy/deploys.jsonl`), never from `/opt/goldbot`, which the service user can write
-(docs/AGENT_STANDARDS.md "Root-run tooling"), and only a full 40-character commit on `main` (forks share GitHub's object store, so a commit id alone does not prove it is ours). Every command that touches
-goldbot's state runs as the `goldbot` user (the `goldbot` wrapper does that): a root-run pull would leave root-owned
-`.lock` files and partitions under `/opt/goldbot/data` that the services then cannot write.
-
-"Mac:" lines run in a goldbot checkout on your Mac at the deployed release (`<checkout>`); "brain:" lines after
-`ssh -F ~/.ssh/goldbot.conf goldbot-brain`. Your Mac may ask whether `python` may use the Keychain item: click Allow, never
-Always Allow (that would let any later script run with that `python` read it without asking).
-That and the two Tailscale sign-in/approval clicks (W4) are your only steps.
-
-**Precondition.** The release that has `accounts set --stdin` / `export` and `state/tv_pull.lock` is deployed and
-healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys.jsonl`).
-
-**TradingView pull**
-
-* T1, Mac (secrets by pipe, never on screen, in argv, history or a log; `export` writes only into a pipe (never a terminal or a file), and an
-  empty pipe stores nothing):
-  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-sessionid | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-sessionid --stdin`
-  then the same line with `tradingview-sessionid-sign` in both places. Each prints `stored ... in
-  /opt/goldbot/state/.secrets.json (plaintext, owner-only file)`; the brain has no desktop keyring (2.3).
-* T2, brain (switch it on; only appends when the file has no `tv_pull:` key yet, otherwise edit that block by hand):
-  `sudo -u goldbot sh -c 'f=/opt/goldbot/config/settings.local.yaml; grep -q "^tv_pull:" "$f" || printf "tv_pull:\n  enabled: true\n" >> "$f"'`
-  then check the settings still load (a typo stops every service at its next restart):
-  `goldbot run tv-pull status` must print `tv_auth=...`, not a settings error.
-* T3, brain (one pass by hand first, so a fault shows here and not as a crash loop):
-  `goldbot run tv-pull sync` must end with `tv-pull: ok, ...` and per timeframe `N bars received`. A first pass
-  backfills (up to 5 history pages per timeframe at one request per 5 s: a few minutes). `FAILED: ... cookie` means T1
-  stored a stale cookie: sign in again in the browser and repeat T1.
-* T4, brain (install and start the follow service):
-  `sudo env S=<SHA> U=goldbot-tv-pull bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-pull`
-* T5, brain, checks (right away, then after the next 15m close + 1 min):
-  `systemctl is-active goldbot-tv-pull` = active; `systemctl show -p NRestarts --value goldbot-tv-pull` = 0;
-  `goldbot run tv-pull status` shows a pass newer than T3 with `new` live bars; `goldbot run health` shows
-  `heartbeat:tv-pull` ok and `tv_pull` ok; `journalctl -u goldbot-tv-pull -n 20` has `tv pull ok` lines and no
-  traceback.
-
-**Webhook (alerts, 2.7b)**
-
-* W1, Mac, once (a new 256-bit secret straight into your Mac Keychain; the Keychain is its system of record, so a
-  rebuilt brain gets it back with W2). First check none exists, since a new one breaks every alert already set up:
-  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | wc -c` prints 0
-  with `refused: ... not stored here` when there is none (a length, never the value). Then:
-  `uv run --directory <checkout> python -c "import secrets; print(secrets.token_urlsafe(32))" | uv run --directory <checkout> python -m goldbot.ops.accounts set tradingview-webhook-secret --stdin`
-* W2, Mac (copy it to the brain):
-  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-webhook-secret --stdin`
-* W3, brain (the unit needs the secret before it starts: without it the service restarts every 5 s):
-  `sudo env S=<SHA> U=goldbot-webhook bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-webhook`
-  then `curl -s http://127.0.0.1:8443/health` prints `{"ok":true,"stored":...}`.
-* W4, brain (the public HTTPS address; Tailscale may already be installed: `tailscale status`).
-  If not: the three apt lines of docs/deploy/first-deploy.md section 3 A step 2, whose `sudo tailscale up` prints a sign-in link:
-  you open it and sign in (your click). Then:
-  `sudo tailscale funnel --bg --set-path /tv http://127.0.0.1:8443/tv`
-  The first time it prints an approval link to enable Funnel on your tailnet: you open it and approve (your click).
-  `tailscale funnel status` then shows `https://<brain>.<tailnet>.ts.net/tv`. That address stays private: in your
-  Terminal and TradingView only, never in GitHub, chat or a file in the repository.
-* W5, checks from outside (owner-verified done): from the Mac,
-  `curl -s -o /dev/null -w '%{http_code}\n' -X POST -d '{}' https://<brain>.<tailnet>.ts.net/tv` prints `403`
-  (Funnel reaches the app; your Mac is not a TradingView address). Then create the alerts (2.7b step 2): the Webhook URL
-  is that address; for the message's `secret`, put the secret on the clipboard with
-  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | pbcopy; (sleep 45; pbcopy </dev/null) &`
-  and paste it in place of `<the stored secret>` within 45 s (the clipboard then empties itself; run the line again
-  for the next alert). A clipboard-history app (Raycast, Alfred, Maccy, Paste) keeps every copy: pause it first, or
-  delete that entry afterwards; Universal Clipboard may also have passed it to your other Apple devices for a few
-  minutes. `export` writes only into a pipe (a terminal or `> file` is refused), but it cannot tell a pipe into a
-  printing command (`| cat`) from one into ssh or pbcopy: pipe it into nothing else. After the alert's first bar close:
-  `journalctl -u goldbot-webhook -n 20` shows `POST /tv ... 200`, and `goldbot run health` shows `heartbeat:webhook` ok.
-  All `403` with "ip not allowed" means Funnel did not pass TradingView's address in `X-Forwarded-For` (not verified
-  yet on this host): `sudo systemctl edit goldbot-webhook`, add `[Service]` and `Environment=GOLDBOT_TV_ENFORCE_IP=0`,
-  `sudo systemctl restart goldbot-webhook`; the 256-bit secret then authenticates alone (2.7b).
-
-**What is watched (and the promise)**
-
-| Failure | Detection | Who hears | Recovery |
-|---|---|---|---|
-| `goldbot-tv-pull` or `goldbot-webhook` dead or hung | `heartbeat:tv-pull` / `heartbeat:webhook` silent > 5 min: WARN | Telegram at the next health poll (NOTIFY_ON_WARN) | `sudo systemctl restart <unit>`; `journalctl -u <unit> -n 50` |
-| Cookie expired or signed out | `tv_pull` WARN (`expired`) | one Telegram notice per expiry | sign in again in the browser, T1 |
-| Pull runs but never succeeds | `tv_pull` WARN after 36 h without a successful pass | Telegram digest | `goldbot run tv-pull status`: the reason |
-| TradingView bars disagree with the reference feed | `tv_reconcile` (daily 23:15): bar flagged `dq`, plots NaN, `dq_events` row | `dq_events` (source tradingview), no alert | none needed (the bar is not used) |
-| Two pulls on the brain at once | `state/tv_pull.lock`: the second pass is skipped, no request | the `sync` output | wait for the running pass |
-
-These are WARNs, never FAILs: TradingView is an optional second feed and must never block trading or exits. Nothing in
-the engine reads it. Both state files are covered by the nightly backup (`state/tv.db`, `state/tv_auth.db`); the secret
-store is not (by design): after a restore, repeat T1 and W2 from the Mac.
-
-Writers into `tv_indicators` (webhook sync, the pull, `tv_reconcile`) are safe together: each append holds the
-partition's exclusive flock for its whole read-merge-write and readers take a shared one (goldbot/data/store.py);
-`origin` is in the key, so an alert row and a pulled row of the same bar never replace each other; `tv_reconcile`
-rewrites only pulled rows, on their own key; the webhook inbox and the pull log share `state/tv.db` (SQLite WAL,
-busy_timeout 5 s).
-
-Budgets to measure after the first day and record in the deploy note (targets, not yet measured):
-`systemctl show -p MemoryCurrent --value goldbot-tv-pull goldbot-webhook` (target under 400 MB and 250 MB),
-`du -sh /opt/goldbot/data/tv_indicators` per day (expected well under 50 MB/day), and
-`goldbot run tv-pull status` requests per pass (the default budget is 3000 a day).
-
-**Rollback** (each line independent; data already pulled stays, marked `pull_live`/`pull_history`, and is harmless):
-
-* Pull: `sudo systemctl disable --now goldbot-tv-pull && sudo -u goldbot rm -f /opt/goldbot/state/heartbeat_tv-pull.json`,
-  then set `tv_pull.enabled: false` in `settings.local.yaml`. To revoke the cookie itself, sign out of TradingView in the
-  browser (that ends the session for every copy).
-* Webhook: `sudo tailscale funnel --set-path /tv off`, then `sudo systemctl disable --now goldbot-webhook && sudo -u goldbot rm -f /opt/goldbot/state/heartbeat_webhook.json`;
-  delete or pause the alerts in TradingView.
-* Before any manual `goldbot-deploy` to a commit older than the release that brought `tv-pull`, disable
-  `goldbot-tv-pull` first (that code has no `tv-pull` command: the unit would crash-loop and fail the deploy's health
-  window).
+The tunnel only carries the dashboard. The TradingView chart-data path (webhook alerts, direct pull, CSV import,
+TradingView features and specialists) was retired on 2026-11-02 (ADR 0066): the engine trades on the broker's own
+real-time prices. Its setup steps, formerly sections 2.7b, 2.7c and 2.7d, are kept in the repository history. The
+data it collected stays on the brain (`state/tv.db`, `data/tv_indicators`) and in the backups. The author-ideas feed
+stays (2.7f).
 
 ### 2.7e The three indicators on the MT5 chart (requires owner approval; not installed)
 
@@ -1397,8 +1204,11 @@ in `state/tv_ideas.db` on the brain and in `raw/tv_ideas/` on the Mac, never in 
 On the brain (no secret needed; the release with `tv-ideas` deployed and healthy):
 
 1. One poll by hand first: `goldbot run tv-ideas poll` must print `tv-ideas poll: ok`.
-2. Install and start the unit from root's own clone of the deployed commit `<SHA>`, as in 2.7d T4, with
-   `U=goldbot-tv-ideas`, then `sudo systemctl enable --now goldbot-tv-ideas`. Never install it from `/opt/goldbot`.
+2. Install and start the unit from root's own clone of the deployed commit `<SHA>` (the full 40-character commit
+   `goldbot-deploy` last recorded in `/var/lib/goldbot-deploy/deploys.jsonl`; docs/AGENT_STANDARDS.md "Root-run
+   tooling"). Never install it from `/opt/goldbot`, which the service user can write:
+   `sudo env S=<SHA> U=goldbot-tv-ideas bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-ideas`
+   Repeat this line when a release changes `goldbot-tv-ideas.service` (the installed unit is a copy).
 3. Check: `systemctl is-active goldbot-tv-ideas` = active; `journalctl -u goldbot-tv-ideas -n 5` shows
    `tv-ideas poll: ok`; `goldbot run health` shows `tv_ideas` ok.
 4. Rollback: `sudo systemctl disable --now goldbot-tv-ideas`. The file stays, and polling resumes where it stopped.
@@ -1443,10 +1253,9 @@ nssm start goldbot-news
 nssm start goldbot-scheduler
 nssm start goldbot-engine-icm
 nssm start goldbot-engine-vantage
-nssm start goldbot-webhook
 ```
 
-Skip `goldbot-webhook` until you have stored `tradingview-webhook-secret`. `nssm status <service>` shows whether
+`nssm status <service>` shows whether
 a service is running; if one keeps restarting, read its `.err` file in the logs folder.
 
 ### 2.10 Dashboard first run: create the owner account
@@ -2639,7 +2448,7 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 
   ```powershell
   cd C:\goldbot
-  foreach ($s in "goldbot-scheduler","goldbot-webhook","goldbot-news","goldbot-api","goldbot-telegram","goldbot-supervisor","goldbot-engine-icm","goldbot-engine-vantage") { nssm stop $s }
+  foreach ($s in "goldbot-scheduler","goldbot-news","goldbot-api","goldbot-telegram","goldbot-supervisor","goldbot-engine-icm","goldbot-engine-vantage") { nssm stop $s }
   .\.venv\Scripts\python.exe -c "import sqlite3; c = sqlite3.connect(r'state\aux.db'); v = c.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]; assert v == 5, f'schema {v}: do not run this'; c.execute('DELETE FROM schema_version WHERE version = 5'); c.execute('PRAGMA user_version = 4'); c.commit()"
   ```
 
@@ -2654,25 +2463,43 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
 
-### MT5 terminal chart on the dashboard (`GET /api/chart/mt5`)
+### MT5 terminal chart: retired (owner 2026-11-02)
 
-The terminal's own IC Markets chart, screenshotted, not rebuilt. On the MT5 box `goldbot-chart-capture.timer` (user `mt5`, every 60 s)
-runs `import -window root` on display `:99` into `/home/mt5/chart/mt5.png` (atomic; it never touches the terminal or the bridge). The brain's
-`goldbot-chart-fetch.timer` (user `goldbot`, every 60 s) pulls it with its own SSH key, which may run one command only
-(`goldbot-chart-serve.sh`, a `tar` of that file; no shell, no forwarding), into `/opt/goldbot/state/chart/mt5.png`. The API returns the PNG
-with an `X-Captured-At` header to any signed-in role, and 404 when the file is missing or older than 5 minutes (dashboard: show a placeholder).
-The brain crops the capture to the chart pane (`goldbot/api/mt5_crop.py`: the largest dark plot rectangle plus its price scale and time axis; the XAUUSD pane when its title is readable, which needs the optional `tesseract` binary on the brain, else the largest pane), writes `state/chart/mt5_chart.png` and serves that, with `X-Chart-Cropped`, `X-Chart-Symbol`, `X-Chart-Timeframe` and `X-Chart-Gold` (`true`/`false`/`unknown`) headers; no pane found serves the full image with `X-Chart-Cropped: false`. The dashboard notes "MT5 is showing <SYM>" only when the symbol is known and not gold.
-It shows whatever chart window the terminal has open (one timeframe, as configured; switching timeframes from the dashboard is out of scope).
+The dashboard no longer shows the MT5 chart picture or key levels (owner: "key levels and all indicators are for the
+system to learn from and know about and improve on, not for charts to display"): `GET /api/chart/mt5`,
+`goldbot/api/mt5_crop.py` and `GET /api/key-levels` are gone; the engine still computes its key zones for the
+strategies. Where the capture was installed, turn it off (it also frees memory on the 1 GB MT5 box):
+`sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `sudo systemctl disable --now goldbot-chart-capture.timer`
+(MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys`
+(`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
+The last captures left in the brain's state are never read again. The scripts in `goldbot/ops/linux` stay until the SRE
+lane retires them.
 
-Install (standalone: needs no `/opt/goldbot` update on the MT5 box, and touches neither the terminal nor the bridge; `<SHA>` is a merged main commit). Root installs the scripts and units from its own hash-checked clone, never from `/opt/goldbot`. On the MT5 box:
-`sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -d -m 755 -o root -g root /usr/local/libexec/goldbot; for f in goldbot-chart-capture.sh goldbot-chart-serve.sh; do install -m 755 -o root -g root $d/r/goldbot/ops/linux/$f /usr/local/libexec/goldbot/; done; for u in goldbot-chart-capture.service goldbot-chart-capture.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload'`
-On the brain (key, then the fetch units; the fetch script stays under `/opt/goldbot` there):
-`sudo -u goldbot ssh-keygen -t ed25519 -N '' -C goldbot-chart -f /var/lib/goldbot/.ssh/chart_ed25519 && sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; for u in goldbot-chart-fetch.service goldbot-chart-fetch.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload' && sudo -u goldbot cat /var/lib/goldbot/.ssh/chart_ed25519.pub`
-Then on the MT5 box, with that public key line in place of `<pubkey>`: `echo 'restrict,command="/usr/local/libexec/goldbot/goldbot-chart-serve.sh" <pubkey>' | sudo -u mt5 tee -a /home/mt5/.ssh/authorized_keys` and `sudo systemctl enable --now goldbot-chart-capture.timer`.
-Last, on the brain: `sudo systemctl enable --now goldbot-chart-fetch.timer`. The brain's `goldbot-chart-fetch.sh` is in `/opt/goldbot` there, so the brain must run a version that has it.
-Check: `sudo -u goldbot /opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh && ls -l /opt/goldbot/state/chart/mt5.png`.
-Remove: `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys` (`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
-Failure: a stale or missing picture is a 404 only; nothing trading depends on it. Look at `journalctl -u goldbot-chart-fetch` (brain) and `-u goldbot-chart-capture` (MT5 box).
+### Multi-instrument MT5 boxes (bridge protocol v10)
+
+An account that names `instruments` (config/accounts.yaml, demo only; a live or observe-only account always serves its own
+gold alone) has its bridge select that list into Market Watch at start (`goldbot/execution/market_watch.py`). A symbol the
+terminal lacks is logged (`not in Market Watch ... not served`) and skipped: gold keeps trading, that symbol's entries are
+refused by the engine, its exits still close. Before the instruments go on a box:
+
+1. Market Watch: after the bridge restarts, the terminal's Market Watch lists the account's gold and every instrument of its
+   list (icm-probe: 19 + XAUUSD; vantage-demo: 7 + XAUUSD+). `journalctl -u goldbot-bridge@<account> | grep "not served"` is empty.
+2. Max bars in chart: MT5 Tools > Options > Charts > "Max bars in chart" = 100000 on every multi-instrument terminal
+   (icm-probe: 952 MB RAM; the default "Unlimited" lets 20 symbols' histories fill it).
+3. Swap on icm-probe (deploy check, SRE): `swapon --show` lists a 1-2 GB swapfile and `free -m` shows it; if not,
+   `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` and add
+   `/swapfile none swap sw 0 0` to `/etc/fstab`. Then watch the terminal's peak RSS during one cold history pull
+   (`ps -o rss= -C terminal64.exe` every few seconds); it must stay well under the box's memory.
+4. Symbol check per symbol: `python -m goldbot.ops.symbol_check <account>` prints the account's gold, then one line per
+   instrument (`ok` or its problems: not listed, symbol_info failed, trading disabled, contract size / digits / minimum lot /
+   lot step / profit currency / triple-swap day differing from config/instruments.yaml) and `note:` lines where the hours the
+   broker quoted the symbol over the last 14 days differ from its session profile (reported only: the engine trades where
+   both are open). Every problem is fixed (or the instrument stays `enabled: false`) before the account trades it.
+5. Health: `symbols:<account>` appears once the engine reports its symbols; WARN names a symbol whose terms are not loaded
+   or whose feed is stale (its entries refused, exits still close).
+
+Protocol: v10 brains and bridges interoperate with v9 either way (`ticks_many` falls back to one `last_tick` per symbol on a
+v9 bridge); the bridge's notional ceiling counts every open symbol of the account (6x equity, account-wide).
 
 ### Program ledger sync (Mac -> brain)
 

@@ -56,6 +56,7 @@ from goldbot.engine import (
     unconfirmed,
     weekend_lane,
 )
+from goldbot.engine.agent_candidates import AgentCandidates
 from goldbot.engine.closed_record import EXCURSION_FREEZE_TOLERANCE_S  # noqa: F401  (re-exported)
 from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
@@ -71,7 +72,6 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     orders_file,
     risk_file,
 )
-from goldbot.engine.tv_context import TvShadowWatch
 from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES: re-exported)
     DEFINITE_REJECT_RETCODES,
     MT5_COMMENT_MAX,
@@ -286,7 +286,6 @@ class EngineConfig(Record):
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
     commission_window_days: int = 90
-    tv_max_lag_s: int = Field(60, ge=0)      # settings tv.max_lag_s: a TradingView value later than this is NaN (tv_context)
     # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
@@ -326,6 +325,7 @@ class Engine:
         # deliberately stricter than the RiskGate's -15/+30 entry block (blackout_before_min/after_min); changing the
         # allocator rule is the owner's decision (allocator/promotion.py), so the gate window never narrows it
         self.allocator = allocator or RuleAllocator()
+        self._cands = AgentCandidates()      # every agent's candidates; replica agents from the host's shadow source
         self.gate = RiskGate(limits)
         # the dashboard's key zones (engine/key_zones.py): display only, rebuilt once per 15m close; gold's book only
         self.key_zones: dict[str, Any] | None = None
@@ -449,7 +449,6 @@ class Engine:
     def _init_book(self) -> None:
         """The active book's own state (engine/books.py BOOK_ATTRS): run once for gold from __init__ and once for each
         other instrument (`books.open_books`)."""
-        self._tv = TvShadowWatch()           # TradingView agents: shadow entries between the close and close + max_lag
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
         self.history = history.History()     # cut-over, background fill and writer, history_gap
@@ -662,7 +661,6 @@ class Engine:
             self._kill_switch(everything=False)   # until its book is flat (the whole account while _kill_everything)
         self._scale_out(t)
         self._track_excursions(t)          # reporting only, after every exit; never raises
-        self._guard(lambda: self._tv.poll(self, self._now(t), t))      # TradingView shadow re-checks, after the exits
         if not repeat:
             self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
         self._refresh_broker_terms(t.ts_utc)
@@ -1127,8 +1125,7 @@ class Engine:
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
-        # a requires_tv agent proposes nothing here; its shadow entry is re-checked until close + max_lag (tv_context)
-        cands_by_agent = self._tv.candidates(self, tf, fr, agents, self._now(last_tick), last_tick, float(a.iloc[last]), hurdle_atr)
+        cands_by_agent = self._cands.candidates(fr, agents)     # a requires_tv agent proposes nothing (agent_candidates)
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         cost_probe.yield_to_live(self, agents, cands_by_agent, last, close_ts)   # ADR 0037: real trades first
@@ -1381,7 +1378,8 @@ class Engine:
         if res.ok and res.position_id is not None:
             fill_px = float(res.price if res.price is not None else requested)
             opened = self.broker.last_tick(self.cfg.symbol).ts_utc
-            tr = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
+            tr = OpenTrade(position_id=res.position_id, symbol=self.cfg.instrument, agent_id=agent.agent_id, side=prop.side,
+                           lots=res.filled_lots,
                            entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp,
                            client_order_id=prop.proposal_id, open_price=fill_px, initial_sl=oi.sl,
                            initial_lots=res.filled_lots, opened_utc=opened,
@@ -1853,7 +1851,7 @@ class Engine:
         late = rec is not None and rec.status in unconfirmed.NEVER_CONFIRMED
         agent, agent_id = cost_probe.adoption(self, p, rec)     # ADR 0037: a probe is never adopted as a live trade
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
-        tr = OpenTrade(position_id=p.position_id, agent_id=agent_id, side=p.side, lots=p.lots,
+        tr = OpenTrade(position_id=p.position_id, symbol=self.cfg.instrument, agent_id=agent_id, side=p.side, lots=p.lots,
                        entry_bar_ts=p.open_time_utc, max_bars=max_bars,
                        sl=unconfirmed.tighter(p.side, rec.sl, p.sl) if late and rec else p.sl,
                        tp=rec.tp if late and rec else p.tp,

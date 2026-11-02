@@ -428,13 +428,15 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         if why:
             start_refused(acc, f"refusing to trade {account_id} through the bridge: {why}", info)
     elif sys.platform == "win32":
+        from goldbot.execution.market_watch import account_symbols
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
         broker = MT5Broker(terminal_path=acc.terminal_path, login=acc.login, password=accounts.account_password(acc),
                            server=acc.server, server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id,
                            # the terminal can be switched to another login after this start check: every entry is
                            # checked again before it is sent (closes never are), as the bridge does
-                           verify=lambda info: accounts.verify_terminal_account(acc, info))
+                           verify=lambda info: accounts.verify_terminal_account(acc, info),
+                           symbols=account_symbols(acc))   # lane L4: every book's symbol selected in Market Watch
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:
@@ -518,7 +520,6 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
                               broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
-                              tv_max_lag_s=settings.tv.max_lag_s,
                               swap_prior=settings_swap(settings), instruments=instruments), broker, agents,
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
@@ -682,8 +683,8 @@ def attach_replica(eng: Any, settings: Settings) -> None:
         # the swing structure and seeded averages forget their start within a few 50-bar swings (weeks on 4h)
         floor = pd.Timestamp(f"{pd.Timestamp.now('UTC').year - REPLICA_HISTORY_YEARS}-01-01", tz="UTC")
         start = max(pd.Timestamp(settings.tv.replica_series_start, tz="UTC"), floor)
-        eng._tv.replica = ReplicaShadow(Database.open(Path(eng.cfg.state_dir), "aux"), symbol=eng.cfg.symbol.lower(),
-                                        history=StoreHistory(eng.store, eng.cfg.symbol, start), series_start=start)
+        eng._cands.replica = ReplicaShadow(Database.open(Path(eng.cfg.state_dir), "aux"), symbol=eng.cfg.symbol.lower(),
+                                           history=StoreHistory(eng.store, eng.cfg.symbol, start), series_start=start)
     except Exception:
         log.exception("replica state not attached: replica agents propose nothing")
 

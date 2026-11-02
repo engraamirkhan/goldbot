@@ -243,9 +243,12 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
     items.append(_memory(ctx))
 
     # 11. deploy timer
+    # enabled AND active: `enable` alone starts a timer only at the next boot (incident 2026-11-02: enabled, never
+    # started, every Telegram-approved deploy silently ignored)
     t = _unit(ctx, "is-enabled", DEPLOY_TIMER)
-    items.append(Item(name="deploy_timer", status="ok" if t == "enabled" else "fail",
-                      detail=f"{DEPLOY_TIMER} is {t}" if t else "systemctl not found (run preflight on the brain)",
+    a = _unit(ctx, "is-active", DEPLOY_TIMER)
+    items.append(Item(name="deploy_timer", status="ok" if (t, a) == ("enabled", "active") else "fail",
+                      detail=f"{DEPLOY_TIMER} is {t}, {a}" if t else "systemctl not found (run preflight on the brain)",
                       fix=f"sudo systemctl enable --now {DEPLOY_TIMER}"))
     return items
 

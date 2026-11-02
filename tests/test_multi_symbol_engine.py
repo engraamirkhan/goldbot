@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -15,6 +16,7 @@ from goldbot.engine.books import BOOK_ATTRS, SYMBOL_STATE, BookSpec, using
 from goldbot.execution.broker import Position, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.instruments import load_instruments
+from goldbot.risk.gate import GateDecision
 from goldbot.specialists.trend import TrendSpecialist
 from goldbot.telegram.approvals import Proposal
 
@@ -26,7 +28,8 @@ OIL = BookSpec(key="XTIUSD", symbol="XTIUSD", store_symbol="XTIUSD", magic_block
 TREND = TrendSpecialist()
 INTENT: Any = "intent"     # stand-ins where only identity matters
 RES: Any = "res"
-OK: Any = "ok"
+OK: Any = GateDecision(allowed=True)
+SILVER_INTENT: Any = SimpleNamespace(symbol="XAGUSD")
 
 
 class MultiPaper(PaperBroker):
@@ -231,9 +234,9 @@ def test_a_non_gold_check_uses_the_instruments_own_spread_cap_or_refuses(tmp_pat
     gold_cap = eng.gate.limits.max_spread_points
     with using(eng, eng.books["XAGUSD"]):
         if getattr(spec.instrument, "max_spread_points", None) is None:
-            assert books.check(eng, INTENT, T0).reasons == ["spread_cap_missing"] and not seen
+            assert books.check(eng, SILVER_INTENT, T0).reasons == ["spread_cap_missing"] and not seen
         else:
-            assert books.check(eng, INTENT, T0) == OK and seen == [getattr(spec.instrument, "max_spread_points")]
+            assert books.check(eng, SILVER_INTENT, T0) == OK and seen == [getattr(spec.instrument, "max_spread_points")]
     assert eng.gate.limits.max_spread_points == gold_cap and books.check(eng, INTENT, T0) == OK
 
 

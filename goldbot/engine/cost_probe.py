@@ -279,6 +279,9 @@ class ProbeRecord(FrozenRecord):
     # prereg K9: the broker's account currency per USD of XAUUSD P&L at send and at close (None: not read)
     fx_acct_per_usd: float | None = None
     exit_fx_acct_per_usd: float | None = None
+    # multi-instrument demo (plan 2026-11-02, lanes L3/L4): the instrument the probe traded (a config/instruments.yaml
+    # key); None on gold's and on every record before it
+    symbol: str | None = None
 
     @property
     def slippage_usd(self) -> float | None:

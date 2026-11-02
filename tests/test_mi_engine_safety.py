@@ -78,7 +78,7 @@ def test_e1_bookings_survive_across_serial_checks_on_the_one_canonical_state(tmp
         books.book(eng, _intent("XAGUSD"), gd, OrderResult(ok=True, retcode=10009, order_id=1, position_id=77,
                                                             filled_lots=0.1, price=30.0, message=""))
     assert eng.state is canonical
-    assert (canonical.open_positions, canonical.open_risk) == (before[0] + 1, pytest.approx(before[1] + 5.5))
+    assert canonical.open_positions == before[0] + 1 and canonical.open_risk == pytest.approx(before[1] + 5.5)
     assert canonical.margin_used >= 15.0 and canonical.unconfirmed_order
     assert canonical.spread_points != 7.0                              # gold's own spread back on the gold book
     seen: list[Any] = []
@@ -162,7 +162,10 @@ def test_e4_the_account_file_publishes_group_notional_and_null_when_unknown(tmp_
 def test_e5_an_intent_for_another_instrument_than_the_book_sends_is_refused(tmp_path):
     eng = _engine(tmp_path, MultiPaper(equity=10_000))
     called: list[Any] = []
-    setattr(eng.gate, "check", lambda *a, **k: called.append(a) or GateDecision(allowed=True))
+    def fake_check(*a: Any, **k: Any) -> GateDecision:
+        called.append(a)
+        return GateDecision(allowed=True)
+    setattr(eng.gate, "check", fake_check)
     with using(eng, eng.books["XAGUSD"]):
         bare = _intent("XAGUSD").model_copy(update={"symbol": "XAUUSD"})   # no terms: reads as gold
         assert books.check(eng, bare, T0).reasons == ["symbol_mismatch"] and not called
@@ -215,3 +218,32 @@ def test_e7_live_and_pilot_accounts_stay_xauusd_only(tmp_path):
     for acc in acc_mod.load_accounts(logins=False).values():
         if acc.mode != "demo" or acc.pilot.enabled:
             assert not acc.instruments and svc.account_instruments(acc) == [], acc.account_id
+
+
+# ------------------------------------------------------------------------------------------------ L4's contract
+def test_the_account_file_carries_symbols_groups_and_heat_for_the_dashboard(tmp_path):
+    pb = MultiPaper(equity=10_000)
+    eng = _engine(tmp_path, pb)
+    gold = _quote(pb, "XAUUSD", 2000.0)
+    pb._positions[1] = _pos(1, "XAUUSD", 260595, 2000.0, 1990.0)
+    eng._last_tick = gold
+    eng._refresh_account(gold)
+    eng._write_state()
+    st = json.loads((tmp_path / "engine_icm-probe.json").read_text())
+    assert set(st["symbols"]) == {"XAUUSD", "XAGUSD"}
+    assert st["symbols"]["XAGUSD"]["state"] in {"market_closed", "stale", "terms_missing"}
+    assert set(st["symbols"]["XAUUSD"]) == {"state", "text", "clears_at", "price", "lot_value"}
+    assert st["groups"]["gold"]["lots_by_symbol"] == {"XAUUSD": 0.1} and st["groups"]["gold"]["open_n"] == 1
+    assert st["groups"]["gold"]["cap"] > 0 and "heat_used" in st and "heat_limit" in st
+
+
+def test_an_entry_past_the_bridges_account_wide_ceiling_is_refused_before_it_is_sent(tmp_path):
+    """The gate's per-group caps add up to far more than the bridge's 6x equity: the engine refuses past 0.95 of it
+    (`account_notional_cap`), so the gate never approves an order the bridge then refuses."""
+    eng = _engine(tmp_path, MultiPaper(equity=10_000))
+    eng.state.equity = 10_000.0
+    eng.state.group_notional = {"fx": 50_000.0}
+    intent = _intent("XAGUSD").model_copy(update={"contract_oz": 5000.0, "account_currency": "USD",
+                                                  "acct_per_usd": 1.0})
+    assert books.ceiling(eng, intent, GateDecision(allowed=True, lots=1.0)).reasons == ["account_notional_cap"]
+    assert books.ceiling(eng, intent, GateDecision(allowed=True, lots=0.01)).allowed

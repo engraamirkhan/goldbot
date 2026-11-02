@@ -6,8 +6,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
 import { modeBadge } from "../../lib/home";
+import { fmtPrice, GOLD } from "../../lib/instruments";
 import {
-  groupOpen, heldWords, kindBadge, KIND_WORDS, moneyOrDash, type OpenGroup, type OpenPositionX, openRowName, type OpenTarget, openTarget, POLL, price, sideArrow,
+  groupOpen, heldWords, kindBadge, KIND_WORDS, moneyOrDash, type OpenGroup, type OpenPositionX, openRowName, type OpenTarget, openTarget, POLL, sideArrow,
   sideWords, signedR, strategyLabel, type TradeKind,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
@@ -78,7 +79,7 @@ export function OpenNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
               {shown.length === 0 ? <EmptyState title="No open trades match.">Choose all accounts and all kinds to see every open trade.</EmptyState>
                 : wide ? <OpenTable groups={groups} onOpen={onOpen} pnl={accountPnl} />
                 : groups.map((g) => <OpenGroupBlock key={g.key} g={g} onOpen={onOpen} pnl={accountPnl(g.key)} />)}
-              <p className="small muted">P&amp;L now is after the costs already paid; risk is the loss at the stop set at entry; prices in USD/oz.</p>
+              <p className="small muted">P&amp;L now is after the costs already paid; risk is the loss at the stop set at entry; prices in each instrument's quote.</p>
             </>}
           </>}
     </Card>
@@ -156,7 +157,7 @@ function OpenRowPhone({ p, onOpen }: { p: OpenPositionX; onOpen?: (t: OpenTarget
         <span className="tr-pnl">{moneyOrDash(p.floating_pnl, p.currency)}</span>
         <span className="tr-r">{signedR(p.r_now)}</span>
         <span className="tr-risk muted">risk {moneyOrDash(risk, p.currency, false)}</span></span>
-      <span className="tr-l3 small muted num">{price(p.entry)} → stop {price(p.stop)} USD/oz · {heldWords(p.held_s, p.hold_limit_s)}</span>
+      <span className="tr-l3 small muted num">{p.symbol !== GOLD && <>{p.symbol} · </>}{fmtPrice(p.symbol, p.entry)} → stop {fmtPrice(p.symbol, p.stop, { unit: true })} · {heldWords(p.held_s, p.hold_limit_s)}</span>
     </RowShell>
   );
 }
@@ -165,7 +166,7 @@ function OpenTable({ groups, onOpen, pnl }: { groups: OpenGroup[]; onOpen?: (t: 
   return (
     <div className="trade-table-wrap">
       <table className="trade-table">
-        <caption className="sr-only">Open trades, real money first; prices in USD per ounce, money in the account currency</caption>
+        <caption className="sr-only">Open trades, real money first; prices in each instrument's quote, money in the account currency</caption>
         {/* fixed layout: the columns never push the page sideways; the account is the group's header row */}
         <colgroup><col /><col className="w-side" /><col className="w-price" /><col className="w-price" /><col className="w-price" />
           <col className="w-money" /><col className="w-money" /><col className="w-r" /><col className="w-held" /><col className="w-kind" /></colgroup>
@@ -187,7 +188,7 @@ function OpenTable({ groups, onOpen, pnl }: { groups: OpenGroup[]; onOpen?: (t: 
                     onKeyDown={(e) => { if (go && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } }}>
                   <td title={strategyLabel(p.family_label, p.family, p.timeframe)}>{strategyLabel(p.family_label, p.family, p.timeframe)}</td>
                   <td><span className={`tr-side ${p.side}`}><span aria-hidden="true">{sideArrow(p.side)}</span> {sideWords(p.side)}</span> {lots(p.lots)}</td>
-                  <td className="num">{price(p.entry)}</td><td className="num">{price(p.stop)}</td><td className="num">{price(p.target)}</td>
+                  <td className="num">{fmtPrice(p.symbol, p.entry)}</td><td className="num">{fmtPrice(p.symbol, p.stop)}</td><td className="num">{fmtPrice(p.symbol, p.target)}</td>
                   <td className="num">{moneyOrDash(risk, p.currency, false)}</td>
                   <td className="num">{moneyOrDash(p.floating_pnl, p.currency)}</td>
                   <td className="num">{signedR(p.r_now)}</td>

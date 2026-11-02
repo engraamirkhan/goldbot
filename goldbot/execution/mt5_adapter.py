@@ -38,6 +38,16 @@ open/close prices, volumes), not its hours. `trading_sessions` therefore reports
 static `SessionTable` defaults, IC Markets / Vantage XAUUSD) resolved to UTC per date with the server zone, and logs
 that once. Holidays and early closes are not visible this way; reading the real schedule needs an MQL5 helper in the
 terminal that writes SymbolInfoSessionTrade to a file (not built).
+
+Another instrument of the account (multi-instrument demo, asked by lane L2: "Sessions per asset class checked vs broker
+trading_sessions"): the documented gold hours would be wrong for DE40 or wheat, so `trading_sessions` reports the
+hours the broker actually quoted the symbol: the minutes with an M1 bar over the last OBSERVE_DAYS days
+(copy_rates_range, read-only), per server weekday from the latest day of that weekday that traded, gaps up to
+OBSERVE_GAP_S merged (a thin minute without a tick is not a close), resolved to UTC per date for the coming week.
+It is the broker's real schedule as observed, not announced: a holiday or early close ahead is not in it, which is
+why the engine intersects it with the instrument's session profile (calendar.SESSION_PROFILES, its exchange holidays)
+and the symbol check reports where the two differ. No bars at all raises, so the engine keeps its static profile
+rather than taking "no sessions" or "always open". The account's own gold is unchanged.
 """
 from __future__ import annotations
 
@@ -67,6 +77,7 @@ from goldbot.execution.broker import (
     tick_key,
 )
 from goldbot.execution.costs import BrokerTerms
+from goldbot.execution.market_watch import check_symbols
 from goldbot.risk.sizing import account_fx
 
 try:  # pragma: no cover - Windows only
@@ -74,6 +85,11 @@ try:  # pragma: no cover - Windows only
 except ImportError:  # pragma: no cover
     mt5 = None
 
+# ticks_many (protocol v10): rows per symbol per call. The engine polls every 500 ms, so a symbol never has this many
+# new ticks between two polls; after an outage the gap is the engine's history fill's (copy_ticks), not this call's
+TICKS_MANY_MAX = 2_000
+OBSERVE_DAYS = 14                # trading_sessions of another symbol: the M1 history its hours are read from
+OBSERVE_GAP_S = 15 * 60          # ... a quote gap up to this long is a thin market, not a session break
 TF_MAP = {"1m": "TIMEFRAME_M1", "5m": "TIMEFRAME_M5", "15m": "TIMEFRAME_M15", "1h": "TIMEFRAME_H1",
           "4h": "TIMEFRAME_H4", "1d": "TIMEFRAME_D1", "1w": "TIMEFRAME_W1"}
 RETCODE_DONE = 10009
@@ -231,6 +247,48 @@ def measure_broker_terms(account_id: str, info: Any, *, account_currency: str, p
                        commission_per_lot_round_trip_usd=rt, commission_lots=lots, notes=notes)
 
 
+def _profit_ccy(i: Any) -> str | None:
+    """SYMBOL_CURRENCY_PROFIT, upper-case; None when the package does not report it (never taken as USD)."""
+    v = getattr(i, "currency_profit", None)
+    return str(v).strip().upper() or None if v is not None else None
+
+
+def _rollover(i: Any) -> int | None:
+    """SYMBOL_SWAP_ROLLOVER3DAYS (0 = Sunday .. 6 = Saturday); None when absent or out of range."""
+    v = getattr(i, "swap_rollover3days", None)
+    try:
+        d = int(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+    return d if d is not None and 0 <= d <= 6 else None
+
+
+def observed_template(minutes: pd.Series, gap_s: int = OBSERVE_GAP_S) -> list[tuple[int, int, int]]:
+    """A weekly server-time session template (weekday, start s, end s) from the opens of quoted M1 bars (naive server
+    wall clock): per weekday the latest date with bars, each run of minutes merged across gaps up to `gap_s`."""
+    if minutes.empty:
+        return []
+    ts = pd.DatetimeIndex(minutes).sort_values().unique()
+    dates = pd.Series(ts.normalize())
+    latest: dict[int, pd.Timestamp] = {}
+    for d in dates.unique():
+        latest[pd.Timestamp(d).weekday()] = pd.Timestamp(d)       # sorted: the last one of each weekday wins
+    out: list[tuple[int, int, int]] = []
+    for wd, d in sorted(latest.items()):
+        secs = sorted(int((t - d).total_seconds()) for t in ts[ts.normalize() == d])
+        start = end = None
+        for s in secs:
+            if end is not None and s - end <= gap_s:
+                end = s + 60
+                continue
+            if start is not None and end is not None:
+                out.append((wd, start, min(end, 86_400)))
+            start, end = s, s + 60
+        if start is not None and end is not None:
+            out.append((wd, start, min(end, 86_400)))
+    return out
+
+
 def account_info_from_mt5(a: Any) -> AccountInfo:
     """mt5.account_info() as an AccountInfo, the shape accounts.verify_terminal_account checks (MT5Broker.account and
     the keyring login in goldbot/ops/login.py read it the same way)."""
@@ -255,7 +313,8 @@ class MT5Broker:
     name = "mt5"
 
     def __init__(self, *, terminal_path: str, login: int | None, password: str | None, server: str, server_tz: str,
-                 symbol: str, account_label: str, verify: Callable[[Any], str | None] | None):
+                 symbol: str, account_label: str, verify: Callable[[Any], str | None] | None,
+                 symbols: Sequence[str] = ()):
         if mt5 is None:
             raise RuntimeError("MetaTrader5 package is Windows-only; run this adapter on the VPS")
         self.server_tz = server_tz
@@ -274,8 +333,26 @@ class MT5Broker:
             mt5.shutdown()
             raise RuntimeError(f"symbol_info({symbol}) returned None; refusing to start")
         self._info = info
+        # multi-instrument demo (protocol v10): the rest of the account's symbol list (market_watch.account_symbols)
+        # into Market Watch, so its ticks, bars and terms answer. Unlike the account's own symbol above, one the
+        # terminal lacks is logged and skipped, never a refusal to start: gold keeps trading, the symbol check reports
+        # it, and the engine's terms rule refuses that symbol's entries (`unselected`)
+        missing = []
+        for extra in symbols:
+            if extra == symbol:
+                continue
+            try:
+                ok = bool(mt5.symbol_select(extra, True))
+            except Exception as exc:                    # noqa: BLE001 - an IPC error on one symbol: skip it
+                log.warning("symbol_select(%s) failed: %s", extra, type(exc).__name__)
+                ok = False
+            if not ok:
+                log.warning("%s: %s not in Market Watch (not on this terminal?): not served", account_label, extra)
+                missing.append(extra)
+        self.unselected: tuple[str, ...] = tuple(missing)
         self._sessions_noted = False
         self._unquoted: set[str] = set()     # symbols whose close was refused for want of a quote (logged once)
+        self._unticked: set[str] = set()     # symbols ticks_many could not read (logged once per streak)
 
     # ------------------------------------------------------------------ info
     def terminal_info(self) -> Any:
@@ -299,7 +376,8 @@ class MT5Broker:
                           stops_level_points=i.trade_stops_level, filling_modes=modes, trade_allowed=i.trade_mode != 0,
                           swap_mode=None if swap_mode is None else int(swap_mode), swap_long=opt("swap_long"),
                           swap_short=opt("swap_short"), margin_initial=opt("margin_initial"),
-                          margin_maintenance=opt("margin_maintenance"))
+                          margin_maintenance=opt("margin_maintenance"), currency_profit=_profit_ccy(i),
+                          swap_rollover3days=_rollover(i))
 
     def symbols_get(self, pattern: str = "*") -> list[str]:
         """The names of the terminal's symbols matching `pattern` (MT5 symbols_get group filter, e.g. "XAUUSD*"),
@@ -402,11 +480,22 @@ class MT5Broker:
 
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         """The broker's documented hours for the week from today's server date, resolved to UTC per date (the Python
-        package exposes no session schedule: see the module docstring)."""
+        package exposes no session schedule: see the module docstring); for any symbol but the account's own, the hours
+        the broker quoted it (`observed_template`, module docstring)."""
+        today = server_wall(pd.Timestamp.now(tz="UTC"), self.server_tz)[0].date()
+        if symbol != self.symbol:
+            now = pd.Timestamp.now(tz="UTC")
+            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, self._mt5_time(now - pd.Timedelta(days=OBSERVE_DAYS)),
+                                         self._mt5_time(now))
+            df = pd.DataFrame(rates) if rates is not None else pd.DataFrame()
+            if df.empty:
+                raise RuntimeError(f"{symbol}: no M1 bars in {OBSERVE_DAYS} days to read its sessions from "
+                                   f"({mt5.last_error()})")
+            tpl = observed_template(pd.Series(pd.to_datetime(df["time"], unit="s")))
+            return resolve_server_sessions(tpl, self.server_tz, today)
         if not self._sessions_noted:
             log.info("%s: MetaTrader5 Python exposes no session schedule; using the broker's documented hours", symbol)
             self._sessions_noted = True
-        today = server_wall(pd.Timestamp.now(tz="UTC"), self.server_tz)[0].date()
         return resolve_server_sessions(SessionTable(server_tz=self.server_tz).server_sessions(), self.server_tz, today)
 
     # ------------------------------------------------------------------ orders
@@ -526,8 +615,33 @@ class MT5Broker:
                 if magic_prefix is None or str(p.magic).startswith(str(magic_prefix))]
 
     def ticks_many(self, symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
-        """Multi-instrument demo step 0: the interface only; lane L4 implements the batched copy_ticks_from."""
-        raise NotImplementedError("ticks_many: lane L4 of the multi-instrument plan")
+        """Protocol v10 (plan: "batched ticks_many(symbols, since) every 500 ms"): every tick strictly after `since`
+        (UTC) for each symbol, up to TICKS_MANY_MAX per symbol, in one request instead of one per symbol. Read-only.
+        A symbol whose read fails (not selected, IPC error) maps to [] and is logged once per streak, so one symbol
+        never blanks the others; the engine's stale-data rule then blocks that symbol's entries. ValueError for more
+        than MAX_BRIDGE_SYMBOLS names or anything that is not a list of names."""
+        names = check_symbols(symbols)
+        since = pd.Timestamp(since)
+        out: dict[str, list[Tick]] = {}
+        for sym in names:
+            try:
+                rows = mt5.copy_ticks_from(sym, self._mt5_time(since), TICKS_MANY_MAX, mt5.COPY_TICKS_ALL)
+                df = pd.DataFrame(rows) if rows is not None else pd.DataFrame()
+            except Exception as exc:                    # noqa: BLE001 - this symbol only
+                if sym not in self._unticked:
+                    self._unticked.add(sym)
+                    log.warning("ticks_many: %s unreadable (%s)", sym, type(exc).__name__)
+                out[sym] = []
+                continue
+            self._unticked.discard(sym)
+            if df.empty:
+                out[sym] = []
+                continue
+            ts = server_to_utc(pd.to_datetime(df["time_msc"], unit="ms"), self.server_tz)
+            flags = df["flags"] if "flags" in df.columns else pd.Series(0, index=df.index)
+            out[sym] = [Tick(ts_utc=t, bid=float(b), ask=float(a), flags=int(f))
+                        for t, b, a, f in zip(ts, df["bid"], df["ask"], flags) if t > since]
+        return out
 
     def account_positions(self) -> list[Position]:
         """Every position on the account, any symbol (positions_get without a filter): the equity cross-check
@@ -552,15 +666,26 @@ class MT5Broker:
             df["ts_utc"] = server_to_utc(pd.to_datetime(df["time_msc"], unit="ms"), self.server_tz)
         return df
 
-    def broker_terms(self, account_id: str, since_utc: pd.Timestamp, now: pd.Timestamp) -> BrokerTerms:
-        """Swap and commission as this terminal reports them (see the module docstring for the conversions). The
-        account conversion is the gate's: the broker's loss on one lot over $1 (`loss_per_lot`) per contract ounce."""
-        info = mt5.symbol_info(self.symbol)
-        tick = mt5.symbol_info_tick(self.symbol)
+    def broker_terms(self, account_id: str, since_utc: pd.Timestamp, now: pd.Timestamp,
+                     symbol: str | None = None) -> BrokerTerms:
+        """Swap and commission of `symbol` (None: the adapter's own, today's call) as this terminal reports them (see
+        the module docstring for the conversions). The account conversion is always the gate's on the account's own
+        gold (USD profit): the broker's loss on one lot over $1 (`loss_per_lot`) per contract ounce, an account-level
+        figure, so another symbol's USD amounts convert the same way and an amount in its non-USD profit currency
+        stays unconverted (None, the settings prior applies) rather than being taken as USD."""
+        sym = self.symbol if symbol is None else symbol
+        info = mt5.symbol_info(sym)
+        tick = mt5.symbol_info_tick(sym)
         price = (float(tick.bid) + float(tick.ask)) / 2 if tick is not None else 0.0
+        if sym == self.symbol:
+            gold, gold_price = info, price
+        else:
+            gold = mt5.symbol_info(self.symbol)
+            gt = mt5.symbol_info_tick(self.symbol)
+            gold_price = (float(gt.bid) + float(gt.ask)) / 2 if gt is not None else 0.0
         return measure_broker_terms(account_id, info, account_currency=str(mt5.account_info().currency), price=price,
                                     deals=self.deals_since(since_utc), now=now,
-                                    acct_per_usd=self._acct_per_usd(info, price))
+                                    acct_per_usd=self._acct_per_usd(gold, gold_price))
 
     def _acct_per_usd(self, info: Any, price: float) -> float | None:
         """Account currency per USD of XAUUSD P&L for the cost terms; None when the terminal cannot say (the terms then

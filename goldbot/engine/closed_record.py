@@ -109,6 +109,7 @@ def record_closed(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float |
         if equity <= 0:
             equity = eng.state.equity
     rec = ClosedTrade(account_id=eng.cfg.account_id, broker=eng.cfg.broker_name,
+                      symbol=None if eng.cfg.instrument == "XAUUSD" else eng.cfg.instrument,
                       mode="live" if eng.cfg.mode == "live" else "demo", exit_utc=exit_utc,
                       ret=ret, pnl=pnl, equity_before=equity, position_id=pid,
                       client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,

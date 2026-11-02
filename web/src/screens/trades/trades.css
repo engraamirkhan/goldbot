@@ -194,3 +194,15 @@ button.trade-row:hover { background: var(--surface-2); }
 .rank-few button { display: block; width: 100%; min-height: var(--tap); padding: var(--s2) 0; text-align: left; background: none;
   border: 0; color: var(--text-2); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
 .rank-few button strong { color: var(--text-2); }
+
+/* multi-instrument (UI spec 2026-11-02): the instrument column, the grouped instrument filter, Today by instrument */
+.trade-table .w-sym { width: 112px; }
+.symbol-tag { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; }
+.symbol-tag-ticker { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tr-sym { font-weight: 600; }
+.sym-filter .sym-group { display: grid; gap: var(--s1); margin-bottom: var(--s2); }
+.sym-filter label { display: flex; align-items: center; gap: var(--s2); min-height: var(--tap); }
+.sym-group-items { display: flex; flex-wrap: wrap; gap: 0 var(--s4); padding-left: var(--s5); }
+.by-symbol { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.by-symbol th, .by-symbol td { padding: var(--s1) var(--s2); text-align: left; }
+.by-symbol .num { text-align: right; font-variant-numeric: tabular-nums; }
