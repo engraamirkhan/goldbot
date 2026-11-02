@@ -211,7 +211,9 @@ def test_a_table_from_a_bridge_older_than_v11_is_used_but_never_cached(tmp_path)
 def test_a_cached_row_without_the_protocol_marker_is_rejected(tmp_path):
     t = _source(tmp_path, SessionsBroker()).table(NOW)
     db = InstrumentsDb(tmp_path / "state")
-    read_at, body = db.load_sessions("icm-probe", "US500")
+    loaded = db.load_sessions("icm-probe", "US500")
+    assert loaded is not None
+    read_at, body = loaded
     assert body[session_cache.PROTOCOL_KEY] >= session_cache.SESSIONS_MIN_PROTOCOL
     db.save_sessions("icm-probe", "US500", read_at, {k: v for k, v in body.items() if k != session_cache.PROTOCOL_KEY})
     assert _source(tmp_path, SessionsBroker()).cached(NOW) is None
