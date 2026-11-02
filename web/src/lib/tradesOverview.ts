@@ -9,6 +9,11 @@ export { signedR };
 
 export const TRADES_POLL_MS = 30_000;
 
+/** The trade sources the API could not read, in words (`TradesOverview.unreadable`). */
+export const SOURCE_WORDS: Record<TradesOverview["unreadable"][number], string> = {
+  shadow: "shadow trades", positions: "account trades", probes: "cost probes",
+};
+
 export type Period = TradesOverview["periods"][number]["period"];
 export type TradeType = TradeTypeSummary["type"];
 export type Breakdown = "family" | "timeframe";

@@ -146,7 +146,7 @@ def test_wizard_needs_a_terminal(monkeypatch, capsys):
 
 # ------------------------------------------------------------------------------------------------ preflight
 GOOD_UNITS = {("is-active", "goldbot-bridge-tunnel"): "active", ("is-active", "chrony"): "active",
-              ("is-enabled", "goldbot-deploy.timer"): "enabled"}
+              ("is-enabled", "goldbot-deploy.timer"): "enabled", ("is-active", "goldbot-deploy.timer"): "active"}
 
 
 def fake_systemctl(units, *, ntp="yes"):
@@ -208,7 +208,7 @@ def server(tmp_path, cfg):
 COMMIT = "a" * 40
 EXPECTED = ["settings", "owner_email", "telegram_token", "telegram_allowlist", "tunnel_service", "bridge_config",
             "bridge_health", "terminal_account", "bridge_server_tz", "bridge_compat", "server_clock", "web_dist", "db_files_private", "backups", "time_sync", "disk",
-            "memory", "deploy_timer"]
+            "memory", "deploy_timer", "retired_units"]
 
 
 def test_preflight_all_green_exits_zero(server, capsys):
@@ -306,6 +306,14 @@ def test_missing_backups_only_warn(server):
     assert "READY: no blocking problems (1 warning(s))" in pf.render(items)
 
 
+def test_an_enabled_deploy_timer_that_is_not_running_fails(server):
+    """Incident 2026-11-02: the bootstrap enabled the timer without --now; it never ran until a reboot that never came."""
+    run, _ = fake_systemctl({**GOOD_UNITS, ("is-active", "goldbot-deploy.timer"): "inactive"})
+    item = next(i for i in pf.run_preflight(server(run_cmd=run)) if i.name == "deploy_timer")
+    assert item.status == "fail" and "enabled, inactive" in item.detail
+    assert item.fix == "sudo systemctl enable --now goldbot-deploy.timer"
+
+
 def test_no_bridge_configured_and_no_systemctl(server):
     del server.secrets["mt5-bridge-url-icm-demo"]
     items = {i.name: i for i in pf.run_preflight(server(run_cmd=lambda argv: (127, "")))}
@@ -354,3 +362,21 @@ def test_a_wal_file_that_vanishes_during_the_permission_check_is_skipped(server,
     monkeypatch.setattr(Path, "stat", stat_gone)
     items = {i.name: i for i in pf.run_preflight(ctx)}
     assert items["db_files_private"].status == "ok" and items["db_files_private"].detail == "1 state file(s) are 0600"
+
+
+@pytest.mark.parametrize("unit,state", [("goldbot-tv-pull", ("is-enabled", "enabled")),
+                                        ("goldbot-webhook", ("is-active", "active"))])
+def test_a_retired_tradingview_unit_still_enabled_or_running_warns_without_blocking(server, unit, state):
+    """ADR 0066 retired the chart pull and the webhook; a brain that still runs one is a leftover the deploy note
+    (docs/deploy/2026-11-retire-tv-units.md) removes."""
+    run, _ = fake_systemctl({**GOOD_UNITS, (state[0], unit): state[1]})
+    items = pf.run_preflight(server(run_cmd=run))
+    item = next(i for i in items if i.name == "retired_units")
+    assert item.status == "warn" and not item.blocking and unit in item.detail
+    assert f"sudo systemctl disable --now {unit}" in item.fix
+    assert pf.exit_code(items) == 0
+
+
+def test_retired_units_are_ok_when_neither_is_enabled_or_running(server):
+    item = next(i for i in pf.run_preflight(server()) if i.name == "retired_units")
+    assert item.status == "ok" and "goldbot-tv-pull" in item.detail and "goldbot-webhook" in item.detail

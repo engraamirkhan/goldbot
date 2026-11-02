@@ -38,7 +38,7 @@ def _more_trades(state: Path) -> None:
 
 
 def _overview(tmp_path: Path) -> TradesOverview:
-    state, _ = _everything(tmp_path)
+    state = _everything(tmp_path)
     _more_trades(state)
     return ov.trades_overview(state, NOW)
 
@@ -134,7 +134,7 @@ def test_an_empty_state_is_all_zero(tmp_path):
 
 
 def test_an_unreadable_source_is_named_and_the_others_still_count(tmp_path):
-    state, _ = _everything(tmp_path)
+    state = _everything(tmp_path)
     (state / "shadow_book.json").write_text("{torn")
     v = ov.trades_overview(state, NOW)
     assert v.unreadable == ["shadow"]
@@ -143,7 +143,7 @@ def test_an_unreadable_source_is_named_and_the_others_still_count(tmp_path):
 
 
 def test_the_route_needs_a_sign_in_and_serves_a_viewer_without_the_login(tmp_path):
-    state, root = _everything(tmp_path)
+    state, root = _everything(tmp_path), tmp_path / "data"
     app = create_app(state, web_dist=tmp_path / "nodist", data_root=root, owner_email="o@x.io")
     c = TestClient(app)
     h = _login(c, app)
@@ -156,7 +156,7 @@ def test_the_route_needs_a_sign_in_and_serves_a_viewer_without_the_login(tmp_pat
 
 
 def test_a_net_record_without_its_currency_counts_in_the_account_currency(tmp_path):
-    state, _ = _everything(tmp_path)                         # the engine state says the account is in GBP
+    state = _everything(tmp_path)                         # the engine state says the account is in GBP
     gates_phase.append_closed_trade(state, ClosedTrade(
         account_id=ACC, broker="icmarkets", mode="demo", exit_utc=NOW - pd.Timedelta(hours=1), ret=0.001, pnl=3.0,
         equity_before=1000.0, position_id=51, agent_id="mfi-g0", commission=0.5, swap=0.0, timeframe="15m"))
