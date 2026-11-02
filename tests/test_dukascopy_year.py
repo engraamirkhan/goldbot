@@ -678,7 +678,12 @@ def test_checkpoint_dir_resumes_built_months_without_downloading_them_again(monk
 def test_no_node_fallback_never_calls_dukascopy_node(monkeypatch, tmp_path):
     monkeypatch.setattr(dy, "_fetch_datafeed", lambda *a, **k: (None, "HTTP 503"))
     called: list[int] = []
-    monkeypatch.setattr(dy, "_fetch_node", lambda *a, **k: called.append(1) or (None, "x"))
+
+    def fake_node(*a, **k):
+        called.append(1)
+        return None, "x"
+
+    monkeypatch.setattr(dy, "_fetch_node", fake_node)
     monkeypatch.setattr(dy, "NODE_FALLBACK", False)
     df, err = dy._fetch(dt.date(2004, 2, 9), dt.date(2004, 2, 16), "bid", tmp_path)
     assert df is None and "node fallback off" in err and "503" in err and not called
