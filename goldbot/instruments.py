@@ -44,6 +44,8 @@ SessionProfile = Literal["metals", "fx", "index_us", "index_eu", "index_uk", "in
 # Plan: "leverage per asset class (FX 30, gold/major idx 20, other commodities 10, bonds 5)" (ESMA retail caps; bonds
 # held to 5 by the plan). The RiskGate's margin check takes the larger of the broker's figure and this one (L2)
 LEVERAGE_BY_CLASS: dict[str, int] = {"fx": 30, "gold_index": 20, "commodity": 10, "bond": 5}
+# the quote currencies a six-letter pair name ends in (InstrumentSpec._terms_agree): COPPER or COFFEE end in none
+QUOTE_CURRENCIES = frozenset({"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"})
 
 
 class InstrumentSpec(FrozenRecord):
@@ -68,6 +70,18 @@ class InstrumentSpec(FrozenRecord):
     leverage_class: LeverageClass
     enabled: bool = False
     verify: bool = True                           # True = terms are placeholders until the symbol check confirms them
+
+    @model_validator(mode="after")
+    def _terms_agree(self) -> InstrumentSpec:
+        """Trading-safety review of PR #307 (M3 a): terms that contradict each other fail at load. The gold group
+        trades at the gold leverage (`gold_index`); a six-letter pair whose last three letters are a currency
+        (QUOTE_CURRENCIES: XAUEUR, USDJPY) is quoted in it, so that is its `currency_profit`."""
+        if self.correlation_group == "gold" and self.leverage_class != "gold_index":
+            raise ValueError(f"{self.key}: the gold group needs leverage_class gold_index, not {self.leverage_class}")
+        quote = self.key[3:] if len(self.key) == 6 and self.key.isalpha() else ""
+        if quote in QUOTE_CURRENCIES and self.currency_profit != quote:
+            raise ValueError(f"{self.key}: currency_profit {self.currency_profit} is not its quote currency {quote}")
+        return self
 
 
 class Instruments(FrozenRecord):

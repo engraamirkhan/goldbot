@@ -313,13 +313,24 @@ class Supervisor:
                                             "equity": float(e.get("equity", 0.0)) if any(e is m for m in money) else 0.0,
                                             **_groups(e)}
                     for e in engines}
+        # review L3: group maps are summed in the one currency the money is summed in; a map in any other currency (or
+        # when the money has no single currency) is listed in `group_notional_excluded`, never added
+        money_ccy = {_currency(m) for m in money}
+        ccy = next(iter(money_ccy)) if len(money_ccy) == 1 else None
         combined_groups: dict[str, float] = {}
-        for x in exposure.values():
-            for g, v in x.get("groups", {}).items():
+        group_excluded: list[str] = []
+        for e in engines:
+            x = exposure[str(e.get("account"))]
+            if "groups" not in x:
+                continue
+            if ccy is None or x.get("groups_currency") != ccy:
+                group_excluded.append(str(e.get("_file", "")))
+                continue
+            for g, v in x["groups"].items():
                 combined_groups[g] = combined_groups.get(g, 0.0) + v
         state = {"combined_open_lots": round(sum(x["lots"] for x in exposure.values()), 6),
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
-                 "combined_group_notional": combined_groups,
+                 "combined_group_notional": combined_groups, "group_notional_excluded": sorted(group_excluded),
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable, "startup_refused_engines": refused, "future_engines": future,

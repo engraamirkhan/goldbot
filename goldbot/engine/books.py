@@ -84,6 +84,7 @@ FRESH_SYMBOL_STATE: dict[str, Any] = {"last_tick_age_s": math.inf, "spread_point
                                       "data_recovering": False, "weekend": False, "market_closed": True,
                                       "clock_mismatch": False, "tier2_blackout": False, "reopen_window": False,
                                       "holiday_thin": False, "calendar_unavailable": False}
+UNVERIFIED = "instrument_unverified"   # a BookSpec.blocked reason: registry terms not confirmed (ops.services.engine)
 TERMS_READ_S = 60.0              # a book's instruments.db row is read again this often (a corruption is seen within it)
 
 T = TypeVar("T")
@@ -472,9 +473,7 @@ def intent_extra(eng: Engine, terms: dict[str, Any]) -> dict[str, Any]:
     spec = book.spec.instrument if book.spec is not None else None
     if book.primary or spec is None:
         return {}
-    from goldbot.risk import Intent
-    return {**intent_terms(spec), "acct_per_profit": terms.get("acct_per_usd"),
-            **({"symbol": eng.cfg.symbol} if "symbol" in Intent.model_fields else {})}   # E5: L2's Intent.symbol
+    return {**intent_terms(spec), "acct_per_profit": terms.get("acct_per_usd")}   # E5: intent_terms carries symbol
 
 
 def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
@@ -500,7 +499,9 @@ def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
                 shock = eng._blackout_event is not None and eng._blackout_event.get("kind") == "news_shock"
                 hit = instrument_blackout(ev, tick.ts_utc, spec.news_currencies, cfg.blackout_before_min,
                                           cfg.blackout_after_min, group=spec.correlation_group)
+                # L2 (#307 M5): any hit blocks, `calendar_unavailable` included; a shock is always a shock
                 st.in_blackout = shock or hit is not None
+                st.blackout_kind = "news_shock" if shock else (hit.get("kind") or "tier1") if hit else None
             try:
                 st.weekend = st.weekend or weekend_cut(eng.sessions, now)
             except Exception as exc:          # a table that cannot say: closed for entries (fail closed)
@@ -550,8 +551,8 @@ def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
             st.open_notional = groups.get("gold", 0.0) / usd
         else:
             st.exposure_unknown = True
-    if others is not None:
-        st.other_group_notional = others
+    # L2: on a multi-symbol state the other accounts' map is always a map; unknown is {} with exposure_unknown set
+    st.other_group_notional = others if others is not None else {}
 
 
 def _others(eng: Engine) -> dict[str, float] | None:

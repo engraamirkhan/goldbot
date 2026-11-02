@@ -279,11 +279,12 @@ def book_terms_problem(spec: Any, info: Any) -> str | None:
     """Why a non-gold instrument may take no entry on this terminal, or None. NEVER a spec with `verify: true` or not
     `enabled` (placeholder terms until lane L1's symbol check confirms them on the brain), nor one whose terminal
     point and digits differ from the registry's."""
+    from goldbot.engine.books import UNVERIFIED
     if not spec.enabled or spec.verify:
-        return f"instrument_unverified: {spec.key} enabled={spec.enabled} verify={spec.verify}"
+        return f"{UNVERIFIED}: {spec.key} enabled={spec.enabled} verify={spec.verify}"
     point, digits = float(info.point), int(info.digits)
     if abs(point - spec.point) > 1e-12 or digits != spec.digits:
-        return (f"instrument_unverified: {spec.key} quotes point {point} / {digits} digits, the registry "
+        return (f"{UNVERIFIED}: {spec.key} quotes point {point} / {digits} digits, the registry "
                 f"{spec.point} / {spec.digits}")
     return None
 
@@ -298,7 +299,7 @@ def instrument_books(acc: Account, broker: Any, exploration_cfg: Any) -> tuple[A
     if not keys:
         return ()
     from goldbot.engine import exploration
-    from goldbot.engine.books import BookSpec
+    from goldbot.engine.books import UNVERIFIED, BookSpec
     from goldbot.instruments import load_instruments
     from goldbot.ops import accounts
     reg = load_instruments()
@@ -316,7 +317,7 @@ def instrument_books(acc: Account, broker: Any, exploration_cfg: Any) -> tuple[A
             why = book_terms_problem(spec, info)
             digits, point = int(info.digits), float(info.point)
         except Exception as exc:  # noqa: BLE001 - a symbol the terminal cannot describe takes no entry
-            why = f"instrument_unverified: symbol_info({sym}) unavailable ({type(exc).__name__})"
+            why = f"{UNVERIFIED}: symbol_info({sym}) unavailable ({type(exc).__name__})"
         if why:
             log.warning("%s: %s: entries refused, exits run", acc.account_id, why)
         out.append(BookSpec(key=key, symbol=sym, store_symbol=spec.store_symbol, magic_block=spec.magic_block,
