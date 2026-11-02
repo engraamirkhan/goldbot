@@ -165,3 +165,12 @@ def test_the_triple_swap_weekday_converts_mt5_sunday_numbering_to_monday_zero() 
     weekend = reg.get("US500").model_copy(update={"swap_rollover3days": 6})
     with pytest.raises(ValueError, match="weekday"):
         inst_mod.triple_weekday(weekend)
+
+
+def test_every_instrument_has_a_spread_ceiling_and_gold_keeps_the_gates_45_points() -> None:
+    from goldbot.config import load_settings
+    reg = registry()
+    assert reg.get(GOLD).max_spread_points == 45 == load_settings().risk.max_spread_points
+    assert all(s.max_spread_points > 0 for s in reg.instruments.values())
+    # in each instrument's own points: EURUSD's 10 points are one pip, never gold's 45
+    assert reg.get("EURUSD").max_spread_points * reg.get("EURUSD").point <= 0.0002

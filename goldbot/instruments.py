@@ -58,6 +58,9 @@ class InstrumentSpec(FrozenRecord):
     point: float = Field(gt=0)
     min_lot: float = Field(gt=0)
     lot_step: float = Field(gt=0)
+    # the RiskGate refuses an entry while the spread is wider than this, in points of `point` (lane L2 PR #307;
+    # XAUUSD 45 = $0.45, risk.max_spread_points); the engine (L3) reads it per symbol
+    max_spread_points: float = Field(gt=0)
     currency_profit: str = Field(min_length=3, max_length=3)    # P&L currency (MT5 SYMBOL_CURRENCY_PROFIT)
     swap_rollover3days: int = Field(ge=0, le=6)   # triple-swap weekday, MT5 numbering: 0 = Sunday .. 6 = Saturday
     session_profile: SessionProfile
