@@ -50,6 +50,7 @@ from goldbot.engine import (
     cost_probe,
     exploration,
     history,
+    key_zones,
     order_send,
     pilot,
     unconfirmed,
@@ -322,12 +323,19 @@ class Engine:
         # allocator rule is the owner's decision (allocator/promotion.py), so the gate window never narrows it
         self.allocator = allocator or RuleAllocator()
         self.gate = RiskGate(limits)
+        # the dashboard's key zones (engine/key_zones.py): display only, rebuilt once per 15m close; gold's book only
+        self.key_zones: dict[str, Any] | None = None
+        self.key_zones_at: pd.Timestamp | None = None
         self.order_sender: order_send.Sender | None = None   # through the bridge: orders off the tick thread
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0,
                                   account_disabled=cfg.wind_down)
         self.store = Store(cfg.data_root) if cfg.data_root else None
+        # the key zones' long history and background build (engine/key_zones.py); its bridge client is set by
+        # goldbot/ops/services/engine.py. Display only.
+        self.key_zone_worker = key_zones.KeyZoneWorker(cfg.account_id, cfg.symbol, store=self.store)
+        self.key_zones_errors: set[str] = set()     # exception types already logged with their traceback
         self._class_cache: tuple[float, StoredClass] = (-2.0, StoredClass())
         self._drift_cache: tuple[float, dict] = (-2.0, {})
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
@@ -957,6 +965,8 @@ class Engine:
             decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
         self._blackout_close(complete, close_ts, frames)
         cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
+        if self.book is self.primary:                    # gold's zones (the account's chart), display only
+            key_zones.update(self, complete, close_ts)   # after every decision of this close; never raises
         if self.shadow is not None:
             self.shadow.save(close_ts)
         self._write_state()
@@ -3055,6 +3065,7 @@ class Engine:
             "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
             # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
             "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self), **broker_bars.published(self),
+            **key_zones.published(self),     # the dashboard's key zones: display only, never read for an order
             **books.published(self),               # more than one book: each instrument's own view
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
