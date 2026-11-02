@@ -228,14 +228,31 @@ class CostOfRecordCell(FrozenRecord):
         return self
 
 
+class SwapMeasured(FrozenRecord):
+    """A broker's measured overnight financing (amendment C1, ADR 0069: "swap_bps(side): measured broker terms ...
+    Shorts are CREDITED"): USD per lot per night, broker sign (negative = paid, positive = credited), frozen from the
+    broker terms file with its own version. Numbers only: no account, login or host."""
+    version: str = Field(min_length=1)
+    measured_utc: str
+    source: str
+    long_usd_per_lot: float = Field(allow_inf_nan=False)
+    short_usd_per_lot: float = Field(allow_inf_nan=False)
+    triple_weekday: int = Field(2, ge=0, le=4)      # 0 = Monday; the rollover after this server day pays 3 nights
+    server_tz: str = "Europe/Athens"                # the broker's server clock: its midnight is the rollover
+    contract_oz: float = Field(100.0, gt=0)
+
+
 class CostOfRecord(FrozenRecord):
     """The measured cost table every research screen reads (docs/research/cost-of-record-2026-10-31.md): broker ->
-    session (asia, london, newyork and the pooled `all`) -> cell, with the version a qualification cites."""
+    session (asia, london, newyork and the pooled `all`) -> cell, with the version a qualification cites, and per broker
+    the measured swap the C1 cost model charges (`swap_measured`, versioned on its own so a screen pinned to the cells'
+    version is unaffected)."""
     version: str = Field(min_length=1)
     window_utc: tuple[str, str]
     source: str
     interval: str = "iid bootstrap"
     cells: dict[str, dict[str, CostOfRecordCell]]
+    swap_measured: dict[str, SwapMeasured] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _pooled_cell(self) -> "CostOfRecord":
