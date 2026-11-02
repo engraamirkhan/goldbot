@@ -382,6 +382,39 @@ class AutodiscSettings(_Section):
     cost_table: str | None = None                   # measured cost table JSON; None: the settings priors
 
 
+class PositionSettings(_Section):
+    """The daily position engine (goldbot/research/position/, amendment W3). W3.6: "Program-wide defaults, fixed and
+    never a free parameter: target 10%/yr per instrument ...; EWMA volatility with a 60-day span, lagged one day; cap
+    2x." Changing any value here is a W3 amendment, not a tuning step: a spec never varies them."""
+    day_close_utc: Literal["21:00"] = "21:00"        # W3.2 clock: the 1d mid bar closes at 21:00 UTC
+    target_vol: float = Field(0.10, gt=0, le=1)      # W3.6, per instrument, annual
+    vol_span_days: int = Field(60, ge=2)
+    max_leverage: float = Field(2.0, gt=0, le=10)
+    band: float = Field(0.10, ge=0, lt=1)            # W3.2: a spec stating no band trades only beyond 10% of its target
+    stop_atr: float = Field(3.0, gt=0)               # W3.2 disaster stop: 3 x ATR(20, 1d) from the last rebalance price
+    atr_days: int = Field(20, ge=2)
+    warmup_days: int = Field(260, ge=0)              # POS-1: a market enters on its first day with data + 260 days
+    null_draws: int = Field(1000, ge=10)             # W3.2 random-side null
+    null_seed: int = 20261102
+    boot_resamples: int = Field(4000, ge=100)        # W3.2 stationary day-block bootstrap
+    boot_block_days: float = Field(20.0, gt=1)
+    cost_broker: str = "icm"                         # C1 point costs from config/cost_of_record.yaml: this broker's
+    cost_session: str = "asia"                       #   cell of the 21:00 UTC fill (W3 addendum), bps at the reference
+    cost_reference_price: float = Field(4000.0, gt=0)
+    round_trip_bps_by_symbol: dict[str, float] = Field(default_factory=dict)   # other markets' point RT; none: refused
+    overshoot_bps_by_symbol: dict[str, float] = Field(default_factory=dict)
+    short_rate_path: str = "raw/daily/fred_DTB3.parquet"   # data lane: value_date, value, available_utc
+    currency_rate_paths: dict[str, str] = Field(default_factory=dict)   # ISO -> FRED OECD 3-month file (FX, indices)
+    short_rate_constant_pct: float = 4.02            # DTB3 at the swap measurement (W3.3); a fallback, never a gate
+    markup_pct_by_symbol: dict[str, tuple[float, float]] = Field(default_factory=dict)   # (long, short) % a year
+    default_markup_pct: float = Field(2.5, ge=0)     # W3.3: a symbol without measured terms, each side
+    triple_weekday_by_symbol: dict[str, int] = Field(default_factory=lambda: {"XAUUSD": 2})   # 0 = Monday; refused
+    read_registry: str = "state/position_reads.jsonl"   # read-once markers (spec, TEST-OLD/CONFIRM): a second read refused
+    etc_fee_pct: float = Field(0.12, ge=0)           # venue B (UK gold ETC): annual fee, no financing
+    etc_extra_rt_bps: float = Field(5.0, ge=0)       #   round trip = C1 point RT + 5 bp
+    cme_fee_usd_per_side: float = Field(2.0, ge=0)   # venue C (CME 1OZ): per oz a side, at the reference price
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -428,6 +461,7 @@ class ResearchSettings(_Section):
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
+    position: PositionSettings = Field(default_factory=PositionSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod
