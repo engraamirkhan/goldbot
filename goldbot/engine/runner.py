@@ -2704,18 +2704,20 @@ class Engine:
             stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
             flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc))
 
-    def _save_risk_state_now(self, what: str) -> None:
+    def _save_risk_state_now(self, what: str) -> bool:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
         in-memory state (the pending 12% read, the stage, the mark) decides the kill switch, so a failed write (a full
         disk) must never abort the refresh before the stage machine, skip the flatten, or narrow it. The failure is
         logged and counted as a tick error, which blocks entries until a clean decision bar; the next state write
-        (`_write_state`) saves the risk state again."""
+        (`_write_state`) saves the risk state again. True when saved."""
         try:
             self._save_risk_state()
         except Exception as exc:
             log.error("risk state not saved after %s (%s); kept in memory, entries blocked, retried with the next "
                       "state write", what, type(exc).__name__)
             self.note_tick_error(exc)
+            return False
+        return True
 
     def _load_risk_state(self) -> None:
         self._kill_everything = False

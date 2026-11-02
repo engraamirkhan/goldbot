@@ -18,7 +18,8 @@ import pytest
 
 from goldbot.engine import Engine, EngineConfig, demo_roll, exploration
 from goldbot.engine.cost_probe import SCHEDULED_ID, SCHEDULED_MAGIC_OFFSET
-from goldbot.engine.store import OpenTrade
+from goldbot.engine.limits_apply import EngineLimits
+from goldbot.engine.store import OpenTrade, PendingClose
 from goldbot.execution.broker import AccountInfo, OrderIntent
 from goldbot.risk.gate import RiskGate, Stage
 from goldbot.telegram.approvals import ApprovalCenter
@@ -44,21 +45,35 @@ def _engine(tmp_path: Path, *, mode: str = "demo", probe_only: bool = True, appr
     pb = _DemoTerminal(equity=10_000)
     pb.trade_mode = trade_mode
     pb.on_tick(_tick(T0))
-    eng = Engine(EngineConfig(account_id=account_id, broker_name="icm", mode=mode, probe_only=probe_only,
-                              approval_mode=approval, state_dir=str(tmp_path), owner_user_id=111, halt_checks=False),
-                 pb, [], {}, ApprovalCenter({111}, bus=bus))
+    eng = _start(tmp_path, pb, mode=mode, probe_only=probe_only, approval=approval, account_id=account_id, bus=bus)
     eng._refresh_account(_tick(T0))                         # mark 10,000; risk day and week rolled at T0
     assert eng.state.balance_closed_hwm == 10_000
     return eng, pb
 
 
-def _balance(monkeypatch: Any, pb: _DemoTerminal, balance: float) -> None:
-    """Every account read returns this balance and equity (a flat book, or open P0 at no floating P&L)."""
+def _start(state: Path, pb: _DemoTerminal, *, mode: str = "demo", probe_only: bool = True, approval: str = "auto",
+           account_id: str = "icm-probe-51234567", bus: ApprovalBus | None = None) -> Engine:
+    """An engine on `state` from the account's own config (also a restart: the risk file is loaded)."""
+    return Engine(EngineConfig(account_id=account_id, broker_name="icm", mode=mode, probe_only=probe_only,
+                               approval_mode=approval, state_dir=str(state), owner_user_id=111, halt_checks=False),
+                  pb, [], {}, ApprovalCenter({111}, bus=bus))
+
+
+def _balance(monkeypatch: Any, pb: _DemoTerminal, balance: float, equity: float | None = None) -> None:
+    """Every account read returns this balance and equity (equity = balance: a flat book, or P0 at no floating P&L)."""
     real = pb.account
 
     def read() -> AccountInfo:
-        return real().model_copy(update={"balance": balance, "equity": balance})
+        return real().model_copy(update={"balance": balance, "equity": balance if equity is None else equity})
     monkeypatch.setattr(pb, "account", read)
+
+
+def _unchanged(eng: Engine, reason: str) -> None:
+    """A refused roll: the mark, the stage and the epoch as they were, and exactly one `rotation_refused` row."""
+    st = eng.state
+    assert st.balance_closed_hwm == 10_000 and Stage(st.stage) == Stage.SIZE_DOWN and eng._epoch == 0
+    assert not _rows(eng, demo_roll.ACTION)
+    assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == [reason]
 
 
 def _at(eng: Engine, t: pd.Timestamp) -> None:
@@ -100,11 +115,39 @@ def test_a_demo_probe_host_paused_at_minus_8pct_rolls_at_the_next_00utc_risk_day
     assert not exploration.paused(eng, NEXT_DAY)                                    # exploration resumes
     [row] = _rows(eng, demo_roll.ACTION)
     assert (row["epoch_from"], row["epoch_to"]) == (0, 1)
-    assert (row["mark_from"], row["mark_to"], row["equity"]) == (10_000, 9_100, 9_100)
+    assert (row["mark_from"], row["mark_to"], row["balance"], row["equity"]) == (10_000, 9_100, 9_100, 9_100)
     assert row["drawdown"] == pytest.approx(0.09) and row["epoch_loss"] == pytest.approx(900.0)
     # the journal carries amounts, never an identifier (public repo: no login, no account id)
     assert set(row) == {"ts", "action", "by", "epoch_from", "epoch_to", "epoch_started", "mark_from", "mark_to",
-                        "equity", "drawdown", "epoch_loss"}
+                        "balance", "equity", "drawdown", "epoch_loss"}
+
+
+def test_the_rolled_mark_is_the_larger_of_balance_and_equity_so_an_open_p0_loss_is_not_banked(tmp_path,
+                                                                                            monkeypatch):
+    """Trading-safety F3 on PR #290: mark = max(balance, equity); both are journalled."""
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _balance(monkeypatch, pb, 9_200.0, equity=9_100.0)      # P0 open at a 100 floating loss
+    _at(eng, NEXT_DAY)
+    [row] = _rows(eng, demo_roll.ACTION)
+    assert eng.state.balance_closed_hwm == 9_200 and row["mark_to"] == 9_200
+    assert (row["balance"], row["equity"]) == (9_200, 9_100)
+    assert eng._hwm.mark == 9_200
+
+
+def test_a_roll_whose_risk_state_cannot_be_saved_sends_no_owner_notice(tmp_path, monkeypatch):
+    """Trading-safety F4 on PR #290: the Telegram notice goes only after a successful save."""
+    state = tmp_path / "state"
+    bus = ApprovalBus(state)
+    eng, pb = _engine(state, bus=bus)
+    _paused_at_9pct(eng, pb, monkeypatch)
+
+    def full_disk() -> None:
+        raise OSError("no space left on device")
+    monkeypatch.setattr(eng, "_save_risk_state", full_disk)
+    _at(eng, NEXT_DAY)                                       # never raises
+    assert _rows(eng, demo_roll.ACTION) and eng.state.balance_closed_hwm == 9_100   # in memory, retried on disk
+    assert _notices(state) == []
 
 
 def test_the_roll_never_touches_the_day_or_week_start_so_this_weeks_loss_is_not_forgiven(tmp_path, monkeypatch):
@@ -261,6 +304,105 @@ def test_a_drawdown_at_the_halt_line_waiting_for_confirmation_is_never_rolled(tm
     assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == ["drawdown_at_halt"]
 
 
+# trading-safety F2 on PR #290: one test per remaining refusal; each leaves the mark, stage and epoch as they were
+def test_an_order_in_flight_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    eng.state.unconfirmed_order = True
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    _unchanged(eng, "order_in_flight")
+
+
+def test_a_close_waiting_to_be_recorded_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    trade = OpenTrade(position_id=7, agent_id="explore:S0", side=1, lots=0.01, entry_bar_ts=T0, max_bars=5)
+    eng._closes = [PendingClose(position_id=7, trade=trade, reason="stop", at=T0 + H)]
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    _unchanged(eng, "closes_pending")
+
+
+def test_a_fresh_read_back_above_the_pause_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _balance(monkeypatch, pb, 9_600.0)                      # the read at the call: -4%, out of the 8-12% band
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    _unchanged(eng, "drawdown_moved")
+
+
+def test_an_unknown_drawdown_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    eng.state.equity = float("nan")
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    _unchanged(eng, "drawdown_unknown")
+
+
+def test_an_unexpected_error_in_the_checks_refuses_the_roll_and_never_raises(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+
+    def broken(*a: Any) -> Any:
+        raise RuntimeError("unexpected")
+    monkeypatch.setattr(demo_roll, "_refusal", broken)
+    _at(eng, NEXT_DAY)                                       # through the risk-day roll itself
+    _unchanged(eng, "error_RuntimeError")
+
+
+@pytest.mark.parametrize("halt", ["owner_halt", "supervisor_halt", "drift_halt"])
+def test_a_standing_entry_halt_refuses_the_roll(tmp_path, monkeypatch, halt):
+    """Trading-safety F5 on PR #290: no roll while the owner's, the supervisor's or the drift halt stands."""
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    setattr(eng.state, halt, True)
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    _unchanged(eng, halt)
+
+
+def test_the_owners_halt_on_the_bus_refuses_the_roll(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    bus = ApprovalBus(state)
+    eng, pb = _engine(state, bus=bus)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    bus.set_halt(True, by="telegram")
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    _unchanged(eng, "owner_halt")
+
+
+# trading-safety F1 on PR #290: the effective approval mode, after a restart
+def test_after_a_restart_the_owners_mode_propose_refuses_the_roll(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    bus = ApprovalBus(state)
+    eng, pb = _engine(state, bus=bus)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    bus.set_mode("propose", by="dashboard")
+    again = _start(state, pb, bus=bus)                      # the account itself is configured auto
+    _at(again, NEXT_DAY)
+    _unchanged(again, "approval_not_auto")
+
+
+def test_after_a_restart_the_propose_only_window_of_an_owner_rearm_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    eng._propose_only_until = NEXT_DAY + pd.Timedelta(days=30)
+    eng._save_risk_state()
+    again = _start(tmp_path, pb)
+    assert again._propose_only_until == NEXT_DAY + pd.Timedelta(days=30)
+    _at(again, NEXT_DAY)
+    _unchanged(again, "propose_only")
+
+
+def test_after_a_restart_the_auto_lock_refusing_on_a_real_terminal_refuses_the_roll(tmp_path, monkeypatch):
+    """The lock (`auto_entry.locked`) refuses auto on a terminal that is not demo; the roll names the terminal."""
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    pb.trade_mode = "real"
+    again = _start(tmp_path, pb)
+    _at(again, NEXT_DAY)
+    assert again.cfg.approval_mode == "propose"             # the engine's own lock refused auto too
+    _unchanged(again, "terminal_not_demo")
+
+
 # ---------------------------------------------------------------------------------------------- real money untouched
 @pytest.mark.parametrize(("mode", "probe_only", "approval", "trade_mode"), [
     ("live", False, "propose", "real"),        # a real-money account
@@ -300,12 +442,17 @@ REARM_PATH_SHA256 = {
     "Engine._poll_rearm": "37a9d935138d30d0fdcc7bd2af7b3db84e7e8f093c75145b152e9991fc9f0df9",
     "Engine._rearm_conditions": "8460d520bd750f874fbb416f643dc201675b4fb03ce453a49309beccdf22c519",
     "RiskGate.rearm": "0f5656464592607aa3b434fae1aad74e4c6fcf134455ef90fb5f3c6387496d94",
+    # trading-safety F6 on PR #290: the stage machine and the owner's reset of the dynamic-limit revert
+    "RiskGate.update_stage": "d3d92a2815fcc5c938de670c0c36f831b6627e82f9909703e4df24990ce5b911",
+    "EngineLimits.reset": "0b2310e79c7f5de3c9e08e6c89a696fe2c675297d459d4a9f8296d8435f88f4d",
 }
 
 
 def test_the_owner_totp_rearm_path_is_byte_identical():
     got: dict[str, Callable[..., Any]] = {"Engine._poll_rearm": Engine._poll_rearm,
                                           "Engine._rearm_conditions": Engine._rearm_conditions,
-                                          "RiskGate.rearm": RiskGate.rearm}
+                                          "RiskGate.rearm": RiskGate.rearm,
+                                          "RiskGate.update_stage": RiskGate.update_stage,
+                                          "EngineLimits.reset": EngineLimits.reset}
     digests = {k: hashlib.sha256(inspect.getsource(f).encode()).hexdigest() for k, f in got.items()}
     assert digests == REARM_PATH_SHA256
