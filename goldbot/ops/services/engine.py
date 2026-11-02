@@ -214,8 +214,14 @@ def disabled_wind_down(acc: Account, broker: Any) -> bool:
     Engine._own) is never stranded by a switch-off: the engine starts with every entry refused `account_disabled`
     and manages the exits; a positions read that fails counts as a position. With nothing of its own open the start is
     refused; the next restart after the wind-down is flat refuses the same way."""
+    from goldbot.engine import magic
     try:
-        own = [p for p in broker.positions() if acc.magic_base <= p.magic < acc.magic_base + 100]
+        blocks = account_blocks(acc)
+        if len(blocks) == 1:
+            own = [p for p in broker.positions() if acc.magic_base <= p.magic < acc.magic_base + 100]
+        else:                  # multi-instrument (lane L3): any book's range, on any symbol
+            bases = magic.book_bases(acc.magic_base, blocks)
+            own = [p for p in broker.account_positions() if magic.owns(p.magic, bases)]
     except Exception as exc:  # noqa: BLE001 - unknown exposure: manage it rather than strand it
         log.warning("%s is disabled and its positions are unreadable (%s): winding down, entries refused",
                     acc.account_id, type(exc).__name__)
@@ -254,6 +260,67 @@ def symbol_terms_problem(info: Any) -> str | None:
         return (f"symbol {info.name} quotes point {point} with {digits} digits; the engine prices in point "
                 f"{PRICE_POINT} and {PRICE_DIGITS} digits")
     return None
+
+
+def account_instruments(acc: Account) -> list[str]:
+    """The registry keys of the non-gold instruments this account trades (accounts.yaml `instruments`, lane L1; none
+    configured or not a demo account: gold alone)."""
+    keys = [str(k) for k in (getattr(acc, "instruments", None) or ()) if str(k) != "XAUUSD"]
+    return keys if keys and acc.mode == "demo" and not acc.is_observe_only else []
+
+
+def account_blocks(acc: Account) -> tuple[int, ...]:
+    """The magic blocks of every instrument the account trades: 0 (gold) and each configured instrument's."""
+    keys = account_instruments(acc)
+    if not keys:
+        return (0,)
+    from goldbot.instruments import load_instruments
+    reg = load_instruments()
+    return (0, *(reg.get(k).magic_block for k in keys if k in reg.instruments))
+
+
+def book_terms_problem(spec: Any, info: Any) -> str | None:
+    """Why a non-gold instrument may not trade on this terminal, or None: placeholder registry terms (`verify: true`,
+    lane L1's symbol check has not confirmed them), not enabled, or the terminal's point and digits differ from the
+    registry's (every price the book sends is rounded to them)."""
+    if not spec.enabled or spec.verify:
+        return f"{spec.key}: registry terms not confirmed (enabled={spec.enabled}, verify={spec.verify})"
+    point, digits = float(info.point), int(info.digits)
+    if abs(point - spec.point) > 1e-12 or digits != spec.digits:
+        return f"{spec.key}: the terminal quotes point {point} with {digits} digits, the registry {spec.point}/{spec.digits}"
+    return None
+
+
+def instrument_books(acc: Account, broker: Any, exploration_cfg: Any) -> tuple[Any, ...]:
+    """The account's non-gold books (engine/books.py BookSpec), demo only. An instrument whose terms are not confirmed
+    or not what the terminal quotes, or that its broker does not list, is left out (logged): that instrument never
+    trades, the rest do. Its exploration arms: `exploration.book_config` (ATR-scaled random controls)."""
+    keys = account_instruments(acc)
+    if not keys:
+        return ()
+    from goldbot.engine import exploration
+    from goldbot.engine.books import BookSpec
+    from goldbot.instruments import load_instruments
+    reg = load_instruments()
+    out = []
+    for key in keys:
+        spec = reg.instruments.get(key)
+        sym = spec.broker_symbols.get(acc.broker) if spec is not None else None
+        if spec is None or sym is None:
+            log.error("%s: instrument %s is not in the registry for broker %s: not traded", acc.account_id, key,
+                      acc.broker)
+            continue
+        try:
+            why = book_terms_problem(spec, broker.symbol_info(sym))
+        except Exception as exc:  # noqa: BLE001 - a symbol the terminal cannot describe is never traded
+            why = f"{key}: symbol_info({sym}) unavailable ({type(exc).__name__})"
+        if why:
+            log.error("%s: %s: not traded", acc.account_id, why)
+            continue
+        out.append(BookSpec(key=key, symbol=sym, store_symbol=spec.store_symbol, magic_block=spec.magic_block,
+                            digits=spec.digits, point=spec.point, contract_size=spec.contract_size,
+                            exploration_config=exploration.book_config(exploration_cfg, key), instrument=spec))
+    return tuple(out)
 
 
 def release_symbol(settings: Settings, acc: Account) -> str:
@@ -381,6 +448,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     if why:
         start_refused(acc, f"refusing to trade {account_id}: {why}")
     wind_down = not acc.enabled and disabled_wind_down(acc, broker)   # refuses when nothing of its own is open
+    # multi-instrument demo (lane L3): the account's other instruments, one SymbolBook each (engine/books.py)
+    instruments = resolve(instrument_books)(acc, broker, exploration.config_for(acc))
     paper =resolve(paper_stand_in)(broker)
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
                                            accounts=list(configured.values()))
@@ -441,7 +510,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
                               tv_max_lag_s=settings.tv.max_lag_s,
-                              swap_prior=settings_swap(settings)), broker, agents,
+                              swap_prior=settings_swap(settings), instruments=instruments), broker, agents,
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
     if shadow_host and eng.store is not None:      # replica agents (box_break_close): carried state, shadow only
@@ -459,6 +528,18 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     if table is not None:
         eng.set_sessions(table)
     refresher = resolve(SessionRefresher)(sessions)
+    # each other book: its broker's hours, its asset class's profile until read (L2 `session_profile`), own thread
+    book_refreshers = []
+    from goldbot.data.calendar import session_profile
+    from goldbot.engine import books
+    for b in list(eng.books.values())[1:]:
+        with books.using(eng, b):
+            src = BrokerSessions(session_broker, eng.cfg.symbol, fallback=session_profile(
+                b.spec.instrument.session_profile if b.spec is not None and b.spec.instrument is not None
+                else "metals", acc.server_tz))
+            if (t := resolve(refresh_sessions)(src, pd.Timestamp.now("UTC"), None)) is not None:
+                eng.set_sessions(t)
+            book_refreshers.append((b, resolve(SessionRefresher)(src)))
     compat: Any = None                      # BACKLOG 42: the bridge's methods, protocol and zone against this brain's
     if bridge is not None:
         from goldbot.ops.bridge_compat import BridgeCompatChecker, check_bridge, repo_commit
@@ -488,6 +569,10 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         eng.order_sender = order_send.bridge_sender(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-orders",
                                                     timeout_s=acc.order_timeout_s)
     warm = eng.warm_start(pd.Timestamp.now("UTC"), history_broker)   # store read only; the fill runs in the background
+    for b in list(eng.books.values())[1:]:    # other books: their own stored minutes only (no tick fill yet: box memory)
+        with books.using(eng, b):
+            eng.warm_start(pd.Timestamp.now("UTC"), None)
+    feed = books.QuoteFeed(broker) if len(eng.books) > 1 else None
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f, limits %s", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade, eng.limits_current.profile)
     def mtimes() -> tuple[float, ...]:
@@ -498,13 +583,23 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     watch.ready()                                  # READY=1: from here only this loop feeds the watchdog
     while True:
         watch.tick()                               # every pass, ticks or none: a stuck loop stops beating
-        resolve(engine_pass)(eng, broker, acc.symbol)
+        if feed is None:
+            resolve(engine_pass)(eng, broker, acc.symbol)
+        else:                                      # every book in turn, one thread: the serial gate (engine/books.py)
+            books.account_pass(eng, broker, resolve(engine_pass), feed)
         try:                                       # D13: a finished background read is applied; the loop never waits
             table = refresher.collect(pd.Timestamp.now("UTC"), eng.sessions)
             if table is not None:
                 eng.set_sessions(table)
         except Exception:
             log.exception("session refresh failed; keeping the last table")
+        for b, r in book_refreshers:
+            try:
+                with books.using(eng, b):
+                    if (t := r.collect(pd.Timestamp.now("UTC"), eng.sessions)) is not None:
+                        eng.set_sessions(t)
+            except Exception:
+                log.exception("session refresh failed for %s; keeping the last table", b)
         if compat is not None:                     # a finished bridge check is applied; the loop never waits for it
             try:
                 resolve(apply_bridge_compat)(eng, compat.collect())
@@ -518,6 +613,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
             refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
+            for _, r in book_refreshers:
+                r.start(pd.Timestamp.now("UTC"))
             if compat is not None:
                 compat.start()                     # GET /health on its own thread (BACKLOG 42)
             now_m = mtimes()
@@ -609,9 +706,22 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      # PD 2026-10-26: the probe host's own open-position cap (demo probe_only only)
                                      **({"max_positions": acc.max_positions}
                                         if acc.max_positions is not None and not paper else {}),
-                                     "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc),
+                                     "exploration_arms": {} if paper else instrument_arm_caps(acc),
+                                     # L2: a multi-instrument account's daily limit holds across its symbols
+                                     "multi_symbol": bool(account_instruments(acc)) and not paper,
                                      # growth sprint 2026-11-01: the arms the gate sizes (demo probe_only only)
                                      "growth_arms": frozenset() if paper else accounts.growth_arm_ids(acc)})
+
+
+def instrument_arm_caps(acc: Account) -> dict[str, float]:
+    """The account's exploration arm caps (`accounts.exploration_arm_caps`), and the same cap for each arm's copy on
+    every other instrument it trades (`<id>@<instrument>`, engine/exploration.py `book_config`): the RiskGate refuses an
+    arm it has no cap for."""
+    from goldbot.ops import accounts
+    caps = dict(accounts.exploration_arm_caps(acc))
+    for key in account_instruments(acc):
+        caps.update({f"{a}@{key}": v for a, v in list(caps.items()) if "@" not in a})
+    return caps
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

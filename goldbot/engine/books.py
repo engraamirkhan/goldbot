@@ -268,13 +268,54 @@ def open_books(eng: Engine, specs: tuple[BookSpec, ...]) -> None:
     eng.center.on_decision = on_primary
 
 
-def account_pass(eng: Engine, broker: Any, one_pass: Any) -> bool:
-    """One loop pass over every book, gold first: `one_pass(eng, broker, symbol)` (ops.services.engine.engine_pass)
-    on each book in turn, serially. True when every book's pass was clean."""
+class QuoteFeed:
+    """The pass's quotes for every book in one call (plan: "batched ticks_many(symbols, since) every 500 ms"): the
+    newest tick of each symbol from `Broker.ticks_many`, else (an adapter or bridge that does not serve it yet, or a
+    read that failed) that symbol's own `last_tick`. A symbol with no new tick keeps its last quote, so the engine's
+    clock and repeat rule see what one `last_tick` poll would. Read-only; `last_tick` raises as the broker's does."""
+
+    def __init__(self, broker: Any) -> None:
+        self.broker = broker
+        self.latest: dict[str, Tick] = {}
+        self.batched = True
+
+    def refresh(self, symbols: list[str], now: pd.Timestamp) -> None:
+        if not self.batched:
+            return
+        since = min((t.ts_utc for s, t in self.latest.items() if s in symbols), default=now - pd.Timedelta(minutes=1))
+        try:
+            got = self.broker.ticks_many(symbols, since)
+        except NotImplementedError:
+            self.batched = False             # this adapter or bridge has no batch read: one last_tick per symbol
+            log.info("ticks_many not served: one last_tick per symbol and pass")
+            return
+        except Exception as exc:              # a failed batch: each symbol's own read this pass
+            log.warning("ticks_many failed (%s): one last_tick per symbol this pass", type(exc).__name__)
+            self.latest = {}
+            return
+        for s, ticks in got.items():
+            if ticks:
+                self.latest[s] = max(ticks, key=lambda t: t.ts_utc)
+
+    def last_tick(self, symbol: str) -> Tick:
+        if self.batched and symbol in self.latest:
+            return self.latest[symbol]
+        return self.broker.last_tick(symbol)
+
+
+def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None) -> bool:
+    """One loop pass over every book, gold first: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass)
+    on each book in turn, serially, the quotes read once for all (`QuoteFeed`). True when every book's pass was
+    clean."""
     ok = True
+    symbols = [b.__dict__["cfg"].symbol for b in eng.books.values()]
+    quotes: Any = broker
+    if feed is not None:
+        feed.refresh(symbols, pd.Timestamp.now("UTC"))
+        quotes = feed
     for book in list(eng.books.values()):
         with using(eng, book):
-            ok = bool(one_pass(eng, broker, book.__dict__["cfg"].symbol)) and ok
+            ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
     return ok
 
 
