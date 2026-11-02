@@ -174,9 +174,11 @@ def test_fetch_one_is_resumable_without_network(tmp_path: Path) -> None:
 def test_quality_counts_missing_weekdays_and_gaps() -> None:
     mod = _script()
     dates = pd.to_datetime(["2024-01-08", "2024-01-09", "2024-01-11", "2024-01-22"])
-    q = mod.quality(pd.DataFrame({"date": dates, "n_hours": [23, 23, 3, 23]}))
+    q = mod.quality(pd.DataFrame({"date": dates, "n_hours": [23, 23, 3, 23], "open": [10.0, 10.0, 10.0, 11.0],
+                                  "close": [10.0, 10.0, 10.0, 11.0]}))
     assert q["days"] == 4 and q["short_days"] == 1
     assert q["missing_weekdays"] == 7 and q["max_gap_days"] == 11 and q["max_gap_at"] == "2024-01-11..2024-01-22"
+    assert q["open_jumps_gt_3pct"] == 1          # a 10% close -> open gap (a futures roll) is counted, not hidden
 
 
 # --------------------------------------------------------------------------- FRED

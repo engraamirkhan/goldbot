@@ -12,7 +12,8 @@ Steps (each resumable and idempotent; run in any order, `manifest` last):
   xauusd    raw/xauusd_1m_dukascopy_<year>.parquet (the XAUUSD lane's files, read only) -> raw/daily/xauusd.parquet.
   fred      FRED DTB3, DFII10, DTWEXBGS, DTWEXB, T10YIE -> raw/daily/fred_<ID>.parquet (goldbot.data.macro conventions;
             rows whose available_utc is at or after the cutoff are dropped).
-  gspc      Yahoo ^GSPC daily close (spec 033 fallback) -> raw/daily/gspc_yahoo.parquet, available_utc = date 21:15 UTC.
+  yahoo     Yahoo daily bars (default ^GSPC, the spec 033 fallback; --tickers for others) -> raw/daily/yahoo_<ticker>.parquet,
+            available_utc = date 21:15 UTC for ^GSPC (prereg), 23:00 UTC otherwise.
   manifest  sha256 + quality table per file -> --out (default ~/tmp/daily_manifest.json), markdown table on stdout.
 
   uv run python scripts/daily_fetch.py fetch [--symbols XAGUSD EURUSD ...] [--threads 2] [--pause 0.5]
@@ -30,6 +31,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -224,24 +226,39 @@ def cmd_fred(args: argparse.Namespace) -> int:
     return rc
 
 
-def cmd_gspc(args: argparse.Namespace) -> int:
+def yahoo_daily(ticker: str, available_after_close: pd.Timedelta) -> pd.DataFrame:
+    """Yahoo chart API daily bars for `ticker`, 2002-01-01 through 2025-09-30 (period2 is before the cutoff), dated in
+    the exchange's local date; available_utc = date + `available_after_close` (UTC)."""
     p1 = int(pd.Timestamp("2002-01-01", tz="UTC").timestamp())
     p2 = int(pd.Timestamp("2025-09-30 23:59:59", tz="UTC").timestamp())
     assert_before_cutoff(pd.Timestamp(p2, unit="s"), "period2")
-    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?period1={p1}&period2={p2}"
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?period1={p1}&period2={p2}"
            "&interval=1d&events=history")
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=60) as r:  # noqa: S310
         js = json.loads(r.read())
     res = js["chart"]["result"][0]
     q = res["indicators"]["quote"][0]
-    ts = pd.to_datetime(pd.Series(res["timestamp"]), unit="s", utc=True).dt.tz_convert("America/New_York")
+    tz = res["meta"].get("exchangeTimezoneName") or "America/New_York"
+    ts = pd.to_datetime(pd.Series(res["timestamp"]), unit="s", utc=True).dt.tz_convert(tz)
     df = pd.DataFrame({"date": pd.DatetimeIndex(ts.dt.date.astype(str)).as_unit("ns"), "open": q["open"],
                        "high": q["high"], "low": q["low"], "close": q["close"]}).dropna()
     df = df[df["date"] < CUTOFF.tz_localize(None)].drop_duplicates("date").reset_index(drop=True)
-    df["available_utc"] = (df["date"] + pd.Timedelta(hours=21, minutes=15)).dt.tz_localize("UTC")
-    df["source"] = "yahoo:^GSPC"
-    _write_parquet(df, args.root / "gspc_yahoo.parquet")
-    print(f"^GSPC: {len(df):,} days {df['date'].min():%Y-%m-%d}..{df['date'].max():%Y-%m-%d}")
+    df["available_utc"] = (df["date"] + available_after_close).dt.tz_localize("UTC")
+    df = df[df["available_utc"] < CUTOFF].reset_index(drop=True)
+    df["source"] = f"yahoo:{ticker}"
+    return df
+
+
+def cmd_yahoo(args: argparse.Namespace) -> int:
+    """^GSPC (spec 033 fallback): available 21:15 UTC on the day (prereg). Anything else: 23:00 UTC, after every US
+    futures settlement in both DST regimes."""
+    for t in args.tickers:
+        lag = pd.Timedelta(hours=21, minutes=15) if t == "^GSPC" else pd.Timedelta(hours=23)
+        df = yahoo_daily(t, lag)
+        name = "yahoo_" + "".join(ch for ch in t.lower() if ch.isalnum()) + ".parquet"
+        _write_parquet(df, args.root / name)
+        print(f"{t}: {len(df):,} days {df['date'].min():%Y-%m-%d}..{df['date'].max():%Y-%m-%d} -> {name}", flush=True)
+        time.sleep(2)
     return 0
 
 
@@ -258,6 +275,10 @@ def quality(df: pd.DataFrame, date_col: str = "date") -> dict[str, object]:
     if gaps.max() > 4:
         i = int(gaps.argmax())
         out["max_gap_at"] = f"{d[i]:%Y-%m-%d}..{d[i + 1]:%Y-%m-%d}"
+    if {"open", "close"} <= set(df.columns) and len(df) > 1:
+        # close -> next open jumps: futures-based CFDs (WTI, Brent, softs) roll with a price gap the bars keep
+        jump = (df["open"].iloc[1:].to_numpy() / df["close"].iloc[:-1].to_numpy() - 1.0)
+        out["open_jumps_gt_3pct"] = int((np.abs(jump) > 0.03).sum())
     return out
 
 
@@ -274,11 +295,12 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     out = Path(os.path.expanduser(args.out))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(man, indent=1))
-    print("| file | first | last | days | missing weekdays | max gap (d) | short days | sha256 (12) |")
-    print("|---|---|---|---:|---:|---:|---:|---|")
+    print("| file | first | last | days | missing weekdays | max gap (d) | short days | open jumps >3% | sha256 (12) |")
+    print("|---|---|---|---:|---:|---:|---:|---:|---|")
     for n, q in entries.items():
         print(f"| {n} | {q['first']} | {q['last']} | {q['days']:,} | {q['missing_weekdays']} | {q['max_gap_days']}"
               f"{' (' + str(q['max_gap_at']) + ')' if 'max_gap_at' in q else ''} | {q.get('short_days', '')} | "
+              f"{q.get('open_jumps_gt_3pct', '')} | "
               f"{str(q['sha256'])[:12]} |")
     print(f"wrote {out}")
     return 0
@@ -286,19 +308,20 @@ def cmd_manifest(args: argparse.Namespace) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["fetch", "build", "xauusd", "fred", "gspc", "manifest"])
+    ap.add_argument("step", choices=["fetch", "build", "xauusd", "fred", "yahoo", "manifest"])
     ap.add_argument("--symbols", nargs="*", default=list(POS1_SYMBOLS))
     ap.add_argument("--root", type=Path, default=DAILY_ROOT)
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--pause", type=float, default=0.5)
     ap.add_argument("--out", default="~/tmp/daily_manifest.json")
+    ap.add_argument("--tickers", nargs="*", default=["^GSPC"])
     args = ap.parse_args()
     if args.symbols == ["all"]:
         args.symbols = list(SPECS)
     unknown = [s for s in args.symbols if s not in SPECS]
     if unknown:
         ap.error(f"unknown symbols {unknown}; known: {sorted(SPECS)}")
-    return {"fetch": cmd_fetch, "build": cmd_build, "xauusd": cmd_xauusd, "fred": cmd_fred, "gspc": cmd_gspc,
+    return {"fetch": cmd_fetch, "build": cmd_build, "xauusd": cmd_xauusd, "fred": cmd_fred, "yahoo": cmd_yahoo,
             "manifest": cmd_manifest}[args.step](args)
 
 
