@@ -174,10 +174,71 @@ def test_the_confirm_set_is_the_eligible_explore_passers_on_dtb3_plus_named_ense
     ps = _screen()
     explore = _explore_json([("POS1-026", "DTB3", True), ("POS1-027", "DTB3", False), ("POS1-001", "DTB3", True),
                              ("POS1-057", "constant", True)])
-    cs = ps.confirm_set(explore, ["026", "027", "057"], ["POS1-ENS-TREND"])
+    cs = ps.confirm_set(explore, ["026", "027", "057", "ENS-TREND"], ["POS1-ENS-TREND"])
     assert cs["ids"] == ["POS1-026", "POS1-ENS-TREND"] and cs["m"] == 2
     with pytest.raises(SystemExit, match="EXPLORE"):
         ps.confirm_set({**explore, "window": "LEARN"}, ["026"], [])
+
+
+# ---------------------------------------------------------------- R-1 the confirm set binds to the EXPLORE read
+TABLE_ENS = TABLE + "| **ENS-TREND** | 0.80 (C1 ensemble) | 0.70 | 0.30 | **confirm-eligible** |\n"
+
+
+def _repo(tmp_path: Path, table: str = TABLE_ENS) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "prereg.md").write_text(table)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "prereg")
+    return repo
+
+
+def _explore_file(tmp_path: Path, blob: str) -> Path:
+    out = tmp_path / "explore.json"                                  # outside the repo: the tree stays clean
+    out.write_text(json.dumps({**_explore_json([("POS1-026", "DTB3", True)]), "prereg_blob": blob}))
+    return out
+
+
+def test_explore_on_a_dirty_tree_or_without_a_committed_prereg_is_refused(tmp_path: Path) -> None:
+    ps = _screen()
+    repo = _repo(tmp_path)
+    base = ["--settings", str(ROOT / "config" / "settings.yaml"), "--spec", "nowhere:NOTHING", "--window", "EXPLORE"]
+    with pytest.raises(SystemExit, match="read once|frozen-prereg"):
+        ps.main(base, root=repo)
+    (repo / "scratch.txt").write_text("uncommitted")
+    with pytest.raises(SystemExit, match="not clean"):
+        ps.main([*base, "--frozen-prereg", "prereg.md"], root=repo)
+
+
+def test_the_confirm_set_is_refused_when_the_prereg_changed_since_explore(tmp_path: Path) -> None:
+    ps = _screen()
+    repo = _repo(tmp_path)
+    explore = _explore_file(tmp_path, _git(repo, "rev-parse", "HEAD:prereg.md"))
+    (repo / "prereg.md").write_text(TABLE_ENS + "| **099** | 1.2 | 0.95 | 0.7 | **confirm-eligible** |\n")
+    _git(repo, "commit", "-qam", "edited after explore")
+    with pytest.raises(SystemExit, match="changed between EXPLORE"):
+        ps.build_confirm_set(repo, "prereg.md", explore, [])
+
+
+def test_the_confirm_set_records_the_explore_json_sha256_and_the_prereg_blob(tmp_path: Path) -> None:
+    import hashlib
+    ps = _screen()
+    repo = _repo(tmp_path)
+    blob = _git(repo, "rev-parse", "HEAD:prereg.md")
+    explore = _explore_file(tmp_path, blob)
+    cs = ps.build_confirm_set(repo, "prereg.md", explore, ["POS1-ENS-TREND"])
+    assert cs["explore_sha256"] == hashlib.sha256(explore.read_bytes()).hexdigest() and cs["prereg_blob"] == blob
+    assert cs["ids"] == ["POS1-026", "POS1-ENS-TREND"]
+
+
+def test_an_ensemble_without_a_committed_confirm_eligible_row_is_refused(tmp_path: Path) -> None:
+    ps = _screen()
+    repo = _repo(tmp_path, TABLE_ENS + "| **ENS-OLD** | 0.3 | 0.2 | 0.01 | **not confirm-eligible** |\n")
+    explore = _explore_file(tmp_path, _git(repo, "rev-parse", "HEAD:prereg.md"))
+    for bad in ("POS1-ENS-NEW", "POS1-ENS-OLD"):
+        with pytest.raises(SystemExit, match="no committed section 3 row"):
+            ps.build_confirm_set(repo, "prereg.md", explore, [bad])
 
 
 def test_a_confirm_batch_must_equal_the_committed_confirm_set_and_bh_runs_over_exactly_it(

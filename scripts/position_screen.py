@@ -18,10 +18,14 @@ Fail closed:
 * TEST-OLD and CONFIRM are read once: `--frozen-prereg` must be tracked at HEAD in a clean tree (its blob sha is
   recorded), and each (spec, window) is claimed in research.position.read_registry BEFORE the read; a second claim is
   refused for the whole batch;
+* EXPLORE runs only with `--frozen-prereg` tracked at HEAD in a clean tree and records its blob, because it feeds the
+  confirm set (LEARN and LEARN-OLD alone are development reads and cannot);
 * the confirm set is fixed between EXPLORE and CONFIRM (POS-1 section 4: "m = the eligible explore passers plus any
   eligible C1 ensembles, fixed before the run"): `--write-confirm-set` takes the explore JSON and the committed
   prereg's confirm-eligible ids (status cell exactly "confirm-eligible"), keeps the eligible ids that passed EVERY
-  explore check on a DTB3-financed run, adds the named ensembles, and writes the set to commit;
+  explore check on a DTB3-financed run, adds the named ensembles (each needs its own committed "confirm-eligible"
+  row), refuses if the prereg blob differs from the one EXPLORE recorded, records the explore JSON's sha256, and
+  writes the set to commit;
 * CONFIRM refuses unless `--confirm-set` is tracked at HEAD and the batch ids equal that set exactly (no subset, no
   extra); BH-FDR at q runs over exactly that set, and no other window carries a BH verdict;
 * without DTB3 at research.position.short_rate_path, financing falls back to the constant only with
@@ -32,6 +36,7 @@ Fail closed:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
@@ -104,14 +109,34 @@ def _matches(spec_id: str, ids: list[str]) -> bool:
 
 def confirm_set(explore: dict[str, Any], eligible: list[str], ensembles: list[str]) -> dict[str, Any]:
     """The confirm set from an EXPLORE result: eligible ids that passed every explore check on a DTB3-financed run (a
-    constant-rate run cannot gate), plus the named ensembles. Refused for any other window."""
+    constant-rate run cannot gate), plus the named ensembles, each of which must have its own committed section 3 row
+    with the exact status "confirm-eligible". Refused for any other window."""
     if explore.get("window") != "EXPLORE":
         raise SystemExit(f"the confirm set comes from the EXPLORE read, not {explore.get('window')!r}")
+    unknown = [e for e in ensembles if not _matches(e, eligible)]
+    if unknown:
+        raise SystemExit(f"ensembles {unknown} have no committed section 3 row with the status confirm-eligible")
     passed = [r["id"] for r in explore["specs"] if _matches(r["id"], eligible) and r["rate_source"] == "DTB3"
               and all(r["explore_checks"].values())]
     ids = passed + [e for e in ensembles if e not in passed]
     return {"window_read": "EXPLORE", "engine_commit": explore.get("engine_commit"), "eligible": eligible,
             "explore_passers": passed, "ensembles": list(ensembles), "ids": ids, "m": len(ids)}
+
+
+def build_confirm_set(root: Path, prereg: str, explore_path: Path, ensembles: list[str]) -> dict[str, Any]:
+    """W3 addendum ruling 17 (R-1): the set binds to the EXPLORE read it came from. The pre-registration must be
+    committed in a clean tree with the SAME blob the EXPLORE JSON recorded (it did not change in between); its
+    eligible ids and the ensembles' rows are read from that blob at HEAD; the explore JSON's sha256 is recorded."""
+    blob = committed(root, prereg, "pre-registration")
+    raw = explore_path.read_bytes()
+    explore = json.loads(raw)
+    if explore.get("prereg_blob") != blob:
+        raise SystemExit(f"the pre-registration changed between EXPLORE ({explore.get('prereg_blob')}) and the "
+                         f"confirm set ({blob}): refused")
+    cs = confirm_set(explore, eligible_ids(_git(root, "show", f"HEAD:{prereg}")), ensembles)
+    cs["prereg_blob"] = blob
+    cs["explore_sha256"] = hashlib.sha256(raw).hexdigest()
+    return cs
 
 
 def committed(root: Path, rel: str, what: str) -> str:
@@ -196,17 +221,14 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
     if args.write_confirm_set:
         if not args.from_explore or not args.frozen_prereg:
             ap.error("--write-confirm-set needs --from-explore and --frozen-prereg")
-        prereg_blob = committed(root, args.frozen_prereg, "pre-registration")
-        cs = confirm_set(json.loads(Path(args.from_explore).expanduser().read_text()),
-                         eligible_ids((root / args.frozen_prereg).read_text()), args.ensemble)
-        cs["prereg_blob"] = prereg_blob
+        cs = build_confirm_set(root, args.frozen_prereg, Path(args.from_explore).expanduser(), args.ensemble)
         Path(args.write_confirm_set).write_text(json.dumps(cs, indent=1) + "\n")
         print(f"confirm set m = {cs['m']}: {cs['ids']} -> {args.write_confirm_set} (commit it before CONFIRM)")
         return 0
     if not args.spec:
         ap.error("--spec is required unless --load-only")
     blob = None
-    if args.window in ONCE_WINDOWS:
+    if args.window in ONCE_WINDOWS or args.window == "EXPLORE":   # EXPLORE feeds the confirm set: bound to HEAD
         blob = frozen_prereg(root, args.frozen_prereg)
     elif args.window not in EXPLORE_WINDOWS:
         raise SystemExit(f"unknown window {args.window}")
@@ -250,7 +272,8 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
             r["bh_reject"] = bool(rej)
     out = {"window": args.window, "windows": [w.model_dump(mode="json") for w in windows], "engine_commit": _commit(),
            "q": args.q if eligible is not None else None, "frozen_prereg": args.frozen_prereg, "prereg_blob": blob,
-           "bh_set": eligible, "confirm_set": args.confirm_set, "confirm_set_blob": set_blob, "costs_bps": {k: v.model_dump() for k, v in costs.items()}, "specs": rows}
+           "bh_set": eligible, "confirm_set": args.confirm_set, "confirm_set_blob": set_blob,
+           "costs_bps": {k: v.model_dump() for k, v in costs.items()}, "specs": rows}
     text = json.dumps(out, indent=1, default=str)
     if args.out:
         Path(args.out).expanduser().parent.mkdir(parents=True, exist_ok=True)

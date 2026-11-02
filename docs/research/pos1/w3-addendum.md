@@ -88,8 +88,11 @@ threshold, no window and no K: every item below fixes arithmetic that W3 left op
       EXPLORE result:
       - it keeps ids whose section 3 status cell is exactly "confirm-eligible" ("not confirm-eligible" is not), that
         passed every explore check on a DTB3-financed run;
-      - it adds the named eligible ensembles;
-      - it records the prereg blob.
+      - it adds the named ensembles, each of which needs its own committed section 3 row with the exact status
+        "confirm-eligible";
+      - it refuses unless the prereg's blob at HEAD equals the `prereg_blob` the EXPLORE JSON recorded (EXPLORE itself
+        runs only on a clean tree with the prereg committed);
+      - it records the prereg blob and the explore JSON's sha256.
       The file is committed before any CONFIRM read.
     - CONFIRM refuses unless the batch ids equal that committed set exactly: no subset and no extra. BH-FDR (q 0.10)
       runs over exactly that set, and the set's blob sha is recorded. No other window carries a BH verdict.

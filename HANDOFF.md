@@ -9,6 +9,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - POS-1 confirm set (quant re-review of PR #291, C-1; W3 addendum ruling 17). `scripts/position_screen.py --write-confirm-set <file> --from-explore <explore.json> --frozen-prereg docs/research/pos1/prereg.md [--ensemble ID]` builds the set; commit the file before any CONFIRM read.
   - **What is in the set.** The ids whose status cell is exactly "confirm-eligible" and that passed every explore check on a DTB3-financed run, plus the named eligible ensembles.
   - **CONFIRM.** It needs `--confirm-set` tracked at HEAD and refuses a batch that is not exactly that set. BH-FDR runs over exactly the set, and the blob shas of the set and the prereg are recorded.
+  - **Bound to EXPLORE (R-1).** EXPLORE runs only on a clean tree with `--frozen-prereg` and records its blob; `--write-confirm-set` refuses if the prereg blob changed since, records the explore JSON sha256, and accepts an `--ensemble` only with its own committed "confirm-eligible" row.
   - **Seeds.** EXPLORE seeds each part's null draws apart: 20261102 + 1000 x part + market.
   - **Rates.** `research.position.currency_rate_paths` now maps EUR, GBP, JPY, AUD, CAD, CHF and NZD to the data lane's local OECD 3-month files (PR #299). The screen loads only the currencies a batch needs and refuses a missing one.
   - **Not done.** Read claims are not mirrored into the trial registry, because that registry feeds K and the quarterly budget.
