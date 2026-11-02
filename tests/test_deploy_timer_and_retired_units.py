@@ -3,8 +3,8 @@
 * The deploy timer must run, not only be enabled (2026-11-02: brain_bootstrap.sh ran `systemctl enable` without
   `--now` after boot, so goldbot-deploy.timer stayed inactive and a Telegram-approved deploy would never be applied).
   The bootstrap starts it, and health FAILs on an approval nothing has picked up.
-* The TradingView services retired on 2026-11-02 (tv-pull, tv-ideas, webhook) stay retired: no unit, no bootstrap
-  service, no heartbeat expected by the deploy script.
+* The TradingView services retired on 2026-11-02 (tv-pull, webhook) stay retired: no unit, no bootstrap service, no
+  heartbeat expected by the deploy script. The authors' ideas feed (goldbot-tv-ideas) is kept (owner, 2026-11-02).
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from tests.test_health import NOW, make_ctx, write
 
 ROOT = Path(__file__).resolve().parents[1]
 OPS = ROOT / "goldbot" / "ops"
-RETIRED = ("tv-pull", "tv-ideas", "webhook")
+RETIRED = ("tv-pull", "webhook")
 
 
 def _approval(tmp_path: Path, age_s: float) -> None:
@@ -57,12 +57,13 @@ def test_an_approval_nothing_applied_fails_and_names_the_timer(tmp_path):
 def test_retired_tradingview_units_are_gone():
     units = {p.name for p in (OPS / "linux" / "systemd").iterdir()}
     assert not {f"goldbot-{s}.service" for s in RETIRED} & units
+    assert "goldbot-tv-ideas.service" in units                     # kept: the followed authors' ideas feed research
 
 
 def test_no_bootstrap_or_deploy_script_runs_a_retired_service():
     deploy = (OPS / "linux" / "goldbot-deploy.sh").read_text(encoding="utf-8")
     beats = next(ln for ln in deploy.splitlines() if ln.startswith("BEAT_SERVICES=")).split('"')[1].split()
     assert not set(RETIRED) & set(beats)
-    assert "goldbot-tv-" not in (OPS / "linux" / "brain_bootstrap.sh").read_text(encoding="utf-8")
+    assert "goldbot-tv-pull" not in (OPS / "linux" / "brain_bootstrap.sh").read_text(encoding="utf-8")
     assert '"goldbot-webhook"' not in (OPS / "vps_bootstrap.ps1").read_text(encoding="utf-8")
     assert "goldbot-webhook" not in (OPS / "vps_update.ps1").read_text(encoding="utf-8")

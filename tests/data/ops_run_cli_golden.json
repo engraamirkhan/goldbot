@@ -384,6 +384,9 @@
   "goldbot/ops/linux/systemd/goldbot-telegram.service": [
    "telegram"
   ],
+  "goldbot/ops/linux/systemd/goldbot-tv-ideas.service": [
+   "tv-ideas follow --state /opt/goldbot/state"
+  ],
   "goldbot/ops/vps_bootstrap.ps1": [
    "bridge $Account",
    "supervisor",
