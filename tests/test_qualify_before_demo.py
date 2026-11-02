@@ -37,6 +37,10 @@ COSTS = "F1A G1A".split()
 RUNNING = {"icm-demo": {"C1H", "G1A", "G1C", "I0", "W0", "ZCD", "GS1C"}
            | ({"GS1"} if pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL else set()), "icm-probe": {"F1A", "F1C", "S0", "S0R"},
            "vantage-demo": {"VC1H", "VI0", "VW0", "ZCV"}, "vantage-247": {"WKS0", "WKI0"}}   # ADR 0062: controls only
+# multi-instrument demo (lane L3): the random controls of the instruments each account lists run there too
+for _acc in acc_mod.load_accounts(logins=False).values():
+    if _acc.account_id in RUNNING:
+        RUNNING[_acc.account_id] |= {f"{g}-{k}" for k in _acc.instruments for g in ("S0", "I0")}
 NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
                  "icm-probe": {"S1A", "S1B", "S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
                  "vantage-demo": {"Z6V", "Z7V"}, "vantage-247": set()}

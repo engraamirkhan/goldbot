@@ -3,8 +3,9 @@ per instrument (never pooled); no gold ML/specialists/dollar-constant arms").
 
 Each listed instrument has its own S0 (1m) and I0 (15m) random bracket under its own id, `params.instrument` naming it
 (hashed: another instrument is another arm), the stop in ATRs (never a dollar constant), registered by lane L3 on the
-account that lists the instrument, and held `blocked` until the multi-instrument engine (lane L3) runs an arm on its own
-instrument: today's engine would run it on gold.
+account that lists the instrument (lane L3), and running: the multi-instrument engine runs each on its own
+instrument's book only (engine/exploration.py `book_config`), which refuses its entries while the instrument's terms
+are unverified.
 """
 from __future__ import annotations
 
@@ -48,16 +49,20 @@ def test_instrument_controls_keep_s0_and_i0s_geometry() -> None:
             "15m", by_id["I0"].params["target_r"], by_id["I0"].params["hold_bars"], by_id["I0"].params["stop_atr"])
 
 
-def test_instrument_controls_stay_blocked_until_the_engine_trades_an_arms_own_instrument() -> None:
+def test_instrument_controls_run_now_the_engine_trades_each_on_its_own_instrument() -> None:
     for rows in _per_instrument().values():
-        assert all(a.status == "blocked" and "L3" in a.note for a in rows)
+        assert all(a.status == "run" and "L3" in a.note for a in rows)
 
 
-def test_no_account_registers_an_instrument_control_before_the_engine_runs_its_instrument() -> None:
-    """Lane L3 registers each on the account listing its instrument when its engine trades an arm's own instrument."""
+def test_each_instrument_control_is_registered_on_exactly_the_account_that_lists_its_instrument() -> None:
+    """Lane L3 registers S0-<key> / I0-<key> on the account listing <key>, nowhere else."""
     accs = acc_mod.load_accounts(logins=False)
-    ids = {a.id for rows in _per_instrument().values() for a in rows}
-    assert ids and not any(ids & set(acc.exploration.arms) for acc in accs.values())
+    for key, rows in _per_instrument().items():
+        owners = [a for a in accs.values() if key in a.instruments]
+        hosts = [a.account_id for a in accs.values() if {r.id for r in rows} & set(a.exploration.arms)]
+        assert hosts == [a.account_id for a in owners], key
+        for a in owners:
+            assert {r.id for r in rows} <= set(a.exploration.arms), key
 
 
 def test_every_instrument_control_is_classified_never_stopped() -> None:

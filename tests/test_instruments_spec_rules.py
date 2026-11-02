@@ -19,7 +19,7 @@ def _spec(**kw: Any) -> InstrumentSpec:
                                 asset_class="metal", correlation_group="gold", magic_block=3, contract_size=100.0,
                                 digits=2, point=0.01, min_lot=0.01, lot_step=0.01, currency_profit="EUR",
                                 swap_rollover3days=3, session_profile="metals", news_currencies=("USD", "EUR"),
-                                leverage_class="gold_index")
+                                leverage_class="gold_index", max_spread_points=45.0)   # L1: required per symbol
     base.update(kw)
     return InstrumentSpec(**base)
 

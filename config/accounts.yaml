@@ -301,7 +301,9 @@ accounts:
       max_open_total: 23
       pot_budgets: false
       learning_max_open: 6
-      pots: { scalp: { max_open: 19 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
+      # multi-instrument demo (lane L3): an intraday pot of 6 slots for the instruments' I0-<key> controls (inside
+      # the unchanged max_open_total 23)
+      pots: { scalp: { max_open: 19 }, intraday: { max_open: 6 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
         S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
@@ -342,6 +344,47 @@ accounts:
         LCZ4P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ5P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ7P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        # multi-instrument demo (plan 2026-11-02, lane L3): each listed instrument's random controls S0-<key>
+        # (1m, 2 ATR stop) and I0-<key> (15m, 1.5 ATR), never pooled with XAUUSD; no entry until the symbol
+        # check confirms the instrument's terms (verify: false). Rollback: drop these lines, restart
+        S0-XAGUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XAGUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-XPTUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XPTUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-XAUEUR: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XAUEUR: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-XAUAUD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XAUAUD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-US500: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-US500: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-USTEC: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-USTEC: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-DE40: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-DE40: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-UK100: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-UK100: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-JP225: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-JP225: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-EURUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-EURUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-USDJPY: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-USDJPY: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-GBPUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-GBPUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-AUDUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-AUDUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-USDCAD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-USDCAD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-USDCHF: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-USDCHF: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-NZDUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-NZDUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-XTIUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XTIUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-XBRUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XBRUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
+        S0-XNGUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XNGUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
   vantage-demo:
     broker: vantage
     mode: demo
@@ -454,6 +497,23 @@ accounts:
         # ZCV stays H-81's
         LCZ6V: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ7V: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        # multi-instrument demo (plan 2026-11-02, lane L3): each listed instrument's random controls S0-<key>
+        # (1m, 2 ATR stop) and I0-<key> (15m, 1.5 ATR), never pooled with XAUUSD; no entry until the symbol
+        # check confirms the instrument's terms (verify: false). Rollback: drop these lines, restart
+        S0-UST10Y: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-UST10Y: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        S0-BUND10Y: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-BUND10Y: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        S0-COPPER: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-COPPER: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        S0-WHEAT: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-WHEAT: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        S0-SOYBEAN: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-SOYBEAN: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        S0-SUGAR: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-SUGAR: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        S0-COFFEE: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-COFFEE: { style: intraday, max_loss: 17.0, control_share: 0.05 }
   icm-depth:
     broker: icm
     mode: demo

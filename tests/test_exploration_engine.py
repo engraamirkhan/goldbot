@@ -870,10 +870,12 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
     assert (probe.budget_share + accs["icm-probe"].cost_probe.budget_share) * 220 == pytest.approx(220, abs=0.01)
     assert not probe.pot_budgets and not demo.pot_budgets
-    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (None, 19)}
+    # multi-instrument demo (lane L3): an intraday pot of 6 slots for the instruments' I0-<key> controls
+    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (None, 19), "intraday": (None, 6)}
     assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
                                                                        "swing": (None, 3), "growth": (80, 2)}
-    assert {a.max_loss for a in probe.arms.values()} == {6.5}
+    assert {a.max_loss for a in probe.arms.values() if a.style == "scalp"} == {6.5}
+    assert {a.max_loss for a in probe.arms.values() if a.style == "intraday"} == {17.0}   # L3: the I0-<key> controls
     assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0, 30.0}   # £30: wave-1 1h arms
     assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
 

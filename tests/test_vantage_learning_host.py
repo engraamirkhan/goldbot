@@ -37,7 +37,9 @@ V_WAVE1 = {"VXRIP1H": 30.0, "VXRT1H": 30.0, "VXFK1H": 30.0, "VXTL1H": 30.0, "VXT
 # arms expansion wave 2 (arms-2026-10-25.md section 8): Vantage's own hypotheses, per-trade cap by timeframe
 V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
 # H-81 stage V1 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pot): the $7.00-bar strata and ZCV, £6.50
-V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
+V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
+# multi-instrument demo (lane L3): the random controls of the 7 Vantage instruments vantage-demo lists
+V_INSTRUMENTS = {f"{p}-{k}" for k in ['UST10Y', 'BUND10Y', 'COPPER', 'WHEAT', 'SOYBEAN', 'SUGAR', 'COFFEE'] for p in ("S0", "I0")}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +71,7 @@ def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound
 
 def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of_180(vantage):
     ex = vantage.exploration
-    assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
+    assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP | V_INSTRUMENTS
     # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
     assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
     assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 6),
@@ -79,7 +81,8 @@ def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
-    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V"}
+    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V",
+                                                                    "LCZ7V"} | V_INSTRUMENTS
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 
@@ -131,8 +134,12 @@ def test_a_twin_whose_body_differs_from_its_arm_or_names_no_arm_is_refused(tmp_p
 def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_the_blocked_one(vantage):
     cfg = exploration.config_for(vantage)
     assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
-    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP)
-    assert len(cfg.arms) == 28                         # + LCZ6V, LCZ7V (ADR 0072 learning controls)
+    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
+                                            | V_INSTRUMENTS)
+    assert len(cfg.arms) == 28 + 14                    # + LCZ6V, LCZ7V (ADR 0072); + the instruments' S0/I0 (L3)
+    gold = exploration.book_config(cfg, "XAUUSD")       # gold's book runs gold's 28 only
+    assert gold is not None and {a.arm_id for a in gold.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1)
+                                                                  | set(V_WAVE2) | V_SCALP)
     by = {a.arm_id: a for a in cfg.arms}
     assert by["DON4"].style == "swing" and by["KSQ1"].style == by["PDC1"].style == "intraday"
     assert by["VI0"].control_share == 0.30 and by["VW0"].control_share == 0.33
@@ -143,7 +150,8 @@ def test_vantage_riskgate_limits_carry_its_host_cap_probe_only_fence_and_arm_cap
     limits = engine_limits(load_settings(), vantage)
     assert limits.max_positions == 24 and limits.probe_only and limits.daily_loss_limit_abs == 200   # ADR 0072: 24
     assert limits.exploration_arms == {**{a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING},
-                                       **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5)}
+                                       **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5),
+                                       **{a: (6.5 if a.startswith("S0-") else 17.0) for a in V_INSTRUMENTS}}
 
 
 class _Recorder(_Terminal):
