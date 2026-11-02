@@ -117,6 +117,12 @@ class RiskLimits(Record):
     # minimum lot (`accounts.growth_arm_ids`: `sizing: growth`, demo probe_only only). Every other check, the arm's
     # per-trade cap included, still applies; an arm not listed keeps the minimum-lot fence
     growth_arms: frozenset[str] = Field(default_factory=frozenset)
+    # demo-limits ADR (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to
+    # test, learn and improve signals"): whether a tier-1 news blackout (`AccountState.in_blackout`) refuses entries;
+    # a news shock (or a blackout of unknown kind) refuses whatever this says (trading-safety M2).
+    # False only for a demo probe_only account whose accounts.yaml `news_blackout_entries` is false, against its real
+    # terminal (`ops.services.engine.blackout_entries`); True (refused, as before) on every other account
+    blackout_entries: bool = True
     # the live pilot (goldbot/risk/pilot.py, ADR 0055): the account's `pilot:` block when enabled, set only by
     # ops.services.engine.engine_limits for that account's real terminal. None (every other account): no change
     pilot: PilotRules | None = None
@@ -181,6 +187,9 @@ class AccountState(Record):
     # disabled_wind_down); every entry is refused `account_disabled`, exits are never gated
     account_disabled: bool = False
     in_blackout: bool = False
+    # demo-limits ADR 0072 (trading-safety M2): the blackout's kind, "tier1" (the calendar) or "news_shock"; None while
+    # none is in force. Only a tier-1 window may be lifted (`RiskLimits.blackout_entries`): any other kind refuses
+    blackout_kind: str | None = None
     dq_error: bool = False
     stale_bars: bool = False          # the last completed bar is more than one decision period old
     data_recovering: bool = False     # data was unhealthy within the last 60 s (design: reset after 60 s healthy)
@@ -757,7 +766,7 @@ class RiskGate:
             reasons.append("equity_unconfirmed")
         if st.dq_error:
             reasons.append("data_quality_error")
-        if st.in_blackout:
+        if st.in_blackout and (L.blackout_entries or st.blackout_kind != "tier1"):    # M2: a shock always refuses
             reasons.append("news_blackout")
         reasons += self.window_reasons(st)
         if st.in_rollover:

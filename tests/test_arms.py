@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.instruments import registry
 from goldbot.research import arms
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +34,13 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
                 # ADR 0062: the XAUUSD247 weekend lane's two random controls (forward only, vantage-247)
                 "WKS0", "WKI0",
                 # growth sprint 2026-11-01: the owner experiment and its random-entry control (icm-demo)
-                "GS1", "GS1C"}
+                "GS1", "GS1C",
+                # ADR 0061 amendment 2026-11-02: the learning arms' dedicated random controls (forward only)
+                "LCZ3D", "LCZ4D", "LCZ6D", "LCZ7D", "LCZ9D", "LCZ10D", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ4P",
+                "LCZ5P", "LCZ7P", "LCZ6V", "LCZ7V"}
+# multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
+INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
+ARM_SPEC_IDS |= INSTRUMENT_CONTROLS
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:

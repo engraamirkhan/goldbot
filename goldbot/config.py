@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 if TYPE_CHECKING:
     import pandas as pd
 
+    from goldbot.instruments import InstrumentSpec
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SETTINGS = ROOT / "config" / "settings.yaml"
 
@@ -461,6 +463,9 @@ class ResearchSettings(_Section):
     lot_fit_acct_per_usd: float = Field(0.75, gt=0)      # account currency per USD (GBP at GBPUSD ~1.33)
     lot_fit_spread_points: float = Field(20.0, ge=0)     # the gate's stop floor: spread prior, points (0.01 USD each)
     lot_fit_stops_level_points: float = Field(0.0, ge=0)  # ...and the broker's stops level (IC Markets: 0)
+    # multi-instrument plan 2026-11-02: another instrument's spread prior in ITS points (`Settings.lot_fit_spread_
+    # points_for`); an instrument not listed has none (gold's 20 points would be another size in its units)
+    lot_fit_spread_points_by_symbol: dict[str, float] = Field(default_factory=dict)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
@@ -958,6 +963,41 @@ class Settings(_Section):
             if missing:
                 raise ValueError(f"labels.{key} has no value for walk-forward timeframe(s) {', '.join(missing)}")
         return self
+
+    # Multi-instrument demo (plan 2026-11-02: "point 0.01 ... config.py, triple-swap weekday per symbol (config.py)"):
+    # the per-symbol reading of the settings that are XAUUSD numbers. `symbol` is an instrument key, store symbol or
+    # broker symbol (config/instruments.yaml, `Instruments.resolve`); XAUUSD in any form reads the configured value,
+    # unchanged; another instrument its own terms; an unknown symbol is KeyError, never gold's number
+
+    def _spec(self, symbol: str) -> InstrumentSpec:
+        from goldbot.instruments import spec_of
+        return spec_of(symbol)
+
+    def point_for(self, symbol: str) -> float:
+        """The price unit `spread_points` and `stops_level_points` count in (XAUUSD 0.01, EURUSD 0.00001)."""
+        return float(self._spec(symbol).point)
+
+    def price_tolerance_for(self, symbol: str) -> float:
+        """The ledger's record-vs-broker price tolerance: `ledger.price_tolerance` for gold, one point otherwise."""
+        spec = self._spec(symbol)
+        from goldbot.instruments import GOLD
+        return self.ledger.price_tolerance if spec.key == GOLD else float(spec.point)
+
+    def swap_triple_weekday_for(self, symbol: str) -> int:
+        """The triple-swap weekday (0 = Monday): `costs.swap_triple_weekday` for gold, the instrument's own (MT5
+        SYMBOL_SWAP_ROLLOVER3DAYS in instruments.yaml) otherwise; indices and energies are Friday at most brokers."""
+        from goldbot.instruments import GOLD, triple_weekday
+        spec = self._spec(symbol)
+        return self.costs.swap_triple_weekday if spec.key == GOLD else triple_weekday(spec)
+
+    def lot_fit_spread_points_for(self, symbol: str) -> float | None:
+        """The H-27 lot-fit spread prior in the instrument's points: `research.lot_fit_spread_points` for gold,
+        `research.lot_fit_spread_points_by_symbol[key]` otherwise, None when not configured (no prior, no guess)."""
+        from goldbot.instruments import GOLD
+        spec = self._spec(symbol)
+        if spec.key == GOLD:
+            return self.research.lot_fit_spread_points
+        return self.research.lot_fit_spread_points_by_symbol.get(spec.key)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

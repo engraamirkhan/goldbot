@@ -236,6 +236,10 @@ class EngineConfig(Record):
     halt_checks: bool = False
     # production: block entries around tier-1 events from the archived calendar (store table calendar_events)
     news_blackout: bool = False
+    # demo-limits ADR (owner 2026-11-02): the Friday cut closes every position of this engine, winners too (censored),
+    # and exploration refuses an entry only in the last 15 minutes before it (`exploration.crosses_friday`). Set by
+    # ops.services.engine only for a demo probe_only account whose accounts.yaml says so; off everywhere else
+    demo_weekend_flat: bool = False
     blackout_before_min: int = 15
     blackout_after_min: int = 30
     shock_blackout_min: int = 30             # after a high-relevance unscheduled news shock (store table news)
@@ -1991,7 +1995,8 @@ class Engine:
             st.combined_size_down = bool(sup.get("size_down", False))
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         if self.cfg.news_blackout:
-            st.in_blackout = self._blackout(tick.ts_utc) is not None
+            ev = self._blackout(tick.ts_utc)
+            st.in_blackout, st.blackout_kind = ev is not None, (ev.get("kind") or "tier1") if ev else None
         self._entry_windows(tick.ts_utc, now, sessions)
         # design (Account classifier): a broker account trades by its measured class; Unknown (incl. not classified
         # yet) trades nothing, Standard is restricted in the gate. The paper broker has no account to classify.
@@ -2192,7 +2197,7 @@ class Engine:
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
         friday_cut = srv.weekday() == 4 and mins >= h * 60 + m
         self.state.weekend = friday_cut or srv.weekday() >= 5
-        if friday_cut and self._weekend_done != srv.date().isoformat() and self._weekend_rule(tick):
+        if friday_cut and weekend_lane.cut_due(self, srv.date().isoformat()) and self._weekend_rule(tick):
             self._weekend_done = srv.date().isoformat()   # only once every position was handled; else retried
             self._save_risk_state_now("the weekend rule")
 
@@ -2601,10 +2606,10 @@ class Engine:
             return None
         self._calendar_events(now)
         hit = blackout_window(self._calendar[1], now, self.cfg.blackout_before_min, self.cfg.blackout_after_min)
-        if hit is None and self.cfg.shock_blackout_min > 0:
+        if (hit is None or not self.gate.limits.blackout_entries) and self.cfg.shock_blackout_min > 0:   # ADR 0072 M2
             if self._news[0] is None or now - self._news[0] > pd.Timedelta(minutes=1):   # shocks need a fast re-read
                 self._news = (now, self.store.read("news", start=now - pd.Timedelta(days=1), end=now))
-            hit = shock_window(self._news[1], now, self.cfg.shock_blackout_min, self.cfg.shock_min_relevance)
+            hit = shock_window(self._news[1], now, self.cfg.shock_blackout_min, self.cfg.shock_min_relevance) or hit
         self._blackout_event = hit
         return hit
 

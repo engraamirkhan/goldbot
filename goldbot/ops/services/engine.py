@@ -502,7 +502,10 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               # ADR 0062: a 24/7 symbol's own calendar and weekend window (off on every other account)
                               always_open=acc.sessions == "always_open", pauses=acc.pauses,
                               weekend_window=acc.weekend_window if acc.weekend_only else None,
+                              # the blackout is computed on every engine; whether it refuses entries is the gate's
+                              # `blackout_entries` (engine_limits)
                               news_blackout=True,
+                              demo_weekend_flat=engine_weekend_flat(acc),   # demo-limits ADR 2026-11-02
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
@@ -686,6 +689,19 @@ def paper_stand_in(broker: Any) -> bool:
     return isinstance(broker, PaperBroker)
 
 
+def engine_weekend_flat(acc: Account) -> bool:
+    """Demo-limits ADR 2026-11-02: the engine's `demo_weekend_flat`, from the account's flag on a demo probe_only
+    account only (accounts.yaml refuses it anywhere else; checked again here). False on every other account."""
+    return bool(acc.demo_weekend_flat and acc.mode == "demo" and acc.probe_only)
+
+
+def blackout_entries(acc: Account, *, paper: bool = False) -> bool:
+    """Demo-limits ADR 2026-11-02 (`RiskLimits.blackout_entries`): False, so the gate trades through a tier-1 news
+    blackout, only on a demo probe_only account whose `news_blackout_entries` is false, against its real terminal
+    (never the paper stand-in); True on every other account, as before."""
+    return not (acc.mode == "demo" and acc.probe_only and not acc.news_blackout_entries and not paper)
+
+
 def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> RiskLimits:
     """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
     file) gets the tiny-live risk per trade (and no minimum-lot exception). The account's own absolute daily loss
@@ -719,7 +735,9 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      # L2: a multi-instrument account's daily limit holds across its symbols
                                      "multi_symbol": bool(account_instruments(acc)) and not paper,
                                      # growth sprint 2026-11-01: the arms the gate sizes (demo probe_only only)
-                                     "growth_arms": frozenset() if paper else accounts.growth_arm_ids(acc)})
+                                     "growth_arms": frozenset() if paper else accounts.growth_arm_ids(acc),
+                                     # demo-limits ADR 2026-11-02: news blackout entries (demo probe_only only)
+                                     "blackout_entries": blackout_entries(acc, paper=paper)})
 
 
 def instrument_arm_caps(acc: Account) -> dict[str, float]:

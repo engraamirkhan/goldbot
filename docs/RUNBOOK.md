@@ -1684,6 +1684,25 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   (idempotent; it prints how many rows it released). Restart `goldbot-engine@icm-demo`. Check the journal shows one
   `exploration_pyramid` row each for GS1 and GS1C (the switch time the 11-07 read splits on). Rollback: drop `adds`
   from both arms and restart. Open groups keep every stop already moved and every exit; no new add goes out.
+* **Demo learning limits and the learning class (ADR 0072, ADR 0061 amendment 2026-11-02; Claude runs it).** This
+  applies on icm-demo, icm-probe and vantage-demo:
+  - **What changes.** Pot £ budgets are off, the host cap is 24, the Friday cut flattens everything, news blackouts no
+    longer refuse entries, and 15 learning arms run (docs/research/learning-2026-11-02.md).
+  - **Deploy.** Then, before restarting, write the learning K rows once on the brain, under the registry lock and
+    inside the 2026Q4 budget:
+    `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/record_learning_k_rows.py --registry /opt/goldbot/state/research_registry.jsonl`.
+    Run it with `--dry-run` first: it lists the 30 rows. It is idempotent. If the budget is short it raises and writes
+    nothing: the learning arms then stay refused (fail closed), and the budget is the owner's decision.
+  - **Restart** the three engines.
+  - **Check:**
+    - each engine file shows `max_positions` 24;
+    - no `exploration_arm_unqualified` row names a learning arm;
+    - an `exploration_learning_unread` row means the ledger read failed: learning entries are refused until it reads;
+    - the first learning fills carry `evidence_class: learning` in `exploration_trades`.
+  - **Retirements are journalled:** `exploration_arm_learning_read_due` at 300 admissible fills (hand the read to the
+    evaluator), `exploration_arm_learning_loss_cap` and `exploration_arm_learning_expired`.
+  - **Rollback.** To stop the learning class only, set `learning_max_open: 0` on each account and restart. To roll back
+    the limits, see ADR 0072 "Consequences". Open positions keep every exit.
 
 ### Auto mode (entries without your click)
 
