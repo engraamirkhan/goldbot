@@ -39,8 +39,10 @@ class EntryBlock(BaseModel):
 # correlation groups (goldbot/instruments.py), in the dashboard's fixed order
 InstrumentGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags"]
 # what a symbol of an account can do now (the engine's per-symbol report): grey = market_closed/disabled, amber =
-# stale/terms_missing, red = group_cap only (UI spec)
-InstrumentState = Literal["can_enter", "market_closed", "stale", "group_cap", "terms_missing", "disabled"]
+# stale/terms_missing/swap_unknown, red = group_cap only (UI spec). swap_unknown (incident 2026-11-02): terms loaded,
+# but a swap the engine cannot price, so entries are refused and exits still close
+InstrumentState = Literal["can_enter", "market_closed", "stale", "group_cap", "terms_missing", "disabled",
+                          "swap_unknown"]
 
 
 class InstrumentView(BaseModel):

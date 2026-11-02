@@ -132,7 +132,13 @@ phase_install() {
     printf '%s\n' "$prev" > "$STATE_DIR/previous-sha"
   fi
 
-  if "$DEPLOY" "$SHA"; then row PASS "goldbot-deploy <sha>" "done"; else row FAIL "goldbot-deploy <sha>" "refused or failed"; return 0; fi
+  # its own unit (review of #319, F2): a dropped SSH session or a Ctrl-C here never stops the deploy half way;
+  # --wait returns the deploy's own exit status
+  if systemd-run --wait --quiet --collect --unit "goldbot-deploy-manual-$(date +%s)" "$DEPLOY" "$SHA"; then
+    row PASS "goldbot-deploy <sha>" "done"
+  else
+    row FAIL "goldbot-deploy <sha>" "refused or failed"; return 0
+  fi
 
   trap 'rm -rf -- "${OPS_SRC:-/nonexistent-never}"' EXIT
   if fetch_ops; then row PASS "root clone at sha" "commit id verified"; else row FAIL "root clone at sha" "fetch or id mismatch"; return 0; fi

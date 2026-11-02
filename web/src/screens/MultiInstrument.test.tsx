@@ -55,13 +55,16 @@ describe("per-symbol entry state", () => {
       { symbol: "DE40", state: "group_cap", text: "Equity cap spent" },
       { symbol: "USDJPY", state: "terms_missing", text: "Terms not loaded" },
       { symbol: "XNGUSD", state: "stale", text: "Feed stale 3 min" },
+      { symbol: "JP225", state: "swap_unknown", text: "swap not priced: entries refused, exits still close" },
     ]} />);
-    expect(screen.getByText(/2 of 6/)).toBeInTheDocument();
+    expect(screen.getByText(/2 of 7/)).toBeInTheDocument();
+    // incident 2026-11-02: a swap the engine cannot price is not "terms not loaded"
+    expect(screen.getByText(/Swap not priced: entries refused, exits still close: JP225/).closest("li")).toHaveClass("warn");
     expect(screen.getByText(/Group cap spent: DE40/).closest("li")).toHaveClass("bad");
     expect(screen.getByText(/Terms not loaded: entries refused, exits still close: USDJPY/).closest("li")).toHaveClass("warn");
     expect(screen.getByText(/Price feed stale: XNGUSD/).closest("li")).toHaveClass("warn");
     expect(screen.getByText(/Market closed: US500/).closest("li")).toHaveClass("muted");
-    fireEvent.click(screen.getByRole("button", { name: "Show all 6" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all 7" }));
     expect(screen.getByText("Feed stale 3 min")).toBeInTheDocument();
   });
 });

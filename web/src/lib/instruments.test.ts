@@ -53,6 +53,7 @@ describe("groups and tones", () => {
     expect(stateTone("disabled")).toBe("muted");
     expect(stateTone("stale")).toBe("warn");
     expect(stateTone("terms_missing")).toBe("warn");
+    expect(stateTone("swap_unknown")).toBe("warn");
     expect(stateTone("unknown")).toBe("warn");
     expect(stateTone("group_cap")).toBe("bad");
     expect(stateTone("can_enter")).toBe("ok");

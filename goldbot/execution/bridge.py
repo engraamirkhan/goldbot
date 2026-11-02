@@ -51,6 +51,7 @@ brain, `RemoteBroker(observe_only=True)` refuses the same calls before the netwo
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import hmac
 import json
@@ -155,7 +156,12 @@ METHODS: dict[str, tuple[str, bool]] = {
 # back to one last_tick per symbol), `broker_terms(..., symbol=None)` (the symbol sent only when given, as
 # positions), the bridge selecting the account's symbol list (market_watch.account_symbols) and the notional ceiling
 # counted account-wide (GuardedBroker). A v9 brain never calls ticks_many, so MIN_COMPATIBLE stays 5
-API_VERSION = 10
+# v11 (incident 2026-11-02): SymbolInfo's currency_base and currency_margin, so a swap in modes 2/3 is priced only
+# when its unit is known (goldbot/engine/instruments_db.py). Read tolerantly: a v10 bridge reports them None (that
+# symbol's swap stays unknown and its entries are refused, exits unaffected) and a v10 brain drops them, so
+# MIN_COMPATIBLE stays 5 and either box can be deployed first. v10 boxes ran before the fields, hence a new number.
+# GET /health also gains the optional `lock_wait_s` and `slow_calls` (no method, record or argument changes).
+API_VERSION = 11
 MIN_COMPATIBLE = 5
 # ADR 0063 (security review of PR 236): what an observe-only bridge serves, an allowlist of read-only methods for
 # bars, ticks and symbol terms, and the account read its verify needs; no positions, history, sizing or order method
@@ -200,6 +206,15 @@ TERMINAL_LOST_READS = 2         # consecutive not_running reads after which the 
 TERMINAL_LOST_MIN_SPAN_S = 30.0  # ... and only when those reads span at least this long (review L1)
 TERMINAL_LOST_EXIT = 75         # EX_TEMPFAIL: systemd's Restart=always starts it again
 TERMINAL_FOR_CAP_S = 99_999     # terminal_for_s never has six digits (security condition 6: no 6-digit run on /health)
+# Incident 2026-11-02 (docs/incidents/2026-11-02-multi-instrument.md): 20 books' calls serialised on one terminal of a
+# CPU-starved box, and the bridge said nothing; the contention showed only as the engine's ReadTimeouts. A call that
+# holds the terminal longer than SLOW_HOLD_S is logged (method, seconds held, requests waiting), and GET /health
+# reports, over the last LOCK_WAIT_WINDOW_S, the longest an RPC waited for the terminal (`lock_wait_s`: queue + lock,
+# one decimal, capped) and how many held it too long (`slow_calls`). Both are additive and optional: absent while no
+# RPC ran in the window; older brains and the root probe ignore them.
+SLOW_HOLD_S = 2.0
+LOCK_WAIT_WINDOW_S = 300.0
+LOCK_WAIT_CAP_S = 999.9
 
 
 class BridgeUnavailable(ConnectionError):
@@ -332,6 +347,31 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
                             "verified": not verify_first}
     main = terminal if terminal is not None else TerminalQueue("terminal")
     orders = TerminalQueue("order-lane")
+    # (ended, seconds waited for the terminal, held it over SLOW_HOLD_S) per RPC on the main worker; read and written on
+    # that worker only (calls and /health both run there)
+    recent: collections.deque[tuple[float, float, bool]] = collections.deque(maxlen=4096)
+
+    def let_go(label: str, got: float, queued: float | None) -> None:
+        """On the worker, as a call lets the terminal go: a hold over SLOW_HOLD_S is logged with the requests still
+        waiting; an RPC's wait (queued -> got) counts on /health (`lock_figures`)."""
+        now = clock()
+        held = now - got
+        slow = held > SLOW_HOLD_S
+        if slow:
+            log.warning("bridge: %s held the terminal %.1f s (%d waiting)", label, held, main.depth())
+        if queued is not None:
+            recent.append((now, max(got - queued, 0.0), slow))
+
+    def lock_figures(body: dict[str, Any]) -> None:
+        """`lock_wait_s` and `slow_calls` over the last LOCK_WAIT_WINDOW_S; nothing while no RPC ran in it."""
+        now = clock()
+        while recent and now - recent[0][0] > LOCK_WAIT_WINDOW_S:
+            recent.popleft()
+        if not recent:
+            return
+        body["lock_wait_s"] = min(round(max(w for _, w, _ in recent), 1), LOCK_WAIT_CAP_S)
+        if n := sum(1 for _, _, s in recent if s):
+            body["slow_calls"] = n
 
     def terminal_state() -> str | None:
         """The terminal's token (and its bookkeeping), or None when the broker does not report one. On the worker."""
@@ -357,11 +397,13 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             if state != seen["state"]:
                 seen["state"], seen["since"] = state, clock()
         else:
+            got = clock()
             try:
                 state = terminal_state()
             finally:
                 if lock is not None:
                     lock.release()
+                let_go("health", got, None)
         login = "in_progress" if held else (login_status() if login_status is not None else None)
         if login in LOGIN_STATES and state != "ok":    # a login held back only matters without an account
             body["login"] = login
@@ -380,6 +422,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
         body["order_lane"] = lane.state if lane is not None else "off"
         if commit is not None:
             body["commit"] = commit
+        lock_figures(body)
         lost = False
         if state != "not_running":
             seen["lost"] = 0
@@ -408,10 +451,13 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
         # answers what it can
         return None
 
-    def call(method: str, args: list[Any], sent_at: float) -> _Outcome:
-        """One RPC on the main worker."""
+    def call(method: str, args: list[Any], sent_at: float, queued: float | None = None) -> _Outcome:
+        """One RPC on the main worker. `queued`: when the request was queued (`clock`), for /health's lock wait."""
         if lock is not None and not lock.acquire(timeout=LOCK_WAIT_S):
+            if queued is not None:
+                recent.append((clock(), max(clock() - queued, 0.0), False))
             return _Outcome(503, {"error": "terminal login in progress: refused, send again"})
+        got = clock()
         try:
             if (refused := gate(read_terminal=True)) is not None:
                 return _Outcome(*refused)
@@ -424,6 +470,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
         finally:
             if lock is not None:
                 lock.release()
+            let_go(method, got, queued)
 
     def lane_call(args: list[Any], sent_at: float) -> _Outcome:
         """place_order on the order lane's own connection (its worker), as `call`; LaneLost propagates."""
@@ -503,6 +550,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
                 self._reply(400, {"error": "bad body"})
                 return
             received = time.monotonic()
+            queued = clock()                         # /health's lock wait: queue + terminal lock, on `clock`
             try:
                 req = json.loads(self.rfile.read(n))
                 method = req["method"]
@@ -533,7 +581,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
                     return f"queued past its client's {ttl:g} s timeout; dropped"
                 return None
             on_lane = method == "place_order" and lane is not None and lane.ready()
-            job = Job((lambda: lane_call(args, sent_at)) if on_lane else (lambda: call(method, args, sent_at)),
+            job = Job((lambda: lane_call(args, sent_at)) if on_lane else (lambda: call(method, args, sent_at, queued)),
                       priority=priority_of(method), label=method, refusal=refusal)
             if not self._run(orders if on_lane else main, job):
                 return

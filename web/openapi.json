@@ -2165,7 +2165,8 @@
        "stale",
        "group_cap",
        "terms_missing",
-       "disabled"
+       "disabled",
+       "swap_unknown"
       ],
       "title": "State",
       "type": "string"
@@ -2571,7 +2572,8 @@
          "stale",
          "group_cap",
          "terms_missing",
-         "disabled"
+         "disabled",
+         "swap_unknown"
         ],
         "type": "string"
        },

@@ -285,3 +285,18 @@ def test_engines_fail_closed_without_a_fresh_readable_supervisor_heartbeat(tmp_p
     (tmp_path / "supervisor.json").write_text(json.dumps({"ts": time.time(), "halt": True,
                                                           "reasons": ["combined_weekly_cap", "combined_drawdown_halt"]}))
     assert Supervisor.engine_should_halt(tmp_path) == (True, "combined_weekly_cap,combined_drawdown_halt")
+
+
+def test_a_heartbeat_written_during_a_slow_report_is_not_stamped_ahead(tmp_path):
+    """Incident 2026-11-02: health judges every account at the instant its pass started (`now`), and on a pass slowed
+    by a bridge timing out the supervisor rewrote supervisor.json more than CLOCK_AHEAD_TOLERANCE_S after it:
+    entry_status:vantage-demo (the last account) read BLOCKED "stamped ahead of this server's clock". Ahead is
+    measured against the later of `now` and the wall clock; stale still against `now`."""
+    import time as _time
+    wall = _time.time()
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": wall, "halt": False, "reasons": []}))
+    assert Supervisor.engine_should_halt(tmp_path, now=wall - 40) == (False, "")
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": wall + 3600, "halt": False, "reasons": []}))
+    assert Supervisor.engine_should_halt(tmp_path, now=wall - 40) == (True, "supervisor_heartbeat_future")
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": wall - 200, "halt": False, "reasons": []}))
+    assert Supervisor.engine_should_halt(tmp_path, now=wall - 40) == (True, "supervisor_heartbeat_stale")

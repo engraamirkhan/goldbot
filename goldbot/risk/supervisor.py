@@ -384,6 +384,11 @@ class Supervisor:
         if not isinstance(s, dict):
             return True, "supervisor_state_unreadable"
         problem = heartbeat_problem(s.get("ts", 0), time.time() if now is None else now, max_age_s)
+        if problem == "future" and now is not None:
+            # a report built at an earlier instant (health's pass start): a heartbeat written while it ran is not a
+            # clock fault; ahead is measured against the later clock, as health's own future checks (incident
+            # 2026-11-02, goldbot.ops.checks._base._ahead_s). The engines (now None) are unchanged
+            problem = heartbeat_problem(s.get("ts", 0), max(now, time.time()), max_age_s)
         if problem == "invalid":
             return True, "supervisor_state_unreadable"
         if problem == "future":

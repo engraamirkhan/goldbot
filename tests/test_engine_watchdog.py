@@ -491,6 +491,7 @@ def test_t1_terminal_ok_restarts_nothing(tmp_path):
     rc, out, calls = _bridge_watchdog(tmp_path, bodies=[_health("ok")])
     assert rc == 0 and _restarted(calls) == [] and calls.count("curl ") == 1
     assert "setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- " in calls   # the probe is unprivileged
+    assert "--inh-caps=-all -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin " in calls   # and has an empty environment (L1)
 
 
 @pytest.mark.skipif(not BASH, reason="needs bash")

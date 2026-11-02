@@ -161,3 +161,32 @@ def test_hours_that_differ_from_the_profile_are_reported_as_notes_never_problems
                       "EURUSD": _info("EURUSD", digits=5, point=0.00001, contract_size=100000.0, swap_rollover3days=3, volume_min=0.01, volume_step=0.01)}, always)
     rep = symbol_check.check_instruments(_probe(), broker)
     assert rep["US500"].problems == [] and any("index_us profile" in n or "broker open" in n for n in rep["US500"].notes)
+
+
+# ------------------------------------------------------------------- incident 2026-11-02: today's bars end at "now"
+def test_todays_unfinished_server_day_never_sets_that_weekdays_hours():
+    """Read at 20:38 server time on a Monday, today's bars stop at 20:38: taken as Monday's hours, every symbol read
+    "market closed" from a minute after the read (all 14 open ICM books and 7 Vantage books on 2026-11-02). The
+    template uses complete server days only: the Monday before."""
+    minutes = pd.concat([_opens(_rates(["2026-10-26"], [("00:05", "23:55")])),
+                         _opens(_rates(["2026-11-02"], [("00:05", "20:38")]))])
+    assert mt5_adapter.observed_template(minutes) == [(0, 5 * 60, 20 * 3600 + 38 * 60)]       # the trap
+    assert mt5_adapter.observed_template(minutes, before=date(2026, 11, 2)) == [(0, 5 * 60, 23 * 3600 + 55 * 60)]
+
+
+def test_trading_sessions_reads_complete_days_only(monkeypatch):
+    days = [str(d.date()) for d in pd.date_range("2026-10-26", "2026-10-30")]
+    rates = np.concatenate([_rates(days, [("00:05", "23:55")]), _rates(["2026-11-02"], [("00:05", "20:38")])])
+    b = _adapter(monkeypatch, rates)
+    now = pd.Timestamp("2026-11-02 18:38", tz="UTC")                                        # 20:38 in Athens
+    monkeypatch.setattr(mt5_adapter, "_utcnow", lambda: now)
+    mon = next(s for s in b.trading_sessions("EURUSD") if s.server_date == date(2026, 11, 2))
+    end = pd.Timestamp("2026-11-02 23:55").tz_localize(TZ).tz_convert("UTC")
+    assert (mon.end_utc.hour, mon.end_utc.minute) == (end.hour, end.minute)
+
+
+def test_only_todays_bars_is_no_template_rather_than_a_closing_market(monkeypatch):
+    b = _adapter(monkeypatch, _rates(["2026-11-02"], [("00:05", "20:38")]))
+    monkeypatch.setattr(mt5_adapter, "_utcnow", lambda: pd.Timestamp("2026-11-02 18:38", tz="UTC"))
+    with pytest.raises(RuntimeError, match="no M1 bars"):                  # the engine keeps its static profile
+        b.trading_sessions("EURUSD")

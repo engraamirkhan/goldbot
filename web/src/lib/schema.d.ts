@@ -1610,7 +1610,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "can_enter" | "market_closed" | "stale" | "group_cap" | "terms_missing" | "disabled";
+            state: "can_enter" | "market_closed" | "stale" | "group_cap" | "terms_missing" | "disabled" | "swap_unknown";
             /** Symbol */
             symbol: string;
             /** Text */
@@ -1796,7 +1796,7 @@ export interface components {
             /** Quote Ccy */
             quote_ccy: string;
             /** State */
-            state: ("can_enter" | "market_closed" | "stale" | "group_cap" | "terms_missing" | "disabled") | "unknown";
+            state: ("can_enter" | "market_closed" | "stale" | "group_cap" | "terms_missing" | "disabled" | "swap_unknown") | "unknown";
             /** Symbol */
             symbol: string;
             /** Unit */

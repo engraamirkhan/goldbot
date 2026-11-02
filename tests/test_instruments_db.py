@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from goldbot.engine import Engine, EngineConfig
 from goldbot.engine.books import BookSpec, swap_spec, using
@@ -109,3 +110,39 @@ def test_a_terms_row_a_newer_release_wrote_still_reads():
     row = terms_from_info("icm-probe", "XAGUSD", "XAGUSD", PaperBroker().symbol_info("XAGUSD"), T0)
     got = load_record(InstrumentTerms, {**row.model_dump(mode="json"), "future_field": 1}, source="instruments.db")
     assert got == row
+
+
+def test_swap_in_the_profit_currency_is_converted_for_index_cfds():
+    """Incident 2026-11-02: ICM's DE40, UK100, JP225, USTEC (mode 3, margin currency) and US500 (mode 2, base currency)
+    stored NULL swap and refused every entry. Where the mode's currency is the profit currency the amount already is
+    profit currency per lot; where it is the base currency of a pair quoted in the profit currency it is x price."""
+    base = PaperBroker().symbol_info("DE40").model_copy(update={"swap_long": -12.5, "swap_short": 3.0,
+                                                                "currency_profit": "EUR"})
+    m3 = base.model_copy(update={"swap_mode": 3, "currency_margin": "EUR", "currency_base": "EUR"})
+    assert swap_per_lot(m3)[:2] == (-12.5, 3.0)
+    m2 = base.model_copy(update={"swap_mode": 2, "currency_margin": "USD", "currency_base": "EUR"})
+    assert swap_per_lot(m2)[:2] == (-12.5, 3.0)
+    # a currency the profit currency is not, and no price to convert: unknown, never 0
+    assert swap_per_lot(m3.model_copy(update={"currency_margin": "USD"}))[:2] == (None, None)
+    # an older bridge (no base or margin currency reported): unknown, as before
+    assert swap_per_lot(base.model_copy(update={"swap_mode": 3}))[:2] == (None, None)
+    fx = base.model_copy(update={"swap_mode": 2, "currency_base": "EUR", "currency_profit": "USD", "swap_long": -2.0})
+    assert swap_per_lot(fx, price=1.1, group="fx")[0] == pytest.approx(-2.2)
+    assert swap_per_lot(fx, group="fx")[:2] == (None, None)
+
+
+def test_the_base_currency_times_price_rule_is_for_fx_and_metal_pairs_only():
+    """Trading-safety review of #319, F5: "x price" turns base-currency units into profit currency only for a pair
+    quoted as base/profit (FX, metals). For an index or a commodity the price is points of the index, not a rate, so
+    the swap stays unknown (entries refused) instead of a wrong cost."""
+    fx = PaperBroker().symbol_info("DE40").model_copy(update={
+        "swap_mode": 2, "swap_long": -2.0, "swap_short": 0.5, "currency_base": "EUR", "currency_profit": "USD"})
+    assert swap_per_lot(fx, price=1.1, group="fx")[0] == pytest.approx(-2.2)
+    assert swap_per_lot(fx, price=30.0, group="metals")[0] == pytest.approx(-60.0)
+    for group in (None, "equity", "energy", "rates", "ags", "gold"):
+        assert swap_per_lot(fx, price=1.1, group=group)[:2] == (None, None), group
+    calc_fx = fx.model_copy(update={"trade_calc_mode": 0}) if "trade_calc_mode" in type(fx).model_fields else None
+    if calc_fx is not None:                               # MT5 SYMBOL_CALC_MODE_FOREX, when the record carries it
+        assert swap_per_lot(calc_fx, price=1.1)[0] == pytest.approx(-2.2)
+    row = terms_from_info("icm-probe", "EURUSD", "EURUSD", fx, T0, price=1.1, group="fx")
+    assert row.swap_long_per_lot == pytest.approx(-2.2)

@@ -106,6 +106,11 @@ class SymbolInfo(Record):
     # 6 = Saturday). None = not reported (paper, an older bridge); never taken as USD or Wednesday by a rule
     currency_profit: str | None = None
     swap_rollover3days: int | None = None
+    # incident 2026-11-02: the units of swap modes 2 (base currency) and 3 (margin currency), MT5 SYMBOL_CURRENCY_BASE
+    # and SYMBOL_CURRENCY_MARGIN. Additive on protocol v10, read tolerantly both ways; None = not reported (an older
+    # bridge, paper), and a swap in an unreported currency stays unknown (entries refused), never taken as profit
+    currency_base: str | None = None
+    currency_margin: str | None = None
 
 
 class OrderIntent(Record):

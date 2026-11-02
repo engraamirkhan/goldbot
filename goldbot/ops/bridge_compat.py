@@ -117,6 +117,34 @@ class BridgeInfo(FrozenRecord):
     methods: list[str] | None = None
     commit: str | None = None
     order_lane: str | None = None        # v7: off | starting | separate | down (bridge_lane.LANE_STATES); else None
+    # incident 2026-11-02: the longest an RPC waited for the terminal and the calls that held it over 2 s, over the
+    # bridge's last 5 minutes (bridge.py `lock_figures`); None when not reported (no RPC in the window, an older bridge)
+    lock_wait_s: float | None = None
+    slow_calls: int | None = None
+
+
+# `bridge_compat:<account>` WARNs on a contended terminal (incident 2026-11-02): an RPC that waited this long for it
+# has already outlived the brain's 10 s read timeout, and this many calls over 2 s in 5 minutes is a starved box
+LOCK_WAIT_WARN_S = 10.0
+SLOW_CALLS_WARN = 10
+
+
+def contention(info: BridgeInfo) -> str | None:
+    """Why the bridge's terminal is contended, in words, or None (figures absent or under the thresholds)."""
+    wait, slow = info.lock_wait_s, info.slow_calls
+    if (wait is None or wait < LOCK_WAIT_WARN_S) and (slow is None or slow < SLOW_CALLS_WARN):
+        return None
+    return (f"terminal contended: calls waited up to {wait if wait is not None else 0:g} s for it and "
+            f"{slow or 0} held it over 2 s in the last 5 minutes; reads time out and entries come late, exits "
+            "still run first (RUNBOOK 'Bridge contention')")
+
+
+def _figure(v: Any, top: float) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= top else None
+
+
+def _count(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100_000 else None
 
 
 def _int(v: Any) -> int | None:
@@ -182,7 +210,9 @@ def _read_bridge_info(url: str, timeout_s: float, get: Callable[..., Any]) -> Br
                       api_version=_int(body.get("api_version")), min_compatible=_int(body.get("min_compatible")),
                       methods=[m for m in methods if isinstance(m, str)] if isinstance(methods, list) else None,
                       commit=commit if isinstance(commit, str) and _SHA.fullmatch(commit) else None,
-                      order_lane=lane if lane in LANE_STATES else None)
+                      order_lane=lane if lane in LANE_STATES else None,
+                      lock_wait_s=_figure(body.get("lock_wait_s"), 999.9),
+                      slow_calls=_count(body.get("slow_calls")))
 
 
 def _short(sha: str | None) -> str:
