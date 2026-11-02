@@ -63,7 +63,7 @@ def test_a_one_day_zero_one_exposure_books_what_triple_barrier_next_open_1m_labe
     res = _run(PositionSpec(id="P", symbols=("XAUUSD",), signal=series_signal(expo)), daily,
                costs=PointCosts(rt_bps=rt_bps, overshoot_bps=0.0))
     book = res.venues["A"].book
-    assert book.n_round_trips == len(trades)
+    assert book.n_round_trips_signal == len(trades) and book.n_stops == 0
     assert book.days_in_market == sum(h + 1 for _, h in trades)
     if half_spread == 0.0:
         assert book.net_total == pytest.approx(tb["ret"].sum(), abs=1e-12)
@@ -136,13 +136,20 @@ def test_wednesday_rollover_charges_three_nights_and_saturday_sunday_none() -> N
     assert financing.rollover_nights(d[:1], d[-1:], triple_weekday=2).tolist() == [7]
 
 
-def test_the_short_rate_is_read_as_of_its_publication_not_its_observation_date() -> None:
-    obs = pd.DataFrame({"date": pd.to_datetime(["2012-01-04", "2012-01-10"]), "rate_pct": [1.0, 5.0]})
-    rates = Rates(series=financing.rate_frame(obs))
-    at = pd.DatetimeIndex(["2012-01-04 21:00", "2012-01-05 21:00", "2012-01-10 21:00", "2012-01-11 21:00"], tz="UTC")
+def test_dtb3_is_read_from_the_data_lane_file_on_its_stored_available_utc_and_cut_before_the_holdout(
+        tmp_path: Path) -> None:
+    vd = pd.to_datetime(["2012-01-04", "2012-01-10", "2025-09-30", "2025-10-01"])
+    av = pd.DatetimeIndex(["2012-01-05 23:00", "2012-01-11 23:00", "2025-09-30 23:00", "2025-10-01 23:00"], tz="UTC")
+    pd.DataFrame({"series": "DTB3", "series_id": "DTB3", "value_date": vd, "value": [1.0, 5.0, 3.9, 9.9],
+                  "vintage": vd, "available_utc": av, "ts_utc": av}).to_parquet(tmp_path / "fred_DTB3.parquet")
+    frame = financing.load_fred(tmp_path / "fred_DTB3.parquet")
+    assert frame["rate_pct"].tolist() == [1.0, 5.0, 3.9]                    # the 2025-10-01 row never loads
+    rates = Rates(series=frame)
+    at = pd.DatetimeIndex(["2012-01-05 21:00", "2012-01-06 21:00", "2012-01-11 21:00", "2012-01-12 21:00"], tz="UTC")
     got = rates.pct("XAUUSD", at)
-    assert np.isnan(got[0]) or got[0] == rates.constant_pct                # not published yet: the constant
-    assert got[1:].tolist() == [1.0, 1.0, 5.0]
+    assert got.tolist() == [rates.constant_pct, 1.0, 1.0, 5.0]             # usable only after its stored 23:00 stamp
+    with pytest.raises(ValueError, match="available_utc"):
+        financing.fred_frame(pd.DataFrame({"value_date": vd, "value": 1.0}))
 
 
 def test_venue_b_refuses_a_short_and_venue_c_charges_a_monthly_roll() -> None:
@@ -226,7 +233,8 @@ def test_the_c1_point_costs_come_from_the_cost_of_record_in_bps_at_the_4000_refe
     assert pc.rt_bps == pytest.approx(0.166 / 4000 * 1e4)
     assert pc.overshoot_bps == pytest.approx(0.11 / 4000 * 1e4)
     s = load_settings(REPO / "config" / "settings.yaml").research.position
-    assert costs_for("XAUUSD", s, REPO / "config" / "cost_of_record.yaml") == pc
+    asia = costs_for("XAUUSD", s, REPO / "config" / "cost_of_record.yaml")     # the 21:00 UTC fill is in Asia
+    assert asia.rt_bps == pytest.approx(0.204 / 4000 * 1e4) and asia.overshoot_bps == pytest.approx(0.10 / 4000 * 1e4)
     with pytest.raises(KeyError):
         costs_for("NOPE", s, REPO / "config" / "cost_of_record.yaml")          # never another market's cost
 
@@ -262,8 +270,9 @@ def test_a_book_of_two_identical_markets_is_scaled_to_its_portfolio_target_and_f
 
 
 def test_fx_financing_uses_the_rate_differential_quote_minus_base() -> None:
-    q = financing.rate_frame(pd.DataFrame({"date": pd.to_datetime(["2012-01-02"]), "rate_pct": [0.25]}))
-    b = financing.rate_frame(pd.DataFrame({"date": pd.to_datetime(["2012-01-02"]), "rate_pct": [1.0]}))
+    at = pd.DatetimeIndex(["2012-01-03 23:00"], tz="UTC")
+    q = pd.DataFrame({"available_utc": at, "rate_pct": [0.25]})
+    b = pd.DataFrame({"available_utc": at, "rate_pct": [1.0]})
     diff = financing.fx_differential(q, b)                          # EURUSD: USD (quote) 0.25 minus EUR (base) 1.0
     assert diff["rate_pct"].tolist() == [-0.75]
     v = venue_a(markup_long_pct=0.5, markup_short_pct=0.5)

@@ -59,6 +59,9 @@ def mid_daily(store_daily: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({c: ((store_daily[f"bid_{c}"] + store_daily[f"ask_{c}"]) / 2.0).to_numpy() for c in DAILY_COLUMNS},
                        index=dates)
     out["close_utc"] = close_utc
+    # the fill minute's measured spread (the first 1m bar after the previous 21:00 close), for venue S (report only)
+    mid_open = (store_daily["ask_open"] + store_daily["bid_open"]).to_numpy(dtype=float) / 2.0
+    out["fill_spread_bps"] = (store_daily["ask_open"] - store_daily["bid_open"]).to_numpy(dtype=float) / mid_open * 1e4
     return out
 
 
@@ -105,13 +108,18 @@ def load_xau_daily(raw_dir: Path | str) -> pd.DataFrame:
 
 
 def load_daily_file(path: Path | str) -> pd.DataFrame:
-    """A data-lane daily file (date, open, high, low, close at the 21:00 UTC close), read with `date < 2025-10-01`."""
-    df = pd.read_parquet(path, columns=["date", *DAILY_COLUMNS], filters=[("date", "<", HOLDOUT_FROM)])
+    """A data-lane daily file (date, open, high, low, close at the 21:00 UTC close; its `visible_at`, when present, is
+    the close instant), read with `date < 2025-10-01`."""
+    import pyarrow.parquet as pq
+    names = set(pq.read_schema(path).names)
+    cols = ["date", *DAILY_COLUMNS, *(["visible_at"] if "visible_at" in names else [])]
+    df = pd.read_parquet(path, columns=cols, filters=[("date", "<", HOLDOUT_FROM)]).sort_values("date")
     dates = pd.DatetimeIndex(pd.to_datetime(df["date"]), name="date")
     dates = dates.tz_convert(None) if dates.tz is not None else dates
-    out = pd.DataFrame({c: df[c].to_numpy(dtype=float) for c in DAILY_COLUMNS}, index=dates.normalize()).sort_index()
-    out["close_utc"] = _close_utc(pd.DatetimeIndex(out.index))
+    out = pd.DataFrame({c: df[c].to_numpy(dtype=float) for c in DAILY_COLUMNS}, index=dates.normalize())
+    out["close_utc"] = utc_index(df["visible_at"]) if "visible_at" in df.columns else _close_utc(pd.DatetimeIndex(out.index))
     assert_before_holdout(out.index, what="daily bars")
+    assert_before_holdout(out["close_utc"], what="daily closes")
     return out
 
 
@@ -121,11 +129,11 @@ def load_panel(raw_dir: Path | str, symbols: Iterable[str]) -> dict[str, pd.Data
     raw = Path(raw_dir)
     out: dict[str, pd.DataFrame] = {}
     for s in symbols:
-        daily_file = raw / "daily" / f"{s}.parquet"
+        files = [raw / "daily" / f"{s}.parquet", raw / "daily" / f"{s.lower()}.parquet"]
         if s == "XAUUSD":
             out[s] = load_xau_daily(raw)
-        elif daily_file.exists():
-            out[s] = load_daily_file(daily_file)
+        elif found := [f for f in files if f.exists()]:
+            out[s] = load_daily_file(found[0])
         else:
-            raise FileNotFoundError(f"no daily file for {s} at {daily_file}")
+            raise FileNotFoundError(f"no daily file for {s} at {files[0]}")
     return out

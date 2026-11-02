@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.config import load_settings
 from goldbot.research.position.signals import PositionSpec
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -27,11 +28,17 @@ def test_a_confirm_read_without_a_frozen_preregistration_is_refused() -> None:
 
 
 def test_financing_without_dtb3_needs_the_constant_rate_flag(tmp_path: Path) -> None:
+    s = load_settings(ROOT / "config" / "settings.yaml").research.position.model_copy(
+        update={"short_rate_path": "fred_DTB3.parquet"})
     with pytest.raises(SystemExit, match="DTB3"):
-        ps.load_rates(tmp_path / "dtb3.parquet", False, 4.02)
-    assert ps.load_rates(tmp_path / "dtb3.parquet", True, 4.02).uses_constant
-    pd.DataFrame({"date": pd.to_datetime(["2012-01-03"]), "rate_pct": [0.05]}).to_parquet(tmp_path / "dtb3.parquet")
-    assert not ps.load_rates(tmp_path / "dtb3.parquet", False, 4.02).uses_constant
+        ps.load_rates(s, tmp_path, ["XAUUSD"], False)
+    assert ps.load_rates(s, tmp_path, ["XAUUSD"], True).uses_constant
+    av = pd.DatetimeIndex(["2012-01-03 23:00"], tz="UTC")
+    pd.DataFrame({"value_date": pd.to_datetime(["2012-01-03"]), "value": [0.05], "available_utc": av}).to_parquet(
+        tmp_path / "fred_DTB3.parquet")
+    assert not ps.load_rates(s, tmp_path, ["XAUUSD"], False).uses_constant
+    with pytest.raises(KeyError, match="EUR"):                     # an FX pair without its currencies is refused
+        ps.load_rates(s, tmp_path, ["XAUUSD", "EURUSD"], False)
 
 
 def _sig(symbol: str, panel) -> pd.Series:
@@ -59,7 +66,9 @@ def test_a_synthetic_learn_batch_writes_summary_statistics_only(tmp_path: Path, 
     got = json.loads(out.read_text())
     assert [r["id"] for r in got["specs"]] == ["SYN-A", "SYN-B"]
     first = got["specs"][0]
-    assert first["rate_source"] == "constant" and set(first["venues"]) == {"A", "C"}
+    assert first["rate_source"] == "constant" and set(first["venues"]) == {"A", "S", "C"}
+    assert first["windows_read"] == ["LEARN"] and first["y_learn"] > 0
     assert first["venues"]["A"]["gates"] and not first["venues"]["C"]["gates"]
-    assert "bh_reject" in first and set(first["explore_checks"]) >= {"t_boot>=2", "round_trips>=30"}
+    assert "bh_reject" not in first and got["q"] is None               # BH only at CONFIRM
+    assert set(first["explore_checks"]) >= {"t_boot>=2", "round_trips>=30"}
     assert "close" not in out.read_text() and "units" not in out.read_text()      # no prices, no trade rows

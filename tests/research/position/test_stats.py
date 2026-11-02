@@ -43,8 +43,13 @@ def test_round_trips_count_entries_from_flat_and_flips_and_days_in_market_count_
     assert ep.tolist() == [-1, 0, 0, -1, 1, 1, 2, -1]
     assert int(ep.max()) + 1 == 3 and int((b != 0).sum()) == 5     # 3 round trips, 5 days in market
     b2 = np.array([0, 1, 1, 1, 0], dtype=float)
-    held2 = np.array([0, 1, 0, 1, 0], dtype=float)                 # stopped on day 2, back in on day 3
-    assert stats.episodes(b2, held2).tolist() == [-1, 0, 0, 1, -1]
+    held2 = np.array([0, 1, 0, 1, 0], dtype=float)                 # stopped inside day 2, back in at day 3's open
+    assert stats.episodes(b2, held2).tolist() == [-1, 0, 0, 0, -1]  # one round trip, the stop counted apart
+    b3 = np.array([0, 1, 0, 1, 0, 1], dtype=float)                 # stopped AT the open of day 2, back in on day 3;
+    so3 = np.array([0, 0, 1, 0, 0, 0], dtype=bool)                 #   day 4 flat by decision, day 5 a new entry
+    assert stats.episodes(b3, b3, so3).tolist() == [-1, 0, -1, 0, -1, 1]
+    flip = np.array([0, 1, 0, -1], dtype=float)                    # a stop then a re-entry on the other side: new
+    assert stats.episodes(flip, np.array([0, 0, 0, -1.0])).tolist() == [-1, 0, -1, 1]
 
 
 def test_the_power_helpers_reproduce_the_pos1_table() -> None:
@@ -70,16 +75,16 @@ def test_a_long_only_spec_is_read_against_the_exposure_matched_null_with_buy_and
     assert book.null_kind == "exposure" and book.null_excess is not None and book.null_p is not None
     assert np.isfinite(book.null_excess) and 0 < book.null_p <= 1
     assert book.short_net == 0.0 and book.buy_hold_net is not None
-    assert book.days_in_market > 0 and book.n_round_trips > 0
+    assert book.days_in_market > 0 and book.n_round_trips_signal > 0
 
 
 def test_explore_checks_apply_the_w3_explore_legs() -> None:
     good = stats.PositionStats(n_days=2000, mean_daily=1e-4, net_total=0.2, gross_total=0.25, cost_total=0.03,
                                financing_total=-0.02, sharpe=0.6, t_boot=2.3, gross_t=2.5, years_positive=6,
                                n_years=8, years_rule=True, drift_adj_gross=0.05, long_net=0.15, short_net=0.05,
-                               n_round_trips=40, days_in_market=900, null_kind="sign", null_mean_net=-0.03,
+                               n_round_trips_signal=40, n_stops=2, days_in_market=900, null_kind="sign", null_mean_net=-0.03,
                                null_excess=0.23, null_p=0.01)
     assert all(stats.explore_checks(good).values())
-    bad = good.model_copy(update={"n_round_trips": 29, "t_boot": 1.9})
+    bad = good.model_copy(update={"n_round_trips_signal": 29, "t_boot": 1.9})
     checks = stats.explore_checks(bad)
     assert not checks["round_trips>=30"] and not checks["t_boot>=2"] and checks["days_in_market>=500"]

@@ -9,7 +9,9 @@ decision today": the engine keeps the held position (a month-end rule returns Na
 value is already an exposure in units of equity (Turtle units, RT-STRATEGY-045's variance rule) and is only capped.
 
 Point in time is checked, not trusted: `assert_point_in_time` recomputes the signal on the panel cut at each of a few
-dates T and refuses (LookaheadError) any value on or before T that differs from the full-panel value.
+dates T and refuses (LookaheadError) any value on or before T that differs from the full-panel value. The cut is on
+when a row became KNOWN (W3 addendum ruling 7): `available_utc` for aux series, `close_utc` for bars, at T's 21:00 UTC
+close; a frame carrying neither is refused.
 """
 from __future__ import annotations
 
@@ -43,8 +45,29 @@ class PositionSpec(FrozenRecord):
     book_target_vol: float | None = Field(None, gt=0)  # a portfolio target on a 60-day covariance (026, 057)
 
 
+def decision_instant(day: pd.Timestamp) -> pd.Timestamp:
+    """The 21:00 UTC close of a daily date: what a decision dated `day` may know."""
+    return (pd.Timestamp(day).normalize() + pd.Timedelta(hours=21)).tz_localize("UTC")
+
+
+def check_panel(panel: Panel) -> None:
+    """Every frame says when each row became known: `available_utc` (aux series: FRED, positioning, a Yahoo close) or
+    `close_utc` (daily bars). A frame with neither is refused: it could only be cut on its value date, which is how a
+    revised or late-published value leaks (W3.2: "every input is joined with asof_join on available_utc")."""
+    for k, v in panel.items():
+        if "available_utc" not in v.columns and "close_utc" not in v.columns:
+            raise ValueError(f"panel frame {k!r} has neither available_utc nor close_utc: refused")
+
+
 def truncate_panel(panel: Panel, at: pd.Timestamp) -> dict[str, pd.DataFrame]:
-    return {k: v.loc[v.index <= at] for k, v in panel.items()}
+    """Every frame as known at the 21:00 UTC close of `at`: rows with available_utc (else close_utc) <= that instant."""
+    check_panel(panel)
+    cut = decision_instant(at)
+    out = {}
+    for k, v in panel.items():
+        col = "available_utc" if "available_utc" in v.columns else "close_utc"
+        out[k] = v.loc[(pd.DatetimeIndex(v[col]) <= cut)]
+    return out
 
 
 def evaluate(spec: PositionSpec, panel: Panel) -> dict[str, pd.Series]:

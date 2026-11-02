@@ -68,7 +68,12 @@ WINDOWS: dict[str, Window] = {w.name: w for w in (
     Window(name="TEST-OLD", start=date(2006, 2, 1), end=date(2009, 12, 31), use="held-out test, read once"),
     Window(name="CONFIRM", start=date(2018, 1, 1), end=date(2025, 9, 30), use="one test"),
 )}
-EXPLORE_WINDOWS = ("LEARN", "LEARN-OLD")       # read without a frozen pre-registration; the others need one
+# W3 addendum (docs/research/pos1/w3-addendum.md, ruling 2): POS-1 explore is LEARN-OLD + LEARN read as one series,
+# each part flat at its own edges; t, the years rule and the W3.4 counts are taken on the concatenation
+COMPOSITES: dict[str, tuple[str, ...]] = {"EXPLORE": ("LEARN-OLD", "LEARN")}
+LEARN_WINDOWS = COMPOSITES["EXPLORE"]          # the W3.1 Y_learn years
+EXPLORE_WINDOWS = ("LEARN", "LEARN-OLD", "EXPLORE")   # read without a frozen pre-registration; the others need one
+ONCE_WINDOWS = ("TEST-OLD", "CONFIRM")         # read once per (spec, window): a frozen pre-registration and a marker
 
 
 def get_window(name: str) -> Window:
@@ -76,3 +81,8 @@ def get_window(name: str) -> Window:
         return WINDOWS[name]
     except KeyError:
         raise KeyError(f"unknown window {name!r}: one of {sorted(WINDOWS)}") from None
+
+
+def get_windows(name: str) -> list[Window]:
+    """A W2 window, or a composite's parts in time order."""
+    return [get_window(n) for n in COMPOSITES[name]] if name in COMPOSITES else [get_window(name)]

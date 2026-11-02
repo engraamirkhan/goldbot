@@ -395,16 +395,18 @@ class PositionSettings(_Section):
     null_seed: int = 20261102
     boot_resamples: int = Field(4000, ge=100)        # W3.2 stationary day-block bootstrap
     boot_block_days: float = Field(20.0, gt=1)
-    cost_broker: str = "icm"                         # C1 point costs from config/cost_of_record.yaml, this broker's
-    cost_session: str = "all"                        #   pooled cell, in bps at the reference price
+    cost_broker: str = "icm"                         # C1 point costs from config/cost_of_record.yaml: this broker's
+    cost_session: str = "asia"                       #   cell of the 21:00 UTC fill (W3 addendum), bps at the reference
     cost_reference_price: float = Field(4000.0, gt=0)
     round_trip_bps_by_symbol: dict[str, float] = Field(default_factory=dict)   # other markets' point RT; none: refused
     overshoot_bps_by_symbol: dict[str, float] = Field(default_factory=dict)
-    short_rate_path: str = "raw/fred/dtb3.parquet"   # DTB3 (date, rate_pct); absent: short_rate_constant_pct
+    short_rate_path: str = "raw/daily/fred_DTB3.parquet"   # data lane: value_date, value, available_utc
+    currency_rate_paths: dict[str, str] = Field(default_factory=dict)   # ISO -> FRED OECD 3-month file (FX, indices)
     short_rate_constant_pct: float = 4.02            # DTB3 at the swap measurement (W3.3); a fallback, never a gate
     markup_pct_by_symbol: dict[str, tuple[float, float]] = Field(default_factory=dict)   # (long, short) % a year
     default_markup_pct: float = Field(2.5, ge=0)     # W3.3: a symbol without measured terms, each side
-    triple_weekday: int = Field(2, ge=0, le=4)       # the broker's triple rollover (Wednesday for ICM XAUUSD)
+    triple_weekday_by_symbol: dict[str, int] = Field(default_factory=lambda: {"XAUUSD": 2})   # 0 = Monday; refused
+    read_registry: str = "state/position_reads.jsonl"   # read-once markers (spec, TEST-OLD/CONFIRM): a second read refused
     etc_fee_pct: float = Field(0.12, ge=0)           # venue B (UK gold ETC): annual fee, no financing
     etc_extra_rt_bps: float = Field(5.0, ge=0)       #   round trip = C1 point RT + 5 bp
     cme_fee_usd_per_side: float = Field(2.0, ge=0)   # venue C (CME 1OZ): per oz a side, at the reference price
