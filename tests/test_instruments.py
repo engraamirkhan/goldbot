@@ -4,6 +4,7 @@ today's XAUUSD behaviour unchanged."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -11,6 +12,7 @@ import yaml
 from pydantic import ValidationError
 
 from goldbot.config import load_yaml
+from goldbot.execution.bridge import RemoteBroker
 from goldbot.execution.broker import OrderIntent, SymbolInfo, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.instruments import (
@@ -153,3 +155,22 @@ def test_paper_ticks_many_returns_each_symbols_newer_quote_and_empty_otherwise()
     out = b.ticks_many(["XAUUSD", "EURUSD"], pd.Timestamp("2026-11-02 10:00", tz="UTC"))
     assert [t.bid for t in out["XAUUSD"]] == [2000.0] and out["EURUSD"] == []
     assert b.ticks_many(["XAUUSD"], pd.Timestamp("2026-11-02 10:00:01", tz="UTC")) == {"XAUUSD": []}
+
+
+def test_the_bridge_client_sends_todays_positions_call_unless_a_symbol_is_asked_for() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class Recording(RemoteBroker):
+        def __init__(self) -> None:    # no network: only the wire arguments are under test
+            pass
+
+        def _call(self, method: str, *args: Any) -> Any:
+            calls.append((method, *args))
+            return []
+
+    b = Recording()
+    b.positions(260100)
+    b.positions(260100, symbol="XAGUSD")
+    assert calls == [("positions", 260100), ("positions", 260100, "XAGUSD")]
+    with pytest.raises(NotImplementedError):
+        b.ticks_many(["XAUUSD"], pd.Timestamp("2026-11-02", tz="UTC"))

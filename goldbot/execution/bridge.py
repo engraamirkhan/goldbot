@@ -145,7 +145,11 @@ METHODS: dict[str, tuple[str, bool]] = {
 # v9 (ADR 0063): AccountInfo.trade_allowed (MT5 ACCOUNT_TRADE_ALLOWED, False on an investor login), read by
 # verify_terminal_account for observe_only accounts only. Read tolerantly (a v8 brain drops it; a v8 bridge reports
 # None, which an observe_only account refuses and every other account ignores), so MIN_COMPATIBLE stays 5.
-API_VERSION = 9
+# v10 (multi-instrument demo, step 0): `positions(magic_prefix, symbol=None)` and SymbolInfo's currency_profit and
+# swap_rollover3days. The brain sends `symbol` only when it is not None, so today's call is byte-identical on the
+# wire; a v9 bridge reports the new SymbolInfo fields as None (read tolerantly) and a v9 brain drops them, so
+# MIN_COMPATIBLE stays 5 and either box can be deployed first. `ticks_many` is not served yet (not in METHODS)
+API_VERSION = 10
 MIN_COMPATIBLE = 5
 # ADR 0063 (security review of PR 236): what an observe-only bridge serves, an allowlist of read-only methods for
 # bars, ticks and symbol terms, and the account read its verify needs; no positions, history, sizing or order method
