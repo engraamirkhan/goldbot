@@ -1566,6 +1566,44 @@ class TradeBars(BaseModel):
     exit_utc: datetime | None
 
 
+# ============================================================================= Key levels (GET /api/key-levels)
+# goldbot/api/key_levels_view.py: each account's current key zones (goldbot/features/key_levels.py, published by
+# goldbot/engine/key_zones.py) and the recent bars of the chart's timeframe. Display only.
+KeyLevelTf = Literal["15m", "1h", "4h", "1d"]
+
+
+class KeyLevelZone(BaseModel):
+    price: float                            # weight-averaged level price, USD/oz
+    lo: float                               # the zone's band
+    hi: float
+    strength: float                         # timeframe weight x touches, age-decayed
+    strength_pct: float | None              # percentile among the trailing 250 days' zones; None while warming up
+    tfs: list[str]                          # timeframes it spans (15m 1h 4h 1d 1w 1M; "round": a $50/$100 number)
+    touches: int
+    role: Literal["support", "resistance", "inside"]
+    flipped: bool                           # its role is now the opposite of how it was born (a close went through)
+
+
+class AccountKeyLevels(BaseModel):
+    account_id: str
+    as_of: datetime                         # the 15m close the zones were built at
+    price: float | None
+    atr_1d: float | None
+    history_days: float | None              # days of 1m bars the engine built them on (it holds about 62)
+    above: list[KeyLevelZone]               # nearest first
+    below: list[KeyLevelZone]
+
+
+class KeyLevelsView(BaseModel):
+    """`bars` (bid, USD/oz): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the
+    reference feed; empty when none are stored); `accounts`: every engine that published zones."""
+    timeframe: KeyLevelTf
+    account_id: str | None
+    feed: Literal["broker", "reference"] | None
+    bars: list[ChartBar]
+    accounts: list[AccountKeyLevels]
+
+
 # ============================================================================= Strategy board (GET /api/strategies/board)
 # goldbot/api/strategy_board.py (docs/design/trades-ux-2026-10-27.md §2.3, §3.4, item 132; ADR 0050, 0053): progress
 # to each arm's single read and the read's frozen figures; the families' results before it are the ranking's

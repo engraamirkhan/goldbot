@@ -590,6 +590,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/key-levels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Key Levels */
+        get: operations["key_levels_api_key_levels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/limits": {
         parameters: {
             query?: never;
@@ -1050,6 +1067,26 @@ export interface components {
             account: string;
             /** Label */
             label: string;
+        };
+        /** AccountKeyLevels */
+        AccountKeyLevels: {
+            /** Above */
+            above: components["schemas"]["KeyLevelZone"][];
+            /** Account Id */
+            account_id: string;
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Atr 1D */
+            atr_1d: number | null;
+            /** Below */
+            below: components["schemas"]["KeyLevelZone"][];
+            /** History Days */
+            history_days: number | null;
+            /** Price */
+            price: number | null;
         };
         /** AccountSummary */
         AccountSummary: {
@@ -2386,6 +2423,50 @@ export interface components {
             next_slot: string | null;
             /** Runs */
             runs: number;
+        };
+        /** KeyLevelZone */
+        KeyLevelZone: {
+            /** Flipped */
+            flipped: boolean;
+            /** Hi */
+            hi: number;
+            /** Lo */
+            lo: number;
+            /** Price */
+            price: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "support" | "resistance" | "inside";
+            /** Strength */
+            strength: number;
+            /** Strength Pct */
+            strength_pct: number | null;
+            /** Tfs */
+            tfs: string[];
+            /** Touches */
+            touches: number;
+        };
+        /**
+         * KeyLevelsView
+         * @description `bars` (bid, USD/oz): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the
+         *     reference feed; empty when none are stored); `accounts`: every engine that published zones.
+         */
+        KeyLevelsView: {
+            /** Account Id */
+            account_id: string | null;
+            /** Accounts */
+            accounts: components["schemas"]["AccountKeyLevels"][];
+            /** Bars */
+            bars: components["schemas"]["ChartBar"][];
+            /** Feed */
+            feed: ("broker" | "reference") | null;
+            /**
+             * Timeframe
+             * @enum {string}
+             */
+            timeframe: "15m" | "1h" | "4h" | "1d";
         };
         /**
          * KindDay
@@ -5730,6 +5811,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobRow"][];
+                };
+            };
+        };
+    };
+    key_levels_api_key_levels_get: {
+        parameters: {
+            query?: {
+                tf?: "15m" | "1h" | "4h" | "1d";
+                account?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLevelsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
