@@ -14,7 +14,7 @@ from __future__ import annotations
 import fnmatch
 import itertools
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import numpy as np
 import pandas as pd
@@ -171,12 +171,21 @@ class PaperBroker:
                 elif p.tp is not None and t.ask <= p.tp:
                     self._close_at(p, p.tp, "target")
 
-    def positions(self, magic_prefix: int | None = None) -> list[Position]:
-        """The engine's symbol only, as MT5Broker.positions (`positions_get(symbol=...)`)."""
-        ps = [p for p in self._positions.values() if p.symbol == self.symbol]
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
+        """One symbol only (`symbol`, else the engine's), as MT5Broker.positions (`positions_get(symbol=...)`)."""
+        want = self.symbol if symbol is None else symbol
+        ps = [p for p in self._positions.values() if p.symbol == want]
         if magic_prefix is not None:
             ps = [p for p in ps if str(p.magic).startswith(str(magic_prefix))]
         return ps
+
+    def ticks_many(self, symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
+        """The paper broker keeps one quote per symbol: each symbol's last quote when it is newer than `since`."""
+        out: dict[str, list[Tick]] = {}
+        for s in symbols:
+            t = self._ticks.get(s)
+            out[s] = [t] if t is not None and t.ts_utc > since else []
+        return out
 
     def account_positions(self) -> list[Position]:
         """Every position on the account, any symbol and magic (no swap: None)."""
