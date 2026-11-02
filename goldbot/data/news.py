@@ -9,6 +9,10 @@ schema: relevance to gold (0-1), rates direction (hawkish/dovish), risk (risk-on
 Cost control: a keyword prefilter decides which items are worth scoring, items are scored in batches, the model
 runs at low effort, and spend goes into the staff agents' monthly ledger under a daily news cap; items beyond the
 cap are stored unscored (relevance NaN) rather than dropped.
+
+Instrument blackouts (multi-instrument plan 2026-11-02): `instrument_blackout` extends gold's tier-1 USD blackout to
+an instrument's own currencies and its group's scheduled commodity reports (EIA crude and gas, WASDE). The headline
+shock stays account-wide: an unscheduled shock blocks every symbol's entries.
 """
 from __future__ import annotations
 
@@ -17,8 +21,11 @@ import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import date, time, timedelta
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from typing import Any, Literal, Protocol
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -175,6 +182,91 @@ def shock_window(news: pd.DataFrame, now: pd.Timestamp, minutes: int, min_releva
         return None
     row = hit.sort_values("received_utc").iloc[-1]
     return {"title": str(row["title"]), "received_utc": pd.Timestamp(row["received_utc"]).isoformat(), "kind": "news_shock"}
+
+
+# Multi-instrument plan 2026-11-02 ("news blackouts by instrument currencies + EIA crude/gas, WASDE"). Scheduled
+# commodity reports, New York wall clock per date (DST-safe): EIA's Weekly Petroleum Status Report (Wednesday 10:30) and
+# Weekly Natural Gas Storage Report (Thursday 10:30), USDA's WASDE (12:00). A week holding a US federal holiday moves
+# EIA's releases (a day later after a Monday holiday, earlier around Thanksgiving), so in such a week the day before,
+# the day and the day after are blacked out at 10:30 and at 12:00. WASDE is published between the 8th and the 12th of
+# the month (USDA's calendar), so every weekday of that span is blacked out at 12:00; a release outside it (2025-11-14,
+# after the shutdown) is listed in WASDE_EXTRA_DATES. Entries only, so a slot too many costs a few minutes of
+# entries, while a slot missed would let an entry open into the release
+REPORT_TZ = ZoneInfo("America/New_York")
+EIA_AT, EIA_MOVED_AT, WASDE_AT = time(10, 30), time(12, 0), time(12, 0)
+EIA_WEEKDAY = {"eia_crude": 2, "eia_gas": 3}
+WASDE_DAYS = range(8, 13)
+WASDE_EXTRA_DATES: frozenset[date] = frozenset({date(2025, 11, 14)})
+REPORTS_BY_GROUP: dict[str, tuple[str, ...]] = {"energy": ("eia_crude", "eia_gas"), "ags": ("wasde",)}
+REPORT_TITLES = {"eia_crude": "EIA crude inventories", "eia_gas": "EIA natural gas storage", "wasde": "USDA WASDE"}
+
+
+@lru_cache(maxsize=16)
+def _federal_holidays(year: int) -> frozenset[date]:
+    from pandas.tseries.holiday import USFederalHolidayCalendar
+    days = USFederalHolidayCalendar().holidays(pd.Timestamp(year - 1, 12, 1), pd.Timestamp(year + 1, 1, 31))
+    return frozenset(d.date() for d in days)
+
+
+def _report_slots(report: str, d: date) -> list[time]:
+    """The New York times report `report` may be released on date `d` (see above); [] when it is not released then."""
+    if d.weekday() >= 5:
+        return []
+    if report == "wasde":
+        return [WASDE_AT] if d.day in WASDE_DAYS or d in WASDE_EXTRA_DATES else []
+    nominal = EIA_WEEKDAY[report]
+    monday = d - timedelta(days=d.weekday())
+    week = {monday + timedelta(days=k) for k in range(5)}
+    if not week & (_federal_holidays(d.year) | _federal_holidays(monday.year)):
+        return [EIA_AT] if d.weekday() == nominal else []
+    if abs(d.weekday() - nominal) <= 1 and d not in _federal_holidays(d.year):
+        return [EIA_AT, EIA_MOVED_AT]
+    return []
+
+
+def commodity_report_window(group: str | None, now: pd.Timestamp, before_min: int,
+                            after_min: int) -> dict[str, Any] | None:
+    """The scheduled commodity report of correlation group `group` (REPORTS_BY_GROUP: EIA crude and gas for energy,
+    WASDE for ags) whose window [release - before, release + after] contains `now`, or None. Both ends included, as
+    `econ_calendar.blackout_window`."""
+    reports = REPORTS_BY_GROUP.get(group or "", ())
+    if not reports:
+        return None
+    now = pd.Timestamp(now)
+    today = now.tz_convert(REPORT_TZ).date()
+    for report in reports:
+        for k in (-1, 0, 1):
+            d = today + timedelta(days=k)
+            for t in _report_slots(report, d):
+                at = pd.Timestamp.combine(d, t).tz_localize(REPORT_TZ).tz_convert("UTC")
+                if at - pd.Timedelta(minutes=before_min) <= now <= at + pd.Timedelta(minutes=after_min):
+                    return {"title": REPORT_TITLES[report], "ts_utc": at.isoformat(), "kind": "commodity_report"}
+    return None
+
+
+def instrument_blackout(events: pd.DataFrame | None, now: pd.Timestamp, currencies: tuple[str, ...] | list[str],
+                        before_min: int, after_min: int, group: str | None = None) -> dict[str, Any] | None:
+    """The entry blackout of one instrument at `now` (multi-instrument plan 2026-11-02): the tier-1 USD event window
+    gold has today (`econ_calendar.blackout_window`, identical for a USD-only instrument) when USD is among its
+    `currencies` (registry `news_currencies`), then any high-impact event of its other currencies (Forex Factory's
+    `impact`, any case; the archive tiers USD events only), then its group's scheduled commodity report
+    (`commodity_report_window`). None outside every window; no calendar (None or empty) leaves the reports only (the
+    engine's `calendar_unavailable` rule is unchanged). Entries only; exits never read it."""
+    from goldbot.data.econ_calendar import blackout_window
+    cur = {c.strip().upper() for c in currencies}
+    if events is not None and not events.empty:
+        if "USD" in cur and (hit := blackout_window(events, now, before_min, after_min)) is not None:
+            return hit
+        others = cur - {"USD"}
+        if others and {"country", "impact"} <= set(events.columns):
+            ev = events[events["country"].astype(str).str.upper().isin(others)
+                        & events["impact"].astype(str).str.lower().eq("high")]
+            ts = pd.DatetimeIndex(pd.to_datetime(ev["ts_utc"], utc=True))
+            inside = (ts - pd.Timedelta(minutes=before_min) <= now) & (now <= ts + pd.Timedelta(minutes=after_min))
+            if inside.any():
+                row = ev[inside].iloc[0]
+                return {"title": str(row["title"]), "ts_utc": pd.Timestamp(row["ts_utc"]).isoformat()}
+    return commodity_report_window(group, now, before_min, after_min)
 
 
 def fetch(url: str, timeout: float = 15.0) -> str:   # pragma: no cover - network (VPS only)

@@ -8,14 +8,83 @@ holds the open P&L up to now. fx is the account currency per USD of XAUUSD P&L (
 Fail closed: a position without a stop (an unbounded loss), or one whose conversion, lots or contract is not a usable
 number, has an unknown risk (None). The engine then publishes the account's open risk as unknown, and RiskGate refuses
 entries while the heat cap or the projection is on. Exits never read any of this.
+
+Multi-instrument plan 2026-11-02 ("account-wide heat"; "notional per correlation group"): `account_open_risk` and
+`group_exposure` value every position of the account, whatever its symbol, from that symbol's own quote, contract and
+conversion (`SymbolQuote`; fx = account currency per unit of the symbol's P&L currency). A position on a symbol the
+engine has no usable quote for makes the account figure unknown, never zero.
 """
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, Protocol
 
 import pandas as pd
+
+from goldbot.base import FrozenRecord
+
+
+class SymbolQuote(FrozenRecord):
+    """One symbol's current close prices and terms, as the engine's SymbolBook last read them: `contract` units per
+    lot, `fx` the account currency per unit of the symbol's P&L currency (None: unknown), `group` its correlation
+    group (goldbot/instruments.py)."""
+    bid: float
+    ask: float
+    contract: float
+    fx: float | None
+    group: str
+
+
+class _Position(Protocol):
+    @property
+    def position_id(self) -> int: ...
+    @property
+    def symbol(self) -> str: ...
+    @property
+    def side(self) -> int: ...
+    @property
+    def lots(self) -> float: ...
+    @property
+    def sl(self) -> float | None: ...
+
+
+def account_open_risk(positions: Iterable[_Position],
+                      quotes: Mapping[str, SymbolQuote]) -> tuple[float | None, list[dict[str, Any]]]:
+    """(what every open position of the account can still lose down to its stop, account currency; one row per
+    position). Each position is valued on its own symbol's quote (`remaining_stop_risk`); one without a quote, a stop
+    or a usable conversion makes the total None (unknown: RiskGate refuses while the heat cap or the projection is
+    on). No positions: 0."""
+    total: float | None = 0.0
+    rows: list[dict[str, Any]] = []
+    for p in positions:
+        q = quotes.get(p.symbol)
+        risk = None if q is None else remaining_stop_risk(side=p.side, lots=p.lots, sl=p.sl, bid=q.bid, ask=q.ask,
+                                                          contract=q.contract, fx=q.fx)
+        rows.append({"position_id": p.position_id, "symbol": p.symbol, "side": p.side, "lots": p.lots, "sl": p.sl,
+                     "risk": round(risk, 2) if risk is not None else None})
+        total = None if total is None or risk is None else total + risk
+    return total, rows
+
+
+def group_exposure(positions: Iterable[_Position],
+                   quotes: Mapping[str, SymbolQuote]) -> tuple[dict[str, float] | None, float]:
+    """(open notional per correlation group, account currency: lots x contract x mid x fx; the gold group's lots) for
+    RiskGate's per-group cap (`AccountState.group_notional`, `open_lots`). A position the engine cannot value (no
+    quote, no usable conversion, price or lots) makes the map None: the engine then sets `exposure_unknown` and
+    entries are refused. No positions: ({}, 0.0)."""
+    groups: dict[str, float] = {}
+    gold_lots = 0.0
+    for p in positions:
+        q = quotes.get(p.symbol)
+        mid = (q.bid + q.ask) / 2 if q is not None else math.nan
+        if q is None or not (_usable(q.fx) and _usable(q.contract) and _usable(mid) and _usable(p.lots)):
+            return None, 0.0
+        assert q.fx is not None
+        groups[q.group] = groups.get(q.group, 0.0) + p.lots * q.contract * mid * q.fx
+        if q.group == "gold":
+            gold_lots += p.lots
+    return groups, gold_lots
 
 
 def _usable(x: float | None) -> bool:
