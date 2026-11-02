@@ -49,7 +49,7 @@ from goldbot.instruments import GOLD, InstrumentSpec
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine, EngineConfig
-    from goldbot.execution.broker import Tick
+    from goldbot.execution.broker import SymbolInfo, Tick
     from goldbot.labels.triple_barrier import SwapSpec
     from goldbot.risk import Intent
     from goldbot.risk.gate import GateDecision
@@ -98,6 +98,13 @@ NOTIONAL_HEADROOM = 0.95     # the account-wide ceiling keeps 5% under the bridg
 # retries first, then starts no further book's refresh and decisions once this many seconds (host clock) have passed;
 # the books left go first on the next pass. Gold alone never takes that path
 PASS_BUDGET_S = 5.0
+# live demo issue 2026-11-02 (icm-probe: 19 blocked books on a gold-only bridge, passes up to 35.8 s): a blocked book
+# that holds nothing in its magic range is quiet, making no broker call at all (`quiet_books`). Whether it holds
+# anything is read from the account's positions at most this often (host clock); its own records are checked every pass
+QUIET_RECHECK_S = 10.0
+# a non-gold book's symbol_info read that failed (a symbol the bridge does not serve) is tried again at most this often
+# (host clock; `symbol_read_due`), never once per refresh. Gold's reads are unchanged
+SYMBOL_RETRY_S = 1800.0
 
 T = TypeVar("T")
 
@@ -158,6 +165,8 @@ class SymbolBook:
         self.terms_written: pd.Timestamp | None = None
         self.fx: dict[tuple[pd.Timestamp, int], float | None] = {}
         self.entry_sessions: Any = None   # E3: the profile-narrowed table entries are judged on (`set_sessions`)
+        # (host-clock time, answer or failure) of the last symbol_info read (`symbol_info`, non-gold books)
+        self.symbol_read: tuple[float, SymbolInfo | BaseException] | None = None
 
     def __repr__(self) -> str:
         return f"SymbolBook({self.__dict__['cfg'].symbol!r}, primary={self.primary})"
@@ -424,6 +433,71 @@ def _exits_first(eng: Engine, quotes: PassQuotes, symbol: str) -> bool:
     return True
 
 
+def _quiet_ok(b: SymbolBook) -> bool:
+    """A blocked non-gold book with no record of its own to work on (no open trade, close due or kill pending)."""
+    d = b.__dict__
+    return (not b.primary and b.spec is not None and b.spec.blocked is not None and not d.get("open")
+            and not d.get("_close_due") and not d.get("_kill_pending"))
+
+
+def _in_range(b: SymbolBook, m: int) -> bool:
+    base = b.__dict__["cfg"].magic_base
+    return bool(base <= m < base + 100)            # Engine._own: the book's 100 magics
+
+
+def quiet_books(eng: Engine) -> set[str]:
+    """The books that make no broker call this pass (live demo issue 2026-11-02: "a book that is blocked and holds NO
+    open position in its magic range makes ZERO broker calls per pass ... It publishes its state as disabled from
+    config alone"). A book is quiet when its `BookSpec.blocked` is set (`instrument_unverified`: disabled, verify, or a
+    symbol the terminal could not describe at start, so one the bridge does not serve; `instrument_wind_down`), it
+    holds no record of its own (`_quiet_ok`) and the account's positions show none on its symbol inside its magic
+    range. The positions come from the pass's shared account_positions() read, at most every QUIET_RECHECK_S; a read
+    that fails keeps the last answer (none yet: only the books' own records count). A manual trade on the symbol
+    (outside the range) wakes nothing: the book would never touch it. A book that is not quiet runs its whole pass,
+    exits included, as before."""
+    candidates = [b for b in eng.books.values() if _quiet_ok(b)]
+    if not candidates:
+        return set()
+    now = time.monotonic()
+    at, held = eng.__dict__.get("_quiet_held", (None, frozenset()))
+    if at is None or now - at >= QUIET_RECHECK_S:
+        try:
+            every = list(eng.broker.account_positions())
+            held = frozenset(b.__dict__["cfg"].symbol for b in candidates
+                             if any(p.symbol == b.__dict__["cfg"].symbol and _in_range(b, p.magic) for p in every))
+        except Exception as exc:
+            log.warning("account positions unreadable (%s): the blocked books' quiet check keeps its last answer",
+                        type(exc).__name__)
+        eng.__dict__["_quiet_held"] = (now, held)
+    quiet = {b.__dict__["cfg"].symbol for b in candidates} - held
+    if quiet != eng.__dict__.get("_quiet_logged"):
+        eng.__dict__["_quiet_logged"] = quiet
+        log.info("%s: %d blocked book(s) holding nothing make no broker call: %s",
+                 eng.primary.__dict__["cfg"].account_id, len(quiet), ", ".join(sorted(quiet)) or "none")
+    return quiet
+
+
+def symbol_info(eng: Engine) -> SymbolInfo:
+    """The active book's symbol_info outside the decision cycle (its contract size, the ladder's lot terms, its
+    instruments.db row). Gold: read now, as before. Another book: one read serves every use for SYMBOL_RETRY_S, an
+    answer or a failure alike (the failure is raised again), so a symbol the bridge does not serve is never asked
+    once per refresh (live demo issue 2026-11-02: "symbol terms are read at most once per symbol per N minutes")."""
+    book: SymbolBook = eng.__dict__["book"]
+    if book.primary:
+        return eng.broker.symbol_info(eng.cfg.symbol)
+    now = time.monotonic()
+    if book.symbol_read is None or now - book.symbol_read[0] >= SYMBOL_RETRY_S:
+        try:
+            got: SymbolInfo | BaseException = eng.broker.symbol_info(eng.cfg.symbol)
+        except Exception as exc:
+            got = exc
+        book.symbol_read = (now, got)
+    v = book.symbol_read[1]
+    if isinstance(v, BaseException):
+        raise v
+    return v
+
+
 def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None,
                  budget_s: float = PASS_BUDGET_S) -> bool:
     """One loop pass over every book: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass) on each book
@@ -434,21 +508,24 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     _retry_closes before any book's refresh or decisions" (`_exits_first`, every book, every pass); "bound each pass
     with a deadline": once `budget_s` (PASS_BUDGET_S) has passed no further book starts its pass, and the books left go first on
     the next one (after gold, whose pass polls the approvals). Gold and the next book in turn always run, so none
-    starves however slow the bridge. Exits never wait on the deadline."""
+    starves however slow the bridge. Exits never wait on the deadline.
+
+    A quiet book (`quiet_books`: blocked, holding nothing) takes no part at all: no quote, no exits step, no pass."""
     ok = True
     t0 = time.monotonic()
     cfg = eng.primary.__dict__["cfg"]
-    symbols = [b.__dict__["cfg"].symbol for b in eng.books.values()]
-    if feed is not None:
-        feed.refresh(symbols, pd.Timestamp.now("UTC"))
-    quotes = PassQuotes(feed if feed is not None else broker)
-    rest = [b for b in eng.books.values() if b is not eng.primary]
-    start = eng.__dict__.get("_pass_cursor", 0) % len(rest) if rest else 0
-    order = [eng.primary, *rest[start:], *rest[:start]]
     prev = eng.broker
     eng.__dict__["broker"] = _pass_broker(prev)
     deferred = False
     try:
+        quiet = quiet_books(eng)
+        active = [b for b in eng.books.values() if b.__dict__["cfg"].symbol not in quiet]
+        if feed is not None:
+            feed.refresh([b.__dict__["cfg"].symbol for b in active], pd.Timestamp.now("UTC"))
+        quotes = PassQuotes(feed if feed is not None else broker)
+        rest = [b for b in active if b is not eng.primary]
+        start = eng.__dict__.get("_pass_cursor", 0) % len(rest) if rest else 0
+        order = [eng.primary, *rest[start:], *rest[:start]]
         for book in order:
             with using(eng, book):
                 ok = _exits_first(eng, quotes, book.__dict__["cfg"].symbol) and ok
@@ -470,11 +547,12 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
 
 
 def positions(eng: Engine) -> list[Any]:
-    """The active book's broker positions: gold's call is unchanged (the adapter's own symbol); a non-gold book names
-    its symbol (`Broker.positions(symbol=...)`)."""
+    """The active book's broker positions: gold's call is unchanged (the adapter's own symbol); a non-gold book's are
+    the account's positions on its symbol (`Broker.account_positions`, read once per pass for every book: live demo
+    issue 2026-11-02, never one bridge call per book)."""
     if is_primary(eng):
         return list(eng.broker.positions())
-    return list(eng.broker.positions(symbol=eng.cfg.symbol))
+    return [p for p in eng.broker.account_positions() if p.symbol == eng.cfg.symbol]
 
 
 AWAIT_REFRESH_S = 60.0   # a booked fill not seen by a refresh within this is left to reconciliation (it closed fast)
@@ -550,7 +628,7 @@ def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = Non
     if book.terms_written is None or (now - book.terms_written).total_seconds() >= cfg.broker_terms_every_s:
         book.terms_written = now
         try:
-            info = eng.broker.symbol_info(cfg.symbol)
+            info = symbol_info(eng)               # shared with the contract and lot terms reads
             db.save(terms_from_info(cfg.account_id, cfg.symbol, cfg.release_symbol, info, now))
         except InstrumentsDbError as exc:
             log.error("%s %s: %s; its entries are refused, exits run", cfg.account_id, cfg.symbol, exc)
@@ -685,7 +763,8 @@ def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
     book: SymbolBook = eng.__dict__["book"]
     st = eng.state
     if not book.primary:
-        refresh_terms(eng, tick.ts_utc)
+        if book.spec is None or book.spec.blocked is None:   # a blocked book takes no entry: its terms are never read
+            refresh_terms(eng, tick.ts_utc)
         if problem(book) is not None:
             st.dq_error = True
         spec = book.spec.instrument if book.spec is not None else None
