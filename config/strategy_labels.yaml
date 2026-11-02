@@ -98,3 +98,11 @@ arms:
   VXTV2: {variant: "TV rule 2"}
   GS1: {variant: "growth test"}
   GS1C: {variant: "growth control"}
+  # ADR 0061 amendment 2026-11-02: the learning arms' dedicated random controls (docs/research/learning-2026-11-02.md)
+  LC4D: {variant: "learning control, 1R"}
+  LC9D: {variant: "learning control, 12 bars"}
+  LCS5A: {variant: "learning control, stop $3"}
+  LCS5B: {variant: "learning control, stop $3.75"}
+  LCZ1P: {variant: "learning control, 1.5R"}
+  LCZ2P: {variant: "learning control, 1R"}
+  LCZ5P: {variant: "learning control, 5-min"}

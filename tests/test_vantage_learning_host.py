@@ -53,26 +53,28 @@ def test_vantage_demo_ships_configured_as_a_demo_probe_only_learning_host_switch
     assert acc.enabled and acc.mode == "demo" and acc.broker == "vantage" and acc.login is None    # on after its registry rows
     assert acc.probe_only and not acc.shadow_host and acc.approval_mode == "auto" and acc.account_class == "raw"
     assert acc.symbol == "XAUUSD+" and acc.server_tz == "NY+7" and acc.magic_base == 260200
-    assert acc.daily_loss_limit_abs == 200 and acc.max_positions == 18
+    assert acc.daily_loss_limit_abs == 200 and acc.max_positions == 24          # demo-limits ADR 0072: 18 -> 24
     assert acc.risk_overrides is not None and acc.risk_overrides.profile == "demo-2026-10-18"
 
 
 def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound_share(vantage):
     cp = vantage.cost_probe
     assert cp.enabled and cp.scheduled.enabled
-    assert cp.budget_share * 200 == pytest.approx(15, abs=0.01)
-    # prereg K10 (PD 2026-10-26: the pre-registered bound stands): at most half the sleeve, £7.50 a day
-    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(7.5, abs=0.01)
+    # demo-limits ADR 0072 (f, 2026-11-02): the sleeve £15 -> £35 (0.175 of the £200 day)
+    assert cp.budget_share * 200 == pytest.approx(35, abs=0.01)
+    # prereg K10 (PD 2026-10-26): at most half the sleeve (the 50% share is the bound): £7.50, now £17.50 a day
+    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(17.5, abs=0.01)
     assert cp.max_loss <= cp.budget_share * 200
 
 
 def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of_180(vantage):
     ex = vantage.exploration
     assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
-    assert ex.budget_share * 200 == pytest.approx(180, abs=0.01) and ex.max_open_total == 17
-    # ADR 0049 D1a (CFO 2026-10-27, H-81 V1): a scalp pot carved inside the unchanged £180
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (100, 8), "intraday": (40, 4),
-                                                                     "swing": (40, 1)}
+    # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
+    assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 6),
+                                                                     "swing": (None, 2)}
+    assert not ex.pot_budgets and ex.learning_max_open == 6
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in V_SCALP} == {("scalp", 6.5)}
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
@@ -139,7 +141,7 @@ def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_
 
 def test_vantage_riskgate_limits_carry_its_host_cap_probe_only_fence_and_arm_caps(vantage):
     limits = engine_limits(load_settings(), vantage)
-    assert limits.max_positions == 18 and limits.probe_only and limits.daily_loss_limit_abs == 200
+    assert limits.max_positions == 24 and limits.probe_only and limits.daily_loss_limit_abs == 200   # ADR 0072: 24
     assert limits.exploration_arms == {**{a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING},
                                        **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5)}
 

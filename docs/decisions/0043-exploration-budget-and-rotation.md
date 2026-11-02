@@ -248,3 +248,24 @@ Decision:
 
 Consequences: a Vantage arm learns from zero (slower), in exchange for allocations and graduation reads that are
 honest about its own costs. Rollback is not needed for ICM: its weights, labels and models continue unchanged.
+
+## Amendment 2026-11-02 (demo-limits ADR 0072; owner 2026-11-02)
+The owner, 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to test, learn and
+improve signals".
+
+- **Pots without £ budgets** (`exploration.pot_budgets: false`, demo probe_only accounts). A pot no longer bounds
+  today's loss plus open risk in £, and an arm's day (its share of its pot) no longer binds: the engine drops the `pot`
+  and `arm_budget` rooms. A pot is then its `max_open` slots only, and its `gbp` may be left out. The pot-sum check
+  runs only with pot budgets on. Still binding: the exploration budget (`budget_share` x the day), each arm's per-trade
+  cap with the round trip, the global, probe-slot, pot and arm slots, X3's net lots, and the RiskGate with the
+  account's daily and weekly limits. The research shares are still recorded as each candidate's propensity.
+- **Slots x1.35 on the three demo hosts.** The host cap goes from 18 to 24 (max_open_total 23, one slot kept for the
+  scheduled probe). The pots: icm-demo scalp 11, intraday 10, swing 3, growth 2; icm-probe scalp 19; vantage-demo scalp
+  11, intraday 6, swing 2.
+- **X3's weekend hold on a `demo_weekend_flat` host.** The Friday cut closes every position (censored), so an entry is
+  refused only in the last 15 minutes before it, not whenever its hold would reach it.
+- **Probe sleeves.** icm-probe 0.1363 -> 0.2363 of the day (exploration 0.7637), and vantage-demo 0.075 -> 0.175
+  (exploration 0.825). Each day's shares sum to 1.0.
+
+Rollback: `pot_budgets: true` with the old £ figures and slots (each account's comment in config/accounts.yaml), then
+restart.

@@ -20,7 +20,9 @@ Design rules kept:
 * Each strategy arm is measured against one control (the strategy board, item 132), in this order: a control whose
   frozen `params.control` names the arm; else a control of the arm's own family (`<family>_control`, or the same rule)
   on its timeframe and a shared account; else a generic random control (one of no strategy's family) on a shared
-  account and sleeve, preferring the arm's pre-registration, then its timeframe, then the spec's order.
+  account and sleeve, preferring the arm's pre-registration, then its timeframe, then the spec's order. A learning
+  arm (ADR 0061 amendment 2026-11-02) is read against the matched control its `learning.control` names; a control
+  dedicated to learning arms (`params.control: "learning:<ids>"`) is never another arm's generic control.
 """
 from __future__ import annotations
 
@@ -226,6 +228,7 @@ def _owns(control_family: str, family: str) -> bool:
 
 def _pairs(spec: list[Arm], arms: dict[str, ArmInfo]) -> dict[str, str]:
     """Strategy arm -> the control it is measured against (module docstring, in that order of preference)."""
+    from goldbot.research.arms import dedicated_control_of
     by_id = {a.id: a for a in spec}
     strategy_families = {i.family for i in arms.values() if not i.is_control}
     controls = [i for i in arms.values() if i.is_control and i.running]
@@ -235,10 +238,13 @@ def _pairs(spec: list[Arm], arms: dict[str, ArmInfo]) -> dict[str, str]:
             continue
         shared = [c for c in controls if not info.accounts or set(c.accounts) & set(info.accounts)]
         token = re.compile(rf"(?<![A-Z0-9]){re.escape(info.arm_id)}(?![A-Z0-9])")
-        named = [c for c in shared if token.search(str(by_id[c.arm_id].params.get("control", "")))]
+        block = by_id[info.arm_id].learning if by_id[info.arm_id].role == "learning" else None
+        mine = block.get("control") if isinstance(block, dict) else None
+        named = [c for c in shared if c.arm_id == mine] or             [c for c in shared if token.search(str(by_id[c.arm_id].params.get("control", "")))]
         own = [c for c in shared if _owns(c.family, info.family) and c.timeframe == info.timeframe]
         generic = [c for c in shared if not any(_owns(c.family, f) for f in strategy_families)
-                   and (c.style is None or info.style is None or c.style == info.style)]
+                   and (c.style is None or info.style is None or c.style == info.style)
+                   and not dedicated_control_of(by_id[c.arm_id])]
         prereg = _prereg(by_id[info.arm_id])
         generic.sort(key=lambda c: (prereg is None or _prereg(by_id[c.arm_id]) != prereg, c.timeframe != info.timeframe))
         pick = (named or own or generic)[:1]

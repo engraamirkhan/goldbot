@@ -90,11 +90,14 @@ def weekday_rule(eng: Engine, tick: Tick) -> bool:
     profit (never loosened). Exits are automatic and never gated. Each position is handled on its own (one raising or
     refused call never stops the others); a failed loser close is re-sent every tick (`_retry_closes`) and the rule
     runs again on each account refresh until it completes. Returns whether it completed for every position (an
-    unreadable book is not complete)."""
+    unreadable book is not complete). Every own position closes at the cut, winners too (`weekend_flat`, censored for
+    an exploration label), under the pilot (ADR 0055) or a demo account's `demo_weekend_flat` (demo-limits ADR
+    2026-11-02), whose entries may then hold up to the cut."""
     positions = eng._read_positions("the weekend rule is retried on the next refresh")
     if positions is None:
         return False
-    done, left, flat = True, len(positions), pilot.weekend_flat(eng)     # ADR 0055: the pilot closes winners too
+    flat = pilot.weekend_flat(eng) or bool(getattr(eng.cfg, "demo_weekend_flat", False))
+    done, left = True, len(positions)
     for p in positions:
         if not eng._own(p.magic):
             continue

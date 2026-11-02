@@ -89,7 +89,15 @@ accounts:
     # probe_only false, a new evidence epoch). Rollback: exploration.enabled false, probe_only false, max_positions
     # removed, restart.
     probe_only: true
-    max_positions: 18         # PD 2026-10-26 host cap (demo probe_only only), as icm-probe
+    # demo-limits ADR 2026-11-02 (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not
+    # bound to test, learn and improve signals"; the three demo learning hosts alike): host cap 18 -> 24 (max_open_total
+    # 23, one slot kept), the Friday cut closes every position (winners too, censored) so entries run until 15 minutes
+    # before it, and a tier-1 news blackout no longer refuses entries (it is still computed and stamped on every
+    # record). Unchanged: the £220 day, the weekly 6%, the stages, the throttle, every per-trade cap, the margin,
+    # notional and net-lot caps and every exit. Rollback: max_positions 18, max_open_total 17, drop the two flags, restart
+    max_positions: 24
+    demo_weekend_flat: true
+    news_blackout_entries: false
     # exploration (plan 2026-10-25, ADR 0043 sleeves; the rules are the frozen ARM-SPEC, config/exploration_arms.yaml):
     # budget_share 0.9 x 220 = £198 = intraday £108 + swing £90 (ADR 0043's £48 : £40 ratio, scaled to the host's
     # budget); slots and per-trade caps unchanged (intraday 5 open at £17, swing 1 open at £40; I0 30% of intraday,
@@ -104,10 +112,17 @@ accounts:
     # 4h arms. The £40 cap and the £90 / £82 pots are unchanged"; 2026Q4 override 93 -> 106): swing max_open 1 -> 2,
     # nothing else moves. Arms blocked in the frozen spec are dropped by the engine (logged) until their engine lane
     # lands. Rollback: drop the wave-2 arms, swing max_open back to 1, restart.
+    # demo-limits ADR 2026-11-02: `pot_budgets: false` = the pots' £ sleeves and each arm's day no longer bind (a pot is
+    # its slots only; the £198 budget, every per-trade cap and the RiskGate still do); slots x1.35 (scalp 8 -> 11,
+    # intraday 7 -> 10, swing 2 -> 3, growth 2). `learning_max_open: 6`: learning arms (ADR 0061 amendment 2026-11-02,
+    # docs/research/learning-2026-11-02.md) open at once, at most. The pot £ figures below are kept as history only.
+    # Rollback: pot_budgets true with gbp scalp 10 / intraday 68 / swing 40 / growth 80, the old max_open, restart
     exploration:
       enabled: true
       budget_share: 0.9
-      max_open_total: 17
+      max_open_total: 23
+      pot_budgets: false
+      learning_max_open: 6
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 option B): a scalp pot carved inside the unchanged £198 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 108 / 9 -> 68 / 7, swing 90 / 2 -> 40 / 2.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
@@ -120,8 +135,7 @@ accounts:
       # is min(3 x (cap + cost), 0.30 x £80) = £24, GS1C's fixed share 0.30 x £80 = £24), so the pair trades at the
       # same size; `sizing: growth` lets the RiskGate size them above the minimum lot inside those bounds. Rollback:
       # drop GS1/GS1C and the growth pot, scalp back to 90, restart.
-      pots: { scalp: { gbp: 10, max_open: 8 }, intraday: { gbp: 68, max_open: 7 }, swing: { gbp: 40, max_open: 2 },
-              growth: { gbp: 80, max_open: 2 } }
+      pots: { scalp: { max_open: 11 }, intraday: { max_open: 10 }, swing: { max_open: 3 }, growth: { max_open: 2 } }
       arms:
         I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         I2A: { style: intraday, max_loss: 17.0 }
@@ -174,6 +188,10 @@ accounts:
         Z9D: { style: scalp, max_loss: 6.5 }
         Z10D: { style: scalp, max_loss: 6.5 }
         ZCD: { style: scalp, max_loss: 6.5, control_share: 0.12 }
+        # learning class 2026-11-02 (docs/research/learning-2026-11-02.md): Z3D/Z6D/Z7D/Z10D read against ZCD, Z4D and
+        # Z9D against their dedicated random controls (same timeframe, stop, target and hold)
+        LC4D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LC9D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         # growth sprint 2026-11-01: GS1 (owner experiment to 2026-11-27) and its random-entry control at the same size.
         # `adds: 3` (section 3, ADR 0065): a unit at each +1 R of the first unit's entry, every earlier stop moved to the
         # newest add's so the group never loses more than one unit; the pair adds alike. Each add is gate-checked; the
@@ -224,13 +242,18 @@ accounts:
     # Demo trim (PD 2026-11-01, decision-2026-11-01-next-lines.md option A; cost of record 2026-10-31 section 6: "24 a
     # day M1 (one per open hour)"): scheduled every_min 15 -> 60, ~70 -> <= 24 probes a day. ICM market-leg and stop-exit
     # slippage are settled by strategy fills; 24 a day keeps the fixed-time control series. Rollback: drop every_min.
-    cost_probe: { enabled: true, budget_share: 0.1363, max_open: 3, max_loss: 10.0, scheduled: { enabled: true, budget_share: 0.5, every_min: 60 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # demo-limits ADR 2026-11-02 (f): the probe sleeve 0.1363 -> 0.2363 (£30 -> £52) with exploration's unchanged
+    # 0.7637, so the day's shares sum to 1.0 (the £220 still binds). Rollback: 0.1363, restart
+    cost_probe: { enabled: true, budget_share: 0.2363, max_open: 3, max_loss: 10.0, scheduled: { enabled: true, budget_share: 0.5, every_min: 60 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
     # PD 2026-10-26 (ADR 0043 host cap, 18 open): the RiskGate's open-position cap on THIS account only, replacing
     # risk.max_positions_per_account (2, which every other account keeps); refused at load off a demo probe_only account
-    max_positions: 18
+    # demo-limits ADR 2026-11-02: 18 -> 24, the weekend flat and the news blackout as icm-demo above
+    max_positions: 24
+    demo_weekend_flat: true
+    news_blackout_entries: false
     # dynamic limits (design 2026-10-19 item 4): each probe's loss is its own stop's at 0.01 lot, at most max_loss
     # and budget_share x the day's limit / max_open; the probe count is budget_share x the day's limit / the median
     # loss at the stop of the last 20 probes, 1 to max_open. max_loss and max_open are the ceilings and the fallback
@@ -253,11 +276,15 @@ accounts:
     # one host slot is always left for the scheduled probe (trading-safety nit, 2026-10-26).
     # ADR 0057 (H-81 amendment (a) 7.1): the scalp pot is re-split to £168 / 14 (0.7637 x 220; with the probes' 0.1363
     # the day's 0.9 = £198 is unchanged), inside the unchanged max_open_total 17 and max_positions 18.
+    # demo-limits ADR 2026-11-02: pot_budgets false (the £168 sleeve no longer binds; the 0.7637 budget does), scalp
+    # slots 14 -> 19, max_open_total 17 -> 23, learning_max_open 6. Rollback: pot_budgets true, gbp 168, 14, 17, restart
     exploration:
       enabled: true
       budget_share: 0.7637
-      max_open_total: 17
-      pots: { scalp: { gbp: 168, max_open: 14 } }   # 7.1: 14 + mirrors 3 + scheduled 1 inside 18 (max_open_total 17 binds); back to 8 if -6% before week 3
+      max_open_total: 23
+      pot_budgets: false
+      learning_max_open: 6
+      pots: { scalp: { max_open: 19 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
         S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
@@ -289,6 +316,13 @@ accounts:
         Z8P: { style: scalp, max_loss: 6.5 }
         Z7P: { style: scalp, max_loss: 6.5 }
         Z4P: { style: scalp, max_loss: 6.5 }
+        # learning class 2026-11-02 (docs/research/learning-2026-11-02.md): the dedicated random controls of S5A, S5B,
+        # Z1P, Z2P/Z4P and Z5P/Z7P (same timeframe, stop, target and hold); they stop with the arms they serve
+        LCS5A: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCS5B: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ1P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ2P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ5P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
   vantage-demo:
     broker: vantage
     mode: demo
@@ -322,12 +356,16 @@ accounts:
     # stays (plan 40 a day; probes are Vantage's only exit-slip measurement) until its exit legs are recorded AND its
     # strategy fills reach 200 per session, then `every_min: 120` (12 a day). Manual switch: the engine does not read
     # fill counts; the weekly cost-of-record refresh checks both conditions.
-    cost_probe: { enabled: true, budget_share: 0.075, max_open: 1, max_loss: 4.0, scheduled: { enabled: true, budget_share: 0.5 } }
+    # demo-limits ADR 2026-11-02 (f): 0.075 -> 0.175 (£15 -> £35), exploration 0.9 -> 0.825 (£180 -> £165): the day's
+    # shares sum to 1.0 under the unchanged £200. Rollback: 0.075 and 0.9, restart
+    cost_probe: { enabled: true, budget_share: 0.175, max_open: 1, max_loss: 4.0, scheduled: { enabled: true, budget_share: 0.5 } }
     shadow_host: false        # icm-probe hosts the shadow book (one host per deployment)
     # a learning host (ADR 0037 amendment 6): no live agent, every non-learning entry refused, out of the supervisor's
     # combined limits, the limits evidence and the phase gate
     probe_only: true
-    max_positions: 18         # PD 2026-10-26 host cap (demo probe_only only), as icm-probe and icm-demo
+    max_positions: 24         # PD 2026-10-26 host cap 18; demo-limits ADR 2026-11-02: 24, as icm-demo and icm-probe
+    demo_weekend_flat: true   # demo-limits ADR 2026-11-02, as icm-demo
+    news_blackout_entries: false
     dynamic_limits: true      # probes' loss and count from their own stops and the budget; the values above are ceilings
     # live issue 2026-10-27 (SRE: Vantage fills 2.6-5.3 s p95, up to 31 s): an entry order waits this long for the
     # terminal's reply on its own worker thread (goldbot/engine/order_send.py); the default 15 s timed out while the
@@ -344,15 +382,20 @@ accounts:
     # are Vantage's own hypotheses, not twins. No other limit changes. Rollback as icm-demo.
     # Arms expansion wave 2 (as icm-demo above, decision 3 of arms-expansion-2026-10-26.md section 11): swing max_open
     # 1 -> 2, the £82 pot and £40 cap unchanged; KSQ1 and PDC1 (1h, £30) and DON4 (4h swing). Rollback as icm-demo.
+    # demo-limits ADR 2026-11-02: budget 0.825 x 200 = £165, pot_budgets false (the pots are slots only), slots
+    # x1.35 (scalp 8 -> 11, intraday 4 -> 6, swing 1 -> 2), max_open_total 23, learning_max_open 6. Rollback:
+    # budget 0.9, pot_budgets true with gbp scalp 100 / intraday 40 / swing 40, the old max_open, 17, restart
     exploration:
       enabled: true
-      budget_share: 0.9
-      max_open_total: 17
+      budget_share: 0.825
+      max_open_total: 23
+      pot_budgets: false
+      learning_max_open: 6
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 V1): a scalp pot carved inside the unchanged £180 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 98 / 9 -> 40 / 4, swing 82 / 2 -> 40 / 1.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
       # Rollback: drop the scalp pot and the H-81 arms, restore intraday 98 / 9 and swing 82 / 2, restart.
-      pots: { scalp: { gbp: 100, max_open: 8 }, intraday: { gbp: 40, max_open: 4 }, swing: { gbp: 40, max_open: 1 } }
+      pots: { scalp: { max_open: 11 }, intraday: { max_open: 6 }, swing: { max_open: 2 } }
       arms:
         VI0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         VI2A: { style: intraday, max_loss: 17.0 }

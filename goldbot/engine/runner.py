@@ -222,6 +222,10 @@ class EngineConfig(Record):
     halt_checks: bool = False
     # production: block entries around tier-1 events from the archived calendar (store table calendar_events)
     news_blackout: bool = False
+    # demo-limits ADR (owner 2026-11-02): the Friday cut closes every position of this engine, winners too (censored),
+    # and exploration refuses an entry only in the last 15 minutes before it (`exploration.crosses_friday`). Set by
+    # ops.services.engine only for a demo probe_only account whose accounts.yaml says so; off everywhere else
+    demo_weekend_flat: bool = False
     blackout_before_min: int = 15
     blackout_after_min: int = 30
     shock_blackout_min: int = 30             # after a high-relevance unscheduled news shock (store table news)

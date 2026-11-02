@@ -533,7 +533,8 @@ def test_icm_probe_registers_its_six_strata_in_the_re_split_scalp_pot_at_the_sca
     ex = accounts["icm-probe"].exploration
     assert {a for a in ex.arms if a in ROWS} == PROBE
     assert {(ex.arms[a].style, ex.arms[a].max_loss, ex.arms[a].control_share) for a in PROBE} == {("scalp", 6.5, None)}
-    assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (168, 14, 17)
+    # demo-limits ADR 0072 (2026-11-02): the pot is slots only (pot_budgets false), 14 -> 19, max_open_total 23
+    assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (None, 19, 23)
     from goldbot.engine.exploration import config_for
     cfg = config_for(accounts["icm-probe"])
     assert cfg is not None and PROBE <= {a.arm_id for a in cfg.arms} and not cfg.dropped

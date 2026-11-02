@@ -33,7 +33,8 @@ WAVE2 = {"F1A": ("hurst_band_break", "15m"), "F1C": ("hurst_band_break_control",
 # lanes E1-E3 merged 2026-10-26; DOND unblocked by ARM-SPEC 8.15 (its exit runs under the Friday cut, as WFRI's)
 BLOCKED: dict[str, str] = {}
 FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0", "WKI0",   # ADR 0062: weekend lane
-                "GS1", "GS1C"}                                                                # growth sprint 2026-11-01
+                "GS1", "GS1C",                                                               # growth sprint 2026-11-01
+                "LC4D", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P"}            # learning-class controls (ADR 0072, 2026-11-02)
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),
@@ -148,16 +149,16 @@ def test_arms_without_a_host_and_virtual_exits_are_not_registered(accounts) -> N
 
 # ADR 0049 D1a (CFO 2026-10-27): a scalp pot carved inside the unchanged budget for H-81's scalp strata (H-81 option B /
 # V1): swing 90 / 2 -> 40 / 2 (icm-demo) and 82 / 2 -> 40 / 1 (vantage-demo), the pots still summing to the budget
-@pytest.mark.parametrize(("account", "pots"), [
-    # growth sprint 2026-11-01: growth 80 / 2 carved from the scalp pot (90 -> 10), the sum unchanged
-    ("icm-demo", {"scalp": (10, 8), "intraday": (68, 7), "swing": (40, 2), "growth": (80, 2)}),
-    ("vantage-demo", {"scalp": (100, 8), "intraday": (40, 4), "swing": (40, 1)})])
-def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots) -> None:
+# Demo-limits ADR 0072 (2026-11-02): the pots are slots only (pot_budgets false), x1.35; Vantage's budget 0.9 -> 0.825
+# (its probe sleeve 0.075 -> 0.175); max_open_total 23
+@pytest.mark.parametrize(("account", "pots", "budget"), [
+    ("icm-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 3), "growth": (None, 2)}, 0.9),
+    ("vantage-demo", {"scalp": (None, 11), "intraday": (None, 6), "swing": (None, 2)}, 0.825)])
+def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots, budget) -> None:
     acc = accounts[account]
     ex = acc.exploration
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == pots
-    assert sum(p.gbp for p in ex.pots.values()) == pytest.approx(ex.budget_share * acc.daily_loss_limit_abs)
-    assert ex.max_open_total == 17 and ex.budget_share == 0.9
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == pots and not ex.pot_budgets
+    assert ex.max_open_total == 23 and ex.budget_share == budget
     for style in ex.pots:
         assert sum(a.control_share or 0.0 for a in ex.arms.values() if a.style == style) <= 1
 

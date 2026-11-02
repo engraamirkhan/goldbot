@@ -819,19 +819,34 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
 # ---------------------------------------------------------------------------------------------- the nightly run
 def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, str] | None = None,
           controls: Sequence[str] = (), ceilings: Mapping[str, float] | None = None, seed: int = 0,
-          retrain: bool = False, models_dir: Path | None = None, held_out: Collection[str] = ()) -> dict[str, Any]:
+          retrain: bool = False, models_dir: Path | None = None, held_out: Collection[str] = (),
+          learning: Collection[str] | None = None) -> dict[str, Any]:
     """One broker's bandit (nightly) and, when `retrain` (Sundays), its H-62 style models whose retrain is due, on
     that broker's evidence only. `arms`: the strategy arm id -> style configured on the broker's accounts (joined
     with the arms seen in its candidates); control arms (random brackets) are never allocated by results. Shares use
-    each arm's net R labels (label_sim_r) resolved by `as_of`."""
+    each arm's net R labels (label_sim_r) resolved by `as_of`. `learning` (default: the spec's `role: learning` rows,
+    ADR 0061 amendment 2026-11-02): unqualified demo arms, never allocated by results and never in a style model's
+    training rows, as a control is never allocated."""
     if not broker:
         raise ValueError("exploration evidence is learnt per broker")
+    if learning is None:
+        try:
+            from goldbot.research.arms import learning_arm_ids
+            learning = learning_arm_ids()
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("exploration spec unreadable (%s): no learning arm is set apart tonight", type(exc).__name__)
+            learning = ()
+    learning = frozenset(learning)
     obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out)     # prereg Amendment 4
+    if learning:
+        held_out = {*held_out, *(str(c) for c in read_obs(db, broker=broker).loc[
+            lambda f: f["arm_id"].isin(learning), "candidate_id"])}
+        obs = obs[~obs["arm_id"].isin(learning)]
     strat = obs[~obs["is_control"]]
     strat = strat[strat["style"].isin(STYLES)]        # quant Q5: a growth-pot row is read, never learnt from
     style_of = {str(a): str(s) for a, s in strat.groupby("arm_id")["style"].first().items()}
     style_of.update({a: s for a, s in (arms or {}).items() if s in STYLES})
-    for c in controls:
+    for c in (*controls, *learning):
         style_of.pop(c, None)
     out: dict[str, Any] = {"arms": len(style_of)}
     if retrain and models_dir is not None:

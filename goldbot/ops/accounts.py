@@ -183,8 +183,9 @@ class ExplorationArm(FrozenRecord):
 class ExplorationPot(FrozenRecord):
     """ADR 0043 section 1: a style's sleeve, enforced by the engine (goldbot/engine/exploration.py): today's realised
     loss + open risk at the stops + the new trade's loss at its stop <= `gbp` (account currency), and at most
-    `max_open` of its arms' positions open."""
-    gbp: float = Field(gt=0)
+    `max_open` of its arms' positions open. `gbp` may be left out only on an account without pot budgets
+    (`Exploration.pot_budgets` false, demo-limits ADR 2026-11-02): its slots still bind."""
+    gbp: float | None = Field(None, gt=0)
     max_open: int = Field(ge=1)
 
 
@@ -203,6 +204,14 @@ class Exploration(FrozenRecord):
     # ADR 0043: style -> its sleeve (scalp, intraday, swing); every enabled arm names one, and the sleeves together fit
     # inside budget_share x daily_loss_limit_abs
     pots: dict[str, ExplorationPot] = Field(default_factory=dict)
+    # demo-limits ADR (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to
+    # test, learn and improve signals"): false = the pots' £ sleeves and each arm's day (its share of its pot) do not
+    # bind (the engine drops those two rooms; a pot needs no `gbp`); the per-trade cap, the exploration budget, every
+    # slot, the daily and weekly limits and the RiskGate still do. Default true: the ADR 0043 sleeves
+    pot_budgets: bool = True
+    # ADR 0061 amendment 2026-11-02: learning arms (`role: learning`) open at once on this account, all together
+    # (`learning_slots`); 0 (the default): no learning arm enters
+    learning_max_open: int = Field(0, ge=0)
 
 
 def growth_arm_ids(acc: Account) -> frozenset[str]:
@@ -262,7 +271,13 @@ class Account(Record):
     # PD decision 2026-10-26 (ADR 0043 host cap): the RiskGate's open-position cap for THIS account, replacing
     # risk.max_positions_per_account (2) here only. Accepted on a demo probe_only account only (refused at load
     # otherwise); None = the global value
-    max_positions: int | None = Field(None, ge=1, le=18)
+    max_positions: int | None = Field(None, ge=1, le=24)
+    # demo-limits ADR (owner 2026-11-02): `demo_weekend_flat` = the Friday cut closes every position, winners too
+    # (censored), and exploration refuses an entry only in the last 15 minutes before it; `news_blackout_entries` false
+    # = the RiskGate no longer refuses entries in a tier-1 news blackout (the blackout is still computed and recorded on
+    # every entry). Off their defaults only on a demo probe_only account (refused at load otherwise)
+    demo_weekend_flat: bool = False
+    news_blackout_entries: bool = True
     # owner 2026-10-19 (docs/design/dynamic-limits-2026-10-19.md): "loss per trade, daily loss ... dynamic according to
     # strategy". On: per-strategy risk per trade from the nightly controller, tighten-only intraday factors and the
     # probes' loss and count from their own stops and the budget (cost_probe.probe_limits); the configured values stay
@@ -398,6 +413,18 @@ class Account(Record):
         return self
 
     @model_validator(mode="after")
+    def _demo_limits_fenced(self) -> Account:
+        """Demo-limits ADR (owner 2026-11-02, "for the system to be not bound to test, learn and improve signals"):
+        the weekend-flat and news-blackout flags leave their defaults only on a demo probe_only account, where nothing
+        real is at stake; anywhere else the config is refused at load, never ignored quietly."""
+        off = [k for k, v in (("demo_weekend_flat", self.demo_weekend_flat),
+                              ("news_blackout_entries", not self.news_blackout_entries)) if v]
+        if off and (self.mode != "demo" or not self.probe_only):
+            raise ValueError(f"{', '.join(off)} off its default is allowed on demo probe_only accounts only "
+                             "(demo-limits ADR 2026-11-02)")
+        return self
+
+    @model_validator(mode="after")
     def _probe_only_is_a_probe_host(self) -> Account:
         """ADR 0037 amendment 4: a probe_only account exists to mirror the shadow book's challengers at the minimum
         lot. Amendment 6 (PD 2026-10-26, ADR 0043 per-style hosts): "or to run exploration arms", so a second demo
@@ -433,8 +460,11 @@ class Account(Record):
             raise ValueError("exploration arm max_loss must fit inside exploration.budget_share x daily_loss_limit_abs")
         if any(a.style is None or a.style not in ex.pots for a in ex.arms.values()):
             raise ValueError("every exploration arm names a style with a pot (exploration.pots, ADR 0043)")
-        if sum(pot.gbp for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
-            raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
+        if ex.pot_budgets:              # without pot budgets the pots are slots only (demo-limits ADR 2026-11-02)
+            if bare := sorted(k for k, pot in ex.pots.items() if pot.gbp is None):
+                raise ValueError(f"exploration pots {bare} need gbp while pot_budgets is on (ADR 0043)")
+            if sum(pot.gbp or 0.0 for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
+                raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
         return self
 
     @model_validator(mode="after")
@@ -725,6 +755,9 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                                dynamic_limits=a.get("dynamic_limits", False),
                                exploration=Exploration(**(a.get("exploration") or {})),
                                max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
+                               # demo-limits ADR 2026-11-02 (demo probe_only only; refused elsewhere at load)
+                               demo_weekend_flat=a.get("demo_weekend_flat", False),
+                               news_blackout_entries=a.get("news_blackout_entries", True),
                                pilot=PilotRules(**(a.get("pilot") or {})),
                                order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
                                store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),

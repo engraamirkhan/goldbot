@@ -36,6 +36,15 @@ RUNNING = {"icm-demo": {"C1H", "G1A", "G1C", "I0", "W0", "ZCD", "GS1C"}
 NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
                  "icm-probe": {"S1A", "S1B", "S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
                  "vantage-demo": {"Z6V", "Z7V"}, "vantage-247": set()}
+# ADR 0061 amendment 2026-11-02 (docs/research/learning-2026-11-02.md): the refused arms with a fixed bracket became
+# learning rows, each with a matched control (ZCD/ZCV shared, LC* dedicated). They enter only once their K rows are in
+# the registry: without it (CI, a checkout) they and the dedicated controls are refused, fail closed
+LEARNING = {"icm-demo": {"Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
+            "icm-probe": {"S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"}, "vantage-demo": {"Z6V", "Z7V"},
+            "vantage-247": set()}
+LEARNING_CONTROLS = {"icm-demo": {"LC4D", "LC9D"}, "icm-probe": {"LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ5P"},
+                     "vantage-demo": set(), "vantage-247": set()}
+NO_REGISTRY = Path("/nonexistent/research_registry.jsonl")
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:
@@ -163,7 +172,13 @@ def test_the_cost_role_is_only_for_f1a_and_g1a_each_naming_its_own_prereg_cost_r
 # ------------------------------------------------------------------------------------------------ the live spec
 @pytest.fixture(scope="module")
 def spec() -> dict[str, arms.Arm]:
-    return {a.id: a for a in arms.load_arms(SPEC)}
+    return {a.id: a for a in arms.load_arms(SPEC, registry=NO_REGISTRY)}
+
+
+@pytest.fixture
+def _no_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine's loads read no K rows (CI and a checkout have no registry): the learning class fails closed."""
+    monkeypatch.setattr(arms, "REGISTRY_PATH", NO_REGISTRY)
 
 
 def test_the_spec_names_f1as_and_g1as_cost_reads_outside_the_hash(spec) -> None:
@@ -178,19 +193,23 @@ def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_sto
 
 
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
-    assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS)
+    dedicated = set().union(*LEARNING_CONTROLS.values())
+    assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS) | dedicated
     assert {i for i, a in spec.items() if a.role == "cost"} == set(COSTS)
     assert {i for i, a in spec.items() if a.role == "owner_experiment"} == OWNER_EXPERIMENTS
+    assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values())
     for arm_id, a in spec.items():
         if a.role == "owner_experiment":
             assert (a.entry_refused == "") == (pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL), arm_id
         elif a.role == "strategy":       # 2026-10-30: no family has qualified (H-16, H-80 R2, H-82..H-84, H-17 FAIL)
             assert a.entry_refused.startswith(RULE), arm_id
+        elif a.role == "learning" or arm_id in dedicated:       # no K rows here: refused, fail closed
+            assert a.entry_refused.startswith(arms.LEARNING_RULE), arm_id
         else:
             assert a.entry_refused == "", arm_id
 
 
-def test_every_account_runs_only_its_exempt_arms_and_keeps_every_refused_arm_configured() -> None:
+def test_every_account_runs_only_its_exempt_arms_and_keeps_every_refused_arm_configured(_no_registry) -> None:
     for acc in acc_mod.load_accounts(logins=False).values():
         cfg = exploration.config_for(acc)
         if cfg is None:
@@ -198,8 +217,30 @@ def test_every_account_runs_only_its_exempt_arms_and_keeps_every_refused_arm_con
         configured = {a.arm_id for a in cfg.arms}
         refused = exploration.entry_refused(cfg)
         assert configured - set(refused) - exploration.spec_retired(cfg) == RUNNING[acc.account_id]
-        assert NEWLY_REFUSED[acc.account_id] <= set(refused) <= configured
-        assert all(refused[i].startswith(RULE) for i in NEWLY_REFUSED[acc.account_id])
+        assert NEWLY_REFUSED[acc.account_id] | LEARNING_CONTROLS[acc.account_id] <= set(refused) <= configured
+        learning = LEARNING[acc.account_id] | LEARNING_CONTROLS[acc.account_id]
+        assert all(refused[i].startswith(RULE) for i in NEWLY_REFUSED[acc.account_id] - learning)
+        assert all(refused[i].startswith(arms.LEARNING_RULE) for i in learning)
+
+
+def test_with_their_k_rows_the_learning_arms_and_their_dedicated_controls_run_too(tmp_path, monkeypatch) -> None:
+    import importlib.util
+    mod_spec = importlib.util.spec_from_file_location("k", SPEC.parents[1] / "scripts" / "record_learning_k_rows.py")
+    assert mod_spec is not None and mod_spec.loader is not None
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    reg = tmp_path / "research_registry.jsonl"
+    reg.write_text("".join(json.dumps({"config_hash": h, "family": arms.LEARNING_FAMILY}) + "\n"
+                           for h in mod.k_rows(SPEC)))
+    monkeypatch.setattr(arms, "REGISTRY_PATH", reg)
+    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp("2026-11-02", tz="UTC"))
+    for acc in acc_mod.load_accounts(logins=False).values():
+        cfg = exploration.config_for(acc)
+        if cfg is None:
+            continue
+        running = {a.arm_id for a in cfg.arms} - set(exploration.entry_refused(cfg)) - exploration.spec_retired(cfg)
+        want = RUNNING[acc.account_id] | LEARNING[acc.account_id] | LEARNING_CONTROLS[acc.account_id]
+        assert running == want, acc.account_id
 
 
 # ------------------------------------------------------------------------------------------------ the engine layer
@@ -285,11 +326,11 @@ def test_health_warns_when_an_exploring_account_has_no_arm_that_may_enter(tmp_pa
     assert health.check_qualification(ctx).status == "warn"
 
 
-def test_the_runtime_qualification_view_matches_the_engine_per_account() -> None:
+def test_the_runtime_qualification_view_matches_the_engine_per_account(_no_registry) -> None:
     view = exploration.qualification_by_account(acc_mod.enabled_accounts())
     for account_id, (running, refused) in view.items():
         assert set(running) == RUNNING[account_id]
-        assert set(refused) == NEWLY_REFUSED[account_id]
+        assert set(refused) == NEWLY_REFUSED[account_id] | LEARNING_CONTROLS[account_id]
 
 
 # ------------------------------------------------------------------------------------------------ the cost read's end
