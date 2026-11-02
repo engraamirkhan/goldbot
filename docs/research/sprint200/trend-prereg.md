@@ -122,3 +122,11 @@ Columns: id | tf | mechanism (why gold pays it) | entry rule | stop / exit | dif
 Per id: n, gross and net mean R, t, control excess, exit mix, cost per trade in R, the $0.70 stress line, per-year
 net means; confirm adds DSR at K 3,233 and the years-positive count. Losers are reported beside winners in
 `docs/research/sprint200/trend-results.md`. Trade rows and market data are never committed.
+
+## Amendment 1 (2026-11-02, before any look)
+
+Coordinator control fix for all lanes: the pass rule uses a leak-free control drawn at or after the signal, matched
+on day, session and side. Section 1's control already does exactly that (post-fill minutes of the same session
+instance), so the pass rule is unchanged. As the coordinator asks, the brief's literal same-day control (4 twins
+uniform over the WHOLE session instance, pre-signal minutes included, same side and exits) is also computed and
+reported as `control_excess_full_lookahead`; it is not used by any rule.
