@@ -54,12 +54,13 @@ def test_a_pot_without_gbp_loads_only_without_pot_budgets() -> None:
     assert acc.exploration.pots["scalp"].gbp is None
 
 
-def test_the_pots_are_summed_against_the_budget_only_with_pot_budgets() -> None:
+def test_a_pot_that_names_its_gbp_always_fits_inside_the_budget() -> None:
+    """Trading-safety M1: without pot budgets a pot that names its £ still binds, so it must still fit the day."""
     big = {"scalp": {"gbp": 10_000, "max_open": 4}}
     arms = {"S0": {"style": "scalp", "max_loss": 6.5, "control_share": 0.25}}
-    with pytest.raises(ValueError, match="pots must fit"):
-        _with("icm-probe", **{"exploration.pots": big, "exploration.arms": arms, "exploration.pot_budgets": True})
-    _with("icm-probe", **{"exploration.pots": big, "exploration.arms": arms, "exploration.pot_budgets": False})
+    for on in (True, False):
+        with pytest.raises(ValueError, match="pots must fit"):
+            _with("icm-probe", **{"exploration.pots": big, "exploration.arms": arms, "exploration.pot_budgets": on})
 
 
 @pytest.mark.parametrize("flag, value", [("demo_weekend_flat", True), ("news_blackout_entries", False)])
@@ -118,6 +119,7 @@ def test_the_three_demo_learning_hosts_carry_the_demo_limits() -> None:
         assert a.demo_weekend_flat is True and a.news_blackout_entries is False, acc_id
         assert a.max_positions == 24 and a.exploration.max_open_total == 23, acc_id
     pots = {k: {s: p.max_open for s, p in accs[k].exploration.pots.items()} for k in DEMO}
+    assert accs["icm-demo"].exploration.pots["growth"].gbp == 80        # M1: GS1/GS1C's £80 day unchanged
     assert pots == {"icm-demo": {"scalp": 11, "intraday": 10, "swing": 3, "growth": 2},
                     "icm-probe": {"scalp": 19}, "vantage-demo": {"scalp": 11, "intraday": 6, "swing": 2}}
 

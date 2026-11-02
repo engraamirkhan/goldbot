@@ -46,8 +46,7 @@ NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D
 LEARNING = {"icm-demo": {"Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
             "icm-probe": {"S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"}, "vantage-demo": {"Z6V", "Z7V"},
             "vantage-247": set()}
-LEARNING_CONTROLS = {"icm-demo": {"LC4D", "LC9D"}, "icm-probe": {"LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ5P"},
-                     "vantage-demo": set(), "vantage-247": set()}
+LEARNING_CONTROLS = {k: {"LC" + a for a in v} for k, v in LEARNING.items()}      # one per arm (quant (2)/(3))
 NO_REGISTRY = Path("/nonexistent/research_registry.jsonl")
 
 

@@ -205,9 +205,10 @@ class Exploration(FrozenRecord):
     # inside budget_share x daily_loss_limit_abs
     pots: dict[str, ExplorationPot] = Field(default_factory=dict)
     # demo-limits ADR (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to
-    # test, learn and improve signals"): false = the pots' £ sleeves and each arm's day (its share of its pot) do not
-    # bind (the engine drops those two rooms; a pot needs no `gbp`); the per-trade cap, the exploration budget, every
-    # slot, the daily and weekly limits and the RiskGate still do. Default true: the ADR 0043 sleeves
+    # test, learn and improve signals"): false = a pot without a `gbp` is slots only: its £ sleeve and its arms' days
+    # do not bind (the engine drops those two rooms); a pot that still names its `gbp` keeps both (trading-safety M1:
+    # the growth pot). The per-trade cap, the exploration budget, every slot, the daily and weekly limits and the
+    # RiskGate always bind. Default true: the ADR 0043 sleeves, every pot with its `gbp`
     pot_budgets: bool = True
     # ADR 0061 amendment 2026-11-02: learning arms (`role: learning`) open at once on this account, all together
     # (`learning_slots`); 0 (the default): no learning arm enters
@@ -467,11 +468,12 @@ class Account(Record):
             raise ValueError("exploration arm max_loss must fit inside exploration.budget_share x daily_loss_limit_abs")
         if any(a.style is None or a.style not in ex.pots for a in ex.arms.values()):
             raise ValueError("every exploration arm names a style with a pot (exploration.pots, ADR 0043)")
-        if ex.pot_budgets:              # without pot budgets the pots are slots only (demo-limits ADR 2026-11-02)
-            if bare := sorted(k for k, pot in ex.pots.items() if pot.gbp is None):
-                raise ValueError(f"exploration pots {bare} need gbp while pot_budgets is on (ADR 0043)")
-            if sum(pot.gbp or 0.0 for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
-                raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
+        # without pot budgets a pot is slots only unless it still names its £, which then binds (demo-limits ADR
+        # 2026-11-02, trading-safety M1); the pots that name one always fit inside the budget
+        if ex.pot_budgets and (bare := sorted(k for k, pot in ex.pots.items() if pot.gbp is None)):
+            raise ValueError(f"exploration pots {bare} need gbp while pot_budgets is on (ADR 0043)")
+        if sum(pot.gbp or 0.0 for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
+            raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
         return self
 
     @model_validator(mode="after")

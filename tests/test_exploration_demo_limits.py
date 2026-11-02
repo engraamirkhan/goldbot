@@ -33,6 +33,7 @@ from tests.test_exploration_engine import CLOSE, LONG, LOSS, SHORT, _actions, _a
 PREREG = "docs/research/learning-2026-11-02.md"
 UNTIL = "2025-03-20"                        # the engine's clock in these tests is March 2025
 LOAD_DAY = pd.Timestamp("2025-03-01", tz="UTC")
+SINCE = "2025-03-01"                       # the learning arms' registration day in these tests
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +55,7 @@ def _registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _spec(arm_id: str, *, side: int = 1, control: str = "C1", until: str = UNTIL, loss_cap: float = 100.0,
-          role: str = "learning", serves: str | None = None, max_open: int = 5) -> SpecArm:
+          role: str = "learning", serves: str | None = None, max_open: int = 5, since: str = SINCE) -> SpecArm:
     params: dict[str, Any] = {"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4}
     if role == "control":                   # a random control names what it controls (a dedicated one: its arms)
         params["control"] = arms.LEARNING_CONTROL_PREFIX + serves if serves is not None else "null"
@@ -62,7 +63,7 @@ def _spec(arm_id: str, *, side: int = 1, control: str = "C1", until: str = UNTIL
     if role == "control":
         return base.model_copy(update={"role": "control"})
     block = {"prereg": PREREG, "k_id": arms.learning_k_id(arm_id, arms.arm_hash(base), PREREG), "control": control,
-             "loss_cap_gbp": loss_cap, "until": until}
+             "loss_cap_gbp": loss_cap, "until": until, "since": since}
     return base.model_copy(update={"role": "learning", "learning": block})
 
 
@@ -76,14 +77,14 @@ def _control(arm_id: str = "C1", serves: str = "L1") -> Arm:
 
 def _engine(tmp_path: Path, arm_list: list[Arm], *, learning_max_open: int = 6, pot_budgets: bool = True,
             pots: dict[str, Pot] | None = None, budget_share: float = 0.9, weekend_flat: bool = False,
-            caps: dict[str, float] | None = None) -> tuple[Engine, Any]:
+            caps: dict[str, float] | None = None, blackout_entries: bool = True) -> tuple[Engine, Any]:
     pots = pots if pots is not None else {"intraday": Pot(gbp=48, max_open=8)}
     cfg = ExplorationConfig(enabled=True, budget_share=budget_share, max_open_total=18, pots=pots,
                             arms=tuple(arm_list), pot_budgets=pot_budgets, learning_max_open=learning_max_open)
     pb = _Terminal(equity=10_000, adverse_slip_points=0.0)
     limits = RiskLimits(risk_per_trade=0.002, multiplier_bounds=(1.0, 1.0), max_positions=50, probe_only=True,
                         exploration_arms=caps if caps is not None else {a.arm_id: 40.0 for a in arm_list},
-                        daily_loss_limit_abs=220.0)
+                        daily_loss_limit_abs=220.0, blackout_entries=blackout_entries)
     eng = Engine(EngineConfig(account_id="icm-probe", broker_name="icm", mode="demo", approval_mode="auto",
                               declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, probe_only=True,
                               exploration_config=cfg, demo_weekend_flat=weekend_flat),
@@ -92,8 +93,8 @@ def _engine(tmp_path: Path, arm_list: list[Arm], *, learning_max_open: int = 6, 
 
 
 def _fill(state: Path, cid: str, arm_id: str = "L1", *, pnl: float | None = -1.0, censored: bool = False,
-          stop_loss: float = 2.0, cost: float = 0.5) -> None:
-    sent = pd.Timestamp("2025-03-03 10:00", tz="UTC")
+          stop_loss: float = 2.0, cost: float = 0.5, sent: pd.Timestamp = pd.Timestamp("2025-03-03 10:00", tz="UTC")
+          ) -> None:
     rec = ExplorationRecord(
         client_order_id=cid, account_id="icm-probe", arm_id=arm_id, family="x", tf="15m", side=1, lots=0.01,
         signal_utc=sent, sent_utc=sent, atr_usd=5.0, stop_usd=5.0, target_usd=10.0, hold_s=3600, fill_price=2400.0,
@@ -153,6 +154,7 @@ def test_at_300_admissible_fills_the_learning_arm_and_its_dedicated_control_reti
     assert sorted(_arms_sent(eng)) == ["C1", "L1"]                                     # nothing more
     [due] = _actions(eng, "exploration_arm_learning_read_due")
     assert due["arm"] == "L1" and due["fills"] == arms.LEARNING_READ_FILLS
+    assert due["censored"] == 1                     # quant (5): censored fills reported apart, never in the 300
     assert eng.exploration is not None and {"L1", "C1"} <= eng.exploration.retired
 
 
@@ -176,7 +178,7 @@ def test_the_loss_cap_retires_the_arm_counting_a_fill_with_no_pnl_as_a_loss_at_i
 
 def test_below_its_loss_cap_the_arm_keeps_entering(tmp_path) -> None:
     _fill(tmp_path, "a", pnl=-6.0)
-    _fill(tmp_path, "b", pnl=None, stop_loss=3.4, cost=0.5)
+    _fill(tmp_path, "b", pnl=None, stop_loss=1.4, cost=0.5)   # 7.9 lost: + £2 for the new trade is 9.9
     eng, pb = _engine(tmp_path, [_learning(loss_cap=10.0), _control()])
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert sorted(_arms_sent(eng)) == ["C1", "L1"]
@@ -243,7 +245,7 @@ def test_a_pot_without_its_gbp_is_refused_while_pot_budgets_are_on() -> None:
 
 
 # ------------------------------------------------------------------------------------------------ the weekend
-FRI_CUT = pd.Timestamp("2025-03-07 19:30", tz="UTC")       # 21:30 Europe/Athens (UTC+2 in March)
+FRI_CUT = pd.Timestamp("2026-11-20 19:30", tz="UTC")       # 21:30 Europe/Athens (UTC+2), an ordinary Friday
 
 
 @pytest.mark.parametrize("before_cut_s, refused", [(3 * 3600, False), (901, False), (899, True), (0, True)])
@@ -266,6 +268,146 @@ def test_a_rule_that_follows_the_cut_keeps_its_own_rule_with_demo_weekend_flat(t
     after_cut = FRI_CUT + pd.Timedelta(minutes=5)
     assert exploration.crosses_friday(eng, after_cut, 60, follows_cut=True)
     assert not exploration.crosses_friday(eng, FRI_CUT - pd.Timedelta(hours=3), 2 * 3600, follows_cut=True)
+
+
+# ------------------------------------------------------------------------------------------------ review round (PR 295)
+def test_m1_a_pot_that_keeps_its_gbp_still_binds_without_pot_budgets(tmp_path) -> None:
+    """Trading-safety M1: a pot with a £ figure keeps its sleeve and its arms' days although pot_budgets is false
+    (the GS1/GS1C growth pot, the ADR 0061 amendment of 2026-11-01); the 0.5-of-£4 case admits two £1 trades."""
+    ctl = Arm(spec=_spec("C1", role="control"), style="intraday", control_share=0.5)
+    eng, pb = _engine(tmp_path, [ctl], pot_budgets=False, pots={"intraday": Pot(gbp=4.0, max_open=5)})
+    for k in range(3):
+        exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15 * k)))
+    assert len(_arms_sent(eng)) == 2
+    assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_budget"]
+
+
+def test_m1_the_growth_pair_never_holds_more_than_its_pot_at_the_stops(tmp_path) -> None:
+    """GS1/GS1C keep their £80 day on icm-demo; here a £3 growth pot holds at most three £1 trades of the pair."""
+    pair = [Arm(spec=_spec(i, role="control", side=s), style="growth", control_share=0.5) for i, s in
+            (("G1", 1), ("G2", -1))]
+    eng, pb = _engine(tmp_path, pair, pot_budgets=False, pots={"growth": Pot(gbp=3.0, max_open=5)})
+    for k in range(4):
+        exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15 * k)))
+    assert len(_arms_sent(eng)) <= 3 and len(eng.open) <= 3
+    assert {d["action"] for d in _actions(eng, "exploration_refused:")} <= {"exploration_refused:pot",
+                                                                           "exploration_refused:arm_budget"}
+    growth = acc_mod.load_accounts(logins=False)["icm-demo"].exploration.pots["growth"]
+    assert (growth.gbp, growth.max_open) == (80, 2)
+
+
+@pytest.mark.parametrize("kind, entered", [("tier1", True), ("news_shock", False), (None, False)])
+def test_m2_a_lifted_blackout_enters_through_tier1_only_and_stamps_its_kind(tmp_path, kind: str | None,
+                                                                            entered: bool) -> None:
+    eng, pb = _engine(tmp_path, [_learning(), _control()], blackout_entries=False)
+    tick = _at(eng, pb, CLOSE)
+    eng.state.in_blackout, eng.state.blackout_kind = True, kind
+    exploration.on_pass(eng, tick)
+    assert bool(_arms_sent(eng)) is entered
+    if entered:
+        rec = next(r for r in exploration.trades(str(tmp_path), "icm-probe") if r.arm_id == "L1")
+        assert rec.in_blackout is True and rec.blackout_kind == "tier1"
+
+
+def test_m2_a_news_shock_inside_a_lifted_tier1_window_is_the_event(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from goldbot.engine import runner
+    eng, _ = _engine(tmp_path, [], blackout_entries=False)
+    eng.store = SimpleNamespace(  # type: ignore[assignment]
+        read=lambda *a, **k: pd.DataFrame({"ts_utc": [CLOSE], "tier": [1], "title": ["NFP"]}))
+    monkeypatch.setattr(runner, "blackout_window", lambda *a, **k: {"title": "NFP", "ts_utc": CLOSE.isoformat()})
+    monkeypatch.setattr(runner, "shock_window", lambda *a, **k: {"title": "x", "received_utc": "y", "kind": "news_shock"})
+    assert eng._blackout(CLOSE) == {"title": "x", "received_utc": "y", "kind": "news_shock"}
+    eng.gate.limits = eng.gate.limits.model_copy(update={"blackout_entries": True})     # every other account
+    eng._news = (None, pd.DataFrame())
+    assert eng._blackout(CLOSE) == {"title": "NFP", "ts_utc": CLOSE.isoformat()}
+
+
+EARLY = pd.Timestamp("2026-11-27 17:45", tz="UTC")      # day after Thanksgiving: 12:00 CT less 15 minutes
+
+
+@pytest.mark.parametrize("now, hold_s, refused", [
+    (pd.Timestamp("2026-11-27 16:00", tz="UTC"), 3600, False),       # ends 17:00, before the effective cut
+    (pd.Timestamp("2026-11-27 16:00", tz="UTC"), 2 * 3600, True),    # reaches it
+    (pd.Timestamp("2026-11-27 17:50", tz="UTC"), 60, True),          # past it, before the reopen
+    (pd.Timestamp("2026-12-31 17:00", tz="UTC"), 3600, True),        # 31 December
+    (pd.Timestamp("2026-12-24 17:00", tz="UTC"), 3600, True),        # 24 December
+    (pd.Timestamp("2026-12-31 15:00", tz="UTC"), 3600, False),
+    (pd.Timestamp("2026-11-19 17:00", tz="UTC"), 2 * 3600, False),   # an ordinary Thursday
+])
+def test_m3_with_demo_weekend_flat_an_early_close_day_cuts_entries_15_minutes_before_its_close(
+        tmp_path, now: pd.Timestamp, hold_s: int, refused: bool) -> None:
+    eng, _ = _engine(tmp_path, [], weekend_flat=True)
+    assert exploration.crosses_friday(eng, now, hold_s) is refused
+
+
+def test_m3_an_unusable_holiday_list_falls_back_to_the_old_hold_rule(tmp_path, monkeypatch) -> None:
+    eng, _ = _engine(tmp_path, [], weekend_flat=True)
+    thursday = pd.Timestamp("2026-11-19 17:00", tz="UTC")
+    assert not exploration.crosses_friday(eng, thursday, 2 * 86400)          # the list read: flat at the cut
+    monkeypatch.setattr(eng, "_holiday_list", lambda: None)
+    assert exploration.crosses_friday(eng, thursday, 2 * 86400)              # unknown early closes: the old rule
+
+
+def test_l1_the_loss_cap_refuses_an_entry_whose_loss_with_open_risk_would_reach_it(tmp_path) -> None:
+    _fill(tmp_path, "a", pnl=-7.0)
+    eng, pb = _engine(tmp_path, [_learning(loss_cap=10.0), _control()])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))                     # 7 + 0 open + 2 (stop and round trip) = 9
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))     # 7 + 1 open + 2 = 10: refused
+    assert _arms_sent(eng).count("L1") == 1
+    assert "exploration_refused:learning_loss_cap" in {d["action"] for d in _actions(eng, "exploration_refused:")
+                                                       if d["arm"] == "L1"}
+
+
+def test_l2_a_dedicated_control_stops_when_its_only_arm_is_cost_suspended(tmp_path) -> None:
+    eng, pb = _engine(tmp_path, [_learning(), _control()])
+    ex = eng.exploration
+    assert ex is not None
+    exploration_learning.refresh(eng, ex, CLOSE)
+    assert "C1" not in ex.retired
+    ex.cost_scale["L1"] = 0.0
+    exploration_learning.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=1))
+    assert "C1" in ex.retired and "L1" not in ex.retired
+
+
+def test_l3_the_loss_cap_verdict_holds_across_a_restart(tmp_path) -> None:
+    eng, pb = _engine(tmp_path, [_learning(loss_cap=10.0), _control()])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert "L1" in _arms_sent(eng)
+    _fill(tmp_path, "big", pnl=-10.0)
+    eng2, pb2 = _engine(tmp_path, [_learning(loss_cap=10.0), _control()])
+    exploration.on_pass(eng2, _at(eng2, pb2, CLOSE + pd.Timedelta(minutes=15)))
+    assert _arms_sent(eng2) == [] and _actions(eng2, "exploration_arm_learning_loss_cap")
+
+
+def test_l3_the_expiry_verdict_holds_across_a_restart(tmp_path) -> None:
+    eng, pb = _engine(tmp_path, [_learning(until="2025-03-04"), _control()])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))                    # 2025-03-04: its last day
+    assert "L1" in _arms_sent(eng)
+    eng2, pb2 = _engine(tmp_path, [_learning(until="2025-03-04"), _control()])
+    exploration.on_pass(eng2, _at(eng2, pb2, CLOSE + pd.Timedelta(days=1)))
+    assert _arms_sent(eng2) == [] and _actions(eng2, "exploration_arm_learning_expired")
+
+
+def test_quant1_fills_before_the_registration_day_never_count(tmp_path) -> None:
+    for i in range(arms.LEARNING_READ_FILLS):
+        _fill(tmp_path, f"old{i}", pnl=-1.0, sent=pd.Timestamp("2025-02-27 10:00", tz="UTC"))
+    eng, pb = _engine(tmp_path, [_learning(loss_cap=10.0), _control()])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert sorted(_arms_sent(eng)) == ["C1", "L1"]
+
+
+def test_quant4_learning_shares_and_strategy_shares_sum_to_at_most_one_within_a_style(tmp_path) -> None:
+    from tests.test_exploration_engine import _arm as strategy
+    arm_list = [_learning("L1"), _learning("L2"), _control(serves="L1,L2"),
+                *(strategy(f"q{i}") for i in range(3))]
+    eng, _ = _engine(tmp_path, arm_list)
+    ex = eng.exploration
+    assert ex is not None
+    got = exploration.shares(ex, CLOSE)
+    assert sum(got.values()) <= 1 + 1e-9 and got["C1"] == pytest.approx(0.2)
+    assert got["L1"] == pytest.approx(got["L2"]) and got["L1"] > 0
 
 
 def test_engine_config_exploration_block_of_every_demo_account_loads() -> None:

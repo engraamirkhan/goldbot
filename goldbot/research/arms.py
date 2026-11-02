@@ -345,12 +345,15 @@ class Qualification(FrozenRecord):
 class Learning(FrozenRecord):
     """A learning arm's block (ADR 0061 amendment 2026-11-02), read leniently by `learning_refusal` (a malformed block
     refuses its arm, never the load): the prereg doc that lists it, its K row in the registry (`learning_k_id`), the
-    matched control row it is read against, the most it may lose in all (account currency) and its last UTC day."""
+    matched control row it is read against, the most it may lose in all (account currency), its last UTC day and its
+    registration day `since` (quant ruling 2026-11-02 (1): only fills sent on or after it count, in the 300 and the
+    loss cap; an arm's earlier demo fills were taken under another rule)."""
     prereg: str = Field(min_length=1)
     k_id: str = Field(pattern=r"^[0-9a-f]{12}$")
     control: str = Field(min_length=1)
     loss_cap_gbp: float = Field(gt=0)
     until: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    since: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 def learning_arm_ids(path: Path | None = None) -> frozenset[str]:
@@ -434,14 +437,16 @@ def learning_refusal(arm: Arm, root: Path | None = None, registry: Path | None =
     if hashes is None or block.k_id not in hashes:
         return f"{LEARNING_RULE}: k_id {block.k_id} does not resolve in the registry"
     try:
-        last = pd.Timestamp(block.until, tz="UTC")
+        last, first = pd.Timestamp(block.until, tz="UTC"), pd.Timestamp(block.since, tz="UTC")
     except ValueError:
-        return f"{LEARNING_RULE}: until {block.until!r} invalid"
+        return f"{LEARNING_RULE}: until {block.until!r} or since {block.since!r} invalid"
     today = (_now() if now is None else pd.Timestamp(now).tz_convert("UTC")).normalize()
     if today > last:
         return f"{LEARNING_RULE}: the learning run of {arm.id} ended after {block.until}"
-    if last - today > pd.Timedelta(days=LEARNING_MAX_DAYS):
+    if last - today > pd.Timedelta(days=LEARNING_MAX_DAYS) or last - first > pd.Timedelta(days=LEARNING_MAX_DAYS):
         return f"{LEARNING_RULE}: until {block.until} is more than {LEARNING_MAX_DAYS} days away"
+    if first > today or first > last:
+        return f"{LEARNING_RULE}: the learning run of {arm.id} starts on {block.since}, not yet"
     return None
 
 

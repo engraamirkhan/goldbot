@@ -479,9 +479,9 @@ daily_review:                        # daily learning-ops review (goldbot/resear
   # exploration candidates a day per broker and style: the arm rows of prereg-2026-10-25-high-volume.md (~290 a day
   # with the probes, high-volume-learning-2026-10-25.md section 1); Vantage runs the intraday and swing twins only
   # Demo-limits ADR 2026-11-02 (owner 2026-11-02: "for the system to be not bound to test, learn and improve signals"):
-  # restated for x1.35 slots on every demo host and the learning class (15 scalp arms and 7 dedicated controls, ADR
-  # 0061 amendment 2026-11-02): ICM 160/35/5 -> 216/47/7; Vantage scalp 0 -> 40 (Z6V, Z7V and ZCV enter as learning
-  # rows and their control), intraday/swing 35/5 -> 47/7. A plan for the low-volume alert, never a target to pad
+  # restated for x1.35 slots on every demo host and the learning class (15 scalp arms, 15 dedicated controls; ADR
+  # 0061 amendment 2026-11-02): ICM 160/35/5 -> 216/47/7; Vantage scalp 0 -> 40 (Z6V, Z7V enter as learning
+  # rows with LCZ6V, LCZ7V; ZCV with them), intraday/swing 35/5 -> 47/7. A plan for the low-volume alert, never a target to pad
   volume_plan:
     icm: {scalp: 216, intraday: 47, swing: 7}
     vantage: {scalp: 40, intraday: 47, swing: 7}

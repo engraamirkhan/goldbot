@@ -35,7 +35,7 @@ WAVE2 = {"F1A": ("hurst_band_break", "15m"), "F1C": ("hurst_band_break_control",
 BLOCKED: dict[str, str] = {}
 FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0", "WKI0",   # ADR 0062: weekend lane
                 "GS1", "GS1C",                                                               # growth sprint 2026-11-01
-                "LC4D", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P"}            # learning-class controls (ADR 0072, 2026-11-02)
+                "LCS5A", "LCS5B"}            # learning-class controls outside H-81's rules (ADR 0072, 2026-11-02)
 # multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
 INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
 FORWARD_ONLY |= INSTRUMENT_CONTROLS
@@ -156,7 +156,7 @@ def test_arms_without_a_host_and_virtual_exits_are_not_registered(accounts) -> N
 # Demo-limits ADR 0072 (2026-11-02): the pots are slots only (pot_budgets false), x1.35; Vantage's budget 0.9 -> 0.825
 # (its probe sleeve 0.075 -> 0.175); max_open_total 23
 @pytest.mark.parametrize(("account", "pots", "budget"), [
-    ("icm-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 3), "growth": (None, 2)}, 0.9),
+    ("icm-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 3), "growth": (80, 2)}, 0.9),
     ("vantage-demo", {"scalp": (None, 11), "intraday": (None, 6), "swing": (None, 2)}, 0.825)])
 def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots, budget) -> None:
     acc = accounts[account]

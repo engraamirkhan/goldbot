@@ -7,13 +7,17 @@ qualification, inside bounds of its own:
 * At the engine's start (`start`) its `learning.control` must be configured on THIS account, not refused, and matched
   (`research.arms.control_match_refusal`: same timeframe, stop, target and hold), else the arm is refused from the start
   (`exploration_arm_unqualified`), like an unqualified strategy: configured, so an open position keeps every exit.
-* Once a minute (`refresh`, beside the cost reads) this host's ledger is read: each learning arm's admissible closed
-  fills (`exploration.admissible_fills`'s rule) and its cumulative net P&L over every filled close, a fill whose P&L
-  is not readable counted as a loss at its stop plus its round trip (never as 0). The arm retires on whichever comes
+* Once a minute (`refresh`, beside the cost reads) this host's ledger is read over the fills sent on or after the
+  block's `since` (its registration day, quant ruling 2026-11-02 (1)): each learning arm's admissible closed fills
+  (`exploration.admissible_fills`'s rule), its censored fills apart (quant (5)) and its cumulative net P&L over every
+  filled close, a fill whose P&L is not readable counted as a loss at its stop plus its round trip (never as 0). The
+  realised loss is kept for `exploration._send`, which refuses an entry once that loss + the arm's open risk at its
+  stops + the new trade's loss would reach the cap (`learning_loss_cap`, trading-safety L1). The arm retires on whichever comes
   first: LEARNING_READ_FILLS (300) admissible fills (`exploration_arm_learning_read_due`: its read is due), a loss of
   `loss_cap_gbp` or more (`exploration_arm_learning_loss_cap`), or a day past `until`
   (`exploration_arm_learning_expired`). A control dedicated to learning arms (`research.arms.dedicated_control_of`)
-  retires with them once none of the arms it serves here may enter. The verdict is recomputed from the ledger on every
+  retires with them once none of the arms it serves here may enter (an arm whose cost stop suspended it may not:
+  trading-safety L2). The verdict is recomputed from the ledger on every
   read, so it holds across a restart.
 * Fail closed: until a read has succeeded in this process, and while reads fail, the learning arms and their dedicated
   controls send nothing (`exploration_refused:learning_unread`, `exploration.Exploration.learning_ok`); a failing
@@ -26,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pandas as pd
 from pydantic import ValidationError
@@ -88,7 +92,9 @@ def _controls(ex: Exploration, stopping: set[str]) -> dict[str, tuple[str, str, 
         serves = dedicated_control_of(arm.spec)
         if not serves or a in ex.retired or a in stopping:
             continue
-        live = [s for s in serves if s in ex.arms and s not in ex.retired and s not in stopping]
+        # trading-safety L2: an arm suspended by its cost stop (share 0) may not enter, so it keeps no control alive
+        live = [s for s in serves if s in ex.arms and s not in ex.retired and s not in stopping
+                and ex.cost_scale.get(s) != 0.0]
         if not live:
             out[a] = ("exploration_arm_unqualified",
                       f"{LEARNING_RULE}: the dedicated control of {', '.join(serves)} stops with them", {})
@@ -119,22 +125,45 @@ def start(eng: Engine, ex: Exploration) -> None:
     _stop(eng, ex, stops, None)
 
 
-def read(conn: Any, arm_id: str, cap: float) -> tuple[int, float]:
-    """(admissible closed fills, cumulative net P&L) of `arm_id` in this host's ledger, every account. Admissible:
-    filled, closed by its own barrier (not censored), net P&L recorded. The P&L sums every filled close; a close
-    without a readable P&L counts as a loss at its stop plus its round trip (`cap`, the arm's per-trade cap, when its
-    loss at the stop was not recorded)."""
-    from goldbot.engine.exploration import LEDGER
-    fills, pnl = 0, 0.0
-    for t in LEDGER.select(conn, "arm_id = ? AND closed = 1", (arm_id,)):
+class LearningRead(NamedTuple):
+    fills: int              # admissible: filled, closed by its own barrier (not censored), net P&L recorded
+    censored: int           # filled and closed otherwise (the Friday flat, a kill switch, a moved stop): never in fills
+    pnl: float              # cumulative net P&L of every filled close
+
+
+def read(conn: Any, arm_id: str, cap: float, since: pd.Timestamp | None = None) -> LearningRead:
+    """`arm_id`'s learning read in this host's ledger, every account, over the fills sent on or after `since` (its
+    registration day, quant ruling 2026-11-02 (1)). The P&L sums every filled close; a close without a readable P&L
+    counts as a loss at its stop plus its round trip (`cap`, the arm's per-trade cap, when its loss at the stop was
+    not recorded). Censored fills are counted apart, never in the 300 (quant ruling (5))."""
+    from goldbot.engine.exploration import LEDGER, _ns
+    where, args = "arm_id = ? AND closed = 1", list[Any]([arm_id])
+    if since is not None:
+        where, args = where + " AND ts_ns >= ?", [*args, _ns(since)]
+    fills, censored, pnl = 0, 0, 0.0
+    for t in LEDGER.select(conn, where, tuple(args)):
         if t.fill_price is None or t.exit_utc is None:
             continue
         if t.pnl is not None:
             pnl += t.pnl
-            fills += int(not t.censored)
         else:
             pnl -= (t.stop_loss if t.stop_loss is not None else cap) + (t.cost or 0.0)
-    return fills, pnl
+        if t.censored:
+            censored += 1
+        elif t.pnl is not None:
+            fills += 1
+    return LearningRead(fills, censored, pnl)
+
+
+def loss_cap(arm: Any) -> float | None:
+    """The learning arm's loss cap (account currency), None when its block is invalid."""
+    block = _block(arm)
+    return block.loss_cap_gbp if block is not None else None
+
+
+def since_of(arm: Any) -> pd.Timestamp | None:
+    block = _block(arm)
+    return pd.Timestamp(block.since, tz="UTC") if block is not None else None
 
 
 def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
@@ -153,7 +182,8 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     caps = eng.gate.limits.exploration_arms
     try:
         with ex.db.connection() as conn:
-            reads = {a: read(conn, a, caps.get(a, max(caps.values(), default=0.0))) for a in due}
+            reads = {a: read(conn, a, caps.get(a, max(caps.values(), default=0.0)), since_of(ex.arms[a]))
+                     for a in due}
     except Exception as exc:
         ex.learning_ok = False
         log.warning("learning arms' ledger unreadable (%s): learning entries refused", type(exc).__name__)
@@ -170,8 +200,10 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         if block is None:
             stops[a] = ("exploration_arm_unqualified", f"{LEARNING_RULE}: learning block invalid", {})
             continue
-        fills, pnl = reads[a]
-        detail: dict[str, Any] = {"fills": fills, "loss": round(max(0.0, -pnl), 2), "loss_cap": block.loss_cap_gbp}
+        fills, censored, pnl = reads[a]
+        ex.learning_loss[a] = max(0.0, -pnl)          # trading-safety L1: `_send` adds open risk and the new trade
+        detail: dict[str, Any] = {"fills": fills, "censored": censored, "loss": round(max(0.0, -pnl), 2),
+                                  "loss_cap": block.loss_cap_gbp}
         if fills >= LEARNING_READ_FILLS:
             stops[a] = (READ_DUE, f"{LEARNING_RULE}: learning_read_due at {fills} admissible fills", detail)
         elif -pnl >= block.loss_cap_gbp - 1e-9:

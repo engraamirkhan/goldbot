@@ -1691,7 +1691,7 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   - **Deploy.** Then, before restarting, write the learning K rows once on the brain, under the registry lock and
     inside the 2026Q4 budget:
     `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/record_learning_k_rows.py --registry /opt/goldbot/state/research_registry.jsonl`.
-    Run it with `--dry-run` first: it lists the 22 rows. It is idempotent. If the budget is short it raises and writes
+    Run it with `--dry-run` first: it lists the 30 rows. It is idempotent. If the budget is short it raises and writes
     nothing: the learning arms then stay refused (fail closed), and the budget is the owner's decision.
   - **Restart** the three engines.
   - **Check:**

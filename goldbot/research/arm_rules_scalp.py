@@ -414,8 +414,11 @@ def check(arm: Arm) -> None:
     """Refused at load: a timeframe the family is not specified on, a bracket that is not a positive fixed price and
     hold, a Z7 slot off the 5m grid, a control without its entry probability in (0, 1)."""
     p: dict[str, Any] = arm.params
-    if arm.timeframe != RULE_TF[arm.rule]:
-        raise ValueError(f"{arm.rule} runs on {RULE_TF[arm.rule]} decision bars, not {arm.timeframe}")
+    # ADR 0061 amendment 2026-11-02 (quant ruling (2)): a learning arm's dedicated control runs on its arm's own
+    # timeframe, so the random control of a 1m stratum (Z1P, Z2P, Z4P, Z4D) is a 1m scalp_control in the same W
+    allowed = ("1m", "5m") if arm.rule == "scalp_control" else (RULE_TF[arm.rule],)
+    if arm.timeframe not in allowed:
+        raise ValueError(f"{arm.rule} runs on {'/'.join(allowed)} decision bars, not {arm.timeframe}")
     if not (float(p.get("stop_usd", 0)) > 0 and float(p.get("target_r", 0)) > 0 and int(p.get("hold_bars", 0)) >= 1):
         raise ValueError(f"{arm.rule} needs a fixed bracket: stop_usd > 0, target_r > 0, hold_bars >= 1")
     if arm.rule == "halfhour_persist" and not {int(s) for s in p.get("slots_ny", [0, 30])} <= set(range(0, 60, 5)):

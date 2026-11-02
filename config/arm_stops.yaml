@@ -92,7 +92,8 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        GS1, GS1C,
        # ADR 0061 amendment 2026-11-02 (docs/research/learning-2026-11-02.md): the learning arms' dedicated random
        # controls, the null; they stop with the arms they serve (engine/exploration_learning.py), never on their own
-       LC4D, LC9D, LCS5A, LCS5B, LCZ1P, LCZ2P, LCZ5P,
+       LCZ3D, LCZ4D, LCZ6D, LCZ7D, LCZ9D, LCZ10D, LCS5A, LCS5B, LCZ1P, LCZ2P, LCZ4P, LCZ5P, LCZ7P, LCZ6V,
+       LCZ7V,
        # multi-instrument demo (plan 2026-11-02): the per-instrument random controls (S0/I0 geometry, ATR stops),
        # the null of each instrument; never stopped on their own
        S0-XAGUSD, I0-XAGUSD, S0-XPTUSD, I0-XPTUSD, S0-XAUEUR, I0-XAUEUR, S0-XAUAUD, I0-XAUAUD, S0-US500, I0-US500,
@@ -100,7 +101,7 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        I0-USDJPY, S0-GBPUSD, I0-GBPUSD, S0-AUDUSD, I0-AUDUSD, S0-USDCAD, I0-USDCAD, S0-USDCHF, I0-USDCHF, S0-NZDUSD,
        I0-NZDUSD, S0-XTIUSD, I0-XTIUSD, S0-XBRUSD, I0-XBRUSD, S0-XNGUSD, I0-XNGUSD, S0-UST10Y, I0-UST10Y, S0-BUND10Y,
        I0-BUND10Y, S0-COPPER, I0-COPPER, S0-WHEAT, I0-WHEAT, S0-SOYBEAN, I0-SOYBEAN, S0-SUGAR, I0-SUGAR, S0-COFFEE,
-        I0-COFFEE]
+       I0-COFFEE]
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above
