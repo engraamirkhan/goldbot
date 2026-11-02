@@ -44,7 +44,7 @@ from goldbot.engine import magic
 from goldbot.engine.exploration import ExplorationConfig
 from goldbot.engine.instruments_db import InstrumentsDb, InstrumentsDbError, InstrumentTerms, terms_from_info
 from goldbot.engine.store import JsonEngineStore, OrdersSnapshot, RiskSnapshot
-from goldbot.instruments import InstrumentSpec
+from goldbot.instruments import GOLD, InstrumentSpec
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine, EngineConfig
@@ -145,6 +145,7 @@ class SymbolBook:
         self.terms_read: pd.Timestamp | None = None
         self.terms_written: pd.Timestamp | None = None
         self.fx: dict[tuple[pd.Timestamp, int], float | None] = {}
+        self.entry_sessions: Any = None   # E3: the profile-narrowed table entries are judged on (`set_sessions`)
 
     def __repr__(self) -> str:
         return f"SymbolBook({self.__dict__['cfg'].symbol!r}, primary={self.primary})"
@@ -340,10 +341,18 @@ def positions(eng: Engine) -> list[Any]:
     return list(eng.broker.positions(symbol=eng.cfg.symbol))
 
 
+AWAIT_REFRESH_S = 60.0   # a booked fill not seen by a refresh within this is left to reconciliation (it closed fast)
+
+
 def unconfirmed(eng: Engine) -> bool:
-    """BACKLOG 72 across the account: an unsettled order row on ANY book refuses every entry."""
+    """BACKLOG 72 across the account: an unsettled order row on ANY book refuses every entry; on a multi-instrument
+    account so does a booked fill no refresh has seen yet (E2: "keep unconfirmed_order set until a refresh sees the
+    position"), for at most AWAIT_REFRESH_S."""
     from goldbot.engine import unconfirmed as unc
-    return any(unc.pending(b.__dict__.get("_orders", {})) for b in eng.books.values())
+    if any(unc.pending(b.__dict__.get("_orders", {})) for b in eng.books.values()):
+        return True
+    awaited: dict[int, pd.Timestamp] = eng.__dict__.get("_awaited", {})
+    return bool(awaited)
 
 
 def costs_file(eng: Engine) -> Path:
@@ -353,6 +362,20 @@ def costs_file(eng: Engine) -> Path:
     if is_primary(eng):
         return Path(cfg.state_dir, f"costs_{cfg.account_id}.json")
     return book_dir(cfg.state_dir, cfg.account_id) / f"costs_{cfg.release_symbol}.json"
+
+
+def set_sessions(eng: Engine, table: Any) -> None:
+    """E3 (trading-safety review of #307): a non-gold book's exits, bar ingestion and management read the broker's own
+    hours (the table with its profile intersection off); its session profile narrows ENTRIES only (`entry_sessions`,
+    applied in `after_refresh`). A table from the static fallback is the profile itself (E5: never DEFAULT_SESSIONS).
+    Gold: the table as given."""
+    book: SymbolBook = eng.__dict__["book"]
+    if book.primary or not getattr(table, "intersect_broker", False):
+        eng.sessions = table
+        book.entry_sessions = None
+        return
+    book.entry_sessions = table
+    eng.sessions = table.model_copy(update={"intersect_broker": False})
 
 
 def feature_ctx(eng: Engine) -> dict[str, Any] | None:
@@ -438,9 +461,17 @@ def check(eng: Engine, intent: Intent, now: pd.Timestamp, **kw: Any) -> GateDeci
     """`RiskGate.check` on the account's one AccountState (trading-safety review of #307, E1): the account's figures,
     bookings included, plus the active book's own SYMBOL_STATE, never a copy. On a non-gold book the spread is held to
     the instrument's own cap (InstrumentSpec `max_spread_points`, lane L1; gold's 45 points mean nothing on another
-    point size): none configured refuses (`spread_cap_missing`). Gold: exactly `gate.check`."""
+    point size): none configured refuses (`spread_cap_missing`). Gold: exactly `gate.check`.
+    E5 (trading-safety review of #307): the intent must name the instrument this book sends to the broker
+    (`Intent.symbol`, from `intent_terms`; an intent with no terms reads XAUUSD): any other is refused
+    (`symbol_mismatch`) before the gate, so an order is never sized on one instrument's terms and sent on another."""
     from goldbot.risk.gate import GateDecision
     book: SymbolBook = eng.__dict__["book"]
+    sent = book.__dict__["cfg"].instrument
+    if getattr(intent, "symbol", GOLD) != sent:
+        log.error("%s: intent for %s on the %s book refused (symbol_mismatch)", eng.cfg.account_id,
+                  getattr(intent, "symbol", GOLD), sent)
+        return GateDecision(allowed=False, reasons=["symbol_mismatch"])
     if book.primary:
         return eng.gate.check(intent, eng.state, now, **kw)
     spec = book.spec.instrument if book.spec is not None else None
@@ -462,6 +493,10 @@ def book(eng: Engine, intent: Intent, gd: GateDecision, res: Any = True) -> None
     order was not sent (a duplicate), nothing booked. Gold alone: nothing (its refresh after the order stands)."""
     if multi(eng) and res is not None:
         eng.gate.book(eng.state, intent, gd)
+        pid = getattr(res, "position_id", None)
+        if pid is not None:               # E2: entries wait until a refresh sees it (`unconfirmed`, `account_exposure`)
+            eng.__dict__.setdefault("_awaited", {})[int(pid)] = pd.Timestamp.now("UTC")
+        eng.state.unconfirmed_order = True
 
 
 def intent_extra(eng: Engine, terms: dict[str, Any]) -> dict[str, Any]:
@@ -503,6 +538,8 @@ def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
                 st.in_blackout = shock or hit is not None
                 st.blackout_kind = "news_shock" if shock else (hit.get("kind") or "tier1") if hit else None
             try:
+                if book.entry_sessions is not None and book.entry_sessions.entry_block(now) is not None:
+                    st.market_closed = True     # E3: the profile closes entries; exits never read it
                 st.weekend = st.weekend or weekend_cut(eng.sessions, now)
             except Exception as exc:          # a table that cannot say: closed for entries (fail closed)
                 log.warning("%s: Friday cut unknown (%s); entries refused", cfg.symbol, type(exc).__name__)
@@ -534,6 +571,12 @@ def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
         fx = _profit_fx(eng, b, 1, tick.ask, contract, now)
         group = b.spec.instrument.correlation_group if b.spec is not None and b.spec.instrument is not None else "gold"
         quotes[sym] = SymbolQuote(bid=tick.bid, ask=tick.ask, contract=contract, fx=fx, group=group)
+    awaited: dict[int, pd.Timestamp] = eng.__dict__.get("_awaited", {})
+    if awaited:                           # E2: a booked fill this read sees (or too old to wait for) is settled
+        seen, wall = {p.position_id for p in held}, pd.Timestamp.now("UTC")
+        eng.__dict__["_awaited"] = {k: t for k, t in awaited.items()
+                                    if k not in seen and (wall - t).total_seconds() < AWAIT_REFRESH_S}
+        st.unconfirmed_order = unconfirmed(eng)
     st.open_positions = len(held)
     st.open_long = sum(1 for p in held if p.side > 0)
     st.open_short = sum(1 for p in held if p.side < 0)

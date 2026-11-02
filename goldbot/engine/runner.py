@@ -2105,7 +2105,7 @@ class Engine:
     def set_sessions(self, table: SessionTable) -> None:
         """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
         `refresh_sessions`); used for market_closed, feed staleness and the server-clock probe."""
-        self.sessions = table
+        books.set_sessions(self, table)    # another instrument: the profile narrows its entries only (E3)
 
     def set_bridge_compat(self, compat: BridgeCompat | None) -> None:
         """The MT5 bridge's compatibility verdict (goldbot/ops/bridge_compat.py), checked by the run loop outside the

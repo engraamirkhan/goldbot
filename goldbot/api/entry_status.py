@@ -242,6 +242,9 @@ REASONS: dict[str, Reason] = {
     "instruments_db_unreadable": _r("The file holding this market's terms (state/instruments.db) can't be read",
                                     "See the Runbook: restore state/instruments.db from the backup or delete it so "
                                     "the engine rebuilds it; open trades keep closing.", "act"),
+    "symbol_mismatch": _r("A trade was built for a different market than the one it would be sent to, so it was refused",
+                          "Report it: the engine refused it before the broker; the Health tab names the market.",
+                          "act"),
     "swap_unknown": _r("This market's overnight swap can't be priced, so it takes no new trades",
                        "The broker reports its swap in a unit the engine does not convert; see the Runbook.", "act"),
     "instrument_unverified": _r("This market's terms aren't confirmed on this terminal yet, so it takes no new trades",
