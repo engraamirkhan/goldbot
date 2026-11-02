@@ -3,7 +3,9 @@
 The files already on the brain were made by the ad-hoc code (CREATE TABLE IF NOT EXISTS at every open, no
 schema_version). The frozen copies below are that code's statements, verbatim: a file they built must upgrade in place
 with every row kept, a fresh file must get exactly the same tables, and the old code must still open a migrated file
-(a rollback).
+(a rollback). Their writers (the TradingView webhook, direct pull and sign-in state) retired on 2026-11-02; the files
+stay on the server ("never delete server data") and `python -m goldbot.db migrate` still upgrades them, so the
+migrations keep their tests, opened here the way every writer opened them (connect + migrate).
 """
 from __future__ import annotations
 
@@ -11,14 +13,11 @@ import re
 import sqlite3
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
-from goldbot.data import tv_pull
 from goldbot.db import SchemaVersionError
+from goldbot.db.connection import DbKind, connect
 from goldbot.db.migrations import MIGRATIONS, Migration, current_version, latest_version, migrate
-from goldbot.ops import tv_pull_health
-from goldbot.webhook.inbox import TvInbox
 
 # ------------------------------------------------------------------ frozen: the ad-hoc schemas before the migrations
 OLD_INBOX = """
@@ -50,7 +49,23 @@ OLD_AUTH = """CREATE TABLE IF NOT EXISTS tv_auth (
     notified INTEGER NOT NULL DEFAULT 0
 ) STRICT"""
 
-T0 = pd.Timestamp("2026-10-17T12:00:00Z")
+
+
+def _open(path: Path, kind: DbKind = "tv") -> None:
+    """Open the file and bring its schema up to date, as its writers did on every open."""
+    conn = connect(path, kind)
+    try:
+        migrate(conn, kind)
+    finally:
+        conn.close()
+
+
+def _rows(path: Path, sql: str) -> list[tuple]:
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(sql).fetchall()
+    finally:
+        conn.close()
 
 
 def _old_db(path: Path, *scripts: str) -> None:
@@ -103,8 +118,7 @@ def _version(path: Path) -> int:
 def test_a_fresh_tv_db_gets_exactly_the_ad_hoc_schema(tmp_path):
     old = tmp_path / "old.db"
     _old_db(old, OLD_INBOX, OLD_PULL)
-    TvInbox(tmp_path / "tv.db")
-    tv_pull.PullLog(tmp_path / "tv.db")
+    _open(tmp_path / "tv.db")
     assert _schema(tmp_path / "tv.db", skip=("schema_version", "tv_graphics")) == _schema(old)   # v3 is newer
     assert _version(tmp_path / "tv.db") == latest_version("tv")
 
@@ -112,16 +126,9 @@ def test_a_fresh_tv_db_gets_exactly_the_ad_hoc_schema(tmp_path):
 def test_a_fresh_tv_auth_db_gets_exactly_the_ad_hoc_schema(tmp_path):
     old = tmp_path / "old.db"
     _old_db(old, OLD_AUTH)
-    tv_pull_health.record_ok(tmp_path, T0)
+    _open(tmp_path / "tv_auth.db", "tv_auth")
     assert _schema(tmp_path / "tv_auth.db") == _schema(old)
     assert _version(tmp_path / "tv_auth.db") == latest_version("tv_auth")
-
-
-def test_either_tv_db_user_alone_migrates_the_whole_file(tmp_path):
-    """The webhook and the pull share tv.db: whichever opens it first brings it to the latest version."""
-    TvInbox(tmp_path / "a.db")
-    tv_pull.PullLog(tmp_path / "b.db")
-    assert _schema(tmp_path / "a.db") == _schema(tmp_path / "b.db")
 
 
 # ------------------------------------------------------------------------------------------------- upgrade in place
@@ -129,15 +136,15 @@ def test_either_tv_db_user_alone_migrates_the_whole_file(tmp_path):
 def test_an_ad_hoc_tv_db_upgrades_in_place_with_every_row_kept(tmp_path, inbox, pull):
     path = tmp_path / "tv.db"
     _seed_old_tv(path, inbox=inbox, pull=pull)
-    box, log = TvInbox(path), tv_pull.PullLog(path)
+    _open(path)
     assert _version(path) == latest_version("tv")
     if inbox:
-        assert box.count() == 1 and box.cursor() == 1
-        assert box.rows_after(0)[0]["price"] == 2400.5
+        assert _rows(path, "SELECT price FROM tv_alerts") == [(2400.5,)]
+        assert _rows(path, "SELECT last_id FROM tv_sync") == [(1,)]
     if pull:
-        assert log.get_state("k") == "v"
+        assert _rows(path, "SELECT value FROM tv_pull_state WHERE key = 'k'") == [("v",)]
     fresh = tmp_path / "fresh.db"
-    TvInbox(fresh)
+    _open(fresh)
     assert _schema(path) == _schema(fresh)
 
 
@@ -145,13 +152,8 @@ def test_a_tv_auth_table_an_earlier_release_left_in_tv_db_is_kept_untouched(tmp_
     """Release 5a819f4 kept tv_auth in tv.db (tv_auth.db since): migrating tv.db neither drops nor reads it."""
     path = tmp_path / "tv.db"
     _seed_old_tv(path, stray_auth=True)
-    TvInbox(path)
-    conn = sqlite3.connect(path)
-    try:
-        assert conn.execute("SELECT status FROM tv_auth").fetchall() == [("ok",)]
-    finally:
-        conn.close()
-    assert tv_pull.PullLog(path).auth_state() is None              # the sign-in state is read from tv_auth.db only
+    _open(path)
+    assert _rows(path, "SELECT status FROM tv_auth") == [("ok",)]
 
 
 def test_an_ad_hoc_tv_auth_db_upgrades_in_place_with_its_row_kept(tmp_path):
@@ -161,30 +163,25 @@ def test_an_ad_hoc_tv_auth_db_upgrades_in_place_with_its_row_kept(tmp_path):
     with conn:
         conn.execute("INSERT INTO tv_auth (id, status, last_ok_utc, notified) VALUES (1, 'expired', NULL, 1)")
     conn.close()
-    assert tv_pull_health.record_expired(tmp_path, T0) is False         # already notified: the row survived
+    _open(path, "tv_auth")
     assert _version(path) == latest_version("tv_auth")
-    assert tv_pull.PullLog(tmp_path / "tv.db").auth_state() == "expired"
+    assert _rows(path, "SELECT status, notified FROM tv_auth") == [("expired", 1)]
 
 
 def test_reopening_applies_nothing_twice(tmp_path):
     path = tmp_path / "tv.db"
     _seed_old_tv(path)
     for _ in range(3):
-        TvInbox(path)
-        tv_pull.PullLog(path)
-    conn = sqlite3.connect(path)
-    try:
-        versions = [v for (v,) in conn.execute("SELECT version FROM schema_version ORDER BY version")]
-    finally:
-        conn.close()
+        _open(path)
+    versions = [v for (v,) in _rows(path, "SELECT version FROM schema_version ORDER BY version")]
     assert versions == list(range(1, latest_version("tv") + 1))
 
 
 # ------------------------------------------------------------------------------------------------- rollback
 def test_the_ad_hoc_code_still_opens_and_writes_a_migrated_file(tmp_path):
     """A rollback to a release from before the migrations: its CREATE IF NOT EXISTS is a no-op, its rows land."""
-    TvInbox(tmp_path / "tv.db")
-    tv_pull_health.record_ok(tmp_path, T0)
+    _open(tmp_path / "tv.db")
+    _open(tmp_path / "tv_auth.db", "tv_auth")
     for name, script in (("tv.db", OLD_INBOX + OLD_PULL), ("tv_auth.db", OLD_AUTH)):
         conn = sqlite3.connect(tmp_path / name)
         conn.executescript(script)
@@ -193,7 +190,7 @@ def test_the_ad_hoc_code_still_opens_and_writes_a_migrated_file(tmp_path):
     with conn:
         conn.execute("INSERT INTO tv_pull_state (key, value, updated_utc) VALUES ('old', 'x', 't')")
     conn.close()
-    assert tv_pull.PullLog(tmp_path / "tv.db").get_state("old") == "x"
+    assert _rows(tmp_path / "tv.db", "SELECT value FROM tv_pull_state WHERE key = 'old'") == [("x",)]
 
 
 def test_tv_migrations_only_ever_add(tmp_path):
@@ -212,7 +209,7 @@ def test_a_tv_db_from_a_newer_non_additive_release_is_refused(tmp_path):
     migrate(conn, "tv", migrations=newer)
     conn.close()
     with pytest.raises(SchemaVersionError):
-        TvInbox(path)
+        _open(path)
 
 
 def test_the_migrate_command_upgrades_tv_files_only_where_they_exist(tmp_path, capsys):

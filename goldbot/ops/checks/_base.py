@@ -57,9 +57,6 @@ WATCH_STALE_S = 15 * 60           # health_last.json older than this: the Telegr
 HEARTBEAT_EVERY_S = 60            # services write state/heartbeat_<service>.json at most this often
 HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any service has been silent for five minutes"
 HEARTBEAT_SERVICES = ("supervisor", "scheduler", "telegram", "news", "api")   # engines: engine_<account>.json
-# opt-in TradingView services (ADR 0030): checked only on a host where one has written a heartbeat; silence WARNs (and
-# notifies, NOTIFY_ON_WARN), never FAILs: TradingView is an optional second feed and must never block trading
-OPTIONAL_HEARTBEAT_SERVICES = ("webhook", "tv-pull")
 QUOTE_INVALID_FAIL_S = 60         # an engine whose every quote has been invalid this long in market hours (review MEDIUM-2)
 FAILED_ORDER_WINDOW_H = 24        # failed sends (X6) in this window are listed, each alerted once
 BRIDGE_TIMEOUT_S = 5.0
@@ -71,8 +68,8 @@ BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
 BACKUP_SLOW_WARN_S = 600.0        # restic >= 0.16 cancels a backup at its lock-refresh deadline under the
                                   # no-delete key (~20 min; ADR 0002 update 2026-10-16): warn with margin
 
-REQUIRED_SECRETS = ("telegram-bot-token",)   # the webhook secret is optional: only the webhook service needs it
-OPTIONAL_SECRETS = ("anthropic-api-key", "github-token", "tradingview-webhook-secret")   # features switch off without them
+REQUIRED_SECRETS = ("telegram-bot-token",)
+OPTIONAL_SECRETS = ("anthropic-api-key", "github-token")   # features switch off without them
 
 
 class Check(FrozenRecord):

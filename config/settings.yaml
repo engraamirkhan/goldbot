@@ -157,14 +157,11 @@ scheduler:
   nightly_costs:    { kind: daily,   at: "23:10", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }
   saturday_retrain: { kind: weekly,  at: "06:00", weekday: 5, max_late_hours: 30 }
   tournament:       { kind: weekly,  at: "12:00", weekday: 5, max_late_hours: 30 }   # population round after the retrain
-  research_director: { kind: weekly, at: "12:30", weekday: 5, max_late_hours: 30 }   # research plan before agents_weekly
+  research_director: { kind: weekly, at: "12:30", weekday: 5, max_late_hours: 30 }   # weekly research plan after the population round
   model_watch:      { kind: daily,   at: "23:30", max_late_hours: 20 }                  # CUSUM on new champions
-  agents_daily:     { kind: daily,   at: "23:45", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # data steward, risk officer
-  agents_weekly:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }     # journal coach, improvement agent
   monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
   calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
   calendar_archive_sunday: { kind: weekly, at: "18:00", weekday: 6, max_late_hours: 3 }  # the new week before the Sunday open
-  agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
@@ -174,7 +171,6 @@ scheduler:
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
-  tv_reconcile:     { kind: daily,   at: "23:15", max_late_hours: 20 }                  # TradingView bars (OANDA, second feed) vs Dukascopy/broker M1: >2 points -> dq + NaN plots
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
   tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
@@ -189,7 +185,6 @@ agents:
 news:                                # headline collector (VPS service goldbot-news); URLs unverified from the sandbox
   feeds:
     forexlive: https://www.forexlive.com/feed/news
-    fxstreet: https://www.fxstreet.com/rss/news
     fed_press: https://www.federalreserve.gov/feeds/press_all.xml
     bls: https://www.bls.gov/feed/bls_latest.rss
   poll_seconds: 300
@@ -440,43 +435,13 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   page_limit_s: 5.0                  # a slower page stops the run (cold history page 2-5 s; orders > 10 s refused)
   run_budget_s: 600                  # per account per run (3 accounts fit the 45-min break); unfinished day pulled next run
 
-webhook:                             # TradingView receiver (goldbot/webhook/app.py)
-  max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
-
-tv_pull:                             # TradingView direct pull (goldbot/data/tv_pull.py, ADR 0030): read-only, cookie in the keyring
-  enabled: false                     # the owner turns it on in settings.local.yaml once both cookies are in the keyring (RUNBOOK 2.8)
-  symbols: {"OANDA:XAUUSD": XAUUSD}  # chart symbol -> store symbol; layouts are read for indicators, only these are pulled
-  timeframes: ["15", "60", "240", "1D"]
-  sessionid_key: tradingview-sessionid            # keyring entry names only (browser cookies sessionid and
-  sessionid_sign_key: tradingview-sessionid-sign  #   sessionid_sign); the values never appear in a file
-  discover: true                     # read the saved layouts for their indicators (no owner naming or listing)
-  discover_every_s: 21600            # layouts re-read every 6 h
-  max_studies: 20                    # indicators pulled per pass at most
-  min_interval_s: 5.0                # between any two requests (GET, series, history page, study)
-  bars_per_request: 5000             # bars per series load and per history page (TradingView serves up to 5000)
-  max_pages_per_tf: 5                # history pages per timeframe and pass (Premium measured: ~11k bars 15m, 1h, 4h)
-  max_requests_per_day: 3000         # rolling 24 h; a pass beyond it is skipped, never queued
-  study_warmup_bars: 300             # the oldest loaded bars' study values are dropped (an EMA needs its warm-up)
-  poll_interval_s: 900               # `tv-pull follow`: one pass per 15m bar ...
-  poll_offset_s: 60                  #   ... this long after the close
-  live_max_lag_s: 1800               # a bar received within this of its close is pull_live (available_utc = received)
-  history_latency_default_s: 960     # pull_history available_utc = close + p95 live latency; this until measured
-  min_live_samples: 20               # live bars needed before the p95 is measured rather than the default
-  backoff_base_s: 300                # after a failed pass: 5 min, doubling ...
-  backoff_max_s: 21600               #   ... to 6 h; an expired cookie waits the full 6 h unless a new cookie is stored
-  timeout_s: 30                      # per request
-  aliases: {}                        # our display names: key_of(name | plot fingerprint) -> "Structure (smc)", "S/R channels",
-                                     #   "Money flow (mfi)" (goldbot/data/tv_alias.py); unmatched -> "Indicator N"
-  graphics_timeframes: ["15", "60", "240"]  # a study's boxes/lines/labels are saved per closed bar here (tv.db tv_graphics); [] = off
-  graphics_max_objects: 500          # per snapshot (highest ids kept, flagged truncated)
-  graphics_max_snapshots: 50000      # per study, symbol and timeframe; append-only, nothing added beyond it
 tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)
   enabled: true                      # public listing, no cookie; text stays in state/tv_ideas.db and raw/ (never the repo)
   authors: [KnightsofGold, Goldviewfx, ArmanShabanTrading]   # public handles
   poll_interval_s: 720               # a poll every 12 min plus up to poll_jitter_s (12-15 min apart)
   poll_jitter_s: 180
   live_page_size: 20                 # newest-activity page per author; a new or changed idea also reads its detail
-  min_interval_s: 3.0                # between two requests (tv_pull's Pacer)
+  min_interval_s: 3.0                # between two requests (goldbot/data/tv_http.py Pacer)
   backfill_min_interval_s: 2.0       # the one-time back catalogue (about 7,000 requests for the three authors)
   max_requests_per_day: 2000         # live, rolling 24 h (a normal day is about 400)
   backfill_max_requests: 12000       # per backfill run; it resumes where it stopped
@@ -498,13 +463,9 @@ observe:                             # ADR 0063: the observe-only live account's
   weekend_flat: "21:00"
   status_stale_s: 300                # health `observe` WARNs (never FAILs: it never blocks trading) past this silence
   bar_stale_s: 900                   # ... or when the 24/7 symbol has had no new bar this long
-tv:                                # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
-  max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
-                                     #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
+tv:                                # the live replica of the owner's indicators, from our own broker bars
   replica_series_start: "2016-01-01" # live replica state (smc/boxes/mfi) bootstraps from the store's bars from here
                                      #   (engine/replica_context.py; the brain's store holds 2016-2026)
-  min_bar_match: 0.95                # share of our decision bars with a TradingView bar of the same open, else the TV
-                                     #   trial is refused before it is charged (research/tv_grid.py: 4h/1d grids differ)
 shadow:                              # shadow book (goldbot/engine/shadow.py; research director ruling 2026-10-19)
   max_open_per_agent: 3              # every signal its own shadow trade, up to 3 open per agent and version; beyond the
                                      #   cap a signal is counted "skipped: cap", never traded. Promotion's 40 counts

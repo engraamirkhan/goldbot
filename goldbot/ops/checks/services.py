@@ -15,7 +15,6 @@ from goldbot.ops.checks._base import (
     HEARTBEAT_SILENT_S,
     JOB_OVERDUE_GRACE_S,
     JOB_RUNNING_FAIL_H,
-    OPTIONAL_HEARTBEAT_SERVICES,
     SCHEDULER_HEARTBEAT_FAIL_S,
     STUCK_APPROVAL_GRACE_S,
     WATCH_FILE,
@@ -33,7 +32,6 @@ from goldbot.ops.checks._base import (
 from goldbot.ops.checks.registry import (
     BLOCK_ACCOUNT,
     BLOCK_HEARTBEATS,
-    BLOCK_OPTIONAL_HEARTBEATS,
     BLOCK_SCHEDULER,
     BLOCK_SERVICE_SKEW,
     BLOCK_TAIL,
@@ -197,6 +195,38 @@ def check_deadman(ctx: HealthContext) -> Check:
                  reason=f"set; the Telegram service pings every {every} min while healthy, <url>/fail on a FAIL")
 
 
+DEPLOY_APPROVAL_STUCK_S = 15 * 60   # goldbot-deploy.timer runs every minute; an approval waits only for a pending entry
+
+
+@register_check("global", block=BLOCK_TAIL, pos=150)
+def check_deploy_approval(ctx: HealthContext) -> Check | None:
+    """An owner-approved deploy (state/deploy/approved.json, written by the Telegram [Deploy] tap) that nothing has
+    applied: goldbot-deploy.timer runs the root deploy script every minute and removes the file on every outcome, so
+    one older than DEPLOY_APPROVAL_STUCK_S means the timer is not running (found 2026-11-02: enabled by the bootstrap
+    but never started since 2026-10-16, so a Telegram approval would have waited forever; every deploy ran by hand).
+    None while no approval waits (the MT5 box, and the brain between deploys). The deploy script keeps the approval
+    while an entry approval is pending (state/approvals/pending/*.json) and applies it once that entry is decided, so
+    then the check warns and names those entries instead of blaming the timer (trading-safety review, ADR 0066
+    release); an entry stuck past its window is the `approvals` check's warn."""
+    f = ctx.state_dir / "deploy" / "approved.json"
+    try:
+        age = _epoch(ctx.now) - f.stat().st_mtime
+    except OSError:
+        return None
+    if age <= DEPLOY_APPROVAL_STUCK_S:
+        return Check(name="deploy_approval", status="ok", reason=f"approved deploy waiting {_age(max(age, 0.0))}")
+    pending_dir = ctx.state_dir / "approvals" / "pending"
+    pending = sorted(p.stem for p in pending_dir.glob("*.json")) if pending_dir.is_dir() else []
+    if pending:
+        return Check(name="deploy_approval", status="warn",
+                     reason=f"an approved deploy has waited {_age(age)} for {len(pending)} pending entry approval(s) "
+                            f"({', '.join(pending)}); it is applied once they are decided")
+    return Check(name="deploy_approval", status="fail",
+                 reason=f"an approved deploy has not been applied for {_age(age)}: goldbot-deploy.timer is not "
+                        "running? `systemctl list-timers goldbot-deploy.timer`; fix: "
+                        "`sudo systemctl enable --now goldbot-deploy.timer` (RUNBOOK 0.5)")
+
+
 @register_check("service", block=BLOCK_HEARTBEATS, pos=10, services=HEARTBEAT_SERVICES)
 def check_heartbeat(ctx: HealthContext, service: str) -> Check:
     """S5: a service silent for HEARTBEAT_SILENT_S fails (the alert); one that never wrote a heartbeat warns."""
@@ -220,23 +250,6 @@ def check_heartbeat(ctx: HealthContext, service: str) -> Check:
         return Check(name=name, status="fail",
                      reason=f"{service} silent for {_age(age)} (> {HEARTBEAT_SILENT_S // 60} min): service down?")
     return Check(name=name, status="ok", reason=f"heartbeat {_age(age)}")
-
-
-def _optional_heartbeat_ran(ctx: HealthContext) -> bool:
-    return any(heartbeat_path(ctx.state_dir, s).exists() for s in OPTIONAL_HEARTBEAT_SERVICES)
-
-
-@register_check("service", block=BLOCK_OPTIONAL_HEARTBEATS, pos=10, services=OPTIONAL_HEARTBEAT_SERVICES,
-                when=_optional_heartbeat_ran, guard="heartbeat")
-def check_optional_heartbeat(ctx: HealthContext, service: str) -> Check:
-    """The opt-in TradingView services (webhook, tv-pull follow; RUNBOOK 2.7b/2.7c): the same heartbeat rule as S5,
-    but a silent one WARNs (NOTIFY_ON_WARN tells the owner), never FAILs, and one that never ran on this host is ok.
-    The whole block is skipped until either has written a heartbeat here (hosts that run neither see no change).
-    A service switched off for good: delete its state/heartbeat_<service>.json (RUNBOOK 2.7c rollback)."""
-    if not heartbeat_path(ctx.state_dir, service).exists():
-        return Check(name=f"heartbeat:{service}", status="ok", reason=f"{service} not running on this host (opt-in)")
-    c = resolve(check_heartbeat)(ctx, service)
-    return c if c.status != "fail" else Check(name=c.name, status="warn", reason=c.reason)
 
 
 SKEW_SERVICES = HEARTBEAT_SERVICES   # schema_skew:svc:<service> from heartbeat_<service>.json (engines: per account)

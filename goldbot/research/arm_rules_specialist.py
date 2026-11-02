@@ -23,8 +23,8 @@ and trail of `breakout` and `trend`) is not run: a 0.01 lot cannot be split. Ent
 close for every family (ARM-SPEC section 0), so a next-open family (H-45) fills at the close; the research sample rule
 `complete_windows` (asia_drift) is not applied: it reads bars after the decision and live has none.
 
-Refused (at load and at run): an unknown family, a family that needs TradingView values (`requires_tv`, e.g.
-`tv_event`: shadow only by design) or whose signal is known only after the close (`entry_delay_s`), an unknown
+Refused (at load and at run): an unknown family, a family that needs TradingView values (`requires_tv`; the
+chart path that fed them retired 2026-11-02) or whose signal is known only after the close (`entry_delay_s`), an unknown
 preset, and a timeframe or config the family's own constructor refuses."""
 from __future__ import annotations
 
@@ -40,8 +40,9 @@ from goldbot.research.arms import Arm
 from goldbot.specialists.base import Specialist
 
 RULE = "specialist"
-# families refused by name even when their module is not imported (tv_event is not in goldbot.specialists.__init__)
-BLOCKED = {"tv_event": "needs TradingView values (requires_tv): shadow only by design (arms expansion section 3)"}
+# families refused by name: tv_event was retired with the TradingView chart path (2026-11-02); an arm naming it must
+# still fail with the reason, not as an unknown family
+BLOCKED = {"tv_event": "needs TradingView values (requires_tv): retired with the TradingView chart path (2026-11-02)"}
 
 
 def refusal(name: str) -> str | None:

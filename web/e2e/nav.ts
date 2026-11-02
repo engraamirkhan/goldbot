@@ -6,16 +6,13 @@ const WHERE: Record<string, [string, string?]> = {
   Overview: ["Home"], Approvals: ["Trades"], "Trades open": ["Trades", "Now"], "Trades activity": ["Trades", "List"],
   "Trades summary": ["Trades", "Today"], "Trades now": ["Trades", "Now"], "Trades list": ["Trades", "List"],
   "Trades strategies": ["Trades", "Strategies"], "Trades today": ["Trades", "Today"], Limits: ["Limits"],
-  Research: ["Research", "Today and trials"], Progress: ["Research", "Road to live"], Agents: ["Research", "Strategies"],
-  Feeds: ["Feeds", "Data feeds"], News: ["Feeds", "News"], Health: ["Feeds", "System health"],
+  Health: ["Health"],   // Research, Progress, Agents, Feeds and News were retired on 2026-11-02 (owner)
   "Entry mode": ["Settings", "Entry mode and halt"], Account: ["Settings", "Your sign-in"], Users: ["Settings", "Users"],
 };
 
-/** Open a screen the way a person would: the rail on a desktop, the bottom bar (and More) on a phone. */
+/** Open a screen the way a person would: the rail on a desktop, the bottom bar on a phone (all five sections fit). */
 export async function go(page: Page, name: string) {
   const [section, tab] = WHERE[name] ?? [name];
-  const item = page.locator(`[data-nav-item="${section}"]:visible`);
-  if (!(await item.count())) await page.getByRole("button", { name: "More", exact: true }).click();
   await page.locator(`[data-nav-item="${section}"]:visible`).first().click();
   if (tab) await page.getByRole("tab", { name: tab, exact: true }).click();
 }
