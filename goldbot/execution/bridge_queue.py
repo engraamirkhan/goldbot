@@ -32,7 +32,14 @@ log = logging.getLogger("goldbot.bridge")
 # priority classes: lower runs first
 CLOSE, HEALTH, READ, ORDER = 0, 1, 2, 3
 EXIT_METHODS = frozenset({"close", "modify"})      # risk-reducing or stop-moving: ahead of everything
-MAX_QUEUED = 64                 # requests waiting per connection; the brain has about six clients per account
+# requests waiting per connection. Multi-instrument plan (Option B, one engine per account with N symbol books): "bridge
+# MAX_QUEUED=64 can be exceeded by ~7 clients x N engines: size it for N symbols in one engine". The engine's own
+# clients (ticks, history, M1 bars, sessions, health, orders, the scheduler) plus a few reads per symbol book at the
+# minute boundary (bars, terms, sessions, positions), for the most symbols one bridge serves
+# (market_watch.MAX_BRIDGE_SYMBOLS, 32; a test pins the three together)
+BASE_CLIENTS = 8
+CLIENTS_PER_SYMBOL = 4
+MAX_QUEUED = BASE_CLIENTS + CLIENTS_PER_SYMBOL * 32
 READ_TTL_S = 30.0               # a read from a client that sent no timeout_s (a v6 brain) is dropped after this
 POLL_S = 0.05                   # how often a waiting handler looks at its client's socket
 

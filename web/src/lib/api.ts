@@ -199,6 +199,8 @@ export const api = {
   strategyRanking: (query: string) => req<Schemas["RankingView"]>(`/api/strategies/ranking${query}`),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit
   limits: () => req<LimitsView>("/api/limits"),
+  // every enabled account's instruments: digits, unit, group and state (lib/instruments.ts fmtPrice, filters)
+  instruments: () => req<Schemas["InstrumentView"][]>("/api/instruments"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),
 };
 

@@ -1,8 +1,10 @@
 // One trade on its bars (docs/design/trades-ux-2026-10-27.md §3.3, backlog 133): inline SVG, no chart library. Candles
 // are told apart by shape (hollow up, filled down), levels by line style and a label with the word and the price, so
 // nothing depends on colour. Fixed height: loading and a missing-bars state take the same box (no layout shift).
+// Prices in the trade's instrument (fmtPrice: its digits and unit; multi-instrument UI spec 2026-11-02).
+import { fmtPrice, labelOf, unitOf } from "../../lib/instruments";
 import { barIndexAt, chartLevels, spreadLabels } from "../../lib/tradeChart";
-import { type Bar, price, type StopMove, type TradeRow } from "../../lib/trades";
+import { type Bar, type StopMove, type TradeRow } from "../../lib/trades";
 
 type Level = { key: string; y: number; word: string; dash?: string; strong?: boolean };
 
@@ -17,11 +19,12 @@ export function TradeChart({ trade, bars, moves = [], timeframe, loading, height
   const W = width;
   if (loading) return <div className="chart-box skeleton-row" style={{ height }} aria-busy="true" aria-label="Loading the chart" />;
   const levels = chartLevels(trade, moves);
+  const sym = trade.symbol;
   if (!bars || bars.length === 0) {
     return (
       <div className="chart-box chart-missing" style={{ height }} role="note">
         <strong>Bars for this period aren't stored yet.</strong>
-        <ul className="small">{levels.map((l) => <li key={l.key}>{l.word} {price(l.value)} USD/oz</li>)}</ul>
+        <ul className="small">{levels.map((l) => <li key={l.key}>{l.word} {fmtPrice(sym, l.value, { unit: true })}</li>)}</ul>
       </div>
     );
   }
@@ -36,9 +39,10 @@ export function TradeChart({ trade, bars, moves = [], timeframe, loading, height
   const cw = Math.max(1, Math.min(10, step * 0.6));
   const entryI = barIndexAt(bars, trade.opened_utc);
   const exitI = barIndexAt(bars, trade.exit_utc);
-  const lv: Level[] = levels.map((l) => ({ key: l.key, y: y(l.value), word: `${l.word} ${price(l.value)}`, dash: l.dash, strong: l.strong }));
+  const lv: Level[] = levels.map((l) => ({ key: l.key, y: y(l.value), word: `${l.word} ${fmtPrice(sym, l.value)}`, dash: l.dash, strong: l.strong }));
   const labelY = spreadLabels(lv.map((l) => l.y), 13, 10, H - 4);
-  const name = `Chart of ${timeframe ?? trade.timeframe ?? ""} bars: ${levels.map((l) => `${l.word} ${price(l.value)}`).join(", ")} USD per ounce`;
+  const unit = unitOf(sym);
+  const name = `Chart of ${timeframe ?? trade.timeframe ?? ""} bars of ${labelOf(sym)}: ${levels.map((l) => `${l.word} ${fmtPrice(sym, l.value)}`).join(", ")}${unit ? `, ${unit}` : ""}`;
   return (
     <div className="chart-box" style={{ height }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={name}>

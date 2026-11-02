@@ -5,13 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api, ApiError } from "../../lib/api";
 import { modeBadge } from "../../lib/home";
+import { fmtPrice } from "../../lib/instruments";
 import {
-  duration, EVIDENCE_WORDS, exitWords, KIND_WORDS, moneyOrDash, POLL, price, resultOf, sideArrow, sideWords, signedR,
+  duration, EVIDENCE_WORDS, exitWords, KIND_WORDS, moneyOrDash, POLL, resultOf, sideArrow, sideWords, signedR,
   strategyLabel, type TradeBars, type TradeRow,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, ErrorState, Skeleton, TimeText } from "../../ui";
 import { lots, money, NBSP } from "../../ui/format";
+import { SymbolTag } from "../../ui/SymbolTag";
 import { TradeChart } from "./TradeChart";
 
 export function TradeDetail({ id, onClose }: { id: string; onClose: () => void }) {
@@ -50,11 +52,13 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
   const { pnl, r } = resultOf(t);
   const c = t.costs;
   const part = (x: number | null, signed = false) => (x == null ? "not recorded" : money(x, t.currency, signed));
+  // every price in the trade's instrument: its digits, its unit once per line (never USD/oz off gold)
+  const px = (x: number | null | undefined, unit = false) => fmtPrice(t.symbol, x, { unit });
   return (
     <div className="detail-body">
       <p className="detail-sub">
         <Badge tone={modeBadge(t.mode) === "REAL" ? "warn" : "info"}>{modeBadge(t.mode)}</Badge>{" "}
-        {t.account_label} · {KIND_WORDS[t.kind]}{t.is_control ? " (random control)" : ""}{" "}
+        <SymbolTag symbol={t.symbol} /> · {t.account_label} · {KIND_WORDS[t.kind]}{t.is_control ? " (random control)" : ""}{" "}
         <strong>{t.status === "open" ? "OPEN" : `CLOSED · ${exitWords(t.exit_reason)}`}</strong>
       </p>
       <p className="detail-money num">
@@ -70,11 +74,11 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
       <dl className="detail-facts">
         <div><dt>Why taken</dt><dd>{t.why || "—"}</dd></div>
         <div><dt>{t.status === "open" ? "Closes at" : "Closed by"}</dt><dd>{t.status === "open"
-          ? <>target {price(t.target)} or stop {price(t.stop_now ?? t.stop)} USD/oz{t.hold_limit_s ? `, or after ${duration(t.hold_limit_s)}` : ""}</>
-          : <>{exitWords(t.exit_reason)}, after {duration(t.held_s)}{t.hold_limit_s ? ` (hold limit ${duration(t.hold_limit_s)})` : ""}{t.exit != null ? ` at ${price(t.exit)} USD/oz` : ""}</>}</dd></div>
-        <div><dt>Levels</dt><dd className="num">entry {price(t.entry)} · stop {price(t.stop)}{chart.data?.stop_moves.length
-          ? chart.data.stop_moves.map((m) => <span key={m.at}> (moved to {price(m.price)} at <TimeText iso={m.at} />)</span>)
-          : t.stop_now != null && t.stop_now !== t.stop ? ` (moved to ${price(t.stop_now)})` : ""} · target {price(t.target)} USD/oz</dd></div>
+          ? <>target {px(t.target)} or stop {px(t.stop_now ?? t.stop, true)}{t.hold_limit_s ? `, or after ${duration(t.hold_limit_s)}` : ""}</>
+          : <>{exitWords(t.exit_reason)}, after {duration(t.held_s)}{t.hold_limit_s ? ` (hold limit ${duration(t.hold_limit_s)})` : ""}{t.exit != null ? ` at ${px(t.exit, true)}` : ""}</>}</dd></div>
+        <div><dt>Levels</dt><dd className="num">entry {px(t.entry)} · stop {px(t.stop)}{chart.data?.stop_moves.length
+          ? chart.data.stop_moves.map((m) => <span key={m.at}> (moved to {px(m.price)} at <TimeText iso={m.at} />)</span>)
+          : t.stop_now != null && t.stop_now !== t.stop ? ` (moved to ${px(t.stop_now)})` : ""} · target {px(t.target, true)}</dd></div>
         <div><dt>Costs</dt><dd className="num">{c ? <>spread {part(c.spread)}{c.spread_exit_estimated ? " (exit half estimated)" : ""} · slippage {part(c.slippage, true)}{c.slippage_exit_known ? "" : " (entry only)"} · commission {part(c.commission)} · swap {part(c.swap, true)} = {money(c.total, t.currency)}
           {!c.complete && <span className="muted"> (known parts only)</span>}{t.gross != null && <span className="muted"> · gross {money(t.gross, t.currency, true)}</span>}</>
           : t.kind === "shadow" ? "none: a paper trade" : "not recorded"}</dd></div>

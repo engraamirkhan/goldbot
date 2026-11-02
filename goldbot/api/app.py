@@ -39,6 +39,7 @@ from goldbot.api import (
     entry_status,
     explain,
     home_cards,
+    instruments_view,
     limits,
     mt5_crop,
     progress,
@@ -102,6 +103,8 @@ from goldbot.api.schema import (
     ForgotPasswordRequest,
     HaltRequest,
     HealthView,
+    InstrumentGroup,
+    InstrumentView,
     InviteRequest,
     InviteResponse,
     LimitChange,
@@ -979,15 +982,29 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     exit_reason: list[ExitReason] = Query([]), evidence: list[TradeEvidence] = Query([]),
                     control: bool | None = None, sort: TradeSort = "newest", cursor: str | None = None,
                     limit: int = Query(trades_ledger.PAGE, ge=1, le=trades_ledger.MAX_PAGE),
+                    symbol: list[str] = Query([]), group: list[InstrumentGroup] = Query([]),
                     _: User = Depends(need("viewer"))) -> TradesPage:
         q = trades_ledger.TradeQuery(period=period, since=since, until=until, account=tuple(account),
                                      family=tuple(family), timeframe=tuple(timeframe), arm=tuple(arm), kind=tuple(kind),
                                      status=status, exit_reason=tuple(exit_reason), evidence=tuple(evidence),
-                                     control=control, sort=sort, cursor=cursor, limit=limit)
+                                     control=control, sort=sort, cursor=cursor, limit=limit, symbol=tuple(symbol),
+                                     group=tuple(group))
         try:
             return trades_ledger.query(ledger(), q)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    # goldbot/api/instruments_view.py (multi-instrument demo, lane L4): every enabled account's instruments with
+    # their digits, unit, group and the engine's state for each (the dashboard's fmtPrice and filters). Read-only
+    @app.get("/api/instruments", response_model=list[InstrumentView])
+    def instruments_list(_: User = Depends(need("viewer"))) -> list[InstrumentView]:
+        from goldbot.ops import accounts as accounts_mod
+        try:
+            accs = list(accounts_mod.load_accounts(logins=False).values())
+        except Exception:                     # noqa: BLE001 - a bad accounts.yaml: no instruments, never a 500
+            log.exception("accounts unreadable: no instruments listed")
+            accs = []
+        return instruments_view.instruments(accs, engines_or_none())
 
     # goldbot/api/trade_chart.py (item 133): one trade on the stored bars of its timeframe, with its own levels and
     # stop moves. Registered before the detail so `{trade_id:path}` never swallows "/bars".

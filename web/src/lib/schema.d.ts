@@ -453,6 +453,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instruments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Instruments List */
+        get: operations["instruments_list_api_instruments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/limits": {
         parameters: {
             query?: never;
@@ -1596,6 +1613,25 @@ export interface components {
              * @enum {string}
              */
             state: "open" | "partial" | "waiting" | "blocked";
+            /** Symbols */
+            symbols?: components["schemas"]["EntrySymbol"][];
+        };
+        /**
+         * EntrySymbol
+         * @description One symbol's entry state on a multi-instrument account (EntryStatus.symbols): exits never depend on it.
+         */
+        EntrySymbol: {
+            /** Clears At */
+            clears_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "can_enter" | "market_closed" | "stale" | "group_cap" | "terms_missing" | "disabled";
+            /** Symbol */
+            symbol: string;
+            /** Text */
+            text: string;
         };
         /** ExitCounts */
         ExitCounts: {
@@ -1680,6 +1716,31 @@ export interface components {
              */
             totp: string;
         };
+        /**
+         * GroupExposure
+         * @description One correlation group's open notional against its cap on one account (the RiskGate's group cap), account
+         *     currency. `cap` None: the engine does not publish one ("cap not published").
+         */
+        GroupExposure: {
+            /** Cap */
+            cap: number | null;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags";
+            /** Lots By Symbol */
+            lots_by_symbol?: {
+                [key: string]: number;
+            };
+            /** Notional */
+            notional: number;
+            /**
+             * Open N
+             * @default 0
+             */
+            open_n: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1732,6 +1793,31 @@ export interface components {
             /** Reliability */
             reliability: components["schemas"]["ReliabilityCurve"][];
             system_halt: components["schemas"]["SystemHaltView"] | null;
+        };
+        /**
+         * InstrumentView
+         * @description One instrument of one account (GET /api/instruments): how to show its prices and what it can do now.
+         */
+        InstrumentView: {
+            /** Account */
+            account: string;
+            /** Digits */
+            digits: number;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags";
+            /** Label */
+            label: string;
+            /** Quote Ccy */
+            quote_ccy: string;
+            /** State */
+            state: ("can_enter" | "market_closed" | "stale" | "group_cap" | "terms_missing" | "disabled") | "unknown";
+            /** Symbol */
+            symbol: string;
+            /** Unit */
+            unit: string;
         };
         /** InviteRequest */
         InviteRequest: {
@@ -1854,6 +1940,12 @@ export interface components {
             day_start_equity: number | null;
             /** Error */
             error: string | null;
+            /** Groups */
+            groups?: components["schemas"]["GroupExposure"][];
+            /** Heat Limit */
+            heat_limit?: number | null;
+            /** Heat Used */
+            heat_used?: number | null;
             last_change: components["schemas"]["LimitChange"] | null;
             /** Min Lot */
             min_lot: number | null;
@@ -2232,7 +2324,7 @@ export interface components {
         };
         /**
          * OpenPosition
-         * @description One open position (N1): money in the account currency, prices in USD per oz. `floating_pnl` is at the engine's
+         * @description One open position (N1): money in the account currency, prices in its instrument's quote (`symbol`). `floating_pnl` is at the engine's
          *     mid price before spread, commission and swap; None when the engine publishes no price or conversion.
          */
         OpenPosition: {
@@ -2302,6 +2394,11 @@ export interface components {
             stale: boolean;
             /** Stop */
             stop: number | null;
+            /**
+             * Symbol
+             * @default XAUUSD
+             */
+            symbol: string;
             /** Target */
             target: number | null;
             /** Timeframe */
@@ -3022,6 +3119,25 @@ export interface components {
             /** Target */
             target: number | null;
         };
+        /**
+         * SymbolDay
+         * @description One instrument's day on one account (TodayAccount.by_symbol), account currency, from the trade ledger. `day_pnl`
+         *     = closed_pnl + open_pnl; None when either is unknown (never a guess).
+         */
+        SymbolDay: {
+            /** Closed N */
+            closed_n: number;
+            /** Closed Pnl */
+            closed_pnl: number | null;
+            /** Day Pnl */
+            day_pnl: number | null;
+            /** Open N */
+            open_n: number;
+            /** Open Pnl */
+            open_pnl: number | null;
+            /** Symbol */
+            symbol: string;
+        };
         /** SystemHaltView */
         SystemHaltView: {
             /** Clear Command */
@@ -3051,6 +3167,8 @@ export interface components {
             by_kind?: {
                 [key: string]: components["schemas"]["KindDay"];
             };
+            /** By Symbol */
+            by_symbol?: components["schemas"]["SymbolDay"][];
             /** Closed Complete */
             closed_complete: boolean;
             /** Closed N */
@@ -3071,6 +3189,8 @@ export interface components {
             fills_target?: number | null;
             /** Fills Today */
             fills_today?: number | null;
+            /** Instruments N */
+            instruments_n?: number | null;
             loss_meter: components["schemas"]["LossMeter"] | null;
             /** Mode */
             mode: ("demo" | "live" | "paper") | null;
@@ -3115,7 +3235,7 @@ export interface components {
         };
         /**
          * TradeBars
-         * @description `bars` (bid prices, USD/oz) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while
+         * @description `bars` (bid prices, in the instrument's quote) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while
          *     open); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,
          *     `stop_moves` each accepted move after it, in time order.
          */
@@ -3176,7 +3296,7 @@ export interface components {
         };
         /**
          * TradeRow
-         * @description One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:
+         * @description One trade (opened and closed merged). Money in the account currency, prices in its instrument's quote (`symbol`), times UTC. Closed:
          *     `pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid
          *     price from the fill (the entry spread is inside it).
          */
@@ -3263,6 +3383,11 @@ export interface components {
             stop: number | null;
             /** Stop Now */
             stop_now: number | null;
+            /**
+             * Symbol
+             * @default XAUUSD
+             */
+            symbol: string;
             /** Target */
             target: number | null;
             /** Timeframe */
@@ -3380,6 +3505,8 @@ export interface components {
             next_cursor: string | null;
             /** Rows */
             rows: components["schemas"]["TradeRow"][];
+            /** Symbols */
+            symbols?: string[];
             totals: components["schemas"]["TradeTotals"];
             /** Unreadable */
             unreadable: ("shadow" | "positions" | "probes" | "exploration" | "orders")[];
@@ -4233,6 +4360,26 @@ export interface operations {
             };
         };
     };
+    instruments_list_api_instruments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentView"][];
+                };
+            };
+        };
+    };
     limits_get_api_limits_get: {
         parameters: {
             query?: never;
@@ -4529,6 +4676,8 @@ export interface operations {
                 sort?: "newest" | "best" | "worst";
                 cursor?: string | null;
                 limit?: number;
+                symbol?: string[];
+                group?: ("gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags")[];
             };
             header?: never;
             path?: never;

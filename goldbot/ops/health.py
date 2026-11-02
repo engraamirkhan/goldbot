@@ -135,6 +135,7 @@ from goldbot.ops.checks.engine import (
     check_engine_loop,
     check_entry_status,
     check_failed_orders,
+    check_symbols,
     check_tick_errors,
     check_weekend_247,
 )
@@ -319,6 +320,7 @@ __all__ = [
     "check_engine",
     "check_engine_loop",
     "check_entry_status",
+    "check_symbols",
     "check_entry_windows",
     "check_failed_orders",
     "check_feature_versions",

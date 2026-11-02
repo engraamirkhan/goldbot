@@ -166,9 +166,6 @@ export function heldWords(held: number | null | undefined, limit: number | null 
   return `${duration(held)} of ${duration(limit)}`;
 }
 
-export const price = (x: number | null | undefined) =>
-  x == null ? "—" : x.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
 /** Signed money or "£ —": unknown is a dash with its currency, never zero and never "not known" on every row. */
 export function moneyOrDash(x: number | null | undefined, ccy: string | null | undefined, signed = true): string {
   if (x == null) return `${ccy === "GBP" || ccy == null ? "£" : `${ccy} `}${NBSP}—`;

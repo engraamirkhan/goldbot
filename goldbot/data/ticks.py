@@ -35,6 +35,15 @@ Size: about 12 bytes a tick (zstd; measured on synthetic millisecond ticks), so 
 pins 50k ticks under 1 MB).
 
   load_day("icm-demo", "2026-11-26")           # research: ts_utc (UTC, ns), bid, ask, flags; sha256 checked
+
+Multi-instrument demo (lane L4; plan: "store ... keyed (source=account, symbol=store_symbol), never pooled with
+XAUUSD"): another instrument of the account (`instrument`, its broker symbol, e.g. US500) is recorded under
+state/ticks/<account>/<instrument>/ with an index of its own, so nothing of it is ever read as the account's gold; the
+gold files, path and index are unchanged (no `instrument`). With every asset class on one bridge, gold's daily break is
+not quiet for the others (US indices, energy), so another instrument is pulled only while every listed market is shut,
+`weekend_quiet` (Friday 17:05 New York to Sunday 16:50), and the job skips it on weekdays.
+
+  load_day("icm-probe", "2026-11-26", instrument="US500")
 """
 from __future__ import annotations
 
@@ -77,6 +86,10 @@ SYNC_RETRIES, SYNC_WAIT_S = 3, 2.0     # requests (and seconds apart) for newer 
 STALE_DAYS = 4                # health: the newest recorded day older than this (Friday -> Monday is 3) WARNs
 SOURCE = "mt5 copy_ticks via the scheduler's read-only broker"
 _LABEL = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# an instrument's directory: a broker symbol name (US500, XAUUSD+, COPPER-C), no "." so it can never be index.json, a
+# day file or a temp name, and no leading "_"
+_INSTRUMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+#-]{0,31}$")
+WEEKEND_FROM, WEEKEND_TO = BREAK_FROM, pd.Timedelta(hours=16, minutes=50)   # Friday from / Sunday before, New York
 _SCHEMA = pa.schema([("time_ns", pa.int64()), ("bid", pa.float64()), ("ask", pa.float64()), ("flags", pa.int32())])
 
 
@@ -106,14 +119,24 @@ def _label(account: str) -> str:
     return account
 
 
-def account_dir(state_dir: str | Path, account: str) -> Path:
-    return Path(state_dir) / TICKS_DIR / _label(account)
+def account_dir(state_dir: str | Path, account: str, instrument: str | None = None) -> Path:
+    """state/ticks/<account>/ (the account's gold), or .../<account>/<instrument>/ for another instrument."""
+    d = Path(state_dir) / TICKS_DIR / _label(account)
+    if instrument is None:
+        return d
+    if not _INSTRUMENT.match(instrument):
+        raise ValueError(f"not an instrument name: {instrument!r}")
+    return d / instrument
 
 
 def _private_dir(d: Path) -> Path:
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for p in (d, d.parent):                     # ticks/ and ticks/<account>/; an existing dir is tightened too
+    p = d                                       # up to and including ticks/; an existing dir is tightened too
+    while True:
         os.chmod(p, 0o700)
+        if p.name == TICKS_DIR or p.parent == p:
+            break
+        p = p.parent
     return d
 
 
@@ -166,6 +189,15 @@ def market_quiet(ts_utc: pd.Timestamp) -> bool:
     return bool(BREAK_FROM <= t < BREAK_TO)
 
 
+def weekend_quiet(ts_utc: pd.Timestamp) -> bool:
+    """Every listed market is shut at `ts_utc`: New York Friday from 17:05, all Saturday, Sunday before 16:50 (FX
+    reopens at 17:00). The quiet window for another instrument's pull (module docstring)."""
+    ny = pd.Timestamp(ts_utc).tz_convert(NEW_YORK)
+    t = ny - ny.normalize()
+    wd = ny.weekday()
+    return wd == 5 or (wd == 6 and bool(t < WEEKEND_TO)) or (wd == 4 and bool(t >= WEEKEND_FROM))
+
+
 class PullDeferred(RuntimeError):
     """The pull stopped before the day was complete (time limit or the quiet window ended); nothing is written."""
 
@@ -180,8 +212,9 @@ class Pace:
     window, all on `clock` (wall time, UTC). Raises PullDeferred when a limit is hit."""
 
     def __init__(self, clock: Callable[[], pd.Timestamp], sleep: Callable[[float], None], *, pause_s: float,
-                 page_limit_s: float, budget_s: float) -> None:
+                 page_limit_s: float, budget_s: float, quiet: Callable[[pd.Timestamp], bool] = market_quiet) -> None:
         self.clock, self.sleep, self.pause_s, self.page_limit_s = clock, sleep, pause_s, page_limit_s
+        self.quiet = quiet
         self.deadline = clock() + pd.Timedelta(seconds=budget_s)
         self.pages = 0
 
@@ -191,7 +224,7 @@ class Pace:
         now = self.clock()
         if now >= self.deadline:
             raise PullDeferred(f"run budget spent after {self.pages} pages")
-        if not market_quiet(now):
+        if not self.quiet(now):
             raise PullDeferred(f"market reopening at {now.isoformat()} after {self.pages} pages")
         return now
 
@@ -276,11 +309,12 @@ def _london_ny(df: pd.DataFrame) -> pd.DataFrame:
     return df[np.isin(sess, ["london", "newyork"])]
 
 
-def read_index(state_dir: str | Path, account: str) -> dict[str, DayRecord]:
-    f = account_dir(state_dir, account) / INDEX_FILE
+def read_index(state_dir: str | Path, account: str, instrument: str | None = None) -> dict[str, DayRecord]:
+    f = account_dir(state_dir, account, instrument) / INDEX_FILE
     if not f.exists():
         return {}
-    return load_record_json(TickIndex, f.read_text(), source=f"ticks/{account}/{INDEX_FILE}").days
+    sub = f"{account}/{instrument}" if instrument is not None else account
+    return load_record_json(TickIndex, f.read_text(), source=f"ticks/{sub}/{INDEX_FILE}").days
 
 
 def _write_index(d: Path, days: dict[str, DayRecord]) -> None:
@@ -288,9 +322,10 @@ def _write_index(d: Path, days: dict[str, DayRecord]) -> None:
 
 
 def write_day(state_dir: str | Path, account: str, day: date, ticks: pd.DataFrame, *, symbol: str, server_tz: str,
-              pulled_utc: pd.Timestamp) -> DayRecord:
-    """Write one server day's ticks (columns ts_utc, bid, ask[, flags]) atomically and record it in the index."""
-    d = _private_dir(account_dir(state_dir, account))
+              pulled_utc: pd.Timestamp, instrument: str | None = None) -> DayRecord:
+    """Write one server day's ticks (columns ts_utc, bid, ask[, flags]) atomically and record it in the index (of
+    `instrument`'s directory when given, module docstring)."""
+    d = _private_dir(account_dir(state_dir, account, instrument))
     df = ticks.sort_values("ts_utc", kind="stable").reset_index(drop=True)
     flags = df["flags"] if "flags" in df.columns else pd.Series(0, index=df.index)
     table = pa.Table.from_arrays(
@@ -317,7 +352,7 @@ def write_day(state_dir: str | Path, account: str, day: date, ticks: pd.DataFram
                     first_utc=df["ts_utc"].iloc[0] if len(df) else None, last_utc=df["ts_utc"].iloc[-1] if len(df) else None,
                     median_spread=float(np.median(ln["ask"] - ln["bid"])) if len(ln) else None,
                     bytes=len(blob), sha256=hashlib.sha256(blob).hexdigest())
-    days = read_index(state_dir, account)
+    days = read_index(state_dir, account, instrument)
     days[day.isoformat()] = rec
     _write_index(d, days)
     return rec
@@ -374,12 +409,12 @@ def quarantine_truncated_day(state_dir: str | Path, account: str, day: date | st
     return f"quarantined {what}"
 
 
-def prune(state_dir: str | Path, account: str, keep_from: date) -> list[str]:
+def prune(state_dir: str | Path, account: str, keep_from: date, instrument: str | None = None) -> list[str]:
     """Delete day files (and their index rows) of server dates before `keep_from`; returns the dates removed."""
-    d = account_dir(state_dir, account)
+    d = account_dir(state_dir, account, instrument)
     if not d.exists():
         return []
-    days = read_index(state_dir, account)
+    days = read_index(state_dir, account, instrument)
     gone: set[str] = set()
     for f in d.glob("*.parquet"):
         try:
@@ -419,18 +454,20 @@ def _bounded_pages(broker: Any, limit_s: float) -> Iterator[None]:
 
 def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, server_tz: str,
                  cfg: TickRecordSettings, *, clock: Callable[[], pd.Timestamp],
-                 sleep: Callable[[float], None]) -> dict[str, Any]:
+                 sleep: Callable[[float], None], instrument: str | None = None) -> dict[str, Any]:
     """Pull up to `max_days_per_run` due server days not yet on disk, oldest first (idempotent: a recorded day is never
     pulled again; delete its file to re-pull), paced and time-boxed (`Pace`), then prune days older than
     `retain_days`. A deferred day (budget, quiet window, slow bridge) stops the run and is left for a later one; a
     truncated day (`TruncatedPull`) is reported under "incomplete" and skipped, so it never blocks newer days. Returns what it did, for the job record. The
-    broker is only ever asked for `copy_ticks`."""
+    broker is only ever asked for `copy_ticks`. `instrument`: another instrument of the account (its own directory,
+    paced to `weekend_quiet`, module docstring); None is the account's gold, exactly as before."""
     now = pd.Timestamp(clock())
-    have = read_index(state_dir, account)
-    d = account_dir(state_dir, account)
+    have = read_index(state_dir, account, instrument)
+    d = account_dir(state_dir, account, instrument)
     missing = [day for day in days_due(now, server_tz, backfill_days=cfg.backfill_days)
                if not (day.isoformat() in have and (d / f"{day.isoformat()}.parquet").exists())]
-    pace = Pace(clock, sleep, pause_s=cfg.pause_s, page_limit_s=cfg.page_limit_s, budget_s=cfg.run_budget_s)
+    pace = Pace(clock, sleep, pause_s=cfg.pause_s, page_limit_s=cfg.page_limit_s, budget_s=cfg.run_budget_s,
+                quiet=market_quiet if instrument is None else weekend_quiet)
     written: list[str] = []
     incomplete: list[str] = []
     deferred: str | None = None
@@ -455,12 +492,13 @@ def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, 
                 incomplete.append(f"{day.isoformat()}: {exc}")
                 log.warning("tick record %s %s not written: %s", account, day, exc)
                 continue
-            rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock())
+            rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock(),
+                            instrument=instrument)
             written.append(day.isoformat())
             log.info("tick record %s %s: %d ticks (%d London/NY), %d bytes", account, day, rec.rows,
                      rec.london_ny_ticks, rec.bytes)
-    pruned = prune(state_dir, account, latest_closed(now, server_tz) - timedelta(days=cfg.retain_days))
-    out: dict[str, Any] = {"written": written, "pruned": pruned, "days": len(read_index(state_dir, account)),
+    pruned = prune(state_dir, account, latest_closed(now, server_tz) - timedelta(days=cfg.retain_days), instrument)
+    out: dict[str, Any] = {"written": written, "pruned": pruned, "days": len(read_index(state_dir, account, instrument)),
                            "behind": len(missing) - len(written), "pages": pace.pages}
     if deferred is not None:
         out["deferred"] = deferred
@@ -470,20 +508,21 @@ def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, 
 
 
 # ------------------------------------------------------------------------------------------- research loader
-def recorded_days(account: str, *, state_dir: str | Path = "state") -> list[date]:
-    return sorted(date.fromisoformat(k) for k in read_index(state_dir, account))
+def recorded_days(account: str, *, state_dir: str | Path = "state", instrument: str | None = None) -> list[date]:
+    return sorted(date.fromisoformat(k) for k in read_index(state_dir, account, instrument))
 
 
-def load_day(account: str, day: date | str, *, state_dir: str | Path = "state", verify: bool = True) -> pd.DataFrame:
+def load_day(account: str, day: date | str, *, state_dir: str | Path = "state", verify: bool = True,
+             instrument: str | None = None) -> pd.DataFrame:
     """One recorded server day: ts_utc (datetime64[ns, UTC]), bid, ask, flags, in time order. `verify` checks the
     file against the sha256 the index recorded when it was written (the digest the H-A verdict lists)."""
-    d = account_dir(state_dir, account)
+    d = account_dir(state_dir, account, instrument)
     key = _day(day).isoformat()
     f = d / f"{key}.parquet"
     if not f.exists():
         raise FileNotFoundError(f"no tick record for {account} on server date {key} ({f})")
     if verify:
-        rec = read_index(state_dir, account).get(key)
+        rec = read_index(state_dir, account, instrument).get(key)
         digest = hashlib.sha256(f.read_bytes()).hexdigest()
         if rec is None or rec.sha256 != digest:
             raise ValueError(f"tick record {account} {key}: sha256 {digest[:12]} does not match the index "
@@ -494,14 +533,15 @@ def load_day(account: str, day: date | str, *, state_dir: str | Path = "state", 
 
 
 # ------------------------------------------------------------------------------------------- health
-def check_tick_record(ctx: HealthContext, account_id: str) -> Check:
-    """ticks:<account>: WARN when the newest recorded trading day has fewer London/NY ticks than
-    `ticks.min_london_ny_ticks` (a recorder, terminal or feed gap; a market holiday also thins it, which is what H-A
-    measures) or when the record has not advanced for STALE_DAYS. Never FAIL: research data, not a trading input."""
+def check_tick_record(ctx: HealthContext, account_id: str, instrument: str | None = None) -> Check:
+    """ticks:<account> (ticks:<account>:<instrument> for another instrument): WARN when the newest recorded trading
+    day has fewer London/NY ticks than `ticks.min_london_ny_ticks` (a recorder, terminal or feed gap; a market holiday
+    also thins it, which is what H-A measures) or when the record has not advanced for STALE_DAYS. Never FAIL:
+    research data, not a trading input."""
     from goldbot.ops.health import Check
-    name = f"ticks:{account_id}"
+    name = f"ticks:{account_id}" + (f":{instrument}" if instrument is not None else "")
     try:
-        days = read_index(ctx.state_dir, account_id)
+        days = read_index(ctx.state_dir, account_id, instrument)
     except (ValueError, OSError) as exc:
         return Check(name=name, status="warn", reason=f"tick record index unreadable: {exc}")
     if not days:
@@ -521,6 +561,6 @@ def check_tick_record(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
-__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "TruncatedPull", "market_quiet", "quarantine_dir", "quarantine_truncated_day", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
+__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "TruncatedPull", "market_quiet", "weekend_quiet", "quarantine_dir", "quarantine_truncated_day", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
            "latest_closed", "prune", "pull_day", "read_index", "record_ticks", "recorded_days", "server_date", "server_day_bounds",
            "write_day"]

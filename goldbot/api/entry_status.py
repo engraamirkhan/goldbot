@@ -714,9 +714,10 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         state, headline = "partial", f"Can take new trades, except {', '.join(agent_label(str(a)) for a in held)}"
     else:
         state, headline = "open", "Can take new trades"
+    from goldbot.api.instruments_view import entry_symbols  # lazily: it reads the instrument registry
     return EntryStatus(state=state, headline=headline, blocks=found, notes=notes,
                        exits=EXITS_SILENT if silent and _open_at(sessions, now) is not False else EXITS_OK,
-                       as_of=_dt(reported), clears_at=_dt(clears))
+                       as_of=_dt(reported), clears_at=_dt(clears), symbols=entry_symbols(e))
 
 
 # ----------------------------------------------------------------------------- from the state directory

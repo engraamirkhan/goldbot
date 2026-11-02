@@ -2125,6 +2125,13 @@
       ],
       "title": "State",
       "type": "string"
+     },
+     "symbols": {
+      "items": {
+       "$ref": "#/components/schemas/EntrySymbol"
+      },
+      "title": "Symbols",
+      "type": "array"
      }
     },
     "required": [
@@ -2134,6 +2141,50 @@
      "exits"
     ],
     "title": "EntryStatus",
+    "type": "object"
+   },
+   "EntrySymbol": {
+    "description": "One symbol's entry state on a multi-instrument account (EntryStatus.symbols): exits never depend on it.",
+    "properties": {
+     "clears_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Clears At"
+     },
+     "state": {
+      "enum": [
+       "can_enter",
+       "market_closed",
+       "stale",
+       "group_cap",
+       "terms_missing",
+       "disabled"
+      ],
+      "title": "State",
+      "type": "string"
+     },
+     "symbol": {
+      "title": "Symbol",
+      "type": "string"
+     },
+     "text": {
+      "title": "Text",
+      "type": "string"
+     }
+    },
+    "required": [
+     "symbol",
+     "state",
+     "text"
+    ],
+    "title": "EntrySymbol",
     "type": "object"
    },
    "ExitCounts": {
@@ -2266,6 +2317,58 @@
      }
     },
     "title": "ForgotPasswordRequest",
+    "type": "object"
+   },
+   "GroupExposure": {
+    "description": "One correlation group's open notional against its cap on one account (the RiskGate's group cap), account\ncurrency. `cap` None: the engine does not publish one (\"cap not published\").",
+    "properties": {
+     "cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cap"
+     },
+     "group": {
+      "enum": [
+       "gold",
+       "metals",
+       "equity",
+       "fx",
+       "energy",
+       "rates",
+       "ags"
+      ],
+      "title": "Group",
+      "type": "string"
+     },
+     "lots_by_symbol": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "title": "Lots By Symbol",
+      "type": "object"
+     },
+     "notional": {
+      "title": "Notional",
+      "type": "number"
+     },
+     "open_n": {
+      "default": 0,
+      "title": "Open N",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "group",
+     "notional",
+     "cap"
+    ],
+    "title": "GroupExposure",
     "type": "object"
    },
    "HTTPValidationError": {
@@ -2425,6 +2528,80 @@
      "errors"
     ],
     "title": "HealthView",
+    "type": "object"
+   },
+   "InstrumentView": {
+    "description": "One instrument of one account (GET /api/instruments): how to show its prices and what it can do now.",
+    "properties": {
+     "account": {
+      "title": "Account",
+      "type": "string"
+     },
+     "digits": {
+      "title": "Digits",
+      "type": "integer"
+     },
+     "group": {
+      "enum": [
+       "gold",
+       "metals",
+       "equity",
+       "fx",
+       "energy",
+       "rates",
+       "ags"
+      ],
+      "title": "Group",
+      "type": "string"
+     },
+     "label": {
+      "title": "Label",
+      "type": "string"
+     },
+     "quote_ccy": {
+      "title": "Quote Ccy",
+      "type": "string"
+     },
+     "state": {
+      "anyOf": [
+       {
+        "enum": [
+         "can_enter",
+         "market_closed",
+         "stale",
+         "group_cap",
+         "terms_missing",
+         "disabled"
+        ],
+        "type": "string"
+       },
+       {
+        "const": "unknown",
+        "type": "string"
+       }
+      ],
+      "title": "State"
+     },
+     "symbol": {
+      "title": "Symbol",
+      "type": "string"
+     },
+     "unit": {
+      "title": "Unit",
+      "type": "string"
+     }
+    },
+    "required": [
+     "symbol",
+     "label",
+     "account",
+     "group",
+     "digits",
+     "unit",
+     "quote_ccy",
+     "state"
+    ],
+    "title": "InstrumentView",
     "type": "object"
    },
    "InviteRequest": {
@@ -2761,6 +2938,35 @@
        }
       ],
       "title": "Error"
+     },
+     "groups": {
+      "items": {
+       "$ref": "#/components/schemas/GroupExposure"
+      },
+      "title": "Groups",
+      "type": "array"
+     },
+     "heat_limit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Heat Limit"
+     },
+     "heat_used": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Heat Used"
      },
      "last_change": {
       "anyOf": [
@@ -3801,7 +4007,7 @@
     "type": "object"
    },
    "OpenPosition": {
-    "description": "One open position (N1): money in the account currency, prices in USD per oz. `floating_pnl` is at the engine's\nmid price before spread, commission and swap; None when the engine publishes no price or conversion.",
+    "description": "One open position (N1): money in the account currency, prices in its instrument's quote (`symbol`). `floating_pnl` is at the engine's\nmid price before spread, commission and swap; None when the engine publishes no price or conversion.",
     "properties": {
      "account": {
       "title": "Account",
@@ -4014,6 +4220,11 @@
        }
       ],
       "title": "Stop"
+     },
+     "symbol": {
+      "default": "XAUUSD",
+      "title": "Symbol",
+      "type": "string"
      },
      "target": {
       "anyOf": [
@@ -6246,6 +6457,66 @@
     "title": "StripDay",
     "type": "object"
    },
+   "SymbolDay": {
+    "description": "One instrument's day on one account (TodayAccount.by_symbol), account currency, from the trade ledger. `day_pnl`\n= closed_pnl + open_pnl; None when either is unknown (never a guess).",
+    "properties": {
+     "closed_n": {
+      "title": "Closed N",
+      "type": "integer"
+     },
+     "closed_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Closed Pnl"
+     },
+     "day_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Day Pnl"
+     },
+     "open_n": {
+      "title": "Open N",
+      "type": "integer"
+     },
+     "open_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Pnl"
+     },
+     "symbol": {
+      "title": "Symbol",
+      "type": "string"
+     }
+    },
+    "required": [
+     "symbol",
+     "day_pnl",
+     "closed_pnl",
+     "open_pnl",
+     "closed_n",
+     "open_n"
+    ],
+    "title": "SymbolDay",
+    "type": "object"
+   },
    "SystemHaltView": {
     "properties": {
      "clear_command": {
@@ -6314,6 +6585,13 @@
       },
       "title": "By Kind",
       "type": "object"
+     },
+     "by_symbol": {
+      "items": {
+       "$ref": "#/components/schemas/SymbolDay"
+      },
+      "title": "By Symbol",
+      "type": "array"
      },
      "closed_complete": {
       "title": "Closed Complete",
@@ -6428,6 +6706,17 @@
        }
       ],
       "title": "Fills Today"
+     },
+     "instruments_n": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Instruments N"
      },
      "loss_meter": {
       "anyOf": [
@@ -6633,7 +6922,7 @@
     "type": "object"
    },
    "TradeBars": {
-    "description": "`bars` (bid prices, USD/oz) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while\nopen); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,\n`stop_moves` each accepted move after it, in time order.",
+    "description": "`bars` (bid prices, in the instrument's quote) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while\nopen); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,\n`stop_moves` each accepted move after it, in time order.",
     "properties": {
      "bars": {
       "items": {
@@ -6847,7 +7136,7 @@
     "type": "object"
    },
    "TradeRow": {
-    "description": "One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:\n`pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid\nprice from the fill (the entry spread is inside it).",
+    "description": "One trade (opened and closed merged). Money in the account currency, prices in its instrument's quote (`symbol`), times UTC. Closed:\n`pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid\nprice from the fill (the entry spread is inside it).",
     "properties": {
      "account": {
       "anyOf": [
@@ -7185,6 +7474,11 @@
        }
       ],
       "title": "Stop Now"
+     },
+     "symbol": {
+      "default": "XAUUSD",
+      "title": "Symbol",
+      "type": "string"
      },
      "target": {
       "anyOf": [
@@ -7583,6 +7877,13 @@
        "$ref": "#/components/schemas/TradeRow"
       },
       "title": "Rows",
+      "type": "array"
+     },
+     "symbols": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Symbols",
       "type": "array"
      },
      "totals": {
@@ -8779,6 +9080,33 @@
     "summary": "Health View"
    }
   },
+  "/api/instruments": {
+   "get": {
+    "operationId": "instruments_list_api_instruments_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/InstrumentView"
+         },
+         "title": "Response Instruments List Api Instruments Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Instruments List"
+   }
+  },
   "/api/limits": {
    "get": {
     "operationId": "limits_get_api_limits_get",
@@ -9438,6 +9766,41 @@
        "minimum": 1,
        "title": "Limit",
        "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "symbol",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Symbol",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "group",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "enum": [
+         "gold",
+         "metals",
+         "equity",
+         "fx",
+         "energy",
+         "rates",
+         "ags"
+        ],
+        "type": "string"
+       },
+       "title": "Group",
+       "type": "array"
       }
      }
     ],

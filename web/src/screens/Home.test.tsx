@@ -148,10 +148,10 @@ describe("Home today", () => {
     vi.spyOn(apiModule.api, "openPositions").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [
       { account: "icm-demo", mode: "demo", probe: false, position_id: 1, agent_id: "a", family: "box_break_close", timeframe: "1h",
         side: "long", lots: 0.01, entry: 2400, stop: 2396, target: 2410, opened_utc: "2026-10-19T09:00:00Z", price: 2401,
-        floating_pnl: 1, currency: "GBP", r_now: 0.25, age_s: 2, stale: false, account_label: "icm-demo", family_label: "", kind: "strategy" },
+        floating_pnl: 1, currency: "GBP", r_now: 0.25, age_s: 2, stale: false, account_label: "icm-demo", family_label: "", kind: "strategy", symbol: "XAUUSD" },
       { account: "icm-demo", mode: "demo", probe: true, position_id: 2, agent_id: "b", family: "probe", timeframe: null,
         side: "short", lots: 0.01, entry: 2400, stop: 2404, target: 2390, opened_utc: "2026-10-19T09:30:00Z", price: 2401,
-        floating_pnl: -1, currency: "GBP", r_now: -0.25, age_s: 2, stale: false, account_label: "icm-demo", family_label: "", kind: "cost_probe" }] });
+        floating_pnl: -1, currency: "GBP", r_now: -0.25, age_s: 2, stale: false, account_label: "icm-demo", family_label: "", kind: "cost_probe", symbol: "XAUUSD" }] });
     const onOpenTrades = vi.fn();
     renderHome("viewer", { onOpenTrades });
     fireEvent.click(await screen.findByRole("button", { name: "2 open trades →" }));
