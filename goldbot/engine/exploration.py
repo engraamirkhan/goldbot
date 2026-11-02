@@ -183,10 +183,14 @@ class Arm(FrozenRecord):
     adds: int = Field(0, ge=0, le=3)
     # quant Q2 2026-11-01: the most lots a growth unit takes (accounts.yaml `unit_lots`); None = the gate's sizing
     unit_lots: float | None = Field(None, gt=0)
+    # multi-instrument demo (lane L3): the registry key of the non-gold instrument this copy runs on; None = gold
+    instrument: str | None = None
 
     @property
     def arm_id(self) -> str:
-        return self.spec.id
+        """The spec's id; on a non-gold instrument `<id>@<instrument>` (plan: "learning-class arms per instrument
+        (never pooled)"): its own ledger rows, order ids, caps and evidence."""
+        return self.spec.id if self.instrument is None else f"{self.spec.id}@{self.instrument}"
 
     @property
     def tf(self) -> str:
@@ -366,6 +370,28 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
                              arms=tuple(arms), dropped=tuple(dropped))
+
+
+def instrument_ok(spec: SpecArm) -> bool:
+    """Whether a frozen arm may run on a non-gold instrument (plan: "random controls S0/I0 and learning-class arms per
+    instrument (never pooled); no gold ML/specialists/dollar-constant arms; POS-1 only after qualification"): a
+    running random control whose geometry is in its own ATR, with no dollar figure (`*_usd` params: gold's dollars
+    mean nothing on another price scale). A strategy's gold qualification is no qualification on another instrument,
+    so strategies wait for their own."""
+    return (spec.status == "run" and spec.role == "control" and not spec.retired
+            and not any(str(k).endswith("_usd") for k in spec.params))
+
+
+def book_config(cfg: ExplorationConfig | None, instrument: str) -> ExplorationConfig | None:
+    """The account's exploration block for one non-gold instrument: its registered arms that may run there
+    (`instrument_ok`), each as `<id>@<instrument>`; the account's pots and budget (counted across every book by
+    `_Pass`). None when none may run."""
+    if cfg is None or not cfg.enabled:
+        return None
+    arms = tuple(a.model_copy(update={"instrument": instrument}) for a in cfg.arms if instrument_ok(a.spec))
+    if not arms:
+        return None
+    return cfg.model_copy(update={"arms": arms, "dropped": ()})
 
 
 class ExplorationRecord(FrozenRecord):
@@ -1336,23 +1362,34 @@ class _Pass:
         self.held: dict[str, float | None] = {}
         # "host": every position the RiskGate's max_positions counts (this engine's and foreign ones on the symbol)
         # but an open scheduled probe, whose slot `_send` keeps free (ADR 0043: one of 18 kept for it)
-        self.count: dict[str, int] = {"host": len(eng._foreign) + sum(
-            t.agent_id != cost_probe.SCHEDULED_ID for t in eng.open.values())}
+        # multi-instrument plan (lane L3): the budgets, pots and slots are the account's, so every book's exploration
+        # trades count, each valued on its own book; gold alone: this engine's, as before
+        self.arms: dict[str, Arm] = dict(ex.arms)
+        self.count: dict[str, int] = {"host": 0}
+        from goldbot.engine import books
         from goldbot.engine.exploration_pyramid import counts_as_slot
-        for pid in _open(eng):
-            tr = eng.open[pid]
-            arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX))
-            loss = _held(eng, ex, pid, tr)
-            slot = counts_as_slot(eng, arm, tr)         # a pyramid add joins its group's arm and pot slot
-            for k in ("*", *((arm.arm_id, "pot:" + arm.style) if arm is not None else ())):
-                _add(self.held, k, loss)
-                if k == "*" or slot:
-                    self.count[k] = self.count.get(k, 0) + 1
+        for book in eng.books.values():
+            with books.using(eng, book):
+                bx = eng.exploration
+                self.count["host"] += len(eng._foreign) + sum(t.agent_id != cost_probe.SCHEDULED_ID
+                                                              for t in eng.open.values())
+                if bx is None:
+                    continue
+                self.arms.update(bx.arms)
+                for pid in _open(eng):
+                    tr = eng.open[pid]
+                    arm = bx.arms.get(tr.agent_id.removeprefix(PREFIX))
+                    loss = _held(eng, bx, pid, tr)
+                    slot = counts_as_slot(eng, arm, tr)         # a pyramid add joins its group's arm and pot slot
+                    for k in ("*", *((arm.arm_id, "pot:" + arm.style) if arm is not None else ())):
+                        _add(self.held, k, loss)
+                        if k == "*" or slot:
+                            self.count[k] = self.count.get(k, 0) + 1
         self.cap: int | None = -1                   # -1: not read yet (the first signal's terms read it)
         self.why: str | None = None                 # the last signal's refusal
 
     def lost_in(self, ex: Exploration, style: str | None = None) -> float:
-        return sum(v for a, v in self.lost.items() if style is None or (a in ex.arms and ex.arms[a].style == style))
+        return sum(v for a, v in self.lost.items() if style is None or (a in self.arms and self.arms[a].style == style))
 
     def note(self, arm: Arm, loss: float, slot: bool = True) -> None:
         for k in ("*", arm.arm_id, "pot:" + arm.style):

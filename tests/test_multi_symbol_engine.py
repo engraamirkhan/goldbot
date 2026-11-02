@@ -205,3 +205,20 @@ def test_an_allowed_entry_is_booked_on_the_shared_state_before_the_next_symbol_i
     gold.gate.book = lambda *a: booked.append(a)                     # type: ignore[method-assign]
     books.check(gold, "intent", T0)
     assert len(booked) == 1
+
+
+def test_only_atr_scaled_random_controls_run_on_another_instrument_each_under_its_own_arm_id():
+    """Plan: "random controls S0/I0 ... per instrument (never pooled); no ... dollar-constant arms". S0's $3 stop
+    means nothing on silver; I0's 1.5 ATR does. The copy's id, order key and tag carry the instrument."""
+    from goldbot.engine import exploration as X
+    from goldbot.research.arms import load_arms
+    specs = {a.id: a for a in load_arms(X.SPEC_PATH)}
+    pots = {"scalp": X.Pot(gbp=10, max_open=3), "intraday": X.Pot(gbp=10, max_open=3)}
+    cfg = X.ExplorationConfig(enabled=True, pots=pots,
+                              arms=(X.Arm(spec=specs["S0"], style="scalp", control_share=0.25),
+                                    X.Arm(spec=specs["I0"], style="intraday", control_share=0.3)))
+    got = X.book_config(cfg, "XAGUSD")
+    assert got is not None and [a.arm_id for a in got.arms] == ["I0@XAGUSD"]
+    a = got.arms[0]
+    assert a.tag == "explore:I0@XAGUSD" and a.key != cfg.arms[1].key and a.spec.id == "I0"
+    assert X.book_config(cfg.model_copy(update={"arms": cfg.arms[:1]}), "XAGUSD") is None
