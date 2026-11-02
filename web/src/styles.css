@@ -327,6 +327,22 @@ td a { color: inherit; }
 
 /* v2 review fixes (docs/ux/dashboard-v2.md section 6) */
 @media (min-width: 720px) { main { margin: 0; } }
+/* Chart tab (unrouted, kept for later): interval buttons, the MT5 chart and the key levels (ADR 0068) */
+.chart-tab .intervals { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.chart-tab .intervals button {
+  min-height: 44px; min-width: 44px; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--line); background: none;
+  color: var(--fg); font-size: 15px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.chart-tab .intervals button[aria-pressed="true"] { background: var(--info-tint); color: var(--info-fg); border-color: var(--info-fg); font-weight: 600; }
+.chart-tab button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.chart-panel { min-width: 0; }
+.key-levels-panel { margin-top: var(--s4); }
+.key-levels .chart-box { height: auto; }
+.zone rect { fill: var(--text-2); stroke: var(--text-2); }
+.zone.res rect { fill: var(--short); stroke: var(--short); }
+.zone.sup rect { fill: var(--long); stroke: var(--long); }
+.price-now { stroke: var(--accent); stroke-width: 1; }
+.zone-label { fill: var(--text); font-size: 11px; font-family: var(--font); font-variant-numeric: tabular-nums; }
+.chart-panel h3 { font-size: var(--fs-small); line-height: var(--lh-small); color: var(--text-2); font-weight: 600; margin: 0 0 var(--s2); }
 .mt5-box { border: 1px solid var(--border, var(--line)); border-radius: var(--r-lg, 8px); overflow: hidden; background: var(--surface-2, var(--surface)); }
 .mt5-box > p { margin: 0; padding: var(--s3, 12px); text-align: center; }
 .mt5-open { display: block; line-height: 0; }

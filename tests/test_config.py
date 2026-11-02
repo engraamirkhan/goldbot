@@ -182,8 +182,66 @@ def test_an_override_with_a_malformed_quarter_key_is_rejected(key):
 
 def test_the_shipped_settings_raise_2026q4_to_55_and_leave_other_quarters_at_the_base():
     r = Settings.model_validate(_raw()).research      # the yaml itself: conftest's base_trial_budget clears the cached copy
-    assert r.budget_for("2026Q4") == 158     # + 9 growth sprint (growth-sprint-2026-11-01.md, 2026-11-01); + 2 XAUUSD247 weekend controls (ADR 0062, 2026-10-31); 58 + 11 + 5 + 19 + 13 + 12 H-80 box arms (2026-10-26) + 27 H-81 scalp-volume arms (2026-10-27)
+    assert r.budget_for("2026Q4") == 3500    # owner ADR 0073 (2026-11-02); before: 158 + 9 growth sprint (growth-sprint-2026-11-01.md, 2026-11-01); + 2 XAUUSD247 weekend controls (ADR 0062, 2026-10-31); 58 + 11 + 5 + 19 + 13 + 12 H-80 box arms (2026-10-26) + 27 H-81 scalp-volume arms (2026-10-27)
     assert r.budget_for("2027Q1") == r.trial_budget_quarter
+
+
+# ---- an override above 500 trials needs a recorded owner decision (owner, 2026-11-02), never above 5,000
+def _owner_adr(tmp_path, text: str) -> str:
+    adr = tmp_path / "docs" / "decisions" / "9999-owner-budget.md"
+    adr.parent.mkdir(parents=True, exist_ok=True)
+    adr.write_text(text, encoding="utf-8")
+    return str(adr)
+
+
+_OWNER_TEXT = "# Owner trial budget 2026Q4: 3,500\n\nThe owner approved 3,500 trials for 2026Q4.\n"
+
+
+def test_budget_override_above_500_without_owner_decision_is_rejected():
+    with pytest.raises(ValidationError, match="owner decision"):
+        _research(trial_budget_overrides={"2026Q4": 501}, trial_budget_owner_decisions={})
+
+
+def test_budget_override_above_500_with_existing_owner_adr_is_accepted(tmp_path):
+    adr = _owner_adr(tmp_path, _OWNER_TEXT)
+    r = _research(trial_budget_overrides={"2026Q4": 3500}, trial_budget_owner_decisions={"2026Q4": adr})
+    assert r.budget_for("2026Q4") == 3500
+    assert r.budget_for("2027Q1") == r.trial_budget_quarter
+
+
+def test_budget_override_citing_missing_adr_is_rejected(tmp_path):
+    with pytest.raises(ValidationError, match="does not exist"):
+        _research(trial_budget_overrides={"2026Q4": 3500},
+                  trial_budget_owner_decisions={"2026Q4": str(tmp_path / "docs" / "decisions" / "nope.md")})
+
+
+@pytest.mark.parametrize("text", [
+    "# Owner trial budget 2027Q1: 3,500\n",          # wrong quarter
+    "# Owner trial budget 2026Q4: 2,000\n",          # wrong trial count
+    "# Owner trial budget 2026Q4: 35000\n",          # the count only as part of a larger number
+])
+def test_owner_adr_must_state_the_quarter_and_trial_count(tmp_path, text):
+    adr = _owner_adr(tmp_path, text)
+    with pytest.raises(ValidationError, match="must state"):
+        _research(trial_budget_overrides={"2026Q4": 3500}, trial_budget_owner_decisions={"2026Q4": adr})
+
+
+def test_owner_adr_may_state_the_trial_count_without_a_thousands_separator(tmp_path):
+    adr = _owner_adr(tmp_path, "# Owner trial budget 2026Q4: 3500\n")
+    assert _research(trial_budget_overrides={"2026Q4": 3500},
+                     trial_budget_owner_decisions={"2026Q4": adr}).budget_for("2026Q4") == 3500
+
+
+def test_budget_override_above_the_5000_hard_ceiling_is_rejected_even_with_an_owner_decision(tmp_path):
+    adr = _owner_adr(tmp_path, "# Owner trial budget 2026Q4: 5,001\n")
+    with pytest.raises(ValidationError, match="5000"):
+        _research(trial_budget_overrides={"2026Q4": 5001}, trial_budget_owner_decisions={"2026Q4": adr})
+
+
+def test_an_owner_decision_for_a_quarter_without_an_override_is_rejected(tmp_path):
+    adr = _owner_adr(tmp_path, _OWNER_TEXT)
+    with pytest.raises(ValidationError, match="trial_budget_owner_decisions"):
+        _research(trial_budget_overrides={}, trial_budget_owner_decisions={"2026Q4": adr})
 
 
 def test_the_director_quarter_budget_follows_the_override():
