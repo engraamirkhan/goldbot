@@ -72,6 +72,36 @@ def test_scheduled_commodity_reports(group, now, title):
     assert (got or {}).get("title") == title
 
 
+def test_a_frame_that_cannot_judge_the_instruments_currencies_blocks():
+    """Review M5: EURUSD cannot be judged from a USD-only frame (or one without country / impact): a blocking
+    calendar_unavailable marker, never silence. A USD-only instrument is judged as before."""
+    usd_only = EVENTS[EVENTS["country"] == "USD"]
+    now = pd.Timestamp("2026-11-05 03:00", tz="UTC")
+    got = instrument_blackout(usd_only, now, ("EUR", "USD"), 15, 30)
+    assert got is not None and got["kind"] == "calendar_unavailable" and "EUR" in got["title"]
+    assert instrument_blackout(usd_only, now, ("USD",), 15, 30) is None
+    bare = usd_only.drop(columns=["impact"])
+    assert (instrument_blackout(bare, now, ("GBP", "USD"), 15, 30) or {}).get("kind") == "calendar_unavailable"
+    assert (instrument_blackout(None, now, ("JPY",), 15, 30) or {}).get("kind") == "calendar_unavailable"
+    assert instrument_blackout(EVENTS, now, ("EUR", "USD"), 15, 30) is None          # EUR rows present: judged
+
+
+def test_eia_moved_releases_include_eleven_in_a_holiday_week():
+    """Review L1: in a holiday week EIA has released at 11:00 New York too (Labor Day week 2026: Thursday)."""
+    got = commodity_report_window("energy", pd.Timestamp("2026-09-10 15:00", tz="UTC"), 5, 5)     # 11:00 EDT
+    assert got is not None and got["title"] == "EIA crude inventories"
+    assert commodity_report_window("energy", pd.Timestamp("2026-11-04 16:00", tz="UTC"), 5, 5) is None  # normal week
+
+
+def test_the_owner_reads_the_calendar_marker_in_words():
+    from goldbot.api.entry_status import _engine_block
+    from goldbot.risk import RiskLimits
+    now = pd.Timestamp("2026-11-05 03:00", tz="UTC")
+    marker = instrument_blackout(None, now, ("EUR", "USD"), 15, 30)
+    b = _engine_block("news_blackout", {"blackout": marker}, now, RiskLimits())
+    assert b.text.startswith("News calendar can't judge this market: ") and "EUR" in b.text
+
+
 def test_wasde_on_a_weekend_day_of_the_span_is_not_listed():
     # 2026-08-08 and 09 are a weekend: no release, no blackout
     assert commodity_report_window("ags", pd.Timestamp("2026-08-08 16:00", tz="UTC"), 15, 30) is None

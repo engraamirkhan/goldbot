@@ -228,6 +228,13 @@ REASONS: dict[str, Reason] = {
                              f"{NOTHING}: a new entry in the group is possible once exposure falls.", "wait"),
     "exposure_unknown": _r("Open exposure can't be valued (a symbol without a price or conversion)",
                            "The Health tab names the symbol; check its quotes in the MT5 terminal.", "act"),
+    "day_start_unknown": _r("Today's starting balance isn't known yet, so the daily limit can't be checked",
+                            "Usually clears at the next account reading; check the Health tab if it lasts.", "act"),
+    "instrument_terms_missing": _r("A market's trading terms are missing, so its trades are refused",
+                                   "Check the market's entry in the instrument list (the symbol check names it).",
+                                   "act"),
+    "daily_limit_projected": _r("This trade could take the day past its loss limit",
+                                f"{NOTHING}: a new entry is possible once open risk falls.", "wait"),
     "margin_level_floor": _r("Not enough free margin", f"{NOTHING}: wait for open trades to close.", "wait"),
     "min_lot_exceeds_risk": _r("The smallest trade would risk too much for this balance",
                                "Normal on a small account; the Runbook explains the minimum-lot setting.", "wait"),
@@ -284,6 +291,7 @@ REFUSAL_TEXT: dict[str, str] = {
     "heat_cap": "too much risk already open",
     "combined_exposure_cap": "enough gold already open across accounts",
     "group_exposure_cap": "enough already open in this market group",
+    "daily_limit_projected": "this trade could take the day past its loss limit",
     "min_lot_exceeds_risk": "the smallest trade would risk too much for this balance",
     "fx_conversion_unavailable": "couldn't convert dollars to the account currency",
     "pilot_stop_above_cap": "its stop would be wider than the pilot's $4",
@@ -555,7 +563,8 @@ def _engine_block(code: str, e: dict[str, Any], now: pd.Timestamp, limits: RiskL
     if code == "news_blackout":
         bo = e.get("blackout")                # a blackout is listed whatever its title (review L3)
         bo = bo if isinstance(bo, dict) else {}
-        label = "News shock" if bo.get("kind") == "news_shock" else "News blackout"
+        label = "News shock" if bo.get("kind") == "news_shock" else \
+            "News calendar can't judge this market" if bo.get("kind") == "calendar_unavailable" else "News blackout"
         title = str(bo.get("title") or "").strip()[:80]
         return block(code, text=f"{label}: {title}" if title else label)
     if code == "spread_too_wide":

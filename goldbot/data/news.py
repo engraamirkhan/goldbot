@@ -188,12 +188,13 @@ def shock_window(news: pd.DataFrame, now: pd.Timestamp, minutes: int, min_releva
 # commodity reports, New York wall clock per date (DST-safe): EIA's Weekly Petroleum Status Report (Wednesday 10:30) and
 # Weekly Natural Gas Storage Report (Thursday 10:30), USDA's WASDE (12:00). A week holding a US federal holiday moves
 # EIA's releases (a day later after a Monday holiday, earlier around Thanksgiving), so in such a week the day before,
-# the day and the day after are blacked out at 10:30 and at 12:00. WASDE is published between the 8th and the 12th of
+# the day and the day after are blacked out at 10:30, 11:00 and 12:00. WASDE is published between the 8th and the 12th of
 # the month (USDA's calendar), so every weekday of that span is blacked out at 12:00; a release outside it (2025-11-14,
 # after the shutdown) is listed in WASDE_EXTRA_DATES. Entries only, so a slot too many costs a few minutes of
 # entries, while a slot missed would let an entry open into the release
 REPORT_TZ = ZoneInfo("America/New_York")
-EIA_AT, EIA_MOVED_AT, WASDE_AT = time(10, 30), time(12, 0), time(12, 0)
+EIA_AT, WASDE_AT = time(10, 30), time(12, 0)
+EIA_MOVED_AT = (time(10, 30), time(11, 0), time(12, 0))     # review L1: EIA has also released at 11:00
 EIA_WEEKDAY = {"eia_crude": 2, "eia_gas": 3}
 WASDE_DAYS = range(8, 13)
 WASDE_EXTRA_DATES: frozenset[date] = frozenset({date(2025, 11, 14)})
@@ -220,7 +221,7 @@ def _report_slots(report: str, d: date) -> list[time]:
     if not week & (_federal_holidays(d.year) | _federal_holidays(monday.year)):
         return [EIA_AT] if d.weekday() == nominal else []
     if abs(d.weekday() - nominal) <= 1 and d not in _federal_holidays(d.year):
-        return [EIA_AT, EIA_MOVED_AT]
+        return list(EIA_MOVED_AT)
     return []
 
 
@@ -250,17 +251,27 @@ def instrument_blackout(events: pd.DataFrame | None, now: pd.Timestamp, currenci
     gold has today (`econ_calendar.blackout_window`, identical for a USD-only instrument) when USD is among its
     `currencies` (registry `news_currencies`), then any high-impact event of its other currencies (Forex Factory's
     `impact`, any case; the archive tiers USD events only), then its group's scheduled commodity report
-    (`commodity_report_window`). None outside every window; no calendar (None or empty) leaves the reports only (the
-    engine's `calendar_unavailable` rule is unchanged). Entries only; exits never read it."""
+    (`commodity_report_window`). None outside every window. For a USD-only instrument no calendar (None or empty)
+    leaves the reports only, as gold today (the engine's `calendar_unavailable` rule is unchanged). Review M5: an
+    instrument with other currencies that the frame cannot judge (no `country` / `impact` column, or no row of that
+    currency in the window the engine read) gets a blocking marker, `kind: calendar_unavailable`, never silence.
+    Entries only; exits never read it."""
     from goldbot.data.econ_calendar import blackout_window
     cur = {c.strip().upper() for c in currencies}
-    if events is not None and not events.empty:
-        if "USD" in cur and (hit := blackout_window(events, now, before_min, after_min)) is not None:
-            return hit
-        others = cur - {"USD"}
-        if others and {"country", "impact"} <= set(events.columns):
-            ev = events[events["country"].astype(str).str.upper().isin(others)
-                        & events["impact"].astype(str).str.lower().eq("high")]
+    others = cur - {"USD"}
+    frame = events if events is not None and not events.empty else None
+    if frame is not None and "USD" in cur and (hit := blackout_window(frame, now, before_min, after_min)) is not None:
+        return hit
+    if others:
+        judged = frame is not None and {"country", "impact"} <= set(frame.columns)
+        seen = set(frame["country"].astype(str).str.upper()) if frame is not None and judged else set()
+        missing = sorted(others - seen)
+        if missing:
+            return {"title": f"the calendar has no {', '.join(missing)} events to judge by",
+                    "ts_utc": pd.Timestamp(now).isoformat(), "kind": "calendar_unavailable"}
+        if frame is not None:
+            ev = frame[frame["country"].astype(str).str.upper().isin(others)
+                        & frame["impact"].astype(str).str.lower().eq("high")]
             ts = pd.DatetimeIndex(pd.to_datetime(ev["ts_utc"], utc=True))
             inside = (ts - pd.Timedelta(minutes=before_min) <= now) & (now <= ts + pd.Timedelta(minutes=after_min))
             if inside.any():
