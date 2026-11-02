@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,7 @@ COSTS = A.load_costs(ROOT / "config" / "arm_costs.yaml")
 MIN = 60_000_000_000
 
 
-def _ctx(o: np.ndarray, h: np.ndarray, lo: np.ndarray, c: np.ndarray, t0: str = "2012-03-06 08:00") -> T.Ctx:
+def _ctx(o: np.ndarray, h: np.ndarray, lo: np.ndarray, c: np.ndarray, t0: str = "2012-03-06 08:00") -> Any:
     """A minute context (mid prices) without the session / day tables: what `walk` and `price` read."""
     t = pd.Timestamp(t0, tz="UTC").value + np.arange(len(o), dtype=np.int64) * MIN
     z = np.zeros(len(o), dtype=np.int64)
@@ -62,7 +63,7 @@ def test_buy_and_hold_books_exactly_the_price_change() -> None:
     assert g_short == pytest.approx(-(c[-1] - o[0]), abs=1e-9)
 
 
-def _planted(plant_usd: float, days: int, seed: int) -> tuple[T.Ctx, np.ndarray]:
+def _planted(plant_usd: float, days: int, seed: int) -> tuple[Any, np.ndarray]:
     """Weekday minutes, a martingale plus a deterministic +`plant_usd` over each 09:00 and 13:00 UTC hour (offset over
     the rest of the day so the day nets zero). Returns the context and the planted rule's decision times."""
     ts = pd.date_range("2012-03-05", periods=days * 1440, freq="1min", tz="UTC")
@@ -81,15 +82,12 @@ def _planted(plant_usd: float, days: int, seed: int) -> tuple[T.Ctx, np.ndarray]
 
 
 @pytest.mark.parametrize("plant", [4.0, 0.0])
-def test_a_planted_edge_is_recovered_net_of_exactly_the_stated_costs(plant: float) -> None:
+def test_a_planted_edge_is_recovered_net_of_exactly_the_stated_costs(plant: float, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, dec = _planted(plant, days=140, seed=5)
     risk = 20.0                                                   # 0.2 R planted when plant = 4.0
     spec = T.Spec(T.frame(dec, 1, risk=risk, cap=dec + 60 * MIN))
-    T.N_TWIN, n_twin = 0, T.N_TWIN                                 # twins read the session tables this ctx lacks
-    try:
-        res = T.simulate(ctx, "PLANT", spec)
-    finally:
-        T.N_TWIN = n_twin
+    monkeypatch.setattr(T, "N_TWIN", 0)                            # twins read the session tables this ctx lacks
+    res = T.simulate(ctx, "PLANT", spec)
     df = T.price(res["real"], COSTS, SwapSpec.research_shipped())
     assert len(df) == len(dec) and set(df.kind) == {"time"}
     se = float(df.gross_R.std(ddof=1) / np.sqrt(len(df)))
@@ -193,6 +191,7 @@ def test_harness_buys_the_ask_sells_the_bid_and_stops_on_the_exit_side(side: int
 # ---------------------------------------------------------------- swap: sign, rate, units
 def test_swap_long_pays_short_shipped_pays_nothing_and_the_rate_scales_with_price() -> None:
     s = SwapSpec.research_shipped()
+    assert s.ref_price_usd is not None
     assert s.ref_price_usd == CostSettings.model_fields["swap_ref_price_usd"].default
     long_, short = s.usd_per_oz(np.array([1, -1]))
     assert long_ < 0 and short == 0.0
@@ -209,11 +208,12 @@ def test_trend_screen_price_charges_the_rate_on_the_trade_notional() -> None:
     t1 = pd.Timestamp("2013-06-07 12:00", tz="UTC").value
     row = {"t_fill": t0, "t_exit": t1, "side": 1, "risk": 10.0, "gross": 0.0, "kind": "time", "id": 0, "entry": 1300.0}
     swap = SwapSpec.research_shipped()
+    assert swap.ref_price_usd is not None
     df = T.price([row, {**row, "side": -1, "id": 1}], COSTS, swap)
     nights = int(rollover_nights(pd.DatetimeIndex([pd.Timestamp(t0, tz="UTC")]),
                                  pd.DatetimeIndex([pd.Timestamp(t1, tz="UTC")]), swap.server_tz, swap.triple_weekday)[0])
     assert nights == 5
-    expect = nights * swap.long_usd_per_lot / 100 * 1300.0 / float(swap.ref_price_usd)
+    expect = nights * swap.long_usd_per_lot / 100 * 1300.0 / swap.ref_price_usd
     assert df.swap.iloc[0] == pytest.approx(expect)                          # about -1.00, not the fixed -3.00
     assert df.swap.iloc[1] == 0.0
 
@@ -225,11 +225,12 @@ def test_harness_swap_is_charged_on_the_entry_notional() -> None:
     sig = pd.DataFrame({"idx": [0], "side": [1], "max_bars": [0], "target_atr": [100.0]})
     spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=1)
     swap = SwapSpec.research_shipped()
+    assert swap.ref_price_usd is not None
     lab = triple_barrier_next_open_1m(dec, b1, sig, spec, pd.Series([50.0, 50.0]), swap=swap)
     r = lab.iloc[0]
     assert r.swap_nights >= 1
     paid = r.swap_ret * r.entry
-    assert paid == pytest.approx(r.swap_nights * swap.long_usd_per_lot / 100 * 1300.0 / float(swap.ref_price_usd))
+    assert paid == pytest.approx(r.swap_nights * swap.long_usd_per_lot / 100 * 1300.0 / swap.ref_price_usd)
 
 
 def test_loader_keeps_epoch_nanoseconds_from_millisecond_files(tmp_path: Path) -> None:
