@@ -6,3 +6,6 @@
   shared `account_positions()` (no `positions(symbol=)` call per book) and shares one `symbol_info` read for 30 min
   (`books.symbol_info`, failures included); decision-cycle reads and gold are unchanged. Tests:
   tests/test_blocked_books_quiet.py.
+- Quiet books follow-ups (trading-safety review of #314): a pending_orders row `sending` or ambiguous keeps a blocked
+  book awake; no book is quiet until `account_positions()` has answered once; a failed `symbol_info` is cached 30 min
+  on a blocked book only, an enabled non-gold book retries after `SYMBOL_RETRY_ENABLED_S` = 60 s.
