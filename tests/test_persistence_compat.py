@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
-from goldbot.data import crossfeed, tv_pull
+from goldbot.data import crossfeed
 from goldbot.data.calendar import PauseWindow
 from goldbot.data.ticks import TickIndex
 from goldbot.engine import cost_probe, exploration
@@ -514,8 +514,6 @@ def test_every_persisted_record_model_has_a_compat_case():
                # engine_<account>.json `schema_skew`: tests/test_schema_skew_health.py::
                # test_health_reads_a_skew_block_a_newer_engine_wrote
                SkewSummary,
-               # state/tv.db pull log: tests/test_tv_pull.py::test_pull_log_rows_a_newer_release_wrote_still_read
-               tv_pull.PassReport, tv_pull.StudyMeta, tv_pull.StudySpec,
                # engine_<account>.json and approval files `ask_reason` (backlog 103; every field defaults, a missing
                # reason is None): tests/test_api_ui_contract.py::
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
@@ -565,8 +563,6 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: credentials (a newer lock or MFA flag must not be ignored)",
     ("goldbot/research/cells.py", "_read_cell_rows", "CellRow"):
         "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
-    ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
-        "strict: an inbound request body, not persisted state (a malformed alert is refused, TradingView sees 422)",
     ("goldbot/telegram/bus.py", "read_control", "Control"): "strict: the owner's halt; unreadable means halted",
     ("goldbot/telegram/bus.py", "ApprovalBus.decisions_for", "BusDecision"):
         "strict: an owner decision is never applied without a field this release does not know; skipped, it expires",

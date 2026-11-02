@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -14,6 +15,18 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SETTINGS = ROOT / "config" / "settings.yaml"
+
+log = logging.getLogger(__name__)
+
+# Settings of retired features (2026-11-02, owner: "focus on the main goal"): the TradingView chart path (direct pull,
+# webhook, cross-feed job, chart-value timing), and the scheduled staff agents. Every section refuses an unknown key,
+# so a server whose own settings.local.yaml still carries one would stop every service at the next deploy; these
+# paths are dropped with a warning instead. Any other unknown key is still refused.
+RETIRED_KEYS: tuple[tuple[str, ...], ...] = (
+    ("tv_pull",), ("webhook",),
+    ("scheduler", "agents_daily"), ("scheduler", "agents_weekly"), ("scheduler", "agents_presession"),
+    ("scheduler", "tv_reconcile"), ("tv", "max_lag_s"), ("tv", "min_bar_match"),
+)
 
 TF_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -226,17 +239,12 @@ class SchedulerSettings(_Section):
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
     research_director: ScheduleSettings
-    agents_daily: ScheduleSettings
-    agents_weekly: ScheduleSettings
     monthly_research: ScheduleSettings
     calendar_archive: ScheduleSettings
-    agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
-    # TradingView bars (second feed) against the reference M1, after the day's pulls and before the feed reconcile
-    tv_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:15", max_late_hours=20)
     # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
     # contention with them on the 4-core brain), and its weekly restore drill
     # on Sunday while the market is closed
@@ -677,54 +685,6 @@ class GateSettings(_Section):
         return [n for n in self.PROPOSED if n not in self.signed_off]
 
 
-class WebhookSettings(_Section):
-    """TradingView webhook (goldbot/webhook/app.py). The inbox is the only thing a caller with the secret can write to."""
-    max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
-
-
-class TvPullSettings(_Section):
-    """TradingView direct pull (goldbot/data/tv_pull.py; owner decision 2026-10-18, ADR 0030): the owner's session
-    cookie (keyring only) reads the saved layouts' indicators and their bars from TradingView's chart websocket.
-    "Strictly read-only; polite rate limit with backoff; fail soft": off until the owner turns it on in
-    settings.local.yaml, and the defaults stay well under what one open chart tab sends."""
-    enabled: bool = False
-    symbols: dict[str, str] = Field(default_factory=lambda: {"OANDA:XAUUSD": "XAUUSD"})  # chart symbol -> store symbol
-    timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240", "1D"])
-    # keyring entry names of the browser cookies `sessionid` and `sessionid_sign` (the values never leave the keyring)
-    sessionid_key: str = "tradingview-sessionid"
-    sessionid_sign_key: str = "tradingview-sessionid-sign"
-    discover: bool = True                              # read the saved layouts for their indicators
-    discover_every_s: float = Field(default=21600, gt=0)
-    max_studies: int = Field(default=20, gt=0)
-    min_interval_s: float = Field(default=5.0, ge=1.0)            # between two requests, whatever kind
-    bars_per_request: int = Field(default=5000, gt=0, le=5000)
-    max_pages_per_tf: int = Field(default=5, ge=0)                # history pages per timeframe and pass
-    max_requests_per_day: int = Field(default=3000, gt=0)         # rolling 24 h; a pass is skipped beyond it
-    study_warmup_bars: int = Field(default=300, ge=0)             # oldest loaded bars whose study values are not kept
-    poll_interval_s: float = Field(default=900, gt=0)
-    poll_offset_s: float = Field(default=60, ge=0)                # after the bar close, so the bar has closed there
-    live_max_lag_s: float = Field(default=1800, gt=0)             # received within this of the close: pull_live
-    history_latency_default_s: float = Field(default=960, ge=0)   # until min_live_samples live bars measure the p95
-    min_live_samples: int = Field(default=20, gt=0)
-    backoff_base_s: float = Field(default=300, gt=0)
-    backoff_max_s: float = Field(default=21600, gt=0)
-    timeout_s: float = Field(default=30, gt=0)
-    # display names (goldbot/data/tv_alias.py): key_of(name | plot fingerprint) -> our name, e.g. "Structure (smc)";
-    # empty here (no vendor name in the repo), the owner's keys sit in settings.local.yaml
-    aliases: dict[str, str] = Field(default_factory=dict)
-    # "TradingView gives only the final box set in history": the graphics a study holds (boxes, lines, labels) are kept
-    # per closed bar of these timeframes in tv.db `tv_graphics`, from the frames the study already sends (no request)
-    graphics_timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240"])
-    graphics_max_objects: int = Field(default=500, ge=0)         # per snapshot; the highest ids are kept, `truncated` set
-    graphics_max_snapshots: int = Field(default=50000, ge=0)     # per study, symbol and timeframe; none are added beyond
-
-    @model_validator(mode="after")
-    def _backoff_ordered(self) -> TvPullSettings:
-        if self.backoff_max_s < self.backoff_base_s:
-            raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
-        return self
-
-
 class ObserveSettings(_Section):
     """The observe lane (ADR 0063, goldbot/ops/observe.py; owner 2026-10-31: XAUUSD247 through the live account, "NO
     live trading"): the collector reads an observe_only account's symbols through its bridge, read-only, into the
@@ -768,7 +728,7 @@ class TvIdeasSettings(_Section):
     poll_interval_s: float = Field(default=720, ge=300)           # a poll every 12 min ...
     poll_jitter_s: float = Field(default=180, ge=0)               #   ... plus up to 3 min, so 12-15 min apart
     live_page_size: int = Field(default=20, gt=0, le=100)         # newest-activity page per author and poll
-    min_interval_s: float = Field(default=3.0, ge=1.0)            # between two requests (the tv_pull Pacer)
+    min_interval_s: float = Field(default=3.0, ge=1.0)            # between two requests (goldbot/data/tv_http.py Pacer)
     backfill_min_interval_s: float = Field(default=2.0, ge=1.0)   # the one-time back catalogue read
     max_requests_per_day: int = Field(default=2000, gt=0)         # live, rolling 24 h; a poll is skipped beyond it
     backfill_max_requests: int = Field(default=12000, gt=0)       # per backfill run (listing slices + details)
@@ -786,18 +746,12 @@ class TvIdeasSettings(_Section):
 
 
 class TvSettings(_Section):
-    """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
-    a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
-    close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
-    training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
-    max_lag_s: int = Field(default=60, ge=0)
+    """The live replica of the owner's indicators, computed from our own broker bars (engine/replica_context.py). The
+    TradingView chart values this section also timed (max_lag_s, min_bar_match) retired on 2026-11-02 with the chart
+    path; the name stays so a server's settings.local.yaml keeps loading."""
     # the live replica's pinned series start (engine/replica_context.py StoreHistory): the store's first bar year; the
     # carried state bootstraps from here (research keeps B4a's 2010 pin, features/smc_live.SERIES_START)
     replica_series_start: str = "2016-01-01"
-    # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
-    # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
-    # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
-    min_bar_match: float = Field(default=0.95, gt=0, le=1)
 
 
 class ShadowSettings(_Section):
@@ -858,8 +812,6 @@ class Settings(_Section):
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
-    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
-    tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv_ideas: TvIdeasSettings = Field(default_factory=TvIdeasSettings)
     observe: ObserveSettings = Field(default_factory=ObserveSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
@@ -928,7 +880,25 @@ def settings_dict(path: str | Path = DEFAULT_SETTINGS) -> dict:
     (`git` fast-forward) never conflict with a local edit."""
     raw = load_yaml(path)
     local = Path(path).with_name("settings.local.yaml")
-    return _deep_merge(raw, load_yaml(local) or {}) if local.exists() else raw
+    return _drop_retired(_deep_merge(raw, load_yaml(local) or {}) if local.exists() else raw)
+
+
+def _drop_retired(d: dict) -> dict:
+    """`d` without the RETIRED_KEYS paths, and one warning naming those it held (delete them from settings.local.yaml)."""
+    out = dict(d)
+    found: list[str] = []
+    for path in RETIRED_KEYS:
+        head, *rest = path
+        if not rest:
+            if head in out:
+                del out[head]
+                found.append(head)
+        elif isinstance(out.get(head), dict) and rest[0] in out[head]:
+            out[head] = {k: v for k, v in out[head].items() if k != rest[0]}
+            found.append(".".join(path))
+    if found:
+        log.warning("retired settings ignored (delete them from config/settings.local.yaml): %s", ", ".join(found))
+    return out
 
 
 @lru_cache(maxsize=4)

@@ -14,7 +14,7 @@ import pytest
 from goldbot.config import TvIdeasSettings
 from goldbot.data import tv_ideas as ti
 from goldbot.data.store import asof_join
-from goldbot.data.tv_wire import ReadOnlyViolation
+from goldbot.data.tv_http import ReadOnlyViolation
 from tests.tv_ideas_fake import FakeIdeasApi, make_idea
 
 T0 = pd.Timestamp("2026-10-27 08:00", tz="UTC")          # a Tuesday
