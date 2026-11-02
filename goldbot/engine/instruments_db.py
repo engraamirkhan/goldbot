@@ -14,9 +14,12 @@ broker-terms cadence) and reads it back before its entries (`load`). The rules:
 * Fail closed: a file that cannot be opened, migrated or read (corrupt, a newer schema, a full disk) raises
   `InstrumentsDbError`; the engine refuses that book's entries (`instruments_db_unreadable`) and every exit still
   runs, since no exit reads this file.
+* `instrument_sessions` (schema 2, additive; incident 2026-11-02): each non-gold book's broker session table, a 24 h
+  cache read and written only by goldbot/engine/session_cache.py. A cache, not state: an unreadable row costs a read.
 """
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from pathlib import Path
@@ -122,6 +125,31 @@ class InstrumentsDb:
                              tuple(row[c] for c in _COLUMNS))
         except (sqlite3.Error, StateDbError, OSError) as exc:
             raise InstrumentsDbError(f"instruments.db not written ({type(exc).__name__})") from exc
+
+    def save_sessions(self, account_id: str, symbol: str, read_utc: pd.Timestamp, body: dict[str, Any]) -> None:
+        """The book's session table as read from the broker (`calendar.session_table_cache`), for the 24 h cache."""
+        try:
+            with self._database().write() as conn:
+                conn.execute("INSERT OR REPLACE INTO instrument_sessions (account_id, symbol, read_utc, body) "
+                             "VALUES (?, ?, ?, ?)", (account_id, symbol, pd.Timestamp(read_utc).isoformat(),
+                                                     json.dumps(body, sort_keys=True)))
+        except (sqlite3.Error, StateDbError, OSError, TypeError, ValueError) as exc:
+            raise InstrumentsDbError(f"instruments.db sessions not written ({type(exc).__name__})") from exc
+
+    def load_sessions(self, account_id: str, symbol: str) -> tuple[pd.Timestamp, dict[str, Any]] | None:
+        """(read_utc, body) of the cached session table, or None; raises InstrumentsDbError when unreadable."""
+        try:
+            with self._database().connection() as conn:
+                got = conn.execute("SELECT read_utc, body FROM instrument_sessions WHERE account_id = ? AND "
+                                   "symbol = ?", (account_id, symbol)).fetchone()
+            if got is None:
+                return None
+            read_utc, body = pd.Timestamp(got[0]), json.loads(got[1])
+        except (sqlite3.Error, StateDbError, OSError, TypeError, ValueError) as exc:
+            raise InstrumentsDbError(f"instruments.db sessions unreadable ({type(exc).__name__})") from exc
+        if read_utc.tzinfo is None or not isinstance(body, dict):
+            raise InstrumentsDbError("instruments.db sessions row invalid")
+        return read_utc, body
 
     def load(self, account_id: str, symbol: str) -> InstrumentTerms | None:
         """The row, or None when there is none yet; raises InstrumentsDbError when the file cannot be read."""

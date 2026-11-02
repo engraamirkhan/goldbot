@@ -791,6 +791,16 @@ INSTRUMENTS: tuple[Migration, ...] = (
     PRIMARY KEY (account_id, symbol)
 ) STRICT""",
     )),
+    # incident 2026-11-02: each non-gold book's broker session table, cached for 24 h so an engine (re)start makes no
+    # session read and the reads after it are staggered (goldbot/engine/session_cache.py). A cache only: losing it
+    # costs one read per book. Additive: a release that knows version 1 opens the file and never reads this table
+    Migration(version=2, name="instrument_sessions", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS instrument_sessions (
+    account_id TEXT NOT NULL, symbol TEXT NOT NULL, read_utc TEXT NOT NULL,
+    body TEXT NOT NULL CHECK (json_valid(body)),
+    PRIMARY KEY (account_id, symbol)
+) STRICT""",
+    )),
 )
 
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH,

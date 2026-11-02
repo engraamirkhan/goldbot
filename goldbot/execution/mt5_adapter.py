@@ -89,7 +89,9 @@ except ImportError:  # pragma: no cover
 # ticks_many (protocol v10): rows per symbol per call. The engine polls every 500 ms, so a symbol never has this many
 # new ticks between two polls; after an outage the gap is the engine's history fill's (copy_ticks), not this call's
 TICKS_MANY_MAX = 2_000
-OBSERVE_DAYS = 14                # trading_sessions of another symbol: the M1 history its hours are read from
+# trading_sessions of another symbol: the M1 history its hours are read from. 8 days = every weekday once from complete
+# days (`before=today`); 14 held the probe box's one terminal too long per book (incident 2026-11-02)
+OBSERVE_DAYS = 8
 OBSERVE_GAP_S = 15 * 60          # ... a quote gap up to this long is a thin market, not a session break
 TF_MAP = {"1m": "TIMEFRAME_M1", "5m": "TIMEFRAME_M5", "15m": "TIMEFRAME_M15", "1h": "TIMEFRAME_H1",
           "4h": "TIMEFRAME_H4", "1d": "TIMEFRAME_D1", "1w": "TIMEFRAME_W1"}

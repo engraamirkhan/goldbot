@@ -89,6 +89,28 @@ def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | 
     return r.collect(now, current)
 
 
+def book_sessions(eng: Any, session_broker: Any, account_id: str, server_tz: str, now: "pd.Timestamp") -> Any:
+    """Each non-gold book's session source, for the engine's start (incident 2026-11-02): NO broker call here. A
+    table read in the last 24 h (state/instruments.db) is applied now; every other book keeps its static session
+    profile (set when the book was built) until the returned `SessionStagger` reads it after the loop starts, one book
+    at a time (goldbot/engine/session_cache.py)."""
+    from goldbot.data.calendar import session_profile
+    from goldbot.engine import books
+    from goldbot.engine.instruments_db import InstrumentsDb
+    from goldbot.engine.session_cache import CachedSessions, SessionStagger
+    db = InstrumentsDb(eng.cfg.state_dir)
+    items = []
+    for b in list(eng.books.values())[1:]:
+        with books.using(eng, b):
+            src = CachedSessions(session_broker, eng.cfg.symbol, account_id=account_id, db=db, fallback=session_profile(
+                b.spec.instrument.session_profile if b.spec is not None and b.spec.instrument is not None
+                else "metals", server_tz))
+            if (t := src.cached(now)) is not None:
+                eng.set_sessions(t)
+            items.append((b, resolve(SessionRefresher)(src)))
+    return SessionStagger(items)
+
+
 def _set_bridge_verdict(eng: Any, verdict: Any) -> None:
     prev = eng.bridge_compat
     if prev is None or prev.status != verdict.status:
@@ -584,18 +606,11 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     if table is not None:
         eng.set_sessions(table)
     refresher = resolve(SessionRefresher)(sessions)
-    # each other book: its broker's hours, its asset class's profile until read (L2 `session_profile`), own thread
-    book_refreshers = []
-    from goldbot.data.calendar import session_profile
+    # each other book: its broker's hours, its asset class's profile until read (L2 `session_profile`), own thread.
+    # Incident 2026-11-02: no broker read before the loop (a cached table or the profile), then one book at a time
     from goldbot.engine import books
-    for b in list(eng.books.values())[1:]:
-        with books.using(eng, b):
-            src = BrokerSessions(session_broker, eng.cfg.symbol, fallback=session_profile(
-                b.spec.instrument.session_profile if b.spec is not None and b.spec.instrument is not None
-                else "metals", acc.server_tz))
-            if (t := resolve(refresh_sessions)(src, pd.Timestamp.now("UTC"), None)) is not None:
-                eng.set_sessions(t)
-            book_refreshers.append((b, resolve(SessionRefresher)(src)))
+    stagger = resolve(book_sessions)(eng, session_broker, account_id, acc.server_tz, pd.Timestamp.now("UTC"))
+    book_refreshers = stagger.items
     compat: Any = None                      # BACKLOG 42: the bridge's methods, protocol and zone against this brain's
     if bridge is not None:
         from goldbot.ops.bridge_compat import BridgeCompatChecker, check_bridge, repo_commit
@@ -652,6 +667,10 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                         eng.set_sessions(t)
             except Exception:
                 log.exception("session refresh failed for %s; keeping the last table", b)
+        try:                                       # incident 2026-11-02: the books' reads one at a time, never a burst
+            stagger.step(pd.Timestamp.now("UTC"))
+        except Exception:
+            log.exception("session read not started; the books keep their tables")
         if compat is not None:                     # a finished bridge check is applied; the loop never waits for it
             try:
                 resolve(apply_bridge_compat)(eng, compat.collect())
@@ -665,8 +684,6 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
             refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
-            for _, r in book_refreshers:
-                r.start(pd.Timestamp.now("UTC"))
             if compat is not None:
                 compat.start()                     # GET /health on its own thread (BACKLOG 42)
             now_m = mtimes()
