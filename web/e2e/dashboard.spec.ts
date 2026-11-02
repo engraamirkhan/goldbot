@@ -644,3 +644,37 @@ test("Trades: money on every open row, filters in the URL, a strategy's totals, 
     }
   }
 });
+
+// Multi-instrument UI spec 2026-11-02 §2, on a phone: the grouped instrument filter (the server's facet of symbols with
+// trades), sym= in the URL, the filtered list, one trade opened with its symbol and its prices in that instrument's
+// digits and unit. The seeded ledger is gold (records before the multi-instrument demo carry no symbol: gold).
+test("Trades on a phone: filter by instrument, the URL keeps it, a trade opens with its prices in its own digits", async ({ page }) => {
+  seed();
+  stopBeat = keepEnginesFresh(info().state_dir);
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/#/trades/list?acct=icm-demo");
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  const sheet = page.getByRole("dialog", { name: "Filters" });
+  const gold = sheet.getByRole("group", { name: "Gold instruments" });
+  await expect(gold).toBeVisible();
+  await gold.getByRole("checkbox", { name: /XAUUSD/ }).check();
+  await sheet.getByRole("button", { name: "Done" }).click();
+  await expect(page).toHaveURL(/sym=XAUUSD/);
+  await expect(page.getByRole("button", { name: "Remove filter XAUUSD" })).toBeVisible();
+  const list = page.getByRole("region", { name: "Trade list" });
+  const row = list.getByRole("button", { name: /^Box break \+ close 1h, long, plus £3\.95, closed at trailing stop$/ });
+  await expect(row).toContainText("XAUUSD · long 0.05");
+  await noSideways(page, 360);
+  await shot(page, "trades-list-instrument-360");
+  await row.click();
+  const detail = page.getByRole("dialog", { name: "Trade detail" });
+  await expect(detail).toContainText("XAUUSD");
+  await expect(detail).toContainText(/at 2,401\.20\sUSD\/oz/);                       // two digits and gold's unit
+  await expect(detail).toContainText(/entry 2,400\.00 · stop 2,398\.00/);
+  await noSideways(page, 360);
+  // an instrument with no trades in the period says so in words
+  await page.goto("/#/trades/list?acct=icm-demo&sym=US500");
+  await expect(list).toContainText("No trades on these instruments in this period.");
+});
