@@ -27,6 +27,7 @@ from goldbot.data import crossfeed
 from goldbot.data.calendar import PauseWindow
 from goldbot.data.ticks import TickIndex
 from goldbot.engine import cost_probe, exploration
+from goldbot.engine.instruments_db import InstrumentTerms
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.execution.costs import (
@@ -520,6 +521,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # engine_<account>.json `schema_skew`: tests/test_schema_skew_health.py::
                # test_health_reads_a_skew_block_a_newer_engine_wrote
                SkewSummary,
+               # state/instruments.db (lane L3): tests/test_instruments_db.py::
+               # test_a_terms_row_a_newer_release_wrote_still_reads
+               InstrumentTerms,
                # engine_<account>.json and approval files `ask_reason` (backlog 103; every field defaults, a missing
                # reason is None): tests/test_api_ui_contract.py::
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly

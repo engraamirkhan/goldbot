@@ -22,7 +22,7 @@ from typing import Any
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.db.connection import Database, StateDbError, db_path
 
 MT5_SWAP_DISABLED, MT5_SWAP_POINTS = 0, 1
@@ -116,6 +116,6 @@ class InstrumentsDb:
         if got is None:
             return None
         try:
-            return InstrumentTerms.model_validate(dict(zip(_COLUMNS, got)))
+            return load_record(InstrumentTerms, dict(zip(_COLUMNS, got)), source="instruments.db")
         except ValueError as exc:
             raise InstrumentsDbError(f"instruments.db row for {symbol} invalid ({type(exc).__name__})") from exc

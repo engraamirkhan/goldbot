@@ -100,3 +100,12 @@ def test_swap_unknown_refuses_that_books_entries(tmp_path):
     row = db.load("icm-probe", "XAGUSD")
     assert row is not None and row.swap_long_per_lot is None
     assert db.load("icm-probe", "XAUUSD") is None
+
+
+def test_a_terms_row_a_newer_release_wrote_still_reads():
+    """ADR 0010: a row with a field this release does not know is read tolerantly (the field dropped)."""
+    from goldbot.base import load_record
+    from goldbot.engine.instruments_db import InstrumentTerms
+    row = terms_from_info("icm-probe", "XAGUSD", "XAGUSD", PaperBroker().symbol_info("XAGUSD"), T0)
+    got = load_record(InstrumentTerms, {**row.model_dump(mode="json"), "future_field": 1}, source="instruments.db")
+    assert got == row
