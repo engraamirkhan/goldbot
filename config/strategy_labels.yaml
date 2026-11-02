@@ -63,7 +63,6 @@ families:
   smc_structure: {label: "Market structure", why: "Change of market structure (TradingView rule)"}
   trend: {label: "Trend", why: "Trend filter and pullback agreed"}
   trend_level_signal: {label: "Trend level", why: "Trend signal at a level"}
-  tv_event: {label: "TradingView alert", why: "A TradingView alert fired"}
 arms:
   S0: {variant: "every 10 min"}
   S0R: {variant: "resting stop"}

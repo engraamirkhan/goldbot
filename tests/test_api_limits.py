@@ -51,7 +51,7 @@ def log(state: Path, ts: pd.Timestamp, c: RiskLimitsCurrent, prev: str | None = 
 def client(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", docs_dir=tmp_path / "docs",
+    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data",
                      owner_email="o@x.io")
     c = TestClient(app)
     return c, _login(c, app), state

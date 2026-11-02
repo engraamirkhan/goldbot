@@ -17,7 +17,7 @@
 #   6. on any new fail (or a failed step in 4) rolls back to the previous commit the same way and says so.
 #
 # Service order (why):
-#   Stop:  scheduler (step 3), webhook, news, api, telegram -> nothing new can come in and no entry can be approved
+#   Stop:  scheduler (step 3), news, api, telegram          -> nothing new can come in and no entry can be approved
 #          supervisor                               -> engines that are still running now fail closed for entries
 #                                                      (heartbeat > 60 s) but keep managing exits
 #          engines LAST                             -> exits are never gated: an engine closes positions on its time
@@ -26,7 +26,7 @@
 #                                                      loss and take profit at the broker; only time-barrier exits
 #                                                      wait, so the down window is kept to install + checks.
 #   Start: supervisor FIRST (fresh heartbeat, else engines start in fail-closed halt), engines next (shortest
-#          unmanaged window), then api, telegram, webhook, scheduler, news.
+#          unmanaged window), then api, telegram, scheduler, news.
 #
 # Notes: open proposals expire while the engines are down (the Telegram service reports them as expired).
 # config\accounts.yaml and config\settings.yaml are edited on the VPS (MT5 logins, Telegram ids); git keeps those
@@ -92,14 +92,14 @@ if ($BridgeOnly) {
 
 # Service names exactly as registered by vps_bootstrap.ps1, in STOP order (start order is built below).
 $StopOrder = @(
-  "goldbot-webhook", "goldbot-news", "goldbot-scheduler", "goldbot-api", "goldbot-telegram",
+  "goldbot-news", "goldbot-scheduler", "goldbot-api", "goldbot-telegram",
   "goldbot-supervisor",
   "goldbot-engine-icm", "goldbot-engine-vantage"
 )
 $StartOrder = @(
   "goldbot-supervisor",
   "goldbot-engine-icm", "goldbot-engine-vantage",
-  "goldbot-api", "goldbot-telegram", "goldbot-webhook", "goldbot-scheduler", "goldbot-news"
+  "goldbot-api", "goldbot-telegram", "goldbot-scheduler", "goldbot-news"
 )
 
 function Stop-Goldbot {

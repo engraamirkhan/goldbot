@@ -76,9 +76,9 @@ class Specialist(ABC):
     # (`Population.ensure_founders`) and is not a member of the pooled models (`pipeline.pooled_members`). A passed
     # walk-forward trial of its exact configuration still becomes a shadow founder (gap_watch `research_ready`)
     screening: bool = False
-    # True for a family whose signal needs TradingView values (e.g. tv_event): it is searched only under TV_GRID_V1
-    # (research.tv_grid), never by the loop grid (`generator._eligible`, `loop_refusal`), and trades in shadow only
-    # ("TradingView indicators: filter features only" until the DESIGN promotion rule is met; engine `_decide`)
+    # True for a family whose signal needs TradingView values: no input exists since the TradingView chart path retired
+    # (2026-11-02), so such a family fails closed everywhere: the engine proposes nothing for it
+    # (engine/agent_candidates.py), research and the loop grid refuse it, arms refuse it (arm_rules_specialist)
     requires_tv: bool = False
     # seconds after the signal bar's close before the signal is known (a TradingView value: up to tv.max_lag_s). > 0:
     # research labels enter at the open of the first 1m bar at/after close + this (`triple_barrier_delayed`, needs the

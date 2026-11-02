@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -14,6 +15,18 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SETTINGS = ROOT / "config" / "settings.yaml"
+
+log = logging.getLogger(__name__)
+
+# Settings of retired features (2026-11-02, owner: "focus on the main goal"): the TradingView chart path (direct pull,
+# webhook, cross-feed job, chart-value timing), and the scheduled staff agents. Every section refuses an unknown key,
+# so a server whose own settings.local.yaml still carries one would stop every service at the next deploy; these
+# paths are dropped with a warning instead. Any other unknown key is still refused.
+RETIRED_KEYS: tuple[tuple[str, ...], ...] = (
+    ("tv_pull",), ("webhook",),
+    ("scheduler", "agents_daily"), ("scheduler", "agents_weekly"), ("scheduler", "agents_presession"),
+    ("scheduler", "tv_reconcile"), ("tv", "max_lag_s"), ("tv", "min_bar_match"),
+)
 
 TF_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -201,6 +214,9 @@ class CostSettings(_Section):
     swap_long_usd_per_lot: float = -60.0
     swap_short_usd_per_lot: float = 0.0
     swap_triple_weekday: int = Field(2, ge=0, le=4)      # 0 = Monday; Wednesday for XAUUSD at most brokers
+    # the gold price the swap prior above stands for (SwapSpec.research_shipped): ICM measured -52.2 USD/lot long on
+    # 2026-11-02 at about 3,907, so -60 at 3,900 is a 5.6%-a-year rate, above the measured 4.9%
+    swap_ref_price_usd: float = Field(3900.0, gt=0)
     # nightly_costs publishes the canonical broker's table (costs only) to release costs-v1 for research.yml;
     # needs the github-token in the keyring. Health warns when the published table is older than 8 days.
     publish_release: bool = False
@@ -226,17 +242,12 @@ class SchedulerSettings(_Section):
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
     research_director: ScheduleSettings
-    agents_daily: ScheduleSettings
-    agents_weekly: ScheduleSettings
     monthly_research: ScheduleSettings
     calendar_archive: ScheduleSettings
-    agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
-    # TradingView bars (second feed) against the reference M1, after the day's pulls and before the feed reconcile
-    tv_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:15", max_late_hours=20)
     # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
     # contention with them on the 4-core brain), and its weekly restore drill
     # on Sunday while the market is closed
@@ -379,6 +390,39 @@ class AutodiscSettings(_Section):
     cost_table: str | None = None                   # measured cost table JSON; None: the settings priors
 
 
+class PositionSettings(_Section):
+    """The daily position engine (goldbot/research/position/, amendment W3). W3.6: "Program-wide defaults, fixed and
+    never a free parameter: target 10%/yr per instrument ...; EWMA volatility with a 60-day span, lagged one day; cap
+    2x." Changing any value here is a W3 amendment, not a tuning step: a spec never varies them."""
+    day_close_utc: Literal["21:00"] = "21:00"        # W3.2 clock: the 1d mid bar closes at 21:00 UTC
+    target_vol: float = Field(0.10, gt=0, le=1)      # W3.6, per instrument, annual
+    vol_span_days: int = Field(60, ge=2)
+    max_leverage: float = Field(2.0, gt=0, le=10)
+    band: float = Field(0.10, ge=0, lt=1)            # W3.2: a spec stating no band trades only beyond 10% of its target
+    stop_atr: float = Field(3.0, gt=0)               # W3.2 disaster stop: 3 x ATR(20, 1d) from the last rebalance price
+    atr_days: int = Field(20, ge=2)
+    warmup_days: int = Field(260, ge=0)              # POS-1: a market enters on its first day with data + 260 days
+    null_draws: int = Field(1000, ge=10)             # W3.2 random-side null
+    null_seed: int = 20261102
+    boot_resamples: int = Field(4000, ge=100)        # W3.2 stationary day-block bootstrap
+    boot_block_days: float = Field(20.0, gt=1)
+    cost_broker: str = "icm"                         # C1 point costs from config/cost_of_record.yaml: this broker's
+    cost_session: str = "asia"                       #   cell of the 21:00 UTC fill (W3 addendum), bps at the reference
+    cost_reference_price: float = Field(4000.0, gt=0)
+    round_trip_bps_by_symbol: dict[str, float] = Field(default_factory=dict)   # other markets' point RT; none: refused
+    overshoot_bps_by_symbol: dict[str, float] = Field(default_factory=dict)
+    short_rate_path: str = "raw/daily/fred_DTB3.parquet"   # data lane: value_date, value, available_utc
+    currency_rate_paths: dict[str, str] = Field(default_factory=dict)   # ISO -> FRED OECD 3-month file (FX, indices)
+    short_rate_constant_pct: float = 4.02            # DTB3 at the swap measurement (W3.3); a fallback, never a gate
+    markup_pct_by_symbol: dict[str, tuple[float, float]] = Field(default_factory=dict)   # (long, short) % a year
+    default_markup_pct: float = Field(2.5, ge=0)     # W3.3: a symbol without measured terms, each side
+    triple_weekday_by_symbol: dict[str, int] = Field(default_factory=lambda: {"XAUUSD": 2})   # 0 = Monday; refused
+    read_registry: str = "state/position_reads.jsonl"   # read-once markers (spec, TEST-OLD/CONFIRM): a second read refused
+    etc_fee_pct: float = Field(0.12, ge=0)           # venue B (UK gold ETC): annual fee, no financing
+    etc_extra_rt_bps: float = Field(5.0, ge=0)       #   round trip = C1 point RT + 5 bp
+    cme_fee_usd_per_side: float = Field(2.0, ge=0)   # venue C (CME 1OZ): per oz a side, at the reference price
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -386,6 +430,9 @@ class ResearchSettings(_Section):
     # raises the budget of ONE quarter ({"2026Q4": 53}); a quarter not listed keeps trial_budget_quarter, a value must
     # be >= it. Every trial is still recorded and the deflated Sharpe still counts the full K (an owner decision)
     trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
+    # an override above OVERRIDE_CAP (500) trials stands only on a recorded owner decision: quarter -> the ADR path
+    # (repo-relative), whose text states that quarter and that trial count; never above OWNER_OVERRIDE_CEILING (5,000)
+    trial_budget_owner_decisions: dict[str, str] = Field(default_factory=dict)
     # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
     # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
     # the deflated Sharpe counts the full running K. 0 turns the loop off. Owner-recorded in
@@ -425,6 +472,7 @@ class ResearchSettings(_Section):
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
+    position: PositionSettings = Field(default_factory=PositionSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod
@@ -435,14 +483,41 @@ class ResearchSettings(_Section):
                 raise ValueError(f"reserved_trials_quarter maps a quarter like 2027Q1 to 0..500 trials, got {q!r}: {n!r}")
         return v
 
+    OVERRIDE_CAP: ClassVar[int] = 500                 # most trials a quarter override may name without an owner ADR
+    OWNER_OVERRIDE_CEILING: ClassVar[int] = 5000      # hard ceiling, even with one (owner, 2026-11-02)
+
     @model_validator(mode="after")
     def _budget_overrides(self) -> ResearchSettings:
+        """"Raising it is an owner decision": an override up to 500 trials is a dated settings entry; above 500 it must
+        cite `trial_budget_owner_decisions[quarter]`, an ADR that exists and states the same quarter and trial count
+        (owner, 2026-11-02: "the validator lifts the 500 cap only for 2026Q4 = 3,500, with a 5,000 hard ceiling").
+        Every trial still counts in K whatever the budget."""
         import re
         for q, n in self.trial_budget_overrides.items():
-            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= 500:
+            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= self.OWNER_OVERRIDE_CEILING:
                 raise ValueError(f"trial_budget_overrides maps a quarter like 2026Q4 to trial_budget_quarter "
-                                 f"({self.trial_budget_quarter})..500 trials, got {q!r}: {n!r}")
+                                 f"({self.trial_budget_quarter})..{self.OWNER_OVERRIDE_CEILING} trials, got {q!r}: {n!r}")
+            if n > self.OVERRIDE_CAP:
+                self._check_owner_decision(q, n)
+        orphan = sorted(set(self.trial_budget_owner_decisions) - set(self.trial_budget_overrides))
+        if orphan:
+            raise ValueError(f"trial_budget_owner_decisions names quarters without a trial_budget_overrides entry: {orphan}")
         return self
+
+    def _check_owner_decision(self, quarter: str, trials: int) -> None:
+        import re
+        cited = self.trial_budget_owner_decisions.get(quarter)
+        if not cited:
+            raise ValueError(f"trial_budget_overrides {quarter}: {trials} is above {self.OVERRIDE_CAP} trials: it needs an "
+                             f"owner decision, research.trial_budget_owner_decisions[{quarter!r}] = the ADR path")
+        path = Path(cited) if Path(cited).is_absolute() else ROOT / cited
+        if not path.is_file():
+            raise ValueError(f"trial_budget_owner_decisions {quarter}: {cited} does not exist")
+        text = path.read_text(encoding="utf-8")
+        count = rf"(?<![\d,])(?:{trials}|{trials:,})(?![\d,]*\d)"   # 3500 or 3,500, not part of 35000 or 13,500
+        if not re.search(rf"\b{quarter}\b", text) or not re.search(count, text):
+            raise ValueError(f"trial_budget_owner_decisions {quarter}: {cited} must state the quarter {quarter} and the "
+                             f"trial count {trials}")
 
     def budget_for(self, quarter: str) -> int:
         """The quarter's pre-registered trial budget: its override when it has one, else trial_budget_quarter."""
@@ -677,54 +752,6 @@ class GateSettings(_Section):
         return [n for n in self.PROPOSED if n not in self.signed_off]
 
 
-class WebhookSettings(_Section):
-    """TradingView webhook (goldbot/webhook/app.py). The inbox is the only thing a caller with the secret can write to."""
-    max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
-
-
-class TvPullSettings(_Section):
-    """TradingView direct pull (goldbot/data/tv_pull.py; owner decision 2026-10-18, ADR 0030): the owner's session
-    cookie (keyring only) reads the saved layouts' indicators and their bars from TradingView's chart websocket.
-    "Strictly read-only; polite rate limit with backoff; fail soft": off until the owner turns it on in
-    settings.local.yaml, and the defaults stay well under what one open chart tab sends."""
-    enabled: bool = False
-    symbols: dict[str, str] = Field(default_factory=lambda: {"OANDA:XAUUSD": "XAUUSD"})  # chart symbol -> store symbol
-    timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240", "1D"])
-    # keyring entry names of the browser cookies `sessionid` and `sessionid_sign` (the values never leave the keyring)
-    sessionid_key: str = "tradingview-sessionid"
-    sessionid_sign_key: str = "tradingview-sessionid-sign"
-    discover: bool = True                              # read the saved layouts for their indicators
-    discover_every_s: float = Field(default=21600, gt=0)
-    max_studies: int = Field(default=20, gt=0)
-    min_interval_s: float = Field(default=5.0, ge=1.0)            # between two requests, whatever kind
-    bars_per_request: int = Field(default=5000, gt=0, le=5000)
-    max_pages_per_tf: int = Field(default=5, ge=0)                # history pages per timeframe and pass
-    max_requests_per_day: int = Field(default=3000, gt=0)         # rolling 24 h; a pass is skipped beyond it
-    study_warmup_bars: int = Field(default=300, ge=0)             # oldest loaded bars whose study values are not kept
-    poll_interval_s: float = Field(default=900, gt=0)
-    poll_offset_s: float = Field(default=60, ge=0)                # after the bar close, so the bar has closed there
-    live_max_lag_s: float = Field(default=1800, gt=0)             # received within this of the close: pull_live
-    history_latency_default_s: float = Field(default=960, ge=0)   # until min_live_samples live bars measure the p95
-    min_live_samples: int = Field(default=20, gt=0)
-    backoff_base_s: float = Field(default=300, gt=0)
-    backoff_max_s: float = Field(default=21600, gt=0)
-    timeout_s: float = Field(default=30, gt=0)
-    # display names (goldbot/data/tv_alias.py): key_of(name | plot fingerprint) -> our name, e.g. "Structure (smc)";
-    # empty here (no vendor name in the repo), the owner's keys sit in settings.local.yaml
-    aliases: dict[str, str] = Field(default_factory=dict)
-    # "TradingView gives only the final box set in history": the graphics a study holds (boxes, lines, labels) are kept
-    # per closed bar of these timeframes in tv.db `tv_graphics`, from the frames the study already sends (no request)
-    graphics_timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240"])
-    graphics_max_objects: int = Field(default=500, ge=0)         # per snapshot; the highest ids are kept, `truncated` set
-    graphics_max_snapshots: int = Field(default=50000, ge=0)     # per study, symbol and timeframe; none are added beyond
-
-    @model_validator(mode="after")
-    def _backoff_ordered(self) -> TvPullSettings:
-        if self.backoff_max_s < self.backoff_base_s:
-            raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
-        return self
-
-
 class ObserveSettings(_Section):
     """The observe lane (ADR 0063, goldbot/ops/observe.py; owner 2026-10-31: XAUUSD247 through the live account, "NO
     live trading"): the collector reads an observe_only account's symbols through its bridge, read-only, into the
@@ -768,7 +795,7 @@ class TvIdeasSettings(_Section):
     poll_interval_s: float = Field(default=720, ge=300)           # a poll every 12 min ...
     poll_jitter_s: float = Field(default=180, ge=0)               #   ... plus up to 3 min, so 12-15 min apart
     live_page_size: int = Field(default=20, gt=0, le=100)         # newest-activity page per author and poll
-    min_interval_s: float = Field(default=3.0, ge=1.0)            # between two requests (the tv_pull Pacer)
+    min_interval_s: float = Field(default=3.0, ge=1.0)            # between two requests (goldbot/data/tv_http.py Pacer)
     backfill_min_interval_s: float = Field(default=2.0, ge=1.0)   # the one-time back catalogue read
     max_requests_per_day: int = Field(default=2000, gt=0)         # live, rolling 24 h; a poll is skipped beyond it
     backfill_max_requests: int = Field(default=12000, gt=0)       # per backfill run (listing slices + details)
@@ -786,18 +813,12 @@ class TvIdeasSettings(_Section):
 
 
 class TvSettings(_Section):
-    """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
-    a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
-    close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
-    training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
-    max_lag_s: int = Field(default=60, ge=0)
+    """The live replica of the owner's indicators, computed from our own broker bars (engine/replica_context.py). The
+    TradingView chart values this section also timed (max_lag_s, min_bar_match) retired on 2026-11-02 with the chart
+    path; the name stays so a server's settings.local.yaml keeps loading."""
     # the live replica's pinned series start (engine/replica_context.py StoreHistory): the store's first bar year; the
     # carried state bootstraps from here (research keeps B4a's 2010 pin, features/smc_live.SERIES_START)
     replica_series_start: str = "2016-01-01"
-    # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
-    # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
-    # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
-    min_bar_match: float = Field(default=0.95, gt=0, le=1)
 
 
 class ShadowSettings(_Section):
@@ -858,8 +879,6 @@ class Settings(_Section):
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
-    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
-    tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv_ideas: TvIdeasSettings = Field(default_factory=TvIdeasSettings)
     observe: ObserveSettings = Field(default_factory=ObserveSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
@@ -928,7 +947,25 @@ def settings_dict(path: str | Path = DEFAULT_SETTINGS) -> dict:
     (`git` fast-forward) never conflict with a local edit."""
     raw = load_yaml(path)
     local = Path(path).with_name("settings.local.yaml")
-    return _deep_merge(raw, load_yaml(local) or {}) if local.exists() else raw
+    return _drop_retired(_deep_merge(raw, load_yaml(local) or {}) if local.exists() else raw)
+
+
+def _drop_retired(d: dict) -> dict:
+    """`d` without the RETIRED_KEYS paths, and one warning naming those it held (delete them from settings.local.yaml)."""
+    out = dict(d)
+    found: list[str] = []
+    for path in RETIRED_KEYS:
+        head, *rest = path
+        if not rest:
+            if head in out:
+                del out[head]
+                found.append(head)
+        elif isinstance(out.get(head), dict) and rest[0] in out[head]:
+            out[head] = {k: v for k, v in out[head].items() if k != rest[0]}
+            found.append(".".join(path))
+    if found:
+        log.warning("retired settings ignored (delete them from config/settings.local.yaml): %s", ", ".join(found))
+    return out
 
 
 @lru_cache(maxsize=4)

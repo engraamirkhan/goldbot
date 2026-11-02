@@ -21,74 +21,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/activity": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Activity Feed */
-        get: operations["activity_feed_api_activity_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agent-runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Agent Runs */
-        get: operations["agent_runs_api_agent_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Agents */
-        get: operations["agents_api_agents_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/attribution": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Attribution */
-        get: operations["attribution_api_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/auth/accept": {
         parameters: {
             query?: never;
@@ -436,41 +368,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/calendar": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Calendar */
-        get: operations["calendar_api_calendar_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/chart/layouts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Chart Layouts Get */
-        get: operations["chart_layouts_get_api_chart_layouts_get"];
-        put?: never;
-        /** Chart Layouts Put */
-        post: operations["chart_layouts_put_api_chart_layouts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/chart/mt5": {
         parameters: {
             query?: never;
@@ -522,23 +419,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/gates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Gates */
-        get: operations["gates_api_gates_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/halt": {
         parameters: {
             query?: never;
@@ -573,15 +453,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jobs": {
+    "/api/key-levels": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Jobs */
-        get: operations["jobs_api_jobs_get"];
+        /** Key Levels */
+        get: operations["key_levels_api_key_levels_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -633,23 +513,6 @@ export interface paths {
         };
         /** Me */
         get: operations["me_api_me_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/news": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** News */
-        get: operations["news_api_news_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -725,23 +588,6 @@ export interface paths {
         put?: never;
         /** Rearm */
         post: operations["rearm_api_rearm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Research View */
-        get: operations["research_view_api_research_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -867,23 +713,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/trades/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Trades Summary */
-        get: operations["trades_summary_api_trades_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/trades/{trade_id}": {
         parameters: {
             query?: never;
@@ -910,23 +739,6 @@ export interface paths {
         };
         /** Trade Bars */
         get: operations["trade_bars_api_trades__trade_id__bars_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tradingview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Tradingview Status */
-        get: operations["tradingview_status_api_tradingview_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1051,6 +863,38 @@ export interface components {
             /** Label */
             label: string;
         };
+        /** AccountKeyLevels */
+        AccountKeyLevels: {
+            /** Above */
+            above: components["schemas"]["KeyLevelZone"][];
+            /** Account Id */
+            account_id: string;
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Atr 1D */
+            atr_1d: number | null;
+            /** Below */
+            below: components["schemas"]["KeyLevelZone"][];
+            /** History Days */
+            history_days: number | null;
+            /**
+             * Pct Ready
+             * @default false
+             */
+            pct_ready: boolean;
+            /** Price */
+            price: number | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Zones Total */
+            zones_total?: number | null;
+        };
         /** AccountSummary */
         AccountSummary: {
             /**
@@ -1114,64 +958,6 @@ export interface components {
             ts_utc: string | null;
         };
         /**
-         * ActivityEvent
-         * @description One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order
-         *     opened or closed, or an entry the engine refused. Fields a kind does not have are null.
-         */
-        ActivityEvent: {
-            /** Account */
-            account?: string | null;
-            /** Agent Id */
-            agent_id?: string | null;
-            /** Currency */
-            currency?: string | null;
-            /** Entry */
-            entry?: number | null;
-            /** Exit */
-            exit?: number | null;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "shadow_opened" | "shadow_closed" | "position_opened" | "position_closed" | "probe_opened" | "probe_closed" | "refused";
-            /** Lots */
-            lots?: number | null;
-            /** Mode */
-            mode?: ("demo" | "live" | "paper") | null;
-            /** P */
-            p?: number | null;
-            /** Pnl */
-            pnl?: number | null;
-            /** R */
-            r?: number | null;
-            /** Reason */
-            reason?: string | null;
-            /** Ret */
-            ret?: number | null;
-            /** Side */
-            side?: ("long" | "short") | null;
-            /** Stop */
-            stop?: number | null;
-            /** Target */
-            target?: number | null;
-            /** Timeframe */
-            timeframe?: string | null;
-            /**
-             * Ts
-             * Format: date-time
-             */
-            ts: string;
-            /** Version */
-            version?: string | null;
-        };
-        /** ActivityView */
-        ActivityView: {
-            /** Events */
-            events: components["schemas"]["ActivityEvent"][];
-            /** Unreadable */
-            unreadable: ("shadow" | "positions" | "probes" | "journal")[];
-        };
-        /**
          * AgentHealthRow
          * @description One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state.
          */
@@ -1213,57 +999,6 @@ export interface components {
             /** Version */
             version: string;
         };
-        /** AgentRow */
-        AgentRow: {
-            /** Agent Id */
-            agent_id: string;
-            /** Calibration Ece */
-            calibration_ece: number;
-            /** Capital Weight */
-            capital_weight: number;
-            /** Expectancy R */
-            expectancy_r: number;
-            /** Family */
-            family: string;
-            /** Fitness */
-            fitness: number;
-            /** Generation */
-            generation: number;
-            /** Hit Rate */
-            hit_rate: number;
-            /** N Trades */
-            n_trades: number;
-            /** Parent Id */
-            parent_id: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "shadow" | "live" | "retired";
-        };
-        /**
-         * AgentRunRow
-         * @description One staff-agent run (data steward, risk officer, journal coach, improvement agent) and its report.
-         */
-        AgentRunRow: {
-            /** Cost Usd */
-            cost_usd: number;
-            /** Detail */
-            detail: string | null;
-            /** Report */
-            report: string | null;
-            /** Role */
-            role: string;
-            /**
-             * Started Utc
-             * Format: date-time
-             */
-            started_utc: string;
-            /** Status */
-            status: string;
-            /** Turns */
-            turns: number;
-        };
         /**
          * AskReasonView
          * @description Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters
@@ -1282,61 +1017,6 @@ export interface components {
             text: string;
             /** Until */
             until?: string | null;
-        };
-        /** AttributionReportView */
-        AttributionReportView: {
-            /**
-             * As Of
-             * Format: date-time
-             */
-            as_of: string;
-            /** Breakdowns */
-            breakdowns: {
-                [key: string]: {
-                    [key: string]: components["schemas"]["ResultCell"];
-                };
-            };
-            challengers: components["schemas"]["ResultCell"];
-            costs: components["schemas"]["ResultCosts"];
-            /** Exits */
-            exits: {
-                [key: string]: components["schemas"]["ResultExitCell"];
-            };
-            /** Live */
-            live: {
-                [key: string]: components["schemas"]["ResultLiveFills"];
-            };
-            /** M */
-            m: number;
-            /** Min Trades */
-            min_trades: number;
-            /** N Candidates */
-            n_candidates: number;
-            /** N Taken */
-            n_taken: number;
-            /** Notes */
-            notes: string[];
-            overall: components["schemas"]["ResultCell"];
-            /** T Bar */
-            t_bar: number;
-            /**
-             * Window From
-             * Format: date-time
-             */
-            window_from: string;
-        };
-        /**
-         * AttributionView
-         * @description state/attribution.json without its trade rows and calibration (calibration stays on Health).
-         */
-        AttributionView: {
-            /** Cant Check */
-            cant_check?: string | null;
-            /** Next Run Utc */
-            next_run_utc: string | null;
-            report: components["schemas"]["AttributionReportView"] | null;
-            /** Stale */
-            stale: boolean;
         };
         /** AuthState */
         AuthState: {
@@ -1474,48 +1154,6 @@ export interface components {
             /** Variant */
             variant: string;
         };
-        /**
-         * CalendarEvent
-         * @description One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.
-         */
-        CalendarEvent: {
-            /** Blackout End */
-            blackout_end: string | null;
-            /** Blackout Start */
-            blackout_start: string | null;
-            /** Country */
-            country: string;
-            /** Event Id */
-            event_id: string;
-            /** Forecast */
-            forecast: string;
-            /** Impact */
-            impact: string;
-            /** Previous */
-            previous: string;
-            /** Tier */
-            tier: number;
-            /** Title */
-            title: string;
-            /**
-             * Ts Utc
-             * Format: date-time
-             */
-            ts_utc: string;
-        };
-        /** CalendarResponse */
-        CalendarResponse: {
-            active_blackout: components["schemas"]["ActiveBlackout"] | null;
-            /** Events */
-            events: components["schemas"]["CalendarEvent"][];
-            /** Note */
-            note: string | null;
-            /**
-             * Now
-             * Format: date-time
-             */
-            now: string;
-        };
         /** CapUse */
         CapUse: {
             /** Limit */
@@ -1561,37 +1199,6 @@ export interface components {
              * Format: date-time
              */
             t: string;
-        };
-        /** ChartLayout */
-        ChartLayout: {
-            /** Name */
-            name: string;
-            /** Url */
-            url: string | null;
-        };
-        /** ChartLayoutIn */
-        ChartLayoutIn: {
-            /** Name */
-            name: string;
-            /** Url */
-            url: string;
-        };
-        /** ChartLayoutsRequest */
-        ChartLayoutsRequest: {
-            /** Layouts */
-            layouts: components["schemas"]["ChartLayoutIn"][];
-            /**
-             * Totp
-             * @default
-             */
-            totp: string;
-        };
-        /** ChartLayoutsView */
-        ChartLayoutsView: {
-            /** Can Edit */
-            can_edit: boolean;
-            /** Layouts */
-            layouts: components["schemas"]["ChartLayout"][];
         };
         /** CodeSignIn */
         CodeSignIn: {
@@ -1702,15 +1309,6 @@ export interface components {
             spread_complete: boolean;
             /** Swap */
             swap: number;
-        };
-        /** DayNet */
-        DayNet: {
-            /** Day */
-            day: string;
-            /** N */
-            n: number;
-            /** Net */
-            net: number;
         };
         /**
          * DecidedProposal
@@ -2083,8 +1681,6 @@ export interface components {
             supervisor_heartbeat_age_s: number;
             /** Terminal Connected */
             terminal_connected: boolean;
-            /** Webhook P99 Latency S */
-            webhook_p99_latency_s: number | null;
         };
         /**
          * ForcedPropose
@@ -2133,92 +1729,6 @@ export interface components {
              */
             totp: string;
         };
-        /** GateCheck */
-        GateCheck: {
-            /** Detail */
-            detail: string;
-            /** Name */
-            name: string;
-            /** Passed */
-            passed: boolean;
-        };
-        /** GateItemView */
-        GateItemView: {
-            /** Ci95 */
-            ci95?: [
-                number,
-                number
-            ] | null;
-            /**
-             * Ci95 Basis
-             * @default per-trade iid, return
-             */
-            ci95_basis: string;
-            /** Earliest Utc */
-            earliest_utc?: string | null;
-            /** Evidence */
-            evidence: string;
-            /** Met */
-            met: boolean;
-            /** Name */
-            name: string;
-            /** Need */
-            need: string;
-            progress?: components["schemas"]["GateProgressView"] | null;
-            /** Proposed */
-            proposed: boolean;
-            /** Required */
-            required: boolean;
-        };
-        /** GateProgressView */
-        GateProgressView: {
-            /** Target */
-            target: number;
-            /**
-             * Unit
-             * @enum {string}
-             */
-            unit: "trades" | "days";
-            /** Value */
-            value: number;
-        };
-        /** GateView */
-        GateView: {
-            /** Gate */
-            gate: string;
-            /** Items */
-            items: components["schemas"]["GateItemView"][];
-            /** Met */
-            met: boolean;
-            /**
-             * Met On Proposed
-             * @default false
-             */
-            met_on_proposed: boolean;
-            /** Recorded */
-            recorded: boolean;
-            /** Recorded Utc */
-            recorded_utc?: string | null;
-        };
-        /** GatesView */
-        GatesView: {
-            /** Cant Check */
-            cant_check?: string | null;
-            /** Gates */
-            gates: components["schemas"]["GateView"][];
-            /**
-             * Generated Utc
-             * Format: date-time
-             */
-            generated_utc: string;
-            /** Phase */
-            phase?: number | null;
-            /** Proposed */
-            proposed: components["schemas"]["ProposedThreshold"][];
-            /** Proposed Count */
-            proposed_count: number;
-            stop_rule: components["schemas"]["StopRuleView"];
-        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2228,42 +1738,6 @@ export interface components {
         HaltRequest: {
             /** Reason */
             reason?: string | null;
-        };
-        /**
-         * Headline
-         * @description One collected headline; unscored items (prefiltered out or over the daily cap) have relevance and tags null.
-         */
-        Headline: {
-            /** Dollar */
-            dollar: ("positive" | "negative" | "neutral") | null;
-            /** Item Id */
-            item_id: string;
-            /** Link */
-            link: string | null;
-            /** Rates */
-            rates: ("hawkish" | "dovish" | "neutral") | null;
-            /**
-             * Received Utc
-             * Format: date-time
-             */
-            received_utc: string;
-            /** Relevance */
-            relevance: number | null;
-            /** Risk */
-            risk: ("risk_on" | "risk_off" | "neutral") | null;
-            /** Shock */
-            shock: boolean;
-            /** Source */
-            source: string;
-            /** Surprise */
-            surprise: ("beat" | "miss" | "inline" | "none") | null;
-            /** Title */
-            title: string;
-            /**
-             * Ts Utc
-             * Format: date-time
-             */
-            ts_utc: string;
         };
         /**
          * HealthCheckRow
@@ -2308,38 +1782,6 @@ export interface components {
             reliability: components["schemas"]["ReliabilityCurve"][];
             system_halt: components["schemas"]["SystemHaltView"] | null;
         };
-        /**
-         * HypothesisDoc
-         * @description The hypothesis portfolio (docs/research/hypotheses.md), its tables parsed, read-only.
-         */
-        HypothesisDoc: {
-            /** Note */
-            note: string | null;
-            /** Path */
-            path: string;
-            /** Tables */
-            tables: components["schemas"]["HypothesisTable"][];
-            /** Updated Utc */
-            updated_utc: string | null;
-        };
-        /** HypothesisTable */
-        HypothesisTable: {
-            /** Columns */
-            columns: string[];
-            /** Rows */
-            rows: string[][];
-            /** Title */
-            title: string;
-        };
-        /** ImputedView */
-        ImputedView: {
-            /** Charged Usd */
-            charged_usd: number;
-            /** N */
-            n: number;
-            /** Unpriced */
-            unpriced: number;
-        };
         /** InviteRequest */
         InviteRequest: {
             /** Email */
@@ -2363,29 +1805,49 @@ export interface components {
             /** Invite Token */
             invite_token: string;
         };
+        /** KeyLevelZone */
+        KeyLevelZone: {
+            /** Flipped */
+            flipped: boolean;
+            /** Hi */
+            hi: number;
+            /** Lo */
+            lo: number;
+            /** Price */
+            price: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "support" | "resistance" | "inside";
+            /** Strength */
+            strength: number;
+            /** Strength Pct */
+            strength_pct: number | null;
+            /** Tfs */
+            tfs: string[];
+            /** Touches */
+            touches: number;
+        };
         /**
-         * JobRow
-         * @description One scheduler job as the dashboard shows it (from state/scheduler.json).
+         * KeyLevelsView
+         * @description `bars` (bid, USD/oz): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the
+         *     reference feed; empty when none are stored); `accounts`: every engine that published zones.
          */
-        JobRow: {
-            /** Failures */
-            failures: number;
-            /** Heartbeat Age S */
-            heartbeat_age_s: number;
-            /** Last Error */
-            last_error: string | null;
-            /** Last Finished */
-            last_finished: string | null;
-            /** Last Ok */
-            last_ok: boolean | null;
-            /** Last Slot */
-            last_slot: string | null;
-            /** Name */
-            name: string;
-            /** Next Slot */
-            next_slot: string | null;
-            /** Runs */
-            runs: number;
+        KeyLevelsView: {
+            /** Account Id */
+            account_id: string | null;
+            /** Accounts */
+            accounts: components["schemas"]["AccountKeyLevels"][];
+            /** Bars */
+            bars: components["schemas"]["ChartBar"][];
+            /** Feed */
+            feed: ("broker" | "reference") | null;
+            /**
+             * Timeframe
+             * @enum {string}
+             */
+            timeframe: "15m" | "1h" | "4h" | "1d";
         };
         /**
          * KindDay
@@ -2801,21 +2263,6 @@ export interface components {
             view: components["schemas"]["AutoModeView"];
         };
         /**
-         * NextTrial
-         * @description Where the next trials go: the research plan's top-ranked family. `planned_date` stays null until the plan
-         *     carries dates (none is invented).
-         */
-        NextTrial: {
-            /** Budget */
-            budget: number;
-            /** Family */
-            family: string;
-            /** Planned Date */
-            planned_date?: string | null;
-            /** Timeframe */
-            timeframe: string | null;
-        };
-        /**
          * NotConfirmed
          * @description The dashboard note (API `DecidedProposal.not_confirmed`): a heading word that carries the state, then a
          *     sentence; `tone` picks the colour (amber while unknown: it is not a halt; red only for "Not placed").
@@ -2985,71 +2432,6 @@ export interface components {
              */
             since: string;
         };
-        /** PlanFamily */
-        PlanFamily: {
-            /** Best Dsr */
-            best_dsr: number | null;
-            /** Blocked */
-            blocked: boolean;
-            /** Evidence */
-            evidence: number;
-            /** Family */
-            family: string;
-            /** Flags */
-            flags: string[];
-            /** Median Auc */
-            median_auc: number | null;
-            /** Shadow Trades */
-            shadow_trades: number;
-            /** Trials */
-            trials: number;
-        };
-        /** PlanFocus */
-        PlanFocus: {
-            /** Budget */
-            budget: number;
-            /** Evidence */
-            evidence: number;
-            /** Family */
-            family: string;
-            /** Rank */
-            rank: number;
-            /** Reasons */
-            reasons: string[];
-        };
-        /** PlanMove */
-        PlanMove: {
-            /** Budget After */
-            budget_after: number;
-            /** Budget Before */
-            budget_before: number;
-            /** Detail */
-            detail: string;
-            /** Family */
-            family: string;
-            /** Share After */
-            share_after?: number | null;
-            /** Share Before */
-            share_before?: number | null;
-            /** Shift Pct */
-            shift_pct?: number | null;
-            /** Source */
-            source: string;
-        };
-        /**
-         * PlanReservation
-         * @description Trials of the quarter held for the pre-registered queue (research/director.py Reservation).
-         */
-        PlanReservation: {
-            /** Pending */
-            pending: number;
-            /** Reserved */
-            reserved: number;
-            /** Run */
-            run: number;
-            /** Setting */
-            setting: number;
-        };
         /** Proposal */
         Proposal: {
             /** Account Id */
@@ -3127,13 +2509,6 @@ export interface components {
             tradingview_url?: string | null;
             /** Window S */
             window_s?: number | null;
-        };
-        /** ProposedThreshold */
-        ProposedThreshold: {
-            /** Name */
-            name: string;
-            /** Value */
-            value: number;
         };
         /**
          * PsiHeatmap
@@ -3485,165 +2860,6 @@ export interface components {
             /** Version */
             version: string | null;
         };
-        /**
-         * ResearchCounts
-         * @description Trials by verdict, counted as the trial table reads them (a pass counts only with its cost treatment).
-         */
-        ResearchCounts: {
-            /** Failed */
-            failed: number;
-            /** No Verdict */
-            no_verdict: number;
-            /** Not Counted */
-            not_counted: number;
-            /** Passed */
-            passed: number;
-            /** Run */
-            run: number;
-        };
-        /**
-         * ResearchPlanView
-         * @description The research director's latest plan (state/research_plan.json).
-         */
-        ResearchPlanView: {
-            /** Attribution Note */
-            attribution_note?: string | null;
-            /** Budget */
-            budget: {
-                [key: string]: number;
-            };
-            /**
-             * Created Utc
-             * Format: date-time
-             */
-            created_utc: string;
-            /** Evidence */
-            evidence: components["schemas"]["PlanFamily"][];
-            /** Focus */
-            focus: components["schemas"]["PlanFocus"][];
-            /** Grid Budget */
-            grid_budget: {
-                [key: string]: number;
-            };
-            /** Holdout From */
-            holdout_from: string;
-            /** Holdout To */
-            holdout_to: string;
-            /**
-             * Hypotheses Changed
-             * @default false
-             */
-            hypotheses_changed: boolean;
-            /**
-             * Hypotheses Drift
-             * @default []
-             */
-            hypotheses_drift: string[];
-            /** Hypotheses Note */
-            hypotheses_note?: string | null;
-            /** Hypotheses Sha256 */
-            hypotheses_sha256?: string | null;
-            /** Hypotheses Sha256 Now */
-            hypotheses_sha256_now?: string | null;
-            /**
-             * Moves
-             * @default []
-             */
-            moves: components["schemas"]["PlanMove"][];
-            /** Quarter */
-            quarter: string;
-            /** Quarter Budget */
-            quarter_budget: number;
-            /**
-             * Quarter Reserved
-             * @default 0
-             */
-            quarter_reserved: number;
-            /** Quarter Used */
-            quarter_used: number;
-            /** Reinstate T */
-            reinstate_t?: number | null;
-            reservation?: components["schemas"]["PlanReservation"] | null;
-            /**
-             * Retired
-             * @default []
-             */
-            retired: components["schemas"]["RetiredFamilyView"][];
-            /** Stale */
-            stale: boolean;
-            /** Total Budget */
-            total_budget: number;
-            /** Unallocated */
-            unallocated: number;
-        };
-        /**
-         * ResearchSummary
-         * @description Backlog 97 (docs/design/ui-97-98-research-limits.md, "Is research getting us to £50 a day?"): the first card
-         *     of the Research screen, from the registry and the plan only. No money projection (needs backlog 33 and
-         *     quant-reviewer sign-off); the research-director signs off the wording before release.
-         */
-        ResearchSummary: {
-            best_candidate: components["schemas"]["TrialRow"] | null;
-            /** Failed Total */
-            failed_total: number;
-            next_trial: components["schemas"]["NextTrial"] | null;
-            /** No Verdict Total */
-            no_verdict_total: number;
-            /** North Star Gbp */
-            north_star_gbp: number;
-            /** Not Counted Total */
-            not_counted_total: number;
-            /** Passed Total */
-            passed_total: number;
-            since_last_week: components["schemas"]["ResearchCounts"];
-        };
-        /**
-         * ResearchToday
-         * @description Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day
-         *     boundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts).
-         */
-        ResearchToday: {
-            /**
-             * Date Utc
-             * Format: date
-             */
-            date_utc: string;
-            /** Failed */
-            failed: number;
-            latest: components["schemas"]["TrialRow"] | null;
-            /** No Verdict */
-            no_verdict: number;
-            /** Not Counted */
-            not_counted: number;
-            /** Passed */
-            passed: number;
-            /**
-             * Quarter End
-             * Format: date
-             */
-            quarter_end: string;
-            /** Run */
-            run: number;
-        };
-        /** ResearchView */
-        ResearchView: {
-            budget: components["schemas"]["TrialBudget"];
-            /**
-             * Generated Utc
-             * Format: date-time
-             */
-            generated_utc: string;
-            hypotheses: components["schemas"]["HypothesisDoc"];
-            plan: components["schemas"]["ResearchPlanView"] | null;
-            /** Plan Error */
-            plan_error: string | null;
-            summary?: components["schemas"]["ResearchSummary"] | null;
-            today: components["schemas"]["ResearchToday"];
-            /** Trials */
-            trials: components["schemas"]["TrialRow"][];
-            /** Trials Total */
-            trials_total: number;
-        };
         /** ResetLinkResponse */
         ResetLinkResponse: {
             /** Expires H */
@@ -3666,169 +2882,6 @@ export interface components {
              * @default
              */
             token: string;
-        };
-        /**
-         * ResultCell
-         * @description One attribution cell (research/attribution.py Cell, ADR 0022). Rows are judged on `verdict_adj` at the row's
-         *     own bar `t_bar`; "by construction" marks a cell whose sign is set by its definition (exit target / stop).
-         */
-        ResultCell: {
-            /** Ci95 Net */
-            ci95_net: [
-                number,
-                number
-            ] | null;
-            /** Ci Adj */
-            ci_adj: [
-                number,
-                number
-            ] | null;
-            /** Hit Rate */
-            hit_rate: number | null;
-            /** Mean R Gross */
-            mean_r_gross: number | null;
-            /** Mean R Net */
-            mean_r_net: number | null;
-            /** N */
-            n: number;
-            /** Profit Factor */
-            profit_factor: number | null;
-            /** Se */
-            se?: number | null;
-            /** Std R Net */
-            std_r_net: number | null;
-            /** T Bar */
-            t_bar: number | null;
-            /** T Stat */
-            t_stat: number | null;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
-            /**
-             * Verdict Adj
-             * @enum {string}
-             */
-            verdict_adj: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
-        };
-        /** ResultCosts */
-        ResultCosts: {
-            /** By Session */
-            by_session: {
-                [key: string]: {
-                    [key: string]: number | null;
-                };
-            };
-            /** Killed */
-            killed: number;
-            /** Mean R */
-            mean_r: {
-                [key: string]: number | null;
-            };
-            /** N */
-            n: number;
-            /** Share Of Gross */
-            share_of_gross: number | null;
-            /** Source */
-            source: string;
-        };
-        /** ResultExitCell */
-        ResultExitCell: {
-            /** Ci95 Net */
-            ci95_net: [
-                number,
-                number
-            ] | null;
-            /** Ci Adj */
-            ci_adj: [
-                number,
-                number
-            ] | null;
-            /** Hit Rate */
-            hit_rate: number | null;
-            /** Mae R Median */
-            mae_r_median?: number | null;
-            /** Mean R Gross */
-            mean_r_gross: number | null;
-            /** Mean R Net */
-            mean_r_net: number | null;
-            /** Mfe R Median */
-            mfe_r_median?: number | null;
-            /** N */
-            n: number;
-            /** Profit Factor */
-            profit_factor: number | null;
-            /** Se */
-            se?: number | null;
-            /** Share */
-            share: number;
-            /** Std R Net */
-            std_r_net: number | null;
-            /** T Bar */
-            t_bar: number | null;
-            /** T Stat */
-            t_stat: number | null;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
-            /**
-             * Verdict Adj
-             * @enum {string}
-             */
-            verdict_adj: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
-        };
-        /** ResultLiveFills */
-        ResultLiveFills: {
-            /** Fills */
-            fills: number;
-            /** Mean Excess R */
-            mean_excess_r: number | null;
-            /** Mean Excess Usd */
-            mean_excess_usd: number | null;
-            /** Mean Slippage Usd */
-            mean_slippage_usd: number | null;
-            /** N With Risk */
-            n_with_risk: number;
-            /** Orders */
-            orders: {
-                [key: string]: number;
-            };
-            /** Prior Usd */
-            prior_usd: number | null;
-            /** T Bar */
-            t_bar: number;
-            /** T Stat */
-            t_stat: number | null;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
-            /**
-             * Verdict Adj
-             * @enum {string}
-             */
-            verdict_adj: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
-        };
-        /** RetiredFamilyView */
-        RetiredFamilyView: {
-            /** Family */
-            family: string;
-            /** Floor */
-            floor: number;
-            /** Hypothesis Id */
-            hypothesis_id: string | null;
-            /** New Evidence */
-            new_evidence: string[];
-            /** Reason */
-            reason: string | null;
-            /** Reinstated */
-            reinstated: boolean;
-            /** Since */
-            since: string | null;
         };
         /** RevokeResponse */
         RevokeResponse: {
@@ -3945,23 +2998,6 @@ export interface components {
              */
             supervisor_reasons: string[];
         };
-        /** StopIncidentView */
-        StopIncidentView: {
-            /** Account */
-            account: string;
-            /**
-             * Closed Utc
-             * Format: date-time
-             */
-            closed_utc: string;
-            /** Loss Frac */
-            loss_frac: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "demo" | "live";
-        };
         /** StopMove */
         StopMove: {
             /**
@@ -3971,58 +3007,6 @@ export interface components {
             at: string;
             /** Price */
             price: number;
-        };
-        /**
-         * StopRuleView
-         * @description P6 in fields a screen words itself. status: breached > cant_check > not_started > ok (a breach stays a breach
-         *     while part of the record is unreadable: a missing row can only hide more).
-         */
-        StopRuleView: {
-            /** After Months */
-            after_months?: number | null;
-            /**
-             * Breach
-             * @default []
-             */
-            breach: ("long_run" | "single_loss")[];
-            /** Cant Check */
-            cant_check?: string | null;
-            /** Clock Source */
-            clock_source?: ("paper_gate" | "first_trade") | null;
-            /** Clock Start Utc */
-            clock_start_utc?: string | null;
-            /** Confidence */
-            confidence?: number | null;
-            imputed?: components["schemas"]["ImputedView"] | null;
-            /**
-             * Incident Count
-             * @default 0
-             */
-            incident_count: number;
-            /**
-             * Incidents
-             * @default []
-             */
-            incidents: components["schemas"]["StopIncidentView"][];
-            /** Lower Bound */
-            lower_bound?: number | null;
-            /** Min Pooled Trades */
-            min_pooled_trades?: number | null;
-            /** Min Trades For Estimate */
-            min_trades_for_estimate: number;
-            /** Months */
-            months?: number | null;
-            /** Pooled Trades */
-            pooled_trades?: number | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "ok" | "not_started" | "breached" | "cant_check";
-            /** Weekly Cap */
-            weekly_cap?: number | null;
-            /** Worst Loss Frac */
-            worst_loss_frac?: number | null;
         };
         /** StrategyBoardView */
         StrategyBoardView: {
@@ -4476,7 +3460,7 @@ export interface components {
             /** Periods */
             periods: components["schemas"]["TradesPeriodView"][];
             /** Unreadable */
-            unreadable: ("shadow" | "positions" | "probes" | "journal")[];
+            unreadable: ("shadow" | "positions" | "probes")[];
         };
         /** TradesPage */
         TradesPage: {
@@ -4504,182 +3488,6 @@ export interface components {
             since: string | null;
             /** Types */
             types: components["schemas"]["TradeTypeSummary"][];
-        };
-        /**
-         * TradesSummary
-         * @description Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's
-         *     day and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed).
-         */
-        TradesSummary: {
-            /** Account */
-            account: string;
-            best_day: components["schemas"]["DayNet"] | null;
-            /** By Day */
-            by_day: components["schemas"]["DayNet"][];
-            /** Currency */
-            currency: string | null;
-            /** Days */
-            days: number;
-            /** Days At Target */
-            days_at_target: number | null;
-            /** Days Traded */
-            days_traded: number;
-            /** First Day */
-            first_day: string;
-            /** Gross Rows */
-            gross_rows: number;
-            /** Last Day */
-            last_day: string;
-            /** Mode */
-            mode: ("demo" | "live" | "paper") | null;
-            /** N */
-            n: number;
-            /** Net */
-            net: number;
-            /** Net N */
-            net_n: number;
-            /** Other Currency Rows */
-            other_currency_rows: number;
-            /** Target */
-            target: number;
-            /** Trading Days */
-            trading_days: number;
-            worst_day: components["schemas"]["DayNet"] | null;
-        };
-        /** TrialBudget */
-        TrialBudget: {
-            /** Budget */
-            budget: number;
-            /** Left */
-            left: number;
-            /** Quarter */
-            quarter: string;
-            /** Used */
-            used: number;
-        };
-        /**
-         * TrialRow
-         * @description One research-registry trial (state/research_registry.jsonl). R figures are the rule's own expectancy over
-         *     every candidate: gross on mid prices, net of every cost.
-         */
-        TrialRow: {
-            /** Agent Id */
-            agent_id: string;
-            /** Family */
-            family: string;
-            /** Gates */
-            gates: components["schemas"]["GateCheck"][];
-            /** Gates Passed */
-            gates_passed: boolean | null;
-            /** Gross R */
-            gross_r: number | null;
-            /** Gross T */
-            gross_t: number | null;
-            /** N */
-            n: number | null;
-            /** Net R */
-            net_r: number | null;
-            /** Net T */
-            net_t: number | null;
-            /**
-             * Pre Swap
-             * @default false
-             */
-            pre_swap: boolean;
-            /** Rationale */
-            rationale: string;
-            /** Status */
-            status: string;
-            /** Timeframe */
-            timeframe: string | null;
-            /** Trial */
-            trial: number;
-            /** Ts */
-            ts: string | null;
-        };
-        /**
-         * TvIndicatorStatus
-         * @description One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values).
-         */
-        TvIndicatorStatus: {
-            /** Alerts 24H */
-            alerts_24h: number;
-            /**
-             * Csv Bars
-             * @default 0
-             */
-            csv_bars: number;
-            /**
-             * Csv Rows
-             * @default 0
-             */
-            csv_rows: number;
-            /** Gaps 24H */
-            gaps_24h: number;
-            /** Indicator */
-            indicator: string;
-            /** Last Bar Time */
-            last_bar_time: string;
-            /** Plots Seen */
-            plots_seen: string[];
-            /**
-             * Pull History Bars
-             * @default 0
-             */
-            pull_history_bars: number;
-            /**
-             * Pull Live 24H
-             * @default 0
-             */
-            pull_live_24h: number;
-            /**
-             * Repaint Status
-             * @default none
-             * @enum {string}
-             */
-            repaint_status: "none" | "unvalidated" | "validated";
-            /** Symbol */
-            symbol: string;
-            /** Tf */
-            tf: string;
-            /** Version */
-            version: string;
-        };
-        /**
-         * TvStatusView
-         * @description The TradingView card (docs/ux/limits-and-tradingview.md B). TradingView is an optional second feed and never
-         *     stops trading, so no state here is a failure: the screen shows expired, unknown and stale in amber.
-         */
-        TvStatusView: {
-            /** Fix Command */
-            fix_command?: string | null;
-            /**
-             * History Bars
-             * @default 0
-             */
-            history_bars: number;
-            /** Indicators */
-            indicators: components["schemas"]["TvIndicatorStatus"][];
-            /** Last Pull Utc */
-            last_pull_utc?: string | null;
-            /**
-             * Live Bars 24H
-             * @default 0
-             */
-            live_bars_24h: number;
-            /** Now */
-            now: string;
-            /**
-             * Signin
-             * @default not_set_up
-             * @enum {string}
-             */
-            signin: "ok" | "expired" | "not_set_up" | "unknown";
-            /**
-             * Stale
-             * @default false
-             */
-            stale: boolean;
         };
         /**
          * UserRef
@@ -4772,97 +3580,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSummary"][];
-                };
-            };
-        };
-    };
-    activity_feed_api_activity_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ActivityView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    agent_runs_api_agent_runs_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentRunRow"][];
-                };
-            };
-        };
-    };
-    agents_api_agents_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentRow"][];
-                };
-            };
-        };
-    };
-    attribution_api_attribution_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AttributionView"];
                 };
             };
         };
@@ -5475,91 +4192,6 @@ export interface operations {
             };
         };
     };
-    calendar_api_calendar_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                max_tier?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CalendarResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    chart_layouts_get_api_chart_layouts_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartLayoutsView"];
-                };
-            };
-        };
-    };
-    chart_layouts_put_api_chart_layouts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChartLayoutsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartLayoutsView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     chart_mt5_api_chart_mt5_get: {
         parameters: {
             query?: never;
@@ -5641,26 +4273,6 @@ export interface operations {
             };
         };
     };
-    gates_api_gates_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GatesView"];
-                };
-            };
-        };
-    };
     halt_api_halt_post: {
         parameters: {
             query?: never;
@@ -5714,9 +4326,12 @@ export interface operations {
             };
         };
     };
-    jobs_api_jobs_get: {
+    key_levels_api_key_levels_get: {
         parameters: {
-            query?: never;
+            query?: {
+                tf?: "15m" | "1h" | "4h" | "1d";
+                account?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5729,7 +4344,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobRow"][];
+                    "application/json": components["schemas"]["KeyLevelsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5802,38 +4426,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Me"];
-                };
-            };
-        };
-    };
-    news_api_news_get: {
-        parameters: {
-            query?: {
-                hours?: number;
-                min_relevance?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Headline"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5927,26 +4519,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    research_view_api_research_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchView"];
                 };
             };
         };
@@ -6129,26 +4701,6 @@ export interface operations {
             };
         };
     };
-    trades_summary_api_trades_summary_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TradesSummary"][];
-                };
-            };
-        };
-    };
     trade_detail_api_trades__trade_id__get: {
         parameters: {
             query?: never;
@@ -6207,26 +4759,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tradingview_status_api_tradingview_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TvStatusView"];
                 };
             };
         };

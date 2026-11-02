@@ -181,45 +181,7 @@ class FeedHealth(BaseModel):
     last_tick_age_s: float
     spread_points: float
     terminal_connected: bool
-    webhook_p99_latency_s: float | None
     supervisor_heartbeat_age_s: float
-
-
-class TvIndicatorStatus(BaseModel):
-    """One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values)."""
-    indicator: str
-    version: str
-    symbol: str
-    tf: str
-    last_bar_time: str
-    alerts_24h: int
-    plots_seen: list[str]
-    gaps_24h: int
-    # history imported from the owner's chart export (counts only): bars and plot rows, and whether the repaint check has
-    # passed; `last_bar_time` and `alerts_24h` count live alerts only ("" when only an export exists)
-    csv_bars: int = 0
-    csv_rows: int = 0
-    # whether every history row (chart export and pull_history) has passed the repaint check; "none": no history
-    repaint_status: Literal["none", "unvalidated", "validated"] = "none"
-    # the direct pull (ADR 0030; goldbot/data/tv_pull.py): closed bars received live in the last 24 h (pull_live) and
-    # backfilled history (pull_history), counted apart from the webhook alerts above
-    pull_live_24h: int = 0
-    pull_history_bars: int = 0
-
-
-class TvStatusView(BaseModel):
-    """The TradingView card (docs/ux/limits-and-tradingview.md B). TradingView is an optional second feed and never
-    stops trading, so no state here is a failure: the screen shows expired, unknown and stale in amber."""
-    now: str
-    indicators: list[TvIndicatorStatus]
-    # the direct pull's sign-in (state/tv_auth.db, goldbot/ops/tv_pull_health.py): not_set_up = the pull never ran
-    # (opt-in); unknown = the state is unreadable, treated as expired
-    signin: Literal["ok", "expired", "not_set_up", "unknown"] = "not_set_up"
-    last_pull_utc: datetime | None = None   # the last successful pull
-    stale: bool = False                     # signed in, but no successful pull for over 36 h (one is expected daily)
-    fix_command: str | None = None          # with expired / unknown: the one line to run on the brain (hidden prompts)
-    live_bars_24h: int = 0                  # every indicator: webhook alerts + pull_live bars, last 24 h
-    history_bars: int = 0                   # every indicator: chart-export + pull_history bars
 
 
 # ----------------------------------------------------------------------------- Limits card (read-only)
@@ -557,45 +519,7 @@ class Status(BaseModel):
     blackout: ActiveBlackout | None = None  # entry blackout an engine is enforcing now
 
 
-class JobRow(BaseModel):
-    """One scheduler job as the dashboard shows it (from state/scheduler.json)."""
-    name: str
-    last_slot: datetime | None
-    last_finished: datetime | None
-    last_ok: bool | None
-    last_error: str | None
-    next_slot: datetime | None
-    runs: int
-    failures: int
-    heartbeat_age_s: float
-
-
-class AgentRunRow(BaseModel):
-    """One staff-agent run (data steward, risk officer, journal coach, improvement agent) and its report."""
-    role: str
-    started_utc: datetime
-    status: str
-    turns: int
-    cost_usd: float
-    detail: str | None
-    report: str | None
-
-
-# ----------------------------------------------------------------------------- calendar and news
-class CalendarEvent(BaseModel):
-    """One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window."""
-    event_id: str
-    ts_utc: datetime
-    country: str
-    title: str
-    impact: str
-    tier: int
-    forecast: str
-    previous: str
-    blackout_start: datetime | None        # tier 1 only
-    blackout_end: datetime | None
-
-
+# ----------------------------------------------------------------------------- entry blackout (Status)
 class ActiveBlackout(BaseModel):
     """An entry blackout an engine is enforcing now (from state/engine_<account>.json)."""
     kind: Literal["calendar", "news_shock"]
@@ -605,30 +529,7 @@ class ActiveBlackout(BaseModel):
     accounts: list[str]
 
 
-class CalendarResponse(BaseModel):
-    now: datetime
-    events: list[CalendarEvent]
-    active_blackout: ActiveBlackout | None
-    note: str | None                        # why the list is empty, when it is
-
-
-class Headline(BaseModel):
-    """One collected headline; unscored items (prefiltered out or over the daily cap) have relevance and tags null."""
-    item_id: str
-    ts_utc: datetime
-    received_utc: datetime
-    source: str
-    title: str
-    link: str | None
-    relevance: float | None
-    rates: Literal["hawkish", "dovish", "neutral"] | None
-    risk: Literal["risk_on", "risk_off", "neutral"] | None
-    dollar: Literal["positive", "negative", "neutral"] | None
-    surprise: Literal["beat", "miss", "inline", "none"] | None
-    shock: bool
-
-
-# ============================================================================= Health and Research screens
+# ============================================================================= Health screen
 # Read-only views for any logged-in role (goldbot/api/explain.py builds them from the state files).
 CheckStatus = Literal["ok", "warn", "fail"]
 
@@ -732,187 +633,7 @@ class HealthView(BaseModel):
     errors: dict[str, str]                  # agents whose model could not be checked
 
 
-class TrialBudget(BaseModel):
-    quarter: str
-    budget: int
-    used: int
-    left: int
-
-
-class GateCheck(BaseModel):
-    name: str
-    passed: bool
-    detail: str
-
-
-class TrialRow(BaseModel):
-    """One research-registry trial (state/research_registry.jsonl). R figures are the rule's own expectancy over
-    every candidate: gross on mid prices, net of every cost."""
-    trial: int
-    ts: datetime | None
-    family: str
-    timeframe: str | None
-    status: str
-    agent_id: str
-    gross_r: float | None
-    gross_t: float | None
-    net_r: float | None
-    net_t: float | None
-    n: int | None
-    gates_passed: bool | None               # null when the trial recorded no gate verdict; a pass counts only
-                                            # with its cost treatment recorded (registry.gate_pass_counts)
-    pre_swap: bool = False                  # recorded a pass but no swap/cost source: shown, not counted
-    gates: list[GateCheck]
-    rationale: str
-
-
-class PlanFocus(BaseModel):
-    rank: int
-    family: str
-    budget: int
-    evidence: float
-    reasons: list[str]
-
-
-class PlanFamily(BaseModel):
-    family: str
-    trials: int
-    evidence: float
-    blocked: bool
-    flags: list[str]
-    median_auc: float | None
-    best_dsr: float | None
-    shadow_trades: int
-
-
-class ResearchPlanView(BaseModel):
-    """The research director's latest plan (state/research_plan.json)."""
-    created_utc: datetime
-    stale: bool                             # older than 21 days: the monthly loop uses the flat budget instead
-    quarter: str
-    quarter_budget: int
-    quarter_used: int
-    total_budget: int
-    budget: dict[str, int]
-    grid_budget: dict[str, int]
-    unallocated: int
-    holdout_from: str
-    holdout_to: str
-    focus: list[PlanFocus]
-    evidence: list[PlanFamily]
-    # the director's governance fields (absent from plans written before them: defaults then)
-    quarter_reserved: int = 0               # trials held for the quarter's pre-registered queue
-    reservation: PlanReservation | None = None
-    retired: list[RetiredFamilyView] = []
-    reinstate_t: float | None = None        # Bonferroni-corrected bar on the shrunk attribution t to reinstate
-    moves: list[PlanMove] = []              # which input moved which family's budget / share vs the evidence-only plan
-    attribution_note: str | None = None
-    hypotheses_note: str | None = None
-    hypotheses_sha256: str | None = None    # hypotheses.md as the director read it
-    hypotheses_sha256_now: str | None = None  # hypotheses.md as the API reads it now
-    hypotheses_changed: bool = False        # the doc changed since the plan (both hashes known and different)
-    hypotheses_drift: list[str] = []        # where the doc disagrees with research.retired_families
-
-
-class PlanReservation(BaseModel):
-    """Trials of the quarter held for the pre-registered queue (research/director.py Reservation)."""
-    setting: int                            # research.reserved_trials_quarter for the plan's quarter (keyed by quarter)
-    run: int                                # queued rows of the quarter a trial ran, and slots a trial used
-    pending: int                            # queued rows not yet run, and slots still held or live
-    reserved: int                           # max(setting - run - withdrawn - expired slots, pending, 0)
-
-
-class RetiredFamilyView(BaseModel):
-    family: str
-    hypothesis_id: str | None               # its row in hypotheses.md section B
-    since: str | None                       # retirement date (ISO)
-    reason: str | None
-    floor: int                              # exploration trials it keeps this quarter (never from the evidence pool)
-    reinstated: bool                        # attribution trades after the retirement date cleared the bar
-    new_evidence: list[str]                 # what reinstated it
-
-
-class PlanMove(BaseModel):
-    family: str
-    source: str                             # "retired_families" | "attribution"
-    detail: str
-    budget_before: int                      # trials in the evidence-only plan
-    budget_after: int
-    share_before: float | None = None       # share of the evidence pool before / after the tilt
-    share_after: float | None = None
-    shift_pct: float | None = None          # (after / before - 1) x 100, at most +-25
-
-
-class HypothesisTable(BaseModel):
-    title: str
-    columns: list[str]
-    rows: list[list[str]]
-
-
-class HypothesisDoc(BaseModel):
-    """The hypothesis portfolio (docs/research/hypotheses.md), its tables parsed, read-only."""
-    path: str
-    updated_utc: datetime | None
-    tables: list[HypothesisTable]
-    note: str | None
-
-
-class ResearchToday(BaseModel):
-    """Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day
-    boundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts)."""
-    date_utc: date
-    run: int                                # trial rows stamped today
-    passed: int                             # passed every gate, costs recorded
-    not_counted: int                        # recorded a pass without its cost treatment
-    failed: int
-    no_verdict: int                         # no gate verdict recorded
-    latest: TrialRow | None
-    quarter_end: date                       # the trial budget (ResearchView.budget) renews the day after
-
-
-class ResearchCounts(BaseModel):
-    """Trials by verdict, counted as the trial table reads them (a pass counts only with its cost treatment)."""
-    run: int
-    passed: int
-    failed: int
-    no_verdict: int
-    not_counted: int                        # recorded a pass without its cost treatment
-
-
-class NextTrial(BaseModel):
-    """Where the next trials go: the research plan's top-ranked family. `planned_date` stays null until the plan
-    carries dates (none is invented)."""
-    family: str
-    timeframe: str | None
-    budget: int                             # trials the plan gives the family this quarter
-    planned_date: date | None = None
-
-
-class ResearchSummary(BaseModel):
-    """Backlog 97 (docs/design/ui-97-98-research-limits.md, "Is research getting us to £50 a day?"): the first card
-    of the Research screen, from the registry and the plan only. No money projection (needs backlog 33 and
-    quant-reviewer sign-off); the research-director signs off the wording before release."""
-    passed_total: int                       # counted passes, all time (the registry, not the capped trials list)
-    failed_total: int
-    no_verdict_total: int
-    not_counted_total: int
-    since_last_week: ResearchCounts         # trials stamped in the 7 days before now
-    best_candidate: TrialRow | None         # the counted pass with the highest net R per trade; null: none passed
-    next_trial: NextTrial | None            # null without a readable plan
-    north_star_gbp: float                   # settings research.north_star_daily_gbp (ADR 0004)
-
-
-class ResearchView(BaseModel):
-    generated_utc: datetime
-    budget: TrialBudget
-    trials: list[TrialRow]                  # newest first, at most 200
-    trials_total: int
-    plan: ResearchPlanView | None
-    plan_error: str | None
-    hypotheses: HypothesisDoc
-    today: ResearchToday
-    summary: ResearchSummary | None = None   # backlog 97; always set by this API (nullable for older clients)
-# ============================================================================= end Health and Research screens
+# ============================================================================= end Health screen
 
 
 # ============================================================================= auto mode (A10)
@@ -988,231 +709,21 @@ class ModeChangeResult(BaseModel):
 # ============================================================================= end auto mode
 
 
-# ============================================================================= Chart tab (saved TradingView layouts)
-class ChartLayout(BaseModel):
-    name: str
-    url: str | None         # the owner's layout URL; None for every other role (it identifies the owner's account)
-
-
-class ChartLayoutsView(BaseModel):
-    layouts: list[ChartLayout]
-    can_edit: bool
-
-
-class ChartLayoutIn(ApiRequest):
-    name: str = Field(min_length=1, max_length=40)
-    url: str = Field(max_length=200)
-
-
-class ChartLayoutsRequest(ApiRequest):
-    layouts: list[ChartLayoutIn] = Field(max_length=3)
-    totp: str = Field("", max_length=16)    # the step-up after an email-code sign-in (ADR 0028)
-# ============================================================================= end Chart tab
-
-
-# ============================================================================= Progress tab (W2-3, read-only)
-# docs/ux/progress-screens.md "API gaps", built by goldbot/api/progress.py. Accounts appear by config name with any run
-# of 5+ digits cut to its last two; no operator-typed text, no email, login or host; every time is UTC.
-class GateProgressView(BaseModel):
-    value: float
-    target: float
-    unit: Literal["trades", "days"]
-
-
-class GateItemView(BaseModel):
-    name: str
-    met: bool
-    required: bool                          # False: context only, decides nothing
-    need: str
-    evidence: str                           # the measured value; never the owner's `gate-evidence --detail` note
-    proposed: bool                          # its threshold is PROPOSED and not in gates.signed_off
-    progress: GateProgressView | None = None
-    earliest_utc: datetime | None = None    # a day item: the calendar date the count is reached (never a forecast)
-    ci95: tuple[float, float] | None = None # an expectancy item: 95% interval of the phase's mean return per trade
-    # how `ci95` is computed: on per-trade returns as independent draws (the gates' convention), not clustered by day
-    # like the Results rows (ADR 0022), so the screen can say so
-    ci95_basis: str = "per-trade iid, return"
-
-
-class GateView(BaseModel):
-    gate: str
-    met: bool                               # met on the evidence; recording stays the owner's command
-    recorded: bool
-    recorded_utc: datetime | None = None
-    items: list[GateItemView]
-    met_on_proposed: bool = False           # met, but a required item's threshold is PROPOSED and not signed off
-
-
-class StopIncidentView(BaseModel):
-    account: str
-    mode: Literal["demo", "live"]
-    closed_utc: datetime
-    loss_frac: float                        # of the equity before the trade
-
-
-class ImputedView(BaseModel):
-    n: int                                  # pooled rows whose return is not net, charged an imputed cost
-    charged_usd: float
-    unpriced: int                           # gross rows that could not be priced
-
-
-class StopRuleView(BaseModel):
-    """P6 in fields a screen words itself. status: breached > cant_check > not_started > ok (a breach stays a breach
-    while part of the record is unreadable: a missing row can only hide more)."""
-    status: Literal["ok", "not_started", "breached", "cant_check"]
-    cant_check: str | None = None           # owner wording; set whenever part of the record is unreadable or lost
-    months: float | None = None
-    after_months: float | None = None
-    pooled_trades: int | None = None
-    min_pooled_trades: int | None = None
-    confidence: float | None = None
-    lower_bound: float | None = None        # per-trade return, fraction (one-sided bound at `confidence`)
-    min_trades_for_estimate: int            # below it there is no bound: "too few trades to estimate yet"
-    worst_loss_frac: float | None = None
-    weekly_cap: float | None = None
-    clock_start_utc: datetime | None = None
-    clock_source: Literal["paper_gate", "first_trade"] | None = None
-    breach: list[Literal["long_run", "single_loss"]] = []
-    incidents: list[StopIncidentView] = []  # worst first, at most 5
-    incident_count: int = 0
-    imputed: ImputedView | None = None
-
-
-class ProposedThreshold(BaseModel):
-    name: str                               # the config/settings.yaml `gates:` key
-    value: float
-
-
-class GatesView(BaseModel):
-    generated_utc: datetime
-    phase: int | None = None
-    gates: list[GateView]
-    stop_rule: StopRuleView
-    proposed_count: int                     # from settings: PROPOSED thresholds not in gates.signed_off
-    proposed: list[ProposedThreshold]
-    cant_check: str | None = None           # owner wording for any unreadable input; never the raw error
-
-
-AttributionVerdict = Literal["noise", "positive", "negative", "indistinguishable from zero", "by construction"]
-
-
-class ResultCell(BaseModel):
-    """One attribution cell (research/attribution.py Cell, ADR 0022). Rows are judged on `verdict_adj` at the row's
-    own bar `t_bar`; "by construction" marks a cell whose sign is set by its definition (exit target / stop)."""
-    n: int
-    mean_r_gross: float | None
-    mean_r_net: float | None
-    std_r_net: float | None
-    t_stat: float | None
-    ci95_net: tuple[float, float] | None
-    hit_rate: float | None
-    profit_factor: float | None
-    verdict: AttributionVerdict             # raw, |t| >= 2 (the overall headline)
-    t_bar: float | None                     # the bar this cell applied
-    ci_adj: tuple[float, float] | None      # mean +- t_bar x se; agrees with verdict_adj
-    verdict_adj: AttributionVerdict
-    se: float | None = None                 # day-clustered standard error, R per trade
-
-
-class ResultExitCell(ResultCell):
-    share: float
-    mae_r_median: float | None = None
-    mfe_r_median: float | None = None
-
-
-class ResultCosts(BaseModel):
-    source: str
-    n: int
-    mean_r: dict[str, float | None]         # spread, slippage, commission, swap, total (R per trade)
-    share_of_gross: float | None
-    killed: int                             # won before costs, lost after them
-    by_session: dict[str, dict[str, float | None]]
-
-
-class ResultLiveFills(BaseModel):
-    fills: int
-    mean_slippage_usd: float | None
-    prior_usd: float | None
-    mean_excess_usd: float | None
-    t_stat: float | None
-    mean_excess_r: float | None
-    n_with_risk: int
-    verdict: AttributionVerdict
-    t_bar: float
-    verdict_adj: AttributionVerdict
-    orders: dict[str, int]
-
-
-class AttributionReportView(BaseModel):
-    as_of: datetime
-    window_from: datetime
-    min_trades: int
-    t_bar: float                            # nominal row bar over `m` rows (each row carries its own `t_bar`)
-    m: int
-    n_candidates: int
-    n_taken: int
-    overall: ResultCell
-    challengers: ResultCell
-    breakdowns: dict[str, dict[str, ResultCell]]
-    exits: dict[str, ResultExitCell]
-    costs: ResultCosts
-    live: dict[str, ResultLiveFills]        # by account (digits cut)
-    notes: list[str]
-
-
-class AttributionView(BaseModel):
-    """state/attribution.json without its trade rows and calibration (calibration stays on Health)."""
-    report: AttributionReportView | None    # None: no report yet (or unreadable: see cant_check)
-    stale: bool                             # older than the job's last slot plus its max_late_hours
-    next_run_utc: datetime | None
-    cant_check: str | None = None
-
-
-class DayNet(BaseModel):
-    day: str                                # YYYY-MM-DD opportunity day (D-1 22:00 to D 22:00 UTC)
-    net: float                              # account currency, net rows only
-    n: int
-
-
-class TradesSummary(BaseModel):
-    """Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's
-    day and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed)."""
-    account: str
-    mode: Literal["demo", "live", "paper"] | None
-    currency: str | None
-    days: int
-    first_day: str
-    last_day: str
-    net: float
-    n: int                                  # every closed trade in the window
-    net_n: int                              # the ones in `net`
-    days_traded: int
-    trading_days: int                       # Monday-Friday opportunity days in the window
-    target: float                           # ADR 0004's £50 day, counted, never aimed at
-    days_at_target: int | None              # GBP accounts only, as the monthly report
-    best_day: DayNet | None
-    worst_day: DayNet | None
-    by_day: list[DayNet]
-    gross_rows: int                         # costs not recorded: not in `net`
-    other_currency_rows: int                # P&L not in the account currency: not in `net`
-# ============================================================================= end Progress tab
-
-
-# ============================================================================= Home activity feed (GET /api/activity)
+# ============================================================================= trade events (goldbot/api/activity.py readers)
 ActivityKind = Literal["shadow_opened", "shadow_closed", "position_opened", "position_closed", "probe_opened",
-                       "probe_closed", "refused"]
-ActivitySource = Literal["shadow", "positions", "probes", "journal"]
+                       "probe_closed"]
+ActivitySource = Literal["shadow", "positions", "probes"]
 
 
 class ActivityEvent(BaseModel):
     """One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order
-    opened or closed, or an entry the engine refused. Fields a kind does not have are null."""
+    opened or closed. Fields a kind does not have are null."""
     ts: datetime                            # when it happened, UTC (a shadow trade: its bar's close)
     kind: ActivityKind
     account: str | None = None              # config name, any run of 5+ digits cut; None for shadow trades (paper)
     mode: Literal["demo", "live", "paper"] | None = None
     agent_id: str | None = None
-    version: str | None = None              # the model version (shadow trades, probes, probe refusals)
+    version: str | None = None              # the model version (shadow trades, probes)
     timeframe: str | None = None
     side: Literal["long", "short"] | None = None
     lots: float | None = None
@@ -1221,17 +732,14 @@ class ActivityEvent(BaseModel):
     exit: float | None = None
     stop: float | None = None               # the stop and the take-profit target the trade was opened with (shadow
     target: float | None = None             # trades, open positions); null where the record does not keep them
-    reason: str | None = None               # exit: target | stop | time | ...; refused: the journal's action code
+    reason: str | None = None               # exit: target | stop | time | ...
     r: float | None = None                  # result in R of the initial risk
     ret: float | None = None                # return, side x (exit - entry) / entry (shadow: gross of costs)
     pnl: float | None = None                # account currency (`currency`)
     currency: str | None = None
 
 
-class ActivityView(BaseModel):
-    events: list[ActivityEvent]             # newest first
-    unreadable: list[ActivitySource]        # sources that could not be read: their events are missing, not zero
-# ============================================================================= end Home activity feed
+# ============================================================================= end trade events
 
 
 # ============================================================================= Home trades summary (GET /api/trades/overview)
@@ -1566,6 +1074,47 @@ class TradeBars(BaseModel):
     exit_utc: datetime | None
 
 
+# ============================================================================= Key levels (GET /api/key-levels)
+# goldbot/api/key_levels_view.py: each account's current key zones (goldbot/features/key_levels.py, published by
+# goldbot/engine/key_zones.py) and the recent bars of the chart's timeframe. Display only.
+KeyLevelTf = Literal["15m", "1h", "4h", "1d"]
+
+
+class KeyLevelZone(BaseModel):
+    price: float                            # weight-averaged level price, USD/oz
+    lo: float                               # the zone's band
+    hi: float
+    strength: float                         # timeframe weight x touches, age-decayed
+    strength_pct: float | None              # percentile among the trailing 250 days' zones; None while warming up
+    tfs: list[str]                          # timeframes it spans (15m 1h 4h 1d 1w 1M; "round": a $50/$100 number)
+    touches: int
+    role: Literal["support", "resistance", "inside"]
+    flipped: bool                           # its role is now the opposite of how it was born (a close went through)
+
+
+class AccountKeyLevels(BaseModel):
+    account_id: str
+    as_of: datetime                         # the 15m close the zones were built at
+    price: float | None
+    atr_1d: float | None
+    history_days: float | None              # days of history behind them (the broker's M15, about 800 days)
+    pct_ready: bool = False                 # strength_pct has its 20 days of samples
+    zones_total: int | None = None          # every research zone in the book; the display shows the strongest few
+    stale: bool = False                     # as_of over STALE_AFTER old (market closed, or the engine stalled)
+    above: list[KeyLevelZone]               # nearest first
+    below: list[KeyLevelZone]
+
+
+class KeyLevelsView(BaseModel):
+    """`bars` (bid, USD/oz): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the
+    reference feed; empty when none are stored); `accounts`: every engine that published zones."""
+    timeframe: KeyLevelTf
+    account_id: str | None
+    feed: Literal["broker", "reference"] | None
+    bars: list[ChartBar]
+    accounts: list[AccountKeyLevels]
+
+
 # ============================================================================= Strategy board (GET /api/strategies/board)
 # goldbot/api/strategy_board.py (docs/design/trades-ux-2026-10-27.md §2.3, §3.4, item 132; ADR 0050, 0053): progress
 # to each arm's single read and the read's frozen figures; the families' results before it are the ranking's
@@ -1824,7 +1373,6 @@ class PeriodNet(BaseModel):
 # ============================================================================= end Trade ledger
 
 
-ResearchPlanView.model_rebuild()   # refers to models defined after it
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status
 OpenPosition.model_rebuild()    # `kind` is TradeKind, defined with the trade ledger after it
 TodayAccount.model_rebuild()    # refers to the trade ledger models defined after it

@@ -11,7 +11,6 @@ from goldbot.ops.services.news import run_news
 from goldbot.ops.services.scheduler import run_scheduler
 from goldbot.ops.services.supervisor import run_supervisor
 from goldbot.ops.services.telegram import run_telegram
-from goldbot.ops.services.webhook import run_webhook
 
 
 @register_command("supervisor", pos=10)
@@ -37,11 +36,6 @@ def _bridge_order_lane(cmd: str, args: list[str]) -> None:
 @register_command("api", pos=50)
 def _api(cmd: str, args: list[str]) -> None:
     resolve(run_api)()
-
-
-@register_command("webhook", pos=60)
-def _webhook(cmd: str, args: list[str]) -> None:
-    resolve(run_webhook)()
 
 
 @register_command("scheduler", pos=70)

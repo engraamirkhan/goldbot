@@ -15,6 +15,7 @@ from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.costs import CostTable
 from goldbot.ops.accounts import Account
 from goldbot.ops.jobs import (
+    JOBS,
     JobContext,
     attribution,
     build_scheduler,
@@ -180,11 +181,10 @@ def test_build_scheduler_registers_every_job(tmp_path):
     assert nxt == {"nightly_costs": "2026-10-02T23:10:00+00:00", "saturday_retrain": "2026-10-03T06:00:00+00:00",
                    "tournament": "2026-10-03T12:00:00+00:00", "research_director": "2026-10-03T12:30:00+00:00",
                    "model_watch": "2026-10-02T23:30:00+00:00",
-                   "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
-                   "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
+                   "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
                    "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00",
-                   "broker_ledger": "2026-10-02T23:25:00+00:00", "tv_reconcile": "2026-10-02T23:15:00+00:00",
+                   "broker_ledger": "2026-10-02T23:25:00+00:00",
                    "backup": "2026-10-02T22:15:00+00:00", "restore_drill": "2026-10-04T10:00:00+00:00",
                    "attribution": "2026-10-02T23:50:00+00:00", "tick_record": "2026-10-02T21:10:00+00:00",
                    "tick_record_winter": "2026-10-02T22:10:00+00:00",
@@ -195,6 +195,18 @@ def test_build_scheduler_registers_every_job(tmp_path):
     # quarterly: after October's run the next is the first Sunday of January
     later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
     assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"
+
+
+def test_build_scheduler_drops_the_state_of_a_job_no_longer_in_jobs(tmp_path):
+    """A job retired with ADR 0066 (agents_daily, tv_reconcile) must not stay in health as job:<name> forever."""
+    from goldbot.ops.scheduler import Schedule, Scheduler
+    ctx = _ctx(tmp_path / "data", tmp_path)
+    def clock() -> pd.Timestamp:
+        return pd.Timestamp("2026-10-02 12:00", tz="UTC")
+    old = Scheduler(ctx.state_dir / "scheduler.json", clock=clock)
+    old.add("agents_daily", Schedule(kind="daily", at="06:00"), lambda slot: None)
+    sch = build_scheduler(ctx, clock=clock)
+    assert set(sch.state) == set(JOBS)
 
 
 def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_trials(bars_store, tmp_path):

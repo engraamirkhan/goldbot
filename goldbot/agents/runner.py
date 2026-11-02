@@ -2,8 +2,8 @@
 
 The loop is written out (rather than the SDK's beta tool runner) because the spending cap must be enforced between
 turns and the whole run must be testable without the network. Every run is logged to aux.db table agent_runs (mirrored
-to state/agent_runs.jsonl for the dashboard) with its inputs, tool calls, usage and cost, and its report is written
-to state/agent_reports/<role>/<UTC time>.md.
+to state/agent_runs.jsonl, which the Telegram service relays to the owner; there is no Agents screen since ADR 0066)
+with its inputs, tool calls, usage and cost, and its report is written to state/agent_reports/<role>/<UTC time>.md.
 
 Model and request shape follow the Claude API guidance for this SDK (anthropic 1.x): Claude Opus 5.5 with thinking on
 (it cannot be disabled; depth is set by `effort`), automatic prompt caching of the stable system prompt and tools, and

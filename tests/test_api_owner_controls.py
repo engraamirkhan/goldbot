@@ -15,7 +15,7 @@ from goldbot.api.auth import totp_code
 from goldbot.config import DriftSettings
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.telegram.bus import ApprovalBus
-from tests.test_api_views import _login, seed_health, seed_research
+from tests.test_api_views import _login, seed_health
 from tests.test_automode import T0, _evidence, _same
 
 
@@ -34,7 +34,7 @@ def app_client(tmp_path):
     state, docs = tmp_path / "state", tmp_path / "docs"
     state.mkdir()
     docs.mkdir()
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", docs_dir=docs, owner_email="o@x.io")
+    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email="o@x.io")
     return app, TestClient(app), state, docs
 
 
@@ -140,38 +140,6 @@ def test_re_arm_lock_and_kill_switch_are_shown_as_forcing_propose(app_client):
     assert kinds == {("icm-demo", "rearm_lock"), ("icm-live", "kill_switch"), ("broken", "risk_unreadable")}
     assert not v["eligible"] and not v["can_enable"] and v["engine_modes"] == {"icm-demo": "propose"}
     assert any("propose-only" in x for x in v["reasons"]) and any("unreadable" in x for x in v["reasons"])
-
-
-# ------------------------------------------------------------------------------------------------ research plan
-def test_plan_shows_reservation_retired_families_moves_and_doc_drift(app_client):
-    app, c, state, docs = app_client
-    h = _login(c, app)
-    seed_research(state, docs)
-    plan = json.loads((state / "research_plan.json").read_text())
-    plan["evidence"].append({"family": "mean_reversion", "trials": 3, "evidence": 0.0, "blocked": False, "flags": [],
-                             "median_auc": None, "best_dsr": None, "shadow_trades": 0, "retired_id": "R-01",
-                             "retired_status": "net negative after costs", "retired_since": "2026-07-01", "retired": True})
-    plan.update(quarter_reserved=4, reservation={"setting": 6, "run": 2, "pending": 3, "reserved": 4},
-                retired_floor={"mean_reversion": 1}, reinstate_t=2.61, hypotheses_sha256="0" * 64,
-                hypotheses_drift=["R-02 in hypotheses.md but not in research.retired_families"],
-                moves=[{"family": "tsmom", "source": "attribution", "detail": "net-R t 2.1 over 60 trades",
-                        "budget_before": 9, "budget_after": 10, "share_before": 0.5, "share_after": 0.56, "shift_pct": 12.0}])
-    (state / "research_plan.json").write_text(json.dumps(plan))
-    p = c.get("/api/research", headers=h["viewer"]).json()["plan"]
-    assert p["quarter_reserved"] == 4 and p["reservation"] == {"setting": 6, "run": 2, "pending": 3, "reserved": 4}
-    assert p["retired"] == [{"family": "mean_reversion", "hypothesis_id": "R-01", "since": "2026-07-01",
-                             "reason": "net negative after costs", "floor": 1, "reinstated": False, "new_evidence": []}]
-    assert p["reinstate_t"] == 2.61 and p["moves"][0]["shift_pct"] == 12.0 and p["moves"][0]["budget_after"] == 10
-    assert p["hypotheses_changed"] and p["hypotheses_sha256_now"] != "0" * 64
-    assert p["hypotheses_drift"] == ["R-02 in hypotheses.md but not in research.retired_families"]
-
-
-def test_plan_written_before_the_governance_fields_reads_with_defaults(app_client):
-    app, c, state, docs = app_client
-    h = _login(c, app)
-    seed_research(state, docs)
-    p = c.get("/api/research", headers=h["viewer"]).json()["plan"]
-    assert p["reservation"] is None and p["retired"] == [] and p["moves"] == [] and not p["hypotheses_changed"]
 
 
 # ------------------------------------------------------------------------------------------------ calibrated CUSUM

@@ -36,7 +36,6 @@ VALID_BODIES: dict[str, dict[str, Any]] = {
     "/api/halt": {"reason": "test"},
     "/api/rearm": {"totp": "000000"},
     "/api/automode": {"mode": "propose", "totp": ""},
-    "/api/chart/layouts": {"layouts": []},
 }
 
 
@@ -45,7 +44,7 @@ def app_client(tmp_path):
     state, docs = tmp_path / "state", tmp_path / "docs"
     state.mkdir()
     docs.mkdir()
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", docs_dir=docs, owner_email="o@x.io")
+    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email="o@x.io")
     return app, TestClient(app)
 
 

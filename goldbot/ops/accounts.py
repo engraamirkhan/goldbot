@@ -21,7 +21,6 @@ CLI:
   python -m goldbot.ops.accounts list
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
   python -m goldbot.ops.accounts add vantage-live-obs  # observe_only: server, login and the INVESTOR password
-  python -m goldbot.ops.accounts set tradingview-webhook-secret
   python -m goldbot.ops.accounts set smtp-password      # the SMTP (Gmail App) password for email sign-in links
   ... set <key> --stdin                                  # the value from a pipe (no prompt; never echoed)
   ... export <key> | ssh <host> goldbot accounts set <key> --stdin   # copy a secret; refuses a terminal stdout
@@ -299,6 +298,10 @@ class Account(Record):
     # its end, so nothing carries into the main session. Needs `always_open`; its exploration arms are controls only
     weekend_only: bool = False
     weekend_window: WeekendWindow = Field(default_factory=WeekendWindow)
+    # ADR 0068 (key levels, display only): `long` = the dashboard's zones are built on the broker's own M15, 800 days
+    # deep, pulled through the bridge (paced, one pull per bridge at a time); `short` = on the engine's ~62 days of 1m
+    # only, no pull (instruments that do not need weekly levels, or a box whose memory is tight)
+    key_levels_history: Literal["long", "short"] = "long"
     # ADR 0063 (owner 2026-10-31: XAUUSD247 through the live account, "NO live trading"): `observe_only` = a real
     # account the system only READS, its terminal logged in with the MT5 investor (read-only) password so the broker
     # rejects every order by construction. Never enabled, never an engine, arm, allocator or probe account and never

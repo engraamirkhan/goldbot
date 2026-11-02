@@ -289,7 +289,7 @@ class Population:
         under its pre-registered screen (`Specialist.screening`): it enters only through a passed trial."""
         added = []
         for fam, cls in sorted(SPECIALISTS.items()):
-            if cls.screening or cls.requires_tv:     # a TradingView family enters only through from_plot (shadow)
+            if cls.screening or cls.requires_tv:     # a TradingView family has no input (chart path retired)
                 continue
             ident = AgentIdentity(family=fam, config=dict(cls.default_config))
             if ident.agent_id not in self.members:

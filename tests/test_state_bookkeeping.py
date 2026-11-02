@@ -211,7 +211,6 @@ def test_scheduler_state_survives_a_restart_without_its_json_file(tmp_path):
 
 # ----------------------------------------------------------------------------------------------- readers
 def test_every_reader_outside_the_step_still_sees_the_data(tmp_path):
-    from goldbot.api.app import State
     _old_files(tmp_path)
     clock = lambda: NOW                                                     # noqa: E731
     sch = Scheduler(tmp_path / "scheduler.json", clock=clock)
@@ -219,10 +218,6 @@ def test_every_reader_outside_the_step_still_sees_the_data(tmp_path):
     ledger = SpendLedger(tmp_path / "agent_spend.json", monthly_cap_usd=40.0)
     ledger.add(NOW, 1.0)
     AgentRunLog(tmp_path).append(json.dumps({"role": "journal_coach", "status": "ok", "cost_usd": 0.3}))
-    # dashboard (api/app.py): /api/jobs and /api/agent-runs
-    st = State(tmp_path)
-    assert st.scheduler()["jobs"]["nightly_costs"]["runs"] == 7
-    assert st.agent_runs()[0]["role"] == "journal_coach"                   # newest first
     # health (ops/health.py): scheduler heartbeat and monthly spend
     ctx = make_ctx(tmp_path, now=NOW)
     assert health.check_scheduler(ctx)[0].status == "ok"

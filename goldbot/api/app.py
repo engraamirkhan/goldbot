@@ -36,11 +36,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 from goldbot.api import (
-    activity,
-    chart_layouts,
     entry_status,
     explain,
     home_cards,
+    key_levels_view,
     limits,
     mt5_crop,
     progress,
@@ -84,18 +83,9 @@ from goldbot.api.schema import (
     AcceptResponse,
     AccountSummary,
     ActiveBlackout,
-    ActivityView,
-    AgentRow,
-    AgentRunRow,
-    AttributionView,
     AuthState,
     AutoModeView,
-    CalendarEvent,
-    CalendarResponse,
     ChangePasswordRequest,
-    ChartLayout,
-    ChartLayoutsRequest,
-    ChartLayoutsView,
     CodeSignIn,
     CodeSignIns,
     DecidedProposal,
@@ -111,13 +101,12 @@ from goldbot.api.schema import (
     ExitReason,
     FeedHealth,
     ForgotPasswordRequest,
-    GatesView,
     HaltRequest,
-    Headline,
     HealthView,
     InviteRequest,
     InviteResponse,
-    JobRow,
+    KeyLevelsView,
+    KeyLevelTf,
     LimitChange,
     LimitsView,
     LoginRequest,
@@ -135,7 +124,6 @@ from goldbot.api.schema import (
     RecoveryCodesResponse,
     RecoveryLoginRequest,
     RecoveryLoginResponse,
-    ResearchView,
     ResetLinkResponse,
     ResetRequest,
     RevokeResponse,
@@ -155,13 +143,10 @@ from goldbot.api.schema import (
     TradeSort,
     TradesOverview,
     TradesPage,
-    TradesSummary,
     TradeStatus,
-    TvStatusView,
     UserRef,
     UserRow,
 )
-from goldbot.api.tv_status import tv_status
 from goldbot.config import MailSettings
 from goldbot.data.store import Store
 from goldbot.data.timeutil import heartbeat_problem
@@ -176,11 +161,9 @@ from goldbot.telegram.bus import ApprovalBus
 log = logging.getLogger("goldbot.api")
 
 
-# The dashboard runs only its own scripts; the one third party is TradingView's chart, a cross-origin iframe that cannot
-# reach our storage (the session token lives in sessionStorage), so script-src stays 'self'.
+# The dashboard runs only its own scripts and frames nothing (the TradingView chart iframe was retired on 2026-11-02).
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
-       "frame-src https://www.tradingview-widget.com https://www.tradingview.com; object-src 'none'; "
-       "base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+       "frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 
 MT5_CHART_MAX_AGE_S = 300.0
@@ -196,7 +179,6 @@ def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
     return max(0.0, now - float(ts))
 
 if TYPE_CHECKING:
-    from goldbot.agents.tools import ReadOnlyTools
     from goldbot.config import Settings
 
 bearer = HTTPBearer(auto_error=False)
@@ -209,20 +191,9 @@ class State:
         self.auth = AuthStore(self.dir, owner_email=owner_email)
         self.ws_clients: set[WebSocket] = set()
         self._data_root = data_root
-        self._tools: ReadOnlyTools | None = None
-
-    def tools(self) -> ReadOnlyTools:
-        """The agents' read-only store tools (calendar, headlines), opened on first use: the store root comes from
-        settings.data_root unless create_app was given one, so apps that never read the store never touch it."""
-        if self._tools is None:
-            from goldbot.agents.tools import ReadOnlyTools
-            from goldbot.config import load_settings
-            root = self._data_root if self._data_root is not None else load_settings().data_root
-            self._tools = ReadOnlyTools(self.dir, Store(root))
-        return self._tools
 
     def store(self) -> Store:
-        """The Parquet store (same root as `tools()`)."""
+        """The Parquet store: settings.data_root unless create_app was given one."""
         from goldbot.config import load_settings
         root = self._data_root if self._data_root is not None else load_settings().data_root
         return Store(root)
@@ -261,35 +232,6 @@ class State:
     def supervisor(self) -> dict:
         f = self.dir / "supervisor.json"
         return json.loads(f.read_text()) if f.exists() else {}
-
-    def scheduler(self) -> dict:
-        f = self.dir / "scheduler.json"
-        try:
-            return json.loads(f.read_text()) if f.exists() else {}
-        except json.JSONDecodeError:
-            return {}
-
-    def agent_runs(self, limit: int = 30) -> list[dict]:
-        f = self.dir / "agent_runs.jsonl"
-        if not f.exists():
-            return []
-        rows = []
-        for line in f.read_text().splitlines()[-limit:]:
-            try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            path = r.get("report_path")
-            rp = Path(path) if path else None
-            # only reports inside this state dir are served
-            ok = rp is not None and rp.exists() and self.dir.resolve() in rp.resolve().parents
-            r["report"] = rp.read_text() if ok and rp is not None else None
-            rows.append(r)
-        return rows[::-1]
-
-    def agents(self) -> list[dict]:
-        f = self.dir / "agents.json"
-        return json.loads(f.read_text()) if f.exists() else []
 
     async def broadcast(self, event: dict) -> None:
         dead = []
@@ -382,7 +324,7 @@ def client_ip(request: Request) -> str | None:
 
 
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
-               data_root: str | Path | None = None, docs_dir: str | Path | None = None,
+               data_root: str | Path | None = None,
                owner_email: str | None = None, mail: MailSettings | None = None,
                mailer: Mailer | None = None, code_delivery: CodeDelivery | None = None) -> FastAPI:
     """owner_email: the dashboard owner; None reads `auth.owner_email` from settings. mail: None reads `auth.mail`;
@@ -967,24 +909,13 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         await st.broadcast({"type": "halt", "halted": False})
         return current_status()
 
-    @app.get("/api/agents", response_model=list[AgentRow])
-    def agents(_: User = Depends(auth)) -> list[AgentRow]:
-        return [AgentRow(**a) for a in st.agents()]
-
     @app.get("/api/feeds", response_model=list[FeedHealth])
     def feeds(_: User = Depends(auth)) -> list[FeedHealth]:
         sup = st.supervisor()
         age = supervisor_heartbeat_age_s(sup or {}, time.time())
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
-                           terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
+                           terminal_connected=e.get("terminal_connected", False),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
-
-    @app.get("/api/tradingview", response_model=TvStatusView)
-    def tradingview_status(_: User = Depends(auth)) -> TvStatusView:
-        s = view_settings()
-        keys = (s.tv_pull.sessionid_key, s.tv_pull.sessionid_sign_key) if s is not None else None
-        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"), state_dir=st.dir, cookie_keys=keys,
-                         aliases=s.tv_pull.aliases if s is not None else None)
 
     # ============================================================== Limits card (read-only, any signed-in role)
     # goldbot/api/limits.py: what the engines publish, the supervisor's combined caps and core.db's change logs
@@ -1001,47 +932,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def limits_changes(account: str | None = None, limit: int = 20, _: User = Depends(auth)) -> list[LimitChange]:
         return limits.changes_view(st.dir, account, limit)
 
-    @app.get("/api/jobs", response_model=list[JobRow])
-    def jobs(u: User = Depends(auth)) -> list[JobRow]:
-        sch = st.scheduler()
-        if not sch:
-            return []
-        age = max(0.0, time.time() - datetime.fromisoformat(sch["ts"]).timestamp())   # clamp clock skew
-        return [JobRow(name=n, last_slot=j.get("last_slot"), last_finished=j.get("last_finished"), last_ok=j.get("last_ok"),
-                       last_error=shown(u, (j.get("last_error") or "").splitlines()[0]) if j.get("last_error") else None,
-                       next_slot=j.get("next_slot"), runs=j.get("runs", 0), failures=j.get("failures", 0), heartbeat_age_s=age)
-                for n, j in sorted(sch.get("jobs", {}).items())]
-
-    @app.get("/api/agent-runs", response_model=list[AgentRunRow])
-    def agent_runs(u: User = Depends(auth)) -> list[AgentRunRow]:
-        owner = st.auth.is_owner(u)                 # account-security notices are the owner's alone
-        return [AgentRunRow(role=r["role"], started_utc=r["started_utc"], status=r["status"], turns=r.get("turns", 0),
-                            cost_usd=r.get("cost_usd", 0.0), detail=r.get("detail"), report=r.get("report"))
-                for r in st.agent_runs() if owner or r.get("role") != "account_security"]
-
-    @app.get("/api/calendar", response_model=CalendarResponse)
-    def calendar(days: int = 7, max_tier: int = 2, _: User = Depends(auth)) -> CalendarResponse:
-        out = st.tools().read_calendar(min(max(days, 1), 14), min(max(max_tier, 1), 3))
-        events = []
-        for e in out["events"]:
-            start, end = e.get("blackout_utc") or (None, None)
-            events.append(CalendarEvent.model_validate({**e, "impact": e["impact"] or "", "forecast": e["forecast"] or "",
-                                                        "previous": e["previous"] or "", "blackout_start": start,
-                                                        "blackout_end": end}))
-        return CalendarResponse(now=out["now"], events=events, active_blackout=st.active_blackout(), note=out.get("note"))
-
-    @app.get("/api/news", response_model=list[Headline])
-    def news(hours: int = 24, min_relevance: float = 0.0, _: User = Depends(auth)) -> list[Headline]:
-        mr = min(max(min_relevance, 0.0), 1.0) if min_relevance == min_relevance else 0.0   # NaN -> 0
-        rows = st.tools().read_headlines(min(max(hours, 1), 72), mr, extra=("item_id", "ts_utc", "link"))
-        tags = ("rates", "risk", "dollar", "surprise")      # unscored rows store "" for the direction tags
-        return [Headline.model_validate({**r, "link": r.get("link") or None, "shock": bool(r["shock"]),
-                                         **{k: r[k] or None for k in tags}}) for r in rows]
-
-    # ============================================================== Health and Research screens (read-only, any role)
-    # Built by goldbot/api/explain.py from drift.json, the shadow book, the health checks, the trial registry, the
-    # research plan and docs/research/hypotheses.md. Nothing here writes.
-    docs = Path(docs_dir) if docs_dir is not None else Path(__file__).resolve().parents[2] / "docs"
+    # ============================================================== Health screen (read-only, any role)
+    # Built by goldbot/api/explain.py from drift.json, the shadow book and the health checks. Nothing here writes.
 
     def view_settings() -> Settings | None:
         from goldbot.config import load_settings
@@ -1054,68 +946,14 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/health", response_model=HealthView)
     def health_view(u: User = Depends(auth)) -> HealthView:
         return explain.health_view(st.dir, view_settings(), is_owner=st.auth.is_owner(u))
-
-    @app.get("/api/research", response_model=ResearchView)
-    def research_view(_: User = Depends(auth)) -> ResearchView:
-        return explain.research_view(st.dir, view_settings(), docs)
-    # ============================================================== end Health and Research screens
-
-    # ============================================================== Progress tab (W2-3; read-only, viewer and above)
-    # goldbot/api/progress.py: the gates evaluated on request with nothing written (cached 60 s), the daily results
-    # file without its trade rows, and each account's last 30 opportunity days. Nothing here records a gate, unlocks
-    # live, halts or changes a setting; accounts are named with their digits cut.
-    gates_cache = progress.GatesCache()
+    # ============================================================== end Health screen
 
     def engines_or_none() -> list[dict]:
         try:
             return st.engines()
         except OSError:
-            log.warning("engine states unreadable: progress views without them")
+            log.warning("engine states unreadable: trade views without them")
             return []
-
-    def build_gates() -> GatesView:
-        now, s = pd.Timestamp.now("UTC"), view_settings()
-        if s is None:
-            return progress.gates_unavailable(now, None)
-        try:
-            return progress.gates_view(st.dir, s, now, engines_or_none())
-        except Exception:                      # noqa: BLE001 - reporting only: the owner reads "can't check"
-            log.exception("gates view failed")
-            return progress.gates_unavailable(now, s)
-
-    @app.get("/api/gates", response_model=GatesView)
-    def gates(_: User = Depends(need("viewer"))) -> GatesView:
-        return gates_cache.get(build_gates)
-
-    @app.get("/api/attribution", response_model=AttributionView)
-    def attribution(_: User = Depends(need("viewer"))) -> AttributionView:
-        return progress.attribution_view(st.dir, view_settings(), pd.Timestamp.now("UTC"))
-
-    @app.get("/api/trades/summary", response_model=list[TradesSummary])
-    def trades_summary(_: User = Depends(need("viewer"))) -> list[TradesSummary]:
-        return progress.trades_summary(st.dir, pd.Timestamp.now("UTC"), engines_or_none())
-    # ============================================================== end Progress tab
-
-    # ============================================================== Home activity feed (read-only, viewer and above)
-    # goldbot/api/activity.py: shadow trades, positions, cost probes and refusals, newest first. One build serves every
-    # poll for ACTIVITY_TTL_S; `limit` only slices it. Nothing here writes.
-    activity_cache = progress.GatesCache(ttl_s=activity.ACTIVITY_TTL_S)
-
-    def build_activity() -> ActivityView:
-        try:
-            store: Store | None = st.store()
-        except Exception as exc:               # noqa: BLE001 - no store: the feed shows without refusals
-            log.warning("activity feed: store unavailable (%s)", type(exc).__name__)
-            store = None
-        v = activity.activity_view(st.dir, store, pd.Timestamp.now("UTC"), engines_or_none())
-        return v if store is not None else v.model_copy(update={"unreadable": [*v.unreadable, "journal"]})
-
-    @app.get("/api/activity", response_model=ActivityView)
-    def activity_feed(limit: int = Query(50, ge=1, le=activity.MAX_EVENTS),
-                      _: User = Depends(need("viewer"))) -> ActivityView:
-        v = activity_cache.get(build_activity)
-        return v.model_copy(update={"events": v.events[:limit]})
-    # ============================================================== end Home activity feed
 
     # ============================================================== Home trades summary (read-only, viewer and above)
     # goldbot/api/trades_overview.py: every trade type (shadow taken and all, demo, live, cost probes) for today, 7 days
@@ -1131,7 +969,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ============================================================== Trade ledger (read-only, viewer and above)
     # goldbot/api/trades_ledger.py (items 128, 129; ADR 0050): one row per trade of every kind, filters, cursor paging
     # and totals (no blinding since ADR 0053). One build serves every poll for LEDGER_TTL_S; /api/today reads it too.
-    # Registered after /api/trades/overview and /api/trades/summary so the detail route never shadows them.
+    # Registered after /api/trades/overview so the detail route never shadows them.
     ledger_cache = progress.GatesCache(ttl_s=trades_ledger.LEDGER_TTL_S)
 
     def ledger() -> trades_ledger.Ledger:
@@ -1270,8 +1108,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return ModeChangeResult(message=msg, view=explain.automode_view(st.dir, s, True))
     # ============================================================== end auto mode
 
-    # ============================================================== Chart tab: saved TradingView layouts
-    # The URL identifies the owner's TradingView layout: only the owner reads it back, and the audit row never holds it.
+    # ============================================================== MT5 terminal chart
     # The MT5 terminal's own chart (IC Markets, Wine/Xvfb), screenshotted every 60 s on the MT5 box and pulled by the
     # brain (docs/RUNBOOK.md "MT5 terminal chart on the dashboard"). Read-only; the file's mtime is the capture time.
     @app.get("/api/chart/mt5", responses={200: {"content": {"image/png": {}}}, 404: {"description": "no fresh capture"}})
@@ -1294,23 +1131,12 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             "X-Chart-Symbol": res.symbol, "X-Chart-Timeframe": res.timeframe,
             "X-Chart-Gold": "unknown" if res.gold is None else str(res.gold).lower()})
 
-    @app.get("/api/chart/layouts", response_model=ChartLayoutsView)
-    def chart_layouts_get(u: User = Depends(auth)) -> ChartLayoutsView:
-        owner = st.auth.is_owner(u)
-        return ChartLayoutsView(layouts=[ChartLayout(name=n, url=url if owner else None)
-                                         for n, url in chart_layouts.read_layouts(st.auth.db)], can_edit=owner)
-
-    @app.post("/api/chart/layouts", response_model=ChartLayoutsView)
-    def chart_layouts_put(body: ChartLayoutsRequest, request: Request, u: User = Depends(need("owner")),
-                          creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> ChartLayoutsView:
-        stepup(u, creds, body.totp, request)
-        for item in body.layouts:
-            if not chart_layouts.valid_layout_url(item.url):
-                raise HTTPException(422, "a layout link must look like https://www.tradingview.com/chart/<id>/")
-        chart_layouts.write_layouts(st.auth.db, [(i.name.strip(), i.url.strip()) for i in body.layouts])
-        st.auth.audit("chart_layouts_set", actor=u.email, count=len(body.layouts))
-        return chart_layouts_get(u)
-    # ============================================================== end Chart tab
+    # goldbot/api/key_levels_view.py: each account's current key zones (engine_<account>.json `key_zones`) and the
+    # recent bars of the chart's timeframe. Display only.
+    @app.get("/api/key-levels", response_model=KeyLevelsView)
+    def key_levels(tf: KeyLevelTf = "1h", account: str | None = None, _: User = Depends(auth)) -> KeyLevelsView:
+        return key_levels_view.key_levels_view(engines_or_none(), st.store(), tf, pd.Timestamp.now("UTC"), account)
+    # ============================================================== end MT5 terminal chart
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
@@ -1360,6 +1186,11 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
         @app.get("/{path:path}")
         def spa(path: str) -> FileResponse:
+            # an unknown /api/ path (a typo, or a route retired since a tab was opened) is a 404, never index.html;
+            # normalised first, so "//api/x" and "/API/x" are caught too
+            p = path.lstrip("/").lower()
+            if p == "api" or p.startswith("api/"):
+                raise HTTPException(404, "not found")
             # the path arrives percent-decoded ("..%2f" -> "../"): serve only files that resolve inside web/dist
             f = (dist / path).resolve()
             return FileResponse(f if f.is_file() and dist in f.parents else dist / "index.html")
