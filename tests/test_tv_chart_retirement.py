@@ -88,3 +88,15 @@ def test_the_engine_starts_and_closes_bars_with_every_registered_family(tmp_path
         eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
     assert eng.tick_errors_total == 0 and eng.state.stage.name != "HALTED"
     assert not [m for m in sys.modules if m in RETIRED]     # nothing on the engine's path loads a retired module
+
+
+def test_the_local_tradingview_chart_probe_and_its_recorded_frames_are_gone():
+    """The Mac websocket probe (scripts/tv_local) was the spike for the chart pull; it goes with the chart path."""
+    assert not (ROOT / "scripts" / "tv_local").exists()
+    assert not (ROOT / "tests" / "fixtures" / "tv").exists()
+
+
+def test_the_feed_health_row_carries_no_webhook_latency():
+    """The webhook went with the chart path, so the dashboard's feed row no longer has a latency for it."""
+    from goldbot.api.schema import FeedHealth
+    assert "webhook_p99_latency_s" not in FeedHealth.model_fields

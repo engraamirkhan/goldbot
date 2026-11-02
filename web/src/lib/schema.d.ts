@@ -1632,8 +1632,6 @@ export interface components {
             supervisor_heartbeat_age_s: number;
             /** Terminal Connected */
             terminal_connected: boolean;
-            /** Webhook P99 Latency S */
-            webhook_p99_latency_s: number | null;
         };
         /**
          * ForcedPropose

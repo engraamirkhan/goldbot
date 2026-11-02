@@ -41,7 +41,7 @@ function renderHome(role: apiModule.Role = "viewer", props: Parameters<typeof Ho
   mockIfFree("proposals", []);
   mockIfFree("recentProposals", []);
   mockIfFree("feeds", [{ account_id: "icm-demo", last_tick_age_s: 2, spread_points: 20, terminal_connected: true,
-    webhook_p99_latency_s: null, supervisor_heartbeat_age_s: 3 }]);
+    supervisor_heartbeat_age_s: 3 }]);
   mockIfFree("today", today());
   mockIfFree("openPositions", { as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [] });
   mockIfFree("strategyWatch", { as_of: "2026-10-19T10:00:00Z", unreadable: [], agents: [] });

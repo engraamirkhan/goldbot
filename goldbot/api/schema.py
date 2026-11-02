@@ -181,7 +181,6 @@ class FeedHealth(BaseModel):
     last_tick_age_s: float
     spread_points: float
     terminal_connected: bool
-    webhook_p99_latency_s: float | None
     supervisor_heartbeat_age_s: float
 
 

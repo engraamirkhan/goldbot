@@ -911,7 +911,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         sup = st.supervisor()
         age = supervisor_heartbeat_age_s(sup or {}, time.time())
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
-                           terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
+                           terminal_connected=e.get("terminal_connected", False),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
 
     # ============================================================== Limits card (read-only, any signed-in role)

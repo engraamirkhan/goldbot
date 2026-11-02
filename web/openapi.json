@@ -2183,17 +2183,6 @@
      "terminal_connected": {
       "title": "Terminal Connected",
       "type": "boolean"
-     },
-     "webhook_p99_latency_s": {
-      "anyOf": [
-       {
-        "type": "number"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Webhook P99 Latency S"
      }
     },
     "required": [
@@ -2201,7 +2190,6 @@
      "last_tick_age_s",
      "spread_points",
      "terminal_connected",
-     "webhook_p99_latency_s",
      "supervisor_heartbeat_age_s"
     ],
     "title": "FeedHealth",
