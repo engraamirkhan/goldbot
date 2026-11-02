@@ -302,8 +302,16 @@ research:
     overshoot_bps_by_symbol: {}      #   is refused, never priced at gold's cost
     short_rate_path: raw/daily/fred_DTB3.parquet   # data lane FRED DTB3 (value_date, value, available_utc), local only;
                                      #   joined on its stored available_utc, cut before 2025-10-01 on both stamps
-    currency_rate_paths: {}          # ISO -> FRED OECD 3-month file for FX differentials and non-USD indices; a U_16
+    currency_rate_paths:             # ISO -> FRED OECD 3-month file for FX differentials and non-USD indices (data lane,
+                                     #   PR #299, local only; monthly, available day 1 of M+2 at 23:00 UTC); a U_16
                                      #   market whose currency is missing is refused, never financed at the USD rate
+      EUR: raw/daily/fred_IR3TIB01EZM156N.parquet
+      GBP: raw/daily/fred_IR3TIB01GBM156N.parquet
+      JPY: raw/daily/fred_IR3TIB01JPM156N.parquet
+      AUD: raw/daily/fred_IR3TIB01AUM156N.parquet
+      CAD: raw/daily/fred_IR3TIB01CAM156N.parquet
+      CHF: raw/daily/fred_IR3TIB01CHM156N.parquet
+      NZD: raw/daily/fred_IR3TIB01NZM156N.parquet
     short_rate_constant_pct: 4.02    # fallback when DTB3 is absent (DTB3 at the swap measurement); a run using it is
                                      #   marked and cannot gate (scripts/position_screen.py refuses without --allow-constant-rate)
     markup_pct_by_symbol:            # W3.3 measured markups, % a year (long, short), swap-icm-2026-11-02: long -52.22 /

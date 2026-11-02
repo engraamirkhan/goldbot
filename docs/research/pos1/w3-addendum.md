@@ -37,8 +37,8 @@ threshold, no window and no K: every item below fixes arithmetic that W3 left op
      known by that part's last close.
    - The daily series are concatenated. t_boot, Sharpe, the years rule and the W3.4 counts are taken on the
      concatenation.
-   - The null nets are summed per draw across parts, with the same seeds (seed 20261102 + the market's index in the
-     spec).
+   - The null nets are summed per draw across parts. Each part has its own seed, 20261102 + 1000 x the part's index
+     (LEARN-OLD 0, LEARN 1) + the market's index in the spec, so the parts' draws are independent.
    - A part with no bars for any market of the spec is skipped and named in `windows_read`; it is not padded.
 8. **Years rule on years in the market.** Only years with at least one day in the market count as "available years".
    Warm-up years and all-flat years count neither for nor against the 60% rule.
@@ -83,8 +83,19 @@ threshold, no window and no K: every item below fixes arithmetic that W3 left op
       recorded in the output.
     - Each (spec, window) is claimed in `research.position.read_registry` before the read. A second claim refuses the
       whole batch, and a crashed read still counts.
-    - BH-FDR (q 0.10) runs only at CONFIRM, over the confirm-eligible ids of the committed, re-stamped section 3
-      table. No other window carries a BH verdict.
+    - **The confirm set is committed between EXPLORE and CONFIRM** (prereg section 4: "m = the eligible explore
+      passers plus any eligible C1 ensembles, fixed before the run"). `--write-confirm-set` builds it from the
+      EXPLORE result:
+      - it keeps ids whose section 3 status cell is exactly "confirm-eligible" ("not confirm-eligible" is not), that
+        passed every explore check on a DTB3-financed run;
+      - it adds the named eligible ensembles;
+      - it records the prereg blob.
+      The file is committed before any CONFIRM read.
+    - CONFIRM refuses unless the batch ids equal that committed set exactly: no subset and no extra. BH-FDR (q 0.10)
+      runs over exactly that set, and the set's blob sha is recorded. No other window carries a BH verdict.
+    - Read claims stay in `research.position.read_registry`. They are not mirrored into the trial registry
+      (`state/research_registry.jsonl`): a row there feeds K and the quarterly budget, and a read claim is neither a
+      trial nor a budget event.
 18. **Y_learn.**
     - The engine emits Y_learn per spec from bar dates only: per calendar year of LEARN-OLD and LEARN, the days the
       book is live (at least `min_live` markets past their 260-day warm-up) over 252, capped at 1.

@@ -6,6 +6,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
 ## Where things are (as of 2026-10-05)
 - Daily multi-asset research set (POS-1 inputs), local only: `goldbot/data/daily.py` (21:00 UTC mid bars, `load_daily`, `load_fred`, `usd_broad` ratio-chained DTWEXB->DTWEXBGS, hard cutoff 2025-10-01 asserted on every load) and `scripts/daily_fetch.py` (resumable Dukascopy hourly pull, FRED, Yahoo, sha256 manifest to `~/tmp/daily_manifest.json`). Files live in the git-ignored `raw/daily/`. `fetch_fred_csv` gained `end=` (coed) and DTWEXB takes the weekly H.10 availability rule. Market availability for POS-1: `docs/research/pos1/data-manifest.md`; POS-1 must not start until that file is re-stamped with the completed manifest's sha256.
+- POS-1 confirm set (quant re-review of PR #291, C-1; W3 addendum ruling 17). `scripts/position_screen.py --write-confirm-set <file> --from-explore <explore.json> --frozen-prereg docs/research/pos1/prereg.md [--ensemble ID]` builds the set; commit the file before any CONFIRM read.
+  - **What is in the set.** The ids whose status cell is exactly "confirm-eligible" and that passed every explore check on a DTB3-financed run, plus the named eligible ensembles.
+  - **CONFIRM.** It needs `--confirm-set` tracked at HEAD and refuses a batch that is not exactly that set. BH-FDR runs over exactly the set, and the blob shas of the set and the prereg are recorded.
+  - **Seeds.** EXPLORE seeds each part's null draws apart: 20261102 + 1000 x part + market.
+  - **Rates.** `research.position.currency_rate_paths` now maps EUR, GBP, JPY, AUD, CAD, CHF and NZD to the data lane's local OECD 3-month files (PR #299). The screen loads only the currencies a batch needs and refuses a missing one.
+  - **Not done.** Read claims are not mirrored into the trial registry, because that registry feeds K and the quarterly budget.
 - Daily position engine (rethink strategy.md step 2; amendment W3, PR #285; the W3 addendum `docs/research/pos1/w3-addendum.md`; ADR 0071): `goldbot/research/position/` turns a pre-registered spec's daily signal into daily P&L in units of starting equity.
   - **Clock and sizing.** Decision at the 21:00 UTC mid close, fill at the next 1m open. Vol targeting at 10%/yr (EWMA 60, lagged a day, cap 2x, re-clipped after a book scale), the no-trade band (10% of target unless the spec states one), and the 3 x ATR(20) disaster stop with restore at the last decision.
   - **Costs.** C1 point costs in bps from the cost of record's Asia cell: 0.51 bp round trip, 0.25 bp overshoot.

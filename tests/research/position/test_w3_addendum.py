@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +84,16 @@ def test_explore_reads_learn_old_and_learn_as_one_series_each_flat_at_its_own_ed
     assert a.net_total == pytest.approx(o.net_total + lr.net_total)
     assert a.n_round_trips_signal == o.n_round_trips_signal + lr.n_round_trips_signal
     assert a.days_in_market == o.days_in_market + lr.days_in_market
-    assert a.null_mean_net == pytest.approx((o.null_mean_net or 0) + (lr.null_mean_net or 0))   # per-draw sums
+    # per-draw sums, each part on its own seed (addendum ruling 7): LEARN is part 1 of EXPLORE
+    learn_as_part1 = engine.run(spec, panel, get_windows("EXPLORE")[1], cfg=FAST, first_part=1,
+                                costs={"XAUUSD": PointCosts(rt_bps=0.5, overshoot_bps=0.25)},
+                                venues={"A": NO_FINANCING}, rates=Rates(constant_pct=0.0))
+    explore_null = res.venues["A"].book_null_nets
+    old_null, learn_null = old.venues["A"].book_null_nets, learn_as_part1.venues["A"].book_null_nets
+    assert explore_null is not None and old_null is not None and learn_null is not None
+    np.testing.assert_allclose(explore_null, old_null + learn_null)
+    lone_null = learn.venues["A"].book_null_nets
+    assert lone_null is not None and not np.allclose(learn_null, lone_null)   # part seeds differ from a lone run's
     assert a.t_boot == pytest.approx(stats.block_t(res.venues["A"].daily["net"], resamples=FAST.boot_resamples,
                                                    block_days=FAST.boot_block_days, seed=FAST.null_seed))
     f = res.venues["A"].assets_daily["XAUUSD"]
@@ -147,14 +157,38 @@ def test_a_read_once_window_needs_a_committed_prereg_in_a_clean_tree_and_refuses
     assert ps._matches("POS1-026", ["026"]) and not ps._matches("POS1-0026x", ["026"])
 
 
-def test_a_confirm_batch_runs_bh_only_over_the_committed_eligible_ids(tmp_path: Path,
-                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_not_confirm_eligible_status_is_not_parsed_as_eligible() -> None:
+    ps = _screen()
+    table = TABLE + "| **027** | 0.666 | 0.54 | 0.163 | **not confirm-eligible** |\n" \
+                    "| 057 | 1.036 | 0.90 | 0.627 | confirm-eligible (pending) |\n"
+    assert ps.eligible_ids(table) == ["026"]
+
+
+def _explore_json(rows: list[tuple[str, str, bool]]) -> dict:
+    checks = ("net>0", "t_boot>=2", "round_trips>=30")
+    return {"window": "EXPLORE", "engine_commit": "abc",
+            "specs": [{"id": i, "rate_source": rate, "explore_checks": {c: ok for c in checks}} for i, rate, ok in rows]}
+
+
+def test_the_confirm_set_is_the_eligible_explore_passers_on_dtb3_plus_named_ensembles() -> None:
+    ps = _screen()
+    explore = _explore_json([("POS1-026", "DTB3", True), ("POS1-027", "DTB3", False), ("POS1-001", "DTB3", True),
+                             ("POS1-057", "constant", True)])
+    cs = ps.confirm_set(explore, ["026", "027", "057"], ["POS1-ENS-TREND"])
+    assert cs["ids"] == ["POS1-026", "POS1-ENS-TREND"] and cs["m"] == 2
+    with pytest.raises(SystemExit, match="EXPLORE"):
+        ps.confirm_set({**explore, "window": "LEARN"}, ["026"], [])
+
+
+def test_a_confirm_batch_must_equal_the_committed_confirm_set_and_bh_runs_over_exactly_it(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ps = _screen()
     _git(tmp_path, "init", "-q")
     (tmp_path / "prereg.md").write_text(TABLE)
     (tmp_path / ".gitignore").write_text("state/\nraw/\n")
+    (tmp_path / "confirm-set.json").write_text(json.dumps({"ids": ["POS1-026", "POS1-001"], "m": 2}))
     _git(tmp_path, "add", ".")
-    _git(tmp_path, "commit", "-qm", "prereg")
+    _git(tmp_path, "commit", "-qm", "prereg and confirm set")
     rng = np.random.default_rng(1)
     dates = pd.bdate_range("2016-06-01", "2025-09-30")
     close = 1500 * np.cumprod(1 + rng.normal(0, 0.01, len(dates)))
@@ -167,16 +201,71 @@ def test_a_confirm_batch_runs_bh_only_over_the_committed_eligible_ids(tmp_path: 
     mod.SPECS = [PositionSpec(id="POS1-026", symbols=("XAUUSD",), signal=momentum_sign(20)),  # type: ignore[attr-defined]
                  PositionSpec(id="POS1-001", symbols=("XAUUSD",), signal=momentum_sign(60))]
     monkeypatch.setitem(sys.modules, "w3_specs", mod)
-    argv = ["--raw-dir", str(tmp_path / "raw"), "--settings", str(ROOT / "config" / "settings.yaml"), "--spec",
-            "w3_specs:SPECS", "--window", "CONFIRM", "--frozen-prereg", "prereg.md", "--allow-constant-rate",
+    mod.SUBSET = mod.SPECS[:1]                                       # type: ignore[attr-defined]
+    base = ["--raw-dir", str(tmp_path / "raw"), "--settings", str(ROOT / "config" / "settings.yaml"), "--window",
+            "CONFIRM", "--frozen-prereg", "prereg.md", "--allow-constant-rate",
             "--out", str(tmp_path / "state" / "confirm.json")]
+    with pytest.raises(SystemExit, match="confirm-set"):
+        ps.main([*base, "--spec", "w3_specs:SPECS"], root=tmp_path)
+    with pytest.raises(SystemExit, match="not exactly the committed confirm set"):
+        ps.main([*base, "--spec", "w3_specs:SUBSET", "--confirm-set", "confirm-set.json"], root=tmp_path)
+    assert not (tmp_path / "state" / "position_reads.jsonl").exists()    # refused before any read was claimed
+    argv = [*base, "--spec", "w3_specs:SPECS", "--confirm-set", "confirm-set.json"]
     assert ps.main(argv, root=tmp_path) == 0
     got = json.loads((tmp_path / "state" / "confirm.json").read_text())
-    rows = {r["id"]: r for r in got["specs"]}
-    assert "bh_reject" in rows["POS1-026"] and "bh_reject" not in rows["POS1-001"]
-    assert got["bh_eligible"] == ["026"] and got["prereg_blob"] == _git(tmp_path, "rev-parse", "HEAD:prereg.md")
+    assert {r["id"]: "bh_reject" in r for r in got["specs"]} == {"POS1-026": True, "POS1-001": True}
+    assert got["bh_set"] == ["POS1-026", "POS1-001"] and got["prereg_blob"] == _git(tmp_path, "rev-parse",
+                                                                                     "HEAD:prereg.md")
+    assert got["confirm_set_blob"] == _git(tmp_path, "rev-parse", "HEAD:confirm-set.json")
     with pytest.raises(SystemExit, match="read once"):
         ps.main(argv, root=tmp_path)
+
+
+# ---------------------------------------------------------------- FX financing from the data lane's OECD files
+def _oecd(path: Path, rate: float) -> None:
+    """A data-lane OECD 3-month file: monthly, available day 1 of month M+2 at 23:00 UTC."""
+    vd = pd.date_range("2003-01-01", "2025-07-01", freq="MS")
+    av = (vd + pd.DateOffset(months=2) + pd.Timedelta(hours=23)).tz_localize("UTC")
+    pd.DataFrame({"value_date": vd, "value": rate, "available_utc": av}).to_parquet(path)
+
+
+def test_fx_financing_loads_for_all_seven_pairs_from_the_configured_oecd_files(tmp_path: Path) -> None:
+    ps = _screen()
+    from goldbot.config import load_settings
+    s = load_settings(ROOT / "config" / "settings.yaml").research.position
+    assert set(s.currency_rate_paths) == {"EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
+    iso_rate = {"EUR": 3.0, "GBP": 4.0, "JPY": 0.1, "AUD": 3.5, "CAD": 2.5, "CHF": 0.5, "NZD": 5.0}
+    for iso, rel in s.currency_rate_paths.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        _oecd(tmp_path / rel, iso_rate[iso])
+    dtb3 = tmp_path / s.short_rate_path
+    _oecd(dtb3, 1.0)
+    pairs = sorted(financing.FX_PAIRS)
+    assert len(pairs) == 7
+    rates = ps.load_rates(s, tmp_path, ["XAUUSD", *pairs, "GER40", "JP225", "UK100"], False)
+    at = pd.DatetimeIndex(["2012-06-05 21:00"], tz="UTC")
+    rate = {**iso_rate, "USD": 1.0}
+    for p in pairs:
+        base, quote = financing.FX_PAIRS[p]
+        assert rates.pct(p, at).tolist() == pytest.approx([rate[quote] - rate[base]])
+    assert rates.pct("GER40", at).tolist() == [3.0] and rates.pct("JP225", at).tolist() == [0.1]
+    early = pd.DatetimeIndex(["2003-02-28 21:00"], tz="UTC")           # January's value lands only on 1 March 23:00
+    assert rates.pct("EURUSD", early).tolist() == [rates.constant_pct]
+
+
+DATA_ROOT = Path(os.environ.get("GOLDBOT_DATA_ROOT", str(ROOT)))     # the checkout whose raw/ holds the data lane
+
+
+@pytest.mark.skipif(not (DATA_ROOT / "raw" / "daily" / "fred_IR3TIB01EZM156N.parquet").exists(),
+                    reason="the data lane's OECD files are local only (set GOLDBOT_DATA_ROOT to a checkout with raw/)")
+def test_the_local_oecd_files_load_for_every_fx_pair() -> None:
+    ps = _screen()
+    from goldbot.config import load_settings
+    s = load_settings(ROOT / "config" / "settings.yaml").research.position
+    rates = ps.load_rates(s, DATA_ROOT, sorted(financing.FX_PAIRS), False)
+    at = pd.DatetimeIndex(["2015-06-05 21:00"], tz="UTC")
+    for p in financing.FX_PAIRS:
+        assert np.isfinite(rates.pct(p, at)).all()
 
 
 # ---------------------------------------------------------------- 6 and 8 restore after a stop, one round trip
