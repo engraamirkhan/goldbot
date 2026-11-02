@@ -519,7 +519,14 @@ and the rest still arrives. It never contains account numbers or emails.
   positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
-  release note mentions the bridge.
+  release note mentions the bridge. On an MT5 box the deploy passes only once every bridge that ran before answers
+  GET /health (any terminal state) within 8 minutes of the switch, and rolls back otherwise (incident 2026-11-02:
+  "active" is not "serving" for a Wine bridge). The record says `bridge@<account> answers GET /health after N s`,
+  with `terminal <state>` when the terminal is not ok (for example `not_logged_in`: log it in, a rollback would not
+  help). `bridge /health not checked` means the box lacks `/usr/local/sbin/goldbot-bridge-probe` (install it: 0.3).
+  **Never deploy to the probe box (`goldbot-mt5-probe`) while its markets trade**: a bridge restart there costs about
+  4 minutes without a bridge for 20 books. Deploy it at the weekend or in the daily break (about 22:00-23:00 UTC in winter,
+  server midnight to 01:00), and the brain's engine for that account after the box.
   Its Windows-Python packages come only from `goldbot/ops/linux/mt5-bridge-requirements.txt`: exact versions and
   sha256 hashes rendered from `uv.lock` (`python scripts/bridge_requirements.py write`; CI fails when it is stale),
   wheels only. A deploy reinstalls them when `uv.lock` or that file changed. An MT5 box set up before this file
@@ -2509,10 +2516,45 @@ refused by the engine, its exits still close. Before the instruments go on a box
 4. Symbol check per symbol: `python -m goldbot.ops.symbol_check <account>` prints the account's gold, then one line per
    instrument (`ok` or its problems: not listed, symbol_info failed, trading disabled, contract size / digits / minimum lot /
    lot step / profit currency / triple-swap day differing from config/instruments.yaml) and `note:` lines where the hours the
-   broker quoted the symbol over the last 14 days differ from its session profile (reported only: the engine trades where
+   broker quoted the symbol over the last 8 complete days differ from its session profile (reported only: the engine trades where
    both are open). Every problem is fixed (or the instrument stays `enabled: false`) before the account trades it.
-5. Health: `symbols:<account>` appears once the engine reports its symbols; WARN names a symbol whose terms are not loaded
-   or whose feed is stale (its entries refused, exits still close).
+5. Health: `symbols:<account>` appears once the engine reports its symbols; WARN names a symbol whose terms are not loaded,
+   whose swap is not priced (`swap not priced: entries refused, exits still close`) or whose feed is stale (its entries
+   refused, exits still close).
+6. CPU budget (incident 2026-11-02): with every book on, `cat /proc/pressure/cpu` on the box must show `some` avg300
+   under 20 % (`vmstat 5 6`: steal under 20 %). Measure it after any change to the account's book list. Over budget:
+   see "Bridge contention on an MT5 box" below.
+
+### Bridge contention on an MT5 box (incident 2026-11-02)
+
+One terminal serves every call of an account one at a time (the MetaTrader5 package is not thread-safe). On a box
+without CPU headroom the calls queue: reads time out on the brain (`ReadTimeout`, `BridgeUnavailable`), engine passes
+take tens of seconds, entries come late. Closes and stop changes still go to the front of the queue (BACKLOG 135), and
+every position keeps its broker-side stop.
+
+**Detection.**
+- `bridge_compat:<account>` WARNs "terminal contended: calls waited up to N s for it and M held it over 2 s in the
+  last 5 minutes" when a call waited 10 s or more, or 10 or more calls held the terminal over 2 s.
+- The bridge journal names each slow call: `journalctl -u goldbot-bridge@<account> --since -15min | grep "held the
+  terminal"` (method, seconds held, requests still waiting).
+- On the box: `curl -s 127.0.0.1:<port>/health` shows `lock_wait_s` and `slow_calls` (absent while no call ran in the
+  last 5 minutes). `cat /proc/pressure/cpu` and `vmstat 5 6` show the CPU pressure and steal.
+
+**Budget.** PSI `some` avg300 under 20 %. Measured 2026-11-02: icm-probe on an E2.1.Micro with 20 books 47 % (steal
+58-77 %), icm-demo on the same shape with 1 symbol 13-17 %, vantage on E5.Flex (1 OCPU, 1/8 baseline, 2 GB) with 8
+books 5 %.
+
+**Recovery**, in order:
+1. Do not restart the bridge to "clear" it: a restart on a starved box costs 3-4 minutes without a bridge and the
+   queue comes back.
+2. Cut the account's book list (`instruments:` in `config/accounts.yaml`, a small PR; demo only) until PSI is under
+   budget. Gold, the indices and EURUSD first, as the 2026-11-02 recommendation.
+3. Or give the box CPU. That is spending, so the owner decides (approved for the probe box on 2026-11-02, about
+   £4.52/month). OCI cannot resize an E2.1.Micro to E5.Flex in place ("hardware series that is not compatible"): try
+   `oci compute instance update --instance-id <id> --shape VM.Standard.E4.Flex --shape-config
+   '{"ocpus":1,"memoryInGBs":2,"baselineOcpuUtilization":"BASELINE_1_8"}' --force` (the VM restarts; markets
+   closed), else build a new E5.Flex box and move the account to it (0.3b), then retire the old one.
+4. After either: measure PSI again with every book on, and check `bridge_compat:<account>` is ok.
 
 Protocol: v10 brains and bridges interoperate with v9 either way (`ticks_many` falls back to one `last_tick` per symbol on a
 v9 bridge); the bridge's notional ceiling counts every open symbol of the account (6x equity, account-wide).
@@ -2529,9 +2571,11 @@ writes it: XAUUSD keeps `costs_<account>.json` and `broker_terms_<account>.json`
   loses nothing.
 - **Swap units.** `swap_long_per_lot` / `swap_short_per_lot` are money in the symbol's **profit currency** (column
   `currency_profit`) per 1.0 lot per night, broker sign (negative = you pay). Converted from `symbol_info` only where the
-  unit is known: swap mode 0 (disabled) is 0, mode 1 (points) is swap x point x contract size. Any other mode is stored
-  NULL with a `swap_note`, and a NULL swap refuses that symbol's entries (`swap_unknown`): a cost the engine cannot price
-  is never taken as 0. `swap_triple_weekday` uses MT5 numbering (0 = Sunday). Read it with
+  unit is known: swap mode 0 (disabled) is 0, mode 1 (points) is swap x point x contract size, modes 2 and 3 (base or
+  margin currency) as is when that currency is the profit currency and x price when it is the base currency (bridge
+  protocol v11 reports `currency_base` / `currency_margin`; an older bridge leaves them unknown). Anything else is stored
+  NULL with a `swap_note`, and a NULL swap refuses that symbol's entries (`swap_unknown`, shown as "swap not priced:
+  entries refused, exits still close"): a cost the engine cannot price is never taken as 0. `swap_triple_weekday` uses MT5 numbering (0 = Sunday). Read it with
   `sqlite3 /opt/goldbot/state/instruments.db 'select account_id, symbol, currency_profit, swap_long_per_lot, swap_short_per_lot, swap_note, updated_utc from instrument_terms'`.
 - **Unreadable (`instruments_db_unreadable`).** A corrupt file, a newer schema or a full disk refuses entries on every
   non-gold book of the engines that read it; gold and every exit keep running (no exit reads this file). Fix: stop the
@@ -2540,6 +2584,12 @@ writes it: XAUUSD keeps `costs_<account>.json` and `broker_terms_<account>.json`
   the engine rebuilds every row from `symbol_info` within one terms refresh) or restore it alone from the backup (0.6,
   "To restore one file only"), and start the engines again. Deleting is the usual choice: the rows are a cache of the
   terminal's terms.
+- **Session cache (`instrument_sessions`, incident 2026-11-02).** Each non-gold book's broker session table, read at
+  most once per 24 h and reused by a restart: an engine start makes no session read, and the books' reads run one at a
+  time after its loop starts (each book keeps its static session profile until read). A failed read keeps the profile
+  and is tried again after 30 min. It is a cache: deleting the file (above) costs one read per book. To force a fresh
+  read of one book: `sudo -u goldbot sqlite3 /opt/goldbot/state/instruments.db "delete from instrument_sessions where symbol = '<broker symbol>'"`,
+  then restart that account's engine.
 - **`instrument_unverified`.** The instrument's terms are not confirmed on this terminal: its entry in
   `config/instruments.yaml` still has `verify: true` or `enabled: false` (the brokers' public contract specifications,
   not yet checked), the terminal quotes a different point or digits than the registry, or the terminal cannot describe

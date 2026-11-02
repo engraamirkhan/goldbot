@@ -15,3 +15,4 @@ Blameless: describe what the system and the process allowed, not who did it.
 | 2026-10-16 | [First restore drill fails on a restic lock the no-delete key cannot remove](2026-10-16-restic-lock-no-delete-key.md) | S3 | open (drill on the brain after deploy) |
 | 2026-10-20 | [A failed deploy's rollback left api, scheduler, telegram, news and tv-pull stopped](2026-10-20-deploy-rollback-left-services-stopped.md) | S1 | open (install the fixed goldbot-deploy on the brain) |
 | 2026-11-01 | [A broker-side "Service is not available" latched vantage-demo's login off for 6 h](2026-11-01-vantage-demo-transient-auth-latched.md) | S2 | closed |
+| 2026-11-02 | [The multi-instrument release left most books closed and the icm-probe bridge starved](2026-11-02-multi-instrument.md) | S2 | open (probe box upgrade with the owner) |
