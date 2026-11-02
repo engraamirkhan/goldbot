@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from goldbot.api import trade_chart
 from goldbot.api.schema import AccountKeyLevels, KeyLevelsView, KeyLevelTf
+from goldbot.base import load_record
 
 log = logging.getLogger(__name__)
 
@@ -32,9 +33,9 @@ def _account(e: dict[str, Any], now: pd.Timestamp) -> AccountKeyLevels | None:
     if not isinstance(kz, dict):
         return None
     try:
-        acc = AccountKeyLevels.model_validate({"account_id": str(e.get("account")), **{
+        acc = load_record(AccountKeyLevels, {"account_id": str(e.get("account")), **{
             k: kz[k] for k in ("as_of", "price", "atr_1d", "history_days", "pct_ready", "zones_total", "above",
-                               "below") if k in kz}})
+                               "below") if k in kz}}, source="engine_state.key_zones")
         return acc.model_copy(update={"stale": now - pd.Timestamp(acc.as_of) > STALE_AFTER})
     except ValidationError:
         log.warning("key zones of %s unreadable: left out", e.get("account"))
