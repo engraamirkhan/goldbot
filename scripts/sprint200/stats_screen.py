@@ -534,7 +534,7 @@ def intraday_mom(m: pd.DataFrame, ctx: dict[str, Any]) -> pd.DataFrame:
     days = pd.DatetimeIndex(np.unique(ts.normalize().tz_localize(None)))
     days = days[days.weekday < 5]
 
-    def at(local: pd.DatetimeIndex) -> np.ndarray:
+    def at(local: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
         u = epoch_ns(local.tz_localize("America/New_York", ambiguous="NaT", nonexistent="shift_forward"))
         k = np.searchsorted(t, u, side="left") - 1          # the last bar with ts < u, closed at <= u
         ok = (k >= 0) & (u - t[np.maximum(k, 0)] <= 5 * MIN)
