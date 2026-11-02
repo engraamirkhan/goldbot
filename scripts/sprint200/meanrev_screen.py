@@ -781,7 +781,7 @@ def walk(d: Data, e: int, side: int, sd: float, td: float | None, dl: int) -> tu
         fill = min(stop, o) if side > 0 else max(stop, o)
         return side * (fill - px), fill, True, e + s_i
     if t_i >= 0:
-        return float(td), px + side * td, False, e + t_i                 # type: ignore[operator]
+        return float(td or 0.0), px + side * float(td or 0.0), False, e + t_i
     return side * (d.c[last] - px), d.c[last], False, last
 
 
@@ -860,6 +860,41 @@ def twins(d: Data, trades: list[Trade], meta: list[tuple[Signal, float, float | 
     return out
 
 
+def twins_leakfree(d: Data, trades: list[Trade], meta: list[tuple[Signal, float, float | None]],
+                   seed: int) -> list[Trade]:
+    """Leak-free control (coordinator correction 2026-11-02, all lanes): twin entries only at or after the trade's own
+    entry minute, same server day and session label, same side / stop / target / hold rule. A trade with no such
+    minute draws its twins at the same server minute of day on other days of the window instead."""
+    rng = np.random.Generator(np.random.PCG64(seed))
+    out: list[Trade] = []
+    for t, (s, sd, td) in zip(trades, meta, strict=True):
+        pool = d.pool.get((int(d.sday[t.entry]), t.label))
+        cand = pool[pool >= t.entry] if pool is not None else np.zeros(0, dtype=np.int64)
+        if len(cand):
+            picks = rng.choice(cand, size=N_TWINS, replace=True).tolist()
+        else:
+            picks = []
+            others = d.days[d.days != d.sday[t.entry]]
+            for dd in rng.choice(others, size=N_TWINS, replace=False).tolist():
+                k0 = d.day_first[int(dd)]
+                k1 = d.day_first.get(int(dd) + 1, k0 + 1440)
+                seg = np.flatnonzero(d.smin[k0:k1] >= d.smin[t.entry])
+                if len(seg):
+                    picks.append(int(k0 + seg[0]))
+        for e in picks:
+            if d.ts[e] < d.start_ns or d.smin[e] >= ROLL_LO or d.smin[e] < ROLL_HI:
+                continue
+            dl = deadline(d, e, s)
+            if dl >= d.end_ns or dl <= int(d.ts[e]):
+                continue
+            w = walk(d, e, s.side, sd, td, dl)
+            if w is None:
+                continue
+            move, _, stop_exit, x = w
+            out.append(Trade(e, x, s.side, move, sd, stop_exit, str(d.label[e])))
+    return out
+
+
 def net_r(d: Data, trades: list[Trade], costs: A.ArmCosts, overshoot: float | None = None) -> np.ndarray:
     if not trades:
         return np.zeros(0)
@@ -899,13 +934,17 @@ def evaluate(sid: str) -> dict[str, Any]:
     years = pd.DatetimeIndex(pd.to_datetime(np.array([d.ts[t.entry] for t in trades], dtype=np.int64), utc=True)).year
     by_year = {int(y): {"n": int((years == y).sum()), "net_r": float(r[years == y].mean())}
                for y in sorted(set(years.tolist()))}
+    tw2 = twins_leakfree(d, trades, meta, SEED + num + 1000)
+    rc2 = net_r(d, tw2, costs)
     stress = net_r(d, trades, costs, overshoot=A.OVERSHOOT_STRESS_USD)
     res: dict[str, Any] = {
         "id": sid, "n_signals": len(sigs), "n": len(trades),
         "gross_r": float(gross.mean()) if len(gross) else None,
         "net_r": float(r.mean()) if len(r) else None, "t": tstat(r),
-        "control_n": len(tw), "control_net_r": float(rc.mean()) if len(rc) else None,
-        "vs_control": float(r.mean() - rc.mean()) if len(r) and len(rc) else None,
+        "control_n": len(tw), "control_sameday_leaky_net_r": float(rc.mean()) if len(rc) else None,
+        "vs_control_sameday_leaky": float(r.mean() - rc.mean()) if len(r) and len(rc) else None,
+        "control_leakfree_n": len(tw2), "control_leakfree_net_r": float(rc2.mean()) if len(rc2) else None,
+        "vs_control": float(r.mean() - rc2.mean()) if len(r) and len(rc2) else None,
         "net_r_stress_os070": float(stress.mean()) if len(stress) else None,
         "median_stop_usd": float(np.median([t.sd for t in trades])) if trades else None,
         "stop_exit_share": float(np.mean([t.stop_exit for t in trades])) if trades else None,
