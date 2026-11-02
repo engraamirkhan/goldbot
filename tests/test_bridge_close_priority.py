@@ -82,9 +82,9 @@ class _Terminal(PaperBroker):
         self._read("last_tick")
         return super().last_tick(symbol)
 
-    def positions(self, magic_prefix: int | None = None) -> list[Position]:
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
         self._read("positions")
-        return super().positions(magic_prefix)
+        return super().positions(magic_prefix, symbol)
 
     def account_positions(self) -> list[Position]:
         self._read("account_positions")

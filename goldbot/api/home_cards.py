@@ -42,6 +42,7 @@ from typing import Any, Literal
 import pandas as pd
 
 from goldbot.api.activity import engines_by_account
+from goldbot.api.instruments_view import GOLD, by_symbol, instrument_key, symbol_quote
 from goldbot.api.schema import (
     DayCosts,
     LossLimit,
@@ -122,17 +123,22 @@ def _family(agent_id: str) -> str:
 
 def _position(account: str, t: OpenTrade, e: dict[str, Any], now: pd.Timestamp) -> OpenPosition:
     entry = t.open_price if t.open_price is not None else t.entry
-    price = _num(e.get("price"))
-    lot = _lot(e)
-    contract, fx = _num(lot.get("contract_oz")), usd_to_account(e)
+    symbol = instrument_key(getattr(t, "symbol", None))
+    if symbol == GOLD:
+        price = _num(e.get("price"))
+        lot = _lot(e)
+        contract, fx = _num(lot.get("contract_oz")), usd_to_account(e)
+        value = None if contract is None or fx is None else contract * fx
+    else:                      # another instrument: its own price and lot value, never the account's gold price
+        price, value = symbol_quote(e, symbol)
     move = None if price is None or entry is None else t.side * (price - entry)
-    pnl = None if move is None or contract is None or fx is None else round(move * t.lots * contract * fx, 2)
+    pnl = None if move is None or value is None else round(move * t.lots * value, 2)
     risk_stop = t.initial_sl if t.initial_sl is not None else t.sl
     risk = None if entry is None or risk_stop is None else abs(entry - risk_stop)
     r_now = None if move is None or not risk else round(move / risk, 2)
     at_risk = None if entry is None or t.sl is None else max(0.0, t.side * (entry - t.sl))
-    open_risk = None if at_risk is None or contract is None or fx is None else round(at_risk * t.lots * contract * fx, 2)
-    risk_amount = None if risk is None or contract is None or fx is None else round(risk * t.lots * contract * fx, 2)
+    open_risk = None if at_risk is None or value is None else round(at_risk * t.lots * value, 2)
+    risk_amount = None if risk is None or value is None else round(risk * t.lots * value, 2)
     age = _age(e, now)
     fx_age, fx_stale = _fx_age(e, now)
     ccy = e.get("currency")
@@ -144,12 +150,12 @@ def _position(account: str, t: OpenTrade, e: dict[str, Any], now: pd.Timestamp) 
                         timeframe=t.timeframe, side=_side(t.side), lots=t.lots, entry=entry,
                         stop=t.sl, target=t.tp, opened_utc=opened, price=price,
                         floating_pnl=pnl, currency=ccy if isinstance(ccy, str) else None, r_now=r_now, open_risk=open_risk,
-                        age_s=age, stale=age is None or age > STALE_S or fx_stale,
+                        age_s=age, stale=age is None or age > STALE_S or fx_stale or price is None and symbol != GOLD,
                         account_label=account_label(account), kind=_kind(t.agent_id, mode),
                         family_label=catalog().family_label(family), risk_amount=risk_amount,
                         held_s=round(max(0.0, (now - opened).total_seconds()), 1),
                         hold_limit_s=float(t.max_bars * tf_seconds(t.timeframe)) if t.timeframe else None,
-                        fx_age_s=fx_age)
+                        fx_age_s=fx_age, symbol=symbol)
 
 
 def _fx_age(e: dict[str, Any], now: pd.Timestamp) -> tuple[float | None, bool]:
@@ -364,11 +370,18 @@ def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str,
             extra = {}
         age = _age(e, now)
         ccy = e.get("currency")
+        try:                              # multi-instrument: per instrument (the movers); reporting only
+            syms = by_symbol(ledger.rows, account_name(account), day_bounds(report_day(now))[0])
+        except Exception as exc:          # noqa: BLE001
+            log.warning("today: by-instrument figures failed (%s)", type(exc).__name__)
+            syms = []
+        listed = e.get("symbols")
         rows.append(TodayAccount(
             account=account_name(account), mode=_mode(e.get("mode")), currency=ccy if isinstance(ccy, str) else None,
             day_pnl=round(eq - d0, 2) if eq is not None and d0 else None,
             open_pnl=round(eq - bal, 2) if eq is not None and bal is not None else None,
             closed_pnl=closed if readable else None, closed_n=n, closed_complete=complete, costs=costs,
             loss_meter=_meter(e, probe_terms.get(account)), age_s=age, stale=age is None or age > STALE_S,
-            account_label=account_label(account), **extra))
+            account_label=account_label(account), by_symbol=syms,
+            instruments_n=len(listed) if isinstance(listed, dict) and listed else None, **extra))
     return TodayView(as_of=now, accounts=rows, unreadable=ledger.unreadable)

@@ -608,8 +608,9 @@ CORE: tuple[Migration, ...] = (
     )),
 )
 
-# tv.db: the TradingView webhook's durable alert inbox (goldbot/webhook/inbox.py) and the direct pull's log
-# (goldbot/data/tv_pull.py), one file shared by both. Steps 1 and 2 are the schemas those modules created ad hoc before
+# tv.db: the TradingView webhook's durable alert inbox and the direct pull's log, one file shared by both (both writers
+# retired 2026-11-02 with the TradingView chart path; the file stays on the server and `goldbot.db migrate` still
+# upgrades it). Steps 1 and 2 are the schemas those modules created ad hoc before
 # this file knew tv.db, verbatim and IF NOT EXISTS: a file the ad-hoc code built (either half, or both) upgrades in
 # place with every row kept, and that code still opens a migrated file (a rollback). A step that is not additive would
 # make an older release refuse the file and the webhook fail closed: keep every tv step additive.
@@ -639,7 +640,7 @@ TV: tuple[Migration, ...] = (
     )),
     # the graphics (boxes, lines, labels) a study held at each closed bar, as the follow pass saw them: append-only,
     # first receipt wins; TradingView serves only the final set in history, so this is the only record of the sets
-    # the study had AT each bar (goldbot/data/tv_pull.py `PullLog.save_graphics`)
+    # the study had AT each bar (the retired direct pull's `PullLog.save_graphics`)
     Migration(version=3, name="tv_graphics", additive=True, statements=(
         """CREATE TABLE IF NOT EXISTS tv_graphics (
     meta_hash8 TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL, bar_time TEXT NOT NULL,
@@ -650,7 +651,7 @@ TV: tuple[Migration, ...] = (
     )),
 )
 
-# tv_auth.db: the TradingView sign-in state (goldbot/ops/tv_pull_health.py), its own file so a corrupt one can be moved
+# tv_auth.db: the TradingView sign-in state (the retired direct pull's), its own file so a corrupt one can be moved
 # aside without touching the alert inbox. Step 1 is the ad-hoc schema, verbatim (same rules as TV). An earlier release
 # (5a819f4) kept this table in tv.db; that copy is left where it is and never read.
 TV_AUTH: tuple[Migration, ...] = (
@@ -772,8 +773,29 @@ PROGRAM: tuple[Migration, ...] = (
     Migration(version=1, name="program_ledger", statements=_ledger_statements()),
 )
 
+# instruments.db (multi-instrument demo, plan 2026-11-02, lane L3: "costs/swap/lot terms per (account, symbol) in
+# state/instruments.db (SQLite WAL)"): one row per account and broker symbol, the terminal's lot terms and its swap as
+# money in the symbol's profit currency per lot per night (NULL: a swap mode the engine does not convert, so entries on
+# that symbol are refused). Written by the engine from symbol_info (goldbot/engine/instruments_db.py); never gold's
+# terms, which keep their own files (costs_<account>.json, broker_terms_<account>.json)
+INSTRUMENTS: tuple[Migration, ...] = (
+    Migration(version=1, name="instrument_terms", statements=(
+        """CREATE TABLE IF NOT EXISTS instrument_terms (
+    account_id TEXT NOT NULL, symbol TEXT NOT NULL, store_symbol TEXT NOT NULL,
+    contract_size REAL NOT NULL CHECK (contract_size > 0), digits INTEGER NOT NULL CHECK (digits >= 0),
+    point REAL NOT NULL CHECK (point > 0), volume_min REAL NOT NULL CHECK (volume_min > 0),
+    volume_step REAL NOT NULL CHECK (volume_step > 0), volume_max REAL NOT NULL CHECK (volume_max > 0),
+    currency_profit TEXT, swap_long_per_lot REAL, swap_short_per_lot REAL,
+    swap_triple_weekday INTEGER CHECK (swap_triple_weekday BETWEEN 0 AND 6),
+    swap_note TEXT NOT NULL, updated_utc TEXT NOT NULL,
+    PRIMARY KEY (account_id, symbol)
+) STRICT""",
+    )),
+)
+
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH,
-                                                   "program": PROGRAM, "tv_ideas": TV_IDEAS}
+                                                   "program": PROGRAM, "tv_ideas": TV_IDEAS,
+                                                   "instruments": INSTRUMENTS}
 
 
 def _check_sequence(kind: DbKind, migs: tuple[Migration, ...]) -> None:

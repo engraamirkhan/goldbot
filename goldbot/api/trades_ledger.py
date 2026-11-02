@@ -39,9 +39,11 @@ import pandas as pd
 from pydantic import PrivateAttr
 
 from goldbot.api.activity import engines_by_account
+from goldbot.api.instruments_view import GOLD, group_of, instrument_key, symbol_quote
 from goldbot.api.schema import (
     CostSplit,
     ExitReason,
+    InstrumentGroup,
     TradeEvidence,
     TradeKind,
     TradeListPeriod,
@@ -139,6 +141,15 @@ class _Acct:
     contract: float = labs.CONTRACT_OZ
     fx: float | None = None
     stale: bool = True                  # engine figures or rate too old: never current
+    # a non-gold instrument (multi-instrument demo): account currency per 1.0 of price per lot, from the engine's
+    # per-symbol report; when set it replaces contract x fx for the money of an open row
+    lot_value: float | None = None
+
+    def value(self) -> float | None:
+        """Account currency per 1.0 of price per lot, or None (never a guessed rate)."""
+        if self.lot_value is not None:
+            return self.lot_value
+        return None if self.fx is None else self.contract * self.fx
 
 
 def _acct(e: dict[str, Any], now: pd.Timestamp) -> _Acct:
@@ -167,9 +178,22 @@ class _Ctx:
     accts: dict[str, _Acct]
     orders: dict[tuple[str, int], OpenTrade] = field(default_factory=dict)
     read_only: bool = False             # a report: never migrate aux.db from a reader (ops/learning_ledger.py)
+    engines: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    def acct(self, account: str) -> _Acct:
-        return self.accts.get(account, _Acct())
+    def acct(self, account: str, symbol: str = GOLD) -> _Acct:
+        """The account's figures for a row of `symbol`: gold's as before; another instrument's price and lot value
+        from the engine's per-symbol report (instruments_view.symbol_quote), its contract from the registry (the
+        costs), and stale whenever the engine does not price it, so its P&L now is None, never priced at gold."""
+        base = self.accts.get(account, _Acct())
+        if symbol == GOLD:
+            return base
+        from goldbot.api.instruments_view import _registry
+        price, value = symbol_quote(self.engines.get(account, {}), symbol)
+        reg = _registry(None)
+        spec = reg.instruments.get(symbol) if reg is not None else None
+        return _Acct(mode=base.mode, currency=base.currency, price=price,
+                     contract=spec.contract_size if spec is not None else 1.0, fx=None,
+                     stale=base.stale or price is None, lot_value=value)
 
 
 def _costs(*, lots: float, contract: float, side: int, fx: float | None, spread_usd: float | None,
@@ -207,9 +231,10 @@ def _costs(*, lots: float, contract: float, side: int, fx: float | None, spread_
 def _open_money(side: int, entry: float | None, a: _Acct, lots: float, risk: float | None
                 ) -> tuple[float | None, float | None]:
     """(pnl_now, r_now) at the engine's mid price and rate; None when either is unknown (never a guessed rate)."""
-    if entry is None or a.price is None or a.fx is None:
+    value = a.value()
+    if entry is None or a.price is None or value is None:
         return None, None
-    pnl = round(side * (a.price - entry) * lots * a.contract * a.fx, 2)
+    pnl = round(side * (a.price - entry) * lots * value, 2)
     return pnl, (round(pnl / risk, 3) if risk else None)
 
 
@@ -236,7 +261,8 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
     info = ctx.cat.arm(t.arm_id)
     family = info.family if info is not None else (t.family or "unknown")
     control = info.is_control if info is not None else False
-    a = ctx.acct(t.account_id)
+    symbol = instrument_key(getattr(t, "symbol", None))
+    a = ctx.acct(t.account_id, symbol)
     entry = t.fill_price
     assert entry is not None
     closed = t.exit_utc is not None
@@ -271,7 +297,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
         gross=round(round(t.pnl, 2) + costs.total, 2) if closed and t.pnl is not None else None,
         pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
         evidence=evidence, excluded_reason=voids.get(t.client_order_id),
-        stale=False if closed else a.stale, position_id=t.position_id)
+        stale=False if closed else a.stale, position_id=t.position_id, symbol=symbol)
 
 
 def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
@@ -279,7 +305,8 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
     for p in cost_probe.probes(state, migrate=not ctx.read_only):
         if p.fill_price is None:
             continue
-        a = ctx.acct(p.account_id)
+        symbol = instrument_key(getattr(p, "symbol", None))
+        a = ctx.acct(p.account_id, symbol)
         scheduled = p.purpose == "cost_measurement"
         family = "cost_probe" if scheduled else family_of(p.agent_id.removeprefix(cost_probe.PREFIX))
         label = "Cost probe" if scheduled else f"Cost probe · {ctx.cat.family_label(family)}"
@@ -305,7 +332,7 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
             gross=round(round(p.pnl, 2) + costs.total, 2) if closed and p.pnl is not None else None,
             pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
             evidence="not_evidence", excluded_reason=None, stale=False if closed else a.stale,
-            position_id=p.position_id))
+            position_id=p.position_id, symbol=symbol))
     return out
 
 
@@ -354,19 +381,21 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             risk_amount=_r2(risk), currency=ccy, pnl=_r2(c.pnl) if net else None, r=c.r,
             gross=round(round(c.pnl, 2) + costs.total, 2) if net else _r2(c.pnl), pnl_now=None, r_now=None,
             price_now=None, costs=costs, why=_strategy_why(ctx, family, kind), evidence="not_evidence",
-            excluded_reason=None, stale=False, position_id=c.position_id))
+            excluded_reason=None, stale=False, position_id=c.position_id, symbol=instrument_key(getattr(c, "symbol", None))))
         if c.position_id is not None:
             seen.add((c.account_id, c.position_id))
     for (account, pid), t in ctx.orders.items():
         if cost_probe.is_learning(t.agent_id) or (account, pid) in seen:
             continue
-        a = ctx.acct(account)
+        symbol = instrument_key(getattr(t, "symbol", None))
+        a = ctx.acct(account, symbol)
         kind = "real" if a.mode == "live" else "strategy"
         family = family_of(t.agent_id)
         entry = t.open_price if t.open_price is not None else t.entry
         stop0 = t.initial_sl if t.initial_sl is not None else t.sl
-        risk = (round(abs(entry - stop0) * t.lots * a.contract * a.fx, 2)
-                if entry is not None and stop0 is not None and a.fx is not None else None)
+        value = a.value()
+        risk = (round(abs(entry - stop0) * t.lots * value, 2)
+                if entry is not None and stop0 is not None and value is not None else None)
         pnl_now, r_now = _open_money(t.side, entry, a, t.lots, risk)
         opened = t.opened_utc or t.entry_bar_ts
         out.append(TradeRow(
@@ -378,7 +407,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             hold_limit_s=float(t.max_bars * tf_seconds(t.timeframe)) if t.timeframe else None, risk_amount=risk,
             currency=a.currency, pnl=None, r=None, gross=None, pnl_now=pnl_now, r_now=r_now, price_now=a.price,
             costs=None, why=_strategy_why(ctx, family, kind), evidence="not_evidence", excluded_reason=None,
-            stale=a.stale, position_id=pid))
+            stale=a.stale, position_id=pid, symbol=symbol))
     return out
 
 
@@ -450,8 +479,9 @@ def build_ledger(state_dir: str | Path, now: pd.Timestamp, engines: list[dict[st
     source is opened without migrating aux.db, as the exploration source already is."""
     state = Path(state_dir)
     unreadable: list[TradeSource] = []
+    by_acc = engines_by_account(state, engines)
     ctx = _Ctx(now=now, cat=cat or catalog(), read_only=read_only,
-               accts={k: _acct(e, now) for k, e in engines_by_account(state, engines).items()})
+               accts={k: _acct(e, now) for k, e in by_acc.items()}, engines=by_acc)
     orders = _read("orders", lambda: [_orders(state)], unreadable)
     ctx.orders = orders[0] if orders else {}
     rows = [*_read("exploration", lambda: _exploration(state, ctx), unreadable),
@@ -478,6 +508,9 @@ class TradeQuery(FrozenRecord):
     exit_reason: tuple[ExitReason, ...] = ()
     evidence: tuple[TradeEvidence, ...] = ()
     control: bool | None = None
+    # multi-instrument (UI spec: "URL sym=…/grp=…"): a row matches when its symbol is picked OR its group is
+    symbol: tuple[str, ...] = ()
+    group: tuple[InstrumentGroup, ...] = ()
     sort: TradeSort = "newest"
     cursor: str | None = None
     limit: int = PAGE
@@ -487,7 +520,7 @@ class TradeQuery(FrozenRecord):
         """Only dates and accounts narrow the list (the default kinds, every status): the bisected slices are the
         answer, less shadow trades."""
         return not (self.kind or self.family or self.timeframe or self.arm or self.status or self.exit_reason
-                    or self.evidence or self.control is not None)
+                    or self.evidence or self.control is not None or self.symbol or self.group)
 
 PERIOD_DAYS: dict[TradeListPeriod, int | None] = {"today": 1, "7d": 7, "30d": 30, "all": None}
 
@@ -517,6 +550,17 @@ def _matcher(q: TradeQuery, lo: pd.Timestamp | None, hi: pd.Timestamp | None,
     kinds = frozenset(q.kind) or DEFAULT_KINDS
     accounts, families, tfs, arms = set(q.account), set(q.family), set(q.timeframe), set(q.arm)
     exits, evidence = set(q.exit_reason), set(q.evidence)
+    symbols, groups = set(q.symbol), set(q.group)
+    group_by: dict[str, str | None] = {}
+
+    def instrument_ok(r: TradeRow) -> bool:
+        if not symbols and not groups:
+            return True
+        if r.symbol in symbols:
+            return True
+        if r.symbol not in group_by:
+            group_by[r.symbol] = group_of(r.symbol)
+        return group_by[r.symbol] in groups
 
     def match(r: TradeRow) -> bool:
         if r.kind not in kinds:
@@ -529,7 +573,8 @@ def _matcher(q: TradeQuery, lo: pd.Timestamp | None, hi: pd.Timestamp | None,
         return ((not accounts or r.account in accounts) and (not families or r.family in families)
                 and (not tfs or r.timeframe in tfs) and (not arms or r.arm_id in arms)
                 and (q.status is None or r.status == q.status) and (not exits or r.exit_reason in exits)
-                and (not evidence or r.evidence in evidence) and (q.control is None or r.is_control == q.control))
+                and (not evidence or r.evidence in evidence) and (q.control is None or r.is_control == q.control)
+                and instrument_ok(r))
     return match
 
 
@@ -720,8 +765,10 @@ def query(ledger: Ledger, q: TradeQuery) -> TradesPage:
     limit = max(1, min(q.limit, MAX_PAGE))
     page = rows[start:start + limit]
     more = start + limit < len(rows)
+    # the facet: the instruments under every filter but the instrument ones (the panel never offers an empty choice)
+    facet = rows if not (q.symbol or q.group) else _answer(ledger, q.model_copy(update={"symbol": (), "group": ()}))[0]
     return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1], q.sort) if more and page else None,
-                      totals=t, unreadable=ledger.unreadable)
+                      totals=t, unreadable=ledger.unreadable, symbols=sorted({r.symbol for r in facet}))
 
 
 def detail(ledger: Ledger, trade_id: str) -> TradeRow | None:

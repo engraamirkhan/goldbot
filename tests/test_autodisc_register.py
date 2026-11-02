@@ -146,7 +146,8 @@ def test_the_per_trade_cap_stays_inside_the_accounts_caps_and_the_room_floor_cei
     acc = A.load_accounts(env["accounts_path"], logins=False)["icm-demo"]
     pot = acc.exploration.pots["intraday"]
     peers = [a.max_loss for a in acc.exploration.arms.values() if a.style == "intraday" and a.control_share is None]
-    ceiling = min(max(peers), X.SHARE_CAP * pot.gbp)
+    sleeve = [X.SHARE_CAP * pot.gbp] if pot.gbp is not None else []     # no £ sleeve without pot budgets (ADR 0072)
+    ceiling = min([max(peers), *sleeve])
     with pytest.raises(R.RegistrationRefused, match="caps"):
         register(env, max_loss=ceiling + 0.5)
     assert register(env, max_loss=ceiling).max_loss == ceiling

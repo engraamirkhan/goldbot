@@ -26,6 +26,7 @@ from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules as R
 from goldbot.research import arm_rules_scalp as Z
 from goldbot.research import arms as A
+from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
 
 NO = np.zeros(0, dtype=np.int64)
 NY = "America/New_York"
@@ -533,10 +534,12 @@ def test_icm_probe_registers_its_six_strata_in_the_re_split_scalp_pot_at_the_sca
     ex = accounts["icm-probe"].exploration
     assert {a for a in ex.arms if a in ROWS} == PROBE
     assert {(ex.arms[a].style, ex.arms[a].max_loss, ex.arms[a].control_share) for a in PROBE} == {("scalp", 6.5, None)}
-    assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (168, 14, 17)
+    # demo-limits ADR 0072 (2026-11-02): the pot is slots only (pot_budgets false), 14 -> 19, max_open_total 23
+    assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (None, 19, 23)
     from goldbot.engine.exploration import config_for
     cfg = config_for(accounts["icm-probe"])
-    assert cfg is not None and PROBE <= {a.arm_id for a in cfg.arms} and not cfg.dropped
+    # lane L3 runs the multi-instrument pairs (status run), so nothing is dropped any more
+    assert cfg is not None and PROBE | MI_ON["icm-probe"] <= {a.arm_id for a in cfg.arms} and cfg.dropped == ()
 
 
 def test_every_registered_h81_arm_is_a_scalp_arm_on_a_host_with_a_scalp_pot(accounts) -> None:

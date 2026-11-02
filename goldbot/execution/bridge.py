@@ -25,7 +25,7 @@ Defence in depth on the terminal's side: requests time out after `SOCKET_TIMEOUT
 only its own thread); an order call older than `ORDER_MAX_AGE_S` when it reaches the terminal is refused
 (the engine has already given up on it, and its price is stale); `GuardedBroker` refuses orders outside the account's
 magic range or above `MAX_ORDER_LOTS`, and stop/target changes on positions that are not goldbot's (closes stay allowed: the kill switch closes everything). It also refuses
-an order that would take this terminal's gross notional on the symbol above `MAX_NOTIONAL_EQUITY_MULT` (6x) its own
+an order that would take this terminal's gross notional, account-wide (every symbol, protocol v10), above `MAX_NOTIONAL_EQUITY_MULT` (6x) its own
 equity, the design's 30% at 1:20 (BACKLOG 66), read entirely on this box and failing closed; that refusal is a definite
 reject (retcode 10006, message "bridge_notional_ceiling: ..."), never a raise, and the order's age is checked again
 just before the send. The bridge listens on
@@ -58,6 +58,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Sequence
 from datetime import date
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -91,6 +92,7 @@ from goldbot.execution.broker import (
     tick_key,
 )
 from goldbot.execution.costs import BrokerTerms
+from goldbot.execution.market_watch import check_symbols
 from goldbot.risk.sizing import account_fx
 
 log = logging.getLogger("goldbot.bridge")
@@ -111,6 +113,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "loss_per_lot": ("float", True),         # read-only (order_calc_profit / tick value): the sizing conversion
     "trading_sessions": ("list[TradingSession]", True),   # read-only session hours (D13)
     "symbols_get": ("list[str]", True),      # read-only symbol names (ADR 0062 symbol check): optional
+    "ticks_many": ("dict[str,list[Tick]]", True),   # read-only, v10: every symbol's new ticks in one call; optional
     "place_order": ("OrderResult", False),
     "modify": ("OrderResult", False),
     "close": ("OrderResult", False),
@@ -144,7 +147,15 @@ METHODS: dict[str, tuple[str, bool]] = {
 # v9 (ADR 0063): AccountInfo.trade_allowed (MT5 ACCOUNT_TRADE_ALLOWED, False on an investor login), read by
 # verify_terminal_account for observe_only accounts only. Read tolerantly (a v8 brain drops it; a v8 bridge reports
 # None, which an observe_only account refuses and every other account ignores), so MIN_COMPATIBLE stays 5.
-API_VERSION = 9
+# v10 (multi-instrument demo, step 0): `positions(magic_prefix, symbol=None)` and SymbolInfo's currency_profit and
+# swap_rollover3days. The brain sends `symbol` only when it is not None, so today's call is byte-identical on the
+# wire; a v9 bridge reports the new SymbolInfo fields as None (read tolerantly) and a v9 brain drops them, so
+# MIN_COMPATIBLE stays 5 and either box can be deployed first. Lane L4 completes v10 (same number: no v10 box ran
+# before it): `ticks_many(symbols, since)` (read-only, OPTIONAL_METHODS: on a v9 bridge's 403 RemoteBroker falls
+# back to one last_tick per symbol), `broker_terms(..., symbol=None)` (the symbol sent only when given, as
+# positions), the bridge selecting the account's symbol list (market_watch.account_symbols) and the notional ceiling
+# counted account-wide (GuardedBroker). A v9 brain never calls ticks_many, so MIN_COMPATIBLE stays 5
+API_VERSION = 10
 MIN_COMPATIBLE = 5
 # ADR 0063 (security review of PR 236): what an observe-only bridge serves, an allowlist of read-only methods for
 # bars, ticks and symbol terms, and the account read its verify needs; no positions, history, sizing or order method
@@ -153,7 +164,7 @@ OBSERVE_METHODS = frozenset({"get_bars", "get_bars_range", "copy_ticks", "last_t
 OBSERVE_REFUSAL = "observe_only"          # the refusal's prefix on an observe-only bridge or client (ADR 0063)
 # Methods the brain calls only with a fallback for a bridge that lacks them: never required by bridge_compat, so their
 # absence never refuses entries. Read-only methods only (an order method is never optional).
-OPTIONAL_METHODS = frozenset({"get_bars_range", "symbols_get"})
+OPTIONAL_METHODS = frozenset({"get_bars_range", "symbols_get", "ticks_many"})
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 # Any change to these records' fields goes to the trading-safety reviewer (AGENT_STANDARDS S12): responses are read
@@ -644,11 +655,12 @@ class GuardedBroker:
     is refused unless the terminal reports a demo account (ADR 0021 F4).
 
     BACKLOG 66, the notional ceiling (DESIGN.md:112: "combined exposure capped at 3 lots or 30% of combined equity
-    notional", 30% x 1:20 = 6x equity): an order is refused when (every open lot on its symbol + its lots) x contract x
-    price x fx > MAX_NOTIONAL_EQUITY_MULT x equity, strict as the gate. Every figure is this terminal's own (only the
+    notional", 30% x 1:20 = 6x equity): an order is refused when the sum over every open symbol of (its open lots, + the
+    order's lots on the order's symbol) x contract x price x fx > MAX_NOTIONAL_EQUITY_MULT x equity (account-wide since
+    protocol v10, `_notional_refusal`), strict as the gate. Every figure is this terminal's own (only the
     lots, side and symbol come from the brain): equity and currency (`account()`, read once per order, always), the
     contract size, the quote the order fills at (ask for a buy, bid for a sell, as MT5Broker.place_order), the
-    conversion (`loss_per_lot` per USD, through `sizing.account_fx`), and `account_positions()` on the symbol, any
+    conversion (`loss_per_lot` per USD, through `sizing.account_fx`), and `account_positions()` on every symbol, any
     magic, both sides (gross). Any read that raises, is missing, non-finite or <= 0 refuses (`unreadable:<field>`).
     A refusal is a definite reject, never a raise: OrderResult retcode 10006 with the message
     "bridge_notional_ceiling: ...", so the engine records `rejected` and alerts the owner. Order of the checks: magic
@@ -741,32 +753,64 @@ class GuardedBroker:
         return NOTIONAL_FRAC * cap
 
     def _notional_refusal(self, intent: OrderIntent, info: AccountInfo) -> str | None:
-        """Why the order would take this terminal's notional on its symbol above MAX_NOTIONAL_EQUITY_MULT x equity, or
-        None. Fail closed: a figure that cannot be read or is not finite and > 0 is the reason (`unreadable:<field>`)."""
+        """Why the order would take this terminal's notional above MAX_NOTIONAL_EQUITY_MULT x equity, or None. Fail
+        closed: a figure that cannot be read or is not finite and > 0 is the reason (`unreadable:<field>`).
+
+        Account-wide (multi-instrument plan: "bridge notional cap account-wide"): every open position on the account
+        counts, whatever its symbol, side or magic, each symbol at its own contract, price and conversion. The order's
+        symbol is read exactly as before (the order's fill price for every lot on it, the conversion through
+        `account_fx`), so a gold-only book gives today's figure and message. Another symbol's lots are priced at
+        max(bid, ask) (gross notional, the larger side). Conversion: a symbol whose profit currency is USD (or not
+        reported) goes through `account_fx` as gold always has; any other profit currency (USDJPY: JPY) takes the
+        terminal's own figure, its loss per lot over 1.0 of price per contract unit (account currency per unit of
+        that currency), checked against 1 only when it is the account's currency."""
         sym = intent.symbol
+        cur = getattr(info, "currency", "")
+        currency = cur if isinstance(cur, str) else ""
         try:
             equity = _positive("equity", getattr(info, "equity", None))
-            currency = getattr(info, "currency", "")
-            contract = _positive("contract", _read("contract", lambda: self._b.symbol_info(sym)).contract_size)
-            tick = _read("price", lambda: self._b.last_tick(sym))
-            px = _positive("price", tick.ask if intent.side > 0 else tick.bid)
-            per_lot = _positive("fx", _read("fx", lambda: self._b.loss_per_lot(sym, intent.side, px, 1.0)))
-            fx = account_fx(currency if isinstance(currency, str) else "", per_lot / contract)
-            if fx is None:                             # blank currency, or a USD figure more than 1% off 1.0
-                raise _Unreadable("fx")
             positions = _read("positions", self._b.account_positions)
-            open_lots = _read("positions", lambda: sum(_positive("positions", p.lots) for p in positions
-                                                       if p.symbol == sym))
+            lots_by: dict[str, float] = {}
+            for p in positions:
+                lots_by[str(p.symbol)] = lots_by.get(str(p.symbol), 0.0) + _positive("positions", p.lots)
+            open_lots = lots_by.pop(sym, 0.0)
+            notional = (open_lots + intent.lots) * self._lot_notional(sym, intent.side, currency, own=True)
+            other = sum(lots * self._lot_notional(s, 1, currency, own=False) for s, lots in sorted(lots_by.items()))
         except _Unreadable as u:
             return f"unreadable:{u}"
         except Exception as exc:                        # noqa: BLE001 - a malformed record: never a 500, never a send
             return f"unreadable:ceiling ({type(exc).__name__})"
-        notional = (open_lots + intent.lots) * contract * px * fx
+        notional += other
         mult = self.notional_mult(info)
         if notional > mult * equity:
+            others = f", {other:.2f} {currency} on {', '.join(sorted(lots_by))}" if lots_by else ""
             return (f"notional {notional:.2f} {currency} > {mult:g} x equity {equity:.2f} "
-                    f"({open_lots:g} lots open + {intent.lots:g} on {sym})")
+                    f"({open_lots:g} lots open + {intent.lots:g} on {sym}{others})")
         return None
+
+    def _lot_notional(self, sym: str, side: int, currency: str, *, own: bool) -> float:
+        """One lot of `sym` in the account currency: contract x price x conversion (see `_notional_refusal`). `own`:
+        the order's symbol, priced at its fill side (ask for a buy, bid for a sell); else max(bid, ask). Field names
+        in a refusal carry the symbol for another symbol (`price:XAGUSD`), never for the order's own (v9 text)."""
+        tag = "" if own else f":{sym}"
+        si = _read(f"contract{tag}", lambda: self._b.symbol_info(sym))
+        contract = _positive(f"contract{tag}", si.contract_size)
+        tick = _read(f"price{tag}", lambda: self._b.last_tick(sym))
+        px = _positive(f"price{tag}", (tick.ask if side > 0 else tick.bid) if own else max(tick.bid, tick.ask))
+        per_lot = _positive(f"fx{tag}", _read(f"fx{tag}", lambda: self._b.loss_per_lot(sym, side, px, 1.0)))
+        profit = getattr(si, "currency_profit", None)
+        profit = profit.strip().upper() if isinstance(profit, str) and profit.strip() else "USD"
+        if profit == "USD":
+            fx = account_fx(currency, per_lot / contract)
+        elif not currency.strip():
+            fx = None
+        elif profit == currency.strip().upper():
+            fx = account_fx("USD", per_lot / contract)   # the account's own currency: must be 1 within 1%, as USD
+        else:
+            fx = per_lot / contract
+        if fx is None:                                   # blank currency, or a figure that disagrees with its unit
+            raise _Unreadable(f"fx{tag}")
+        return contract * px * fx
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
         self._refuse_observed("modify")
@@ -932,6 +976,7 @@ class RemoteBroker:
         self.read_attempts = 2          # read-only calls; a paced caller (the tick record) sets 1 and its own timeout_s
         self._session = requests.Session()
         self._post = post or self._session.post
+        self._ticks_many_served = True  # False after a v9 bridge refused ticks_many: one last_tick per symbol since
 
     def _call(self, method: str, *args: Any) -> Any:
         if self.observe_only and method not in OBSERVE_METHODS:
@@ -1008,8 +1053,36 @@ class RemoteBroker:
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         return self._call("close", position_id, lots)
 
-    def positions(self, magic_prefix: int | None = None) -> list[Position]:
-        return self._call("positions", magic_prefix)
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
+        # symbol None keeps today's wire call byte-identical (the bridge's own symbol)
+        if symbol is None:
+            return self._call("positions", magic_prefix)
+        return self._call("positions", magic_prefix, symbol)
+
+    def ticks_many(self, symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
+        """Protocol v10: every symbol's ticks after `since` in one request. Checked before anything is sent (at most
+        MAX_BRIDGE_SYMBOLS names). On a v9 bridge (403, method not allowed: OPTIONAL_METHODS) it falls back to one
+        `last_tick` per symbol, kept when newer than `since`, and remembers that for this client, so the caller never
+        needs to know the bridge's version; a symbol without a quote there maps to []."""
+        names = check_symbols(symbols)
+        if self._ticks_many_served:
+            try:
+                got = self._call("ticks_many", names, pd.Timestamp(since))
+                return {s: list(got.get(s) or []) for s in names}
+            except BridgeError as exc:
+                if "HTTP 403" not in str(exc) or "not allowed" not in str(exc):
+                    raise
+                log.info("%s: the bridge does not serve ticks_many (protocol v9): one last_tick per symbol", self.name)
+                self._ticks_many_served = False
+        out: dict[str, list[Tick]] = {}
+        for s in names:
+            try:
+                t = self.last_tick(s)
+            except BridgeError:                     # no quote for this symbol on a v9 bridge: none, not a fault
+                out[s] = []
+                continue
+            out[s] = [t] if t is not None and t.ts_utc > pd.Timestamp(since) else []
+        return out
 
     def account_positions(self) -> list[Position]:
         return self._call("account_positions")
@@ -1017,5 +1090,9 @@ class RemoteBroker:
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
         return self._call("deals_since", since_utc)
 
-    def broker_terms(self, account_id: str, since_utc: pd.Timestamp, now: pd.Timestamp) -> BrokerTerms:
-        return self._call("broker_terms", account_id, since_utc, now)
+    def broker_terms(self, account_id: str, since_utc: pd.Timestamp, now: pd.Timestamp,
+                     symbol: str | None = None) -> BrokerTerms:
+        # symbol None keeps today's wire call byte-identical (a v9 bridge takes three arguments)
+        if symbol is None:
+            return self._call("broker_terms", account_id, since_utc, now)
+        return self._call("broker_terms", account_id, since_utc, now, symbol)

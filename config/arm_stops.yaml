@@ -78,7 +78,12 @@ follows:
 # (tests/test_arm_stops.py); an arm in no list also falls back to it.
 h61: [S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B, S6, I1, I2A, I2B, MB15, MB30, MB1H, MSA15, I3, W1A, W1B, W2, W3,
       VI2A, VI2B, VMB15, VMB30, VMB1H, VMS15, VW1A, VW1B, VW2, BXR15, BXR30, BXR1H, BXR4H,
-      VS1A, VS1B, VS2A, VS2B, VS3A, VS3B, VS5A, VS5B]
+      VS1A, VS1B, VS2A, VS2B, VS3A, VS3B, VS5A, VS5B,
+      # multi-instrument learning arms (learning-mi-2026-11-02.md section 6): H-61's intraday stop on top of the
+      # learning class's own (300 fills, loss cap, until); each instrument is its own unit, never pooled
+      LB-US500, LB-DE40, LB-XTIUSD, LB-UST10Y, LB-EURUSD, LB-USDJPY, LB-BUND10Y, LB-JP225, LB-XAGUSD, LB-USTEC,
+      LB-GBPUSD, LB-COPPER, LB-UK100, LB-XPTUSD, LB-AUDUSD, LB-USDCAD, LB-XBRUSD, LB-USDCHF, LB-NZDUSD, LB-XNGUSD,
+      LB-WHEAT, LB-SOYBEAN, LB-COFFEE, LB-SUGAR, LB-XAUEUR, LB-XAUAUD]
 
 # No stop: the controls (the null; HV amendment 3, Z 4, arms 8.9) and the virtual twins BXT/BXF (H-80: scored on
 # BXR's fills, they place no order).
@@ -89,7 +94,23 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        # read ("kill GS1 if its excess over GS1C has a 90% lower bound <= 0" at 40 trades or 2026-11-27), read by the
        # performance-analyst, not a cumulative-R stop; the code expiry (research.arms.OWNER_EXPERIMENTS) ends its
        # entries on 2026-11-27 whatever the read. GS1C is its control
-       GS1, GS1C]
+       GS1, GS1C,
+       # ADR 0061 amendment 2026-11-02 (docs/research/learning-2026-11-02.md): the learning arms' dedicated random
+       # controls, the null; they stop with the arms they serve (engine/exploration_learning.py), never on their own
+       LCZ3D, LCZ4D, LCZ6D, LCZ7D, LCZ9D, LCZ10D, LCS5A, LCS5B, LCZ1P, LCZ2P, LCZ4P, LCZ5P, LCZ7P, LCZ6V,
+       LCZ7V,
+       # multi-instrument demo (plan 2026-11-02): the per-instrument random controls (S0/I0 geometry, ATR stops),
+       # the null of each instrument; never stopped on their own
+       S0-XAGUSD, I0-XAGUSD, S0-XPTUSD, I0-XPTUSD, S0-XAUEUR, I0-XAUEUR, S0-XAUAUD, I0-XAUAUD, S0-US500, I0-US500,
+       S0-USTEC, I0-USTEC, S0-DE40, I0-DE40, S0-UK100, I0-UK100, S0-JP225, I0-JP225, S0-EURUSD, I0-EURUSD, S0-USDJPY,
+       I0-USDJPY, S0-GBPUSD, I0-GBPUSD, S0-AUDUSD, I0-AUDUSD, S0-USDCAD, I0-USDCAD, S0-USDCHF, I0-USDCHF, S0-NZDUSD,
+       I0-NZDUSD, S0-XTIUSD, I0-XTIUSD, S0-XBRUSD, I0-XBRUSD, S0-XNGUSD, I0-XNGUSD, S0-UST10Y, I0-UST10Y, S0-BUND10Y,
+       I0-BUND10Y, S0-COPPER, I0-COPPER, S0-WHEAT, I0-WHEAT, S0-SOYBEAN, I0-SOYBEAN, S0-SUGAR, I0-SUGAR, S0-COFFEE,
+       I0-COFFEE,
+       # multi-instrument learning arms' dedicated controls (learning-mi-2026-11-02.md): stop with their arm
+       LBC-US500, LBC-DE40, LBC-XTIUSD, LBC-UST10Y, LBC-EURUSD, LBC-USDJPY, LBC-BUND10Y, LBC-JP225, LBC-XAGUSD,
+       LBC-USTEC, LBC-GBPUSD, LBC-COPPER, LBC-UK100, LBC-XPTUSD, LBC-AUDUSD, LBC-USDCAD, LBC-XBRUSD, LBC-USDCHF,
+       LBC-NZDUSD, LBC-XNGUSD, LBC-WHEAT, LBC-SOYBEAN, LBC-COFFEE, LBC-SUGAR, LBC-XAUEUR, LBC-XAUAUD]
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above

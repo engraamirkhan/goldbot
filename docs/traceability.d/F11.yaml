@@ -1,5 +1,5 @@
 id: F11
 requirement: TradingView alerts "with fired_at - bar_time < tf are flagged intrabar and excluded from training"
-status: partial
+status: 'deviates (retired 2026-11-02, ADR 0066: owner directive to focus on the main goal; the TradingView chart-data path is removed, the real-time broker prices are the price source. Code and tests leave in the cleanup release; collected data stays on the brain and in the backups. Reversal: an arm that needs TradingView data passes its history qualification)'
 code: flagged (goldbot/webhook/app.py to_row); tv_features and the tradingview feature exclude intrabar rows (goldbot/features/tradingview.py)
 test: tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar, tests/test_tv_webhook.py

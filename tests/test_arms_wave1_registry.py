@@ -75,14 +75,17 @@ def test_each_host_registers_its_wave_one_arms_at_the_timeframe_cap(spec, accoun
 
 # ADR 0049 D1a (CFO 2026-10-27): a scalp pot carved inside the unchanged budget for H-81's scalp strata: intraday 108 / 9 ->
 # 68 / 7 (icm-demo) and 98 / 9 -> 40 / 4 (vantage-demo), swing 2 -> 1 on vantage-demo; no other limit moves
+# demo-limits ADR 0072 (2026-11-02): pots are slots only (x1.35), host cap 24 (23 open); the day and the weekly
+# ceiling do not move
 @pytest.mark.parametrize(("account", "gbp", "slots", "swing_slots", "cap"),
-                         [("icm-demo", 68, 7, 2, 220), ("vantage-demo", 40, 4, 1, 200)])
+                         [("icm-demo", None, 10, 3, 220),
+                          ("vantage-demo", None, 10, 2, 200)])   # vantage 6 -> 10: learning-mi-2026-11-02.md
 def test_the_intraday_pot_is_the_cfos_and_no_other_limit_moves(accounts, account, gbp, slots, swing_slots, cap) -> None:
     acc = accounts[account]
     ex = acc.exploration
     assert (ex.pots["intraday"].gbp, ex.pots["intraday"].max_open) == (gbp, slots)
-    assert ex.pots["swing"].max_open == swing_slots and ex.max_open_total == 17 and ex.budget_share == 0.9
-    assert acc.daily_loss_limit_abs == cap and acc.max_positions == 18
+    assert ex.pots["swing"].max_open == swing_slots and ex.max_open_total == 23
+    assert acc.daily_loss_limit_abs == cap and acc.max_positions == 24
     assert acc.risk_overrides is not None and acc.risk_overrides.ceilings.weekly == 0.06
     assert sum(a.control_share or 0.0 for a in ex.arms.values() if a.style == "intraday") <= 1
 

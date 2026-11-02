@@ -62,7 +62,8 @@ from goldbot.config import AttributionSettings, Settings, tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.timeutil import bar_close_utc, epoch_ns
 from goldbot.engine.shadow import ShadowTrade
-from goldbot.execution.costs import CONTRACT_OZ, CostTable
+from goldbot.execution.costs import CostTable
+from goldbot.instruments import GOLD, contract_size
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
 from goldbot.research.promotion import QUARANTINE_HISTORY_GAP, quarantine_reason
 
@@ -105,7 +106,7 @@ class CostModel(FrozenRecord):
         slip = {k.split(":", 1)[0]: s.mean for k, s in table.slippage.items() if k.endswith(":market")}
         return cls(spread_usd={k: s.median for k, s in table.spread.items()}, slippage_usd=slip,
                    slippage_prior_usd=table.slippage_prior_usd,
-                   commission_usd_per_oz=2 * table.commission_per_lot_side_usd / CONTRACT_OZ, swap=swap,
+                   commission_usd_per_oz=2 * table.commission_per_lot_side_usd / table.contract_size, swap=swap,
                    source=f"cost table {table.account_id} built {table.built_utc:%Y-%m-%d}")
 
     @classmethod
@@ -114,7 +115,7 @@ class CostModel(FrozenRecord):
         canonical = [b for b, cfg in settings.brokers.items() if cfg.canonical_costs]
         side = settings.costs.commission_per_lot_side_usd.get(canonical[0], 0.0) if canonical else 0.0
         return cls(spread_usd={}, slippage_usd={}, slippage_prior_usd=settings.costs.slippage_prior_usd,
-                   commission_usd_per_oz=2 * side / CONTRACT_OZ, swap=settings_swap(settings),
+                   commission_usd_per_oz=2 * side / contract_size(GOLD), swap=settings_swap(settings),
                    source="settings priors (no cost table yet; spread unknown, gross = shadow R)")
 
     def spread(self, session: str) -> float:

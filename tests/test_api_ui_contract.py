@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from goldbot.api import explain, spread_normal
 from goldbot.api.app import create_app
-from goldbot.api.schema import ResearchSummary
 from goldbot.data import ticks
 from goldbot.telegram.approvals import ASK_KINDS, AskReason, Proposal, ask_reason_text
 from goldbot.telegram.bus import ApprovalBus
@@ -259,82 +258,6 @@ def test_combined_money_is_null_with_mixed_currencies_or_no_fresh_supervisor(tmp
                                       "weekly_used_amount"))
     assert s["mixed_currencies"] is (True if "vantage-demo" in sup.get("currencies", {}) else None)
     assert s["day_resets_utc"] is not None and s["week_resets_utc"] is not None
-
-
-# ---------------------------------------------------------------------------------------------- 97: research summary
-NOW = datetime(2026, 10, 18, 15, 0, tzinfo=timezone.utc)
-COSTS: dict[str, Any] = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "ICM measured"}
-PASS = {"passed": True, "checks": [{"name": "dsr", "passed": True, "detail": "0.97"}]}
-FAIL = {"passed": False, "checks": [{"name": "net_r", "passed": False, "detail": "net -0.03 R"}]}
-
-
-def _row(trial: int, ts: str, gates: dict | None, net_r: float, family: str = "tsmom", **res: Any) -> dict:
-    results: dict[str, Any] = {"rule_only": {"net": {"n": 400, "mean_r": net_r}}, **res}
-    if gates is not None:
-        results["gates"] = gates
-    return {"trial": trial, "ts": ts, "agent_id": f"a{trial}", "family": family, "config": {}, "status": "evaluated",
-            "rationale": "", "results": results}
-
-
-def _summary(state: Path, docs: Path, settings: Any = None) -> ResearchSummary:
-    s = explain.research_view(state, settings, docs).summary
-    assert s is not None                                      # always set by this API
-    return s
-
-
-@pytest.fixture
-def research_state(tmp_path, monkeypatch) -> Path:
-    monkeypatch.setattr(explain, "_now", lambda: NOW)
-    rows = [_row(1, "2026-09-01T10:00:00+00:00", PASS, 0.30, **COSTS),     # all time, passed, the best net R
-            _row(2, "2026-10-12T10:00:00+00:00", PASS, 0.12, family="asia_drift", **COSTS),   # this week
-            _row(3, "2026-10-13T10:00:00+00:00", PASS, 0.50),              # a pass without costs: never the best
-            _row(4, "2026-10-14T10:00:00+00:00", FAIL, -0.05),
-            _row(5, "2026-10-15T10:00:00+00:00", None, 0.02),
-            _row(6, "2026-10-01T10:00:00+00:00", FAIL, 0.90)]               # a failed trial is never the best
-    (tmp_path / "research_registry.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-    (tmp_path / "research_plan.json").write_text(json.dumps({
-        "created_utc": "2026-10-17T00:00:00+00:00", "quarter": "2026Q4", "quarter_budget": 20, "quarter_used": 6,
-        "focus": [{"rank": 2, "family": "trend", "budget": 3, "evidence": 0.4, "reasons": []},
-                  {"rank": 1, "family": "tsmom", "budget": 8, "evidence": 1.1, "reasons": []}]}))
-    return tmp_path
-
-
-def test_the_research_summary_counts_every_trial_by_verdict_and_the_last_seven_days(research_state, tmp_path):
-    s = _summary(research_state, tmp_path / "docs")
-    assert (s.passed_total, s.failed_total, s.no_verdict_total, s.not_counted_total) == (2, 2, 1, 1)
-    assert (s.since_last_week.run, s.since_last_week.passed, s.since_last_week.failed) == (4, 1, 1)
-    assert s.since_last_week.no_verdict == 1 and s.since_last_week.not_counted == 1
-
-
-def test_the_best_candidate_is_the_counted_pass_with_the_highest_net_r(research_state, tmp_path):
-    s = _summary(research_state, tmp_path / "docs")
-    assert s.best_candidate is not None and s.best_candidate.trial == 1 and s.best_candidate.net_r == 0.30
-
-
-def test_with_no_counted_pass_there_is_no_best_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(explain, "_now", lambda: NOW)
-    (tmp_path / "research_registry.jsonl").write_text(json.dumps(_row(1, "2026-10-14T10:00:00+00:00", FAIL, 0.9)))
-    s = _summary(tmp_path, tmp_path / "docs")
-    assert s.best_candidate is None and s.next_trial is None and s.north_star_gbp == 50.0
-
-
-def test_the_next_trial_is_the_plans_top_ranked_family_without_an_invented_date(research_state, tmp_path):
-    s = _summary(research_state, tmp_path / "docs")
-    assert s.next_trial is not None and s.next_trial.family == "tsmom" and s.next_trial.planned_date is None
-    assert s.next_trial.timeframe is not None
-
-
-def test_the_north_star_comes_from_settings(research_state, tmp_path):
-    from goldbot.config import load_settings
-    settings = load_settings()
-    assert _summary(research_state, tmp_path / "docs", settings).north_star_gbp == \
-        settings.research.north_star_daily_gbp == 50.0
-
-
-def test_the_research_endpoint_serves_the_summary(research_state):
-    c, h = _client(research_state)
-    s = c.get("/api/research", headers=h).json()["summary"]
-    assert s["passed_total"] == 2 and s["best_candidate"]["trial"] == 1
 
 
 # ---------------------------------------------------------------------------------------------- the e2e seed

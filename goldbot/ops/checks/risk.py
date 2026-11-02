@@ -311,9 +311,14 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
         # BACKLOG 29: the engine's effective daily loss limit (min of the % cap and the absolute) and what is left
         limit, left = e.get("daily_loss_limit"), e.get("daily_loss_remaining")
         allowance = (float(limit), float(left)) if limit is not None and left is not None else None
+        caps = {"daily": ctx.settings.risk.daily_cap, "weekly": ctx.settings.risk.weekly_cap}
+        # demo-limits ADR 2026-11-02: a demo account's caps are its controller's current ones (ADR 0032 ceilings, the
+        # gate's own), never the settings' defaults, which raised a false "LOSS CAP hit" on the demo learning hosts
+        current = e.get("limits_current")
+        if e.get("mode") == "demo" and isinstance(current, dict):
+            caps = {p: float(current[f"{p}_cap"]) if current.get(f"{p}_cap") is not None else caps[p] for p in caps}
     except (ValueError, OSError, AttributeError, TypeError):
         return []                                   # check_engine reports the unreadable file
-    caps = {"daily": ctx.settings.risk.daily_cap, "weekly": ctx.settings.risk.weekly_cap}
     out = []
     for period in ("daily", "weekly"):
         start = starts[period]

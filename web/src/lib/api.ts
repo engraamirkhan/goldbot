@@ -12,34 +12,16 @@ export type Proposal = Schemas["Proposal"];
 export type DecidedProposal = Schemas["DecidedProposal"];
 export type Decision = Schemas["Decision"];
 export type ReasonCode = NonNullable<Decision["reason_code"]>;
-export type AgentRow = Schemas["AgentRow"];
 export type FeedHealth = Schemas["FeedHealth"];
 export type Status = Schemas["Status"];
 export type Role = Schemas["Me"]["role"];
 export type GrantableRole = Schemas["RoleChange"]["role"];   // the owner role is never granted
 export type Me = Schemas["Me"];
 export type UserRow = Schemas["UserRow"];
-export type JobRow = Schemas["JobRow"];
-export type AgentRunRow = Schemas["AgentRunRow"];
-export type CalendarResponse = Schemas["CalendarResponse"];
-export type CalendarEvent = Schemas["CalendarEvent"];
 export type ActiveBlackout = Schemas["ActiveBlackout"];
-export type Headline = Schemas["Headline"];
 export type AutoModeView = Schemas["AutoModeView"];
 export type ModeChangeResult = Schemas["ModeChangeResult"];
 export type ApprovalMode = Schemas["ModeChangeRequest"]["mode"];
-export type ChartLayoutsView = Schemas["ChartLayoutsView"];
-export type ChartLayoutIn = Schemas["ChartLayoutIn"];
-export type GatesView = Schemas["GatesView"];
-export type GateView = Schemas["GateView"];
-export type GateItemView = Schemas["GateItemView"];
-export type StopRuleView = Schemas["StopRuleView"];
-export type AttributionView = Schemas["AttributionView"];
-export type AttributionReportView = Schemas["AttributionReportView"];
-export type ResultCell = Schemas["ResultCell"];
-export type TradesSummary = Schemas["TradesSummary"];
-export type ActivityView = Schemas["ActivityView"];
-export type ActivityEvent = Schemas["ActivityEvent"];
 export type TradesOverview = Schemas["TradesOverview"];
 export type TradeStats = Schemas["TradeStats"];
 export type TradeTypeSummary = Schemas["TradeTypeSummary"];
@@ -52,10 +34,7 @@ export type TodayView = Schemas["TodayView"];
 export type TodayAccount = Schemas["TodayAccount"];
 export type LossMeter = Schemas["LossMeter"];
 export type LimitChange = Schemas["LimitChange"];
-export type TvStatusView = Schemas["TvStatusView"];
 export type LimitChangesQuery = NonNullable<operations["limits_changes_api_limits_changes_get"]["parameters"]["query"]>;
-export type CalendarQuery = NonNullable<operations["calendar_api_calendar_get"]["parameters"]["query"]>;
-export type NewsQuery = NonNullable<operations["news_api_news_get"]["parameters"]["query"]>;
 
 /** `?a=1&b=2` from the defined, non-null values of a typed query object (the server clamps out-of-range values). */
 function qs(q: Record<string, number | string | null | undefined>): string {
@@ -126,32 +105,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-/** The MT5 chart pane cropped on the server; isGold null = the title could not be read. */
-export type Mt5Shot = { url: string; capturedAt: string | null; cropped: boolean; symbol: string; isGold: boolean | null };
-
-/** The MT5 terminal picture (PNG) for one timeframe, fetched with the session token so it can become a blob URL.
- * null = no fresh capture (404, older than 5 minutes). The caller owns the URL and must revoke it. */
-async function mt5Chart(tf: string): Promise<Mt5Shot | null> {
-  const sent = token;
-  let r: Response;
-  try {
-    r = await fetch(`/api/chart/mt5?tf=${encodeURIComponent(tf)}`, { headers: sent ? { authorization: `Bearer ${sent}` } : {} });
-  } catch {
-    throw new ApiError(0, NETWORK_TEXT);
-  }
-  if (r.status === 401) { endSession(sent); throw new ApiError(401, "login required"); }
-  if (r.status === 404) return null;
-  if (!r.ok) throw new ApiError(r.status, r.statusText);
-  const gold = r.headers.get("X-Chart-Gold");
-  return {
-    url: URL.createObjectURL(await r.blob()), capturedAt: r.headers.get("X-Captured-At"),
-    cropped: r.headers.get("X-Chart-Cropped") === "true", symbol: r.headers.get("X-Chart-Symbol") ?? "unknown",
-    isGold: gold === "true" ? true : gold === "false" ? false : null,
-  };
-}
-
 export const api = {
-  mt5Chart,
   authState: () => req<Schemas["AuthState"]>("/api/auth/state"),
   setup: (setup_code: string, email: string, password: string) => req<Schemas["SetupResponse"]>("/api/auth/setup", { method: "POST", body: JSON.stringify({ setup_code, email, password }) }),
   login: (email: string, password: string, totp: string) => req<Schemas["LoginResponse"]>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, totp }) }),
@@ -191,8 +145,6 @@ export const api = {
   status: () => req<Status>("/api/status"),
   automode: () => req<AutoModeView>("/api/automode"),
   setMode: (mode: ApprovalMode, totp = "") => req<ModeChangeResult>("/api/automode", { method: "POST", body: JSON.stringify({ mode, totp }) }),
-  chartLayouts: () => req<ChartLayoutsView>("/api/chart/layouts"),
-  setChartLayouts: (layouts: ChartLayoutIn[], totp = "") => req<ChartLayoutsView>("/api/chart/layouts", { method: "POST", body: JSON.stringify({ layouts, totp }) }),
   accounts: () => req<AccountSummary[]>("/api/accounts"),
   proposals: () => req<Proposal[]>("/api/proposals"),
   recentProposals: () => req<DecidedProposal[]>("/api/proposals/recent"),
@@ -201,20 +153,8 @@ export const api = {
     req<Schemas["DecisionResult"]>("/api/decisions", { method: "POST", body: JSON.stringify({ proposal_id, created, action, reason_code }) }),
   halt: (reason?: string) => req<Status>("/api/halt", { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
   rearm: (totp: string) => req<Status>("/api/rearm", { method: "POST", body: JSON.stringify({ totp }) }),
-  agents: () => req<AgentRow[]>("/api/agents"),
   feeds: () => req<FeedHealth[]>("/api/feeds"),
-  jobs: () => req<JobRow[]>("/api/jobs"),
-  agentRuns: () => req<AgentRunRow[]>("/api/agent-runs"),
-  calendar: (q: CalendarQuery = {}) => req<CalendarResponse>(`/api/calendar${qs(q)}`),
-  news: (q: NewsQuery = {}) => req<Headline[]>(`/api/news${qs(q)}`),
   health: () => req<Schemas["HealthView"]>("/api/health"),
-  research: () => req<Schemas["ResearchView"]>("/api/research"),
-  // Progress tab (docs/ux/progress-screens.md): read-only, any signed-in role
-  gates: () => req<GatesView>("/api/gates"),
-  attribution: () => req<AttributionView>("/api/attribution"),
-  tradesSummary: () => req<TradesSummary[]>("/api/trades/summary"),
-  // Home live feed: shadow trades, positions, cost probes and refusals, newest first (read-only, viewer and above)
-  activity: (limit = 50) => req<ActivityView>(`/api/activity${qs({ limit })}`),
   // Home trades summary: every trade type for today, 7 days and all time (read-only, viewer and above)
   tradesOverview: () => req<TradesOverview>("/api/trades/overview"),
   // Home card stack (docs/ux/home-redesign-2026-10-19.md): open positions, strategy states, today's money (read-only)
@@ -227,15 +167,17 @@ export const api = {
   trade: (id: string) => req<Schemas["TradeRow"]>(`/api/trades/${encodeURIComponent(id)}`),
   // one trade on the stored bars of its timeframe with its levels and stop moves (backlog 133)
   tradeBars: (id: string) => req<Schemas["TradeBars"]>(`/api/trades/${encodeURIComponent(id)}/bars`),
+  // each account's current key zones and the recent bars of the timeframe (display only)
   // the strategy board (backlog 132): progress to each arm's read and the read's frozen figures (ADR 0050, 0051)
   strategyBoard: () => req<Schemas["StrategyBoardView"]>("/api/strategies/board"),
   // the strategy ranking (backlog 136-138, ADR 0053): families by the adjusted lower bound of net R per trade after
   // costs; `query` from lib/trades.rankingQuery (window, account, style)
   strategyRanking: (query: string) => req<Schemas["RankingView"]>(`/api/strategies/ranking${query}`),
-  // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
+  // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit
   limits: () => req<LimitsView>("/api/limits"),
+  // every enabled account's instruments: digits, unit, group and state (lib/instruments.ts fmtPrice, filters)
+  instruments: () => req<Schemas["InstrumentView"][]>("/api/instruments"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),
-  tradingview: () => req<TvStatusView>("/api/tradingview"),
 };
 
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {

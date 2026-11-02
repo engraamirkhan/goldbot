@@ -10,30 +10,23 @@ import { Login } from "./screens/Login";
 import { Home } from "./screens/Home";
 import { TradesTabView } from "./screens/Trades";
 import { TRADES_TABS } from "./lib/trades";
-import { Agents } from "./screens/Agents";
-import { Feeds } from "./screens/Feeds";
 import { Health } from "./screens/Health";
-import { Research } from "./screens/Research";
-import { News } from "./screens/News";
 import { Users } from "./screens/Users";
 import { Account } from "./screens/Account";
-import { Progress } from "./screens/Progress";
 import { Limits } from "./screens/Limits";
 import { AutoModeCard } from "./screens/AutoMode";
 import { HaltControl } from "./screens/HaltControl";
 import { CodeSignInsBanner } from "./screens/CodeSignInsBanner";
 
-// Six destinations (docs/ux/dashboard-v2.md section 2; Chart off for now, owner 2026-10-25). Phone: bottom bar with the first four and More; desktop: rail.
+// Five destinations (docs/ux/dashboard-v2.md section 2; Chart off, owner 2026-10-25; Research and Feeds retired, owner
+// 2026-11-02, System health is its own section). Phone: all five on the bottom bar; desktop: rail.
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" },
   { id: "trades", label: "Trades", icon: "M4 17l5-5 4 4 7-8M15 8h5v5" },
   { id: "limits", label: "Limits", icon: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
-  { id: "research", label: "Research", icon: "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M8 3h8" },
-  { id: "feeds", label: "Feeds", icon: "M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16M5 19h.01" },
+  { id: "health", label: "Health", icon: "M3 12h4l3-7 4 14 3-7h4" },
   { id: "settings", label: "Settings", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1-2-4-2 1-2-1-1-2h-4l-1 2-2 1-2-1-2 4 2 1v0l-2 1 2 4 2-1 2 1 1 2h4l1-2 2-1 2 1 2-4z" },
 ];
-const PHONE_BAR: Section[] = ["home", "trades", "limits", "research"];
-
 type Tab = { id: string; label: string; owner?: boolean; render: () => ReactNode };
 
 function Icon({ d }: { d: string }) {
@@ -58,7 +51,6 @@ function SafetySettings() {
 export function App() {
   const [authed, setAuthed] = useState(hasToken());
   const [route, go] = useRoute();
-  const [more, setMore] = useState(false);
   const qc = useQueryClient();
 
   useEffect(() => onSessionEnded(() => { clearLinkTokens(); setAuthed(false); }), []);
@@ -86,16 +78,6 @@ export function App() {
     trades: [
       ...TRADES_TABS.map((t) => ({ id: t.id, label: t.label, render: () => <TradesTabView tab={t.id} route={route} go={go} /> })),
     ],
-    research: [
-      { id: "trials", label: "Today and trials", render: () => <Research /> },
-      { id: "road", label: "Road to live", render: () => <Progress onOpenOverview={() => go("settings", "safety")} /> },
-      { id: "strategies", label: "Strategies", render: () => <Agents /> },
-    ],
-    feeds: [
-      { id: "data", label: "Data feeds", render: () => <Feeds /> },
-      { id: "news", label: "News", render: () => <News /> },
-      { id: "health", label: "System health", render: () => <Health /> },
-    ],
     settings: [
       { id: "safety", label: "Entry mode and halt", render: () => <SafetySettings /> },
       { id: "account", label: "Your sign-in", render: () => <Account /> },
@@ -103,17 +85,17 @@ export function App() {
     ],
   };
   const SINGLE: Record<string, () => ReactNode> = {
-    home: () => <Home onOpenProgress={() => go("research", "road")} onOpenLimits={() => go("limits")}
-                      onOpenTrades={() => go("trades", "now")} />,
+    home: () => <Home onOpenLimits={() => go("limits")} onOpenTrades={() => go("trades", "now")} />,
     limits: () => <Limits />,
+    health: () => <Health />,
   };
   const tabs = (TABS[route.section] ?? []).filter((t) => !t.owner || hasRole("owner"));
   const tab = tabs.find((t) => t.id === route.tab) ?? tabs[0];
   const title = NAV.find((n) => n.id === route.section)!.label;
-  const link = (n: (typeof NAV)[number], extra?: () => void) => (
+  const link = (n: (typeof NAV)[number]) => (
     <button key={n.id} type="button" className="navlink" data-nav-item={n.label}
             aria-current={route.section === n.id ? "page" : undefined}
-            onClick={() => { extra?.(); go(n.id); }}>
+            onClick={() => go(n.id)}>
       <Icon d={n.icon} /><span>{n.label}</span>
     </button>
   );
@@ -148,18 +130,7 @@ export function App() {
           </main>
         </div>
       </div>
-      {more && (
-        <div className="more-sheet" role="group" aria-label="More">
-          {NAV.filter((n) => !PHONE_BAR.includes(n.id)).map((n) => link(n, () => setMore(false)))}
-        </div>
-      )}
-      <nav className="bottombar" aria-label="Main, phone">
-        {NAV.filter((n) => PHONE_BAR.includes(n.id)).map((n) => link(n, () => setMore(false)))}
-        <button type="button" className="navlink" aria-expanded={more} aria-current={!PHONE_BAR.includes(route.section) ? "page" : undefined}
-                onClick={() => setMore(!more)}>
-          <Icon d="M5 12h.01M12 12h.01M19 12h.01" /><span>More</span>
-        </button>
-      </nav>
+      <nav className="bottombar" aria-label="Main, phone">{NAV.map((n) => link(n))}</nav>
     </div>
   );
 }

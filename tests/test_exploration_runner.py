@@ -293,7 +293,7 @@ def test_a_natural_pair_charges_the_twin_bxrs_own_commission_beside_its_exit_spr
     [rec] = exploration.trades(str(tmp_path))
     assert rec.censored is False and {p.exit_mode for p in pairs} == {"struct", "fixed"}
     assert rec.pnl is not None and rec.commission is not None and rec.fx_acct_per_usd
-    oz = rec.lots * exploration.CONTRACT_OZ
+    oz = rec.lots * exploration.contract_size("XAUUSD")
     commission = rec.commission / rec.fx_acct_per_usd / oz
     for p in pairs:
         [tw] = [t for t in _twins(tmp_path) if t.twin_id == p.twin_id]

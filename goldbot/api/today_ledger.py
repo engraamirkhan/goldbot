@@ -58,7 +58,8 @@ def plans_from_config(settings: Settings | None) -> dict[str, AccountPlan]:
         target = None if a.mode == "live" or tv is None else tv.fills_target_by_account.get(aid, tv.fills_target)
         out[aid] = AccountPlan(fills_target=target, daily_target=tv.daily_target_by_account.get(aid) if tv else None,
                                daily_share=tv.daily_target_share if tv else 0.05,
-                               pot=round(sum(p.gbp for p in ex.pots.values()), 2) if ex.enabled and ex.pots else None,
+                               pot=round(sum(p.gbp or 0.0 for p in ex.pots.values()), 2)
+                               if ex.enabled and ex.pots and ex.pot_budgets else None,   # no £ sleeves: none
                                strip_days=tv.strip_days if tv else 14)
     return out
 

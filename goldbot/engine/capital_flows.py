@@ -1,5 +1,6 @@
-"""The high-water mark's rise rule and capital flows (BACKLOG 54 / ADR 0018, ADR 0042), moved out of engine/runner.py
-(ADR 0023 ratchet): the engine calls `update_hwm` on every account read."""
+"""The high-water mark's rise rule, capital flows (BACKLOG 54 / ADR 0018, ADR 0042) and the risk-period roll, moved
+out of engine/runner.py (ADR 0023 ratchet): the engine calls `update_hwm` on every account read and
+`roll_risk_period` on every tick and account read."""
 from __future__ import annotations
 
 import logging
@@ -8,7 +9,9 @@ from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
 
+from goldbot.engine import demo_roll
 from goldbot.risk import hwm
+from goldbot.risk.gate import _risk_week, new_day
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
@@ -16,6 +19,28 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("goldbot.engine")
 FLOW_LOOKBACK = pd.Timedelta(days=1)
+
+
+def roll_risk_period(eng: Engine, now: pd.Timestamp) -> None:
+    """Daily and weekly loss caps roll over at the risk-day / risk-week boundary (gate.new_day); the reset time is
+    persisted so a restart neither resets twice in one day nor skips a boundary. At a genuine boundary (not the first
+    start) a paused demo probe host is then offered the ADR 0049 D3 demo roll (`demo_roll.at_day_roll`; every other
+    account returns there before any read). Moved from `Engine._roll_risk_period` unchanged but for that call."""
+    last = eng._last_reset
+    if last is not None and now.tz_convert("UTC").date() == last.tz_convert("UTC").date():
+        return
+    eng.state.equity = eng.broker.account().equity
+    week = last is None or _risk_week(now) != _risk_week(last)
+    if new_day(eng.state, now, last):
+        eng._last_reset = now
+        if week:
+            eng._week_reset = now
+        # BACKLOG 43 (code review LOW-1): a new risk day starts with no "last entry refused" (an agent that stopped
+        # producing intents is never allowed again, so its refusal would otherwise stay until a restart)
+        eng._entry_refusals.clear()
+        if last is not None:                # ADR 0049 D3: a paused demo probe host rolls at a 00:00 UTC roll
+            demo_roll.at_day_roll(eng, now)
+        eng._save_risk_state_now("the risk-period reset")
 
 
 def update_hwm(eng: Engine, acc: AccountInfo, now: pd.Timestamp) -> None:

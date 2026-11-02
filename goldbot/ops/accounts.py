@@ -21,7 +21,6 @@ CLI:
   python -m goldbot.ops.accounts list
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
   python -m goldbot.ops.accounts add vantage-live-obs  # observe_only: server, login and the INVESTOR password
-  python -m goldbot.ops.accounts set tradingview-webhook-secret
   python -m goldbot.ops.accounts set smtp-password      # the SMTP (Gmail App) password for email sign-in links
   ... set <key> --stdin                                  # the value from a pipe (no prompt; never echoed)
   ... export <key> | ssh <host> goldbot accounts set <key> --stdin   # copy a secret; refuses a terminal stdout
@@ -183,8 +182,9 @@ class ExplorationArm(FrozenRecord):
 class ExplorationPot(FrozenRecord):
     """ADR 0043 section 1: a style's sleeve, enforced by the engine (goldbot/engine/exploration.py): today's realised
     loss + open risk at the stops + the new trade's loss at its stop <= `gbp` (account currency), and at most
-    `max_open` of its arms' positions open."""
-    gbp: float = Field(gt=0)
+    `max_open` of its arms' positions open. `gbp` may be left out only on an account without pot budgets
+    (`Exploration.pot_budgets` false, demo-limits ADR 2026-11-02): its slots still bind."""
+    gbp: float | None = Field(None, gt=0)
     max_open: int = Field(ge=1)
 
 
@@ -203,6 +203,15 @@ class Exploration(FrozenRecord):
     # ADR 0043: style -> its sleeve (scalp, intraday, swing); every enabled arm names one, and the sleeves together fit
     # inside budget_share x daily_loss_limit_abs
     pots: dict[str, ExplorationPot] = Field(default_factory=dict)
+    # demo-limits ADR (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to
+    # test, learn and improve signals"): false = a pot without a `gbp` is slots only: its £ sleeve and its arms' days
+    # do not bind (the engine drops those two rooms); a pot that still names its `gbp` keeps both (trading-safety M1:
+    # the growth pot). The per-trade cap, the exploration budget, every slot, the daily and weekly limits and the
+    # RiskGate always bind. Default true: the ADR 0043 sleeves, every pot with its `gbp`
+    pot_budgets: bool = True
+    # ADR 0061 amendment 2026-11-02: learning arms (`role: learning`) open at once on this account, all together
+    # (`learning_slots`); 0 (the default): no learning arm enters
+    learning_max_open: int = Field(0, ge=0)
 
 
 def growth_arm_ids(acc: Account) -> frozenset[str]:
@@ -262,7 +271,13 @@ class Account(Record):
     # PD decision 2026-10-26 (ADR 0043 host cap): the RiskGate's open-position cap for THIS account, replacing
     # risk.max_positions_per_account (2) here only. Accepted on a demo probe_only account only (refused at load
     # otherwise); None = the global value
-    max_positions: int | None = Field(None, ge=1, le=18)
+    max_positions: int | None = Field(None, ge=1, le=24)
+    # demo-limits ADR (owner 2026-11-02): `demo_weekend_flat` = the Friday cut closes every position, winners too
+    # (censored), and exploration refuses an entry only in the last 15 minutes before it; `news_blackout_entries` false
+    # = the RiskGate no longer refuses entries in a tier-1 news blackout (the blackout is still computed and recorded on
+    # every entry). Off their defaults only on a demo probe_only account (refused at load otherwise)
+    demo_weekend_flat: bool = False
+    news_blackout_entries: bool = True
     # owner 2026-10-19 (docs/design/dynamic-limits-2026-10-19.md): "loss per trade, daily loss ... dynamic according to
     # strategy". On: per-strategy risk per trade from the nightly controller, tighten-only intraday factors and the
     # probes' loss and count from their own stops and the budget (cost_probe.probe_limits); the configured values stay
@@ -299,6 +314,10 @@ class Account(Record):
     # its end, so nothing carries into the main session. Needs `always_open`; its exploration arms are controls only
     weekend_only: bool = False
     weekend_window: WeekendWindow = Field(default_factory=WeekendWindow)
+    # ADR 0068 (key levels, display only): `long` = the dashboard's zones are built on the broker's own M15, 800 days
+    # deep, pulled through the bridge (paced, one pull per bridge at a time); `short` = on the engine's ~62 days of 1m
+    # only, no pull (instruments that do not need weekly levels, or a box whose memory is tight)
+    key_levels_history: Literal["long", "short"] = "long"
     # ADR 0063 (owner 2026-10-31: XAUUSD247 through the live account, "NO live trading"): `observe_only` = a real
     # account the system only READS, its terminal logged in with the MT5 investor (read-only) password so the broker
     # rejects every order by construction. Never enabled, never an engine, arm, allocator or probe account and never
@@ -306,6 +325,13 @@ class Account(Record):
     # `observe_symbols`: the store symbols the collector records (goldbot/ops/observe.py), each resolved on the terminal
     kind: Literal["trading", "observe_only"] = "trading"
     observe_symbols: tuple[str, ...] = ()
+    # Multi-instrument demo (plan 2026-11-02, owner: "all listed instruments live on DEMO"): the instruments this
+    # account trades beside its own gold `symbol`, as keys of config/instruments.yaml listed for its broker. "Real-
+    # money/live and observe accounts refuse any non-XAUUSD instrument": refused at load there (`_gold_only_off_demo`).
+    # An instrument's orders carry magics from `instrument_magic_index` (plan: "3_000_000 + account_idx*10_000 +
+    # magic_block*100 + offset"); gold keeps `magic_base`. Adding an instrument is a YAML change: list it here
+    instruments: tuple[str, ...] = ()
+    instrument_magic_index: int | None = Field(None, ge=0, lt=100)
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -398,6 +424,18 @@ class Account(Record):
         return self
 
     @model_validator(mode="after")
+    def _demo_limits_fenced(self) -> Account:
+        """Demo-limits ADR (owner 2026-11-02, "for the system to be not bound to test, learn and improve signals"):
+        the weekend-flat and news-blackout flags leave their defaults only on a demo probe_only account, where nothing
+        real is at stake; anywhere else the config is refused at load, never ignored quietly."""
+        off = [k for k, v in (("demo_weekend_flat", self.demo_weekend_flat),
+                              ("news_blackout_entries", not self.news_blackout_entries)) if v]
+        if off and (self.mode != "demo" or not self.probe_only):
+            raise ValueError(f"{', '.join(off)} off its default is allowed on demo probe_only accounts only "
+                             "(demo-limits ADR 2026-11-02)")
+        return self
+
+    @model_validator(mode="after")
     def _probe_only_is_a_probe_host(self) -> Account:
         """ADR 0037 amendment 4: a probe_only account exists to mirror the shadow book's challengers at the minimum
         lot. Amendment 6 (PD 2026-10-26, ADR 0043 per-style hosts): "or to run exploration arms", so a second demo
@@ -433,7 +471,11 @@ class Account(Record):
             raise ValueError("exploration arm max_loss must fit inside exploration.budget_share x daily_loss_limit_abs")
         if any(a.style is None or a.style not in ex.pots for a in ex.arms.values()):
             raise ValueError("every exploration arm names a style with a pot (exploration.pots, ADR 0043)")
-        if sum(pot.gbp for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
+        # without pot budgets a pot is slots only unless it still names its £, which then binds (demo-limits ADR
+        # 2026-11-02, trading-safety M1); the pots that name one always fit inside the budget
+        if ex.pot_budgets and (bare := sorted(k for k, pot in ex.pots.items() if pot.gbp is None)):
+            raise ValueError(f"exploration pots {bare} need gbp while pot_budgets is on (ADR 0043)")
+        if sum(pot.gbp or 0.0 for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
             raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
         return self
 
@@ -493,6 +535,37 @@ class Account(Record):
         if self.weekend_only and any(a.control_share is None for a in self.exploration.arms.values()):
             raise ValueError("a weekend_only account runs random controls only: every arm has a control_share "
                              "(ADR 0062)")
+        return self
+
+    @model_validator(mode="after")
+    def _gold_only_off_demo(self) -> Account:
+        """Plan 2026-11-02: "real-money/live and observe accounts refuse any non-XAUUSD instrument". On a live or
+        observe_only account the own symbol and every observed symbol must be XAUUSD on its broker, and nothing else is
+        listed; on a demo account every listed instrument is a registry key its broker lists, once, never gold (gold
+        is the account's own `symbol`), and the account names its magic index. Refused at load, never skipped."""
+        from goldbot.instruments import GOLD, registry
+        reg = registry()
+        if self.mode != "demo" or self.kind == "observe_only":
+            names = (self.symbol, *self.observe_symbols)
+            if self.instruments or self.instrument_magic_index is not None or any(
+                    (s := reg.resolve(n, self.broker) or reg.resolve(n)) is None or s.key != GOLD for n in names):
+                raise ValueError(f"a {'live' if self.mode != 'demo' else 'observe_only'} account trades and observes "
+                                 f"XAUUSD only (multi-instrument plan 2026-11-02): no instruments, no magic index")
+            return self
+        if not self.instruments:
+            return self
+        if len(set(self.instruments)) != len(self.instruments):
+            raise ValueError("an instrument is listed twice in instruments")
+        for key in self.instruments:
+            if key == GOLD:
+                raise ValueError(f"{GOLD} is the account's own symbol, not one of its instruments")
+            if key not in reg.instruments:
+                raise ValueError(f"instrument {key!r} is not in config/instruments.yaml")
+            if self.broker not in reg.get(key).broker_symbols:
+                raise ValueError(f"instrument {key!r} is not listed for broker {self.broker} in config/instruments.yaml")
+        if self.instrument_magic_index is None:
+            raise ValueError("an account with instruments needs its instrument_magic_index (its magic range, plan "
+                             "2026-11-02)")
         return self
 
     @property
@@ -725,6 +798,9 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                                dynamic_limits=a.get("dynamic_limits", False),
                                exploration=Exploration(**(a.get("exploration") or {})),
                                max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
+                               # demo-limits ADR 2026-11-02 (demo probe_only only; refused elsewhere at load)
+                               demo_weekend_flat=a.get("demo_weekend_flat", False),
+                               news_blackout_entries=a.get("news_blackout_entries", True),
                                pilot=PilotRules(**(a.get("pilot") or {})),
                                order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
                                store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),
@@ -733,7 +809,9 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                                weekend_only=bool(a.get("weekend_only", False)),
                                weekend_window=WeekendWindow(**(a.get("weekend_window") or {})),
                                kind=a.get("kind", "trading"),
-                               observe_symbols=tuple(a.get("observe_symbols") or ()))
+                               observe_symbols=tuple(a.get("observe_symbols") or ()),
+                               instruments=tuple(a.get("instruments") or ()),
+                               instrument_magic_index=a.get("instrument_magic_index"))
         except ValidationError as exc:
             if a.get("kind") != "observe_only":
                 raise
@@ -747,6 +825,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                          "account in config/accounts.yaml: evidence, costs and weights are keyed by broker, so the "
                          "24/7 symbol would pool with weekday gold. Give the always-open account its own broker key "
                          "(ADR 0062)")
+    if clash := magic_clashes(out.values()):
+        raise ValueError(f"config/accounts.yaml: {clash}")
     hosts =[a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
@@ -778,6 +858,35 @@ def observe_login_clash(acc: Account, accounts: Iterable[Account]) -> str | None
         if o.is_observe_only and o.login is not None and int(o.login) == int(acc.login) and o.server == acc.server:
             return (f"{acc.account_id} resolves to the same MT5 login and server as the observe_only account "
                     f"{o.account_id} (ADR 0063): it is read, never traded; store another login or leave it disabled")
+    return None
+
+
+def instrument_magic_base(acc: Account, instrument: str) -> int:
+    """The first magic of `instrument` on `acc`: XAUUSD keeps `magic_base` (byte-identical), every other instrument
+    `goldbot.instruments.instrument_magic_base` of the account's index. KeyError for an instrument it does not list."""
+    from goldbot.instruments import GOLD, registry
+    from goldbot.instruments import instrument_magic_base as base_of
+    if instrument == GOLD:
+        return acc.magic_base
+    if instrument not in acc.instruments or acc.instrument_magic_index is None:
+        raise KeyError(f"{acc.account_id} does not trade {instrument!r}")
+    return base_of(acc.instrument_magic_index, registry().get(instrument))
+
+
+def magic_clashes(accounts: Iterable[Account]) -> str | None:
+    """Why two accounts' magics could collide, None when none can: two accounts with one `instrument_magic_index`
+    (their instrument ranges would be one), or a gold `magic_base` range reaching the instrument ranges. Positions are
+    reconciled by magic, so a shared number would adopt another account's position."""
+    from goldbot.instruments import MAGIC_INSTRUMENT_BASE
+    seen: dict[int, str] = {}
+    for a in accounts:
+        if a.magic_base + 99 >= MAGIC_INSTRUMENT_BASE:
+            return f"{a.account_id}: magic_base {a.magic_base} reaches the instrument magics ({MAGIC_INSTRUMENT_BASE}+)"
+        i = a.instrument_magic_index
+        if i is not None and i in seen:
+            return f"{seen[i]} and {a.account_id} share instrument_magic_index {i}: their magics would collide"
+        if i is not None:
+            seen[i] = a.account_id
     return None
 
 

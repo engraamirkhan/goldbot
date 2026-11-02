@@ -6,6 +6,7 @@ import * as apiModule from "../lib/api";
 import type { Route } from "../lib/route";
 import { bars, board, openPositions, ranking, todayAccount, tradeBars, tradeRow, tradesPage } from "../test/tradesFixtures";
 import type { TradesTab } from "../lib/trades";
+import { NBSP } from "../ui/format";
 import { TradesTabView } from "./Trades";
 import { TradeChart } from "./trades/TradeChart";
 
@@ -20,7 +21,6 @@ function renderTab(tab: TradesTab, route: Partial<Route> = {}, go = vi.fn()) {
   };
   free("status", status); free("accounts", []); free("proposals", []); free("recentProposals", []);
   free("openPositions", openPositions());
-  free("activity", { events: [], unreadable: [] });
   free("today", { as_of: "2026-10-27T09:00:00Z", accounts: [todayAccount()] });
   free("tradesOverview", { as_of: "2026-10-27T09:00:00Z", periods: [], unreadable: [] });
   free("limits", { generated_utc: "2026-10-27T09:00:00Z", error: null, supervisor: {}, accounts: [] });
@@ -45,7 +45,7 @@ describe("Trades > Now (128, 130)", () => {
     expect(row.textContent).toContain("+£3.40");
     expect(row.textContent).toContain(`+0.63${NB}R`);
     expect(row.textContent).toContain("risk £5.40");
-    expect(row.textContent).toContain("4,012.40 → stop 4,006.10 USD/oz");
+    expect(row.textContent).toContain(`4,012.40 → stop 4,006.10${NBSP}USD/oz`);
     expect(row.textContent).toContain(`22${NB}min of 2${NB}h`);
     expect(screen.queryByText(/not known/)).toBeNull();
     const scalp = screen.getByRole("region", { name: "Open trades Scalp lab" });
@@ -97,7 +97,8 @@ describe("Trades > List (130)", () => {
     const row = within(list).getByRole("button", { name: "Box break + close 15m, long, plus £2.10, closed at target" });
     expect(row.textContent).toContain("+£2.10");
     expect(row.textContent).toContain(`+1.50${NB}R`);
-    expect(row.textContent).toContain("LONG · Day/swing lab · target");
+    expect(row.textContent).toContain("XAUUSD · long 0.01 · ");
+    expect(row.textContent).toContain(" · Day/swing lab · target");
     expect(row.textContent).toContain("Close above the 15m box after a squeeze");
     expect(within(list).getByText("CONTROL")).toBeInTheDocument();
     expect(within(list).getByText("COST PROBE")).toBeInTheDocument();
@@ -157,7 +158,7 @@ describe("Trade detail (133)", () => {
 
   it("draws the trade on its bars: entry, first and last stop, target and exit labelled; the move in words; the feed named", async () => {
     renderTab("list", { sub: "exploration:icm-demo:41" });
-    const chart = await screen.findByRole("img", { name: /^Chart of 15m bars: target 4,024\.00, entry 4,012\.40, first stop 4,006\.10, last stop 4,012\.40, exit 4,024\.00/ });
+    const chart = await screen.findByRole("img", { name: /^Chart of 15m bars of Gold: target 4,024\.00, entry 4,012\.40, first stop 4,006\.10, last stop 4,012\.40, exit 4,024\.00/ });
     expect(chart.querySelectorAll("rect.up, rect.down")).toHaveLength(40);
     const d = screen.getByRole("dialog", { name: "Trade detail" });
     expect(d).toHaveTextContent(/stop 4,006\.10 \(moved to 4,012\.40 at/);

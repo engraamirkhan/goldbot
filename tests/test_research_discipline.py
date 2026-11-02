@@ -11,9 +11,10 @@ from goldbot.config import load_settings
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.engine.shadow import ShadowBook
-from goldbot.execution.costs import CONTRACT_OZ, prior_extra_cost_usd, settings_extra_cost_usd
+from goldbot.execution.costs import prior_extra_cost_usd, settings_extra_cost_usd
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.features.registry import side_align, signed_neutral
+from goldbot.instruments import contract_size
 from goldbot.research.director import quarter_usage
 from goldbot.research.gates import MIN_CANDIDATES, MIN_TEST_FOLD, holdout_verdict, research_gates
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, expectancy, summarize
@@ -140,10 +141,10 @@ def test_expectancy_in_r_with_t_stat():
 
 def test_cost_hurdle_is_slippage_and_commission_not_the_spread_again():
     # labels already pay the spread (ask in, bid out); the extra cost is slippage both ways + commission both sides
-    assert prior_extra_cost_usd(0.15, 3.5) == pytest.approx(2 * 0.15 + 2 * 3.5 / CONTRACT_OZ)
+    assert prior_extra_cost_usd(0.15, 3.5) == pytest.approx(2 * 0.15 + 2 * 3.5 / contract_size("XAUUSD"))
     s = load_settings()
     assert settings_extra_cost_usd(s) == pytest.approx(2 * s.costs.slippage_prior_usd
-                                                        + 2 * s.costs.commission_per_lot_side_usd["icm"] / CONTRACT_OZ)
+                                                        + 2 * s.costs.commission_per_lot_side_usd["icm"] / contract_size("XAUUSD"))
 
 
 def test_zero_spread_bars_are_mid_prices():

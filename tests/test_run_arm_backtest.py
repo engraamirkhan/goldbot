@@ -169,7 +169,7 @@ def test_a_history_twin_pays_the_round_trip_and_the_swap_of_every_rollover_it_he
     from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
     from goldbot.research import arm_rules_clock_box as K
     trades, _ = rab.run_arm(b1, _spec("BXR15", "box_next", {"exit": "runner"}), START, END, COSTS)
-    swap = SwapSpec.shipped()
+    swap = SwapSpec.research_shipped()          # ADR 0070: today's rate on the entry's notional
     close = pd.DatetimeIndex(rab.resample_bars(b1, "15m").reset_index(drop=True)["visible_at"])
     held = 0
     for _, t in trades.iterrows():
@@ -180,7 +180,7 @@ def test_a_history_twin_pays_the_round_trip_and_the_swap_of_every_rollover_it_he
             w = K.walk_runner(path, closes, entry, side, r, r / K.BOX_STOP_ATR, target_r=float(t[f"twin_{mode}_target_r"]))
             nights = int(rollover_nights(pd.DatetimeIndex([t["entry_ts"]]), pd.DatetimeIndex([w["at"]]),
                                          swap.server_tz, swap.triple_weekday)[0])
-            move = side * (w["exit"] - entry) + nights * float(swap.usd_per_oz(np.array([side]))[0])
+            move = side * (w["exit"] - entry) + nights * float(swap.usd_per_oz_at(np.array([side]), entry)[0])
             stop = float(t[f"twin_{mode}_hit"] == "stop")
             assert t[f"twin_{mode}_gross_r"] == pytest.approx(move / r)
             assert t[f"twin_{mode}_net_r"] == pytest.approx((move - COSTS.round_trip_usd) / r)

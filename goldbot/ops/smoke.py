@@ -115,6 +115,7 @@ STATE_SOURCES: dict[str, str] = {
     "supervisor_halt": "Supervisor.engine_should_halt(state): halt flag, missing, unreadable or stale heartbeat",
     "owner_halt": "ApprovalBus.control().halted",
     "in_blackout": "the engine's calendar (store calendar_events, tier 1) and news shocks; unreadable refuses",
+    "blackout_kind": "news_shock for a shock, tier1 for a calendar window, else None (ADR 0072 M2: a shock always refuses)",
     "dq_error": "a failed tick or bars read, or stale bars",
     "stale_bars": "get_bars(1m): last bar older than one decision period",
     "account_disabled": "constant False: engine-only state (a disabled account's wind-down; the smoke is operational)",
@@ -146,6 +147,10 @@ STATE_SOURCES: dict[str, str] = {
     # ADR 0055: read only on a pilot account, which is live; the smoke is demo-only (F1), so both are none
     "pilot": "none: the live pilot's record is the engine's, and the smoke never runs on a live account (F1)",
     "broker_leverage": "none: read only on the live pilot account; the 1:20 figure applies (F1: demo only)",
+    # multi-instrument plan 2026-11-02: the smoke is an XAUUSD order, so the single-instrument combined cap applies
+    "group_notional": "none: an XAUUSD-only state (the lots and USD notional cap, as before)",
+    "other_group_notional": "none: an XAUUSD-only state",
+    "exposure_unknown": "false: an XAUUSD-only state values its book through open_lots / open_notional",
 }
 
 
@@ -484,6 +489,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         closed = True
     clock = server_clock.assess(acc.account_id, acc.server_tz, tick.ts_utc, now, sessions) if tick is not None \
         else None
+    tier1 = blackout_window(events, tick_ts, cfg.blackout_before_min, cfg.blackout_after_min) is not None
     st = AccountState(
         equity=info.equity, balance_closed_hwm=risk["hwm"], day_start_equity=risk["day"],
         week_start_equity=risk["week"], margin_used=info.margin,
@@ -491,8 +497,8 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         spread_points=(tick.ask - tick.bid) / cfg.limits.point if tick is not None else math.inf,
         stage=risk["stage"], equity_unconfirmed=risk["unconfirmed"],
         supervisor_halt=sup_halt, owner_halt=bus.control().halted,
-        in_blackout=shock is not None or blackout_window(events, tick_ts, cfg.blackout_before_min,
-                                                         cfg.blackout_after_min) is not None,
+        in_blackout=shock is not None or tier1,
+        blackout_kind="news_shock" if shock is not None else "tier1" if tier1 else None,
         dq_error=stale_bars or bars_failed or tick is None, stale_bars=stale_bars,
         account_disabled=False,  # engine-only state (services.engine disabled_wind_down); the smoke is ADR 0021's own
         data_recovering=False,   # engine-only state (runner: healthy_resume_s after an engine data error)
@@ -502,6 +508,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         drift_halt=_drift_halt(state_dir), clock_mismatch=clock is None or clock.status == "mismatch",
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
         unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id), pilot=None, broker_leverage=None,
+        group_notional=None, other_group_notional=None, exposure_unknown=False,
         **_windows(cfg.limits, sessions, events, tick_ts, now),
         **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)

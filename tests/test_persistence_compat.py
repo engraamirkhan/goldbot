@@ -23,10 +23,11 @@ from pydantic import BaseModel, Field
 
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
-from goldbot.data import crossfeed, tv_pull
+from goldbot.data import crossfeed
 from goldbot.data.calendar import PauseWindow
 from goldbot.data.ticks import TickIndex
 from goldbot.engine import cost_probe, exploration
+from goldbot.engine.instruments_db import InstrumentTerms
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.execution.costs import (
@@ -429,15 +430,21 @@ def case_trial_day_summed_dsr(tmp: Path) -> None:
 
 def case_attribution_report(tmp: Path) -> None:
     """state/attribution.json (research/attribution.py AttributionReport) with a field from a newer release at the top
-    and in a cell: the Progress tab's results view still serves it (goldbot/api/progress.py)."""
-    from goldbot.api.progress import attribution_view
-    from goldbot.research.attribution import CostModel, build_report, save_report
+    and in a cell: an older release still loads it as a record."""
+    from goldbot.base import load_record
+    from goldbot.research.attribution import (
+        AttributionReport,
+        CostModel,
+        build_report,
+        load_report,
+        save_report,
+    )
     free = CostModel(spread_usd={}, slippage_usd={}, slippage_prior_usd=0.0, commission_usd_per_oz=0.0, swap=None,
                      source="test")
     save_report(build_report([], now=T0, costs=free, settings=load_settings().attribution), tmp)
     _rewrite(tmp / "attribution.json", lambda d: {**_newer(d), "overall": _newer(d["overall"])})
-    v = attribution_view(tmp, load_settings(), T0)
-    assert v.cant_check is None and v.report is not None and v.report.overall.n == 0
+    rep = load_record(AttributionReport, load_report(tmp), source="attribution.json")
+    assert rep.overall.n == 0
 
 
 def case_daily_review(tmp: Path) -> None:
@@ -514,8 +521,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # engine_<account>.json `schema_skew`: tests/test_schema_skew_health.py::
                # test_health_reads_a_skew_block_a_newer_engine_wrote
                SkewSummary,
-               # state/tv.db pull log: tests/test_tv_pull.py::test_pull_log_rows_a_newer_release_wrote_still_read
-               tv_pull.PassReport, tv_pull.StudyMeta, tv_pull.StudySpec,
+               # state/instruments.db (lane L3): tests/test_instruments_db.py::
+               # test_a_terms_row_a_newer_release_wrote_still_reads
+               InstrumentTerms,
                # engine_<account>.json and approval files `ask_reason` (backlog 103; every field defaults, a missing
                # reason is None): tests/test_api_ui_contract.py::
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
@@ -544,6 +552,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
         "strict: the hash-chained arm registration journal (ADR 0058); a row that does not read must refuse",
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/instruments.py", "load_instruments", "Instruments"):
+        "strict: config/instruments.yaml (a misspelt key or a repeated magic_block must fail)",
     ("goldbot/research/autodisc/ledger.py", "SearchLedger.get_spec", "StrategySpec"):
         "strict: hash-chained spec; a field dropped on read would change spec_hash and break the ledger chain (ADR 0058)",
     ("goldbot/research/autodisc/gen_gp.py", "_spec", "base"):
@@ -553,6 +563,14 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/arms.py", "qualification_refusal", "Qualification"):
         "strict: an arm row's checked-in qualification (ADR 0061); a malformed or misspelt record must refuse the arm's "
         "demo entries (caught, never raised), not be read loosely as a pass",
+    ("goldbot/research/arms.py", "learning_refusal", "Learning"):
+        "strict: an arm row's checked-in learning block (ADR 0061 amendment 2026-11-02); a malformed block must refuse "
+        "the arm's demo entries (caught, never raised), never be read loosely as a learning arm",
+    ("goldbot/research/arms.py", "learning_cross_refusals", "Learning"):
+        "strict: the same checked-in learning block, read across rows (its control, its k_id); a bad block is skipped "
+        "there because learning_refusal has refused its arm already",
+    ("goldbot/engine/exploration_learning.py", "_block", "Learning"):
+        "strict: the same checked-in learning block in the engine; an invalid block refuses the arm (fail closed)",
     ("goldbot/engine/exploration.py", "_load_spec_arm_rows", "SpecArm"):
         "strict: the same frozen Arm rows from config/spec_arms.yaml (hash-checked), read one row at a time so a bad row "
         "is dropped and journalled, never a loosened read (ADR 0058 phase 4)",
@@ -565,8 +583,6 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: credentials (a newer lock or MFA flag must not be ignored)",
     ("goldbot/research/cells.py", "_read_cell_rows", "CellRow"):
         "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
-    ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
-        "strict: an inbound request body, not persisted state (a malformed alert is refused, TradingView sees 422)",
     ("goldbot/telegram/bus.py", "read_control", "Control"): "strict: the owner's halt; unreadable means halted",
     ("goldbot/telegram/bus.py", "ApprovalBus.decisions_for", "BusDecision"):
         "strict: an owner decision is never applied without a field this release does not know; skipped, it expires",
@@ -582,6 +598,16 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/api/strategy_labels.py", "_reads_file", "ReadsFile"):
         "strict: hand-edited checked-in config, not persisted state (a misspelt read fails closed: no arm counts as "
         "read, every arm its own unit, ADR 0050)",
+    ("goldbot/research/sprint3000/vocab.py", "load_catalogue", "Spec"):
+        "strict: the pre-registered sprint-3000 catalogue (sha256-pinned in the amendment); a misspelt or unknown key "
+        "must fail the load, never drop a filter or parameter silently",
+    ("goldbot/research/sprint3000/vocab.py", "_parse", "reg[rule.type].params"):
+        "strict: a catalogue rule's parameters, as load_catalogue (an unknown parameter must fail, not default)",
+    ("goldbot/research/sprint3000/engine.py", "load_rules", "PassRules"):
+        "strict: the frozen pass rules (config/research/sprint3000_rules.yaml, sha256 in every report); a misspelt "
+        "threshold must fail, never fall back to a default",
+    ("goldbot/research/sprint3000/engine.py", "run_screen", "DsrInputs"):
+        "not persisted: rebuilt from the model_dump made in the same run",
     ("goldbot/research/arm_stops.py", "_load", "StopRules"):
         "strict: hand-edited checked-in config, not persisted state (a misspelt stop rule fails closed: exploration "
         "entries refused as stop_rules_unreadable)",
@@ -591,13 +617,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/api/app.py", "create_app.users", "UserRow"): "not persisted: API response from AuthStore.list_users()",
     ("goldbot/api/app.py", "create_app.recent_proposals", "DecidedProposal"):
         "not persisted: API response built from a loaded Proposal",
-    ("goldbot/api/app.py", "create_app.calendar", "CalendarEvent"):
-        "not persisted: API response from code-selected columns",
-    ("goldbot/api/app.py", "create_app.news", "Headline"): "not persisted: API response from code-selected columns",
     ("goldbot/risk/adaptive.py", "AdaptiveController.current", "Evidence"):
         "not persisted, strict: the evidence for a risk decision (ADR 0031: corrupt evidence gives the floors)",
-    ("goldbot/api/explain.py", "_plan", "PlanReservation"):
-        "API schema model (pydantic default extra='ignore'): tolerant",
 }
 # Models that fail closed: never read tolerantly, by load_record or by RecordRepo(..., tolerant=True).
 STRICT_MODELS = {"User", "Invite", "PasswordReset", "Control", "Settings", "BusDecision"}

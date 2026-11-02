@@ -9,7 +9,6 @@ allocator/   regime allocator (rule table first, learned later)
 research/    purged walk-forward, metrics, trial registry
 risk/        RiskGate: limits no model output can override
 execution/   Broker protocol, paper broker, MT5 adapter (Windows only), account classifier
-webhook/     TradingView alert receiver
 telegram/    approvals and alerts
 ops/         VPS bootstrap and service definitions
 """

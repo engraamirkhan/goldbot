@@ -234,7 +234,7 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
         if b.empty:
             return pd.DataFrame(columns=cols, index=pd.DatetimeIndex([], tz="UTC"), dtype=float)
         ts = pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)).as_unit("ns")
-        # a frame with closes only (tv_reconcile) has no range: its minute range is the close itself
+        # a frame with closes only has no range: its minute range is the close itself
         b = b.assign(**{c: b[c] if c in b.columns else b["bid_close"] for c in cols[1:]})
         f = pd.DataFrame(b[cols].astype(float).to_numpy(), index=ts, columns=cols)
         f = f[~f.index.duplicated(keep="last")]

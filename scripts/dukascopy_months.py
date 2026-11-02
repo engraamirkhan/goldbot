@@ -8,7 +8,7 @@ scripts/dukascopy_year.py imports the same function, so the workflow and the scr
      months=2024-01,2024-06,2026-06
 
 Exit status 2 and nothing on stdout for any list that is not comma-separated YYYY-MM months (ASCII digits only,
-spaces allowed around commas), from 2010-01 up to the current month, at most MAX_MONTHS of them.
+spaces allowed around commas), from 2003-01 up to the current month, at most MAX_MONTHS of them.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import json
 import re
 import sys
 
-FIRST_YEAR = 2010   # the first year data-v1 holds
+FIRST_YEAR = 2003   # XAUUSD archive starts 2003-05-04 (dukascopy_year.INSTRUMENTS); pre-2010 years are held locally only
 MAX_MONTHS = 24     # a targeted refetch costs up to ~80 runner-minutes a month when Dukascopy throttles
 _MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 

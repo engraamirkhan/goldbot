@@ -25,17 +25,36 @@ API contracts unchanged except the SRE lane's `GET /api/chart/mt5?tf=15|60|240|1
 9. **Tables on phone** (Overview, Agents, News, Health, Users) overflow sideways; numbers not tabular in several.
 10. **Dark mode**: surfaces barely differ from background; green "Approve" and gold bars dominate.
 
-## 2. Information architecture (7 destinations)
+## 2. Information architecture (5 destinations; revised 2026-11-02, ADR 0066)
+| Nav | Holds (current screens) | Who |
+|---|---|---|
+| **Home** | status, waiting trade(s), today's P&L vs limits, open positions summary | all |
+| **Trades** | segmented: Waiting (Approvals) · Recent (decided 10 min + your trades) · Results | all |
+| **Limits** | Limits (unchanged content, new cards) | all |
+| **Health** | System health (Health screen; `/api/health` and `/api/feeds` stay) | all |
+| **Settings** | Entry mode (auto mode), Halt / re-arm, Your sign-in (Account), Users (owner), Recovery codes | role-gated |
+Phone bottom bar and desktop left rail: all 5. `#/health` is the Health section; `#/feeds` and `#/feeds/*` (old
+bookmarks and Telegram links) open it. `#/research/*` and `#/chart` open Home.
+
+Retired 2026-11-02 (ADR 0066, owner directive to focus on the main goal): the **Research** section (Today, Road to
+live, Strategies, Trials) and the **Feeds** section (Data feeds, TradingView card, News & calendar); its System health tab is now Health.
+Chart was taken off the nav on 2026-10-25 (owner: focus on the trading system); its screens stay in the repository.
+The 2026-10-18 IA below is kept for the record.
+
+<details><summary>2026-10-18 IA (7 destinations, superseded)</summary>
+
 | Nav | Holds (current screens) | Who |
 |---|---|---|
 | **Home** | status, waiting trade(s), today's P&L vs limits, open positions summary | all |
 | **Trades** | segmented: Waiting (Approvals) · Recent (decided 10 min + your trades) · Results (Progress results) | all |
-| **Chart** | TradingView chart + MT5 chart side by side | all |
+| ~~**Chart**~~ | removed 2026-11-02 (owner: levels and indicators are for the system to learn from, not for charts to display) | - |
 | **Limits** | Limits (unchanged content, new cards) | all |
 | **Research** | segmented: Today · Road to live (Progress gates, stop rule) · Strategies (Agents league) · Trials (Research) | all |
 | **Feeds** | segmented: Data feeds (Feeds + TradingView card) · News & calendar (News) · System health (Health) | all |
 | **Settings** | Entry mode (auto mode), Halt / re-arm, Your sign-in (Account), Users (owner), Recovery codes | role-gated |
 Phone bottom bar: Home, Trades, Chart, Limits, More (sheet with Research, Feeds, Settings). Desktop: left rail, all 7.
+</details>
+
 Hash routes (`#/trades/waiting`) so Telegram cards can link straight to a trade. A waiting trade puts a count badge
 on Trades and the header pill turns to "1 trade waiting · 0:58".
 
@@ -59,11 +78,11 @@ on Trades and the header pill turns to "1 trade waiting · 0:58".
 ┌ Safety ── all clear ──────────────────────────────┐  <- one line when fine; expands to list when not
 │ ✓ No halts  ✓ No news blackout  ✓ Data fresh 11:47│
 └───────────────────────────────────────────────────┘
-Next milestone: 1-hour trades at £2,744 (37%)  ›   Research: 2 of 53 trials used ›
+Next milestone: 1-hour trades at £2,744 (37%)  ›
 ```
 Desktop: left column trade + today, right column tiles + safety. States: loading (skeletons same size), error
 ("Couldn't reach goldbot since 11:47. Exits keep running on the server." amber banner, last data greyed), empty
-(no engine: "No engine is reporting, so no trades can open. See Feeds › System health."), halted (pill red
+(no engine: "No engine is reporting, so no trades can open. See Health."), halted (pill red
 "Entries halted: FOMC", safety card lists each stopper with its clear time; trade card shows "Approving will be
 refused: halted").
 
@@ -81,7 +100,7 @@ Two panels, side by side >= 1080 px, stacked on phone; shared timeframe Segmente
    skeleton of the same box. Our indicators on MT5 (MQL5 ports of the replica) are a follow-up for the architect,
    not in this build. Fetched with the session token (blob URL), no identifiers in the image caption.
 
-### Limits / Research / Feeds / Settings
+### Limits / Health / Settings
 Same content as today, rebuilt from Card, MetricTile, Meter, Badge, DataTable; internal names behind "Details";
 tables become cards < 720 px. Settings groups owner controls with explanatory copy and the authenticator step-up.
 

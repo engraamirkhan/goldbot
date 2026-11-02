@@ -23,7 +23,7 @@ def app_client(tmp_path):
     state, docs = tmp_path / "state", tmp_path / "docs"
     state.mkdir()
     docs.mkdir()
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", docs_dir=docs, owner_email=OWNER)
+    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email=OWNER)
     return app, TestClient(app), state, docs
 
 
@@ -136,7 +136,7 @@ def test_mode_by_shows_only_the_channel_to_every_role_even_the_owner(app_client)
     assert c.get("/api/automode", headers=h["viewer"]).json()["mode_by"] == "telegram"
 
 
-def test_automode_and_plan_errors_show_the_exception_type_not_the_detail(app_client, monkeypatch):
+def test_automode_errors_show_the_exception_type_not_the_detail(app_client, monkeypatch):
     app, c, state, _ = app_client
     h = _login(c, app)
 
@@ -145,9 +145,6 @@ def test_automode_and_plan_errors_show_the_exception_type_not_the_detail(app_cli
     monkeypatch.setattr(automode, "auto_mode_eligibility_from_state", broken)
     v = c.get("/api/automode", headers=h["viewer"]).json()
     assert v["error"] == "evidence unreadable (OSError)" and not any("/home" in x for x in v["reasons"])
-    (state / "research_plan.json").write_text("{not json")
-    r = c.get("/api/research", headers=h["viewer"]).json()
-    assert r["plan_error"] == "research_plan.json unreadable (JSONDecodeError)"
 
 
 def test_a_failing_health_check_shows_the_type_only(tmp_path, monkeypatch):

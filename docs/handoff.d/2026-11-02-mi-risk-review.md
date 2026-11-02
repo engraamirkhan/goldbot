@@ -1,0 +1,10 @@
+- Multi-instrument lane L2, trading-safety review of PR #307 (BLOCK) fixed:
+  - **H1:** `RiskGate.book` reserves `margin_needed` in `margin_used`, so a third group on the same bar meets the 300% floor.
+  - **M1:** a multi-symbol account refuses `day_start_unknown`. Without an absolute limit, its projection refuses `daily_limit_projected`.
+  - **M2:** class leverage is min(class, leverage_cap x class / 20).
+  - **M3:** the registry rejects a gold group outside `gold_index` and a pair whose `currency_profit` is not its quote currency. The gold group always uses `leverage_cap`. `Intent.symbol` was added; a non-XAUUSD symbol without its registry terms refuses `instrument_terms_missing`.
+  - **M4:** `other_group_notional` None means unknown and refuses `exposure_unknown` on a multi-symbol state.
+  - **M5:** `instrument_blackout` returns a blocking `calendar_unavailable` marker when the calendar cannot judge an instrument currency.
+  - **L1:** moved EIA slots now include 11:00 ET.
+  - **L3:** `combined_group_notional` sums maps in the money currency only; any others are listed in `group_notional_excluded`.
+  - The owner text for the new codes is in `goldbot/api/entry_status.py`.

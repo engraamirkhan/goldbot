@@ -13,7 +13,8 @@ const pos = (o: Partial<OpenPositionX>): OpenPositionX => ({
   account: "icm-demo", mode: "demo", probe: true, position_id: 1, agent_id: "ex:BXR-15m", family: "box_break_close",
   timeframe: "15m", side: "long", lots: 0.01, entry: 4012.4, stop: 4006.1, target: 4024, opened_utc: iso(22), price: 4015.8,
   floating_pnl: 3.4, currency: "GBP", r_now: 0.63, open_risk: 5.4, age_s: 2, stale: false, risk_amount: 5.4, held_s: 22 * 60,
-  hold_limit_s: 7200, account_label: "Day/swing lab", kind: "exploration", family_label: "Box break + close", fx_age_s: 3, ...o,
+  hold_limit_s: 7200, account_label: "Day/swing lab", kind: "exploration", family_label: "Box break + close", fx_age_s: 3,
+  symbol: "XAUUSD", ...o,
 });
 
 export const openPositions = (): { as_of: string; unreadable: string[]; positions: OpenPositionX[] } => ({
@@ -35,7 +36,7 @@ export const tradeRow = (o: Partial<TradeRow> = {}): TradeRow => ({
   exit: 4024, exit_utc: iso(19), exit_reason: "target", censored: false, opened_utc: iso(51), held_s: 32 * 60, hold_limit_s: 7200,
   risk_amount: 1.4, pnl: 2.1, gross: 2.37, pnl_now: null, r: 1.5, r_now: null, price_now: null,
   costs: { spread: 0.18, slippage: 0.02, commission: 0.07, swap: 0, total: 0.27, complete: true, spread_exit_estimated: false, slippage_exit_known: true },
-  why: "Close above the 15m box after a squeeze", evidence: "counted", excluded_reason: null, stale: false, ...o,
+  why: "Close above the 15m box after a squeeze", evidence: "counted", excluded_reason: null, stale: false, symbol: "XAUUSD", ...o,
 });
 
 const totals = (o: Partial<TradesPage["totals"]> = {}): TradesPage["totals"] => ({

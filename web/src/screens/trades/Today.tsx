@@ -2,35 +2,43 @@
 // on its own card. Is the day on plan? Fills against the plan's target and pace, net £ after costs (closed) by kind,
 // open risk and P&L, caps used, the 14-day £ strip against the daily target (ADR 0004), week and month to date with the
 // costs split. Never summed across accounts, demo and real, or currencies; a net missing a trade's costs says so in
-// words; unreadable ledger sources are named. The broker's balance and risk per trade follow.
+// words; unreadable ledger sources are named. The broker's balance and risk per trade follow. Multi-instrument (UI spec
+// 2026-11-02 §1): "By instrument" per account (symbol, trades, closed, open, net; sorted by net or by group), and
+// ?acct= (Home's "all →") shows that account alone.
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { api } from "../../lib/api";
 import { meterWords, modeBadge } from "../../lib/home";
 import {
   capWords, fillsWords, incompleteWords, KIND_ORDER, KIND_WORDS, moneyOrDash, type PeriodNet, POLL, sourcesWords, type StripDay, stripScale,
   type TodayAccountX, type TradeKind,
 } from "../../lib/trades";
-import { Badge, Card, EmptyState, ErrorState, Meter, Skeleton, TimeText } from "../../ui";
+import { GROUP_ORDER, groupOf } from "../../lib/instruments";
+import type { SymbolDay } from "../../lib/movers";
+import { Badge, Card, EmptyState, ErrorState, Meter, Segmented, Skeleton, TimeText } from "../../ui";
+import { SymbolTag } from "../../ui/SymbolTag";
 import { money, seconds } from "../../ui/format";
 import { BalanceCard, BalanceCardSkeleton } from "../BalanceCard";
 import { CardBoundary, RiskTodayCard } from "../HomeCards";
 import "./trades.css";
 
-export function TradesToday() {
+export function TradesToday({ query = "" }: { query?: string }) {
+  const acct = new URLSearchParams(query).get("acct") ?? "";
   return (
     <div className="trades-page">
-      <CardBoundary name="Today"><TodayAccounts /></CardBoundary>
+      <CardBoundary name="Today"><TodayAccounts acct={acct} /></CardBoundary>
       <CardBoundary name="Balance"><Balances /></CardBoundary>
       <CardBoundary name="Risk per trade today"><RiskTodayCard /></CardBoundary>
     </div>
   );
 }
 
-function TodayAccounts() {
+function TodayAccounts({ acct }: { acct: string }) {
   const q = useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: POLL.today });
   if (q.isLoading) return <Skeleton height={220} label="Loading today's money" />;
   if (q.isError && !q.data) return <ErrorState title="Couldn't load today's money." stillWorks="Trading and the loss limits are not affected." onRetry={() => q.refetch()} />;
-  const accts = [...q.data!.accounts].sort((a, b) => Number(b.mode === "live") - Number(a.mode === "live"));
+  const all = [...q.data!.accounts].sort((a, b) => Number(b.mode === "live") - Number(a.mode === "live"));
+  const accts = acct && all.some((a) => a.account === acct) ? all.filter((a) => a.account === acct) : all;
   if (accts.length === 0) return <Card title="Today" label="Today"><EmptyState title="No engine is reporting">Today's money shows once an engine reports.</EmptyState></Card>;
   const missing = q.data!.unreadable ?? [];
   return <>
@@ -79,6 +87,7 @@ function AccountDay({ a, updated }: { a: TodayAccountX; updated: number }) {
           <p className={`small ${m.tone === "ok" ? "muted" : `state ${m.tone}`}`}>{m.text}</p>
         </div>
       ) : <p className="small muted">Loss limit not reported by this engine yet.</p>}
+      {(a.by_symbol?.length ?? 0) > 1 && <ByInstrument rows={a.by_symbol!} ccy={ccy} label={label} />}
       {a.strip && a.strip.length > 0 && <DayStrip days={a.strip} target={a.daily_target ?? null} ccy={ccy} label={label} />}
       {(a.week_to_date || a.month_to_date) && (
         <dl className="period-net small num">
@@ -99,6 +108,32 @@ function PeriodLine({ name, p, ccy }: { name: string; p: PeriodNet; ccy: string 
 }
 
 const part = (x: number | null, ccy: string | null, signed = false) => (x == null ? "not recorded" : money(x, ccy, signed));
+
+type BySort = "net" | "group";
+
+/** One account's day per instrument: trades, closed, open and net in the account currency (the server's figures,
+ *  never re-added here), sorted by net (largest move first) or by group in the fixed order. */
+export function ByInstrument({ rows, ccy, label }: { rows: readonly SymbolDay[]; ccy: string | null; label: string }) {
+  const [sort, setSort] = useState<BySort>("net");
+  const mag = (d: SymbolDay) => (d.day_pnl == null ? -1 : Math.abs(d.day_pnl));
+  const sorted = [...rows].sort(sort === "net" ? (a, b) => mag(b) - mag(a) || a.symbol.localeCompare(b.symbol)
+    : (a, b) => GROUP_ORDER.indexOf(groupOf(a.symbol)) - GROUP_ORDER.indexOf(groupOf(b.symbol)) || a.symbol.localeCompare(b.symbol));
+  return (
+    <section className="by-instrument" aria-label={`${label} by instrument`}>
+      <div className="list-bar"><h3 className="small">By instrument</h3>
+        <Segmented label="Sort by" items={[{ id: "net", label: "Net" }, { id: "group", label: "Group" }]} value={sort} onChange={setSort} /></div>
+      <table className="by-symbol small">
+        <caption className="sr-only">{label}: today per instrument, money in the account currency after costs</caption>
+        <thead><tr><th scope="col">Instrument</th><th scope="col" className="num">Trades</th><th scope="col" className="num">Closed</th>
+          <th scope="col" className="num">Open</th><th scope="col" className="num">Net</th></tr></thead>
+        <tbody>{sorted.map((d) => (
+          <tr key={d.symbol}><td><SymbolTag symbol={d.symbol} compact /></td><td className="num">{d.closed_n + d.open_n}</td>
+            <td className="num">{moneyOrDash(d.closed_pnl, ccy)}</td><td className="num">{moneyOrDash(d.open_pnl, ccy)}</td>
+            <td className="num"><strong>{moneyOrDash(d.day_pnl, ccy)}</strong></td></tr>))}</tbody>
+      </table>
+    </section>
+  );
+}
 
 const SW = 336;
 const SH = 72;

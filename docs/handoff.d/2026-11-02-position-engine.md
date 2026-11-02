@@ -1,0 +1,12 @@
+- Daily position engine (rethink strategy.md step 2; amendment W3, PR #285; the W3 addendum `docs/research/pos1/w3-addendum.md`; ADR 0071): `goldbot/research/position/` turns a pre-registered spec's daily signal into daily P&L in units of starting equity.
+  - **Clock and sizing.** Decision at the 21:00 UTC mid close, fill at the next 1m open. Vol targeting at 10%/yr (EWMA 60, lagged a day, cap 2x, re-clipped after a book scale), the no-trade band (10% of target unless the spec states one), and the 3 x ATR(20) disaster stop with restore at the last decision.
+  - **Costs.** C1 point costs in bps from the cost of record's Asia cell: 0.51 bp round trip, 0.25 bp overshoot.
+  - **Financing by date.** DTB3 is read from `raw/daily/fred_DTB3.parquet` on its stored available_utc, plus the measured ICM markup of 0.74%/yr each side (2.5% for unmeasured symbols). FX pairs pay quote minus base and non-USD indices their home rate; a market without its rate or its triple rollover day is refused.
+  - **Venues.** A gates; S (the fill-minute spread), B (ETC, long/flat) and C (CME, monthly roll) are report-only.
+  - **Statistics.** Block-bootstrap t (20-day blocks, 4,000 resamples), Sharpe, years positive (60% of years in the market), drift-adjusted gross and legs. Also `n_round_trips_signal` and `n_stops`, the episode-sign or exposure-matched (circular shift) null with 1,000 draws, buy-and-hold, Y_learn and the W3.1 power helpers.
+- `scripts/position_screen.py` runs a batch on a W2 window or EXPLORE (LEARN-OLD + LEARN as one series).
+  - **TEST-OLD and CONFIRM** need `--frozen-prereg`, tracked at HEAD in a clean tree, with its blob sha recorded. Each (spec, window) is claimed once in `state/position_reads.jsonl`.
+  - **BH-FDR** runs only at CONFIRM, over the committed confirm-eligible ids.
+  - **Inputs.** Panel frames must carry `available_utc` or `close_utc`. Gold loads from raw/ 1m (4,066 days, 2010-01-01..2025-09-30); other markets load from the data lane's `raw/daily/` files.
+  - **Holdout.** Nothing at or after 2025-10-01 is read.
+- No strategy has been run on any real window.

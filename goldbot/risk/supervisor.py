@@ -17,7 +17,14 @@ Probe accounts (ADR 0037 amendment 4, directors' ruling 2026-10-19: "probes must
 allowance"): an engine file stating `probe_only: true` (literally) is kept out of every combined sum, cap, currency
 check and the exposure the real engines read; it is reported apart (`probe_engines`) and stays under its own account's
 RiskGate limits. A missing or malformed flag counts the file as a real account (fail closed). An unreadable file or a
-clock fault halts as before, whatever the account."""
+clock fault halts as before, whatever the account.
+
+Exposure per correlation group (multi-instrument plan 2026-11-02: "notional per correlation group (gold, metals, equity,
+FX, energy, rates, ags), supervisor publishes per group"): a multi-symbol engine writes `group_notional` (account
+currency, `open_risk.group_exposure`); the supervisor publishes it per account (`exposure.<account>.groups` with
+`groups_currency`, or under `probe_engines`) and summed over the real accounts (`combined_group_notional`). A file
+whose map is not finite numbers >= 0 is unreadable (halt). An XAUUSD-only engine writes no map and its entry is as
+before; `others_group_notional` counts its USD notional in the gold group."""
 from __future__ import annotations
 
 import json
@@ -91,10 +98,15 @@ def _finite_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
+def _group_map_ok(v: Any) -> bool:
+    return isinstance(v, dict) and all(isinstance(k, str) and _finite_number(x) and x >= 0 for k, x in v.items())
+
+
 def engine_fault(e: dict) -> str | None:
     """Why an engine file's numbers cannot be used (a null, a string, a bool, NaN or infinity), None when they can.
     October safety batch, MEDIUM: such a file failed open (a NaN equity made every combined cap False) or crashed
-    the supervisor (`None + 0`, `float("x")`), so it is treated exactly as an unparsable file."""
+    the supervisor (`None + 0`, `float("x")`), so it is treated exactly as an unparsable file. A `group_notional` that
+    is present must map group names to finite numbers >= 0 (multi-instrument plan 2026-11-02)."""
     for k in _REQUIRED_NUMBERS:
         if not _finite_number(e.get(k)):
             return k
@@ -104,6 +116,8 @@ def engine_fault(e: dict) -> str | None:
     for k in _NULLABLE_NUMBERS:
         if e.get(k) is not None and not _finite_number(e[k]):
             return k
+    if "group_notional" in e and not _group_map_ok(e["group_notional"]):
+        return "group_notional"
     return None
 
 
@@ -132,6 +146,8 @@ def write_startup_error(state_dir: str | Path, account_id: str, why: str, *, dq_
     kept: dict[str, Any] = {k: prev[k] for k in STARTUP_KEEP if _finite_number(prev.get(k))}
     if _finite_number(prev.get("daily_loss_limit_abs")):
         kept["daily_loss_limit_abs"] = prev["daily_loss_limit_abs"]
+    if _group_map_ok(prev.get("group_notional")):             # a multi-symbol account's exposure per group, kept too
+        kept["group_notional"] = prev["group_notional"]
     cur = (currency or "").strip().upper() or _currency(prev)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(path, json.dumps({**kept, "account": account_id, "ts": time.time(), "dq_error": True,
@@ -160,6 +176,40 @@ def others_exposure(sup: dict, account_id: str, *, probe_only: bool) -> tuple[fl
     notional = sum(float(v.get("notional", 0.0)) for v in others)
     equity = 0.0 if probe_only else sum(float(v.get("equity", 0.0)) for v in others)
     return lots, notional, equity
+
+
+def _groups(e: dict) -> dict[str, Any]:
+    """The per-group keys an engine file adds to its exposure entry: none for an XAUUSD-only engine (no map)."""
+    if "group_notional" not in e:
+        return {}
+    return {"groups": {str(k): float(v) for k, v in e["group_notional"].items()}, "groups_currency": _currency(e)}
+
+
+def others_group_notional(sup: dict, account_id: str, *, currency: str,
+                          acct_per_usd: float | None) -> dict[str, float] | None:
+    """The other real accounts' open notional per correlation group in this account's currency, for RiskGate's
+    per-group cap (`AccountState.other_group_notional`). A multi-symbol engine's groups count only when they are in
+    this currency; an XAUUSD-only engine's USD notional is gold, converted with `acct_per_usd` (account currency per
+    USD). None (unknown: the engine sets `exposure_unknown`) when a group map is in another currency or a USD notional
+    has no usable rate: never summed on a guess. Probe accounts are not in `exposure` (ADR 0037 amendment 4)."""
+    out: dict[str, float] = {}
+    cur = currency.strip().upper()
+    for k, v in (sup.get("exposure") or {}).items():
+        if k == account_id or not isinstance(v, dict):
+            continue
+        if "groups" in v:
+            if str(v.get("groups_currency") or "").strip().upper() != cur:
+                return None
+            for g, x in v["groups"].items():
+                out[g] = out.get(g, 0.0) + float(x)
+            continue
+        usd = float(v.get("notional", 0.0))
+        if usd == 0.0:
+            continue
+        if acct_per_usd is None or not math.isfinite(acct_per_usd) or acct_per_usd <= 0:
+            return None
+        out["gold"] = out.get("gold", 0.0) + usd * acct_per_usd
+    return out
 
 
 class Supervisor:
@@ -260,10 +310,27 @@ class Supervisor:
         # combined exposure: engines block entries that would take the sum past the cap (RiskGate)
         exposure = {str(e.get("account")): {"lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
                                             # a file kept out of the money adds no equity (the gate's other_equity)
-                                            "equity": float(e.get("equity", 0.0)) if any(e is m for m in money) else 0.0}
+                                            "equity": float(e.get("equity", 0.0)) if any(e is m for m in money) else 0.0,
+                                            **_groups(e)}
                     for e in engines}
+        # review L3: group maps are summed in the one currency the money is summed in; a map in any other currency (or
+        # when the money has no single currency) is listed in `group_notional_excluded`, never added
+        money_ccy = {_currency(m) for m in money}
+        ccy = next(iter(money_ccy)) if len(money_ccy) == 1 else None
+        combined_groups: dict[str, float] = {}
+        group_excluded: list[str] = []
+        for e in engines:
+            x = exposure[str(e.get("account"))]
+            if "groups" not in x:
+                continue
+            if ccy is None or x.get("groups_currency") != ccy:
+                group_excluded.append(str(e.get("_file", "")))
+                continue
+            for g, v in x["groups"].items():
+                combined_groups[g] = combined_groups.get(g, 0.0) + v
         state = {"combined_open_lots": round(sum(x["lots"] for x in exposure.values()), 6),
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
+                 "combined_group_notional": combined_groups, "group_notional_excluded": sorted(group_excluded),
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable, "startup_refused_engines": refused, "future_engines": future,
@@ -277,7 +344,7 @@ class Supervisor:
                      "lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
                      "equity": float(e.get("equity", 0.0)), "day_start_equity": float(e.get("day_start_equity", 0.0)),
                      "currency": _currency(e), "stale": now - e["ts"] > self.limits.heartbeat_max_age_s,
-                     "startup_error": bool(e.get("startup_error"))} for e in probes}}
+                     "startup_error": bool(e.get("startup_error")), **_groups(e)} for e in probes}}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 

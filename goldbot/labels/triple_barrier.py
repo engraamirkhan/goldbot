@@ -40,10 +40,31 @@ class SwapSpec(FrozenRecord):
     triple_weekday: int = Field(2, ge=0, le=4)   # 0 = Monday; the rollover after this server day is charged 3 nights
     server_tz: str = "Europe/Athens"             # the broker's server clock (IANA or NY+7): its midnight is the rollover
     contract_oz: float = Field(100.0, gt=0)
+    # the gold price (USD/oz) at which the per-lot rates were measured, or None. Swap is a financing RATE on notional:
+    # with a reference price, `usd_per_oz_at` charges the same rate at the trade's own price (a 2013 hold at $1,300 pays
+    # a third of what the same hold pays at $3,900). None keeps the fixed-dollar charge (live paths, priced today).
+    ref_price_usd: float | None = Field(None, gt=0, allow_inf_nan=False)
 
     def usd_per_oz(self, side: np.ndarray) -> np.ndarray:
-        """Swap per oz per night for each side (+1 long / -1 short)."""
+        """Swap per oz per night for each side (+1 long / -1 short), in dollars at the reference price."""
         return np.where(np.asarray(side) > 0, self.long_usd_per_lot, self.short_usd_per_lot) / self.contract_oz
+
+    def usd_per_oz_at(self, side: np.ndarray, price: np.ndarray | float) -> np.ndarray:
+        """Swap per oz per night at each trade's own entry `price`: the rate of `usd_per_oz` scaled by price / the
+        reference price; exactly `usd_per_oz` when the spec has no reference price. Research over years of history
+        charges this (sanity lane, 2026-11-02: a fixed $0.60/oz/night was 16% a year of the 2010-2017 mean price)."""
+        base = self.usd_per_oz(side)
+        if self.ref_price_usd is None:
+            return base
+        return base * np.asarray(price, dtype=float) / self.ref_price_usd
+
+    @classmethod
+    def research_shipped(cls) -> SwapSpec:
+        """`shipped` with the reference price of its rates (`costs.swap_ref_price_usd`): what a historical screen
+        charges, so a hold pays today's financing rate on its own notional rather than today's dollars."""
+        from goldbot.config import CostSettings
+        ref = CostSettings.model_fields["swap_ref_price_usd"].default
+        return cls.shipped().model_copy(update={"ref_price_usd": ref})
 
     @classmethod
     def shipped(cls) -> SwapSpec:
@@ -171,7 +192,8 @@ def _finish(out: pd.DataFrame, bars: pd.DataFrame, signals: pd.DataFrame, swap: 
         nights = rollover_nights(close[out["idx"].to_numpy()], close[out["t_exit"].to_numpy()], swap.server_tz,
                                  swap.triple_weekday)
         out["swap_nights"] = nights
-        out["swap_ret"] = nights * swap.usd_per_oz(out["side"].to_numpy()) / out["entry"].to_numpy(dtype=float)
+        entry = out["entry"].to_numpy(dtype=float)
+        out["swap_ret"] = nights * swap.usd_per_oz_at(out["side"].to_numpy(), entry) / entry
         out["ret"] = out["ret"] + out["swap_ret"]
     return out
 
@@ -310,9 +332,9 @@ def triple_barrier_next_open_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame, signa
                                 atr: pd.Series, swap: SwapSpec | None = None) -> pd.DataFrame:
     """`triple_barrier_1m` with the entry at the OPEN of the first 1m bar at or after the decision bar's close (ask for
     longs, bid for shorts), as the exploration arms' spec and the H-62 replay labels enter ("the open of bar t+1"), and the
-    barriers searched minute by minute from that bar (its own minute included; stop first when both fall in one minute).
-    Time barrier: the close of decision bar idx + 1 + max_bars. A gap between the close and that first minute (weekend,
-    session) is in the fill. Columns as `triple_barrier_1m`, plus `entry_ts` (the entry minute's stamp).
+    barriers searched minute by minute from that bar (its own minute included; stop first when both fall in one minute;
+    a minute that opens through the stop fills at its open). Time barrier: the close of decision bar idx + 1 + max_bars.
+    A gap between the close and that first minute (weekend, session) is in the fill. Columns as `triple_barrier_1m`, plus `entry_ts` (the entry minute's stamp).
     An optional signals column `entry_delay_s` (seconds after the close the order is sent, `arms.send_delay_s`) moves
     the entry to the minute holding close + delay: under a minute that is still the first minute after the close."""
     n = len(bars)
@@ -343,10 +365,19 @@ def triple_barrier_next_open_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame, signa
         if res.empty:
             continue
         r = res.iloc[0]
-        minute = t1[k0 + int(r["t_exit"]) - 1]
+        km = k0 + int(r["t_exit"]) - 1
+        minute = t1[km]
         t_exit = min(int(close.searchsorted(minute, side="right")), last)
+        exit_px, ret = float(r["exit"]), float(r["ret"])
+        if str(r["barrier_hit"]) == "stop":
+            # a minute that OPENS through the stop (weekend, daily break) fills at that open, never at the stop
+            # (sanity lane 2026-11-02: 199 of 19,724 I0 trades in 2010-2017 were filled $1.10/oz better than the open)
+            opened = float(b1["bid_open" if side > 0 else "ask_open"].iloc[km])
+            if side * (opened - exit_px) < 0:
+                exit_px = opened
+                ret = side * (exit_px - float(r["entry"])) / float(r["entry"])
         rows.append({"idx": idx, "side": side, "t_entry": idx + 1, "t_exit": t_exit, "bars_held": t_exit - idx,
-                     "entry": float(r["entry"]), "exit": float(r["exit"]), "ret": float(r["ret"]),
+                     "entry": float(r["entry"]), "exit": exit_px, "ret": ret,
                      "label": int(r["label"]), "barrier_hit": str(r["barrier_hit"]), "target_hit": int(r["target_hit"]),
                      "entry_ts": t1[k0]})
     return _finish(pd.DataFrame(rows), bars, signals, swap)

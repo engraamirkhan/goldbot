@@ -187,6 +187,45 @@ def check_entry_status(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status=status, reason=reason[:600])
 
 
+# multi-instrument demo (lane L4; UI spec 2026-11-02): amber states of one symbol, in the owner's words
+SYMBOL_WARN_WORDS = {"terms_missing": "terms not loaded: entries refused, exits still close",
+                     "stale": "price feed stale: entries refused, exits still close"}
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=17)
+def check_symbols(ctx: HealthContext, account_id: str) -> Check | None:
+    """symbols:<account>, only on an engine that reports its symbols (`symbols` in engine_<account>.json, a
+    multi-instrument account; a single-symbol engine reports nothing new here). WARN when a symbol's terms are not
+    loaded or its feed is stale (its entries are refused; exits still close, account-wide); a closed market, a
+    disabled symbol and a spent group cap are the gate working and stay OK, counted in the reason. FAIL only on
+    `unbooked_positions` (trading-safety review of #310, M3): a position on a symbol no book trades counts in no
+    exposure, so every entry on the account is refused until it is closed or given a book. Otherwise the account-wide
+    engine and entry_status checks judge the engine itself. Reporting only."""
+    from goldbot.api.instruments_view import entry_symbols  # lazily: it reads the instrument registry
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    try:
+        e = _read_json(f) if f.exists() else None
+    except (ValueError, OSError):
+        return None                                  # engine:<account> reports an unreadable file
+    if not isinstance(e, dict) or not isinstance(e.get("symbols"), dict):
+        return None
+    rows = entry_symbols(e)
+    name = f"symbols:{account_id}"
+    can = sum(1 for s in rows if s.state == "can_enter")
+    bad = [s for s in rows if s.state in SYMBOL_WARN_WORDS]
+    summary = f"{can} of {len(rows)} can enter"
+    unbooked = e.get("unbooked_positions")
+    if isinstance(unbooked, list) and unbooked:
+        syms = sorted({str(p.get("symbol")) for p in unbooked if isinstance(p, dict)})
+        return Check(name=name, status="fail",
+                     reason=(f"{len(unbooked)} open position(s) on symbols this engine does not trade "
+                             f"({', '.join(syms)}): every entry refused until closed; {summary}")[:600])
+    if not bad:
+        return Check(name=name, status="ok", reason=summary)
+    words = "; ".join(f"{s.symbol}: {SYMBOL_WARN_WORDS[s.state]}" for s in bad)
+    return Check(name=name, status="warn", reason=f"{summary}; {words}"[:600])
+
+
 TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even after it cleared
 
 

@@ -279,6 +279,9 @@ class ProbeRecord(FrozenRecord):
     # prereg K9: the broker's account currency per USD of XAUUSD P&L at send and at close (None: not read)
     fx_acct_per_usd: float | None = None
     exit_fx_acct_per_usd: float | None = None
+    # multi-instrument demo (plan 2026-11-02, lanes L3/L4): the instrument the probe traded (a config/instruments.yaml
+    # key); None on gold's and on every record before it
+    symbol: str | None = None
 
     @property
     def slippage_usd(self) -> float | None:
@@ -872,8 +875,10 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
     side, price = intent.side, intent.price
-    gd = eng.gate.check(intent, eng.state, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
-                        throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
+    from goldbot.engine import books
+    # the serial gate on the account's one state (engine/books.py: the instrument's spread cap on another book)
+    gd = books.check(eng, intent, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
+                     throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
     # the minimum lot, or a growth arm's allowed lot (`exploration.growth_lots`, growth sprint 2026-11-01): every
     # other caller passes no `max_lots` and keeps the minimum-lot rule exactly
     if not gd.allowed or gd.lots > (intent.volume_min if max_lots is None else max_lots) + 1e-9:
@@ -910,11 +915,13 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
         return None
     except Exception as exc:        # as an auto entry (review LOW-C): the row stays "sending", reconciliation resolves it
         eng._auto_paused = (close_ts, "order_raised")
+        books.book(eng, intent, gd)  # it may be at the broker: booked on the shared state (multi-instrument, E2)
         eng.note_tick_error(exc)
         eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
                               "action": f"{action}auto_unconfirmed:{type(exc).__name__}", **applied()})
         return None
     latency_ms = (time.perf_counter() - t0) * 1000.0
+    books.book(eng, intent, gd, res)  # sent: booked before the next symbol is checked (multi-instrument, E2)
     eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
                           "action": action + auto_entry.action(res), **applied()})
     if res is None:

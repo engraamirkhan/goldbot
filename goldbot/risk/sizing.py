@@ -12,6 +12,11 @@ This mirrors goldbot/risk/gate.py `RiskGate.check` (the "sizing" block) line for
   than the per-trade maximum (1%) whatever the target.
 * fx (BACKLOG 28, ADR 0004 A3) is the account currency per USD of P&L: the stop is a USD amount (XAUUSD P&L is in
   USD), equity is in the deposit currency. 1 on a USD account; the broker's conversion otherwise (`account_fx`).
+* Multi-instrument demo (plan 2026-11-02: "P&L currency -> account currency per quote via loss_per_lot, refuse without
+  it"): another instrument's stop is in its own price units and its P&L in its profit currency (USDJPY: JPY), so fx
+  is the account currency per unit of that currency, always the broker's own figure (`acct_per_quote` of
+  `loss_per_lot` over a 1.0 move, `instrument_fx`); without it the entry is refused. `size_lots` is unchanged: its
+  `contract_oz` is the instrument's units per lot and its `acct_per_usd` that fx.
 RiskGate.check calls these functions for its arithmetic; tests/test_sizing_parity.py runs the gate against them so a
 second copy (the analytics) cannot drift.
 """
@@ -68,6 +73,35 @@ def account_fx(account_currency: str, acct_per_usd: float | None) -> float | Non
     fx = float(acct_per_usd) if acct_per_usd is not None and math.isfinite(acct_per_usd) and acct_per_usd > 0 else None
     if account_currency.strip().upper() == "USD":
         return None if fx is not None and abs(fx - 1.0) > USD_FX_TOLERANCE else 1.0
+    return fx
+
+
+def acct_per_quote(loss_per_lot: float | None, contract_size: float) -> float | None:
+    """Account currency per unit of the instrument's profit currency, from the broker's `loss_per_lot(symbol, side,
+    price, 1.0)` (MT5 order_calc_profit: one lot's loss over a 1.0 price move, account currency) over the contract
+    size. None when either is missing, not finite or not positive: the caller then refuses, never guesses."""
+    if loss_per_lot is None or not (math.isfinite(loss_per_lot) and loss_per_lot > 0):
+        return None
+    if not (math.isfinite(contract_size) and contract_size > 0):
+        return None
+    return float(loss_per_lot) / float(contract_size)
+
+
+def instrument_fx(account_currency: str, profit_currency: str | None, acct_per_quote: float | None) -> float | None:
+    """The conversion a non-XAUUSD instrument is sized with: the broker's figure (`acct_per_quote`), or None (the
+    entry is refused, `fx_conversion_unavailable`). Stricter than `account_fx`: no currency is 1 by definition, so a
+    USD account trading USDJPY is never sized as if JPY were USD, and an instrument quoted in the account's own
+    currency (UK100 on a GBP account) must still read about 1 (within USD_FX_TOLERANCE), which checks the declared
+    profit currency and contract against what the broker trades. Unknown currencies are refused."""
+    acct = account_currency.strip().upper()
+    profit = (profit_currency or "").strip().upper()
+    if not acct or not profit:
+        return None
+    if acct_per_quote is None or not (math.isfinite(acct_per_quote) and acct_per_quote > 0):
+        return None
+    fx = float(acct_per_quote)
+    if acct == profit and abs(fx - 1.0) > USD_FX_TOLERANCE:
+        return None
     return fx
 
 

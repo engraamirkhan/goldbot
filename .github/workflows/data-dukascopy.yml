@@ -89,7 +89,7 @@ jobs:
               echo "::error::months is a targeted refetch: leave full_refresh and retry_flagged off"; exit 1
             fi
             if ! plan=$(python3 scripts/dukascopy_months.py "$MONTHS"); then
-              echo "::error::months must be comma-separated YYYY-MM months (2010-01 .. this month), at most 24"; exit 1
+              echo "::error::months must be comma-separated YYYY-MM months (2003-01 .. this month), at most 24"; exit 1
             fi
             echo "$plan"
             echo "$plan" >> "$GITHUB_OUTPUT"

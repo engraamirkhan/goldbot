@@ -72,11 +72,15 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     # process first): initialize(path=..., timeout=60 s). A failed attach logs in from the keyring (when stored) and
     # attaches once more; a second failure raises, and Restart=always tries again.
     login_settings = load_settings().mt5_login
+    # protocol v10 (multi-instrument demo): the account's symbol list into Market Watch; its own symbol alone until it
+    # names instruments, and always alone on a live or observe-only account (goldbot/execution/market_watch.py)
+    from goldbot.execution.market_watch import account_symbols
+    symbols = account_symbols(acc)
     broker = mt5_login.attach_terminal(
         acc, mt5_adapter.mt5, login_settings,
         lambda: MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
                           server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id,
-                          verify=None))     # GuardedBroker below verifies every order on its one account read
+                          verify=None, symbols=symbols))   # GuardedBroker below verifies every order on its account read
     # If the terminal died between the unit's wait and the attach, initialize(path=...) launched one of its own, in
     # this unit's cgroup: never serve it. Exiting lets systemd stop the cgroup (that terminal with it).
     spawned = terminals_in_bridge_cgroup(_proc_root())

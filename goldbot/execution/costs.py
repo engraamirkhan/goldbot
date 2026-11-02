@@ -34,6 +34,7 @@ from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.instruments import GOLD, contract_size
 from goldbot.labels.triple_barrier import SwapSpec
 
 if TYPE_CHECKING:
@@ -42,7 +43,11 @@ if TYPE_CHECKING:
 
 Session = Literal["asia", "london", "newyork"]
 SESSIONS: tuple[Session, ...] = ("asia", "london", "newyork")
-CONTRACT_OZ = 100.0
+
+
+def _gold_contract() -> float:
+    """XAUUSD's units per lot from config/instruments.yaml (100 oz): a table without its own contract is a gold one."""
+    return contract_size(GOLD)
 
 
 class SpreadStat(FrozenRecord):
@@ -192,12 +197,17 @@ class CostTable(FrozenRecord):
     spread_profile: SpreadProfile | None = None   # the recorded broker ticks by hour and session (reported only)
     probe_slippage: dict[str, ProbeSlippage] = Field(default_factory=dict)   # by session; reported beside `slippage`
     n_probe_fills: int = 0                     # scheduled-probe entry fills seen (never part of n_fills)
+    # Multi-instrument demo (plan 2026-11-02: "costs/swap/lot terms per (account, symbol)"): the instrument the table
+    # measures (a config/instruments.yaml key) and its units per lot, so commission per lot is spread over the right
+    # contract ("$/oz" reads "per unit of price" for it). A table written before these fields is XAUUSD's, 100 oz
+    symbol: str = GOLD
+    contract_size: float = Field(default_factory=_gold_contract, gt=0)
 
     def extra_cost_usd(self) -> float:
         """Round-trip cost per oz beyond the quoted spread: entry and exit slippage (mean of the market-order cells,
         measured or the prior) plus commission both sides. What research labels pay on top of the bar spread."""
         slips = [max(s.mean, 0.0) for k, s in self.slippage.items() if k.endswith(":market")] or [self.slippage_prior_usd]
-        return float(2 * (sum(slips) / len(slips)) + 2 * self.commission_per_lot_side_usd / CONTRACT_OZ)
+        return float(2 * (sum(slips) / len(slips)) + 2 * self.commission_per_lot_side_usd / self.contract_size)
 
     def swap_spec(self, server_tz: str, default_triple_weekday: int = 2) -> SwapSpec | None:
         """The broker's measured swap as a SwapSpec, or None when the table has no swap rates (keep the prior)."""
@@ -216,7 +226,7 @@ class CostTable(FrozenRecord):
         spread = sp.median if sp is not None else max(s.median for s in self.spread.values())
         slip = self.slippage.get(f"{session}:{order_type}")
         slip_usd = slip.mean if slip is not None else self.slippage_prior_usd
-        commission = 2 * self.commission_per_lot_side_usd / CONTRACT_OZ
+        commission = 2 * self.commission_per_lot_side_usd / self.contract_size
         return float(spread + 2 * max(slip_usd, 0.0) + commission)
 
     def round_trip_ex_spread_atr(self, session: str, atr_usd: float, order_type: str = "market") -> float | None:
@@ -360,10 +370,13 @@ def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, 
                      commission_measured=commission_measured, spread_profile=spread_profile)
 
 
-def prior_extra_cost_usd(slippage_prior_usd: float, commission_per_lot_side_usd: float) -> float:
+def prior_extra_cost_usd(slippage_prior_usd: float, commission_per_lot_side_usd: float, *,
+                         contract_size: float | None = None) -> float:
     """Round-trip cost per oz beyond the quoted spread before any fills are measured: entry and exit slippage at the
-    conservative prior plus commission both sides. Research labels already pay the spread (ask in, bid out)."""
-    return float(2 * max(slippage_prior_usd, 0.0) + 2 * commission_per_lot_side_usd / CONTRACT_OZ)
+    conservative prior plus commission both sides. Research labels already pay the spread (ask in, bid out).
+    `contract_size`: the instrument's units per lot (None = XAUUSD's), so commission is per unit of its price."""
+    contract = _gold_contract() if contract_size is None else contract_size
+    return float(2 * max(slippage_prior_usd, 0.0) + 2 * commission_per_lot_side_usd / contract)
 
 
 def settings_extra_cost_usd(settings: "Settings") -> float:
@@ -381,7 +394,7 @@ def settings_swap(settings: "Settings") -> SwapSpec:
     c = settings.costs
     return SwapSpec(long_usd_per_lot=c.swap_long_usd_per_lot, short_usd_per_lot=c.swap_short_usd_per_lot,
                     triple_weekday=c.swap_triple_weekday, server_tz=canonical[0] if canonical else "Europe/Athens",
-                    contract_oz=CONTRACT_OZ)
+                    contract_oz=_gold_contract())
 
 
 def research_costs(settings: "Settings", table: CostTable | None) -> tuple[float, SwapSpec, str]:
@@ -514,7 +527,11 @@ def publishable(table: CostTable, broker: str) -> tuple[PublishedCostTable | Non
     """The table to publish, or None and why not. K3 (costs-binding-2026-10-18.md): "Publish once spread and swap are
     measured, with slippage marked `fields.slippage.source = "prior"`": refused while swap is unmeasured or no spread
     is (neither the engine's session table nor the recorded-tick profile). Fills are not needed: a slippage cell below
-    `research.min_fills_for_slippage` fills keeps the prior and is labelled so, as is a commission no deal has shown."""
+    `research.min_fills_for_slippage` fills keeps the prior and is labelled so, as is a commission no deal has shown.
+    Only an XAUUSD table is published: the published format names no instrument, so research would read any other
+    instrument's costs as gold's (multi-instrument plan 2026-11-02: never pooled with XAUUSD)."""
+    if table.symbol != GOLD:
+        return None, f"{table.symbol} costs are not published (release {COSTS_TAG} is XAUUSD's)"
     if table.swap_long_usd_per_lot is None or table.swap_short_usd_per_lot is None:
         return None, "swap not measured by the terminal yet"
     if not table.spread and table.spread_profile is None:

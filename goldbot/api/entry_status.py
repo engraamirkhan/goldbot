@@ -223,6 +223,35 @@ REASONS: dict[str, Reason] = {
                              f"{NOTHING}: a new entry this way is possible once one closes.", "wait"),
     "combined_exposure_cap": _r("Enough gold already open across accounts",
                                 f"{NOTHING}: a new entry is possible once exposure falls.", "wait"),
+    # multi-instrument plan 2026-11-02 (lane L2): the per-group notional cap and an exposure the engine cannot value
+    "group_exposure_cap": _r("Enough already open in this market group",
+                             f"{NOTHING}: a new entry in the group is possible once exposure falls.", "wait"),
+    "exposure_unknown": _r("Open exposure can't be valued (a symbol without a price or conversion)",
+                           "The Health tab names the symbol; check its quotes in the MT5 terminal.", "act"),
+    "day_start_unknown": _r("Today's starting balance isn't known yet, so the daily limit can't be checked",
+                            "Usually clears at the next account reading; check the Health tab if it lasts.", "act"),
+    "instrument_terms_missing": _r("A market's trading terms are missing, so its trades are refused",
+                                   "Check the market's entry in the instrument list (the symbol check names it).",
+                                   "act"),
+    "daily_limit_projected": _r("This trade could take the day past its loss limit",
+                                f"{NOTHING}: a new entry is possible once open risk falls.", "wait"),
+    # multi-instrument plan 2026-11-02 (lane L3, engine/books.py): a non-gold instrument's own refusals
+    "spread_cap_missing": _r("This market has no spread limit set, so it takes no new trades",
+                             "Add max_spread_points for it in config/instruments.yaml (symbol check), then restart "
+                             "its engine.", "act"),
+    "instruments_db_unreadable": _r("The file holding this market's terms (state/instruments.db) can't be read",
+                                    "See the Runbook: restore state/instruments.db from the backup or delete it so "
+                                    "the engine rebuilds it; open trades keep closing.", "act"),
+    "account_notional_cap": _r("Enough open across all markets for the MT5 box's account-wide limit (6x equity)",
+                               f"{NOTHING}: a new entry is possible once exposure falls.", "wait"),
+    "symbol_mismatch": _r("A trade was built for a different market than the one it would be sent to, so it was refused",
+                          "Report it: the engine refused it before the broker; the Health tab names the market.",
+                          "act"),
+    "swap_unknown": _r("This market's overnight swap can't be priced, so it takes no new trades",
+                       "The broker reports its swap in a unit the engine does not convert; see the Runbook.", "act"),
+    "instrument_unverified": _r("This market's terms aren't confirmed on this terminal yet, so it takes no new trades",
+                                "Run the symbol check on the brain (python -m goldbot.ops.symbol_check <account>); "
+                                "open trades keep closing.", "act"),
     "margin_level_floor": _r("Not enough free margin", f"{NOTHING}: wait for open trades to close.", "wait"),
     "min_lot_exceeds_risk": _r("The smallest trade would risk too much for this balance",
                                "Normal on a small account; the Runbook explains the minimum-lot setting.", "wait"),
@@ -278,6 +307,8 @@ REFUSAL_TEXT: dict[str, str] = {
     "margin_level_floor": "not enough free margin",
     "heat_cap": "too much risk already open",
     "combined_exposure_cap": "enough gold already open across accounts",
+    "group_exposure_cap": "enough already open in this market group",
+    "daily_limit_projected": "this trade could take the day past its loss limit",
     "min_lot_exceeds_risk": "the smallest trade would risk too much for this balance",
     "fx_conversion_unavailable": "couldn't convert dollars to the account currency",
     "pilot_stop_above_cap": "its stop would be wider than the pilot's $4",
@@ -549,7 +580,8 @@ def _engine_block(code: str, e: dict[str, Any], now: pd.Timestamp, limits: RiskL
     if code == "news_blackout":
         bo = e.get("blackout")                # a blackout is listed whatever its title (review L3)
         bo = bo if isinstance(bo, dict) else {}
-        label = "News shock" if bo.get("kind") == "news_shock" else "News blackout"
+        label = "News shock" if bo.get("kind") == "news_shock" else \
+            "News calendar can't judge this market" if bo.get("kind") == "calendar_unavailable" else "News blackout"
         title = str(bo.get("title") or "").strip()[:80]
         return block(code, text=f"{label}: {title}" if title else label)
     if code == "spread_too_wide":
@@ -714,9 +746,10 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         state, headline = "partial", f"Can take new trades, except {', '.join(agent_label(str(a)) for a in held)}"
     else:
         state, headline = "open", "Can take new trades"
+    from goldbot.api.instruments_view import entry_symbols  # lazily: it reads the instrument registry
     return EntryStatus(state=state, headline=headline, blocks=found, notes=notes,
                        exits=EXITS_SILENT if silent and _open_at(sessions, now) is not False else EXITS_OK,
-                       as_of=_dt(reported), clears_at=_dt(clears))
+                       as_of=_dt(reported), clears_at=_dt(clears), symbols=entry_symbols(e))
 
 
 # ----------------------------------------------------------------------------- from the state directory

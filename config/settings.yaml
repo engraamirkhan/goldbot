@@ -157,14 +157,11 @@ scheduler:
   nightly_costs:    { kind: daily,   at: "23:10", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }
   saturday_retrain: { kind: weekly,  at: "06:00", weekday: 5, max_late_hours: 30 }
   tournament:       { kind: weekly,  at: "12:00", weekday: 5, max_late_hours: 30 }   # population round after the retrain
-  research_director: { kind: weekly, at: "12:30", weekday: 5, max_late_hours: 30 }   # research plan before agents_weekly
+  research_director: { kind: weekly, at: "12:30", weekday: 5, max_late_hours: 30 }   # weekly research plan after the population round
   model_watch:      { kind: daily,   at: "23:30", max_late_hours: 20 }                  # CUSUM on new champions
-  agents_daily:     { kind: daily,   at: "23:45", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # data steward, risk officer
-  agents_weekly:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }     # journal coach, improvement agent
   monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
   calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
   calendar_archive_sunday: { kind: weekly, at: "18:00", weekday: 6, max_late_hours: 3 }  # the new week before the Sunday open
-  agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
@@ -174,7 +171,6 @@ scheduler:
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
-  tv_reconcile:     { kind: daily,   at: "23:15", max_late_hours: 20 }                  # TradingView bars (OANDA, second feed) vs Dukascopy/broker M1: >2 points -> dq + NaN plots
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
   tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
@@ -189,7 +185,6 @@ agents:
 news:                                # headline collector (VPS service goldbot-news); URLs unverified from the sandbox
   feeds:
     forexlive: https://www.forexlive.com/feed/news
-    fxstreet: https://www.fxstreet.com/rss/news
     fed_press: https://www.federalreserve.gov/feeds/press_all.xml
     bls: https://www.bls.gov/feed/bls_latest.rss
   poll_seconds: 300
@@ -202,7 +197,9 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
-  trial_budget_overrides: {"2026Q4": 158}   # 149 -> 158 (PD + PO 2026-11-01, owner growth goal 11-01 under the standing 10-18 "backtest as much as needed" directive): growth sprint (growth-sprint-2026-11-01.md) 7 screen variants C1-C4 + demo arms GS1 and GS1C, one registry row each before its first score or fill (+1 more if the GS1 single-unit fallback is used); 147 -> 149 (PD + PO 2026-10-31, under the owner's standing 10-18 "backtest as much as needed" directive): the 2 XAUUSD247 weekend controls WKS0/WKI0 (prereg-2026-10-31-weekend-247.md, ADR 0062), one registry row each before their first fill, fills never promotion evidence; 145 -> 147 (PD + PO 2026-10-30, under the owner's 10-18 "backtest as much as needed" and 10-30 "speed up" directives): +1 H-80 R2 exit confirmation on 2018-2025-09 (research-plan 2026-10-30 bet 2a), +1 TVA-BC TradingView author-ideas back-catalogue screen (prereg-2026-10-28-tv-author-ideas.md section 5), one registry row each before its first score; owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md. +2 (53->55) for H-48 + H-49 stage 2: RD ruling 2026-10-18 (prereg-kb-2026-10-18.md), owner approved 2026-10-18. +11 (55->66) for the Vantage twin arms (prereg amendment 2), under the same owner directive and the 2026-10-26 "all three accounts learn"; reported to the owner 2026-10-26; 66 -> 69: Q4 already held 58 (H-60 reruns and corrections count +1 each, conservative), so the honest total is 69; 69 -> 74 (PD + PO 2026-10-26, under the owner's 2026-10-18 "backtest as much as needed" and 2026-10-25 no-quarterly-wait directives, Vantage precedent): the 5 time-structure arms F1A/F1C/G1A/G1C/WFRI (prereg-2026-10-26-time-structure.md), one registry row each before its first fill, K +5, fills never evidence, owner told on #34 the same day; 74 -> 93 -> 106 (PD + PO 2026-10-26, owner directives "tripple the numbers" and "30 different strategies" (arms-expansion-2026-10-26.md directives 1 and 5), quant approved with conditions): wave 1 (19 arm ids, arms-expansion section 3) and wave 2 (13 ids, arms-2026-10-25.md section 8), one registry row each before its first fill, K counted by the precedent arm-id rule (K about 358), fills never promotion evidence; 106 -> 118 (quant C6, 2026-10-26): the 12 H-80 box-family ids BXR/BXT/BXF x 15m/30m/1h/4h are counted too; 118 -> 145 (PD 2026-10-27, H-81 scalp-volume prereg, owner directives 10-18 "backtest as much as needed", 10-26 "tripple the numbers", 10-27 "500 plus overall, 200 per account"): 27 scalp-volume ids, one registry row each before its first fill, fills never promotion evidence
+  trial_budget_overrides: {"2026Q4": 3500}   # 158 -> 3500 (owner decision 2026-11-02, ADR 0073: sprint-3000, sprint-200, C1 composites, POS-1, mlprob, demo learning rows); 149 -> 158 (PD + PO 2026-11-01, owner growth goal 11-01 under the standing 10-18 "backtest as much as needed" directive): growth sprint (growth-sprint-2026-11-01.md) 7 screen variants C1-C4 + demo arms GS1 and GS1C, one registry row each before its first score or fill (+1 more if the GS1 single-unit fallback is used); 147 -> 149 (PD + PO 2026-10-31, under the owner's standing 10-18 "backtest as much as needed" directive): the 2 XAUUSD247 weekend controls WKS0/WKI0 (prereg-2026-10-31-weekend-247.md, ADR 0062), one registry row each before their first fill, fills never promotion evidence; 145 -> 147 (PD + PO 2026-10-30, under the owner's 10-18 "backtest as much as needed" and 10-30 "speed up" directives): +1 H-80 R2 exit confirmation on 2018-2025-09 (research-plan 2026-10-30 bet 2a), +1 TVA-BC TradingView author-ideas back-catalogue screen (prereg-2026-10-28-tv-author-ideas.md section 5), one registry row each before its first score; owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md. +2 (53->55) for H-48 + H-49 stage 2: RD ruling 2026-10-18 (prereg-kb-2026-10-18.md), owner approved 2026-10-18. +11 (55->66) for the Vantage twin arms (prereg amendment 2), under the same owner directive and the 2026-10-26 "all three accounts learn"; reported to the owner 2026-10-26; 66 -> 69: Q4 already held 58 (H-60 reruns and corrections count +1 each, conservative), so the honest total is 69; 69 -> 74 (PD + PO 2026-10-26, under the owner's 2026-10-18 "backtest as much as needed" and 2026-10-25 no-quarterly-wait directives, Vantage precedent): the 5 time-structure arms F1A/F1C/G1A/G1C/WFRI (prereg-2026-10-26-time-structure.md), one registry row each before its first fill, K +5, fills never evidence, owner told on #34 the same day; 74 -> 93 -> 106 (PD + PO 2026-10-26, owner directives "tripple the numbers" and "30 different strategies" (arms-expansion-2026-10-26.md directives 1 and 5), quant approved with conditions): wave 1 (19 arm ids, arms-expansion section 3) and wave 2 (13 ids, arms-2026-10-25.md section 8), one registry row each before its first fill, K counted by the precedent arm-id rule (K about 358), fills never promotion evidence; 106 -> 118 (quant C6, 2026-10-26): the 12 H-80 box-family ids BXR/BXT/BXF x 15m/30m/1h/4h are counted too; 118 -> 145 (PD 2026-10-27, H-81 scalp-volume prereg, owner directives 10-18 "backtest as much as needed", 10-26 "tripple the numbers", 10-27 "500 plus overall, 200 per account"): 27 scalp-volume ids, one registry row each before its first fill, fills never promotion evidence
+  trial_budget_owner_decisions: {"2026Q4": "config/owner_decisions/2026Q4-trial-budget.md"}   # quarter -> owner ADR path; required for an override above 500 trials (the ADR must
+                                     #   state that quarter and trial count); 5,000 is the hard ceiling even with one
   loop_trials_per_run: 16            # continuous research loop (owner 2026-10-18): trials per scheduled batch, separate from the
                                      #   quarterly budget; every one is a registry row and the deflated Sharpe counts the full K. 0 = off
                                      #   (ADR 0029; a loop trial cites rule_ref=loop, the quarterly count skips it, K counts it)
@@ -267,6 +264,8 @@ research:
                                      #   min_lot_exceeds_risk are `unfit` and earn nothing in the overlay
   lot_fit_spread_points: 20          #   the gate floors every stop at stops level + spread: a spread prior (points of 0.01
   lot_fit_stops_level_points: 0      #   USD; the typical London/NY spread) and the broker's stops level (0 at IC Markets)
+  lot_fit_spread_points_by_symbol: {}  # multi-instrument plan 2026-11-02: another instrument's spread prior in ITS points
+                                     #   (config/instruments.yaml `point`), e.g. {EURUSD: 2}; none listed = no prior
   registry: state/research_registry.jsonl
   models_dir: models
   autodisc:                          # ADR 0058 phase 2: nightly bounded G2 search on the explore window (2010-2017) only;
@@ -281,6 +280,49 @@ research:
     max_candidates: 20               # best candidates whose grid neighbours (plateau, counted in K) and shift null are run
     seed: 0                          # base seed; each night adds its day number, so nights search new ground
     cost_table: null                 # measured cost table JSON (costs_measured.json); null: the settings priors
+  position:                          # daily position engine (goldbot/research/position/, amendment W3, PR #285). These are
+                                     #   W3's program-wide fixed values: a spec never varies them; a change is a W3 amendment
+    day_close_utc: "21:00"           # W3.2 clock: decide on the 1d mid bar closing 21:00 UTC, fill at the next 1m open
+    target_vol: 0.10                 # W3.6 sizing only: 10%/yr per instrument, EWMA vol (span below) lagged one day,
+    vol_span_days: 60                #   exposure capped at max_leverage
+    max_leverage: 2.0
+    band: 0.10                       # W3.2 no-trade band when a spec states none: trade only beyond 10% of the target
+    stop_atr: 3.0                    # W3.2 disaster stop on every spec: 3 x ATR(atr_days, 1d) from the last rebalance
+    atr_days: 20                     #   price; flat until the next decision, restored only if the signal still says so
+    warmup_days: 260                 # POS-1: a market enters on its first day with data + 260 days of warm-up
+    null_draws: 1000                 # W3.2 episode-sign (long-only: exposure-matched) null draws and seed
+    null_seed: 20261102
+    boot_resamples: 4000             # W3.2 t: stationary day-block bootstrap, mean block 20 days
+    boot_block_days: 20.0
+    cost_broker: icm                 # C1 point costs: config/cost_of_record.yaml, the cell of the 21:00 UTC fill (asia,
+    cost_session: asia               #   W3 addendum), in bps of the reference (0.204 $ RT -> 0.51 bp; 0.10 $ overshoot -> 0.25 bp)
+    cost_reference_price: 4000.0
+    round_trip_bps_by_symbol: {}     # other markets' point RT in bps (data lane / cost of record); a market without one
+    overshoot_bps_by_symbol: {}      #   is refused, never priced at gold's cost
+    short_rate_path: raw/daily/fred_DTB3.parquet   # data lane FRED DTB3 (value_date, value, available_utc), local only;
+                                     #   joined on its stored available_utc, cut before 2025-10-01 on both stamps
+    currency_rate_paths:             # ISO -> FRED OECD 3-month file for FX differentials and non-USD indices (data lane,
+                                     #   PR #299, local only; monthly, available day 1 of M+2 at 23:00 UTC); a U_16
+                                     #   market whose currency is missing is refused, never financed at the USD rate
+      EUR: raw/daily/fred_IR3TIB01EZM156N.parquet
+      GBP: raw/daily/fred_IR3TIB01GBM156N.parquet
+      JPY: raw/daily/fred_IR3TIB01JPM156N.parquet
+      AUD: raw/daily/fred_IR3TIB01AUM156N.parquet
+      CAD: raw/daily/fred_IR3TIB01CAM156N.parquet
+      CHF: raw/daily/fred_IR3TIB01CHM156N.parquet
+      NZD: raw/daily/fred_IR3TIB01NZM156N.parquet
+    short_rate_constant_pct: 4.02    # fallback when DTB3 is absent (DTB3 at the swap measurement); a run using it is
+                                     #   marked and cannot gate (scripts/position_screen.py refuses without --allow-constant-rate)
+    markup_pct_by_symbol:            # W3.3 measured markups, % a year (long, short), swap-icm-2026-11-02: long -52.22 /
+      XAUUSD: [0.74, 0.74]           #   short +36.00 USD/lot/night at 4,000 = 4.76 / 3.29 %/yr against DTB3 4.02
+    default_markup_pct: 2.5          # W3.3: a symbol without measured terms pays this each side (conservative)
+    triple_weekday_by_symbol: {XAUUSD: 2}   # triple rollover per symbol (0 = Monday; ICM XAUUSD Wednesday): 3 nights,
+                                     #   weekend none; a symbol not listed is refused
+    read_registry: state/position_reads.jsonl   # one marker per (spec, TEST-OLD/CONFIRM) read; a second read is refused
+    etc_fee_pct: 0.12                # venue B (UK gold ETC, report only): long/flat, 0.12%/yr fee, no financing,
+    etc_extra_rt_bps: 5.0            #   round trip = C1 point RT + 5 bp
+    cme_fee_usd_per_side: 2.0        # venue C (CME 1OZ, report only): +$2/oz a side at the reference price, DTB3 both
+                                     #   ways with no markup, one round trip at each monthly roll
 
 drift:                               # design: Drift and health (goldbot/research/drift.py)
   psi_warn: 0.1                      # PSI on a top-10 feature that warns
@@ -395,43 +437,13 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   page_limit_s: 5.0                  # a slower page stops the run (cold history page 2-5 s; orders > 10 s refused)
   run_budget_s: 600                  # per account per run (3 accounts fit the 45-min break); unfinished day pulled next run
 
-webhook:                             # TradingView receiver (goldbot/webhook/app.py)
-  max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
-
-tv_pull:                             # TradingView direct pull (goldbot/data/tv_pull.py, ADR 0030): read-only, cookie in the keyring
-  enabled: false                     # the owner turns it on in settings.local.yaml once both cookies are in the keyring (RUNBOOK 2.8)
-  symbols: {"OANDA:XAUUSD": XAUUSD}  # chart symbol -> store symbol; layouts are read for indicators, only these are pulled
-  timeframes: ["15", "60", "240", "1D"]
-  sessionid_key: tradingview-sessionid            # keyring entry names only (browser cookies sessionid and
-  sessionid_sign_key: tradingview-sessionid-sign  #   sessionid_sign); the values never appear in a file
-  discover: true                     # read the saved layouts for their indicators (no owner naming or listing)
-  discover_every_s: 21600            # layouts re-read every 6 h
-  max_studies: 20                    # indicators pulled per pass at most
-  min_interval_s: 5.0                # between any two requests (GET, series, history page, study)
-  bars_per_request: 5000             # bars per series load and per history page (TradingView serves up to 5000)
-  max_pages_per_tf: 5                # history pages per timeframe and pass (Premium measured: ~11k bars 15m, 1h, 4h)
-  max_requests_per_day: 3000         # rolling 24 h; a pass beyond it is skipped, never queued
-  study_warmup_bars: 300             # the oldest loaded bars' study values are dropped (an EMA needs its warm-up)
-  poll_interval_s: 900               # `tv-pull follow`: one pass per 15m bar ...
-  poll_offset_s: 60                  #   ... this long after the close
-  live_max_lag_s: 1800               # a bar received within this of its close is pull_live (available_utc = received)
-  history_latency_default_s: 960     # pull_history available_utc = close + p95 live latency; this until measured
-  min_live_samples: 20               # live bars needed before the p95 is measured rather than the default
-  backoff_base_s: 300                # after a failed pass: 5 min, doubling ...
-  backoff_max_s: 21600               #   ... to 6 h; an expired cookie waits the full 6 h unless a new cookie is stored
-  timeout_s: 30                      # per request
-  aliases: {}                        # our display names: key_of(name | plot fingerprint) -> "Structure (smc)", "S/R channels",
-                                     #   "Money flow (mfi)" (goldbot/data/tv_alias.py); unmatched -> "Indicator N"
-  graphics_timeframes: ["15", "60", "240"]  # a study's boxes/lines/labels are saved per closed bar here (tv.db tv_graphics); [] = off
-  graphics_max_objects: 500          # per snapshot (highest ids kept, flagged truncated)
-  graphics_max_snapshots: 50000      # per study, symbol and timeframe; append-only, nothing added beyond it
 tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)
   enabled: true                      # public listing, no cookie; text stays in state/tv_ideas.db and raw/ (never the repo)
   authors: [KnightsofGold, Goldviewfx, ArmanShabanTrading]   # public handles
   poll_interval_s: 720               # a poll every 12 min plus up to poll_jitter_s (12-15 min apart)
   poll_jitter_s: 180
   live_page_size: 20                 # newest-activity page per author; a new or changed idea also reads its detail
-  min_interval_s: 3.0                # between two requests (tv_pull's Pacer)
+  min_interval_s: 3.0                # between two requests (goldbot/data/tv_http.py Pacer)
   backfill_min_interval_s: 2.0       # the one-time back catalogue (about 7,000 requests for the three authors)
   max_requests_per_day: 2000         # live, rolling 24 h (a normal day is about 400)
   backfill_max_requests: 12000       # per backfill run; it resumes where it stopped
@@ -453,13 +465,9 @@ observe:                             # ADR 0063: the observe-only live account's
   weekend_flat: "21:00"
   status_stale_s: 300                # health `observe` WARNs (never FAILs: it never blocks trading) past this silence
   bar_stale_s: 900                   # ... or when the 24/7 symbol has had no new bar this long
-tv:                                # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
-  max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
-                                     #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
+tv:                                # the live replica of the owner's indicators, from our own broker bars
   replica_series_start: "2016-01-01" # live replica state (smc/boxes/mfi) bootstraps from the store's bars from here
                                      #   (engine/replica_context.py; the brain's store holds 2016-2026)
-  min_bar_match: 0.95                # share of our decision bars with a TradingView bar of the same open, else the TV
-                                     #   trial is refused before it is charged (research/tv_grid.py: 4h/1d grids differ)
 shadow:                              # shadow book (goldbot/engine/shadow.py; research director ruling 2026-10-19)
   max_open_per_agent: 3              # every signal its own shadow trade, up to 3 open per agent and version; beyond the
                                      #   cap a signal is counted "skipped: cap", never traded. Promotion's 40 counts
@@ -476,14 +484,19 @@ mt5_login:                           # MT5 terminal login from the keyring (gold
 daily_review:                        # daily learning-ops review (goldbot/research/daily_review.py; research-director spec 2026-10-26)
   # exploration candidates a day per broker and style: the arm rows of prereg-2026-10-25-high-volume.md (~290 a day
   # with the probes, high-volume-learning-2026-10-25.md section 1); Vantage runs the intraday and swing twins only
+  # Demo-limits ADR 2026-11-02 (owner 2026-11-02: "for the system to be not bound to test, learn and improve signals"):
+  # restated for x1.35 slots on every demo host and the learning class (15 scalp arms, 15 dedicated controls; ADR
+  # 0061 amendment 2026-11-02): ICM 160/35/5 -> 216/47/7; Vantage scalp 0 -> 40 (Z6V, Z7V enter as learning
+  # rows with LCZ6V, LCZ7V; ZCV with them), intraday/swing 35/5 -> 47/7. A plan for the low-volume alert, never a target to pad
   volume_plan:
-    icm: {scalp: 160, intraday: 35, swing: 5}
-    vantage: {scalp: 0, intraday: 35, swing: 5}
+    icm: {scalp: 216, intraday: 47, swing: 7}
+    vantage: {scalp: 40, intraday: 47, swing: 7}
   # cost probes a day per broker, from the ADR 0043 probe sleeves (ICM: P0 60-90 + ~8 mirrors; Vantage: scheduled
   # M1 probes only at half ICM's scheduled share, no shadow book to mirror). Demo trim 2026-11-01 (cost of record
   # 2026-10-31 section 6): ICM 90 -> 24 (icm-probe scheduled every_min 60); Vantage stays 40 until its exit legs are
-  # recorded and it has 200 fills per session, then 12
-  probe_plan: {icm: 24, vantage: 40}
+  # recorded and it has 200 fills per session, then 12. Demo-limits ADR 2026-11-02 (f): the icm-probe sleeve £30 -> £52
+  # leaves room for ~6 more mirror probes a day (24 -> 30); Vantage stays schedule-bound at 40 (its sleeve £15 -> £35)
+  probe_plan: {icm: 30, vantage: 40}
   volume_alert_below: 0.5            # a trading day under half the plan is low ...
   volume_alert_days: 2               #   ... two low trading days running open a learning-ops issue with the counted cause
   refit_min_fills: 200               # a (broker, session) slippage cell is refit after 200 fills since its last fit; never cheaper within a day

@@ -63,10 +63,114 @@ families:
   smc_structure: {label: "Market structure", why: "Change of market structure (TradingView rule)"}
   trend: {label: "Trend", why: "Trend filter and pullback agreed"}
   trend_level_signal: {label: "Trend level", why: "Trend signal at a level"}
-  tv_event: {label: "TradingView alert", why: "A TradingView alert fired"}
 arms:
   S0: {variant: "every 10 min"}
   S0R: {variant: "resting stop"}
+  # multi-instrument demo (lane L3): each instrument's random controls read by their instrument
+  S0-XAGUSD: {variant: "XAGUSD"}
+  I0-XAGUSD: {variant: "XAGUSD"}
+  S0-XPTUSD: {variant: "XPTUSD"}
+  I0-XPTUSD: {variant: "XPTUSD"}
+  S0-XAUEUR: {variant: "XAUEUR"}
+  I0-XAUEUR: {variant: "XAUEUR"}
+  S0-XAUAUD: {variant: "XAUAUD"}
+  I0-XAUAUD: {variant: "XAUAUD"}
+  S0-US500: {variant: "US500"}
+  I0-US500: {variant: "US500"}
+  S0-USTEC: {variant: "USTEC"}
+  I0-USTEC: {variant: "USTEC"}
+  S0-DE40: {variant: "DE40"}
+  I0-DE40: {variant: "DE40"}
+  S0-UK100: {variant: "UK100"}
+  I0-UK100: {variant: "UK100"}
+  S0-JP225: {variant: "JP225"}
+  I0-JP225: {variant: "JP225"}
+  S0-EURUSD: {variant: "EURUSD"}
+  I0-EURUSD: {variant: "EURUSD"}
+  S0-USDJPY: {variant: "USDJPY"}
+  I0-USDJPY: {variant: "USDJPY"}
+  S0-GBPUSD: {variant: "GBPUSD"}
+  I0-GBPUSD: {variant: "GBPUSD"}
+  S0-AUDUSD: {variant: "AUDUSD"}
+  I0-AUDUSD: {variant: "AUDUSD"}
+  S0-USDCAD: {variant: "USDCAD"}
+  I0-USDCAD: {variant: "USDCAD"}
+  S0-USDCHF: {variant: "USDCHF"}
+  I0-USDCHF: {variant: "USDCHF"}
+  S0-NZDUSD: {variant: "NZDUSD"}
+  I0-NZDUSD: {variant: "NZDUSD"}
+  S0-XTIUSD: {variant: "XTIUSD"}
+  I0-XTIUSD: {variant: "XTIUSD"}
+  S0-XBRUSD: {variant: "XBRUSD"}
+  I0-XBRUSD: {variant: "XBRUSD"}
+  S0-XNGUSD: {variant: "XNGUSD"}
+  I0-XNGUSD: {variant: "XNGUSD"}
+  S0-UST10Y: {variant: "UST10Y"}
+  I0-UST10Y: {variant: "UST10Y"}
+  S0-BUND10Y: {variant: "BUND10Y"}
+  I0-BUND10Y: {variant: "BUND10Y"}
+  S0-COPPER: {variant: "COPPER"}
+  I0-COPPER: {variant: "COPPER"}
+  S0-WHEAT: {variant: "WHEAT"}
+  I0-WHEAT: {variant: "WHEAT"}
+  S0-SOYBEAN: {variant: "SOYBEAN"}
+  I0-SOYBEAN: {variant: "SOYBEAN"}
+  S0-SUGAR: {variant: "SUGAR"}
+  I0-SUGAR: {variant: "SUGAR"}
+  S0-COFFEE: {variant: "COFFEE"}
+  I0-COFFEE: {variant: "COFFEE"}
+  LB-XAGUSD: {variant: "XAGUSD"}
+  LBC-XAGUSD: {variant: "XAGUSD control"}
+  LB-XPTUSD: {variant: "XPTUSD"}
+  LBC-XPTUSD: {variant: "XPTUSD control"}
+  LB-XAUEUR: {variant: "XAUEUR"}
+  LBC-XAUEUR: {variant: "XAUEUR control"}
+  LB-XAUAUD: {variant: "XAUAUD"}
+  LBC-XAUAUD: {variant: "XAUAUD control"}
+  LB-US500: {variant: "US500"}
+  LBC-US500: {variant: "US500 control"}
+  LB-USTEC: {variant: "USTEC"}
+  LBC-USTEC: {variant: "USTEC control"}
+  LB-DE40: {variant: "DE40"}
+  LBC-DE40: {variant: "DE40 control"}
+  LB-UK100: {variant: "UK100"}
+  LBC-UK100: {variant: "UK100 control"}
+  LB-JP225: {variant: "JP225"}
+  LBC-JP225: {variant: "JP225 control"}
+  LB-EURUSD: {variant: "EURUSD"}
+  LBC-EURUSD: {variant: "EURUSD control"}
+  LB-USDJPY: {variant: "USDJPY"}
+  LBC-USDJPY: {variant: "USDJPY control"}
+  LB-GBPUSD: {variant: "GBPUSD"}
+  LBC-GBPUSD: {variant: "GBPUSD control"}
+  LB-AUDUSD: {variant: "AUDUSD"}
+  LBC-AUDUSD: {variant: "AUDUSD control"}
+  LB-USDCAD: {variant: "USDCAD"}
+  LBC-USDCAD: {variant: "USDCAD control"}
+  LB-USDCHF: {variant: "USDCHF"}
+  LBC-USDCHF: {variant: "USDCHF control"}
+  LB-NZDUSD: {variant: "NZDUSD"}
+  LBC-NZDUSD: {variant: "NZDUSD control"}
+  LB-XTIUSD: {variant: "XTIUSD"}
+  LBC-XTIUSD: {variant: "XTIUSD control"}
+  LB-XBRUSD: {variant: "XBRUSD"}
+  LBC-XBRUSD: {variant: "XBRUSD control"}
+  LB-XNGUSD: {variant: "XNGUSD"}
+  LBC-XNGUSD: {variant: "XNGUSD control"}
+  LB-UST10Y: {variant: "UST10Y"}
+  LBC-UST10Y: {variant: "UST10Y control"}
+  LB-BUND10Y: {variant: "BUND10Y"}
+  LBC-BUND10Y: {variant: "BUND10Y control"}
+  LB-COPPER: {variant: "COPPER"}
+  LBC-COPPER: {variant: "COPPER control"}
+  LB-WHEAT: {variant: "WHEAT"}
+  LBC-WHEAT: {variant: "WHEAT control"}
+  LB-SOYBEAN: {variant: "SOYBEAN"}
+  LBC-SOYBEAN: {variant: "SOYBEAN control"}
+  LB-SUGAR: {variant: "SUGAR"}
+  LBC-SUGAR: {variant: "SUGAR control"}
+  LB-COFFEE: {variant: "COFFEE"}
+  LBC-COFFEE: {variant: "COFFEE control"}
   S1A: {variant: "target VWAP"}
   S1B: {variant: "target 1R"}
   S2A: {variant: "15-min range"}
@@ -98,3 +202,19 @@ arms:
   VXTV2: {variant: "TV rule 2"}
   GS1: {variant: "growth test"}
   GS1C: {variant: "growth control"}
+  # ADR 0061 amendment 2026-11-02: the learning arms' dedicated random controls (docs/research/learning-2026-11-02.md)
+  LCZ3D: {variant: "learning ctl, round break"}
+  LCZ4D: {variant: "learning ctl, round reject"}
+  LCZ6D: {variant: "learning ctl, NR4 break"}
+  LCZ7D: {variant: "learning ctl, half-hour"}
+  LCZ9D: {variant: "learning ctl, 1h reclaim"}
+  LCZ10D: {variant: "learning ctl, three horizons"}
+  LCS5A: {variant: "learning ctl, stop $3"}
+  LCS5B: {variant: "learning ctl, stop $3.75"}
+  LCZ1P: {variant: "learning ctl, tick surge"}
+  LCZ2P: {variant: "learning ctl, run fade"}
+  LCZ4P: {variant: "learning ctl, round reject"}
+  LCZ5P: {variant: "learning ctl, extreme break"}
+  LCZ7P: {variant: "learning ctl, half-hour"}
+  LCZ6V: {variant: "learning ctl, NR4 break"}
+  LCZ7V: {variant: "learning ctl, half-hour"}

@@ -204,7 +204,7 @@ jobs:
         if: failure() && steps.tests.outcome == 'failure'
         run: pytest -m integration --last-failed --last-failed-no-failures none -q -n 0 --tb=short --junitxml="ci-out/rerun-$CHECK.xml" 2>&1 | tail -60 || true
       - name: dry-run
-        if: (success() || failure()) && matrix.shard == 5   # the lightest shard (tests/test_ci_workflow.py checks it)
+        if: (success() || failure()) && matrix.shard == 9   # the lightest shard (tests/test_ci_workflow.py checks it)
         run: set -o pipefail; python scripts/dry_run.py 1 2>&1 | tail -40 | tee ci-out/dry-run.txt || { echo dry-run >> "ci-out/failed-$CHECK.list"; exit 1; }
       - name: summary
         if: ${{ !cancelled() }}

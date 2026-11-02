@@ -1,4 +1,5 @@
-"""Read-only views for the dashboard's Health and Research screens (design: Explainability; Drift and health).
+"""Read-only views for the dashboard's Health screen and auto-mode card (design: Explainability; Drift and health).
+The Research screen and its view were retired on 2026-11-02 (owner: remove the research and feeds screens).
 
 Everything here reads files other processes write and never changes them:
 
@@ -6,8 +7,6 @@ Everything here reads files other processes write and never changes them:
 * state/shadow_book.json (engine/shadow.py): closed shadow trades, for the reliability curve and the CUSUM trace;
 * state/agents.json (population league): the allocator's capital share per agent;
 * the deploy, data-quality and drift health checks (ops/health.py), evaluated on request;
-* state/research_registry.jsonl (trial registry), state/research_plan.json (research director);
-* docs/research/hypotheses.md (hypothesis portfolio): its markdown tables, parsed;
 * models/registry.json (model registry): each champion's backtest trade rate, which sets its calibrated CUSUM h;
 * control.json, approvals/done, risk_<account>.json, engine_<account>.json: the auto-mode card (row A10), through the
   same evidence check `/mode auto` runs (telegram/automode.py auto_mode_eligibility_from_state).
@@ -16,13 +15,12 @@ Most of these files are absent until the VPS runs; every builder returns an empt
 """
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import logging
 import math
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,34 +35,17 @@ from goldbot.api.schema import (
     CusumTrace,
     EntryModeAccount,
     ForcedPropose,
-    GateCheck,
     HealthCheckRow,
     HealthView,
-    HypothesisDoc,
-    HypothesisTable,
-    NextTrial,
-    PlanFamily,
-    PlanFocus,
-    PlanMove,
-    PlanReservation,
     PsiHeatmap,
     ReliabilityBin,
     ReliabilityCurve,
-    ResearchCounts,
-    ResearchPlanView,
-    ResearchSummary,
-    ResearchToday,
-    ResearchView,
-    RetiredFamilyView,
     SystemHaltView,
-    TrialBudget,
-    TrialRow,
     VetoTestView,
 )
 from goldbot.base import load_record
 from goldbot.config import DriftSettings, Settings, TelegramSettings
 from goldbot.ops.accounts import engine_state_files
-from goldbot.research.registry import costs_recorded
 from goldbot.telegram.approvals import AskReason, ask_reason_text
 
 log = logging.getLogger(__name__)
@@ -90,15 +71,12 @@ def _fault(what: str, exc: BaseException) -> str:
     log.warning("%s: %s: %s", what, type(exc).__name__, exc)
     return f"{what} ({type(exc).__name__})"
 
+
 REVIEW_COMMAND = "python -m goldbot.ops.run drift-review"
 CLEAR_COMMAND = 'python -m goldbot.ops.run drift-review --clear "what you checked"'
 PSI_MAX_FEATURES = 15            # heatmap rows: the features with the highest PSI across agents
 RELIABILITY_BINS = 10
 MAX_CURVES = 6
-MAX_TRIALS = 200
-PLAN_MAX_AGE_DAYS = 21           # ops/jobs.py PLAN_MAX_AGE_DAYS (not imported: jobs pulls in the research stack)
-DEFAULT_QUARTER_BUDGET = 20      # research/director.py DEFAULT_QUARTER_BUDGET
-NORTH_STAR_GBP = 50.0            # settings research.north_star_daily_gbp, when settings cannot be read
 
 
 def _now() -> datetime:
@@ -346,229 +324,6 @@ def health_view(state: Path, settings: Settings | None, is_owner: bool = False) 
     return HealthView(generated_utc=_now(), drift_ts=_ts(d.get("ts")), drift_error=err, system_halt=system,
                       agents=agents, psi=psi, reliability=reliability, cusum=cusum, dd_mult=ds.dd_mult,
                       checks=_checks(state, settings, is_owner), errors={str(k): say(str(v)) for k, v in errors.items()})
-
-
-# ---------------------------------------------------------------------------------------------- research
-def _registry(state: Path) -> list[dict[str, Any]]:
-    f = state / "research_registry.jsonl"
-    if not f.exists():
-        return []
-    rows = []
-    for line in f.read_text(encoding="utf-8").splitlines():
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(r, dict):
-            rows.append(r)
-    return rows
-
-
-def _trial(r: dict[str, Any], timeframes: dict[str, str]) -> TrialRow:
-    res = _d(r.get("results"))
-    ro = _d(res.get("rule_only"))
-    gross = _d(ro.get("gross"))
-    net = _d(ro.get("net"))
-    gates: list[GateCheck] = []
-    passed: bool | None = None
-    g = res.get("gates")
-    hv = res.get("holdout_verdict")
-    if isinstance(g, dict):
-        passed = g.get("passed") if isinstance(g.get("passed"), bool) else None
-        gates = [GateCheck(name=str(c.get("name", "")), passed=bool(c.get("passed")), detail=str(c.get("detail", "")))
-                 for c in g.get("checks") or [] if isinstance(c, dict)]
-    elif isinstance(hv, dict):
-        passed = bool(hv.get("passed"))
-        gates = [GateCheck(name="holdout", passed=passed, detail=str(hv.get("rule", "")))]
-    # a recorded pass counts only with the research cost treatment (registry.gate_pass_counts): a pass from before swap
-    # was charged is shown as not passed and marked pre-swap, so the view never claims a pass the registry won't count
-    pre_swap = passed is True and not costs_recorded(res)
-    if passed is True:
-        passed = costs_recorded(res)
-    family = str(r.get("family", ""))
-    cfg = _d(r.get("config"))
-    n = gross.get("n", net.get("n"))
-    return TrialRow(trial=int(r.get("trial") or 0), ts=_ts(r.get("ts")), family=family,
-                    timeframe=timeframes.get(family) or (str(cfg["timeframe"]) if cfg.get("timeframe") else None),
-                    status=str(r.get("status", "")), agent_id=str(r.get("agent_id", "")),
-                    gross_r=_f(gross.get("mean_r")), gross_t=_f(gross.get("t_stat")), net_r=_f(net.get("mean_r")),
-                    net_t=_f(net.get("t_stat")), n=int(n) if isinstance(n, (int, float)) else None,
-                    gates_passed=passed, pre_swap=pre_swap, gates=gates, rationale=str(r.get("rationale", "")))
-
-
-def _retired(p: dict[str, Any]) -> list[RetiredFamilyView]:
-    """Retired families from the plan's evidence rows (retired_id set: retired, or reinstated by new evidence) and its
-    retired_floor, with the exploration floor each keeps this quarter."""
-    floors = {str(k): int(v) for k, v in _d(p.get("retired_floor")).items()}
-    out: dict[str, RetiredFamilyView] = {}
-    for e in p.get("evidence") or []:
-        if isinstance(e, dict) and e.get("retired_id"):
-            fam = str(e["family"])
-            out[fam] = RetiredFamilyView(
-                family=fam, hypothesis_id=str(e["retired_id"]), since=str(e["retired_since"]) if e.get("retired_since") else None,
-                reason=str(e["retired_status"]) if e.get("retired_status") else None, floor=floors.get(fam, 0),
-                reinstated=not bool(e.get("retired")), new_evidence=[str(x) for x in e.get("new_evidence") or []])
-    for fam, f in floors.items():
-        out.setdefault(fam, RetiredFamilyView(family=fam, hypothesis_id=None, since=None, reason=None, floor=f,
-                                              reinstated=False, new_evidence=[]))
-    return [out[k] for k in sorted(out)]
-
-
-def _doc_sha(docs_dir: Path | None) -> str | None:
-    """sha256 of hypotheses.md as the director hashes it (research/director.py: the text, UTF-8)."""
-    f = docs_dir / "research" / "hypotheses.md" if docs_dir is not None else None
-    try:
-        return hashlib.sha256(f.read_text(encoding="utf-8").encode()).hexdigest() if f is not None and f.exists() else None
-    except OSError:
-        return None
-
-
-def _plan(state: Path, docs_dir: Path | None = None) -> tuple[ResearchPlanView | None, str | None]:
-    f = state / "research_plan.json"
-    if not f.exists():
-        return None, None
-    try:
-        p = _read(f)
-        created = _ts(p["created_utc"])
-        if created is None:
-            raise ValueError("created_utc missing")
-        sha = str(p["hypotheses_sha256"]) if p.get("hypotheses_sha256") else None
-        now_sha = _doc_sha(docs_dir)
-        focus = [PlanFocus(rank=int(x["rank"]), family=str(x["family"]), budget=int(x["budget"]),
-                           evidence=float(x["evidence"]), reasons=[str(s) for s in x.get("reasons") or []])
-                 for x in p.get("focus") or []]
-        evidence = [PlanFamily(family=str(e["family"]), trials=int(e.get("trials") or 0),
-                               evidence=float(e.get("evidence") or 0.0), blocked=bool(e.get("blocked")),
-                               flags=[str(s) for s in e.get("flags") or []], median_auc=_f(e.get("median_auc")),
-                               best_dsr=_f(e.get("best_dsr")), shadow_trades=int(e.get("shadow_trades") or 0))
-                    for e in p.get("evidence") or []]
-        view = ResearchPlanView(
-            created_utc=created, stale=(_now() - created).total_seconds() > PLAN_MAX_AGE_DAYS * 86400,
-            quarter=str(p["quarter"]), quarter_budget=int(p["quarter_budget"]), quarter_used=int(p["quarter_used"]),
-            total_budget=int(p.get("total_budget") or 0),
-            budget={str(k): int(v) for k, v in (p.get("budget") or {}).items()},
-            grid_budget={str(k): int(v) for k, v in (p.get("grid_budget") or {}).items()},
-            unallocated=int(p.get("unallocated") or 0), holdout_from=str(p.get("holdout_from", "")),
-            holdout_to=str(p.get("holdout_to", "")), focus=focus, evidence=evidence,
-            quarter_reserved=int(p.get("quarter_reserved") or 0),
-            reservation=PlanReservation.model_validate(p["reservation"]) if isinstance(p.get("reservation"), dict) else None,
-            retired=_retired(p), reinstate_t=_f(p.get("reinstate_t")),
-            moves=[PlanMove(family=str(m["family"]), source=str(m.get("source", "")), detail=str(m.get("detail", "")),
-                            budget_before=int(m.get("budget_before") or 0), budget_after=int(m.get("budget_after") or 0),
-                            share_before=_f(m.get("share_before")), share_after=_f(m.get("share_after")),
-                            shift_pct=_f(m.get("shift_pct"))) for m in p.get("moves") or [] if isinstance(m, dict)],
-            attribution_note=str(p["attribution_note"]) if p.get("attribution_note") else None,
-            hypotheses_note=str(p["hypotheses_note"]) if p.get("hypotheses_note") else None,
-            hypotheses_sha256=sha, hypotheses_sha256_now=now_sha,
-            hypotheses_changed=sha is not None and now_sha is not None and sha != now_sha,
-            hypotheses_drift=[str(x) for x in p.get("hypotheses_drift") or []])
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        return None, _fault("research_plan.json unreadable", exc)
-    return view, None
-
-
-_BOLD = re.compile(r"\*\*(.+?)\*\*")
-
-
-def _cell(s: str) -> str:
-    return _BOLD.sub(r"\1", s.strip()).replace("`", "")
-
-
-def parse_tables(md: str) -> list[HypothesisTable]:
-    """Every pipe table in a markdown document, titled by the heading above it."""
-    tables: list[HypothesisTable] = []
-    title = ""
-    lines = md.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if line.startswith("#"):
-            title = line.lstrip("#").strip()
-        elif line.startswith("|") and i + 1 < len(lines) and re.match(r"^\|[\s:|-]+\|?$", lines[i + 1].strip()):
-            cols = [_cell(c) for c in line.strip("|").split("|")]
-            rows = []
-            i += 2
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                cells = [_cell(c) for c in lines[i].strip().strip("|").split("|")]
-                rows.append((cells + [""] * len(cols))[:len(cols)])
-                i += 1
-            tables.append(HypothesisTable(title=title, columns=cols, rows=rows))
-            continue
-        i += 1
-    return tables
-
-
-def _hypotheses(docs_dir: Path) -> HypothesisDoc:
-    f = docs_dir / "research" / "hypotheses.md"
-    rel = "docs/research/hypotheses.md"
-    if not f.exists():
-        return HypothesisDoc(path=rel, updated_utc=None, tables=[], note="hypotheses.md not found next to the API")
-    try:
-        text = f.read_text(encoding="utf-8")
-    except OSError as exc:
-        return HypothesisDoc(path=rel, updated_utc=None, tables=[], note=_fault("unreadable", exc))
-    updated = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
-    return HypothesisDoc(path=rel, updated_utc=updated, tables=parse_tables(text), note=None)
-
-
-def _today(rows: list[dict[str, Any]], tfs: dict[str, str], now: datetime) -> ResearchToday:
-    """Trial rows (`registry.is_trial`) stamped on the current UTC day, by verdict as the trial table reads them: a
-    recorded pass without its cost treatment is `not_counted`, a row with no gate verdict `no_verdict`."""
-    from goldbot.research.registry import is_trial, quarter_of, quarter_start
-    day = now.astimezone(timezone.utc).date()
-    today = [t for r in rows if is_trial(r) and (t := _trial(r, tfs)).ts is not None
-             and t.ts.astimezone(timezone.utc).date() == day]
-    q = quarter_of(now)
-    y, qn = int(q[:4]), int(q[5])
-    end = (quarter_start(f"{y + 1}Q1" if qn == 4 else f"{y}Q{qn + 1}") - timedelta(days=1)).date()
-    latest = max(today, key=lambda t: (t.ts or now, t.trial), default=None)
-    return ResearchToday(date_utc=day, run=len(today), passed=sum(t.gates_passed is True for t in today),
-                         not_counted=sum(t.pre_swap for t in today),
-                         failed=sum(t.gates_passed is False and not t.pre_swap for t in today),
-                         no_verdict=sum(t.gates_passed is None for t in today), latest=latest, quarter_end=end)
-
-
-def _counts(trials: list[TrialRow]) -> ResearchCounts:
-    return ResearchCounts(run=len(trials), passed=sum(t.gates_passed is True for t in trials),
-                          failed=sum(t.gates_passed is False and not t.pre_swap for t in trials),
-                          no_verdict=sum(t.gates_passed is None for t in trials),
-                          not_counted=sum(t.pre_swap for t in trials))
-
-
-def _summary(rows: list[dict[str, Any]], tfs: dict[str, str], plan: ResearchPlanView | None, now: datetime,
-             settings: Settings | None) -> ResearchSummary:
-    """Backlog 97's summary card from the whole registry (every trial row, not the 200 listed) and the plan. The best
-    candidate is the counted pass (`gates_passed`: costs recorded) with the highest net R per trade: a failed or a
-    pre-swap trial is never offered as one, however high its R. The next trial is the plan's top-ranked family."""
-    from goldbot.research.registry import is_trial
-    trials = [_trial(r, tfs) for r in rows if is_trial(r)]
-    week = [t for t in trials if t.ts is not None and now - timedelta(days=7) <= t.ts <= now]
-    every = _counts(trials)
-    passes = [t for t in trials if t.gates_passed is True and t.net_r is not None]
-    best = max(passes, key=lambda t: (t.net_r or 0.0, t.trial), default=None)
-    top = min(plan.focus, key=lambda x: x.rank, default=None) if plan is not None else None
-    nxt = NextTrial(family=top.family, timeframe=tfs.get(top.family), budget=top.budget) if top is not None else None
-    star = settings.research.north_star_daily_gbp if settings is not None else NORTH_STAR_GBP
-    return ResearchSummary(passed_total=every.passed, failed_total=every.failed, no_verdict_total=every.no_verdict,
-                           not_counted_total=every.not_counted, since_last_week=_counts(week), best_candidate=best,
-                           next_trial=nxt, north_star_gbp=star)
-
-
-def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> ResearchView:
-    from goldbot.research.registry import quarter_of, quarter_trials
-    from goldbot.specialists import SPECIALISTS
-    rows = _registry(state)
-    now = _now()
-    q = quarter_of(now)
-    cap = settings.research.budget_for(q) if settings is not None else DEFAULT_QUARTER_BUDGET
-    used = quarter_trials(rows, q)
-    tfs = {k: str(v.timeframe) for k, v in SPECIALISTS.items()}
-    trials = sorted((_trial(r, tfs) for r in rows), key=lambda t: -t.trial)[:MAX_TRIALS]
-    plan, plan_err = _plan(state, docs_dir)
-    return ResearchView(generated_utc=now, budget=TrialBudget(quarter=q, budget=cap, used=used, left=max(cap - used, 0)),
-                        trials=trials, trials_total=len(rows), plan=plan, plan_error=plan_err,
-                        hypotheses=_hypotheses(docs_dir), today=_today(rows, tfs, now),
-                        summary=_summary(rows, tfs, plan, now, settings))
 
 
 # ---------------------------------------------------------------------------------------------- auto mode (A10)

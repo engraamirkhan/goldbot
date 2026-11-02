@@ -23,7 +23,7 @@ export function TradesTabView({ tab, route, go }: { tab: TradesTab; route: Route
                                      onQuery={(q) => go("trades", "list", null, q, { replace: true, keepScroll: true })} />}
       {tab === "strategies" && <TradesStrategies query={query} onQuery={(q) => go("trades", "strategies", null, q, { replace: true, keepScroll: true })}
                                                  onFamily={(fam) => go("trades", "list", null, filtersQuery({ ...parseFilters(""), fam: [fam] }))} />}
-      {tab === "today" && <TradesToday />}
+      {tab === "today" && <TradesToday query={query} />}
       {route.sub && (tab === "now" || tab === "list") && <TradeDetail id={route.sub} onClose={close} />}
     </>
   );

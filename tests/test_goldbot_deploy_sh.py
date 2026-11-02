@@ -554,7 +554,7 @@ def test_the_settings_check_works_with_the_real_settings_model(tmp_path):
     repo = tmp_path / "real"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
-    files = {rel: (REPO / rel).read_text() for rel in ("goldbot/__init__.py", "goldbot/config.py",
+    files = {rel: (REPO / rel).read_text() for rel in ("goldbot/__init__.py", "goldbot/config.py", "config/owner_decisions/2026Q4-trial-budget.md",
                                                          "config/settings.yaml")}
     sha = _commit(repo, files, "real settings model")
     local = repo / "config" / "settings.local.yaml"
@@ -955,8 +955,8 @@ def test_a_watcher_for_a_version_that_no_longer_runs_does_nothing(tmp_path):
 def test_the_heartbeat_service_list_matches_the_health_checks():
     src = SCRIPT.read_text()
     listed = set(next(ln for ln in src.splitlines() if ln.startswith("BEAT_SERVICES=")).split('"')[1].split())
-    from goldbot.ops.checks._base import HEARTBEAT_SERVICES, OPTIONAL_HEARTBEAT_SERVICES
-    assert listed == set(HEARTBEAT_SERVICES) | set(OPTIONAL_HEARTBEAT_SERVICES)
+    from goldbot.ops.checks._base import HEARTBEAT_SERVICES
+    assert listed == set(HEARTBEAT_SERVICES)
 
 
 def test_services_stop_before_the_checkout_and_start_after_it_engine_last_out_first_in(tmp_path):
@@ -1021,9 +1021,8 @@ def test_an_engine_warn_that_persists_after_the_rechecks_is_still_degraded(tmp_p
 
 # ---------------------------------------------------------------- incident 2026-10-20: a rollback left services stopped
 # (docs/incidents/2026-10-20-deploy-rollback-left-services-stopped.md)
-FULL_BOX = {"goldbot-news.service": True, "goldbot-tv-pull.service": True}
-INPUTS = ("goldbot-api.service", "goldbot-scheduler.service", "goldbot-telegram.service", "goldbot-news.service",
-          "goldbot-tv-pull.service")
+FULL_BOX = {"goldbot-news.service": True}
+INPUTS = ("goldbot-api.service", "goldbot-scheduler.service", "goldbot-telegram.service", "goldbot-news.service")
 
 
 def _incident_units(box: Box, fail: dict[str, str], probe: bool = True) -> None:
@@ -1082,7 +1081,7 @@ def test_a_newly_enabled_engine_down_with_its_bridge_ok_rolls_back_without_being
 
 def test_a_rollback_after_a_real_failure_restarts_every_service_that_ran_before(tmp_path):
     """The incident's rollback: one engine cannot start on either commit. Before the fix the first failed restart
-    ended the start loop, leaving api, scheduler, telegram, news and tv-pull stopped."""
+    ended the start loop, leaving api, scheduler, telegram and news stopped."""
     box = Box(tmp_path, running="c1", aux=4)
     _incident_units(box, {}, probe=False)
     st = json.loads((box.t / "units.json").read_text())
@@ -1095,7 +1094,7 @@ def test_a_rollback_after_a_real_failure_restarts_every_service_that_ran_before(
     rec = box.records()[-1]
     assert rec["result"] == "failed" and box.head() == box.c1
     assert "not running: engine@icm-demo" in rec["detail"]
-    assert "running: supervisor,api,scheduler,telegram,news,tv-pull; not running: engine@icm-demo" in rec["detail"]
+    assert "running: supervisor,api,scheduler,telegram,news; not running: engine@icm-demo" in rec["detail"]
     st = json.loads((box.t / "units.json").read_text())
     assert all(st["units"][u]["active"] for u in (*INPUTS, "goldbot-supervisor.service"))
     assert not st["units"]["goldbot-engine@icm-demo.service"]["active"]

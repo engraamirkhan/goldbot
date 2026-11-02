@@ -62,6 +62,9 @@ class OpenTrade(Record):
     # since entry), so the record leaves R-based excursions empty (prices and times are still recorded)
     risk_known: bool = True
     audit: EntryAudit | None = None   # finance audit entry facts for the record; None: adopted or saved before them
+    # multi-instrument demo (plan 2026-11-02, lanes L3/L4): the instrument the trade is on (a config/instruments.yaml
+    # key, never a broker or store symbol); absent on every record before it, which is the account's gold
+    symbol: str = "XAUUSD"
 
 
 class PendingClose(Record):
@@ -169,7 +172,9 @@ class JsonEngineStore:
 
     def save_orders(self, s: OrdersSnapshot) -> None:
         payload = {"sent": {k: o.model_dump(mode="json") for k, o in s.sent.items()},
-                   "open": {str(k): t.model_dump(mode="json") for k, t in s.open.items()},
+                   # a gold trade's `symbol` is left out: gold's file reads exactly as before (absent = XAUUSD)
+                   "open": {str(k): t.model_dump(mode="json", exclude={"symbol"} if t.symbol == "XAUUSD" else None)
+                            for k, t in s.open.items()},
                    # closed-trade records not written yet (a failed write) survive a restart; lost ones stay listed
                    "closing": [c.model_dump(mode="json") for c in s.closing],
                    "records_lost": s.records_lost}

@@ -191,25 +191,7 @@ test("owner regenerates the recovery codes with password and authenticator code;
   await expect(page.locator("ol.codes")).toHaveCount(0);
 });
 
-test("news tab shows the calendar with blackout windows and the scored headlines", async ({ page }) => {
-  await page.goto("/");
-  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await go(page, "News");
-  await expect(page.getByRole("heading", { name: "Economic calendar" })).toBeVisible();
-  const cpi = page.locator("tr", { hasText: "CPI m/m" });
-  await expect(cpi.locator(".badge.tier1")).toHaveText("T1");
-  await expect(cpi.locator("td").last()).toHaveText(/^\d\d:\d\d–\d\d:\d\d/);   // the seeded tier-1 event's blackout window
-  await expect(page.locator("tr", { hasText: "ISM Manufacturing PMI" }).locator("td").last()).toHaveText("—");
-  const shock = page.locator("tr.shock", { hasText: "Missile strike" });
-  await expect(shock.getByText("SHOCK")).toBeVisible();
-  await expect(shock.getByText("risk-off")).toBeVisible();
-  await expect(page.locator("tr", { hasText: "Weekend football results" }).getByText("unscored")).toBeVisible();
-  await page.getByLabel("Minimum relevance").selectOption("0.7");
-  await expect(page.getByText("Weekend football results")).toHaveCount(0);
-  await expect(page.getByText("Fed's Powell signals a pause in hikes")).toBeVisible();
-});
-
-test("health tab shows agent halts, PSI bands and the charts; research tab the budget, trials and hypotheses", async ({ page }) => {
+test("health shows agent halts, PSI bands and the charts; an old Feeds bookmark opens it", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   await go(page, "Health");
@@ -224,18 +206,8 @@ test("health tab shows agent halts, PSI bands and the charts; research tab the b
   await expect(page.getByRole("list", { name: "Health checks" })).toContainText("Deploy");
   await expect(page.getByRole("alert")).toHaveCount(0);                       // no system halt seeded
 
-  await go(page, "Research");
-  await expect(page.getByRole("meter", { name: /trials used/ })).toBeVisible();
-  const trials = page.locator("table.trials");
-  await expect(trials.locator("tbody tr")).toHaveCount(2);
-  await expect(trials.locator("tbody tr").first()).toContainText("+0.061 (t 2.63)");
-  await expect(trials.getByText("failed: dsr").first()).toBeVisible();
-  await expect(page.getByText("gross t 2.63 but net negative")).toBeVisible();
-  await expect(page.getByText("4 trials reserved")).toBeVisible();
-  await expect(page.getByRole("list", { name: "Retired families" }).getByRole("listitem").first()).toContainText("1 trial this quarter");
-  await expect(page.locator("table.moves tbody tr").first()).toContainText("11 → 12");
-  await expect(page.getByRole("note")).toContainText("hypotheses.md changed since this plan");
-  await expect(page.locator("details.hyp").first()).toContainText("H-01");    // the real docs/research/hypotheses.md
+  await page.goto("/#/feeds/health");                                      // retired Feeds section (2026-11-02)
+  await expect(page.getByRole("heading", { level: 1, name: "Health" })).toBeVisible();
 });
 
 test("owner invites a viewer", async ({ page }) => {
@@ -263,23 +235,10 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   await expectRoleNotEmail(page, "Viewer", VIEWER.email);
   await go(page, "Settings");
   await expect(page.getByRole("tab", { name: "Users" })).toHaveCount(0);
-  for (const tab of ["Overview", "News", "Agents", "Health", "Research", "Feeds", "Approvals"]) {
+  for (const tab of ["Overview", "Health", "Limits", "Approvals"]) {
     await go(page, tab);
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
-
-  // Progress (docs/ux/progress-screens.md) is read-only for every role: on a fresh state nothing is recorded, the stop
-  // rule has not started and the daily results job has not run; nobody sees a record-gate command here
-  await page.setViewportSize({ width: 360, height: 800 });
-  await go(page, "Progress");
-  await expect(page.getByRole("heading", { name: "Road to live" })).toBeVisible();
-  await expect(page.getByTestId("gate-foundation_to_backtest")).toContainText("Not met");
-  await expect(page.getByTestId("stop-rule")).toContainText("Not started");
-  await expect(page.getByText(/No results yet/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Copy" })).toHaveCount(0);
-  const road = await page.getByRole("region", { name: "Road to live" }).boundingBox();
-  expect(road && road.x >= 0 && road.x + road.width <= 360).toBe(true);        // fits the phone without sideways scroll
-  await page.setViewportSize({ width: 1280, height: 720 });
 
   // the API enforces the same rule the UI hides
   const token = await page.evaluate(() => sessionStorage.getItem("goldbot_token"));
@@ -641,7 +600,7 @@ test("Trades: money on every open row, filters in the URL, a strategy's totals, 
       await list.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 1h, long, plus £3\.95, closed at trailing stop$/ }).click();
       await expect(detail).toContainText("+£3.95");
       // its chart from the server's stored broker minutes: levels in words, the journalled stop move drawn (133)
-      await expect(detail.getByRole("img", { name: /^Chart of 1h bars: target 2,404\.00, entry 2,400\.00, first stop 2,398\.00, last stop 2,399\.50, exit 2,401\.20/ })).toBeVisible();
+      await expect(detail.getByRole("img", { name: /^Chart of 1h bars of Gold: target 2,404\.00, entry 2,400\.00, first stop 2,398\.00, last stop 2,399\.50, exit 2,401\.20/ })).toBeVisible();
       await expect(detail).toContainText("1h bars, bid prices, from this broker.");
       await expect(detail).toContainText(/moved to 2,399\.50 at/);
       await expect(detail).toContainText(/commission £0\.35 · swap \+?£0\.12|commission £0\.35/);
@@ -684,4 +643,38 @@ test("Trades: money on every open row, filters in the URL, a strategy's totals, 
       await shot(page, `trades-today-${tag}`);
     }
   }
+});
+
+// Multi-instrument UI spec 2026-11-02 §2, on a phone: the grouped instrument filter (the server's facet of symbols with
+// trades), sym= in the URL, the filtered list, one trade opened with its symbol and its prices in that instrument's
+// digits and unit. The seeded ledger is gold (records before the multi-instrument demo carry no symbol: gold).
+test("Trades on a phone: filter by instrument, the URL keeps it, a trade opens with its prices in its own digits", async ({ page }) => {
+  seed();
+  stopBeat = keepEnginesFresh(info().state_dir);
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/#/trades/list?acct=icm-demo");
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  const sheet = page.getByRole("dialog", { name: "Filters" });
+  const gold = sheet.getByRole("group", { name: "Gold instruments" });
+  await expect(gold).toBeVisible();
+  await gold.getByRole("checkbox", { name: /XAUUSD/ }).check();
+  await sheet.getByRole("button", { name: "Done" }).click();
+  await expect(page).toHaveURL(/sym=XAUUSD/);
+  await expect(page.getByRole("button", { name: "Remove filter XAUUSD" })).toBeVisible();
+  const list = page.getByRole("region", { name: "Trade list" });
+  const row = list.getByRole("button", { name: /^Box break \+ close 1h, long, plus £3\.95, closed at trailing stop$/ });
+  await expect(row).toContainText("XAUUSD · long 0.05");
+  await noSideways(page, 360);
+  await shot(page, "trades-list-instrument-360");
+  await row.click();
+  const detail = page.getByRole("dialog", { name: "Trade detail" });
+  await expect(detail).toContainText("XAUUSD");
+  await expect(detail).toContainText(/at 2,401\.20\sUSD\/oz/);                       // two digits and gold's unit
+  await expect(detail).toContainText(/entry 2,400\.00 · stop 2,398\.00/);
+  await noSideways(page, 360);
+  // an instrument with no trades in the period says so in words
+  await page.goto("/#/trades/list?acct=icm-demo&sym=US500");
+  await expect(list).toContainText("No trades on these instruments in this period.");
 });

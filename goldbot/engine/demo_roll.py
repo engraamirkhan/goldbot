@@ -1,5 +1,5 @@
 """ADR 0049 D3 / T1: the demo epoch roll, the automated mark reset of a demo `probe_only` host paused at -8% (amends
-ADR 0043 R1 there only; called by `Engine._roll_risk_period` at each risk-day roll).
+ADR 0043 R1 there only; called by `capital_flows.roll_risk_period` (`Engine._roll_risk_period`) at each risk-day roll).
 
 "It runs at the first 00:00 UTC risk-day roll after the pause, once the host is flat except P0 (open arms exit by their
 own rules first) ... Mark reset: mark = max(balance, equity), stage NORMAL, automated on the fenced path (T1). It never

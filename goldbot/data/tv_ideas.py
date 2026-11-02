@@ -58,7 +58,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp
-from goldbot.data.tv_wire import SITE, ReadOnlyNetwork, TvNetwork, TvPullError
+from goldbot.data.tv_http import SITE, Pacer, ReadOnlyNetwork, TvNetwork, TvReadError
 from goldbot.db.connection import connect, write
 from goldbot.db.migrations import migrate
 
@@ -75,7 +75,7 @@ LISTING_CAP = 1000                       # items one listing query serves, whate
 PAGE = 100                               # per_page the listing accepts at most
 DIRECTIONS = {1: "long", 2: "short", 0: "neutral"}
 Direction = Literal["long", "short", "neutral", "unknown"]
-_UUID = re.compile(r"^[A-Za-z0-9]{4,20}$")
+_UUID = re.compile(r"[A-Za-z0-9]{4,20}")      # used with fullmatch: "$" would accept a trailing newline
 # exchanges gold ideas are published on: probed once for the top slice, beside those seen in the listing
 GOLD_EXCHANGES = ("FX", "OANDA", "TVC", "FX_IDC", "FOREXCOM", "CAPITALCOM", "PEPPERSTONE", "ICMARKETS", "SAXO",
                   "COMEX", "FXOPEN", "EIGHTCAP", "BLACKBULL", "VANTAGE", "SPREADEX", "CURRENCYCOM")
@@ -313,12 +313,12 @@ def _author_of(item: Mapping[str, Any]) -> str:
 
 
 # ------------------------------------------------------------------------------------------------- the client
-class BudgetExhausted(TvPullError):
+class BudgetExhausted(TvReadError):
     pass
 
 
 class IdeasClient:
-    """Every request: the read-only guard (tv_wire allow list; GET only; no cookie), the tv_pull Pacer, a budget."""
+    """Every request: the read-only guard (tv_http allow list; GET only; no cookie), the Pacer, a budget."""
 
     def __init__(self, network: ReadOnlyNetwork, pacer: Any, budget: int):
         self.network, self.pacer, self.budget = network, pacer, budget
@@ -327,8 +327,7 @@ class IdeasClient:
     def build(cls, inner: TvNetwork, *, min_interval_s: float, budget: int,
               sleep: Callable[[float], None] = time.sleep,
               monotonic: Callable[[], float] = time.monotonic) -> IdeasClient:
-        from goldbot.data.tv_pull import Pacer
-        return cls(ReadOnlyNetwork(inner, cookie="", secrets=[]), Pacer(min_interval_s, monotonic, sleep), budget)
+        return cls(ReadOnlyNetwork(inner), Pacer(min_interval_s, monotonic, sleep), budget)
 
     @property
     def requests(self) -> int:
@@ -338,24 +337,24 @@ class IdeasClient:
         if self.pacer.count >= self.budget:
             raise BudgetExhausted(f"request budget reached ({self.budget})")
         self.pacer.wait()
-        body = self.network.get(url, with_cookie=False, xhr=True)
+        body = self.network.get(url, xhr=True)
         try:
             return json.loads(body)
         except ValueError:
-            raise TvPullError(f"not JSON from {url.split('?')[0]}") from None
+            raise TvReadError(f"not JSON from {url.split('?')[0]}") from None
 
     def listing(self, params: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_json(LIST_URL + "?" + urlencode(dict(params)))
         if not isinstance(data, dict) or not isinstance(data.get("results"), list):
-            raise TvPullError("unexpected ideas listing shape")
+            raise TvReadError("unexpected ideas listing shape")
         return data
 
     def detail(self, uuid: str) -> dict[str, Any]:
-        if not _UUID.match(uuid):
-            raise TvPullError(f"refused idea id {uuid!r}")
+        if not _UUID.fullmatch(uuid):
+            raise TvReadError(f"refused idea id {uuid!r}")
         data = self.get_json(f"{LIST_URL}{uuid}/")
         if not isinstance(data, dict) or "id" not in data:
-            raise TvPullError("unexpected idea detail shape")
+            raise TvReadError("unexpected idea detail shape")
         return data
 
 
@@ -620,7 +619,7 @@ def poll_once(cfg: TvIdeasSettings, db: IdeasDb, client: IdeasClient, *,
     for author in cfg.authors:
         try:
             data = client.listing({"by": author, "sort": "recent_extended", "per_page": cfg.live_page_size})
-        except TvPullError as exc:
+        except TvReadError as exc:
             problems.append(f"{author}: {exc}")
             continue
         seen = now()
@@ -643,7 +642,7 @@ def poll_once(cfg: TvIdeasSettings, db: IdeasDb, client: IdeasClient, *,
                 continue
             try:
                 idea, ups = idea_from_detail(client.detail(str(it.get("image_url") or "")))
-            except (TvPullError, KeyError, ValueError, TypeError) as exc:
+            except (TvReadError, KeyError, ValueError, TypeError) as exc:
                 problems.append(f"{author} idea {it.get('id')}: {type(exc).__name__}: {exc}"[:200])
                 author_ok = False
                 continue
@@ -821,18 +820,18 @@ def backfill(cfg: TvIdeasSettings, db: IdeasDb, client: IdeasClient, *, authors:
                 idea, ups = idea_from_detail(client.detail(uuid))
             except BudgetExhausted:
                 raise
-            except (TvPullError, KeyError, ValueError, TypeError) as exc:
+            except (TvReadError, KeyError, ValueError, TypeError) as exc:
                 rep.detail_failures += 1
                 fails += 1
                 log.warning("tv ideas backfill: idea %s: %s", idea_id, type(exc).__name__)
                 if fails >= max_consecutive_failures:
-                    raise TvPullError(f"{fails} detail reads failed in a row (last: {exc})"[:300]) from None
+                    raise TvReadError(f"{fails} detail reads failed in a row (last: {exc})"[:300]) from None
                 continue
             fails = 0
             out = db.record(idea, ups, now(), live_since=None, latency_s=cfg.backfill_latency_s)
             rep.details_fetched += int(out.new_idea)
             rep.new_updates += out.new_updates
-    except TvPullError as exc:
+    except TvReadError as exc:
         rep.ok, rep.reason = False, str(exc)[:300]
     rep.requests = client.requests
     if rep.ok:
@@ -950,7 +949,7 @@ def check_tv_ideas(ctx: Any) -> Check:
 
 # ------------------------------------------------------------------------------------------------- CLI
 def _client_from(cfg: TvIdeasSettings, *, min_interval_s: float, budget: int) -> IdeasClient:
-    from goldbot.data.tv_wire import LiveNetwork
+    from goldbot.data.tv_http import LiveNetwork
     return IdeasClient.build(LiveNetwork(cfg.timeout_s), min_interval_s=min_interval_s, budget=budget)
 
 
