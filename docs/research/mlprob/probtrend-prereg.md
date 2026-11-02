@@ -156,3 +156,20 @@ used only as a gate on rules that already carry a gross premium.
   gate family at today's costs.
 - Explore pass(es), 0 confirm -> report, retire, no arm.
 - Confirm pass -> "confirm-passed, old-test pending"; arm code written but not enabled for demo until TEST-OLD passes.
+
+## Amendment 1 (2026-11-02, before any data is loaded; coordinator relay of W1/W2 and the statistics expert's memo)
+
+The frozen model, gates and pass rules above are unchanged. Added, all reported only (not gating) unless stated:
+1. **TEST-OLD window = W2**: entries 2006-02-01..2009-12-31 (warm-up may read 2005 and 2006-01). Qualification rule
+   (W2, replaces W1's for this lane): n >= 100 (>= 60 for a 4h rule), net mean R > 0, t >= 1.28, net minus leak-free
+   control >= 0. Run once, confirm passers only; until the files are on disk the status is "old-test pending". The
+   keyless calendar starts 2010-01, so f9 (tier-1 event day) is 0 for every TEST-OLD day; disclosed as a known
+   input gap, not repaired after any look.
+2. **Excluding 2025**: every confirm statistic is also reported on entries 2018-01-01..2024-12-31.
+3. **Drift control**: per real trade, four twins with the same side, same time of day, same stop/target/trail/hold and
+   deadline kind, on a random other trading day within +/-20 trading days (hash-seeded); net uplift vs it reported.
+4. **bps cost version**: the cor-2026-10-31.2 dollar round trip, overshoot and swap scaled by entry price / 4,000
+   (W2 price-relative costs); net R and t reported beside the frozen dollar version.
+5. **W2 pass rules reported beside ours**: explore t on day-summed R and control excess >= 0; confirm BH-FDR q 0.10 on
+   the one-sided day-block-bootstrap p (m = explore passers, 5-day blocks, 2,000 resamples, seed 0), >= 5 of 8 years;
+   DSR at K = 3,300 and K_eff = 12 (this lane).
