@@ -1208,10 +1208,12 @@ class Engine:
                     # review LOW-C: the order may be at the broker: its row stays "sending" (reconciliation resolves it),
                     # entries blocked (tick_error), no further auto entry this close; other agents journalled, exits go on
                     self._auto_paused = (close_ts, "order_raised")
+                    books.book(self, intent, gd)   # it may be at the broker: booked (E2)
                     self.note_tick_error(exc)
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
                                                   pid, scored_fv=sfv))
                     continue
+                books.book(self, intent, gd, res)   # sent: booked before the next symbol is checked (E2)
                 decisions.append(self._record(agent, close_ts, p, mult, auto_entry.action(res), pid, scored_fv=sfv))
                 auto_entry.after_order(self, res, gd, prop, close_ts)
             else:
@@ -1279,6 +1281,7 @@ class Engine:
                 res = self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                                     price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
                                     atr_usd=intent.atr_usd, gd=gd)      # the re-check's decision (exception)
+                books.book(self, intent, gd, res)   # after the approval-time re-check, once sent (E2)
                 code = None if res is None else refusal_code(res, paper=self.cfg.mode == "paper",
                                                              definite=DEFINITE_REJECT_RETCODES)
                 if res is not None and code is not None:      # the card says "NOT PLACED" (docs/ux/order-not-placed.md)

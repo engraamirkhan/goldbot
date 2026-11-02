@@ -228,6 +228,18 @@ REASONS: dict[str, Reason] = {
                              f"{NOTHING}: a new entry in the group is possible once exposure falls.", "wait"),
     "exposure_unknown": _r("Open exposure can't be valued (a symbol without a price or conversion)",
                            "The Health tab names the symbol; check its quotes in the MT5 terminal.", "act"),
+    # multi-instrument plan 2026-11-02 (lane L3, engine/books.py): a non-gold instrument's own refusals
+    "spread_cap_missing": _r("This market has no spread limit set, so it takes no new trades",
+                             "Add max_spread_points for it in config/instruments.yaml (symbol check), then restart "
+                             "its engine.", "act"),
+    "instrument_terms_missing": _r("This market's contract and swap terms aren't recorded yet",
+                                   f"{NOTHING}: the engine records them from the MT5 terminal within minutes; if it "
+                                   "lasts, check the symbol is in Market Watch.", "wait"),
+    "instruments_db_unreadable": _r("The file holding this market's terms (state/instruments.db) can't be read",
+                                    "See the Runbook: restore state/instruments.db from the backup or delete it so "
+                                    "the engine rebuilds it; open trades keep closing.", "act"),
+    "swap_unknown": _r("This market's overnight swap can't be priced, so it takes no new trades",
+                       "The broker reports its swap in a unit the engine does not convert; see the Runbook.", "act"),
     "margin_level_floor": _r("Not enough free margin", f"{NOTHING}: wait for open trades to close.", "wait"),
     "min_lot_exceeds_risk": _r("The smallest trade would risk too much for this balance",
                                "Normal on a small account; the Runbook explains the minimum-lot setting.", "wait"),

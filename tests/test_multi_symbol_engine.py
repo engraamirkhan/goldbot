@@ -14,6 +14,7 @@ from goldbot.engine import Engine, EngineConfig, books, magic
 from goldbot.engine.books import BOOK_ATTRS, SYMBOL_STATE, BookSpec, using
 from goldbot.execution.broker import Position, Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.instruments import load_instruments
 from goldbot.specialists.trend import TrendSpecialist
 from goldbot.telegram.approvals import Proposal
 
@@ -185,26 +186,56 @@ def test_account_pass_runs_every_book_serially_gold_first(tmp_path):
     assert eng.book is eng.primary
 
 
-def test_an_allowed_entry_is_booked_on_the_shared_state_before_the_next_symbol_is_checked(tmp_path):
-    """L2's serial gate: `books.check` books every allowed decision (RiskGate.book) on a multi-symbol account only, so a
-    second symbol on the same bar sees the first one's risk; gold alone calls gate.check exactly as before."""
+def test_a_sent_entry_is_booked_on_the_one_shared_state_never_at_the_check(tmp_path):
+    """Trading-safety review of #307, E1/E2: the check runs on the account's one AccountState (no copy) and books
+    nothing; an entry is booked (RiskGate.book) once its order went out, on a multi-symbol account only, and an
+    order not sent (res None) books nothing. Gold alone never books (its refresh after the order stands)."""
     from types import SimpleNamespace
 
     eng = _engine(tmp_path, MultiPaper(equity=10_000))
     assert eng.gate.limits.multi_symbol
-    booked: list[Any] = []
+    seen: list[Any] = []
     allowed = SimpleNamespace(allowed=True)
-    eng.gate.check = lambda *a, **k: allowed                         # type: ignore[method-assign]
-    eng.gate.book = lambda st, intent, d: booked.append((intent, d))   # type: ignore[method-assign]
-    assert books.check(eng, "intent", T0) is allowed and booked == [("intent", allowed)]
+    eng.gate.check = lambda intent, st, now, **k: seen.append(st) or allowed      # type: ignore[method-assign]
+    eng.gate.book = lambda st, intent, d: seen.append(("book", st, intent))        # type: ignore[method-assign]
+    assert books.check(eng, "intent", T0) is allowed and seen == [eng.state]       # the state itself, not a copy
+    books.book(eng, "intent", allowed, None)                                       # nothing sent
+    books.book(eng, "intent", allowed, "res")
+    assert seen[1:] == [("book", eng.state, "intent")]
 
     gold = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path / "g")),
                   MultiPaper(), [], {})
     assert not gold.gate.limits.multi_symbol
-    gold.gate.check = lambda *a, **k: allowed                        # type: ignore[method-assign]
-    gold.gate.book = lambda *a: booked.append(a)                     # type: ignore[method-assign]
-    books.check(gold, "intent", T0)
-    assert len(booked) == 1
+    gold.gate.book = lambda *a: seen.append(a)                                     # type: ignore[method-assign]
+    books.book(gold, "intent", allowed, "res")
+    assert len(seen) == 2
+
+
+def test_a_non_gold_check_uses_the_instruments_own_spread_cap_or_refuses(tmp_path):
+    """E1: "use a per-symbol spread limit": gold's 45 points are not another point size's. No cap configured: refused
+    (`spread_cap_missing`); the account's limits are back to gold's after the check."""
+    reg = load_instruments()
+    spec = SILVER.model_copy(update={"instrument": reg.get("XAGUSD")})
+    eng = _engine(tmp_path, MultiPaper(equity=10_000), specs=(spec,))
+    seen: list[float] = []
+    eng.gate.check = lambda intent, st, now, **k: seen.append(eng.gate.limits.max_spread_points) or "ok"  # type: ignore
+    gold_cap = eng.gate.limits.max_spread_points
+    with using(eng, eng.books["XAGUSD"]):
+        if getattr(spec.instrument, "max_spread_points", None) is None:
+            assert books.check(eng, "intent", T0).reasons == ["spread_cap_missing"] and not seen
+        else:
+            assert books.check(eng, "intent", T0) == "ok" and seen == [spec.instrument.max_spread_points]
+    assert eng.gate.limits.max_spread_points == gold_cap and books.check(eng, "intent", T0) == "ok"
+
+
+def test_live_and_pilot_accounts_stay_xauusd_only(tmp_path):
+    """E7: a live account never opens a non-gold book (the engine refuses) and is never multi_symbol."""
+    with pytest.raises(ValueError, match="demo accounts only"):
+        Engine(EngineConfig(account_id="icm-live", broker_name="icm", mode="live", magic_base=260300,
+                            state_dir=str(tmp_path), instruments=(SILVER,)), MultiPaper(), [], {})
+    live = Engine(EngineConfig(account_id="icm-live", broker_name="icm", mode="live", magic_base=260300,
+                               state_dir=str(tmp_path / "l")), MultiPaper(), [], {})
+    assert list(live.books) == ["XAUUSD"] and not live.gate.limits.multi_symbol
 
 
 def test_only_atr_scaled_random_controls_run_on_another_instrument_each_under_its_own_arm_id():
@@ -239,3 +270,19 @@ def test_a_non_gold_books_rows_are_keyed_by_account_and_store_symbol_never_poole
     store = Store(tmp_path / "data")
     assert len(store.read("ticks", source="icm-probe", symbol="XAGUSD")) == 3
     assert store.read("ticks", source="icm-probe", symbol="XAUUSD").empty
+
+
+def test_an_exposure_the_engine_cannot_value_is_published_as_null_so_the_supervisor_halts(tmp_path):
+    """E4: on exposure_unknown the group_notional key stays, as null (never dropped); entries are refused."""
+    pb = MultiPaper(equity=10_000)
+    eng = _engine(tmp_path, pb)
+    gold = _quote(pb, "XAUUSD", 2000.0)
+    eng._last_tick = gold
+    eng._refresh_account(gold)
+    assert eng.state.group_notional == {} and not eng.state.exposure_unknown
+    pb.account_positions = lambda: (_ for _ in ()).throw(ConnectionError("down"))   # type: ignore[method-assign]
+    eng._refresh_account(gold)
+    assert eng.state.exposure_unknown and "exposure_unknown" in eng.gate.account_reasons(eng.state)
+    eng._write_state()
+    st = json.loads((tmp_path / "engine_icm-probe.json").read_text())
+    assert "group_notional" in st and st["group_notional"] is None and st["exposure_unknown"] is True

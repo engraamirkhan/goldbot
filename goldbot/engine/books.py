@@ -416,13 +416,33 @@ def swap_spec(eng: Engine) -> SwapSpec | None:
 
 # ------------------------------------------------------------------ the serial gate and the instrument's rules
 def check(eng: Engine, intent: Intent, now: pd.Timestamp, **kw: Any) -> GateDecision:
-    """`RiskGate.check` on the shared account state; on a multi-instrument account an allowed entry is booked at once
-    (`RiskGate.book`, plan: "a serial gate so per-account loss limits cover all symbols"), so the next symbol's check
-    on the same bar sees it before the next refresh reads the broker. Gold alone: exactly `gate.check`."""
-    gd = eng.gate.check(intent, eng.state, now, **kw)
-    if multi(eng) and gd.allowed:
+    """`RiskGate.check` on the account's one AccountState (trading-safety review of #307, E1): the account's figures,
+    bookings included, plus the active book's own SYMBOL_STATE, never a copy. On a non-gold book the spread is held to
+    the instrument's own cap (InstrumentSpec `max_spread_points`, lane L1; gold's 45 points mean nothing on another
+    point size): none configured refuses (`spread_cap_missing`). Gold: exactly `gate.check`."""
+    from goldbot.risk.gate import GateDecision
+    book: SymbolBook = eng.__dict__["book"]
+    if book.primary:
+        return eng.gate.check(intent, eng.state, now, **kw)
+    spec = book.spec.instrument if book.spec is not None else None
+    cap = getattr(spec, "max_spread_points", None) if spec is not None else eng.gate.limits.max_spread_points
+    if cap is None:
+        return GateDecision(allowed=False, reasons=["spread_cap_missing"])
+    limits = eng.gate.limits
+    eng.gate.limits = limits.model_copy(update={"max_spread_points": float(cap)})
+    try:
+        return eng.gate.check(intent, eng.state, now, **kw)
+    finally:
+        eng.gate.limits = limits
+
+
+def book(eng: Engine, intent: Intent, gd: GateDecision, res: Any = True) -> None:
+    """E2 (trading-safety review of #307): an entry is booked on the shared state (`RiskGate.book`) right after its
+    order went out (decision time on demo, after the approval-time re-check otherwise; never at proposal time), so
+    the next symbol's check on the same bar counts it until a refresh reads the broker's positions. `res` None: the
+    order was not sent (a duplicate), nothing booked. Gold alone: nothing (its refresh after the order stands)."""
+    if multi(eng) and res is not None:
         eng.gate.book(eng.state, intent, gd)
-    return gd
 
 
 def intent_extra(eng: Engine, terms: dict[str, Any]) -> dict[str, Any]:
@@ -434,7 +454,9 @@ def intent_extra(eng: Engine, terms: dict[str, Any]) -> dict[str, Any]:
     spec = book.spec.instrument if book.spec is not None else None
     if book.primary or spec is None:
         return {}
-    return {**intent_terms(spec), "acct_per_profit": terms.get("acct_per_usd")}
+    from goldbot.risk import Intent
+    return {**intent_terms(spec), "acct_per_profit": terms.get("acct_per_usd"),
+            **({"symbol": eng.cfg.symbol} if "symbol" in Intent.model_fields else {})}   # E5: L2's Intent.symbol
 
 
 def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
@@ -500,11 +522,16 @@ def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
     groups, gold_lots = group_exposure(held, quotes)
     others = _others(eng)
     st.exposure_unknown = groups is None or others is None
+    # E4 (trading-safety review of #307): open_lots and open_notional are the gold group's (lots, USD); every group's
+    # notional is in the deposit currency; unknown is None, published as null so the supervisor halts
+    st.group_notional = groups
     if groups is not None:
-        st.group_notional, st.open_lots = groups, round(gold_lots, 6)
+        st.open_lots = round(gold_lots, 6)
         usd = _usd_fx(eng, now)
         if usd is not None:
-            st.open_notional = sum(groups.values()) / usd       # USD, the published single-figure view
+            st.open_notional = groups.get("gold", 0.0) / usd
+        else:
+            st.exposure_unknown = True
     if others is not None:
         st.other_group_notional = others
 
@@ -573,4 +600,4 @@ def published(eng: Engine) -> dict[str, Any]:
                                              "dq_error", "in_blackout", "weekend")}}
     st = eng.state
     return {"books": out, "exposure_unknown": st.exposure_unknown,
-            **({"group_notional": dict(st.group_notional)} if st.group_notional is not None else {})}
+            "group_notional": None if st.exposure_unknown or st.group_notional is None else dict(st.group_notional)}

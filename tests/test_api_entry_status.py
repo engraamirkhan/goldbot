@@ -388,7 +388,8 @@ def test_every_owner_text_is_for_a_real_or_declared_reason():
     """The other direction: no wording for a reason nothing raises (typos, renamed codes), unless declared."""
     root = Path(__file__).resolve().parents[1]
     src = "".join((root / f).read_text() for f in ("goldbot/risk/gate.py", "goldbot/risk/supervisor.py",
-                                                   "goldbot/engine/runner.py"))
+                                                   "goldbot/engine/runner.py",
+                                                   "goldbot/engine/books.py"))   # non-gold books (lane L3)
     for code in es.REASONS:
         assert f'"{code}"' in src or code in es.API_ONLY | es.FUTURE, code
     assert not (es.API_ONLY & es.FUTURE)

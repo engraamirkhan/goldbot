@@ -873,7 +873,7 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     from goldbot.telegram.approvals import Proposal
     side, price = intent.side, intent.price
     from goldbot.engine import books
-    # the serial gate: on a multi-instrument account an allowed entry is booked on the shared state (engine/books.py)
+    # the serial gate on the account's one state (engine/books.py: the instrument's spread cap on another book)
     gd = books.check(eng, intent, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
                      throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
     # the minimum lot, or a growth arm's allowed lot (`exploration.growth_lots`, growth sprint 2026-11-01): every
@@ -912,11 +912,13 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
         return None
     except Exception as exc:        # as an auto entry (review LOW-C): the row stays "sending", reconciliation resolves it
         eng._auto_paused = (close_ts, "order_raised")
+        books.book(eng, intent, gd)  # it may be at the broker: booked on the shared state (multi-instrument, E2)
         eng.note_tick_error(exc)
         eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
                               "action": f"{action}auto_unconfirmed:{type(exc).__name__}", **applied()})
         return None
     latency_ms = (time.perf_counter() - t0) * 1000.0
+    books.book(eng, intent, gd, res)  # sent: booked before the next symbol is checked (multi-instrument, E2)
     eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
                           "action": action + auto_entry.action(res), **applied()})
     if res is None:
