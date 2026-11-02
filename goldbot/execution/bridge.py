@@ -58,6 +58,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Sequence
 from datetime import date
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1008,8 +1009,15 @@ class RemoteBroker:
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         return self._call("close", position_id, lots)
 
-    def positions(self, magic_prefix: int | None = None) -> list[Position]:
-        return self._call("positions", magic_prefix)
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
+        # symbol None keeps today's wire call byte-identical (the bridge's own symbol)
+        if symbol is None:
+            return self._call("positions", magic_prefix)
+        return self._call("positions", magic_prefix, symbol)
+
+    def ticks_many(self, symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
+        """Not on the wire yet (not in METHODS): lane L4 of the multi-instrument plan adds it with a version bump."""
+        raise NotImplementedError("ticks_many: not served by this bridge version")
 
     def account_positions(self) -> list[Position]:
         return self._call("account_positions")

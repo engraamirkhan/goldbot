@@ -46,8 +46,8 @@ class LaggingPaper(PaperBroker):
             self.hidden.add(res.position_id)
         return res
 
-    def positions(self, magic_prefix: int | None = None) -> list[Position]:
-        return [p for p in super().positions(magic_prefix) if p.position_id not in self.hidden]
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
+        return [p for p in super().positions(magic_prefix, symbol) if p.position_id not in self.hidden]
 
 
 class AmbiguousPaper(PaperBroker):
