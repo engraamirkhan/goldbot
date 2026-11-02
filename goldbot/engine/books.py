@@ -94,6 +94,10 @@ UNVERIFIED = "instrument_unverified"   # a BookSpec.blocked reason: registry ter
 WIND_DOWN = "instrument_wind_down"
 TERMS_READ_S = 60.0          # a book's instruments.db row is read again this often (a corruption is seen within it)
 NOTIONAL_HEADROOM = 0.95     # the account-wide ceiling keeps 5% under the bridge's (prices move between the two)
+# trading-safety review of #310 (M1): a multi-book pass (`account_pass`) runs every book's stop check and close
+# retries first, then starts no further book's refresh and decisions once this many seconds (host clock) have passed;
+# the books left go first on the next pass. Gold alone never takes that path
+PASS_BUDGET_S = 5.0
 
 T = TypeVar("T")
 
@@ -383,6 +387,10 @@ class PassBroker:
             return write
         return attr
 
+    def clear(self) -> None:
+        """Forget the pass's reads: the next one goes to the broker (an order sent around this wrapper, `book`)."""
+        self.__dict__["_memo"].clear()
+
 
 def _pass_broker(broker: Any) -> PassBroker:
     """A PassBroker whose class carries the broker's class flags (`balance_exact`, read on the type: capital_flows)."""
@@ -416,14 +424,15 @@ def _exits_first(eng: Engine, quotes: PassQuotes, symbol: str) -> bool:
     return True
 
 
-def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None) -> bool:
+def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None,
+                 budget_s: float = PASS_BUDGET_S) -> bool:
     """One loop pass over every book: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass) on each book
     in turn, serially, the quotes read once for all (`QuoteFeed`, `PassQuotes`). True when every book's pass was clean.
 
     Trading-safety review of #310 (M1, bridge load): "read account() and account_positions() ONCE per pass and share
     them across books" (`PassBroker`, installed as the engine's broker for the pass); "run every book's _stop_check and
     _retry_closes before any book's refresh or decisions" (`_exits_first`, every book, every pass); "bound each pass
-    with a deadline": once `pass_budget_s` has passed no further book starts its pass, and the books left go first on
+    with a deadline": once `budget_s` (PASS_BUDGET_S) has passed no further book starts its pass, and the books left go first on
     the next one (after gold, whose pass polls the approvals). Gold and the next book in turn always run, so none
     starves however slow the bridge. Exits never wait on the deadline."""
     ok = True
@@ -444,12 +453,12 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
             with using(eng, book):
                 ok = _exits_first(eng, quotes, book.__dict__["cfg"].symbol) and ok
         for i, book in enumerate(order):
-            if i > 1 and time.monotonic() - t0 >= cfg.pass_budget_s:
+            if i > 1 and time.monotonic() - t0 >= budget_s:
                 eng.__dict__["_pass_cursor"] = (start + i - 1) % len(rest)
                 eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
                 if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
                     log.warning("%s: pass budget %.1f s spent after %d of %d books; the rest go first next pass",
-                                cfg.account_id, cfg.pass_budget_s, i, len(order))
+                                cfg.account_id, budget_s, i, len(order))
                 deferred = True
                 break
             with using(eng, book):
@@ -640,8 +649,13 @@ def book(eng: Engine, intent: Intent, gd: GateDecision, res: Any = True) -> None
     """E2 (trading-safety review of #307): an entry is booked on the shared state (`RiskGate.book`) right after its
     order went out (decision time on demo, after the approval-time re-check otherwise; never at proposal time), so
     the next symbol's check on the same bar counts it until a refresh reads the broker's positions. `res` None: the
-    order was not sent (a duplicate), nothing booked. Gold alone: nothing (its refresh after the order stands)."""
+    order was not sent (a duplicate), nothing booked. Gold alone: nothing (its refresh after the order stands).
+    Inside a multi-book pass the pass's shared account and position reads are cleared (`PassBroker.clear`): an entry
+    sent on the bridge's order thread (not through the PassBroker), even one answered with no position id, is never
+    left out of a later book's refresh in the same pass."""
     if multi(eng) and res is not None:
+        if isinstance(eng.broker, PassBroker):
+            eng.broker.clear()
         eng.gate.book(eng.state, intent, gd)
         pid = getattr(res, "position_id", None)
         if pid is not None:               # E2: entries wait until a refresh sees it (`unconfirmed`, `account_exposure`)

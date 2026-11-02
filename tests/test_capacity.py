@@ -108,7 +108,7 @@ def test_a_26_book_pass_reads_the_account_and_its_positions_once_and_stays_under
     took = time.perf_counter() - t0
     names = [n for n, _ in pb.calls]
     assert names.count("account") == 1 and names.count("account_positions") == 1, names
-    assert took < eng.cfg.pass_budget_s + 1.0, f"26-book pass took {took:.1f} s"
+    assert took < books.PASS_BUDGET_S + 1.0, f"26-book pass took {took:.1f} s"
 
 
 def test_every_books_stop_check_runs_before_any_books_refresh_or_decisions(tmp_path):
@@ -131,7 +131,7 @@ def test_every_books_stop_check_runs_before_any_books_refresh_or_decisions(tmp_p
 def test_a_pass_past_its_deadline_defers_the_remaining_books_which_go_first_next_pass(tmp_path):
     """M1: once the pass budget is spent no further book starts its refresh and decisions; the deferred books go
     first on the next pass (after gold), so none starves, while every book's exits ran on every pass."""
-    eng, pb = _bridge_engine(tmp_path, pass_budget_s=0.3)
+    eng, pb = _bridge_engine(tmp_path)
     pb.latency_s = 0.02                             # the same calls, a quicker test
     seen: list[str] = []
 
@@ -139,17 +139,43 @@ def test_a_pass_past_its_deadline_defers_the_remaining_books_which_go_first_next
         seen.append(symbol)
         return engine_pass(e, quotes, symbol)
     feed = books.QuoteFeed(pb)
-    books.account_pass(eng, pb, one, feed)
+    books.account_pass(eng, pb, one, feed, budget_s=0.3)
     first = list(seen)
     assert first[0] == "XAUUSD" and len(first) < N_BOOKS
     seen.clear()
-    books.account_pass(eng, pb, one, feed)
+    books.account_pass(eng, pb, one, feed, budget_s=0.3)
     assert seen[0] == "XAUUSD" and seen[1] == next(s for s in eng.books if s not in first)
     ran = set(first) | set(seen)
     for _ in range(N_BOOKS):
         if len(ran) == N_BOOKS:
             break
         seen.clear()
-        books.account_pass(eng, pb, one, feed)
+        books.account_pass(eng, pb, one, feed, budget_s=0.3)
         ran |= set(seen)
     assert ran == set(eng.books)
+
+
+def test_an_entry_booked_inside_a_pass_clears_the_passs_account_reads(tmp_path):
+    """M1 follow-up: an entry sent on the bridge's order thread goes around the PassBroker; booking it (even with no
+    position id in the reply) clears the pass's account() and account_positions() reads, so the next book's refresh
+    in the same pass reads the broker again and sees the fill."""
+    from goldbot.execution.broker import OrderResult
+    from goldbot.risk import Intent
+    from goldbot.risk.gate import GateDecision
+    eng, pb = _bridge_engine(tmp_path)
+    pb.latency_s = 0.0
+    seen: list[int] = []
+
+    def one(e: Engine, quotes: Any, symbol: str) -> bool:
+        seen.append(len(e.broker.account_positions()))
+        if symbol == "XAUUSD":                      # an entry filled on the order thread, reply without a position id
+            pb._positions[42] = Position(position_id=42, symbol="SYM01", side=1, lots=0.1, open_price=30.0, sl=29.0,
+                                         tp=None, magic=magic.book_base(260500, 1) + 95, comment="",
+                                         open_time_utc=T_PASS, profit=0.0)
+            books.book(e, Intent(agent_id="a", side=1, p=0.5, target_atr=2.0, stop_atr=1.0, atr_usd=0.5,
+                                 cost_atr=0.1, multiplier=1.0, price=2000.0), GateDecision(allowed=True, lots=0.1, risk_amount=1.0),
+                       OrderResult(ok=True, retcode=10009, order_id=1, position_id=None, filled_lots=0.1, price=30.0,
+                                   message=""))
+        return True
+    books.account_pass(eng, pb, one, books.QuoteFeed(pb))
+    assert seen[0] == 0 and seen[1] == 1

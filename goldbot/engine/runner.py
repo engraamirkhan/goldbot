@@ -261,10 +261,6 @@ class EngineConfig(Record):
     # of positive paper shadow since the halt, and is followed by this many days of propose-and-approve
     rearm_shadow_days: int = 10
     rearm_propose_days: int = 30
-    # trading-safety review of #310 (M1): a multi-instrument pass (engine/books.py `account_pass`) runs every book's
-    # stop check and close retries first, then starts no further book's refresh and decisions once this many seconds
-    # (host clock) have passed; the books left go first on the next pass. Gold alone never takes that path
-    pass_budget_s: float = 5.0
     reconcile_every_s: int = 30              # broker reconciliation (tick time), besides every bar close and the start
     orphan_stop_atr: float = 1.5             # an adopted orphan without a stop gets one this many ATR from entry
     # a rejected stop modify is re-sent by reconciliation after reconcile_every_s, doubling per reject up to this
