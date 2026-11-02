@@ -321,6 +321,13 @@ class Account(Record):
     # `observe_symbols`: the store symbols the collector records (goldbot/ops/observe.py), each resolved on the terminal
     kind: Literal["trading", "observe_only"] = "trading"
     observe_symbols: tuple[str, ...] = ()
+    # Multi-instrument demo (plan 2026-11-02, owner: "all listed instruments live on DEMO"): the instruments this
+    # account trades beside its own gold `symbol`, as keys of config/instruments.yaml listed for its broker. "Real-
+    # money/live and observe accounts refuse any non-XAUUSD instrument": refused at load there (`_gold_only_off_demo`).
+    # An instrument's orders carry magics from `instrument_magic_index` (plan: "3_000_000 + account_idx*10_000 +
+    # magic_block*100 + offset"); gold keeps `magic_base`. Adding an instrument is a YAML change: list it here
+    instruments: tuple[str, ...] = ()
+    instrument_magic_index: int | None = Field(None, ge=0, lt=100)
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -523,6 +530,37 @@ class Account(Record):
         if self.weekend_only and any(a.control_share is None for a in self.exploration.arms.values()):
             raise ValueError("a weekend_only account runs random controls only: every arm has a control_share "
                              "(ADR 0062)")
+        return self
+
+    @model_validator(mode="after")
+    def _gold_only_off_demo(self) -> Account:
+        """Plan 2026-11-02: "real-money/live and observe accounts refuse any non-XAUUSD instrument". On a live or
+        observe_only account the own symbol and every observed symbol must be XAUUSD on its broker, and nothing else is
+        listed; on a demo account every listed instrument is a registry key its broker lists, once, never gold (gold
+        is the account's own `symbol`), and the account names its magic index. Refused at load, never skipped."""
+        from goldbot.instruments import GOLD, registry
+        reg = registry()
+        if self.mode != "demo" or self.kind == "observe_only":
+            names = (self.symbol, *self.observe_symbols)
+            if self.instruments or self.instrument_magic_index is not None or any(
+                    (s := reg.resolve(n, self.broker) or reg.resolve(n)) is None or s.key != GOLD for n in names):
+                raise ValueError(f"a {'live' if self.mode != 'demo' else 'observe_only'} account trades and observes "
+                                 f"XAUUSD only (multi-instrument plan 2026-11-02): no instruments, no magic index")
+            return self
+        if not self.instruments:
+            return self
+        if len(set(self.instruments)) != len(self.instruments):
+            raise ValueError("an instrument is listed twice in instruments")
+        for key in self.instruments:
+            if key == GOLD:
+                raise ValueError(f"{GOLD} is the account's own symbol, not one of its instruments")
+            if key not in reg.instruments:
+                raise ValueError(f"instrument {key!r} is not in config/instruments.yaml")
+            if self.broker not in reg.get(key).broker_symbols:
+                raise ValueError(f"instrument {key!r} is not listed for broker {self.broker} in config/instruments.yaml")
+        if self.instrument_magic_index is None:
+            raise ValueError("an account with instruments needs its instrument_magic_index (its magic range, plan "
+                             "2026-11-02)")
         return self
 
     @property
@@ -766,7 +804,9 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                                weekend_only=bool(a.get("weekend_only", False)),
                                weekend_window=WeekendWindow(**(a.get("weekend_window") or {})),
                                kind=a.get("kind", "trading"),
-                               observe_symbols=tuple(a.get("observe_symbols") or ()))
+                               observe_symbols=tuple(a.get("observe_symbols") or ()),
+                               instruments=tuple(a.get("instruments") or ()),
+                               instrument_magic_index=a.get("instrument_magic_index"))
         except ValidationError as exc:
             if a.get("kind") != "observe_only":
                 raise
@@ -780,6 +820,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                          "account in config/accounts.yaml: evidence, costs and weights are keyed by broker, so the "
                          "24/7 symbol would pool with weekday gold. Give the always-open account its own broker key "
                          "(ADR 0062)")
+    if clash := magic_clashes(out.values()):
+        raise ValueError(f"config/accounts.yaml: {clash}")
     hosts =[a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
@@ -811,6 +853,35 @@ def observe_login_clash(acc: Account, accounts: Iterable[Account]) -> str | None
         if o.is_observe_only and o.login is not None and int(o.login) == int(acc.login) and o.server == acc.server:
             return (f"{acc.account_id} resolves to the same MT5 login and server as the observe_only account "
                     f"{o.account_id} (ADR 0063): it is read, never traded; store another login or leave it disabled")
+    return None
+
+
+def instrument_magic_base(acc: Account, instrument: str) -> int:
+    """The first magic of `instrument` on `acc`: XAUUSD keeps `magic_base` (byte-identical), every other instrument
+    `goldbot.instruments.instrument_magic_base` of the account's index. KeyError for an instrument it does not list."""
+    from goldbot.instruments import GOLD, registry
+    from goldbot.instruments import instrument_magic_base as base_of
+    if instrument == GOLD:
+        return acc.magic_base
+    if instrument not in acc.instruments or acc.instrument_magic_index is None:
+        raise KeyError(f"{acc.account_id} does not trade {instrument!r}")
+    return base_of(acc.instrument_magic_index, registry().get(instrument))
+
+
+def magic_clashes(accounts: Iterable[Account]) -> str | None:
+    """Why two accounts' magics could collide, None when none can: two accounts with one `instrument_magic_index`
+    (their instrument ranges would be one), or a gold `magic_base` range reaching the instrument ranges. Positions are
+    reconciled by magic, so a shared number would adopt another account's position."""
+    from goldbot.instruments import MAGIC_INSTRUMENT_BASE
+    seen: dict[int, str] = {}
+    for a in accounts:
+        if a.magic_base + 99 >= MAGIC_INSTRUMENT_BASE:
+            return f"{a.account_id}: magic_base {a.magic_base} reaches the instrument magics ({MAGIC_INSTRUMENT_BASE}+)"
+        i = a.instrument_magic_index
+        if i is not None and i in seen:
+            return f"{seen[i]} and {a.account_id} share instrument_magic_index {i}: their magics would collide"
+        if i is not None:
+            seen[i] = a.account_id
     return None
 
 

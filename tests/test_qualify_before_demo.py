@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from goldbot.engine import cost_probe, exploration
+from goldbot.instruments import registry
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops import health
 from goldbot.research import arm_rules, arms
@@ -24,6 +25,9 @@ from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
 CONTROLS = "S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1C G1C F2C C30C XC15 VS0 WKS0 WKI0 GS1C".split()   # + ADR 0062
+# multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
+INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
+CONTROLS += sorted(INSTRUMENT_CONTROLS)
 # ADR 0061 amendment 2026-11-01 (owner instruction): GS1 runs unqualified as an owner experiment until 2026-11-27
 OWNER_EXPERIMENTS = {"GS1"}
 OWNER_UNTIL = pd.Timestamp("2026-11-27", tz="UTC")

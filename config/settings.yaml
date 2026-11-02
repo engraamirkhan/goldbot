@@ -267,6 +267,8 @@ research:
                                      #   min_lot_exceeds_risk are `unfit` and earn nothing in the overlay
   lot_fit_spread_points: 20          #   the gate floors every stop at stops level + spread: a spread prior (points of 0.01
   lot_fit_stops_level_points: 0      #   USD; the typical London/NY spread) and the broker's stops level (0 at IC Markets)
+  lot_fit_spread_points_by_symbol: {}  # multi-instrument plan 2026-11-02: another instrument's spread prior in ITS points
+                                     #   (config/instruments.yaml `point`), e.g. {EURUSD: 2}; none listed = no prior
   registry: state/research_registry.jsonl
   models_dir: models
   autodisc:                          # ADR 0058 phase 2: nightly bounded G2 search on the explore window (2010-2017) only;

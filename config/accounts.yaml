@@ -210,6 +210,16 @@ accounts:
     server_tz: NY+7   # measured 2026-10-26 (gap week): UTC+3 = NY+7 (ADR 0005)
     symbol: XAUUSD
     magic_base: 260500
+    # Multi-instrument demo (plan 2026-11-02; owner: "all listed instruments live on DEMO in one release"): the 19 IC
+    # Markets instruments this host trades beside its gold, keys of config/instruments.yaml (their terms, magic block,
+    # correlation group and sessions live there). Each instrument's orders carry magics 3_000_000 + index x 10_000 +
+    # magic_block x 100 + offset (index 5 = 3_050_000 ..); gold keeps magic_base. Demo only: the loader refuses any
+    # non-XAUUSD instrument on a live or observe_only account. An instrument trades only once it is `enabled` with its
+    # terms verified by `python -m goldbot.ops.symbol_check icm-probe`; its random controls S0-<key> / I0-<key>
+    # (config/exploration_arms.yaml) are registered here by lane L3. Rollback: drop the list, restart.
+    instruments: [XAGUSD, XPTUSD, XAUEUR, XAUAUD, US500, USTEC, DE40, UK100, JP225, EURUSD, USDJPY, GBPUSD, AUDUSD,
+                  USDCAD, USDCHF, NZDUSD, XTIUSD, XBRUSD, XNGUSD]
+    instrument_magic_index: 5
     # ADR 0037 amendment 4 (owner 2026-10-19: "a dedicated demo account for learning probes", GBP; directors' ruling:
     # "probes must never consume the real trades' allowance"). Off until its credentials and terminal exist; enable it
     # together with the switch-over steps on icm-demo above.
@@ -332,6 +342,10 @@ accounts:
     server_tz: NY+7   # measured 2026-10-26 (US-EU DST gap week): server clock UTC+3 = NY+7, Athens gave UTC+2 (ADR 0005)
     symbol: XAUUSD+   # Vantage Raw ECN gold (contract 100 oz, min 0.01, 2 digits), read from symbol_info 2026-10-26
     magic_base: 260200
+    # Multi-instrument demo (plan 2026-11-02, as icm-probe): the 7 Vantage instruments (bond, copper, grain and soft
+    # CFDs) beside its gold; magics from index 2 (3_020_000 ..). Rollback: drop the list, restart.
+    instruments: [UST10Y, BUND10Y, COPPER, WHEAT, SOYBEAN, SUGAR, COFFEE]
+    instrument_magic_index: 2
     # third learning host (PD 2026-10-26, owner: "all three accounts learn"); broker-separated evidence (loop lane L1,
     # ADR 0043 broker amendment) has merged: Vantage labels, costs, weights and models never pool with ICM's, and the
     # H-60 priors (ICM-cost history) do not seed it (flat prior). ON since 2026-10-26: its 11 registry trials were

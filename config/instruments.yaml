@@ -10,6 +10,13 @@
 # - contract_size / digits / point / min_lot / lot_step / currency_profit / swap_rollover3days: the broker's terms.
 #   `verify: true` = placeholders; lane L1 fills them from the symbol check (goldbot/ops/symbol_check.py) against the
 #   terminal's symbol_info before any instrument is enabled. swap_rollover3days uses MT5 numbering (0 = Sunday).
+#   Source of the non-gold terms (lane L1, 2026-11-02): FALLBACK, the brokers' public contract-specification values
+#   (IC Markets Raw MT5, Vantage Raw ECN), NOT read from a terminal: the read from the brain was refused by the build
+#   sandbox's permission policy. They stay `verify: true` until `python -m goldbot.ops.symbol_check icm-probe` (and
+#   `vantage-demo`) passes on the brain: it compares contract_size, digits, point, min_lot, lot_step, currency_profit
+#   and swap_rollover3days with each terminal and prints the terminal's own terms in these field names; correct any
+#   that differ, then set `verify: false`. Sizing must not read these terms (the RiskGate sizes from the terminal's own
+#   symbol_info and the broker's loss_per_lot); they key the checks, the magic blocks and the research.
 # - correlation_group: the group the RiskGate caps notional by (gold, metals, equity, fx, energy, rates, ags).
 # - leverage_class: fx 30, gold_index 20, commodity 10, bond 5 (goldbot/instruments.py LEVERAGE_BY_CLASS).
 # - session_profile: trading-hours family, checked against the broker's trading_sessions (lane L2).

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from goldbot.instruments import registry
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules, arms
 
@@ -35,6 +36,9 @@ BLOCKED: dict[str, str] = {}
 FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0", "WKI0",   # ADR 0062: weekend lane
                 "GS1", "GS1C",                                                               # growth sprint 2026-11-01
                 "LC4D", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P"}            # learning-class controls (ADR 0072, 2026-11-02)
+# multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
+INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
+FORWARD_ONLY |= INSTRUMENT_CONTROLS
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),

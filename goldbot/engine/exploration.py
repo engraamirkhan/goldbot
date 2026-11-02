@@ -92,7 +92,7 @@ from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe, weekend_lane
-from goldbot.execution.costs import CONTRACT_OZ
+from goldbot.instruments import GOLD, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.research.arms import (
     COST_ARMS,
@@ -436,6 +436,9 @@ class ExplorationRecord(FrozenRecord):
     # a news blackout was in force (an account whose blackout no longer refuses entries trades through it)
     evidence_class: str | None = None
     in_blackout: bool | None = None
+    # multi-instrument demo (plan 2026-11-02): the instrument the order traded (a config/instruments.yaml key); the
+    # cost of record cells by it (research.cost_of_record), never pooled with XAUUSD. JSON body only; older rows XAUUSD
+    symbol: str = "XAUUSD"
 
 
 class TwinRecord(FrozenRecord):
@@ -2029,7 +2032,7 @@ def twin_pairs(state_dir: str, account_id: str | None = None) -> list[TwinPair]:
                 or r.exit_utc is None or r.censored is not False or r.pnl is None or r.commission is None
                 or not r.fx_acct_per_usd or not r.lots):
             continue
-        per_oz = r.fx_acct_per_usd * r.lots * CONTRACT_OZ          # account currency per USD-per-oz
+        per_oz = r.fx_acct_per_usd * r.lots * contract_size(GOLD)         # account currency per USD-per-oz
         cost = tw.exit_spread_usd + r.commission / per_oz - tw.swap_usd
         out.append(TwinPair(twin_id=tw.twin_id, client_order_id=tw.client_order_id, arm_id=tw.arm_id,
                             of_arm_id=tw.of_arm_id, exit_mode=tw.exit_mode,

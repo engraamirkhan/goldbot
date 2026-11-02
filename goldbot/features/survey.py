@@ -23,7 +23,10 @@ Families and warm-up (n bars before the first value):
 - `round_numbers` (family `structure`): for each step $5, $10, $25, $50 the nearest multiple L of the step to the
   close; `round_<s>_dist_atr` = (close - L) / ATR14 (positive above the level, at most step / 2 / ATR in size) and
   `round_<s>_touches` = how many of the last `ctx['round_touch_bars']` (50) bars, bar t included, traded through L
-  (low <= L <= high). Warm-up: ATR 13 bars, touches 49 bars.
+  (low <= L <= high). Warm-up: ATR 13 bars, touches 49 bars. Gold only (multi-instrument plan 2026-11-02: "round-
+  number feature -> ATR-scaled or off for non-gold"): a dollar handle is no level on EURUSD or US500, so for a
+  `ctx['symbol']` outside the gold correlation group (config/instruments.yaml; XAUEUR and XAUAUD are in it) every
+  column is NaN, same names (off: the screen never sees a fake level). No symbol = XAUUSD, as before.
 - `regime_stats` (family `regime`): variance ratio `vr_<q>` = var(q-bar log returns) / (q x var(1-bar log returns))
   over the last `ctx['vr_window']` (120) bars, q = 2, 4, 8 (Lo-MacKinlay's ratio with overlapping q-bar returns;
   > 1 trending, < 1 mean-reverting); `hurst_128` = rolling rescaled-range (R/S) Hurst exponent over the last 128
@@ -42,7 +45,9 @@ Families and warm-up (n bars before the first value):
   cost-to-move filter is a later trial). Cost per unit = the median bar spread over the last 96 bars plus
   `ctx['round_trip_extra']` (0.37 USD/oz: 2 x the 0.15 slippage prior plus 2 x 3.5 USD/lot commission over 100 oz,
   config/settings.yaml `costs`). `em_yz_<h>_cost` = close x YZ20 x sqrt(h) / cost for horizons h of
-  `ctx['em_horizons']` (4, 16, 48 bars); `em_atr_cost` = ATR14 / cost. Warm-up: 95 bars (the spread median).
+  `ctx['em_horizons']` (4, 16, 48 bars); `em_atr_cost` = ATR14 / cost. Warm-up: 95 bars (the spread median). That
+  default is gold's (per oz of a 100 oz lot): a `ctx['symbol']` outside the gold group needs its own
+  `ctx['round_trip_extra']` in its price units, else every column is NaN.
 """
 from __future__ import annotations
 
@@ -52,6 +57,7 @@ import pandas as pd
 from goldbot.features.columns import Columns
 from goldbot.features.registry import FeatureCtx, feature
 from goldbot.features.technical import atr
+from goldbot.instruments import registry
 
 ROUND_STEPS = (5, 10, 25, 50)
 VR_LAGS = (2, 4, 8)
@@ -60,6 +66,23 @@ HURST_CHUNKS = (8, 16, 32, 64)
 JUMP_MAX_AGE = 500
 ROUND_TRIP_EXTRA_USD = 2 * 0.15 + 2 * 3.5 / 100     # slippage prior and commission per side, per oz
 _BLOCK = 20_000                                       # rows per sliding-window block (bounds memory)
+
+
+def _gold_group(ctx: FeatureCtx) -> bool:
+    """True for XAUUSD (no `symbol` in the context: every caller before the multi-instrument plan) and the instruments
+    of the gold correlation group; False for any other or an unknown symbol (off, never gold's dollar numbers)."""
+    sym = ctx.get("symbol")
+    if sym is None:
+        return True
+    spec = registry().resolve(str(sym))
+    return spec is not None and spec.correlation_group == "gold"
+
+
+def _off(df: pd.DataFrame, names: list[str]) -> pd.DataFrame:
+    out = Columns(df.index)
+    for name in names:
+        out[name] = np.full(len(df), np.nan)
+    return out.frame()
 
 
 def _ohlc(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -118,7 +141,10 @@ def f_vol_estimators(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 # --------------------------------------------------------------------------- round numbers
 @feature("round_numbers", "structure", lookback=100)
 def f_round_numbers(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
-    """Distance in ATR to the nearest $5/$10/$25/$50 level and how many of the last N bars traded through it."""
+    """Distance in ATR to the nearest $5/$10/$25/$50 level and how many of the last N bars traded through it (gold
+    group only: NaN for another instrument, module docstring)."""
+    if not _gold_group(ctx):
+        return _off(df, [f"round_{s}_{k}" for s in ROUND_STEPS for k in ("dist_atr", "touches")])
     n_touch = int(ctx.get("round_touch_bars", 50))
     _, h, lo, c = _ohlc(df)
     a = atr(df, 14).to_numpy(dtype=float)
@@ -222,6 +248,8 @@ def f_jumps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 def f_expected_move(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Forecast move over the specialist horizons (YZ20 scaled by sqrt(h)) and ATR14, in round-trip costs."""
     horizons = tuple(int(x) for x in ctx.get("em_horizons", (4, 16, 48)))
+    if "round_trip_extra" not in ctx and not _gold_group(ctx):
+        return _off(df, [*(f"em_yz_{hz}_cost" for hz in horizons), "em_atr_cost"])
     extra = float(ctx.get("round_trip_extra", ROUND_TRIP_EXTRA_USD))
     c = df["close"].to_numpy(dtype=float)
     spread = pd.Series(df["spread"].to_numpy(dtype=float)).rolling(96, min_periods=96).median().to_numpy(dtype=float)

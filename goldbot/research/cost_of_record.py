@@ -13,7 +13,7 @@ Definitions (every one in USD per oz, adverse positive):
 * spread = ask - bid at send; entry slip = side x (fill - requested); exit slip = side x (requested - filled) on the
   store's `exit_fills` legs of exploration agents; a broker with no exit leg in a session reads its own scheduled
   probes (`cost_probes`, purpose cost_measurement): side x (exit touch - exit price) (ADR 0043: never another broker);
-* commission = |booked commission| / (lots x 100 x account-per-USD rate), on the window's closes;
+* commission = |booked commission| / (lots x contract x account-per-USD rate), on the window's closes (XAUUSD: 100 oz);
 * round trip = spread + max(0, entry slip) + max(0, exit slip) + commission, pooled first and floored after;
 * overshoot = side x ((requested - side x stop_usd) - exit price) on stop exits at the INITIAL stop: exits of an arm
   that trails its stop (`TRAILING_ARM_PREFIXES`) and exits more than `MOVED_STOP_USD` better than the initial stop
@@ -23,6 +23,10 @@ Definitions (every one in USD per oz, adverse positive):
 * intervals: 5th-95th percentile of a bootstrap that resamples whole minutes (fills on the same bar are correlated):
   entries cluster on their send minute, closes, stop exits and exit legs on their exit minute; spread and entry slip
   share their resample.
+* per instrument (multi-instrument plan 2026-11-02: "costs per (account, symbol)", never pooled with XAUUSD): a fill's
+  instrument is its ledger row's `symbol` (a row before it is XAUUSD) and an exit leg's the store's `symbol` column when
+  it has one; XAUUSD cells keep their broker key (`brk`), another instrument's are `brk:<instrument>`, in units of its
+  own price (USD per oz reads "profit currency per unit" there) and its own contract.
 """
 from __future__ import annotations
 
@@ -39,6 +43,7 @@ import pandas as pd
 
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.timeutil import epoch_ns
+from goldbot.instruments import GOLD, contract_size, registry
 
 SESSIONS = tuple(DEFAULT_SESSIONS.sessions_local)
 ALL = "all"
@@ -51,10 +56,34 @@ MIN_STOPS_FOR_TRUST = 20
 RESAMPLES = 4000
 SEED = 20261031
 MINUTE_NS = 60_000_000_000
-COLUMNS = {"entries": ["broker", "session", "minute", "spread", "slip"],
-           "closes": ["broker", "session", "minute", "comm", "stop", "over", "moved"],
-           "legs": ["broker", "session", "minute", "xslip"],
-           "probes": ["broker", "session", "minute", "xslip"]}
+COLUMNS = {"entries": ["broker", "symbol", "session", "minute", "spread", "slip"],
+           "closes": ["broker", "symbol", "session", "minute", "comm", "stop", "over", "moved"],
+           "legs": ["broker", "symbol", "session", "minute", "xslip"],
+           "probes": ["broker", "symbol", "session", "minute", "xslip"]}
+
+
+def cell_key(broker: str, symbol: str) -> str:
+    """The table's key of one broker's cells of one instrument: the broker for XAUUSD (unchanged), else broker:key."""
+    return broker if symbol == GOLD else f"{broker}:{symbol}"
+
+
+def _contract(symbol: str) -> float:
+    """The instrument's units per lot; NaN for one the registry no longer lists (its commission is then unread, never
+    spread over another instrument's contract, and the build goes on)."""
+    try:
+        return contract_size(symbol)
+    except KeyError:
+        return float("nan")
+
+
+def _leg_symbols(df: pd.DataFrame, broker: str) -> list[str]:
+    """Each exit leg's instrument key: the store's `symbol` column resolved on the broker, XAUUSD without one; a name
+    the registry does not know stays as it is (its own cell, never another instrument's)."""
+    if "symbol" not in df.columns:
+        return [GOLD] * len(df)
+    reg = registry()
+    return [(spec.key if (spec := reg.resolve(str(x), broker) or reg.resolve(str(x))) is not None else str(x))
+            for x in df["symbol"]]
 
 
 @dataclass(frozen=True)
@@ -100,14 +129,16 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
     closed = [t for t in LEDGER.select(conn, f"account_id IN ({marks}) AND closed = 1 AND exit_ns >= ? AND exit_ns < ?",
                                        (*hosts, a, b))
               if t.fill_price is not None and t.client_order_id not in void]
-    entries = _frame({"broker": [hosts[t.account_id] for t in sent], "session": _labels([t.sent_utc for t in sent]),
+    entries = _frame({"broker": [hosts[t.account_id] for t in sent], "symbol": [t.symbol for t in sent],
+                      "session": _labels([t.sent_utc for t in sent]),
                       "minute": _minute([t.sent_utc for t in sent]),
                       "spread": [np.nan if t.spread_usd is None else float(t.spread_usd) for t in sent],
                       "slip": [t.side * (float(t.fill_price or 0.0) - float(t.requested_price or 0.0)) for t in sent]},
                      "entries")
     comm, over, moved = [], [], []
     for t in closed:
-        per_oz = t.lots * 100.0 * float(t.fx_acct_per_usd) if t.fx_acct_per_usd and t.lots > 0 else np.nan
+        contract = _contract(t.symbol)
+        per_oz = t.lots * contract * float(t.fx_acct_per_usd) if t.fx_acct_per_usd and t.lots > 0 else np.nan
         comm.append(abs(float(t.commission)) / per_oz if t.commission is not None else np.nan)
         o, m = np.nan, False
         if t.exit_reason in STOP_EXITS and t.requested_price is not None and t.exit_price is not None and t.stop_usd:
@@ -116,7 +147,8 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
         over.append(np.nan if m else o)
         moved.append(m)
     ex_ts = [t.exit_utc or t.sent_utc for t in closed]
-    closes = _frame({"broker": [hosts[t.account_id] for t in closed], "session": _labels(ex_ts), "minute": _minute(ex_ts),
+    closes = _frame({"broker": [hosts[t.account_id] for t in closed], "symbol": [t.symbol for t in closed],
+                     "session": _labels(ex_ts), "minute": _minute(ex_ts),
                      "comm": comm, "stop": [t.exit_reason in STOP_EXITS for t in closed], "over": over, "moved": moved},
                     "closes")
     leg_rows: dict[str, list[Any]] = {k: [] for k in COLUMNS["legs"]}
@@ -132,6 +164,7 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
         df = df[((ts >= lo) & (ts < hi)).to_numpy()]
         stamps = list(pd.to_datetime(df["ts_utc"], utc=True))
         leg_rows["broker"] += [hosts[host]] * len(df)
+        leg_rows["symbol"] += _leg_symbols(df, hosts[host])
         leg_rows["session"] += _labels(stamps)
         leg_rows["minute"] += _minute(stamps)
         leg_rows["xslip"] += list(df["side"].to_numpy(dtype=float) * (df["requested"].to_numpy(dtype=float)
@@ -140,7 +173,8 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
                                                   (*hosts, a, b))
               if p.purpose == "cost_measurement" and p.client_order_id not in void and p.exit_price is not None
               and p.exit_bid is not None and p.exit_ask is not None]
-    pr = _frame({"broker": [hosts[p.account_id] for p in probes], "session": _labels([p.sent_utc for p in probes]),
+    pr = _frame({"broker": [hosts[p.account_id] for p in probes], "symbol": [GOLD] * len(probes),   # gold probes only
+                 "session": _labels([p.sent_utc for p in probes]),
                  "minute": _minute([p.sent_utc for p in probes]),
                  "xslip": [p.side * ((float(p.exit_bid or 0.0) if p.side > 0 else float(p.exit_ask or 0.0)) - float(p.exit_price or 0.0))
                            for p in probes]}, "probes")
@@ -174,9 +208,10 @@ def _stat(values: pd.Series, boot: np.ndarray) -> dict[str, Any]:
             "p90": float(np.percentile(v, 90)) if len(v) else 0.0, "ci90": (lo, hi)}
 
 
-def _cell(fr: Frames, broker: str, session: str, rng: np.random.Generator, resamples: int) -> dict[str, Any] | None:
+def _cell(fr: Frames, broker: str, session: str, rng: np.random.Generator, resamples: int,
+          symbol: str = GOLD) -> dict[str, Any] | None:
     def sel(df: pd.DataFrame) -> pd.DataFrame:
-        m = df["broker"] == broker
+        m = (df["broker"] == broker) & (df["symbol"] == symbol)
         return df[m if session == ALL else m & (df["session"] == session)]
     e, c, x, p = sel(fr.entries), sel(fr.closes), sel(fr.legs), sel(fr.probes)
     if e.empty:
@@ -215,17 +250,28 @@ def _cell(fr: Frames, broker: str, session: str, rng: np.random.Generator, resam
             "overshoot_usd": ov["mean"], "overshoot_ci90": ov["ci90"], "overshoot_trusted": not exact}
 
 
+def _gold_by_default(fr: Frames) -> Frames:
+    """Frames built without a `symbol` column (before the multi-instrument plan) are XAUUSD's."""
+    def tag(df: pd.DataFrame) -> pd.DataFrame:
+        return df if "symbol" in df.columns else df.assign(symbol=GOLD)
+    return Frames(entries=tag(fr.entries), closes=tag(fr.closes), legs=tag(fr.legs), probes=tag(fr.probes),
+                  n_void=fr.n_void)
+
+
 def build_table(fr: Frames, *, version: str, window_utc: tuple[str, str], seed: int = SEED,
                 resamples: int = RESAMPLES) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
+    fr = _gold_by_default(fr)
     cells: dict[str, dict[str, Any]] = {}
-    for broker in sorted(set(fr.entries["broker"])):
-        row = {s: c for s in (*SESSIONS, ALL) if (c := _cell(fr, broker, s, rng, resamples)) is not None}
+    pairs = sorted(set(zip(fr.entries["broker"], fr.entries["symbol"], strict=True)),
+                   key=lambda bs: (bs[1] != GOLD, bs[0], bs[1]))    # every gold cell first: its draws as before
+    for broker, symbol in pairs:
+        row = {s: c for s in (*SESSIONS, ALL) if (c := _cell(fr, broker, s, rng, resamples, symbol)) is not None}
         if ALL in row:
             # stops filled at the stop price are the broker's demo server, not a session: the pooled cell decides
             for c in row.values():
                 c["overshoot_trusted"] = row[ALL]["overshoot_trusted"]
-            cells[broker] = row
+            cells[cell_key(broker, symbol)] = row
     return {"version": version, "window_utc": list(window_utc),
             "source": f"exploration fills (aux.db exploration_trades), market orders, evidence exclusions removed "
                       f"({fr.n_void} fills)",
