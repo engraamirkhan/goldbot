@@ -402,6 +402,9 @@ def main() -> int:
                          "from --existing (required)")
     ap.add_argument("--pause", type=float, default=0.0,
                     help="seconds to wait before each archive request (polite local backfill; default 0)")
+    ap.add_argument("--checkpoint-dir", default=None,
+                    help="resumable run: each closed month is saved here once built and reused by the next run "
+                         "(local backfill; never a published location)")
     ap.add_argument("--no-node-fallback", action="store_true",
                     help="read the bi5 archive only; never fall back to dukascopy-node (npx)")
     args = ap.parse_args()
@@ -458,7 +461,22 @@ def main() -> int:
             print(f"{k}: kept {len(kept):,} bars", flush=True)
             continue
         first = max(start, inst.history_start) if inst.history_start is not None else start
-        b = month_bars(first, end, Path(args.tmp), inst=inst)
+        ckpt = Path(args.checkpoint_dir) / f"{args.symbol}_{k}.parquet" if args.checkpoint_dir else None
+        closed = (dt.date(start.year + 1, 1, 1) if start.month == 12 else dt.date(start.year, start.month + 1, 1)) \
+            <= dt.date.today()
+        b: pd.DataFrame | None
+        if ckpt is not None and ckpt.exists():
+            # resumable local backfill: a closed month built by an earlier, interrupted run is not downloaded again
+            b = pd.read_parquet(ckpt)
+            b["ts_utc"] = pd.to_datetime(b["ts_utc"], utc=True)
+            b["visible_at"] = pd.to_datetime(b["visible_at"], utc=True)
+            print(f"  {k}: resumed {len(b):,} bars from checkpoint {ckpt}", flush=True)
+        else:
+            b = month_bars(first, end, Path(args.tmp), inst=inst)
+            if ckpt is not None and b is not None and closed:
+                ckpt.parent.mkdir(parents=True, exist_ok=True)
+                b.to_parquet(f"{ckpt}.tmp", compression="zstd", index=False)
+                os.replace(f"{ckpt}.tmp", ckpt)
         download_failed = b is None
         if existing is not None:
             # never publish a day with fewer bars than before: a failed download keeps the published month, a

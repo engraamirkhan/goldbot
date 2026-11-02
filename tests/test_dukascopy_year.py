@@ -650,6 +650,31 @@ def test_http_get_waits_the_pause_before_each_request(monkeypatch):
     assert slept == [0.5, 0.5]
 
 
+def test_checkpoint_dir_resumes_built_months_without_downloading_them_again(monkeypatch, tmp_path):
+    bars = {"2008-09": _full_bars(pd.date_range("2008-09-15 10:00", periods=300, freq="1min", tz="UTC"), 780.0),
+            "2008-10": _full_bars(pd.date_range("2008-10-15 10:00", periods=300, freq="1min", tz="UTC"), 790.0)}
+    calls: list[str] = []
+
+    def fake_month_bars(start, end, tmp, **kw):
+        calls.append(f"{start:%Y-%m}")
+        return bars[f"{start:%Y-%m}"]
+
+    monkeypatch.setattr(dy, "month_bars", fake_month_bars)
+    monkeypatch.setattr(dy, "month_range", lambda year, today=None: iter([(dt.date(2008, 9, 1), dt.date(2008, 10, 1)),
+                                                                          (dt.date(2008, 10, 1), dt.date(2008, 11, 1))]))
+    ck = tmp_path / "ck"
+    out = tmp_path / "out.parquet"
+    _argv(monkeypatch, tmp_path, "2008", "--out", str(out), "--checkpoint-dir", str(ck))
+    assert dy.main() == 0 and calls == ["2008-09", "2008-10"]
+    assert sorted(p.name for p in ck.glob("*.parquet")) == ["xauusd_2008-09.parquet", "xauusd_2008-10.parquet"]
+    first = pd.read_parquet(out)
+    (ck / "xauusd_2008-10.parquet").unlink()            # as if the run died after September
+    out.unlink()
+    _argv(monkeypatch, tmp_path, "2008", "--out", str(out), "--checkpoint-dir", str(ck))
+    assert dy.main() == 0 and calls == ["2008-09", "2008-10", "2008-10"]   # September came from the checkpoint
+    pd.testing.assert_frame_equal(pd.read_parquet(out), first)
+
+
 def test_no_node_fallback_never_calls_dukascopy_node(monkeypatch, tmp_path):
     monkeypatch.setattr(dy, "_fetch_datafeed", lambda *a, **k: (None, "HTTP 503"))
     called: list[int] = []
