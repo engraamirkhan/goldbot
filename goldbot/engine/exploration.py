@@ -1861,7 +1861,7 @@ def _trail_runners(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_t
                                 risk / K.BOX_STOP_ATR)
         if tr.side * (cand - (entry - tr.side * risk)) <= 1e-9:
             continue                                    # not armed (below +1 R): the entry stop stands
-        new = round(cand, 2)
+        new = round(cand, eng.cfg.price_digits)         # the instrument's digits, never the cent
         sl = new if tr.sl is None or tr.side * (new - tr.sl) > 1e-9 else tr.sl      # a ratchet: never looser
         eng._tighten_stop(pid, tr, pos, sl)
     eng._save_orders()
@@ -2067,7 +2067,10 @@ def _observe(eng: Engine, db: Database, r: ExplorationRecord, filled: pd.Timesta
     if r.fill_price is None or r.exit_price is None or r.exit_utc is None or not r.lots:
         return
     try:
-        oz = r.lots * eng._contract_size()
+        contract = eng._contract_size()
+        if contract is None:                  # never a guessed 100 oz (multi-instrument plan): logged below
+            raise ValueError("contract size unknown")
+        oz = r.lots * contract
         paid = (r.commission or 0.0) + max(0.0, -(r.swap or 0.0))
         entry = filled or r.sent_utc
         record_fill(db, candidate_id=r.client_order_id, entry_utc=min(entry, r.exit_utc), exit_utc=r.exit_utc,

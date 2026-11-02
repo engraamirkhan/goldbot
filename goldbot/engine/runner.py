@@ -84,7 +84,6 @@ from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES:
 )
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
 from goldbot.execution.costs import CostTable
-from goldbot.execution.deals import exit_summary
 from goldbot.execution.not_placed import bridge_refused, not_placed, notice_text, refusal_code
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
@@ -202,6 +201,12 @@ class EngineConfig(Record):
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
     release_symbol: str = "XAUUSD"   # the release bars' store symbol (canonical; orders use `symbol`; services.engine)
+    # the instrument's terms (goldbot/instruments.py InstrumentSpec, checked against the terminal at start): every price
+    # sent is rounded to `price_digits` (plan: "sl/tp round(...,2) -> round to info.digits"), spreads are in `point`s;
+    # `contract_size` is the closed-trade record's fallback only (exposure never assumes it: `_contract_size`)
+    point: float = Field(0.01, gt=0)
+    price_digits: int = Field(2, ge=0, le=8)
+    contract_size: float = Field(100.0, gt=0)
     decision_tf: str = "15m"
     magic_base: int = 260100
     state_dir: str = "state"
@@ -964,17 +969,19 @@ class Engine:
             self._contract = size
         return info
 
-    def _contract_size(self) -> float:
-        """Contract size for open notional (review LOW-2): the last one the terminal reported, read once if none yet;
-        100 oz (the design's XAUUSD contract) only while the terminal has never answered."""
-        if self._contract is None and not self._contract_tried:
-            self._contract_tried = True
+    def _contract_size(self) -> float | None:
+        """Contract size for open notional and open risk (review LOW-2): the last one the terminal reported, asked
+        again while it has never answered. Unknown is None, never 100 oz (multi-instrument plan: "runner.py:971
+        fallback must REFUSE"): `_refresh_account` then refuses entries (`contract_unknown`); no exit reads it."""
+        if self._contract is None:
             try:
                 self._symbol_info()
             except Exception as exc:
-                log.warning("symbol_info unavailable for the contract size (%s: %s); 100 oz until it answers",
-                            type(exc).__name__, exc)
-        return self._contract if self._contract is not None else 100.0
+                if not self._contract_tried:      # logged once; asked again on every refresh until it answers
+                    self._contract_tried = True
+                    log.warning("symbol_info unavailable for the contract size (%s: %s); entries refused until it "
+                                "answers", type(exc).__name__, exc)
+        return self._contract
 
     def _usd_to_account(self, side: int, price: float, distance: float, cycle: pd.Timestamp | None = None) -> float | None:
         """Account currency per USD of XAUUSD P&L from the broker's loss on one lot over `distance` (BACKLOG 28):
@@ -1064,7 +1071,7 @@ class Engine:
                 if p.sl is not None and math.isfinite(p.sl) and p.side * (px - p.sl) > 0:
                     fx = self._open_risk_fx(p.side, px, p.side * (px - p.sl), tick.ts_utc)
                 risk = open_risk.remaining_stop_risk(side=p.side, lots=p.lots, sl=p.sl, bid=tick.bid, ask=tick.ask,
-                                                     contract=self._contract_size(), fx=fx)
+                                                     contract=self._contract_size() or math.nan, fx=fx)
             rows.append({"position_id": p.position_id, "side": p.side, "lots": p.lots, "sl": p.sl,
                          "risk": round(risk, 2) if risk is not None else None})
             total = None if total is None or risk is None else total + risk
@@ -1326,7 +1333,8 @@ class Engine:
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
                            timeframe=agent.timeframe, family=agent.family,
                            model_version=self.live_versions.get(agent.agent_id), **self._entry_limits(prop, gd))
-        oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
+        oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, self.cfg.price_digits),
+                         tp=round(target, self.cfg.price_digits), magic=magic,
                          comment=prop.proposal_id[-MT5_COMMENT_MAX:])
         # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
         self._orders_record(prop.proposal_id, agent_id=agent.agent_id, side=prop.side, magic=magic, lots=lots,
@@ -1474,8 +1482,8 @@ class Engine:
             best = fav if tr.side * (fav - tr.entry) > 0 else tr.entry
             trail = policy.trail_stop(tr.side, tr.entry, tr.atr_usd, best)
             sl = tr.sl
-            if trail is not None and (sl is None or tr.side * (round(trail, 2) - sl) > 1e-9):
-                sl = round(trail, 2)                      # never loosens
+            if trail is not None and (sl is None or tr.side * (round(trail, self.cfg.price_digits) - sl) > 1e-9):
+                sl = round(trail, self.cfg.price_digits)   # never loosens
             if sl is None or trail is None:
                 continue
             self._tighten_stop(pid, tr, pos, sl)
@@ -1770,7 +1778,7 @@ class Engine:
                 if a is None:
                     self.decisions.append({"ts": time.time(), "action": "orphan_stop_pending", "position": p.position_id})
                     continue                  # no ATR yet (no bars): retried on the next pass
-                tr.sl = round(p.open_price - p.side * self.cfg.orphan_stop_atr * a, 2)
+                tr.sl = round(p.open_price - p.side * self.cfg.orphan_stop_atr * a, self.cfg.price_digits)
                 res = self.broker.modify(p.position_id, tr.sl, p.tp)
                 self.decisions.append({"ts": time.time(), "action": "orphan_stop", "position": p.position_id, "sl": tr.sl,
                                        "ok": res.ok, "retcode": res.retcode})
@@ -1911,8 +1919,9 @@ class Engine:
                 st.open_risk, self._open_risk_rows = None, []
         else:                                   # unknown book: unknown open risk (entries are blocked anyway)
             st.open_risk, self._open_risk_rows, self._position_ids = None, [], None
-        st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract
-        st.spread_points = (tick.ask - tick.bid) / 0.01
+        contract = self._contract_size()        # unknown: no notional assumed, entries refused below (contract_unknown)
+        st.open_notional = st.open_lots * (contract or 0.0) * (tick.bid + tick.ask) / 2   # USD, terminal contract
+        st.spread_points = (tick.ask - tick.bid) / self.cfg.point
         now = self._now(tick)
         # signed: a tick stamped AFTER the host clock (wrong server_tz, broker or host clock) must not look fresh, so
         # staleness uses the distance either way and the lead itself is an entry block (`tick_from_future`)
@@ -1928,7 +1937,7 @@ class Engine:
             log.warning("session table unusable (%s): entries blocked as market_closed", type(exc).__name__)
             stale, closed = False, True
         st.dq_error = stale or bool(self._dq_errors() or self._dq_blocking()) or positions is None \
-            or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
+            or self._book_unreadable() > 0 or contract is None      # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
         if self.bars_1m.empty:
             st.stale_bars = True
@@ -2406,92 +2415,20 @@ class Engine:
 
     # ------------------------------------------------------------------ closed-trade record (phase gates P7, stop rule P6)
     def _sweep_closed(self, live: set[int]) -> None:
-        """Open trades the broker no longer lists closed at the broker (stop, target, stop-out, manual): each is
-        recorded once its exit deal is seen and then forgotten. When the broker's deal history carries positions but
-        shows no exit, or is empty (a positions() reply that dropped the trade, or a deal not synced yet), the trade is
-        kept as it is and asked again at the next bar close, `close_confirm_checks` times, then recorded from what the
-        engine knows. An unreadable deal history (the read raised: MT5 history_deals_get returned None) never confirms
-        a close: the trade is kept, uncounted, until the history can be read. Only called with a positions() reply
-        that was read successfully, so an unreadable book never records or forgets a trade. A trade that reappears
-        simply carries on with its stop and policy."""
-        self._unconfirmed = {k: v for k, v in self._unconfirmed.items() if k in self.open and k not in live}
-        missing = [k for k in self.open if k not in live]
-        if not missing:
-            self._read_fails["deals"] = 0       # no deal read outstanding: a past failure no longer blocks entries
-        for pid in missing:
-            tr = self.open[pid]
-            try:
-                summary, _ = self._exit_deals(pid, tr)
-            except Exception:                   # counted by _read_deals (positions_unreadable); asked again next pass
-                continue
-            tries = self._unconfirmed.get(pid, 0) + 1
-            if summary is None and tries < self.cfg.close_confirm_checks:
-                if tries == 1:
-                    self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "close_unconfirmed",
-                                           "position": pid})
-                self._unconfirmed[pid] = tries
-                continue
-            self._unconfirmed.pop(pid, None)
-            del self.open[pid]
-            self._note_closed(pid, tr, "broker_close")
+        """Moved verbatim to engine/closed_record.py (`sweep_closed`)."""
+        closed_record.sweep_closed(self, live)
 
     def _note_closed(self, pid: int, tr: OpenTrade, reason: str, res: OrderResult | None = None) -> None:
-        """Queue the record of a fully closed position. Nothing is read or written here, so an exit never waits on the
-        record: the queue is written after the tick's exits (`on_tick`) and before the open-trade table is saved."""
-        if pid in self._recorded or any(c.position_id == pid for c in self._closes):
-            return
-        px = res.price if res is not None and res.ok else None
-        at = self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
-        self._closes.append(PendingClose(position_id=pid, trade=tr, reason=reason, price=px, at=at))
+        """Moved verbatim to engine/closed_record.py (`note_closed`)."""
+        closed_record.note_closed(self, pid, tr, reason, res)
 
     def _flush_closed(self) -> None:
-        """Write the queued records. A failure is logged and journalled (`closed_trade_record_failed`) and never
-        raised: the exit has already happened and nothing after it may stop. The record stays queued (and in the
-        open-trade table file, so a restart keeps it) and is retried every reconcile_every_s of tick time,
-        `closed_record_retries` attempts in all; then it is reported lost (`closed_trade_record_lost` in the journal,
-        `closed_records_lost` in the engine state, which fails the engine's health check and alerts the owner)."""
-        if not self._closes:
-            self._flush_exit_fills()
-            return
-        now = self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
-        pending, self._closes = self._closes, []
-        keep: list[PendingClose] = []
-        for c in pending:
-            if c.next_try is not None and (self._last_tick is None or now < c.next_try):
-                keep.append(c)                  # a retry waits for its time on the tick clock
-                continue
-            try:
-                self._record_closed(c.position_id, c.trade, c.reason, c.price, c.at)
-            except Exception as e:
-                c.tries += 1
-                lost = c.tries >= self.cfg.closed_record_retries
-                log.exception("closed trade not recorded for position %s (%s), attempt %d", c.position_id, c.reason,
-                              c.tries)
-                self.decisions.append({"ts": time.time(), "agent": c.trade.agent_id, "action": "closed_trade_record_failed",
-                                       "position": c.position_id, "reason": c.reason, "tries": c.tries,
-                                       "error": repr(e)})
-                if lost:
-                    log.error("closed trade record LOST for position %s after %d attempts: %s", c.position_id,
-                              c.tries, c.model_dump_json())
-                    self.decisions.append({"ts": time.time(), "agent": c.trade.agent_id,
-                                           "action": "closed_trade_record_lost", "position": c.position_id,
-                                           "reason": c.reason, "pending": c.model_dump(mode="json")})
-                    self._records_lost.append(c.position_id)
-                    self._throttle_lost.append(c)
-                else:
-                    c.next_try = now + pd.Timedelta(seconds=self.cfg.reconcile_every_s)
-                    keep.append(c)
-        self._closes = keep + self._closes
-        self._flush_exit_fills()             # after the records: a broker stop or target leg is added by its record
+        """Moved verbatim to engine/closed_record.py (`flush_closed`)."""
+        closed_record.flush_closed(self)
 
     def _exit_deals(self, pid: int, tr: OpenTrade) -> tuple[dict | None, bool]:
-        """(summary of the position's deals (`deals.exit_summary`: None when no exit deal is there), whether the
-        broker's deal history identifies positions at all). A read that fails raises (`_read_deals`)."""
-        starts = [x for x in (tr.opened_utc, tr.entry_bar_ts) if x is not None]
-        d = self._read_deals(min(starts) - pd.Timedelta(days=1))
-        if not isinstance(d, pd.DataFrame) or "position_id" not in d.columns:
-            return None, False
-        return exit_summary(d, pid), True
+        """Moved verbatim to engine/closed_record.py (`exit_deals`)."""
+        return closed_record.exit_deals(self, pid, tr)
 
     def _record_closed(self, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> None:
         """One ClosedTrade for a fully closed position (engine/closed_record.py `record_closed`)."""
@@ -3070,7 +3007,8 @@ class Engine:
             "approval_mode": self.cfg.approval_mode, "ask_reason": auto_entry.published_reason(self), "blackout": self._blackout_event,
             "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering,
             "dq_checks": sorted({e.check for e in self._dq_errors()} | self._dq_blocking()
-                                | ({"positions_unreadable"} if self._book_unreadable() else set())),
+                                | ({"positions_unreadable"} if self._book_unreadable() else set())
+                                | ({"contract_unknown"} if self._contract is None and self._contract_tried else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
             "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
