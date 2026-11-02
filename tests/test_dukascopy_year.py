@@ -187,7 +187,7 @@ def test_parse_months_normalises_a_valid_list():
     "2024-1", "24-01", "2024-13", "2024-00", "2024/01", "2024-01-05", "202401",
     "2024-01;rm -rf /", "2024-01 2024-02", "2024-01\n", "2024-01\n2024-02", "$(id)", "2024-01`id`",
     "２０２４-01",      # full-width digits: \d would accept them, [0-9] does not
-    "2009-12",                           # before the first year Dukascopy is pulled for
+    "2002-12",                           # before the first year Dukascopy is pulled for (FIRST_YEAR 2003)
     "2026-11", "2027-01",                # not started yet (no completed day to download)
 ])
 def test_parse_months_rejects_anything_but_yyyy_mm(bad):
@@ -626,3 +626,64 @@ def test_plan_step_refuses_silver_without_a_private_repository(tmp_path):
     assert got["years"] == "[2011]" and got["symbol"] == "xagusd"
     rc, got, log = _run_plan(tmp_path, SYMBOL="btcusd")
     assert rc != 0 and "years" not in got
+
+
+# --- local pre-2010 backfill (ADR research-windows-w2): polite pause, archive only -------------------------------
+def test_http_get_waits_the_pause_before_each_request(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(dy.time, "sleep", slept.append)
+    monkeypatch.setattr(dy, "REQUEST_PAUSE_S", 0.5)
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b""
+
+    monkeypatch.setattr(dy.urllib.request, "urlopen", lambda req, timeout: _Resp())
+    dy._http_get("https://datafeed.dukascopy.com/x")
+    dy._http_get("https://datafeed.dukascopy.com/y")
+    assert slept == [0.5, 0.5]
+
+
+def test_checkpoint_dir_resumes_built_months_without_downloading_them_again(monkeypatch, tmp_path):
+    bars = {"2008-09": _full_bars(pd.date_range("2008-09-15 10:00", periods=300, freq="1min", tz="UTC"), 780.0),
+            "2008-10": _full_bars(pd.date_range("2008-10-15 10:00", periods=300, freq="1min", tz="UTC"), 790.0)}
+    calls: list[str] = []
+
+    def fake_month_bars(start, end, tmp, **kw):
+        calls.append(f"{start:%Y-%m}")
+        return bars[f"{start:%Y-%m}"]
+
+    monkeypatch.setattr(dy, "month_bars", fake_month_bars)
+    monkeypatch.setattr(dy, "month_range", lambda year, today=None: iter([(dt.date(2008, 9, 1), dt.date(2008, 10, 1)),
+                                                                          (dt.date(2008, 10, 1), dt.date(2008, 11, 1))]))
+    ck = tmp_path / "ck"
+    out = tmp_path / "out.parquet"
+    _argv(monkeypatch, tmp_path, "2008", "--out", str(out), "--checkpoint-dir", str(ck))
+    assert dy.main() == 0 and calls == ["2008-09", "2008-10"]
+    assert sorted(p.name for p in ck.glob("*.parquet")) == ["xauusd_2008-09.parquet", "xauusd_2008-10.parquet"]
+    first = pd.read_parquet(out)
+    (ck / "xauusd_2008-10.parquet").unlink()            # as if the run died after September
+    out.unlink()
+    _argv(monkeypatch, tmp_path, "2008", "--out", str(out), "--checkpoint-dir", str(ck))
+    assert dy.main() == 0 and calls == ["2008-09", "2008-10", "2008-10"]   # September came from the checkpoint
+    pd.testing.assert_frame_equal(pd.read_parquet(out), first)
+
+
+def test_no_node_fallback_never_calls_dukascopy_node(monkeypatch, tmp_path):
+    monkeypatch.setattr(dy, "_fetch_datafeed", lambda *a, **k: (None, "HTTP 503"))
+    called: list[int] = []
+
+    def fake_node(*a, **k):
+        called.append(1)
+        return None, "x"
+
+    monkeypatch.setattr(dy, "_fetch_node", fake_node)
+    monkeypatch.setattr(dy, "NODE_FALLBACK", False)
+    df, err = dy._fetch(dt.date(2004, 2, 9), dt.date(2004, 2, 16), "bid", tmp_path)
+    assert df is None and "node fallback off" in err and "503" in err and not called
