@@ -3,7 +3,7 @@
 Owner decision 2026-11-02 (remove unused feeds). This release deletes `goldbot-tv-pull.service`
 and `goldbot-webhook.service` from the repo, drops `webhook`/`tv-pull` from the deploy
 script's heartbeat list (`BEAT_SERVICES`) and the health check registry, and drops `goldbot-webhook` from the
-Windows VPS scripts. `goldbot-tv-ideas` (the followed authors' ideas, RUNBOOK 2.7d) is KEPT and keeps running
+Windows VPS scripts. `goldbot-tv-ideas` (the followed authors' ideas, RUNBOOK 2.7f) is KEPT and keeps running
 (owner, 2026-11-02): do not stop it. Server data is never touched: `tv.db`, `tv_ideas.db`, `tv_indicators/` and the old heartbeat files
 stay where they are.
 
@@ -27,7 +27,7 @@ The old `state/heartbeat_tv-pull.json` is now read by nothing; leave it (server 
 ## Rollback
 
 Go back with `sudo goldbot-deploy --rollback <previous sha>`, then reinstall the units from git at that commit, root
-from its own clone (never from `/opt/goldbot`), exactly as RUNBOOK 2.7c T4 describes (`U=goldbot-tv-pull`), then
+from its own clone (never from `/opt/goldbot`), exactly as RUNBOOK 2.7c T4 at that commit describes (`U=goldbot-tv-pull`; the section left the current RUNBOOK with ADR 0066), then
 `sudo systemctl enable --now goldbot-tv-pull`. Its data was kept, so pulling resumes where it stopped.
 `goldbot-tv-ideas` is not touched by this release or its rollback.
 
