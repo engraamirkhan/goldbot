@@ -32,9 +32,11 @@ log = logging.getLogger(__name__)
 # because a recorded decision or resume snapshot must survive power loss
 # tv_ideas: TradingView author ideas (goldbot/data/tv_ideas.py), third-party text kept out of tv.db; NORMAL: a lost last
 # second is re-read on the next poll and only ever makes a first sighting later (conservative)
-DbKind = Literal["core", "aux", "tv", "tv_auth", "program", "tv_ideas"]
+# instruments: the multi-instrument demo's lot and swap terms per (account, symbol) (goldbot/engine/instruments_db.py,
+# plan 2026-11-02, lane L3); FULL like core: those terms gate an entry
+DbKind = Literal["core", "aux", "tv", "tv_auth", "program", "tv_ideas", "instruments"]
 SYNCHRONOUS: dict[DbKind, str] = {"core": "FULL", "aux": "NORMAL", "tv": "FULL", "tv_auth": "FULL", "program": "FULL",
-                                  "tv_ideas": "NORMAL"}
+                                  "tv_ideas": "NORMAL", "instruments": "FULL"}
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 MIN_SQLITE = (3, 37, 0)          # STRICT tables
 

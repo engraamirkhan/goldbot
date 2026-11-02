@@ -140,6 +140,8 @@ def _account(e: dict[str, Any], now: pd.Timestamp, state_dir: Path, last: LimitC
     elif weekly_limit is not None and weekly_used is not None and weekly_used >= weekly_limit:
         hit = "weekly"
     error = None if lim is not None else "the engine does not publish its limits yet"
+    from goldbot.api.instruments_view import group_exposure  # lazily: it reads the instrument registry
+    groups, heat_used, heat_limit = group_exposure(e)
     return LimitAccount(
         account_id=acct, mode=_mode(e), profile=str(cur.get("profile") or DEFAULT_PROFILE) if cur else DEFAULT_PROFILE,
         source=source, adr=adr, updated_utc=updated,
@@ -153,7 +155,8 @@ def _account(e: dict[str, Any], now: pd.Timestamp, state_dir: Path, last: LimitC
         min_lot=_pos(terms.get("volume_min")), min_lot_risk=_pos(gate.get("min_lot_risk_account")),
         min_lot_risk_cap=_pos(gate.get("min_lot_risk_cap")),
         revert_active=reverted, revert_since=since, revert_reason=why, cap_hit=hit if lim else "none",
-        last_change=last, error=error, risk_today=risk_today_view(e.get("risk_today")))
+        last_change=last, error=error, risk_today=risk_today_view(e.get("risk_today")), groups=groups,
+        heat_used=heat_used, heat_limit=heat_limit)
 
 
 def _combined_money(sup: dict[str, Any], daily_cap: float | None, weekly_cap: float | None) -> dict[str, Any]:

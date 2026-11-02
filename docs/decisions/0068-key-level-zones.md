@@ -71,10 +71,20 @@ before any screen result exists.
   - The levels client gets one attempt and a 20 s timeout per read.
   - Pages are 30 days, 1 s apart. A page over 30 s, or 300 s in all (history._Deadline), defers the rest of the pull
     to a retry an hour later. Pages already cached are kept.
-  - Only one pull per bridge runs at a time; another account finding the bridge busy tries again in 5 minutes. The
-    first pull after a restart waits a random 0-600 s.
-  - A cache that starts more than 5 days after its target head is re-pulled from the head, unless the broker's own
-    history starts there.
+  - Only one pull per MT5 box runs at a time, across every engine process on the brain. Engines run one process per
+    account, so this is an `fcntl.flock(LOCK_EX | LOCK_NB)` on `state/locks/levels-<box>.lock`.
+    - The box is a short hash of the bridge URL's host, so accounts on one box share it whatever their port, and no
+      host name appears in a file name.
+    - The flock dies with its process, so a killed engine never leaves the box locked.
+    - Another engine finding the box busy tries again in 5 minutes.
+    - (Corrected after the re-review, N1: the first version used an in-process lock, which serialised nothing.)
+  - The first pull after a restart waits a random 0-600 s.
+  - A cache that starts more than 5 days after its target head is re-pulled from the head, at most once every 7 days
+    after a head pull completes. It is not re-pulled when the broker's own history starts there, which only a head
+    page that returns bars can show; an empty first page on a cold terminal proves nothing.
+  - Every pull resumes at the oldest hole: the last cached bar before the first gap holding more than 5 days of open
+    market time. A head re-pull cut short (budget or failure) therefore has its middle filled by the next retry, not
+    left as a gap of up to about 300 days (N2).
   - An empty page over open market time, after bars are known, is a failed pull (retried hourly), never a hole kept.
   - An account can opt out with accounts.yaml `key_levels_history: short` (the engine's ~62 days only, no pull), for
     the coming non-gold instruments.
@@ -99,3 +109,10 @@ before any screen result exists.
   ~62 days are used, and the dashboard says the history is short.
 - Research zones are dense: about 36 within ±3 ATR(1d) of gold in 2026. Rules should filter on `strength_pct` and
   timeframe, not on "a zone exists". The display shows only the few strongest nearby.
+
+## Amendment 2026-11-02 (owner)
+
+"Key levels and all indicators are for the system to learn from and know about and improve on, not for charts to
+display." The dashboard's key-level chart, its `GET /api/key-levels` route and view models were removed (lane L4 of the
+multi-instrument demo). The zone computation (`goldbot/engine/key_zones.py`, `goldbot/features/key_levels.py`,
+`goldbot/research/level_vocab.py`) stays for the strategies and the learning loop.

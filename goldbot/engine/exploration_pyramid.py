@@ -58,7 +58,9 @@ log = logging.getLogger(__name__)
 MAX_ADDS = 3                          # "up to 3 adds"
 # quant Q3 2026-11-01: a pyramid unit has no profit target; the broker order and the shadow replay carry one this far
 NO_TARGET_R = 100.0
-CENT = 0.01                           # XAUUSD price step: a stop is rounded to it, tighter (as the BXR trail)
+# XAUUSD's price step: the default of `tighter_round`; every engine call passes its instrument's own point and digits
+# (multi-instrument plan: "CENT becomes the point")
+CENT = 0.01
 MOVE_ACTION = "exploration_pyramid_stops"
 UNKNOWN_ACTION = "exploration_pyramid_group_unknown"
 
@@ -164,10 +166,11 @@ def group_stop(units: list[Unit], budget: float, side: int) -> float | None:
     return _tighter(side, newest.sl, (sum(u.lots * u.price for u in earlier) - side * room) / lots)
 
 
-def tighter_round(level: float, side: int) -> float:
-    """`level` on the price step, rounded the tighter way (up for a long's stop, down for a short's)."""
-    steps = level / CENT
-    return round((math.ceil(steps - 1e-6) if side > 0 else math.floor(steps + 1e-6)) * CENT, 2)
+def tighter_round(level: float, side: int, point: float = CENT, digits: int = 2) -> float:
+    """`level` on the instrument's price step (`point`, `digits`: EngineConfig), rounded the tighter way (up for a
+    long's stop, down for a short's)."""
+    steps = level / point
+    return round((math.ceil(steps - 1e-6) if side > 0 else math.floor(steps + 1e-6)) * point, digits)
 
 
 def _tighter(side: int, a: float | None, b: float) -> float:
@@ -274,12 +277,12 @@ def heal(eng: Engine, ex: Exploration, arm: Arm, g: Group, now: pd.Timestamp, fo
     held = open_units(eng, arm, g.group_id).get(g.group_id, [])
     units = [u for u, _ in held]
     loss = group_loss(units, g.side)
-    if len(units) < 2 or (not force and loss is not None and loss <= g.budget + CENT * sum(u.lots for u in units)):
+    if len(units) < 2 or (not force and loss is not None and loss <= g.budget + eng.cfg.point * sum(u.lots for u in units)):
         return
     level = group_stop(units, g.budget, g.side)
     if level is None:
         return
-    stop = tighter_round(level, g.side)
+    stop = tighter_round(level, g.side, eng.cfg.point, eng.cfg.price_digits)
     newest = max(u.add_no for u in units)
     earlier = [(u.position_id, tr) for u, tr in held if u.add_no != newest]
     if all(tr.sl is not None and g.side * (tr.sl - stop) >= -1e-9 for _, tr in earlier):
@@ -378,7 +381,7 @@ def plan(eng: Engine, ex: Exploration, arm: Arm, s: Pending, tick: Tick, price: 
     level = group_stop([*(u for u, _ in held), add], g.budget, g.side)
     if level is None:
         return "open_risk_unknown"
-    stop = tighter_round(level, g.side)
+    stop = tighter_round(level, g.side, eng.cfg.point, eng.cfg.price_digits)
     exit_px = tick.bid if g.side > 0 else tick.ask
     if g.side * (exit_px - stop) <= 0:
         return "add_stop_through_price"

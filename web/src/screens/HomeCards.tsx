@@ -12,6 +12,7 @@ import { type Budget, factorWords, leftState, rateText, riskTodayLine, strategyR
 import { useNow } from "../lib/useNow";
 import { Badge, Button, Card, EmptyState, ErrorState, Meter, Skeleton, TimeText } from "../ui";
 import { money, NBSP, seconds } from "../ui/format";
+import { TopMovers } from "./TopMovers";
 
 /** One card's crash shows its own error; the other cards keep working. */
 export class CardBoundary extends Component<{ name: string; children: ReactNode }, { failed: boolean }> {
@@ -126,6 +127,7 @@ function TodayLine({ a, limits }: { a: TodayAccount; limits?: LimitAccount }) {
         <span className="today-pnl num">{signed(a.day_pnl, ccy)}</span> <span className="muted small">today after costs</span></p>
       <p className="small muted num">closed {signed(a.closed_pnl, ccy)} ({a.closed_n} trade{a.closed_n === 1 ? "" : "s"}
         {a.closed_complete ? "" : ", some left out"}) · open {signed(a.open_pnl, ccy)}</p>
+      <TopMovers account={a.account} rows={a.by_symbol ?? []} instrumentsN={a.instruments_n} currency={ccy} />
       {a.stale && <Stale age={a.age_s} />}
       {a.loss_meter && m ? (
         <div className="today-meter">

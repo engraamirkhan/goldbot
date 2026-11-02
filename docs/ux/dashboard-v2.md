@@ -47,7 +47,7 @@ The 2026-10-18 IA below is kept for the record.
 |---|---|---|
 | **Home** | status, waiting trade(s), today's P&L vs limits, open positions summary | all |
 | **Trades** | segmented: Waiting (Approvals) · Recent (decided 10 min + your trades) · Results (Progress results) | all |
-| **Chart** | TradingView chart + MT5 chart side by side | all |
+| ~~**Chart**~~ | removed 2026-11-02 (owner: levels and indicators are for the system to learn from, not for charts to display) | - |
 | **Limits** | Limits (unchanged content, new cards) | all |
 | **Research** | segmented: Today · Road to live (Progress gates, stop rule) · Strategies (Agents league) · Trials (Research) | all |
 | **Feeds** | segmented: Data feeds (Feeds + TradingView card) · News & calendar (News) · System health (Health) | all |

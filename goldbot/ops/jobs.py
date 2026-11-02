@@ -126,6 +126,7 @@ from goldbot.execution.costs import (
     publishable,
     spread_profile,
 )
+from goldbot.execution.market_watch import account_symbols
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
@@ -1423,10 +1424,13 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily, per enabled account (goldbot/data/ticks.py): the broker's ticks of every closed server day not yet on
     disk -> state/ticks/<account>/<date>.parquet (copy_ticks, read-only, paged), then retention. Health: ticks:<acc>.
     Runs only while gold is closed (daily break or weekend, `market_quiet`), time-boxed and paced, so the shared
-    bridge is never busy in trading hours (trading-safety review); `slot` is not used as the time."""
+    bridge is never busy in trading hours (trading-safety review); `slot` is not used as the time. The account's other
+    instruments (multi-instrument demo, `market_watch.account_symbols`) are recorded under their own directory and only
+    at the weekend (`weekend_quiet`: gold's daily break is not quiet for the US indices or energy); on a weekday each
+    is reported skipped under `<account>:<symbol>`."""
     import time
 
-    from goldbot.data.ticks import market_quiet, record_ticks
+    from goldbot.data.ticks import market_quiet, record_ticks, weekend_quiet
     if ctx.broker_for is None:
         return {"skipped": "no broker connection configured for the scheduler"}
     clock = ctx.clock or (lambda: pd.Timestamp.now("UTC"))
@@ -1449,6 +1453,13 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                 continue
             out[acc.account_id] = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz,
                                                ctx.settings.ticks, clock=clock, sleep=ctx.sleep or time.sleep)
+            for sym in account_symbols(acc)[1:]:
+                key = f"{acc.account_id}:{sym}"
+                if not weekend_quiet(clock()):
+                    out[key] = {"skipped": "another instrument: pulled only at the weekend, when every market is shut"}
+                    continue
+                out[key] = record_ticks(broker, ctx.state_dir, acc.account_id, sym, acc.server_tz, ctx.settings.ticks,
+                                        clock=clock, sleep=ctx.sleep or time.sleep, instrument=sym)
         except Exception as exc:
             failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
         finally:

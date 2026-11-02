@@ -669,6 +669,26 @@ def test_loss_caps_warn_and_are_announced_once(tmp_path):
     assert caps["daily_cap:icm-demo"].status == "warn" and caps["weekly_cap:icm-demo"].status == "ok"
 
 
+def test_a_demo_account_reads_its_engines_current_caps_not_the_settings_defaults(tmp_path):
+    """Demo-limits ADR 2026-11-02: a demo account's caps are its controller's (`limits_current`, ADR 0032 ceilings:
+    daily 5%, weekly 6% on the demo learning hosts), so a 3% day is no "LOSS CAP hit" there; a live account and an
+    engine file without `limits_current` keep the settings' caps."""
+    ctx = make_ctx(tmp_path)
+    daily = SETTINGS.risk.daily_cap
+    loss = daily + 0.01                                                 # over the settings' 2%, under the demo 5%
+    current = {"profile": "demo-2026-10-18", "daily_cap": 0.05, "weekly_cap": 0.06, "reason": "ceilings"}
+    engine_equity(tmp_path, 10_000 * (1 - loss), 10_000, 10_000)
+    payload = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    write(tmp_path / "engine_icm-demo.json", {**payload, "mode": "demo", "limits_current": current})
+    caps = by_name(health.check_loss_caps(ctx, "icm-demo"))
+    assert caps["daily_cap:icm-demo"].status == "ok" and "cap 5.0%" in caps["daily_cap:icm-demo"].reason
+    assert caps["weekly_cap:icm-demo"].status == "ok" and "cap 6.0%" in caps["weekly_cap:icm-demo"].reason
+    write(tmp_path / "engine_icm-demo.json", {**payload, "mode": "live", "limits_current": current})
+    assert by_name(health.check_loss_caps(ctx, "icm-demo"))["daily_cap:icm-demo"].status == "warn"
+    write(tmp_path / "engine_icm-demo.json", {**payload, "mode": "demo"})
+    assert by_name(health.check_loss_caps(ctx, "icm-demo"))["daily_cap:icm-demo"].status == "warn"
+
+
 def test_plain_warnings_are_still_not_announced():
     assert health.alert_text({}, report(news="warn", supervisor="warn")) is None
 

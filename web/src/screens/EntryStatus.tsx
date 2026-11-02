@@ -2,6 +2,7 @@ import type { AccountSummary, EntryBlock } from "../lib/api";
 import { NO_ENGINE } from "./SafetyStrip";
 import { BADGE, STALE_MS, TONE, localHm, utcText, whenText } from "../lib/entry";
 import { useNow } from "../lib/useNow";
+import { EntrySymbols } from "./EntrySymbols";
 
 // updatedAt: when the accounts last arrived (react-query dataUpdatedAt), to grey out a report the server no longer refreshes
 type Props = { accounts?: AccountSummary[]; loading?: boolean; error?: boolean; now?: number; updatedAt?: number };
@@ -61,6 +62,7 @@ function Row({ a, now, stale }: { a: AccountSummary; now: number; stale: boolean
         {s.as_of && <AsOf iso={s.as_of} />}
       </header>
       <p className="entry-headline">{s.headline}{s.clears_at && <Clears iso={s.clears_at} now={now} />}</p>
+      {s.symbols && s.symbols.length > 0 && <EntrySymbols symbols={s.symbols} now={now} />}
       {s.blocks.length > 0 && (
         <ul className="entry-blocks">{s.blocks.map((b) => <Block key={`${b.code}:${b.agent_id ?? ""}`} b={b} now={now} />)}</ul>
       )}

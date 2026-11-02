@@ -24,6 +24,7 @@ from goldbot.research import exploration_data as ex
 from goldbot.research.exploration_data import PRIOR_BROKERS
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _sent, _Terminal
+from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 TWINS = {"VI0": "I0", "VI2A": "I2A", "VI2B": "I2B", "VMB15": "MB15", "VMB30": "MB30", "VMB1H": "MB1H",
@@ -37,7 +38,9 @@ V_WAVE1 = {"VXRIP1H": 30.0, "VXRT1H": 30.0, "VXFK1H": 30.0, "VXTL1H": 30.0, "VXT
 # arms expansion wave 2 (arms-2026-10-25.md section 8): Vantage's own hypotheses, per-trade cap by timeframe
 V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
 # H-81 stage V1 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pot): the $7.00-bar strata and ZCV, £6.50
-V_SCALP = {"Z6V", "Z7V", "ZCV"}
+V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
+# multi-instrument demo (lane L3): the random controls of the 7 Vantage instruments vantage-demo lists
+V_INSTRUMENTS = {f"{p}-{k}" for k in ['UST10Y', 'BUND10Y', 'COPPER', 'WHEAT', 'SOYBEAN', 'SUGAR', 'COFFEE'] for p in ("S0", "I0")}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
 
 
 @pytest.fixture(scope="module")
@@ -53,31 +56,35 @@ def test_vantage_demo_ships_configured_as_a_demo_probe_only_learning_host_switch
     assert acc.enabled and acc.mode == "demo" and acc.broker == "vantage" and acc.login is None    # on after its registry rows
     assert acc.probe_only and not acc.shadow_host and acc.approval_mode == "auto" and acc.account_class == "raw"
     assert acc.symbol == "XAUUSD+" and acc.server_tz == "NY+7" and acc.magic_base == 260200
-    assert acc.daily_loss_limit_abs == 200 and acc.max_positions == 18
+    assert acc.daily_loss_limit_abs == 200 and acc.max_positions == 24          # demo-limits ADR 0072: 18 -> 24
     assert acc.risk_overrides is not None and acc.risk_overrides.profile == "demo-2026-10-18"
 
 
 def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound_share(vantage):
     cp = vantage.cost_probe
     assert cp.enabled and cp.scheduled.enabled
-    assert cp.budget_share * 200 == pytest.approx(15, abs=0.01)
-    # prereg K10 (PD 2026-10-26: the pre-registered bound stands): at most half the sleeve, £7.50 a day
-    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(7.5, abs=0.01)
+    # demo-limits ADR 0072 (f, 2026-11-02): the sleeve £15 -> £35 (0.175 of the £200 day)
+    assert cp.budget_share * 200 == pytest.approx(35, abs=0.01)
+    # prereg K10 (PD 2026-10-26): at most half the sleeve (the 50% share is the bound): £7.50, now £17.50 a day
+    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(17.5, abs=0.01)
     assert cp.max_loss <= cp.budget_share * 200
 
 
 def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of_180(vantage):
     ex = vantage.exploration
-    assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
-    assert ex.budget_share * 200 == pytest.approx(180, abs=0.01) and ex.max_open_total == 17
-    # ADR 0049 D1a (CFO 2026-10-27, H-81 V1): a scalp pot carved inside the unchanged £180
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (100, 8), "intraday": (40, 4),
-                                                                     "swing": (40, 1)}
+    assert ex.enabled and set(ex.arms) == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
+                                           | V_INSTRUMENTS | MI_ON["vantage-demo"])
+    # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
+    assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
+                                                                     "swing": (None, 2)}
+    assert not ex.pot_budgets and ex.learning_max_open == 6
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in V_SCALP} == {("scalp", 6.5)}
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
-    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV"}
+    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V"} | {
+        i for i in MI_ON["vantage-demo"] if i.startswith("LBC-")} | V_INSTRUMENTS
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 
@@ -129,8 +136,12 @@ def test_a_twin_whose_body_differs_from_its_arm_or_names_no_arm_is_refused(tmp_p
 def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_the_blocked_one(vantage):
     cfg = exploration.config_for(vantage)
     assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
-    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP)
-    assert len(cfg.arms) == 26
+    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
+                                            | V_INSTRUMENTS | MI_ON["vantage-demo"])
+    assert len(cfg.arms) == 28 + 14 + 14               # + the instruments' S0/I0 and LB/LBC pairs (lane L3)
+    gold = exploration.book_config(cfg, "XAUUSD")       # gold's book runs gold's 28 only
+    assert gold is not None and {a.arm_id for a in gold.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1)
+                                                                  | set(V_WAVE2) | V_SCALP)
     by = {a.arm_id: a for a in cfg.arms}
     assert by["DON4"].style == "swing" and by["KSQ1"].style == by["PDC1"].style == "intraday"
     assert by["VI0"].control_share == 0.30 and by["VW0"].control_share == 0.33
@@ -139,9 +150,11 @@ def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_
 
 def test_vantage_riskgate_limits_carry_its_host_cap_probe_only_fence_and_arm_caps(vantage):
     limits = engine_limits(load_settings(), vantage)
-    assert limits.max_positions == 18 and limits.probe_only and limits.daily_loss_limit_abs == 200
+    assert limits.max_positions == 24 and limits.probe_only and limits.daily_loss_limit_abs == 200   # ADR 0072: 24
     assert limits.exploration_arms == {**{a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING},
-                                       **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5)}
+                                       **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5),
+                                       **{a: (6.5 if a.startswith("S0-") else 17.0) for a in V_INSTRUMENTS},
+                                       **dict.fromkeys(MI_ON["vantage-demo"], 8.0)}
 
 
 class _Recorder(_Terminal):

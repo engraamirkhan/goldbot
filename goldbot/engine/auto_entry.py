@@ -201,7 +201,7 @@ def after_order(eng: Engine, res: OrderResult | None, gd: GateDecision, prop: Pr
     st.open_lots = round(st.open_lots + lots, 6)
     px = eng._price or res.price            # USD notional at the mid, as `_refresh_account` publishes it
     if px:
-        st.open_notional = st.open_lots * eng._contract_size() * px
+        st.open_notional = st.open_lots * (eng._contract_size() or 0.0) * px   # unknown: refused at refresh
     if prop.side > 0:
         st.open_long += 1
     else:

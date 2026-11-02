@@ -3,10 +3,13 @@
 // a cursor and a "Load 50 more" button (no infinite scroll: position stays put, screen readers cope). The totals line
 // is the server's (after costs); the client never adds results up. The order is newest first, or by result (backlog
 // 139: the server sorts, `sort` in the URL). While the list is scrolled down, a poll that brings new trades shows a
-// "N new · show" pill instead of pushing the rows down.
+// "N new · show" pill instead of pushing the rows down. Multi-instrument (UI spec 2026-11-02 §2): the instrument on
+// every row (the phone line starts with it, the table has a Symbol column after Side), the grouped instrument filter
+// (sym=/grp= in the URL, the server's facet as its choices) and chips for it.
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
+import { GROUP_WORDS } from "../../lib/instruments";
 import {
   activeFilterCount, apiQuery, DEFAULT_KINDS, EVIDENCE_WORDS, type Evidence, EXIT_REASONS, EXIT_WORDS, exitWords, type Filters,
   filtersQuery, heldWords, KIND_WORDS, KINDS, kindBadge, moneyOrDash, parseFilters, type Period, PERIOD_WORDS, PERIODS, POLL, sourcesWords, resultOf,
@@ -15,7 +18,9 @@ import {
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, Card, EmptyState, ErrorState, Segmented, TimeText } from "../../ui";
 import { money } from "../../ui/format";
+import { SymbolTag } from "../../ui/SymbolTag";
 import { SkeletonRows } from "./Now";
+import { SymbolFilter } from "./SymbolFilter";
 import "./trades.css";
 
 type Props = { query: string; onQuery: (q: string) => void; onOpen: (id: string) => void };
@@ -37,7 +42,8 @@ export function TradesList({ query, onQuery, onOpen }: Props) {
   const named = new Map<string, string>();
   for (const page of q.data?.pages ?? []) for (const r of page.rows) named.set(r.family, r.family_label);
   for (const x of f.fam) if (!named.has(x)) named.set(x, x);
-  const panel = <FilterPanel f={f} set={set} named={named} />;
+  const symbols = q.data?.pages[0]?.symbols ?? [];
+  const panel = <FilterPanel f={f} set={set} named={named} symbols={symbols} />;
   return (
     <div className="trades-page list-page">
       <div className="list-main">
@@ -53,7 +59,7 @@ export function TradesList({ query, onQuery, onOpen }: Props) {
         {wide && sheet && <section id="trade-filters" className="filter-inline" aria-label="Filters">{panel}</section>}
         <Chips f={f} set={set} named={named} />
         <Card title="Trades" label="Trade list">
-          <ListBody q={q} f={f} onOpen={onOpen} wide={wide} onClear={() => onQuery(filtersQuery({ ...f, acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] }))} />
+          <ListBody q={q} f={f} onOpen={onOpen} wide={wide} onClear={() => onQuery(filtersQuery({ ...f, acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [], sym: [], grp: [] }))} />
         </Card>
       </div>
       {sheet && !wide && (
@@ -104,7 +110,8 @@ function ListBody({ q, f, onOpen, wide, onClear }: { q: Q; f: Filters; onOpen: (
       )}
       {rows.length === 0 ? (
         <EmptyState title="No trades match." action={activeFilterCount(f) ? <Button onClick={onClear}>Clear filters</Button> : undefined}>
-          {f.period === "today" ? "Nothing yet today with these filters." : "Nothing in this period with these filters."}
+          {f.sym.length || f.grp.length ? "No trades on these instruments in this period."
+            : f.period === "today" ? "Nothing yet today with these filters." : "Nothing in this period with these filters."}
         </EmptyState>
       ) : wide ? <ListTable rows={rows} onOpen={onOpen} period={f.period} /> : (
         <ul className="trade-rows" aria-label="Trades">
@@ -136,7 +143,7 @@ function ListRowPhone({ t, onOpen }: { t: TradeRow; onOpen: (id: string) => void
       {/* line 1 what and how much; line 2 when, side, where, how it ended; line 3 the kind in a word and why */}
       <span className="tr-l1"><span className="tr-name">{strategyLabel(t.family_label, t.family, t.timeframe, t.variant)}</span>
         <span className="tr-pnl num">{res.pnl}</span></span>
-      <span className="tr-l2"><span className="tr-meta"><TimeText iso={t.opened_utc} /> · {sideWords(t.side)} · {t.account_label} · {endWords(t)}
+      <span className="tr-l2"><span className="tr-meta"><strong className="tr-sym">{t.symbol}</strong> · {t.side}{t.lots != null ? ` ${t.lots}` : ""} · <TimeText iso={t.opened_utc} /> · {t.account_label} · {endWords(t)}
         {t.status === "closed" && t.held_s != null ? ` · ${heldWords(t.held_s, null)}` : ""}</span>
         <span className="tr-r num">{res.r}</span></span>
       <span className="tr-l3 small muted">{badge && <Badge tone="idle">{badge.toUpperCase()}</Badge>} {t.why}</span>
@@ -150,10 +157,10 @@ function ListTable({ rows, onOpen, period }: { rows: TradeRow[]; onOpen: (id: st
       <table className="trade-table">
         <caption className="sr-only">Trades, newest first; net after costs in the account currency</caption>
         {/* fixed layout, two lines a row (56 px): the why sits under the strategy, so nothing pushes the page sideways */}
-        <colgroup><col className="w-time" /><col /><col className="w-acct" /><col className="w-side" /><col className="w-exit" />
+        <colgroup><col className="w-time" /><col /><col className="w-acct" /><col className="w-side" /><col className="w-sym" /><col className="w-exit" />
           <col className="w-money" /><col className="w-r" /><col className="w-money" /><col className="w-kind" /></colgroup>
         <thead><tr>
-          <th scope="col">Opened</th><th scope="col">Strategy and why</th><th scope="col">Account</th><th scope="col">Side</th>
+          <th scope="col">Opened</th><th scope="col">Strategy and why</th><th scope="col">Account</th><th scope="col">Side</th><th scope="col">Symbol</th>
           <th scope="col">Closed by, held</th><th scope="col" className="num">Net</th>
           <th scope="col" className="num">R</th><th scope="col" className="num">Costs</th><th scope="col">Kind</th>
         </tr></thead>
@@ -169,6 +176,7 @@ function ListTable({ rows, onOpen, period }: { rows: TradeRow[]; onOpen: (id: st
                   <span className="muted">{t.why}</span></td>
                 <td>{t.account_label}</td>
                 <td className={`tr-side ${t.side}`}>{sideWords(t.side)}</td>
+                <td><SymbolTag symbol={t.symbol} /></td>
                 <td>{endWords(t)} · {heldWords(t.held_s, t.status === "open" ? t.hold_limit_s : null)}</td>
                 <td className="num">{res.pnl}</td>
                 <td className="num">{res.r}</td>
@@ -190,7 +198,7 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 
 const flip = <T,>(xs: T[], x: T) => (xs.includes(x) ? xs.filter((y) => y !== x) : [...xs, x]);
 
-function FilterPanel({ f, set, named }: { f: Filters; set: (n: Partial<Filters>) => void; named: Map<string, string> }) {
+function FilterPanel({ f, set, named, symbols }: { f: Filters; set: (n: Partial<Filters>) => void; named: Map<string, string>; symbols: readonly string[] }) {
   const today = useQuery({ queryKey: ["today"], queryFn: api.today, staleTime: POLL.today });
   const board = useQuery({ queryKey: ["strategyBoard"], queryFn: api.strategyBoard, staleTime: POLL.strategies, retry: false });
   const accts = (today.data?.accounts ?? []).map((a) => ({ id: a.account, label: a.account_label || a.account }));
@@ -203,6 +211,7 @@ function FilterPanel({ f, set, named }: { f: Filters; set: (n: Partial<Filters>)
         <Segmented label="Status" items={[{ id: "", label: "Open + closed" }, { id: "open", label: "Open" }, { id: "closed", label: "Closed" }]}
                    value={f.status} onChange={(status) => set({ status })} />
       </fieldset>
+      <SymbolFilter f={f} set={set} symbols={symbols} />
       {accts.length > 0 && <fieldset><legend>Account</legend><div className="chip-set">
         {accts.map((a) => <Toggle key={a.id} on={f.acct.includes(a.id)} onClick={() => set({ acct: flip(f.acct, a.id) })}>{a.label}</Toggle>)}
       </div></fieldset>}
@@ -233,6 +242,8 @@ function Chips({ f, set, named }: { f: Filters; set: (n: Partial<Filters>) => vo
   const acctLabel = (id: string) => today.data?.accounts.find((a) => a.account === id)?.account_label || id;
   const famLabel = (id: string) => board.data?.families.find((x) => x.family === id)?.family_label || named.get(id) || id;
   const chips: { key: string; label: string; drop: () => void }[] = [
+    ...f.grp.map((g) => ({ key: `g-${g}`, label: GROUP_WORDS[g], drop: () => set({ grp: f.grp.filter((x) => x !== g) }) })),
+    ...f.sym.map((s) => ({ key: `y-${s}`, label: s, drop: () => set({ sym: f.sym.filter((x) => x !== s) }) })),
     ...f.acct.map((a) => ({ key: `a-${a}`, label: acctLabel(a), drop: () => set({ acct: f.acct.filter((x) => x !== a) }) })),
     ...f.fam.map((a) => ({ key: `f-${a}`, label: famLabel(a), drop: () => set({ fam: f.fam.filter((x) => x !== a) }) })),
     ...f.tf.map((a) => ({ key: `t-${a}`, label: a, drop: () => set({ tf: f.tf.filter((x) => x !== a) }) })),

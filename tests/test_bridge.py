@@ -525,9 +525,9 @@ def test_open_position_notional_counts_toward_the_ceiling():
     (_pos(0.02, side=-1), True),                    # the opposite side: gross, not net
     (_pos(0.02, magic=1), True),                    # another magic (the owner's manual trade): still exposure
     (_pos(0.02, magic=999_999), True),
-    (_pos(0.02, symbol="XAGUSD"), False),           # another symbol: not this instrument's notional
+    (_pos(0.02, symbol="XAGUSD"), True),            # another symbol: account-wide since protocol v10 (multi-instrument)
 ])
-def test_every_position_on_the_symbol_counts_whatever_its_side_or_magic_and_other_symbols_do_not(position, counts):
+def test_every_open_position_counts_whatever_its_side_magic_or_symbol(position, counts):
     t = _Terminal(equity=1_000.0, positions=[position])
     res = GuardedBroker(t, magic_base=260100).place_order(_order(0.01))
     assert _refused(res, t) is counts and res.ok is not counts

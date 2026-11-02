@@ -39,9 +39,8 @@ from goldbot.api import (
     entry_status,
     explain,
     home_cards,
-    key_levels_view,
+    instruments_view,
     limits,
-    mt5_crop,
     progress,
     spread_normal,
     strategy_board,
@@ -103,10 +102,10 @@ from goldbot.api.schema import (
     ForgotPasswordRequest,
     HaltRequest,
     HealthView,
+    InstrumentGroup,
+    InstrumentView,
     InviteRequest,
     InviteResponse,
-    KeyLevelsView,
-    KeyLevelTf,
     LimitChange,
     LimitsView,
     LoginRequest,
@@ -165,8 +164,6 @@ log = logging.getLogger("goldbot.api")
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
        "frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
-
-MT5_CHART_MAX_AGE_S = 300.0
 
 
 def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
@@ -982,15 +979,29 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     exit_reason: list[ExitReason] = Query([]), evidence: list[TradeEvidence] = Query([]),
                     control: bool | None = None, sort: TradeSort = "newest", cursor: str | None = None,
                     limit: int = Query(trades_ledger.PAGE, ge=1, le=trades_ledger.MAX_PAGE),
+                    symbol: list[str] = Query([]), group: list[InstrumentGroup] = Query([]),
                     _: User = Depends(need("viewer"))) -> TradesPage:
         q = trades_ledger.TradeQuery(period=period, since=since, until=until, account=tuple(account),
                                      family=tuple(family), timeframe=tuple(timeframe), arm=tuple(arm), kind=tuple(kind),
                                      status=status, exit_reason=tuple(exit_reason), evidence=tuple(evidence),
-                                     control=control, sort=sort, cursor=cursor, limit=limit)
+                                     control=control, sort=sort, cursor=cursor, limit=limit, symbol=tuple(symbol),
+                                     group=tuple(group))
         try:
             return trades_ledger.query(ledger(), q)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    # goldbot/api/instruments_view.py (multi-instrument demo, lane L4): every enabled account's instruments with
+    # their digits, unit, group and the engine's state for each (the dashboard's fmtPrice and filters). Read-only
+    @app.get("/api/instruments", response_model=list[InstrumentView])
+    def instruments_list(_: User = Depends(need("viewer"))) -> list[InstrumentView]:
+        from goldbot.ops import accounts as accounts_mod
+        try:
+            accs = list(accounts_mod.load_accounts(logins=False).values())
+        except Exception:                     # noqa: BLE001 - a bad accounts.yaml: no instruments, never a 500
+            log.exception("accounts unreadable: no instruments listed")
+            accs = []
+        return instruments_view.instruments(accs, engines_or_none())
 
     # goldbot/api/trade_chart.py (item 133): one trade on the stored bars of its timeframe, with its own levels and
     # stop moves. Registered before the detail so `{trade_id:path}` never swallows "/bars".
@@ -1108,35 +1119,6 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return ModeChangeResult(message=msg, view=explain.automode_view(st.dir, s, True))
     # ============================================================== end auto mode
 
-    # ============================================================== MT5 terminal chart
-    # The MT5 terminal's own chart (IC Markets, Wine/Xvfb), screenshotted every 60 s on the MT5 box and pulled by the
-    # brain (docs/RUNBOOK.md "MT5 terminal chart on the dashboard"). Read-only; the file's mtime is the capture time.
-    @app.get("/api/chart/mt5", responses={200: {"content": {"image/png": {}}}, 404: {"description": "no fresh capture"}})
-    def chart_mt5(_: User = Depends(auth)) -> Response:
-        png = Path(st.dir) / "chart" / "mt5.png"
-        try:
-            age = time.time() - png.stat().st_mtime
-        except OSError:
-            raise HTTPException(404, "no MT5 chart capture yet") from None
-        if age > MT5_CHART_MAX_AGE_S:
-            raise HTTPException(404, f"the MT5 chart capture is stale ({int(age)} s old)")
-        try:
-            res, captured = mt5_crop.cached_crop(Path(st.dir))
-        except OSError:
-            raise HTTPException(404, "no MT5 chart capture yet") from None
-        iso = datetime.fromtimestamp(captured, tz=timezone.utc).isoformat()
-        # only the chart pane is served (goldbot/api/mt5_crop.py); the headers say which chart it is
-        return Response(res.png, media_type="image/png", headers={
-            "X-Captured-At": iso, "Cache-Control": "no-store", "X-Chart-Cropped": str(res.cropped).lower(),
-            "X-Chart-Symbol": res.symbol, "X-Chart-Timeframe": res.timeframe,
-            "X-Chart-Gold": "unknown" if res.gold is None else str(res.gold).lower()})
-
-    # goldbot/api/key_levels_view.py: each account's current key zones (engine_<account>.json `key_zones`) and the
-    # recent bars of the chart's timeframe. Display only.
-    @app.get("/api/key-levels", response_model=KeyLevelsView)
-    def key_levels(tf: KeyLevelTf = "1h", account: str | None = None, _: User = Depends(auth)) -> KeyLevelsView:
-        return key_levels_view.key_levels_view(engines_or_none(), st.store(), tf, pd.Timestamp.now("UTC"), account)
-    # ============================================================== end MT5 terminal chart
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})

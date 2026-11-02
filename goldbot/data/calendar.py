@@ -12,13 +12,26 @@ unreadable or implausible list (error, empty, malformed, no closed time in a wee
 with a logged reason, never to "always open". The MetaTrader5 Python package exposes no session schedule
 (`symbol_info().session_deals` is the number of deals in the current session, not its hours), so the MT5 adapter
 reports the broker's documented hours, i.e. these defaults (goldbot/execution/mt5_adapter.py).
+
+Session profiles per asset class (multi-instrument plan 2026-11-02: "Sessions per asset class checked vs broker
+trading_sessions; Friday cut per symbol"; early closes): `SESSION_PROFILES` holds one static server-time table per
+registry `session_profile` (goldbot/instruments.py), from the exchange hours of the instrument's underlying market,
+widened at both ends to the union over the DST weeks in which the server clock (Europe/Athens) and the exchange's
+clock differ, so the table errs towards closed (entries only: a closed minute refuses an entry, it never touches an
+exit). A profile may add server-time pauses inside the day (`daily_pauses`: Osaka's midday break, the CBOT grains'
+morning gap), its own Friday cut (`friday_cut`, read by goldbot/risk/windows.py `weekend_cut`) and its exchange
+holidays (`holidays`: CME Globex closures and early halts, the CBOT/ICE US whole-day closures, the Eurex/ICE Europe
+closing days). A non-gold profile is intersected with the broker's own session list (`intersect_broker`): each can
+only narrow the other, so the MT5 adapter's documented gold hours never open DE40 at 01:30, and a day the broker does
+not list stays closed. `profile_disagreement` names where the two differ (the symbol check reports it). The metals
+profile IS the table above, unchanged: XAUUSD's sessions, cut and holidays are what they were.
 """
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -26,7 +39,7 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, load_record
-from goldbot.data.cme_holidays import cme_metals_closed
+from goldbot.data.cme_holidays import CHICAGO, cme_metals_closed, cme_metals_holidays
 from goldbot.data.timeutil import epoch_ns, server_to_utc, server_wall
 
 log = logging.getLogger("goldbot.calendar")
@@ -212,6 +225,40 @@ class WeekendWindow(FrozenRecord):
         return cut if cut <= ts else cut - pd.Timedelta(days=7)
 
 
+HolidayRule = Literal["none", "cme", "cme_all_day", "eu"]
+EU_TZ = ZoneInfo("Europe/Berlin")
+_ALL_DAY_FROM, _ALL_DAY_UNTIL = time(16, 0), time(19, 0)    # CT: the previous day's break to the evening reopen
+
+
+def _cme_all_day_closed(u: pd.DatetimeIndex) -> np.ndarray:
+    """Every CME holiday, early halt or not, closes the whole trading day: from the previous day's 16:00 CT break to
+    19:00 CT on the holiday (the CBOT grains' and ICE US softs' evening reopen), on Chicago wall clocks per date."""
+    ns = epoch_ns(u)
+    out = np.zeros(len(ns), dtype=bool)
+    for y in range(int(u.year.min()) - 1, int(u.year.max()) + 2):
+        for d in cme_metals_holidays(y):
+            lo = pd.Timestamp.combine(d - timedelta(days=1), _ALL_DAY_FROM).tz_localize(CHICAGO).value
+            hi = pd.Timestamp.combine(d, _ALL_DAY_UNTIL).tz_localize(CHICAGO).value
+            out |= (ns >= lo) & (ns < hi)
+    return out
+
+
+def eu_exchange_holidays(year: int) -> set[date]:
+    """The Eurex / ICE Futures Europe closing days the profiles block (whole Frankfurt day): 1 January, Good Friday,
+    Easter Monday, 1 May, 24, 25, 26 and 31 December. A union of both exchanges, so it errs towards closed."""
+    from pandas.tseries.holiday import EasterMonday, GoodFriday
+    lo, hi = pd.Timestamp(year, 1, 1), pd.Timestamp(year, 12, 31)
+    fixed = {date(year, 1, 1), date(year, 5, 1), date(year, 12, 24), date(year, 12, 25), date(year, 12, 26),
+             date(year, 12, 31)}
+    return fixed | {d.date() for r in (GoodFriday, EasterMonday) for d in r.dates(lo, hi)}
+
+
+def _eu_closed(u: pd.DatetimeIndex) -> np.ndarray:
+    local = u.tz_convert(EU_TZ)
+    days = set().union(*(eu_exchange_holidays(y) for y in range(int(local.year.min()), int(local.year.max()) + 1)))
+    return np.isin(np.asarray(local.date, dtype=object), np.array(sorted(days), dtype=object))
+
+
 class _SessionSource(Protocol):
     def trading_sessions(self, symbol: str) -> list[TradingSession]: ...
 
@@ -238,6 +285,21 @@ class SessionTable(FrozenRecord):
     # hours, which would close it). Off on every other account: their table is unchanged
     always_open: bool = False
     pauses: tuple[PauseWindow, ...] = ()
+    # multi-instrument plan 2026-11-02 (module docstring): the registry session profile this table is, its server-time
+    # pauses inside each trading day, its Friday cut (no entries from it until the week reopens; the engine's
+    # `weekend_cut` for gold), its exchange holidays and whether the broker's session list is intersected with it.
+    # The defaults are the metals profile, i.e. XAUUSD's table as before
+    profile: str = "metals"
+    daily_pauses: tuple[tuple[time, time], ...] = ()
+    friday_cut: time = time(21, 30)
+    holidays: HolidayRule = "none"
+    intersect_broker: bool = False
+
+    @model_validator(mode="after")
+    def _pauses_ordered(self) -> SessionTable:
+        if any(not a < b for a, b in self.daily_pauses):
+            raise ValueError("a daily pause ends after it starts, inside one server day")
+        return self
 
     def server_sessions(self) -> list[ServerSession]:
         """The static rule as a weekly server-time session template (the broker's documented hours): from the end of
@@ -292,13 +354,15 @@ class SessionTable(FrozenRecord):
             return np.where(covered, False, static)
         k = np.searchsorted(starts, ns, side="right") - 1       # last window starting at or before each stamp
         inside = (k >= 0) & (ns < ends[np.clip(k, 0, None)])
+        if self.intersect_broker:                               # a non-gold profile: each can only narrow the other
+            inside = inside & static
         return np.where(covered, inside, static)
 
     def expected_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
         """Minutes a complete feed has bars for: `is_open` less the CME metals holiday closures (goldbot/data/
         cme_holidays.py). For judging missing data only (the engine's history gap guard); `is_open` itself, which
         filters release, resampled and research bars, does not change."""
-        if self.always_open:
+        if self.always_open or self.holidays != "none":      # a profile with holidays already closes them in is_open
             return np.asarray(self.is_open(utc_ts), dtype=bool)
         return np.asarray(self.is_open(utc_ts), dtype=bool) & ~cme_metals_closed(pd.DatetimeIndex(utc_ts))
 
@@ -329,7 +393,23 @@ class SessionTable(FrozenRecord):
         fri_closed = (dow == self.week_close_day) & (
             tsec >= self.week_close_time.hour * 3600 + self.week_close_time.minute * 60
         )
-        return ~(in_break | weekend | fri_closed)
+        closed = in_break | weekend | fri_closed
+        for a, b in self.daily_pauses:
+            closed |= (tsec >= a.hour * 3600 + a.minute * 60) & (tsec < b.hour * 3600 + b.minute * 60)
+        if self.holidays != "none" and len(tsec):
+            closed |= self._holiday_closed(pd.DatetimeIndex(utc_ts))
+        return ~closed
+
+    def _holiday_closed(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
+        """The profile's exchange holidays (see the module docstring): `cme` the CME Globex closures and early halts
+        (goldbot/data/cme_holidays.py), `cme_all_day` every CME holiday as a whole-day closure, `eu` the Eurex / ICE
+        Europe closing days."""
+        u = utc_ts.tz_convert("UTC")
+        if self.holidays == "cme":
+            return cme_metals_closed(u)
+        if self.holidays == "cme_all_day":
+            return _cme_all_day_closed(u)
+        return _eu_closed(u)
 
     def session_windows(self, utc_ts: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
         """(index into `sessions_local` of the session holding each stamp, -1 outside every window; the UTC start of
@@ -374,6 +454,77 @@ class SessionTable(FrozenRecord):
 
 
 DEFAULT_SESSIONS = SessionTable()
+
+
+def _profile(name: str, *, open_at: time, close_at: time, friday_close: time, friday_cut: time,
+             holidays: HolidayRule, pauses: tuple[tuple[time, time], ...] = ()) -> SessionTable:
+    """A non-gold profile: open from `open_at` to `close_at` server time Monday to Friday (the daily break between),
+    the week closing at `friday_close`, intersected with the broker's session list."""
+    return SessionTable(profile=name, daily_break_start=close_at, daily_break_end=open_at, week_close_time=friday_close,
+                        friday_cut=friday_cut, holidays=holidays, daily_pauses=pauses, intersect_broker=True)
+
+
+# Server time (Europe/Athens: UTC+2, UTC+3 in EU summer); each window is the union over the US/EU DST gap weeks. The
+# underlying hours: FX 24/5; Brent opens 01:00 London; CME equity and Treasury futures halt 16:00-17:00 CT; Eurex
+# 01:10-22:00 CET (the Bund from its liquid 08:00); ICE FTSE 01:00-21:00 London; Osaka night 17:00-06:00 and day
+# 08:45-15:45 JST; CBOT grains 19:00-07:45 and 08:30-13:20 CT; ICE US softs 03:30-13:30 ET.
+SESSION_PROFILES: dict[str, SessionTable] = {
+    "metals": SessionTable(),
+    "fx": _profile("fx", open_at=time(0, 1), close_at=time(23, 59), friday_close=time(23, 57),
+                   friday_cut=time(21, 30), holidays="none"),
+    "energy": _profile("energy", open_at=time(3, 5), close_at=time(23, 55), friday_close=time(23, 55),
+                       friday_cut=time(21, 30), holidays="cme"),
+    "index_us": _profile("index_us", open_at=time(1, 10), close_at=time(22, 55), friday_close=time(22, 55),
+                         friday_cut=time(21, 30), holidays="cme"),
+    "index_eu": _profile("index_eu", open_at=time(2, 15), close_at=time(23, 0), friday_close=time(23, 0),
+                         friday_cut=time(21, 0), holidays="eu"),
+    "index_uk": _profile("index_uk", open_at=time(3, 5), close_at=time(23, 0), friday_close=time(23, 0),
+                         friday_cut=time(21, 0), holidays="eu"),
+    "index_jp": _profile("index_jp", open_at=time(2, 50), close_at=time(23, 0), friday_close=time(23, 0),
+                         friday_cut=time(21, 0), holidays="none", pauses=((time(8, 40), time(11, 5)),)),
+    "rates_us": _profile("rates_us", open_at=time(1, 10), close_at=time(22, 55), friday_close=time(22, 55),
+                         friday_cut=time(21, 0), holidays="cme"),
+    "rates_eu": _profile("rates_eu", open_at=time(9, 5), close_at=time(23, 0), friday_close=time(23, 0),
+                         friday_cut=time(21, 0), holidays="eu"),
+    "ags": _profile("ags", open_at=time(3, 5), close_at=time(20, 15), friday_close=time(20, 15),
+                    friday_cut=time(19, 0), holidays="cme_all_day", pauses=((time(14, 40), time(16, 35)),)),
+    "softs": _profile("softs", open_at=time(11, 20), close_at=time(19, 0), friday_close=time(19, 0),
+                      friday_cut=time(17, 30), holidays="cme_all_day"),
+}
+
+
+def session_profile(name: str, server_tz: str = "Europe/Athens") -> SessionTable:
+    """The static table of registry session profile `name` on the account's server clock. An unknown name raises
+    (the engine must not trade a symbol whose hours it does not know)."""
+    if name not in SESSION_PROFILES:
+        raise ValueError(f"unknown session profile {name!r}")
+    t = SESSION_PROFILES[name]
+    return t if t.server_tz == server_tz else t.model_copy(update={"server_tz": server_tz})
+
+
+def profile_disagreement(table: SessionTable, reported: Any) -> list[str]:
+    """Where the broker's session list (`trading_sessions`) and a profile's static table differ, on a one-minute grid
+    over the days the broker reports: minutes the broker calls open that the profile closes (the profile narrows them:
+    no entries), then minutes the profile calls open that the broker closes (the broker's list narrows them). [] when
+    they agree; the reason when the list cannot be used. For the symbol check's report; the engine intersects."""
+    why = _implausible(reported, table.server_tz)
+    if why:
+        return [why]
+    first = min(s.server_date for s in reported)
+    lo = server_midnight_utc(first, table.server_tz)
+    hi = server_midnight_utc(first + timedelta(days=SESSION_DAYS), table.server_tz)
+    grid = pd.date_range(lo, hi, freq="1min", inclusive="left")
+    static = table.model_copy(update={"broker_windows": None, "covers_from": None, "covers_until": None})
+    broker = SessionTable(server_tz=table.server_tz).model_copy(update={
+        "broker_windows": tuple(sorted(s.interval(table.server_tz) for s in reported)), "covers_from": lo,
+        "covers_until": hi})
+    mine, theirs = static.is_open(grid), broker.is_open(grid)
+    out = []
+    for mask, text in ((theirs & ~mine, f"broker open {{n}} min the {table.profile} profile calls closed"),
+                       (mine & ~theirs, f"{table.profile} profile open {{n}} min the broker calls closed")):
+        if mask.any():
+            out.append(text.format(n=int(mask.sum())) + f" (first {grid[np.flatnonzero(mask)[0]].isoformat()})")
+    return out
 
 
 def _implausible(reported: Any, server_tz: str) -> str | None:
@@ -426,8 +577,11 @@ def session_table_cache(t: SessionTable) -> dict[str, Any]:
     windows as ISO strings; the static rule's fields stay at their defaults."""
     def iso(x: pd.Timestamp | None) -> str | None:
         return None if x is None else pd.Timestamp(x).isoformat()
-    # ADR 0062: the two keys only on an always-open table, so every other account's state file is unchanged
+    # ADR 0062: the two keys only on an always-open table, so every other account's state file is unchanged; the
+    # same for a session profile other than metals (multi-instrument plan 2026-11-02)
     lane = {"always_open": True, "pauses": [p.model_dump(mode="json") for p in t.pauses]} if t.always_open else {}
+    if t.profile != "metals":
+        lane["profile"] = t.profile
     return {"server_tz": t.server_tz, "source": t.source, "note": t.note, **lane,
             "covers_from": iso(t.covers_from), "covers_until": iso(t.covers_until),
             "broker_windows": None if t.broker_windows is None else [[iso(a), iso(b)] for a, b in t.broker_windows]}
@@ -440,6 +594,8 @@ def session_table_from_cache(d: Any) -> SessionTable | None:
         base = SessionTable(server_tz=str(d["server_tz"]), always_open=bool(d.get("always_open", False)),
                             pauses=tuple(load_record(PauseWindow, p, source="engine state sessions.pauses")
                                          for p in d.get("pauses") or ()))
+        if "profile" in d:
+            base = session_profile(str(d["profile"]), base.server_tz)
         if base.always_open:
             return base.model_copy(update={"source": "always_open"})
         if win is None:

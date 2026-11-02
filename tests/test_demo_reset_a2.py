@@ -98,13 +98,16 @@ def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active
         if not ex.enabled:
             continue
         assert acc.daily_loss_limit_abs is not None
-        assert sum(p.gbp for p in ex.pots.values()) <= ex.budget_share * acc.daily_loss_limit_abs + 1e-9
+        if ex.pot_budgets:              # demo-limits ADR 0072: a pot without pot budgets is slots only
+            assert sum(p.gbp or 0.0 for p in ex.pots.values()) <= ex.budget_share * acc.daily_loss_limit_abs + 1e-9
         assert all(a.max_loss <= {"scalp": 6.5, "intraday": 30.0, "swing": 40.0, "growth": 24.0}[str(a.style)]
                    for a in ex.arms.values())
         for style in ex.pots:
             mine = [i for i, a in ex.arms.items() if a.style == style]
             assert sum(ex.arms[i].control_share or 0.0 for i in mine) <= 1
-            assert any(not spec[i].retired and spec[i].status == "run" for i in mine), (acc.account_id, style)
+            # a pot of multi-instrument learning pairs only (learning-mi-2026-11-02.md) waits for lane L3 as they do
+            waits = bool(mine) and all(spec[i].status == "blocked" and "L3" in spec[i].note for i in mine)
+            assert waits or any(not spec[i].retired and spec[i].status == "run" for i in mine), (acc.account_id, style)
 
 
 def _retired(arm: exploration.Arm) -> exploration.Arm:

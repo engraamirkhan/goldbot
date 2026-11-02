@@ -374,7 +374,9 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     if not peers:
         raise RegistrationRefused(f"{account_id}: no {style} strategy arm sets the style's per-trade cap")
     cap = round(float(max_loss if max_loss is not None else min(peers)), 2)     # pence: journal and config agree
-    ceiling = min(max(peers), X.SHARE_CAP * pot.gbp, ex.budget_share * float(acc.daily_loss_limit_abs or 0.0))
+    # a pot without its £ sleeve (pot_budgets false, demo-limits ADR 2026-11-02) sets no ceiling of its own
+    sleeve = [X.SHARE_CAP * pot.gbp] if pot.gbp is not None else []
+    ceiling = min(max(peers), *sleeve, ex.budget_share * float(acc.daily_loss_limit_abs or 0.0))
     if not 0 < cap <= ceiling + 1e-9:
         raise RegistrationRefused(f"max_loss {cap:g} is outside the {account_id} {style} caps (0, {ceiling:g}]: its "
                                   "strategy arms' largest, SHARE_CAP x the pot (ADR 0057) and the exploration budget")

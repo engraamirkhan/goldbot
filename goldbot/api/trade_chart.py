@@ -11,6 +11,9 @@ Read-only: nothing here writes, sizes or orders.
 * Levels: the trade's own record (entry, the stop at entry, target, exit) and each stop move the engine journalled
   for its position (store `decisions`, action `trail`, accepted by the broker), in time order.
 * The row comes from trades_ledger.detail: the trade's own result, whatever its arm's read (ADR 0050, 0053).
+* Another instrument (multi-instrument demo; plan: "never pooled with XAUUSD"): the same broker feeds read for its
+  store symbol, rounded to its digits, and never the reference feed (Dukascopy here is gold): no bars of its own is
+  "missing", never gold's candles under a US500 trade.
 """
 from __future__ import annotations
 
@@ -20,13 +23,14 @@ from typing import Any, Literal
 
 import pandas as pd
 
+from goldbot.api.instruments_view import GOLD
 from goldbot.api.schema import ChartBar, StopMove, TradeBars, TradeRow
 from goldbot.config import tf_seconds
 from goldbot.data.resample import BAR_COLUMNS, resample_bars
 
 log = logging.getLogger(__name__)
 
-__all__ = ["BARS_AFTER", "BARS_BEFORE", "MAX_BARS", "MISSING", "REFERENCE", "recent_bars", "trade_bars"]
+__all__ = ["BARS_AFTER", "BARS_BEFORE", "MAX_BARS", "MISSING", "REFERENCE", "trade_bars"]
 
 BARS_BEFORE = 30                    # spec §3.3: "30 bars before entry to 5 after exit"
 BARS_AFTER = 5
@@ -63,7 +67,7 @@ def _broker(account: str) -> str | None:
         return None
 
 
-def _sources(account: str | None) -> list[tuple[str, str, Literal["broker", "reference"]]]:
+def _sources(account: str | None, gold: bool = True) -> list[tuple[str, str, Literal["broker", "reference"]]]:
     out: list[tuple[str, str, Literal["broker", "reference"]]] = []
     if account:
         out.append(("bars_1m_broker", account, "broker"))
@@ -71,17 +75,29 @@ def _sources(account: str | None) -> list[tuple[str, str, Literal["broker", "ref
         if broker:
             out.append(("bars_1m_live", broker, "broker"))
         out.append(("bars_1m", account, "broker"))
-    out.append(("bars_1m", REFERENCE, "reference"))
+    if gold:                                 # the reference feed is gold's only
+        out.append(("bars_1m", REFERENCE, "reference"))
     return out
 
 
-def _bars(store: Any, account: str | None, tf: str, lo: pd.Timestamp,
-          hi: pd.Timestamp) -> tuple[list[ChartBar], Literal["broker", "reference"] | None]:
+def _symbol_terms(symbol: str) -> tuple[str, int]:
+    """(store symbol, digits) of an instrument key; gold and an unknown key keep XAUUSD's (2 digits)."""
+    from goldbot.api.instruments_view import _registry
+    reg = _registry(None)
+    spec = reg.instruments.get(symbol) if reg is not None else None
+    return (spec.store_symbol, spec.digits) if spec is not None else (symbol, 2)
+
+
+def _bars(store: Any, account: str | None, tf: str, lo: pd.Timestamp, hi: pd.Timestamp,
+          symbol: str = GOLD) -> tuple[list[ChartBar], Literal["broker", "reference"] | None]:
     # a daily bar opens at the previous settlement (resample_bars): read a day either side
     pad = pd.Timedelta(days=1) if tf == "1d" else pd.Timedelta(0)
-    for table, source, feed in _sources(account):
+    gold = symbol == GOLD
+    store_symbol, digits = ("XAUUSD", 2) if gold else _symbol_terms(symbol)
+    for table, source, feed in _sources(account, gold):
         try:
-            m1 = store.read(table, source=source, start=lo - pad, end=hi + pad)
+            m1 = (store.read(table, source=source, start=lo - pad, end=hi + pad) if gold
+                  else store.read(table, source=source, symbol=store_symbol, start=lo - pad, end=hi + pad))
         except Exception as exc:          # noqa: BLE001 - one unreadable feed is skipped, never a failed chart
             log.warning("trade chart: %s/%s unreadable (%s)", table, source, type(exc).__name__)
             continue
@@ -93,20 +109,10 @@ def _bars(store: Any, account: str | None, tf: str, lo: pd.Timestamp,
         b = b[(ts >= lo) & (ts < hi)]
         if b.empty:
             continue
-        return [ChartBar(t=t, o=round(o, 2), h=round(h, 2), l=round(lo_, 2), c=round(c, 2))
+        return [ChartBar(t=t, o=round(o, digits), h=round(h, digits), l=round(lo_, digits), c=round(c, digits))
                 for t, o, h, lo_, c in zip(pd.to_datetime(b["ts_utc"], utc=True), b["bid_open"], b["bid_high"],
                                            b["bid_low"], b["bid_close"], strict=True)], feed
     return [], None
-
-
-def recent_bars(store: Any, account: str | None, tf: str, n: int,
-                now: pd.Timestamp) -> tuple[list[ChartBar], Literal["broker", "reference"] | None]:
-    """The last `n` complete-or-forming bars of `tf` before now, from the same feeds in the same order as a trade's
-    chart (the key-level chart, api/key_levels_view.py)."""
-    step = pd.Timedelta(seconds=tf_seconds(tf))
-    days = pd.Timedelta(days=max(1.0, n * step / pd.Timedelta(days=1) * 1.6 + 3))   # weekends and the daily break
-    bars, feed = _bars(store, account, tf, now - days, now.ceil("min"))
-    return bars[-n:], feed
 
 
 def _stop_moves(store: Any, row: TradeRow, now: pd.Timestamp) -> list[StopMove]:
@@ -138,7 +144,7 @@ def trade_bars(row: TradeRow, store: Any, now: pd.Timestamp) -> TradeBars:
     end = pd.Timestamp(row.exit_utc) if row.exit_utc is not None else now
     tf = _timeframe(row, pd.Timestamp(row.opened_utc), end)
     lo, hi = _window(row, tf, now)
-    bars, feed = _bars(store, row.account, tf, lo, hi)
+    bars, feed = _bars(store, row.account, tf, lo, hi, row.symbol)
     return TradeBars(trade_id=row.trade_id, timeframe=tf, feed=feed, bars=bars, missing=None if bars else MISSING,
                      side=row.side, entry=row.entry, entry_utc=row.opened_utc, stop=row.stop,
                      stop_moves=_stop_moves(store, row, now), target=row.target, exit=row.exit, exit_utc=row.exit_utc)

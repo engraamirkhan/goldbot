@@ -16,7 +16,13 @@ rules on 15m bars.
 Sessions are on city clocks, converted per date (each city's own DST): the Asia range runs 00:00 UTC to the London open
 (08:00 London) and is broken in London 08:00-12:00 London; the London range runs 08:00 London to the New York open
 (08:30 New York) and is broken in New York 08:30-11:00 New York. A range needs MIN_RANGE_BARS 15m bars; the common
-filters (tier-1 blackout, rollover, Friday evening) apply to both arms."""
+filters (tier-1 blackout, rollover, Friday evening) apply to both arms.
+
+Multi-instrument learning arms (docs/research/learning-mi-2026-11-02.md, ADR 0061 amendment 2026-11-02): instead of the
+named `sessions`, a row may give its instrument's OWN session as `session_local` {zone, range_from, range_to, break_to}
+(HH:MM on one city clock, the 15m grid, range_from < range_to < break_to on the same local day): the range is
+range_from..range_to of that clock on each weekday, broken by the first 15m close in (range_to, break_to]. One session,
+named OWN in the control's seed. GS1 and GS1C carry no `session_local`: their rows, hashes and decisions are unchanged."""
 from __future__ import annotations
 
 import hashlib
@@ -49,15 +55,37 @@ SESSIONS: dict[str, tuple[Clock, Clock, Clock]] = {
 }
 
 
+OWN = "own"                     # the session name of a `session_local` row (the control's seed key)
+SESSION_LOCAL_KEYS = frozenset({"zone", "range_from", "range_to", "break_to"})
+Session = tuple[Clock, Clock, Clock]
+
+
 def _at(day: pd.Timestamp, spec: Clock) -> pd.Timestamp:
     zone, h, m = spec
     return pd.Timestamp(year=day.year, month=day.month, day=day.day, hour=h, minute=m, tz=zone).tz_convert("UTC")
 
 
+def _bounds(day: pd.Timestamp, clocks: Session) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]:
+    a, b, c = clocks
+    return _at(day, a), _at(day, b), _at(day, c)
+
+
 def session_bounds(day: pd.Timestamp, session: str) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]:
     """(range start, range end, break window end) of `session` on `day`, UTC."""
-    a, b, c = SESSIONS[session]
-    return _at(day, a), _at(day, b), _at(day, c)
+    return _bounds(day, SESSIONS[session])
+
+
+def _clock(zone: str, hhmm: str) -> Clock:
+    return zone, int(hhmm[:2]), int(hhmm[3:])
+
+
+def arm_sessions(params: dict) -> list[tuple[str, Session]]:
+    """(name, clocks) of every session the row trades: its `session_local` (one session, OWN) or its named `sessions`."""
+    own = params.get("session_local")
+    if own is not None:
+        z = str(own["zone"])
+        return [(OWN, (_clock(z, own["range_from"]), _clock(z, own["range_to"]), _clock(z, own["break_to"])))]
+    return [(s, SESSIONS[s]) for s in params["sessions"]]
 
 
 def session_of(close: pd.Timestamp) -> str | None:
@@ -70,10 +98,11 @@ def session_of(close: pd.Timestamp) -> str | None:
     return None
 
 
-def control_close(arm_id: str, day: pd.Timestamp, session: str) -> pd.Timestamp:
+def control_close(arm_id: str, day: pd.Timestamp, session: str, clocks: Session | None = None) -> pd.Timestamp:
     """The control's decision close in `session` on `day`: uniform over the break window's 15m closes, from the seed
-    `SEED_PREFIX|arm|day|session`; the schedule fixes it, not the bars present (live == history)."""
-    _, start, end = session_bounds(day, session)
+    `SEED_PREFIX|arm|day|session`; the schedule fixes it, not the bars present (live == history). `clocks`: the
+    session's own clocks (a `session_local` row), else the named session's."""
+    _, start, end = _bounds(day, SESSIONS[session] if clocks is None else clocks)
     n = max(1, int((end - start) / STEP))
     key = f"{SEED_PREFIX}|{arm_id}|{day:%Y-%m-%d}|{session}"
     u = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big") / 2 ** 64
@@ -94,14 +123,14 @@ def _rows(arm: Arm, ctx: RuleContext, control: bool) -> pd.DataFrame:
     for day in pd.DatetimeIndex(ts.normalize().unique()):
         if day.dayofweek >= 5:
             continue
-        for session in p["sessions"]:
-            r0, r1, w1 = session_bounds(day, session)
+        for session, clocks in arm_sessions(p):
+            r0, r1, w1 = _bounds(day, clocks)
             in_range = np.flatnonzero((ts >= r0) & (ts < r1))
             if len(in_range) < MIN_RANGE_BARS:
                 continue                                      # no range formed: GS1 not eligible, no control either
             window = np.flatnonzero((close > r1) & (close <= w1))
             if control:
-                at = control_close(arm.id, day, session)
+                at = control_close(arm.id, day, session, clocks)
                 hit = window[close[window] == at]
                 if len(hit) and ok[hit[0]]:
                     rows.append((int(hit[0]), hash_side(arm.id, at), float(p["stop_atr"]) * a[hit[0]]))
@@ -136,11 +165,55 @@ def check(arm: Arm) -> None:
     p = arm.params
     if arm.timeframe != "15m":
         raise ValueError("a growth session-range arm runs on 15m bars")
-    sessions = p.get("sessions")
-    if not isinstance(sessions, list) or not sessions or set(sessions) - set(SESSIONS):
-        raise ValueError(f"sessions must be a non-empty list of {sorted(SESSIONS)}")
+    if "session_local" in p:
+        if "sessions" in p:
+            raise ValueError("a session-range row names its sessions or its own session_local, not both")
+        _check_session_local(p["session_local"])
+    else:
+        sessions = p.get("sessions")
+        if not isinstance(sessions, list) or not sessions or set(sessions) - set(SESSIONS):
+            raise ValueError(f"sessions must be a non-empty list of {sorted(SESSIONS)}")
     for k in ("stop_atr", "target_r", "hold_bars"):
         if k not in p:
             raise ValueError(f"missing params.{k}")
     if arm.rule == "session_range_control" and not p.get("control"):
         raise ValueError("a growth control names the arm it controls (params.control)")
+
+
+def _check_session_local(own: object) -> None:
+    """`session_local`: exactly zone, range_from, range_to, break_to; a known zone; HH:MM on the 15m grid; the range at
+    least MIN_RANGE_BARS bars and range_from < range_to < break_to on one local day (no session across midnight)."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    if not isinstance(own, dict) or set(own) != SESSION_LOCAL_KEYS:
+        raise ValueError(f"session_local needs exactly {sorted(SESSION_LOCAL_KEYS)}; got {own!r}")
+    try:
+        ZoneInfo(str(own["zone"]))
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"session_local: unknown time zone {own['zone']!r}") from exc
+    mins = []
+    for key in ("range_from", "range_to", "break_to"):
+        v = own[key]
+        if not (isinstance(v, str) and len(v) == 5 and v[2] == ":" and v[:2].isdigit() and v[3:].isdigit()
+                and int(v[:2]) < 24 and int(v[3:]) % 15 == 0):
+            raise ValueError(f"session_local {key}: {v!r} is not HH:MM on the 15m grid")
+        mins.append(int(v[:2]) * 60 + int(v[3:]))
+    if not mins[0] < mins[1] < mins[2]:
+        raise ValueError("session_local needs range_from < range_to < break_to on one local day")
+    if mins[1] - mins[0] < MIN_RANGE_BARS * 15:
+        raise ValueError(f"session_local's range must hold at least {MIN_RANGE_BARS} 15m bars")
+    for key, m in zip(("range_from", "range_to", "break_to"), mins, strict=True):
+        if _in_dst_gap(str(own["zone"]), m):
+            raise ValueError(f"session_local {key}: {own[key]} {own['zone']} does not exist on the day the clocks "
+                             "go forward (a DST gap); pick a time outside it")
+
+
+DST_CHECK_DAYS = pd.date_range("2000-01-01", "2040-12-31", freq="D")   # every rule change the history and plan span
+
+
+def _in_dst_gap(zone: str, minute_of_day: int) -> bool:
+    """Trading-safety review of #310, L4: a `session_local` clock that some day skips (02:30 New York on the spring
+    Sunday) would be read as another instant (pandas shifts it by the gap) and give that day's range other bounds;
+    such a clock is refused at load, never localised silently."""
+    local = DST_CHECK_DAYS + pd.Timedelta(minutes=minute_of_day)
+    got = local.tz_localize(zone, ambiguous=np.ones(len(local), dtype=bool), nonexistent="NaT")
+    return bool(np.asarray(got.isna()).any())

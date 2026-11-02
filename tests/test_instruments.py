@@ -172,5 +172,13 @@ def test_the_bridge_client_sends_todays_positions_call_unless_a_symbol_is_asked_
     b.positions(260100)
     b.positions(260100, symbol="XAGUSD")
     assert calls == [("positions", 260100), ("positions", 260100, "XAGUSD")]
-    with pytest.raises(NotImplementedError):
-        b.ticks_many(["XAUUSD"], pd.Timestamp("2026-11-02", tz="UTC"))
+    # lane L4 put ticks_many on the wire (protocol v10): one call for every symbol
+    b._ticks_many_served = True
+    calls.clear()
+    since = pd.Timestamp("2026-11-02", tz="UTC")
+    def record(method: str, *args: Any) -> Any:
+        calls.append((method, *args))
+        return {}
+    b._call = record  # type: ignore[method-assign]
+    assert b.ticks_many(["XAUUSD"], since) == {"XAUUSD": []}
+    assert calls == [("ticks_many", ["XAUUSD"], since)]

@@ -34,6 +34,35 @@ class EntryBlock(BaseModel):
     runbook_url: str | None = None
 
 
+# ============================================================================= Instruments (multi-instrument demo)
+# goldbot/api/instruments_view.py (multi-instrument plan lane L4; UI spec 2026-11-02). Groups are the RiskGate's
+# correlation groups (goldbot/instruments.py), in the dashboard's fixed order
+InstrumentGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags"]
+# what a symbol of an account can do now (the engine's per-symbol report): grey = market_closed/disabled, amber =
+# stale/terms_missing, red = group_cap only (UI spec)
+InstrumentState = Literal["can_enter", "market_closed", "stale", "group_cap", "terms_missing", "disabled"]
+
+
+class InstrumentView(BaseModel):
+    """One instrument of one account (GET /api/instruments): how to show its prices and what it can do now."""
+    symbol: str                             # the instrument key (instruments.yaml): XAUUSD, US500, USDJPY ...
+    label: str                              # the owner's word: "Gold", "S&P 500", "Dollar / yen"
+    account: str                            # config name, digits cut
+    group: InstrumentGroup
+    digits: int                             # price decimals (the broker's terms)
+    unit: str                               # "USD/oz", "pts", "" (an FX rate needs none)
+    quote_ccy: str                          # the currency its P&L is made in (SYMBOL_CURRENCY_PROFIT)
+    state: InstrumentState | Literal["unknown"]   # unknown: the engine does not report this symbol (yet)
+
+
+class EntrySymbol(BaseModel):
+    """One symbol's entry state on a multi-instrument account (EntryStatus.symbols): exits never depend on it."""
+    symbol: str
+    state: InstrumentState
+    text: str                               # plain words: "Market closed", "Feed stale 3 min", "Equity cap spent"
+    clears_at: datetime | None = None       # when it clears by itself (a reopen, a cap reset), when known
+
+
 class EntryStatus(BaseModel):
     """Can this account take a new trade right now? open: yes; partial: yes, except the strategies named; waiting:
     no, and every reason clears by itself; blocked: no, and something needs the owner. Exits never depend on it."""
@@ -44,6 +73,9 @@ class EntryStatus(BaseModel):
     exits: str                              # what still protects open trades
     as_of: datetime | None = None           # the engine's last report
     clears_at: datetime | None = None       # waiting only: when the last reason clears by itself, if every one says
+    # multi-instrument accounts only (empty for a single-symbol account): each symbol's state, the account-wide
+    # `state` above still decides whether anything can enter at all
+    symbols: list[EntrySymbol] = Field(default_factory=list)
 
 
 class AccountSummary(BaseModel):
@@ -226,6 +258,16 @@ class RiskTodayView(BaseModel):
     why: str                                # one plain sentence
 
 
+class GroupExposure(BaseModel):
+    """One correlation group's open notional against its cap on one account (the RiskGate's group cap), account
+    currency. `cap` None: the engine does not publish one ("cap not published")."""
+    group: InstrumentGroup
+    notional: float
+    cap: float | None
+    lots_by_symbol: dict[str, float] = Field(default_factory=dict)
+    open_n: int = 0
+
+
 class LimitAccount(BaseModel):
     """One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in
     core.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say."""
@@ -259,6 +301,11 @@ class LimitAccount(BaseModel):
     last_change: LimitChange | None
     error: str | None                       # why the limits cannot be shown (the engines fail closed on it)
     risk_today: RiskTodayView | None = None   # dynamic limits: "why this limit today"; null when they are off
+    # multi-instrument (empty / null on a single-symbol engine): every group in the fixed order, zero included, and
+    # the account's heat, the loss if every stop on every symbol were hit, against its limit
+    groups: list[GroupExposure] = Field(default_factory=list)
+    heat_used: float | None = None
+    heat_limit: float | None = None
 
 
 class LimitsSupervisorView(BaseModel):
@@ -805,7 +852,7 @@ class TradesOverview(BaseModel):
 # ============================================================================= Home status card stack
 # goldbot/api/home_cards.py (docs/ux/home-redesign-2026-10-19.md, Decision 2026-10-19); read-only, viewer and above
 class OpenPosition(BaseModel):
-    """One open position (N1): money in the account currency, prices in USD per oz. `floating_pnl` is at the engine's
+    """One open position (N1): money in the account currency, prices in its instrument's quote (`symbol`). `floating_pnl` is at the engine's
     mid price before spread, commission and swap; None when the engine publishes no price or conversion."""
     account: str                            # config name, any run of 5+ digits cut
     mode: Literal["demo", "live", "paper"] | None
@@ -835,6 +882,7 @@ class OpenPosition(BaseModel):
     held_s: float | None = None             # since the fill
     hold_limit_s: float | None = None       # the most it is held (max bars x timeframe); None when not bounded by time
     fx_age_s: float | None = None           # age of the engine's USD -> account rate (stale past 120 s)
+    symbol: str = "XAUUSD"                  # the instrument key (prices in its digits and unit)
 
 
 class OpenPositionsView(BaseModel):
@@ -892,6 +940,17 @@ class LossMeter(BaseModel):
     binding: Literal["probe_stop", "daily_limit"]   # the limit with the least left: it stops entries first
 
 
+class SymbolDay(BaseModel):
+    """One instrument's day on one account (TodayAccount.by_symbol), account currency, from the trade ledger. `day_pnl`
+    = closed_pnl + open_pnl; None when either is unknown (never a guess)."""
+    symbol: str
+    day_pnl: float | None
+    closed_pnl: float | None
+    open_pnl: float | None
+    closed_n: int
+    open_n: int
+
+
 class TodayAccount(BaseModel):
     """Today's money for one account (never summed across accounts or modes)."""
     account: str
@@ -927,6 +986,10 @@ class TodayAccount(BaseModel):
     week_to_date: PeriodNet | None = None
     month_to_date: PeriodNet | None = None
     quiet_day: bool | None = None           # the volatility screen's verdict; None while no screen publishes one
+    # multi-instrument: one row per instrument traded today or open now (the movers and "By instrument" table); a
+    # single-instrument account has at most one row and the dashboard shows no movers for it
+    by_symbol: list[SymbolDay] = Field(default_factory=list)
+    instruments_n: int | None = None        # the instruments this account can trade (its list); None: not known
 
 
 class TodayView(BaseModel):
@@ -968,7 +1031,7 @@ class CostSplit(BaseModel):
 
 
 class TradeRow(BaseModel):
-    """One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:
+    """One trade (opened and closed merged). Money in the account currency, prices in its instrument's quote (`symbol`), times UTC. Closed:
     `pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid
     price from the fill (the entry spread is inside it)."""
     trade_id: str
@@ -1010,6 +1073,7 @@ class TradeRow(BaseModel):
     excluded_reason: str | None
     stale: bool                             # open: the engine's figures or rate are old, never shown as current
     position_id: int | None = None          # the broker's position (the "Details" disclosure; its stop moves)
+    symbol: str = "XAUUSD"                  # the instrument key (instruments.yaml); prices in its digits and unit
 
 
 class TradeTotals(BaseModel):
@@ -1037,6 +1101,8 @@ class TradesPage(BaseModel):
     next_cursor: str | None                 # pass as `cursor` for the next page; None on the last
     totals: TradeTotals
     unreadable: list[TradeSource]           # their trades are missing, not zero
+    # the instruments with a trade under every filter but the symbol and group ones (the filter panel's facet)
+    symbols: list[str] = Field(default_factory=list)
 
 
 # ============================================================================= Trade chart (GET /api/trades/{id}/bars)
@@ -1056,7 +1122,7 @@ class StopMove(BaseModel):
 
 
 class TradeBars(BaseModel):
-    """`bars` (bid prices, USD/oz) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while
+    """`bars` (bid prices, in the instrument's quote) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while
     open); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,
     `stop_moves` each accepted move after it, in time order."""
     trade_id: str
@@ -1072,47 +1138,6 @@ class TradeBars(BaseModel):
     target: float | None
     exit: float | None
     exit_utc: datetime | None
-
-
-# ============================================================================= Key levels (GET /api/key-levels)
-# goldbot/api/key_levels_view.py: each account's current key zones (goldbot/features/key_levels.py, published by
-# goldbot/engine/key_zones.py) and the recent bars of the chart's timeframe. Display only.
-KeyLevelTf = Literal["15m", "1h", "4h", "1d"]
-
-
-class KeyLevelZone(BaseModel):
-    price: float                            # weight-averaged level price, USD/oz
-    lo: float                               # the zone's band
-    hi: float
-    strength: float                         # timeframe weight x touches, age-decayed
-    strength_pct: float | None              # percentile among the trailing 250 days' zones; None while warming up
-    tfs: list[str]                          # timeframes it spans (15m 1h 4h 1d 1w 1M; "round": a $50/$100 number)
-    touches: int
-    role: Literal["support", "resistance", "inside"]
-    flipped: bool                           # its role is now the opposite of how it was born (a close went through)
-
-
-class AccountKeyLevels(BaseModel):
-    account_id: str
-    as_of: datetime                         # the 15m close the zones were built at
-    price: float | None
-    atr_1d: float | None
-    history_days: float | None              # days of history behind them (the broker's M15, about 800 days)
-    pct_ready: bool = False                 # strength_pct has its 20 days of samples
-    zones_total: int | None = None          # every research zone in the book; the display shows the strongest few
-    stale: bool = False                     # as_of over STALE_AFTER old (market closed, or the engine stalled)
-    above: list[KeyLevelZone]               # nearest first
-    below: list[KeyLevelZone]
-
-
-class KeyLevelsView(BaseModel):
-    """`bars` (bid, USD/oz): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the
-    reference feed; empty when none are stored); `accounts`: every engine that published zones."""
-    timeframe: KeyLevelTf
-    account_id: str | None
-    feed: Literal["broker", "reference"] | None
-    bars: list[ChartBar]
-    accounts: list[AccountKeyLevels]
 
 
 # ============================================================================= Strategy board (GET /api/strategies/board)

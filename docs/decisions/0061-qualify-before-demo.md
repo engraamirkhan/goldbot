@@ -94,3 +94,44 @@ rule for that one experiment.
 Consequences: icm-demo gains GS1 (until 2026-11-27) and GS1C, in a growth pot of £80 carved from its scalp pot inside
 the unchanged £198. No cap moves: the daily £220, the weekly 6%, the RiskGate's per-trade maximum and ADR 0043 X3 all
 still bind. Open positions keep every exit after the expiry.
+
+## Amendment 2026-11-02 (owner 2026-11-02; the demo learning class, ADR 0072)
+Context: the owner, 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to test,
+learn and improve signals". Asked whether a demo "learning" class should exist, the owner answered YES. No strategy has
+qualified yet, so this rule had stopped every demo strategy arm.
+
+- **A fourth role, `learning`, with its own bounds, never a qualification.** A `role: learning` row enters on demo
+  without a `qualification` when `research.arms.learning_refusal` and the loader's cross-row checks
+  (`learning_cross_refusals`) all pass:
+  - its `learning.k_id` is its own K row (`learning_k_id`, derived from the arm, its hash and its prereg) and resolves
+    in the registry. Without the registry it is refused (fail closed);
+  - its `learning.prereg` doc exists in the repo;
+  - its `learning.control` names a matched control row (role control; same timeframe and the same fixed bracket: stop,
+    target, hold);
+  - its `until` is not past, at most 45 days away and at most 45 days after its `since` (the registration day; only
+    fills sent on or after it count, quant ruling 2026-11-02 (1)), and `since` is not in the future;
+  - it has no qualification block, and no growth sizing or pyramid adds on the account (`exploration.config_for`).
+- **Controls.** Every learning arm has its own dedicated control (quant rulings 2026-11-02 (2)/(3)): the arm's
+  timeframe, bracket and window (`params.control: "learning:<arm>"`). It is refused with its arm once the arm may not
+  enter (or is cost-suspended), at load and once a minute in the engine. ZCD and ZCV stay H-81's own controls,
+  unchanged.
+- **The engine stops.** `engine/exploration_learning.py` stops a learning arm at whichever comes first:
+  - 300 admissible fills: its read is due;
+  - its `loss_cap_gbp` (20 x its per-trade cap);
+  - its end.
+
+  It also refuses any entry whose loss, with the arm's realised loss and open risk, would reach the cap (trading-safety
+  L1), enforces `learning_max_open`, counts censored fills apart from the 300 (quant (5)) and fails closed on an
+  unreadable ledger.
+- **Evidence.** Learning fills are stamped `evidence_class: learning`.
+  - A qualification citing a learning K row is refused, both by the registry row's family and by the spec's own k_ids.
+  - The perf report and the daily review show learning arms in their own section, never in the family rankings.
+  - The bandit never allocates them, and their rows train no style model.
+  - A learning read can only motivate a pre-registered history qualification (a screen and a confirm).
+- **Registered 2026-11-02** (docs/research/learning-2026-11-02.md): the 15 arms the qualification gate refused that have
+  a fixed bracket, each with its own new dedicated control (15). Left refused, because no random control can match
+  them: BXR15, BXR30, BXR1H, BXR4H, XBB15, S1A and S1B.
+
+Consequences: unqualified strategies trade on demo again, labelled and bounded; the rule above stands for every other
+arm and for every account that is not a demo probe_only host. Each learning arm and its control need their K rows on
+the brain first (30 rows, `scripts/record_learning_k_rows.py`, inside the quarter's budget).

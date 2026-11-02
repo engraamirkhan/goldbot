@@ -22,10 +22,12 @@ from goldbot.ops.services.engine import engine_limits
 from goldbot.risk.supervisor import Supervisor
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Terminal
+from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
 
 SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
          "KA15", "XC15",                                                                     # wave 2 (8.8, 8.9)
-         "Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P"}                                           # H-81 (2026-10-27)
+         "Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P",                                           # H-81 (2026-10-27)
+         "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ4P", "LCZ5P", "LCZ7P"}    # learning controls (ADR 0072)
 INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             # arms expansion wave 1 (2026-10-26)
             "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",
@@ -33,10 +35,14 @@ INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             "F2A", "F2C", "OBR15", "BXR15", "BXR30", "BXR1H"}
 SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
 # H-81 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pots): icm-demo's and vantage-demo's scalp strata
-DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD"}
+DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD",
+              "LCZ3D", "LCZ4D", "LCZ6D", "LCZ7D", "LCZ9D", "LCZ10D"}                # LC*: ADR 0072 learning controls
 GROWTH = {"GS1", "GS1C"}           # growth sprint 2026-11-01: icm-demo only
-VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV"}
+VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
 WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
+# multi-instrument demo (lane L3): each listed instrument's random controls, on the account that lists it
+ICM_INSTRUMENTS = {f"{p}-{k}" for k in ['XAGUSD', 'XPTUSD', 'XAUEUR', 'XAUAUD', 'US500', 'USTEC', 'DE40', 'UK100', 'JP225', 'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'XTIUSD', 'XBRUSD', 'XNGUSD'] for p in ("S0", "I0")}
+VANTAGE_INSTRUMENTS = {f"{p}-{k}" for k in ['UST10Y', 'BUND10Y', 'COPPER', 'WHEAT', 'SOYBEAN', 'SUGAR', 'COFFEE'] for p in ("S0", "I0")}
 VANTAGE = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
            "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",   # wave 1
            "KSQ1", "PDC1", "DON4"}                                                                     # wave 2
@@ -75,20 +81,24 @@ def test_icm_demo_ships_as_the_intraday_swing_and_h81_scalp_learning_host(accs):
     acc = accs["icm-demo"]
     ex = acc.exploration
     assert acc.enabled and acc.mode == "demo" and acc.probe_only and acc.login is None
-    assert not acc.shadow_host and not acc.cost_probe.enabled and acc.max_positions == 18
+    # demo-limits ADR 0072 (2026-11-02): host cap 24 (23 open), pots slots only; the £198 budget is unchanged
+    assert not acc.shadow_host and not acc.cost_probe.enabled and acc.max_positions == 24
     assert ex.enabled and set(ex.arms) == INTRADAY | SWING | DEMO_SCALP | GROWTH \
         and set(ex.pots) == {"scalp", "intraday", "swing", "growth"}
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in DEMO_SCALP} == {("scalp", 6.5)}
-    assert ex.budget_share * 220 == pytest.approx(198, abs=0.05) and ex.max_open_total == 17
-    assert sum(p.gbp for p in ex.pots.values()) == pytest.approx(198)
+    assert ex.budget_share * 220 == pytest.approx(198, abs=0.05) and ex.max_open_total == 23
+    assert not ex.pot_budgets
 
 
 def test_icm_probe_ships_the_scalp_arms_and_the_cost_probes(accs):
     acc = accs["icm-probe"]
     ex = acc.exploration
-    assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(30, abs=0.05)
-    assert ex.enabled and set(ex.arms) == SCALP and set(ex.pots) == {"scalp"}
-    assert ex.pots["scalp"].gbp == 168 and ex.max_open_total == 17       # one slot of 18 kept for the scheduled probe
+    # demo-limits ADR 0072 (2026-11-02): the probe sleeve £30 -> £52; the scalp pot slots only, 23 of 24 host slots
+    assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
+    # learning-mi-2026-11-02.md and lane L3: the multi-instrument pairs and controls beside the scalp arms
+    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"]
+    assert set(ex.pots) == {"scalp", "intraday"}
+    assert ex.pots["scalp"].gbp is None and ex.max_open_total == 23      # one slot of 24 kept for the scheduled probe
     assert ex.budget_share * 220 == pytest.approx(168, abs=0.05)
 
 
@@ -100,7 +110,8 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         clash = {arm: seen[arm] for arm in acc.exploration.arms if arm in seen}
         assert not clash, f"{aid} shares arms with another host: {clash}"
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
-    assert set(seen) == SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
+    assert set(seen) == (SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
+                         | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"])
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):
@@ -118,7 +129,7 @@ def _host_engine(tmp_path: Path, acc: acc_mod.Account) -> Engine:
     s = load_settings()
     cfg = ExplorationConfig(enabled=True, budget_share=acc.exploration.budget_share, max_open_total=17,
                             pots={k: exploration.Pot(gbp=p.gbp, max_open=p.max_open)
-                                  for k, p in acc.exploration.pots.items()},
+                                  for k, p in acc.exploration.pots.items()}, pot_budgets=acc.exploration.pot_budgets,
                             arms=(_arm("I0"),) if "intraday" in acc.exploration.pots else (_arm("S0", style="scalp"),))
     limits = engine_limits(s, acc).model_copy(update={"exploration_arms": {"I0": 17.0, "S0": 6.5}})
     return Engine(EngineConfig(account_id=acc.account_id, broker_name=acc.broker, mode=acc.mode,

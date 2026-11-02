@@ -176,8 +176,8 @@ def m15_rates() -> pd.DataFrame:
 class Bridge:
     """get_bars_range / symbol_info as the bridge serves them; records each call."""
 
-    def __init__(self, rates: pd.DataFrame, fail: bool = False):
-        self.rates, self.fail = rates, fail
+    def __init__(self, rates: pd.DataFrame, fail: bool = False, pages: int | None = None):
+        self.rates, self.fail, self.pages = rates, fail, pages      # pages: a slow terminal fails after this many
         self.calls: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
 
     def symbol_info(self, symbol: str) -> Any:
@@ -185,7 +185,7 @@ class Bridge:
 
     def get_bars_range(self, symbol: str, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
         self.calls.append((tf, start, end))
-        if self.fail:
+        if self.fail or (self.pages is not None and len(self.calls) > self.pages):
             raise ConnectionError("bridge down")
         r = self.rates
         return r[(r["ts_utc"] >= start) & (r["ts_utc"] <= end)].reset_index(drop=True)
@@ -297,20 +297,122 @@ def test_a_bridge_that_times_out_gets_exactly_one_request_of_20_s(tmp_path):
     assert w.next_pull is not None
 
 
-def test_one_pull_per_bridge_at_a_time_and_a_random_first_delay(tmp_path, m15_rates):
+HOLDER = """
+import sys, time
+from pathlib import Path
+from goldbot.engine.key_zones import box_lock
+lock_dir, box, ready, done = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4])
+with box_lock(lock_dir, box) as mine:
+    ready.write_text("held" if mine else "busy")
+    t0 = time.time()
+    while not done.exists() and time.time() - t0 < 60:
+        time.sleep(0.05)
+"""
+
+
+def test_one_pull_per_mt5_box_across_engine_processes(tmp_path, m15_rates):
+    import subprocess
+    import sys
+    locks, ready, done = tmp_path / "state" / "locks", tmp_path / "ready", tmp_path / "done"
+    box = key_zones.box_key("http://box-a.invalid:8765")
+    assert box == key_zones.box_key("http://box-a.invalid:9999") != key_zones.box_key("http://box-b.invalid:8765")
+    holder = subprocess.Popen([sys.executable, "-c", HOLDER, str(locks), box, str(ready), str(done)],
+                              cwd=Path(__file__).resolve().parents[1])
+    try:
+        t0 = time.time()
+        while not ready.exists() and time.time() - t0 < 60:
+            time.sleep(0.05)
+        assert ready.read_text() == "held"                  # another engine process pulls on this box
+        w = _worker(m15_rates, tmp_path)
+        w.attach(w.client, box, lock_dir=locks, jitter_s=0)
+        w.next_pull = None                                  # due now (the engine clock of this test)
+        w.refresh(NOW)
+        assert w.client.calls == [] and w.next_pull == NOW + key_zones.BUSY_RETRY
+        other = _worker(m15_rates, tmp_path / "b")
+        other.attach(other.client, key_zones.box_key("http://box-b.invalid:8765"), lock_dir=locks, jitter_s=0)
+        other.next_pull = None
+        other.refresh(NOW)
+        assert other.client.calls                           # another box is not held up
+    finally:
+        done.write_text("x")
+        holder.wait(30)
+    w.refresh(NOW + key_zones.BUSY_RETRY)                   # the holder exited: this process pulls
+    assert w.client.calls
+    assert list(locks.iterdir()) and all("invalid" not in f.name for f in locks.iterdir())   # no host in a name
+
+
+def test_two_loopback_tunnels_to_different_boxes_get_their_own_lock(tmp_path):
+    """Safety re-review of #306, P1: every brain bridge is http://127.0.0.1:<port> (an SSH tunnel), so the host names
+    no box. The tunnel's port does, and the account's own `box` (accounts.yaml) wins over both."""
+    a, b = "http://127.0.0.1:18765", "http://127.0.0.1:18766"
+    assert key_zones.box_key(a) != key_zones.box_key(b)
+    assert key_zones.box_key(a, "vps-icm") == key_zones.box_key(b, "vps-icm") != key_zones.box_key(a, "vps-vantage")
+    locks = tmp_path / "locks"
+    with key_zones.box_lock(locks, key_zones.box_key(a)) as first:
+        with key_zones.box_lock(locks, key_zones.box_key(b)) as second:
+            assert first and second                       # two boxes: two pulls at once
+    assert all("127" not in f.name and "vps" not in f.name for f in locks.iterdir())
+
+
+def test_a_hole_the_broker_has_no_bars_for_is_not_re_read_until_the_head_recheck(tmp_path, m15_rates):
+    """Safety re-review of #306, P2: a completed pull that re-read a hole and got no bar there is remembered, and the
+    hole is skipped until HEAD_RECHECK (as `broker_start` is for the head), never re-read on every refresh."""
+    ts = pd.to_datetime(m15_rates["ts_utc"], utc=True)
+    hole = (NOW - pd.Timedelta(days=300), NOW - pd.Timedelta(days=270))
+    holed = m15_rates[~((ts > hole[0]) & (ts < hole[1]))]
+    w = _worker(holed, tmp_path)
+    w.refresh(NOW)                                         # from the head: the hole is the broker's
+    w.client, w.next_pull = Bridge(holed), None
+    w.refresh(NOW + pd.Timedelta(days=1))                  # resumes at the hole, finds nothing there
+    assert w.client.calls[0][1] <= hole[0] and w.dead_gaps
+    w.client, w.next_pull = Bridge(holed), None
+    w.refresh(NOW + pd.Timedelta(days=2))                  # remembered: a top-up only
+    assert w.client.calls[0][1] > NOW - pd.Timedelta(days=3)
+    w.client, w.next_pull = Bridge(holed), None
+    w.refresh(NOW + key_zones.HEAD_RECHECK + pd.Timedelta(days=2))   # a week on: asked again
+    assert w.client.calls[0][1] <= hole[0]
+
+
+def test_the_first_pull_after_a_restart_waits_a_random_delay(tmp_path, m15_rates):
     w = _worker(m15_rates, tmp_path)
     before = w.clock()
     w.attach(w.client, "box-2")
     assert w.next_pull is not None
     assert before <= w.next_pull <= w.clock() + pd.Timedelta(seconds=key_zones.START_JITTER_S)
+
+
+def test_a_head_re_pull_cut_short_is_resumed_at_the_hole_it_left(tmp_path, m15_rates):
+    """Review N2: a 200-day cache, a head re-pull stopped after 10 pages, then a retry must fill the middle."""
+    late = m15_rates[m15_rates["ts_utc"] >= NOW - pd.Timedelta(days=200)]
+    _worker(late, tmp_path).refresh(NOW)
+    w = _worker(m15_rates, tmp_path, pages=10)
+    with pytest.raises(ConnectionError):
+        w.refresh(NOW + pd.Timedelta(days=1))
+    ts = pd.to_datetime(w.long["ts_utc"], utc=True)
+    assert ts.diff().max() > pd.Timedelta(days=200)          # the hole between the head pages and the old cache
+    w.client = Bridge(m15_rates)
+    w.refresh(NOW + pd.Timedelta(days=1, hours=2))
+    first_call = w.client.calls[0][1]
+    assert first_call > NOW - pd.Timedelta(days=key_zones.LONG_DAYS - 200)   # resumed at the hole, not the head
+    ts = pd.to_datetime(w.long["ts_utc"], utc=True)
+    assert ts.diff().max() < pd.Timedelta(days=5)            # no hole left (weekends and holidays only)
+
+
+def test_an_empty_first_page_on_a_cold_terminal_does_not_date_the_brokers_start(tmp_path, m15_rates):
+    head = NOW - pd.Timedelta(days=key_zones.LONG_DAYS)
+    cold = m15_rates[m15_rates["ts_utc"] >= head + pd.Timedelta(days=key_zones.PAGE_DAYS + 3)]
+    w = _worker(cold, tmp_path)
+    w.refresh(NOW)
+    assert w.broker_start is None and w.head_checked == NOW
+    w.client = Bridge(m15_rates)
     w.next_pull = None
-    lock = key_zones._bridge_lock("box-2")
-    lock.acquire()                                  # another account's pull on the same MT5 box
-    try:
-        w.refresh(NOW)
-    finally:
-        lock.release()
-    assert w.client.calls == [] and w.next_pull == NOW + key_zones.BUSY_RETRY
+    w.refresh(NOW + pd.Timedelta(days=1))                    # within the week: a top-up, not another head pull
+    assert w.client.calls[0][1] > NOW - pd.Timedelta(days=3)
+    w.client = Bridge(m15_rates)
+    w.next_pull = None
+    later = NOW + key_zones.HEAD_RECHECK + pd.Timedelta(days=1)
+    w.refresh(later)                                         # a week on: the head is asked again
+    assert w.client.calls[0][1] == later - pd.Timedelta(days=key_zones.LONG_DAYS)
 
 
 def test_two_symbols_of_one_account_keep_their_own_cache(tmp_path, m15_rates):
@@ -359,10 +461,38 @@ def test_the_broker_bars_are_read_through_the_accounts_own_sessions(tmp_path, m1
     assert seen and all(s is own for s in seen)
 
 
-def test_an_account_can_opt_out_of_the_long_history():
+# ------------------------------------------------------------------------------------------- service wiring (N3)
+ACC_KW: dict[str, Any] = dict(account_id="icm-demo", broker="icm", mode="demo", server="ICMarketsSC-Demo", login=None,
+                              terminal_path="", server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100,
+                              enabled=True)
+
+
+def test_a_long_history_account_gets_a_paced_levels_client_keyed_by_its_mt5_box(tmp_path):
     from goldbot.ops.accounts import Account
-    fields = Account.model_fields["key_levels_history"]
-    assert fields.default == "long"
+    from goldbot.ops.services import engine as service
+    eng = _engine(tmp_path)
+    acc = Account(**ACC_KW)
+    assert acc.key_levels_history == "long"
+    service.attach_levels(eng, acc, ("http://box-a.invalid:8765", "t"), tmp_path / "state")
+    w = eng.key_zone_worker
+    assert w.client is not None and w.client.read_attempts == 1 and w.client.timeout_s == key_zones.CLIENT_TIMEOUT_S
+    assert w.box == key_zones.box_key("http://box-a.invalid:8765") and w.lock_dir == tmp_path / "state" / "locks"
+    assert w.next_pull is not None                            # the random first delay
+    import inspect
+    assert "attach_levels(eng, acc, bridge" in inspect.getsource(service._run_engine)
+
+
+def test_a_short_history_account_gets_no_client_and_still_reads_its_cache(tmp_path, m15_rates):
+    from goldbot.ops.accounts import Account
+    from goldbot.ops.services import engine as service
+    _worker(m15_rates, tmp_path).refresh(NOW)                 # a cache from earlier
+    eng = _engine(tmp_path, data_root=str(tmp_path / "data"))
+    service.attach_levels(eng, Account(**ACC_KW, key_levels_history="short"), ("http://box-a.invalid:1", "t"),
+                          tmp_path / "state")
+    w = eng.key_zone_worker
+    assert w.client is None
+    w.refresh(NOW)
+    assert len(w.long) > 50_000
 
 
 def test_the_engines_own_bars_replace_the_long_history_from_its_first_15m_bar():

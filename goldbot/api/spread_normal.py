@@ -9,6 +9,9 @@ closed server day, not the engine's sample of them). Definition, for quant-revie
 * a window counts with at least MIN_TICKS ticks; its value is the median of ask - bid over its ticks;
 * the usual spread is the median of those window medians (each day once, so one news day cannot set the normal),
   in points of 0.01 $/oz, the engine's `spread_points`; null with fewer than MIN_WINDOWS windows or no record.
+* multi-instrument demo (plan 2026-11-02: "point 0.01 spread_normal.py" per symbol): points are the symbol's own
+  (`point_for`, config/instruments.yaml). The tick record is the account's gold symbol's, so another instrument has no
+  usual spread (null, "unknown") until the record is kept per symbol.
 
 Read-only and cached per account and hour (the record changes once a day), so polling the card does not re-read it.
 """
@@ -23,17 +26,28 @@ import numpy as np
 import pandas as pd
 
 from goldbot.data import ticks
+from goldbot.instruments import GOLD, spec_of
 
 log = logging.getLogger(__name__)
 
 LOOKBACK_DAYS = 20
 MIN_WINDOWS = 2
 MIN_TICKS = 30
-POINT = 0.01                     # $/oz per point, as runner.py `spread_points`
+POINT = 0.01                     # $/oz per point, as runner.py `spread_points` (XAUUSD's; `point_for` per symbol)
 
 
-def normal_spread_points(state_dir: str | Path, account: str, at: pd.Timestamp) -> float | None:
-    """The usual spread for `at`'s UTC hour-of-week (module docstring); None when it cannot be known."""
+def point_for(symbol: str) -> float:
+    """The price unit `symbol`'s spread points count in: XAUUSD in any broker's form POINT, another its own."""
+    spec = spec_of(symbol)
+    return POINT if spec.key == GOLD else float(spec.point)
+
+
+def normal_spread_points(state_dir: str | Path, account: str, at: pd.Timestamp, *,
+                         symbol: str = GOLD) -> float | None:
+    """The usual spread for `at`'s UTC hour-of-week (module docstring); None when it cannot be known, and for any
+    symbol but gold (the account's tick record is its gold symbol's)."""
+    if spec_of(symbol).key != GOLD:
+        return None
     at = pd.Timestamp(at).tz_convert("UTC") if pd.Timestamp(at).tzinfo else pd.Timestamp(at, tz="UTC")
     try:
         days = tuple(d for d in ticks.recorded_days(account, state_dir=state_dir) if d < at.date())[-LOOKBACK_DAYS:]

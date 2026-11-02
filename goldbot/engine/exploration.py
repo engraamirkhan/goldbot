@@ -92,12 +92,13 @@ from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe, weekend_lane
-from goldbot.execution.costs import CONTRACT_OZ
+from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.research.arms import (
     COST_ARMS,
     COST_CONTROLS,
     COST_READ_DONE,
+    LEARNING_RULE,
     OWNER_EXPERIMENT_RULE,
     SPEC_RULE,
     arm_hash,
@@ -163,6 +164,11 @@ WAIT_ACTION = "exploration_broker_bar_wait"
 SHIFT_TF = "15m"                    # arms 8.9: a shifted XC15 enters "at the next 15m close" KA15 is not open
 OWNER_EXPERIMENT_ACTION = "exploration_arm_owner_experiment"   # journalled at start for each running owner experiment
 CUT_EXIT = "weekend_close_loser"    # the Friday cut's loser close (`Engine._weekend_rule`): natural for a rule following it
+# demo-limits ADR (owner 2026-11-02): with the account's `demo_weekend_flat` the Friday cut closes every position, so an
+# entry is refused only this close to the cut (`crosses_friday`); without it a hold that reaches the cut is refused
+WEEKEND_ENTRY_BUFFER_S = 900
+# the evidence class a record carries (the arm's role at send; a strategy arm sends only when it qualified)
+EVIDENCE_CLASS = {"strategy": "qualified"}
 
 
 def stale_s(tf: str) -> float:
@@ -187,6 +193,12 @@ class Arm(FrozenRecord):
     @property
     def arm_id(self) -> str:
         return self.spec.id
+
+    @property
+    def instrument(self) -> str:
+        """The instrument the arm's frozen row trades (`params.instrument`, a config/instruments.yaml key: S0-<key>,
+        I0-<key>, lane L1); XAUUSD when the row names none (every arm before the multi-instrument plan)."""
+        return arm_instrument(self.spec.params)
 
     @property
     def tf(self) -> str:
@@ -230,8 +242,9 @@ class Arm(FrozenRecord):
 
 class Pot(FrozenRecord):
     """ADR 0043 section 1: a style's sleeve. Today's realised loss + open risk at the stops + the new trade's loss at
-    its stop <= `gbp` (account currency); at most `max_open` of its arms' positions open."""
-    gbp: float = Field(gt=0)
+    its stop <= `gbp` (account currency); at most `max_open` of its arms' positions open. `gbp` None: no £ sleeve (an
+    account without pot budgets, demo-limits ADR 2026-11-02); its slots still bind."""
+    gbp: float | None = Field(None, gt=0)
     max_open: int = Field(ge=1)
 
 
@@ -245,9 +258,18 @@ class ExplorationConfig(FrozenRecord):
     pots: dict[str, Pot] = Field(default_factory=dict)
     arms: tuple[Arm, ...] = ()
     dropped: tuple[str, ...] = ()
+    # demo-limits ADR (owner 2026-11-02): False = the pots' £ sleeves and each arm's day (its share of its pot) do not
+    # bind (`_send` drops the `pot` and `arm_budget` rooms); the per-trade cap, the exploration budget, every slot and
+    # the RiskGate still do. True (the default) is the ADR 0043 sleeves as before
+    pot_budgets: bool = True
+    # learning arms (`role: learning`, ADR 0061 amendment 2026-11-02) open at once, all together (`learning_slots`);
+    # 0 (the default): no learning arm enters
+    learning_max_open: int = Field(0, ge=0)
 
     @model_validator(mode="after")
     def _consistent(self) -> ExplorationConfig:
+        if self.pot_budgets and (bare := sorted(k for k, p in self.pots.items() if p.gbp is None)):
+            raise ValueError(f"exploration pots {bare} have no gbp while pot_budgets is on")
         ids, keys = [a.arm_id for a in self.arms], [a.key for a in self.arms]
         if len(set(ids)) != len(ids) or len(set(keys)) != len(keys):
             raise ValueError("exploration arm ids (and their 5-character keys) must be unique")
@@ -359,13 +381,43 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
                         arm_id, acc.account_id)
             dropped.append(arm_id)
             continue
-        arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share, adds=reg.adds,
+        spec = specs[arm_id]
+        if spec.role == "learning" and (reg.sizing == "growth" or reg.adds):
+            # ADR 0061 amendment 2026-11-02: a learning arm trades the minimum lot, one unit (refused, kept configured)
+            why = "pyramid adds" if reg.adds else "growth sizing"
+            spec = spec.model_copy(update={"entry_refused": f"{LEARNING_RULE}: a learning arm takes no {why} "
+                                                            f"(registered on {acc.account_id})"})
+        arms.append(Arm(spec=spec, style=reg.style, control_share=reg.control_share, adds=reg.adds,
                         unit_lots=reg.unit_lots))
     running = {a.arm_id for a in arms}
     dropped += [i for i in rejected if i not in running and i not in dropped]
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
-                             arms=tuple(arms), dropped=tuple(dropped))
+                             arms=tuple(arms), dropped=tuple(dropped), pot_budgets=ex.pot_budgets,
+                             learning_max_open=ex.learning_max_open)
+
+
+def instrument_ok(spec: SpecArm) -> bool:
+    """Whether a frozen arm may run on a non-gold instrument (plan: "random controls S0/I0 and learning-class arms per
+    instrument (never pooled); no gold ML/specialists/dollar-constant arms; POS-1 only after qualification"): a control
+    or learning arm with no dollar figure (`*_usd` params: gold's dollars mean nothing on another price scale)."""
+    return spec.role in ("control", "learning") and not any(str(k).endswith("_usd") for k in spec.params)
+
+
+def book_config(cfg: ExplorationConfig | None, instrument: str) -> ExplorationConfig | None:
+    """The exploration block of one book: the account's registered arms whose row trades `instrument`
+    (`Arm.instrument`; S0-<key> / I0-<key> for a non-gold one), with the account's pots and budget (counted across
+    every book by `_Pass`). Gold's book never runs another instrument's arm, nor a non-gold book gold's. A non-gold
+    arm that is not `instrument_ok` is dropped (journalled at its book's start). None for a non-gold book
+    with none; gold keeps its block whatever is left (as before)."""
+    if cfg is None or not cfg.enabled:
+        return None
+    mine = [a for a in cfg.arms if a.instrument == instrument]
+    ok = [a for a in mine if instrument == GOLD or instrument_ok(a.spec)]
+    dropped = tuple(a.arm_id for a in mine if a not in ok) + (cfg.dropped if instrument == GOLD else ())
+    if instrument != GOLD and not ok and not dropped:
+        return None
+    return cfg.model_copy(update={"arms": tuple(ok), "dropped": dropped})
 
 
 class ExplorationRecord(FrozenRecord):
@@ -408,6 +460,15 @@ class ExplorationRecord(FrozenRecord):
     # client_order_id here, the first unit its own id or None; the read folds a group into one trade (R = the group's
     # P&L over the first unit's stop_loss: `research.growth_ledger.fold_groups`). In the JSON body only
     group_id: str | None = None
+    # demo-limits ADR 2026-11-02, stamped at send (JSON body only; None on older rows): the arm's evidence class (its
+    # role; a strategy arm is `qualified`, `learning` is unqualified demo evidence, never a qualification) and whether
+    # a news blackout was in force (an account whose blackout no longer refuses entries trades through it)
+    evidence_class: str | None = None
+    in_blackout: bool | None = None
+    blackout_kind: str | None = None        # trading-safety M2: "tier1" or "news_shock" while `in_blackout`
+    # multi-instrument demo (plan 2026-11-02): the instrument the order traded (a config/instruments.yaml key); the
+    # cost of record cells by it (research.cost_of_record), never pooled with XAUUSD. JSON body only; older rows XAUUSD
+    symbol: str = "XAUUSD"
 
 
 class TwinRecord(FrozenRecord):
@@ -569,6 +630,15 @@ class Exploration:
         # tried; both rebuilt from the ledger, the sent ids and the candidates after a restart
         self.groups: dict[str, Any] = {}
         self.ladder: dict[str, int] = {}
+        # ADR 0061 amendment 2026-11-02 (`exploration_learning`): the learning arms and their dedicated controls send
+        # nothing until a read of this host's ledger has succeeded (fail closed, as `retired_ok`); re-read once a minute
+        from goldbot.engine import exploration_learning
+        self.learning_group: frozenset[str] = exploration_learning.group(self)
+        self.learning_ok = False
+        self.learning_read_at: pd.Timestamp | None = None
+        self.learning_warned = False
+        self.learning_loss: dict[str, float] = {}      # arm -> realised loss since registration, from the last read
+        exploration_learning.start(eng, self)
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -938,6 +1008,8 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     try:
         refresh_retired(eng, ex, now)
         refresh_cost_reads(eng, ex, now)
+        from goldbot.engine import exploration_learning
+        exploration_learning.refresh(eng, ex, now)
         refresh_owner_experiments(eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
@@ -1112,13 +1184,20 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     out: dict[str, float] = {}
     for style in ex.cfg.pots:
         arms = [a for a in ex.arms.values() if a.style == style]
-        strat = [a.arm_id for a in arms if a.control_share is None]
+        # ADR 0061 amendment 2026-11-02: a learning arm is never allocated by results (the bandit sets it apart):
+        # equal shares among the style's learning arms, in the same bounds
+        learn = [a.arm_id for a in arms if a.control_share is None and a.spec.role == "learning"]
+        strat = [a.arm_id for a in arms if a.control_share is None and a.arm_id not in learn]
         rest = max(0.0, 1.0 - sum(a.control_share or 0.0 for a in arms))
         try:
             w = weights(ex.db, strat, broker=ex.broker, now=now) if strat else {}
         except Exception as exc:                    # the reader falls back itself; this is the last line
             log.warning("exploration weights unreadable (%s): equal shares", type(exc).__name__)
             w = {a: min(SHARE_CAP, max(SHARE_FLOOR, 1.0 / len(strat))) for a in strat}
+        w = {**w, **{a: min(SHARE_CAP, max(SHARE_FLOOR, 1.0 / len(learn))) for a in learn}}
+        if (tot := sum(float(v) for v in w.values())) > 1.0:
+            # quant ruling 2026-11-02 (4): the strategy and learning shares together never pass the style's rest
+            w = {a: float(v) / tot for a, v in w.items()}
         for a in arms:
             v = a.control_share if a.control_share is not None else rest * float(w.get(a.arm_id, 0.0))
             out[a.arm_id] = v if math.isfinite(v) and v >= 0 else 0.0
@@ -1253,7 +1332,12 @@ def crosses_friday(eng: Engine, now: pd.Timestamp, hold_s: int, follows_cut: boo
     prereg-2026-10-26-time-structure.md section 4, amendment 1: "at the cut a losing WFRI is closed and a winning one
     has its stop tightened ... then held to the 16:30 New York time exit"). Its entry may hold across the cut, which
     acts on it as on every position of the engine (`Engine._weekend_rule`, unchanged), but never into the weekend:
-    refused when its hold reaches the server's Saturday 00:00, or when it would be sent after the week's cut."""
+    refused when its hold reaches the server's Saturday 00:00, or when it would be sent after the week's cut.
+
+    `demo_weekend_flat` (demo-limits ADR 2026-11-02; a demo probe_only account): the cut closes every position of the
+    engine, winners too (`weekend_lane.weekday_rule`, censored), so a hold may reach it; an entry is refused only from
+    WEEKEND_ENTRY_BUFFER_S (15 min) before the week's cut until the week ends. A rule that follows the cut keeps its
+    rule above."""
     from goldbot.data.timeutil import server_wall
     if getattr(eng.cfg, "always_open", False):   # ADR 0062: no Friday cut; a weekend_only account's own cut instead
         return weekend_lane.crosses_cut(eng.cfg, now, hold_s)
@@ -1265,10 +1349,40 @@ def crosses_friday(eng: Engine, now: pd.Timestamp, hold_s: int, follows_cut: boo
         saturday = srv_now.normalize() + pd.Timedelta(days=(5 - srv_now.weekday()) % 7)
         past_cut = srv_now.weekday() == 5 or (srv_now.weekday() == 4 and srv_now >= srv_now.normalize() + at_cut)
         return bool(past_cut or srv_end >= saturday)
+    if getattr(eng.cfg, "demo_weekend_flat", False):
+        # this week's cut (Saturday and Sunday read the Friday before: past it)
+        week_cut = srv_now.normalize() + pd.Timedelta(days=4 - srv_now.weekday()) + at_cut
+        if srv_now >= week_cut - pd.Timedelta(seconds=WEEKEND_ENTRY_BUFFER_S):
+            return True
+        windows = early_close_windows(eng, now, end)
+        if windows is not None:
+            return any(now < hi and end >= lo for lo, hi in windows)
+        # trading-safety M3: early closes unknown (holiday list unusable): the old hold rule below
     cut = srv_now.normalize() + pd.Timedelta(days=(4 - srv_now.weekday()) % 7) + at_cut
     if cut <= srv_now:
         cut += pd.Timedelta(days=7)
     return bool(srv_end >= cut)
+
+
+def early_close_windows(eng: Engine, start: pd.Timestamp, end: pd.Timestamp
+                        ) -> list[tuple[pd.Timestamp, pd.Timestamp]] | None:
+    """Trading-safety M3 (`demo_weekend_flat`): [effective cut, reopen) UTC of every listed thin day (the holiday list,
+    config/holidays_cme_metals.yaml: 27 Nov, 24 and 31 Dec included) from the day before `start` to the day after
+    `end`. The effective cut is the earliest CME holiday halt (12:00 Chicago) less WEEKEND_ENTRY_BUFFER_S, the reopen
+    17:00 Chicago; an entry whose hold reaches a cut, or sent inside a window, is refused. None when the list cannot be
+    read or does not cover the span (the caller falls back to the old hold rule: fail closed)."""
+    from goldbot.data.cme_holidays import CHICAGO, EARLY_HALT, REOPEN
+    hl = eng._holiday_list()
+    first, last = (start - pd.Timedelta(days=1)).date(), (end + pd.Timedelta(days=1)).date()
+    if hl is None or not (hl.covers(first) and hl.covers(last)):
+        return None
+    out = []
+    for d in pd.date_range(first, last, freq="D").date:
+        if hl.thin(d) is not None:
+            halt = pd.Timestamp.combine(d, EARLY_HALT).tz_localize(CHICAGO).tz_convert("UTC")
+            out.append((halt - pd.Timedelta(seconds=WEEKEND_ENTRY_BUFFER_S),
+                        pd.Timestamp.combine(d, REOPEN).tz_localize(CHICAGO).tz_convert("UTC")))
+    return out
 
 
 def _held(eng: Engine, ex: Exploration, pid: int, tr: OpenTrade) -> float | None:
@@ -1315,6 +1429,9 @@ def _add(d: dict[str, float | None], k: str, v: float | None) -> None:
     d[k] = None if v is None or before is None else before + v
 
 
+LEARNING_SLOT = "learning"          # `_Pass.count` key: open learning positions (`learning_slots`)
+
+
 class _Pass:
     """What one pass reads once: the budgets, today's realised loss and the open risk, by arm, by pot and in all."""
 
@@ -1336,29 +1453,44 @@ class _Pass:
         self.held: dict[str, float | None] = {}
         # "host": every position the RiskGate's max_positions counts (this engine's and foreign ones on the symbol)
         # but an open scheduled probe, whose slot `_send` keeps free (ADR 0043: one of 18 kept for it)
-        self.count: dict[str, int] = {"host": len(eng._foreign) + sum(
-            t.agent_id != cost_probe.SCHEDULED_ID for t in eng.open.values())}
+        # multi-instrument plan (lane L3): the budgets, pots and slots are the account's, so every book's exploration
+        # trades count, each valued on its own book; gold alone: this engine's, as before
+        self.arms: dict[str, Arm] = dict(ex.arms)
+        self.count: dict[str, int] = {"host": 0}
+        from goldbot.engine import books
         from goldbot.engine.exploration_pyramid import counts_as_slot
-        for pid in _open(eng):
-            tr = eng.open[pid]
-            arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX))
-            loss = _held(eng, ex, pid, tr)
-            slot = counts_as_slot(eng, arm, tr)         # a pyramid add joins its group's arm and pot slot
-            for k in ("*", *((arm.arm_id, "pot:" + arm.style) if arm is not None else ())):
-                _add(self.held, k, loss)
-                if k == "*" or slot:
-                    self.count[k] = self.count.get(k, 0) + 1
+        for book in eng.books.values():
+            with books.using(eng, book):
+                bx = eng.exploration
+                self.count["host"] += len(eng._foreign) + sum(t.agent_id != cost_probe.SCHEDULED_ID
+                                                              for t in eng.open.values())
+                if bx is None:
+                    continue
+                self.arms.update(bx.arms)
+                for pid in _open(eng):
+                    tr = eng.open[pid]
+                    arm = bx.arms.get(tr.agent_id.removeprefix(PREFIX))
+                    loss = _held(eng, bx, pid, tr)
+                    slot = counts_as_slot(eng, arm, tr)         # a pyramid add joins its group's arm and pot slot
+                    for k in ("*", *((arm.arm_id, "pot:" + arm.style) if arm is not None else ())):
+                        _add(self.held, k, loss)
+                        if k == "*" or slot:
+                            self.count[k] = self.count.get(k, 0) + 1
+                    if arm is not None and arm.spec.role == "learning":
+                        self.count[LEARNING_SLOT] = self.count.get(LEARNING_SLOT, 0) + 1
         self.cap: int | None = -1                   # -1: not read yet (the first signal's terms read it)
         self.why: str | None = None                 # the last signal's refusal
 
     def lost_in(self, ex: Exploration, style: str | None = None) -> float:
-        return sum(v for a, v in self.lost.items() if style is None or (a in ex.arms and ex.arms[a].style == style))
+        return sum(v for a, v in self.lost.items() if style is None or (a in self.arms and self.arms[a].style == style))
 
     def note(self, arm: Arm, loss: float, slot: bool = True) -> None:
         for k in ("*", arm.arm_id, "pot:" + arm.style):
             _add(self.held, k, loss)
             if k == "*" or slot:
                 self.count[k] = self.count.get(k, 0) + 1
+        if arm.spec.role == "learning":
+            self.count[LEARNING_SLOT] = self.count.get(LEARNING_SLOT, 0) + 1
         self.count["host"] += 1
 
 
@@ -1532,6 +1664,10 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if pid in eng.sent_ids:
         ps.why = "duplicate"
         return "refused"
+    if arm.arm_id in ex.learning_group and not ex.learning_ok:
+        # ADR 0061 amendment 2026-11-02: its fills and loss are not known (no read of the ledger yet, or it failed)
+        refuse("learning_unread")
+        return "refused"
     if ex.cost_scale.get(arm.arm_id) == 0.0:
         # H-81 cost stop above 0.20: suspended. Refused before any room check, so no first-trade-of-the-day bypass
         # (trading-safety 2026-10-27 b); the daily review records the suspension for good
@@ -1556,6 +1692,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     if not add and ps.count.get(arm.arm_id, 0) >= arm.max_open:
         refuse("arm_max_open")
+        return "refused"
+    if arm.spec.role == "learning" and ps.count.get(LEARNING_SLOT, 0) >= ex.cfg.learning_max_open:
+        refuse("learning_slots")
         return "refused"
     # quant Q2: every style, swing included; a rule whose exit is the cut may hold across it, never into the weekend
     if crosses_friday(eng, now, hold_s, arm_rules.follows_friday_cut(arm.spec)):
@@ -1586,6 +1725,17 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if held_arm is None or held_pot is None or held_all is None:
         refuse("open_risk_unknown")
         return "refused"
+    if arm.spec.role == "learning":
+        # trading-safety L1: realised loss (since registration) + this arm's open risk at its stops + the new trade's
+        # loss at its stop and round trip may not reach the arm's loss cap; an arm not read yet is refused
+        from goldbot.engine.exploration_learning import loss_cap
+        lost, cap_l = ex.learning_loss.get(arm.arm_id), loss_cap(arm)
+        if lost is None or cap_l is None:
+            refuse("learning_unread")
+            return "refused"
+        if lost + held_arm + loss + cost >= cap_l - 1e-9:
+            refuse("learning_loss_cap")
+            return "refused"
     plan = None
     if add:
         # the earlier units go to the add's level before it is sent (`before_send`): the bounds count them there
@@ -1599,11 +1749,16 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         applied.update(group=plan.group.group_id, add=s.add_no, group_sl=plan.stop)
     # what the new trade may lose at its stop under each bound, in the order they are journalled
     rooms = {"arm_cap": arm_cap - cost,              # trading-safety LOW: the round trip counts too
-             "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
-             "pot": pot.gbp - ps.lost_in(ex, arm.style) - held_pot,
-             "arm_budget": _arm_room(ps.share.get(arm.arm_id, 0.0) * pot.gbp, ps.lost.get(arm.arm_id, 0.0), held_arm,
-                                     arm_cap, first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id),
-                                     floor_gbp=_room_floor(arm, arm_cap, cost, pot.gbp))}
+             "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0}
+    if pot.gbp is not None:
+        # the ADR 0043 sleeves. Without pot budgets (demo-limits ADR 2026-11-02: "drop pot and arm_budget when
+        # pot_budgets is false. Keep arm_cap and budget") only a pot that still names its £ keeps them (trading-safety
+        # M1: the GS1/GS1C growth pot, the ADR 0061 amendment of 2026-11-01); a pot without one is slots only
+        rooms["pot"] = pot.gbp - ps.lost_in(ex, arm.style) - held_pot
+        rooms["arm_budget"] = _arm_room(ps.share.get(arm.arm_id, 0.0) * pot.gbp, ps.lost.get(arm.arm_id, 0.0),
+                                        held_arm, arm_cap,
+                                        first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id),
+                                        floor_gbp=_room_floor(arm, arm_cap, cost, pot.gbp))
 
     volume_max = float(lot)
     growth = arm.arm_id in eng.gate.limits.growth_arms
@@ -1641,7 +1796,10 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             retcode=res.retcode, position_id=res.position_id if filled else None,
             fill_price=(res.price if res.price is not None else price) if filled else None,
             stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"),
-            decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id)
+            decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id,
+            evidence_class=EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
+            blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
+            symbol=eng.cfg.instrument)      # the instrument KEY (never the store symbol): never pooled with XAUUSD
 
     from goldbot.engine import exploration_pyramid as pyr
     try:
@@ -1696,6 +1854,7 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
     `stop_usd`, the target its R multiple. No p is invented: 0.5, the gate skips only the edge rules for this purpose.
     A growth arm's `volume_max` (`growth_lots`) lets the gate size it above the minimum lot. None when the gate's
     Intent does not take it (fail closed)."""
+    from goldbot.engine import books
     from goldbot.risk import Intent
     try:
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
@@ -1705,7 +1864,8 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
                       hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,
-                      **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")})
+                      **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")},
+                      **books.intent_extra(eng, terms))   # a non-gold book: its group, class, P&L currency (L2)
     except ValidationError as exc:
         log.warning("exploration intent refused by its schema (%s)", exc.error_count())
         return None
@@ -1861,7 +2021,7 @@ def _trail_runners(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_t
                                 risk / K.BOX_STOP_ATR)
         if tr.side * (cand - (entry - tr.side * risk)) <= 1e-9:
             continue                                    # not armed (below +1 R): the entry stop stands
-        new = round(cand, 2)
+        new = round(cand, eng.cfg.price_digits)         # the instrument's digits, never the cent
         sl = new if tr.sl is None or tr.side * (new - tr.sl) > 1e-9 else tr.sl      # a ratchet: never looser
         eng._tighten_stop(pid, tr, pos, sl)
     eng._save_orders()
@@ -1959,7 +2119,7 @@ def twin_pairs(state_dir: str, account_id: str | None = None) -> list[TwinPair]:
                 or r.exit_utc is None or r.censored is not False or r.pnl is None or r.commission is None
                 or not r.fx_acct_per_usd or not r.lots):
             continue
-        per_oz = r.fx_acct_per_usd * r.lots * CONTRACT_OZ          # account currency per USD-per-oz
+        per_oz = r.fx_acct_per_usd * r.lots * contract_size(GOLD)         # account currency per USD-per-oz
         cost = tw.exit_spread_usd + r.commission / per_oz - tw.swap_usd
         out.append(TwinPair(twin_id=tw.twin_id, client_order_id=tw.client_order_id, arm_id=tw.arm_id,
                             of_arm_id=tw.of_arm_id, exit_mode=tw.exit_mode,
@@ -2067,7 +2227,10 @@ def _observe(eng: Engine, db: Database, r: ExplorationRecord, filled: pd.Timesta
     if r.fill_price is None or r.exit_price is None or r.exit_utc is None or not r.lots:
         return
     try:
-        oz = r.lots * eng._contract_size()
+        contract = eng._contract_size()
+        if contract is None:                  # never a guessed 100 oz (multi-instrument plan): logged below
+            raise ValueError("contract size unknown")
+        oz = r.lots * contract
         paid = (r.commission or 0.0) + max(0.0, -(r.swap or 0.0))
         entry = filled or r.sent_utc
         record_fill(db, candidate_id=r.client_order_id, entry_utc=min(entry, r.exit_utc), exit_utc=r.exit_utc,

@@ -19,7 +19,7 @@ What is charged, per row, only for the components its return does not already ca
   (`costs.swap_*`). A swap credit is never counted (conservative), on the server clock of the trade's broker; a row
   without a side pays the larger paid rate of long and short.
 
-Both are USD per oz (a lot is `CONTRACT_OZ` ounces, as the cost tables assume), so the charge in return units is
+Both are USD per oz (a lot is XAUUSD's contract, `CostTable.contract_size`), so the charge in return units is
 cost per oz / entry price (the exit price when the entry is not recorded) and in R units cost per oz / |entry - initial
 stop|; neither needs the lot size or a currency conversion. A row the charge cannot be computed for (no price at all,
 or no entry time while swap is unknown) is "unpriced": it is kept, charged nothing, and counted, so a reader can fail
@@ -37,7 +37,8 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from goldbot.base import FrozenRecord, load_record
-from goldbot.execution.costs import CONTRACT_OZ, CostTable, settings_swap
+from goldbot.execution.costs import CostTable, settings_swap
+from goldbot.instruments import GOLD, contract_size
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
 
 if TYPE_CHECKING:
@@ -173,7 +174,7 @@ class CostImputer:
         if price is None or price <= 0 or (need_swap and t.entry_utc is None):
             return TradeCharge(imputed=True, priced=False, r=None, usd=None)
         terms = self.terms_for(t)
-        per_oz = 2 * terms.commission_per_lot_side_usd / CONTRACT_OZ if need_comm else 0.0
+        per_oz = 2 * terms.commission_per_lot_side_usd / contract_size(GOLD) if need_comm else 0.0
         if need_swap and t.entry_utc is not None:
             per_oz += paid_swap_per_oz(terms.swap, t.side, t.entry_utc, t.exit_utc)
         if t.entry_price is not None and t.initial_sl is not None and abs(t.entry_price - t.initial_sl) > 0:
@@ -182,7 +183,7 @@ class CostImputer:
             r = per_oz / price * (t.r / t.ret)        # r / ret = notional / initial risk (same P&L, same currency)
         else:
             r = None
-        usd = per_oz * t.lots * CONTRACT_OZ if t.lots is not None else None
+        usd = per_oz * t.lots * contract_size(GOLD) if t.lots is not None else None
         return TradeCharge(imputed=True, usd_per_oz=per_oz, ret=per_oz / price, r=r, usd=usd)
 
     def net_ret(self, t: ClosedTrade) -> float:

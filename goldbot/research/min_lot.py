@@ -35,20 +35,31 @@ from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import tf_seconds
 from goldbot.data.store import Store
 from goldbot.data.timeutil import utc_index
-from goldbot.execution.costs import CONTRACT_OZ
+from goldbot.instruments import GOLD, spec_of
 from goldbot.risk.sizing import MIN_LOT_TOLERANCE, effective_risk, size_lots
 
 ATR_BARS = 14
 MID_BASIS = "mid of the store's Dukascopy bid/ask bars (broker bid/ask ATR may differ by about a spread)"
 
 
-class LotSpec(FrozenRecord):
-    """The symbol's lot terms (MT5 SymbolInfo); defaults are XAUUSD at IC Markets: 100 oz, 0.01 min and step."""
+def _gold_contract() -> float:
+    return spec_of(GOLD).contract_size
 
-    contract_oz: float = Field(CONTRACT_OZ, gt=0)
+
+class LotSpec(FrozenRecord):
+    """The symbol's lot terms (MT5 SymbolInfo); defaults are XAUUSD at IC Markets: 100 oz (config/instruments.yaml),
+    0.01 min and step. `contract_oz` is units per lot for another instrument (`for_instrument`)."""
+
+    contract_oz: float = Field(default_factory=_gold_contract, gt=0)
     volume_min: float = Field(0.01, gt=0)
     volume_step: float = Field(0.01, gt=0)
     volume_max: float = Field(50.0, gt=0)
+
+    @classmethod
+    def for_instrument(cls, key: str) -> LotSpec:
+        """The registry's lot terms of `key` (config/instruments.yaml; the symbol check confirms them per broker)."""
+        spec = spec_of(key)
+        return cls(contract_oz=spec.contract_size, volume_min=spec.min_lot, volume_step=spec.lot_step)
 
 
 class Feasibility(FrozenRecord):
@@ -92,10 +103,13 @@ def min_lot_feasibility(*, price: float, risk_fraction: float, stop_distance: fl
                         family: str | None = None, preset: str | None = None, timeframe: str | None = None,
                         atr_timeframe: str | None = None, as_of_utc: pd.Timestamp | None = None,
                         price_basis: str = "as given", account_currency: str = "USD",
-                        acct_per_usd: float | None = None, min_lot_risk_cap: float | None = None) -> Feasibility:
+                        acct_per_usd: float | None = None, min_lot_risk_cap: float | None = None,
+                        profit_currency: str | None = None) -> Feasibility:
     """Feasibility of the minimum lot for one stop. `risk_fraction` is the phase's risk per trade; `stop_distance` in
     $/oz, or `atr_usd` x `stop_atr`, floored at the stops level plus the spread as the gate does. `account_currency`
-and `acct_per_usd` are the gate's conversion; `min_lot_risk_cap` is `risk.min_lot_risk_cap` (the gate's exception)."""
+and `acct_per_usd` are the gate's conversion; `min_lot_risk_cap` is `risk.min_lot_risk_cap` (the gate's exception).
+`profit_currency` None is XAUUSD (`sizing.account_fx`); another instrument's (its MT5 profit currency) takes the strict
+`sizing.instrument_fx`: `acct_per_usd` is then the broker's account currency per unit of it, refused when absent."""
     from goldbot.risk import RiskGate, RiskLimits, sizing
     lot = lot or LotSpec()
     if stop_distance is None:
@@ -111,7 +125,8 @@ and `acct_per_usd` are the gate's conversion; `min_lot_risk_cap` is `risk.min_lo
                         multiplier_bounds=multiplier_bounds, min_lot_risk_cap=min_lot_risk_cap)
     eff = effective_risk(limits, size_down, multiplier)
     cap = RiskGate(limits).min_lot_cap(size_down)
-    fx = sizing.account_fx(account_currency, acct_per_usd)
+    fx = (sizing.account_fx(account_currency, acct_per_usd) if profit_currency is None
+          else sizing.instrument_fx(account_currency, profit_currency, acct_per_usd))
     min_risk_usd = lot.volume_min * stop * lot.contract_oz
     min_risk_acct = None if fx is None else min_risk_usd * fx
     out: dict[str, Any] = dict(
@@ -257,14 +272,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--multiplier", type=float, default=1.0, help="model multiplier (clamped like the gate)")
     ap.add_argument("--size-down", action="store_true", help="the 8%% stage: risk halved, multiplier capped at 0.5")
     ap.add_argument("--equity", type=float, default=None, help="also report lots and real risk at this equity")
-    ap.add_argument("--contract", type=float, default=CONTRACT_OZ)
+    ap.add_argument("--instrument", default=GOLD,
+                    help="config/instruments.yaml key (default XAUUSD); its contract, lot terms, point and profit "
+                         "currency are the defaults below. Another instrument needs --price (the store is gold's)")
+    ap.add_argument("--contract", type=float, default=None, help="units per lot (default: the instrument's)")
     ap.add_argument("--currency", default="USD", help="account deposit currency (the gate's conversion)")
     ap.add_argument("--acct-per-usd", type=float, default=None,
-                    help="account currency per USD (the broker's conversion; required for a non-USD account)")
+                    help="account currency per USD (the broker's conversion; required for a non-USD account); for "
+                         "another instrument, per unit of its profit currency, always required")
     ap.add_argument("--min-lot-risk-cap", type=float, default=None,
                     help="the minimum-lot exception cap (default: settings risk.min_lot_risk_cap; none in tiny-live)")
-    ap.add_argument("--min-lot", type=float, default=0.01)
-    ap.add_argument("--lot-step", type=float, default=0.01)
+    ap.add_argument("--min-lot", type=float, default=None, help="default: the instrument's")
+    ap.add_argument("--lot-step", type=float, default=None, help="default: the instrument's")
     ap.add_argument("--stops-level-points", type=float, default=0.0, help="broker stops level (stop floor)")
     ap.add_argument("--spread-points", type=float, default=None,
                     help="spread for the stop floor (default: the last bar's mean spread in store mode, else 0)")
@@ -279,10 +298,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args.settings) if args.settings else load_settings()
     gl = RiskLimits.from_settings(settings.risk, tiny_live=args.tiny_live)
     risk = args.risk if args.risk is not None else gl.risk_per_trade
-    lot = LotSpec(contract_oz=args.contract, volume_min=args.min_lot, volume_step=args.lot_step)
+    spec = spec_of(args.instrument)
+    gold = spec.key == GOLD
+    if not gold and args.price is None:
+        print(f"{spec.key}: give --price with --stop-distance or --atr/--stop-atr (the store's bars are XAUUSD's)",
+              file=sys.stderr)
+        return 2
+    base = LotSpec.for_instrument(spec.key)
+    lot = LotSpec(contract_oz=args.contract if args.contract is not None else base.contract_oz,
+                  volume_min=args.min_lot if args.min_lot is not None else base.volume_min,
+                  volume_step=args.lot_step if args.lot_step is not None else base.volume_step)
     common: dict[str, Any] = dict(equity=args.equity, lot=lot, multiplier=args.multiplier, size_down=args.size_down,
                                   multiplier_bounds=gl.multiplier_bounds, max_risk_per_trade=gl.max_risk_per_trade,
-                                  stops_level_points=args.stops_level_points, point=gl.point,
+                                  stops_level_points=args.stops_level_points, point=gl.point if gold else spec.point,
+                                  profit_currency=None if gold else spec.currency_profit,
                                   account_currency=args.currency, acct_per_usd=args.acct_per_usd,
                                   min_lot_risk_cap=(args.min_lot_risk_cap if args.min_lot_risk_cap is not None
                                                     else gl.min_lot_risk_cap))

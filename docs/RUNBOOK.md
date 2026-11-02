@@ -1507,6 +1507,25 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   (idempotent; it prints how many rows it released). Restart `goldbot-engine@icm-demo`. Check the journal shows one
   `exploration_pyramid` row each for GS1 and GS1C (the switch time the 11-07 read splits on). Rollback: drop `adds`
   from both arms and restart. Open groups keep every stop already moved and every exit; no new add goes out.
+* **Demo learning limits and the learning class (ADR 0072, ADR 0061 amendment 2026-11-02; Claude runs it).** This
+  applies on icm-demo, icm-probe and vantage-demo:
+  - **What changes.** Pot £ budgets are off, the host cap is 24, the Friday cut flattens everything, news blackouts no
+    longer refuse entries, and 15 learning arms run (docs/research/learning-2026-11-02.md).
+  - **Deploy.** Then, before restarting, write the learning K rows once on the brain, under the registry lock and
+    inside the 2026Q4 budget:
+    `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/record_learning_k_rows.py --registry /opt/goldbot/state/research_registry.jsonl`.
+    Run it with `--dry-run` first: it lists the 30 rows. It is idempotent. If the budget is short it raises and writes
+    nothing: the learning arms then stay refused (fail closed), and the budget is the owner's decision.
+  - **Restart** the three engines.
+  - **Check:**
+    - each engine file shows `max_positions` 24;
+    - no `exploration_arm_unqualified` row names a learning arm;
+    - an `exploration_learning_unread` row means the ledger read failed: learning entries are refused until it reads;
+    - the first learning fills carry `evidence_class: learning` in `exploration_trades`.
+  - **Retirements are journalled:** `exploration_arm_learning_read_due` at 300 admissible fills (hand the read to the
+    evaluator), `exploration_arm_learning_loss_cap` and `exploration_arm_learning_expired`.
+  - **Rollback.** To stop the learning class only, set `learning_max_open: 0` on each account and restart. To roll back
+    the limits, see ADR 0072 "Consequences". Open positions keep every exit.
 
 ### Auto mode (entries without your click)
 
@@ -2458,25 +2477,94 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
 
-### MT5 terminal chart on the dashboard (`GET /api/chart/mt5`)
+### MT5 terminal chart: retired (owner 2026-11-02)
 
-The terminal's own IC Markets chart, screenshotted, not rebuilt. On the MT5 box `goldbot-chart-capture.timer` (user `mt5`, every 60 s)
-runs `import -window root` on display `:99` into `/home/mt5/chart/mt5.png` (atomic; it never touches the terminal or the bridge). The brain's
-`goldbot-chart-fetch.timer` (user `goldbot`, every 60 s) pulls it with its own SSH key, which may run one command only
-(`goldbot-chart-serve.sh`, a `tar` of that file; no shell, no forwarding), into `/opt/goldbot/state/chart/mt5.png`. The API returns the PNG
-with an `X-Captured-At` header to any signed-in role, and 404 when the file is missing or older than 5 minutes (dashboard: show a placeholder).
-The brain crops the capture to the chart pane (`goldbot/api/mt5_crop.py`: the largest dark plot rectangle plus its price scale and time axis; the XAUUSD pane when its title is readable, which needs the optional `tesseract` binary on the brain, else the largest pane), writes `state/chart/mt5_chart.png` and serves that, with `X-Chart-Cropped`, `X-Chart-Symbol`, `X-Chart-Timeframe` and `X-Chart-Gold` (`true`/`false`/`unknown`) headers; no pane found serves the full image with `X-Chart-Cropped: false`. The dashboard notes "MT5 is showing <SYM>" only when the symbol is known and not gold.
-It shows whatever chart window the terminal has open (one timeframe, as configured; switching timeframes from the dashboard is out of scope).
+The dashboard no longer shows the MT5 chart picture or key levels (owner: "key levels and all indicators are for the
+system to learn from and know about and improve on, not for charts to display"): `GET /api/chart/mt5`,
+`goldbot/api/mt5_crop.py` and `GET /api/key-levels` are gone; the engine still computes its key zones for the
+strategies. Where the capture was installed, turn it off (it also frees memory on the 1 GB MT5 box):
+`sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `sudo systemctl disable --now goldbot-chart-capture.timer`
+(MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys`
+(`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
+The last captures left in the brain's state are never read again. The scripts in `goldbot/ops/linux` stay until the SRE
+lane retires them.
 
-Install (standalone: needs no `/opt/goldbot` update on the MT5 box, and touches neither the terminal nor the bridge; `<SHA>` is a merged main commit). Root installs the scripts and units from its own hash-checked clone, never from `/opt/goldbot`. On the MT5 box:
-`sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -d -m 755 -o root -g root /usr/local/libexec/goldbot; for f in goldbot-chart-capture.sh goldbot-chart-serve.sh; do install -m 755 -o root -g root $d/r/goldbot/ops/linux/$f /usr/local/libexec/goldbot/; done; for u in goldbot-chart-capture.service goldbot-chart-capture.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload'`
-On the brain (key, then the fetch units; the fetch script stays under `/opt/goldbot` there):
-`sudo -u goldbot ssh-keygen -t ed25519 -N '' -C goldbot-chart -f /var/lib/goldbot/.ssh/chart_ed25519 && sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; for u in goldbot-chart-fetch.service goldbot-chart-fetch.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload' && sudo -u goldbot cat /var/lib/goldbot/.ssh/chart_ed25519.pub`
-Then on the MT5 box, with that public key line in place of `<pubkey>`: `echo 'restrict,command="/usr/local/libexec/goldbot/goldbot-chart-serve.sh" <pubkey>' | sudo -u mt5 tee -a /home/mt5/.ssh/authorized_keys` and `sudo systemctl enable --now goldbot-chart-capture.timer`.
-Last, on the brain: `sudo systemctl enable --now goldbot-chart-fetch.timer`. The brain's `goldbot-chart-fetch.sh` is in `/opt/goldbot` there, so the brain must run a version that has it.
-Check: `sudo -u goldbot /opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh && ls -l /opt/goldbot/state/chart/mt5.png`.
-Remove: `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys` (`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
-Failure: a stale or missing picture is a 404 only; nothing trading depends on it. Look at `journalctl -u goldbot-chart-fetch` (brain) and `-u goldbot-chart-capture` (MT5 box).
+### Multi-instrument MT5 boxes (bridge protocol v10)
+
+An account that names `instruments` (config/accounts.yaml, demo only; a live or observe-only account always serves its own
+gold alone) has its bridge select that list into Market Watch at start (`goldbot/execution/market_watch.py`). A symbol the
+terminal lacks is logged (`not in Market Watch ... not served`) and skipped: gold keeps trading, that symbol's entries are
+refused by the engine, its exits still close. Before the instruments go on a box:
+
+1. Market Watch: after the bridge restarts, the terminal's Market Watch lists the account's gold and every instrument of its
+   list (icm-probe: 19 + XAUUSD; vantage-demo: 7 + XAUUSD+). `journalctl -u goldbot-bridge@<account> | grep "not served"` is empty.
+2. Max bars in chart: MT5 Tools > Options > Charts > "Max bars in chart" = 100000 on every multi-instrument terminal
+   (icm-probe: 952 MB RAM; the default "Unlimited" lets 20 symbols' histories fill it).
+3. Swap on icm-probe (deploy check, SRE): `swapon --show` lists a 1-2 GB swapfile and `free -m` shows it; if not,
+   `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` and add
+   `/swapfile none swap sw 0 0` to `/etc/fstab`. Then watch the terminal's peak RSS during one cold history pull
+   (`ps -o rss= -C terminal64.exe` every few seconds); it must stay well under the box's memory.
+4. Symbol check per symbol: `python -m goldbot.ops.symbol_check <account>` prints the account's gold, then one line per
+   instrument (`ok` or its problems: not listed, symbol_info failed, trading disabled, contract size / digits / minimum lot /
+   lot step / profit currency / triple-swap day differing from config/instruments.yaml) and `note:` lines where the hours the
+   broker quoted the symbol over the last 14 days differ from its session profile (reported only: the engine trades where
+   both are open). Every problem is fixed (or the instrument stays `enabled: false`) before the account trades it.
+5. Health: `symbols:<account>` appears once the engine reports its symbols; WARN names a symbol whose terms are not loaded
+   or whose feed is stale (its entries refused, exits still close).
+
+Protocol: v10 brains and bridges interoperate with v9 either way (`ticks_many` falls back to one `last_tick` per symbol on a
+v9 bridge); the bridge's notional ceiling counts every open symbol of the account (6x equity, account-wide).
+
+### Instrument terms file (`state/instruments.db`)
+
+Each non-gold instrument's lot and swap terms per (account, broker symbol) live in `state/instruments.db` (SQLite WAL,
+`goldbot/engine/instruments_db.py`). The engine writes a row from the terminal's own `symbol_info` for every non-gold
+book on the broker-terms cadence and reads it back (at most every 60 s) before that book's entries. Gold never reads or
+writes it: XAUUSD keeps `costs_<account>.json` and `broker_terms_<account>.json`.
+
+- **Backup.** It is in the nightly backup with the other databases (0.6: every `state/**/*.db` is copied with the online
+  backup API and integrity-checked); nothing to configure. It holds no history, only the latest terms, so losing a day
+  loses nothing.
+- **Swap units.** `swap_long_per_lot` / `swap_short_per_lot` are money in the symbol's **profit currency** (column
+  `currency_profit`) per 1.0 lot per night, broker sign (negative = you pay). Converted from `symbol_info` only where the
+  unit is known: swap mode 0 (disabled) is 0, mode 1 (points) is swap x point x contract size. Any other mode is stored
+  NULL with a `swap_note`, and a NULL swap refuses that symbol's entries (`swap_unknown`): a cost the engine cannot price
+  is never taken as 0. `swap_triple_weekday` uses MT5 numbering (0 = Sunday). Read it with
+  `sqlite3 /opt/goldbot/state/instruments.db 'select account_id, symbol, currency_profit, swap_long_per_lot, swap_short_per_lot, swap_note, updated_utc from instrument_terms'`.
+- **Unreadable (`instruments_db_unreadable`).** A corrupt file, a newer schema or a full disk refuses entries on every
+  non-gold book of the engines that read it; gold and every exit keep running (no exit reads this file). Fix: stop the
+  multi-instrument engines (`goldbot-engine@icm-probe`, `goldbot-engine@vantage-demo`), then either delete the file and its journals
+  (`sudo -u goldbot rm -f /opt/goldbot/state/instruments.db /opt/goldbot/state/instruments.db-wal /opt/goldbot/state/instruments.db-shm`;
+  the engine rebuilds every row from `symbol_info` within one terms refresh) or restore it alone from the backup (0.6,
+  "To restore one file only"), and start the engines again. Deleting is the usual choice: the rows are a cache of the
+  terminal's terms.
+- **`instrument_unverified`.** The instrument's terms are not confirmed on this terminal: its entry in
+  `config/instruments.yaml` still has `verify: true` or `enabled: false` (the brokers' public contract specifications,
+  not yet checked), the terminal quotes a different point or digits than the registry, or the terminal cannot describe
+  the symbol (`symbol_info` failed). The engine still runs that book (bars accumulate, exits close, health reports it)
+  but refuses every entry on it. The engine log names which (`<account>: instrument_unverified: <key> ...: entries
+  refused, exits run`). It is not a fault; it clears only by the enable step below, never by editing the database.
+
+### Enabling the instruments after a deploy (symbol check, then a small PR)
+
+The release ships every non-gold instrument with `enabled: false` / `verify: true`. After the deploy, on the brain:
+
+1. Run the check for both multi-instrument accounts (read-only; it never places or changes anything):
+   `python -m goldbot.ops.symbol_check icm-probe` and `python -m goldbot.ops.symbol_check vantage-demo`.
+   Each prints the account's gold, then one line per instrument: `ok`, or its problems with the terminal's own terms in
+   `config/instruments.yaml`'s field names (contract_size, digits, point, min_lot, lot_step, currency_profit,
+   swap_rollover3days); `note:` lines (session-hour differences) are informational only.
+2. Correct `config/instruments.yaml` from that output: every field a line reports as different takes the terminal's value.
+   Never renumber a `magic_block`.
+3. Only for an instrument whose line reads `ok` (after the correction, run the check again): set `verify: false` and
+   `enabled: true`. Anything still failing (not listed, trading disabled, symbol_info failed) stays `enabled: false` /
+   `verify: true`, with the reason in the follow-up PR.
+4. Open a small follow-up PR with only that `config/instruments.yaml` change and the symbol-check output summarised
+   (symbols and terms only, never an account login). After it merges and deploys, restart the two engines
+   (`goldbot-engine@icm-probe`, `goldbot-engine@vantage-demo`); health `symbols:<account>` lists the enabled symbols
+   and the dashboard's entry status drops `instrument_unverified` for them.
+
+Before step 1 the boxes must be ready (previous section: Market Watch, max bars 100000, the icm-probe swapfile).
 
 ### Program ledger sync (Mac -> brain)
 
