@@ -7,12 +7,21 @@ trading enabled". The engine sizes from the terminal's own contract size (never 
 configuration error to fix before `enabled: true`, not something to trade through. It asks the terminal only
 `symbols_get` (when it has it: an older bridge does not) and `symbol_info`; it prints the swap and margin terms for the
 owner's record. It never places, modifies or closes anything.
+
+Per symbol (multi-instrument demo, lane L4; RUNBOOK "symbol_check per symbol"): every other instrument of the account's
+list (market_watch.account_symbols) is checked too: listed by the terminal, symbol_info readable, trading enabled, and
+its contract size, digits, minimum lot, lot step, profit currency and triple-swap day equal to config/instruments.yaml
+(a difference is a problem: the registry's terms are what the RiskGate sizes and rounds with). Its hours as the broker
+quotes them (MT5Broker.trading_sessions) against the instrument's session profile (calendar.profile_disagreement) are
+NOTES, never problems: the engine trades only where both are open.
 """
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from typing import Any
 
+from goldbot.instruments import InstrumentSpec, load_instruments
 from goldbot.ops import accounts
 
 
@@ -40,6 +49,65 @@ def check_symbol(acc: accounts.Account, broker: Any) -> list[str]:
     return problems
 
 
+@dataclass
+class SymbolReport:
+    """One instrument's check: `problems` stop it being enabled; `notes` are for the owner's record."""
+    problems: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+def _terms(sym: str, spec: InstrumentSpec, info: Any) -> list[str]:
+    out = []
+    pairs: list[tuple[str, Any, Any]] = [
+        ("contract size", info.contract_size, spec.contract_size), ("digits", info.digits, spec.digits),
+        ("minimum lot", info.volume_min, spec.min_lot), ("lot step", info.volume_step, spec.lot_step)]
+    for what, got, want in pairs:
+        if abs(float(got) - float(want)) > 1e-9:
+            out.append(f"{sym}: {what} {got:g} on the terminal, {want:g} in config/instruments.yaml")
+    for what, got, want in (("profit currency", getattr(info, "currency_profit", None), spec.currency_profit),
+                            ("triple-swap day", getattr(info, "swap_rollover3days", None), spec.swap_rollover3days)):
+        if got is not None and got != want:
+            out.append(f"{sym}: {what} {got} on the terminal, {want} in config/instruments.yaml")
+    return out
+
+
+def check_instruments(acc: accounts.Account, broker: Any) -> dict[str, SymbolReport]:
+    """Every instrument of the account's list but its own symbol (`check_symbol` checks that), by broker symbol."""
+    from goldbot.data.calendar import profile_disagreement, session_profile
+    from goldbot.execution.market_watch import account_symbols
+    reg = load_instruments()
+    out: dict[str, SymbolReport] = {}
+    for sym in account_symbols(acc, reg)[1:]:
+        rep = out[sym] = SymbolReport()
+        spec = reg.by_broker_symbol(str(acc.broker), sym)
+        if spec is None:
+            rep.problems.append(f"{sym}: not in config/instruments.yaml for broker {acc.broker}")
+            continue
+        listing = getattr(broker, "symbols_get", None)
+        try:
+            names = listing(sym) if listing is not None else None
+        except Exception:                     # noqa: BLE001 - an older bridge: symbol_info alone
+            names = None
+        if names is not None and sym not in names:
+            rep.problems.append(f"{sym} is not listed by the terminal of {acc.account_id}")
+            continue
+        try:
+            info = broker.symbol_info(sym)
+        except Exception as exc:              # noqa: BLE001 - symbol_info None raises in the adapter
+            rep.problems.append(f"{sym}: symbol_info failed ({type(exc).__name__})")
+            continue
+        rep.problems += _terms(sym, spec, info)
+        if not info.trade_allowed:
+            rep.problems.append(f"{sym}: trading disabled on the terminal")
+        try:
+            reported = broker.trading_sessions(sym)
+            rep.notes += profile_disagreement(session_profile(spec.session_profile, acc.server_tz), reported)
+        except Exception as exc:              # noqa: BLE001 - reported, never a problem: the engine keeps the profile
+            rep.notes.append(f"{sym}: sessions not read ({type(exc).__name__}: {exc}); the "
+                             f"{spec.session_profile} profile applies alone")
+    return out
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print("usage: python -m goldbot.ops.symbol_check <account>")
@@ -54,6 +122,7 @@ def main(argv: list[str]) -> int:
     try:
         problems = check_symbol(acc, broker)
         info = broker.symbol_info(acc.symbol) if not problems else None
+        others = check_instruments(acc, broker)
     finally:
         if hasattr(broker, "shutdown"):
             broker.shutdown()
@@ -61,6 +130,11 @@ def main(argv: list[str]) -> int:
         print(f"{acc.symbol}: contract {info.contract_size:g}, lots {info.volume_min:g}..{info.volume_max:g} step "
               f"{info.volume_step:g}, digits {info.digits}, swap mode {info.swap_mode} long {info.swap_long} short "
               f"{info.swap_short}, margin initial {info.margin_initial} maintenance {info.margin_maintenance}")
+    for sym, rep in others.items():
+        print(f"{sym}: {'ok' if not rep.problems else f'{len(rep.problems)} problem(s)'}")
+        for n in rep.notes:
+            print(f"  note: {n}")
+        problems += rep.problems
     for p in problems:
         print(f"FAIL: {p}")
     print("ok" if not problems else f"{len(problems)} problem(s)")
