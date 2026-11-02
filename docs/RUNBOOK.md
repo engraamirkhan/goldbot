@@ -1488,9 +1488,11 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
      to trade until then.
   2. On icm-demo set `exploration.enabled: false`, restart its engine, and wait until the account is flat (the
      exploration positions close at their own stop, target or hold; exits are never gated, nothing is closed by hand).
-  3. While it is still `probe_only`: if the account is 8% or more below its high-water mark, run the X5 rotation (ADR
-     0043 section 2; owner TOTP). X5 is not built yet: until it is, a mark at -8% or below blocks this step, and the
-     re-role waits for it.
+  3. While it is still `probe_only`: if the account is 8% or more below its high-water mark, wait for the demo roll
+     (ADR 0049 D3, `goldbot/engine/demo_roll.py`; no owner input). At the next 00:00 UTC risk-day roll on a host in
+     auto, on a terminal reporting demo, flat except the scheduled cost probe and below 12%, it resets the mark to the
+     equity (journal `rotation`, a Telegram notice). A refused roll journals `rotation_refused` with its reason and is
+     tried again at the next risk-day roll.
   4. Set `probe_only: false`, remove `max_positions` (both are refused at load off a probe host), and leave the
      intraday and swing arms either moved back to icm-probe or retired (no arm on two hosts).
   5. Open a new evidence epoch for icm-demo before any strategy fill counts: fills opened before the re-role date are

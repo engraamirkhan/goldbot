@@ -112,9 +112,7 @@ from goldbot.risk.gate import (
     REARM_PHRASE,
     GateDecision,
     Stage,
-    _risk_week,
     broker_margin,
-    new_day,
 )
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
 from goldbot.risk.supervisor import Supervisor, others_exposure, write_startup_error
@@ -388,6 +386,8 @@ class Engine:
         self._week_reset: pd.Timestamp | None = None
         self._flows_through: pd.Timestamp | None = None
         self._flow_balance: float | None = None
+        self._epoch = 0                                 # ADR 0049 D3: the demo roll's epoch and when it began
+        self._epoch_utc: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
@@ -2302,21 +2302,7 @@ class Engine:
 
     # ------------------------------------------------------------------ risk periods and re-arm
     def _roll_risk_period(self, now: pd.Timestamp) -> None:
-        """Daily and weekly loss caps roll over at the risk-day / risk-week boundary (gate.new_day); the reset time
-        is persisted so a restart neither resets twice in one day nor skips a boundary."""
-        last = self._last_reset
-        if last is not None and now.tz_convert("UTC").date() == last.tz_convert("UTC").date():
-            return
-        self.state.equity = self.broker.account().equity
-        week = last is None or _risk_week(now) != _risk_week(last)
-        if new_day(self.state, now, last):
-            self._last_reset = now
-            if week:
-                self._week_reset = now
-            # BACKLOG 43 (code review LOW-1): a new risk day starts with no "last entry refused" (an agent that stopped
-            # producing intents is never allowed again, so its refusal would otherwise stay until a restart)
-            self._entry_refusals.clear()
-            self._save_risk_state_now("the risk-period reset")
+        capital_flows.roll_risk_period(self, now)     # the day and week starts, then the ADR 0049 demo roll
 
     def _poll_rearm(self, now: pd.Timestamp) -> None:
         """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once, it
@@ -2536,20 +2522,22 @@ class Engine:
             weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
             rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
             stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
-            flows_through=self._flows_through))
+            flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc))
 
-    def _save_risk_state_now(self, what: str) -> None:
+    def _save_risk_state_now(self, what: str) -> bool:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
         in-memory state (the pending 12% read, the stage, the mark) decides the kill switch, so a failed write (a full
         disk) must never abort the refresh before the stage machine, skip the flatten, or narrow it. The failure is
         logged and counted as a tick error, which blocks entries until a clean decision bar; the next state write
-        (`_write_state`) saves the risk state again."""
+        (`_write_state`) saves the risk state again. True when saved."""
         try:
             self._save_risk_state()
         except Exception as exc:
             log.error("risk state not saved after %s (%s); kept in memory, entries blocked, retried with the next "
                       "state write", what, type(exc).__name__)
             self.note_tick_error(exc)
+            return False
+        return True
 
     def _load_risk_state(self) -> None:
         self._kill_everything = False
@@ -2571,6 +2559,7 @@ class Engine:
         self._stage2_pending_since = snap.stage2_pending_since
         self._kill_everything = snap.kill_everything
         self._week_reset, self._flows_through = snap.week_reset, snap.flows_through
+        self._epoch, self._epoch_utc = snap.epoch, snap.epoch_utc
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

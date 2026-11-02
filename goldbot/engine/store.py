@@ -132,6 +132,10 @@ class RiskSnapshot(FrozenRecord):
     # ADR 0042: capital flows stamped up to here were applied (or were already in the marks); absent = the mark's
     # deal-history anchor, then the first read
     flows_through: pd.Timestamp | None = None
+    # ADR 0049 D3: the demo roll's epoch (0 = never rolled) and when it began; written only once a host has rolled, so
+    # every other account's file is unchanged. Absent (an older file, or never rolled) = epoch 0
+    epoch: int = 0
+    epoch_utc: pd.Timestamp | None = None
 
 
 @runtime_checkable
@@ -204,6 +208,8 @@ class JsonEngineStore:
                    else s.stage2_pending_since.isoformat(),
                    "week_reset": s.week_reset.isoformat() if s.week_reset is not None else None,
                    "flows_through": s.flows_through.isoformat() if s.flows_through is not None else None}
+        if s.epoch:
+            payload |= {"epoch": s.epoch, "epoch_utc": s.epoch_utc.isoformat() if s.epoch_utc is not None else None}
         # durable: halts and stages survive a power cut
         write_atomic(risk_file(self.state_dir, self.account_id), json.dumps(payload))
 
@@ -238,7 +244,9 @@ class JsonEngineStore:
                             propose_only_until=propose_only_until, rearm_refused=rearm_refused,
                             kill_everything=kill_everything, stage2_pending_since=stage2_pending_since,
                             week_reset=pd.Timestamp(d["week_reset"]) if d.get("week_reset") else None,
-                            flows_through=pd.Timestamp(d["flows_through"]) if d.get("flows_through") else None)
+                            flows_through=pd.Timestamp(d["flows_through"]) if d.get("flows_through") else None,
+                            epoch=int(d.get("epoch") or 0),
+                            epoch_utc=pd.Timestamp(d["epoch_utc"]) if d.get("epoch_utc") else None)
 
     def write_engine_state(self, payload: dict[str, Any], durable: bool = False) -> None:
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync

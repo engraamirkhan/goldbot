@@ -3,6 +3,18 @@
 Status: proposed (CFO, 2026-10-27). It is decided under the owner's delegation of demo sizing and limit decisions to
 the experts (2026-10-18), once trading-safety has reviewed it (blocking: items T1-T4 below).
 
+**T1 accepted (product owner, 2026-11-02).** The trading-safety review of PR #290 accepted T1 once its findings
+F1 and F2 were applied. Those findings, together with F3-F6, are in `goldbot/engine/demo_roll.py`:
+- **F1:** the effective approval mode must be auto, and no roll happens inside the 30-day propose-only window after an
+  owner re-arm.
+- **F2:** every refusal reason has its own test.
+- **F3:** the mark is reset to max(balance, equity).
+- **F4:** the owner notice is sent only after the risk state is saved.
+- **F5:** no roll while the owner's, the supervisor's or the drift halt stands.
+- **F6:** the stage machine and the dynamic-limit reset are added to the byte pin of the owner re-arm path.
+
+T2-T6 stay proposed until each is built and reviewed.
+
 **Tighten-only.** This ADR does not change any RiskGate limit, % ceiling, `daily_loss_limit_abs`, `budget_share`,
 per-trade cap, `max_open_total`, drawdown stage or the 12% halt. Real-money accounts (`icm-live`, `vantage-live`) and
 ADR 0004's £50 daily limit are untouched, and nothing here can reach them (T1).
@@ -185,7 +197,7 @@ arms exit by their own rules first). In this order:
 | Step | Act | Rule | Records |
 |---|---|---|---|
 | 1 Top-up (optional) | demo deposit **back to the reference balance, never above it** (£11,000 / £10,960.55 / £10,000) | Never above the reference: a larger balance would widen the £ weekly and stage room while the %s stay the same. That is a loosening, and it is refused. ADR 0042 D3/D4 apply (mark + flow; day and week starts + flow) | a `deposit` capital flow, real cost £0 |
-| 2 Mark reset | mark = equity, stage NORMAL, **automated** on the fenced path (T1) | It never touches `day_start_equity` or `week_start_equity`, and never touches another engine | journal `rotation`: epoch n → n+1, old and new mark, equity, the epoch's demo £ by sleeve |
+| 2 Mark reset | mark = **max(balance, equity)** at the call (an open P0's floating loss is never banked as headroom; trading-safety F3, PR #290), stage NORMAL, **automated** on the fenced path (T1) | It never touches `day_start_equity` or `week_start_equity`, and never touches another engine | journal `rotation`: epoch n → n+1, old and new mark, balance and equity, the epoch's demo £ by sleeve |
 | 3 Resume | exploration unpauses at the same targets | the arms' H-61 stops, £ ledgers, Thompson posteriors and two-look counts **carry over unchanged** | |
 
 **Without a top-up the roll is still safe.** The next epoch's £ caps shrink pro rata, because 2% of a lower day start
