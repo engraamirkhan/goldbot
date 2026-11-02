@@ -554,7 +554,7 @@ def test_the_settings_check_works_with_the_real_settings_model(tmp_path):
     repo = tmp_path / "real"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
-    files = {rel: (REPO / rel).read_text() for rel in ("goldbot/__init__.py", "goldbot/config.py",
+    files = {rel: (REPO / rel).read_text() for rel in ("goldbot/__init__.py", "goldbot/config.py", "docs/decisions/0073-owner-trial-budget-2026q4.md",
                                                          "config/settings.yaml")}
     sha = _commit(repo, files, "real settings model")
     local = repo / "config" / "settings.local.yaml"

@@ -341,7 +341,9 @@ settings_problems() {  # $1 target; prints problems; returns 0 valid, 3 invalid,
   as_owner test -f "$localf" || return 0
   read -r -a py <<< "$(target_py)"
   dir=$(as_owner mktemp -d /tmp/goldbot-deploy-check.XXXXXX) || return 4
-  if g archive "$1" goldbot config | as_owner tar -x -C "$dir" \
+  local paths=(goldbot config)   # owner ADRs back research budget overrides above 500 (ADR 0073)
+  g cat-file -e "$1:docs/decisions" 2>/dev/null && paths+=(docs/decisions)
+  if g archive "$1" "${paths[@]}" | as_owner tar -x -C "$dir" \
       && as_owner cp -- "$localf" "$dir/config/settings.local.yaml"; then
     as_owner "${py[@]}" -I -c "$SETTINGS_PY" "$(pypath "$dir")" || rc=$?
   else
