@@ -2515,6 +2515,57 @@ refused by the engine, its exits still close. Before the instruments go on a box
 Protocol: v10 brains and bridges interoperate with v9 either way (`ticks_many` falls back to one `last_tick` per symbol on a
 v9 bridge); the bridge's notional ceiling counts every open symbol of the account (6x equity, account-wide).
 
+### Instrument terms file (`state/instruments.db`)
+
+Each non-gold instrument's lot and swap terms per (account, broker symbol) live in `state/instruments.db` (SQLite WAL,
+`goldbot/engine/instruments_db.py`). The engine writes a row from the terminal's own `symbol_info` for every non-gold
+book on the broker-terms cadence and reads it back (at most every 60 s) before that book's entries. Gold never reads or
+writes it: XAUUSD keeps `costs_<account>.json` and `broker_terms_<account>.json`.
+
+- **Backup.** It is in the nightly backup with the other databases (0.6: every `state/**/*.db` is copied with the online
+  backup API and integrity-checked); nothing to configure. It holds no history, only the latest terms, so losing a day
+  loses nothing.
+- **Swap units.** `swap_long_per_lot` / `swap_short_per_lot` are money in the symbol's **profit currency** (column
+  `currency_profit`) per 1.0 lot per night, broker sign (negative = you pay). Converted from `symbol_info` only where the
+  unit is known: swap mode 0 (disabled) is 0, mode 1 (points) is swap x point x contract size. Any other mode is stored
+  NULL with a `swap_note`, and a NULL swap refuses that symbol's entries (`swap_unknown`): a cost the engine cannot price
+  is never taken as 0. `swap_triple_weekday` uses MT5 numbering (0 = Sunday). Read it with
+  `sqlite3 /opt/goldbot/state/instruments.db 'select account_id, symbol, currency_profit, swap_long_per_lot, swap_short_per_lot, swap_note, updated_utc from instrument_terms'`.
+- **Unreadable (`instruments_db_unreadable`).** A corrupt file, a newer schema or a full disk refuses entries on every
+  non-gold book of the engines that read it; gold and every exit keep running (no exit reads this file). Fix: stop the
+  multi-instrument engines (`goldbot-engine@icm-probe`, `goldbot-engine@vantage-demo`), then either delete the file and its journals
+  (`sudo -u goldbot rm -f /opt/goldbot/state/instruments.db /opt/goldbot/state/instruments.db-wal /opt/goldbot/state/instruments.db-shm`;
+  the engine rebuilds every row from `symbol_info` within one terms refresh) or restore it alone from the backup (0.6,
+  "To restore one file only"), and start the engines again. Deleting is the usual choice: the rows are a cache of the
+  terminal's terms.
+- **`instrument_unverified`.** The instrument's terms are not confirmed on this terminal: its entry in
+  `config/instruments.yaml` still has `verify: true` or `enabled: false` (the brokers' public contract specifications,
+  not yet checked), the terminal quotes a different point or digits than the registry, or the terminal cannot describe
+  the symbol (`symbol_info` failed). The engine still runs that book (bars accumulate, exits close, health reports it)
+  but refuses every entry on it. The engine log names which (`<account>: instrument_unverified: <key> ...: entries
+  refused, exits run`). It is not a fault; it clears only by the enable step below, never by editing the database.
+
+### Enabling the instruments after a deploy (symbol check, then a small PR)
+
+The release ships every non-gold instrument with `enabled: false` / `verify: true`. After the deploy, on the brain:
+
+1. Run the check for both multi-instrument accounts (read-only; it never places or changes anything):
+   `python -m goldbot.ops.symbol_check icm-probe` and `python -m goldbot.ops.symbol_check vantage-demo`.
+   Each prints the account's gold, then one line per instrument: `ok`, or its problems with the terminal's own terms in
+   `config/instruments.yaml`'s field names (contract_size, digits, point, min_lot, lot_step, currency_profit,
+   swap_rollover3days); `note:` lines (session-hour differences) are informational only.
+2. Correct `config/instruments.yaml` from that output: every field a line reports as different takes the terminal's value.
+   Never renumber a `magic_block`.
+3. Only for an instrument whose line reads `ok` (after the correction, run the check again): set `verify: false` and
+   `enabled: true`. Anything still failing (not listed, trading disabled, symbol_info failed) stays `enabled: false` /
+   `verify: true`, with the reason in the follow-up PR.
+4. Open a small follow-up PR with only that `config/instruments.yaml` change and the symbol-check output summarised
+   (symbols and terms only, never an account login). After it merges and deploys, restart the two engines
+   (`goldbot-engine@icm-probe`, `goldbot-engine@vantage-demo`); health `symbols:<account>` lists the enabled symbols
+   and the dashboard's entry status drops `instrument_unverified` for them.
+
+Before step 1 the boxes must be ready (previous section: Market Watch, max bars 100000, the icm-probe swapfile).
+
 ### Program ledger sync (Mac -> brain)
 
 `python -m goldbot.ops.run ledger sync` sends the Mac's new ledger rows to the brain's `state/program.db` over ssh with its own key, which may run one
