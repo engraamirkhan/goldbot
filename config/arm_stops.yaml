@@ -81,7 +81,9 @@ h61: [S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B, S6, I1, I2A, I2B, MB15, MB30, 
       VS1A, VS1B, VS2A, VS2B, VS3A, VS3B, VS5A, VS5B,
       # multi-instrument learning arms (learning-mi-2026-11-02.md section 6): H-61's intraday stop on top of the
       # learning class's own (300 fills, loss cap, until); each instrument is its own unit, never pooled
-      LB-US500, LB-DE40, LB-XTIUSD, LB-UST10Y, LB-EURUSD, LB-USDJPY, LB-BUND10Y, LB-JP225]
+      LB-US500, LB-DE40, LB-XTIUSD, LB-UST10Y, LB-EURUSD, LB-USDJPY, LB-BUND10Y, LB-JP225, LB-XAGUSD, LB-USTEC,
+      LB-GBPUSD, LB-COPPER, LB-UK100, LB-XPTUSD, LB-AUDUSD, LB-USDCAD, LB-XBRUSD, LB-USDCHF, LB-NZDUSD, LB-XNGUSD,
+      LB-WHEAT, LB-SOYBEAN, LB-COFFEE, LB-SUGAR, LB-XAUEUR, LB-XAUAUD]
 
 # No stop: the controls (the null; HV amendment 3, Z 4, arms 8.9) and the virtual twins BXT/BXF (H-80: scored on
 # BXR's fills, they place no order).
@@ -106,7 +108,9 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        I0-BUND10Y, S0-COPPER, I0-COPPER, S0-WHEAT, I0-WHEAT, S0-SOYBEAN, I0-SOYBEAN, S0-SUGAR, I0-SUGAR, S0-COFFEE,
        I0-COFFEE,
        # multi-instrument learning arms' dedicated controls (learning-mi-2026-11-02.md): stop with their arm
-       LBC-US500, LBC-DE40, LBC-XTIUSD, LBC-UST10Y, LBC-EURUSD, LBC-USDJPY, LBC-BUND10Y, LBC-JP225]
+       LBC-US500, LBC-DE40, LBC-XTIUSD, LBC-UST10Y, LBC-EURUSD, LBC-USDJPY, LBC-BUND10Y, LBC-JP225, LBC-XAGUSD,
+       LBC-USTEC, LBC-GBPUSD, LBC-COPPER, LBC-UK100, LBC-XPTUSD, LBC-AUDUSD, LBC-USDCAD, LBC-XBRUSD, LBC-USDCHF,
+       LBC-NZDUSD, LBC-XNGUSD, LBC-WHEAT, LBC-SOYBEAN, LBC-COFFEE, LBC-SUGAR, LBC-XAUEUR, LBC-XAUAUD]
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above

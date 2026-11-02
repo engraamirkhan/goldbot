@@ -74,15 +74,15 @@ def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of
         "vantage-demo"]
     # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
     assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 6),
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
                                                                      "swing": (None, 2)}
     assert not ex.pot_budgets and ex.learning_max_open == 6
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in V_SCALP} == {("scalp", 6.5)}
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
-    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V",
-                                                                   "LBC-UST10Y", "LBC-BUND10Y"}
+    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V"} | {
+        i for i in MI_ON["vantage-demo"] if i.startswith("LBC-")}
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 

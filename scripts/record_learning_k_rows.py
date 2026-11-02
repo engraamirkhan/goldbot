@@ -69,9 +69,14 @@ def budget_report(registry: Path, spec: Path = SPEC, *, cap: int | None = None,
         reg = TrialRegistry(registry)
         have = {r.get("config_hash") for r in reg._rows()}
         used = reg.budget_used(q)
-    missing = sorted(r["arm"] for h, r in k_rows(spec).items() if h not in have)
+    rows = {h: r for h, r in k_rows(spec).items() if h not in have}
+    missing = sorted(r["arm"] for r in rows.values())
+    by_prereg: dict[str, int] = {}
+    for r in rows.values():
+        by_prereg[r["config"]["prereg"]] = by_prereg.get(r["config"]["prereg"], 0) + 1
     return {"quarter": q, "used": used, "cap": cap, "missing": len(missing), "arms": missing,
-            "fits": used + len(missing) <= cap}
+            "by_prereg": dict(sorted(by_prereg.items())), "fits": used + len(missing) <= cap,
+            "left_after": cap - used - len(missing)}
 
 
 def record(registry: Path, spec: Path = SPEC, *, dry_run: bool = False) -> list[str]:
@@ -107,7 +112,10 @@ def main() -> None:
     if args.budget:
         b = budget_report(Path(args.registry))
         print(f"{b['quarter']}: {b['used']} of {b['cap']} used; {b['missing']} learning K rows missing; "
-              + ("they fit" if b["fits"] else "they do NOT fit (the budget is the owner's to raise)"))
+              + (f"they fit, {b['left_after']} left after" if b["fits"]
+                 else "they do NOT fit (the budget is the owner's to raise)"))
+        for doc, n in b["by_prereg"].items():
+            print(f"  {n:3d}  {doc}")
         return
     arms = record(Path(args.registry), dry_run=args.dry_run)
     print(("would write" if args.dry_run else "wrote") + f" {len(arms)} K rows: {', '.join(arms) or '-'}")

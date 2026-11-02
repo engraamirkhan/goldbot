@@ -41,9 +41,8 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
 # multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
 INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
 ARM_SPEC_IDS |= INSTRUMENT_CONTROLS
-# multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md): the 8 registered of 26
-ARM_SPEC_IDS |= {f"{g}-{k}" for k in ("US500", "DE40", "XTIUSD", "EURUSD", "USDJPY", "JP225", "UST10Y", "BUND10Y")
-                 for g in ("LB", "LBC")}
+# multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md): one per listed instrument
+ARM_SPEC_IDS |= {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("LB", "LBC")}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:

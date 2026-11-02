@@ -34,14 +34,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Multi-instrument learning arms (`docs/research/learning-mi-2026-11-02.md`, ADR 0061 amendment, ADR 0072).
   - **The pairs.** One opening-range breakout per instrument in its own session (`session_range_break` with the new
     `session_local`; GS1/GS1C unchanged), each with a dedicated seeded control (`session_range_control`).
-  - **Registered.** 8 of 26 pairs, ranked by evidence, cost per R and slot capacity:
-    - icm-probe: US500, DE40, XTIUSD, EURUSD, USDJPY, JP225 (a new 4-slot intraday pot inside the unchanged 23);
-    - vantage-demo: UST10Y, BUND10Y.
-  - **Queued.** 18 instruments, frozen in the doc with no K row until they are registered.
+  - **Registered.** All 26 pairs (research lead 2026-11-02), each on the account that lists its instrument: 19 on
+    icm-probe, 7 on vantage-demo.
+  - **Slot counts raised, nothing else.**
+    - icm-probe: `learning_max_open` 6 -> 14, intraday pot 12;
+    - vantage-demo: intraday pot 6 -> 10.
+    - The host total of 23, the per-trade caps, the days, margin and notional are unchanged.
+  - **Slot refusals** are reported per arm in the read as a bias diagnostic.
   - **Status.** The pairs are `blocked` until lane L3 runs arms on their own instrument (today's engine would compute
     them on gold). The unblock is `status: run` on both rows of a pair, with nothing hashed.
-  - **K rows.** 16 learning K rows, written by `scripts/record_learning_k_rows.py` with the gold ones (46 in all). Its
-    new `--budget` prints the quarter's count against the 3,500 cap before any write.
+  - **K rows.** 52 learning K rows, written by `scripts/record_learning_k_rows.py` with the 30 gold ones (82 in all).
+    `--budget` prints the quarter's count against the 3,500 cap, the missing rows per pre-registration, and what is
+    left, before any write.
 - Multi-instrument demo, step 0 (interfaces frozen for lanes L1-L4): `goldbot/instruments.py` (`InstrumentSpec`, `Instruments`, `load_instruments`, `LEVERAGE_BY_CLASS`) and `config/instruments.yaml` (XAUUSD at magic_block 0 plus 19 IC Markets and 7 Vantage instruments, unique magic_blocks 1-26, every non-gold entry `enabled: false` with placeholder terms marked `verify: true` for the L1 symbol check). Broker protocol: `positions(magic_prefix, symbol=None)` (None = the adapter's own symbol, as before; the bridge wire call is unchanged when None), `ticks_many(symbols, since)` (paper: last quote per symbol; MT5 and the bridge client raise NotImplementedError until L4), `SymbolInfo.currency_profit` / `swap_rollover3days` (default None, nothing reads them). Bridge API_VERSION 9 -> 10 (MIN_COMPATIBLE stays 5; either box can be deployed first). Nothing reads the registry yet: XAUUSD paths unchanged (`tests/test_instruments.py`).
 - Trial budget overrides above 500 now need a recorded owner decision: `research.trial_budget_owner_decisions` maps a quarter to an ADR path (repo-relative) that must exist and state the same quarter and trial count (3500 or 3,500); 5,000 trials is the hard ceiling even with one, and a decision without a matching override is refused (`goldbot/config.py` `ResearchSettings._budget_overrides`, `tests/test_config.py`). The shipped 2026Q4 budget is unchanged at 158 by this change; raising it to 3,500 needs the owner ADR and the settings entry together.
 - POS-1 confirm set (quant re-review of PR #291, C-1; W3 addendum ruling 17). `scripts/position_screen.py --write-confirm-set <file> --from-explore <explore.json> --frozen-prereg docs/research/pos1/prereg.md [--ensemble ID]` builds the set; commit the file before any CONFIRM read.

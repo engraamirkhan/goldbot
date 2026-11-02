@@ -116,12 +116,13 @@ measured.** Replacing them with measured values is the first deliverable of thes
   refusal hits both alike.
 - **Loss cap, £160** (20 x £8, as the learning class sets it). At these sizes the £ cap is a backstop. The binding kill
   is in R (section 6).
-- **Notional.** The 8 registered pairs at the minimum lot are each about $300 (JP225) to $2,700 (DE40).
-  - At most 4 open on icm-probe, so under $11k, against the 6x-notional cap of about £60k on an £11k demo.
-  - At most 2 open on vantage-demo.
+- **Notional.** At the minimum lot each pair's position is about $30 (a grain) to $2,700 (DE40).
+  - At most 12 open on icm-probe (its intraday pot), about $25k at the worst. The 6x-notional ceiling is about £60k on
+    an £11k demo.
+  - At most 10 open on vantage-demo, shared with VI0 and VC1H.
   - The correlation-group caps (lane L2) bind first if anything does.
 
-## 5. Ranking and registration: 8 registered, 18 queued
+## 5. Ranking and registration: all 26 registered
 
 **Ranking criteria**, in order of weight:
 
@@ -132,68 +133,69 @@ measured.** Replacing them with measured values is the first deliverable of thes
 - (d) distinctness, so the first pick per correlation group ranks above a near-duplicate (US500 above USTEC, XTIUSD above
   XBRUSD).
 
-Gold crosses rank last (section 3, point 2).
+Gold crosses rank last (section 3, point 2). The rank is fixed here. It orders the reports and any later retirement
+for capacity. It never changes on fills.
 
-**Capacity rule (why 8, not 26).** These are the binding demo limits, none of them changed here:
+**Registration (research lead decision, 2026-11-02).** Under the owner's directive that testing and learning must not
+be bound by limits and that all 26 instruments trade, every pair is registered with its own K rows. Only slot counts
+were raised to hold them:
 
 | Limit | icm-probe | vantage-demo |
 |---|---|---|
-| `learning_max_open` | 6, already shared with 7 gold learning arms | 6, shared with Z6V and Z7V |
-| Intraday pot slots | 4, a new pot carved inside the unchanged `max_open_total` 23 (scalp 19 + intraday 4) | 6, shared with VI0 (max_open 3, 24h holds) and VC1H, so about 2 are free |
+| `learning_max_open` | 6 -> **14** (the 19 pairs beside 7 gold learning arms) | 6, unchanged (7 pairs beside Z6V and Z7V) |
+| Intraday pot slots | new pot of **12** | 6 -> **10** (shared with VI0, max_open 3, 24h holds, and VC1H) |
 
-- **Why refusals matter.** A learning entry refused for want of a slot is not a neutral loss of data. Slots run out
-  on days when many markets break at once, which are the days a breakout rule is most likely to work, while the
-  seeded control is refused at other times. That biases the arm-versus-control read.
-- **The rule.** Register at most 2 pairs per session group on icm-probe and 1 on vantage-demo. The groups are Tokyo
-  (01:00-08:00 UTC), Europe (07:00-15:00 UTC) and New York (12:30-21:00 UTC), and their open periods barely
-  overlap.
-- **The effect.** The pairs' open positions can never exceed the pot. At most 2 new learning positions are open at
-  once beside the gold learning arms.
-- **The exception.** In the US-EU DST gap weeks the Europe and New York groups overlap by up to an hour. None falls
-  before 2026-12-17. A registration that runs into March needs this rule re-checked.
+**What did not change, and still binds:**
 
-`tests/test_learning_mi.py` checks this rule.
+- the host total: `max_open_total` 23 of `max_positions` 24 (icm-probe's pots now sum past 23 on purpose; the total
+  decides);
+- every per-trade cap (£8 here);
+- the £220 and £200 days and the weekly 6%;
+- the margin floor and the account-wide notional ceiling;
+- the correlation-group caps.
 
-**The 26 rows.** Session clocks are local. k_id is the K row's config hash: for a queued row it is what the row would
-get if registered unchanged (it does not depend on `since`).
+**The bias this leaves, and how it is handled.**
 
-| Rank | Instrument | Account | Session (zone, range, break until) | Hold | Status | Arm / control | k_id arm / control |
+- **The bias.** A learning entry refused for want of a slot is not a neutral loss of data. Slots run out on days when
+  many markets break at once, which are the days a breakout rule is most likely to work, while the seeded control is
+  refused at other times. That biases the arm-versus-control read.
+- **How tight the slots are.** Each session group (Tokyo, Europe, New York) now has up to 11 icm-probe pairs whose
+  open periods overlap: the Tokyo group 01:00-08:00 UTC, Europe 07:00-15:00 UTC, New York 12:30-21:00 UTC. The host
+  total of 23 is shared with the scalp arms. Refusals will happen.
+- **How it is handled.** It is not prevented; it is measured. Each arm's and each control's slot refusals are counted
+  and reported in the read (section 7) as a bias diagnostic. A pair whose refusals pass 10% has its verdict marked
+  selection-affected.
+
+**The 26 rows.** Session clocks are local. k_id is the K row's config hash.
+
+| Rank | Instrument | Account | Session (zone, range, break until) | Hold | Group | Arm / control | k_id arm / control |
 |---|---|---|---|---|---|---|---|
-| 1 | US500 | icm-probe | New York 09:30-10:30, 12:30 | 16 | **registered** (NY group) | LB-US500 / LBC-US500 | `7824af5337d6` / `0b48159e6744` |
-| 2 | DE40 | icm-probe | Berlin 09:00-10:00, 12:00 | 16 | **registered** (Europe) | LB-DE40 / LBC-DE40 | `0cc84bd9b32d` / `fd514988ac7f` |
-| 3 | XTIUSD | icm-probe | New York 09:00-10:00, 12:00 | 16 | **registered** (NY) | LB-XTIUSD / LBC-XTIUSD | `3c4f380493a9` / `95662ebf0c11` |
-| 4 | UST10Y | vantage-demo | New York 08:30-09:30, 11:30 | 16 | **registered** (NY) | LB-UST10Y / LBC-UST10Y | `934a5d28e98b` / `43a691518ebe` |
-| 5 | EURUSD | icm-probe | London 08:00-09:00, 11:00 | 16 | **registered** (Europe) | LB-EURUSD / LBC-EURUSD | `15cb722f0a67` / `e43dd09885bd` |
-| 6 | USDJPY | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | **registered** (Tokyo) | LB-USDJPY / LBC-USDJPY | `24fb1d1b9c86` / `2b291a35aef4` |
-| 7 | BUND10Y | vantage-demo | Berlin 08:00-09:00, 11:00 | 16 | **registered** (Europe) | LB-BUND10Y / LBC-BUND10Y | `cbf941bf9300` / `13a7a667a577` |
-| 8 | JP225 | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | **registered** (Tokyo) | LB-JP225 / LBC-JP225 | `c7f73f8a84da` / `cddd20718048` |
-| 9 | XAGUSD | icm-probe | New York 08:30-09:30, 11:30 | 16 | queued (NY group full) | LB-XAGUSD / LBC-XAGUSD | `5d6d7b150e90` / `afa358f94caa` |
-| 10 | USTEC | icm-probe | New York 09:30-10:30, 12:30 | 16 | queued (US500's near-duplicate) | LB-USTEC / LBC-USTEC | `be4886b0e38b` / `d42af4dc795e` |
-| 11 | GBPUSD | icm-probe | London 08:00-09:00, 11:00 | 16 | queued (Europe full) | LB-GBPUSD / LBC-GBPUSD | `70665fc91289` / `78a7d6e40779` |
-| 12 | COPPER | vantage-demo | New York 08:30-09:30, 11:30 | 16 | queued (Vantage NY full) | LB-COPPER / LBC-COPPER | `53ad7dfe0793` / `b7e5c7ded5b4` |
-| 13 | UK100 | icm-probe | London 08:00-09:00, 11:00 | 16 | queued | LB-UK100 / LBC-UK100 | `0a1e8565e58d` / `e5d58f3c524e` |
-| 14 | XPTUSD | icm-probe | New York 08:30-09:30, 11:30 | 16 | queued | LB-XPTUSD / LBC-XPTUSD | `ecde87228882` / `e5cf0f52dcef` |
-| 15 | AUDUSD | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | queued | LB-AUDUSD / LBC-AUDUSD | `a2ddabbad3b7` / `348d01e9fa68` |
-| 16 | USDCAD | icm-probe | New York 08:00-09:00, 11:00 | 16 | queued | LB-USDCAD / LBC-USDCAD | `e7edb44163bf` / `f81005cd4b16` |
-| 17 | XBRUSD | icm-probe | London 08:00-09:00, 11:00 | 16 | queued (XTIUSD's near-duplicate) | LB-XBRUSD / LBC-XBRUSD | `35006879a48b` / `8380b8dbbcb6` |
-| 18 | USDCHF | icm-probe | London 08:00-09:00, 11:00 | 16 | queued | LB-USDCHF / LBC-USDCHF | `5928cb942f16` / `0f45accc184e` |
-| 19 | NZDUSD | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | queued | LB-NZDUSD / LBC-NZDUSD | `9ef62e4ea9e3` / `4c24c0084b8f` |
-| 20 | XNGUSD | icm-probe | New York 09:00-10:00, 12:00 | 16 | queued (cost and gap risk) | LB-XNGUSD / LBC-XNGUSD | `faf3c514280b` / `b80ba9755d38` |
-| 21 | WHEAT | vantage-demo | Chicago 08:30-09:30, 11:00 | 8 | queued (cost; session hours unverified) | LB-WHEAT / LBC-WHEAT | `ca8e9909da51` / `42845fe11e71` |
-| 22 | SOYBEAN | vantage-demo | Chicago 08:30-09:30, 11:00 | 8 | queued (as WHEAT) | LB-SOYBEAN / LBC-SOYBEAN | `67efc9c3242f` / `000f85f8c7b2` |
-| 23 | COFFEE | vantage-demo | New York 04:30-05:30, 07:30 | 16 | queued (cost; session hours unverified) | LB-COFFEE / LBC-COFFEE | `7993d968376a` / `884ba48bbb9a` |
-| 24 | SUGAR | vantage-demo | New York 04:30-05:30, 07:30 | 16 | queued (as COFFEE) | LB-SUGAR / LBC-SUGAR | `b8a6f41dffe2` / `cd31c35923db` |
-| 25 | XAUEUR | icm-probe | London 08:00-09:00, 11:00 | 16 | queued (gold component retired on XAUUSD) | LB-XAUEUR / LBC-XAUEUR | `aec0750bde08` / `fefdb9196f39` |
-| 26 | XAUAUD | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | queued (as XAUEUR) | LB-XAUAUD / LBC-XAUAUD | `80041997a8d4` / `e13da7f72451` |
-
-**A queued row** is frozen here (its definition does not change) but is not in the spec: no K row, no fill.
-
-- **When it may be registered.** When a registered pair in its session group retires, or when the slots above are
-  raised (an owner decision, section 9).
-- **How.** It joins at the next rank, by appending its two spec rows exactly as above, with `since` = its registration
-  day and `until` at most 45 days later. Its two K rows are written before its first fill.
-- **No re-ranking from fills.** A queued row is never re-ranked by any registered pair's fills: rank order is fixed
-  here.
+| 1 | US500 | icm-probe | New York 09:30-10:30, 12:30 | 16 | New York | LB-US500 / LBC-US500 | `7824af5337d6` / `0b48159e6744` |
+| 2 | DE40 | icm-probe | Berlin 09:00-10:00, 12:00 | 16 | Europe | LB-DE40 / LBC-DE40 | `0cc84bd9b32d` / `fd514988ac7f` |
+| 3 | XTIUSD | icm-probe | New York 09:00-10:00, 12:00 | 16 | New York | LB-XTIUSD / LBC-XTIUSD | `3c4f380493a9` / `95662ebf0c11` |
+| 4 | UST10Y | vantage-demo | New York 08:30-09:30, 11:30 | 16 | New York | LB-UST10Y / LBC-UST10Y | `934a5d28e98b` / `43a691518ebe` |
+| 5 | EURUSD | icm-probe | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURUSD / LBC-EURUSD | `15cb722f0a67` / `e43dd09885bd` |
+| 6 | USDJPY | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-USDJPY / LBC-USDJPY | `24fb1d1b9c86` / `2b291a35aef4` |
+| 7 | BUND10Y | vantage-demo | Berlin 08:00-09:00, 11:00 | 16 | Europe | LB-BUND10Y / LBC-BUND10Y | `cbf941bf9300` / `13a7a667a577` |
+| 8 | JP225 | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-JP225 / LBC-JP225 | `c7f73f8a84da` / `cddd20718048` |
+| 9 | XAGUSD | icm-probe | New York 08:30-09:30, 11:30 | 16 | New York | LB-XAGUSD / LBC-XAGUSD | `5d6d7b150e90` / `afa358f94caa` |
+| 10 | USTEC | icm-probe | New York 09:30-10:30, 12:30 | 16 | New York | LB-USTEC / LBC-USTEC | `be4886b0e38b` / `d42af4dc795e` |
+| 11 | GBPUSD | icm-probe | London 08:00-09:00, 11:00 | 16 | Europe | LB-GBPUSD / LBC-GBPUSD | `70665fc91289` / `78a7d6e40779` |
+| 12 | COPPER | vantage-demo | New York 08:30-09:30, 11:30 | 16 | New York | LB-COPPER / LBC-COPPER | `53ad7dfe0793` / `b7e5c7ded5b4` |
+| 13 | UK100 | icm-probe | London 08:00-09:00, 11:00 | 16 | Europe | LB-UK100 / LBC-UK100 | `0a1e8565e58d` / `e5d58f3c524e` |
+| 14 | XPTUSD | icm-probe | New York 08:30-09:30, 11:30 | 16 | New York | LB-XPTUSD / LBC-XPTUSD | `ecde87228882` / `e5cf0f52dcef` |
+| 15 | AUDUSD | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-AUDUSD / LBC-AUDUSD | `a2ddabbad3b7` / `348d01e9fa68` |
+| 16 | USDCAD | icm-probe | New York 08:00-09:00, 11:00 | 16 | New York | LB-USDCAD / LBC-USDCAD | `e7edb44163bf` / `f81005cd4b16` |
+| 17 | XBRUSD | icm-probe | London 08:00-09:00, 11:00 | 16 | Europe | LB-XBRUSD / LBC-XBRUSD | `35006879a48b` / `8380b8dbbcb6` |
+| 18 | USDCHF | icm-probe | London 08:00-09:00, 11:00 | 16 | Europe | LB-USDCHF / LBC-USDCHF | `5928cb942f16` / `0f45accc184e` |
+| 19 | NZDUSD | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-NZDUSD / LBC-NZDUSD | `9ef62e4ea9e3` / `4c24c0084b8f` |
+| 20 | XNGUSD | icm-probe | New York 09:00-10:00, 12:00 | 16 | New York | LB-XNGUSD / LBC-XNGUSD | `faf3c514280b` / `b80ba9755d38` |
+| 21 | WHEAT | vantage-demo | Chicago 08:30-09:30, 11:00 | 8 | New York | LB-WHEAT / LBC-WHEAT | `ca8e9909da51` / `42845fe11e71` |
+| 22 | SOYBEAN | vantage-demo | Chicago 08:30-09:30, 11:00 | 8 | New York | LB-SOYBEAN / LBC-SOYBEAN | `67efc9c3242f` / `000f85f8c7b2` |
+| 23 | COFFEE | vantage-demo | New York 04:30-05:30, 07:30 | 16 | New York | LB-COFFEE / LBC-COFFEE | `7993d968376a` / `884ba48bbb9a` |
+| 24 | SUGAR | vantage-demo | New York 04:30-05:30, 07:30 | 16 | New York | LB-SUGAR / LBC-SUGAR | `b8a6f41dffe2` / `cd31c35923db` |
+| 25 | XAUEUR | icm-probe | London 08:00-09:00, 11:00 | 16 | Europe | LB-XAUEUR / LBC-XAUEUR | `aec0750bde08` / `fefdb9196f39` |
+| 26 | XAUAUD | icm-probe | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-XAUAUD / LBC-XAUAUD | `80041997a8d4` / `e13da7f72451` |
 
 ## 6. The control (frozen; LBC-<key>) and the stops
 
@@ -230,8 +232,9 @@ learning-ops review enforces 5-7 by a dated retirement (`retired_day` / `retired
    - a magic number outside the instrument's block;
    - a size other than the minimum lot;
    - a position held across its session close or the 17:00 New York rollover.
-7. **Selection check (not a kill).** If over 10% of an arm's signals in a week are refused by `learning_slots` or the
-   pot's slots, the read reports it as selection-affected. It goes to the research-director within 24 h.
+7. **Selection check (not a kill).** If over 10% of an arm's signals in a week are refused by `learning_slots`, the
+   pot's slots or the host total, the weekly review reports it as selection-affected. It goes to the
+   research-director within 24 h.
 
 ## 7. Reading rule (decided before any fill)
 
@@ -247,6 +250,14 @@ pair; nothing can fill before then.
 - **Excess.** Arm net R minus control net R, on session days where both entered. Its SE is day-clustered (the pair
   enters at most once a day, so this is the per-day difference SE). Also reported: the arm's net R, the control's,
   and gross R for both.
+- **Slot refusals, per arm and per control (bias diagnostic).** The count and share of signals refused by
+  `learning_slots`, by the intraday pot's slots and by the host total (`max_open_total` / `max_positions`), each by
+  session day. Two derived figures are also reported:
+  - the excess recomputed on days when neither the arm nor its control was refused;
+  - the arm's refusal share minus its control's.
+
+  A pair with more than 10% of its arm's signals refused, or a refusal-share gap above 5 points, gets its verdict
+  marked **selection-affected**. A LEAD so marked needs the refusal-free excess to meet the same bar on its own.
 
 **Power, before any data.**
 
@@ -270,19 +281,19 @@ whatever the verdict.
 
 ## 8. K, the budget and the registry
 
-- **Rows written.** 16 K rows: 8 arms and their 8 dedicated controls, family `learning_class`, status `learning`, each
-  config = (arm id, its frozen config hash, this doc).
+- **Rows written.** 52 K rows: 26 arms and their 26 dedicated controls, family `learning_class`, status `learning`,
+  each config = (arm id, its frozen config hash, this doc).
   - `scripts/record_learning_k_rows.py` writes them in the same run as the gold learning rows (30). The script now
-    holds 46 rows in all.
-  - Run `--budget` on the brain first: it prints the quarter's count, the 3,500 cap (ADR 0073) and the missing rows.
-    The write checks the budget under the registry lock and writes nothing if the rows do not fit.
+    holds 82 rows in all.
+  - Run `--budget` on the brain first. It prints the quarter's count, the 3,500 cap (ADR 0073), the missing rows by
+    pre-registration (30 gold, 52 here) and what is left after them. It writes nothing.
+  - The write checks the budget under the registry lock and writes nothing if the rows do not fit.
 - **Fit.** ADR 0073 sized the 3,500 for sprint-3000 (3,000), the sprint-200 lanes, the C1 composites, POS-1, mlprob
   and "the demo learning-class rows, with headroom".
   - The registry is on the brain and was not readable from this lane, so the exact count used is not known here.
-  - The 16 rows are inside the headroom ADR 0073 describes, but that is not verified.
+  - The 52 rows (82 with the gold ones) are inside the headroom ADR 0073 describes, but that is not verified.
   - If they do not fit, nothing is written, the arms stay refused (fail closed), and raising the budget is the
     owner's decision.
-- **Queued rows** cost nothing until registered, then 2 each.
 - **Fail closed.** Until the K rows exist, every LB and LBC row is refused by the learning gate as well as held by its
   `blocked` status.
 
@@ -299,18 +310,19 @@ whatever the verdict.
 - `since` stays 2026-11-02 and `until` 2026-12-17. No fill can exist before the unblock, so the 45-day window only
   shortens.
 
-**2. 8 of 26 registered.** The brief's own rule applies: rank and register the top ones; queue the rest (section 5).
+**2. All 26 registered (research lead decision, 2026-11-02).** The first draft registered 8 and queued 18 to keep slot
+refusals out of the read.
 
-**Raising the slots to register more** is a demo-limits change under ADR 0072. It is not taken here. The numbers, for
-the research-director, PD and PO:
+- **The decision.** The research lead, under the owner's directive that testing and learning must not be bound by
+  limits and that all 26 instruments trade, registered all 26. Only slot counts were raised:
+  - icm-probe `learning_max_open` 6 -> 14 and its intraday pot 4 -> 12;
+  - vantage-demo's intraday pot 6 -> 10.
+- **What still binds.** The host total, the per-trade caps, the days, the margin floor and the notional ceiling are
+  unchanged.
+- **The cost.** Slot refusals are now expected, so section 7 measures and reports them per arm as a bias diagnostic
+  instead of preventing them.
 
-- **Registering all 26.** That needs `learning_max_open` 6 -> about 14 and an intraday pot of about 12 on icm-probe
-  (scalp 19 -> 11 inside the unchanged 23, or a host-cap change, which is the owner's), and vantage-demo's intraday pot
-  6 -> 10.
-- **Recommendation:** none until the first two weeks of the 8 pairs show the slot-refusal rate and the measured costs
-  (kills 5 and 7). Then register the next ranks group by group.
-
-**3. Budget.** Owner-only if the 16 rows do not fit (section 8).
+**3. Budget.** Owner-only if the 52 rows do not fit (section 8).
 
 **4. Real money.** Never. Every pair is on a demo probe_only account, and the loader refuses a non-XAUUSD instrument
 on a live or observe-only account (`tests/test_learning_mi.py` and `tests/test_instrument_accounts.py`).

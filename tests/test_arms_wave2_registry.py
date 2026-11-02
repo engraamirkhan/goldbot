@@ -159,7 +159,8 @@ def test_arms_without_a_host_and_virtual_exits_are_not_registered(accounts) -> N
 # (its probe sleeve 0.075 -> 0.175); max_open_total 23
 @pytest.mark.parametrize(("account", "pots", "budget"), [
     ("icm-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 3), "growth": (80, 2)}, 0.9),
-    ("vantage-demo", {"scalp": (None, 11), "intraday": (None, 6), "swing": (None, 2)}, 0.825)])
+    # vantage intraday 6 -> 10: the multi-instrument learning pairs (learning-mi-2026-11-02.md section 5)
+    ("vantage-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 2)}, 0.825)])
 def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots, budget) -> None:
     acc = accounts[account]
     ex = acc.exploration

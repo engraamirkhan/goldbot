@@ -414,4 +414,6 @@ def test_engine_config_exploration_block_of_every_demo_account_loads() -> None:
     for acc in acc_mod.load_accounts(logins=False).values():
         cfg = exploration.config_for(acc)
         if cfg is not None and acc.account_id != "vantage-247":
-            assert cfg.pot_budgets is False and cfg.learning_max_open == 6, acc.account_id
+            # icm-probe 6 -> 14 for the multi-instrument learning pairs (learning-mi-2026-11-02.md section 5)
+            assert cfg.pot_budgets is False, acc.account_id
+            assert cfg.learning_max_open == (14 if acc.account_id == "icm-probe" else 6), acc.account_id

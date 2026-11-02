@@ -3,9 +3,10 @@ live on DEMO", demo strategies as a K-counted learning class: ADR 0061 amendment
 
 One opening-range breakout per instrument in the instrument's OWN session (`session_range_break` with
 `session_local`), stop 2 x ATR(14) of its own 15m bars, 1.5 R, 16 bars (8 for the grains), each with a dedicated
-seeded control (`session_range_control`: one entry per eligible session, the same sessions and bracket). The top 8 of
-26 are in the spec and registered on the account that lists the instrument; the other 18 are queued in the doc only
-(no K row before registration). Blocked with S0-/I0-<key> until lane L3 runs an arm on its own instrument.
+seeded control (`session_range_control`: one entry per eligible session, the same sessions and bracket). All 26 are
+in the spec and registered on the account that lists the instrument (research lead 2026-11-02), with the learning and
+intraday slots raised to hold them; the host total, per-trade caps, margin and notional still bind. Blocked with
+S0-/I0-<key> until lane L3 runs an arm on its own instrument.
 """
 from __future__ import annotations
 
@@ -26,9 +27,12 @@ from goldbot.research import arms
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "config" / "exploration_arms.yaml"
 PREREG = "docs/research/learning-mi-2026-11-02.md"
-# the registered pairs, by account (the doc's ranking, section 5); every other listed instrument is queued
-MI_LEARNING: dict[str, tuple[str, ...]] = {"icm-probe": ("US500", "DE40", "XTIUSD", "EURUSD", "USDJPY", "JP225"),
-                                           "vantage-demo": ("UST10Y", "BUND10Y")}
+# the registered pairs, by account, in the doc's rank order (section 5): every listed instrument
+MI_LEARNING: dict[str, tuple[str, ...]] = {
+    "icm-probe": ("US500", "DE40", "XTIUSD", "EURUSD", "USDJPY", "JP225", "XAGUSD", "USTEC", "GBPUSD", "UK100", "XPTUSD",
+                  "AUDUSD", "USDCAD", "XBRUSD", "USDCHF", "NZDUSD", "XNGUSD", "XAUEUR", "XAUAUD"),
+    "vantage-demo": ("UST10Y", "BUND10Y", "COPPER", "WHEAT", "SOYBEAN", "COFFEE", "SUGAR")}
+GRAINS = {"WHEAT", "SOYBEAN"}                  # CBOT day session closes 13:20 Chicago: 8 bars
 MI_ARMS = {f"LB-{k}" for keys in MI_LEARNING.values() for k in keys}
 MI_CONTROLS = {f"LBC-{k}" for keys in MI_LEARNING.values() for k in keys}
 # account -> the pair ids registered there (blocked until lane L3: the engine drops them, logged)
@@ -64,7 +68,8 @@ def test_the_spec_loads_with_every_hash_and_holds_exactly_the_registered_pairs()
         a = spec[arm_id]
         assert (a.rule, a.timeframe, a.role, a.max_open) == ("session_range_break", "15m", "learning", 1)
         assert a.params["stop_atr"] == 2.0 and a.params["target_r"] == 1.5 and "stop_usd" not in a.params
-        assert a.params["hold_bars"] == 16 and set(a.params["session_local"]) == G.SESSION_LOCAL_KEYS
+        assert a.params["hold_bars"] == (8 if a.params["instrument"] in GRAINS else 16)
+        assert set(a.params["session_local"]) == G.SESSION_LOCAL_KEYS
 
 
 def test_every_learning_row_resolves_its_own_matched_control_on_the_same_instrument_and_session() -> None:
@@ -108,19 +113,14 @@ def test_the_pairs_stay_blocked_until_lane_l3_trades_an_arm_on_its_own_instrumen
         assert "L3" in spec[arm_id].note and "L3" in c.note
 
 
-def test_the_queued_instruments_are_in_the_doc_and_not_in_the_spec() -> None:
-    """No K row before registration: a queued instrument is a frozen definition in the doc, never a spec row."""
-    spec = _spec()
+def test_every_listed_instrument_has_its_pair_in_the_spec_and_in_the_docs_table() -> None:
     accs = acc_mod.load_accounts(logins=False)
     listed = {k for a in accs.values() for k in a.instruments}
     registered = {k for keys in MI_LEARNING.values() for k in keys}
-    queued = listed - registered
-    assert len(listed) == 26 and len(queued) == 18
-    text = (ROOT / PREREG).read_text()
-    section = text.split("## 5.")[1].split("\n## ")[0]
-    for key in queued:
-        assert f"LB-{key}" not in spec and f"LBC-{key}" not in spec
-        assert f"| {key} |" in section and "queued" in section
+    assert len(listed) == 26 and registered == listed
+    section = (ROOT / PREREG).read_text().split("## 5.")[1].split("\n## ")[0]
+    for key in listed:
+        assert f"| {key} |" in section and f"LB-{key}" in section
 
 
 # ------------------------------------------------------------------------------------------------ the accounts
@@ -147,24 +147,19 @@ def test_no_pair_lands_on_a_live_or_observe_only_account_or_another_brokers() ->
             assert arm_id.split("-", 1)[1] in acc.instruments, (acc.account_id, arm_id)
 
 
-def test_the_registered_pairs_fit_the_slots_two_pairs_per_session_group_at_most() -> None:
-    """Section 5's capacity rule: at most two pairs per session group (Tokyo, Europe, New York) on an account, so the
-    pairs' open positions never pass the intraday pot's slots (icm-probe 4) and at most two new learning positions
-    are open at once beside the gold learning arms (learning_max_open 6). Vantage: one pair per group (VI0 and VC1H
-    share the pot)."""
-    spec = _spec()
-    zone_group = {"Asia/Tokyo": "tokyo", "Europe/London": "europe", "Europe/Berlin": "europe",
-                  "America/New_York": "new_york", "America/Chicago": "new_york"}
+def test_only_slot_counts_were_raised_for_the_pairs_and_every_cap_still_binds() -> None:
+    """Research lead 2026-11-02: icm-probe learning_max_open 6 -> 14 and intraday pot 4 -> 12, vantage-demo intraday
+    pot 6 -> 10. The host total (23 of 24), the per-trade caps, the day, the margin floor and the notional ceiling are
+    unchanged; the read reports each arm's slot refusals as a bias diagnostic (section 7)."""
     accs = acc_mod.load_accounts(logins=False)
-    for acc_id, keys in MI_LEARNING.items():
-        groups: dict[str, int] = {}
-        for key in keys:
-            g = zone_group[spec[f"LB-{key}"].params["session_local"]["zone"]]
-            groups[g] = groups.get(g, 0) + 1
-        per_group = 2 if acc_id == "icm-probe" else 1
-        assert max(groups.values()) <= per_group, (acc_id, groups)
-        assert 2 * per_group <= accs[acc_id].exploration.pots["intraday"].max_open
-        assert per_group <= accs[acc_id].exploration.learning_max_open
+    probe, van = accs["icm-probe"], accs["vantage-demo"]
+    assert (probe.exploration.learning_max_open, probe.exploration.pots["intraday"].max_open) == (14, 12)
+    assert (van.exploration.learning_max_open, van.exploration.pots["intraday"].max_open) == (6, 10)
+    for acc in (probe, van):
+        ex = acc.exploration
+        assert ex.max_open_total == 23 and acc.max_positions == 24 and not ex.pot_budgets
+        assert all(ex.arms[i].max_loss == MAX_LOSS for i in MI_ON[acc.account_id])
+    assert (probe.daily_loss_limit_abs, van.daily_loss_limit_abs) == (220, 200)
 
 
 def test_each_arm_carries_h61s_intraday_stop_and_each_control_none_of_its_own() -> None:
@@ -179,7 +174,7 @@ def test_the_k_row_script_writes_one_row_per_pair_member_with_the_others(tmp_pat
     rows = _k_script().k_rows(SPEC)
     mi = {r["arm"] for r in rows.values() if r["arm"] in MI_ARMS | MI_CONTROLS}
     assert mi == MI_ARMS | MI_CONTROLS
-    assert sum(1 for r in rows.values() if r["config"]["prereg"] == PREREG) == 16
+    assert sum(1 for r in rows.values() if r["config"]["prereg"] == PREREG) == 52
     for h, r in rows.items():
         assert h == arms.learning_k_id(r["arm"], r["config"]["arm_config_hash"], r["config"]["prereg"])
 
@@ -219,6 +214,8 @@ def test_the_budget_report_counts_the_rows_still_missing_against_the_quarter(tmp
     report = mod.budget_report(reg, SPEC, cap=3500, quarter="2026Q4")
     assert report["missing"] == len(mod.k_rows(SPEC)) and report["used"] == 0
     assert report["fits"] and report["cap"] == 3500 and report["quarter"] == "2026Q4"
+    assert report["by_prereg"] == {"docs/research/learning-2026-11-02.md": 30, PREREG: 52}
+    assert report["left_after"] == 3500 - 82
     assert mod.budget_report(reg, SPEC, cap=10, quarter="2026Q4")["fits"] is False
 
 
