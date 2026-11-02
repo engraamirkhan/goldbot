@@ -635,8 +635,16 @@ def all_signals(m: pd.DataFrame, window: str, rules: list[str] | None = None,
         return _dec(d1, (v > 1.10) & (np.abs(z20) >= 1), sgn(z20), "1d")
 
     # --- distribution
+    def last5(col: pd.Series, how: str) -> pd.Series:
+        """Defect fix (rules 18, 21 had 0 decisions): the feature-day bars include a short Friday 13:30-17:00 NY stub
+        each week with no realised measure (< 50 five-minute returns), so every plain 5-row window held a NaN. "The last
+        5 feature days" = the last 5 days that have the measure."""
+        v = col.dropna()
+        r = v.rolling(5).mean() if how == "mean" else v.rolling(5).sum()
+        return r.reindex(col.index)
+
     def s18() -> pd.DataFrame:
-        sk5 = d1["rskew"].rolling(5).mean().to_numpy()
+        sk5 = last5(d1["rskew"], "mean").to_numpy()
         pc = pct_rank_finite(sk5, 252)
         return _dec(d1, np.isfinite(pc), np.where(pc >= 80, -1, np.where(pc <= 20, 1, 0)), "1d")
 
@@ -646,7 +654,7 @@ def all_signals(m: pd.DataFrame, window: str, rules: list[str] | None = None,
         return _dec(d1, np.nan_to_num(jz) >= 3.09, (1 if cont else -1) * sgn(ret), "1d")
 
     def s21() -> pd.DataFrame:
-        sj = ((d1["rsp"] - d1["rsn"]).rolling(5).sum() / d1["rv"].rolling(5).sum()).to_numpy()
+        sj = (last5(d1["rsp"] - d1["rsn"], "sum") / last5(d1["rv"], "sum")).to_numpy()
         pc = pct_rank_finite(sj, 252)
         return _dec(d1, np.isfinite(pc), np.where(pc >= 80, -1, np.where(pc <= 20, 1, 0)), "1d")
 
