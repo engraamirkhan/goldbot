@@ -559,11 +559,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                                    timeout_s=broker_bars.FETCH_TIMEOUT_S)
         bars_client.read_attempts = 1
         eng.broker_m1.fetcher = broker_bars.Fetcher(bars_client)
-        # the key zones' long M15 history (engine/key_zones.py, display only): its own client (one attempt, 20 s) and
-        # thread, paced paged pulls, one per bridge at a time, a random first delay; none on short history
-        if acc.key_levels_history == "long":
-            from goldbot.engine import key_zones
-            eng.key_zone_worker.attach(key_zones.levels_client(bridge[0], bridge[1], account_id), bridge_key=bridge[0])
+        attach_levels(eng, acc, bridge, Path(eng.cfg.state_dir))
         # entry orders (engine/order_send.py) on their own thread and client, with this account's order timeout, so a
         # slow fill neither stalls the tick thread nor raises as a tick error
         eng.order_sender = order_send.bridge_sender(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-orders",
@@ -648,6 +644,18 @@ def is_shadow_host(acc: Account, settings: Settings) -> bool:
         log.error("shadow_host is set on an account whose broker is not the canonical-cost broker: not hosted")
         return False
     return True
+
+
+def attach_levels(eng: Any, acc: Account, bridge: tuple[str, str], state_dir: Path) -> None:
+    """The key zones' long M15 history (engine/key_zones.py, display only). On `key_levels_history: long` the worker
+    gets its own levels client (one attempt, 20 s), the MT5 box's key and the brain's lock dir (state/locks: one pull
+    per box across every engine process) and waits a random delay before its first pull. On `short` it gets no client:
+    the store cache, if any, and the engine's own bars are still used."""
+    if acc.key_levels_history != "long":
+        return
+    from goldbot.engine import key_zones
+    eng.key_zone_worker.attach(key_zones.levels_client(bridge[0], bridge[1], acc.account_id),
+                               box=key_zones.box_key(bridge[0]), lock_dir=Path(state_dir) / "locks")
 
 
 def attach_replica(eng: Any, settings: Settings) -> None:

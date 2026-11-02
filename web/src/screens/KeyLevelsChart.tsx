@@ -85,6 +85,7 @@ export function KeyLevelsChart({ tf }: { tf: KeyLevelTf }) {
         {acc.history_days != null && <> Built on {historyWords(acc.history_days)} of history.</>}
         {acc.history_days != null && acc.history_days < MATURE_DAYS &&
           <> That is short of {MATURE_DAYS} days, so weekly swings and the strength ranking see less than research does.</>}
+        {!acc.pct_ready && <> Strength ranking still warming up (it needs 20 days of zones), so no zone is shown as strong yet.</>}
         {view.bars.length === 0 && <> Bars for this timeframe aren't stored yet.</>}
         {acc.stale && <> <span className="badge" role="status">STALE: last built {new Date(acc.as_of).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span></>}
       </p>

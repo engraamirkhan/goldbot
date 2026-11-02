@@ -74,5 +74,15 @@ describe("key-level chart", () => {
     render(wrap(<KeyLevelsChart tf="1h" />));
     expect(await screen.findByText(/short of 540 days/)).toBeInTheDocument();
     expect(screen.getByText(/STALE: last built/)).toBeInTheDocument();
+    expect(screen.getByText(/Built on 62 days of history/)).toBeInTheDocument();
+    expect(screen.queryByText(/still warming up/)).toBeNull();
+  });
+
+  it("says the strength ranking is warming up on a short build without its 20 days", async () => {
+    const acc = { ...VIEW.accounts[0], history_days: 12, pct_ready: false, above: [], below: [] };
+    vi.spyOn(apiModule.api, "keyLevels").mockResolvedValue({ ...VIEW, accounts: [acc] });
+    render(wrap(<KeyLevelsChart tf="15m" />));
+    expect(await screen.findByText(/Strength ranking still warming up/)).toBeInTheDocument();
+    expect(screen.getByText(/Built on 12 days of history/)).toBeInTheDocument();
   });
 });
