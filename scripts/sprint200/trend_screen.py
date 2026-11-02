@@ -672,7 +672,7 @@ def s28(ctx: Ctx) -> Spec:
     b = ctx.bars["4h"]
     a = atr(b, 14)
     ax, pdi, ndi = adx(b, 14)
-    on = ((ax.shift(1) < 20) & (ax >= 20)).to_numpy()
+    on = ((ax.shift(1) < 20) & (ax >= 20)).to_numpy().copy()
     on[:50] = False                                     # Wilder warm-up
     L, S = on & (pdi > ndi).to_numpy(), on & (pdi < ndi).to_numpy()
     return Spec(bar_rule(b, L, S, 2 * a, trail=3 * a.to_numpy(), hold=30))
