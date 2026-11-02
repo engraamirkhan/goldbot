@@ -197,6 +197,22 @@ def pct_rank(x: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
+def pct_rank_finite(x: np.ndarray, n: int) -> np.ndarray:
+    """Defect fix after the explore run (rules 18, 21, 23, 33 had 0 decisions): the realised-measure series have
+    missing days/bars (holidays, < 50 five-minute returns, thin weekend windows), and `pct_rank` returned NaN for every
+    window holding one missing value, so these rules never fired. Rank of x[i] among the FINITE values of the previous n
+    (exclusive), 0..100, NaN when x[i] is missing or fewer than n // 2 of them are finite. `pct_rank` is kept unchanged
+    for rules 04, 05, 22 (their series have no gaps; their results are untouched)."""
+    out = np.full(len(x), np.nan)
+    for i in range(n, len(x)):
+        w = x[i - n:i]
+        w = w[np.isfinite(w)]
+        if not np.isfinite(x[i]) or len(w) < n // 2:
+            continue
+        out[i] = 100.0 * float(np.mean(w < x[i]))
+    return out
+
+
 def vr(r: pd.Series, q: int, w: int) -> np.ndarray:
     rq = r.rolling(q, min_periods=q).sum()
     return (rq.rolling(w - q + 1, min_periods=w - q + 1).var() / (q * r.rolling(w, min_periods=w).var())).to_numpy()
@@ -621,7 +637,7 @@ def all_signals(m: pd.DataFrame, window: str, rules: list[str] | None = None,
     # --- distribution
     def s18() -> pd.DataFrame:
         sk5 = d1["rskew"].rolling(5).mean().to_numpy()
-        pc = pct_rank(sk5, 252)
+        pc = pct_rank_finite(sk5, 252)
         return _dec(d1, np.isfinite(pc), np.where(pc >= 80, -1, np.where(pc <= 20, 1, 0)), "1d")
 
     def jump(cont: bool) -> pd.DataFrame:
@@ -631,7 +647,7 @@ def all_signals(m: pd.DataFrame, window: str, rules: list[str] | None = None,
 
     def s21() -> pd.DataFrame:
         sj = ((d1["rsp"] - d1["rsn"]).rolling(5).sum() / d1["rv"].rolling(5).sum()).to_numpy()
-        pc = pct_rank(sj, 252)
+        pc = pct_rank_finite(sj, 252)
         return _dec(d1, np.isfinite(pc), np.where(pc >= 80, -1, np.where(pc <= 20, 1, 0)), "1d")
 
     def s22() -> pd.DataFrame:
@@ -642,7 +658,7 @@ def all_signals(m: pd.DataFrame, window: str, rules: list[str] | None = None,
         side = np.where(hi & ~lo, -1, np.where(lo & ~hi, 1, 0))
         return _dec(d1, np.isfinite(pmx) & np.isfinite(pmn), side, "1d")
 
-    rsk4_pct = pct_rank(ctx["rsk4"], 180)
+    rsk4_pct = pct_rank_finite(ctx["rsk4"], 180)
 
     def s23() -> pd.DataFrame:
         pc = rsk4_pct
