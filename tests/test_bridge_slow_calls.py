@@ -20,6 +20,8 @@ from goldbot.execution import bridge as bridge_mod
 from goldbot.execution.bridge import RemoteBroker, make_handler
 from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.ops import health
+from goldbot.ops.bridge_compat import BridgeInfo, read_bridge_info
 
 TOKEN = "t" * 40
 T0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
@@ -106,3 +108,58 @@ def test_old_calls_leave_the_window(slow_bridge, monkeypatch):
 
 def test_the_figure_is_capped():
     assert bridge_mod.LOCK_WAIT_CAP_S < 1000                 # at most 3 digits before the decimal point
+
+
+# ------------------------------------------------------------------------------------------------ the brain's detection
+# The brain reads the figures from the /health GET its bridge_compat check already makes (no extra call on a contended
+# bridge) and WARNs `bridge_compat:<account>` when calls waited LOCK_WAIT_WARN_S or more, or SLOW_CALLS_WARN or more
+# held the terminal over 2 s in 5 minutes. Telegram alerts on a WARN that persists (health's own rule).
+TZ = "Europe/Athens"
+WED = pd.Timestamp("2026-11-04 10:00", tz="UTC")
+
+
+def test_the_brain_reads_the_figures_from_the_health_get(slow_bridge):
+    RemoteBroker(slow_bridge, TOKEN).last_tick("XAUUSD")
+    info = read_bridge_info(slow_bridge, 10.0)
+    assert info.lock_wait_s is not None and info.lock_wait_s >= 0 and info.slow_calls == 1
+
+
+def test_junk_figures_are_dropped():
+    for body in ({"lock_wait_s": True, "slow_calls": "9"}, {"lock_wait_s": -1, "slow_calls": -2},
+                 {"lock_wait_s": 1e9, "slow_calls": 10**9}):
+        info = _info_from_body(body)
+        assert info.lock_wait_s is None and info.slow_calls is None, body
+
+
+def _info_from_body(extra: dict[str, Any]) -> BridgeInfo:
+    import json as _json
+
+    class R:
+        status_code = 200
+
+        def iter_content(self, n: int) -> Iterator[bytes]:
+            yield _json.dumps({"ok": True, "server_tz": TZ, "api_version": 11, "min_compatible": 5,
+                               "methods": sorted(bridge_mod.METHODS), "order_lane": "off", **extra}).encode()
+
+        def close(self) -> None:
+            pass
+    return read_bridge_info("http://x", 5.0, get=lambda *a, **k: R())
+
+
+def _hctx(tmp_path, info: BridgeInfo) -> health.HealthContext:
+    return health.HealthContext(state_dir=tmp_path, now=WED, get_secret={"mt5-bridge-url-icm-probe": "http://x"}.get,
+                                accounts=[health.AccountRef(account_id="icm-probe", server_tz=TZ)],
+                                bridge_info=lambda url: info, commit=None)
+
+
+@pytest.mark.parametrize("extra, warn", [({}, False), ({"lock_wait_s": 3.2}, False),
+                                         ({"lock_wait_s": 12.4}, True), ({"lock_wait_s": 1.0, "slow_calls": 15}, True),
+                                         ({"lock_wait_s": 1.0, "slow_calls": 9}, False)])
+def test_a_contended_terminal_warns_bridge_compat_naming_the_figures(tmp_path, extra, warn):
+    c = health.check_bridge_compat(_hctx(tmp_path, _info_from_body(extra)), health.AccountRef(account_id="icm-probe",
+                                                                                              server_tz=TZ))
+    assert c is not None
+    if warn:
+        assert c.status == "warn" and "terminal contended" in c.reason and "Bridge contention" in c.reason
+    else:
+        assert c.status == "ok", c.reason
