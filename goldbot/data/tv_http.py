@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import Protocol
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 MAX_HTTP_BYTES = 4 * 2**20           # about three times the largest ideas page seen (100 items)
 SITE = "https://www.tradingview.com"
@@ -41,8 +41,19 @@ class TvNetwork(Protocol):
 
 
 def _url_allowed(url: str) -> bool:
+    """https, an allowed host and path prefix, and nothing that could steer the request elsewhere: no userinfo, no
+    explicit port, and no `.`/`..` segment (plain or percent-encoded) that a client or server would resolve out of the
+    prefix."""
     u = urlsplit(url)
-    return u.scheme == "https" and any(u.hostname == host and u.path.startswith(prefix) for host, prefix in READ_URLS)
+    try:
+        port = u.port
+    except ValueError:                       # a malformed port is refused, never guessed
+        return False
+    if u.scheme != "https" or u.username is not None or u.password is not None or port is not None:
+        return False
+    if any(unquote(seg) in (".", "..") for seg in u.path.split("/")):
+        return False
+    return any(u.hostname == host and u.path.startswith(prefix) for host, prefix in READ_URLS)
 
 
 class ReadOnlyNetwork:

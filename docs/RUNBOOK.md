@@ -1073,7 +1073,21 @@ Other secrets: each command asks `value for <key>` and hides what you type.
 | `anthropic-api-key` | `.\.venv\Scripts\python -m goldbot.ops.accounts set anthropic-api-key` | `goldbot-scheduler` (staff agents), `goldbot-news` (headline scoring) | Staff agents are off; headlines are kept but not scored, so there is no news-shock blackout (calendar blackouts still work). |
 | `github-token` | `.\.venv\Scripts\python -m goldbot.ops.accounts set github-token` | `goldbot-scheduler` (bar refresh from `data-v1`, shared trial registry on `research-v1`) | The trial registry stays local to the VPS. Use a GitHub token for `engraamirkhan/goldbot` that can read and write release assets (Contents: read and write). |
 
-`config/accounts.yaml` also names a key `tradingview-ideas-cookie`; no running code reads it yet, so skip it.
+**Retired keys (ADR 0066): delete them after the cleanup release is deployed.** `tradingview-sessionid`,
+`tradingview-sessionid-sign`, `tradingview-webhook-secret` and `tradingview-ideas-cookie` are read by nothing any
+more: the chart pull and the webhook are gone, and the author-ideas feed (2.7f) sends no cookie. On the brain the
+secret store is `/opt/goldbot/state/.secrets.json` (see 0.4). Once, as the `ubuntu` user, after the deploy:
+
+1. Check that no code reads them (prints nothing):
+   `grep -rn "tradingview-sessionid\|tradingview-webhook-secret\|tradingview-ideas-cookie" /opt/goldbot/goldbot`
+2. See which are stored (names only, never values):
+   `sudo -u goldbot /opt/goldbot/.venv/bin/python -I -c 'import json; print(sorted(k for k in json.load(open("/opt/goldbot/state/.secrets.json")) if k.startswith("tradingview")))'`
+3. Delete them (the file keeps mode 600):
+   `sudo -u goldbot sh -c 'umask 077 && cd /opt/goldbot/state && /opt/goldbot/.venv/bin/python -I -c "import json; d=json.load(open(\".secrets.json\")); [d.pop(k, None) for k in (\"tradingview-sessionid\", \"tradingview-sessionid-sign\", \"tradingview-webhook-secret\", \"tradingview-ideas-cookie\")]; json.dump(d, open(\".secrets.new\", \"w\"))" && mv -f .secrets.new .secrets.json'`
+4. Step 2 again prints `[]`.
+
+On a host with an OS keyring (the Windows VPS, a Mac) the same keys go with `python -m keyring del goldbot <key>`.
+A `goldbot accounts delete <key>` command replaces these lines once it exists (BACKLOG, "accounts delete").
 
 > **Check before starting services: which Windows user the services run as.** Windows Credential Manager is per
 > Windows user. The bootstrap script registers the services with NSSM's default account and does not set one. If

@@ -155,6 +155,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 135 | MT5 bridge: closes ahead of reads and orders, abandoned reads dropped (before any real-money account) | Execution (bridge) · safety | M | in review (ADR 0056, protocol v7; order lane opt-in per account after its drill), severity MEDIUM, gate: before any real-money account · accountable: implementer · reviews: trading-safety-reviewer, sre, security-reviewer |
 | 140 | Autonomous discovery phase 1: spec DSL, search ledger, explore-window evaluator, family-combination generator | Research (discovery) · ADR 0058 | L | proposed 2026-10-28 · accountable: research-director (spec), implementer (build, 3 parallel staff slices) · reviews: quant-reviewer, code-reviewer · target 2026-11-06 |
 | 141 | Record Vantage exit legs (exit_fills) so its cost of record measures exit slippage and overshoot | Data (execution ledger) · cost of record | S | proposed, severity MEDIUM · accountable: data-engineer then implementer · reviews: quant-reviewer, trading-safety-reviewer |
+| 143 | goldbot accounts delete <key>: remove a secret from the store | Ops (secrets) | S | proposed, severity LOW · accountable: implementer · reviews: code-reviewer, security-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1498,6 +1499,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   6. No server data is deleted (`state/`, `data/`, backups). The rollback is a redeploy of the previous SHA.
 
   Dependencies: the ADR 0066 cleanup release is merged and deployed (phase 1). (b) option 1 needs the owner. TRACEABILITY: D16, G1-G6, G11, M16, M29, M39.
+- **143. goldbot accounts delete <key>: remove a secret from the store.** Value: retiring a feature leaves its secrets behind (ADR 0066: `tradingview-sessionid`, `-sign`, `tradingview-webhook-secret`, `tradingview-ideas-cookie`), and today the only way to remove one is a hand-written Python line against `state/.secrets.json` (RUNBOOK 2.3, "Retired keys") or `python -m keyring del` on a keyring host. A stale credential that nothing reads is still a credential to leak. Acceptance: `python -m goldbot.ops.accounts delete <key>` removes the key from the OS keyring and from the plaintext fallback under `_fallback_lock` (file stays mode 600, the file is removed when empty); it never prints a value; an unknown key exits 1 with "not stored"; an MT5 key (`mt5-<account>`, `mt5-login-<account>`) of an enabled account in `config/accounts.yaml` is refused unless `--force`; tests for keyring, fallback, missing key, refusal and no-value-in-output. RUNBOOK 2.3 "Retired keys" then uses it.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only

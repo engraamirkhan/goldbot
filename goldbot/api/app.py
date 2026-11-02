@@ -1178,8 +1178,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
         @app.get("/{path:path}")
         def spa(path: str) -> FileResponse:
-            # an unknown /api/ path (a typo, or a route retired since a tab was opened) is a 404, never index.html
-            if path == "api" or path.startswith("api/"):
+            # an unknown /api/ path (a typo, or a route retired since a tab was opened) is a 404, never index.html;
+            # normalised first, so "//api/x" and "/API/x" are caught too
+            p = path.lstrip("/").lower()
+            if p == "api" or p.startswith("api/"):
                 raise HTTPException(404, "not found")
             # the path arrives percent-decoded ("..%2f" -> "../"): serve only files that resolve inside web/dist
             f = (dist / path).resolve()
