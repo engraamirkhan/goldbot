@@ -1,0 +1,146 @@
+{
+ "deals": [
+  {
+   "client_order_id": "icm-demo-1741163400-b4767a70b8",
+   "comment": "cm-demo-1741163400-b4767a70b8",
+   "commission": -0.07,
+   "lots": 0.02,
+   "pnl": null,
+   "position_id": 1,
+   "price": 2468.654853696,
+   "profit": 0.0,
+   "swap": null,
+   "ts_utc": "2025-03-05T08:30:35.607Z",
+   "type": "entry"
+  },
+  {
+   "client_order_id": null,
+   "comment": "cm-demo-1741163400-b4767a70b8",
+   "commission": -0.07,
+   "lots": 0.02,
+   "pnl": -35.979191713,
+   "position_id": 1,
+   "price": 2450.70025784,
+   "profit": -35.909191713,
+   "swap": null,
+   "ts_utc": "2025-03-05T11:27:37.422Z",
+   "type": "stop"
+  },
+  {
+   "client_order_id": "icm-demo-1741183200-56feeb4da5",
+   "comment": "cm-demo-1741183200-56feeb4da5",
+   "commission": -0.07,
+   "lots": 0.02,
+   "pnl": null,
+   "position_id": 2,
+   "price": 2469.822483427,
+   "profit": 0.0,
+   "swap": null,
+   "ts_utc": "2025-03-05T14:00:39.212Z",
+   "type": "entry"
+  },
+  {
+   "client_order_id": null,
+   "comment": "cm-demo-1741183200-56feeb4da5",
+   "commission": -0.07,
+   "lots": 0.02,
+   "pnl": -31.005694225,
+   "position_id": 2,
+   "price": 2454.354636314,
+   "profit": -30.935694225,
+   "swap": null,
+   "ts_utc": "2025-03-05T15:44:40.369Z",
+   "type": "stop"
+  },
+  {
+   "client_order_id": "icm-demo-1741269600-30c0f3aeb9",
+   "comment": "cm-demo-1741269600-30c0f3aeb9",
+   "commission": -0.07,
+   "lots": 0.02,
+   "pnl": null,
+   "position_id": 3,
+   "price": 2509.328420835,
+   "profit": 0.0,
+   "swap": null,
+   "ts_utc": "2025-03-06T14:00:54.376Z",
+   "type": "entry"
+  },
+  {
+   "client_order_id": null,
+   "comment": "cm-demo-1741269600-30c0f3aeb9",
+   "commission": -0.07,
+   "lots": 0.02,
+   "pnl": -31.725460229,
+   "position_id": 3,
+   "price": 2493.50069072,
+   "profit": -31.655460229,
+   "swap": null,
+   "ts_utc": "2025-03-06T14:23:54.589Z",
+   "type": "stop"
+  }
+ ],
+ "decisions": [
+  {
+   "action": "order",
+   "agent": "session_open-g0-5459f06f97",
+   "lots": 0.02,
+   "message": "filled",
+   "ok": true,
+   "price": 2468.654853696,
+   "proposal": "icm-demo-1741163400-b4767a70b8",
+   "retcode": 10009
+  },
+  {
+   "action": "executed:auto",
+   "agent": "session_open-g0-5459f06f97",
+   "mult": 0.75,
+   "p": 0.65,
+   "proposal": "icm-demo-1741163400-b4767a70b8",
+   "scored_feature_version": "f-079deacc61"
+  },
+  {
+   "action": "order",
+   "agent": "session_open-g0-5459f06f97",
+   "lots": 0.02,
+   "message": "filled",
+   "ok": true,
+   "price": 2469.822483427,
+   "proposal": "icm-demo-1741183200-56feeb4da5",
+   "retcode": 10009
+  },
+  {
+   "action": "executed:auto",
+   "agent": "session_open-g0-5459f06f97",
+   "mult": 0.75,
+   "p": 0.65,
+   "proposal": "icm-demo-1741183200-56feeb4da5",
+   "scored_feature_version": "f-079deacc61"
+  },
+  {
+   "action": "order",
+   "agent": "session_open-g0-5459f06f97",
+   "lots": 0.02,
+   "message": "filled",
+   "ok": true,
+   "price": 2509.328420835,
+   "proposal": "icm-demo-1741269600-30c0f3aeb9",
+   "retcode": 10009
+  },
+  {
+   "action": "executed:auto",
+   "agent": "session_open-g0-5459f06f97",
+   "mult": 0.75,
+   "p": 0.65,
+   "proposal": "icm-demo-1741269600-30c0f3aeb9",
+   "scored_feature_version": "f-079deacc61"
+  }
+ ],
+ "open": {},
+ "state": {
+  "equity": 9901.079653833,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": 0.0,
+  "spread_points": 60.821390507
+ }
+}
