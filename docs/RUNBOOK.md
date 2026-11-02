@@ -2444,25 +2444,42 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
 
-### MT5 terminal chart on the dashboard (`GET /api/chart/mt5`)
+### MT5 terminal chart: retired (owner 2026-11-02)
 
-The terminal's own IC Markets chart, screenshotted, not rebuilt. On the MT5 box `goldbot-chart-capture.timer` (user `mt5`, every 60 s)
-runs `import -window root` on display `:99` into `/home/mt5/chart/mt5.png` (atomic; it never touches the terminal or the bridge). The brain's
-`goldbot-chart-fetch.timer` (user `goldbot`, every 60 s) pulls it with its own SSH key, which may run one command only
-(`goldbot-chart-serve.sh`, a `tar` of that file; no shell, no forwarding), into `/opt/goldbot/state/chart/mt5.png`. The API returns the PNG
-with an `X-Captured-At` header to any signed-in role, and 404 when the file is missing or older than 5 minutes (dashboard: show a placeholder).
-The brain crops the capture to the chart pane (`goldbot/api/mt5_crop.py`: the largest dark plot rectangle plus its price scale and time axis; the XAUUSD pane when its title is readable, which needs the optional `tesseract` binary on the brain, else the largest pane), writes `state/chart/mt5_chart.png` and serves that, with `X-Chart-Cropped`, `X-Chart-Symbol`, `X-Chart-Timeframe` and `X-Chart-Gold` (`true`/`false`/`unknown`) headers; no pane found serves the full image with `X-Chart-Cropped: false`. The dashboard notes "MT5 is showing <SYM>" only when the symbol is known and not gold.
-It shows whatever chart window the terminal has open (one timeframe, as configured; switching timeframes from the dashboard is out of scope).
+The dashboard no longer shows the MT5 chart picture or key levels (owner: "key levels and all indicators are for the
+system to learn from and know about and improve on, not for charts to display"): `GET /api/chart/mt5`,
+`goldbot/api/mt5_crop.py` and `GET /api/key-levels` are gone; the engine still computes its key zones for the
+strategies. Where the capture was installed, turn it off (it also frees memory on the 1 GB MT5 box):
+`sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `sudo systemctl disable --now goldbot-chart-capture.timer`
+(MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys`
+(`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`), `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`
+and `sudo rm -f /opt/goldbot/state/chart/mt5*.png`. The scripts in `goldbot/ops/linux` stay until the SRE lane retires them.
 
-Install (standalone: needs no `/opt/goldbot` update on the MT5 box, and touches neither the terminal nor the bridge; `<SHA>` is a merged main commit). Root installs the scripts and units from its own hash-checked clone, never from `/opt/goldbot`. On the MT5 box:
-`sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -d -m 755 -o root -g root /usr/local/libexec/goldbot; for f in goldbot-chart-capture.sh goldbot-chart-serve.sh; do install -m 755 -o root -g root $d/r/goldbot/ops/linux/$f /usr/local/libexec/goldbot/; done; for u in goldbot-chart-capture.service goldbot-chart-capture.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload'`
-On the brain (key, then the fetch units; the fetch script stays under `/opt/goldbot` there):
-`sudo -u goldbot ssh-keygen -t ed25519 -N '' -C goldbot-chart -f /var/lib/goldbot/.ssh/chart_ed25519 && sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; for u in goldbot-chart-fetch.service goldbot-chart-fetch.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload' && sudo -u goldbot cat /var/lib/goldbot/.ssh/chart_ed25519.pub`
-Then on the MT5 box, with that public key line in place of `<pubkey>`: `echo 'restrict,command="/usr/local/libexec/goldbot/goldbot-chart-serve.sh" <pubkey>' | sudo -u mt5 tee -a /home/mt5/.ssh/authorized_keys` and `sudo systemctl enable --now goldbot-chart-capture.timer`.
-Last, on the brain: `sudo systemctl enable --now goldbot-chart-fetch.timer`. The brain's `goldbot-chart-fetch.sh` is in `/opt/goldbot` there, so the brain must run a version that has it.
-Check: `sudo -u goldbot /opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh && ls -l /opt/goldbot/state/chart/mt5.png`.
-Remove: `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys` (`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
-Failure: a stale or missing picture is a 404 only; nothing trading depends on it. Look at `journalctl -u goldbot-chart-fetch` (brain) and `-u goldbot-chart-capture` (MT5 box).
+### Multi-instrument MT5 boxes (bridge protocol v10)
+
+An account that names `instruments` (config/accounts.yaml, demo only; a live or observe-only account always serves its own
+gold alone) has its bridge select that list into Market Watch at start (`goldbot/execution/market_watch.py`). A symbol the
+terminal lacks is logged (`not in Market Watch ... not served`) and skipped: gold keeps trading, that symbol's entries are
+refused by the engine, its exits still close. Before the instruments go on a box:
+
+1. Market Watch: after the bridge restarts, the terminal's Market Watch lists the account's gold and every instrument of its
+   list (icm-probe: 19 + XAUUSD; vantage-demo: 7 + XAUUSD+). `journalctl -u goldbot-bridge@<account> | grep "not served"` is empty.
+2. Max bars in chart: MT5 Tools > Options > Charts > "Max bars in chart" = 100000 on every multi-instrument terminal
+   (icm-probe: 952 MB RAM; the default "Unlimited" lets 20 symbols' histories fill it).
+3. Swap on icm-probe (deploy check, SRE): `swapon --show` lists a 1-2 GB swapfile and `free -m` shows it; if not,
+   `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` and add
+   `/swapfile none swap sw 0 0` to `/etc/fstab`. Then watch the terminal's peak RSS during one cold history pull
+   (`ps -o rss= -C terminal64.exe` every few seconds); it must stay well under the box's memory.
+4. Symbol check per symbol: `python -m goldbot.ops.symbol_check <account>` prints the account's gold, then one line per
+   instrument (`ok` or its problems: not listed, symbol_info failed, trading disabled, contract size / digits / minimum lot /
+   lot step / profit currency / triple-swap day differing from config/instruments.yaml) and `note:` lines where the hours the
+   broker quoted the symbol over the last 14 days differ from its session profile (reported only: the engine trades where
+   both are open). Every problem is fixed (or the instrument stays `enabled: false`) before the account trades it.
+5. Health: `symbols:<account>` appears once the engine reports its symbols; WARN names a symbol whose terms are not loaded
+   or whose feed is stale (its entries refused, exits still close).
+
+Protocol: v10 brains and bridges interoperate with v9 either way (`ticks_many` falls back to one `last_tick` per symbol on a
+v9 bridge); the bridge's notional ceiling counts every open symbol of the account (6x equity, account-wide).
 
 ### Program ledger sync (Mac -> brain)
 

@@ -74,7 +74,7 @@ describe("group exposure", () => {
   it("shows every group in order with a meter in words, lots by symbol and 'cap not published'", () => {
     const groups = (["gold", "metals", "equity", "fx", "energy", "rates", "ags"] as const).map((group) => ({
       group, notional: group === "fx" ? 1500 : 0, cap: group === "rates" ? null : 3000,
-      lots_by_symbol: group === "fx" ? { EURUSD: 0.01 } : {}, open_n: group === "fx" ? 1 : 0 }));
+      lots_by_symbol: (group === "fx" ? { EURUSD: 0.01 } : {}) as Record<string, number>, open_n: group === "fx" ? 1 : 0 }));
     render(<GroupExposureCard a={limitAcct({ groups, heat_used: 4.2, heat_limit: 50 })} now={NOW} />);
     const items = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
     expect(items.map((t) => t.split(" ")[0])).toEqual(["Gold", "Metals", "Equity", "FX", "Energy", "Rates", "Ags"]);

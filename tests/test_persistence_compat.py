@@ -21,7 +21,6 @@ import pandas as pd
 import pytest
 from pydantic import BaseModel, Field
 
-from goldbot.api.schema import AccountKeyLevels
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
 from goldbot.data import crossfeed
@@ -466,26 +465,13 @@ def case_daily_review(tmp: Path) -> None:
     assert review_section(tmp, "2026-10-25")[0].text.startswith("Review: costs ICM $0.37/oz")
 
 
-def case_key_zones(tmp: Path) -> None:
-    """engine_<account>.json `key_zones` (engine/key_zones.py, ADR 0068) with a field from a newer release at the top
-    and in a zone: GET /api/key-levels still shows the account's zones (goldbot/api/key_levels_view.py)."""
-    from goldbot.api.key_levels_view import key_levels_view
-    zone = {"price": 2412.5, "lo": 2411.0, "hi": 2414.0, "strength": 9.5, "strength_pct": 88.0, "tfs": ["1h", "1d"],
-            "touches": 3, "role": "resistance", "flipped": False}
-    kz = {"as_of": T0.isoformat(), "price": 2405.0, "atr_1d": 30.0, "history_days": 800.0, "pct_ready": True,
-          "zones_total": 36, "above": _newer([zone]), "below": []}
-    view = key_levels_view([{"account": "icm-demo", "key_zones": _newer(kz)}], None, "1h", T0)
-    [acc] = view.accounts
-    assert acc.account_id == "icm-demo" and acc.above[0].price == 2412.5 and acc.zones_total == 36
-
-
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_pilot_state, case_limits_profile, case_risk_term,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index,
-         case_daily_review, case_exploration_trade, case_exploration_twin, case_key_zones]
+         case_daily_review, case_exploration_trade, case_exploration_twin]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -548,9 +534,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                PauseWindow,
                # state/observe_<account>.json (ADR 0063): tests/test_observe_collector.py::
                # test_health_reads_a_status_a_newer_collector_wrote_with_an_extra_field
-               ObserveStatus,
-               # engine_<account>.json `key_zones` (ADR 0068): case_key_zones
-               AccountKeyLevels}
+               ObserveStatus}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

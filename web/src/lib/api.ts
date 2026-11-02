@@ -22,9 +22,6 @@ export type ActiveBlackout = Schemas["ActiveBlackout"];
 export type AutoModeView = Schemas["AutoModeView"];
 export type ModeChangeResult = Schemas["ModeChangeResult"];
 export type ApprovalMode = Schemas["ModeChangeRequest"]["mode"];
-export type KeyLevelsView = Schemas["KeyLevelsView"];
-export type KeyLevelZone = Schemas["KeyLevelZone"];
-export type KeyLevelTf = KeyLevelsView["timeframe"];
 export type TradesOverview = Schemas["TradesOverview"];
 export type TradeStats = Schemas["TradeStats"];
 export type TradeTypeSummary = Schemas["TradeTypeSummary"];
@@ -108,32 +105,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-/** The MT5 chart pane cropped on the server; isGold null = the title could not be read. */
-export type Mt5Shot = { url: string; capturedAt: string | null; cropped: boolean; symbol: string; isGold: boolean | null };
-
-/** The MT5 terminal picture (PNG) for one timeframe, fetched with the session token so it can become a blob URL.
- * null = no fresh capture (404, older than 5 minutes). The caller owns the URL and must revoke it. */
-async function mt5Chart(tf: string): Promise<Mt5Shot | null> {
-  const sent = token;
-  let r: Response;
-  try {
-    r = await fetch(`/api/chart/mt5?tf=${encodeURIComponent(tf)}`, { headers: sent ? { authorization: `Bearer ${sent}` } : {} });
-  } catch {
-    throw new ApiError(0, NETWORK_TEXT);
-  }
-  if (r.status === 401) { endSession(sent); throw new ApiError(401, "login required"); }
-  if (r.status === 404) return null;
-  if (!r.ok) throw new ApiError(r.status, r.statusText);
-  const gold = r.headers.get("X-Chart-Gold");
-  return {
-    url: URL.createObjectURL(await r.blob()), capturedAt: r.headers.get("X-Captured-At"),
-    cropped: r.headers.get("X-Chart-Cropped") === "true", symbol: r.headers.get("X-Chart-Symbol") ?? "unknown",
-    isGold: gold === "true" ? true : gold === "false" ? false : null,
-  };
-}
-
 export const api = {
-  mt5Chart,
   authState: () => req<Schemas["AuthState"]>("/api/auth/state"),
   setup: (setup_code: string, email: string, password: string) => req<Schemas["SetupResponse"]>("/api/auth/setup", { method: "POST", body: JSON.stringify({ setup_code, email, password }) }),
   login: (email: string, password: string, totp: string) => req<Schemas["LoginResponse"]>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, totp }) }),
@@ -196,9 +168,6 @@ export const api = {
   // one trade on the stored bars of its timeframe with its levels and stop moves (backlog 133)
   tradeBars: (id: string) => req<Schemas["TradeBars"]>(`/api/trades/${encodeURIComponent(id)}/bars`),
   // each account's current key zones and the recent bars of the timeframe (display only)
-  // `symbol`: an instrument key; gold's call is unchanged (no parameter)
-  keyLevels: (tf: KeyLevelTf, account?: string, symbol?: string) =>
-    req<KeyLevelsView>(`/api/key-levels?tf=${tf}${account ? `&account=${encodeURIComponent(account)}` : ""}${symbol && symbol !== "XAUUSD" ? `&symbol=${encodeURIComponent(symbol)}` : ""}`),
   // the strategy board (backlog 132): progress to each arm's read and the read's frozen figures (ADR 0050, 0051)
   strategyBoard: () => req<Schemas["StrategyBoardView"]>("/api/strategies/board"),
   // the strategy ranking (backlog 136-138, ADR 0053): families by the adjusted lower bound of net R per trade after

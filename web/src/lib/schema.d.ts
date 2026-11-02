@@ -368,23 +368,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/chart/mt5": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Chart Mt5 */
-        get: operations["chart_mt5_api_chart_mt5_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/decisions": {
         parameters: {
             query?: never;
@@ -462,23 +445,6 @@ export interface paths {
         };
         /** Instruments List */
         get: operations["instruments_list_api_instruments_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/key-levels": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Key Levels */
-        get: operations["key_levels_api_key_levels_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -879,43 +845,6 @@ export interface components {
             account: string;
             /** Label */
             label: string;
-        };
-        /** AccountKeyLevels */
-        AccountKeyLevels: {
-            /** Above */
-            above: components["schemas"]["KeyLevelZone"][];
-            /** Account Id */
-            account_id: string;
-            /**
-             * As Of
-             * Format: date-time
-             */
-            as_of: string;
-            /** Atr 1D */
-            atr_1d: number | null;
-            /** Below */
-            below: components["schemas"]["KeyLevelZone"][];
-            /** History Days */
-            history_days: number | null;
-            /**
-             * Pct Ready
-             * @default false
-             */
-            pct_ready: boolean;
-            /** Price */
-            price: number | null;
-            /**
-             * Stale
-             * @default false
-             */
-            stale: boolean;
-            /**
-             * Symbol
-             * @default XAUUSD
-             */
-            symbol: string;
-            /** Zones Total */
-            zones_total?: number | null;
         };
         /** AccountSummary */
         AccountSummary: {
@@ -1895,55 +1824,6 @@ export interface components {
             expires_h: number;
             /** Invite Token */
             invite_token: string;
-        };
-        /** KeyLevelZone */
-        KeyLevelZone: {
-            /** Flipped */
-            flipped: boolean;
-            /** Hi */
-            hi: number;
-            /** Lo */
-            lo: number;
-            /** Price */
-            price: number;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "support" | "resistance" | "inside";
-            /** Strength */
-            strength: number;
-            /** Strength Pct */
-            strength_pct: number | null;
-            /** Tfs */
-            tfs: string[];
-            /** Touches */
-            touches: number;
-        };
-        /**
-         * KeyLevelsView
-         * @description `bars` (bid, in the instrument's quote): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the
-         *     reference feed; empty when none are stored); `accounts`: every engine that published zones.
-         */
-        KeyLevelsView: {
-            /** Account Id */
-            account_id: string | null;
-            /** Accounts */
-            accounts: components["schemas"]["AccountKeyLevels"][];
-            /** Bars */
-            bars: components["schemas"]["ChartBar"][];
-            /** Feed */
-            feed: ("broker" | "reference") | null;
-            /**
-             * Symbol
-             * @default XAUUSD
-             */
-            symbol: string;
-            /**
-             * Timeframe
-             * @enum {string}
-             */
-            timeframe: "15m" | "1h" | "4h" | "1d";
         };
         /**
          * KindDay
@@ -4329,34 +4209,6 @@ export interface operations {
             };
         };
     };
-    chart_mt5_api_chart_mt5_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                    "image/png": unknown;
-                };
-            };
-            /** @description no fresh capture */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     decide_api_decisions_post: {
         parameters: {
             query?: never;
@@ -4479,39 +4331,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstrumentView"][];
-                };
-            };
-        };
-    };
-    key_levels_api_key_levels_get: {
-        parameters: {
-            query?: {
-                tf?: "15m" | "1h" | "4h" | "1d";
-                account?: string | null;
-                symbol?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KeyLevelsView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

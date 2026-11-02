@@ -9,6 +9,7 @@ broker's hours and the instrument's session profile differ (calendar.profile_dis
 the engine intersects the two)."""
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
 from datetime import date
 from types import SimpleNamespace
 from typing import Any
@@ -27,7 +28,7 @@ TZ = "Europe/Athens"
 NOW = pd.Timestamp("2026-11-04 12:00", tz="UTC")          # Wednesday
 
 
-def _rates(days: list[str], spans: list[tuple[str, str]], skip: set[str] = frozenset()) -> np.ndarray:
+def _rates(days: list[str], spans: list[tuple[str, str]], skip: AbstractSet[str] = frozenset()) -> np.ndarray:
     """M1 bars (server wall clock) on each of `days` over each [start, end) of `spans`, minus the minutes in `skip`."""
     ts = []
     for d in days:
@@ -41,20 +42,22 @@ def _rates(days: list[str], spans: list[tuple[str, str]], skip: set[str] = froze
     return out
 
 
+def _opens(rates: np.ndarray) -> pd.Series:
+    """The bars' open times as the adapter reads them (server wall clock, naive)."""
+    return pd.Series(pd.to_datetime([int(t) for t in rates["time"]], unit="s"))
+
+
 def test_the_observed_template_merges_thin_gaps_and_keeps_real_breaks():
-    minutes = pd.Series(pd.to_datetime(_rates(["2026-11-02"], [("01:10", "22:55")], skip={"03:00", "03:01"})["time"],
-                                           unit="s"))
+    minutes = _opens(_rates(["2026-11-02"], [("01:10", "22:55")], skip={"03:00", "03:01"}))
     tpl = mt5_adapter.observed_template(minutes)
     assert tpl == [(0, 1 * 3600 + 600, 22 * 3600 + 55 * 60)]                # a 2-minute hole is a thin market, open
-    minutes = pd.Series(pd.to_datetime(_rates(["2026-11-02"], [("01:10", "08:40"), ("11:05", "22:55")])["time"],
-                                       unit="s"))
+    minutes = _opens(_rates(["2026-11-02"], [("01:10", "08:40"), ("11:05", "22:55")]))
     assert len(mt5_adapter.observed_template(minutes)) == 2                  # Osaka's midday break stays closed
 
 
 def test_each_weekday_takes_its_latest_trading_day_and_a_quiet_weekend_is_closed():
     days = ["2026-10-26", "2026-10-27", "2026-11-02", "2026-11-03"]          # two Mondays and two Tuesdays
-    minutes = pd.Series(pd.to_datetime(_rates(days[:2], [("02:00", "10:00")])["time"].tolist()
-                                       + _rates(days[2:], [("03:00", "09:00")])["time"].tolist(), unit="s"))
+    minutes = pd.concat([_opens(_rates(days[:2], [("02:00", "10:00")])), _opens(_rates(days[2:], [("03:00", "09:00")]))])
     tpl = dict(((wd, (a, b)) for wd, a, b in mt5_adapter.observed_template(minutes)))
     assert tpl == {0: (3 * 3600, 9 * 3600), 1: (3 * 3600, 9 * 3600)}
 

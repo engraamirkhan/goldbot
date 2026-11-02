@@ -600,7 +600,7 @@ test("Trades: money on every open row, filters in the URL, a strategy's totals, 
       await list.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 1h, long, plus £3\.95, closed at trailing stop$/ }).click();
       await expect(detail).toContainText("+£3.95");
       // its chart from the server's stored broker minutes: levels in words, the journalled stop move drawn (133)
-      await expect(detail.getByRole("img", { name: /^Chart of 1h bars: target 2,404\.00, entry 2,400\.00, first stop 2,398\.00, last stop 2,399\.50, exit 2,401\.20/ })).toBeVisible();
+      await expect(detail.getByRole("img", { name: /^Chart of 1h bars of Gold: target 2,404\.00, entry 2,400\.00, first stop 2,398\.00, last stop 2,399\.50, exit 2,401\.20/ })).toBeVisible();
       await expect(detail).toContainText("1h bars, bid prices, from this broker.");
       await expect(detail).toContainText(/moved to 2,399\.50 at/);
       await expect(detail).toContainText(/commission £0\.35 · swap \+?£0\.12|commission £0\.35/);

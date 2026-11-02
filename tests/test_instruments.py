@@ -176,6 +176,9 @@ def test_the_bridge_client_sends_todays_positions_call_unless_a_symbol_is_asked_
     b._ticks_many_served = True
     calls.clear()
     since = pd.Timestamp("2026-11-02", tz="UTC")
-    b._call = lambda method, *args: calls.append((method, *args)) or {}  # type: ignore[method-assign]
+    def record(method: str, *args: Any) -> Any:
+        calls.append((method, *args))
+        return {}
+    b._call = record  # type: ignore[method-assign]
     assert b.ticks_many(["XAUUSD"], since) == {"XAUUSD": []}
     assert calls == [("ticks_many", ["XAUUSD"], since)]

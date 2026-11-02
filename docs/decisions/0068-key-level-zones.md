@@ -99,3 +99,10 @@ before any screen result exists.
   ~62 days are used, and the dashboard says the history is short.
 - Research zones are dense: about 36 within ±3 ATR(1d) of gold in 2026. Rules should filter on `strength_pct` and
   timeframe, not on "a zone exists". The display shows only the few strongest nearby.
+
+## Amendment 2026-11-02 (owner)
+
+"Key levels and all indicators are for the system to learn from and know about and improve on, not for charts to
+display." The dashboard's key-level chart, its `GET /api/key-levels` route and view models were removed (lane L4 of the
+multi-instrument demo). The zone computation (`goldbot/engine/key_zones.py`, `goldbot/features/key_levels.py`,
+`goldbot/research/level_vocab.py`) stays for the strategies and the learning loop.

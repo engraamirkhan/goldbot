@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from goldbot.api import instruments_view as iv
 from goldbot.api import trades_ledger as tl
 from goldbot.api.app import create_app
-from goldbot.api.schema import TradeRow
+from goldbot.api.schema import TradeKind, TradeRow
 from goldbot.instruments import load_instruments
 from goldbot.ops import accounts as acc_mod
 from tests.test_api_views import _login
@@ -27,8 +27,8 @@ NOW = pd.Timestamp("2026-11-02 12:00", tz="UTC")
 DAY0 = pd.Timestamp("2026-11-01 22:00", tz="UTC")
 
 
-def _row(i: int, *, account: str = "icm-probe", symbol: str = "XAUUSD", status: str = "closed",
-         pnl: float | None = 1.0, pnl_now: float | None = None, kind: str = "exploration") -> TradeRow:
+def _row(i: int, *, account: str = "icm-probe", symbol: str = "XAUUSD", status: Literal["open", "closed"] = "closed",
+         pnl: float | None = 1.0, pnl_now: float | None = None, kind: TradeKind = "exploration") -> TradeRow:
     closed = status == "closed"
     return TradeRow.model_construct(
         trade_id=f"exploration:{account}:{i}", kind=kind, status=status, account=account, account_label="Scalp lab",
