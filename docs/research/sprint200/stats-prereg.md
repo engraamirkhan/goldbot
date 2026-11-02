@@ -188,3 +188,12 @@ Equal-weight ensembles of weak rules
 sprint's 200 already counts each strategy once). 0 registry trials until the evaluator re-runs a survivor. Mac load: at
 most 2 worker processes. Owner-only: none here; deploying a survivor is a demo exploration arm at min lot under the
 RiskGate, inside the ADR 0061 qualification gate. Live sizing and instruments stay owner decisions.
+
+## Amendment 1 (2026-11-02, before any outcome was computed): leak-free control
+
+Coordinator correction for all lanes: a same-day twin drawn BEFORE the signal takes its side from that day's later
+move, which inflates the control for momentum rules and deflates it for fades. The explore pass leg "beats the matched
+random control by >= 0.05 R" now uses the **forward control**: 4 twins per real trade drawn uniformly from the 1m bars
+of the same UTC day and session at or after the real entry minute, same side, stop, target and hold; if no such minute
+exists, the same UTC time of day (within 15 minutes) on another day of the loaded window. The brief's same-day control
+is still computed and reported beside it. Nothing else changes.
