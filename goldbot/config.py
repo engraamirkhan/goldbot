@@ -386,6 +386,9 @@ class ResearchSettings(_Section):
     # raises the budget of ONE quarter ({"2026Q4": 53}); a quarter not listed keeps trial_budget_quarter, a value must
     # be >= it. Every trial is still recorded and the deflated Sharpe still counts the full K (an owner decision)
     trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
+    # an override above OVERRIDE_CAP (500) trials stands only on a recorded owner decision: quarter -> the ADR path
+    # (repo-relative), whose text states that quarter and that trial count; never above OWNER_OVERRIDE_CEILING (5,000)
+    trial_budget_owner_decisions: dict[str, str] = Field(default_factory=dict)
     # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
     # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
     # the deflated Sharpe counts the full running K. 0 turns the loop off. Owner-recorded in
@@ -435,14 +438,41 @@ class ResearchSettings(_Section):
                 raise ValueError(f"reserved_trials_quarter maps a quarter like 2027Q1 to 0..500 trials, got {q!r}: {n!r}")
         return v
 
+    OVERRIDE_CAP: ClassVar[int] = 500                 # most trials a quarter override may name without an owner ADR
+    OWNER_OVERRIDE_CEILING: ClassVar[int] = 5000      # hard ceiling, even with one (owner, 2026-11-02)
+
     @model_validator(mode="after")
     def _budget_overrides(self) -> ResearchSettings:
+        """"Raising it is an owner decision": an override up to 500 trials is a dated settings entry; above 500 it must
+        cite `trial_budget_owner_decisions[quarter]`, an ADR that exists and states the same quarter and trial count
+        (owner, 2026-11-02: "the validator lifts the 500 cap only for 2026Q4 = 3,500, with a 5,000 hard ceiling").
+        Every trial still counts in K whatever the budget."""
         import re
         for q, n in self.trial_budget_overrides.items():
-            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= 500:
+            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= self.OWNER_OVERRIDE_CEILING:
                 raise ValueError(f"trial_budget_overrides maps a quarter like 2026Q4 to trial_budget_quarter "
-                                 f"({self.trial_budget_quarter})..500 trials, got {q!r}: {n!r}")
+                                 f"({self.trial_budget_quarter})..{self.OWNER_OVERRIDE_CEILING} trials, got {q!r}: {n!r}")
+            if n > self.OVERRIDE_CAP:
+                self._check_owner_decision(q, n)
+        orphan = sorted(set(self.trial_budget_owner_decisions) - set(self.trial_budget_overrides))
+        if orphan:
+            raise ValueError(f"trial_budget_owner_decisions names quarters without a trial_budget_overrides entry: {orphan}")
         return self
+
+    def _check_owner_decision(self, quarter: str, trials: int) -> None:
+        import re
+        cited = self.trial_budget_owner_decisions.get(quarter)
+        if not cited:
+            raise ValueError(f"trial_budget_overrides {quarter}: {trials} is above {self.OVERRIDE_CAP} trials: it needs an "
+                             f"owner decision, research.trial_budget_owner_decisions[{quarter!r}] = the ADR path")
+        path = Path(cited) if Path(cited).is_absolute() else ROOT / cited
+        if not path.is_file():
+            raise ValueError(f"trial_budget_owner_decisions {quarter}: {cited} does not exist")
+        text = path.read_text(encoding="utf-8")
+        count = rf"(?<![\d,])(?:{trials}|{trials:,})(?![\d,]*\d)"   # 3500 or 3,500, not part of 35000 or 13,500
+        if not re.search(rf"\b{quarter}\b", text) or not re.search(count, text):
+            raise ValueError(f"trial_budget_owner_decisions {quarter}: {cited} must state the quarter {quarter} and the "
+                             f"trial count {trials}")
 
     def budget_for(self, quarter: str) -> int:
         """The quarter's pre-registered trial budget: its override when it has one, else trial_budget_quarter."""
