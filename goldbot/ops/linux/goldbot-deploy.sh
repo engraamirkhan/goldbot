@@ -19,7 +19,7 @@
 # any other unknown version is refused), settings.local.yaml must validate with the TARGET's own Settings model, and
 # no scheduler job may be mid-run (the scheduler is stopped first and checked again). After the restart every enabled
 # service must be active and un-restarted for 30 s AND each service with a heartbeat (supervisor, scheduler, telegram,
-# news, api, webhook, tv-pull) must have written a new one since its restart AND (brain) the supervisor must have
+# news, api) must have written a new one since its restart AND (brain) the supervisor must have
 # written a new supervisor.json, else the previous commit is restored the same way. The deploy is then reported; a
 # background watcher (`--watch`, own systemd unit) keeps checking for restarts until 90 s after the switch and rolls
 # back the same way if one happens (a crash loop restarts every ~10 s, so 30 s of quiet plus 60 s more of watching
@@ -87,7 +87,7 @@ BUILD_MEM_MAX=512M                        # cgroup cap for npm/uv builds: an OOM
 STABLE_S=30                               # active + un-restarted this long (and heartbeats fresh) = healthy
 WATCH_S=90                                # a restart within this long of the switch rolls back
 POLL_S=2
-BEAT_SERVICES=" supervisor scheduler telegram news api webhook tv-pull "   # = HEARTBEAT_SERVICES + OPTIONAL_... (tested)
+BEAT_SERVICES=" supervisor scheduler telegram news api "   # = HEARTBEAT_SERVICES (tested)
 APPROVED=$ROOT/state/deploy/approved.json
 PY_BRAIN=$ROOT/.venv/bin/python           # run only as the service user
 BRIDGE_REQS=goldbot/ops/linux/mt5-bridge-requirements.txt   # MT5 box: hash-pinned from uv.lock (scripts/bridge_requirements.py)
@@ -624,7 +624,7 @@ switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rol
   # old engine at the moment the new one starts: the trading gap is one restart, not the install), then the rest.
   # Restarts are safe: engines reconcile on start. Only enabled units: a loaded but disabled instance (a stray
   # engine) is never started by a deploy. A failed restart never stops the next one (incident 2026-10-20: one engine
-  # whose bridge was not logged in left api, scheduler, telegram, news and tv-pull stopped); the switch fails after
+  # whose bridge was not logged in left api, scheduler, telegram, news and a feed service stopped); the switch fails after
   # all were tried. An engine that was not active before the deploy is started last, without waiting, and judged on
   # its own (judge_new_engines); a rollback (RESTORE=1) starts only the units that were active before.
   local failed=0 fresh=()
