@@ -8,6 +8,11 @@ export const TF_OF_INTERVAL: Record<string, KeyLevelTf> = { "15": "15m", "60": "
 
 const TF_WORD: Record<string, string> = { round: "$ round" };
 
+/** "2.2 years" from a year on, else "62 days". */
+export function historyWords(days: number): string {
+  return days >= 365 ? `${(days / 365).toFixed(1)} years` : `${Math.round(days)} days`;
+}
+
 /** Border width of a zone's band in px: 1 for the weakest to 4 for the strongest (unknown strength: 1). */
 export function bandStroke(pct: number | null | undefined): number {
   if (pct == null || !Number.isFinite(pct)) return 1;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { KeyLevelZone } from "./api";
-import { TF_OF_INTERVAL, bandOpacity, bandStroke, zoneLabel } from "./keyLevels";
+import { TF_OF_INTERVAL, bandOpacity, bandStroke, historyWords, zoneLabel } from "./keyLevels";
 
 const Z: KeyLevelZone = { price: 2412.5, lo: 2411, hi: 2414, strength: 9.5, strength_pct: 88, tfs: ["1h", "1d"], touches: 3, role: "resistance", flipped: false };
 
@@ -17,6 +17,11 @@ describe("key-level chart helpers", () => {
     expect(zoneLabel(Z, true)).toBe("Resistance 2412.50 · 1h 1d · strength 88%");
     expect(zoneLabel({ ...Z, tfs: ["round"], strength_pct: null }, false)).toBe("Support 2412.50 · $ round · strength warming up");
     expect(zoneLabel({ ...Z, flipped: true }, false)).toBe("Support 2412.50 · 1h 1d · strength 88% · was resistance");
+  });
+
+  it("says history in years from a year on, else in days", () => {
+    expect(historyWords(800)).toBe("2.2 years");
+    expect(historyWords(62.4)).toBe("62 days");
   });
 
   it("maps every chart interval to an API timeframe", () => {

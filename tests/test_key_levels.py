@@ -113,6 +113,27 @@ def test_zones_asof_only_reads_bars_visible_by_then(bars_1m):
     assert kl.zones_asof(later, t) == kl.zones_asof(bars_1m, t)
 
 
+def test_a_corrected_minute_is_not_a_level_before_it_is_visible(bars_1m):
+    i = 50_000
+    fixed = bars_1m.copy()
+    spike = float(fixed["bid_close"].iloc[i]) + 300.0
+    fixed.loc[i, ["bid_high", "ask_high"]] = spike                       # a corrected minute with a new high ...
+    fixed.loc[i, "visible_at"] = fixed.loc[i, "ts_utc"] + pd.Timedelta(days=2)   # ... written two days later
+    for t in _vis(bars_1m).iloc[np.array([i + 30, i + 1500])]:                     # after its natural close, before it was written
+        z = kl.zones_asof(fixed, t)
+        assert not any(x.lo - 1 <= spike <= x.hi + 1 for x in z.zones if "round" not in x.tfs or x.touches)
+        assert z == kl.zones_asof(bars_1m.drop(index=i), t)
+    frame = kl.key_level_frame(fixed)
+    pd.testing.assert_frame_equal(frame.drop(index=i), kl.key_level_frame(bars_1m.drop(index=i)), check_exact=True)
+    assert np.isnan(float(frame["res_price"].iloc[i])) and not bool(frame["pct_ready"].iloc[i])
+
+
+def test_bars_whose_visibility_goes_backwards_are_refused(bars_1m):
+    shuffled = bars_1m.iloc[[*range(100, 200), *range(0, 100)]]
+    with pytest.raises(ValueError, match="time order"):
+        kl.key_level_frame(shuffled)
+
+
 def test_the_per_bar_frame_is_the_nearest_zone_of_the_book_at_each_bar(bars_1m, frame):
     vis = _vis(bars_1m)
     close = mid(bars_1m)["close"].to_numpy()

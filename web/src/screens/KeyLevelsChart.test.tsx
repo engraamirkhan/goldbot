@@ -14,11 +14,13 @@ const bars = Array.from({ length: 10 }, (_, i) => ({ t: new Date(Date.UTC(2026, 
 const VIEW: KeyLevelsView = {
   timeframe: "1h", account_id: "icm-demo", feed: "broker", bars,
   accounts: [{
-    account_id: "icm-demo", as_of: "2026-10-27T10:00:00Z", price: 2410, atr_1d: 30, history_days: 62,
+    account_id: "icm-demo", as_of: "2026-10-27T10:00:00Z", price: 2410, atr_1d: 30, history_days: 800,
+    zones_total: 36, pct_ready: true, stale: false,
     above: [zone(2420, 92, ["1h", "1d"], "resistance"), zone(2440, 30, ["round"], "resistance")],
     below: [zone(2395, 70, ["15m", "4h"], "support")],
   }, {
-    account_id: "vantage-demo", as_of: "2026-10-27T10:00:00Z", price: 2411, atr_1d: 30, history_days: 20, above: [], below: [],
+    account_id: "vantage-demo", as_of: "2026-10-27T10:00:00Z", price: 2411, atr_1d: 30, history_days: 20,
+    pct_ready: false, stale: false, above: [], below: [],
   }],
 };
 
@@ -57,9 +59,20 @@ describe("key-level chart", () => {
     expect(await screen.findByText(/No key levels yet/)).toBeInTheDocument();
   });
 
-  it("notes when the zones were built on less history than the strength percentile wants", async () => {
+  it("says how much history the zones were built on and how many of all zones it shows", async () => {
     vi.spyOn(apiModule.api, "keyLevels").mockResolvedValue(VIEW);
     render(wrap(<KeyLevelsChart tf="1h" />));
-    expect(await screen.findByText(/built on the last 62 days/)).toBeInTheDocument();
+    expect(await screen.findByText(/Built on 2\.2 years of history/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing the 3 strongest nearby of 36 zones/)).toBeInTheDocument();
+    expect(screen.queryByText(/short of 540 days/)).toBeNull();
+    expect(screen.queryByText(/STALE/)).toBeNull();
+  });
+
+  it("warns when the history is short and badges zones over 30 minutes old", async () => {
+    const acc = { ...VIEW.accounts[0], history_days: 62, stale: true };
+    vi.spyOn(apiModule.api, "keyLevels").mockResolvedValue({ ...VIEW, accounts: [acc] });
+    render(wrap(<KeyLevelsChart tf="1h" />));
+    expect(await screen.findByText(/short of 540 days/)).toBeInTheDocument();
+    expect(screen.getByText(/STALE: last built/)).toBeInTheDocument();
   });
 });

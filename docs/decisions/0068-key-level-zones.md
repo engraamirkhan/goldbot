@@ -1,6 +1,6 @@
 # 0068: Key-level zones: definition choices and room_to_level strength
 
-Status: accepted (implementer, 2026-11-02)
+Status: accepted (implementer, 2026-11-02; amended after the quant and safety reviews of #281)
 
 ## Context
 The owner asked on 2026-11-02 for the system to "identify key levels, support and resistance on all time frames".
@@ -37,16 +37,49 @@ before any screen result exists.
   about 0.16 ATR(1d) away. Top quartile matches the bar the catalogue's `near_level` uses for "a zone". It also fits
   the mechanism: a target fails at strong levels, while weak ones are run through. A zone the close sits in leaves no
   room. No opposing zone means unlimited room.
-- **Evidence behind the 75 choice.** It was frequency only; no returns were looked at. Over 2010-01 to 2025-09, a
-  1h long with a 3 ATR stop passes `min_r 2` on 3.7% / 9.4% / 28% of bars at strength 50 / 75 / 90. Short: 1.8% /
-  5.8% / 23%.
+- **Evidence and disclosure for 75.** 75 is fixed by the catalogue's own definition of a zone (`near_level`
+  min_strength_pct 75, catalogue sha ea344498…, committed before any bar was read) and by the mechanism; it was not
+  selected from data. After the choice, pass-rate frequencies (no returns, no outcomes) were computed over
+  2010-01..2025-09, which includes the confirm window, contrary to prereg §0's no-2018-2025 statement: a 1h long with
+  a 3 ATR stop passes min_r 2 on 3.7% / 9.4% / 28% of bars at strength 50 / 75 / 90 (short 1.8% / 5.8% / 23%). These
+  figures did not move the choice (75 is not the n-maximising value) and cannot change the null distribution of any
+  pass statistic. 75 is frozen; any other value is a new definition, new spec ids, counted in K.
+- **Corrected minutes (quant review F1).** An input bar visible later than its natural close (a minute corrected
+  after the fact) is dropped, as `resample_bars(drop_late=True)` drops it from decision bars. Input whose
+  `visible_at` goes backwards is refused.
+- **Maturity (quant review F2).** The frame carries `pct_ready` (strength_pct has its 20 days of samples) and
+  `book_mature` (540 days of input history, the life of a 1w swing). `room_to_level` passes only where ATR(1d) is
+  finite and pct_ready. No level primitive emits anything where the book is not mature. `LevelContext` is built once
+  on the whole history and sliced to a window; slicing a context built from bars that start after the window's start
+  is refused. Consequence: the first 540 days of the history (2010-01..2011-06) carry no level signals.
+- **Recording level results (quant review F3).** A room_to_level spec that fails explore or confirm on n < 100 is
+  recorded as untested (insufficient events), not rejected. ROOM_MIN_STRENGTH_PCT is not changed after any result; a
+  changed value is a new definition with new ids counted in K. Long-side room_to_level results are reported alongside
+  the same entry without the filter, so an all-time-high regime effect is not read as a level effect.
+
+### Display (live dashboard and API only; the research definition above is unchanged)
+- **Long history.** The engine's zones are built on the broker's own M15 bars, 800 days deep (540-day mature book +
+  250-day pool + 10 days). They are pulled through the bridge's `get_bars_range` in 90-day pages on a separate client
+  and thread, cached in the store (`bars_15m_broker`, source = account) and topped up once a day from the last cached
+  bars minus two days. The engine's own 15m bars replace them from its first one on. 15m is the book's evaluation
+  clock, so the live book is the research book: on the 2026-10-23 bar it reproduces the 16-year build's zones and
+  percentiles, for example 4001.62 at 68.3 and 3943.38 at 66.1. The build runs off the bar close (about 0.11 s). Builds
+  over 1 s are logged, and the first failure of each exception type is logged with its traceback. A non-finite price
+  or ATR keeps the last zones. The API marks zones over 30 minutes old as stale.
+- **Density rule** (not fitted to any data; all thresholds follow from the frozen definition):
+  - Only zones with strength_pct >= 50 (the median zone) are shown.
+  - A lone single-touch 15m swing is never shown; it ages out of the book after 9 days anyway.
+  - Neighbours less than 0.25 ATR(1d) apart (the research cluster width) merge for display, up to 0.5 ATR wide.
+  - At most 3 zones are shown on each side of the price. They are chosen by strength-weighted proximity:
+    strength_pct / 100 / (1 + edge distance / ATR(1d)).
+
+  The 36-zone book on 2026-10-23 shows 3 above and 2 below.
 
 ## Consequences
 - The 379 level specs can be screened with one book pass per decision timeframe: `LevelContext.build`, about 31 s for
   1h and 14 s for 4h over 16 years with all 13 zone views.
 - This record freezes the definition. A changed constant is a new definition, and specs run on it count as new ids.
-- The live engine builds the zones from its own ~62 days of 1m bars, so most 1w swings and the 250-day pool are
-  truncated live. The API and dashboard state `history_days`. Live/research parity of the zones matters only once a
-  level rule trades, and that needs a longer engine history (follow-up).
-- Zones are dense: about 36 within ±3 ATR(1d) of gold in 2026. Rules should filter on `strength_pct` and timeframe,
-  not on "a zone exists".
+- Live and research zones agree once the broker's M15 history is cached. Without a bridge (paper) the engine's own
+  ~62 days are used, and the dashboard says the history is short.
+- Research zones are dense: about 36 within ±3 ATR(1d) of gold in 2026. Rules should filter on `strength_pct` and
+  timeframe, not on "a zone exists". The display shows only the few strongest nearby.

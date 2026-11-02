@@ -1589,7 +1589,10 @@ class AccountKeyLevels(BaseModel):
     as_of: datetime                         # the 15m close the zones were built at
     price: float | None
     atr_1d: float | None
-    history_days: float | None              # days of 1m bars the engine built them on (it holds about 62)
+    history_days: float | None              # days of history behind them (the broker's M15, about 800 days)
+    pct_ready: bool = False                 # strength_pct has its 20 days of samples
+    zones_total: int | None = None          # every research zone in the book; the display shows the strongest few
+    stale: bool = False                     # as_of over STALE_AFTER old (market closed, or the engine stalled)
     above: list[KeyLevelZone]               # nearest first
     below: list[KeyLevelZone]
 

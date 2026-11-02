@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type KeyLevelTf, type KeyLevelZone } from "../lib/api";
-import { bandOpacity, bandStroke, zoneLabel } from "../lib/keyLevels";
+import { bandOpacity, bandStroke, historyWords, zoneLabel } from "../lib/keyLevels";
 import { spreadLabels } from "../lib/tradeChart";
 import "./trades/trades.css";
 
@@ -15,7 +15,7 @@ const H = 420;
 const PAD_R = 300;    // room for the band labels
 const PAD_T = 10;
 const PAD_B = 18;
-const FULL_POOL_DAYS = 250;
+const MATURE_DAYS = 540;    // goldbot/features/key_levels.py MATURE_DAYS: a 1w swing's life
 
 type Band = { z: KeyLevelZone; above: boolean };
 
@@ -81,9 +81,12 @@ export function KeyLevelsChart({ tf }: { tf: KeyLevelTf }) {
       </div>
       <p className="muted small">
         Solid bands are resistance above the price, dashed bands support below; a thicker band is a stronger zone.
-        {acc.history_days != null && acc.history_days < FULL_POOL_DAYS &&
-          <> Zones built on the last {Math.round(acc.history_days)} days the engine holds, so weekly swings and the strength ranking see less history than research does.</>}
+        {acc.zones_total != null && <> Showing the {bands.length} strongest nearby of {acc.zones_total} zones.</>}
+        {acc.history_days != null && <> Built on {historyWords(acc.history_days)} of history.</>}
+        {acc.history_days != null && acc.history_days < MATURE_DAYS &&
+          <> That is short of {MATURE_DAYS} days, so weekly swings and the strength ranking see less than research does.</>}
         {view.bars.length === 0 && <> Bars for this timeframe aren't stored yet.</>}
+        {acc.stale && <> <span className="badge" role="status">STALE: last built {new Date(acc.as_of).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span></>}
       </p>
     </div>
   );

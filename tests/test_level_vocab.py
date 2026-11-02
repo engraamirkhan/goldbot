@@ -6,9 +6,12 @@ before the bar), filters read the book at the decision close itself.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
@@ -21,7 +24,7 @@ NAN = np.nan
 def _zones(**cols: list[float]) -> pd.DataFrame:
     """A hand-made zone frame (the columns key_level_frame gives) for three decision bars."""
     base = {f"{s}_{f}": [NAN] * 3 for s in ("sup", "res") for f in ("price", "lo", "hi", "strength_pct", "dist_atr")}
-    base.update(atr_1d=[10.0] * 3)
+    base.update(atr_1d=[10.0] * 3, pct_ready=[True] * 3, book_mature=[True] * 3)
     base.update(cols)
     return pd.DataFrame(base)
 
@@ -141,9 +144,6 @@ def test_frames_for_several_filters_in_one_pass_equal_one_frame_per_filter(bars_
 
 
 def test_every_level_block_of_the_sprint3000_catalogue_maps_to_a_zone_view():
-    from pathlib import Path
-
-    import yaml
     cat = yaml.safe_load(Path("config/research/sprint3000_catalogue.yaml").read_text())
     specs = cat["specs"]
     level = [s for s in specs if s["entry"]["type"] in lv.ENTRY_TYPES
@@ -152,3 +152,73 @@ def test_every_level_block_of_the_sprint3000_catalogue_maps_to_a_zone_view():
     views = lv.filters_for(specs)
     assert kl.LevelFilter(lv.ROOM_MIN_STRENGTH_PCT, None) in views
     assert all(f.min_tf is None or f.min_tf in kl.TF_RANK for f in views)
+
+
+def test_room_strength_is_frozen_to_the_catalogue_zone_bar():
+    specs = yaml.safe_load(Path("config/research/sprint3000_catalogue.yaml").read_text())["specs"]
+    near = {float(f["params"]["min_strength_pct"]) for s in specs for f in s.get("filters") or []
+            if f["type"] == "near_level"}
+    assert lv.ROOM_MIN_STRENGTH_PCT == 75.0
+    assert near == {lv.ROOM_MIN_STRENGTH_PCT}
+
+
+def test_room_to_level_fails_closed_until_the_percentile_is_ready_and_the_book_is_mature():
+    cur = _zones(res_lo=[200.0] * 3, res_hi=[201.0] * 3, sup_lo=[10.0] * 3, sup_hi=[11.0] * 3,
+                 pct_ready=[False, True, True], book_mature=[True, False, True])
+    got = lv.room_to_level(_bars([100.0] * 3), cur, np.array([1, 1, 1]), np.full(3, 1.0), min_r=2.0)
+    assert got.tolist() == [False, False, True]
+
+
+def test_no_level_primitive_acts_on_an_immature_book():
+    z = _zones(res_lo=[100.0] * 3, res_hi=[101.0] * 3, sup_lo=[90.0] * 3, sup_hi=[91.0] * 3,
+               book_mature=[False, False, False])
+    bars = _bars([102.0, 89.0, 95.0], high=[102.0, 95.0, 100.5], low=[95.0, 89.0, 90.5])
+    assert lv.level_break(bars, z).tolist() == [0, 0, 0]
+    assert lv.level_reject(bars, z).tolist() == [0, 0, 0]
+    assert not lv.near_level(bars, z, np.full(3, 10.0), max_dist_atr=5.0).any()
+
+
+# ------------------------------------------------------------------------------------------- 400-day prefix (F4)
+@pytest.fixture(scope="module")
+def long_bars() -> pd.DataFrame:
+    return ticks_to_1m(synthetic_ticks("2024-01-01", "2025-02-04", ticks_per_minute=1, seed=11))
+
+
+def test_a_400_day_history_cut_at_day_300_keeps_every_past_row_zone_and_context(long_bars):
+    cut_t = pd.Timestamp("2024-10-29 13:07", tz="UTC")                    # ~day 300, a Tuesday, mid-15m
+    k = int((pd.to_datetime(long_bars["ts_utc"], utc=True) < cut_t).sum())
+    head = long_bars.iloc[:k].reset_index(drop=True)
+    later = long_bars.copy()
+    fut = later.index >= k                                                 # the future: highs, lows, closes all moved
+    for side in ("bid", "ask"):
+        later.loc[fut, f"{side}_high"] += 40.0
+        later.loc[fut, f"{side}_low"] -= 40.0
+        later.loc[fut, f"{side}_close"] += 7.0
+    full = kl.key_level_frame(later)
+    pd.testing.assert_frame_equal(kl.key_level_frame(head), full.iloc[:k].reset_index(drop=True), check_exact=True)
+    vis = pd.to_datetime(head["visible_at"], utc=True)
+    for t in (vis.iloc[k // 3], vis.iloc[k - 1]):
+        assert kl.zones_asof(head, t) == kl.zones_asof(later, t)
+    end = vis.iloc[-1]
+    h1_all = mid(resample_bars(later, "1h"))
+    h1_head = h1_all[pd.to_datetime(h1_all["visible_at"], utc=True) <= end].reset_index(drop=True)
+    fs = [kl.LevelFilter(75.0, None), kl.LevelFilter(50.0, "4h")]
+    whole = lv.LevelContext.build(later, h1_all, fs)
+    part = lv.LevelContext.build(head, h1_head, fs)
+    lo = pd.Timestamp("2024-03-01", tz="UTC")
+    win, part_win = whole.window(lo, cut_t), part.window(lo, cut_t)
+    for f in fs:
+        assert len(win.at(f)) > 1000
+        pd.testing.assert_frame_equal(part_win.at(f).reset_index(drop=True), win.at(f).reset_index(drop=True),
+                                      check_exact=True)
+        pd.testing.assert_frame_equal(part_win.prev(f).reset_index(drop=True), win.prev(f).reset_index(drop=True),
+                                      check_exact=True)
+    assert not win.at(fs[0])["book_mature"].any()                         # < 540 days of history: nothing acts
+
+
+def test_a_window_of_a_context_built_on_the_windows_own_bars_is_refused(long_bars):
+    late = long_bars[pd.to_datetime(long_bars["ts_utc"], utc=True) >= pd.Timestamp("2024-06-01", tz="UTC")]
+    late = late.iloc[:20_000].reset_index(drop=True)
+    ctx = lv.LevelContext.build(late, mid(resample_bars(late, "4h")), [kl.LevelFilter(75.0, None)])
+    with pytest.raises(ValueError, match="whole history"):
+        ctx.window(pd.Timestamp("2024-05-01", tz="UTC"), pd.Timestamp("2024-07-01", tz="UTC"))

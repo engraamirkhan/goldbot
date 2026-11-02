@@ -67,3 +67,12 @@ def test_the_route_needs_a_sign_in_and_refuses_an_unknown_timeframe(tmp_path):
     body = c.get("/api/key-levels?tf=15m", headers=h).json()
     assert body["accounts"][0]["above"][0]["price"] == 2412.5 and body["timeframe"] == "15m"
     assert c.get("/api/key-levels?tf=3m", headers=h).status_code == 422
+
+
+def test_zones_built_over_30_minutes_ago_are_marked_stale(tmp_path):
+    def acc(age_min: int) -> Any:
+        kz = {**ZONES, "as_of": (NOW - pd.Timedelta(minutes=age_min)).isoformat(), "pct_ready": True, "zones_total": 31}
+        view = kv.key_levels_view([{"account": SCALP, "key_zones": kz}], None, "1h", NOW)
+        return view.accounts[0]
+    assert not acc(29).stale and acc(31).stale
+    assert acc(5).zones_total == 31 and acc(5).pct_ready

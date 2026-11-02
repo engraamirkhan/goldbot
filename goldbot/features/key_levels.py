@@ -65,6 +65,7 @@ ROUND_STEP = 50.0
 ROUND_RANGE_ATR = 3.0
 PCT_WINDOW_DAYS = 250
 PCT_MIN_DAYS = 20
+MATURE_DAYS = 540                              # = the longest swing life (1w: 3 x 180 days): the book is complete
 GRID_TF = "15m"
 DAY_NS = 86_400 * 10**9
 PERIODS = (("pdh", "1d", 1), ("pdl", "1d", -1), ("pwh", "1w", 1), ("pwl", "1w", -1), ("pmh", "1M", 1), ("pml", "1M", -1))
@@ -168,6 +169,8 @@ class KeyZones(FrozenRecord):
     price: float | None
     atr_1d: float | None
     zones: tuple[KeyZone, ...]          # every zone, by price
+    history_days: float | None = None   # input history behind the book (MATURE_DAYS and more: complete)
+    pct_ready: bool = False             # strength_pct has its PCT_MIN_DAYS of samples
 
     def nearest(self, n: int = 3) -> tuple[list[KeyZone], list[KeyZone]]:
         """The n nearest zones above the price (nearest first) and at or below it (nearest first)."""
@@ -179,7 +182,11 @@ class KeyZones(FrozenRecord):
 
 # ------------------------------------------------------------------------------------------------ inputs
 def _raw(bars: pd.DataFrame) -> pd.DataFrame:
-    """BAR_COLUMNS bars (bid/ask) from either raw bars or mid bars (open/high/low/close: bid = ask = mid)."""
+    """BAR_COLUMNS bars (bid/ask) from either raw bars or mid bars (open/high/low/close: bid = ask = mid).
+
+    A bar visible later than its natural close (a corrected minute, data/quarantine.py: `visible_at` = when it was
+    written) is dropped, as `resample_bars(drop_late=True)` drops it from decision bars: no level can rest on values
+    nobody saw at that close. ValueError when `visible_at` then goes backwards (the frame is not in time order)."""
     if "bid_close" in bars.columns:
         out = bars[[c for c in BAR_COLUMNS if c in bars.columns]].copy()
     else:
@@ -195,7 +202,16 @@ def _raw(bars: pd.DataFrame) -> pd.DataFrame:
     for c in ("tick_count", "spread_mean", "spread_max"):
         if c not in out.columns:
             out[c] = 0.0
-    return out[BAR_COLUMNS].reset_index(drop=True)
+    kept = np.arange(len(out))
+    if len(out):
+        on_time = np.asarray(pd.DatetimeIndex(out["visible_at"]) <= ts + pd.Timedelta(seconds=_step_s(ts)))
+        out, kept = out[on_time], kept[on_time]
+        vis = epoch_ns(pd.DatetimeIndex(out["visible_at"]))
+        if len(vis) > 1 and bool((np.diff(vis) < 0).any()):
+            raise ValueError("key levels need bars in time order: visible_at goes backwards")
+    res = out[BAR_COLUMNS].reset_index(drop=True)
+    res.attrs["kept"] = kept                       # positions of the input bars kept (key_level_frames' rows)
+    return res
 
 
 def _step_s(ts: pd.DatetimeIndex) -> int:
@@ -219,6 +235,7 @@ class _Inputs(NamedTuple):
     c_expire: np.ndarray
     c_tf: np.ndarray              # index into SWING_TFS
     c_origin: np.ndarray
+    start_ns: int                 # the first input bar's open: the book is mature MATURE_DAYS after it
 
 
 def _tf_mid(raw: pd.DataFrame, tf: str, base_s: int) -> pd.DataFrame:
@@ -266,7 +283,7 @@ def _inputs(raw: pd.DataFrame) -> _Inputs:
     return _Inputs(base_close=base["close"].to_numpy(dtype=float), base_vis=epoch_ns(utc_index(base["visible_at"])),
                    grid_vis=grid_vis, grid_close=grid["close"].to_numpy(dtype=float), periods=periods, atr_1d=atr_1d,
                    c_price=c_price, c_known=c_known, c_expire=c_known + life[c_tf].astype(np.int64), c_tf=c_tf,
-                   c_origin=c_origin)
+                   c_origin=c_origin, start_ns=int(epoch_ns(utc_index(raw["ts_utc"]))[0]))
 
 
 # ------------------------------------------------------------------------------------------------ the book
@@ -353,8 +370,9 @@ def zones_asof(bars_1m: pd.DataFrame, t: pd.Timestamp | str) -> KeyZones:
     z = _book(inp, k, _active_at(inp, int(inp.grid_vis[k])))
     price = float(inp.base_close[-1])
     as_of = pd.Timestamp(int(inp.grid_vis[k]), unit="ns", tz="UTC")
+    days = (int(inp.grid_vis[k]) - inp.start_ns) / DAY_NS
     if z is None:
-        return KeyZones(as_of=as_of, price=price, atr_1d=None, zones=())
+        return KeyZones(as_of=as_of, price=price, atr_1d=None, zones=(), history_days=days)
     pct = pool.pct(z.strength)
     zones = []
     for i in range(len(z.price)):
@@ -364,7 +382,8 @@ def zones_asof(bars_1m: pd.DataFrame, t: pd.Timestamp | str) -> KeyZones:
                              strength=float(z.strength[i]),
                              strength_pct=None if np.isnan(pct[i]) else float(pct[i]), tfs=tf_names(b),
                              top_tf=_top_tf(b), touches=int(z.touches[i]), role=role, flipped=flipped))
-    return KeyZones(as_of=as_of, price=price, atr_1d=float(inp.atr_1d[k]), zones=tuple(zones))
+    return KeyZones(as_of=as_of, price=price, atr_1d=float(inp.atr_1d[k]), zones=tuple(zones), history_days=days,
+                    pct_ready=pool.sorted is not None)
 
 
 FRAME_SIDES = ("sup", "res")
@@ -382,8 +401,9 @@ def key_level_frame(bars: pd.DataFrame, *, min_strength_pct: float = 0.0, min_tf
                     at: pd.Series | pd.DatetimeIndex | None = None) -> pd.DataFrame:
     """Per input bar (or per time in `at`): the nearest zone above the close (`res_*`) and at or below it (`sup_*`)
     among the zones LevelFilter(min_strength_pct, min_tf) keeps: price, lo, hi, strength_pct, tfs (TF_BIT mask),
-    distance in ATR(14, 1d) (>= 0 both sides); `atr_1d`; `close`; `available_utc` = the bar's close (or the `at`
-    time), the key to join it asof. NaN where no such zone exists."""
+    distance in ATR(14, 1d) (>= 0 both sides); `atr_1d`; `close`; `pct_ready` (strength_pct has its PCT_MIN_DAYS
+    of samples); `book_mature` (MATURE_DAYS of input history: every swing a full history would hold is in the book);
+    `available_utc` = the bar's close (or the `at` time), the key to join it asof. NaN where no such zone exists."""
     f = LevelFilter(min_strength_pct, min_tf)
     return key_level_frames(bars, [f], at=at)[f]
 
@@ -396,7 +416,7 @@ def key_level_frames(bars: pd.DataFrame, filters: list[LevelFilter],
     raw = _raw(bars)
     base_vis = epoch_ns(utc_index(raw["visible_at"]))
     if at is None:
-        times, index = pd.DatetimeIndex(raw["visible_at"]), bars.index
+        times, index = pd.DatetimeIndex(raw["visible_at"]), bars.index[raw.attrs["kept"]]
     else:
         times = utc_index(pd.Series(at))
         index = pd.RangeIndex(len(times))
@@ -405,22 +425,32 @@ def key_level_frames(bars: pd.DataFrame, filters: list[LevelFilter],
     outs = {f: {f"{s}_{x}": (np.zeros(n, dtype=np.int64) if x == "tfs" else np.full(n, np.nan))
                 for s in FRAME_SIDES for x in FRAME_FIELDS} for f in dict.fromkeys(filters)}
     atr_col, close = np.full(n, np.nan), np.full(n, np.nan)
+    ready, mature = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
     if n and len(raw):
         inp = _inputs(raw)
         src = np.searchsorted(base_vis, row_vis, side="right") - 1              # the last input bar visible then
         close = np.where(src >= 0, inp.base_close[np.clip(src, 0, None)], np.nan)
-        _fill_frames(inp, row_vis, close, outs, atr_col)
+        _fill_frames(inp, row_vis, close, outs, atr_col, ready)
+        mature = row_vis - inp.start_ns >= MATURE_DAYS * DAY_NS
     res = {}
     for f, out in outs.items():
         cols: dict[str, object] = {"ts_utc": raw["ts_utc"].to_numpy()} if at is None else {}
-        frame = pd.DataFrame({**cols, "available_utc": times, **out, "atr_1d": atr_col, "close": close})
+        frame = pd.DataFrame({**cols, "available_utc": times, **out, "atr_1d": atr_col, "close": close,
+                              "pct_ready": ready, "book_mature": mature})
         frame.index = index
+        if at is None and len(index) < len(bars):            # a dropped (corrected) bar's row: no zone, not ready
+            frame = frame.reindex(bars.index)
+            frame["available_utc"] = utc_index(bars["visible_at"]) if "visible_at" in bars else frame["available_utc"]
+            for c in ("pct_ready", "book_mature"):
+                frame[c] = frame[c].eq(True)
+            for c in ("sup_tfs", "res_tfs"):
+                frame[c] = frame[c].fillna(0).astype(np.int64)
         res[f] = frame
     return res
 
 
 def _fill_frames(inp: _Inputs, row_vis: np.ndarray, row_close: np.ndarray,
-                 outs: dict[LevelFilter, dict[str, np.ndarray]], atr_col: np.ndarray) -> None:
+                 outs: dict[LevelFilter, dict[str, np.ndarray]], atr_col: np.ndarray, ready: np.ndarray) -> None:
     ev = np.searchsorted(inp.grid_vis, row_vis, side="right") - 1          # each row's evaluation (rows sorted)
     bounds = np.searchsorted(ev, np.arange(len(inp.grid_vis) + 1), side="left")
     first = _first_of_day(inp.grid_vis)
@@ -448,6 +478,7 @@ def _fill_frames(inp: _Inputs, row_vis: np.ndarray, row_close: np.ndarray,
             continue
         a = inp.atr_1d[k]
         atr_col[r0:r1] = a
+        ready[r0:r1] = pool.sorted is not None
         x = row_close[r0:r1]
         rows = np.arange(r0, r1)
         top = _TOP_RANK[z.bits & _TF_MASK]

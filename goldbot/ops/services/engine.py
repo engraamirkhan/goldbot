@@ -478,6 +478,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                                    timeout_s=broker_bars.FETCH_TIMEOUT_S)
         bars_client.read_attempts = 1
         eng.broker_m1.fetcher = broker_bars.Fetcher(bars_client)
+        # the key zones' long M15 history (engine/key_zones.py): its own client and thread, paged pulls, display only
+        eng.key_zone_worker.client = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-levels",
+                                                  timeout_s=60.0)
         # entry orders (engine/order_send.py) on their own thread and client, with this account's order timeout, so a
         # slow fill neither stalls the tick thread nor raises as a tick error
         eng.order_sender = order_send.bridge_sender(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-orders",

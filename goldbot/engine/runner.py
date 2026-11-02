@@ -328,6 +328,10 @@ class Engine:
                                   account_disabled=cfg.wind_down)
         self.decisions: list[dict] = []
         self.store = Store(cfg.data_root) if cfg.data_root else None
+        # the key zones' long history and background build (engine/key_zones.py); its bridge client is set by
+        # goldbot/ops/services/engine.py. Display only.
+        self.key_zone_worker = key_zones.KeyZoneWorker(cfg.account_id, cfg.symbol, store=self.store)
+        self.key_zones_errors: set[str] = set()     # exception types already logged with their traceback
         self._tick_log: list[Tick] = []
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)

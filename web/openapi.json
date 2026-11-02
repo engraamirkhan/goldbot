@@ -101,6 +101,11 @@
       ],
       "title": "History Days"
      },
+     "pct_ready": {
+      "default": false,
+      "title": "Pct Ready",
+      "type": "boolean"
+     },
      "price": {
       "anyOf": [
        {
@@ -111,6 +116,22 @@
        }
       ],
       "title": "Price"
+     },
+     "stale": {
+      "default": false,
+      "title": "Stale",
+      "type": "boolean"
+     },
+     "zones_total": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Zones Total"
      }
     },
     "required": [

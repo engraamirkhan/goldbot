@@ -1085,8 +1085,20 @@ export interface components {
             below: components["schemas"]["KeyLevelZone"][];
             /** History Days */
             history_days: number | null;
+            /**
+             * Pct Ready
+             * @default false
+             */
+            pct_ready: boolean;
             /** Price */
             price: number | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Zones Total */
+            zones_total?: number | null;
         };
         /** AccountSummary */
         AccountSummary: {
