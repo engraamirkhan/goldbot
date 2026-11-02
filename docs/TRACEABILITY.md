@@ -22,8 +22,8 @@ Status values:
 | partial | 19 |
 | missing | 2 |
 | deviates | 16 |
-| in review | 16 |
-| **total** | **321** |
+| in review | 17 |
+| **total** | **322** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -365,6 +365,7 @@ tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stag
 | X25 | Incident 2026-11-02: the bridge logs every call holding the terminal over 2 s (method, seconds, requests waiting) and reports lock_wait_s and slow_calls on GET /health (optional, the whole body within the root probe's 1024 bytes); bridge_compat:<account> WARNs on a contended terminal from the same GET | in review (trading-safety, security, sre; PR | goldbot/execution/bridge.py `make_handler` (`let_go`, `lock_figures`, SLOW_HOLD_S, LOCK_WAIT_WINDOW_S, LOCK_WAIT_CAP_S); goldbot/ops/bridge_compat.py BridgeInfo, `contention`; goldbot/ops/checks/bridge.py `check_bridge_compat` | tests/test_bridge_slow_calls.py |
 | X26 | Incident 2026-11-02: engine start makes no blocking non-gold trading_sessions call; a book uses its table cached in the last 24 h (instruments.db, only from bridge protocol v11, rows without the marker ignored) or its static profile; reads run one at a time after the loop starts, a read past twice its timeout no longer holds the others; observed hours from 8 complete days | in review (trading-safety, sre; PR | goldbot/engine/session_cache.py (`CachedSessions`, `SessionStagger`); goldbot/ops/services/engine.py `book_sessions`, `_run_engine`; goldbot/engine/instruments_db.py `save_sessions`, `load_sessions`; goldbot/db/migrations.py INSTRUMENTS v2; goldbot/execution/mt5_adapter.py OBSERVE_DAYS | tests/test_session_cache.py |
 | X27 | Incident 2026-11-02: a mode 2/3 swap is priced only where its unit is known (the profit currency as is; the base currency x price for fx and metal pairs only); any other swap stays unknown and refuses entries, shown as "swap not priced: entries refused, exits still close" on the engine report, API, dashboard and health | in review (trading-safety, quant; PR | goldbot/engine/instruments_db.py `swap_per_lot`, `terms_from_info`; goldbot/engine/books.py `refresh_terms`, `_symbol_state`, STATE_TEXT; goldbot/ops/checks/engine.py SYMBOL_WARN_WORDS; goldbot/api/schema.py InstrumentState; web/src/screens/EntrySymbols.tsx | tests/test_instruments_db.py::test_the_base_currency_times_price_rule_is_for_fx_and_metal_pairs_only; ::test_swap_in_the_profit_currency_is_converted_for_index_cfds; tests/test_swap_unknown_state.py; web/src/screens/MultiInstrument.test.tsx |
+| X28 | Live demo issue 2026-11-02: each enabled non-gold book warms up at engine start from the broker's 1m history (get_bars_range), one book per pass in the background, paced (1 day a page, 1 s apart, 60 s a turn, one attempt with a 20 s timeout, one pull per MT5 box), only the gap to its stored minutes, on its own sessions and point in time, stored in bars_1m_live (account, store_symbol); until it holds the larger of 400 bars, a full decision frame and its arms' longest lookback it takes no entry; exits are never gated; a failed page is retried after 120 s and never raises into the pass; gold is never pulled | in review (trading-safety; PR fix/book-history-backfill) | goldbot/engine/book_backfill.py; goldbot/engine/books.py `warming`, SymbolBook.warm, `published` warm_up; goldbot/engine/runner.py `on_bar_close`; goldbot/engine/exploration.py `on_pass`; goldbot/ops/services/engine.py | tests/test_book_backfill.py; tests/test_mi_xauusd_replay_golden.py |
 
 ## Phases, accounts and credentials [Demo first, live by gate; Logins and credentials]
 

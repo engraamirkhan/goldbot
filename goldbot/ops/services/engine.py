@@ -466,7 +466,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     import pandas as pd
 
     from goldbot.config import load_settings
-    from goldbot.engine import Engine, EngineConfig, broker_bars, exploration, order_send
+    from goldbot.engine import Engine, EngineConfig, book_backfill, broker_bars, exploration, order_send
     from goldbot.execution.costs import settings_swap
     from goldbot.instruments import GOLD
     from goldbot.ops import accounts
@@ -643,6 +643,11 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         bars_client.read_attempts = 1
         eng.broker_m1.fetcher = broker_bars.Fetcher(bars_client)
         attach_levels(eng, acc, bridge, Path(eng.cfg.state_dir))
+        if len(eng.books) > 1:             # the non-gold books' warm-up (engine/book_backfill.py): own client
+            from goldbot.engine import key_zones
+            book_backfill.attach(eng, book_backfill.client(bridge[0], bridge[1], account_id),
+                                 box=key_zones.box_key(bridge[0], getattr(acc, "box", None)),
+                                 lock_dir=Path(eng.cfg.state_dir) / "locks")
         # entry orders (engine/order_send.py) on their own thread and client, with this account's order timeout, so a
         # slow fill neither stalls the tick thread nor raises as a tick error
         eng.order_sender = order_send.bridge_sender(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-orders",
@@ -666,6 +671,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
             resolve(engine_pass)(eng, broker, acc.symbol)
         else:                                      # every book in turn, one thread: the serial gate (engine/books.py)
             books.account_pass(eng, broker, resolve(engine_pass), feed)
+            book_backfill.step(eng)            # one book's history warm-up at a time; never raises
         try:                                       # D13: a finished background read is applied; the loop never waits
             table = refresher.collect(pd.Timestamp.now("UTC"), eng.sessions)
             if table is not None:

@@ -170,6 +170,8 @@ class SymbolBook:
         self.entry_sessions: Any = None   # E3: the profile-narrowed table entries are judged on (`set_sessions`)
         # (host-clock time, answer or failure) of the last symbol_info read (`symbol_info`, non-gold books)
         self.symbol_read: tuple[float, SymbolInfo | BaseException] | None = None
+        # False while a non-gold book waits for its history backfill (engine/book_backfill.py): no entry until then
+        self.warm = True
 
     def __repr__(self) -> str:
         return f"SymbolBook({self.__dict__['cfg'].symbol!r}, primary={self.primary})"
@@ -207,6 +209,12 @@ def problem(book: SymbolBook) -> str | None:
     """Why the book takes no entry now (its `BookSpec.blocked`, else its instruments.db terms), or None."""
     blocked = book.spec.blocked if book.spec is not None else None
     return blocked or book.terms_problem
+
+
+def warming(eng: Engine) -> bool:
+    """True while the active book waits for its warm-up from the broker's history (engine/book_backfill.py): it
+    decides nothing and takes no entry; its exits never read this. Gold is always warm."""
+    return not eng.__dict__["book"].warm
 
 
 def multi(eng: Engine) -> bool:
@@ -974,6 +982,8 @@ def published(eng: Engine) -> dict[str, Any]:
                     "last_tick_utc": last.ts_utc.isoformat() if last is not None else None,
                     "open": sorted(d.get("open", {})), "closes_due": sorted(d.get("_close_due", {})),
                     "foreign_positions": d.get("_foreign", []), "terms_problem": problem(b),
+                    "warm_up": (eng.__dict__["_book_backfill"].status.get(sym, {"warm": b.warm})
+                                if "_book_backfill" in eng.__dict__ else {"warm": b.warm}),
                     **{k: s.get(k) for k in ("spread_points", "last_tick_age_s", "market_closed", "stale_bars",
                                              "dq_error", "in_blackout", "weekend")}}
         state = _symbol_state(eng, b, s)
