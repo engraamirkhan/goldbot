@@ -680,7 +680,8 @@ def simulate(m: Market, cands: list[Cand], hi_ns: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def control(m: Market, tr: pd.DataFrame, costs: A.ArmCosts, rng: np.random.Generator, hi_ns: int) -> np.ndarray:
+def control(m: Market, tr: pd.DataFrame, costs: A.ArmCosts, rng: np.random.Generator, hi_ns: int,
+            leak_free: bool = False) -> np.ndarray:
     """Per trade: the mean net R of N_DRAWS random entries in the same session instance (same side, stop, target R,
     hold length, cost rules). A draw whose exit is missing or reaches the window end is redrawn (up to 20 tries each)."""
     rows: list[tuple[int, int, int, float, float, float, bool, int, int]] = []
@@ -689,12 +690,21 @@ def control(m: Market, tr: pd.DataFrame, costs: A.ArmCosts, rng: np.random.Gener
     tgt_a = pd.to_numeric(tr["target_usd"], errors="coerce").to_numpy(float)
     for j in range(len(tr)):
         lo, hi = int(m.sess_lo[k_a[j]]), int(m.sess_hi[k_a[j]])
+        if leak_free:
+            lo = int(k_a[j])          # amendment A1: draws at or after the signal's entry minute only
         tgt = float(tgt_a[j]) if np.isfinite(tgt_a[j]) else None
         side, stop_usd, hold = int(side_a[j]), float(stop_a[j]), int(hold_a[j])
         got, tries = 0, 0
         while got < N_DRAWS and tries < N_DRAWS * 20:
             tries += 1
-            kk = int(rng.integers(lo, hi))
+            if hi - lo >= 2:
+                kk = int(rng.integers(lo, hi))
+            else:                     # A1 fallback: the same UTC time of day on another day within +-30 days
+                off = int(rng.integers(1, 31)) * (1 if rng.random() < 0.5 else -1)
+                kq = m.entry_k(int(m.ts[k_a[j]]) + off * 24 * HOUR)
+                if kq is None or m.ts[kq] - m.ts[k_a[j]] - off * 24 * HOUR != 0:
+                    continue
+                kk = kq
             e = float(m.o[kk])
             w = walk(m, kk, e, side, stop_usd, tgt, int(m.ts[kk]) + hold)
             if w is None or w[2] >= hi_ns:
@@ -751,7 +761,8 @@ def run_one(args: tuple[str, str, str]) -> dict[str, Any]:
     _, stress = cost_net(*args_c, overshoot=A.OVERSHOOT_STRESS_USD)
     tr["gross_r"], tr["net_r"], tr["net_r_stress"] = gross, net, stress
     rng = np.random.default_rng([SEED, int(sid), 0 if phase == "explore" else 1])
-    tr["control_r"] = control(m, tr, costs, rng, hi_ns)
+    tr["control_r"] = control(m, tr, costs, rng, hi_ns)                       # as pre-registered (reported)
+    tr["control_lf_r"] = control(m, tr, costs, rng, hi_ns, leak_free=True)     # amendment A1: the gate's control
     t, n_days = day_t(net, tr["entry_ns"].to_numpy(np.int64))
     years = pd.to_datetime(tr["entry_ns"], utc=True).dt.year
     by_year = tr.groupby(years)["net_r"].mean()
@@ -762,11 +773,13 @@ def run_one(args: tuple[str, str, str]) -> dict[str, Any]:
                                   .sum().to_numpy()).t(),
         "control_mean_r": float(np.nanmean(tr["control_r"])),
         "vs_control_r": float(np.mean(net) - np.nanmean(tr["control_r"])),
+        "control_lf_mean_r": float(np.nanmean(tr["control_lf_r"])),
+        "vs_control_lf_r": float(np.mean(net) - np.nanmean(tr["control_lf_r"])),
         "stop_share": float((tr["kind"] == "stop").mean()), "mean_stop_usd": float(tr["stop_usd"].mean()),
         "years": dict(zip(by_year.index.to_numpy(int).tolist(), by_year.to_numpy(float).tolist(), strict=True)),
         "years_positive": int((by_year > 0).sum()), "n_years": len(by_year)})
     if phase == "explore":
-        res["pass"] = bool(len(tr) >= 100 and res["net_mean_r"] > 0 and t >= 2.0 and res["vs_control_r"] >= 0.05)
+        res["pass"] = bool(len(tr) >= 100 and res["net_mean_r"] > 0 and t >= 2.0 and res["vs_control_lf_r"] >= 0.05)
     else:
         entry_utc = pd.DatetimeIndex(pd.to_datetime(tr["entry_ns"], utc=True))
         dsr = day_summed_dsr(net, entry_utc, K_PLANNED)

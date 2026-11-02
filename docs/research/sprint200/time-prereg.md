@@ -128,3 +128,13 @@ Report every strategy, losers beside winners: explore n, gross and net mean R, t
 stress net; confirm n, net R, t, DSR at K 3,229 and 5,000, years positive. A survivor is a strategy that passes both.
 Survivors only: rule code `goldbot/research/arm_rules_sprint200_time.py`, a unit test on a fixed bar fixture, and an
 append-only exploration arm entry with its paired random control and qualification record.
+
+## Amendment A1 (2026-11-02, before any data was read for this lane): leak-free control
+
+Coordinator ruling for all lanes: a same-day control draw that falls before the signal takes its side from that day's
+later move (look-ahead), which inflates the control for momentum rules and deflates it for fades. The explore gate
+"beats the control by >= 0.05 R" now uses the **leak-free control**: the same 5 draws per trade, but entry minutes
+uniform over the session instance's bars **at or after the strategy's entry minute** (same day, session, side, stop,
+target R, hold, cost rules); if fewer than 2 such bars exist, the draw takes the same UTC time of day on another day
+within +-30 days (a random offset, redrawn if that minute has no bar). The pre-registered same-session control is still
+computed and reported beside it. Nothing else changes. This corrects the null; no strategy parameter moved.
