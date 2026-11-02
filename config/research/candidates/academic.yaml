@@ -1,0 +1,3186 @@
+# Rethink lane ACADEMIC: mechanical strategy/signal candidates for XAUUSD from peer-reviewed and working-paper
+# literature, practitioner books and fund notes, plus commodity/FX/futures anomalies that plausibly port to gold.
+# Companion: docs/research/rethink/academic.md (diagnosis, ranking, pre-registration drafts, sources).
+#
+# Integrity: written from sources and from published EXPLORE-window (2010-2017) numbers of earlier lanes only.
+# No price, outcome or holdout data was read to write this file. K added by this file: 0 (nothing was run).
+# Holdout (>= 2025-10-01) sealed. Every candidate that is later screened counts in K whether it fires or not.
+#
+# Field legend
+#   grade: peer-reviewed | practitioner-documented | folklore | own-data   ("(unverified)" in `source` = cited
+#          from memory, not fetched in this lane; treat as a lead, not as evidence)
+#   reported: effect as published, sample, instrument; net = source charges realistic costs, gross = it does not
+#   s3k: sprint3000 vocabulary mapping (docs/research/sprint3000/prereg.md) or "needs primitive: <id>"
+#   data: local (gold 1m 2010+, FRED macro-v1, COT/GLD positioning-v1, US calendar 2010+, XAG/EURUSD/USDJPY 1m
+#         2010-2017) | free (named public source) | paid
+#   tested: no | partial (<what covered it>) | yes (<row, result>)
+#   priority: A = pre-register as a single trial now | B = screen inside one bulk family trial |
+#             C = feature only / low prior | X = do not test (already failed, retired, contradicted or untradeable)
+#
+# Primitives referenced (definitions in academic.md section 5)
+#   CP    continuous vol-targeted position: daily forecast in [-20, +20], position = clip(f/10, -2, 2) x 10% / sigma_ann
+#         (EWMA 35-day span of daily close-to-close returns), decision on the 21:00 UTC daily close, fill at the first
+#         1m open after 23:00 UTC, 10% no-trade buffer, P&L = position x return - |trade| x RT bps - swap by side per
+#         night held; read as annual SR on daily P&L (t = SR x sqrt(years)) against CP-HOLD and a sign-randomised twin
+#   XS    external daily series as-of joined on available_utc (FRED, GPR, EPU, FX, equity, commodity closes)
+#   CAL   calendar window (month, turn of month, FOMC cycle week, festival dates) with entry/exit at fixed clocks
+#   EVT   threshold event on a daily series -> trade with wide ATR(20,1d) stop and fixed time exit (> 20 bars allowed)
+#   W1    weekly bars (Friday 21:00 UTC close)
+#   PAIR  two tradable legs (needs a second instrument: owner decision)
+#   CURVE COMEX GC term structure (front/second contract settlements)
+#   ML    a fitted model (fold-internal fitting only)
+lane: academic
+version: 1
+date: "2026-11-02"
+author: "strategy-researcher (principal), rethink lane academic"
+k_added: 0
+holdout: "sealed; nothing at or after 2025-10-01 read"
+candidates:
+
+# ---------------------------------------------------------------------------------------------------------------
+# A. Time-series momentum and trend following at the literature's horizon (weeks to months, vol-scaled, no tight stop)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-001
+    name: "TSMOM 12-month, vol-scaled (Moskowitz-Ooi-Pedersen)"
+    family: trend
+    source: "Moskowitz, Ooi, Pedersen 2012, JFE 104(2) 228-250 (unverified DOI)"
+    grade: peer-reviewed
+    reported: "12-month lookback, 1-month hold: positive in all 58 futures incl. gold; diversified Sharpe about 1.0-1.2; 1965-2009; gross of costs. Per-asset gold Sharpe not fetched (figure only)"
+    mechanism: "Initial under-reaction and later over-reaction of investors; hedging-pressure flows; slow diffusion of macro information"
+    tf: "1d data, monthly rebalance"
+    rule:
+      entry: "Last trading day of month: forecast = +10 if 252-day return > 0, -10 if < 0"
+      side: "signal (long and short)"
+      stop: "none (risk set by vol scaling)"
+      exit: "next monthly rebalance"
+      hold: "1 month, rolled while the sign persists"
+    s3k: "needs primitive: CP (s3k 1d momentum_sign(250) caps hold at 20 bars with 1-2 ATR stops, a different strategy)"
+    data: local
+    tested: "partial (H-01 trial #48: 1d vol-scaled 1-12m signal on ATR barriers with 5-20-day holds, 294 events, gross +0.166 R t 2.04, net +0.002 R, inconclusive; R-06/R-10 tsmom 1h/4h failed). Never tested as a continuous monthly position"
+    priority: B
+  - id: RT-ACADEMIC-002
+    name: "TSMOM 1-month lookback, weekly rebalance"
+    family: trend
+    source: "Moskowitz, Ooi, Pedersen 2012 (unverified); Hurst, Ooi, Pedersen 2013 J. Investment Management 'Demystifying managed futures' (unverified)"
+    grade: peer-reviewed
+    reported: "1-month signals positive but weaker than 12-month across 58 futures, 1985-2009, gross"
+    mechanism: "As 001 at a faster speed; earlier entry into new trends, more turnover"
+    tf: "1d data, weekly rebalance"
+    rule:
+      entry: "Friday close: forecast = 10 x sign(21-day return)"
+      side: signal
+      stop: none
+      exit: "next weekly rebalance"
+      hold: "1 week, rolled"
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no (s3k 1d momentum_sign(24) is the trade-form cousin with <= 20-bar hold, pending)"
+    priority: C
+  - id: RT-ACADEMIC-003
+    name: "TSMOM 3-month lookback"
+    family: trend
+    source: "Hurst, Ooi, Pedersen 2013 (unverified)"
+    grade: peer-reviewed
+    reported: "1/3/12-month TSMOM each positive across 58 futures 1985-2012; blend Sharpe > any single; gross"
+    mechanism: "As 001"
+    tf: "1d data, weekly rebalance"
+    rule:
+      entry: "Friday close: forecast = 10 x sign(63-day return)"
+      side: signal
+      stop: none
+      exit: "next weekly rebalance"
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-004
+    name: "TSMOM 6-month lookback"
+    family: trend
+    source: "Moskowitz, Ooi, Pedersen 2012 (unverified)"
+    grade: peer-reviewed
+    reported: "Positive t-stats for 1-12 month lookbacks and 1-12 month holds across the panel; gross"
+    mechanism: "As 001"
+    tf: "1d data, monthly rebalance"
+    rule:
+      entry: "Month end: forecast = 10 x sign(126-day return)"
+      side: signal
+      stop: none
+      exit: "next monthly rebalance"
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-005
+    name: "TSMOM 12-1 (skip the most recent month)"
+    family: trend
+    source: "Moskowitz, Ooi, Pedersen 2012 robustness (unverified); Jegadeesh-Titman convention"
+    grade: peer-reviewed
+    reported: "Skipping the last month changes little for futures TSMOM; gross"
+    mechanism: "Removes short-term reversal contamination from the trend signal"
+    tf: "1d data, monthly"
+    rule:
+      entry: "Month end: forecast = 10 x sign(return from t-252 to t-21)"
+      side: signal
+      stop: none
+      exit: "next rebalance"
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-006
+    name: "1/3/12-month blended TSMOM (AQR managed-futures replication)"
+    family: trend
+    source: "Hurst, Ooi, Pedersen 2017 JPM 'A century of evidence on trend-following investing' https://www.aqr.com/Insights/Research/Journal-Article/A-Century-of-Evidence-on-Trend-Following-Investing"
+    grade: peer-reviewed
+    reported: "Equal-weight 1/3/12-month TSMOM, 67 markets 1880-2016: positive every decade, net of estimated fees and costs (metals about 58 bp one way early on)"
+    mechanism: "As 001; blending speeds diversifies turning-point risk"
+    tf: "1d data, weekly rebalance"
+    rule:
+      entry: "Friday close: forecast = 10 x mean(sign r21, sign r63, sign r252) x 1.3 (scaled so mean |f| ~ 10)"
+      side: signal
+      stop: none
+      exit: "next rebalance"
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no (H-01 used a different trade-form signal)"
+    priority: B
+  - id: RT-ACADEMIC-007
+    name: "Trend t-statistic signal with Yang-Zhang vol (Baltas-Kosowski)"
+    family: trend
+    source: "Baltas, Kosowski, SSRN 2140091 https://papers.ssrn.com/abstract=2140091"
+    grade: peer-reviewed
+    reported: "t-stat-of-slope trend signal plus Yang-Zhang volatility cut turnover by more than a third without significant return loss; futures 1974/84-2013; net of a roll and rebalance cost model"
+    mechanism: "Continuous signal strength avoids whipsaw at zero crossings; better vol estimate lowers turnover"
+    tf: "1d, weekly rebalance"
+    rule:
+      entry: "Friday: t = OLS slope t-stat of log close on time over 252 days; forecast = 10 x clip(t/2, -2, 2); sigma = Yang-Zhang 60-day"
+      side: signal
+      stop: none
+      exit: rebalance
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-008
+    name: "EMA-deviation trend signal (Lemperiere et al., two centuries)"
+    family: trend
+    source: "Lemperiere, Deremble, Seager, Potters, Bouchaud 2014, J. Investment Strategies; arXiv 1404.3274 https://arxiv.org/abs/1404.3274"
+    grade: peer-reviewed
+    reported: "Trend t-stat about 5 since 1960 (futures) and about 10 since 1800 after removing drift; stable across asset classes and time; gross"
+    mechanism: "As 001"
+    tf: "1d, daily signal"
+    rule:
+      entry: "s = (close - EMA(close, 100 days)) / sigma_100d of price changes; forecast = 10 x clip(s, -2, 2)"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-009
+    name: "EWMAC 8/32 (Carver)"
+    family: trend
+    source: "Carver 2015 'Systematic Trading' and 2023 'Advanced Futures Trading Strategies', Harriman House (rule set and forecast scalars, unverified page refs)"
+    grade: practitioner-documented
+    reported: "EWMAC variants positive across ~100 futures over decades; faster speeds hurt most by costs; gross and net reported in book (unverified)"
+    mechanism: "As 001 (Levine and Pedersen 2016 FAJ 72(3) show MA crossovers and TSMOM are equivalent linear filters)"
+    tf: "1d"
+    rule:
+      entry: "raw = EWMA(8) - EWMA(32) of close; f = raw / sigma_price(25d) x scalar (Carver 5.3), cap +-20"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP (s3k ma_cross is a binary trade form)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-010
+    name: "EWMAC 16/64"
+    family: trend
+    source: "Carver 2015/2023 (unverified page refs)"
+    grade: practitioner-documented
+    reported: "As 009"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "f = (EWMA16 - EWMA64)/sigma_price x scalar (3.75), cap +-20"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-011
+    name: "EWMAC 32/128"
+    family: trend
+    source: "Carver 2015/2023 (unverified page refs)"
+    grade: practitioner-documented
+    reported: "As 009"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "f = (EWMA32 - EWMA128)/sigma_price x scalar (2.65), cap +-20"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-012
+    name: "EWMAC 64/256"
+    family: trend
+    source: "Carver 2015/2023 (unverified page refs)"
+    grade: practitioner-documented
+    reported: "As 009; slowest speeds have the best net Sharpe after costs in the book's tables (unverified)"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "f = (EWMA64 - EWMA256)/sigma_price x scalar (1.91), cap +-20"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-013
+    name: "Multi-speed EWMAC ensemble (16/64, 32/128, 64/256 equal weight, FDM)"
+    family: trend
+    source: "Carver 2015/2023 (unverified page refs); Hurst-Ooi-Pedersen 2017; Levine-Pedersen 2016 FAJ 72(3) 51-66"
+    grade: peer-reviewed
+    reported: "Blending speeds raises Sharpe over single speeds across the futures panel; slow trend is the replicated premium (R); gross and net"
+    mechanism: "Slow diffusion of information and hedging flows; the one trend horizon the literature supports for small-tick contracts (Kurth et al. 2026 arXiv 2607.01550 find short-term trend gone since 2009)"
+    tf: "1d"
+    rule:
+      entry: "f = FDM x mean(f_16/64, f_32/128, f_64/256), FDM fixed at 1.1 ex ante, cap +-20; CP sizing at 10% vol"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: "continuous; expected average holding period 6-12 weeks"
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no (H-01 was a single trade-form signal; sprint3000 1d holds <= 20 bars)"
+    priority: A
+  - id: RT-ACADEMIC-014
+    name: "Carver breakout ensemble (40/80/160/320-day range position)"
+    family: trend
+    source: "Carver 2015 'Systematic Trading' breakout rule; 2023 AFTS (unverified page refs)"
+    grade: practitioner-documented
+    reported: "Breakout forecasts correlate ~0.8-0.9 with EWMAC and add a little diversification; positive across futures; gross and net (unverified)"
+    mechanism: "As 001; channel position is a nonlinear trend filter"
+    tf: "1d"
+    rule:
+      entry: "for N in {40,80,160,320}: x = (close - (maxN+minN)/2)/(maxN-minN); f_N = 40 x EWMA(x, span N/4); f = mean f_N, cap +-20"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP (s3k donchian_break is a trade-form entry)"
+    data: local
+    tested: "partial (Donchian trade forms at 1h/4h in sprint200 trend: H1-DON48-D1 passed explore, failed confirm; never as a continuous slow ensemble)"
+    priority: B
+  - id: RT-ACADEMIC-015
+    name: "Trend ensemble: EWMAC (013) + breakout (014), one pre-registered forecast"
+    family: trend
+    source: "Carver 2015/2023 (unverified); Hurst-Ooi-Pedersen 2017; Babu, Levine, Ooi, Pedersen, Stamelos 2020 J. Investment Management 18(1) 52-68 'Trends everywhere'"
+    grade: peer-reviewed
+    reported: "Trend replicates out of sample on 82 new securities and 16 factors (Babu et al. 2020); diversified net Sharpe ~0.7-1.0 historically; single-asset Sharpe typically 0.2-0.5 (Huang, Li, Wang, Zhou 2020 JFE 135(3): single-asset predictability is weak)"
+    mechanism: "As 013"
+    tf: "1d"
+    rule:
+      entry: "f = 1.15 x (0.6 x f_013 + 0.4 x f_014), cap +-20; CP at 10% vol"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: A
+  - id: RT-ACADEMIC-016
+    name: "Trend acceleration (change in EWMAC forecast)"
+    family: trend
+    source: "Carver 2023 'Advanced Futures Trading Strategies' acceleration strategy (unverified)"
+    grade: practitioner-documented
+    reported: "Small positive standalone Sharpe in the book's futures panel, mostly diversification (unverified)"
+    mechanism: "Second derivative catches trend starts earlier than the level of the trend"
+    tf: "1d"
+    rule:
+      entry: "f = f_EWMAC16/64(t) - f_EWMAC16/64(t-16), rescaled to mean |f| 10, cap +-20"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-017
+    name: "Slow/fast momentum states (Bull, Correction, Bear, Rebound)"
+    family: trend
+    source: "Goulding, Harvey, Mazzoleni 2023 JFE 'Momentum turning points' (earlier WP with Garg); CXO summary https://www.cxoadvisory.com/technical-trading/mitigating-impact-of-price-turning-points-on-trend-following/"
+    grade: peer-reviewed
+    reported: "Blending 12-month and 1-month signals by state improves modestly on static slow or fast TSMOM; global assets; gross"
+    mechanism: "Slow trend fails at turning points; the fast signal flags corrections and rebounds"
+    tf: "1d, monthly"
+    rule:
+      entry: "slow = sign r252, fast = sign r21; Bull/Bear (agree) -> f = 10 x slow; Correction/Rebound (disagree) -> f = 0"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-018
+    name: "Changepoint-scaled trend (slow momentum, fast reversion)"
+    family: trend
+    source: "Wood, Roberts, Zohren 2022 J. Financial Data Science; arXiv 2105.13727 https://arxiv.org/abs/2105.13727"
+    grade: peer-reviewed
+    reported: "Online changepoint score added to an LSTM momentum model: Sharpe +33% over 1995-2020 and about +67% in 2015-2020 on 50 futures; gross"
+    mechanism: "Regime breaks (corrections, rebounds) are where trend loses; a changepoint score cuts exposure there"
+    tf: "1d"
+    rule:
+      entry: "Simplified non-ML port: f = f_015 x (1 - cp), cp = CUSUM changepoint severity over 63 days rescaled to [0,1] (Page CUSUM on standardised returns, h = 5)"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + changepoint score"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-019
+    name: "10-month SMA timing, long or flat (Faber)"
+    family: trend
+    source: "Faber 2007 J. Wealth Management 'A quantitative approach to tactical asset allocation' (unverified)"
+    grade: peer-reviewed
+    reported: "Month-end price above 10-month SMA -> hold, else cash: lower drawdowns, similar returns for US stocks, bonds, REITs, GSCI 1973-2005; gross, low turnover (unverified)"
+    mechanism: "Trend filter avoids extended bear phases"
+    tf: "1d data, monthly"
+    rule:
+      entry: "Month-end close > SMA(10 month-end closes) -> long at CP vol target, else flat"
+      side: long_only
+      stop: none
+      exit: "month-end close below the SMA"
+      hold: months
+    s3k: "needs primitive: CP (monthly clock)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-020
+    name: "Absolute momentum vs T-bill (Antonacci)"
+    family: trend
+    source: "Antonacci 2014 'Dual Momentum Investing', McGraw-Hill (unverified)"
+    grade: practitioner-documented
+    reported: "Long an asset only when its 12-month return exceeds T-bills; cuts drawdowns; 1974-2013 multi-asset, gross (unverified)"
+    mechanism: "Excess-return trend; the cash hurdle is the CFD's financing cost made explicit"
+    tf: "1d data, monthly"
+    rule:
+      entry: "Month end: long if r252(gold) > cumulative DFF yield over 12 months, else flat"
+      side: long_only
+      stop: none
+      exit: monthly
+      hold: months
+    s3k: "needs primitive: CP + XS (DFF in macro-v1)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-021
+    name: "200-day SMA regime, long or flat"
+    family: trend
+    source: "Practitioner standard; Zakamulin 2017 'Market Timing with Moving Averages', Palgrave (unverified)"
+    grade: practitioner-documented
+    reported: "MA-200 timing reduces drawdowns in equity indices; weak once costs and snooping are counted (unverified)"
+    mechanism: "As 019"
+    tf: "1d"
+    rule:
+      entry: "Daily close > SMA200 -> long at CP vol target; else flat"
+      side: long_only
+      stop: none
+      exit: "close < SMA200"
+      hold: "weeks to months"
+    s3k: "approx: ma_cross(1,200,sma) 1d, but s3k caps hold at 20 bars -> needs primitive: CP"
+    data: local
+    tested: "partial (used as a filter: trend(1d, ema 200) in s3k and H-31 d1_sma200 side, never as the strategy)"
+    priority: C
+  - id: RT-ACADEMIC-022
+    name: "50/200 SMA cross, long and short"
+    family: trend
+    source: "Practitioner standard; Szakmary, Shen, Sharma 2010 JBF 34(2) 409-426 test dual MA crossovers on commodity futures https://ideas.repec.org/a/eee/jbfina/v34y2010i2p409-426.html"
+    grade: peer-reviewed
+    reported: "Dual MA crossover and channel rules profitable in most of 28 commodity futures 1959-2007 with ex-ante parameter choice (abstract-level; full text not fetched; net status unverified)"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "SMA50 crosses SMA200: side = sign(SMA50 - SMA200)"
+      side: signal
+      stop: "none; CP sizing"
+      exit: "opposite cross"
+      hold: months
+    s3k: "needs primitive: CP (ma_cross 1d exists only with <= 20-bar hold)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-023
+    name: "Clenow core trend model (50/100 EMA filter + 50-day breakout + 3 ATR trail)"
+    family: trend
+    source: "Clenow 2013 'Following the Trend', Wiley; rules as quoted by the author https://scan.stockcharts.com/discussion/comment/1456"
+    grade: practitioner-documented
+    reported: "Diversified futures backtest 1990-2011 with CTA-index-like returns; book reports net of costs (figures unverified)"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "Long if EMA50 > EMA100 and close = 50-day high; short if EMA50 < EMA100 and close = 50-day low"
+      side: signal
+      stop: "3 x ATR(100) trailing from the highest high (long) / lowest low (short) since entry"
+      exit: "trailing stop only"
+      hold: "weeks to months"
+    s3k: "approx: donchian_break(50) 1d + trend(1d, 100) + chandelier(100, 3); s3k caps hold at 20 -> needs max_hold >= 250"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-024
+    name: "Turtle System 1 (20-day breakout)"
+    family: trend
+    source: "Faith 2007 'Way of the Turtle', McGraw-Hill (unverified); Kaufman 2013 'Trading Systems and Methods' 5th ed. (unverified)"
+    grade: practitioner-documented
+    reported: "Profitable 1983-1988 for the Turtles across futures incl. gold; later decay reported by practitioners; net in trading records (unverified)"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "Buy-stop at 20-day high / sell-stop at 20-day low; skip if the previous System-1 breakout was a winner"
+      side: signal
+      stop: "2 x N (N = ATR20) from entry"
+      exit: "10-day opposite channel"
+      hold: "days to weeks"
+    s3k: "approx: donchian_break(20) 1d, stop atr_mult 2 on ATR20, exit needs 'opposite channel(10)'"
+    data: local
+    tested: "partial (Donchian at 1h/4h in sprint200 trend; s3k has 1d donchian_break(20) once with time(5))"
+    priority: B
+  - id: RT-ACADEMIC-025
+    name: "Turtle System 2 (55-day breakout)"
+    family: trend
+    source: "Faith 2007 (unverified)"
+    grade: practitioner-documented
+    reported: "As 024; slower, fewer whipsaws"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "Buy-stop at 55-day high / sell-stop at 55-day low"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "20-day opposite channel"
+      hold: "weeks to months"
+    s3k: "approx: donchian_break(55) 1d; needs exit 'opposite channel(20)' and max_hold >= 120"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-026
+    name: "Donchian 4-week rule, always in market"
+    family: trend
+    source: "Donchian (1960s), documented in Kaufman 2013 (unverified)"
+    grade: practitioner-documented
+    reported: "Classic stop-and-reverse channel; positive in long futures histories; gross (unverified)"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "Close above prior 20-day high -> long; below prior 20-day low -> short (reverse)"
+      side: signal
+      stop: "the opposite channel (stop and reverse)"
+      exit: "reverse only"
+      hold: "always in"
+    s3k: "approx: donchian_break(20) 1d + opposite_signal, needs unbounded max_hold"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-027
+    name: "Rolling ex-ante parameter selection of MA/channel rules (Szakmary protocol)"
+    family: trend
+    source: "Szakmary, Shen, Sharma 2010 JBF 34(2); contra Marshall, Cahan, Cahan 2008 JBF 32(9) 1810-1819 https://ideas.repec.org/a/eee/jbfina/v32y2008i9p1810-1819.html"
+    grade: peer-reviewed
+    reported: "Szakmary: rules chosen on prior data profitable out of sample in most commodities (abstract-level). Marshall: 7,846 rules, 15 commodities 1984-2005, data-snooping adjustment removes reliable profits in 14 of 15. Conflicting, S-grade both ways"
+    mechanism: "As 001; the protocol tests whether ex-ante selection survives"
+    tf: "1d"
+    rule:
+      entry: "Each January choose (fast, slow) from {(1,50),(5,100),(10,200),(20,250)} by prior-10-year net Sharpe; trade that crossover for the year"
+      side: signal
+      stop: none
+      exit: "opposite cross"
+      hold: "weeks to months"
+    s3k: "needs primitive: CP + annual walk-forward selector"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-028
+    name: "Kaufman adaptive moving average slope"
+    family: trend
+    source: "Kaufman 1995 'Smarter Trading'; Kaufman 2013 'Trading Systems and Methods' (unverified)"
+    grade: practitioner-documented
+    reported: "KAMA slows in noise and speeds in trends; book examples on futures; no out-of-sample significance tests"
+    mechanism: "Noise-adaptive smoothing reduces whipsaw cost"
+    tf: "1d"
+    rule:
+      entry: "KAMA(10, 2, 30) of close; long when KAMA rises > 0.25 x sigma_20(dKAMA) in 1 day, short when it falls by as much"
+      side: signal
+      stop: "2.5 x ATR20"
+      exit: "opposite KAMA turn"
+      hold: weeks
+    s3k: "needs primitive: kama entry"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-029
+    name: "Efficiency-ratio gated trend"
+    family: regime
+    source: "Kaufman 2013 (unverified)"
+    grade: practitioner-documented
+    reported: "ER = |net change| / sum |changes|; high ER marks trending regimes (book examples)"
+    mechanism: "Trade the trend only when the path is efficient; skip choppy regimes where trend pays costs"
+    tf: "1d"
+    rule:
+      entry: "CP forecast of 013 applied only when ER(60) > its 250-day median; else f = 0"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + ER filter (close to s3k adx_min)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-030
+    name: "Parabolic SAR stop-and-reverse, daily"
+    family: trend
+    source: "Wilder 1978 'New Concepts in Technical Trading Systems' (unverified)"
+    grade: folklore
+    reported: "Book examples only; no significance tests"
+    mechanism: "Accelerating trailing stop; trend capture"
+    tf: "1d"
+    rule:
+      entry: "SAR(0.02, 0.02, 0.20) flip"
+      side: signal
+      stop: "the SAR level"
+      exit: flip
+      hold: "always in"
+    s3k: "needs primitive: parabolic_sar entry (supertrend_flip is the nearest)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-031
+    name: "Supertrend(10, 3) daily, always in"
+    family: trend
+    source: "Practitioner indicator, no peer-reviewed test"
+    grade: folklore
+    reported: "None peer-reviewed; own: sprint200 SUPERTREND-1H explore gross +0.078 R (t 1.60), net -0.004"
+    mechanism: "ATR-band trend flip"
+    tf: "1d"
+    rule:
+      entry: "supertrend_flip(10, 3) on 1d"
+      side: signal
+      stop: "the supertrend line"
+      exit: "opposite flip"
+      hold: "always in"
+    s3k: "supertrend_flip(10,3) 1d + opposite_signal; needs max_hold > 20"
+    data: local
+    tested: "partial (1h failed explore, sprint200 trend 33)"
+    priority: C
+  - id: RT-ACADEMIC-032
+    name: "Regression slope t-stat breakout (trend quality)"
+    family: trend
+    source: "Baltas-Kosowski SSRN 2140091 t-stat signal; Lemperiere et al. 2014 trend-strength measures"
+    grade: peer-reviewed
+    reported: "See 007/008"
+    mechanism: "Only strong, statistically clean trends are traded"
+    tf: "1d"
+    rule:
+      entry: "t = slope t-stat of log close over 60 days; long when t crosses above +2.5, short when below -2.5"
+      side: signal
+      stop: "3 x ATR20"
+      exit: "|t| < 1 or stop"
+      hold: weeks
+    s3k: "needs primitive: slope_tstat entry (sprint200 LINREG-1H was unsatisfiable; t >= 2.5 at n 60 needs only R2 >= 0.10)"
+    data: local
+    tested: "partial (sprint200 LINREG-1H unsatisfiable, n 0)"
+    priority: C
+  - id: RT-ACADEMIC-033
+    name: "Trend-magnitude conditioning (stronger trends continue)"
+    family: trend
+    source: "AQR 2020 JPM 'You can't always trend when you want' (authors, volume unverified)"
+    grade: peer-reviewed
+    reported: "Trend-following returns rise with the magnitude of the underlying trends (unverified)"
+    mechanism: "Big trends carry information diffusion and flows; small trends are noise that costs turnover"
+    tf: "1d"
+    rule:
+      entry: "f = f_013 only when |r252| / sigma_252 > its 10-year median, else 0"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-034
+    name: "Short-only slow trend (swap-aware)"
+    family: trend
+    source: "own-data: cor-2026-10-31.2 charges long swap only (about 5.5% a year of notional at 4,000); H-01 note 'likely depends on the short side'"
+    grade: own-data
+    reported: "Design variant, no published effect. Gold drifted up 2003-2025, so a short-only book has negative drift exposure"
+    mechanism: "Keeps the trend premium on the side the CFD does not charge"
+    tf: "1d"
+    rule:
+      entry: "f = min(0, f_015)"
+      side: short_only
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-035
+    name: "Long-only slow trend with date-varying swap"
+    family: trend
+    source: "Design variant of 015; swap model per academic.md section 3"
+    grade: own-data
+    reported: "Isolates the long leg; against CP-HOLD it measures timing value net of long financing"
+    mechanism: "As 015"
+    tf: "1d"
+    rule:
+      entry: "f = max(0, f_015)"
+      side: long_only
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-036
+    name: "13-week TSMOM on weekly bars"
+    family: trend
+    source: "Moskowitz-Ooi-Pedersen 2012 horizon grid (unverified)"
+    grade: peer-reviewed
+    reported: "3-month lookback, 1-week holding positive in the panel; gross"
+    mechanism: "As 001"
+    tf: "1w"
+    rule:
+      entry: "Friday close: side = sign(13-week return)"
+      side: signal
+      stop: "2.5 x ATR(13 weeks)"
+      exit: "sign change at a Friday close"
+      hold: weeks
+    s3k: "needs primitive: W1"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-037
+    name: "Moving-average distance (MA21/MA200)"
+    family: trend
+    source: "Avramov, Kaplanski, Subrahmanyam 2021 Management Science 'Moving average distance as a predictor of equity returns' (unverified)"
+    grade: peer-reviewed
+    reported: "MAD predicts stock returns cross-sectionally; anchoring explanation; gross; equities only (unverified)"
+    mechanism: "Anchoring to the long average"
+    tf: "1d"
+    rule:
+      entry: "Month end: f = 10 x clip((MA21/MA200 - 1)/0.05, -2, 2)"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-038
+    name: "52-week-high nearness minus historical-high nearness (anchoring)"
+    family: trend
+    source: "Li, Yu 2012 JFE 104(2) 401-419 'Investor attention, psychological anchors, and stock return predictability'; George, Hwang 2004 JF 59(5) (unverified)"
+    grade: peer-reviewed
+    reported: "Aggregate equity market: nearness to the 52-week high predicts higher returns (under-reaction), nearness to the historical high predicts lower returns (over-reaction); Dow and G7; gross"
+    mechanism: "Anchoring at salient highs; gold has salient all-time highs (1980, 2011, 2020, 2024-25)"
+    tf: "1d, monthly"
+    rule:
+      entry: "Month end: x52 = close / max(close, 252d); xH = close / all-time max close; f = 10 x sign(z(x52) - z(xH)), z over prior 10 years"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP"
+    data: "local plus pre-2010 daily history for the all-time high (free: Stooq/Yahoo/Bundesbank fix series, licences unverified)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-039
+    name: "All-time-high breakout continuation"
+    family: trend
+    source: "Practitioner folklore; contradicted by Li-Yu 2012 historical-high over-reaction (aggregate equities)"
+    grade: folklore
+    reported: "None; the only related peer-reviewed evidence points the other way"
+    mechanism: "No overhead supply at new highs"
+    tf: "1d"
+    rule:
+      entry: "First daily close at an all-time high after >= 60 days without one -> long"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "40 days or stop"
+      hold: "up to 40 days"
+    s3k: "needs primitive: prior_level_break(level=all_time)"
+    data: "free daily history before 2010 (licences unverified)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-040
+    name: "Prior-month high/low break on daily closes, long hold"
+    family: trend
+    source: "Practitioner monthly range breakout (Kaufman 2013 channel family, unverified)"
+    grade: practitioner-documented
+    reported: "No gold-specific test"
+    mechanism: "Monthly extremes are where slow participants place stops and reassess"
+    tf: "1d"
+    rule:
+      entry: "Daily close above prior calendar month high -> long; below prior month low -> short"
+      side: signal
+      stop: "nearer of the opposite side of the prior month's range or 3 x ATR20"
+      exit: "close back inside the prior month range by > 0.5 ATR, or 40 days"
+      hold: "up to 40 days"
+    s3k: "prior_level_break(level=month) 1d + chandelier; needs max_hold 40"
+    data: local
+    tested: "partial (s3k has 18 1d prior_level_break specs capped at 20 bars; PMH fade retired in sprint200 meanrev 14)"
+    priority: C
+  - id: RT-ACADEMIC-041
+    name: "3-month high/low breakout at month end"
+    family: trend
+    source: "Practitioner channel family (Kaufman 2013, unverified)"
+    grade: practitioner-documented
+    reported: "None gold-specific"
+    mechanism: "As 001 at a monthly clock"
+    tf: "1d data, monthly"
+    rule:
+      entry: "Month-end close > prior 63-day high -> long; < 63-day low -> short"
+      side: signal
+      stop: "3 x ATR20"
+      exit: "next month end if close is back inside the channel; else roll"
+      hold: months
+    s3k: "needs primitive: monthly clock"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-042
+    name: "Weekly Donchian 4-week breakout"
+    family: trend
+    source: "Donchian weekly rule (Kaufman 2013, unverified)"
+    grade: practitioner-documented
+    reported: "None gold-specific"
+    mechanism: "As 001"
+    tf: "1w"
+    rule:
+      entry: "Weekly close above prior 4-week high -> long; below 4-week low -> short"
+      side: signal
+      stop: "2 x ATR(10 weeks)"
+      exit: "opposite 4-week channel"
+      hold: "weeks to months"
+    s3k: "needs primitive: W1"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-043
+    name: "Hurst-exponent regime switch (trend vs reversion)"
+    family: regime
+    source: "Long-memory studies of gold (single studies, unverified); practitioner R/S regime rules"
+    grade: folklore
+    reported: "Mixed single-study evidence of time-varying long memory in gold returns; no net trading test found"
+    mechanism: "Persistent regimes favour trend, anti-persistent favour reversion"
+    tf: "1d"
+    rule:
+      entry: "H = R/S Hurst on 128 daily returns; H > 0.55 -> trade f_013; H < 0.45 -> f = -10 x sign(r5) with 5-day hold; else flat"
+      side: signal
+      stop: "3 x ATR20 on reversion trades"
+      exit: "regime change or 5 days (reversion leg)"
+      hold: "days to weeks"
+    s3k: "needs primitive: hurst filter (H-70 used hurst_128 on 15m)"
+    data: local
+    tested: "partial (H-70 at 15m)"
+    priority: C
+  - id: RT-ACADEMIC-044
+    name: "Variance-ratio regime filter"
+    family: regime
+    source: "Lo, MacKinlay 1988 RFS 1(1) variance ratio test (unverified)"
+    grade: peer-reviewed
+    reported: "VR > 1 indicates positive autocorrelation; a test statistic, not a trading result"
+    mechanism: "Trade trend only when returns show positive autocorrelation"
+    tf: "1d"
+    rule:
+      entry: "VR(5) over 250 daily returns > 1.1 -> f_013 on; else f = 0"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: variance_ratio filter"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-045
+    name: "Kalman local-linear-trend slope"
+    family: trend
+    source: "Levine, Pedersen 2016 FAJ 72(3) 51-66 (Kalman and HP filters are linear trend filters equivalent to TSMOM weightings)"
+    grade: peer-reviewed
+    reported: "Equivalence result; no separate premium expected beyond TSMOM"
+    mechanism: "As 001; smoother weights cut turnover"
+    tf: "1d"
+    rule:
+      entry: "Local linear trend Kalman filter on log close (signal-to-noise q = 1e-4 fixed ex ante); f = 10 x clip(slope / sd(slope), -2, 2)"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + kalman"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-046
+    name: "Trend with crash-risk de-scaling"
+    family: regime
+    source: "Daniel, Moskowitz 2016 JFE 122(2) 'Momentum crashes' (cross-sectional equities; unverified port)"
+    grade: peer-reviewed
+    reported: "Momentum crashes follow bear markets with high volatility; dynamic scaling roughly doubles Sharpe in equities 1927-2013; gross (unverified)"
+    mechanism: "Trend reversals after panic phases"
+    tf: "1d"
+    rule:
+      entry: "f_013 x 0.5 when 60-day realised vol is in its top decile (10-year window) and r252 < 0, else f_013"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP (vol_regime filter exists for trade forms only)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-047
+    name: "CONTROL: vol-targeted buy-and-hold gold (CP-HOLD)"
+    family: control
+    source: "Huang, Li, Wang, Zhou 2020 JFE 135(3) (TSMOM profits resemble a historical-mean strategy); Carver 2023 strategies 1/3 (unverified)"
+    grade: peer-reviewed
+    reported: "Benchmark; every CP candidate must beat it net, else the 'trend' is just the drift"
+    mechanism: "Drift plus vol scaling; isolates timing value"
+    tf: "1d"
+    rule:
+      entry: "f = +10 always"
+      side: long_only
+      stop: none
+      exit: never
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: A
+  - id: RT-ACADEMIC-048
+    name: "Wilder volatility system (ATR stop-and-reverse)"
+    family: trend
+    source: "Wilder 1978 (unverified)"
+    grade: folklore
+    reported: "Book examples only"
+    mechanism: "Trend capture with an ATR trailing reverse"
+    tf: "1d"
+    rule:
+      entry: "Reverse when close crosses SIC -/+ 3.0 x ATR(7) (SIC = most favourable close since entry)"
+      side: signal
+      stop: "the reverse level"
+      exit: reverse
+      hold: "always in"
+    s3k: "approx: chandelier(7,3) with stop-and-reverse; needs reverse primitive"
+    data: local
+    tested: "no"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# B. Trade-form entries for multi-day trend (wide stops, holds beyond the 20-bar s3k cap)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-049
+    name: "Holy Grail daily (ADX > 30 pullback to EMA20)"
+    family: trend
+    source: "Raschke, Connors 1995 'Street Smarts', M. Gordon Publishing (unverified)"
+    grade: practitioner-documented
+    reported: "Book examples on futures; no out-of-sample statistics"
+    mechanism: "Buy the first pullback in a strong trend; ADX confirms the trend"
+    tf: "1d"
+    rule:
+      entry: "ADX(14) > 30 and rising; low touches EMA20; buy-stop above that day's high (mirror for shorts with -DI > +DI)"
+      side: signal
+      stop: "below the pullback low (min 1.5 x ATR14)"
+      exit: "3 R, trail 2 x ATR after +1 R"
+      hold: "up to 20 days"
+    s3k: "ema_pullback(20, 0) 1d + adx_min(14, 30); s3k has no 1d ema_pullback specs"
+    data: local
+    tested: "partial (sprint200 PB-D1EMA20-1H gross -0.123 R; PB-4H-EMA20 gross +0.145 R t 2.69; daily form not tested)"
+    priority: B
+  - id: RT-ACADEMIC-050
+    name: "Elder triple screen (weekly MACD-histogram slope, daily oscillator pullback)"
+    family: trend
+    source: "Elder 1993 'Trading for a Living', Wiley (unverified)"
+    grade: practitioner-documented
+    reported: "Book examples; no significance tests"
+    mechanism: "Trade the weekly tide on daily counter-waves"
+    tf: "1w side, 1d entry"
+    rule:
+      entry: "Weekly MACD(12,26,9) histogram rising -> long bias; daily Stochastic(5,3) < 30 -> buy-stop above the prior day high (mirror short)"
+      side: signal
+      stop: "below the lower of the last two daily lows"
+      exit: "weekly histogram turns, or 3 R"
+      hold: "days to weeks"
+    s3k: "needs primitive: W1 filter + stochastic entry"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-051
+    name: "ADX onset, daily"
+    family: trend
+    source: "Wilder 1978 ADX (unverified); own explore prior: sprint200 ADX-ONSET-4H gross +0.252 R (t 2.26), net +0.141, n 207, 2010-2017"
+    grade: own-data
+    reported: "4h explore only; never confirmed"
+    mechanism: "Trend emergence after a non-trending phase"
+    tf: "1d"
+    rule:
+      entry: "ADX(14) crosses above 25 having been below 20 within 10 days; side = sign(+DI - -DI)"
+      side: signal
+      stop: "2 x ATR14"
+      exit: "chandelier(22, 3)"
+      hold: "up to 60 days"
+    s3k: "adx_onset(14, 25) 1d + chandelier; s3k has no 1d adx_onset and caps hold at 20"
+    data: local
+    tested: "partial (4h explore gross positive, not confirmed)"
+    priority: B
+  - id: RT-ACADEMIC-052
+    name: "MACD signal-line turn, daily, with weekly trend"
+    family: trend
+    source: "Appel MACD (practitioner); own explore prior: sprint200 MACD-4H-D1 gross +0.164 R (t 1.95), net +0.056, n 304"
+    grade: own-data
+    reported: "4h explore only"
+    mechanism: "Momentum turn in the direction of the higher-timeframe trend"
+    tf: "1d"
+    rule:
+      entry: "MACD(12,26,9) crosses its signal line in the direction of sign(EMA10w - EMA40w)"
+      side: signal
+      stop: "2 x ATR14"
+      exit: "opposite cross or 40 days"
+      hold: "up to 40 days"
+    s3k: "macd_turn(12,26,9) 1d + trend(1d, 200); 41 1d macd_turn specs in s3k, capped at 20 bars"
+    data: local
+    tested: "partial (s3k pending, capped holds)"
+    priority: C
+  - id: RT-ACADEMIC-053
+    name: "Bollinger band-width squeeze breakout, daily"
+    family: breakout
+    source: "Bollinger 2001 'Bollinger on Bollinger Bands' (unverified); own explore prior: sprint200 H4-BBW gross +0.289 R (t 2.22), net +0.149, n 183"
+    grade: own-data
+    reported: "4h explore only; small n"
+    mechanism: "Volatility compression precedes expansion; direction from the break"
+    tf: "1d"
+    rule:
+      entry: "BB(20,2) width at its 125-day low within the last 5 days; close beyond a band -> side = break"
+      side: signal
+      stop: "wider of the middle band or 2 x ATR14"
+      exit: "chandelier(22, 3) or 40 days"
+      hold: "up to 40 days"
+    s3k: "bb_break(20,2) 1d + compression(125, 0.05); needs max_hold 40"
+    data: local
+    tested: "partial (4h explore gross positive)"
+    priority: B
+  - id: RT-ACADEMIC-054
+    name: "Keltner channel break, daily, long hold"
+    family: breakout
+    source: "Keltner 1960 via Kaufman 2013 (unverified)"
+    grade: practitioner-documented
+    reported: "None gold-specific; own: sprint200 H4-KELT gross +0.102 R (t 1.24)"
+    mechanism: "As 001"
+    tf: "1d"
+    rule:
+      entry: "Close beyond EMA20 +- 2 x ATR10"
+      side: signal
+      stop: EMA20
+      exit: "close back through EMA20 or 60 days"
+      hold: "up to 60 days"
+    s3k: "keltner_break(20, 2) 1d; needs max_hold 60"
+    data: local
+    tested: "partial (4h failed explore)"
+    priority: C
+  - id: RT-ACADEMIC-055
+    name: "NR7 daily breakout (Crabel)"
+    family: breakout
+    source: "Crabel 1990 'Day Trading with Short Term Price Patterns and Opening Range Breakout' (unverified)"
+    grade: practitioner-documented
+    reported: "Narrow-range days precede range expansion (book statistics on S&P and bond futures)"
+    mechanism: "Volatility clustering and compression release"
+    tf: "1d"
+    rule:
+      entry: "NR7 day; next day buy-stop at its high, sell-stop at its low (first fill only)"
+      side: signal
+      stop: "opposite side of the NR7 day"
+      exit: "5 days or 2 R"
+      hold: "up to 5 days"
+    s3k: "nr_breakout(7) 1d (41 specs in s3k)"
+    data: local
+    tested: "yes (growth GS-C4 NR7 prior-day break 4R failed, net +0.05 R; sprint200 NR4ID-1H gross +0.081 t 2.46 net +0.059 fail; s3k covers 1d)"
+    priority: X
+  - id: RT-ACADEMIC-056
+    name: "Larry Williams volatility breakout (open + k x prior range)"
+    family: breakout
+    source: "Williams 1999 'Long-Term Secrets to Short-Term Trading', Wiley (unverified)"
+    grade: practitioner-documented
+    reported: "Book backtests on bond and S&P futures; gold not shown"
+    mechanism: "A move of a set fraction of yesterday's range from the open signals initiative flow"
+    tf: "1d"
+    rule:
+      entry: "Buy-stop at open + 0.6 x (prior high - prior low); sell-stop at open - 0.6 x prior range"
+      side: signal
+      stop: "0.5 x prior range from entry"
+      exit: "first profitable open, else 3rd day close"
+      hold: "1-3 days"
+    s3k: "needs primitive: open-anchored range breakout (atr_expansion is close-based)"
+    data: local
+    tested: "partial (sprint200 ATREXP-1D n 66 gross -0.106 R; intraday ORB retired R-02)"
+    priority: C
+  - id: RT-ACADEMIC-057
+    name: "Weekly inside bar breakout"
+    family: breakout
+    source: "Practitioner price action (Bulkowski 2008 'Encyclopedia of Candlestick Charts', unverified)"
+    grade: folklore
+    reported: "No peer-reviewed evidence; candlesticks retired as rules (R-09)"
+    mechanism: "Compression on the weekly clock"
+    tf: "1w"
+    rule:
+      entry: "Weekly inside bar; next week buy-stop above its high / sell-stop below its low"
+      side: signal
+      stop: "opposite side of the inside week"
+      exit: "2 R or 4 weeks"
+      hold: "up to 4 weeks"
+    s3k: "needs primitive: W1 (inside_bar_break exists at 1h/4h)"
+    data: local
+    tested: "partial (sprint200 IBB 1h/4h failed; H4-INSIDE-D1 gross -0.004)"
+    priority: X
+  - id: RT-ACADEMIC-058
+    name: "Donchian 20 break after ADX compression"
+    family: breakout
+    source: "Practitioner combination (Kaufman channel + Wilder ADX), no peer-reviewed test"
+    grade: practitioner-documented
+    reported: "None"
+    mechanism: "Breaks out of quiet regimes start trends more often than breaks inside noisy ones"
+    tf: "1d"
+    rule:
+      entry: "ADX(14) < 20 on each of the last 15 days; close beyond the 20-day channel"
+      side: signal
+      stop: "2.5 x ATR20"
+      exit: "chandelier(22, 3) or 60 days"
+      hold: "up to 60 days"
+    s3k: "donchian_break(20) 1d + compression filter; needs max_hold 60"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-059
+    name: "Daily pullback entry in the slow-trend direction"
+    family: trend
+    source: "Grimes 2012 'The Art and Science of Technical Analysis', Wiley (quantitative pullback tests; unverified)"
+    grade: practitioner-documented
+    reported: "Small but positive conditional edges for trend pullbacks in stocks/futures (unverified)"
+    mechanism: "Enter an established trend at a better price; wider R relative to cost"
+    tf: "1d"
+    rule:
+      entry: "f_013 > 5 (long trend); close <= EMA20 - 0.5 x ATR14, then the first close above the prior day high -> long (mirror)"
+      side: signal
+      stop: "pullback low - 0.5 x ATR14"
+      exit: "chandelier(22, 3) or 40 days"
+      hold: "up to 40 days"
+    s3k: "ema_pullback(20, 0.5) 1d with trend(1d, ema 64) as a proxy for f_013"
+    data: local
+    tested: "partial (sprint200 PB-D1EMA20-1H on 1h failed)"
+    priority: B
+  - id: RT-ACADEMIC-060
+    name: "First pullback after a new 52-week high"
+    family: trend
+    source: "George, Hwang 2004 JF 59(5) '52-week high and momentum investing' (unverified; equities)"
+    grade: peer-reviewed
+    reported: "Nearness to the 52-week high explains much of equity momentum profits; gross (unverified)"
+    mechanism: "Anchoring delays the price response to good news near the old high"
+    tf: "1d"
+    rule:
+      entry: "Within 20 days after a 252-day high: a close below the 10-day low, then the first close above the prior day high -> long"
+      side: long_only
+      stop: "pullback low - 0.25 x ATR14"
+      exit: "3 R or 40 days"
+      hold: "up to 40 days"
+    s3k: "needs primitive: event sequence (52w high then pullback)"
+    data: local
+    tested: "no"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# C. Volatility management and volatility/skew risk premia
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-061
+    name: "Vol-managed long gold as alpha (Moreira-Muir)"
+    family: vol
+    source: "Moreira, Muir 2017 JF 72(4) (unverified); Harvey et al. 2018 JPM (Man Group) 'The impact of volatility targeting' (unverified); Cederburg, O'Doherty, Wang, Yan 2020 JFE 138"
+    grade: peer-reviewed
+    reported: "Vol targeting helps equities/credit (leverage effect); almost nothing for commodities (Harvey 2018); real-time versions underperform in most of 103 strategies (Cederburg 2020)"
+    mechanism: "None for gold: no negative vol-return correlation"
+    tf: "1d"
+    rule:
+      entry: "w = 10% / sigma_20d, long only, monthly"
+      side: long_only
+      stop: none
+      exit: monthly
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "yes (retired from the literature as alpha, R-08; never trialled)"
+    priority: X
+  - id: RT-ACADEMIC-062
+    name: "Conditional vol targeting overlay (extreme states only)"
+    family: vol
+    source: "Bongaerts, Kang, van Dijk 2020 FAJ 76(4) 54-71 'Conditional volatility targeting' https://ideas.repec.org/a/taf/ufajxx/v76y2020i4p54-71.html"
+    grade: peer-reviewed
+    reported: "Scaling exposure only in extreme high/low vol states improves Sharpe in every equity market tested (vs 8 of 10 for plain targeting), lower turnover; equities; gross"
+    mechanism: "Risk control in the tails without paying turnover in normal states; overlay, not alpha"
+    tf: "1d"
+    rule:
+      entry: "Overlay on 015: if sigma_20d in top quintile of 10-year history -> position x 0.5; bottom quintile -> x 1.5; else x 1"
+      side: "as the base"
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-063
+    name: "Time-series skewness signal (negative skew earns a premium)"
+    family: vol
+    source: "Fernandez-Perez, Frijns, Fuertes, Miffre 2018 JBF 86 143-158 'The skewness of commodity futures returns' https://openaccess.city.ac.uk/id/eprint/17843/"
+    grade: peer-reviewed
+    reported: "Long most negatively skewed, short most positively skewed commodities: significant excess return (about 8% a year in the WP version), beyond standard risk premia; cross-sectional; gross"
+    mechanism: "Investors overpay for positive skew (lottery preference) and selective hedging; a time-series version asks whether gold's own skew state predicts it"
+    tf: "1d, monthly"
+    rule:
+      entry: "Month end: s = skewness of daily returns over 252 days; f = -10 x sign(z(s)) when |z(s)| > 0.5 (z over 10 years), else 0"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + skew feature"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-064
+    name: "MAX (lottery) state, time-series"
+    family: vol
+    source: "Bali, Cakici, Whitelaw 2011 JFE 99(2) 'Maxing out' (equities; unverified port)"
+    grade: peer-reviewed
+    reported: "Stocks with high maximum daily returns earn lower future returns; equities; gross (unverified)"
+    mechanism: "Lottery demand overprices recent extreme-up assets"
+    tf: "1d, monthly"
+    rule:
+      entry: "Month end: MAX = largest daily return of the month; long next month when MAX in bottom tercile of 10y history, short when top tercile"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: "1 month"
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-065
+    name: "Gold variance risk premium (GVZ^2 - HAR-RV^2)"
+    family: vol
+    source: "Survey #72 in hypotheses H-03 (unverified); H-84 V4"
+    grade: peer-reviewed
+    reported: "Own: H-84 V4 gross +0.077 R (t 0.62), failed; retired R-16"
+    mechanism: "Jump-risk premium"
+    tf: "1d"
+    rule:
+      entry: "Long when VRP in top third of its 250-day range"
+      side: long_only
+      stop: "1.5 x ATR(1d)"
+      exit: "5-20 days"
+      hold: "5-20 days"
+    s3k: "needs primitive: XS (GVZCLS)"
+    data: local
+    tested: "yes (H-84 V4, R-16 failed)"
+    priority: X
+  - id: RT-ACADEMIC-066
+    name: "GVZ spike contrarian long"
+    family: vol
+    source: "Practitioner commentary (DailyFX, City Index; directions conflict); no peer-reviewed return test found in this lane"
+    grade: folklore
+    reported: "None; practitioner sources disagree on the sign"
+    mechanism: "Panic spikes mark forced selling that later reverses"
+    tf: "1d"
+    rule:
+      entry: "GVZCLS > 95th percentile of its trailing 250 days and up > 20% in 5 days -> long next open"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "20 days"
+      hold: "20 days"
+    s3k: "needs primitive: EVT + XS (GVZCLS)"
+    data: local
+    tested: "partial (GVZ tercile used as a gate in discovery v2, R-18)"
+    priority: C
+  - id: RT-ACADEMIC-067
+    name: "Inverted asymmetric volatility: up-move vol bursts continue"
+    family: vol
+    source: "Baur 2012 J. Alternative Investments 'Asymmetric volatility in the gold market' (unverified)"
+    grade: peer-reviewed
+    reported: "Positive gold shocks raise volatility more than negative ones (opposite of equities), 1979-2009; a volatility result, not a return test (unverified)"
+    mechanism: "Safe-haven buying arrives in bursts with rising vol; vol up with price up = demand shock"
+    tf: "1d"
+    rule:
+      entry: "RV5/RV60 > 1.5 and r5 > +1.5 sigma_daily x sqrt(5) -> long; mirror is not traded (asymmetric)"
+      side: long_only
+      stop: "2.5 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: EVT on realised-vol ratio"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-068
+    name: "VIX-timed weekly reversal"
+    family: reversal
+    source: "Nagel 2012 RFS 25(7) 'Evaporating liquidity' (equities; unverified)"
+    grade: peer-reviewed
+    reported: "Short-term reversal profits (liquidity provision) are high when VIX is high; equities 1998-2010; gross (unverified)"
+    mechanism: "Liquidity providers demand more when funding is scarce; price pressure reverses"
+    tf: "1d"
+    rule:
+      entry: "VIX close > 25: side = -sign(r5 of gold) if |r5| > 1.5 sigma; enter next open"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "5 days"
+      hold: "5 days"
+    s3k: "needs primitive: EVT + XS (VIXCLS)"
+    data: "free (FRED VIXCLS)"
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-069
+    name: "Realised-vol shock, next 10-day drift"
+    family: vol
+    source: "own-data idea; Baur-Lucey 2010 haven duration (about 15 days) as mechanism prior"
+    grade: own-data
+    reported: "No published gold result"
+    mechanism: "After a vol shock gold's haven bid persists for about two weeks"
+    tf: "1d"
+    rule:
+      entry: "RV5/RV60 > 2 -> long next open"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: EVT"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-070
+    name: "Vol compression two-sided bracket on daily bars"
+    family: breakout
+    source: "Crabel 1990; Bollinger 2001 (unverified)"
+    grade: practitioner-documented
+    reported: "Range expansion follows compression (volatility clustering is robust; direction is not)"
+    mechanism: "Volatility clustering"
+    tf: "1d"
+    rule:
+      entry: "Parkinson vol(10) at its 250-day 10th percentile: OCO stops at +-0.5 x ATR20 from the close"
+      side: signal
+      stop: "1 x ATR20"
+      exit: "3 R or 10 days"
+      hold: "10 days"
+    s3k: "atr_expansion or nr_breakout 1d with compression filter"
+    data: local
+    tested: "partial (GS-C4, NR7/NR4 families, opportunity-days work)"
+    priority: X
+
+# ---------------------------------------------------------------------------------------------------------------
+# D. Carry, term structure, positioning and flows
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-071
+    name: "Gold carry (Koijen et al.) as a time-series signal"
+    family: carry
+    source: "Koijen, Moskowitz, Pedersen, Vrugt 2018 JFE 127(2) 'Carry' (unverified DOI)"
+    grade: peer-reviewed
+    reported: "Carry predicts returns in every asset class incl. commodities, 1983-2012; mostly cross-sectional; gross"
+    mechanism: "Carry = convenience yield minus financing; high carry (backwardation) means physical tightness"
+    tf: "1d, monthly"
+    rule:
+      entry: "Month end: carry = ln(F1/F2) x 12/months_between; long when carry above its 3-year median, short when below"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + CURVE"
+    data: "paid or unverified free (CME settlement archive)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-072
+    name: "Implied lease-rate spike (physical tightness)"
+    family: carry
+    source: "Practitioner (GOFO = USD rate - lease rate; Advisor Perspectives 2014; skeptical: Sunshine Profits 2016); EFMA 2013 WP on lease rates (unverified)"
+    grade: practitioner-documented
+    reported: "Negative GOFO (lease > Libor) followed by rallies 2013-2014 anecdotally; no reliable long-run link (critics); no peer-reviewed predictive test"
+    mechanism: "Lease spikes mean scarce lendable bullion"
+    tf: "1d"
+    rule:
+      entry: "lease = DFF - annualised (F1/spot - 1); lease > 2 sigma above its 1-year mean -> long"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "20 days"
+      hold: "20 days"
+    s3k: "needs primitive: EVT + CURVE"
+    data: "paid or unverified free (GOFO discontinued by LBMA)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-073
+    name: "Basis-momentum, time series"
+    family: carry
+    source: "Boons, Porras Prado 2019 JF 74(1) 239-279 'Basis-momentum' https://ideas.repec.org/a/bla/jfinan/v74y2019i1p239-279.html"
+    grade: peer-reviewed
+    reported: "Momentum of front minus second contract predicts commodity spot and term premia in time series and cross-section; inconsistent with storage/hedging-pressure explanations; gross"
+    mechanism: "Supply/demand imbalance in futures when intermediaries are constrained"
+    tf: "1d, monthly"
+    rule:
+      entry: "Month end: BM = 12-month return of rolled F1 minus rolled F2; f = 10 x sign(BM)"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + CURVE"
+    data: "paid or unverified free (CME settlement archive)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-074
+    name: "Open-interest growth predicts returns (Hong-Yogo)"
+    family: positioning
+    source: "Hong, Yogo 2012 JFE 105(3) 473-490 'What does futures market interest tell us about the macroeconomy and asset prices?' https://www.nber.org/papers/w16712"
+    grade: peer-reviewed
+    reported: "Aggregate commodity open-interest growth predicts commodity returns (1 sd rise -> about +0.6-0.7% next month), bonds and short rates, beyond prices and other predictors; 1965-2008; gross"
+    mechanism: "Hedging demand and limited risk absorption show up in OI before prices"
+    tf: "weekly COT, monthly hold"
+    rule:
+      entry: "Month end (latest COT available_utc): g = 12-month log growth of COMEX gold OI; f = 10 x clip(z(g, 5y), -2, 2)"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (positioning-v1 OI)"
+    data: local
+    tested: "no (R-19 used managed-money net % OI, not OI growth)"
+    priority: B
+  - id: RT-ACADEMIC-075
+    name: "Price and open interest joint confirmation"
+    family: positioning
+    source: "Practitioner rule (Kaufman 2013; classic futures texts, unverified)"
+    grade: practitioner-documented
+    reported: "No significance tests"
+    mechanism: "New money entering a move (OI up with price) makes it more persistent"
+    tf: "weekly"
+    rule:
+      entry: "Friday after COT: long if 4-week gold return > 0 and 4-week OI change > 0; short if return < 0 and OI change > 0; else flat"
+      side: signal
+      stop: "2.5 x ATR(1d) x sqrt(5)"
+      exit: "next weekly decision"
+      hold: "1 week, rolled"
+    s3k: "needs primitive: W1 + XS (positioning-v1)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-076
+    name: "Commercial hedging pressure"
+    family: positioning
+    source: "Basu, Miffre 2013 JBF 37(7) 'Capturing the risk premium of commodity futures: the role of hedging pressure' (unverified); de Roon, Nijman, Veld 2000 JF (unverified)"
+    grade: peer-reviewed
+    reported: "Long high hedger-short-pressure, short low: significant premia across 27 commodities 1992-2011; cross-sectional; gross (unverified)"
+    mechanism: "Producers pay speculators to carry their hedges"
+    tf: "weekly"
+    rule:
+      entry: "Weekly: HP = commercial net short / commercial total; long when HP in top tercile of 3 years, short bottom tercile; hold 4 weeks"
+      side: signal
+      stop: "2.5 x ATR(1d) x sqrt(20)"
+      exit: "4 weeks"
+      hold: "4 weeks"
+    s3k: "needs primitive: W1 + XS (positioning-v1)"
+    data: local
+    tested: "partial (R-19: managed-money extremes, mirror image of commercials, failed: n 114 gross +0.08 R)"
+    priority: C
+  - id: RT-ACADEMIC-077
+    name: "Hedger weekly flow, liquidity-provision sign (Kang-Rouwenhorst-Tang)"
+    family: positioning
+    source: "Kang, Rouwenhorst, Tang 2020 JF 75(1) 377-417 'A tale of two premiums' https://ideas.repec.org/a/bla/jfinan/v75y2020i1p377-417.html"
+    grade: peer-reviewed
+    reported: "Short-term liquidity provision by hedgers offsets their long-run insurance premium; position changes predict returns with opposite sign"
+    mechanism: "Speculators demand immediacy; hedgers supply it"
+    tf: "weekly"
+    rule:
+      entry: "-sign(weekly change of MM net % OI) when the change is in the top third of 52 reports; 1-week hold"
+      side: signal
+      stop: "1.5 x ATR(1d)"
+      exit: "5 decision days"
+      hold: "1 week"
+    s3k: "needs primitive: XS (positioning-v1)"
+    data: local
+    tested: "yes (H-87 failed: n 135, gross +0.023 R t 0.29; R-19)"
+    priority: X
+  - id: RT-ACADEMIC-078
+    name: "COT managed-money extremes, contrarian"
+    family: positioning
+    source: "Practitioner sentiment use of COT; Wang 2003 JFM 23(9) (unverified)"
+    grade: practitioner-documented
+    reported: "Own: H-86 n 114 gross +0.08 R, failed"
+    mechanism: "Crowded speculative positioning unwinds"
+    tf: "weekly"
+    rule:
+      entry: "MM net % OI in bottom decile of 156 reports -> long; top decile -> short; 1 week"
+      side: signal
+      stop: "1.5 x ATR(1d)"
+      exit: "5 decision days"
+      hold: "1 week"
+    s3k: "needs primitive: XS"
+    data: local
+    tested: "yes (H-86, R-19 failed)"
+    priority: X
+  - id: RT-ACADEMIC-079
+    name: "GLD holdings flow momentum"
+    family: flows
+    source: "Practitioner; Nomura note via Advisor Perspectives 2013 (asymmetric, weak short-term link)"
+    grade: practitioner-documented
+    reported: "Own: H-88 n 214 gross +0.014 R (t 0.19), failed"
+    mechanism: "ETF creations as demand pressure"
+    tf: "1d"
+    rule:
+      entry: "sign(5-day % change in GLD tonnes) when in top third of 252-day range; 1-week hold"
+      side: signal
+      stop: "1.5 x ATR(1d)"
+      exit: "5 days"
+      hold: "1 week"
+    s3k: "needs primitive: XS"
+    data: local
+    tested: "yes (H-88, R-19 failed)"
+    priority: X
+  - id: RT-ACADEMIC-080
+    name: "GLD flow reversal at 3-5 days"
+    family: flows
+    source: "Hypothesis H-12 (thesis-level price-pressure evidence); flows follow price (Taiwan MSc thesis via search, unverified)"
+    grade: folklore
+    reported: "Flows appear to follow price; reversal unproven"
+    mechanism: "Temporary price pressure from creations reverses"
+    tf: "1d"
+    rule:
+      entry: "GLD 3-day tonnage change in top decile -> short at day 3 close; bottom decile -> long"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "5 days"
+      hold: "5 days"
+    s3k: "needs primitive: XS"
+    data: local
+    tested: "partial (same data as H-88 with the opposite horizon; R-19 retired positioning and flows as 1-week rules)"
+    priority: X
+  - id: RT-ACADEMIC-081
+    name: "COMEX warehouse stock changes (inventory)"
+    family: carry
+    source: "Gorton, Hayashi, Rouwenhorst 2013 Review of Finance 17(1) 'The fundamentals of commodity futures returns' (unverified)"
+    grade: peer-reviewed
+    reported: "Low inventories predict higher futures risk premia across commodities 1969-2006; gold has large above-ground stocks so the link is weak (unverified)"
+    mechanism: "Scarcity premium"
+    tf: "1d, monthly"
+    rule:
+      entry: "Month end: 3-month change in COMEX registered gold stocks in bottom tercile of 5 years -> long; top tercile -> short"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: "1 month"
+    s3k: "needs primitive: CP + XS (CME daily metal stocks report)"
+    data: "free (CME daily stocks reports; history depth unverified)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-082
+    name: "Speculative-pressure momentum (52-week change of MM net)"
+    family: positioning
+    source: "Fan, Fernandez-Perez, Fuertes, Miffre 2020 JFM 'Speculative pressure' (unverified)"
+    grade: peer-reviewed
+    reported: "Speculative pressure prices the cross-section of commodity futures; gross Sharpe about 0.55 (survey; unverified)"
+    mechanism: "Speculators as informed trend capital"
+    tf: "weekly"
+    rule:
+      entry: "Weekly: SP = MM net long / MM total; long when 52-week change of SP > 0, short when < 0; 4-week hold"
+      side: signal
+      stop: "2.5 x ATR(1d) x sqrt(20)"
+      exit: "4 weeks"
+      hold: "4 weeks"
+    s3k: "needs primitive: W1 + XS"
+    data: local
+    tested: "partial (R-19 used the same series at 1-week holds)"
+    priority: C
+  - id: RT-ACADEMIC-083
+    name: "Small-trader (non-reportable) extreme, contrarian"
+    family: positioning
+    source: "Wang 2003 JFM 23(9) 'Investor sentiment, market timing, and futures returns' (unverified)"
+    grade: peer-reviewed
+    reported: "Large-speculator sentiment is a continuation indicator; hedger sentiment contrarian; small traders mixed (unverified)"
+    mechanism: "Retail crowding"
+    tf: "weekly"
+    rule:
+      entry: "Non-reportable net % OI top decile of 3 years -> short 4 weeks; bottom decile -> long"
+      side: signal
+      stop: "2.5 x ATR(1d) x sqrt(20)"
+      exit: "4 weeks"
+      hold: "4 weeks"
+    s3k: "needs primitive: W1 + XS (COT non-reportable columns: check positioning-v1 has them)"
+    data: "local if the column exists, else free (CFTC)"
+    tested: "no"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# E. Intermarket, macro and safe-haven signals (daily to monthly)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-084
+    name: "Commodity currencies forecast commodity prices (Chen-Rogoff-Rossi)"
+    family: macro
+    source: "Chen, Rogoff, Rossi 2010 QJE 125(3) 1145-1194 'Can exchange rates forecast commodity prices?' https://papers.ssrn.com/abstract=1112013"
+    grade: peer-reviewed
+    reported: "Exchange rates of commodity exporters (AUD, CAD, NZD, CLP, ZAR) forecast commodity price indices in and out of sample against many benchmarks; reverse direction weak; quarterly; gross. Gold-specific forecasting not reported"
+    mechanism: "FX markets are forward-looking and price expected commodity demand; commodity spot reacts to short-term imbalances"
+    tf: "1d data, monthly"
+    rule:
+      entry: "Month end: x = mean of 3-month log changes of AUD/USD, ZAR/USD (USD per unit), each z-scored over 5 years; f = 10 x clip(x, -2, 2)"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (FRED DEXUSAL, DEXSFUS)"
+    data: "free (FRED daily FX)"
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-085
+    name: "Rand (ZAR) lead, short horizon"
+    family: macro
+    source: "Port of Chen-Rogoff-Rossi 2010 to a producer currency at a daily clock (no direct evidence)"
+    grade: folklore
+    reported: "None at this horizon; 1m lead-lag of USD legs failed in XA-X2 (A28)"
+    mechanism: "South African producer flows"
+    tf: "1d"
+    rule:
+      entry: "ZAR/USD 20-day return z > 1 -> long gold; < -1 -> short; 10-day hold"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: XS"
+    data: "free (FRED DEXSFUS)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-086
+    name: "Macro momentum for gold (Brooks)"
+    family: macro
+    source: "Brooks 2017 AQR white paper / JPM 'A half century of macro momentum' https://www.aqr.com/Insights/Research/White-Papers/A-Half-Century-of-Macro-Momentum ; AQR 2024 'Economic trend'"
+    grade: practitioner-documented
+    reported: "Positions on 1-year trends in growth, inflation, trade and monetary policy across asset classes: consistent positive returns 1970-2016, low correlation to trend and to stocks/bonds; directional and long-short; gross (AQR's own research)"
+    mechanism: "Prices under-react to slow-moving fundamental trends"
+    tf: "monthly"
+    rule:
+      entry: "Month end: f = 10 x clip(mean(-z(12m chg DGS2), -z(12m chg DTWEXBGS), +z(12m chg CPI YoY), -z(12m chg INDPRO YoY)), -2, 2); signs fixed from economics before any look"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (FRED; CPI and INDPRO with release-date lags)"
+    data: "local (DGS2, DTWEXBGS) + free (FRED CPIAUCSL, INDPRO via ALFRED vintages)"
+    tested: "partial (H-84 used 20-day DFII10/USD changes, a different horizon and set)"
+    priority: B
+  - id: RT-ACADEMIC-087
+    name: "Policy-expectations trend (2-year yield, 3-month change)"
+    family: macro
+    source: "Brooks 2017 monetary-policy theme; Barsky et al. 2021 Chicago Fed Letter 464 (gold and expected real rates)"
+    grade: practitioner-documented
+    reported: "Monetary-policy macro momentum positive in AQR backtests (gross); gold-real-rate link broke in 2022 (RBC, Janus Henderson notes)"
+    mechanism: "Rising expected policy rates raise gold's opportunity cost"
+    tf: "1d data, weekly"
+    rule:
+      entry: "Friday: f = -10 x clip(z(63-day change in DGS2, 5y), -2, 2)"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (DGS2 local)"
+    data: local
+    tested: "partial (H-84 V1 used 20-day DFII10 change, failed; R-08 retired real-yield sign rules)"
+    priority: C
+  - id: RT-ACADEMIC-088
+    name: "Breakeven-inflation trend"
+    family: macro
+    source: "Erb, Harvey 2013 FAJ 69(4) 'The golden dilemma' (gold a poor short-run inflation hedge) https://www.nber.org/papers/w18706 ; Neville et al. 2021 Man Group 'The best strategies for inflationary times' (unverified)"
+    grade: peer-reviewed
+    reported: "No correlation between gold and changes in annual inflation since 1975 (Erb-Harvey); gold did well in high-inflation regimes (Man, gross, few episodes)"
+    mechanism: "Inflation-hedge demand when inflation expectations rise"
+    tf: "1d data, weekly"
+    rule:
+      entry: "Friday: f = 10 x clip(z(63-day change in T10YIE, 5y), -2, 2)"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (T10YIE local)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-089
+    name: "20-day real-yield change, short when rising"
+    family: macro
+    source: "Erb-Harvey 2013; Barsky et al. 2021"
+    grade: peer-reviewed
+    reported: "Own: H-84 V1 failed (R-16)"
+    mechanism: "Opportunity cost"
+    tf: "1d"
+    rule:
+      entry: "-sign(20-day change DFII10)"
+      side: signal
+      stop: "1.5 x ATR(1d)"
+      exit: "5-20 days"
+      hold: "5-20 days"
+    s3k: "needs primitive: XS"
+    data: local
+    tested: "yes (H-84 V1, R-16 failed)"
+    priority: X
+  - id: RT-ACADEMIC-090
+    name: "20-day broad-dollar change, short when rising"
+    family: macro
+    source: "Pukthuanthong, Roll 2011 JBF 35(8) 2070-2083 'Gold and the dollar (and the euro, pound, and yen)'"
+    grade: peer-reviewed
+    reported: "Own: H-84 V2 failed (R-16)"
+    mechanism: "USD pricing"
+    tf: "1d"
+    rule:
+      entry: "-sign(20-day change DTWEXBGS)"
+      side: signal
+      stop: "1.5 x ATR(1d)"
+      exit: "5-20 days"
+      hold: "5-20 days"
+    s3k: "needs primitive: XS"
+    data: local
+    tested: "yes (H-84 V2, R-16 failed)"
+    priority: X
+  - id: RT-ACADEMIC-091
+    name: "Dollar 200-day trend filter"
+    family: macro
+    source: "Practitioner; Pukthuanthong-Roll 2011 (contemporaneous link only)"
+    grade: practitioner-documented
+    reported: "Contemporaneous negative gold-USD relation; no lead documented"
+    mechanism: "USD regime"
+    tf: "1d"
+    rule:
+      entry: "Overlay on 015: zero longs when DTWEXBGS > its 200-day SMA, zero shorts when below"
+      side: "as base"
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + XS"
+    data: local
+    tested: "partial (H-06/H-84 V3 gate on 20-day USD change failed)"
+    priority: C
+  - id: RT-ACADEMIC-092
+    name: "Negative real yield -> long gold"
+    family: macro
+    source: "Erb-Harvey 2013; practitioner"
+    grade: peer-reviewed
+    reported: "Real-yield level relation broke in 2022 (correlation 0.84 -> ~0.03); retired R-08"
+    mechanism: "Opportunity cost"
+    tf: "1d"
+    rule:
+      entry: "Long while DFII10 < 0"
+      side: long_only
+      stop: none
+      exit: "DFII10 >= 0"
+      hold: months
+    s3k: "needs primitive: CP + XS"
+    data: local
+    tested: "yes (retired R-08 from the literature)"
+    priority: X
+  - id: RT-ACADEMIC-093
+    name: "Fair-value residual mean reversion (gold vs real yield and dollar)"
+    family: macro
+    source: "Practitioner fair-value models (WGC GRAM https://www.gold.org/goldhub/data/short-term-gold-price-drivers ; bank models); no peer-reviewed trading test"
+    grade: practitioner-documented
+    reported: "None as a trading rule; model R^2 fell from ~85% to ~16% after 2022 (JPMAM via SOTA B1)"
+    mechanism: "Temporary deviations from macro fair value close as positioning normalises"
+    tf: "1d"
+    rule:
+      entry: "Rolling 2-year OLS of daily gold log change on dDFII10 and dlog DTWEXBGS; e = cumulative residual over 20 days; z = e / sd(e, 2y); z > 2 -> short, z < -2 -> long"
+      side: signal
+      stop: "3 x ATR20"
+      exit: "|z| < 0.5 or 10 days"
+      hold: "up to 10 days"
+    s3k: "needs primitive: EVT + XS + rolling regression"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-094
+    name: "Gold-in-other-currencies momentum"
+    family: trend
+    source: "Pukthuanthong, Roll 2011 JBF 35(8) (gold price moves relate to depreciation of every currency)"
+    grade: peer-reviewed
+    reported: "Gold is linked to each currency's depreciation, not to the USD alone; contemporaneous evidence, 1970s-2010; no trading test"
+    mechanism: "Trend in gold measured outside USD removes dollar noise; agreement across currencies marks a global gold trend"
+    tf: "1d, weekly"
+    rule:
+      entry: "Friday: long XAUUSD if 63-day returns of XAUEUR and XAUJPY (gold x EURUSD, USDJPY) are both > 0 and XAUUSD 63-day > 0; short if all three < 0; else flat"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (EURUSD, USDJPY daily from FRED DEXUSEU, DEXJPUS)"
+    data: "free (FRED); local 1m HistData 2010-2017"
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-095
+    name: "Gold/silver ratio z-score, gold leg only"
+    family: relative
+    source: "Baur, Tran 2014 Empirical Economics (gold-silver long-run relation and bubbles; unverified); practitioner ratio trading; Silver Institute cointegration study via VT Markets 2026 (industry)"
+    grade: practitioner-documented
+    reported: "Long-run cointegration with breaks (2008-09); no peer-reviewed net trading test found"
+    mechanism: "Relative value within the precious complex; silver's speculative excess reverts"
+    tf: "1d"
+    rule:
+      entry: "R = ln(XAU/XAG); z = (R - mean_250)/sd_250; z > 2 -> short gold; z < -2 -> long gold"
+      side: signal
+      stop: "3 x ATR20"
+      exit: "|z| < 0.5 or 20 days"
+      hold: "up to 20 days"
+    s3k: "needs primitive: EVT + XS (XAGUSD daily)"
+    data: "local 1m 2010-2017 (HistData); free daily otherwise"
+    tested: "no (1m silver lead-lag XA-X1 failed: a different horizon and mechanism)"
+    priority: C
+  - id: RT-ACADEMIC-096
+    name: "Gold/silver pair (both legs)"
+    family: relative
+    source: "As 095"
+    grade: practitioner-documented
+    reported: "As 095"
+    mechanism: "As 095, market-neutral"
+    tf: "1d"
+    rule:
+      entry: "z > 2: short gold, long silver (beta-neutral by 60-day vol); z < -2 opposite"
+      side: signal
+      stop: "z beyond 3.5"
+      exit: "|z| < 0.5 or 30 days"
+      hold: "up to 30 days"
+    s3k: "needs primitive: PAIR"
+    data: "local/free"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-097
+    name: "Silver catch-up (silver breaks, gold lags)"
+    family: relative
+    source: "Practitioner folklore; silver as the higher-beta precious metal"
+    grade: folklore
+    reported: "None; 1m lead-lag failed (XA-X1)"
+    mechanism: "Speculative flow enters silver first"
+    tf: "1d"
+    rule:
+      entry: "XAG closes at a 20-day high while XAU is >= 1 ATR below its 20-day high -> long gold"
+      side: long_only
+      stop: "2 x ATR20"
+      exit: "gold makes a 20-day high or 10 days"
+      hold: "up to 10 days"
+    s3k: "needs primitive: XS (XAGUSD)"
+    data: local
+    tested: "partial (1m lead-lag XA-X1 failed)"
+    priority: C
+  - id: RT-ACADEMIC-098
+    name: "GLD/GDX cointegration pair (Chan)"
+    family: relative
+    source: "Chan 2009 'Quantitative Trading' / 2013 'Algorithmic Trading', Wiley (chapter disputed); replication QuantRocket https://quantrocket.com/blog/pairs-trading-still-viable"
+    grade: practitioner-documented
+    reported: "Profitable out of sample for about 2 years after publication, then unprofitable (QuantRocket replication)"
+    mechanism: "Miners mean-revert to gold"
+    tf: "1d"
+    rule:
+      entry: "Spread = GDX - beta x GLD (Johansen); z > 1 short spread, z < -1 long spread"
+      side: signal
+      stop: "z beyond 3"
+      exit: "z crosses 0"
+      hold: "days to weeks"
+    s3k: "needs primitive: PAIR (equity ETFs: not on our venue)"
+    data: "free (Yahoo, licence unverified)"
+    tested: "no"
+    priority: X
+  - id: RT-ACADEMIC-099
+    name: "Gold miners lead gold"
+    family: relative
+    source: "Contradicted: Lucey, O'Connor 2016 Applied Economics Letters 'Are gold bugs coherent?' (gold futures lead miners by a week or more, 1998-2015) https://research.ucc.ie/en/publications/are-gold-bugs-coherent/"
+    grade: peer-reviewed
+    reported: "Gold leads miners, not the reverse; short-run relationship weak"
+    mechanism: "Equity investors as informed gold traders (rejected by the evidence)"
+    tf: "1d"
+    rule:
+      entry: "GDX/GLD ratio 20-day change > +1 sd -> long gold 10 days"
+      side: long_only
+      stop: "2 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: XS"
+    data: "free (licence unverified)"
+    tested: "no"
+    priority: X
+  - id: RT-ACADEMIC-100
+    name: "Copper/gold ratio as a growth-and-rates signal"
+    family: macro
+    source: "Practitioner (bond-market commentary); no peer-reviewed test"
+    grade: folklore
+    reported: "None"
+    mechanism: "Rising copper/gold = reflation and higher yields = weaker gold"
+    tf: "1d, weekly"
+    rule:
+      entry: "Friday: f = -10 x sign(63-day change of ln(HG/XAU))"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (copper daily)"
+    data: "free (FRED PCOPPUSDM monthly only; daily via Stooq, licence unverified)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-101
+    name: "Oil shock -> gold (inflation channel)"
+    family: macro
+    source: "Gold-oil cointegration and spillover studies (e.g. Narayan, Narayan, Zheng 2010 Applied Energy, unverified); Caporale-Plastun 2021 (oil momentum, gold contrarian next day)"
+    grade: peer-reviewed
+    reported: "Long-run co-movement; no robust short-run lead"
+    mechanism: "Oil spikes raise inflation expectations"
+    tf: "1d"
+    rule:
+      entry: "WTI 20-day return z > 2 -> long gold next open"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "20 days"
+      hold: "20 days"
+    s3k: "needs primitive: EVT + XS (FRED DCOILWTICO)"
+    data: "free (FRED)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-102
+    name: "Equity-crash haven (Baur-Lucey)"
+    family: haven
+    source: "Baur, Lucey 2010 Financial Review 45(2) 'Is gold a hedge or a safe haven?' (unverified); Baur, McDermott 2010 JBF 34(8) (unverified); hypothesis H-07"
+    grade: peer-reviewed
+    reported: "Gold is a safe haven for stocks in extreme down days, lasting about 15 trading days, 1995-2005 (US, UK, Germany); gross"
+    mechanism: "Flight-to-safety flows after equity shocks"
+    tf: "1d"
+    rule:
+      entry: "S&P 500 daily return below its trailing 2-year 5th percentile (or VIX up > 25% in a day) -> long gold at next 23:00 UTC open; one event per 15 days"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "15 trading days"
+      hold: "15 days"
+    s3k: "needs primitive: EVT + XS (FRED SP500 10y only; VIXCLS 1990+; longer S&P via free index history)"
+    data: "free (FRED VIXCLS; SP500)"
+    tested: "no (H-07 proposed, never run)"
+    priority: A
+  - id: RT-ACADEMIC-103
+    name: "Liquidation rebound (gold sold with stocks, then recovers)"
+    family: haven
+    source: "Hypothesis H-15 (playbook C-1); dash-for-cash episodes 2008, March 2020 (descriptive)"
+    grade: practitioner-documented
+    reported: "Descriptive episodes only"
+    mechanism: "Forced cross-asset deleveraging sells gold for liquidity; it recovers once margin calls clear"
+    tf: "1d"
+    rule:
+      entry: "Day with gold < -1.5 sigma, S&P < -2 sigma and VIX up > 20% -> long gold at the second next 23:00 UTC open (one-day delay)"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "10 trading days"
+      hold: "10 days"
+    s3k: "needs primitive: EVT + XS"
+    data: "free (FRED)"
+    tested: "no (H-15 proposed, never run)"
+    priority: B
+  - id: RT-ACADEMIC-104
+    name: "VIX regime gate for gold trend longs"
+    family: haven
+    source: "Baur-Lucey 2010 (unverified); practitioner"
+    grade: practitioner-documented
+    reported: "Haven demand concentrated in stress regimes"
+    mechanism: "Gold trend longs are more persistent in equity stress"
+    tf: "1d"
+    rule:
+      entry: "Overlay on 015: long forecasts x 1.5 when VIX > its 1-year 80th percentile, x 0.75 when below median"
+      side: "as base"
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + XS"
+    data: "free (FRED VIXCLS)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-105
+    name: "Geopolitical-threat spike (GPR Threats index)"
+    family: haven
+    source: "Baur, Smales 2020 JBF 117 105823 'Hedging geopolitical risk with precious metals' https://ideas.repec.org/a/eee/jbfina/v117y2020ics037842662030090x.html ; Caldara, Iacoviello 2022 AER (GPR data https://www.matteoiacoviello.com/gpr.htm)"
+    grade: peer-reviewed
+    reported: "Gold and silver hedge geopolitical threats (not acts); a GPR-signal hedging strategy is investable only at daily frequency; 1985-2018"
+    mechanism: "Threat news raises haven demand before any realised act"
+    tf: "1d"
+    rule:
+      entry: "Daily GPR Threats (GPRD_THREAT) > 95th percentile of its trailing 250 days and up > 50% vs its 20-day mean -> long gold next 23:00 UTC open (GPR available next morning: use available_utc)"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "5 trading days"
+      hold: "5 days"
+    s3k: "needs primitive: EVT + XS (daily GPR)"
+    data: "free (Caldara-Iacoviello daily GPR)"
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-106
+    name: "Economic-policy-uncertainty spike (daily EPU)"
+    family: haven
+    source: "Balcilar, Gupta, Pierdzioch 2016 Resources Policy 49 74-80 'Does uncertainty move the gold price?'; Raza, Shah, Shahbaz 2018 Resources Policy 57; Baker, Bloom, Davis 2016 QJE (EPU index, unverified)"
+    grade: peer-reviewed
+    reported: "Causality-in-quantiles from uncertainty measures to gold returns and volatility at daily and monthly frequency; in-sample tests, no trading P&L; gross"
+    mechanism: "Uncertainty raises demand for a store of value"
+    tf: "1d"
+    rule:
+      entry: "US daily EPU 7-day mean > 95th percentile of trailing 2 years -> long gold next open"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "20 trading days"
+      hold: "20 days"
+    s3k: "needs primitive: EVT + XS (daily EPU)"
+    data: "free (policyuncertainty.com daily US EPU)"
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-107
+    name: "CNY depreciation -> Chinese hedging demand"
+    family: macro
+    source: "Practitioner (Chinese demand; CME 2024 note on China gold market https://www.cmegroup.com/articles/2024/riding-the-global-gold-bull-dynamics-of-the-china-gold-market.html)"
+    grade: practitioner-documented
+    reported: "Descriptive only"
+    mechanism: "Local-currency weakness raises Chinese gold buying"
+    tf: "1d"
+    rule:
+      entry: "USD/CNY 20-day change z > 1.5 -> long gold, 20 days"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "20 days"
+      hold: "20 days"
+    s3k: "needs primitive: EVT + XS (FRED DEXCHUS)"
+    data: "free (FRED)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-108
+    name: "Shanghai premium/discount"
+    family: flows
+    source: "Meader (Metals Focus) 2016, LBMA Alchemist 83 'Links between the Chinese and international gold prices' https://www.lbma.org.uk/alchemist/issue-83/links-between-the-chinese-and-international-gold-prices"
+    grade: practitioner-documented
+    reported: "2005-2016: only -$1 over 10 days after premiums >= 1%, but -$14 after discounts > 0.2%; overall 'disappointing', modest link"
+    mechanism: "Chinese demand pressure"
+    tf: "1d"
+    rule:
+      entry: "SGE Au99.99 in USD/oz vs London spot discount > 0.2% -> short gold 10 days"
+      side: short_only
+      stop: "3 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: EVT + XS (SGE daily benchmark + USDCNY)"
+    data: "free (SGE website; history depth and terms unverified)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-109
+    name: "Stock-bond correlation regime"
+    family: macro
+    source: "Practitioner (inflation regimes flip the stock-bond correlation, e.g. 2022); no gold trading test found"
+    grade: folklore
+    reported: "None for gold"
+    mechanism: "When bonds stop hedging equities, investors substitute gold"
+    tf: "1d"
+    rule:
+      entry: "Overlay: when 60-day corr(S&P daily, -10y yield change) < 0 (positive stock-bond correlation), gold longs x 1.5"
+      side: "as base"
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + XS"
+    data: "free/local"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-110
+    name: "Equity 12-month downtrend -> long gold"
+    family: haven
+    source: "Practitioner (dual momentum gold vs equities; Antonacci 2014, unverified)"
+    grade: practitioner-documented
+    reported: "None specific"
+    mechanism: "Bear-market haven allocation"
+    tf: "monthly"
+    rule:
+      entry: "Month end: S&P 500 12-month return < 0 -> long gold at CP target, else flat"
+      side: long_only
+      stop: none
+      exit: monthly
+      hold: months
+    s3k: "needs primitive: CP + XS"
+    data: "free"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-111
+    name: "High-inflation regime long"
+    family: macro
+    source: "Neville, Draaisma, Funnell, Harvey, Van Hemert 2021 Man Group 'The best strategies for inflationary times' (unverified)"
+    grade: practitioner-documented
+    reported: "Gold real returns strongly positive in US inflation regimes 1926-2020 (8 regimes; gross; unverified figure)"
+    mechanism: "Store of value against currency debasement"
+    tf: "monthly"
+    rule:
+      entry: "Long while US CPI YoY > 5% and rising over 6 months (release-date lagged)"
+      side: long_only
+      stop: none
+      exit: "condition false at a month end"
+      hold: months
+    s3k: "needs primitive: CP + XS (ALFRED CPI vintages)"
+    data: "free"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-112
+    name: "Money-growth acceleration"
+    family: macro
+    source: "Practitioner/monetarist folklore"
+    grade: folklore
+    reported: "None tested"
+    mechanism: "Monetary debasement"
+    tf: "monthly"
+    rule:
+      entry: "M2 YoY growth 6-month change > 0 -> long; else flat (release-date lagged)"
+      side: long_only
+      stop: none
+      exit: monthly
+      hold: months
+    s3k: "needs primitive: CP + XS"
+    data: "free (FRED M2SL via ALFRED)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-113
+    name: "Yield-curve steepening"
+    family: macro
+    source: "Practitioner folklore"
+    grade: folklore
+    reported: "None tested"
+    mechanism: "Bull steepening signals easing ahead"
+    tf: "weekly"
+    rule:
+      entry: "Friday: f = 10 x sign(63-day change in DGS10 - DGS2) only when DGS2 is falling"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (local)"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-114
+    name: "Gold vs equities relative momentum"
+    family: relative
+    source: "Antonacci 2014 relative momentum (unverified); Asness, Moskowitz, Pedersen 2013 JF 68(3) cross-asset momentum (unverified)"
+    grade: practitioner-documented
+    reported: "Relative momentum across assets positive in multi-asset panels; gross"
+    mechanism: "Capital rotates between risk and haven assets with persistence"
+    tf: "monthly"
+    rule:
+      entry: "Month end: long gold if 6-month return of gold > S&P 500 (both in USD), else flat"
+      side: long_only
+      stop: none
+      exit: monthly
+      hold: months
+    s3k: "needs primitive: CP + XS"
+    data: "free"
+    tested: "no"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# F. Seasonality and calendar structure (daily to monthly)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-115
+    name: "Autumn effect (September and November long)"
+    family: seasonal
+    source: "Baur 2013 Research in International Business and Finance 27(1) 1-11 'The autumn effect of gold' https://ideas.repec.org/a/eee/riibaf/v27y2013i1p1-11.html ; reversal: Potrykus, Augustynowicz 2024 Int. J. Management and Economics 60(3) https://ideas.repec.org/a/vrs/ijomae/v60y2024i3p157-172n1001.html"
+    grade: peer-reviewed
+    reported: "1980-2010 London fix: September and November the only significantly positive months (reported ~2.2% and ~1.8%, secondary source); 2024 replication says the effect reversed into a 'winter effect' after publication; gross"
+    mechanism: "Indian festival and wedding demand, Western jewellery for Christmas, hedging of equity Halloween weakness"
+    tf: "1d, calendar"
+    rule:
+      entry: "Long at the first 23:00 UTC open of September and of November"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "last trading day of the month 21:00 UTC"
+      hold: "1 month"
+    s3k: "needs primitive: CAL"
+    data: local
+    tested: "partial (sprint200 time lane tested intraday calendar rules, not month-of-year)"
+    priority: C
+  - id: RT-ACADEMIC-116
+    name: "Winter effect (post-publication replacement)"
+    family: seasonal
+    source: "Potrykus, Augustynowicz 2024 IJME 60(3) (abstract-level; exact months unverified)"
+    grade: peer-reviewed
+    reported: "Autumn effect replaced by a winter effect, read through the Adaptive Market Hypothesis"
+    mechanism: "As 115 with shifted timing (Chinese New Year build-up)"
+    tf: "1d, calendar"
+    rule:
+      entry: "Long first open of December, exit last day of February (months to be fixed from the paper before any look)"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "end of February"
+      hold: "3 months"
+    s3k: "needs primitive: CAL"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-117
+    name: "Same-calendar-month seasonality (Keloharju et al.)"
+    family: seasonal
+    source: "Keloharju, Linnainmaa, Nyberg 2016 JF 71(4) 1557-1590 'Return seasonalities'; 2021 JFE follow-up 'Are return seasonalities due to risk or mispricing?'"
+    grade: peer-reviewed
+    reported: "Same-calendar-month past returns predict returns in stocks (13% a year long-short 1963-2011) and similar seasonalities exist in commodities, indices, daily data; offset by seasonal reversals (2021); gross"
+    mechanism: "Recurring seasonal demand (festivals, budgets, fund flows) not arbitraged within one asset"
+    tf: "monthly"
+    rule:
+      entry: "Month start: f = 10 x sign(mean return of this calendar month over the prior 20 years), only if |t| of that mean > 1"
+      side: signal
+      stop: none
+      exit: "month end"
+      hold: "1 month"
+    s3k: "needs primitive: CAL + CP; needs >= 20 years of monthly history (free monthly 1968+)"
+    data: "free (monthly history: World Bank Pink Sheet 1960+, DataHub PDDL)"
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-118
+    name: "Turn-of-the-month window (-2..+3 days)"
+    family: seasonal
+    source: "Seasonax vendor study via Interactive Brokers (gold rises in the two days before month start, since ~2006, 'not strong'); Lakonishok, Smidt 1988 RFS (equities; unverified)"
+    grade: practitioner-documented
+    reported: "Vendor seasonal chart, 1998-2023; no significance tests"
+    mechanism: "Month-end pension/ETF flows and salary-cycle buying"
+    tf: "1d, calendar"
+    rule:
+      entry: "Long at 23:00 UTC open 3 trading days before month end"
+      side: long_only
+      stop: "2 x ATR20"
+      exit: "21:00 UTC close of the 3rd trading day of the new month"
+      hold: "6 trading days"
+    s3k: "needs primitive: CAL"
+    data: local
+    tested: "partial (sprint200 time 17/18 month-end WM-fix flow, 19 quarter-turn, 32 month-start intraday long: all failed explore)"
+    priority: C
+  - id: RT-ACADEMIC-119
+    name: "FOMC-cycle even weeks"
+    family: seasonal
+    source: "Cieslak, Morse, Vissing-Jorgensen 2019 JF 74(5) 'Stock returns over the FOMC cycle' https://papers.ssrn.com/abstract=2687614"
+    grade: peer-reviewed
+    reported: "US equities 1994-2016: the whole equity premium earned in even weeks (0, 2, 4, 6) of the FOMC cycle (+0.33 to +0.60% per even week vs -0.09 to -0.18% odd); gross; not tested on gold"
+    mechanism: "Informal Fed communication and news flow cluster in even weeks; gold is the rate-sensitive asset (port, uncertain sign)"
+    tf: "1d, calendar"
+    rule:
+      entry: "Long gold from the 23:00 UTC open of the day before each even FOMC-cycle week to its last day; flat in odd weeks"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "end of even week"
+      hold: "5 trading days"
+    s3k: "needs primitive: CAL (FOMC dates in the local calendar)"
+    data: local
+    tested: "no"
+    priority: B
+  - id: RT-ACADEMIC-120
+    name: "FOMC next-day drift"
+    family: event
+    source: "Awartani, Hussain, Virk 2024 IRFA (gold reacts more to dovish surprises; adjustment beyond 5 minutes) https://e-space.mmu.ac.uk/635429 ; own: sprint200 macro 15 'FED next-day drift' explore n 49 net +0.333 R (t 2.74), failed n"
+    grade: peer-reviewed
+    reported: "Intraday asymmetric reaction; own next-day drift too few events"
+    mechanism: "Slow digestion of policy news"
+    tf: "1d"
+    rule:
+      entry: "sign(gold return 14:00-16:00 NY on FOMC day) -> enter at next 23:00 UTC open"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "next day 21:00 UTC"
+      hold: "1 day"
+    s3k: "needs primitive: EVT (calendar local)"
+    data: local
+    tested: "yes (H-89 post-statement continuation in confirm; macro lane 15 failed on n)"
+    priority: X
+  - id: RT-ACADEMIC-121
+    name: "Pre-FOMC drift"
+    family: event
+    source: "Lucca, Moench 2015 JF (equities); disappeared after 2015 (Kurov, Wolfe, Gilbert 2021 FRL 40)"
+    grade: peer-reviewed
+    reported: "Equity drift gone post-2015; no fixed-income/FX drift"
+    mechanism: "Resolution of uncertainty premium"
+    tf: "1d"
+    rule:
+      entry: "Long 24 h before scheduled FOMC statement"
+      side: long_only
+      stop: "1.5 x ATR20"
+      exit: "at the statement"
+      hold: "24 h"
+    s3k: "needs primitive: EVT"
+    data: local
+    tested: "yes (retired R-08; sprint200 macro 17 pre-event long failed)"
+    priority: X
+  - id: RT-ACADEMIC-122
+    name: "Chinese New Year pre-holiday demand"
+    family: seasonal
+    source: "Roesch, Schmidbauer, Jiang 2013 EcoMod conference paper (GARCH with festival dummies) https://ecomod.net/system/files/gold_and_china_ecomod2013.pdf ; Schmidbauer, Roesch 2018 IRFA (unverified); skeptic: Capital Economics note"
+    grade: peer-reviewed
+    reported: "Festival dummies shift gold return distribution in GARCH models (effect sizes not retrieved); Capital Economics: little impact on global prices"
+    mechanism: "Gift and jewellery buying before the holiday"
+    tf: "1d, calendar"
+    rule:
+      entry: "Long at the open 15 trading days before Chinese New Year's Eve"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "close on the last trading day before the holiday"
+      hold: "15 days"
+    s3k: "needs primitive: CAL (CNY dates table)"
+    data: "free (dates)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-123
+    name: "Indian festival demand (Akshaya Tritiya, Dhanteras)"
+    family: seasonal
+    source: "Practitioner (WGC demand reports; Gulf News commentary); Schmidbauer-Roesch 2018 (unverified)"
+    grade: practitioner-documented
+    reported: "Demand spikes documented; price effect unproven"
+    mechanism: "Auspicious-day buying in the largest jewellery market"
+    tf: "1d, calendar"
+    rule:
+      entry: "Long at the open 10 trading days before Akshaya Tritiya and before Dhanteras"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "close on the festival day"
+      hold: "10 days"
+    s3k: "needs primitive: CAL (festival dates table)"
+    data: "free (dates)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-124
+    name: "Halloween (November-April) for gold"
+    family: seasonal
+    source: "Bouman, Jacobsen 2002 AER (equities; unverified); gold port is folklore"
+    grade: folklore
+    reported: "None for gold"
+    mechanism: "As 115"
+    tf: "monthly"
+    rule:
+      entry: "Long 1 November to 30 April; flat otherwise"
+      side: long_only
+      stop: none
+      exit: "30 April"
+      hold: "6 months"
+    s3k: "needs primitive: CAL + CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-125
+    name: "Day-of-week and weekend effects"
+    family: seasonal
+    source: "Blose, Gondhalekar 2013 Accounting & Finance 53(3); Lucey, Tully 2006 (unverified)"
+    grade: peer-reviewed
+    reported: "Fragile, regime-dependent"
+    mechanism: "None robust"
+    tf: "1d"
+    rule:
+      entry: "Long Friday close to Monday close, etc."
+      side: signal
+      stop: "1.5 x ATR20"
+      exit: "1 day"
+      hold: "1 day"
+    s3k: "weekday filter"
+    data: local
+    tested: "yes (R-08; sprint200 time 14-16, 31; H-72 forward)"
+    priority: X
+  - id: RT-ACADEMIC-126
+    name: "Options expiry and first-notice-day effects"
+    family: seasonal
+    source: "Practitioner"
+    grade: folklore
+    reported: "Own: sprint200 time 20-23 failed"
+    mechanism: "Pinning and roll flows"
+    tf: "1d"
+    rule:
+      entry: "Fade into expiry / long after FND"
+      side: signal
+      stop: "1.5 x ATR"
+      exit: "days"
+      hold: "days"
+    s3k: "needs primitive: CAL"
+    data: local
+    tested: "yes (sprint200 time 20-23 failed)"
+    priority: X
+  - id: RT-ACADEMIC-127
+    name: "Holiday effects (pre-holiday long, thin-day fade)"
+    family: seasonal
+    source: "Ariel 1990 JF (equities; unverified)"
+    grade: peer-reviewed
+    reported: "Own: sprint200 time 24-25 failed"
+    mechanism: "Pre-holiday optimism"
+    tf: "1d"
+    rule:
+      entry: "Long the day before US holidays"
+      side: long_only
+      stop: "1.5 x ATR20"
+      exit: "1 day"
+      hold: "1 day"
+    s3k: "needs primitive: CAL"
+    data: local
+    tested: "yes (sprint200 time 24-25 failed)"
+    priority: X
+  - id: RT-ACADEMIC-128
+    name: "Commodity-index roll window (Goldman roll)"
+    family: seasonal
+    source: "Mou 2010 WP 'Limits to arbitrage and commodity index investment: front-running the Goldman roll' (unverified)"
+    grade: peer-reviewed
+    reported: "Index rolls pressure calendar spreads, not outright spot; profits in spread trades (unverified)"
+    mechanism: "Predictable index flows into the next contract"
+    tf: "1d"
+    rule:
+      entry: "Spread trade F1-F2 before the 5th-9th business-day roll window"
+      side: signal
+      stop: "n/a"
+      exit: "after the window"
+      hold: "5 days"
+    s3k: "needs primitive: CURVE + PAIR"
+    data: paid
+    tested: "no"
+    priority: X
+  - id: RT-ACADEMIC-129
+    name: "Chinese Golden Week (SGE closed) Asia-session weakness"
+    family: seasonal
+    source: "Practitioner folklore (absence of Chinese bids during SGE holidays)"
+    grade: folklore
+    reported: "None"
+    mechanism: "Asia-session demand missing when Shanghai is shut"
+    tf: "1h, calendar"
+    rule:
+      entry: "During SGE holiday weeks (Golden Week, CNY): short gold 23:00-07:00 UTC each day"
+      side: short_only
+      stop: "1.5 x ATR(1h) x sqrt(8)"
+      exit: "07:00 UTC"
+      hold: "8 h, no rollover"
+    s3k: "session(asia) + CAL date filter"
+    data: "free (SGE calendar)"
+    tested: "partial (H-04 Asia drift stop; holiday-thin hypotheses H-A..H-C)"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# G. Short-term reversal, overreaction, overnight vs intraday
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-130
+    name: "Next-day contrarian after an abnormal-return day (Caporale-Plastun)"
+    family: reversal
+    source: "Caporale, Plastun 2021 Financial Markets and Portfolio Management 35 353-368 'Gold and oil prices: abnormal returns, momentum and contrarian effects' https://link.springer.com/10.1007/s11408-021-00380-w"
+    grade: peer-reviewed
+    reported: "Gold daily 2009-2020: momentum within the abnormal day, contrarian effect the next day; trading simulations 'exploitable' (costs as modelled by authors, net status unverified). Earlier Caporale, Gil-Alana, Plastun 2014: counter-moves not profitable in FX/commodities"
+    mechanism: "Over-reaction to large daily shocks partially reverses as liquidity returns"
+    tf: "1d"
+    rule:
+      entry: "Day t return |r| > mean + 2 x sd of the prior 250 daily returns -> at the 23:00 UTC open after t, take side = -sign(r_t)"
+      side: signal
+      stop: "1.5 x ATR20"
+      exit: "next day 21:00 UTC close"
+      hold: "1 day"
+    s3k: "approx: zscore(250, 2, fade) 1d + time(1 bar)"
+    data: local
+    tested: "partial (sprint200 macro 20 Monday fade of Friday shock, gross +0.086 R t 1.39 n 117; meanrev 25 overextension 1d failed; the generic next-day form not run)"
+    priority: B
+  - id: RT-ACADEMIC-131
+    name: "Abnormal-day same-day continuation"
+    family: trend
+    source: "Caporale, Plastun 2021 (momentum within the abnormal day)"
+    grade: peer-reviewed
+    reported: "Within-day momentum on abnormal days (needs intraday entry before the day is known to be abnormal)"
+    mechanism: "Information days trend"
+    tf: "1h"
+    rule:
+      entry: "By 14:00 UTC, day return > 1.5 sd -> follow to the 21:00 UTC close"
+      side: signal
+      stop: "1 x ATR(1h) x 3"
+      exit: "21:00 UTC"
+      hold: "intraday"
+    s3k: "approx: momentum_sign at 1h with session filter"
+    data: local
+    tested: "yes (H-17 trend-day continuation retired R-17; R-05 intraday momentum retired)"
+    priority: X
+  - id: RT-ACADEMIC-132
+    name: "Weekly reversal after extreme weeks"
+    family: reversal
+    source: "Lehmann 1990 QJE (equities; unverified); contra for commodities: Zhang, Urquhart 2020 Review of Behavioral Finance (no significant reversal profits in 29 commodity futures 1979-2017) https://ideas.repec.org/a/eme/rbfpps/rbf-05-2019-0067.html"
+    grade: peer-reviewed
+    reported: "No reversal profits in commodity futures (Zhang-Urquhart 2020); Bianchi, Drew, Fan 2015 JBF 59 find reversal 12-30 months out, not weekly"
+    mechanism: "Liquidity provision"
+    tf: "weekly"
+    rule:
+      entry: "Weekly return > +2 sd -> short next week; < -2 sd -> long"
+      side: signal
+      stop: "2 x ATR(1d) x sqrt(5)"
+      exit: "1 week"
+      hold: "1 week"
+    s3k: "needs primitive: W1"
+    data: local
+    tested: "partial (sprint200 meanrev daily fades failed)"
+    priority: X
+  - id: RT-ACADEMIC-133
+    name: "Long-horizon reversal (12-30 months) combined with momentum"
+    family: reversal
+    source: "Bianchi, Drew, Fan 2015 JBF 59 423-444 'Combining momentum with reversal in commodity futures' https://ideas.repec.org/a/eee/jbfina/v59y2015icp423-444.html ; Asness, Moskowitz, Pedersen 2013 JF 68(3) commodity value = 5-year reversal (unverified)"
+    grade: peer-reviewed
+    reported: "Cross-sectional double sort momentum + 12-30 month reversal: 20.2% a year vs 11.1% for momentum alone; commodities; gross"
+    mechanism: "Over-reaction corrects over 1-3 years"
+    tf: "monthly"
+    rule:
+      entry: "Month end: f = 10 x [sign(r_12m) - 0.5 x sign(r from t-30m to t-12m)] / 1.5"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP; needs > 2.5 years warm-up"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-134
+    name: "Asia-session momentum (overnight component continuation)"
+    family: session
+    source: "Lou, Polk, Skouras 2019 JFE 134(1) 192-213 'A tug of war: overnight versus intraday expected returns' (firm-level continuation of overnight and intraday components, cross-period reversal) https://personal.lse.ac.uk/polk/research/TugOfWar.pdf"
+    grade: peer-reviewed
+    reported: "Equities: overnight returns continue overnight, intraday continue intraday, for years; components carry opposite-signed profits; gross. Port to gold's clientele split (Asia physical vs Western futures) is untested"
+    mechanism: "Different clienteles trade in different sessions and their demand persists"
+    tf: "1h"
+    rule:
+      entry: "At 23:00 UTC: side = sign(sum of the last 20 Asia-session returns 23:00-07:00 UTC); hold Asia session"
+      side: signal
+      stop: "1.5 x ATR(1h) x sqrt(8)"
+      exit: "07:00 UTC"
+      hold: "8 h, after rollover (no swap)"
+    s3k: "needs primitive: session-return momentum (session filter exists)"
+    data: local
+    tested: "partial (H-04 unconditional Asia long: gross +0.043 R t 3.09, net -0.093 R, stop; the conditional component-momentum form not tested)"
+    priority: B
+  - id: RT-ACADEMIC-135
+    name: "US-session momentum (intraday component continuation)"
+    family: session
+    source: "Lou, Polk, Skouras 2019 (as 134)"
+    grade: peer-reviewed
+    reported: "As 134"
+    mechanism: "As 134 for the Western futures clientele"
+    tf: "1h"
+    rule:
+      entry: "At 13:30 UTC: side = sign(sum of the last 20 13:30-20:00 UTC returns); hold to 20:00 UTC"
+      side: signal
+      stop: "1.5 x ATR(1h) x sqrt(6.5)"
+      exit: "20:00 UTC"
+      hold: "6.5 h, no rollover"
+    s3k: "needs primitive: session-return momentum"
+    data: local
+    tested: "partial (H-24 West drift proposed; R-05 intraday momentum retired)"
+    priority: C
+  - id: RT-ACADEMIC-136
+    name: "Unconditional overnight/day drift (Asia long, West short)"
+    family: session
+    source: "Blose GVSU WP (overnight negative, day positive) https://scholarworks.gvsu.edu/fsdg/200 ; Donati, Jung CBS thesis (hat-shaped)"
+    grade: practitioner-documented
+    reported: "Own: H-04 Asia drift gross +0.043 R t 3.09 on 4,025 events, net -0.093 R: STOP"
+    mechanism: "Clientele demand by session"
+    tf: "1h"
+    rule:
+      entry: "Long 00:00-07:00 UTC"
+      side: long_only
+      stop: "1.5 x ATR(1h)"
+      exit: "07:00 UTC"
+      hold: "7 h"
+    s3k: "session(asia)"
+    data: local
+    tested: "yes (H-04 stop; sprint200 time lane)"
+    priority: X
+  - id: RT-ACADEMIC-137
+    name: "Last-30-minute momentum into the settle"
+    family: session
+    source: "Baltussen, Da, Lammers, Martens 2021 JFE 142(1) 'Hedging demand and market intraday momentum' https://ideas.repec.org/a/eee/jfinec/v142y2021i1p377-403.html"
+    grade: peer-reviewed
+    reported: "60+ futures 1974-2020: rest-of-day return predicts the last 30 minutes (gamma hedging), reverses over following days; gross"
+    mechanism: "Dealer gamma and leveraged-ETF rebalancing; weak in spot XAUUSD"
+    tf: "15m"
+    rule:
+      entry: "13:00 ET: side = sign(return since 08:20 ET); exit 13:30 ET (COMEX settle)"
+      side: signal
+      stop: "1 x ATR15"
+      exit: "13:30 ET"
+      hold: "30 min"
+    s3k: "approx: momentum_sign with session(ny)"
+    data: local
+    tested: "yes (R-05; sprint200 time 03-04 settle-to-settle and Gao-filtered momentum failed)"
+    priority: X
+  - id: RT-ACADEMIC-138
+    name: "First-half-hour predicts last-half-hour"
+    family: session
+    source: "Gao, Han, Li, Zhou 2018 JFE 129(2) (SPY); Jin, Kearney, Li, Yang JFM (Chinese metal futures) https://hull-repository.worktribe.com/output/3295550"
+    grade: peer-reviewed
+    reported: "Positive in SPY and Chinese metal futures; gross"
+    mechanism: "Late-informed traders and infrequent rebalancers"
+    tf: "15m"
+    rule:
+      entry: "sign(first 30 min after COMEX open) -> trade the last 30 min before settle"
+      side: signal
+      stop: "1 x ATR15"
+      exit: settle
+      hold: "30 min"
+    s3k: "approx: opening_range_break variant"
+    data: local
+    tested: "yes (R-05; time lane 04)"
+    priority: X
+  - id: RT-ACADEMIC-139
+    name: "Connors RSI(2) daily pullback"
+    family: reversal
+    source: "Connors, Alvarez 2009 'Short Term Trading Strategies That Work' (equity indices; unverified)"
+    grade: practitioner-documented
+    reported: "Own: sprint200 meanrev 26 failed; RSI2-1H gross +0.041 R t 3.15 net -0.012"
+    mechanism: "Short-term overreaction in an uptrend"
+    tf: "1d"
+    rule:
+      entry: "RSI(2) < 5 and close > SMA200 -> long"
+      side: signal
+      stop: "2 x ATR(1d)"
+      exit: "1 R or 5 days"
+      hold: "up to 5 days"
+    s3k: "rsi_threshold(2, 5, fade) 1d + trend(1d, 200)"
+    data: local
+    tested: "yes (sprint200 meanrev 26 failed)"
+    priority: X
+  - id: RT-ACADEMIC-140
+    name: "Internal bar strength fade"
+    family: reversal
+    source: "Pagonidis 2014 NAAIM paper (equity indices; unverified)"
+    grade: practitioner-documented
+    reported: "Own: sprint200 meanrev 29 failed"
+    mechanism: "Close at the day's extreme overshoots"
+    tf: "1d"
+    rule:
+      entry: "IBS <= 0.10 -> long, >= 0.90 -> short, next day"
+      side: signal
+      stop: "1 x ATR(1d)"
+      exit: "next close"
+      hold: "1 day"
+    s3k: "needs primitive: IBS"
+    data: local
+    tested: "yes (sprint200 meanrev 29 failed)"
+    priority: X
+  - id: RT-ACADEMIC-141
+    name: "Turtle soup (failed 20-day breakout fade)"
+    family: reversal
+    source: "Raschke, Connors 1995 (unverified)"
+    grade: practitioner-documented
+    reported: "Own: sprint200 meanrev 10-12 failed"
+    mechanism: "Trapped breakout traders"
+    tf: "1d"
+    rule:
+      entry: "New 20-day low (prior low >= 4 days old), close back above it -> long"
+      side: signal
+      stop: "day low - 0.1 ATR"
+      exit: "2 R"
+      hold: "days"
+    s3k: "needs primitive: failed-break fade"
+    data: local
+    tested: "yes (sprint200 meanrev 10-12 failed)"
+    priority: X
+  - id: RT-ACADEMIC-142
+    name: "Double 7s (close at 7-day low above SMA200)"
+    family: reversal
+    source: "Connors, Alvarez 2009 (unverified)"
+    grade: practitioner-documented
+    reported: "Equity-index backtests; near-equivalent of 139 and meanrev 33 (4 down days), both failed here"
+    mechanism: "As 139"
+    tf: "1d"
+    rule:
+      entry: "Close at a 7-day low and above SMA200 -> long"
+      side: long_only
+      stop: "2 x ATR20"
+      exit: "close at a 7-day high"
+      hold: "days"
+    s3k: "approx: donchian fade; needs primitive"
+    data: local
+    tested: "partial (near-equivalents failed: meanrev 26, 33)"
+    priority: X
+  - id: RT-ACADEMIC-143
+    name: "Williams 'Oops' (gap below prior low, reclaim)"
+    family: reversal
+    source: "Williams 1999 (unverified)"
+    grade: practitioner-documented
+    reported: "Book examples; near-equivalent of turtle soup and the weekend-gap fade (failed)"
+    mechanism: "Gap traps"
+    tf: "1d"
+    rule:
+      entry: "Open below prior day low, buy-stop at prior day low"
+      side: long_only
+      stop: "day low"
+      exit: "next open or 2 R"
+      hold: "1-2 days"
+    s3k: "needs primitive: gap entry"
+    data: local
+    tested: "partial (OS-SB Sunday gap fade failed; meanrev 10 failed)"
+    priority: X
+  - id: RT-ACADEMIC-144
+    name: "Raschke 80-20 reversal"
+    family: reversal
+    source: "Raschke, Connors 1995 (unverified)"
+    grade: practitioner-documented
+    reported: "Near-equivalent of IBS fade (failed)"
+    mechanism: "Exhaustion closes reverse"
+    tf: "1d"
+    rule:
+      entry: "Prior day opened in top 20% of range and closed in bottom 20%; next day trades 5-15 ticks below prior low then back above it -> long"
+      side: signal
+      stop: "day low"
+      exit: "trail; 1-2 days"
+      hold: "1-2 days"
+    s3k: "needs primitive"
+    data: local
+    tested: "partial (meanrev 29 IBS failed)"
+    priority: X
+
+# ---------------------------------------------------------------------------------------------------------------
+# H. Event-driven (daily)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-145
+    name: "Post-FOMC statement continuation (H-89)"
+    family: event
+    source: "Gao et al. 2018 JFE (news-day momentum, adjacent); own: director memo 2026-11-01 explore n 64 net +$3.49/oz t 3.58, 8 of 8 years"
+    grade: own-data
+    reported: "Own explore only; confirm one look decided by 2026-11-04"
+    mechanism: "Slow digestion of policy news"
+    tf: "1m"
+    rule:
+      entry: "sign(mid t+5m - mid t-1m) at t+6m"
+      side: signal
+      stop: "per H-89"
+      exit: "t+60m"
+      hold: "54 min"
+    s3k: "n/a (own line)"
+    data: local
+    tested: "yes (H-89 running: confirm pending)"
+    priority: X
+  - id: RT-ACADEMIC-146
+    name: "Standardised macro-surprise drift"
+    family: event
+    source: "Roache, Rossi 2010 IMF WP / J. Commodity Markets? 'The effects of economic news on commodity prices' (gold reacts countercyclically; unverified); Elder, Miao, Ramchander 2012 JBF 36(1) (adjustment within minutes; unverified)"
+    grade: peer-reviewed
+    reported: "Gold responds to US surprises within minutes; no documented multi-day drift"
+    mechanism: "Countercyclical haven response"
+    tf: "1d"
+    rule:
+      entry: "Surprise z = (actual - consensus)/sd; |z| > 1 for NFP/CPI -> side = -sign(z) for growth/inflation-hawkish surprises from the next open"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "5 days"
+      hold: "5 days"
+    s3k: "needs primitive: EVT + consensus feed"
+    data: "paid or unavailable (consensus history; H-11 blocked)"
+    tested: "partial (macro lane event drifts without surprise sign failed)"
+    priority: C
+  - id: RT-ACADEMIC-147
+    name: "PBoC reported gold-reserve increase"
+    family: event
+    source: "Practitioner (official-sector buying, ECB 2026 international role of the euro report; Arslanalp, Eichengreen, Simpson-Bell 2023 IMF WP/23/14, unverified)"
+    grade: practitioner-documented
+    reported: "Central-bank buying > 1,000 t a year 2022-24 (data); no event-study of announcement returns found"
+    mechanism: "Price-insensitive official demand; announcement signals continuation"
+    tf: "1d"
+    rule:
+      entry: "Day after PBoC monthly reserve data shows an increase after >= 1 month without -> long 10 days"
+      side: long_only
+      stop: "3 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: EVT + XS (PBoC monthly release dates)"
+    data: "free (PBoC/SAFE releases; release-date history to be built)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-148
+    name: "News-jump continuation vs no-news-jump reversal"
+    family: event
+    source: "Lee, Mykland 2008 RFS (jump test; unverified); Lahaye, Laurent, Neely 2011 J. Applied Econometrics (jumps and news in FX/futures; unverified); hypothesis H-10"
+    grade: peer-reviewed
+    reported: "Jumps cluster at releases; direction after jumps not documented for gold"
+    mechanism: "News jumps carry information (continue); liquidity jumps revert"
+    tf: "15m"
+    rule:
+      entry: "Lee-Mykland jump on 5m returns: within 5 min of a tier-1 release -> follow; otherwise -> fade; enter next 15m open"
+      side: signal
+      stop: "1.5 x ATR15"
+      exit: "4 h"
+      hold: "4 h"
+    s3k: "needs primitive: jump flag"
+    data: local
+    tested: "partial (micro-tick MT-VAC fade of fast moves failed; macro lane 15m fades failed)"
+    priority: C
+  - id: RT-ACADEMIC-149
+    name: "Monetary-policy surprise sign (Fed funds futures)"
+    family: event
+    source: "Awartani, Hussain, Virk 2024 IRFA (dovish surprises move gold more); Kuttner 2001 JME surprise measure (unverified)"
+    grade: peer-reviewed
+    reported: "Asymmetric intraday gold response to FOMC surprises; persistence beyond 5 minutes"
+    mechanism: "Dovish surprises lower opportunity cost and weaken USD"
+    tf: "1d"
+    rule:
+      entry: "Kuttner surprise < -5 bp -> long gold at next 23:00 UTC open; > +5 bp -> short"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "5 days"
+      hold: "5 days"
+    s3k: "needs primitive: EVT + surprise series"
+    data: "paid (fed funds futures intraday) or free proxy: 2-year yield change on FOMC day (local DGS2)"
+    tested: "partial (H-89 uses the price reaction sign, not the surprise)"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# I. Statistical learning and forecast combination (daily to monthly; fold-internal fitting only)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-150
+    name: "Technical-indicator PCA forecast of next-month return"
+    family: ml
+    source: "Neely, Rapach, Tu, Zhou 2014 Management Science 60(7) 1772-1791 'Forecasting the equity risk premium: the role of technical indicators'"
+    grade: peer-reviewed
+    reported: "14 MA/momentum/volume indicators match or beat macro predictors in and out of sample for the US equity premium 1950-2011; combining both helps; caveats: snooping, decay after mid-1980s (CXO), Baetje-Menkhoff 2015 instability"
+    mechanism: "Technical signals capture slow-moving premium changes"
+    tf: "monthly"
+    rule:
+      entry: "Month end: first principal component of 14 binary indicators (MA(1,9),(1,12),(2,9),(2,12),(3,9),(3,12); MOM(9),(12); 6 volume-free proxies replaced by GLD-flow and OI signs), expanding-window OLS forecast; f = 10 x clip(forecast / sd, -2, 2)"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + ML"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-151
+    name: "Forecast combination of macro predictors"
+    family: ml
+    source: "Rapach, Strauss, Zhou 2010 RFS 23(2) 'Out-of-sample equity premium prediction: combination forecasts' (unverified); Welch, Goyal 2008 RFS (single predictors fail out of sample)"
+    grade: peer-reviewed
+    reported: "Mean of univariate forecasts beats the historical mean out of sample for equities (small R2, economically meaningful); gross"
+    mechanism: "Combination shrinks noisy predictors toward the mean"
+    tf: "monthly"
+    rule:
+      entry: "Month end: mean of univariate expanding OLS forecasts of next-month gold return from dDFII10, dUSD, dT10YIE, VIX, term spread, OI growth; long if > historical mean forecast, short if below"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + ML + XS"
+    data: "local + free"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-152
+    name: "Deep momentum network (Sharpe-loss LSTM)"
+    family: ml
+    source: "Lim, Zohren, Roberts 2019 J. Financial Data Science 'Enhancing time series momentum strategies using deep neural networks'; arXiv 1904.04912"
+    grade: peer-reviewed
+    reported: "On 88 continuous futures, Sharpe-optimised LSTM more than doubles the Sharpe of classic TSMOM without costs; turnover regularisation proposed for costs; gross"
+    mechanism: "Learns trend estimation and sizing jointly"
+    tf: "1d"
+    rule:
+      entry: "Position = tanh(LSTM(63 days of normalised returns at 1/21/63/126/252 horizons, MACD features)) x vol target; trained on a futures panel, applied to gold"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + ML + futures panel"
+    data: "paid or unverified free (multi-futures daily panel)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-153
+    name: "Momentum transformer"
+    family: ml
+    source: "Wood, Giegerich, Roberts, Zohren 2023? J. Financial Data Science / arXiv 2112.08534 'Trading with the momentum transformer' (unverified)"
+    grade: peer-reviewed
+    reported: "Attention-based model with changepoint inputs improves on LSTM deep momentum on a futures panel (unverified)"
+    mechanism: "As 152"
+    tf: "1d"
+    rule:
+      entry: "As 152 with a transformer encoder and multi-scale changepoint features"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP + ML + futures panel"
+    data: "paid or unverified free"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-154
+    name: "Gradient-boosted 5-day return forecast on daily macro and price features"
+    family: ml
+    source: "Gu, Kelly, Xiu 2020 RFS 33(5) (ML gains real cross-sectionally, tiny for the market as a whole; unverified DOI)"
+    grade: peer-reviewed
+    reported: "Monthly market-level out-of-sample R2 < 1%"
+    mechanism: "Nonlinear interactions"
+    tf: "1d"
+    rule:
+      entry: "Daily: LightGBM on <= 40 PIT features (macro-v1, COT/GLD, calendar, RV, trend states) predicting 5-day return; long top quintile forecast, short bottom; purged walk-forward"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "5 days"
+      hold: "5 days"
+    s3k: "needs primitive: ML"
+    data: local
+    tested: "partial (R-07/R-20 meta-label models over intraday generators failed; a daily direct forecast not run)"
+    priority: C
+  - id: RT-ACADEMIC-155
+    name: "Two-state Markov regime-switching trend"
+    family: regime
+    source: "Hamilton 1989 Econometrica (method; unverified); Ang, Timmermann 2012 Annual Review of Financial Economics 'Regime changes and financial markets' (unverified)"
+    grade: peer-reviewed
+    reported: "Regimes are well documented in returns and volatility; trading gains from them are mixed"
+    mechanism: "Persistent bull/bear states"
+    tf: "weekly"
+    rule:
+      entry: "Fit 2-state Gaussian HMM on weekly returns (expanding window, refit yearly); long when P(bull) > 0.7, short when P(bear) > 0.7, else flat"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + ML"
+    data: local
+    tested: "no"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# J. Chart patterns (folklore for gold; kept so the tested universe stays explicit)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-156
+    name: "Kernel-smoothed head-and-shoulders / double bottom (Lo-Mamaysky-Wang)"
+    family: pattern
+    source: "Lo, Mamaysky, Wang 2000 JF 55(4) 'Foundations of technical analysis' (unverified)"
+    grade: peer-reviewed
+    reported: "Patterns detected by kernel regression change the conditional return distribution of US stocks 1962-1996; not a profitability test"
+    mechanism: "Pattern completion reflects supply/demand shifts"
+    tf: "1d"
+    rule:
+      entry: "Kernel regression (bandwidth by CV x 0.3) over 38-day windows; on a completed inverse H&S or double bottom, buy at the neckline break close"
+      side: signal
+      stop: "below the right shoulder"
+      exit: "measured move or 20 days"
+      hold: "up to 20 days"
+    s3k: "needs primitive: kernel pattern detector"
+    data: local
+    tested: "no (R-09 retired chart tools as standalone rules but listed SMC/pivots/candles, not kernel patterns)"
+    priority: C
+  - id: RT-ACADEMIC-157
+    name: "Bulkowski double bottom/top (Adam and Eve)"
+    family: pattern
+    source: "Bulkowski 2005 'Encyclopedia of Chart Patterns' 2nd ed., Wiley (US stocks statistics; unverified)"
+    grade: folklore
+    reported: "Stock-based breakout statistics; none for gold"
+    mechanism: "Twice-defended level"
+    tf: "1d"
+    rule:
+      entry: "Two lows within 3% and 10-60 days apart; close above the intervening high -> long"
+      side: signal
+      stop: "below the lower low"
+      exit: "measured move or 30 days"
+      hold: "up to 30 days"
+    s3k: "approx: level_break with swing points"
+    data: local
+    tested: "partial (level_break specs in s3k; R-13 equal highs/lows as magnets retired)"
+    priority: C
+  - id: RT-ACADEMIC-158
+    name: "Flag after a thrust (daily)"
+    family: pattern
+    source: "Bulkowski 2005 (unverified)"
+    grade: folklore
+    reported: "None for gold"
+    mechanism: "Pause in a strong trend"
+    tf: "1d"
+    rule:
+      entry: "10-day move > 3 x ATR20 then 3-8 days with range < 1.5 x ATR20 against it; close beyond the flag -> follow"
+      side: signal
+      stop: "opposite end of the flag"
+      exit: "measured move or 20 days"
+      hold: "up to 20 days"
+    s3k: "needs primitive: thrust-then-compression pattern"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-159
+    name: "Outside-week reversal"
+    family: pattern
+    source: "Practitioner (Williams 1999, unverified)"
+    grade: folklore
+    reported: "None"
+    mechanism: "Engulfing range on the weekly clock"
+    tf: "1w"
+    rule:
+      entry: "Week makes a higher high and lower low than the prior week and closes in its bottom 25% -> short next week (mirror long)"
+      side: signal
+      stop: "the outside week's extreme"
+      exit: "2 weeks"
+      hold: "2 weeks"
+    s3k: "needs primitive: W1"
+    data: local
+    tested: "partial (engulfing patterns at 1h/4h failed: sprint200 patterns 01-05)"
+    priority: X
+  - id: RT-ACADEMIC-160
+    name: "Head-and-shoulders top, weekly"
+    family: pattern
+    source: "Bulkowski 2005; Osler, Chang 1995 NY Fed staff report (H&S in FX: some profit, not robust; unverified)"
+    grade: peer-reviewed
+    reported: "FX H&S signals modestly profitable in some currencies 1973-1994, not robust (unverified)"
+    mechanism: "Distribution top"
+    tf: "1w"
+    rule:
+      entry: "Algorithmic H&S (Osler-Chang definition) on weekly closes; neckline break -> short"
+      side: short_only
+      stop: "above the right shoulder"
+      exit: "measured move or 12 weeks"
+      hold: "up to 12 weeks"
+    s3k: "needs primitive: W1 + pattern detector"
+    data: local
+    tested: "no"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# K. Risk, exits and portfolio construction around the survivors
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-161
+    name: "Stop-loss with re-entry on long gold (Kaminski-Lo)"
+    family: risk
+    source: "Kaminski, Lo 2014 J. Financial Markets 18 234-254 'When do stop-loss rules stop losses?' https://dspace.mit.edu/handle/1721.1/114876"
+    grade: peer-reviewed
+    reported: "Under a random walk, stop-loss rules always lower expected return; with momentum they can add value (50-100 bp a month in stop-out periods for a stock/bond switch, 1950-2004)"
+    mechanism: "Stops harvest momentum after losses; they cost money without it (relevant to our tight-stop designs)"
+    tf: "monthly"
+    rule:
+      entry: "Hold long gold (CP-HOLD); exit to flat when the trailing 1-month return < -5%"
+      side: long_only
+      stop: "the rule itself"
+      exit: "re-enter when the trailing 1-month return > 0"
+      hold: months
+    s3k: "needs primitive: CP"
+    data: local
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-162
+    name: "Sleeve combination: trend + haven events + seasonality at equal risk"
+    family: portfolio
+    source: "Carver 2015 portfolio construction (unverified); Hurst-Ooi-Pedersen 2017 (trend as crisis alpha)"
+    grade: practitioner-documented
+    reported: "Diversifying uncorrelated sleeves raises portfolio Sharpe roughly with sqrt(N) when correlations are low"
+    mechanism: "Diversification, not a new edge"
+    tf: "1d"
+    rule:
+      entry: "Equal risk weights across the sleeves that individually pass (e.g. 015 + 102 + 117), FDM from realised correlations in the learning window only"
+      side: "as sleeves"
+      stop: "as sleeves"
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP portfolio"
+    data: local
+    tested: "no (conditional on component passes)"
+    priority: C
+  - id: RT-ACADEMIC-163
+    name: "Pyramiding a daily trend (Turtle units)"
+    family: risk
+    source: "Faith 2007 (unverified)"
+    grade: practitioner-documented
+    reported: "Turtle rules added units every 0.5 N up to 4; no independent test"
+    mechanism: "Convexity in long trends"
+    tf: "1d"
+    rule:
+      entry: "On 025 entries add one unit at each +0.5 x ATR20, max 4 units, stops moved to 2 x ATR20 below the last add"
+      side: signal
+      stop: "2 x ATR20 below the last add"
+      exit: "20-day opposite channel"
+      hold: "weeks to months"
+    s3k: "needs primitive: pyramiding"
+    data: local
+    tested: "partial (GS-C2 intraday pyramiding failed: C2a -0.36 R, C2b -0.03 R)"
+    priority: C
+
+# ---------------------------------------------------------------------------------------------------------------
+# L. Intraday rules with literature support already covered here (kept so they are not re-tested)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-164
+    name: "Opening-range breakout"
+    family: session
+    source: "Holmberg, Loennbark, Lundstroem 2013 Finance Research Letters 10(1) 27-33 'Assessing the profitability of intraday opening range breakout strategies' (crude oil futures per thesis keywords; unverified sample)"
+    grade: peer-reviewed
+    reported: "ORB profitable in crude oil futures in-sample (unverified figures)"
+    mechanism: "Opening order flow"
+    tf: "15m"
+    rule:
+      entry: "Break of the first 30-60 minute range of London/NY/SGE"
+      side: signal
+      stop: "opposite end of the range"
+      exit: "session end"
+      hold: intraday
+    s3k: "opening_range_break(session, minutes)"
+    data: local
+    tested: "yes (R-02; sprint200 LON-OR60, NY-OR60, SGE-OR failed)"
+    priority: X
+  - id: RT-ACADEMIC-165
+    name: "London fix front-running"
+    family: session
+    source: "Caminschi, Heaney 2014 JFM 34(11) https://ideas.repec.org/a/wly/jfutmk/v34y2014i11p1003-1039.html"
+    grade: peer-reviewed
+    reported: "Pre-2015 leakage around the PM fix; venue reformed 2015"
+    mechanism: "Information leakage (gone)"
+    tf: "1m"
+    rule:
+      entry: "Trade the first minutes of the fix in the direction of the early auction"
+      side: signal
+      stop: n/a
+      exit: "fix publication"
+      hold: minutes
+    s3k: "n/a"
+    data: local
+    tested: "yes (R-08; sprint200 time 05-07 fix fades failed)"
+    priority: X
+  - id: RT-ACADEMIC-166
+    name: "Intraday 5-minute MA crossovers on spot gold"
+    family: trend
+    source: "Urquhart, Batten, Lucey, McGroarty, Peat 2015 WP 'Does technical analysis beat the market? Evidence from high frequency trading in gold and silver' (66,297 rules, 2008-2014; CXO summary https://www.cxoadvisory.com/technical-trading/high-frequency-technical-trading-of-gold-and-silver/)"
+    grade: practitioner-documented
+    reported: "Some 5-minute rules profitable in gold out of sample, not silver; common (1,50)-(1,200) rules lose; costs unclear; working paper"
+    mechanism: "Short-horizon trend in spot gold (contradicted for small-tick contracts after 2009 by Kurth et al. 2026)"
+    tf: "5m"
+    rule:
+      entry: "Best in-sample MA rule selected on a training window, traded out of sample"
+      side: signal
+      stop: none
+      exit: "opposite cross"
+      hold: minutes-hours
+    s3k: "ma_cross at 15m/1h (174 1h specs in s3k)"
+    data: local
+    tested: "yes (R-03/R-04/R-06 intraday trend retired; discovery v1/v2 R-18)"
+    priority: X
+
+# ---------------------------------------------------------------------------------------------------------------
+# M. Attention, sentiment and volume proxies (daily/weekly)
+# ---------------------------------------------------------------------------------------------------------------
+  - id: RT-ACADEMIC-167
+    name: "Search-attention spike (Google Trends 'gold price')"
+    family: sentiment
+    source: "Da, Engelberg, Gao 2011 JF 66(5) 'In search of attention' (equities; unverified)"
+    grade: peer-reviewed
+    reported: "Search volume spikes predict higher prices for 2 weeks then reversal within a year (Russell 3000 IPOs/stocks); gross (unverified)"
+    mechanism: "Retail attention brings buying pressure that later reverses"
+    tf: "weekly"
+    rule:
+      entry: "Weekly SVI z-score (vs prior 8-week median) > 2 -> short gold from week 3 to week 8 (reversal leg only, the 2-week pressure leg is too fast for weekly data)"
+      side: short_only
+      stop: "2.5 x ATR(1d) x sqrt(5)"
+      exit: "week 8"
+      hold: "6 weeks"
+    s3k: "needs primitive: W1 + XS (Google Trends; rescaling makes history non-PIT unless snapshotted)"
+    data: "free (Google Trends; PIT caveat)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-168
+    name: "Gold news-sentiment tilt"
+    family: sentiment
+    source: "Smales 2014 JBF 49 'News sentiment in the gold futures market' (unverified)"
+    grade: peer-reviewed
+    reported: "Asymmetric gold futures response to news sentiment; contemporaneous mostly (unverified)"
+    mechanism: "Slow incorporation of negative news"
+    tf: "1d"
+    rule:
+      entry: "Daily net sentiment of gold headlines (own collector, forward-only) in top/bottom decile -> follow for 3 days"
+      side: signal
+      stop: "2 x ATR20"
+      exit: "3 days"
+      hold: "3 days"
+    s3k: "needs primitive: XS (news collector is forward-only; no history)"
+    data: "paid for history (news analytics); local forward-only"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-169
+    name: "COMEX volume spike with price direction"
+    family: flows
+    source: "Practitioner volume-confirmation rule; Gervais, Kaniel, Mingelgrin 2001 JF 'The high-volume return premium' (equities; unverified)"
+    grade: peer-reviewed
+    reported: "Stocks with unusually high volume outperform over the next month (equities, unverified)"
+    mechanism: "Volume shocks raise visibility and demand"
+    tf: "1d"
+    rule:
+      entry: "GC front-month daily volume > 2 x its 50-day median: side = sign(day return); hold 10 days"
+      side: signal
+      stop: "2.5 x ATR20"
+      exit: "10 days"
+      hold: "10 days"
+    s3k: "needs primitive: XS (COMEX daily volume)"
+    data: "free (Yahoo GC=F volume, licence unverified; CME daily bulletin)"
+    tested: "partial (tick-count activity proxies at 1m failed: MT-TIM)"
+    priority: C
+  - id: RT-ACADEMIC-170
+    name: "Trend only after up-markets (market-state momentum)"
+    family: regime
+    source: "Cooper, Gutierrez, Hameed 2004 JF 59(3) 'Market states and momentum' (equities; unverified)"
+    grade: peer-reviewed
+    reported: "Momentum profits occur only after UP market states (36-month market return > 0); equities 1929-1995; gross (unverified)"
+    mechanism: "Overconfidence rises after gains, strengthening continuation"
+    tf: "1d"
+    rule:
+      entry: "f_015 applied only when gold's 36-month return > 0; else f = 0"
+      side: signal
+      stop: none
+      exit: continuous
+      hold: continuous
+    s3k: "needs primitive: CP"
+    data: "local (needs 2007+ for the first 36-month state; pre-2010 daily from W2 LEARN-OLD/TEST-OLD)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-171
+    name: "Commodity-complex trend spillover"
+    family: trend
+    source: "Moskowitz, Ooi, Pedersen 2012 (TSMOM correlated within asset classes; unverified); Levine, Ooi, Richardson, Sasseville 2018 FAJ 74(2) 55-68 'Commodities for the long run' (1877+ futures; returns from spot moves, momentum/carry/value mildly predictive at 1 month per summaries)"
+    grade: peer-reviewed
+    reported: "Commodity index returns somewhat predictable at 1 month from carry, value and momentum (secondary summary); gross"
+    mechanism: "Common commodity-cycle factor (inflation, dollar, global demand) trends"
+    tf: "monthly"
+    rule:
+      entry: "Month end: f = 10 x sign(12-month return of a broad commodity index ex-precious) when it agrees with sign(r252 gold); else 0"
+      side: signal
+      stop: none
+      exit: monthly
+      hold: rolled
+    s3k: "needs primitive: CP + XS (commodity index daily; AQR public 'Commodities for the long run' monthly data to 2015)"
+    data: "free (AQR dataset monthly; daily index licence unverified)"
+    tested: "no"
+    priority: C
+  - id: RT-ACADEMIC-172
+    name: "Real-yield momentum only in high-beta regimes"
+    family: macro
+    source: "SOTA B1 (real-yield correlation 0.84 in 2005-21, ~0.03 in 2022-23; RBC, Janus Henderson notes); Erb-Harvey 2013"
+    grade: practitioner-documented
+    reported: "The relation is time-varying; a regime-aware version is untested"
+    mechanism: "Trade the opportunity-cost channel only when it is active"
+    tf: "1d, weekly"
+    rule:
+      entry: "Friday: if the 1-year rolling beta of daily gold returns on dDFII10 has t < -3, f = -10 x sign(63-day change DFII10); else f = 0"
+      side: signal
+      stop: none
+      exit: weekly
+      hold: rolled
+    s3k: "needs primitive: CP + XS + rolling beta"
+    data: local
+    tested: "partial (H-84 V1 unconditional 20-day form failed; R-08)"
+    priority: C
