@@ -138,3 +138,17 @@ def test_frames_for_several_filters_in_one_pass_equal_one_frame_per_filter(bars_
         pd.testing.assert_frame_equal(many[f].drop(columns=["available_utc"]).reset_index(drop=True),
                                       one.iloc[::97].drop(columns=["ts_utc", "available_utc"]).reset_index(drop=True),
                                       check_exact=True)
+
+
+def test_every_level_block_of_the_sprint3000_catalogue_maps_to_a_zone_view():
+    from pathlib import Path
+
+    import yaml
+    cat = yaml.safe_load(Path("config/research/sprint3000_catalogue.yaml").read_text())
+    specs = cat["specs"]
+    level = [s for s in specs if s["entry"]["type"] in lv.ENTRY_TYPES
+             or any(f["type"] in lv.FILTER_TYPES for f in s.get("filters") or [])]
+    assert len(level) == 379                                    # prereg: 379 level-based specs
+    views = lv.filters_for(specs)
+    assert kl.LevelFilter(lv.ROOM_MIN_STRENGTH_PCT, None) in views
+    assert all(f.min_tf is None or f.min_tf in kl.TF_RANK for f in views)
