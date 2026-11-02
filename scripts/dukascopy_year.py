@@ -149,7 +149,16 @@ def datafeed_url(day: dt.date, side: str, inst: Instrument | None = None) -> str
     return f"{DATAFEED}/{code}/{day.year:04d}/{day.month - 1:02d}/{day.day:02d}/{side.upper()}_candles_min_1.bi5"
 
 
+# Seconds to wait before each archive request (`--pause`). 0 on Actions (one runner, its own throttling); a local Mac
+# pull of the pre-2010 years runs with a pause so a backfill of thousands of day files stays polite.
+REQUEST_PAUSE_S = 0.0
+# `--no-node-fallback`: archive only. A local pull does not download and run dukascopy-node from npm.
+NODE_FALLBACK = True
+
+
 def _http_get(url: str, timeout: int = 30) -> bytes:
+    if REQUEST_PAUSE_S > 0:
+        time.sleep(REQUEST_PAUSE_S)
     req = urllib.request.Request(url, headers={"User-Agent": "goldbot-data/1"})
     with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (fixed https host)
         return bytes(r.read())
@@ -210,6 +219,8 @@ def _fetch(start: dt.date, end: dt.date, side: str, outdir: Path, salvage: bool 
     df, err = _fetch_datafeed(start, end, side, inst)
     if df is not None:
         return df, ""
+    if not NODE_FALLBACK:
+        return None, f"datafeed: {err}; node fallback off"
     df, err2 = _fetch_node(start, end, side, outdir, salvage=salvage, inst=inst)
     return df, "" if df is not None else f"datafeed: {err}; node: {err2}"
 
@@ -389,7 +400,14 @@ def main() -> int:
     ap.add_argument("--months", default=None,
                     help="targeted refetch: comma-separated YYYY-MM; only this year's are downloaded, the rest are kept "
                          "from --existing (required)")
+    ap.add_argument("--pause", type=float, default=0.0,
+                    help="seconds to wait before each archive request (polite local backfill; default 0)")
+    ap.add_argument("--no-node-fallback", action="store_true",
+                    help="read the bi5 archive only; never fall back to dukascopy-node (npx)")
     args = ap.parse_args()
+    global REQUEST_PAUSE_S, NODE_FALLBACK
+    REQUEST_PAUSE_S = max(0.0, args.pause)
+    NODE_FALLBACK = not args.no_node_fallback
     inst = INSTRUMENTS[args.symbol]
     months = list(month_range(args.year))
     wanted: set[str] | None = None
