@@ -53,6 +53,8 @@ set -euo pipefail
 export HARNESS_PID=$$
 source "$SCRIPT"
 [ -z "${TEST_POLL_S:-}" ] || POLL_S=$TEST_POLL_S   # fewer fake-clock polls: each one spawns python stubs
+PROBE=$T/bin/goldbot-bridge-probe                  # MT5 box: the bridge's /health token (present only when a test writes it)
+setpriv() { while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; "$@"; }   # no uid switch in a test
 ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role; ROLLBACK_FLOOR=$T/floor
 APPROVED=$ROOT/state/deploy/approved.json; PY_BRAIN=$PYTHON
 STAGE=$T/stage; STAGE_LOCK=$T/stage.lock; WATCH_FILE=$VAR/watch; UV=$T/bin/uv
@@ -120,6 +122,8 @@ elif cmd == "is-active":
 elif cmd == "show":
     if "ActiveState" in sys.argv:
         print("active" if up(norm(args[-1])) else "failed")
+    elif "ExecStart" in sys.argv:
+        print(st.get("exec_start", {}).get(norm(args[-1]), ""))
     elif "NRestarts" in sys.argv:
         calls = os.path.join(T, "show_calls")
         n = int(open(calls).read()) + 1 if os.path.exists(calls) else 1
@@ -1156,3 +1160,88 @@ def test_the_box_checkout_reads_nothing_of_the_machines_git(tmp_path, monkeypatc
     assert _git(box.root, "rev-parse", "HEAD") == box.c1
     bare = subprocess.run(["git", "clone", "-q", str(box.origin), str(tmp_path / "bare")], capture_output=True)
     assert bare.returncode != 0                                              # the old call, on the same poisoned env
+
+
+# ---------------------------------------------------------------- MT5 box: the bridge must answer GET /health
+# incident 2026-11-02 (docs/incidents/2026-11-02-multi-instrument.md): the probe box's deploy passed its stability
+# window at 18:33:28 while the bridge only answered /health at 18:35:54. On an MT5 box the deploy now passes only once
+# every bridge that ran before answers (any terminal token) within BRIDGE_ANSWER_S of the switch; else it rolls back.
+FAKE_PROBE = """#!/bin/sh
+echo "$*" >> "$T/probe.log"
+n=$(wc -l < "$T/probe.log" | tr -d ' ')
+after=$(cat "$T/probe_after" 2>/dev/null || echo 0)
+if [ "$after" -gt 0 ] && [ "$n" -ge "$after" ]; then cat "$T/probe_answer" 2>/dev/null || echo ok; else echo noanswer; fi
+"""
+
+
+def _mt5_box(tmp_path: Path, *, answer_after: int | None, token: str = "ok") -> Box:
+    box = Box(tmp_path, running="c1", aux=None)
+    (tmp_path / "role").write_text("mt5\n")
+    (tmp_path / "units.json").write_text(json.dumps({"units": {
+        "goldbot-bridge@icm-probe.service": {"enabled": True, "active": True}}}))
+    if answer_after is not None:
+        probe = tmp_path / "bin" / "goldbot-bridge-probe"
+        probe.write_text(FAKE_PROBE)
+        probe.chmod(0o755)
+        (tmp_path / "probe_after").write_text(str(answer_after))
+        (tmp_path / "probe_answer").write_text(token + "\n")
+    return box
+
+
+def test_an_mt5_deploy_whose_bridge_never_answers_health_rolls_back_after_8_minutes(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=0)                                   # /health never answers
+    t0 = _clock(box)
+    p = box.run(box.c2)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "rolled_back" and box.head() == box.c1
+    assert "bridge@icm-probe did not answer GET /health" in rec["detail"]
+    assert _clock(box) - t0 >= 480                                             # it waited its 8 minutes first
+    assert all(ln.split() == ["8765", "20"] for ln in _lines(box, "probe.log"))   # the default port, 20 s each
+    assert not (tmp_path / "watch_spawned").exists()
+
+
+def test_an_mt5_deploy_passes_only_once_the_bridge_answers(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=4)                                   # answers on the 4th probe
+    t0 = _clock(box)
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed" and box.head() == box.c2
+    assert len(_lines(box, "probe.log")) == 4 and _clock(box) - t0 < 480
+    assert "bridge@icm-probe answers GET /health" in rec["detail"]
+
+
+def test_a_bridge_that_answers_with_its_terminal_logged_out_still_passes_and_is_named(tmp_path):
+    # a login a rollback cannot restore is not a code fault: deployed, and the detail says so
+    box = _mt5_box(tmp_path, answer_after=1, token="not_logged_in")
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed" and "terminal not_logged_in" in rec["detail"]
+
+
+def test_an_mt5_box_without_the_probe_says_the_bridge_was_not_checked(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=None)                                # older box: no probe installed
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "bridge /health not checked" in box.records()[-1]["detail"]
+
+
+def test_the_bridge_port_comes_from_the_watchdogs_unit(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1)
+    st = json.loads((tmp_path / "units.json").read_text())
+    st["exec_start"] = {"goldbot-bridge-watchdog@icm-probe.service":
+                        "{ path=/usr/local/sbin/goldbot-bridge-watchdog ; argv[]=/usr/local/sbin/goldbot-bridge-watchdog "
+                        "icm-probe 8766 ; ignore_errors=no }"}
+    (tmp_path / "units.json").write_text(json.dumps(st))
+    assert box.run(box.c2).returncode == 0
+    assert _lines(box, "probe.log") == ["8766 20"]
+
+
+def test_a_brain_deploy_never_probes_a_bridge(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    probe = tmp_path / "bin" / "goldbot-bridge-probe"
+    probe.write_text(FAKE_PROBE)
+    probe.chmod(0o755)
+    assert box.run(box.c2).returncode == 0 and _lines(box, "probe.log") == []
