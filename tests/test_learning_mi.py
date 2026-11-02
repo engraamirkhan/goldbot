@@ -116,8 +116,9 @@ def test_the_pairs_run_now_lane_l3_routes_each_to_its_own_instrument() -> None:
             arm = X.Arm(spec=row, style="intraday", control_share=0.02 if row is c else None)
             cfg = X.ExplorationConfig(enabled=True, pots={"intraday": X.Pot(max_open=1)}, arms=(arm,),
                                       pot_budgets=False)
-            assert arm.instrument == key and X.book_config(cfg, key) is not None
-            assert X.book_config(cfg, key).arms == (arm,) and X.book_config(cfg, "XAUUSD").arms == ()
+            own, gold = X.book_config(cfg, key), X.book_config(cfg, "XAUUSD")
+            assert arm.instrument == key and own is not None and gold is not None
+            assert own.arms == (arm,) and gold.arms == ()
 
 
 def test_every_listed_instrument_has_its_pair_in_the_spec_and_in_the_docs_table() -> None:
