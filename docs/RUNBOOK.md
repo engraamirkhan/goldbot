@@ -1166,10 +1166,11 @@ adds 360 px; `PYTHON`, `UI_SHOTS_PORT` (default 8795) and `PW_CHROMIUM_PATH` as 
    secret: type it on the VPS only.
 3. The dashboard enforces its own login (email, password, authenticator code) and roles on the public URL.
 
-The tunnel only carries the dashboard. The TradingView webhook, direct pull and author-ideas feeds were retired on
-2026-11-02 (ADR 0066). Their setup steps, formerly sections 2.7b, 2.7c, 2.7d and 2.7f, are kept in the repository
-history. The data they collected stays on the brain (`state/tv.db`, `state/tv_ideas.db`, `data/tv_indicators`) and
-in the backups.
+The tunnel only carries the dashboard. The TradingView chart-data path (webhook alerts, direct pull, CSV import,
+TradingView features and specialists) was retired on 2026-11-02 (ADR 0066): the engine trades on the broker's own
+real-time prices. Its setup steps, formerly sections 2.7b, 2.7c and 2.7d, are kept in the repository history. The
+data it collected stays on the brain (`state/tv.db`, `data/tv_indicators`) and in the backups. The author-ideas feed
+stays (2.7f).
 
 ### 2.7e The three indicators on the MT5 chart (requires owner approval; not installed)
 
@@ -1192,6 +1193,39 @@ They have not been compiled in CI (no MetaEditor there). Once the owner approves
 2. Open each in MetaEditor (F4) and Compile (F7); fix any error in the repo first, never only on the box.
 3. In the Navigator, refresh Indicators and drag each one onto the XAUUSD chart; keep the default inputs.
 4. To remove: delete the indicator from the chart (the box rectangles go with it) and the files from the folder.
+
+### 2.7f TradingView author ideas (the authors you follow; ADR 0059; Claude runs it)
+
+goldbot follows the published ideas of the TradingView authors in `tv_ideas.authors` (KnightsofGold, Goldviewfx,
+ArmanShabanTrading). It reads TradingView's public ideas listing and each idea's page data, sends no cookie, never
+writes to TradingView, and spaces requests at least 3 s apart (2 s for the one-time back catalogue). The text stays
+in `state/tv_ideas.db` on the brain and in `raw/tv_ideas/` on the Mac, never in the repo. Nothing for you to do.
+
+On the brain (no secret needed; the release with `tv-ideas` deployed and healthy):
+
+1. One poll by hand first: `goldbot run tv-ideas poll` must print `tv-ideas poll: ok`.
+2. Install and start the unit from root's own clone of the deployed commit `<SHA>` (the full 40-character commit
+   `goldbot-deploy` last recorded in `/var/lib/goldbot-deploy/deploys.jsonl`; docs/AGENT_STANDARDS.md "Root-run
+   tooling"). Never install it from `/opt/goldbot`, which the service user can write:
+   `sudo env S=<SHA> U=goldbot-tv-ideas bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-ideas`
+   Repeat this line when a release changes `goldbot-tv-ideas.service` (the installed unit is a copy).
+3. Check: `systemctl is-active goldbot-tv-ideas` = active; `journalctl -u goldbot-tv-ideas -n 5` shows
+   `tv-ideas poll: ok`; `goldbot run health` shows `tv_ideas` ok.
+4. Rollback: `sudo systemctl disable --now goldbot-tv-ideas`. The file stays, and polling resumes where it stopped.
+
+On the Mac (research copy, one-time, resumable):
+`python -m goldbot.ops.run tv-ideas backfill --state raw/tv_ideas`, then
+`python -m goldbot.ops.run tv-ideas summary --state raw/tv_ideas` and
+`... export --state raw/tv_ideas --out raw/tv_ideas` (Parquet). Run it only by hand; never run `follow` on the Mac.
+After a parser change, `tv-ideas reparse --state DIR` recomputes the parsed levels; the text is never changed.
+
+Point in time: join on `available_utc` only. Live rows are available when we first held the full text. Rows with
+`backfilled=1` are available at TradingView's time + 900 s (the author's claim). `edited` ideas have later
+versions or updates, each with its own time.
+
+Health `tv_ideas` WARNs when no poll succeeded for 2 h on a weekday (UTC). It never FAILs, and it never blocks
+trading. A TradingView block or a change to the endpoint shows as failed polls in `journalctl`. The service backs
+off (5 min doubling to 6 h, never faster than the 12-minute poll).
 
 ### 2.8 Telegram bot with @BotFather
 
