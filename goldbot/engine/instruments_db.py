@@ -64,10 +64,17 @@ def _ccy(info: Any, field: str) -> str | None:
     return str(v).strip().upper() or None if v is not None else None
 
 
-def swap_per_lot(info: Any, price: float | None = None) -> tuple[float | None, float | None, str]:
+MT5_CALC_FOREX = 0                  # SYMBOL_CALC_MODE_FOREX
+PRICE_IS_A_RATE_GROUPS = frozenset({"fx", "metals"})   # registry groups whose price is profit ccy per unit of base
+
+
+def swap_per_lot(info: Any, price: float | None = None,
+                 group: str | None = None) -> tuple[float | None, float | None, str]:
     """(long, short, note): symbol_info's swap as profit currency per lot per night, broker sign; (None, None, why)
     for a mode or currency this rule does not convert. `price`: the symbol's price (profit currency per unit of its
-    base), needed only for a mode 2/3 amount in a base currency other than the profit currency."""
+    base), needed only for a mode 2/3 amount in a base currency other than the profit currency. That "x price" holds
+    only for a pair quoted as base/profit (trading-safety review of #319, F5): MT5 calc mode FOREX, or registry
+    `group` fx or metals. For an index or a commodity the price is not an exchange rate: unknown (entries refused)."""
     mode = getattr(info, "swap_mode", None)
     lng, sht = getattr(info, "swap_long", None), getattr(info, "swap_short", None)
     if mode is None or lng is None or sht is None:
@@ -82,15 +89,16 @@ def swap_per_lot(info: Any, price: float | None = None) -> tuple[float | None, f
         profit, base = _ccy(info, "currency_profit"), _ccy(info, "currency_base")
         if unit is not None and unit == profit:
             return float(lng), float(sht), f"swap mode {int(mode)}: in the profit currency {profit}"
-        if unit is not None and unit == base and profit is not None and price is not None and math.isfinite(price) \
-                and price > 0:
+        rate = getattr(info, "trade_calc_mode", None) == MT5_CALC_FOREX or group in PRICE_IS_A_RATE_GROUPS
+        if rate and unit is not None and unit == base and profit is not None and price is not None \
+                and math.isfinite(price) and price > 0:
             return float(lng) * price, float(sht) * price, f"swap mode {int(mode)}: {unit} x price into {profit}"
     return None, None, f"swap mode {int(mode)} not converted: entries refused (swap_unknown)"
 
 
 def terms_from_info(account_id: str, symbol: str, store_symbol: str, info: Any, now: pd.Timestamp,
-                    price: float | None = None) -> InstrumentTerms:
-    lng, sht, note = swap_per_lot(info, price)
+                    price: float | None = None, group: str | None = None) -> InstrumentTerms:
+    lng, sht, note = swap_per_lot(info, price, group)
     triple = getattr(info, "swap_rollover3days", None)
     return InstrumentTerms(account_id=account_id, symbol=symbol, store_symbol=store_symbol,
                            contract_size=float(info.contract_size), digits=int(info.digits), point=float(info.point),

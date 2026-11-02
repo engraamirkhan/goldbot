@@ -127,5 +127,22 @@ def test_swap_in_the_profit_currency_is_converted_for_index_cfds():
     # an older bridge (no base or margin currency reported): unknown, as before
     assert swap_per_lot(base.model_copy(update={"swap_mode": 3}))[:2] == (None, None)
     fx = base.model_copy(update={"swap_mode": 2, "currency_base": "EUR", "currency_profit": "USD", "swap_long": -2.0})
-    assert swap_per_lot(fx, price=1.1)[0] == pytest.approx(-2.2)
-    assert swap_per_lot(fx)[:2] == (None, None)
+    assert swap_per_lot(fx, price=1.1, group="fx")[0] == pytest.approx(-2.2)
+    assert swap_per_lot(fx, group="fx")[:2] == (None, None)
+
+
+def test_the_base_currency_times_price_rule_is_for_fx_and_metal_pairs_only():
+    """Trading-safety review of #319, F5: "x price" turns base-currency units into profit currency only for a pair
+    quoted as base/profit (FX, metals). For an index or a commodity the price is points of the index, not a rate, so
+    the swap stays unknown (entries refused) instead of a wrong cost."""
+    fx = PaperBroker().symbol_info("DE40").model_copy(update={
+        "swap_mode": 2, "swap_long": -2.0, "swap_short": 0.5, "currency_base": "EUR", "currency_profit": "USD"})
+    assert swap_per_lot(fx, price=1.1, group="fx")[0] == pytest.approx(-2.2)
+    assert swap_per_lot(fx, price=30.0, group="metals")[0] == pytest.approx(-60.0)
+    for group in (None, "equity", "energy", "rates", "ags", "gold"):
+        assert swap_per_lot(fx, price=1.1, group=group)[:2] == (None, None), group
+    calc_fx = fx.model_copy(update={"trade_calc_mode": 0}) if "trade_calc_mode" in type(fx).model_fields else None
+    if calc_fx is not None:                               # MT5 SYMBOL_CALC_MODE_FOREX, when the record carries it
+        assert swap_per_lot(calc_fx, price=1.1)[0] == pytest.approx(-2.2)
+    row = terms_from_info("icm-probe", "EURUSD", "EURUSD", fx, T0, price=1.1, group="fx")
+    assert row.swap_long_per_lot == pytest.approx(-2.2)

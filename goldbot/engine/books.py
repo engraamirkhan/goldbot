@@ -642,8 +642,10 @@ def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = Non
         try:
             info = symbol_info(eng)               # shared with the contract and lot terms reads
             tick = book.__dict__.get("_last_tick")     # a mode 2/3 swap in the base currency is x price
+            inst = book.spec.instrument if book.spec is not None else None   # F5: x price for fx/metal pairs only
             db.save(terms_from_info(cfg.account_id, cfg.symbol, cfg.release_symbol, info, now,
-                                    price=None if tick is None else getattr(tick, "bid", None)))
+                                    price=None if tick is None else getattr(tick, "bid", None),
+                                    group=inst.correlation_group if inst is not None else None))
         except InstrumentsDbError as exc:
             log.error("%s %s: %s; its entries are refused, exits run", cfg.account_id, cfg.symbol, exc)
         except Exception as exc:          # the terminal: the row last written (if any) stands
