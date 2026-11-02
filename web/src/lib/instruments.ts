@@ -80,10 +80,10 @@ export function byGroup(list: readonly Instrument[]): [InstrumentGroup, Instrume
   return GROUP_ORDER.map((g) => [g, list.filter((i) => i.group === g)] as [InstrumentGroup, Instrument[]]).filter(([, xs]) => xs.length > 0);
 }
 
-/** UI spec tones: grey = closed/disabled, amber = stale/unknown terms, red = a spent group cap only. */
+/** UI spec tones: grey = closed/disabled, amber = stale/unknown terms or swap, red = a spent group cap only. */
 export function stateTone(s: InstrumentState): "muted" | "warn" | "bad" | "ok" {
   if (s === "market_closed" || s === "disabled") return "muted";
-  if (s === "stale" || s === "terms_missing" || s === "unknown") return "warn";
+  if (s === "stale" || s === "terms_missing" || s === "swap_unknown" || s === "unknown") return "warn";
   if (s === "group_cap") return "bad";
   return "ok";
 }

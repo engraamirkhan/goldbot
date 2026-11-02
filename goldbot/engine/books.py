@@ -913,7 +913,9 @@ def _usd_fx(eng: Engine, now: pd.Timestamp) -> float | None:
 
 STATE_TEXT = {"can_enter": "can enter", "market_closed": "market closed", "stale": "no fresh prices",
               "group_cap": "group exposure cap reached", "terms_missing": "terms not recorded",
-              "disabled": "terms not confirmed: no new trades"}
+              "disabled": "terms not confirmed: no new trades",
+              # incident 2026-11-02: terms present, but a swap the engine cannot price (`swap_unknown`)
+              "swap_unknown": "swap not priced: entries refused, exits still close"}
 WIND_DOWN_TEXT = "winding down: no new trades, open ones keep their exits"
 
 
@@ -922,6 +924,8 @@ def _symbol_state(eng: Engine, b: SymbolBook, s: dict[str, Any]) -> str:
     why = problem(b)
     if why in (UNVERIFIED, WIND_DOWN):
         return "disabled"
+    if why == "swap_unknown":
+        return "swap_unknown"
     if why is not None:
         return "terms_missing"
     if s.get("market_closed") or s.get("weekend"):

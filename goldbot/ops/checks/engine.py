@@ -189,7 +189,9 @@ def check_entry_status(ctx: HealthContext, account_id: str) -> Check:
 
 # multi-instrument demo (lane L4; UI spec 2026-11-02): amber states of one symbol, in the owner's words
 SYMBOL_WARN_WORDS = {"terms_missing": "terms not loaded: entries refused, exits still close",
-                     "stale": "price feed stale: entries refused, exits still close"}
+                     "stale": "price feed stale: entries refused, exits still close",
+                     # incident 2026-11-02: the terms are there; only the swap cannot be priced
+                     "swap_unknown": "swap not priced: entries refused, exits still close"}
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=17)

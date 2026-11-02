@@ -13,8 +13,11 @@ type State = EntrySymbol["state"];
 const REASON_WORDS: Record<Exclude<State, "can_enter">, string> = {
   market_closed: "Market closed", stale: "Price feed stale", group_cap: "Group cap spent",
   terms_missing: "Terms not loaded: entries refused, exits still close", disabled: "Switched off",
+  // incident 2026-11-02: the terms are there, only the swap cannot be priced
+  swap_unknown: "Swap not priced: entries refused, exits still close",
 };
-const REASON_ORDER: Exclude<State, "can_enter">[] = ["group_cap", "terms_missing", "stale", "market_closed", "disabled"];
+const REASON_ORDER: Exclude<State, "can_enter">[] = ["group_cap", "terms_missing", "swap_unknown", "stale", "market_closed",
+  "disabled"];
 
 export function EntrySymbols({ symbols, now }: { symbols: readonly EntrySymbol[]; now: number }) {
   const [all, setAll] = useState(false);
