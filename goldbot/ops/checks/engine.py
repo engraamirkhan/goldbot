@@ -197,8 +197,10 @@ def check_symbols(ctx: HealthContext, account_id: str) -> Check | None:
     """symbols:<account>, only on an engine that reports its symbols (`symbols` in engine_<account>.json, a
     multi-instrument account; a single-symbol engine reports nothing new here). WARN when a symbol's terms are not
     loaded or its feed is stale (its entries are refused; exits still close, account-wide); a closed market, a
-    disabled symbol and a spent group cap are the gate working and stay OK, counted in the reason. Never FAIL: the
-    account-wide engine and entry_status checks judge the engine itself. Reporting only."""
+    disabled symbol and a spent group cap are the gate working and stay OK, counted in the reason. FAIL only on
+    `unbooked_positions` (trading-safety review of #310, M3): a position on a symbol no book trades counts in no
+    exposure, so every entry on the account is refused until it is closed or given a book. Otherwise the account-wide
+    engine and entry_status checks judge the engine itself. Reporting only."""
     from goldbot.api.instruments_view import entry_symbols  # lazily: it reads the instrument registry
     f = ctx.state_dir / f"engine_{account_id}.json"
     try:
@@ -212,6 +214,12 @@ def check_symbols(ctx: HealthContext, account_id: str) -> Check | None:
     can = sum(1 for s in rows if s.state == "can_enter")
     bad = [s for s in rows if s.state in SYMBOL_WARN_WORDS]
     summary = f"{can} of {len(rows)} can enter"
+    unbooked = e.get("unbooked_positions")
+    if isinstance(unbooked, list) and unbooked:
+        syms = sorted({str(p.get("symbol")) for p in unbooked if isinstance(p, dict)})
+        return Check(name=name, status="fail",
+                     reason=(f"{len(unbooked)} open position(s) on symbols this engine does not trade "
+                             f"({', '.join(syms)}): every entry refused until closed; {summary}")[:600])
     if not bad:
         return Check(name=name, status="ok", reason=summary)
     words = "; ".join(f"{s.symbol}: {SYMBOL_WARN_WORDS[s.state]}" for s in bad)

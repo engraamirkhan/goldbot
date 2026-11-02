@@ -201,3 +201,19 @@ def _check_session_local(own: object) -> None:
         raise ValueError("session_local needs range_from < range_to < break_to on one local day")
     if mins[1] - mins[0] < MIN_RANGE_BARS * 15:
         raise ValueError(f"session_local's range must hold at least {MIN_RANGE_BARS} 15m bars")
+    for key, m in zip(("range_from", "range_to", "break_to"), mins, strict=True):
+        if _in_dst_gap(str(own["zone"]), m):
+            raise ValueError(f"session_local {key}: {own[key]} {own['zone']} does not exist on the day the clocks "
+                             "go forward (a DST gap); pick a time outside it")
+
+
+DST_CHECK_DAYS = pd.date_range("2000-01-01", "2040-12-31", freq="D")   # every rule change the history and plan span
+
+
+def _in_dst_gap(zone: str, minute_of_day: int) -> bool:
+    """Trading-safety review of #310, L4: a `session_local` clock that some day skips (02:30 New York on the spring
+    Sunday) would be read as another instant (pandas shifts it by the gap) and give that day's range other bounds;
+    such a clock is refused at load, never localised silently."""
+    local = DST_CHECK_DAYS + pd.Timedelta(minutes=minute_of_day)
+    got = local.tz_localize(zone, ambiguous=np.ones(len(local), dtype=bool), nonexistent="NaT")
+    return bool(np.asarray(got.isna()).any())

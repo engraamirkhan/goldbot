@@ -294,6 +294,11 @@ def test_the_session_follows_its_own_citys_clock_across_the_dst_switch() -> None
     ({"session_local": {"zone": "America/New_York", "range_from": "10:30", "range_to": "09:30", "break_to": "12:30"}},
      "range_from < range_to"),
     ({"session_local": {"zone": "America/New_York", "range_from": "09:30", "range_to": "10:30"}}, "exactly"),
+    # trading-safety review of #310, L4: 02:30 New York does not exist on the spring-forward Sunday
+    ({"session_local": {"zone": "America/New_York", "range_from": "02:30", "range_to": "04:00", "break_to": "06:00"}},
+     "does not exist"),
+    ({"session_local": {"zone": "Europe/London", "range_from": "00:00", "range_to": "01:15", "break_to": "03:00"}},
+     "does not exist"),
 ])
 def test_a_malformed_own_session_is_refused_at_load(bad: dict[str, Any], why: str) -> None:
     with pytest.raises(ValueError, match=why):

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -72,21 +73,27 @@ BOOK_ATTRS: tuple[str, ...] = (
     "_weekend_done", "_read_fails", "_read_fail_at", "_last_reconcile", "_last_state_write",
 )
 
-# AccountState fields that describe the instrument being decided on; every other field is the account's
+# AccountState fields that describe the instrument being decided on; every other field is the account's.
+# `blackout_kind` goes with `in_blackout` (trading-safety review of #310, L1): one book's news shock never reads as
+# another book's tier-1 blackout, nor the reverse
 SYMBOL_STATE: tuple[str, ...] = (
-    "last_tick_age_s", "spread_points", "tick_ahead_s", "in_blackout", "dq_error", "stale_bars", "data_recovering",
-    "weekend", "market_closed", "clock_mismatch", "tier2_blackout", "reopen_window", "holiday_thin",
-    "calendar_unavailable",
+    "last_tick_age_s", "spread_points", "tick_ahead_s", "in_blackout", "blackout_kind", "dq_error", "stale_bars",
+    "data_recovering", "weekend", "market_closed", "clock_mismatch", "tier2_blackout", "reopen_window",
+    "holiday_thin", "calendar_unavailable",
 )
 # a book that has not refreshed yet: stale and closed, so the gate refuses its entries until its first refresh
 FRESH_SYMBOL_STATE: dict[str, Any] = {"last_tick_age_s": math.inf, "spread_points": math.inf, "tick_ahead_s": 0.0,
-                                      "in_blackout": False, "dq_error": True, "stale_bars": True,
+                                      "in_blackout": False, "blackout_kind": None, "dq_error": True,
+                                      "stale_bars": True,
                                       "data_recovering": False, "weekend": False, "market_closed": True,
                                       "clock_mismatch": False, "tier2_blackout": False, "reopen_window": False,
                                       "holiday_thin": False, "calendar_unavailable": False}
 UNVERIFIED = "instrument_unverified"   # a BookSpec.blocked reason: registry terms not confirmed (ops.services.engine)
-TERMS_READ_S = 60.0
-NOTIONAL_HEADROOM = 0.95     # the account-wide ceiling keeps 5% under the bridge's (prices move between the two)              # a book's instruments.db row is read again this often (a corruption is seen within it)
+# a BookSpec.blocked reason (trading-safety review of #310, M3): an instrument the account no longer lists while it
+# holds positions in its magic range; the book runs their exits and takes no entry (ops.services.engine)
+WIND_DOWN = "instrument_wind_down"
+TERMS_READ_S = 60.0          # a book's instruments.db row is read again this often (a corruption is seen within it)
+NOTIONAL_HEADROOM = 0.95     # the account-wide ceiling keeps 5% under the bridge's (prices move between the two)
 
 T = TypeVar("T")
 
@@ -264,7 +271,8 @@ def open_books(eng: Engine, specs: tuple[BookSpec, ...]) -> None:
             eng._init_book()
             if spec.instrument is not None:    # its hours until the run loop reads the broker's (plan: per asset class)
                 from goldbot.data.calendar import session_profile
-                eng.sessions = session_profile(spec.instrument.session_profile, bcfg.server_tz)
+                # L2 (review of #310): through set_sessions, so the profile narrows its entries only (E3)
+                set_sessions(eng, session_profile(spec.instrument.session_profile, bcfg.server_tz))
             eng.agents, eng.models, eng.live_shares, eng.live_versions = {}, {}, {}, {}
             eng.shadow, eng.shadow_models, eng.probe = None, {}, None
             eng.state_store = BookStore(eng.primary.__dict__["state_store"], bcfg.state_dir, bcfg.account_id,
@@ -318,19 +326,137 @@ class QuoteFeed:
         return self.broker.last_tick(symbol)
 
 
+class PassQuotes:
+    """The pass's quote per symbol, read once (`last_tick`, a raise included) and served to both of the pass's phases,
+    so the exits phase costs no extra bridge call."""
+
+    def __init__(self, source: Any) -> None:
+        self.source = source
+        self.got: dict[str, Tick | BaseException] = {}
+
+    def last_tick(self, symbol: str) -> Tick:
+        if symbol not in self.got:
+            try:
+                self.got[symbol] = self.source.last_tick(symbol)
+            except Exception as exc:
+                self.got[symbol] = exc
+        v = self.got[symbol]
+        if isinstance(v, BaseException):
+            raise v
+        return v
+
+
+# what the pass serves once to every book (trading-safety review of #310, M1); any order call clears them
+PASS_READS = frozenset({"account", "account_positions"})
+PASS_WRITES = frozenset({"place_order", "close", "modify"})
+
+
+class PassBroker:
+    """The account's broker for one multi-book pass (M1: "read account() and account_positions() ONCE per pass and
+    share them across books"): each of PASS_READS is read once and the same answer (or the same exception: a failing
+    bridge is not asked 26 times) is served to every book; an order, close or modify sent through it clears them, so
+    no book decides on positions read before an order of this pass. Everything else goes straight to the broker."""
+
+    def __init__(self, broker: Any) -> None:
+        self.__dict__["_inner"] = broker
+        self.__dict__["_memo"] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        inner, memo = self.__dict__["_inner"], self.__dict__["_memo"]
+        attr = getattr(inner, name)
+        if name in PASS_READS:
+            def read() -> Any:
+                if name not in memo:
+                    try:
+                        memo[name] = attr()
+                    except Exception as exc:
+                        memo[name] = exc
+                v = memo[name]
+                if isinstance(v, BaseException):
+                    raise v
+                return list(v) if isinstance(v, list) else v
+            return read
+        if name in PASS_WRITES:
+            def write(*a: Any, **k: Any) -> Any:
+                memo.clear()
+                return attr(*a, **k)
+            return write
+        return attr
+
+
+def _pass_broker(broker: Any) -> PassBroker:
+    """A PassBroker whose class carries the broker's class flags (`balance_exact`, read on the type: capital_flows)."""
+    cls = type(broker)
+    sub = _PASS_TYPES.get(cls)
+    if sub is None:
+        sub = _PASS_TYPES[cls] = type(f"Pass{cls.__name__}", (PassBroker,),
+                                      {"balance_exact": getattr(cls, "balance_exact", False)})
+    return sub(broker)
+
+
+_PASS_TYPES: dict[type, type[PassBroker]] = {}
+
+
+def _exits_first(eng: Engine, quotes: PassQuotes, symbol: str) -> bool:
+    """The active book's stop check and close retries on this pass's quote (`Engine._stop_check`,
+    `Engine._retry_closes`), before any book's refresh or decisions. A missing or unusable quote skips them here: the
+    book's own pass then runs `no_quote_pass` (its close retries) as before. False when one raised (a tick error)."""
+    try:
+        t = quotes.last_tick(symbol)
+    except Exception:
+        return True
+    if eng._quote_fault(t) is not None:
+        return True
+    try:
+        eng._stop_check(t)
+        eng._retry_closes(t.ts_utc)
+    except Exception as exc:
+        eng.note_tick_error(exc)
+        return False
+    return True
+
+
 def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None) -> bool:
-    """One loop pass over every book, gold first: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass)
-    on each book in turn, serially, the quotes read once for all (`QuoteFeed`). True when every book's pass was
-    clean."""
+    """One loop pass over every book: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass) on each book
+    in turn, serially, the quotes read once for all (`QuoteFeed`, `PassQuotes`). True when every book's pass was clean.
+
+    Trading-safety review of #310 (M1, bridge load): "read account() and account_positions() ONCE per pass and share
+    them across books" (`PassBroker`, installed as the engine's broker for the pass); "run every book's _stop_check and
+    _retry_closes before any book's refresh or decisions" (`_exits_first`, every book, every pass); "bound each pass
+    with a deadline": once `pass_budget_s` has passed no further book starts its pass, and the books left go first on
+    the next one (after gold, whose pass polls the approvals). Gold and the next book in turn always run, so none
+    starves however slow the bridge. Exits never wait on the deadline."""
     ok = True
+    t0 = time.monotonic()
+    cfg = eng.primary.__dict__["cfg"]
     symbols = [b.__dict__["cfg"].symbol for b in eng.books.values()]
-    quotes: Any = broker
     if feed is not None:
         feed.refresh(symbols, pd.Timestamp.now("UTC"))
-        quotes = feed
-    for book in list(eng.books.values()):
-        with using(eng, book):
-            ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+    quotes = PassQuotes(feed if feed is not None else broker)
+    rest = [b for b in eng.books.values() if b is not eng.primary]
+    start = eng.__dict__.get("_pass_cursor", 0) % len(rest) if rest else 0
+    order = [eng.primary, *rest[start:], *rest[:start]]
+    prev = eng.broker
+    eng.__dict__["broker"] = _pass_broker(prev)
+    deferred = False
+    try:
+        for book in order:
+            with using(eng, book):
+                ok = _exits_first(eng, quotes, book.__dict__["cfg"].symbol) and ok
+        for i, book in enumerate(order):
+            if i > 1 and time.monotonic() - t0 >= cfg.pass_budget_s:
+                eng.__dict__["_pass_cursor"] = (start + i - 1) % len(rest)
+                eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
+                if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
+                    log.warning("%s: pass budget %.1f s spent after %d of %d books; the rest go first next pass",
+                                cfg.account_id, cfg.pass_budget_s, i, len(order))
+                deferred = True
+                break
+            with using(eng, book):
+                ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+    finally:
+        eng.__dict__["_pass_was_deferred"] = deferred
+        eng.__dict__["broker"] = prev
     return ok
 
 
@@ -369,8 +495,11 @@ def set_sessions(eng: Engine, table: Any) -> None:
     """E3 (trading-safety review of #307): a non-gold book's exits, bar ingestion and management read the broker's own
     hours (the table with its profile intersection off); its session profile narrows ENTRIES only (`entry_sessions`,
     applied in `after_refresh`). A table from the static fallback is the profile itself (E5: never DEFAULT_SESSIONS).
-    Gold: the table as given."""
+    Gold: the table as given. L2 (trading-safety review of #310): the book's own current table handed back (a failed
+    refresh: `SessionRefresher.collect` returns it) changes nothing, so it never drops the profile narrowing entries."""
     book: SymbolBook = eng.__dict__["book"]
+    if not book.primary and table is eng.sessions:
+        return
     if book.primary or not getattr(table, "intersect_broker", False):
         eng.sessions = table
         book.entry_sessions = None
@@ -579,11 +708,20 @@ def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
     st = eng.state
     books = {b.__dict__["cfg"].symbol: b for b in eng.books.values()}
     try:
-        held = [p for p in eng.broker.account_positions() if p.symbol in books]
+        every = list(eng.broker.account_positions())
     except Exception as exc:
         log.warning("account positions unreadable (%s): exposure unknown, entries refused", type(exc).__name__)
         st.open_risk, st.exposure_unknown = None, True
         return
+    held = [p for p in every if p.symbol in books]
+    # M3 (trading-safety review of #310): "any position whose symbol has no book sets exposure_unknown and raises a
+    # health alert": its exposure counts in no group, so every entry is refused while it stays open (published as
+    # `unbooked_positions`, health's symbols check FAILs). The positions themselves are never touched here
+    unbooked = [p for p in every if p.symbol not in books]
+    if {p.position_id for p in unbooked} != {p.position_id for p in eng.__dict__.get("_unbooked", [])} and unbooked:
+        log.error("%s: %d position(s) on symbols no book trades (%s): exposure unknown, every entry refused",
+                  eng.cfg.account_id, len(unbooked), ", ".join(sorted({p.symbol for p in unbooked})))
+    eng.__dict__["_unbooked"] = unbooked
     quotes: dict[str, SymbolQuote] = {}
     for sym, b in books.items():
         tick, contract = b.__dict__.get("_last_tick"), b.__dict__.get("_contract")
@@ -605,7 +743,7 @@ def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
     st.open_risk, eng._open_risk_rows = account_open_risk(held, quotes)
     groups, gold_lots = group_exposure(held, quotes)
     others = _others(eng)
-    st.exposure_unknown = groups is None or others is None
+    st.exposure_unknown = groups is None or others is None or bool(unbooked)
     # E4 (trading-safety review of #307): open_lots and open_notional are the gold group's (lots, USD); every group's
     # notional is in the deposit currency; unknown is None, published as null so the supervisor halts
     st.group_notional = groups
@@ -669,12 +807,13 @@ def _usd_fx(eng: Engine, now: pd.Timestamp) -> float | None:
 STATE_TEXT = {"can_enter": "can enter", "market_closed": "market closed", "stale": "no fresh prices",
               "group_cap": "group exposure cap reached", "terms_missing": "terms not recorded",
               "disabled": "terms not confirmed: no new trades"}
+WIND_DOWN_TEXT = "winding down: no new trades, open ones keep their exits"
 
 
 def _symbol_state(eng: Engine, b: SymbolBook, s: dict[str, Any]) -> str:
     """The dashboard's state of one book (goldbot/api/instruments_view.py InstrumentState), first that applies."""
     why = problem(b)
-    if why == UNVERIFIED:
+    if why in (UNVERIFIED, WIND_DOWN):
         return "disabled"
     if why is not None:
         return "terms_missing"
@@ -704,7 +843,11 @@ def published(eng: Engine) -> dict[str, Any]:
     (each instrument's own view), `symbols` {symbol: state, text, clears_at, price, lot_value}, `groups` {group:
     notional, cap, lots_by_symbol, open_n}, `heat_used` / `heat_limit` (the loss at every stop, its limit) and the
     account's `group_notional` (account currency; the supervisor's per-group caps), null when unknown so the
-    supervisor halts (E4). Reporting only: no entry or exit reads it."""
+    supervisor halts (E4). M2 (trading-safety review of #310): a probe_only engine publishes {} with
+    `exposure_unknown` instead, never null: the supervisor keeps probe files out of every combined sum, but reads a
+    null map as an unreadable file and would halt the real accounts on a probe's unknown. M3: `unbooked_positions`,
+    the account's positions on a symbol no book trades (health FAILs on them). Reporting only: no entry or exit reads
+    it."""
     if not multi(eng):
         return {}
     st = eng.state
@@ -723,7 +866,8 @@ def published(eng: Engine) -> dict[str, Any]:
         state = _symbol_state(eng, b, s)
         fx = next((v for (_, side), v in sorted(b.fx.items(), key=lambda kv: kv[0][0]) if side == 1), None)
         contract = d.get("_contract")
-        symbols[sym] = {"state": state, "text": STATE_TEXT[state], "clears_at": None, "price": d.get("_price"),
+        text = WIND_DOWN_TEXT if problem(b) == WIND_DOWN else STATE_TEXT[state]
+        symbols[sym] = {"state": state, "text": text, "clears_at": None, "price": d.get("_price"),
                         "lot_value": fx * contract if fx is not None and contract is not None else None}
     groups: dict[str, Any] = {}
     by_symbol = {b.__dict__["cfg"].symbol: b for b in eng.books.values()}
@@ -736,7 +880,15 @@ def published(eng: Engine) -> dict[str, Any]:
         row["lots_by_symbol"][p.symbol] = round(row["lots_by_symbol"].get(p.symbol, 0.0) + p.lots, 6)
         row["open_n"] += 1
     heat = eng.gate.limits.heat
+    gn: dict[str, float] | None = None
+    unknown = st.exposure_unknown
+    if not st.exposure_unknown and st.group_notional is not None:
+        gn = dict(st.group_notional)
+    elif eng.cfg.probe_only:                  # M2: never null on a probe file; the flag says it is unknown
+        gn, unknown = {}, True
     return {"books": out, "symbols": symbols, "groups": groups, "heat_used": st.open_risk,
             "heat_limit": heat.max_open_risk * st.equity if heat.enabled else None,
-            "exposure_unknown": st.exposure_unknown,
-            "group_notional": None if st.exposure_unknown or st.group_notional is None else dict(st.group_notional)}
+            "exposure_unknown": unknown, "group_notional": gn,
+            "unbooked_positions": [{"position_id": p.position_id, "symbol": p.symbol, "magic": p.magic}
+                                   for p in eng.__dict__.get("_unbooked", [])],
+            "passes_deferred": eng.__dict__.get("_passes_deferred", 0)}

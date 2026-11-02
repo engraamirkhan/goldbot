@@ -294,10 +294,14 @@ def instrument_books(acc: Account, broker: Any, exploration_cfg: Any) -> tuple[A
     gets a book (its bars accumulate, its exits run); one whose terms are not confirmed (`book_terms_problem`) or that
     the terminal cannot describe refuses every entry (`BookSpec.blocked`). Prices are rounded to the terminal's own
     digits when it reports them. Its exploration arms: the account's registered S0-<key> / I0-<key>
-    (`exploration.book_config`)."""
-    keys = account_instruments(acc)
-    if not keys:
+    (`exploration.book_config`).
+
+    M3 (trading-safety review of #310): "keep a wind-down book (entries refused, exits run) for every registry
+    instrument where the account holds positions in its magic range" (`wind_down_books`), so an instrument taken off
+    the account never leaves its open trades without a stop or a close."""
+    if acc.mode != "demo" or acc.is_observe_only:
         return ()
+    keys = account_instruments(acc)
     from goldbot.engine import exploration
     from goldbot.engine.books import UNVERIFIED, BookSpec
     from goldbot.instruments import load_instruments
@@ -324,6 +328,48 @@ def instrument_books(acc: Account, broker: Any, exploration_cfg: Any) -> tuple[A
                             magic_base=accounts.instrument_magic_base(acc, key), digits=digits, point=point,
                             contract_size=spec.contract_size, blocked=why.split(":")[0] if why else None,
                             exploration_config=exploration.book_config(exploration_cfg, key), instrument=spec))
+    return (*out, *wind_down_books(acc, broker, reg, {b.symbol for b in out}))
+
+
+def wind_down_books(acc: Account, broker: Any, reg: Any, have: set[str]) -> tuple[Any, ...]:
+    """M3: a book for each registry instrument the account does not list (or has no book for) while it holds a
+    position on its broker symbol inside the account's range of that instrument (`instrument_magic_base`, 100
+    magics). Blocked `instrument_wind_down`: no entry, no exploration arm; its exits (stops, orphan stops, time and
+    Friday rules, the kill switch) run. An unreadable account read gives none here: the engine's account-wide exposure
+    then refuses every entry on any position no book holds (`books.account_exposure`)."""
+    from goldbot.engine.books import WIND_DOWN, BookSpec
+    from goldbot.engine.magic import BLOCK_SPAN
+    from goldbot.instruments import GOLD, instrument_magic_base
+    index = getattr(acc, "instrument_magic_index", None)
+    if index is None:
+        return ()
+    try:
+        held = list(broker.account_positions())
+    except Exception as exc:  # noqa: BLE001 - the engine's exposure read fails closed on what it cannot see
+        log.warning("%s: account positions unreadable at start (%s): no wind-down books", acc.account_id,
+                    type(exc).__name__)
+        return ()
+    out = []
+    for key, spec in reg.instruments.items():
+        sym = spec.broker_symbols.get(acc.broker)
+        if key == GOLD or sym is None or sym in have:
+            continue
+        base = instrument_magic_base(int(index), spec)
+        if not any(p.symbol == sym and base <= int(p.magic) < base + BLOCK_SPAN for p in held):
+            continue
+        log.warning("%s: %s is not listed but holds positions in its magic range: wind-down book (exits only)",
+                    acc.account_id, key)
+        digits, point = spec.digits, spec.point
+        try:                                   # its stops round to the terminal's own digits when it reports them
+            info = broker.symbol_info(sym)
+            digits, point = int(info.digits), float(info.point)
+        except Exception as exc:  # noqa: BLE001 - the registry's terms stand
+            log.warning("%s: symbol_info(%s) unavailable (%s): registry digits", acc.account_id, sym,
+                        type(exc).__name__)
+        out.append(BookSpec(key=key, symbol=sym, store_symbol=spec.store_symbol, magic_block=spec.magic_block,
+                            magic_base=base, digits=digits, point=point, contract_size=spec.contract_size,
+                            blocked=WIND_DOWN, exploration_config=None, instrument=spec))
+        have.add(sym)
     return tuple(out)
 
 
