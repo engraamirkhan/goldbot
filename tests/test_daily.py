@@ -239,3 +239,11 @@ def test_specs_cover_pos1_universe() -> None:
     assert len(daily.POS1_SYMBOLS) == 15     # U_16 minus XAUUSD (built from the 1m lane's files)
     for s in daily.SPECS.values():
         assert s.price_band[0] < s.price_band[1]
+
+
+def test_oecd_monthly_stamp_is_two_months_after_the_month_start() -> None:
+    av = daily.oecd_monthly_available_utc(pd.DatetimeIndex(["2025-07-01", "2025-08-01"]))
+    assert list(av) == [_u("2025-09-01 23:00"), _u("2025-10-01 23:00")]   # August's average is past the cutoff
+    paths = daily.currency_rate_paths()
+    assert set(paths) == {"EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
+    assert paths["EUR"] == "raw/daily/fred_IR3TIB01EZM156N.parquet"

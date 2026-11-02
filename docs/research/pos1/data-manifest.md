@@ -78,6 +78,32 @@ come from the manifest table when the pull completes.
 - Spec 033 uses Yahoo ^GSPC because Dukascopy USA500 hourly starts 2011-09 (its yearly day-candle files reach back
   further, but on a UTC-midnight clock of unknown lineage, so they do not meet the prereg's "covers 2003 onward").
 
+## Non-USD short rates (W3.3 financing of FX and non-USD indices)
+
+OECD Main Economic Indicators 3-month interbank rate, monthly average, % a year (FRED `IR3TIB01<CC>M156N`, public CSV,
+requested through 2025-09-30). Same schema as DTB3 (value_date, value, available_utc, plus series, vintage, ts_utc).
+GER40 uses EUR, UK100 GBP, JP225 JPY.
+
+| currency | file | months | value dates | missing months | last available_utc |
+|---|---|---:|---|---:|---|
+| EUR (euro area) | fred_IR3TIB01EZM156N.parquet | 283 | 2002-01..2025-07 | 0 | 2025-09-01 23:00 |
+| GBP | fred_IR3TIB01GBM156N.parquet | 283 | 2002-01..2025-07 | 0 | 2025-09-01 23:00 |
+| JPY | fred_IR3TIB01JPM156N.parquet | 280 | 2002-04..2025-07 | 0 | 2025-09-01 23:00 |
+| AUD | fred_IR3TIB01AUM156N.parquet | 283 | 2002-01..2025-07 | 0 | 2025-09-01 23:00 |
+| CAD | fred_IR3TIB01CAM156N.parquet | 283 | 2002-01..2025-07 | 0 | 2025-09-01 23:00 |
+| CHF | fred_IR3TIB01CHM156N.parquet | 283 | 2002-01..2025-07 | 0 | 2025-09-01 23:00 |
+| NZD | fred_IR3TIB01NZM156N.parquet | 283 | 2002-01..2025-07 | 0 | 2025-09-01 23:00 |
+
+- Availability (`goldbot.data.daily.oecd_monthly_available_utc`): month M is known on the first day of M+2 at
+  23:00 UTC. A monthly average cannot exist before the month ends; OECD's MEI update publishes it around mid M+1 and
+  FRED posts it days later. Without ALFRED vintages this stamp is set at or after the latest plausible release, so
+  August and September 2025 (available 2025-10-01 and 11-01) are not stored. The cost is up to about six weeks of
+  staleness on a financing rate.
+- Every series starts by 2002-06 in availability terms, before the earliest market goes live (2004-05).
+- Settings mapping (`research.position.currency_rate_paths`, PR #291):
+  `{EUR: raw/daily/fred_IR3TIB01EZM156N.parquet, GBP: ...GBM156N, JPY: ...JPM156N, AUD: ...AUM156N, CAD: ...CAM156N,
+  CHF: ...CHM156N, NZD: ...NZM156N}`; `goldbot.data.daily.currency_rate_paths()` returns exactly this.
+
 ## Venue terms (ICM)
 
 - XAUUSD only, from the brain's `broker_terms_icm-demo.json` (measured 2026-11-02 05:02 UTC): swap long -52.22 and
