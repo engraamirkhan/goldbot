@@ -135,7 +135,10 @@ accounts:
       # is min(3 x (cap + cost), 0.30 x £80) = £24, GS1C's fixed share 0.30 x £80 = £24), so the pair trades at the
       # same size; `sizing: growth` lets the RiskGate size them above the minimum lot inside those bounds. Rollback:
       # drop GS1/GS1C and the growth pot, scalp back to 90, restart.
-      pots: { scalp: { max_open: 11 }, intraday: { max_open: 10 }, swing: { max_open: 3 }, growth: { max_open: 2 } }
+      # trading-safety M1 (PR 295): the growth pot keeps its £80 (a pot that names its £ still binds without
+      # pot_budgets), so the GS1/GS1C owner-experiment day of the ADR 0061 amendment 2026-11-01 is unchanged
+      pots: { scalp: { max_open: 11 }, intraday: { max_open: 10 }, swing: { max_open: 3 },
+              growth: { gbp: 80, max_open: 2 } }
       arms:
         I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         I2A: { style: intraday, max_loss: 17.0 }
@@ -188,10 +191,14 @@ accounts:
         Z9D: { style: scalp, max_loss: 6.5 }
         Z10D: { style: scalp, max_loss: 6.5 }
         ZCD: { style: scalp, max_loss: 6.5, control_share: 0.12 }
-        # learning class 2026-11-02 (docs/research/learning-2026-11-02.md): Z3D/Z6D/Z7D/Z10D read against ZCD, Z4D and
-        # Z9D against their dedicated random controls (same timeframe, stop, target and hold)
-        LC4D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
-        LC9D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        # learning class 2026-11-02 (docs/research/learning-2026-11-02.md; quant ruling 2026-11-02 (2)/(3)): each
+        # learning arm's own dedicated random control (its timeframe, bracket and window W); ZCD stays H-81's
+        LCZ3D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ4D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ6D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ7D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ9D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ10D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         # growth sprint 2026-11-01: GS1 (owner experiment to 2026-11-27) and its random-entry control at the same size.
         # `adds: 3` (section 3, ADR 0065): a unit at each +1 R of the first unit's entry, every earlier stop moved to the
         # newest add's so the group never loses more than one unit; the pair adds alike. Each add is gate-checked; the
@@ -316,13 +323,15 @@ accounts:
         Z8P: { style: scalp, max_loss: 6.5 }
         Z7P: { style: scalp, max_loss: 6.5 }
         Z4P: { style: scalp, max_loss: 6.5 }
-        # learning class 2026-11-02 (docs/research/learning-2026-11-02.md): the dedicated random controls of S5A, S5B,
-        # Z1P, Z2P/Z4P and Z5P/Z7P (same timeframe, stop, target and hold); they stop with the arms they serve
+        # learning class 2026-11-02 (docs/research/learning-2026-11-02.md; quant ruling 2026-11-02 (2)/(3)): one
+        # dedicated random control per learning arm (its timeframe, bracket and window); each stops with its arm
         LCS5A: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCS5B: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ1P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ2P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ4P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ5P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ7P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
   vantage-demo:
     broker: vantage
     mode: demo
@@ -427,6 +436,10 @@ accounts:
         Z6V: { style: scalp, max_loss: 6.5 }
         Z7V: { style: scalp, max_loss: 6.5 }
         ZCV: { style: scalp, max_loss: 6.5, control_share: 0.20 }
+        # learning class 2026-11-02 (quant ruling 2026-11-02 (2)/(3)): Z6V's and Z7V's own dedicated random controls;
+        # ZCV stays H-81's
+        LCZ6V: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        LCZ7V: { style: scalp, max_loss: 6.5, control_share: 0.05 }
   icm-depth:
     broker: icm
     mode: demo

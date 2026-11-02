@@ -26,7 +26,7 @@ from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Te
 SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
          "KA15", "XC15",                                                                     # wave 2 (8.8, 8.9)
          "Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P",                                           # H-81 (2026-10-27)
-         "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ5P"}               # learning class controls (ADR 0072, 2026-11-02)
+         "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ4P", "LCZ5P", "LCZ7P"}    # learning controls (ADR 0072)
 INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             # arms expansion wave 1 (2026-10-26)
             "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",
@@ -34,9 +34,10 @@ INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             "F2A", "F2C", "OBR15", "BXR15", "BXR30", "BXR1H"}
 SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
 # H-81 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pots): icm-demo's and vantage-demo's scalp strata
-DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD", "LC4D", "LC9D"}     # LC*: ADR 0072 learning controls
+DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD",
+              "LCZ3D", "LCZ4D", "LCZ6D", "LCZ7D", "LCZ9D", "LCZ10D"}                # LC*: ADR 0072 learning controls
 GROWTH = {"GS1", "GS1C"}           # growth sprint 2026-11-01: icm-demo only
-VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV"}
+VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
 WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
 VANTAGE = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
            "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",   # wave 1

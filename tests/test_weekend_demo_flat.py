@@ -48,6 +48,32 @@ def test_a_refused_flat_close_is_retried_every_tick_until_it_fills(tmp_path) -> 
     assert pid not in _open_ids(pb) and pb.calls >= 3
 
 
+def test_l3_an_engine_restarted_after_the_cut_flattens_what_it_finds(tmp_path) -> None:
+    """Trading-safety L3: a restart mid-cut (the cut passed while the engine was down, its positions still open)."""
+    from tests.test_engine_clock import _engine
+    _, pb, host, pid = _winner_before_the_cut(tmp_path / "before")
+    after = CUT + pd.Timedelta(minutes=5)
+    pb.on_tick(Tick(ts_utc=after, bid=2410.0, ask=2410.3))
+    eng, _, _ = _engine(tmp_path / "restarted", start=after, pb=pb, demo_weekend_flat=True)
+    eng.open[pid] = eng._adopt(next(p for p in pb.positions() if p.position_id == pid))
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    assert pid not in _open_ids(pb) and eng.state.weekend
+
+
+def test_l4_a_position_that_appears_after_the_flat_cut_completed_is_closed_too(tmp_path) -> None:
+    """Trading-safety L4 (the always-open lane's re-flatten, ported): after the cut's flatten completed, a late
+    position of this engine (a late-resolved send, an adopted orphan) is closed at the next refresh."""
+    from tests.test_engine_clock import _open
+    eng, pb, host, pid = _at_the_cut(tmp_path, flat=True)
+    assert pid not in _open_ids(pb) and eng._weekend_done is not None
+    late = _open(pb, 1, 2400.0)
+    eng.open[late] = eng._adopt(next(p for p in pb.positions() if p.position_id == late))
+    host[0] = host[0] + pd.Timedelta(seconds=30)
+    pb.on_tick(Tick(ts_utc=host[0], bid=2410.0, ask=2410.3))
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    assert late not in _open_ids(pb)
+
+
 def test_the_flat_close_censors_an_exploration_label() -> None:
     arm = exploration.Arm(spec=exploration.SpecArm(id="X1", rule="random_bracket", timeframe="15m", role="control",
                                                    params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4}),

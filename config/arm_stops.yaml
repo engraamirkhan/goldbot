@@ -92,7 +92,8 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        GS1, GS1C,
        # ADR 0061 amendment 2026-11-02 (docs/research/learning-2026-11-02.md): the learning arms' dedicated random
        # controls, the null; they stop with the arms they serve (engine/exploration_learning.py), never on their own
-       LC4D, LC9D, LCS5A, LCS5B, LCZ1P, LCZ2P, LCZ5P]
+       LCZ3D, LCZ4D, LCZ6D, LCZ7D, LCZ9D, LCZ10D, LCS5A, LCS5B, LCZ1P, LCZ2P, LCZ4P, LCZ5P, LCZ7P, LCZ6V,
+       LCZ7V]
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above

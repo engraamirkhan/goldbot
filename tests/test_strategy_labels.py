@@ -75,7 +75,7 @@ def test_each_strategy_arm_is_read_against_its_named_or_own_family_control_else_
     arms = load_catalog().arms
     pairs = {a: arms[a].control_arm for a in ("F1A", "KA15", "G1A", "C30A", "S1A", "I2A", "W1A", "Z3D", "PDC4", "VI2A")}
     assert pairs == {"F1A": "F1C", "KA15": "XC15", "G1A": "G1C", "C30A": "C30C", "S1A": "S0", "I2A": "I0",
-                     "W1A": "W0", "Z3D": "ZCD", "PDC4": "W0", "VI2A": "VI0"}
+                     "W1A": "W0", "Z3D": "LCZ3D", "PDC4": "W0", "VI2A": "VI0"}
     assert all(i.control_arm is None for i in arms.values() if i.is_control)
 
 

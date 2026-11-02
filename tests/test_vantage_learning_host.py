@@ -37,7 +37,7 @@ V_WAVE1 = {"VXRIP1H": 30.0, "VXRT1H": 30.0, "VXFK1H": 30.0, "VXTL1H": 30.0, "VXT
 # arms expansion wave 2 (arms-2026-10-25.md section 8): Vantage's own hypotheses, per-trade cap by timeframe
 V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
 # H-81 stage V1 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pot): the $7.00-bar strata and ZCV, £6.50
-V_SCALP = {"Z6V", "Z7V", "ZCV"}
+V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +79,7 @@ def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
-    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV"}
+    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V"}
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 
@@ -132,7 +132,7 @@ def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_
     cfg = exploration.config_for(vantage)
     assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
     assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP)
-    assert len(cfg.arms) == 26
+    assert len(cfg.arms) == 28                         # + LCZ6V, LCZ7V (ADR 0072 learning controls)
     by = {a.arm_id: a for a in cfg.arms}
     assert by["DON4"].style == "swing" and by["KSQ1"].style == by["PDC1"].style == "intraday"
     assert by["VI0"].control_share == 0.30 and by["VW0"].control_share == 0.33

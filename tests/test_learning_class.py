@@ -31,10 +31,11 @@ PREREG = "docs/research/learning-2026-11-02.md"
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = arms.LEARNING_RULE
 # the 2026-11-02 registration: every arm the qualification gate refused that has a fixed bracket, and its control
-LEARNING = {"icm-demo": {"Z3D": "ZCD", "Z4D": "LC4D", "Z6D": "ZCD", "Z7D": "ZCD", "Z9D": "LC9D", "Z10D": "ZCD"},
-            "icm-probe": {"S5A": "LCS5A", "S5B": "LCS5B", "Z1P": "LCZ1P", "Z2P": "LCZ2P", "Z4P": "LCZ2P",
-                          "Z5P": "LCZ5P", "Z7P": "LCZ5P"},
-            "vantage-demo": {"Z6V": "ZCV", "Z7V": "ZCV"}}
+# quant ruling 2026-11-02 (2)/(3): every learning arm has its own dedicated control "LC<arm>"
+LEARNING = {acc: {a: "LC" + a for a in ids} for acc, ids in {
+    "icm-demo": ("Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D"),
+    "icm-probe": ("S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"),
+    "vantage-demo": ("Z6V", "Z7V")}.items()}
 # refused by the qualification gate and left out: no fixed bracket a random control can match (a runner exit, a
 # specialist's own stop, a VWAP target or a stop band)
 NO_BRACKET = {"BXR15", "BXR30", "BXR1H", "BXR4H", "XBB15", "S1A", "S1B"}
@@ -59,7 +60,7 @@ def _row(a: arms.Arm, **extra: Any) -> dict[str, Any]:
 
 def _learning_row(a: arms.Arm, control: str = "C1", **change: Any) -> dict[str, Any]:
     block = {"prereg": PREREG, "k_id": arms.learning_k_id(a.id, arms.arm_hash(a), PREREG), "control": control,
-             "loss_cap_gbp": 130.0, "until": "2026-12-17", **change}
+             "loss_cap_gbp": 130.0, "until": "2026-12-17", "since": "2026-11-02", **change}
     return _row(a, role="learning", learning=block)
 
 
@@ -230,7 +231,7 @@ def test_the_k_row_script_writes_each_row_once_inside_the_quarters_budget(tmp_pa
     mod = _k_script()
     reg = tmp_path / "research_registry.jsonl"
     want = mod.k_rows(SPEC)
-    assert len(want) == len(LEARNING["icm-demo"]) + len(LEARNING["icm-probe"]) + len(LEARNING["vantage-demo"]) + 7
+    assert len(want) == 2 * sum(len(v) for v in LEARNING.values())          # 15 arms and their 15 controls
     assert mod.record(reg, SPEC, dry_run=True) and not TrialRegistry(reg)._rows()
     monkeypatch.setattr(TrialRegistry, "check_budget", lambda self, n, cap, now=None: "2026Q4")
     written = mod.record(reg, SPEC)
@@ -276,7 +277,8 @@ def test_the_spec_registers_every_fixed_bracket_arm_the_gate_refused_as_a_learni
             assert a.entry_refused == "", (arm_id, a.entry_refused)
             assert block.control == control and spec[control].role == "control"
             assert arms.control_match_refusal(a, spec[control]) is None
-            assert block.prereg == PREREG and block.until == "2026-12-17"
+            assert block.prereg == PREREG and block.until == "2026-12-17" and block.since == "2026-11-02"
+            assert arms.dedicated_control_of(spec[control]) == (arm_id,)
     for arm_id in NO_BRACKET:
         assert spec[arm_id].role == "strategy" and spec[arm_id].entry_refused.startswith(arms.QUALIFY_RULE)
 
@@ -307,7 +309,7 @@ def test_without_its_k_rows_every_learning_arm_and_dedicated_control_is_refused_
     for a in spec.values():
         if a.role == "learning" or str(a.params.get("control", "")).startswith(arms.LEARNING_CONTROL_PREFIX):
             assert a.entry_refused.startswith(RULE), a.id
-    assert spec["ZCD"].entry_refused == "" and spec["ZCV"].entry_refused == ""     # their own role, unchanged
+    assert spec["ZCD"].entry_refused == "" and spec["ZCV"].entry_refused == ""     # H-81's, unchanged
 
 
 def test_every_learning_arm_is_registered_on_its_account_with_its_control_and_no_growth_or_adds() -> None:

@@ -253,12 +253,16 @@ honest about its own costs. Rollback is not needed for ICM: its weights, labels 
 The owner, 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to test, learn and
 improve signals".
 
-- **Pots without £ budgets** (`exploration.pot_budgets: false`, demo probe_only accounts). A pot no longer bounds
-  today's loss plus open risk in £, and an arm's day (its share of its pot) no longer binds: the engine drops the `pot`
-  and `arm_budget` rooms. A pot is then its `max_open` slots only, and its `gbp` may be left out. The pot-sum check
-  runs only with pot budgets on. Still binding: the exploration budget (`budget_share` x the day), each arm's per-trade
-  cap with the round trip, the global, probe-slot, pot and arm slots, X3's net lots, and the RiskGate with the
-  account's daily and weekly limits. The research shares are still recorded as each candidate's propensity.
+- **Pots without £ budgets** (`exploration.pot_budgets: false`, demo probe_only accounts).
+  - A pot that leaves out its `gbp` no longer bounds today's loss plus open risk in £, and its arms' days (their
+    shares of it) no longer bind: the engine drops the `pot` and `arm_budget` rooms. Such a pot is its `max_open`
+    slots only.
+  - A pot that still names its `gbp` keeps both rooms (trading-safety M1). icm-demo's growth pot keeps its £80 for
+    GS1/GS1C, and the pots that name a `gbp` still fit inside the budget.
+  - Still binding: the exploration budget (`budget_share` x the day), each arm's per-trade cap with the round trip,
+    the global, probe-slot, pot and arm slots, X3's net lots, and the RiskGate with the account's daily and weekly
+    limits.
+  - The research shares are still recorded as each candidate's propensity.
 - **Slots x1.35 on the three demo hosts.** The host cap goes from 18 to 24 (max_open_total 23, one slot kept for the
   scheduled probe). The pots: icm-demo scalp 11, intraday 10, swing 3, growth 2; icm-probe scalp 19; vantage-demo scalp
   11, intraday 6, swing 2.

@@ -84,6 +84,17 @@ def bar_table(eng: Any) -> SessionTable:
     return eng.sessions if getattr(eng.cfg, "always_open", False) else DEFAULT_SESSIONS
 
 
+def cut_due(eng: Any, day: str) -> bool:
+    """Whether the weekday Friday cut runs at this refresh: once per Friday (`Engine._weekend_done`) as always; with
+    `demo_weekend_flat` (demo-limits ADR 2026-11-02, trading-safety L4) also after it completed whenever the engine
+    tracks a trade or the refresh read a position, so a position that appears later (a late-resolved send, an
+    adopted orphan) is closed too and nothing rides into Monday, as the always-open lane does (`step`)."""
+    if eng._weekend_done != day:
+        return True
+    held = bool(eng.open) or bool(getattr(eng, "_position_ids", None))
+    return bool(getattr(eng.cfg, "demo_weekend_flat", False)) and held
+
+
 def weekday_rule(eng: Engine, tick: Tick) -> bool:
     """`Engine._weekend_rule`, moved here verbatim (runner.py line cap; the weekday accounts' Friday cut, unchanged).
     Design: weekend gaps blow through stops, so losers are closed and winners' stops moved to lock in half the open
