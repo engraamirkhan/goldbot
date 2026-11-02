@@ -9,8 +9,8 @@ this file carries, quoted from the plan:
 - "store bars_1m_live keyed (source=account, symbol=store_symbol), never pooled with XAUUSD": store_symbol is unique.
 - "leverage per asset class (FX 30, gold/major idx 20, other commodities 10, bonds 5)": LEVERAGE_BY_CLASS.
 - "notional per correlation group (gold, metals, equity, FX, energy, rates, ags)": correlation_group.
-- "XAUUSD paths byte-identical": nothing reads this registry yet; the non-gold entries load with `enabled: false`
-  and their terms are placeholders marked `verify: true` until the symbol check (L1) fills them from the terminal.
+- "XAUUSD paths byte-identical": a non-gold entry is a placeholder (`verify: true`, `enabled: false`) until the
+  symbol check (L1) confirms its terms against the terminal; then it is `verify: false` and may be enabled.
 """
 from __future__ import annotations
 

@@ -95,12 +95,71 @@ def test_a_misspelt_field_fails_at_load(tmp_path: Path) -> None:
         load_instruments(p)
 
 
-def test_only_gold_is_enabled_until_the_lanes_land() -> None:
-    assert [k for k, i in load_instruments().instruments.items() if i.enabled] == ["XAUUSD"]
+# the terminals' own terms (python -m goldbot.ops.symbol_check icm-probe / vantage-demo on the brain, 2026-11-02):
+# key -> (contract_size, digits, point, min_lot, lot_step, currency_profit, swap_rollover3days, broker symbol)
+TERMINAL_TERMS: dict[str, tuple[float, int, float, float, float, str, int, str]] = {
+    "XPTUSD": (100.0, 2, 0.01, 0.01, 0.01, "USD", 3, "XPTUSD"),
+    "XAUEUR": (100.0, 2, 0.01, 0.01, 0.01, "EUR", 3, "XAUEUR"),
+    "XAUAUD": (100.0, 2, 0.01, 0.01, 0.01, "AUD", 3, "XAUAUD"),
+    "US500": (1.0, 2, 0.01, 0.1, 0.1, "USD", 5, "US500"),
+    "USTEC": (1.0, 2, 0.01, 0.1, 0.1, "USD", 5, "USTEC"),
+    "DE40": (1.0, 2, 0.01, 0.1, 0.1, "EUR", 5, "DE40"),
+    "UK100": (1.0, 2, 0.01, 0.1, 0.1, "GBP", 5, "UK100"),
+    "JP225": (1.0, 2, 0.01, 1.0, 1.0, "JPY", 5, "JP225"),
+    "EURUSD": (100000.0, 5, 0.00001, 0.01, 0.01, "USD", 3, "EURUSD"),
+    "USDJPY": (100000.0, 3, 0.001, 0.01, 0.01, "JPY", 3, "USDJPY"),
+    "GBPUSD": (100000.0, 5, 0.00001, 0.01, 0.01, "USD", 3, "GBPUSD"),
+    "AUDUSD": (100000.0, 5, 0.00001, 0.01, 0.01, "USD", 3, "AUDUSD"),
+    "USDCAD": (100000.0, 5, 0.00001, 0.01, 0.01, "CAD", 3, "USDCAD"),
+    "USDCHF": (100000.0, 5, 0.00001, 0.01, 0.01, "CHF", 3, "USDCHF"),
+    "NZDUSD": (100000.0, 5, 0.00001, 0.01, 0.01, "USD", 3, "NZDUSD"),
+    "XTIUSD": (100.0, 3, 0.001, 0.01, 0.01, "USD", 5, "XTIUSD"),
+    "XBRUSD": (100.0, 3, 0.001, 0.01, 0.01, "USD", 5, "XBRUSD"),
+    "XNGUSD": (10000.0, 4, 0.0001, 0.01, 0.01, "USD", 5, "XNGUSD"),
+    "UST10Y": (1.0, 2, 0.01, 1.0, 1.0, "USD", 3, "USNote10Y"),
+    "BUND10Y": (1.0, 2, 0.01, 1.0, 1.0, "EUR", 3, "EUB10Y"),
+    "COPPER": (25000.0, 4, 0.0001, 0.1, 0.1, "USD", 5, "COPPER-C"),
+    "WHEAT": (1000.0, 3, 0.001, 0.1, 0.1, "USD", 5, "Wheat-C"),
+    "SOYBEAN": (500.0, 3, 0.001, 0.1, 0.1, "USD", 5, "Soybean-C"),
+    "SUGAR": (112000.0, 5, 0.00001, 0.1, 0.1, "USD", 5, "Sugar-C"),
+    "COFFEE": (37500.0, 4, 0.0001, 0.1, 0.1, "USD", 5, "Coffee-C"),
+}
+# the terminal did not report it (symbol_info failed: BridgeUnavailable), so its terms stay placeholders
+UNCONFIRMED = {"XAGUSD"}
 
 
-def test_every_placeholder_term_is_marked_for_the_symbol_check() -> None:
-    assert all(i.verify for k, i in load_instruments().instruments.items() if k != "XAUUSD")
+@pytest.mark.parametrize("key", sorted(TERMINAL_TERMS))
+def test_each_instruments_terms_are_the_terminals_own(key: str) -> None:
+    i = load_instruments().get(key)
+    contract, digits, point, min_lot, step, ccy, triple, symbol = TERMINAL_TERMS[key]
+    assert (i.contract_size, i.digits, i.min_lot, i.lot_step, i.currency_profit, i.swap_rollover3days) == (
+        contract, digits, min_lot, step, ccy, triple)
+    assert i.point == pytest.approx(point, rel=1e-12) and symbol in i.broker_symbols.values()
+
+
+def test_an_instrument_the_terminal_confirmed_is_enabled_and_one_it_did_not_stays_a_placeholder() -> None:
+    inst = load_instruments().instruments
+    assert {k for k, i in inst.items() if i.enabled} == {"XAUUSD", *TERMINAL_TERMS}
+    assert {k for k, i in inst.items() if i.verify} == UNCONFIRMED
+    assert all(not inst[k].enabled for k in UNCONFIRMED)
+
+
+def test_no_enabled_instrument_carries_placeholder_terms() -> None:
+    assert all(not i.verify for i in load_instruments().instruments.values() if i.enabled)
+
+
+# the spread ceiling in price units (max_spread_points x point) after the point correction: unchanged where only the
+# point's decimals moved (XNGUSD, UST10Y); Sugar and Coffee moved from cents to dollars per lb (contract x 100), so
+# the same ceiling in cents is a hundredth in dollars; Wheat and Soybean read as dollars per bushel (contract
+# 1000 / 500 bushels at the minimum lot of 0.1), the same 3-cent ceiling
+SPREAD_CEILING_PRICE = {"XNGUSD": 0.02, "UST10Y": 0.09, "WHEAT": 0.03, "SOYBEAN": 0.03, "SUGAR": 0.0015,
+                        "COFFEE": 0.015}
+
+
+@pytest.mark.parametrize("key", sorted(SPREAD_CEILING_PRICE))
+def test_the_spread_ceiling_keeps_its_price_width_when_the_point_is_corrected(key: str) -> None:
+    i = load_instruments().get(key)
+    assert i.max_spread_points * i.point == pytest.approx(SPREAD_CEILING_PRICE[key], rel=1e-9)
 
 
 def test_for_broker_lists_an_accounts_instruments_and_finds_one_by_broker_symbol() -> None:

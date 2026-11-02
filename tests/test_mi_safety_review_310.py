@@ -4,6 +4,7 @@ here, one test (or more) per finding, named for the behaviour it holds."""
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,7 +17,7 @@ from goldbot.engine import Engine, EngineConfig, books
 from goldbot.engine.books import FRESH_SYMBOL_STATE, SYMBOL_STATE, BookSpec, using
 from goldbot.execution.broker import Position, Tick
 from goldbot.execution.paper import PaperBroker
-from goldbot.instruments import Instruments, load_instruments
+from goldbot.instruments import Instruments, load_instruments, registry
 from goldbot.ops.checks.engine import check_symbols
 from goldbot.ops.services import engine as svc
 from goldbot.risk.supervisor import Supervisor
@@ -109,6 +110,15 @@ def _acc(**kw: Any) -> Any:
     base = dict(account_id="icm-probe", broker="icm", mode="demo", is_observe_only=False, magic_base=260500,
                 instruments=["XAGUSD"], instrument_magic_index=5, enabled=True)
     return SimpleNamespace(**{**base, **kw})
+
+
+@pytest.fixture(autouse=True)
+def _fresh_registry() -> Iterator[None]:
+    """`registry()` caches whatever `load_instruments` returns: a patched copy cached here (`_confirmed`, XAGUSD at
+    2 digits) failed later tests in the same process (test_symbol_check_instruments), so it never outlives a test."""
+    registry.cache_clear()
+    yield
+    registry.cache_clear()
 
 
 def _confirmed(monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:

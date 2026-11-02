@@ -224,7 +224,7 @@ def _acc(account_id: str, **kw: Any) -> acc_mod.Account:
 def _registry(**enabled: bool) -> Any:
     reg = load_instruments()
     return reg.model_copy(update={"instruments": {
-        k: v.model_copy(update={"enabled": enabled.get(k, v.enabled)}) for k, v in reg.instruments.items()}})
+        k: v.model_copy(update={"enabled": enabled.get(k, k == "XAUUSD")}) for k, v in reg.instruments.items()}})
 
 
 def test_account_symbols_is_the_accounts_own_symbol_while_no_instrument_is_listed():

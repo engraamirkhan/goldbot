@@ -31,9 +31,9 @@ export const TERMS: Record<string, Terms> = {
   AUDUSD: T(5, "", "Aussie / dollar", "fx"), USDCAD: T(5, "", "Dollar / Canadian", "fx"), USDCHF: T(5, "", "Dollar / franc", "fx"),
   NZDUSD: T(5, "", "Kiwi / dollar", "fx"),
   XTIUSD: T(3, "USD/bbl", "WTI crude", "energy"), XBRUSD: T(3, "USD/bbl", "Brent crude", "energy"),
-  XNGUSD: T(3, "USD/MMBtu", "Natural gas", "energy"),
-  UST10Y: T(3, "", "US 10-year note", "rates"), BUND10Y: T(2, "", "German 10-year Bund", "rates"),
-  WHEAT: T(2, "", "Wheat", "ags"), SOYBEAN: T(2, "", "Soybeans", "ags"), SUGAR: T(2, "", "Sugar", "ags"), COFFEE: T(2, "", "Coffee", "ags"),
+  XNGUSD: T(4, "USD/MMBtu", "Natural gas", "energy"),
+  UST10Y: T(2, "", "US 10-year note", "rates"), BUND10Y: T(2, "", "German 10-year Bund", "rates"),
+  WHEAT: T(3, "", "Wheat", "ags"), SOYBEAN: T(3, "", "Soybeans", "ags"), SUGAR: T(5, "", "Sugar", "ags"), COFFEE: T(4, "", "Coffee", "ags"),
 };
 
 const live = new Map<string, Terms>();

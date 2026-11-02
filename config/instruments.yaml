@@ -10,22 +10,25 @@
 # - contract_size / digits / point / min_lot / lot_step / currency_profit / swap_rollover3days: the broker's terms.
 #   `verify: true` = placeholders; lane L1 fills them from the symbol check (goldbot/ops/symbol_check.py) against the
 #   terminal's symbol_info before any instrument is enabled. swap_rollover3days uses MT5 numbering (0 = Sunday).
-#   Source of the non-gold terms (lane L1, 2026-11-02): FALLBACK, the brokers' public contract-specification values
-#   (IC Markets Raw MT5, Vantage Raw ECN), NOT read from a terminal: the read from the brain was refused by the build
-#   sandbox's permission policy. They stay `verify: true` until `python -m goldbot.ops.symbol_check icm-probe` (and
-#   `vantage-demo`) passes on the brain: it compares contract_size, digits, point, min_lot, lot_step, currency_profit
-#   and swap_rollover3days with each terminal and prints the terminal's own terms in these field names; correct any
-#   that differ, then set `verify: false`. Sizing must not read these terms (the RiskGate sizes from the terminal's own
-#   symbol_info and the broker's loss_per_lot); they key the checks, the magic blocks and the research.
+#   Source of the non-gold terms: the terminals themselves, `python -m goldbot.ops.symbol_check icm-probe` and
+#   `vantage-demo` run read-only on the brain on 2026-11-02 (it compares contract_size, digits, point, min_lot,
+#   lot_step, currency_profit and swap_rollover3days). Every instrument it confirmed is `verify: false`; XAGUSD
+#   stays `verify: true` (symbol_info failed: BridgeUnavailable) until a rerun passes. Sizing must not read these
+#   terms (the RiskGate sizes from the terminal's own symbol_info and the broker's loss_per_lot); they key the
+#   checks, the magic blocks and the research.
 # - max_spread_points: the RiskGate's spread ceiling in points of `point` (XAUUSD 45 = $0.45, risk.max_spread_points).
 #   Non-gold: about 3 x a typical raw-account spread from the brokers' public spread pages (FALLBACK), until the
-#   recorded broker ticks measure it (nightly spread profile); lane L2's gate and L3's engine read it.
+#   recorded broker ticks measure it (nightly spread profile); lane L2's gate and L3's engine read it. When the
+#   symbol check corrected a point, the ceiling kept its width in price (points x point): XNGUSD, UST10Y; Sugar and
+#   Coffee also moved from cents to dollars per lb (contract x 100), so their ceiling is a hundredth in dollars;
+#   Wheat and Soybean read as dollars per bushel (3 cents).
 # - correlation_group: the group the RiskGate caps notional by (gold, metals, equity, fx, energy, rates, ags).
 # - leverage_class: fx 30, gold_index 20, commodity 10, bond 5 (goldbot/instruments.py LEVERAGE_BY_CLASS).
 # - session_profile: trading-hours family, checked against the broker's trading_sessions (lane L2).
 # - news_currencies: news blackouts by these currencies; L2 adds EIA (crude, gas) and WASDE (grains) by group.
-# - enabled: false for every non-gold instrument until lanes L1-L4 land; the accounts loader refuses non-XAUUSD
-#   instruments on a live or observe-only account whatever this says.
+# - enabled: true only once the symbol check confirmed the terms (`verify: false`); never with `verify: true`
+#   (tests/test_instruments.py). The accounts loader refuses non-XAUUSD instruments on a live or observe-only account
+#   whatever this says, and the RiskGate refuses an entry whose minimum lot risks more than the cap.
 # Corn is out: the brokers list dated contracts only, no continuous CFD.
 instruments:
   XAUUSD:   # today's gold: the terms the engine and RiskGate use now (contract 100 oz, 2 digits, 0.01 lot)
@@ -59,126 +62,126 @@ instruments:
     { key: XPTUSD, broker_symbols: { icm: XPTUSD }, store_symbol: XPTUSD, asset_class: metal,
       correlation_group: metals, magic_block: 2, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 400, currency_profit: USD, swap_rollover3days: 3, session_profile: metals, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      leverage_class: commodity, enabled: true, verify: false }
   XAUEUR:
     { key: XAUEUR, broker_symbols: { icm: XAUEUR }, store_symbol: XAUEUR, asset_class: metal,
       correlation_group: gold, magic_block: 3, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 150, currency_profit: EUR, swap_rollover3days: 3, session_profile: metals,
-      news_currencies: [USD, EUR], leverage_class: gold_index, enabled: false, verify: true }
+      news_currencies: [USD, EUR], leverage_class: gold_index, enabled: true, verify: false }
   XAUAUD:
     { key: XAUAUD, broker_symbols: { icm: XAUAUD }, store_symbol: XAUAUD, asset_class: metal,
       correlation_group: gold, magic_block: 4, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 300, currency_profit: AUD, swap_rollover3days: 3, session_profile: metals,
-      news_currencies: [USD, AUD], leverage_class: gold_index, enabled: false, verify: true }
+      news_currencies: [USD, AUD], leverage_class: gold_index, enabled: true, verify: false }
   US500:
     { key: US500, broker_symbols: { icm: US500 }, store_symbol: US500, asset_class: index,
       correlation_group: equity, magic_block: 5, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 150, currency_profit: USD, swap_rollover3days: 5, session_profile: index_us, news_currencies: [USD],
-      leverage_class: gold_index, enabled: false, verify: true }
+      leverage_class: gold_index, enabled: true, verify: false }
   USTEC:
     { key: USTEC, broker_symbols: { icm: USTEC }, store_symbol: USTEC, asset_class: index,
       correlation_group: equity, magic_block: 6, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 450, currency_profit: USD, swap_rollover3days: 5, session_profile: index_us, news_currencies: [USD],
-      leverage_class: gold_index, enabled: false, verify: true }
+      leverage_class: gold_index, enabled: true, verify: false }
   DE40:
     { key: DE40, broker_symbols: { icm: DE40 }, store_symbol: DE40, asset_class: index,
       correlation_group: equity, magic_block: 7, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 300, currency_profit: EUR, swap_rollover3days: 5, session_profile: index_eu, news_currencies: [EUR],
-      leverage_class: gold_index, enabled: false, verify: true }
+      leverage_class: gold_index, enabled: true, verify: false }
   UK100:
     { key: UK100, broker_symbols: { icm: UK100 }, store_symbol: UK100, asset_class: index,
       correlation_group: equity, magic_block: 8, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 300, currency_profit: GBP, swap_rollover3days: 5, session_profile: index_uk, news_currencies: [GBP],
-      leverage_class: gold_index, enabled: false, verify: true }
+      leverage_class: gold_index, enabled: true, verify: false }
   JP225:
     { key: JP225, broker_symbols: { icm: JP225 }, store_symbol: JP225, asset_class: index,
       correlation_group: equity, magic_block: 9, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 1.0,
       lot_step: 1.0, max_spread_points: 3000, currency_profit: JPY, swap_rollover3days: 5, session_profile: index_jp,
-      news_currencies: [JPY, USD], leverage_class: gold_index, enabled: false, verify: true }
+      news_currencies: [JPY, USD], leverage_class: gold_index, enabled: true, verify: false }
   EURUSD:
     { key: EURUSD, broker_symbols: { icm: EURUSD }, store_symbol: EURUSD, asset_class: fx, correlation_group: fx,
       magic_block: 10, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 10,
       currency_profit: USD, swap_rollover3days: 3, session_profile: fx, news_currencies: [EUR, USD],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   USDJPY:
     { key: USDJPY, broker_symbols: { icm: USDJPY }, store_symbol: USDJPY, asset_class: fx, correlation_group: fx,
       magic_block: 11, contract_size: 100000.0, digits: 3, point: 0.001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 10,
       currency_profit: JPY, swap_rollover3days: 3, session_profile: fx, news_currencies: [USD, JPY],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   GBPUSD:
     { key: GBPUSD, broker_symbols: { icm: GBPUSD }, store_symbol: GBPUSD, asset_class: fx, correlation_group: fx,
       magic_block: 12, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 12,
       currency_profit: USD, swap_rollover3days: 3, session_profile: fx, news_currencies: [GBP, USD],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   AUDUSD:
     { key: AUDUSD, broker_symbols: { icm: AUDUSD }, store_symbol: AUDUSD, asset_class: fx, correlation_group: fx,
       magic_block: 13, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 12,
       currency_profit: USD, swap_rollover3days: 3, session_profile: fx, news_currencies: [AUD, USD],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   USDCAD:
     { key: USDCAD, broker_symbols: { icm: USDCAD }, store_symbol: USDCAD, asset_class: fx, correlation_group: fx,
       magic_block: 14, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 15,
       currency_profit: CAD, swap_rollover3days: 3, session_profile: fx, news_currencies: [USD, CAD],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   USDCHF:
     { key: USDCHF, broker_symbols: { icm: USDCHF }, store_symbol: USDCHF, asset_class: fx, correlation_group: fx,
       magic_block: 15, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 15,
       currency_profit: CHF, swap_rollover3days: 3, session_profile: fx, news_currencies: [USD, CHF],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   NZDUSD:
     { key: NZDUSD, broker_symbols: { icm: NZDUSD }, store_symbol: NZDUSD, asset_class: fx, correlation_group: fx,
       magic_block: 16, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 20,
       currency_profit: USD, swap_rollover3days: 3, session_profile: fx, news_currencies: [NZD, USD],
-      leverage_class: fx, enabled: false, verify: true }
+      leverage_class: fx, enabled: true, verify: false }
   XTIUSD:
     { key: XTIUSD, broker_symbols: { icm: XTIUSD }, store_symbol: XTIUSD, asset_class: energy,
-      correlation_group: energy, magic_block: 17, contract_size: 1000.0, digits: 3, point: 0.001, min_lot: 0.01,
+      correlation_group: energy, magic_block: 17, contract_size: 100.0, digits: 3, point: 0.001, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 100, currency_profit: USD, swap_rollover3days: 5, session_profile: energy, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      leverage_class: commodity, enabled: true, verify: false }
   XBRUSD:
     { key: XBRUSD, broker_symbols: { icm: XBRUSD }, store_symbol: XBRUSD, asset_class: energy,
-      correlation_group: energy, magic_block: 18, contract_size: 1000.0, digits: 3, point: 0.001, min_lot: 0.01,
+      correlation_group: energy, magic_block: 18, contract_size: 100.0, digits: 3, point: 0.001, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 100, currency_profit: USD, swap_rollover3days: 5, session_profile: energy, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      leverage_class: commodity, enabled: true, verify: false }
   XNGUSD:
     { key: XNGUSD, broker_symbols: { icm: XNGUSD }, store_symbol: XNGUSD, asset_class: energy,
-      correlation_group: energy, magic_block: 19, contract_size: 10000.0, digits: 3, point: 0.001, min_lot: 0.01,
-      lot_step: 0.01, max_spread_points: 20, currency_profit: USD, swap_rollover3days: 5, session_profile: energy, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      correlation_group: energy, magic_block: 19, contract_size: 10000.0, digits: 4, point: 0.0001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 200, currency_profit: USD, swap_rollover3days: 5, session_profile: energy, news_currencies: [USD],
+      leverage_class: commodity, enabled: true, verify: false }
 
   # --- Vantage (vantage-demo), 7 ---
   UST10Y:
     { key: UST10Y, broker_symbols: { vantage: USNote10Y }, store_symbol: UST10Y, asset_class: bond,
-      correlation_group: rates, magic_block: 20, contract_size: 1000.0, digits: 3, point: 0.001, min_lot: 0.01,
-      lot_step: 0.01, max_spread_points: 90, currency_profit: USD, swap_rollover3days: 5, session_profile: rates_us,
-      news_currencies: [USD], leverage_class: bond, enabled: false, verify: true }
+      correlation_group: rates, magic_block: 20, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 1.0,
+      lot_step: 1.0, max_spread_points: 9, currency_profit: USD, swap_rollover3days: 3, session_profile: rates_us,
+      news_currencies: [USD], leverage_class: bond, enabled: true, verify: false }
   BUND10Y:
     { key: BUND10Y, broker_symbols: { vantage: EUB10Y }, store_symbol: BUND10Y, asset_class: bond,
-      correlation_group: rates, magic_block: 21, contract_size: 1000.0, digits: 2, point: 0.01, min_lot: 0.01,
-      lot_step: 0.01, max_spread_points: 15, currency_profit: EUR, swap_rollover3days: 5, session_profile: rates_eu,
-      news_currencies: [EUR], leverage_class: bond, enabled: false, verify: true }
+      correlation_group: rates, magic_block: 21, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 1.0,
+      lot_step: 1.0, max_spread_points: 15, currency_profit: EUR, swap_rollover3days: 3, session_profile: rates_eu,
+      news_currencies: [EUR], leverage_class: bond, enabled: true, verify: false }
   COPPER:
     { key: COPPER, broker_symbols: { vantage: COPPER-C }, store_symbol: COPPER, asset_class: metal,
-      correlation_group: metals, magic_block: 22, contract_size: 10000.0, digits: 4, point: 0.0001, min_lot: 0.01,
-      lot_step: 0.01, max_spread_points: 120, currency_profit: USD, swap_rollover3days: 5, session_profile: metals, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      correlation_group: metals, magic_block: 22, contract_size: 25000.0, digits: 4, point: 0.0001, min_lot: 0.1,
+      lot_step: 0.1, max_spread_points: 120, currency_profit: USD, swap_rollover3days: 5, session_profile: metals, news_currencies: [USD],
+      leverage_class: commodity, enabled: true, verify: false }
   WHEAT:
     { key: WHEAT, broker_symbols: { vantage: Wheat-C }, store_symbol: WHEAT, asset_class: agri,
-      correlation_group: ags, magic_block: 23, contract_size: 50.0, digits: 2, point: 0.01, min_lot: 0.1,
-      lot_step: 0.1, max_spread_points: 300, currency_profit: USD, swap_rollover3days: 5, session_profile: ags, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      correlation_group: ags, magic_block: 23, contract_size: 1000.0, digits: 3, point: 0.001, min_lot: 0.1,
+      lot_step: 0.1, max_spread_points: 30, currency_profit: USD, swap_rollover3days: 5, session_profile: ags, news_currencies: [USD],
+      leverage_class: commodity, enabled: true, verify: false }
   SOYBEAN:
     { key: SOYBEAN, broker_symbols: { vantage: Soybean-C }, store_symbol: SOYBEAN, asset_class: agri,
-      correlation_group: ags, magic_block: 24, contract_size: 50.0, digits: 2, point: 0.01, min_lot: 0.1,
-      lot_step: 0.1, max_spread_points: 300, currency_profit: USD, swap_rollover3days: 5, session_profile: ags, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      correlation_group: ags, magic_block: 24, contract_size: 500.0, digits: 3, point: 0.001, min_lot: 0.1,
+      lot_step: 0.1, max_spread_points: 30, currency_profit: USD, swap_rollover3days: 5, session_profile: ags, news_currencies: [USD],
+      leverage_class: commodity, enabled: true, verify: false }
   SUGAR:
     { key: SUGAR, broker_symbols: { vantage: Sugar-C }, store_symbol: SUGAR, asset_class: agri,
-      correlation_group: ags, magic_block: 25, contract_size: 1120.0, digits: 2, point: 0.01, min_lot: 0.1,
-      lot_step: 0.1, max_spread_points: 15, currency_profit: USD, swap_rollover3days: 5, session_profile: softs, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      correlation_group: ags, magic_block: 25, contract_size: 112000.0, digits: 5, point: 0.00001, min_lot: 0.1,
+      lot_step: 0.1, max_spread_points: 150, currency_profit: USD, swap_rollover3days: 5, session_profile: softs, news_currencies: [USD],
+      leverage_class: commodity, enabled: true, verify: false }
   COFFEE:
     { key: COFFEE, broker_symbols: { vantage: Coffee-C }, store_symbol: COFFEE, asset_class: agri,
-      correlation_group: ags, magic_block: 26, contract_size: 375.0, digits: 2, point: 0.01, min_lot: 0.1,
+      correlation_group: ags, magic_block: 26, contract_size: 37500.0, digits: 4, point: 0.0001, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 150, currency_profit: USD, swap_rollover3days: 5, session_profile: softs, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      leverage_class: commodity, enabled: true, verify: false }
