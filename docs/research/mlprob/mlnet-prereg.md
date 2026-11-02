@@ -140,3 +140,22 @@ scored; the model is the variant fitted once on every explore + confirm pool tra
 fixed hyperparameters), frozen. Costs: today's cost of record + overshoot + swap. Pass: selected n >= 50 over the
 three years, net mean R > 0, clustered t >= 1.5, selected minus leak-free twins >= 0. If the pre-2010 data is not on
 disk, a confirm-passer is "confirm-passed, old-test pending" and does not deploy.
+
+## 9. Windows amendment W2 and the coordinator's reporting additions (2026-11-02, before any run of this lane)
+
+W2 supersedes W1 for TEST-OLD. The frozen model, features, variants, thresholds and the explore/confirm pass rules
+of sections 4-5 are NOT changed. Changes:
+
+- **TEST-OLD = entries 2006-02-01..2009-12-31** (replaces section 8's 2004/2006/2008). The pool is built from
+  2005-01-01 (warm-up for bars and for momentum features 32-33; 2005 trades are history only, never scored, no
+  2006-01 entry is scored). Model and freezing as section 8. Qualification pass (W2): selected n >= 100, net mean
+  R > 0, day-summed t >= 1.28, selected minus leak-free twins >= 0. Read once, confirm passers only.
+- **Reported beside the frozen gates, not gating** (each window): (a) everything again EXCLUDING 2025 (in confirm,
+  2025 entries are dropped from the scored set and all statistics recomputed); (b) a DRIFT control: per trade one
+  twin with the same side, stop distance, target, trail and hold length, entered at the same UTC time of day on a
+  random other trading day within +/-20 trading days (deterministic hash), net uplift = selected minus drift twin;
+  (c) the bps cost version: round trip, overshoot and swap converted to price-relative terms (dollar figure /
+  4,000 x entry price), net R recomputed; (d) W2 statistics: t on DAY-SUMMED net R, one-sided day-block bootstrap
+  p of the confirm net mean (10,000 draws, seed 0), BH-FDR at q = 0.10 over m = number of explore passers (fixed
+  before confirm), and >= 5 of 8 years; the W2 verdict is reported beside the frozen verdict. K_eff is not
+  estimated by this lane (DSR at programme K only).
