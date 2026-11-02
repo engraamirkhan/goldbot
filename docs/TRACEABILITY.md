@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 268 |
+| implemented | 269 |
 | partial | 22 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 12 |
-| **total** | **310** |
+| **total** | **311** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
