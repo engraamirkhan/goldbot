@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from goldbot.engine import Engine, EngineConfig
 from goldbot.engine.books import BookSpec, swap_spec, using
@@ -109,3 +110,22 @@ def test_a_terms_row_a_newer_release_wrote_still_reads():
     row = terms_from_info("icm-probe", "XAGUSD", "XAGUSD", PaperBroker().symbol_info("XAGUSD"), T0)
     got = load_record(InstrumentTerms, {**row.model_dump(mode="json"), "future_field": 1}, source="instruments.db")
     assert got == row
+
+
+def test_swap_in_the_profit_currency_is_converted_for_index_cfds():
+    """Incident 2026-11-02: ICM's DE40, UK100, JP225, USTEC (mode 3, margin currency) and US500 (mode 2, base currency)
+    stored NULL swap and refused every entry. Where the mode's currency is the profit currency the amount already is
+    profit currency per lot; where it is the base currency of a pair quoted in the profit currency it is x price."""
+    base = PaperBroker().symbol_info("DE40").model_copy(update={"swap_long": -12.5, "swap_short": 3.0,
+                                                                "currency_profit": "EUR"})
+    m3 = base.model_copy(update={"swap_mode": 3, "currency_margin": "EUR", "currency_base": "EUR"})
+    assert swap_per_lot(m3)[:2] == (-12.5, 3.0)
+    m2 = base.model_copy(update={"swap_mode": 2, "currency_margin": "USD", "currency_base": "EUR"})
+    assert swap_per_lot(m2)[:2] == (-12.5, 3.0)
+    # a currency the profit currency is not, and no price to convert: unknown, never 0
+    assert swap_per_lot(m3.model_copy(update={"currency_margin": "USD"}))[:2] == (None, None)
+    # an older bridge (no base or margin currency reported): unknown, as before
+    assert swap_per_lot(base.model_copy(update={"swap_mode": 3}))[:2] == (None, None)
+    fx = base.model_copy(update={"swap_mode": 2, "currency_base": "EUR", "currency_profit": "USD", "swap_long": -2.0})
+    assert swap_per_lot(fx, price=1.1)[0] == pytest.approx(-2.2)
+    assert swap_per_lot(fx)[:2] == (None, None)

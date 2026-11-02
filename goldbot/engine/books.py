@@ -641,7 +641,9 @@ def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = Non
         book.terms_written = now
         try:
             info = symbol_info(eng)               # shared with the contract and lot terms reads
-            db.save(terms_from_info(cfg.account_id, cfg.symbol, cfg.release_symbol, info, now))
+            tick = book.__dict__.get("_last_tick")     # a mode 2/3 swap in the base currency is x price
+            db.save(terms_from_info(cfg.account_id, cfg.symbol, cfg.release_symbol, info, now,
+                                    price=None if tick is None else getattr(tick, "bid", None)))
         except InstrumentsDbError as exc:
             log.error("%s %s: %s; its entries are refused, exits run", cfg.account_id, cfg.symbol, exc)
         except Exception as exc:          # the terminal: the row last written (if any) stands
