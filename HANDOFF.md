@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Daily multi-asset research set (POS-1 inputs), local only: `goldbot/data/daily.py` (21:00 UTC mid bars, `load_daily`, `load_fred`, `usd_broad` ratio-chained DTWEXB->DTWEXBGS, hard cutoff 2025-10-01 asserted on every load) and `scripts/daily_fetch.py` (resumable Dukascopy hourly pull, FRED, Yahoo, sha256 manifest to `~/tmp/daily_manifest.json`). Files live in the git-ignored `raw/daily/`. `fetch_fred_csv` gained `end=` (coed) and DTWEXB takes the weekly H.10 availability rule. Market availability for POS-1: `docs/research/pos1/data-manifest.md`; POS-1 must not start until that file is re-stamped with the completed manifest's sha256.
 - Key levels (owner 2026-11-02, sprint-3000 ADDENDUM A; ADR 0068). `goldbot/features/key_levels.py` builds
   point-in-time support and resistance zones from five sources: confirmed 15m/1h/4h/1d/1w swings, the previous
   day/week/month high and low, and $50/$100 numbers. Levels are clustered at 0.25 ATR(1d). Each zone carries an
