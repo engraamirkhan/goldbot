@@ -11,8 +11,9 @@ Design rules:
 - Paced and bounded (history._Deadline): PAGE_MIN minutes a page (`get_bars_range`, at most 1 440 bars),
   PAGE_PAUSE_S between pages, PAGE_LIMIT_S a page and TURN_BUDGET_S a turn; past the budget the rest waits for the
   book's next turn and the next book goes first. One pull per MT5 box at a time across engine processes
-  (key_zones.box_lock, its own lock name). A failed page ends the turn; the book is tried again after RETRY_S, and
-  nothing raises into the pass.
+  (key_zones.box_lock on the key zones' own levels-<box> lock, so their long pull and this one never overlap; a
+  held lock ends the turn `busy`, tried again after BUSY_RETRY_S). A failed page ends the turn; the book is tried
+  again after RETRY_S, and nothing raises into the pass.
 - Only the gap. The book's stored minutes (`warm_start`, `bars_1m_live` keyed (account, store_symbol)) are reused:
   a turn pulls the holes inside them, the tail from the last stored minute to now, then older minutes until the book
   holds `need` bars (the largest of MIN_BARS, a bar close's frame and the longest lookback its arms read), never
@@ -126,7 +127,7 @@ class Backfill:
         from goldbot.engine.key_zones import box_lock
         p = turn.plan
         try:
-            with box_lock(self.lock_dir, f"books-{self.box}") as mine:
+            with box_lock(self.lock_dir, self.box) as mine:     # the key zones' lock: one pull per box
                 if not mine:
                     turn.error = "busy"
                     return

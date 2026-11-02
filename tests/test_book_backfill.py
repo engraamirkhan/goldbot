@@ -293,3 +293,52 @@ def test_live_minutes_win_and_nothing_at_or_after_the_first_unbuilt_tick_is_inse
     book_backfill.step(eng)
     with using(eng, _book(eng)):
         assert pd.Timestamp(eng.bars_1m["ts_utc"].max()) < first_tick
+
+
+# ------------------------------------------------------------------------------------------- follow-ups (#322)
+def test_the_backfill_shares_the_key_zones_box_lock_and_waits_while_a_levels_pull_holds_it(tmp_path):
+    from goldbot.engine.key_zones import box_lock
+    eng = _engine(tmp_path)
+    rates = Rates()
+    locks = tmp_path / "locks"
+    bf = book_backfill.attach(eng, rates, box="box1", lock_dir=locks, clock=Clock(), sleep=lambda s: None,
+                              spawn=lambda fn: fn())
+    with box_lock(locks, "box1") as mine:            # a key zones long pull on the same box
+        assert mine
+        book_backfill.step(eng)
+        book_backfill.step(eng)
+    assert rates.calls == [] and bf.status["SYM01"]["error"] == "busy" and _warming(eng)
+    assert [p.name for p in locks.iterdir()] == ["levels-box1.lock"]
+
+
+def _pyramid_case(monkeypatch: Any) -> tuple[Any, list[str]]:
+    from goldbot.engine import exploration_pyramid as ep
+    healed: list[str] = []
+    unit = SimpleNamespace(add_no=0)
+    grp = SimpleNamespace(side=1, entry=30.0, risk=0.1, end_utc=NOW + pd.Timedelta(days=1), group_id="g1")
+    monkeypatch.setattr(ep, "open_units", lambda eng, arm, gid=None: {"g1": [(unit, None)]})
+    monkeypatch.setattr(ep, "group", lambda *a: grp)
+    monkeypatch.setattr(ep, "heal", lambda eng, ex, arm, g, now, force=False: healed.append(g.group_id))
+    monkeypatch.setattr(ep, "ladder", lambda *a: 0)
+    arm = SimpleNamespace(arm_id="a1", adds=2, tf="15m")
+    ex = SimpleNamespace(arms={"a1": arm}, retired=frozenset(), queue=[], groups={}, ladder={})
+    return ex, healed
+
+
+def test_a_warming_book_queues_no_pyramid_add_but_still_holds_its_groups_stops(tmp_path, monkeypatch):
+    from goldbot.engine.exploration_pyramid import pyramid
+    eng = _engine(tmp_path)
+    _attach(eng, Rates())
+    ex, healed = _pyramid_case(monkeypatch)
+    with using(eng, _book(eng)):
+        pyramid(eng, ex, NOW, Tick(ts_utc=NOW, bid=30.3, ask=30.32))
+    assert healed == ["g1"] and ex.queue == []
+
+
+def test_a_warm_book_queues_its_pyramid_add_once_the_price_reaches_the_level(tmp_path, monkeypatch):
+    from goldbot.engine.exploration_pyramid import pyramid
+    eng = _engine(tmp_path)
+    ex, healed = _pyramid_case(monkeypatch)
+    with using(eng, _book(eng)):
+        pyramid(eng, ex, NOW, Tick(ts_utc=NOW, bid=30.3, ask=30.32))
+    assert healed == ["g1"] and [p.add_no for p in ex.queue] == [1]
