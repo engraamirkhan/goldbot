@@ -1,0 +1,3338 @@
+# Practitioner-sourced gold strategy/signal candidates (rethink lane `practitioner`, 2026-11-02).
+# Public pages only (no sign-up, login, download or payment). Claimed performance is the source's own
+# claim; 'verified_track_record' says whether any third-party-verified record exists (Myfxbook/MQL5
+# signal) and whether we checked it. No market data, trade rows or account ids in this file.
+# test_priority: A = maps to sprint3000 vocabulary at 1h/4h/1d, not previously failed;
+#   B = needs a new primitive or is 15m (cost per R high); C = grid/martingale, paid/no data,
+#   proxy rule, or a family already failed/retired here. Every tested spec counts in K.
+# Doc: docs/research/rethink/practitioner.md
+lane: practitioner
+as_of: '2026-11-02'
+count: 163
+candidates:
+- id: RT-PRACTITIONER-001
+  name: Gold Breakout 15M Strategy (overnight range straddle)
+  group: tradingview
+  source: TradingView strategy 'Gold Breakout 15M Strategy [WillyAlgoTrader]', ~2.5K boosts, https://www.tradingview.com/scripts/gold/
+    (listing fetched 2026-11-02)
+  evidence_grade: practitioner-documented
+  verified_track_record: none (TradingView strategy-tester backtest only)
+  claimed_performance: author backtest only; not checked
+  mechanism: the overnight (Asia) range leaves resting stops on both sides; London liquidity carries the first break
+  tf: 15m
+  rule:
+    entry: at 07:00 UTC place a buy-stop at the Asia (00:00-07:00 UTC) high and a sell-stop at the Asia low; first fill cancels
+      the other (OCO)
+    side: signal
+    stop: opposite side of the Asia range
+    exit: 'flat at a fixed hour, 16:00 UTC (author: ''closes all positions at a fixed hour'')'
+    hold: 36 bars
+  sprint3000_mapping: 'session_range_break(session=asia) + exit time(36); exact stop needs primitive: range_opposite_edge
+    (approx atr_mult 1.5)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-002
+  name: Gold Trail regime-gated adaptive ATR trail
+  group: tradingview
+  source: TradingView strategy 'Gold Trail [XAUUSD] | Regime-Gated Adaptive ATR Strategy' by blitz_locked, 239 boosts, https://www.tradingview.com/scripts/gold/
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: not stated
+  mechanism: trend persistence; the efficiency-ratio gate removes chop where trail flips bleed costs
+  tf: 1h
+  rule:
+    entry: ATR trail (ATR 14 x 3) flips AND Kaufman efficiency ratio(20) is above its 60th percentile of the last 250 bars
+    side: signal
+    stop: the trail level
+    exit: trail stop or opposite flip
+    hold: 240 bars
+  sprint3000_mapping: 'supertrend_flip(14,3); filter needs primitive: efficiency_ratio_pct(20, 0.6)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-003
+  name: Strong SFP swing-failure fade
+  group: tradingview
+  source: TradingView 'Strong SFP MSS | ProjectSyndicate', ~1.3K boosts, https://www.tradingview.com/scripts/gold/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: stop runs beyond swing highs/lows revert (liquidity grab)
+  tf: 15m
+  rule:
+    entry: bar trades beyond the last confirmed 5-bar swing high (low) and closes back below (above) it
+    side: signal (fade)
+    stop: sweep extreme + 0.25 ATR(14)
+    exit: target_r(2)
+    hold: 16 bars
+  sprint3000_mapping: 'level_reject approx; exact needs primitive: swing_failure(pivot 5)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'FAMILY ALREADY FAILED: H-46/H-48 sweep fades, sprint-200 meanrev'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-004
+  name: Strong Fade Signals volatility-envelope fade
+  group: tradingview
+  source: TradingView 'Strong Fade Signals | ProjectSyndicate', ~1.4K boosts, https://www.tradingview.com/scripts/gold/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: overextension beyond a volatility envelope mean-reverts
+  tf: 15m
+  rule:
+    entry: close outside EMA(20) +/- 2.5 x ATR(20) and the next bar fails to make a new extreme
+    side: signal (fade)
+    stop: extreme + 0.5 ATR
+    exit: EMA(20) touch or 1.5R
+    hold: 16 bars
+  sprint3000_mapping: zscore(20, 2.5, mode=fade) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: FAMILY RETIRED (sprint-200 meanrev ~0 gross)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-005
+  name: Gold Sniper Targets filtered EMA cross
+  group: tradingview
+  source: TradingView 'Gold Sniper Targets' by Michael_Fx_Trader, 755 boosts, https://www.tradingview.com/scripts/gold/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: trend cross only when trend, volatility and session agree
+  tf: 1h
+  rule:
+    entry: EMA(9) crosses EMA(21) with 4h trend agreeing, London/NY session, ATR(14) between the 30th and 90th percentile
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 48 bars
+  sprint3000_mapping: ma_cross(9,21,ema) + trend(4h,50) + session(london) + vol_regime(14,30,90)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-006
+  name: Gold Compass trend pullback (EMA 50/100/200 + stochastic)
+  group: tradingview
+  source: TradingView 'Gold Compass Lite' by Gold_Compass_Pro, https://www.tradingview.com/scripts/gold/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: pullback entry inside an aligned trend
+  tf: 1h
+  rule:
+    entry: EMA50>EMA100>EMA200, close pulls back to EMA(21) and stochastic(14,3) %K crosses up from below 20 (mirror for shorts)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 48 bars
+  sprint3000_mapping: ema_pullback(21, 0.5) + trend(4h,200) approx; stochastic turn needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-007
+  name: Confirmed-close MTPI gold trend vote
+  group: tradingview
+  source: TradingView 'Confirmed Close MTPI GOLD' by realJohnRutter, https://www.tradingview.com/scripts/gold/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: an ensemble of trend votes reduces single-indicator noise
+  tf: 1d
+  rule:
+    entry: 'average of 12 trend votes (+1/-1: close vs SMA 20/50/100/200, EMA 12/26, MACD sign, supertrend dir, donchian-20
+      mid, RSI>50, DI sign, aroon, HMA slope) crosses +0.5 / -0.5'
+    side: signal
+    stop: 2 x ATR(14)
+    exit: opposite cross of 0
+    hold: 60 bars
+  sprint3000_mapping: 'needs primitive: trend_vote_score(threshold 0.5)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 1d holds pay swap
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-008
+  name: PowerTrend Pro gold (VWAP + Supertrend + RSI)
+  group: tradingview
+  source: TradingView 'PowerTrend Pro Strategy - Gold Optimized' by MarkSteve_7, 221 boosts
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: not stated
+  mechanism: trend with a fair-value (VWAP) filter
+  tf: 15m
+  rule:
+    entry: supertrend(10,3) up AND close above session VWAP AND RSI(14) between 50 and 70 (mirror)
+    side: signal
+    stop: supertrend line
+    exit: break-even at 1R, trail on supertrend
+    hold: 64 bars
+  sprint3000_mapping: 'supertrend_flip(10,3); needs filter primitive: vwap_side'
+  data_needed: available locally (Dukascopy 1m); VWAP from tick counts
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-009
+  name: XAUUSD Trend Strategy (EMA cross + RSI + BB)
+  group: tradingview
+  source: TradingView open-source jRFTHVt7 'XAUUSD Trend Strategy', https://www.tradingview.com/script/jRFTHVt7
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: trend cross confirmed by momentum
+  tf: 1h
+  rule:
+    entry: EMA(20) crosses EMA(50), RSI(14) on the cross side of 50, close inside BB(20,2)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: 'target_r(2) (author: fixed RR)'
+    hold: 48 bars
+  sprint3000_mapping: ma_cross(20,50,ema); rsi side needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-010
+  name: Gold Strategy v10 (FVG + BB reversal + 200 MA)
+  group: tradingview
+  source: TradingView TNuMDlbv 'Gold Strategy v10 - XAUUSD', https://cn.tradingview.com/script/TNuMDlbv/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: imbalance fill at band extremes, with trend
+  tf: 15m
+  rule:
+    entry: close back inside BB(20,2) after a close outside, a same-direction 3-bar FVG in the last 5 bars, close on the trend
+      side of SMA(200), London/NY
+    side: signal
+    stop: band extreme + 0.25 ATR
+    exit: trail 1 ATR after 1R
+    hold: 32 bars
+  sprint3000_mapping: 'needs primitive: fvg; band-fade part retired'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: ICT/FVG family tested (H-34, ICT/retail lane)
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-011
+  name: XAUUSD 10-minute MACD/RSI/BB/ATR
+  group: tradingview
+  source: TradingView LxrgnsTO 'XAUUSD 10-Minute Strategy', backtest 2024-07-21..2024-10-30 OANDA, https://ru.tradingview.com/script/LxrgnsTO-XAUUSD-10-Minute-Strategy
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: 3-month TradingView backtest
+  mechanism: intraday momentum continuation
+  tf: 15m
+  rule:
+    entry: MACD(12,26,9) crosses up, RSI(14)>50, close above BB mid (mirror)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: 2 x ATR target
+    hold: 16 bars
+  sprint3000_mapping: macd_turn(12,26,9); rsi side needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: tiny sample, 2024 bull only
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-012
+  name: GOLD Asian Range Breakout Signals (ATR buffer)
+  group: tradingview
+  source: TradingView open-source rCMX1vGE 'GOLD Asian Range Breakout Signals' (Asia 01:00-08:00 server), https://kr.tradingview.com/script/rCMX1vGE-GOLD-Asian-Range-Breakout-Signals/
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: London order flow escapes the Asia range
+  tf: 15m
+  rule:
+    entry: London close above Asia high + 0.1 x ATR(14) -> long; below Asia low - 0.1 ATR -> short; one per direction per
+      day
+    side: signal
+    stop: Asia range midpoint
+    exit: target_r(2) or 16:00 UTC
+    hold: 36 bars
+  sprint3000_mapping: session_range_break(session=asia)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: sibling of the London breakout; sprint-200 session breaks ~0 gross at 15m
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-013
+  name: Gold ORB 15-min range (NY)
+  group: tradingview
+  source: TradingView open-source oYW9gdag 'Gold ORB Strategy (15 min Range, 5 min Entry)', https://jp.tradingview.com/script/oYW9gdag-Gold-ORB-Strategy-15-min-Range-5-min-Entry
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: NY cash-open order flow
+  tf: 15m
+  rule:
+    entry: range = first 15 min after 13:30 UTC; first close beyond it -> trade the break
+    side: signal
+    stop: opposite range edge
+    exit: target_r(2) or 20:00 UTC
+    hold: 24 bars
+  sprint3000_mapping: opening_range_break(session=ny, minutes=15)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-014
+  name: Gold H1 breakout-failure fade
+  group: tradingview
+  source: TradingView 8Iv42BDE 'Gold H1 Breakout Failure V11.0', https://kr.tradingview.com/script/8Iv42BDE-Gold-H1-Breakout-Failure-V11-0
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: failed breaks trap breakout traders
+  tf: 1h
+  rule:
+    entry: close above the prior 20-bar high, then within 3 bars a close back below that high -> short (mirror)
+    side: signal (fade)
+    stop: failure extreme + 0.25 ATR
+    exit: target_r(2)
+    hold: 24 bars
+  sprint3000_mapping: 'needs primitive: failed_break(n=20, within=3)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: close to retired fakey/sweep fades (H-44, H-46)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-015
+  name: Gold Futures Leading Momentum (7-bar high break)
+  group: tradingview
+  source: TradingView InKPr25e 'Gold Futures Leading Momentum v4', https://in.tradingview.com/script/InKPr25e
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: short-horizon breakout continuation
+  tf: 1h
+  rule:
+    entry: close > highest high of the prior 7 bars (mirror for lows)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 48 bars
+  sprint3000_mapping: donchian_break(7) + exit chandelier(14,3)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-016
+  name: Kevin Davey Keltner channel breakout
+  group: tradingview
+  source: TradingView 'Keltner Channel Strategy by Kevin Davey' (TiaIcwIt); Davey, Entry and Exit Confessions of a Champion
+    Trader (2019)
+  evidence_grade: practitioner-documented
+  verified_track_record: Davey's World Cup Championship of Futures results (multi-market, not gold-specific)
+  claimed_performance: none for gold
+  mechanism: volatility-channel breakout with trend
+  tf: 1d
+  rule:
+    entry: close above EMA(20) + 1.5 x ATR(10) -> long next open (mirror)
+    side: signal
+    stop: 2 x ATR(14)
+    exit: close back through EMA(20)
+    hold: 40 bars
+  sprint3000_mapping: keltner_break(20,1.5) + exit opposite_signal
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap on 1d holds
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-017
+  name: UT Bot Alerts (ATR trailing-stop flip)
+  group: tradingview
+  source: TradingView 'UT Bot Alerts' (QuantNomad), among the most-used community scripts (like count not verified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: ATR trail flip = momentum turn
+  tf: 1h
+  rule:
+    entry: close crosses the ATR trailing stop (key 1, ATR 10) -> trade in the cross direction
+    side: signal
+    stop: trail level
+    exit: opposite flip
+    hold: 96 bars
+  sprint3000_mapping: supertrend_flip(10,1) approx + exit opposite_signal
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: tight trail = many flips; 1h/4h only
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-018
+  name: Squeeze Momentum (LazyBear) release
+  group: tradingview
+  source: 'TradingView ''Squeeze Momentum Indicator [LazyBear]'', listed #1 popular free indicator (https://blog.pickmytrade.io/top-free-indicators-and-strategies-on-tradingview/,
+    count not verified)'
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: volatility compression precedes expansion; side from linear-regression momentum
+  tf: 4h
+  rule:
+    entry: BB(20,2) inside KC(20,1.5) for >= 6 bars, then exits; side = sign of linreg(close - avg(donchian-20 mid, SMA20),
+      20)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: momentum histogram fades or 3R
+    hold: 30 bars
+  sprint3000_mapping: 'compression(20, 20) + bb_break(20,2) approx; exact needs primitive: ttm_squeeze_release'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-019
+  name: SuperTrend (KivancOzbilgic) flip
+  group: tradingview
+  source: TradingView 'SuperTrend' by KivancOzbilgic (popular; count not verified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: ATR trend-following
+  tf: 4h
+  rule:
+    entry: supertrend(10,3) flips
+    side: signal
+    stop: supertrend line
+    exit: opposite flip
+    hold: 120 bars
+  sprint3000_mapping: supertrend_flip(10,3) + exit opposite_signal
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-020
+  name: Chandelier Exit (everget) flip
+  group: tradingview
+  source: TradingView 'Chandelier Exit' by everget (popular; count not verified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: a trail 3 ATR from the extreme flips = trend turn
+  tf: 4h
+  rule:
+    entry: close crosses above the short chandelier (lowest low(22) + 3 ATR(22)) -> long; mirror
+    side: signal
+    stop: chandelier level
+    exit: opposite flip
+    hold: 120 bars
+  sprint3000_mapping: 'donchian_break(22) + exit chandelier(22,3) approx; exact needs primitive: chandelier_flip(22,3)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-021
+  name: SSL Channel cross
+  group: tradingview
+  source: TradingView 'SSL channel' by ErwinBeckers (popular; count not verified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: moving-average envelope cross
+  tf: 1h
+  rule:
+    entry: SMA(high,10) and SMA(low,10) swap order (close above SMA(high,10) -> long state)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: opposite cross
+    hold: 96 bars
+  sprint3000_mapping: 'ma_cross(5,10,sma) approx; exact needs primitive: ssl_cross(10)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-022
+  name: HalfTrend (everget) flip
+  group: tradingview
+  source: TradingView 'HalfTrend' by everget (popular; count not verified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: swing-based trend with an ATR channel
+  tf: 1h
+  rule:
+    entry: HalfTrend(amplitude 2, channel deviation 2) direction flips
+    side: signal
+    stop: ATR channel edge
+    exit: opposite flip
+    hold: 96 bars
+  sprint3000_mapping: 'needs primitive: halftrend(2,2)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-023
+  name: WaveTrend oscillator cross (LazyBear)
+  group: tradingview
+  source: TradingView 'WaveTrend Oscillator [WT]' by LazyBear (popular)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: oscillator turn from overextension
+  tf: 4h
+  rule:
+    entry: WT1 crosses WT2 up while WT1 < -60 -> long; down while > 60 -> short
+    side: signal (fade)
+    stop: 1.5 x ATR(14)
+    exit: opposite WT cross
+    hold: 30 bars
+  sprint3000_mapping: 'rsi_threshold(fade) approx; exact needs primitive: wavetrend(10,21)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: fade family retired at 15m/1h; 4h not tested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-024
+  name: Hull Suite slope flip
+  group: tradingview
+  source: TradingView 'Hull Suite' by InSilico (popular)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: low-lag MA slope = trend
+  tf: 4h
+  rule:
+    entry: HMA(55) slope changes sign at bar close
+    side: signal
+    stop: 2 x ATR(14)
+    exit: opposite flip
+    hold: 120 bars
+  sprint3000_mapping: 'needs primitive: hma_slope_flip(55)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-025
+  name: Range Filter (DonovanWall)
+  group: tradingview
+  source: TradingView 'Range Filter Buy and Sell' by DonovanWall (popular)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: filters moves smaller than a smoothed range
+  tf: 1h
+  rule:
+    entry: range filter (period 100, mult 3) turns up and close above it -> long; mirror
+    side: signal
+    stop: filter line - 0.5 ATR
+    exit: opposite signal
+    hold: 96 bars
+  sprint3000_mapping: 'needs primitive: range_filter(100,3)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-026
+  name: QQE MOD cross
+  group: tradingview
+  source: TradingView 'QQE MOD' by Mihkel00 (popular)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: smoothed RSI with volatility bands
+  tf: 1h
+  rule:
+    entry: QQE line (RSI 6 smoothed 5, factor 3) crosses 50 with both histograms agreeing
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: opposite cross
+    hold: 48 bars
+  sprint3000_mapping: rsi_threshold(6, 50, follow) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-027
+  name: Nadaraya-Watson envelope fade (non-repainting)
+  group: tradingview
+  source: TradingView 'Nadaraya-Watson Envelope [LuxAlgo]' (very popular; the original repaints)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: kernel-regression band overextension
+  tf: 1h
+  rule:
+    entry: close outside the non-repainting NW endpoint envelope (h 8, 3 x MAE) then back inside -> fade
+    side: signal (fade)
+    stop: extreme + 0.25 ATR
+    exit: NW midline
+    hold: 24 bars
+  sprint3000_mapping: zscore fade approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: REPAINT RISK in the popular version; fade family retired
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-028
+  name: LuxAlgo Smart Money Concepts BOS/CHoCH
+  group: tradingview
+  source: TradingView 'Smart Money Concepts [LuxAlgo]' (~97K likes per a third-party blog, unverified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: structure-break continuation
+  tf: 1h
+  rule:
+    entry: internal CHoCH in the swing-trend direction, entry on the close
+    side: signal
+    stop: beyond the last swing + buffer
+    exit: target_r(2)
+    hold: 32 bars
+  sprint3000_mapping: 'needs primitive: choch(internal 5, swing 50)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'ALREADY TESTED: H-34/H-35 smc_mtf, ICT/retail lane failed'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-029
+  name: MACD Custom (ChrisMoody) signal cross
+  group: tradingview
+  source: TradingView 'CM MACD Custom Indicator' by ChrisMoody (~70K likes per a third-party blog, unverified)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: momentum turn
+  tf: 4h
+  rule:
+    entry: MACD(12,26,9) crosses its signal line
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: opposite cross
+    hold: 60 bars
+  sprint3000_mapping: macd_turn(12,26,9) + exit opposite_signal
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-030
+  name: Pivot Reversal strategy (TradingView built-in)
+  group: tradingview
+  source: TradingView built-in 'Pivot Reversal Strategy' (left 4, right 2)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: break of a confirmed swing pivot
+  tf: 1h
+  rule:
+    entry: buy-stop at the last confirmed pivot high (4 left/2 right), sell-stop at the pivot low; stop-and-reverse
+    side: signal
+    stop: opposite pivot
+    exit: reverse on the opposite fill
+    hold: 96 bars
+  sprint3000_mapping: 'donchian_break(6) approx; exact needs primitive: swing_break(4,2)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-031
+  name: Gold Power Hours (Tue-Thu, 08-12 NY)
+  group: tradingview
+  source: TradingView 'Gold Power Hours Strategy', https://de.tradingview.com/scripts/xaueur
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: liquidity concentrates mid-week in the London/NY overlap
+  tf: 15m
+  rule:
+    entry: 'Tue-Thu 12:00-16:00 UTC only: EMA(9)/EMA(21) cross on the VWAP side'
+    side: signal
+    stop: 1.0 x ATR(14)
+    exit: 1.5R or 16:00 UTC
+    hold: 16 bars
+  sprint3000_mapping: ma_cross(9,21,ema) + weekday([1,2,3]) + session(ny)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 15m cost per R high
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-032
+  name: Initial Balance breakout (NY first hour)
+  group: tradingview
+  source: TradingView 'Initial Balance Auction Intelligence by DGT' (Editors' pick); Dalton, Mind Over Markets (1990)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: 'auction theory: acceptance outside the initial balance = range-extension day'
+  tf: 1h
+  rule:
+    entry: IB = 13:30-14:30 UTC range; first 1h close outside the IB -> trade the break
+    side: signal
+    stop: IB midpoint
+    exit: flat 20:00 UTC
+    hold: 7 bars
+  sprint3000_mapping: opening_range_break(session=ny, minutes=60)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-033
+  name: Gold-DXY correlation regime filter
+  group: tradingview
+  source: TradingView 'Gold-DXY Correlation - Light' by deltaterminal
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: gold trends are cleaner when it trades as the anti-dollar
+  tf: 4h
+  rule:
+    entry: allow donchian_break(20) only while 50-bar corr(gold, DXY returns) < -0.5
+    side: signal
+    stop: 2 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 120 bars
+  sprint3000_mapping: 'donchian_break(20); needs filter primitive: corr_regime(DXY,50,-0.5)'
+  data_needed: available locally (Dukascopy 1m) + EURUSD/DXY proxy 1m (free Dukascopy)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-034
+  name: Gold Strength Basket (gold vs 6 currencies agree)
+  group: tradingview
+  source: TradingView 'Gold Strength Basket' by deltaterminal
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: a move that shows in every currency is gold demand, not USD noise
+  tf: 4h
+  rule:
+    entry: gold 20-bar return in USD, EUR, JPY, GBP, CHF and AUD all the same sign -> trade that sign
+    side: signal
+    stop: 2 x ATR(14)
+    exit: time(30)
+    hold: 30 bars
+  sprint3000_mapping: 'needs primitive: multi_ccy_agree(20)'
+  data_needed: available locally (Dukascopy 1m) + FX majors 1m (free Dukascopy)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-035
+  name: Wyckoff spring
+  group: tradingview
+  source: TradingView 'Wyckoff [theUltimator5]' (Editors' pick); Wyckoff method (Pruden, The Three Skills of Top Trading,
+    2007)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: a test below range support that fails = absorption
+  tf: 4h
+  rule:
+    entry: 40-bar range (high-low < 6 x ATR(14)); bar dips below the range low and closes back inside within 2 bars -> long
+    side: long_only
+    stop: spring low - 0.25 ATR
+    exit: range high or 3R
+    hold: 40 bars
+  sprint3000_mapping: 'level_reject approx; exact needs primitive: range_spring(40)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: fade-at-level family retired at 15m/1h
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-036
+  name: Time-of-day drift table (QuantAlgo)
+  group: tradingview
+  source: TradingView 'Time-of-Day/Session Performance Stats [QuantAlgo]' (Editors' pick)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: persistent hourly drift
+  tf: 1h
+  rule:
+    entry: trade the sign of hours whose trailing-250-day mean return has |t|>2 (prior data only)
+    side: signal
+    stop: 1.0 x ATR(14)
+    exit: hour end
+    hold: 1 bar
+  sprint3000_mapping: 'needs primitive: rolling_hour_drift'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: time-of-day direction RETIRED (sprint-200 time lane)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-037
+  name: MSB gold trend breakout
+  group: tradingview
+  source: TradingView n4hyTFWO 'MSB Gold Trend Breakout [TV]', https://www.tradingview.com/script/n4hyTFWO
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: 1.8 y backtest
+  mechanism: market-structure break with trend
+  tf: 15m
+  rule:
+    entry: close beyond the last confirmed 5-bar swing high with EMA(50) > EMA(200) (mirror)
+    side: signal
+    stop: last swing low
+    exit: target_r(2)
+    hold: 32 bars
+  sprint3000_mapping: swing_break needs primitive; + trend(4h,50)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-038
+  name: London breakout EA on gold (MQL5 blog, 3.7 y tick test)
+  group: mql5-myfxbook
+  source: 'MQL5 blog post 777540 ''London Breakout on Gold: 3.7 Years of Backtests'', https://www.mql5.com/en/blogs/post/777540'
+  evidence_grade: practitioner-documented
+  verified_track_record: none (MT5 tester, real ticks, two brokers' data; costs not stated)
+  claimed_performance: '2023-01..2026-09: 715 trades, PF 1.38 (broker A) / 1.37 (broker B), 49% win, max DD 17-19% at 1% risk;
+    params fit on 2023-2025, 2026 ''unseen'' PF 1.61 on 157 trades'
+  mechanism: London liquidity breaks the pre-London range; range filter drops no-trend and already-moved days
+  tf: 15m
+  rule:
+    entry: range = 03:00-08:00 server (00:00-05:00 UTC winter); at 08:00 server OCO buy-stop above / sell-stop below the range
+      (+ small buffer); skip if range < 0.30% or > 1.60% of price; max 1 trade/day
+    side: signal
+    stop: opposite side of the range, capped at 0.6% of price
+    exit: target 2.5R; stop to break-even at 1.5R; flat 21:00 server
+    hold: 52 bars
+  sprint3000_mapping: 'session_range_break(session=asia) + exit target_r(2.5); range-width filter needs primitive: range_pct_band(0.30,1.60)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: sample 2023-2026 = gold bull; costs unstated; 5R target and overnight holds were worse per the author
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-039
+  name: Gold Trade Pro (daily S/R breakout)
+  group: mql5-myfxbook
+  source: MQL5/gumroad vendor 'Gold Trade Pro'; review https://newyorkcityservers.com/blog/best-forex-gold-eas-robots
+  evidence_grade: folklore
+  verified_track_record: claimed Myfxbook-verified (start date not stated; not checked)
+  claimed_performance: +169% total, ~18%/month claimed, 60% win, DD 14.8%
+  mechanism: breakouts of daily support/resistance levels
+  tf: 1h
+  rule:
+    entry: close beyond the prior day's high (low) during London/NY -> trade the break
+    side: signal
+    stop: 'fixed: 1.0 x ATR(14,1d) x 0.5 (vendor: fixed SL)'
+    exit: trailing stop 1 ATR(14,1h) after 1R
+    hold: 24 bars
+  sprint3000_mapping: prior_level_break(level=day) + session(london)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: marketing claims; 7 sub-strategies undisclosed
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-040
+  name: Forex Gold Investor (time-window entries)
+  group: mql5-myfxbook
+  source: EA 'Forex Gold Investor'; review https://newyorkcityservers.com/blog/best-forex-gold-eas-robots
+  evidence_grade: practitioner-documented
+  verified_track_record: claimed Myfxbook real account since 2020-10 (not checked)
+  claimed_performance: +297% since 2020-10, ~3.2%/month, max DD 42%
+  mechanism: time-of-day entry windows; vendor does not disclose direction logic
+  tf: 15m
+  rule:
+    entry: 'inferred: enter at the end of the Asia session (06:00 UTC) in the direction of the Asia-session drift (close 06:00
+      vs open 00:00), 1 trade/day'
+    side: signal
+    stop: 1.0 x ATR(14,1h)
+    exit: time(16) or target_r(1)
+    hold: 16 bars
+  sprint3000_mapping: momentum_sign(24) + session(london) approx (rule partly inferred)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: rule inferred from 'time-based entries'; DD 42% vs 3%/month
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-041
+  name: EA Gold Stuff (trend + grid + martingale 1.5x)
+  group: mql5-myfxbook
+  source: MQL5 Market 'EA Gold Stuff' (500+ reviews); review https://newyorkcityservers.com/blog/ea-gold-stuff-review
+  evidence_grade: folklore
+  verified_track_record: MQL5 live signal 2346976 referenced (not checked)
+  claimed_performance: ~14%/month in good periods; DD 19-30%; some signals closed within weeks
+  mechanism: trend direction plus averaging; no hard stop
+  tf: 15m
+  rule:
+    entry: open 0.01 lot in the direction of EMA(50) slope on M15; add an order every 1.0 x ATR(14,1h) against the position
+      with lot x 1.5, max 8 orders
+    side: signal
+    stop: NONE by default (SL 0); our test adds a basket stop at 3% equity
+    exit: close the basket at +$ target equal to 0.5 x ATR(14,1h) on the average price
+    hold: until basket closes
+  sprint3000_mapping: 'needs primitive: grid_basket(distance_atr, multiplier, max_orders)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'MARTINGALE + GRID: negative skew, ruin risk; listed for completeness'
+  risk_flags:
+  - martingale
+  - grid
+  test_priority: C
+- id: RT-PRACTITIONER-042
+  name: Quantum Queen (trend-following grid, 6 sub-strategies)
+  group: mql5-myfxbook
+  source: MQL5 Market 'Quantum Queen' (Bogdan Ion Puscasu), 4.98/5 from 400+ reviews per https://newyorkcityservers.com/blog/quantum-queen-ea-review
+  evidence_grade: folklore
+  verified_track_record: claimed Myfxbook live signals 20+ months (not checked)
+  claimed_performance: +214% over 20+ months, ~12%/month, live DD < 22%; backtest 2018-2024 $10k->$21M (87.85% win)
+  mechanism: waits for a directional bias then averages in as price moves
+  tf: 1h
+  rule:
+    entry: bias = H1 close vs EMA(100) and ADX(14) > 20; open 1 unit with bias; add equal units every 1.0 x ATR(14,1h) adverse,
+      max 5 (martingale removed in v2.0)
+    side: signal
+    stop: basket stop at 2.5 x ATR(14,1d) from the first entry (our choice; vendor undisclosed)
+    exit: basket TP at +1 x ATR(14,1h) on the average price
+    hold: 120 bars
+  sprint3000_mapping: 'needs primitive: grid_basket(1.0, 1.0, 5) + adx_min(14,20)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: GRID (non-martingale since v2.0); internals locked; backtest figures implausible
+  risk_flags:
+  - martingale
+  - grid
+  test_priority: C
+- id: RT-PRACTITIONER-043
+  name: Golden Pickaxe (ML-filtered grid)
+  group: mql5-myfxbook
+  source: EA 'Golden Pickaxe'; review https://newyorkcityservers.com/blog/best-forex-gold-eas-robots
+  evidence_grade: folklore
+  verified_track_record: claimed developer Myfxbook, IC Markets real, since 2022 (not checked)
+  claimed_performance: +1,435% since 2022, ~11.5%/month, max DD 50.9%
+  mechanism: grid with an ML entry filter and news filter
+  tf: 15m
+  rule:
+    entry: 'grid: open with the M15 EMA(20) slope, add every 1.0 x ATR(14,1h) adverse at 1.0x lots, max 6; skip 30 min around
+      tier-1 US releases'
+    side: signal
+    stop: basket stop 3% equity (our choice)
+    exit: basket TP +0.5 ATR(14,1h)
+    hold: until basket closes
+  sprint3000_mapping: 'needs primitive: grid_basket + event filter'
+  data_needed: available locally (Dukascopy 1m) + free US calendar
+  prior_test_or_risk: GRID; DD 51%
+  risk_flags:
+  - grid
+  test_priority: C
+- id: RT-PRACTITIONER-044
+  name: Happy Gold (ZigZag swing + scalp + grid)
+  group: mql5-myfxbook
+  source: EA 'Happy Gold'; review https://newyorkcityservers.com/blog/best-forex-gold-eas-robots (Forex Peace Army test 2021-2025)
+  evidence_grade: folklore
+  verified_track_record: none (third-party review tests only)
+  claimed_performance: 214-3,839% cumulative 2021-2025, 7-8%/month, DD 18-26%
+  mechanism: ZigZag swing reversal
+  tf: 1h
+  rule:
+    entry: ZigZag(12,5,3) confirms a new swing low -> long at the close; mirror
+    side: signal
+    stop: fixed 24 pips = $2.40 (vendor)
+    exit: adaptive TP = 1.5 x ATR(14)
+    hold: 24 bars
+  sprint3000_mapping: 'needs primitive: zigzag_pivot(12)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: grid mode exists; ZigZag confirmation lags
+  risk_flags:
+  - grid
+  test_priority: C
+- id: RT-PRACTITIONER-045
+  name: Gold Guardian (long-only, overlap-only)
+  group: mql5-myfxbook
+  source: MQL5 blog post 773690 (Gold Guardian EA), https://www.mql5.com/en/blogs/post/773690
+  evidence_grade: folklore
+  verified_track_record: Myfxbook referenced, no figures (not checked)
+  claimed_performance: none given
+  mechanism: long-only gold drift; trade only the London/NY overlap; flat before tier-1 releases
+  tf: 15m
+  rule:
+    entry: 'Mon-Fri 12:00-15:30 UTC: long when close > EMA(50) and EMA(50) rising; no entries 15 min before tier-1 US releases'
+    side: long_only
+    stop: 1.0 x ATR(14,1h)
+    exit: target_r(1.5); trail
+    hold: 16 bars
+  sprint3000_mapping: ema_pullback(50,0.25) approx + session(ny) + side long_only
+  data_needed: available locally (Dukascopy 1m) + free US calendar
+  prior_test_or_risk: long-only = bull-market beta
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-046
+  name: Gold Asian Breakout EA (full-candle break)
+  group: mql5-myfxbook
+  source: MQL5 Market product 166774 'Gold Asian Breakout', https://www.mql5.com/en/market/product/166774
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: Asia-range break, full-body confirmation cuts false breaks
+  tf: 15m
+  rule:
+    entry: Asia range 00:00-07:00 UTC; trade only when a whole candle (open and close) is beyond the range during 07:00-11:00
+      UTC
+    side: signal
+    stop: beyond the opposite range edge
+    exit: target_r(2)
+    hold: 36 bars
+  sprint3000_mapping: session_range_break(session=asia); full-candle confirm needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-047
+  name: Gold Trend Filter EA (Donchian + efficiency ratio)
+  group: mql5-myfxbook
+  source: MQL5 Market product 183962 'Gold Trend Filter', https://www.mql5.com/it/market/product/183962
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: breakouts only when the market is efficient (trending)
+  tf: 4h
+  rule:
+    entry: donchian_break(20) AND efficiency ratio(20) > 0.35
+    side: signal
+    stop: 2 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 120 bars
+  sprint3000_mapping: 'donchian_break(20); needs filter primitive: efficiency_ratio_min(20,0.35)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-048
+  name: Gold SuperTrend ATR EA
+  group: mql5-myfxbook
+  source: MQL5 Market product 176905 'Gold SuperTrend ATR Strategy MT4', https://www.mql5.com/it/market/product/176905
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: ATR trend-following
+  tf: 1h
+  rule:
+    entry: supertrend(10,3) flip with ADX(14) > 20
+    side: signal
+    stop: supertrend line
+    exit: opposite flip
+    hold: 96 bars
+  sprint3000_mapping: supertrend_flip(10,3) + adx_min(14,20)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-049
+  name: Gold H1 Phoenix Breakout (no grid)
+  group: mql5-myfxbook
+  source: MQL5 signal 2388689, https://www.mql5.com/de/signals/2388689
+  evidence_grade: folklore
+  verified_track_record: 'MQL5 signal live since 2026-08 (MQL5 tracks it): growth -66%'
+  claimed_performance: live -66%; 4.5 y backtest claim
+  mechanism: H1 range breakout
+  tf: 1h
+  rule:
+    entry: close beyond the prior 24-bar high/low
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 24 bars
+  sprint3000_mapping: donchian_break(24)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: VERIFIED LOSS on MQL5 (-66%)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-050
+  name: Gold Breakout Straddle signal
+  group: mql5-myfxbook
+  source: MQL5 signal 2386330 'Gold Breakout Straddle', https://www.mql5.com/en/signals/2386330
+  evidence_grade: folklore
+  verified_track_record: 'MQL5 signal (warning: too few trading days)'
+  claimed_performance: not meaningful
+  mechanism: pre-news / pre-session straddle
+  tf: 15m
+  rule:
+    entry: at 12:15 UTC OCO stops 0.5 x ATR(14,1h) above/below the 12:15 price
+    side: signal
+    stop: the other stop level
+    exit: target_r(2) or 16:00 UTC
+    hold: 15 bars
+  sprint3000_mapping: 'needs primitive: time_straddle(time, distance_atr)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-051
+  name: XAUUSD Power Breakouts Low Risk signal
+  group: mql5-myfxbook
+  source: MQL5 signal 2381396, https://www.mql5.com/en/signals/2381396
+  evidence_grade: folklore
+  verified_track_record: 'MQL5 signal: -2% growth, 0 subscribers'
+  claimed_performance: -2%
+  mechanism: session breakout
+  tf: 1h
+  rule:
+    entry: first 1h close beyond the London morning range (07:00-10:00 UTC) between 10:00 and 15:00 UTC
+    side: signal
+    stop: range midpoint
+    exit: target_r(2)
+    hold: 10 bars
+  sprint3000_mapping: opening_range_break(session=london, minutes=180)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-052
+  name: Classic Market Surfer EA (M15 gold)
+  group: mql5-myfxbook
+  source: MQL5 blog post 773097, https://www.mql5.com/en/blogs/post/773097
+  evidence_grade: folklore
+  verified_track_record: claimed 'live-verified', 3 weeks only
+  claimed_performance: +84% in the first 3 weeks
+  mechanism: M15 trend-surfing
+  tf: 15m
+  rule:
+    entry: EMA(20)/EMA(50) aligned, entry on a pullback close to EMA(20)
+    side: signal
+    stop: 1.2 x ATR(14)
+    exit: target_r(1.5)
+    hold: 32 bars
+  sprint3000_mapping: ema_pullback(20,0.3) + trend(4h,50)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 3-week sample
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-053
+  name: Dynamic micro-hedging gold EA (hedge grid)
+  group: mql5-myfxbook
+  source: 'EarnForex forum ''LIVE AUDIT: XAUUSD Dynamic Micro-Hedging EA 14 months verified'', https://www.earnforex.com/forum/threads/live-audit-xauusd-dynamic-micro-hedging-ea-14-months-verified-500k-executions-direct-investor-access.54961/'
+  evidence_grade: folklore
+  verified_track_record: claimed 14 months live (not checked)
+  claimed_performance: 500k+ executions
+  mechanism: both-side hedge grid harvesting oscillation
+  tf: 15m
+  rule:
+    entry: keep a long and a short open; every 0.5 x ATR(14,1h) adverse move add a hedge leg; close legs at +0.5 ATR
+    side: both
+    stop: basket stop 3% equity (our choice)
+    exit: leg TP 0.5 ATR
+    hold: until basket closes
+  sprint3000_mapping: 'needs primitive: hedge_grid'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: HEDGE GRID; 500k executions = cost-dominated at our RT
+  risk_flags:
+  - grid
+  test_priority: C
+- id: RT-PRACTITIONER-054
+  name: XTrader Pro Gold EA
+  group: mql5-myfxbook
+  source: seller page https://thetradelovers.gumroad.com/l/XTraderProGoldEAv1MT4
+  evidence_grade: folklore
+  verified_track_record: claimed 'verified' (not checked)
+  claimed_performance: +287.9%, 85% win, max DD 57.7%
+  mechanism: high-win-rate small-TP averaging (implied by 85% win / 58% DD)
+  tf: 15m
+  rule:
+    entry: fade RSI(14) < 30 / > 70 on M15 with 0.5 ATR TP; add at 1 ATR adverse x1.5 lot, max 5
+    side: signal (fade)
+    stop: none (basket 5% equity, our choice)
+    exit: basket TP 0.5 ATR
+    hold: until basket closes
+  sprint3000_mapping: 'rsi_threshold(14,30,fade) + needs primitive: grid_basket'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: MARTINGALE-LIKE profile (85% win, 58% DD)
+  risk_flags:
+  - martingale
+  test_priority: C
+- id: RT-PRACTITIONER-055
+  name: Hunter ProGold EA
+  group: mql5-myfxbook
+  source: EarnForex forum 'Hunter ProGold Expert Advisor - Myfxbook verified 152% in under 1 month', https://www.earnforex.com/forum/threads/hunter-progold-expert-advisor-%E2%80%93-myfxbook-verified-performance-152-in-under-1-month.53266/
+  evidence_grade: folklore
+  verified_track_record: claimed Myfxbook (under 1 month)
+  claimed_performance: +152% in < 1 month
+  mechanism: undisclosed scalping; such returns imply high leverage
+  tf: 15m
+  rule:
+    entry: 'inferred: breakout of the 15m 8-bar range during 07:00-16:00 UTC'
+    side: signal
+    stop: opposite range edge
+    exit: target_r(1)
+    hold: 8 bars
+  sprint3000_mapping: donchian_break(8) + session(london)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 1-month sample; rule inferred
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-056
+  name: Chonos Capital XAUUSD signal
+  group: mql5-myfxbook
+  source: MQL5 signal 2379848, https://www.mql5.com/en/signals/2379848
+  evidence_grade: folklore
+  verified_track_record: MQL5 signal (history < 1 year; not checked)
+  claimed_performance: not checked
+  mechanism: undisclosed
+  tf: 1h
+  rule:
+    entry: no rule published; we test the generic 1h donchian_break(20) with trend(1d,50) as its proxy
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 48 bars
+  sprint3000_mapping: donchian_break(20) + trend(1d,50)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: PROXY ONLY - no disclosed rule
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-057
+  name: Velocity Pulse Gold (momentum burst)
+  group: mql5-myfxbook
+  source: MQL5 product 158766 / signal 2384268 'Velocity Pulse Gold', https://www.mql5.com/ru/signals/2384268
+  evidence_grade: folklore
+  verified_track_record: MQL5 signal (short history; not checked)
+  claimed_performance: not checked
+  mechanism: price-velocity bursts continue briefly
+  tf: 15m
+  rule:
+    entry: 15m bar range > 2 x ATR(14) and close in the outer 20% of the bar -> follow
+    side: signal
+    stop: bar midpoint
+    exit: time(4)
+    hold: 4 bars
+  sprint3000_mapping: atr_expansion(14, 2.0)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-058
+  name: Institutional Breakout Pro (session EA)
+  group: mql5-myfxbook
+  source: MQL5 product 'Institutional Breakout Pro XAUUSD Session EA', https://mql5.com/8cr8i
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: session open breakout
+  tf: 15m
+  rule:
+    entry: NY open range 13:30-14:00 UTC; break of it before 16:00 UTC
+    side: signal
+    stop: opposite range edge
+    exit: target_r(2)
+    hold: 16 bars
+  sprint3000_mapping: opening_range_break(session=ny, minutes=30)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-059
+  name: AurumBreak Pro (prior-day level break)
+  group: mql5-myfxbook
+  source: MQL5 product 169819 'AurumBreak Pro', https://www.mql5.com/fr/market/product/169819
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: prior-day extremes hold stops
+  tf: 1h
+  rule:
+    entry: first 1h close beyond the prior-day high/low
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 24 bars
+  sprint3000_mapping: prior_level_break(level=day)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-060
+  name: Waka Waka-style grid applied to gold (vendor family)
+  group: mql5-myfxbook
+  source: 'ValeryTrading Waka Waka / Perceptrader AI reviews: https://newyorkcityservers.com/blog/waka-waka-ea-review, https://benzinga.com/money/waka-waka-ea-by-valerytrading-review'
+  evidence_grade: folklore
+  verified_track_record: claimed Myfxbook/MQL5 since 2018 (FX crosses, not gold; not checked)
+  claimed_performance: 58-70+ consecutive profitable months claimed
+  mechanism: range-pair grid with volatility filter; NOT gold-specific
+  tf: 1h
+  rule:
+    entry: in low-volatility regime (ATR(14,1d) below 40th pct of 250d) fade 1h closes beyond BB(20,2); add every 1 ATR adverse
+      at 1.0x, max 5
+    side: signal (fade)
+    stop: basket 3% equity (our choice)
+    exit: basket TP at BB mid
+    hold: until basket closes
+  sprint3000_mapping: 'zscore(20,2,fade) + vol_regime(14,0,40) + needs primitive: grid_basket'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: GRID; built for range FX crosses, gold trends -> poor fit
+  risk_flags:
+  - grid
+  test_priority: C
+- id: RT-PRACTITIONER-061
+  name: Turtle System 1 (20/10 Donchian)
+  group: book
+  source: Faith, Way of the Turtle (2007); original Turtle rules (gold in the Turtle portfolio)
+  evidence_grade: practitioner-documented
+  verified_track_record: Turtle program audited fund results 1984-1988 (multi-market, not gold-only)
+  claimed_performance: Turtles reported ~80%/yr 1984-88 multi-market (book)
+  mechanism: trend persistence in commodities
+  tf: 1d
+  rule:
+    entry: close > 20-day high -> long; < 20-day low -> short; skip if the last System-1 signal would have won
+    side: signal
+    stop: 2 x ATR(20) (2N)
+    exit: 10-day opposite breakout
+    hold: 60 bars
+  sprint3000_mapping: donchian_break(20) + stop atr(20) x2; exit 10-day opposite donchian needs primitive (approx chandelier(20,2))
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: '1d long holds pay CFD swap (decision memo: 0.13-0.15 R)'
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-062
+  name: Turtle System 2 (55/20 Donchian)
+  group: book
+  source: Faith, Way of the Turtle (2007)
+  evidence_grade: practitioner-documented
+  verified_track_record: as above
+  claimed_performance: as above
+  mechanism: long-horizon trend
+  tf: 1d
+  rule:
+    entry: close > 55-day high -> long; < 55-day low -> short
+    side: signal
+    stop: 2 x ATR(20)
+    exit: 20-day opposite breakout
+    hold: 120 bars
+  sprint3000_mapping: donchian_break(55) + chandelier(20,3) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-063
+  name: Larry Williams volatility breakout
+  group: book
+  source: Williams, Long-Term Secrets to Short-Term Trading (1999)
+  evidence_grade: practitioner-documented
+  verified_track_record: Williams' 1987 Robbins World Cup (multi-market, not audited for gold)
+  claimed_performance: book examples only
+  mechanism: a move beyond a fraction of yesterday's range from the open signals intraday commitment
+  tf: 1h
+  rule:
+    entry: buy-stop at today's open + 0.6 x yesterday's range (sell-stop at open - 0.6 x range); 1 trade/day
+    side: signal
+    stop: 0.5 x yesterday's range
+    exit: 'close at day end (bailout: first profitable open)'
+    hold: 24 bars
+  sprint3000_mapping: 'needs primitive: open_range_breakout(k=0.6); approx atr_expansion'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-064
+  name: Larry Williams 'Oops!' gap reversal
+  group: book
+  source: Williams, Long-Term Secrets to Short-Term Trading (1999)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: opening gap below the prior low that recovers traps sellers
+  tf: 1d
+  rule:
+    entry: today opens below yesterday's low; buy-stop at yesterday's low (mirror for shorts)
+    side: signal
+    stop: today's low
+    exit: first profitable open / close
+    hold: 2 bars
+  sprint3000_mapping: 'needs primitive: gap_reclaim (rare in 24h CFD; use the Asia-session open as the ''open'')'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: CFD trades 23h, so true gaps are rare
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-065
+  name: Larry Williams smash-day reversal
+  group: book
+  source: Williams, Long-Term Secrets to Short-Term Trading (1999)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: a close outside the prior range that is immediately reversed = exhaustion
+  tf: 1d
+  rule:
+    entry: day closes below the prior day's low (smash down); next day buy-stop at the smash-day high
+    side: signal
+    stop: smash-day low
+    exit: 3-day exit / first profitable open
+    hold: 3 bars
+  sprint3000_mapping: 'needs primitive: smash_day_reversal'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-066
+  name: Larry Williams COT commercial index (26-week)
+  group: book
+  source: 'Williams, Trade Stocks and Commodities with the Insiders: Secrets of the COT Report (Wiley 2005); index formula
+    via TradingView ''COT Index'' FDi7l1v6'
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: commercial hedgers are informed and contrarian at extremes
+  tf: 1d
+  rule:
+    entry: COT commercial net index over 26 weeks (0-100) > 80 -> allow longs only; < 20 -> shorts only; entry on 1d donchian_break(10)
+      in the allowed direction
+    side: signal
+    stop: 2 x ATR(14)
+    exit: time(15)
+    hold: 15 bars
+  sprint3000_mapping: 'donchian_break(10); needs filter primitive: cot_index(commercials, 26w, 80/20) asof released Friday'
+  data_needed: free (CFTC legacy COT; positioning-v1 local)
+  prior_test_or_risk: near ALREADY-FAILED H-86 (MM deciles); this variant uses commercials + a price trigger
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-067
+  name: Toby Crabel opening-range breakout with stretch
+  group: book
+  source: Crabel, Day Trading with Short-Term Price Patterns and Opening Range Breakout (1990)
+  evidence_grade: practitioner-documented
+  verified_track_record: Crabel's later CTA record exists but is not gold-only and not public
+  claimed_performance: book stats on S&P/bonds 1980s
+  mechanism: a move of one 'stretch' from the open shows the day's initiative side
+  tf: 1h
+  rule:
+    entry: stretch = 10-day mean of min(|open-high|,|open-low|); buy-stop at the 07:00 UTC price + stretch, sell-stop at -
+      stretch
+    side: signal
+    stop: the opposite stretch level
+    exit: close at 20:00 UTC
+    hold: 13 bars
+  sprint3000_mapping: 'needs primitive: stretch_orb(10)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-068
+  name: Crabel NR7 breakout
+  group: book
+  source: Crabel (1990); Raschke & Connors, Street Smarts (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book stats
+  mechanism: narrowest range in 7 days precedes expansion
+  tf: 1d
+  rule:
+    entry: today's range is the narrowest of the last 7 days; next day OCO stops at today's high/low
+    side: signal
+    stop: the other side of the NR7 bar
+    exit: close at day end
+    hold: 1 bar
+  sprint3000_mapping: nr_breakout(7)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: NR4 at 1m/5m tested in H-81 Z6 (failed); daily not tested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-069
+  name: Crabel ID/NR4
+  group: book
+  source: Crabel (1990); Street Smarts (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book stats
+  mechanism: inside day that is also NR4 = maximum compression
+  tf: 1d
+  rule:
+    entry: inside day AND narrowest range of 4 days; next day OCO stops at its high/low
+    side: signal
+    stop: other side of the bar
+    exit: close at day end or 2nd day close
+    hold: 2 bars
+  sprint3000_mapping: nr_breakout(4) + inside_bar_break
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-070
+  name: Raschke Turtle Soup
+  group: book
+  source: Raschke & Connors, Street Smarts (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: new 20-day extremes that fail trap Turtle breakout traders
+  tf: 1d
+  rule:
+    entry: today makes a new 20-day low, the previous 20-day low is >= 4 days old; buy-stop 5-10 ticks above the prior 20-day
+      low the same day
+    side: signal (fade)
+    stop: 1 tick below today's low
+    exit: trail; exit within 2-3 days
+    hold: 3 bars
+  sprint3000_mapping: 'needs primitive: turtle_soup(20,4)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: failed-break fade; similar intraday versions retired
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-071
+  name: Raschke Turtle Soup Plus One
+  group: book
+  source: Raschke & Connors, Street Smarts (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: as Turtle Soup, entered after the breakout day closes
+  tf: 1d
+  rule:
+    entry: day closes at a new 20-day low (prior low >= 3 days old); next day buy-stop at the prior 20-day low
+    side: signal (fade)
+    stop: low of the two days
+    exit: trail; 3-day exit
+    hold: 3 bars
+  sprint3000_mapping: 'needs primitive: turtle_soup_plus_one(20,3)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-072
+  name: Raschke Holy Grail (ADX pullback)
+  group: book
+  source: Raschke & Connors, Street Smarts (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: first pullback in a strong trend continues
+  tf: 1d
+  rule:
+    entry: ADX(14) > 30 and rising; price retraces to EMA(20); buy-stop above the high of the touch bar
+    side: signal
+    stop: the recent swing low
+    exit: the recent swing high or trail
+    hold: 10 bars
+  sprint3000_mapping: ema_pullback(20, 0) + adx_min(14,30)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-073
+  name: Raschke 80-20s
+  group: book
+  source: Raschke & Connors, Street Smarts (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: a day that closes at its extreme often reverses next morning
+  tf: 1d
+  rule:
+    entry: yesterday opened in its top 20% and closed in its bottom 20%; today trades 5-15 ticks below yesterday's low then
+      buy-stop at yesterday's low
+    side: signal (fade)
+    stop: today's low
+    exit: trail, exit within 2 days
+    hold: 2 bars
+  sprint3000_mapping: 'needs primitive: eighty_twenty'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-074
+  name: Raschke Anti (stochastic pullback)
+  group: book
+  source: Raschke, 'The Anti' (Street Smarts 1995 / LBR Group)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: a counter-trend hook of the fast stochastic in a trend
+  tf: 1h
+  rule:
+    entry: slow %D(7,10,?) sloping up; %K(7) pulls back then hooks up -> long at the close
+    side: signal
+    stop: the pullback low
+    exit: target_r(1.5) or 8 bars
+    hold: 8 bars
+  sprint3000_mapping: 'needs primitive: stoch_hook(7,10)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-075
+  name: Connors RSI(2) pullback with 200-day trend
+  group: book
+  source: Connors & Alvarez, Short Term Trading Strategies That Work (2008)
+  evidence_grade: practitioner-documented
+  verified_track_record: none for gold
+  claimed_performance: equity-index stats
+  mechanism: short-term pullbacks in a long-term uptrend snap back
+  tf: 1d
+  rule:
+    entry: close > SMA(200) and RSI(2) < 10 -> long at the close
+    side: long_only
+    stop: 3 x ATR(14) (Connors uses none)
+    exit: close > SMA(5)
+    hold: 10 bars
+  sprint3000_mapping: rsi_threshold(2,10,fade) + trend(1d,200) + side long_only
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: meanrev retired at 15m/1h; daily long-only = bull beta
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-076
+  name: Clenow trend following (50/100 EMA + 50-day break)
+  group: book
+  source: Clenow, Following the Trend (2013)
+  evidence_grade: practitioner-documented
+  verified_track_record: Clenow's fund results (multi-market)
+  claimed_performance: book simulation 1990-2011 multi-futures
+  mechanism: diversified trend premium
+  tf: 1d
+  rule:
+    entry: EMA(50) > EMA(100) and close at a 50-day high -> long; mirror
+    side: signal
+    stop: 3 x ATR(100) trailing
+    exit: 3 x ATR trail
+    hold: 250 bars
+  sprint3000_mapping: donchian_break(50) + trend(1d,100) + exit chandelier(100,3)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap; decision memo shows 1d trend fails on CFD swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-077
+  name: Carver EWMAC 16/64
+  group: book
+  source: Carver, Systematic Trading (2015); Leveraged Trading (2019)
+  evidence_grade: practitioner-documented
+  verified_track_record: Carver's own account published on his blog (multi-market)
+  claimed_performance: multi-market backtests
+  mechanism: trend premium with continuous forecast
+  tf: 1d
+  rule:
+    entry: forecast = (EMA16 - EMA64)/stdev(price,25); long if > +10 scaled units, short if < -10
+    side: signal
+    stop: 3 x ATR(14)
+    exit: forecast sign change
+    hold: 250 bars
+  sprint3000_mapping: ma_cross(16,64,ema) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-078
+  name: Carver EWMAC 32/128 (slow)
+  group: book
+  source: Carver, Systematic Trading (2015)
+  evidence_grade: practitioner-documented
+  verified_track_record: as above
+  claimed_performance: as above
+  mechanism: slow trend
+  tf: 1d
+  rule:
+    entry: EMA(32) vs EMA(128) cross
+    side: signal
+    stop: 3 x ATR(14)
+    exit: opposite cross
+    hold: 500 bars
+  sprint3000_mapping: ma_cross(32,128,ema)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-079
+  name: Donchian 4-week rule
+  group: book
+  source: Donchian (1960s); popularised in Kaufman, Trading Systems and Methods (5th ed. 2013)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: Kaufman's tests
+  mechanism: 4-week breakout = trend
+  tf: 1d
+  rule:
+    entry: close above the 20-day high -> long; below 20-day low -> short (always in)
+    side: signal
+    stop: opposite 20-day extreme
+    exit: stop-and-reverse
+    hold: 120 bars
+  sprint3000_mapping: donchian_break(20) + exit opposite_signal
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-080
+  name: Bollinger squeeze breakout (Method I)
+  group: book
+  source: Bollinger, Bollinger on Bollinger Bands (2001)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book examples
+  mechanism: 'volatility cycles: lowest bandwidth precedes expansion'
+  tf: 1d
+  rule:
+    entry: BandWidth(20,2) at its 125-day low; then close outside a band -> trade the break
+    side: signal
+    stop: opposite band or 2 x ATR
+    exit: close back across the middle band
+    hold: 40 bars
+  sprint3000_mapping: compression(125, 5) + bb_break(20,2)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-081
+  name: Kevin Davey ATR expansion breakout
+  group: book
+  source: Davey, Entry and Exit Confessions of a Champion Trader (2019) (summarised at financialwisdomtv.com)
+  evidence_grade: practitioner-documented
+  verified_track_record: none for gold
+  claimed_performance: book
+  mechanism: a range larger than recent ATR starts a move
+  tf: 4h
+  rule:
+    entry: bar range > 1.5 x ATR(20) and close in the outer third -> follow at the next open
+    side: signal
+    stop: bar extreme opposite
+    exit: time(6)
+    hold: 6 bars
+  sprint3000_mapping: atr_expansion(20, 1.5)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-082
+  name: Mark Fisher ACD (A-up/A-down)
+  group: book
+  source: Fisher, The Logical Trader (2002)
+  evidence_grade: practitioner-documented
+  verified_track_record: Fisher's MBF Clearing (not public)
+  claimed_performance: book examples on crude/gold
+  mechanism: 'opening-range acceptance: price held beyond A for half the OR length = day direction'
+  tf: 15m
+  rule:
+    entry: OR = first 30 min of the NY session (13:20-13:50 UTC, COMEX open); A = OR high + 0.1 x 30-day ATR(1d); long when
+      price holds above A for 15 min (mirror)
+    side: signal
+    stop: OR low
+    exit: close at 18:30 UTC (COMEX close)
+    hold: 20 bars
+  sprint3000_mapping: opening_range_break(session=ny, minutes=30) approx; A offset needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-083
+  name: Mark Fisher pivot range trend day
+  group: book
+  source: Fisher, The Logical Trader (2002)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: opening above the prior pivot range = bullish acceptance
+  tf: 1h
+  rule:
+    entry: pivot range = (H+L+C)/3 +/- |(H+L)/2 - pivot| of yesterday; if 13:30 UTC price > top of the range and the day's
+      A-up triggers -> long
+    side: signal
+    stop: bottom of the pivot range
+    exit: flat 20:00 UTC
+    hold: 7 bars
+  sprint3000_mapping: 'needs primitive: pivot_range_side'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: pivots largely retired (sprint-200)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-084
+  name: Elder Triple Screen
+  group: book
+  source: Elder, Trading for a Living (1993)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: trade daily pullbacks in the weekly trend
+  tf: 1d
+  rule:
+    entry: weekly MACD-histogram slope up; daily Force Index(2) < 0 -> buy-stop above yesterday's high
+    side: signal
+    stop: below the recent low
+    exit: target_r(2) or opposite weekly slope
+    hold: 20 bars
+  sprint3000_mapping: 'needs primitive: weekly_macdh_slope + force_index; approx ema_pullback(13,0.5) + trend(1d,26)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-085
+  name: Elder Impulse System
+  group: book
+  source: Elder, Come Into My Trading Room (2002)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: EMA slope and MACD-H slope agree = impulse
+  tf: 4h
+  rule:
+    entry: EMA(13) rising AND MACD-H(12,26,9) rising -> long ('green bar'); mirror red; exit on the first non-agreeing bar
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: first bar that is not the entry colour
+    hold: 30 bars
+  sprint3000_mapping: 'needs primitive: elder_impulse(13)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-086
+  name: Weinstein stage-2 breakout (30-week MA)
+  group: book
+  source: Weinstein, Secrets for Profiting in Bull and Bear Markets (1988)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: base breakout above a flattening 30-week MA begins a stage-2 trend
+  tf: 1d
+  rule:
+    entry: weekly close above a 26-week range high with the 30-week SMA flat-to-rising -> long
+    side: long_only
+    stop: below the base low
+    exit: weekly close below the 30-week SMA
+    hold: 180 bars
+  sprint3000_mapping: donchian_break(130) + trend(1d,150) + side long_only
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap; very few trades
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-087
+  name: Paul Tudor Jones 200-day rule
+  group: book
+  source: 'PTJ interview in Tony Robbins, Money: Master the Game (2014)'
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: stay with the 200-day trend
+  tf: 1d
+  rule:
+    entry: close crosses above SMA(200) -> long; below -> short
+    side: signal
+    stop: 3 x ATR(14)
+    exit: opposite cross
+    hold: 500 bars
+  sprint3000_mapping: ma_cross(1,200,sma)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap; whipsaw-heavy
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-088
+  name: Faber 10-month SMA timing (gold/commodities)
+  group: book
+  source: Faber, 'A Quantitative Approach to Tactical Asset Allocation', Journal of Wealth Management (2007)
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: GSCI timing improved Sharpe 1973-2005 (gross)
+  mechanism: time-series trend on monthly data
+  tf: 1d
+  rule:
+    entry: month-end close > 10-month SMA -> long next month, else flat
+    side: long_only
+    stop: none (monthly)
+    exit: month-end close < 10-month SMA
+    hold: 21 bars
+  sprint3000_mapping: 'ma_cross approx at month-end; needs primitive: month_end_rebalance'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: monthly; ~1 trade/yr; swap; TSMOM H-01 already failed net
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-089
+  name: Peter Brandt classical pattern breakout (rectangle)
+  group: book
+  source: Brandt, Diary of a Professional Commodity Trader (2011)
+  evidence_grade: practitioner-documented
+  verified_track_record: Brandt's published annual returns (multi-market, not audited for gold)
+  claimed_performance: book
+  mechanism: a horizontal boundary tested >= 3 times over >= 8 weeks breaks with follow-through
+  tf: 1d
+  rule:
+    entry: 40-day range with >= 3 touches of the top (within 0.25 ATR); close > top -> long
+    side: signal
+    stop: '''last day rule'': the low of the breakout day'
+    exit: target = range height or trail 3 ATR
+    hold: 60 bars
+  sprint3000_mapping: level_break(min_strength_pct=80, min_tf=1d) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: fits the KEYLEVELS primitive
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-090
+  name: Rob Hoffman inventory retracement bar (IRB)
+  group: book
+  source: Hoffman, Become a Better Trader (2014); Hoffman's World Cup results cited by him
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: contest wins claimed
+  mechanism: a 45% counter-trend wick inside a trend = inventory flush
+  tf: 15m
+  rule:
+    entry: EMA(20) slope >= 45 degrees equivalent (20-bar EMA change > 1.5 ATR); bar with >= 45% of its range as a counter-trend
+      wick; buy-stop above its high
+    side: signal
+    stop: bar low
+    exit: target_r(1.5)
+    hold: 16 bars
+  sprint3000_mapping: 'needs primitive: irb(0.45) + ema slope filter'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: candle-shape family retired (sprint-200 patterns)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-091
+  name: Wilder Parabolic SAR stop-and-reverse
+  group: book
+  source: Wilder, New Concepts in Technical Trading Systems (1978)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: accelerating trailing stop
+  tf: 4h
+  rule:
+    entry: SAR(0.02, 0.2) flip
+    side: signal
+    stop: SAR level
+    exit: reverse at the opposite flip
+    hold: 120 bars
+  sprint3000_mapping: 'needs primitive: psar_flip(0.02,0.2)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-092
+  name: Wilder ADX/DMI crossover
+  group: book
+  source: Wilder (1978)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: directional-movement crossover with trend strength
+  tf: 4h
+  rule:
+    entry: +DI crosses -DI with ADX(14) > 25 -> follow
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: opposite DI cross
+    hold: 60 bars
+  sprint3000_mapping: adx_onset(14,25) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-093
+  name: Ichimoku kumo breakout + TK cross
+  group: book
+  source: Hosoda; Patel, Trading with Ichimoku Clouds (2010)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: cloud breakout = regime change
+  tf: 4h
+  rule:
+    entry: close above the cloud (senkou A/B 9/26/52) AND tenkan > kijun AND chikou above price 26 bars ago -> long; mirror
+    side: signal
+    stop: kijun-sen
+    exit: close back inside the cloud
+    hold: 120 bars
+  sprint3000_mapping: 'needs primitive: ichimoku_state(9,26,52)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-094
+  name: DeMark TD Sequential 9 (setup) fade
+  group: book
+  source: DeMark, The New Science of Technical Analysis (1994); Perl, DeMark Indicators (2008)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: book
+  mechanism: 9 consecutive closes vs 4 bars earlier = exhaustion
+  tf: 4h
+  rule:
+    entry: 9 consecutive closes below the close 4 bars earlier (setup complete), bar 8 or 9 low below bars 6/7 lows -> long
+    side: signal (fade)
+    stop: setup low - 1 ATR
+    exit: time(8) or target_r(1.5)
+    hold: 8 bars
+  sprint3000_mapping: consecutive_bars(9, mode=fade) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: fade family
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-095
+  name: Stan Kroll / Ed Seykota fast EMA cross
+  group: book
+  source: Seykota interview in Schwager, Market Wizards (1989); Kroll, The Professional Commodity Trader (1974)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: trend with fast EMAs
+  tf: 4h
+  rule:
+    entry: EMA(15) crosses EMA(150)
+    side: signal
+    stop: 3 x ATR(14)
+    exit: opposite cross
+    hold: 300 bars
+  sprint3000_mapping: ma_cross(15,150,ema)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-096
+  name: Andrea Unger GC session high/low breakout
+  group: book
+  source: Unger Academy, 'Trading Gold with Multiday Trend-Following Strategies', https://ungeracademy.com/?p=7022 (Andrea
+    Unger, 4x World Cup champion)
+  evidence_grade: practitioner-documented
+  verified_track_record: Unger's World Cup results (multi-market); gold system figures are vendor backtests
+  claimed_performance: 'GC 5m session-break system: $49.3k since 2010, avg trade > $260 per 1 contract (costs unstated); out
+    of sample since 2018'
+  mechanism: the new-session (18:00 NY) extremes set early hold information; breaks in the window continue for days
+  tf: 15m
+  rule:
+    entry: within 18:00-22:00 NY after the futures open, buy-stop at the session high so far / sell-stop at the session low;
+      positions can be held multi-session
+    side: signal
+    stop: 2 x ATR(14,1h) (source undisclosed)
+    exit: chandelier(14,3) on 1h
+    hold: 200 bars
+  sprint3000_mapping: 'needs primitive: session_extreme_break(window); approx session_range_break(session=asia)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: rules partly undisclosed; swap on multi-day
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-097
+  name: Andrea Unger GC 30m Supertrend multiday
+  group: book
+  source: Unger Academy, https://ungeracademy.com/blog/gold-futures-trading-strategies-supertrend-and-high-low-breakout-techniques-usd80-000-gained-in-2023-and-2024
+  evidence_grade: practitioner-documented
+  verified_track_record: vendor backtest; 'out of sample since 2018'
+  claimed_performance: $262.7k since 2010 per contract ($195k from longs), avg trade > $340
+  mechanism: medium-term trend on mid-price supertrend
+  tf: 1h
+  rule:
+    entry: supertrend on (H+L)/2 with ATR(10) x 3 flips; hold multi-day
+    side: signal
+    stop: supertrend line
+    exit: opposite flip
+    hold: 240 bars
+  sprint3000_mapping: supertrend_flip(10,3) (30m in source; tested at 1h)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 74% of profit from longs = bull drift; swap
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-098
+  name: Andrea Unger GC 5m price-channel breakout
+  group: book
+  source: Unger Academy, https://ungeracademy.com/?p=7022
+  evidence_grade: practitioner-documented
+  verified_track_record: vendor; live 'about a year'
+  claimed_performance: max DD $10k, return/DD 15.4, avg trade ~$140
+  mechanism: channel breakout
+  tf: 15m
+  rule:
+    entry: close beyond the N-bar high/low channel (N=48 bars = 12 h) with an undisclosed pattern filter (we use none)
+    side: signal
+    stop: 2 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 200 bars
+  sprint3000_mapping: donchian_break(48)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: filter undisclosed
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-099
+  name: 'Hat-shaped day: long Asia hours'
+  group: session-calendar
+  source: Donati & Jung, 'Gold Price Dynamics Around the Clock', Copenhagen Business School MSc thesis (2019), https://research.cbs.dk/en/studentProjects/gold-price-dynamics-around-the-clock/;
+    WGC H1-2026 session split (Asia +12.9%, NA -15%) via https://www.moneymetals.com/news/2026/07/12/a-strange-dichotomy-gold-up-on-the-year-in-asian-markets-down-big-in-the-west-005059
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: Sharpe up to 1.61 gross; underperforms after costs (thesis)
+  mechanism: physical demand from China/India bids gold in Asian hours; Western selling in NA hours
+  tf: 1h
+  rule:
+    entry: long at 23:00 UTC (NY close + 1h), exit 07:00 UTC
+    side: long_only
+    stop: 1.5 x ATR(14)
+    exit: time(8)
+    hold: 8 bars
+  sprint3000_mapping: 'needs primitive: clock_window_entry(23:00, 8h); session(asia) + side long_only approx'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'ALREADY FAILED as H-04 asia_drift (trial #44): gross +0.043 R t 3.09 on 4,025 events, net -0.093 R
+    - costs decide it; also crosses rollover'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-100
+  name: 'Hat-shaped day: short NY hours'
+  group: session-calendar
+  source: Donati & Jung (2019) CBS thesis; WGC H1-2026 session split
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: as above
+  mechanism: Western-hours selling pressure
+  tf: 1h
+  rule:
+    entry: short at 13:30 UTC, exit 20:00 UTC
+    side: short_only
+    stop: 1.5 x ATR(14)
+    exit: time(6)
+    hold: 6 bars
+  sprint3000_mapping: 'needs primitive: clock_window_entry; session(ny) + side short_only approx'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'H-24 West-hours drift: conditional on H-04, never run; H-04 failed on costs'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-101
+  name: London PM fix pre-fix drift (short)
+  group: session-calendar
+  source: 'Caminschi & Heaney, ''Fixing a Leaky Fixing'', Journal of Futures Markets 34(11) (2014); Donati & Jung (2019):
+    prices drop around fixings in alleged manipulation years'
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: elevated volume/volatility from 15:00 London; drop around fixes in 'manipulation years'
+  mechanism: information leakage / dealer positioning around the 15:00 London fix
+  tf: 15m
+  rule:
+    entry: short at 14:45 London, exit 15:30 London
+    side: short_only
+    stop: 1.0 x ATR(14)
+    exit: time(3)
+    hold: 3 bars
+  sprint3000_mapping: 'needs primitive: clock_window_entry(14:45 Europe/London, 45m)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'RETIRED FROM LITERATURE R-08 (London-fix front-running: venue reformed 2015); test only as a pre/post-2015
+    split if at all'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-102
+  name: London AM fix (10:30) drift
+  group: session-calendar
+  source: Caminschi & Heaney (2014) report no AM-fix effect; Abrantes-Metz & Addanki (2014) working paper on PM fix (unverified)
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: 'AM: no effect reported (negative control)'
+  mechanism: control for the PM-fix candidate
+  tf: 15m
+  rule:
+    entry: short at 10:15 London, exit 11:00 London
+    side: short_only
+    stop: 1.0 x ATR(14)
+    exit: time(3)
+    hold: 3 bars
+  sprint3000_mapping: 'needs primitive: clock_window_entry'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: placebo for the PM-fix line; R-08 retired
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-103
+  name: COMEX open (08:20 NY) opening range break
+  group: session-calendar
+  source: Fisher, The Logical Trader (2002) (COMEX pit open ORs); common in gold futures courses
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: pit-open order flow
+  tf: 15m
+  rule:
+    entry: OR = 08:20-08:50 NY; first 15m close beyond OR by 0.1 ATR(14,1d) -> follow
+    side: signal
+    stop: OR opposite side
+    exit: flat 13:30 NY (pit close)
+    hold: 20 bars
+  sprint3000_mapping: opening_range_break(session=ny, minutes=30) with the COMEX clock
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-104
+  name: Shanghai open (01:30 UTC) momentum
+  group: session-calendar
+  source: 'folklore in gold desks: SGE AM auction (10:15 Beijing) and Shanghai open move gold; SGE premium commentary (WGC)'
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: Chinese physical demand hits at the SGE open
+  tf: 15m
+  rule:
+    entry: sign of the 01:30-02:30 UTC return; enter at 02:30 UTC with that sign
+    side: signal
+    stop: 1.0 x ATR(14,1h)
+    exit: time(16) (to 06:30 UTC)
+    hold: 16 bars
+  sprint3000_mapping: momentum_sign(4) + session(asia) approx; exact clock needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-105
+  name: Autumn effect (September and November long)
+  group: session-calendar
+  source: Baur, 'The Autumn Effect of Gold', Research in International Business and Finance 27(1) (2013), 1980-2010; replication
+    Potrykus & Augustynowicz, Int. J. Management and Economics (2024)
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: Sep and Nov the only significantly positive months 1980-2010 (gross)
+  mechanism: Indian wedding/festival demand, Halloween-effect hedging
+  tf: 1d
+  rule:
+    entry: long at the first trading day of September and of November, exit at the month's last trading day
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: month end
+    hold: 21 bars
+  sprint3000_mapping: 'needs primitive: calendar_month_hold(months=[9,11])'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 2 trades/yr; swap ~20 nights; known & crowded
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-106
+  name: Gold January effect (mid-Dec low to Feb high)
+  group: session-calendar
+  source: Equity Clock gold seasonal chart (equityclock.com, unverified); Moore Research seasonal reports (unverified)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: seasonal average 1990s-2020s (gross)
+  mechanism: Chinese New Year and Indian buying, fund new-year allocations
+  tf: 1d
+  rule:
+    entry: long on the 15th of December (or next trading day), exit the last trading day of February
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: fixed date
+    hold: 50 bars
+  sprint3000_mapping: 'needs primitive: calendar_window(12-15, 02-28)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: swap ~50 nights = large
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-107
+  name: Pre-Chinese-New-Year accumulation
+  group: session-calendar
+  source: folklore (WGC China demand notes; dealer commentary)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: Chinese jewellery/bar buying before the Spring Festival, then a lull
+  tf: 1d
+  rule:
+    entry: long 20 trading days before CNY, exit 2 days before CNY
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: fixed date
+    hold: 18 bars
+  sprint3000_mapping: 'needs primitive: calendar_event_window(cny, -20, -2)'
+  data_needed: available locally (Dukascopy 1m) + CNY date list (free)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-108
+  name: Akshaya Tritiya / Diwali pre-festival long
+  group: session-calendar
+  source: folklore (Indian festival demand; WGC India notes)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: Indian festival buying
+  tf: 1d
+  rule:
+    entry: long 10 trading days before Diwali and before Akshaya Tritiya, exit on the festival day
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: fixed date
+    hold: 10 bars
+  sprint3000_mapping: 'needs primitive: calendar_event_window(festival, -10, 0)'
+  data_needed: available locally (Dukascopy 1m) + festival dates (free)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-109
+  name: Turn-of-month gold
+  group: session-calendar
+  source: practitioner seasonality (Quantpedia turn-of-month family; gold-specific claims unverified)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: month-end portfolio flows/rebalancing
+  tf: 1d
+  rule:
+    entry: long at the close of the 4th-last trading day, exit at the close of the 3rd trading day of the new month
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(7)
+    hold: 7 bars
+  sprint3000_mapping: 'needs primitive: turn_of_month(-4,+3)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: calendar direction family largely retired (sprint-200 time lane) - check coverage
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-110
+  name: COMEX options-expiry pin
+  group: session-calendar
+  source: practitioner folklore (gold options expire 4 business days before the futures month; pinning to strikes)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: dealer hedging pins price to $25/$50 strikes into expiry
+  tf: 1h
+  rule:
+    entry: 'on COMEX gold options expiry day, 13:30-17:30 UTC: if price is within 0.3 x ATR(14,1h) of a $25 strike, fade moves
+      away from it (> 0.5 ATR)'
+    side: signal (fade)
+    stop: 1.0 x ATR(14)
+    exit: strike touch or 17:30 UTC
+    hold: 4 bars
+  sprint3000_mapping: 'needs primitive: strike_pin(25, expiry_calendar)'
+  data_needed: available locally (Dukascopy 1m) + CME expiry calendar (free)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-111
+  name: GC futures roll-week drift
+  group: session-calendar
+  source: practitioner folklore (index/ETF roll windows; Mou 2010 'Limits to Arbitrage and Commodity Index Investment' on
+    GSCI roll, SSRN)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: front-running of index rolls (Mou 2010, commodities in general)
+  mechanism: predictable roll flows from index funds
+  tf: 1d
+  rule:
+    entry: short the 5th-9th business days of the month before a GC delivery month (Feb/Apr/Jun/Aug/Oct/Dec), i.e. GSCI roll
+      window
+    side: short_only
+    stop: 2 x ATR(14,1d)
+    exit: time(5)
+    hold: 5 bars
+  sprint3000_mapping: 'needs primitive: roll_window_calendar'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: spot CFD has no roll; effect would be in the spread vs futures, not spot -> likely null for XAUUSD
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-112
+  name: Weekend gap fade (Sunday open)
+  group: session-calendar
+  source: retail folklore ('gaps fill'); goldbot prereg-2026-10-31-weekend-247.md exists
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: weekend news over-reaction at thin Sunday open
+  tf: 15m
+  rule:
+    entry: if Sunday open gaps > 0.5 x ATR(14,1d) from Friday close, fade toward the Friday close from 23:15 UTC
+    side: signal (fade)
+    stop: gap extreme + 0.5 ATR(14,1h)
+    exit: Friday close touch or 07:00 UTC Monday
+    hold: 32 bars
+  sprint3000_mapping: 'needs primitive: weekend_gap(0.5)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: weekend effects R-08 retired; see prereg-2026-10-31-weekend-247.md; Sunday spreads high
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-113
+  name: Tuesday-Thursday only breakout
+  group: session-calendar
+  source: TradingView Gold Power Hours (Tue-Thu); prop-firm guides (jptradingcapital.com)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: Monday/Friday positioning noise
+  tf: 1h
+  rule:
+    entry: prior_level_break(day) only on Tue-Thu
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 24 bars
+  sprint3000_mapping: prior_level_break(level=day) + weekday([1,2,3])
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: weekday effects retired from literature (R-08) as a direction rule; here only a filter
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-114
+  name: Post-NFP second-hour continuation
+  group: session-calendar
+  source: practitioner rule ('don't trade the first spike, trade the retest'); MQL5 blog 773690 on NFP spreads
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: after spreads normalise, the NFP direction persists
+  tf: 15m
+  rule:
+    entry: 'NFP day: sign of 12:30-13:30 UTC move; enter 13:30 UTC with that sign'
+    side: signal
+    stop: 1.0 x ATR(14,1h)
+    exit: time(12)
+    hold: 12 bars
+  sprint3000_mapping: 'needs primitive: event_followthrough(nfp, +60m)'
+  data_needed: available locally (Dukascopy 1m); free US calendar (keyless, already used by H-89)
+  prior_test_or_risk: 'decision memo: NFP 5-60m t -0.89 (failed); this is a later window'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-115
+  name: CPI-day range break
+  group: session-calendar
+  source: practitioner rule; CPI is the dominant gold mover since 2021 (dealer commentary)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: inflation surprises reprice real yields
+  tf: 15m
+  rule:
+    entry: 'CPI days: OR = 12:30-13:00 UTC; trade the first close beyond it until 16:00 UTC'
+    side: signal
+    stop: OR opposite edge
+    exit: 16:00 UTC
+    hold: 12 bars
+  sprint3000_mapping: 'opening_range_break approx + needs filter primitive: event_day(cpi)'
+  data_needed: available locally (Dukascopy 1m); free US calendar (keyless, already used by H-89)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-116
+  name: Pre-FOMC drift long
+  group: session-calendar
+  source: Lucca & Moench, 'The Pre-FOMC Announcement Drift', Journal of Finance (2015) - equities; gold extension practitioner/folklore
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: 'equities: +49 bp in 24h pre-FOMC 1994-2011 (gross)'
+  mechanism: risk premium ahead of policy news
+  tf: 1h
+  rule:
+    entry: long at 14:00 NY the day before FOMC, exit 13:55 NY on FOMC day
+    side: long_only
+    stop: 2 x ATR(14,1h)
+    exit: time(24)
+    hold: 24 bars
+  sprint3000_mapping: 'needs primitive: event_window(fomc, -24h, -5m)'
+  data_needed: available locally (Dukascopy 1m); free US calendar (keyless, already used by H-89)
+  prior_test_or_risk: RETIRED FROM LITERATURE R-08 (pre-FOMC drift gone after 2015); H-89 post-FOMC is the live line
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-117
+  name: Month-end London 4pm fix (WMR) USD flow
+  group: session-calendar
+  source: practitioner folklore (month-end USD rebalancing flows at the 16:00 London WM/Reuters fix)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: month-end hedge rebalancing moves USD, gold inverse
+  tf: 15m
+  rule:
+    entry: 'last business day: sign of USD (EURUSD inverted) move 14:00-15:45 London; trade gold opposite to USD 15:45-16:15'
+    side: signal
+    stop: 1.0 x ATR(14)
+    exit: time(2)
+    hold: 2 bars
+  sprint3000_mapping: 'needs primitive: month_end_fix_flow'
+  data_needed: available locally (Dukascopy 1m) + EURUSD 1m (free Dukascopy)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-118
+  name: Asian-range liquidity sweep then London reversal
+  group: session-calendar
+  source: MQL5 blog 772224 'The XAUUSD Trading Day' and 773690 (Asia high/low as liquidity, not breakout), https://www.mql5.com/en/blogs/post/772224
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: London sweeps Asia stops then reverses
+  tf: 15m
+  rule:
+    entry: '07:00-10:00 UTC: price trades beyond the Asia high/low by > 0.1 ATR and closes back inside -> fade toward the
+      opposite Asia extreme'
+    side: signal (fade)
+    stop: sweep extreme + 0.25 ATR
+    exit: opposite Asia extreme or 2R
+    hold: 16 bars
+  sprint3000_mapping: level_reject approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'ALREADY FAILED: A-1 failed Asia-range fade (H-76), H-48 sweep_absorb'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-119
+  name: Overnight (close-to-open) gold drift via GLD
+  group: session-calendar
+  source: Quantpedia, 'Dangers of Relying on OHLC Prices - Overnight Drift in GDX ETF', https://quantpedia.com/dangers-of-relying-on-ohlc-prices-the-case-of-overnight-drift-in-gdx-etf/;
+    QuantifiedStrategies 'Gold Overnight Strategy' (2024, paywalled)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: GDX overnight ~8.6%/yr before fees, DD 40.7%; GLD share of returns overnight
+  mechanism: overnight = Asia hours demand (same as the hat shape)
+  tf: 1h
+  rule:
+    entry: long XAUUSD at 20:00 UTC (US ETF close), exit 13:30 UTC (US open)
+    side: long_only
+    stop: 2 x ATR(14,1h)
+    exit: time(18)
+    hold: 18 bars
+  sprint3000_mapping: 'needs primitive: clock_window_entry(20:00, 17.5h)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: crosses the swap rollover every trade
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-120
+  name: Managed-money record gross short = short-covering long
+  group: sentiment-flows
+  source: Macleod (GoldMoney research, 'Managed money positions hint at bullish turns'), https://www.goldmoney.com/research/managed-money-positions-hint-at-bullish-turns-for-gold-and-silver;
+    Seabridge Gold COT updates
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: anecdotes (2015, 2018, 2019 lows)
+  mechanism: crowded shorts must cover
+  tf: 1d
+  rule:
+    entry: MM gross short (not net) in its top 5% of the trailing 156 reports (asof Friday release) -> long on the next 1d
+      close above the 5-day high
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: 'donchian_break(5) + needs filter primitive: cot_mm_gross_short_pct(156, 95)'
+  data_needed: free (CFTC disaggregated; positioning-v1 local)
+  prior_test_or_risk: H-86 (net deciles) FAILED; gross-short-extreme variant differs
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-121
+  name: COT non-commercial vs managed-money divergence
+  group: sentiment-flows
+  source: metalcharts.org COT notes ('non-commercial sometimes captures crowding better'), https://metalcharts.org/cot/gold
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: crowding signal
+  tf: 1d
+  rule:
+    entry: non-commercial net %OI in its top decile (156w) AND MM net falling week on week -> short on a 1d close below the
+      5-day low
+    side: short_only
+    stop: 2 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: donchian_break(5) + needs cot filter primitive
+  data_needed: free CFTC
+  prior_test_or_risk: related to failed H-86/H-87
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-122
+  name: Swap-dealer net short extreme (bullion bank cover)
+  group: sentiment-flows
+  source: practitioner folklore (bullion-bank positioning commentary)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: dealers cover shorts into strength
+  tf: 1d
+  rule:
+    entry: swap-dealer net short in its smallest 10% (least short) of 156 reports -> long bias; entry 1d close > 10-day high
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: donchian_break(10) + needs cot filter primitive
+  data_needed: free CFTC disaggregated
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-123
+  name: Hulbert Gold Newsletter Sentiment Index < 10% buy
+  group: sentiment-flows
+  source: Hulbert columns (MarketWatch; ETF Trends 2014; StockCharts 2018 summary), https://stockcharts.com/articles/muscular-investing/2018/12/mark-hulbert-sentiment-indices-4.html
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: 'contrarian anecdotes; Hulbert: better for miners than gold'
+  mechanism: timers capitulate at lows
+  tf: 1d
+  rule:
+    entry: HGNSI < 10% (rule of thumb cited by Hulbert) -> long for 20 days
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: 'needs primitive: external_sentiment(hgnsi)'
+  data_needed: paid (Hulbert Ratings); no free history
+  prior_test_or_risk: DATA PAID - not testable now
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-124
+  name: SentimenTrader Gold Optix extremes
+  group: sentiment-flows
+  source: SentimenTrader, Gold Optix, https://sentimentrader.com/indicators/gold-optix
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: 'vendor: optimism peaks precede declines'
+  mechanism: crowd optimism contrarian
+  tf: 1d
+  rule:
+    entry: Optix > 80 -> short bias 20 days; < 20 -> long bias
+    side: signal (fade)
+    stop: 3 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: 'needs primitive: external_sentiment(optix)'
+  data_needed: paid
+  prior_test_or_risk: DATA PAID
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-125
+  name: Daily Sentiment Index (Bernstein) extremes
+  group: sentiment-flows
+  source: Jake Bernstein, Daily Sentiment Index (trade-futures.com)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: vendor
+  mechanism: contrarian at 90/10
+  tf: 1d
+  rule:
+    entry: DSI gold >= 90 -> short on the first down close; <= 10 -> long on the first up close
+    side: signal (fade)
+    stop: 3 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: 'needs primitive: external_sentiment(dsi)'
+  data_needed: paid
+  prior_test_or_risk: DATA PAID
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-126
+  name: IG client sentiment contrarian (gold)
+  group: sentiment-flows
+  source: IG client sentiment notes, e.g. https://ig.com/au/news-and-trade-ideas/gold-ig-client-sentiment--traders-net-long-first-time-since-mar--240326;
+    DailyFX SSI archive pages (2017)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: no published backtest found
+  mechanism: retail CFD crowd is wrong at extremes in trends
+  tf: 1d
+  rule:
+    entry: retail net-long % flips from < 50% to > 50% (net long first time in N weeks) -> short bias for 10 days, entry on
+      a 1d close below the 5-day low
+    side: short_only
+    stop: 2 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: 'donchian_break(5) + needs filter primitive: retail_sentiment'
+  data_needed: no free history (IG only shows today) - would need forward collection
+  prior_test_or_risk: DATA NOT AVAILABLE historically; forward-log candidate
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-127
+  name: Myfxbook community outlook contrarian
+  group: sentiment-flows
+  source: Myfxbook Community Outlook (public page shows current long/short %)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: retail crowd contrarian
+  tf: 1h
+  rule:
+    entry: Myfxbook XAUUSD short % > 70 -> long bias; long % > 70 -> short bias; entry 1h donchian_break(20) in the bias
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 48 bars
+  sprint3000_mapping: 'donchian_break(20) + needs filter primitive: retail_sentiment'
+  data_needed: forward collection only (no history)
+  prior_test_or_risk: DATA NOT AVAILABLE historically; forward-log candidate
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-128
+  name: GLD tonnage flow reversal (contrarian)
+  group: sentiment-flows
+  source: practitioner commentary (ETF outflow capitulation marks lows); WGC ETF flow data
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: ETF holders capitulate at lows
+  tf: 1d
+  rule:
+    entry: GLD tonnes 20-day change in its bottom 5% of 3 years AND price closes above its 10-day high -> long
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: 'donchian_break(10) + needs filter primitive: etf_flow_pct'
+  data_needed: free (SPDR holdings csv; positioning-v1 local?)
+  prior_test_or_risk: H-88 flow MOMENTUM failed; contrarian variant untested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-129
+  name: Gold/silver ratio extreme -> gold direction
+  group: sentiment-flows
+  source: QuantifiedStrategies 'Gold Silver Chart Ratio Strategy' (paywalled) https://quantifiedstrategies.substack.com/p/gold-silver-chart-ratio-strategy;
+    sentimentrader GSR notes
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: no numbers public
+  mechanism: a stretched GSR resolves with silver catching up in risk-on (gold up)
+  tf: 1d
+  rule:
+    entry: GSR 20-day z-score > +2 and turning down (today < yesterday) -> long gold 20 days; z < -2 turning up -> short gold
+    side: signal
+    stop: 2 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: 'needs primitive: ratio_zscore(XAGUSD, 20)'
+  data_needed: free (Dukascopy XAGUSD 1m)
+  prior_test_or_risk: X1 silver-leads lead-lag FAILED (cross-asset screen 2026-11); ratio-extreme variant untested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-130
+  name: Miners lead gold (GDX/GLD ratio breakout)
+  group: sentiment-flows
+  source: practitioner folklore (miners lead bullion at turns); sentimentrader miners notes
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: equity investors in miners anticipate metal moves
+  tf: 1d
+  rule:
+    entry: GDX/GLD ratio closes at a 20-day high -> long gold next open; 20-day low -> short
+    side: signal
+    stop: 2 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: 'needs primitive: ratio_breakout(GDX/GLD, 20)'
+  data_needed: free (stooq daily GDX, GLD)
+  prior_test_or_risk: cross-asset screen (2026-11) may have covered - check
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-131
+  name: Real-yield 5-day shock
+  group: sentiment-flows
+  source: practitioner macro rule (gold vs 10y TIPS); WGC GRAM
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: gold reprices to real yields with a lag
+  tf: 1d
+  rule:
+    entry: 10y real yield (DFII10) falls > 15 bp over 5 days -> long gold 10 days (mirror short)
+    side: signal
+    stop: 2 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: 'needs primitive: macro_change(DFII10, 5d, 15bp)'
+  data_needed: free FRED (macro-v1 local)
+  prior_test_or_risk: real-yield sign rules R-08 retired; H-84 20-day version FAILED
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-132
+  name: Dollar-index breakout inverse
+  group: sentiment-flows
+  source: practitioner intermarket (Murphy, Intermarket Analysis, 2004)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: gold priced in USD moves inverse to the dollar
+  tf: 4h
+  rule:
+    entry: EURUSD closes at a 20-bar high (USD breakdown) -> long gold; 20-bar low -> short gold
+    side: signal
+    stop: 2 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 60 bars
+  sprint3000_mapping: 'needs primitive: cross_asset_donchian(EURUSD, 20)'
+  data_needed: free Dukascopy EURUSD
+  prior_test_or_risk: X2 USD-leads FAILED (cross-asset screen 2026-11); H-84 USD 20-day FAILED
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-133
+  name: Copper/gold ratio regime (risk-on)
+  group: sentiment-flows
+  source: Gundlach copper/gold vs 10y yields commentary (DoubleLine, unverified)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: risk-on (copper outperforming) = higher yields = gold underperforms
+  tf: 1d
+  rule:
+    entry: copper/gold ratio 20-day change in the top quintile -> short gold bias; bottom quintile -> long bias; entry 1d
+      donchian_break(10)
+    side: signal
+    stop: 2 x ATR(14,1d)
+    exit: time(20)
+    hold: 20 bars
+  sprint3000_mapping: 'donchian_break(10) + needs filter primitive: ratio_change_pct(HG/XAU)'
+  data_needed: free (stooq HG daily)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-134
+  name: Central-bank buying regime (long-only bias)
+  group: sentiment-flows
+  source: WGC Gold Demand Trends (quarterly); IMF IFS reserves
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: persistent official-sector demand since 2022 supports dips
+  tf: 1d
+  rule:
+    entry: 'when trailing-4-quarter CB net purchases (asof publication date) > 500 t: buy 1d closes 1.5 ATR below the 20-day
+      high (dip) with trend(1d,50) up'
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: 'ema_pullback(20,1.5) + trend(1d,50) + needs filter primitive: cb_demand_regime'
+  data_needed: free (WGC quarterly; publication lag ~1 month)
+  prior_test_or_risk: quarterly data, few regime switches
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-135
+  name: GVZ spike contrarian
+  group: sentiment-flows
+  source: practitioner (VIX-style spike fade applied to GVZ); CBOE GVZ
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: none
+  mechanism: implied-vol spikes mark capitulation
+  tf: 1d
+  rule:
+    entry: GVZ closes > 1.3 x its 20-day mean -> long gold at the next close above the prior day's high
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(10)
+    hold: 10 bars
+  sprint3000_mapping: 'needs primitive: gvz_spike(1.3, 20)'
+  data_needed: free (FRED GVZCLS)
+  prior_test_or_risk: GVZ failed as range input (H-16) and VRP (H-84 V4); spike-contrarian untested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-136
+  name: Trading Rush MACD + 200 EMA
+  group: youtube-course
+  source: Trading Rush YouTube 'MACD strategy tested 100 times' (~62% win claimed); rules via https://www.tradingview.com/script/4gXXEI5Y-Trading-Rush-Signals-Alerts
+    and usethinkscript.com thread 7944
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: 62% win over 100 trades (EURUSD/EURJPY 30m, self-reported)
+  mechanism: trend filter + momentum turn
+  tf: 1h
+  rule:
+    entry: close > EMA(200); MACD(12,26,9) crosses above signal while both < 0 -> long (mirror)
+    side: signal
+    stop: below the recent swing low (approx 1.5 x ATR)
+    exit: target_r(1.5)
+    hold: 48 bars
+  sprint3000_mapping: macd_turn(12,26,9) + trend(4h,50) approx (same-tf EMA200 needs primitive)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-137
+  name: Trading Rush RSI 200 EMA pullback
+  group: youtube-course
+  source: Trading Rush YouTube (RSI + 200 EMA tested 100 times, self-reported)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: self-reported
+  mechanism: pullback in trend
+  tf: 1h
+  rule:
+    entry: close > EMA(200), RSI(14) dips below 30 and crosses back above -> long (mirror)
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(1.5)
+    hold: 48 bars
+  sprint3000_mapping: rsi_threshold(14,30,fade) + trend(4h,50) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-138
+  name: 3-EMA ribbon (8/13/21) gold scalp
+  group: youtube-course
+  source: retail YouTube/course staple (e.g. 'EMA 8 13 21 scalping'), many channels
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: aligned fast EMAs = momentum
+  tf: 15m
+  rule:
+    entry: EMA8>EMA13>EMA21 freshly aligned and close pulls back to EMA13 -> long (mirror)
+    side: signal
+    stop: below EMA21 - 0.25 ATR
+    exit: target_r(1.5)
+    hold: 16 bars
+  sprint3000_mapping: ema_pullback(13,0.25) + ma_cross(8,21,ema)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 15m cost/R
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-139
+  name: 9/21 EMA cross scalping
+  group: youtube-course
+  source: retail YouTube staple
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: fast momentum
+  tf: 15m
+  rule:
+    entry: EMA(9) crosses EMA(21) during 07:00-16:00 UTC
+    side: signal
+    stop: 1.0 x ATR(14)
+    exit: target_r(1.5)
+    hold: 16 bars
+  sprint3000_mapping: ma_cross(9,21,ema) + session(london)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 15m cost/R
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-140
+  name: Stochastic + EMA50 trend pullback
+  group: youtube-course
+  source: retail course staple
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: pullback in trend
+  tf: 1h
+  rule:
+    entry: close > EMA(50); stochastic(14,3,3) %K crosses up through 20 -> long
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: target_r(2)
+    hold: 32 bars
+  sprint3000_mapping: rsi_threshold(fade) approx + trend(4h,50); stochastic needs primitive
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-141
+  name: Heikin-Ashi colour flip with EMA filter
+  group: youtube-course
+  source: retail YouTube staple
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: smoothed candle trend
+  tf: 4h
+  rule:
+    entry: Heikin-Ashi turns from red to green with no lower wick, close > EMA(50) -> long
+    side: signal
+    stop: HA low
+    exit: first opposite HA colour
+    hold: 30 bars
+  sprint3000_mapping: 'needs primitive: heikin_ashi_flip'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-142
+  name: Parabolic SAR + 200 EMA
+  group: youtube-course
+  source: retail YouTube staple
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: trend + accelerator stop
+  tf: 1h
+  rule:
+    entry: close > EMA(200) and PSAR flips below price -> long
+    side: signal
+    stop: SAR
+    exit: SAR flip
+    hold: 48 bars
+  sprint3000_mapping: 'needs primitive: psar_flip + trend filter'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-143
+  name: Fibonacci 61.8% pullback (OTE)
+  group: youtube-course
+  source: ICT 'optimal trade entry' (62-79%) and retail fib courses
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: institutions reload at deep retracements
+  tf: 1h
+  rule:
+    entry: after a swing leg > 3 x ATR(14) confirmed by a 5-bar pivot, limit at the 61.8% retracement; must fill within 24
+      bars
+    side: signal (with the leg)
+    stop: beyond the 78.6% level + 0.25 ATR
+    exit: the leg's extreme (100%)
+    hold: 48 bars
+  sprint3000_mapping: 'needs primitive: fib_retrace_limit(0.618, leg_atr 3)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: ICT family tested (failed); limit fills avoid half the spread
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-144
+  name: Supply/demand zone (rally-base-rally) retest
+  group: youtube-course
+  source: Sam Seiden / Online Trading Academy supply-and-demand method
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: unfilled institutional orders at the base
+  tf: 1h
+  rule:
+    entry: base = 1-4 small bars (range < 0.5 ATR) followed by a departure bar > 2 ATR; first return to the base -> trade
+      with the departure
+    side: signal
+    stop: beyond the base + 0.25 ATR
+    exit: target_r(3)
+    hold: 48 bars
+  sprint3000_mapping: 'level_reject approx; needs primitive: sd_zone(base<=4, departure 2ATR)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: order-block family tested (ICT lane)
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-145
+  name: Camarilla H4/L4 breakout
+  group: youtube-course
+  source: Nick Stott, Camarilla equation (1989); retail courses
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: breakout through the outer Camarilla level = trend day
+  tf: 15m
+  rule:
+    entry: close above H4 = C + 1.1 x (H-L)/2 of yesterday -> long; below L4 -> short
+    side: signal
+    stop: H3/L3 level
+    exit: target at H5 or 16:00 UTC
+    hold: 24 bars
+  sprint3000_mapping: 'needs primitive: camarilla_level(4); approx prior_level_break'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: pivots largely retired (sprint-200); breakout variant only
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-146
+  name: Inside bar at NY open
+  group: youtube-course
+  source: retail price-action courses (e.g. Nial Fuller 'inside bar' adapted to sessions)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: compression into the open
+  tf: 15m
+  rule:
+    entry: the 13:15-13:30 UTC bar is inside the prior bar; OCO stops at its high/low
+    side: signal
+    stop: other side of the mother bar
+    exit: target_r(2)
+    hold: 16 bars
+  sprint3000_mapping: inside_bar_break + session(ny)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: inside-bar 4h (H-43) failed
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-147
+  name: 1h 50-EMA bounce with trend
+  group: youtube-course
+  source: retail gold YouTube staple ('gold respects the 50 EMA')
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: dynamic support in trend
+  tf: 1h
+  rule:
+    entry: EMA(50) rising and close > EMA(50); low touches EMA(50) and the bar closes above it -> long
+    side: long_only (mirror short when falling)
+    stop: EMA50 - 1.0 ATR
+    exit: target_r(2)
+    hold: 48 bars
+  sprint3000_mapping: ema_pullback(50, 0)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-148
+  name: Keltner + RSI momentum break
+  group: youtube-course
+  source: retail course staple
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: volatility break with momentum
+  tf: 1h
+  rule:
+    entry: close above KC(20,2) and RSI(14) > 60 -> long
+    side: signal
+    stop: KC mid
+    exit: close back inside KC
+    hold: 24 bars
+  sprint3000_mapping: keltner_break(20,2)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-149
+  name: London session first-hour momentum
+  group: youtube-course
+  source: retail session courses ('trade the first London hour'); Gao, Han, Li & Zhou JFE 2018 intraday momentum (adjacent
+    asset)
+  evidence_grade: practitioner-documented
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: the first hour's direction continues into the morning
+  tf: 1h
+  rule:
+    entry: sign of the 07:00-08:00 UTC return; enter 08:00 with that sign
+    side: signal
+    stop: 1.0 x ATR(14)
+    exit: time(4)
+    hold: 4 bars
+  sprint3000_mapping: momentum_sign(1) + session(london)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: intraday momentum failed at 15m (Q4 2026)
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-150
+  name: Last-half-hour momentum (Gao et al.) on gold
+  group: youtube-course
+  source: Gao, Han, Li & Zhou, 'Market Intraday Momentum', Journal of Financial Economics (2018) (SPY); commodity extensions
+    practitioner
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: 'SPY: first half-hour predicts last half-hour (gross)'
+  mechanism: late-day hedging/informed flow
+  tf: 15m
+  rule:
+    entry: sign of the return from the previous NY close (17:00 NY) to 10:00 NY; enter 16:00 NY (COMEX settlement window 13:25-13:30
+      NY variant also) and exit 17:00 NY
+    side: signal
+    stop: 1.0 x ATR(14)
+    exit: time(4)
+    hold: 4 bars
+  sprint3000_mapping: 'needs primitive: clock_window_signal'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: time-of-day family partly retired
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-151
+  name: Range-day vs trend-day ADR exhaustion
+  group: youtube-course
+  source: retail courses ('gold rarely exceeds its ADR')
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: the daily range is bounded; fade once ADR is used
+  tf: 15m
+  rule:
+    entry: when today's range >= 1.0 x ADR(20) and price is at today's extreme, fade back toward VWAP
+    side: signal (fade)
+    stop: today's extreme + 0.3 ATR(14,1h)
+    exit: VWAP or 16 bars
+    hold: 16 bars
+  sprint3000_mapping: 'needs primitive: adr_used(1.0)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: fade family retired; range-used feature tested in H-73
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-152
+  name: Gold 4h break-and-retest
+  group: youtube-course
+  source: retail price-action courses (break, retest, go)
+  evidence_grade: folklore
+  verified_track_record: none
+  claimed_performance: none
+  mechanism: role reversal of broken levels
+  tf: 4h
+  rule:
+    entry: 4h close beyond the 20-bar high, then within 6 bars a pullback to that level that closes back on the break side
+      -> follow
+    side: signal
+    stop: level - 0.5 ATR
+    exit: target_r(2.5)
+    hold: 30 bars
+  sprint3000_mapping: 'level_break + needs primitive: retest_confirm(6)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: box_retest H-39 (1h) failed; 4h donchian-level variant untested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-153
+  name: Round-number $50 magnet
+  group: youtube-course
+  source: retail folklore; Osler (2003) on stop clustering at round numbers in FX, Journal of Finance (peer-reviewed, FX)
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: 'FX: stop-loss clusters just beyond round numbers cause trend acceleration (Osler 2003)'
+  mechanism: stop clusters beyond round numbers
+  tf: 1h
+  rule:
+    entry: 1h close through a $50 level by > 0.1 ATR -> follow toward the next $50
+    side: signal
+    stop: back through the level by 0.5 ATR
+    exit: next $50 level
+    hold: 24 bars
+  sprint3000_mapping: level_break(min_strength_pct=0, min_tf=1h) with $50 zones (KEYLEVELS)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: Z3 round-number break at 1m/5m FAILED; 1h $50 untested
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-154
+  name: QuantifiedStrategies GLD 12-month momentum with IEF filter
+  group: quant-blog
+  source: QuantifiedStrategies, 'A Gold Strategy', https://quantifiedstrategies.substack.com/p/a-gold-strategy
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: backtest figures not public
+  mechanism: gold trends when bonds also trend up (falling yields)
+  tf: 1d
+  rule:
+    entry: 'month end: hold gold if both gold and IEF 12-month returns > 0, else flat'
+    side: long_only
+    stop: none (monthly)
+    exit: month-end rule
+    hold: 21 bars
+  sprint3000_mapping: 'momentum_sign(252) + needs filter primitive: ief_12m_positive'
+  data_needed: available locally (Dukascopy 1m) + free IEF daily (stooq)
+  prior_test_or_risk: TSMOM gold (H-01) failed net of swap
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-155
+  name: 'QuantifiedStrategies GLD breakout swing #12'
+  group: quant-blog
+  source: QuantifiedStrategies product 'Breakout Swing Trading Strategy - Gold ETF (GLD) (#12)', https://www.quantifiedstrategies.com/?p=1195177
+    (paywalled)
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: 509 trades, +0.32% avg per trade (vendor)
+  mechanism: short-term breakout
+  tf: 1d
+  rule:
+    entry: 'rule paywalled; public proxy: close at a 10-day high -> long, exit at the close 5 days later'
+    side: long_only
+    stop: 2 x ATR(14,1d)
+    exit: time(5)
+    hold: 5 bars
+  sprint3000_mapping: donchian_break(10) + exit time(5)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: PROXY - real rule paywalled
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-156
+  name: 'QuantifiedStrategies GLD long pullback #97'
+  group: quant-blog
+  source: QuantifiedStrategies product 'Long Pullback Strategy - Gold (GLD) (#97)' (paywalled), https://www.quantifiedstrategies.com/product/strategy97/
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: vendor
+  mechanism: short-term pullback reversion
+  tf: 1d
+  rule:
+    entry: 'public proxy: close at a 5-day low while close > SMA(100) -> long; exit close > prior day''s high'
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: close > prior high
+    hold: 10 bars
+  sprint3000_mapping: zscore(5,-1.5,fade) + trend(1d,100) approx
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: PROXY - rule paywalled; meanrev
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-157
+  name: 'QuantifiedStrategies gold seasonal trend #56'
+  group: quant-blog
+  source: QuantifiedStrategies 'Gold Seasonal Trend Strategy - GLD (#56)' (paywalled), https://www.quantifiedstrategies.com/?p=1195103
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: vendor
+  mechanism: seasonal
+  tf: 1d
+  rule:
+    entry: 'public proxy: long only in Jan, Aug, Sep, Nov when close > SMA(50)'
+    side: long_only
+    stop: 3 x ATR(14,1d)
+    exit: month end or close < SMA(50)
+    hold: 21 bars
+  sprint3000_mapping: 'trend(1d,50) + needs filter primitive: month_in([1,8,9,11])'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: PROXY
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-158
+  name: Alpha Algo 'robust gold strategy' (Lab)
+  group: quant-blog
+  source: 'Alpha Algo Trading Research, ''From the lab: a robust gold strategy'', https://algotr.substack.com/p/from-the-lab-a-robust-gold-strategy
+    (details not fetched)'
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: not checked
+  mechanism: not checked
+  tf: 1h
+  rule:
+    entry: 'proxy until fetched: 1h close at a 20-bar high with 1d close > SMA(50) -> long; chandelier exit'
+    side: long_only
+    stop: 2 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 120 bars
+  sprint3000_mapping: donchian_break(20) + trend(1d,50) + long_only
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: PROXY - source not read
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-159
+  name: TradeMachine long breakout in gold
+  group: quant-blog
+  source: 'TradeMachine substack ''Strategy: Long Breakout Trade in Gold'', https://trademachine.substack.com/p/strategy-long-breakout-trade-in-gold
+    (details not fetched)'
+  evidence_grade: folklore
+  verified_track_record: n/a
+  claimed_performance: not checked
+  mechanism: breakout
+  tf: 4h
+  rule:
+    entry: 'proxy: 4h close above the 30-bar high with ADX(14) > 20 -> long'
+    side: long_only
+    stop: 2 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 60 bars
+  sprint3000_mapping: donchian_break(30) + adx_min(14,20) + long_only
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: PROXY
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-160
+  name: Quantpedia time-series momentum, gold-only, vol-scaled
+  group: quant-blog
+  source: Moskowitz, Ooi & Pedersen, 'Time Series Momentum', Journal of Financial Economics (2012)
+  evidence_grade: peer-reviewed
+  verified_track_record: n/a
+  claimed_performance: 1985-2009 multi-asset, gross; gold alone weaker
+  mechanism: behavioural under-reaction + hedging demand
+  tf: 1d
+  rule:
+    entry: sign of the 12-month return at month end, position scaled to 10% vol
+    side: signal
+    stop: none (monthly)
+    exit: month end
+    hold: 21 bars
+  sprint3000_mapping: momentum_sign(252)
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: 'ALREADY FAILED (H-01 / H-84 V3: CFD swap 0.13-0.15 R)'
+  risk_flags: []
+  test_priority: C
+- id: RT-PRACTITIONER-161
+  name: Kaufman adaptive moving average (KAMA) trend
+  group: quant-blog
+  source: Kaufman, Trading Systems and Methods (2013); Smarter Trading (1995)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: book tests
+  mechanism: adaptive smoothing cuts whipsaw
+  tf: 4h
+  rule:
+    entry: close crosses KAMA(10,2,30) and KAMA slope agrees -> follow
+    side: signal
+    stop: 2 x ATR(14)
+    exit: opposite cross
+    hold: 120 bars
+  sprint3000_mapping: 'needs primitive: kama_cross(10,2,30)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: B
+- id: RT-PRACTITIONER-162
+  name: Kaufman efficiency-ratio trend gate on donchian
+  group: quant-blog
+  source: Kaufman (2013)
+  evidence_grade: practitioner-documented
+  verified_track_record: n/a
+  claimed_performance: book
+  mechanism: only trade breakouts when ER is high
+  tf: 1h
+  rule:
+    entry: donchian_break(20) with ER(20) > 0.4
+    side: signal
+    stop: 1.5 x ATR(14)
+    exit: chandelier(14,3)
+    hold: 96 bars
+  sprint3000_mapping: 'donchian_break(20) + needs filter primitive: efficiency_ratio_min(20,0.4)'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: none known
+  risk_flags: []
+  test_priority: A
+- id: RT-PRACTITIONER-163
+  name: Volatility-targeted 4h trend with swap-aware exit
+  group: quant-blog
+  source: 'practitioner synthesis (Carver 2015 vol targeting; goldbot cost-of-record: close before 21:00 UTC rollover)'
+  evidence_grade: own-data
+  verified_track_record: n/a
+  claimed_performance: sprint-200 S200-TREND-03 gross +0.165R OOS (t 2.29) before costs
+  mechanism: the gross trend premium exists; swap is the killer -> exit before rollover
+  tf: 1h
+  rule:
+    entry: 4h donchian_break(20) signal; enter next 1h open; force flat at 20:45 UTC every day (no swap)
+    side: signal
+    stop: 1.5 x ATR(14,4h)
+    exit: chandelier(14,3) or 20:45 UTC
+    hold: 20 bars
+  sprint3000_mapping: 'donchian_break(20) on 4h + needs exit primitive: flat_before_rollover'
+  data_needed: available locally (Dukascopy 1m)
+  prior_test_or_risk: addresses the measured failure mode (swap) directly
+  risk_flags: []
+  test_priority: A
