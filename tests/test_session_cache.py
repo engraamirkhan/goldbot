@@ -47,9 +47,10 @@ class SessionsBroker:
         return resolve_server_sessions(DEFAULT_SESSIONS.server_sessions(), TZ, NOW.tz_convert(TZ).date())
 
 
-def _source(tmp_path: Path, broker: Any, symbol: str = "US500", profile: str = "index_us") -> CachedSessions:
+def _source(tmp_path: Path, broker: Any, symbol: str = "US500", profile: str = "index_us",
+            protocol: int | None = 11) -> CachedSessions:
     return CachedSessions(broker, symbol, account_id="icm-probe", db=InstrumentsDb(tmp_path / "state"),
-                          fallback=session_profile(profile, TZ))
+                          fallback=session_profile(profile, TZ), protocol=lambda: protocol)
 
 
 # ------------------------------------------------------------------------------------------------ the 24 h cache
@@ -82,7 +83,7 @@ def test_a_cache_is_per_account_and_symbol_and_profile(tmp_path):
     assert _source(tmp_path, SessionsBroker(), symbol="DE40").cached(NOW) is None
     assert _source(tmp_path, SessionsBroker(), profile="fx").cached(NOW) is None      # a re-profiled instrument
     other = CachedSessions(SessionsBroker(), "US500", account_id="vantage-demo", db=InstrumentsDb(tmp_path / "state"),
-                           fallback=session_profile("index_us", TZ))
+                           fallback=session_profile("index_us", TZ), protocol=lambda: 11)
     assert other.cached(NOW) is None
 
 
@@ -150,7 +151,7 @@ def test_engine_start_makes_no_blocking_non_gold_sessions_call_and_staggers_them
     eng = _engine(tmp_path)
     gate = threading.Event()
     b = SessionsBroker(gate=gate)                                   # a read that would hang the start
-    stagger = engine_svc.book_sessions(eng, b, "icm-probe", TZ, NOW)
+    stagger = engine_svc.book_sessions(eng, b, "icm-probe", TZ, NOW, protocol=lambda: 11)
     assert b.calls == []                                            # the start read nothing from the broker
     for book in list(eng.books.values())[1:]:
         with using(eng, book):
@@ -167,9 +168,9 @@ def test_engine_start_makes_no_blocking_non_gold_sessions_call_and_staggers_them
 def test_engine_start_applies_a_table_cached_in_the_last_24_hours(tmp_path):
     eng = _engine(tmp_path, n=2)
     CachedSessions(SessionsBroker(), "SYM02", account_id="icm-probe", db=InstrumentsDb(tmp_path / "state"),
-                   fallback=session_profile("metals", TZ)).table(NOW - pd.Timedelta(hours=3))
+                   fallback=session_profile("metals", TZ), protocol=lambda: 11).table(NOW - pd.Timedelta(hours=3))
     b = SessionsBroker()
-    stagger = engine_svc.book_sessions(eng, b, "icm-probe", TZ, NOW)
+    stagger = engine_svc.book_sessions(eng, b, "icm-probe", TZ, NOW, protocol=lambda: 11)
     books = list(eng.books.values())
     with using(eng, books[2]):
         assert eng.sessions.source == "broker"                      # the cached table, no call
@@ -195,3 +196,46 @@ def test_the_observed_hours_read_is_eight_days():
 def test_a_cached_table_is_fresh_within_the_ttl(tmp_path, hours):
     _source(tmp_path, SessionsBroker()).table(NOW)
     assert _source(tmp_path, SessionsBroker()).cached(NOW + pd.Timedelta(hours=hours)) is not None
+
+
+# ------------------------------------------------------------------------------------------------ review of #319
+def test_a_table_from_a_bridge_older_than_v11_is_used_but_never_cached(tmp_path):
+    """F4: a v10 bridge still builds hours from today's unfinished day (the bug PR #317 fixed on the bridge); caching
+    its table would keep that wrong table for 24 h after the bridge is fixed."""
+    for proto in (10, None):
+        b = SessionsBroker()
+        assert _source(tmp_path, b, protocol=proto).table(NOW).source == "broker"
+        assert _source(tmp_path, SessionsBroker()).cached(NOW) is None, proto
+
+
+def test_a_cached_row_without_the_protocol_marker_is_rejected(tmp_path):
+    t = _source(tmp_path, SessionsBroker()).table(NOW)
+    db = InstrumentsDb(tmp_path / "state")
+    read_at, body = db.load_sessions("icm-probe", "US500")
+    assert body[session_cache.PROTOCOL_KEY] >= session_cache.SESSIONS_MIN_PROTOCOL
+    db.save_sessions("icm-probe", "US500", read_at, {k: v for k, v in body.items() if k != session_cache.PROTOCOL_KEY})
+    assert _source(tmp_path, SessionsBroker()).cached(NOW) is None
+    db.save_sessions("icm-probe", "US500", read_at, {**body, session_cache.PROTOCOL_KEY: 10})
+    assert _source(tmp_path, SessionsBroker()).cached(NOW) is None
+    assert t.source == "broker"
+
+
+def test_a_read_running_past_twice_its_timeout_no_longer_holds_the_stagger(caplog):
+    """F6: one hung read (a bridge call that never returns) must not stop every other book's read for good."""
+    gate = threading.Event()
+    now = [100.0]
+    srcs = [_Src(True, gate), _Src(True, gate)]
+    refs = [(f"b{i}", engine_svc.SessionRefresher(s)) for i, s in enumerate(srcs)]
+    st = SessionStagger(refs, read_timeout_s=10.0, clock=lambda: now[0])
+    caplog.set_level("WARNING", logger="goldbot.engine.sessions")
+    assert st.step(NOW) == "b0"
+    now[0] += 19.0
+    assert st.step(NOW) is None                                     # within 2 x 10 s: still in flight
+    now[0] += 2.0
+    assert st.step(NOW) == "b1"                                     # b0 hung: skipped, logged
+    msgs = [r.getMessage() for r in caplog.records if "session read" in r.getMessage()]
+    assert len(msgs) == 1 and "b0" in msgs[0]
+    now[0] += 1.0
+    st.step(NOW)
+    assert len([r for r in caplog.records if "session read" in r.getMessage()]) == 1   # logged once
+    gate.set()

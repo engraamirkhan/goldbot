@@ -89,11 +89,13 @@ def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | 
     return r.collect(now, current)
 
 
-def book_sessions(eng: Any, session_broker: Any, account_id: str, server_tz: str, now: "pd.Timestamp") -> Any:
+def book_sessions(eng: Any, session_broker: Any, account_id: str, server_tz: str, now: "pd.Timestamp", *,
+                  protocol: Any = lambda: None) -> Any:
     """Each non-gold book's session source, for the engine's start (incident 2026-11-02): NO broker call here. A
     table read in the last 24 h (state/instruments.db) is applied now; every other book keeps its static session
     profile (set when the book was built) until the returned `SessionStagger` reads it after the loop starts, one book
-    at a time (goldbot/engine/session_cache.py)."""
+    at a time (goldbot/engine/session_cache.py). `protocol`: the bridge protocol of the reads (a table is cached only
+    from v11 on, review F4); a read running past twice the client's read timeout no longer holds the others (F6)."""
     from goldbot.data.calendar import session_profile
     from goldbot.engine import books
     from goldbot.engine.instruments_db import InstrumentsDb
@@ -102,13 +104,15 @@ def book_sessions(eng: Any, session_broker: Any, account_id: str, server_tz: str
     items = []
     for b in list(eng.books.values())[1:]:
         with books.using(eng, b):
-            src = CachedSessions(session_broker, eng.cfg.symbol, account_id=account_id, db=db, fallback=session_profile(
-                b.spec.instrument.session_profile if b.spec is not None and b.spec.instrument is not None
-                else "metals", server_tz))
+            src = CachedSessions(session_broker, eng.cfg.symbol, account_id=account_id, db=db, protocol=protocol,
+                                 fallback=session_profile(
+                                     b.spec.instrument.session_profile if b.spec is not None
+                                     and b.spec.instrument is not None else "metals", server_tz))
             if (t := src.cached(now)) is not None:
                 eng.set_sessions(t)
             items.append((b, resolve(SessionRefresher)(src)))
-    return SessionStagger(items)
+    timeout = getattr(session_broker, "timeout_s", None)
+    return SessionStagger(items, read_timeout_s=float(timeout) if isinstance(timeout, (int, float)) else 10.0)
 
 
 def _set_bridge_verdict(eng: Any, verdict: Any) -> None:
@@ -609,7 +613,15 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     # each other book: its broker's hours, its asset class's profile until read (L2 `session_profile`), own thread.
     # Incident 2026-11-02: no broker read before the loop (a cached table or the profile), then one book at a time
     from goldbot.engine import books
-    stagger = resolve(book_sessions)(eng, session_broker, account_id, acc.server_tz, pd.Timestamp.now("UTC"))
+    from goldbot.execution.bridge import API_VERSION
+
+    def session_protocol() -> int | None:     # review F4: the bridge's protocol (this code's own without a bridge)
+        if bridge is None:
+            return API_VERSION
+        v = eng.bridge_compat
+        return v.bridge_api_version if v is not None else None
+    stagger = resolve(book_sessions)(eng, session_broker, account_id, acc.server_tz, pd.Timestamp.now("UTC"),
+                                     protocol=session_protocol)
     book_refreshers = stagger.items
     compat: Any = None                      # BACKLOG 42: the bridge's methods, protocol and zone against this brain's
     if bridge is not None:
