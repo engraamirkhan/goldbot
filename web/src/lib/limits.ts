@@ -1,15 +1,11 @@
-// Words and tones for the read-only Limits, TradingView and Research-today cards (docs/ux/limits-and-tradingview.md).
-// Red only for what stops trading (a spent daily or weekly cap); TradingView is an optional feed, so its problems are
-// amber at worst. Every state is said in words as well as colour.
+// Words and tones for the read-only Limits card (docs/ux/limits-and-tradingview.md A). Red only for what stops trading
+// (a spent daily or weekly cap). Every state is said in words as well as colour.
 import type { components } from "./schema";
 
 type Schemas = components["schemas"];
 export type LimitsView = Schemas["LimitsView"];
 export type LimitAccount = Schemas["LimitAccount"];
 export type LimitChange = Schemas["LimitChange"];
-export type TvStatusView = Schemas["TvStatusView"];
-export type TvIndicatorStatus = Schemas["TvIndicatorStatus"];
-export type ResearchToday = Schemas["ResearchToday"];
 export type Tone = "ok" | "warn" | "bad" | "idle" | "info";
 
 /** 0.05 -> "5.0%", 0.0375 -> "3.75%": one decimal at least, a configured step is never rounded away. */
@@ -48,21 +44,6 @@ export function ago(seconds: number): string {
   return `${Math.round(seconds / 86400)} days ago`;
 }
 
-export const SIGNIN_WORDS: Record<TvStatusView["signin"], { label: string; tone: Tone }> = {
-  ok: { label: "Signed in", tone: "ok" },
-  expired: { label: "Expired", tone: "warn" },
-  not_set_up: { label: "Not set up", tone: "idle" },
-  unknown: { label: "Unknown", tone: "warn" },
-};
-
-export const REPAINT_WORDS: Record<TvIndicatorStatus["repaint_status"], { label: string; tone: Tone }> = {
-  validated: { label: "Passed: history matches live", tone: "ok" },
-  unvalidated: { label: "Not checked yet: not used for trading until it passes", tone: "idle" },
-  none: { label: "No history imported", tone: "idle" },
-};
-
-export const TV_STALE_H = 36;
-
 const ZONED_TIME = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
 const ZONED_DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
 const UTC_TIME = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
@@ -72,16 +53,3 @@ export const zoned = (iso: string) => ZONED_TIME.format(new Date(iso)).replace("
 export const zonedDay = (iso: string) => ZONED_DAY.format(new Date(iso)).replace(",", "");
 /** "13:05 UTC". */
 export const utcClock = (iso: string) => `${UTC_TIME.format(new Date(iso))} UTC`;
-
-type Trial = Schemas["TrialRow"];
-/** "Passed all gates" / "Failed: <first failing gate>" / "Passed, but costs not recorded: not counted" / "Needs more
- *  data" (no gate verdict recorded). */
-export function verdictWords(t: Trial): string {
-  if (t.pre_swap) return "Passed, but costs not recorded: not counted";
-  if (t.gates_passed === true) return "Passed all gates";
-  if (t.gates_passed === false) {
-    const first = t.gates.find((g) => !g.passed);
-    return first ? `Failed: ${first.name}${first.detail ? ` (${first.detail})` : ""}` : "Failed";
-  }
-  return "Needs more data";
-}
