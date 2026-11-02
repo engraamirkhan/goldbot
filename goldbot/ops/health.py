@@ -202,7 +202,6 @@ from goldbot.ops.checks.services import (
 )
 from goldbot.ops.limits_job import check_limits_controller
 from goldbot.ops.observe import check_observe
-from goldbot.ops.tv_pull_health import check_tv_pull
 
 # the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
 # tests import and patch them here)
@@ -352,7 +351,6 @@ __all__ = [
     "check_tick_record",
     "check_tv_ideas",
     "check_observe",
-    "check_tv_pull",
     "exit_code",
     "heartbeat_path",
     "log",
@@ -594,8 +592,7 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
-                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
-                  "heartbeat:webhook", "heartbeat:tv-pull")      # opt-in TradingView services: WARN, still told
+                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:")
 
 
 def _alerting(name: str, status: str) -> bool:

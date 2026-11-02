@@ -13,7 +13,7 @@
   [
    "secrets",
    "ok",
-   "5 keys present"
+   "4 keys present"
   ],
   [
    "disk",
@@ -104,21 +104,6 @@
    "scheduler",
    "ok",
    "heartbeat 0 s"
-  ],
-  [
-   "job:agents_daily",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:agents_presession",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:agents_weekly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
    "job:attribution",
@@ -231,11 +216,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:tv_reconcile",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "costs:icm-demo",
    "ok",
    "built 0.6 d ago"
@@ -301,11 +281,6 @@
    "last drill 3.0 d ago verified 9 files"
   ],
   [
-   "tv_pull",
-   "ok",
-   "no TradingView pull yet (opt-in)"
-  ],
-  [
    "tv_ideas",
    "ok",
    "no TradingView ideas poll yet"
@@ -360,7 +335,7 @@
   [
    "secrets",
    "ok",
-   "5 keys present"
+   "4 keys present"
   ],
   [
    "disk",
@@ -382,7 +357,7 @@
   [
    "secrets",
    "warn",
-   "optional missing: anthropic-api-key, github-token, tradingview-webhook-secret (python -m goldbot.ops.accounts set <key>)"
+   "optional missing: anthropic-api-key, github-token (python -m goldbot.ops.accounts set <key>)"
   ],
   [
    "disk",
@@ -570,21 +545,6 @@
    "heartbeat 0 s"
   ],
   [
-   "job:agents_daily",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:agents_presession",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:agents_weekly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:attribution",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -695,11 +655,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:tv_reconcile",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "costs:icm-demo",
    "ok",
    "built 0.6 d ago"
@@ -790,11 +745,6 @@
    "last drill 3.0 d ago verified 9 files"
   ],
   [
-   "tv_pull",
-   "ok",
-   "no TradingView pull yet (opt-in)"
-  ],
-  [
    "tv_ideas",
    "ok",
    "no TradingView ideas poll yet"
@@ -849,7 +799,7 @@
   [
    "secrets",
    "warn",
-   "optional missing: anthropic-api-key, github-token, tradingview-webhook-secret (python -m goldbot.ops.accounts set <key>)"
+   "optional missing: anthropic-api-key, github-token (python -m goldbot.ops.accounts set <key>)"
   ],
   [
    "disk",

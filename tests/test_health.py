@@ -16,7 +16,7 @@ from goldbot.telegram.bus import ApprovalBus
 NOW = pd.Timestamp("2026-10-07 14:00", tz="UTC")        # Wednesday afternoon: gold market open
 SATURDAY = pd.Timestamp("2026-10-10 12:00", tz="UTC")   # weekend: market closed
 SETTINGS = load_settings().model_copy(update={"telegram": TelegramSettings(allowed_user_ids=[42])})
-ALL_SECRETS = {"telegram-bot-token", "tradingview-webhook-secret", "mt5-icm-demo", "anthropic-api-key", "github-token",
+ALL_SECRETS = {"telegram-bot-token", "mt5-icm-demo", "anthropic-api-key", "github-token",
                "deadman-url"}
 
 
@@ -57,9 +57,9 @@ def test_accounts_check(tmp_path):
 
 def test_secrets_report_names_never_values(tmp_path):
     assert health.check_secrets(make_ctx(tmp_path)).status == "ok"
-    c = health.check_secrets(make_ctx(tmp_path, secrets={"telegram-bot-token", "anthropic-api-key", "github-token"}))
+    c = health.check_secrets(make_ctx(tmp_path, secrets={"telegram-bot-token", "github-token"}))
     assert c.status == "fail"
-    assert "tradingview-webhook-secret" in c.reason and "mt5-icm-demo" in c.reason
+    assert "anthropic-api-key" in c.reason and "mt5-icm-demo" in c.reason
     assert "telegram-bot-token" not in c.reason and "s3cr3t" not in c.reason
     c = health.check_secrets(make_ctx(tmp_path, secrets=ALL_SECRETS - {"github-token"}))
     assert c.status == "warn" and "github-token" in c.reason
@@ -302,7 +302,7 @@ def test_scheduler_job_states(tmp_path):
         "model_watch": {"last_ok": True, "last_started": t("40h"), "last_finished": t("40h"), "next_slot": t("2h")},
         "calendar_archive": {"last_ok": True, "last_slot": t("8h"), "last_skipped": t("1h"),
                              "last_started": t("32h"), "last_finished": t("32h"), "next_slot": future},
-        "agents_daily": {"last_ok": True, "last_started": t("14h"), "last_finished": t("14h"), "next_slot": future},
+        "attribution": {"last_ok": True, "last_started": t("14h"), "last_finished": t("14h"), "next_slot": future},
     }
     sched_file(tmp_path, NOW - pd.Timedelta("10s"), jobs)
     out = by_name(health.check_scheduler(make_ctx(tmp_path)))
@@ -311,7 +311,7 @@ def test_scheduler_job_states(tmp_path):
     assert "KeyError" in out["job:nightly_costs"].reason and "Traceback" not in out["job:nightly_costs"].reason
     assert out["job:model_watch"].status == "fail" and "overdue" in out["job:model_watch"].reason
     assert out["job:calendar_archive"].status == "warn" and "skipped" in out["job:calendar_archive"].reason
-    assert out["job:agents_daily"].status == "ok"
+    assert out["job:attribution"].status == "ok"
 
 
 def test_scheduler_busy_with_a_long_job_is_not_dead(tmp_path):

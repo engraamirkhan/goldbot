@@ -32,7 +32,7 @@ from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 # leaks into the default set whenever it was enabled first (tests/test_opt_in_features.py checks every module).
 OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events", "tod_periodicity", "smc_replica", "price_action",
                    "price_action_patterns", "price_action_candles", "positioning", "tier1_events", "tier2_events",
-                   "day_type", "tradingview", "tv_plots")
+                   "day_type")
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in OPT_IN_FEATURES]
 MACRO_FEATURE_NAMES = ["macro_drivers"]
 # the only features computed on higher-timeframe context frames (h1_/h4_/d1_ columns), in research and in the engine;

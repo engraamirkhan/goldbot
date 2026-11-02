@@ -173,17 +173,6 @@ def test_read_state_serves_only_the_documented_service_files(setup):
     assert json.loads(tools.call("read_state", {"name": "supervisor"}, ["read_state"])[0]) == {"halt": False}
 
 
-def test_agent_jobs_are_skipped_without_a_key(tmp_path):
-    from goldbot.config import load_settings
-    from goldbot.ops.jobs import JobContext, agents_daily
-    from goldbot.research.model_registry import ModelRegistry
-    from goldbot.research.population import Population
-    from goldbot.research.registry import TrialRegistry
-    ctx = JobContext(settings=load_settings(), store=Store(tmp_path / "d"), state_dir=tmp_path, models=ModelRegistry(tmp_path / "m"),
-                     trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[], population=Population(tmp_path / "p.json"))
-    assert "skipped" in agents_daily(ctx, NOW)
-
-
 # ------------------------------------------------------------------------------------------- research analyst
 def test_overrides_are_validated_against_the_family_defaults():
     from goldbot.agents.tools import validate_overrides

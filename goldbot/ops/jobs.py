@@ -22,7 +22,7 @@
                     replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
 * tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
                     cloning, capital shares) -> state/agents.json for the dashboard's league table.
-* research_director weekly before the staff agents: scores every family's evidence (trial registry, shadow book,
+* research_director weekly: scores every family's evidence (trial registry, shadow book,
                     population) and splits what is left of the quarter's trial budget after the pre-registered
                     queue's reservation (research.reserved_trials_quarter) -> state/research_plan.json
                     (research/director.py). It decides what to research, never what goes live: promotion stays with
@@ -62,10 +62,6 @@
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
-* tv_reconcile      daily (goldbot/data/tv_reconcile.py): the TradingView bars the direct pull read (a second feed, OANDA,
-                    never a primary bar source) against the Dukascopy/broker M1 resampled, last 3 days; a close more than
-                    2 points off flags the bar (`dq`) and sets its plots NaN in tv_indicators, an event to dq_events
-                    (source tradingview). Reporting and data quality only; never blocks an entry or an exit.
 * broker_ledger     daily (finance audit GAP-07/GAP-08, RC-8/RC-9): per account, read-only, a balance snapshot (balance,
                     equity, margin, currency) and the deposits, withdrawals and adjustments in the broker's deal history,
                     the balance tied out against the deals, and goldbot's closed records and open trades reconciled
@@ -109,7 +105,6 @@ from typing import Any, Callable, cast
 import numpy as np
 import pandas as pd
 
-from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, load_record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
@@ -944,7 +939,7 @@ def research_families() -> list[str]:
     trials on: every registered family except one under its pre-registered rule-only screen (`Specialist.screening`,
     e.g. asia_drift / H-04), whose only trial is the pre-registered one (research.yml), as it is kept out of the
     default founders and the pools (quant review M1)."""
-    return sorted(f for f, cls in SPECIALISTS.items() if not cls.screening and not cls.requires_tv)   # TV: TV_GRID_V1 only
+    return sorted(f for f, cls in SPECIALISTS.items() if not cls.screening and not cls.requires_tv)   # TV: no input (retired)
 
 
 def research_budget(ctx: JobContext) -> tuple[int, int]:
@@ -1008,31 +1003,6 @@ def current_plan(ctx: JobContext, slot: pd.Timestamp) -> ResearchPlan | None:
     if plan is None or slot - plan.created_utc > pd.Timedelta(days=PLAN_MAX_AGE_DAYS):
         return None
     return plan
-
-
-# ---------------------------------------------------------------------------------------------- staff agents
-def _run_agents(ctx: JobContext, slot: pd.Timestamp, cadence: str) -> dict[str, Any]:
-    if ctx.agent_runner is None:
-        return {"skipped": "no anthropic-api-key in the keyring (python -m goldbot.ops.accounts set anthropic-api-key)"}
-    out: dict[str, Any] = {}
-    for role in ROLES.values():
-        if role.cadence == cadence:
-            run = ctx.agent_runner.run(role, slot)
-            out[role.name] = {"status": run.status, "cost_usd": round(run.cost_usd, 4), "turns": run.turns,
-                              "report": run.report_path, "detail": run.detail}
-    return out
-
-
-def agents_daily(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    return _run_agents(ctx, slot, "daily")
-
-
-def agents_weekly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    return _run_agents(ctx, slot, "weekly")
-
-
-def agents_presession(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    return _run_agents(ctx, slot, "presession")
 
 
 # ---------------------------------------------------------------------------------------------- calendar
@@ -1417,67 +1387,6 @@ def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
-# ---------------------------------------------------------------------------------------------- TradingView cross-feed
-TV_RECONCILE_DAYS = 3                 # lookback: late-arriving history bars and a missed run are still caught
-TV_DROP_COLUMNS = ["source", "symbol", "year", "month"]      # hive columns Store.read adds; not part of the rows
-
-
-def _tv_reference(ctx: JobContext, start: pd.Timestamp, end: pd.Timestamp) -> tuple[pd.DataFrame, str]:
-    """The reference M1: Dukascopy, else the first account's broker M1 (bars_1m_broker) that has the window."""
-    for table, source in (("bars_1m", "dukascopy"), *(("bars_1m_broker", a.account_id) for a in ctx.accounts)):
-        ref = ctx.store.read(table, source=source, start=start, end=end)
-        if not ref.empty:
-            return ref, source
-    return pd.DataFrame(), ""
-
-
-def tv_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Daily: the pulled TradingView bars (second feed) against the reference M1 over the last TV_RECONCILE_DAYS days.
-    A bar more than 2 points off is flagged `dq` and its plots set NaN in `tv_indicators` (a rewrite on the store key,
-    so a flagged bar stays NaN); each is one dq_events row (source tradingview). Reporting only: no order path."""
-    from goldbot.data.crossfeed import CLOSE_TOL_POINTS, POINT_DEFAULT
-    from goldbot.data.quality import DQEvent, events_frame
-    from goldbot.data.tv_reconcile import PULL_ORIGINS, apply_dq, compare_closes, reconcile_counts
-    end = pd.Timestamp(slot).tz_convert("UTC").floor("min")
-    start = end - pd.Timedelta(days=TV_RECONCILE_DAYS)
-    ref, ref_source = _tv_reference(ctx, start - pd.Timedelta(hours=8), end)
-    out: dict[str, Any] = {"reference": ref_source or None, "flagged": 0, "compared": 0}
-    tdir = ctx.store.table_dir("tv_indicators")
-    if ref.empty or not tdir.exists():
-        out["skipped"] = "no reference M1 bars" if ref.empty else "no TradingView rows"
-        return out
-    tol = CLOSE_TOL_POINTS * POINT_DEFAULT
-    events: list[DQEvent] = []
-    for d in sorted(tdir.glob("source=*")):
-        source = d.name.removeprefix("source=")
-        long = ctx.store.read("tv_indicators", source=source, start=start - pd.Timedelta(hours=8), end=end)
-        if long.empty or "origin" not in long.columns:
-            continue
-        flagged_rows: list[pd.DataFrame] = []
-        for tf in sorted(set(long.loc[long["origin"].isin(PULL_ORIGINS), "tf"].astype(str))):
-            cmp = compare_closes(long, ref, tf=tf, tolerance=tol, start=start, end=end)
-            counts = reconcile_counts(long, ref, tf=tf, tolerance=tol, start=start, end=end)
-            out["compared"] += len(cmp)
-            out.setdefault("by_source", {})[f"{source}:{tf}"] = {
-                "compared": len(cmp), "matched": counts["matched"], "max_close_diff": counts["max_close_diff"]}
-            bad = cmp[cmp["dq"]]
-            if bad.empty:
-                continue
-            fixed = apply_dq(long[long["tf"].astype(str) == tf], cmp)
-            flagged_rows.append(fixed[fixed["dq"] == "tv_close_diff"])
-            for r in bad.itertuples():
-                events.append(DQEvent(ts_utc=cast(pd.Timestamp, r.ts_utc), check="tv_close_diff", severity="warning",
-                                      detail=f"{source} {tf}: TradingView close {r.tv_close:.2f} vs {ref_source} "
-                                             f"{r.ref_close:.2f} ({r.diff:.2f} off, limit {tol:.2f}); plots set NaN"))
-        if flagged_rows:
-            rows = pd.concat(flagged_rows, ignore_index=True)
-            ctx.store.append("tv_indicators", rows.drop(columns=TV_DROP_COLUMNS, errors="ignore"), source=source)
-            out["flagged"] += int(rows["bar_time"].nunique())
-    if events:
-        ctx.store.append("dq_events", events_frame(events), source="tradingview", dedupe=False)
-    return out
-
-
 # ---------------------------------------------------------------------------------------------- broker ledger (GAP-07/08)
 def broker_ledger(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily, per enabled account (goldbot/ops/ledger.py): RC-9 "Opening balance + net closed P&L + deposits -
@@ -1619,17 +1528,13 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "model_watch": model_watch,
     "tournament": tournament,
     "research_director": research_director,
-    "agents_daily": agents_daily,
-    "agents_weekly": agents_weekly,
     "monthly_research": monthly_research,
     "calendar_archive": calendar_archive,
     "calendar_archive_sunday": calendar_archive,  # the new Forex Factory week before the weekly open (review M2)
-    "agents_presession": agents_presession,
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
     "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
-    "tv_reconcile": tv_reconcile,                 # TradingView bars (second feed) vs the reference M1; dq flag + NaN plots
     "broker_ledger": broker_ledger,               # GAP-07/08: balance snapshot, positions and balance vs the broker
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup

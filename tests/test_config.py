@@ -191,3 +191,41 @@ def test_the_director_quarter_budget_follows_the_override():
     r = _research(trial_budget_quarter=20, trial_budget_overrides={"2026Q4": 53})
     assert quarter_budget(r, "2026Q4") == 53
     assert quarter_budget(r, "2027Q1") == 20
+
+
+# retired 2026-11-02 (TradingView pull and webhook; the scheduled staff agents; the TradingView cross-feed job):
+# a server's settings.local.yaml that still carries one of these must not stop every service at the next deploy
+_RETIRED_LOCAL = {
+    "tv_pull": {"enabled": True, "aliases": {"k": "Structure (smc)"}},
+    "webhook": {"max_rows_per_hour": 10},
+    "scheduler": {"agents_daily": {"kind": "daily", "at": "23:45"}, "agents_weekly": {"kind": "weekly", "at": "13:00"},
+                  "agents_presession": {"kind": "daily", "at": "06:30"}, "tv_reconcile": {"kind": "daily", "at": "23:15"}},
+    "tv": {"max_lag_s": 60, "min_bar_match": 0.95, "replica_series_start": "2017-01-01"},
+}
+
+
+def test_a_settings_local_that_still_carries_a_retired_section_loads_and_ignores_it(tmp_path, caplog):
+    (tmp_path / "settings.yaml").write_text(DEFAULT_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "settings.local.yaml").write_text(yaml.safe_dump(_RETIRED_LOCAL), encoding="utf-8")
+    with caplog.at_level("WARNING", logger="goldbot.config"):
+        s = load_settings(tmp_path / "settings.yaml")
+    for key in ("tv_pull", "webhook"):
+        assert not hasattr(s, key)
+    for job in ("agents_daily", "agents_weekly", "agents_presession", "tv_reconcile"):
+        assert not hasattr(s.scheduler, job)
+    assert not hasattr(s.tv, "max_lag_s") and s.tv.replica_series_start == "2017-01-01"   # the kept key still applies
+    assert "scheduler.agents_daily" in caplog.text and "tv_pull" in caplog.text   # the owner sees what to delete
+
+
+def test_an_unknown_section_in_settings_local_is_still_refused(tmp_path):
+    (tmp_path / "settings.yaml").write_text(DEFAULT_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "settings.local.yaml").write_text(yaml.safe_dump({"tv_pul": {"enabled": True}}), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_settings(tmp_path / "settings.yaml")
+
+
+def test_the_shipped_settings_have_no_fxstreet_feed_and_no_retired_section():
+    raw = _raw()
+    assert "fxstreet" not in raw["news"]["feeds"]
+    assert not {"tv_pull", "webhook"} & set(raw) and "tv_ideas" in raw   # the authors' ideas stay
+    assert not {"agents_daily", "agents_weekly", "agents_presession", "tv_reconcile"} & set(raw["scheduler"])

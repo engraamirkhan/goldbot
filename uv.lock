@@ -434,7 +434,6 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -492,7 +491,6 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
-    { name = "websockets", specifier = ">=13" },
 ]
 provides-extras = ["live", "viz", "dev"]
 

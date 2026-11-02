@@ -157,11 +157,9 @@ from goldbot.api.schema import (
     TradesPage,
     TradesSummary,
     TradeStatus,
-    TvStatusView,
     UserRef,
     UserRow,
 )
-from goldbot.api.tv_status import tv_status
 from goldbot.config import MailSettings
 from goldbot.data.store import Store
 from goldbot.data.timeutil import heartbeat_problem
@@ -978,13 +976,6 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
                            terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
-
-    @app.get("/api/tradingview", response_model=TvStatusView)
-    def tradingview_status(_: User = Depends(auth)) -> TvStatusView:
-        s = view_settings()
-        keys = (s.tv_pull.sessionid_key, s.tv_pull.sessionid_sign_key) if s is not None else None
-        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"), state_dir=st.dir, cookie_keys=keys,
-                         aliases=s.tv_pull.aliases if s is not None else None)
 
     # ============================================================== Limits card (read-only, any signed-in role)
     # goldbot/api/limits.py: what the engines publish, the supervisor's combined caps and core.db's change logs
