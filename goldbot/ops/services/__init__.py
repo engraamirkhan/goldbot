@@ -6,7 +6,6 @@ module each; goldbot/ops/run.py re-exports every name they had there.
   supervisor.py  run_supervisor, supervisor_pass
   bridge.py      run_bridge (the MT5 terminal's bridge, under Wine or Windows)
   api.py         run_api (dashboard)
-  webhook.py     run_webhook (TradingView)
   scheduler.py   run_scheduler and its read-only job brokers and staff agents
   telegram.py    run_telegram
   news.py        run_news

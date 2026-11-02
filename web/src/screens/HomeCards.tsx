@@ -71,19 +71,19 @@ export function StrategiesCard() {
 
 // ------------------------------------------------------------------------------------------------ Learning (Home)
 /** One compact card: the shadow book's 7 days (R with n, never money) and the largest change since last week. */
-export function LearningCard({ onOpenProgress }: { onOpenProgress?: () => void }) {
+export function LearningCard() {
   const q = useQuery({ queryKey: ["tradesOverview"], queryFn: api.tradesOverview, refetchInterval: TRADES_POLL_MS });
   const v = q.data;
   return (
     <Card title="Learning" label="Learning">
       {q.isLoading ? <Skeleton height={64} label="Loading learning" />
         : q.isError && !v ? <ErrorState title="Could not load what the system learned." stillWorks="Trading is not affected." onRetry={() => q.refetch()} />
-        : <LearningBody v={v!} onOpenProgress={onOpenProgress} />}
+        : <LearningBody v={v!} />}
     </Card>
   );
 }
 
-function LearningBody({ v, onOpenProgress }: { v: TradesOverview; onOpenProgress?: () => void }) {
+function LearningBody({ v }: { v: TradesOverview }) {
   const [all, taken] = shadowTiles(v);
   const top = digest(v, 1)[0];
   return (
@@ -91,7 +91,6 @@ function LearningBody({ v, onOpenProgress }: { v: TradesOverview; onOpenProgress
       <p className="learn-line">Shadow trades, 7 days: every candidate <strong className="num">{signedR(all.avgR)}</strong> per
         trade ({`n${NBSP}${all.n}`}) · taken <strong className="num">{signedR(taken.avgR)}</strong> ({`n${NBSP}${taken.n}`}) <span className="muted small">· shadow, not money</span></p>
       <p className="small muted">{top ? `Biggest change: ${top.text}.` : "Nothing changed enough to report since last week."}</p>
-      {onOpenProgress && <Button variant="ghost" className="home-link" onClick={onOpenProgress}>Road to live ›</Button>}
     </>
   );
 }

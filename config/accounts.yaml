@@ -540,11 +540,6 @@ accounts:
     enabled: false
     dynamic_limits: false     # owner-only on real money (design 2026-10-19)
 
-tradingview:
-  # Webhook secret and any session cookie for the ideas fetcher also live in the keyring (keys below).
-  secret_key: tradingview-webhook-secret
-  ideas_cookie_key: tradingview-ideas-cookie
-
 telegram:
   bot_token_key: telegram-bot-token
   allowed_user_ids: []  # not read: the services use settings.yaml telegram.allowed_user_ids

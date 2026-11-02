@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Mt5Shot } from "../lib/api";
 
-// MT5 (IC Markets) terminal picture beside the TradingView chart. Refetched every 60 s and on timeframe change; the
+// MT5 (IC Markets) terminal picture, the broker's own price chart. Refetched every 60 s and on timeframe change; the
 // server answers 404 when its capture is older than 5 minutes. The blob URL is revoked on every refresh and on unmount.
 // The server crops the capture to the chart pane (plot, price scale, time axis); a known non-gold symbol is noted.
 // The image fills the panel width at its own aspect ratio (no fixed height); over 3 minutes old it carries a STALE badge.
@@ -49,8 +49,8 @@ export function Mt5Chart({ tf }: { tf: string }) {
     <div data-testid="mt5-chart">
       <div className="mt5-box" aria-live="polite">
         {shot === null && <p className="muted" role="status">Loading the MT5 chart...</p>}
-        {shot === "none" && <p className="muted">The MT5 chart has not updated for over 5 minutes, so it is hidden. The TradingView chart still works.</p>}
-        {shot === "error" && <p className="muted" role="status">MT5 chart unavailable; the TradingView chart still works.</p>}
+        {shot === "none" && <p className="muted">The MT5 chart has not updated for over 5 minutes, so it is hidden. Trading is not affected.</p>}
+        {shot === "error" && <p className="muted" role="status">MT5 chart unavailable. Trading is not affected.</p>}
         {img && (
           <a href={img.url} target="_blank" rel="noopener" className="mt5-open" aria-label="Open the MT5 chart full size in a new tab">
             <img src={img.url} alt={`MT5 gold chart, ${TF_WORDS[tf] ?? tf}`} />

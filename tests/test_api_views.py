@@ -1,4 +1,4 @@
-"""Health and Research screens: read-only endpoints for any logged-in role, built from fixture state files."""
+"""Health screen: read-only endpoints for any logged-in role, built from fixture state files."""
 import json
 from pathlib import Path
 
@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
-from goldbot.api.explain import parse_tables
 from goldbot.engine.shadow import ShadowBook
 
 T0 = pd.Timestamp("2026-09-01T00:00:00Z")
@@ -64,43 +63,12 @@ def seed_health(state: Path) -> None:
                                                      "ts": "2026-10-09T05:00:00Z", "detail": "health failed"}) + "\n")
 
 
-def seed_research(state: Path, docs: Path) -> None:
-    now = pd.Timestamp.now("UTC")
-    gates = {"passed": False, "checks": [{"name": "dsr", "passed": False, "detail": "deflated Sharpe n/a"},
-                                         {"name": "events", "passed": True, "detail": "1498 events"}]}
-    rows = [
-        {"trial": 1, "ts": "2025-12-01T00:00:00+00:00", "agent_id": "session_open-x", "family": "session_open",
-         "config": {}, "status": "evaluated", "rationale": "old quarter", "results": {
-             "rule_only": {"gross": {"n": 1498, "mean_r": 0.042, "t_stat": 1.31}, "net": {"n": 1498, "mean_r": -0.1, "t_stat": -3.0}},
-             "gates": gates}},
-        {"trial": 2, "ts": now.isoformat(), "agent_id": "tsmom-x", "family": "tsmom", "config": {}, "status": "evaluated",
-         "rationale": "H-01 slow TSMOM", "results": {"rule_only": {"gross": {"n": 900, "mean_r": 0.061, "t_stat": 2.63},
-                                                                   "net": {"n": 900, "mean_r": -0.079, "t_stat": -2.1}}, "gates": gates}},
-        {"trial": 3, "ts": now.isoformat(), "agent_id": "tsmom-x", "family": "tsmom", "config": {}, "status": "holdout",
-         "rationale": "holdout", "results": {"holdout_verdict": {"passed": True, "rule": "mean R > 0 and t >= 2"},
-                                             "swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0},
-                                             "cost_source": "PRIORS ONLY: test"}},
-    ]
-    (state / "research_registry.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
-    (state / "research_plan.json").write_text(json.dumps({
-        "created_utc": (now - pd.Timedelta(days=30)).isoformat(), "quarter": "2026Q4", "quarter_budget": 20, "quarter_used": 2,
-        "total_budget": 18, "floor": 1, "cap": 20, "budget": {"tsmom": 10, "trend": 8}, "grid_budget": {"tsmom": 0, "trend": 0},
-        "unallocated": 0, "holdout_from": "2025-10-01", "holdout_to": "2026-10-01", "holdout_trials_ignored": 1,
-        "focus": [{"rank": 1, "family": "tsmom", "budget": 10, "evidence": 1.2, "reasons": ["gross t 2.63"]}],
-        "evidence": [{"family": "tsmom", "trials": 2, "evidence": 1.2, "blocked": False, "flags": ["few_filtered_trades"],
-                      "median_auc": 0.52, "best_dsr": None, "shadow_trades": 0}], "rule": "..."}))
-    (docs / "research").mkdir(parents=True)
-    (docs / "research" / "hypotheses.md").write_text(
-        "# Hypothesis portfolio\n\n## A. Ranked portfolio\n\n| Rank | ID | Hypothesis |\n|---|---|---|\n"
-        "| 1 | H-01 | **Slow TSMOM**: 1d `signal` |\n| 2 | H-02 |\n\n## B. Retired\n\n| ID | Idea |\n|---|---|\n| R-01 | mean_reversion |\n")
-
-
 @pytest.fixture
 def client(tmp_path):
     state, docs = tmp_path / "state", tmp_path / "docs"
     state.mkdir()
     docs.mkdir()
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", docs_dir=docs, owner_email="o@x.io")
+    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email="o@x.io")
     c = TestClient(app)
     return c, _login(c, app), state, docs
 
@@ -108,15 +76,10 @@ def client(tmp_path):
 def test_views_need_login_and_are_empty_before_the_vps_runs(client):
     c, h, _, _ = client
     assert c.get("/api/health").status_code == 401
-    assert c.get("/api/research").status_code == 401
     v = c.get("/api/health", headers=h["viewer"]).json()
     assert v["agents"] == [] and v["system_halt"] is None and v["drift_ts"] is None
     assert v["psi"]["features"] == [] and v["reliability"] == [] and v["cusum"] == []
     assert {x["name"]: x["status"] for x in v["checks"]} == {"deploy": "ok", "data_quality": "ok", "drift": "ok"}
-    r = c.get("/api/research", headers=h["viewer"]).json()
-    assert r["trials"] == [] and r["plan"] is None and r["budget"]["used"] == 0
-    assert r["budget"]["left"] == r["budget"]["budget"] == 20
-    assert r["hypotheses"]["tables"] == [] and "not found" in r["hypotheses"]["note"]
 
 
 def test_health_view_from_fixture_state(client):
@@ -150,90 +113,3 @@ def test_unreadable_drift_file_is_shown_as_a_halt(client):
     (state / "drift.json").write_text("{not json")
     v = c.get("/api/health", headers=h["viewer"]).json()
     assert v["drift_error"] and v["system_halt"]["reasons"] == [v["drift_error"]]
-
-
-def test_research_view_from_fixture_state(client):
-    c, h, state, docs = client
-    seed_research(state, docs)
-    r = c.get("/api/research", headers=h["viewer"]).json()
-    assert r["budget"]["used"] == 2 and r["budget"]["left"] == 18 and r["trials_total"] == 3
-    assert [t["trial"] for t in r["trials"]] == [3, 2, 1]
-    t2 = r["trials"][1]
-    assert (t2["family"], t2["timeframe"], t2["gross_r"], t2["net_t"], t2["n"]) == ("tsmom", "1h", 0.061, -2.1, 900)
-    assert t2["gates_passed"] is False and [g["name"] for g in t2["gates"]] == ["dsr", "events"]
-    assert r["trials"][0]["gates"] == [{"name": "holdout", "passed": True, "detail": "mean R > 0 and t >= 2"}]
-    assert r["trials"][0]["gates_passed"] is True and r["trials"][0]["pre_swap"] is False
-    assert r["plan"]["stale"] is True and r["plan"]["focus"][0]["family"] == "tsmom"
-    assert r["plan"]["evidence"][0]["flags"] == ["few_filtered_trades"]
-    tables = r["hypotheses"]["tables"]
-    assert [t["title"] for t in tables] == ["A. Ranked portfolio", "B. Retired"]
-    assert tables[0]["rows"] == [["1", "H-01", "Slow TSMOM: 1d signal"], ["2", "H-02", ""]]
-
-
-def test_a_recorded_gate_pass_without_its_cost_treatment_is_shown_as_pre_swap_not_passed(client):
-    """Review of 978c667: the research view reads gate passes as registry.gate_pass_counts does, and marks a recorded
-    pass from before swap was charged as pre-swap so the owner sees why it does not count."""
-    c, h, state, docs = client
-    seed_research(state, docs)
-    rows = [json.loads(x) for x in (state / "research_registry.jsonl").read_text().splitlines() if x.startswith("{")]
-    rows[1]["results"]["gates"] = {"passed": True, "checks": [{"name": "dsr", "passed": True, "detail": "0.97"}]}
-    rows[2]["results"] = {"holdout_verdict": {"passed": True, "rule": "mean R > 0 and t >= 2"}}      # no swap recorded
-    (state / "research_registry.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-    t3, t2, t1 = c.get("/api/research", headers=h["viewer"]).json()["trials"]
-    assert (t2["gates_passed"], t2["pre_swap"]) == (False, True)
-    assert (t3["gates_passed"], t3["pre_swap"]) == (False, True)
-    assert (t1["gates_passed"], t1["pre_swap"]) == (False, False)          # a recorded fail is a fail, not pre-swap
-
-
-def test_corrupt_plan_is_reported_not_raised(client):
-    c, h, state, _ = client
-    (state / "research_plan.json").write_text("{}")
-    r = c.get("/api/research", headers=h["owner"]).json()
-    assert r["plan"] is None and "unreadable" in r["plan_error"]
-
-
-def test_the_real_hypotheses_file_parses():
-    md = (Path(__file__).resolve().parents[1] / "docs" / "research" / "hypotheses.md").read_text()
-    tables = parse_tables(md)
-    assert tables and tables[0].columns[:2] == ["Rank", "ID"]
-    assert any(r[1] == "H-01" for r in tables[0].rows)
-
-
-def test_tradingview_status_is_for_any_signed_in_role_and_shows_no_values(client, tmp_path):
-    from goldbot.data.store import Store
-    from goldbot.webhook.app import Alert, to_row
-    from goldbot.webhook.inbox import TvInbox, sync_to_store
-    c, h, _, _ = client
-    assert c.get("/api/tradingview").status_code == 401
-    assert c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"] == []
-    box = TvInbox(tmp_path / "tv.db")
-    bar = pd.Timestamp.now(tz="UTC").floor("15min") - pd.Timedelta(minutes=30)
-    a = Alert.model_validate({"indicator": "smc", "version": "2", "symbol": "XAUUSD", "tf": "15",
-                              "bar_time": bar.isoformat(), "fired_at": (bar + pd.Timedelta(minutes=15)).isoformat(),
-                              "secret": "x", "plots": {"plot_0": "123.456"}})
-    box.put(to_row(a, (bar + pd.Timedelta(minutes=16)).to_pydatetime()))
-    sync_to_store(box, Store(tmp_path / "data"))
-    body = c.get("/api/tradingview", headers=h["viewer"]).json()
-    assert body["indicators"][0]["plots_seen"] == ["plot_0"] and body["indicators"][0]["alerts_24h"] == 1
-    assert "123.456" not in json.dumps(body)
-
-
-def test_tradingview_status_counts_csv_history_apart_from_alerts_and_shows_the_repaint_status(client, tmp_path):
-    from goldbot.data import tv_csv
-    from goldbot.data.store import Store
-    from goldbot.research import tv_repaint
-    c, h, _, _ = client
-    store = Store(tmp_path / "data")
-    t0 = pd.Timestamp("2026-01-05T08:00:00Z")
-    p = tmp_path / "e.csv"
-    p.write_text("time,open,high,low,close,A,B\n" + "".join(
-        f"{int((t0 + pd.Timedelta(minutes=15 * i)).timestamp())},1,2,1,1,{i},{i}\n" for i in range(10)))
-    tv_csv.import_tv_csv(p, store=store, indicator="smc", version="2", tf="15")
-    row = c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"][0]
-    assert (row["csv_bars"], row["csv_rows"], row["repaint_status"]) == (10, 20, "unvalidated")
-    assert row["alerts_24h"] == 0 and row["last_bar_time"] == ""      # the CSV is history, not a live alert
-    assert tv_repaint.validate(store, indicator="smc", version="2", tf="15", min_bars=0).validated is False   # no live bars
-    df = store.read("tv_indicators", source="smc@2")
-    df["repaint_validated"] = True
-    store.append("tv_indicators", df.drop(columns=["source", "symbol", "year", "month"]), source="smc@2")
-    assert c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"][0]["repaint_status"] == "validated"

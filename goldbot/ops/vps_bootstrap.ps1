@@ -258,7 +258,6 @@ $svcs = @(
   @{ name="goldbot-engine-icm"; args="-m goldbot.ops.run engine icm-demo" },
   @{ name="goldbot-engine-vantage"; args="-m goldbot.ops.run engine vantage-demo" },
   @{ name="goldbot-api"; args="-m goldbot.ops.run api" },
-  @{ name="goldbot-webhook"; args="-m goldbot.ops.run webhook" },
   @{ name="goldbot-scheduler"; args="-m goldbot.ops.run scheduler" },
   @{ name="goldbot-telegram"; args="-m goldbot.ops.run telegram" },
   @{ name="goldbot-news"; args="-m goldbot.ops.run news" }

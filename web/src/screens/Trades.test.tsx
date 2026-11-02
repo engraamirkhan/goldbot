@@ -20,7 +20,6 @@ function renderTab(tab: TradesTab, route: Partial<Route> = {}, go = vi.fn()) {
   };
   free("status", status); free("accounts", []); free("proposals", []); free("recentProposals", []);
   free("openPositions", openPositions());
-  free("activity", { events: [], unreadable: [] });
   free("today", { as_of: "2026-10-27T09:00:00Z", accounts: [todayAccount()] });
   free("tradesOverview", { as_of: "2026-10-27T09:00:00Z", periods: [], unreadable: [] });
   free("limits", { generated_utc: "2026-10-27T09:00:00Z", error: null, supervisor: {}, accounts: [] });

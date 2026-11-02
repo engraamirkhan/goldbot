@@ -14,7 +14,7 @@ import pytest
 from goldbot.config import TvIdeasSettings
 from goldbot.data import tv_ideas as ti
 from goldbot.data.store import asof_join
-from goldbot.data.tv_wire import ReadOnlyViolation
+from goldbot.data.tv_http import ReadOnlyViolation
 from tests.tv_ideas_fake import FakeIdeasApi, make_idea
 
 T0 = pd.Timestamp("2026-10-27 08:00", tz="UTC")          # a Tuesday
@@ -100,6 +100,28 @@ def test_requests_carry_no_cookie_and_stay_on_the_ideas_api(tmp_path: Path):
     assert all(u.startswith("https://www.tradingview.com/api/v1/ideas/") for u, _ in api.calls)
     with pytest.raises(ReadOnlyViolation):
         _client(api).get_json("https://www.tradingview.com/accounts/signin/")
+
+
+@pytest.mark.parametrize("url", [
+    "https://user:pw@www.tradingview.com/api/v1/ideas/",           # userinfo
+    "https://user@www.tradingview.com/api/v1/ideas/",
+    "https://www.tradingview.com:8443/api/v1/ideas/",               # an explicit port
+    "https://www.tradingview.com:443/api/v1/ideas/",
+    "https://www.tradingview.com/api/v1/ideas/../../accounts/signin/",   # dot-segments climbing out of the prefix
+    "https://www.tradingview.com/api/v1/ideas/%2e%2e/x/",
+    "https://www.tradingview.com/api/v1/ideas/./x/",
+])
+def test_the_read_guard_refuses_userinfo_ports_and_dot_segments(url: str):
+    with pytest.raises(ReadOnlyViolation):
+        _client(FakeIdeasApi([])).get_json(url)
+
+
+@pytest.mark.parametrize("uuid", ["abcd1234\n", "abcd\n", "ab/../c", "abc"])
+def test_an_idea_id_with_a_trailing_newline_or_a_path_is_refused_before_a_request(uuid: str):
+    api = FakeIdeasApi([])
+    with pytest.raises(ti.TvReadError, match="refused idea id"):
+        _client(api).detail(uuid)
+    assert not api.calls
 
 
 # ------------------------------------------------------------------------------------------------ live poll
