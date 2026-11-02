@@ -8,7 +8,7 @@ Nothing at or after 2025-10-01 is read (goldbot.research.arms: files past 2025 a
 cut is asserted). Rules are the live rule code (goldbot.specialists) or the ARM-SPEC's written rules
 (goldbot.research.arm_rules). Barriers are searched on 1m bars (`triple_barrier_next_open_1m`: entry at the OPEN of the first 1m
 bar after the decision close, stop first when both fall in one minute) on mid prices; R is the candidate's own stop distance; costs are the frozen cost
-model (config/arm_costs.yaml: $0.23 round trip, plus swap per rollover) and net R is reported with a stop-exit overshoot
+model (config/arm_costs.yaml: $0.23 round trip, plus the swap rate per rollover on the entry price) and net R is reported with a stop-exit overshoot
 of $0 and of $0.70."""
 from __future__ import annotations
 
@@ -115,7 +115,7 @@ def runner_labels(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands
             w = K.walk_runner(path, closes, entry, side, r, r / K.BOX_STOP_ATR, target_r=target_r)
             at = pd.Timestamp(w["at"]) if w["at"] is not None else t0[0]
             nights = rollover_nights(t0, pd.DatetimeIndex([at]), swap.server_tz, swap.triple_weekday)[0]
-            move = side * (float(w["exit"]) - entry) + nights * float(swap.usd_per_oz(np.array([side]))[0])
+            move = side * (float(w["exit"]) - entry) + nights * float(swap.usd_per_oz_at(np.array([side]), entry)[0])
             return str(w["kind"]), float(w["exit"]), move, at
 
         kind, px, move, at = walk(K.NO_TARGET_R)
@@ -166,7 +166,7 @@ def cut_labels(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands: p
         w = W.walk_cut(path, entry, side, risk[i], cut[i], close[last], target[i])
         at = pd.Timestamp(w["at"]) if w["at"] is not None else entry_ts[j]
         nights = rollover_nights(entry_ts[j:j + 1], pd.DatetimeIndex([at]), swap.server_tz, swap.triple_weekday)[0]
-        move = side * (float(w["exit"]) - entry) + nights * float(swap.usd_per_oz(np.array([side]))[0])
+        move = side * (float(w["exit"]) - entry) + nights * float(swap.usd_per_oz_at(np.array([side]), entry)[0])
         t_exit = min(int(close.searchsorted(at, side="left")), last)
         for key, v in (("barrier_hit", str(w["kind"])), ("exit", float(w["exit"])), ("ret", move / entry),
                        ("t_exit", t_exit), ("ts_exit", bar_ts[t_exit])):
@@ -251,7 +251,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         # live == history: the order goes out the arm's send delay after the close (ARM-SPEC section 0, 2026-10-27)
         sig["entry_delay_s"] = [A.send_delay_s(arm.id, arm.timeframe, c) for c in close[sig["idx"].to_numpy()]]
         spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=1, name=arm.id)
-        swap = SwapSpec.shipped()
+        swap = SwapSpec.research_shipped()            # today's financing rate on each trade's own notional
         lab = triple_barrier_next_open_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=swap)
         runner = K.is_runner(arm)
         if runner:
