@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { validLayoutUrl } from "../lib/chart";
+import { TF_OF_INTERVAL } from "../lib/keyLevels";
+import { KeyLevelsChart } from "./KeyLevelsChart";
 import { Mt5Chart } from "./Mt5Chart";
 import { api, type ChartLayoutIn, type ChartLayoutsView } from "../lib/api";
 
@@ -133,6 +135,8 @@ export function Chart() {
         <div className="chart-panel"><h3>MT5 · IC Markets (the broker goldbot trades on)</h3>
           <Mt5Chart key={interval} tf={interval === "D" ? "1D" : interval} /></div>
       </div>
+      <div className="chart-panel key-levels-panel"><h3>Key levels · support and resistance on every timeframe (goldbot)</h3>
+        <KeyLevelsChart tf={TF_OF_INTERVAL[interval] ?? "1h"} /></div>
       <p className="muted">Times on the chart are in your local time zone. The chart is TradingView's own and may be delayed or unavailable; goldbot does not use it to trade.</p>
 
       <div className="layout-links">

@@ -41,6 +41,7 @@ from goldbot.api import (
     entry_status,
     explain,
     home_cards,
+    key_levels_view,
     limits,
     mt5_crop,
     progress,
@@ -118,6 +119,8 @@ from goldbot.api.schema import (
     InviteRequest,
     InviteResponse,
     JobRow,
+    KeyLevelsView,
+    KeyLevelTf,
     LimitChange,
     LimitsView,
     LoginRequest,
@@ -1293,6 +1296,12 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             "X-Captured-At": iso, "Cache-Control": "no-store", "X-Chart-Cropped": str(res.cropped).lower(),
             "X-Chart-Symbol": res.symbol, "X-Chart-Timeframe": res.timeframe,
             "X-Chart-Gold": "unknown" if res.gold is None else str(res.gold).lower()})
+
+    # goldbot/api/key_levels_view.py: each account's current key zones (engine_<account>.json `key_zones`) and the
+    # recent bars of the chart's timeframe. Display only.
+    @app.get("/api/key-levels", response_model=KeyLevelsView)
+    def key_levels(tf: KeyLevelTf = "1h", account: str | None = None, _: User = Depends(auth)) -> KeyLevelsView:
+        return key_levels_view.key_levels_view(engines_or_none(), st.store(), tf, pd.Timestamp.now("UTC"), account)
 
     @app.get("/api/chart/layouts", response_model=ChartLayoutsView)
     def chart_layouts_get(u: User = Depends(auth)) -> ChartLayoutsView:

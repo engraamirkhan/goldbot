@@ -6,6 +6,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
 ## Where things are (as of 2026-10-05)
 - Daily multi-asset research set (POS-1 inputs), local only: `goldbot/data/daily.py` (21:00 UTC mid bars, `load_daily`, `load_fred`, `usd_broad` ratio-chained DTWEXB->DTWEXBGS, hard cutoff 2025-10-01 asserted on every load) and `scripts/daily_fetch.py` (resumable Dukascopy hourly pull, FRED, Yahoo, sha256 manifest to `~/tmp/daily_manifest.json`). Files live in the git-ignored `raw/daily/`. `fetch_fred_csv` gained `end=` (coed) and DTWEXB takes the weekly H.10 availability rule. Market availability for POS-1: `docs/research/pos1/data-manifest.md`; POS-1 must not start until that file is re-stamped with the completed manifest's sha256.
+- Key levels (owner 2026-11-02, sprint-3000 ADDENDUM A; ADR 0068). `goldbot/features/key_levels.py` builds
+  point-in-time support and resistance zones from five sources: confirmed 15m/1h/4h/1d/1w swings, the previous
+  day/week/month high and low, and $50/$100 numbers. Levels are clustered at 0.25 ATR(1d). Each zone carries an
+  age-decayed strength, its 250-day `strength_pct`, the timeframes it spans and a role flip. Corrected minutes are
+  dropped. `pct_ready` and `book_mature` (540 days of history) gate the primitives. Runtime on 16 years of 1m bars:
+  `zones_asof` 7 s, the full per-minute frame 38 s, one decision-timeframe `LevelContext` 14-31 s (built once,
+  sliced per window). `goldbot/research/level_vocab.py` holds `level_break`, `level_reject`, `near_level` and
+  `room_to_level` (opposing zone = top quartile, frozen to the catalogue's zone bar) for the sprint-3000 screen. They
+  still have to be registered in the sprint3000 engine's vocabulary once that engine is on main.
+- The engine builds `key_zones` off the bar close (display only), on 800 days of the broker's M15. The M15 bars are
+  pulled through `get_bars_range` and cached in the store table `bars_15m_broker` (per account and symbol), then
+  topped up daily, so the live zones equal research's. Pulls are paced: one attempt and 20 s per read, 30-day pages
+  1 s apart, a 300 s budget, one pull per bridge, a random first delay. Accounts can set `key_levels_history: short`.
+  Deploy checks (ADR 0068): the icm-probe swapfile and peak terminal RSS. It publishes at most 3 strong zones each side (strength_pct >= 50, merged neighbours,
+  ranked by strength-weighted proximity). `GET /api/key-levels` marks zones over 30 minutes old as stale. The Chart
+  tab draws them as bands, thicker for stronger, labelled with their timeframes, and says how much history they were
+  built on.
 - Multi-instrument demo, step 0 (interfaces frozen for lanes L1-L4): `goldbot/instruments.py` (`InstrumentSpec`, `Instruments`, `load_instruments`, `LEVERAGE_BY_CLASS`) and `config/instruments.yaml` (XAUUSD at magic_block 0 plus 19 IC Markets and 7 Vantage instruments, unique magic_blocks 1-26, every non-gold entry `enabled: false` with placeholder terms marked `verify: true` for the L1 symbol check). Broker protocol: `positions(magic_prefix, symbol=None)` (None = the adapter's own symbol, as before; the bridge wire call is unchanged when None), `ticks_many(symbols, since)` (paper: last quote per symbol; MT5 and the bridge client raise NotImplementedError until L4), `SymbolInfo.currency_profit` / `swap_rollover3days` (default None, nothing reads them). Bridge API_VERSION 9 -> 10 (MIN_COMPATIBLE stays 5; either box can be deployed first). Nothing reads the registry yet: XAUUSD paths unchanged (`tests/test_instruments.py`).
 - POS-1 confirm set (quant re-review of PR #291, C-1; W3 addendum ruling 17). `scripts/position_screen.py --write-confirm-set <file> --from-explore <explore.json> --frozen-prereg docs/research/pos1/prereg.md [--ensemble ID]` builds the set; commit the file before any CONFIRM read.
   - **What is in the set.** The ids whose status cell is exactly "confirm-eligible" and that passed every explore check on a DTB3-financed run, plus the named eligible ensembles.

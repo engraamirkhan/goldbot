@@ -54,6 +54,98 @@
     "title": "AccountChoice",
     "type": "object"
    },
+   "AccountKeyLevels": {
+    "properties": {
+     "above": {
+      "items": {
+       "$ref": "#/components/schemas/KeyLevelZone"
+      },
+      "title": "Above",
+      "type": "array"
+     },
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "atr_1d": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atr 1D"
+     },
+     "below": {
+      "items": {
+       "$ref": "#/components/schemas/KeyLevelZone"
+      },
+      "title": "Below",
+      "type": "array"
+     },
+     "history_days": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "History Days"
+     },
+     "pct_ready": {
+      "default": false,
+      "title": "Pct Ready",
+      "type": "boolean"
+     },
+     "price": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price"
+     },
+     "stale": {
+      "default": false,
+      "title": "Stale",
+      "type": "boolean"
+     },
+     "zones_total": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Zones Total"
+     }
+    },
+    "required": [
+     "account_id",
+     "as_of",
+     "price",
+     "atr_1d",
+     "history_days",
+     "above",
+     "below"
+    ],
+    "title": "AccountKeyLevels",
+    "type": "object"
+   },
    "AccountSummary": {
     "properties": {
      "account_class": {
@@ -3822,6 +3914,138 @@
      "heartbeat_age_s"
     ],
     "title": "JobRow",
+    "type": "object"
+   },
+   "KeyLevelZone": {
+    "properties": {
+     "flipped": {
+      "title": "Flipped",
+      "type": "boolean"
+     },
+     "hi": {
+      "title": "Hi",
+      "type": "number"
+     },
+     "lo": {
+      "title": "Lo",
+      "type": "number"
+     },
+     "price": {
+      "title": "Price",
+      "type": "number"
+     },
+     "role": {
+      "enum": [
+       "support",
+       "resistance",
+       "inside"
+      ],
+      "title": "Role",
+      "type": "string"
+     },
+     "strength": {
+      "title": "Strength",
+      "type": "number"
+     },
+     "strength_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strength Pct"
+     },
+     "tfs": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Tfs",
+      "type": "array"
+     },
+     "touches": {
+      "title": "Touches",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "price",
+     "lo",
+     "hi",
+     "strength",
+     "strength_pct",
+     "tfs",
+     "touches",
+     "role",
+     "flipped"
+    ],
+    "title": "KeyLevelZone",
+    "type": "object"
+   },
+   "KeyLevelsView": {
+    "description": "`bars` (bid, USD/oz): the last N_BARS bars of `timeframe` of `account_id` (its broker's minutes, else the\nreference feed; empty when none are stored); `accounts`: every engine that published zones.",
+    "properties": {
+     "account_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account Id"
+     },
+     "accounts": {
+      "items": {
+       "$ref": "#/components/schemas/AccountKeyLevels"
+      },
+      "title": "Accounts",
+      "type": "array"
+     },
+     "bars": {
+      "items": {
+       "$ref": "#/components/schemas/ChartBar"
+      },
+      "title": "Bars",
+      "type": "array"
+     },
+     "feed": {
+      "anyOf": [
+       {
+        "enum": [
+         "broker",
+         "reference"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Feed"
+     },
+     "timeframe": {
+      "enum": [
+       "15m",
+       "1h",
+       "4h",
+       "1d"
+      ],
+      "title": "Timeframe",
+      "type": "string"
+     }
+    },
+    "required": [
+     "timeframe",
+     "account_id",
+     "feed",
+     "bars",
+     "accounts"
+    ],
+    "title": "KeyLevelsView",
     "type": "object"
    },
    "KindDay": {
@@ -12402,6 +12626,73 @@
      }
     ],
     "summary": "Jobs"
+   }
+  },
+  "/api/key-levels": {
+   "get": {
+    "operationId": "key_levels_api_key_levels_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "tf",
+      "required": false,
+      "schema": {
+       "default": "1h",
+       "enum": [
+        "15m",
+        "1h",
+        "4h",
+        "1d"
+       ],
+       "title": "Tf",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "account",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Account"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/KeyLevelsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Key Levels"
    }
   },
   "/api/limits": {
