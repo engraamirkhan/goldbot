@@ -43,7 +43,7 @@ T0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
 
 # ---------------------------------------------------------------------------------------------- protocol
 def test_v10_serves_ticks_many_read_only_and_optional_so_a_v9_bridge_stays_compatible():
-    assert API_VERSION == 10 and MIN_COMPATIBLE == 5
+    assert API_VERSION >= 10 and MIN_COMPATIBLE == 5            # v11 added SymbolInfo currencies only
     assert METHODS["ticks_many"] == ("dict[str,list[Tick]]", True)
     assert "ticks_many" in OPTIONAL_METHODS and "ticks_many" not in REQUIRED_METHODS
     assert "ticks_many" not in OBSERVE_METHODS            # an observed (live, XAUUSD-only) account never batches
