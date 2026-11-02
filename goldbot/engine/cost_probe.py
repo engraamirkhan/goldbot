@@ -872,8 +872,10 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
     side, price = intent.side, intent.price
-    gd = eng.gate.check(intent, eng.state, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
-                        throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
+    from goldbot.engine import books
+    # the serial gate: on a multi-instrument account an allowed entry is booked on the shared state (engine/books.py)
+    gd = books.check(eng, intent, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
+                     throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
     # the minimum lot, or a growth arm's allowed lot (`exploration.growth_lots`, growth sprint 2026-11-01): every
     # other caller passes no `max_lots` and keeps the minimum-lot rule exactly
     if not gd.allowed or gd.lots > (intent.volume_min if max_lots is None else max_lots) + 1e-9:

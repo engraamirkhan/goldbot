@@ -183,3 +183,25 @@ def test_account_pass_runs_every_book_serially_gold_first(tmp_path):
     assert books.account_pass(eng, eng.broker, one)
     assert seen == [("XAUUSD", "XAUUSD"), ("XAGUSD", "XAGUSD"), ("XTIUSD", "XTIUSD")]
     assert eng.book is eng.primary
+
+
+def test_an_allowed_entry_is_booked_on_the_shared_state_before_the_next_symbol_is_checked(tmp_path):
+    """L2's serial gate: `books.check` books every allowed decision (RiskGate.book) on a multi-symbol account only, so a
+    second symbol on the same bar sees the first one's risk; gold alone calls gate.check exactly as before."""
+    from types import SimpleNamespace
+
+    eng = _engine(tmp_path, MultiPaper(equity=10_000))
+    assert eng.gate.limits.multi_symbol
+    booked: list[Any] = []
+    allowed = SimpleNamespace(allowed=True)
+    eng.gate.check = lambda *a, **k: allowed                         # type: ignore[method-assign]
+    eng.gate.book = lambda st, intent, d: booked.append((intent, d))   # type: ignore[method-assign]
+    assert books.check(eng, "intent", T0) is allowed and booked == [("intent", allowed)]
+
+    gold = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path / "g")),
+                  MultiPaper(), [], {})
+    assert not gold.gate.limits.multi_symbol
+    gold.gate.check = lambda *a, **k: allowed                        # type: ignore[method-assign]
+    gold.gate.book = lambda *a: booked.append(a)                     # type: ignore[method-assign]
+    books.check(gold, "intent", T0)
+    assert len(booked) == 1

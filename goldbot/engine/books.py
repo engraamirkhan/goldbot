@@ -44,12 +44,14 @@ from goldbot.engine import magic
 from goldbot.engine.exploration import ExplorationConfig
 from goldbot.engine.instruments_db import InstrumentsDb, InstrumentsDbError, InstrumentTerms, terms_from_info
 from goldbot.engine.store import JsonEngineStore, OrdersSnapshot, RiskSnapshot
+from goldbot.instruments import InstrumentSpec
 
 if TYPE_CHECKING:
-
     from goldbot.engine.runner import Engine, EngineConfig
     from goldbot.execution.broker import Tick
     from goldbot.labels.triple_barrier import SwapSpec
+    from goldbot.risk import Intent
+    from goldbot.risk.gate import GateDecision
 
 log = logging.getLogger("goldbot.engine")
 
@@ -98,6 +100,9 @@ class BookSpec(FrozenRecord):
     point: float
     contract_size: float
     exploration_config: ExplorationConfig | None = None
+    # the registry entry (correlation group, leverage class, P&L currency, session profile, news currencies); None only
+    # in unit tests, where the book keeps gold's rules
+    instrument: InstrumentSpec | None = None
 
 
 class BookAttr(Generic[T]):
@@ -183,7 +188,15 @@ def book_cfg(cfg: EngineConfig, spec: BookSpec) -> EngineConfig:
         "magic_base": magic.book_base(cfg.magic_base, spec.magic_block),
         "point": spec.point, "price_digits": spec.digits, "contract_size": spec.contract_size,
         "exploration_config": spec.exploration_config, "cost_probe": False, "shadow_host": False,
-        "broker_bars": False, "always_open": False, "pauses": (), "weekend_window": None, "instruments": ()})
+        "broker_bars": False, "always_open": False, "pauses": (), "weekend_window": None, "instruments": (),
+        **({"weekend_cut": _friday_cut(spec.instrument, cfg.server_tz)} if spec.instrument is not None else {})})
+
+
+def _friday_cut(spec: InstrumentSpec, server_tz: str) -> str:
+    """The instrument's Friday cut (its session profile's `friday_cut`, server time) for the engine's weekend rule."""
+    from goldbot.data.calendar import session_profile
+    cut = session_profile(spec.session_profile, server_tz).friday_cut
+    return f"{cut.hour:02d}:{cut.minute:02d}"
 
 
 def book_dir(state_dir: str | Path, account_id: str) -> Path:
@@ -234,6 +247,9 @@ def open_books(eng: Engine, specs: tuple[BookSpec, ...]) -> None:
         eng.books[bcfg.symbol] = book
         with using(eng, book):
             eng._init_book()
+            if spec.instrument is not None:    # its hours until the run loop reads the broker's (plan: per asset class)
+                from goldbot.data.calendar import session_profile
+                eng.sessions = session_profile(spec.instrument.session_profile, bcfg.server_tz)
             eng.agents, eng.models, eng.live_shares, eng.live_versions = {}, {}, {}, {}
             eng.shadow, eng.shadow_models, eng.probe = None, {}, None
             eng.state_store = BookStore(eng.primary.__dict__["state_store"], bcfg.state_dir, bcfg.account_id,
@@ -241,6 +257,9 @@ def open_books(eng: Engine, specs: tuple[BookSpec, ...]) -> None:
             eng.exploration = exploration.Exploration.start(eng)
             eng._kill_pending = eng._kill_everything
             eng._load_orders()
+    # L2 (risk): a multi-symbol account's daily limit holds across symbols (RiskGate `multi_symbol`); the services
+    # set it in the policy's defaults too, so a limits refresh keeps it
+    eng.gate.limits = eng.gate.limits.model_copy(update={"multi_symbol": True})
     on_decision = eng._on_decision                  # proposals are the primary's: applied on its book (its symbol)
 
     def on_primary(p: Any) -> None:
@@ -340,64 +359,112 @@ def swap_spec(eng: Engine) -> SwapSpec | None:
                     contract_oz=t.contract_size)
 
 
-# ------------------------------------------------------------------ account-wide exposure and refusals
-def after_refresh(eng: Engine, tick: Tick) -> None:
-    """`Engine._refresh_account`'s multi-book step (no-op with gold alone): the active non-gold book's terms (a
-    problem refuses its entries: `dq_error`), then the account's exposure over every book (`account_exposure`)."""
+# ------------------------------------------------------------------ the serial gate and the instrument's rules
+def check(eng: Engine, intent: Intent, now: pd.Timestamp, **kw: Any) -> GateDecision:
+    """`RiskGate.check` on the shared account state; on a multi-instrument account an allowed entry is booked at once
+    (`RiskGate.book`, plan: "a serial gate so per-account loss limits cover all symbols"), so the next symbol's check
+    on the same bar sees it before the next refresh reads the broker. Gold alone: exactly `gate.check`."""
+    gd = eng.gate.check(intent, eng.state, now, **kw)
+    if multi(eng) and gd.allowed:
+        eng.gate.book(eng.state, intent, gd)
+    return gd
+
+
+def intent_extra(eng: Engine, terms: dict[str, Any]) -> dict[str, Any]:
+    """The Intent fields of the active non-gold book's instrument (`gate.intent_terms`) and its account currency per
+    unit of P&L currency (`acct_per_profit`: the broker's conversion `_sizing_terms` read as `acct_per_usd`, which for
+    a non-USD quote is per unit of that quote). Gold: {} (the Intent defaults are gold's)."""
+    from goldbot.risk.gate import intent_terms
+    book: SymbolBook = eng.__dict__["book"]
+    spec = book.spec.instrument if book.spec is not None else None
+    if book.primary or spec is None:
+        return {}
+    return {**intent_terms(spec), "acct_per_profit": terms.get("acct_per_usd")}
+
+
+def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
+    """`Engine._refresh_account`'s multi-book step (no-op with gold alone), after the engine's own rules ran on the
+    active book: a non-gold book's terms (a problem refuses its entries: `dq_error`), its instrument's news blackout
+    (`instrument_blackout`: its currencies and its group's commodity reports; an unscheduled shock still counts) and
+    its Friday cut (`windows.weekend_cut` on its session profile); then the account's exposure over every book."""
     if not multi(eng):
         return
     book: SymbolBook = eng.__dict__["book"]
+    st = eng.state
     if not book.primary:
         refresh_terms(eng, tick.ts_utc)
         if book.terms_problem is not None:
-            eng.state.dq_error = True
+            st.dq_error = True
+        spec = book.spec.instrument if book.spec is not None else None
+        if spec is not None:
+            from goldbot.data.news import instrument_blackout
+            from goldbot.risk.windows import weekend_cut
+            cfg = eng.cfg
+            if cfg.news_blackout:
+                ev = eng._calendar[1] if eng.store is not None else None
+                shock = eng._blackout_event is not None and eng._blackout_event.get("kind") == "news_shock"
+                hit = instrument_blackout(ev, tick.ts_utc, spec.news_currencies, cfg.blackout_before_min,
+                                          cfg.blackout_after_min, group=spec.correlation_group)
+                st.in_blackout = shock or hit is not None
+            try:
+                st.weekend = st.weekend or weekend_cut(eng.sessions, now)
+            except Exception as exc:          # a table that cannot say: closed for entries (fail closed)
+                log.warning("%s: Friday cut unknown (%s); entries refused", cfg.symbol, type(exc).__name__)
+                st.weekend = True
     account_exposure(eng, tick.ts_utc)
 
 
 def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
-    """Every position on every book's symbol counts: open positions, lots and sides, the open risk at the stops
-    (account currency) and the notional (USD). One `account_positions()` read. A position whose book has no quote,
-    no contract or no conversion makes the open risk and the notional unknown: the risk None (RiskGate refuses while
-    the heat cap or the projection is on) and the entries refused (`dq_error`). An unreadable book is the same."""
-    from goldbot.risk import open_risk
+    """Every position on every book's symbol counts (plan: account-wide heat), from one `account_positions()` read,
+    each valued on its own book's quote, contract and the broker's conversion (`open_risk.SymbolQuote`): the open risk
+    at the stops (`account_open_risk`), the notional per correlation group and the gold lots (`group_exposure`), and
+    the other accounts' groups (`supervisor.others_group_notional`). Anything the engine cannot value makes the figure
+    unknown: open risk None (RiskGate refuses while the heat cap or the projection is on) and `exposure_unknown`
+    (every entry refused). Exits never read them."""
+    from goldbot.risk.open_risk import SymbolQuote, account_open_risk, group_exposure
     st = eng.state
     books = {b.__dict__["cfg"].symbol: b for b in eng.books.values()}
     try:
         held = [p for p in eng.broker.account_positions() if p.symbol in books]
     except Exception as exc:
         log.warning("account positions unreadable (%s): exposure unknown, entries refused", type(exc).__name__)
-        st.open_risk, st.dq_error = None, True
+        st.open_risk, st.exposure_unknown = None, True
         return
+    quotes: dict[str, SymbolQuote] = {}
+    for sym, b in books.items():
+        tick, contract = b.__dict__.get("_last_tick"), b.__dict__.get("_contract")
+        if tick is None or contract is None or not any(p.symbol == sym for p in held):
+            continue
+        fx = _profit_fx(eng, b, 1, tick.ask, contract, now)
+        group = b.spec.instrument.correlation_group if b.spec is not None and b.spec.instrument is not None else "gold"
+        quotes[sym] = SymbolQuote(bid=tick.bid, ask=tick.ask, contract=contract, fx=fx, group=group)
     st.open_positions = len(held)
-    st.open_lots = round(sum(p.lots for p in held), 6)
     st.open_long = sum(1 for p in held if p.side > 0)
     st.open_short = sum(1 for p in held if p.side < 0)
-    usd = _usd_fx(eng, now)
-    total: float | None = 0.0
-    notional: float | None = 0.0
-    rows: list[dict[str, Any]] = []
-    for p in held:
-        b = books[p.symbol]
-        tick, contract = b.__dict__.get("_last_tick"), b.__dict__.get("_contract")
-        risk: float | None = None
-        n: float | None = None
-        if tick is not None and contract is not None:
-            px = tick.bid if p.side > 0 else tick.ask
-            fx = _profit_fx(eng, b, p.side, px, contract, now)
-            risk = open_risk.remaining_stop_risk(side=p.side, lots=p.lots, sl=p.sl, bid=tick.bid, ask=tick.ask,
-                                                 contract=contract, fx=fx)
-            mid = (tick.bid + tick.ask) / 2
-            n = None if fx is None or usd is None else p.lots * contract * mid * fx / usd
-        rows.append({"position_id": p.position_id, "symbol": p.symbol, "side": p.side, "lots": p.lots, "sl": p.sl,
-                     "risk": round(risk, 2) if risk is not None else None})
-        total = None if total is None or risk is None else total + risk
-        notional = None if notional is None or n is None else notional + n
-    st.open_risk = total
-    eng._open_risk_rows = rows
-    if notional is None:
-        st.dq_error = True                # a notional the combined caps cannot count: no entry anywhere
-    else:
-        st.open_notional = notional
+    st.open_risk, eng._open_risk_rows = account_open_risk(held, quotes)
+    groups, gold_lots = group_exposure(held, quotes)
+    others = _others(eng)
+    st.exposure_unknown = groups is None or others is None
+    if groups is not None:
+        st.group_notional, st.open_lots = groups, round(gold_lots, 6)
+        usd = _usd_fx(eng, now)
+        if usd is not None:
+            st.open_notional = sum(groups.values()) / usd       # USD, the published single-figure view
+    if others is not None:
+        st.other_group_notional = others
+
+
+def _others(eng: Engine) -> dict[str, float] | None:
+    """The other real accounts' notional per group in this account's currency ({} without halt checks: tests)."""
+    if not eng.cfg.halt_checks:
+        return {}
+    from goldbot.risk.supervisor import Supervisor, others_group_notional
+    try:
+        return others_group_notional(Supervisor.read_state(eng.cfg.state_dir), eng.cfg.account_id,
+                                     currency=eng._account_currency(), acct_per_usd=_usd_fx(eng, pd.Timestamp.now("UTC")))
+    except Exception as exc:
+        log.warning("other accounts' group notional unreadable (%s): exposure unknown", type(exc).__name__)
+        return None
 
 
 def _profit_fx(eng: Engine, b: SymbolBook, side: int, px: float, contract: float, now: pd.Timestamp) -> float | None:
@@ -434,7 +501,8 @@ def _usd_fx(eng: Engine, now: pd.Timestamp) -> float | None:
 
 
 def published(eng: Engine) -> dict[str, Any]:
-    """`books` in engine_<account>.json (multi-book only): each instrument's own view, for health and the dashboard."""
+    """Multi-book only: `books`, each instrument's own view (health, the dashboard), and the account's `group_notional`
+    (account currency; the supervisor's per-group combined caps, goldbot/risk/supervisor.py)."""
     if not multi(eng):
         return {}
     out: dict[str, Any] = {}
@@ -447,5 +515,7 @@ def published(eng: Engine) -> dict[str, Any]:
                     "open": sorted(d.get("open", {})), "closes_due": sorted(d.get("_close_due", {})),
                     "foreign_positions": d.get("_foreign", []), "terms_problem": b.terms_problem,
                     **{k: s.get(k) for k in ("spread_points", "last_tick_age_s", "market_closed", "stale_bars",
-                                             "dq_error")}}
-    return {"books": out}
+                                             "dq_error", "in_blackout", "weekend")}}
+    st = eng.state
+    return {"books": out, "exposure_unknown": st.exposure_unknown,
+            **({"group_notional": dict(st.group_notional)} if st.group_notional is not None else {})}

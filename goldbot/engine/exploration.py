@@ -1696,6 +1696,7 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
     `stop_usd`, the target its R multiple. No p is invented: 0.5, the gate skips only the edge rules for this purpose.
     A growth arm's `volume_max` (`growth_lots`) lets the gate size it above the minimum lot. None when the gate's
     Intent does not take it (fail closed)."""
+    from goldbot.engine import books
     from goldbot.risk import Intent
     try:
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
@@ -1705,7 +1706,8 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
                       hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,
-                      **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")})
+                      **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")},
+                      **books.intent_extra(eng, terms))   # a non-gold book: its group, class, P&L currency (L2)
     except ValidationError as exc:
         log.warning("exploration intent refused by its schema (%s)", exc.error_count())
         return None

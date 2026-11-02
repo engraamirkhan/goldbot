@@ -1175,7 +1175,7 @@ class Engine:
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult, price=price, timeframe=tf, family=agent.family, model_version=self.live_versions.get(agent.agent_id),
                             swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts), **terms)
-            gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
+            gd = books.check(self, intent, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
                                  throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
             self._note_refusal(agent.agent_id, gd, close_ts)
             if not gd.allowed:
@@ -1266,7 +1266,7 @@ class Engine:
                                                                         intent.stop_atr * intent.atr_usd),
                                                    "price": now_px,
                                                    "swap_usd_per_oz": swap})
-                gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
+                gd = books.check(self, intent, tick.ts_utc,  # re-check at approval time
                                      margin_required=broker_margin(self.broker, self.cfg.symbol),
                                      throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
                                                                    tick.ts_utc))
@@ -1970,7 +1970,6 @@ class Engine:
         else:
             seen = pd.Timestamp(self.bars_1m["visible_at"].iloc[-1])
             st.stale_bars = abs((now - seen).total_seconds()) > tf_seconds(self.cfg.decision_tf)
-        books.after_refresh(self, tick)         # more than one book: its terms, the account's exposure
         self.clock_probe = self._probe_clock(tick, now, sessions)
         st.clock_mismatch = self.clock_probe.status == "mismatch"
         st.market_closed = closed
@@ -1996,6 +1995,7 @@ class Engine:
         st.account_class = "raw" if self.cfg.mode == "paper" else self._account_class()
         st.drift_halt = bool(self._drift().get("system_halt"))
         self._server_clock(now, tick)
+        books.after_refresh(self, tick, now)    # more than one book: its terms and rules, the account's exposure
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         self.cfg.approval_mode = auto_entry.lock(self, owner_mode or self._account_approval, acc)   # ADR 0036 lock
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
