@@ -1,0 +1,2921 @@
+meta:
+  lane: owndata
+  written: '2026-11-02'
+  author: performance-analyst (principal)
+  count: 110
+  k_note: 'Every candidate is data-mined: K for this lane''s mining = 2,106 slice reads + the 101 sprint-200 rule re-reads + 5 demo families;
+    charge K+1 per candidate when pre-registered'
+  windows_read: explore 2010-01-01..2017-12-31 per-trade outputs of sprint-200 trend/patterns/time (re-read), published explore aggregates, brain
+    demo ledger 2026-10-19..11-02. No confirm or holdout row was opened by this lane.
+  retest_rule: 'Each candidate needs a fresh pre-registration with a new id. Clean test order: TEST-OLD 2006-02..2009 (never read by any rule
+    here; data not yet local) then CONFIRM 2018-01..2025-09 once. Candidates flagged ''confirm already read'' or ''contaminated'' get TEST-OLD
+    + forward demo only.'
+candidates:
+- id: RT-OWNDATA-001
+  name: Equal-risk book of all 33 sprint-200 trend rules (no selection)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md, all 33 rows as frozen)'
+  evidence_grade: own-data
+  mechanism: 'Diversified time-series momentum: many weakly correlated trend triggers average out trigger noise while sharing the gross trend
+    premium (Moskowitz-Ooi-Pedersen 2012 JFE; Hurst-Ooi-Pedersen 2017)'
+  tf: mixed 15m-4h
+  rule:
+    entry: each S200-TREND-01..33 rule exactly as frozen in trend-prereg.md section 3
+    side: signal
+    stop: per rule
+    exit: per rule
+    hold: per rule; book = equal 1R per rule, one position per rule
+  sprint3000_vocab: 'maps per rule (most rows map to donchian_break/keltner_break/bb_break/adx_onset/macd_turn/ma_cross); session-TSMOM and SGE
+    rows need primitive: clock-anchored return'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    rules: 33
+    weeks: 417
+    gross_book_t_weekly: 4.3
+    gross_years_pos: 8/8
+    net_usd_cost_t_weekly: -0.49
+    net_usd_years_pos: 2/8
+    net_bps_cost_t_weekly: 2.71
+    net_bps_years_pos: 7/8
+    real_minus_leakfree_twin_t_weekly: 3.62
+    mean_pairwise_weekly_corr: 0.13 (13-rule subset)
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'pre-registered set, not selected on outcome: the least data-mined candidate here'
+  - verdict depends on the cost convention (dollar cor vs W2 bps)
+  - contains S200-TREND-03 whose confirm was already read
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 15%
+- id: RT-OWNDATA-002
+  name: Equal-risk book of the 13 gross-positive trend rules
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-results.md rows 01,03,04,10,15,16,19,20,21,24,27,28,31)'
+  evidence_grade: own-data
+  mechanism: diversified time-series momentum over weakly correlated 1h-4h trend triggers (Moskowitz-Ooi-Pedersen 2012 JFE); this subset keeps
+    rules with explore gross t >= 1.6
+  tf: 1h-4h
+  rule:
+    entry: rows 01,03,04,10,15,16,19,20,21,24,27,28,31 as frozen
+    side: signal
+    stop: per rule
+    exit: per rule
+    hold: per rule; equal 1R per rule
+  sprint3000_vocab: 'maps per rule (donchian_break, bb_break+compression, adx_onset, macd_turn, ma_cross, ema_pullback, rsi_threshold); rows 10,
+    16, 19, 20, 21 need primitive: clock anchors / daily-range trigger / shock bar'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    rules: 13
+    gross_t_weekly: 6.21
+    net_usd_t_weekly: 2.0
+    net_usd_years_pos: 6/8
+    net_usd_no_swap_t_weekly: 3.39
+    net_bps_t_weekly: 4.82
+    net_bps_years_pos: 8/8
+    real_minus_twin_t_weekly: 5.45
+    net_usd_by_year_R:
+      2010: -0.3
+      2011: 13.8
+      2012: 2.0
+      2013: 10.5
+      2014: 4.3
+      2015: -4.9
+      2016: 0.4
+      2017: 2.0
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected on explore gross: in-sample selection inflates t'
+  - 2011 and 2013 carry most of the net
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 15%
+- id: RT-OWNDATA-003
+  name: 13-rule trend book on a swap-free instrument
+  source: own data (as RT-OWNDATA-002, swap removed)
+  evidence_grade: own-data
+  mechanism: the trend premium needs overnight holds; the CFD long swap (-$0.60/oz/night) is about half the cost
+  tf: 1h-4h
+  rule:
+    entry: as RT-OWNDATA-002
+    side: signal
+    stop: per rule
+    exit: per rule
+    hold: per rule
+  sprint3000_vocab: maps per rule as RT-OWNDATA-002; the venue is not a vocabulary item
+  data_needed: available locally; the venue (futures/ETF/swap-free CFD) is an OWNER decision (spending, instruments)
+  evidence:
+    window: 2010-2017 explore
+    net_usd_no_swap_t_weekly: 3.39
+    years_pos: 7/8
+    sharpe_weekly_ann: 1.2
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'owner-only: instrument/venue'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 15%
+- id: RT-OWNDATA-004
+  name: 13-rule trend book, long side only, swap-free
+  source: own data (as RT-OWNDATA-002, longs only, swap removed)
+  evidence_grade: own-data
+  mechanism: long trend premium in gold is positive gross even through the 2011-2015 bear
+  tf: 1h-4h
+  rule:
+    entry: as RT-OWNDATA-002, long signals only
+    side: long_only
+    stop: per rule
+    exit: per rule
+    hold: per rule
+  sprint3000_vocab: maps per rule as RT-OWNDATA-002 with side long_only
+  data_needed: as RT-OWNDATA-003 (owner venue decision)
+  evidence:
+    window: 2010-2017 explore
+    gross_t_weekly: 4.52
+    gross_years_pos: 7/8
+    net_usd_no_swap_t_weekly: 2.52
+    net_usd_with_swap_t_weekly: 0.55
+    net_bps_t_weekly: 3.26
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'owner-only: instrument/venue'
+  - '2018-2025 is a bull market: long-only will look good there for the wrong reason; drift control mandatory'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-005
+  name: 13-rule trend book, short side only (CFD shorts pay no swap)
+  source: own data (as RT-OWNDATA-002, shorts only)
+  evidence_grade: own-data
+  mechanism: 'swap asymmetry: shorts carry no financing cost on the ICM CFD'
+  tf: 1h-4h
+  rule:
+    entry: as RT-OWNDATA-002, short signals only
+    side: short_only
+    stop: per rule
+    exit: per rule
+    hold: per rule
+  sprint3000_vocab: maps per rule as RT-OWNDATA-002 with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    gross_t_weekly: 3.61
+    net_usd_t_weekly: 2.0
+    net_usd_years_pos: 4/8
+    net_bps_t_weekly: 3.08
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2010-2017 contains the 2011-2015 bear: short-side profit is regime, not signal, until shown otherwise'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-006
+  name: '18-rule book: 13 trend rules + 5 trend-filtered 1h candle rules (CH3 exits)'
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/patterns rows 01,06,11,15,19)'
+  evidence_grade: own-data
+  mechanism: candle triggers inside a trend filter are another noisy entry into the same premium; diversification over triggers
+  tf: 1h-4h
+  rule:
+    entry: RT-OWNDATA-002 rules + S200-PATTERNS-01/06/11/15/19 as frozen
+    side: signal
+    stop: per rule
+    exit: per rule
+    hold: per rule
+  sprint3000_vocab: 'patterns need primitive: candle patterns (ENG, PIN, IBB, OB, R3)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    gross_t_weekly: 4.95
+    net_usd_t_weekly: 1.65
+    net_bps_t_weekly: 3.86
+    net_bps_years_pos: 8/8
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-007
+  name: Trend book with the H-80 runner exit on every member
+  source: 'own data: exits-adaptive-targets-2026-10-26.md (H-80 discovery) + RT-OWNDATA-001'
+  evidence_grade: own-data
+  mechanism: trailing exits pay under serial correlation (Kaminski-Lo 2014); the only exit with a measured gain
+  tf: 1h-4h
+  rule:
+    entry: RT-OWNDATA-001 entries
+    side: signal
+    stop: per rule initial stop
+    exit: break-even at +1R, then 2.5 ATR_tf chandelier armed at +1R, no fixed target
+    hold: per rule cap
+  sprint3000_vocab: 'maps: chandelier(14,2.5) exit; needs primitive: break-even arm'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    runner_minus_fixed2R_R: 0.039
+    t: 2.4
+    years_pos: 8/8 gross
+    note: measured on box-break entries, carried by 30m (+0.085, t 2.8)
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-008
+  name: Time-structure pre-specified 4-stream book (E1, V1, O1, TS)
+  source: 'own data: time-structure-2026-10-26.md section 2.5 (slice H)'
+  evidence_grade: own-data
+  mechanism: 12 time-structure streams have mean pairwise rho -0.000; equal-risk book beats its average member
+  tf: 15m-1h
+  rule:
+    entry: streams E1, V1, O1, TS as defined in time-structure/combinations.md
+    side: signal
+    stop: per stream
+    exit: per stream
+    hold: per stream
+  sprint3000_vocab: 'needs primitive: the slice-H stream definitions'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    gross_sharpe: 0.82
+    null_p95: 0.52
+    sharpe_at_measured_cost: 0.37
+    note: negative at the research cost prior
+  flags:
+  - slice H used $0.75/oz, not the audit's $1.07
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-009
+  name: S200-TREND-03 H1-DON48-D1 re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 03)'
+  evidence_grade: own-data
+  mechanism: 'two-day channel breaks aligned with the daily trend: trend persistence'
+  tf: 1h
+  rule:
+    entry: fresh 1h close beyond Channel(48), long only in D1UP / short only in D1DN
+    side: signal
+    stop: 2 ATR(1h,14)
+    exit: 3 ATR(1h,14) chandelier
+    hold: 48 bars
+  sprint3000_vocab: donchian_break(48) + trend(1d,50); D1 slope condition needs primitive
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 449
+    gross: 0.316
+    gross_t: 4.08
+    net_usd: 0.206
+    t: 2.68
+    net_bps: 0.279
+    t_day_bps: 3.69
+    ctrl_excess: 0.115
+    years_pos_bps: 8/8
+    short: 0.278
+    long: 0.142
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'CONFIRM ALREADY READ (failed at dollar cost): only TEST-OLD 2006-2009 is a clean test left'
+  - do not re-confirm on 2018-2025
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-010
+  name: S200-TREND-04 H1-DON24-ATRX re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 04)'
+  evidence_grade: own-data
+  mechanism: a breakout on range expansion carries informed order flow
+  tf: 1h
+  rule:
+    entry: fresh 1h close beyond Channel(24) AND bar TR >= 1.5 x ATR(1h,20) of the 20 prior bars
+    side: signal
+    stop: 1.5 ATR(1h,14)
+    exit: 2.5 ATR(1h,14) chandelier
+    hold: 24 bars
+  sprint3000_vocab: 'donchian_break(24) with atr_expansion(20,1.5) as a second entry condition: needs primitive: entry AND'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 1395
+    gross: 0.162
+    gross_t: 3.87
+    net_usd: 0.042
+    t: 1.01
+    net_bps: 0.123
+    t_day_bps: 2.93
+    ctrl_excess: 0.105
+    years_pos_bps: 7/8
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 15%
+- id: RT-OWNDATA-011
+  name: S200-TREND-16 NR4ID-1H re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 16)'
+  evidence_grade: own-data
+  mechanism: compression precedes expansion; wide structural stop makes cost only 0.02R
+  tf: 1h
+  rule:
+    entry: completed day d is NR4 or inside; on day d+1 first 1h close (Asia open+1h..NY 15:00) beyond day-d range
+    side: signal
+    stop: opposite side of day-d range (skip if outside 0.3-2.5 ATRd)
+    exit: flat 16:30 NY
+    hold: intraday
+  sprint3000_vocab: 'nr_breakout(4) on 1d with a 1h trigger: needs primitive: daily-range break traded intraday'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 554
+    gross: 0.081
+    gross_t: 2.46
+    net_usd: 0.059
+    t: 1.8
+    net_bps: 0.073
+    t_day_bps: 2.24
+    ctrl_excess: 0.031
+    years_pos: 7/8
+    cost_R: 0.022
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 15%
+- id: RT-OWNDATA-012
+  name: S200-TREND-24 MTF-EMA-1H re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 24)'
+  evidence_grade: own-data
+  mechanism: three-timeframe agreement
+  tf: 1h
+  rule:
+    entry: 1h EMA9 crosses EMA21 with D1UP and last 4h close > EMA50(4h) (mirror)
+    side: signal
+    stop: 1.5 ATR(1h,14)
+    exit: target 3R
+    hold: 24 bars
+  sprint3000_vocab: 'ma_cross(9,21,ema) + trend(1d,50) + trend(4h,50): maps'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 491
+    gross: 0.201
+    gross_t: 2.65
+    net_usd: 0.085
+    t: 1.11
+    net_bps: 0.163
+    t_day_bps: 2.13
+    ctrl_excess: 0.071
+    long_gross: 0.332
+    long_gross_t: 3.02
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-013
+  name: S200-TREND-20 ITS-AL2NY re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 20)'
+  evidence_grade: own-data
+  mechanism: session time-series momentum (Gao-Han-Li-Zhou 2018 JFE, adjacent asset); wide stop, no swap
+  tf: 1m decision
+  rule:
+    entry: 'at NY open: ret = mid(NY open) - mid(Asia open); trade sign(ret) if abs(ret) >= 0.5 ATR(1d,20)'
+    side: signal
+    stop: 0.5 ATR(1d,20)
+    exit: flat 16:30 NY
+    hold: intraday (no swap)
+  sprint3000_vocab: 'needs primitive: session TSMOM (return since a session anchor)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 411
+    gross: 0.124
+    gross_t: 2.27
+    net_usd: 0.092
+    t: 1.66
+    net_bps: 0.113
+    t_day_bps: 2.07
+    ctrl_excess: 0.059
+    cost_R: 0.033
+    short: 0.173
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-014
+  name: S200-TREND-31 PB-4H-EMA20 re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 31)'
+  evidence_grade: own-data
+  mechanism: shallow pullback inside a 4h trend
+  tf: 4h
+  rule:
+    entry: 4h close > EMA50(4h), EMA20 > EMA50, low <= EMA20(4h) < close (mirror)
+    side: signal
+    stop: 1.5 ATR(4h,14)
+    exit: target 2R
+    hold: 18 bars
+  sprint3000_vocab: 'ema_pullback(20, 0) + trend(4h,50): needs primitive: EMA20>EMA50 condition'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 607
+    gross: 0.145
+    gross_t: 2.69
+    net_usd: 0.044
+    t: 0.83
+    net_bps: 0.112
+    t_day_bps: 2.06
+    ctrl_excess: 0.006
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'beats its twin by only +0.006R: entry timing adds ~nothing over a random same-side entry'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-015
+  name: S200-TIME-02 10:00 NY burst continuation re-test under W2
+  source: 'own data: sprint-200 time lane (branch research/sprint200-time, time-prereg row 02)'
+  evidence_grade: own-data
+  mechanism: the 10:00 NY data slot (ISM, confidence) moves price; the first half hour carries into the early afternoon
+  tf: 1m clock
+  rule:
+    entry: T = 10:30 NY; r = mid(10:30)-mid(10:00 NY); trade sign(r) if abs(r) >= 0.75 ATR(1h,14)
+    side: signal
+    stop: 1.5 ATR(1h,14)
+    exit: time exit 13:30 NY
+    hold: 3h
+  sprint3000_vocab: 'needs primitive: clock-anchored return trigger'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 638
+    gross: 0.116
+    net_usd: 0.06
+    t: 1.33
+    net_bps: 0.098
+    t_day_bps: 2.18
+    ctrl_excess: 0.128
+    long_gross: 0.13
+    long_gross_t: 2.23
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 10%
+- id: RT-OWNDATA-016
+  name: S200-PATTERNS-19 R3 reversal-in-trend 1h re-test under W2
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/patterns-prereg.md row 19)'
+  evidence_grade: own-data
+  mechanism: a three-bar pullback end inside an EMA50>EMA200 trend resumes the dominant flow
+  tf: 1h
+  rule:
+    entry: 'R3 (long): c[i-2]<o[i-2]; l[i-1]<l[i-2]; c[i]>h[i-1]; c[i]>o[i]; only when EMA50>EMA200 and c>EMA50 (mirror short)'
+    side: signal
+    stop: 'structure: min low of bars i-2..i - 0.1 ATR(14); skip if <0.3 or >3 ATR or <$1'
+    exit: 3 ATR chandelier (CH3), no target
+    hold: 48 bars
+  sprint3000_vocab: 'needs primitive: R3 candle pattern'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 1223
+    gross: 0.191
+    gross_t: 2.76
+    net_usd: 0.082
+    t: 1.18
+    net_bps: 0.155
+    t_day_bps: 2.28
+    short: 0.21
+    short_t: 2.02
+    london_session:
+      n: 294
+      net: 0.34
+      t: 2.39
+  flags:
+  - 'patterns lane control was the leaky one (same-side controls earned +0.199R): needs the leak-free control before any read'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-017
+  name: S200-TREND-10 SGE-OR re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 10)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 15m
+  rule:
+    entry: OR = 01:00-02:00 UTC; first 15m close in (02:00,05:00] UTC beyond OR; one a day
+    side: signal
+    stop: opposite OR side (skip outside 0.5-4 ATRh)
+    exit: exit 06:45 UTC
+    hold: intraday
+  sprint3000_vocab: 'needs primitive: opening_range_break with a 01:00 UTC anchor'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 1354
+    gross: 0.081
+    gross_t: 3.38
+    net_usd: -0.019
+    net_bps: 0.048
+    t_day_bps: 1.98
+    long_gross: 0.109
+    long_gross_t: 3.57
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-018
+  name: S200-TREND-28 ADX-ONSET-4H re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 28)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 4h
+  rule:
+    entry: ADX14 crosses up through 20; side = sign(+DI - -DI)
+    side: signal
+    stop: 2 ATR(4h,14)
+    exit: 3 ATR chandelier
+    hold: 30 bars
+  sprint3000_vocab: 'adx_onset(14,20) + chandelier(14,3): maps'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 207
+    gross: 0.252
+    gross_t: 2.26
+    net_usd: 0.141
+    net_bps: 0.215
+    t_day_bps: 1.94
+    short: 0.469
+    short_t: 2.45
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-019
+  name: S200-TREND-15 H4-BBW re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 15)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 4h
+  rule:
+    entry: prior bar BB(20,2) width <= 10th pct of last 250 bars; this 4h close outside the band
+    side: signal
+    stop: 1.5 ATR(4h,14)
+    exit: 2.5 ATR chandelier
+    hold: 30 bars
+  sprint3000_vocab: 'bb_break(20,2) + compression(250,10): maps'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 183
+    gross: 0.289
+    gross_t: 2.22
+    net_usd: 0.149
+    net_bps: 0.243
+    t_day_bps: 1.88
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-020
+  name: S200-TREND-19 H1-SHOCK-CONT re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 19)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 1h
+  rule:
+    entry: 1h range >= 2.5 x ATR(1h,50) of prior 50 bars, close in top (bottom) 25% of range
+    side: signal
+    stop: bar midpoint (skip outside 0.5-3 x ATR50)
+    exit: target 2R
+    hold: 8 bars
+  sprint3000_vocab: approx atr_expansion(50,2.5); close-location needs primitive
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 998
+    gross: 0.11
+    gross_t: 2.73
+    net_usd: -0.003
+    net_bps: 0.072
+    t_day_bps: 1.85
+    ctrl_excess: 0.14
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-021
+  name: S200-TREND-32 RSI2-1H re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 32)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 1h
+  rule:
+    entry: close > SMA200(1h) and RSI(2) < 10 -> long; close < SMA200 and RSI(2) > 90 -> short
+    side: signal
+    stop: 2 ATR(1h,14)
+    exit: close beyond SMA5(1h)
+    hold: 10 bars
+  sprint3000_vocab: rsi_threshold(2,10,fade); trend filter on 1h SMA200 needs primitive
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 2361
+    gross: 0.041
+    gross_t: 3.15
+    net_usd: -0.012
+    net_bps: 0.024
+    t_day_bps: 1.78
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-022
+  name: S200-TREND-01 H4-DON30-TR re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 01)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 4h
+  rule:
+    entry: fresh 4h close beyond Channel(30)
+    side: signal
+    stop: 2 ATR(4h,14)
+    exit: 3 ATR chandelier
+    hold: 60 bars
+  sprint3000_vocab: 'donchian_break(30) + chandelier(14,3): maps'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 329
+    gross: 0.188
+    gross_t: 2.26
+    net_usd: 0.047
+    net_bps: 0.142
+    t_day_bps: 1.72
+    long_gross: 0.245
+    long_no_swap: 0.216
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-023
+  name: S200-TREND-27 MACD-4H-D1 re-test under W2 (bps costs, day-summed t)
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/trend-prereg.md row 27)'
+  evidence_grade: own-data
+  mechanism: trend/breakout persistence; fails W2 explore only on day-summed t (1.5-2.0) at bps costs
+  tf: 4h
+  rule:
+    entry: MACD(12,26,9) histogram crosses zero in the D1 direction
+    side: signal
+    stop: 2 ATR(4h,14)
+    exit: 3 ATR chandelier
+    hold: 30 bars
+  sprint3000_vocab: 'macd_turn(12,26,9) + trend(1d,50): maps'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 304
+    gross: 0.164
+    gross_t: 1.95
+    net_usd: 0.056
+    net_bps: 0.128
+    t_day_bps: 1.53
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-024
+  name: S200-PATTERNS-06 pin bar at EMA20 in trend, 1h, re-test under W2
+  source: 'own data: sprint-200 explore per-trade re-read (docs/research/sprint200/patterns-prereg row 06)'
+  evidence_grade: own-data
+  mechanism: rejection at dynamic support inside a trend
+  tf: 1h
+  rule:
+    entry: 'PIN (long: lower wick >= 0.6 range, body <= 0.3 range, range >= 0.8 ATR) with l <= EMA20 < c, only in EMA50>EMA200 uptrend (mirror)'
+    side: signal
+    stop: structure - 0.1 ATR
+    exit: CH3 chandelier
+    hold: 48 bars
+  sprint3000_vocab: 'needs primitive: pin bar'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    n: 370
+    gross: 0.313
+    gross_t: 2.23
+    net_usd: 0.179
+    net_bps: 0.269
+    t_day_bps: 1.91
+    short: 0.385
+    ctrl_excess_leaky: 0.158
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-025
+  name: S200-TIME-07 COMEX settle fade re-test under W2
+  source: 'own data: sprint-200 time lane (branch research/sprint200-time)'
+  evidence_grade: own-data
+  mechanism: settlement pressure reverses after the COMEX settle
+  tf: 1m clock
+  rule:
+    entry: T = 13:30 NY; r = r[13:00->13:30 NY]; abs(r) >= 0.5 ATR(1h,14)
+    side: -sign(r)
+    stop: 1.5 ATR(1h,14)
+    exit: exit 14:30 NY
+    hold: intraday
+  sprint3000_vocab: 'needs primitive: clock-anchored return trigger'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 615
+    gross: 0.06
+    net_bps: 0.042
+    t_day_bps: 1.81
+    short_gross: 0.096
+    short_gross_t: 3.1
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-026
+  name: S200-TIME-05 PM fix overshoot fade re-test under W2
+  source: 'own data: sprint-200 time lane (branch research/sprint200-time)'
+  evidence_grade: own-data
+  mechanism: pre-fix hedging overshoot reverts (Caminschi-Heaney 2014 JFM)
+  tf: 1m clock
+  rule:
+    entry: T = 15:05 London; r = r[14:35->15:05 LDN]; abs(r) >= 0.75 ATR(1h,14)
+    side: -sign(r)
+    stop: 1.5 ATR(1h,14)
+    exit: exit 16:00 London
+    hold: intraday
+  sprint3000_vocab: 'needs primitive: clock-anchored return trigger'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 706
+    gross: 0.064
+    net_bps: 0.047
+    t_day_bps: 1.71
+    friday:
+      n: 152
+      net_usd: 0.139
+      t: 2.16
+      years: 7/8
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-027
+  name: 'Horizon rescue: H1-DON24-ATRX on 4h'
+  source: 'own data: S200-TREND-04 explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: 4h
+  rule:
+    entry: fresh 4h close beyond Channel(24) AND bar TR >= 1.5 x ATR(4h,20)
+    side: signal
+    stop: 1.5 ATR(4h,14)
+    exit: 2.5 ATR(4h,14) chandelier
+    hold: 24 bars
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 1395
+    source_gross: 0.162
+    source_gross_t: 3.87
+    source_cost_R: 0.12
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-028
+  name: 'Horizon rescue: H1-SHOCK-CONT on 4h'
+  source: 'own data: S200-TREND-19 explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: 4h
+  rule:
+    entry: 4h range >= 2.5 x ATR(4h,50), close in top/bottom 25%
+    side: signal
+    stop: bar midpoint
+    exit: target 2R
+    hold: 8 bars
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 998
+    source_gross: 0.11
+    source_gross_t: 2.73
+    source_cost_R: 0.113
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-029
+  name: 'Horizon rescue: SGE-OR held to the NY close'
+  source: 'own data: S200-TREND-10 explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: intraday
+  rule:
+    entry: as S200-TREND-10
+    side: signal
+    stop: opposite OR side
+    exit: flat 16:30 NY (instead of 06:45 UTC)
+    hold: intraday
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 1354
+    source_gross: 0.081
+    source_gross_t: 3.38
+    source_cost_R: 0.101
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-030
+  name: 'Horizon rescue: RSI2 trend-pullback on 4h'
+  source: 'own data: S200-TREND-32 explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: 4h
+  rule:
+    entry: close > SMA200(4h) and RSI(2) < 10 -> long (mirror)
+    side: signal
+    stop: 2 ATR(4h,14)
+    exit: close beyond SMA5(4h)
+    hold: 10 bars
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 2361
+    source_gross: 0.041
+    source_gross_t: 3.15
+    source_cost_R: 0.054
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-031
+  name: 'Horizon rescue: Pin bar LO/NYO 15m moved to 1h'
+  source: 'own data: S200-PATTERNS-09 explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: 1h
+  rule:
+    entry: PIN on 1h closes 07:00-10:00 or 12:30-15:30 UTC, 1h ATR
+    side: signal
+    stop: 1.0 ATR(1h,14)
+    exit: target 1.5R
+    hold: 8 bars
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 4277
+    source_gross: 0.039
+    source_gross_t: 2.08
+    source_cost_R: 0.19
+  flags:
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-032
+  name: 'Horizon rescue: Inside-bar break at London open moved to 1h, short side'
+  source: 'own data: S200-PATTERNS-13 explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: 1h
+  rule:
+    entry: IBB on 1h closes 07:00-10:00 UTC, short only
+    side: short_only
+    stop: mother bar opposite side - 0.1 ATR
+    exit: target 2R
+    hold: 8 bars
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 519
+    source_short_gross: 0.192
+    source_short_gross_t: 3.36
+    source_cost_R: 0.14
+  flags:
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-033
+  name: 'Horizon rescue: 1h trend leg in high RV5 (OS-SD) on 4h'
+  source: 'own data: OS-SD trend leg explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: 4h
+  rule:
+    entry: Donchian-20 break on 4h when RV5 is in its top tercile (trailing 250 d)
+    side: signal
+    stop: 1.5 ATR(4h,14)
+    exit: target 2R
+    hold: 18 bars
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 446
+    source_gross: 0.2
+    source_gross_t: 1.79
+    source_net: 0.108
+    note: leg split was descriptive in opportunity-signals-screen-2026-11.md
+  flags:
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-034
+  name: 'Horizon rescue: Liquidity-vacuum fade with a 4x wider stop'
+  source: 'own data: MT-VAC explore (gross positive, cost-killed)'
+  evidence_grade: own-data
+  mechanism: same mechanism as the source rule; cost per R falls roughly in proportion to the stop size
+  tf: intraday
+  rule:
+    entry: as MT-VAC (fade a minute of blown-out spread) with stop 4 x the VAC stop and target 1R
+    side: signal
+    stop: 4 x VAC stop
+    exit: target 1R
+    hold: 60 min
+  sprint3000_vocab: maps where the source maps; see source row
+  data_needed: available locally
+  evidence:
+    window: 2010-2017 explore
+    source_n: 539
+    source_gross: 0.188
+    source_gross_t: 3.55
+    source_cost_R: 0.62
+    note: part may be a quote artefact; needs executable tick bid/ask
+  flags:
+  - 'mlexec V4 showed wider stops at the SAME tf cut gross faster than cost: the rescue must change the signal tf, not only the stop'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-035
+  name: 'One-side: 1h Donchian-48 D1-aligned, short side'
+  source: 'own data: S200-TREND-03 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TREND-03, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 210
+    gross: 0.341
+    gross_t: 2.73
+    net_usd: 0.278
+    t: 2.23
+    years: 8/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - confirm of the parent already read
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-036
+  name: 'One-side: 4h ADX onset, short side'
+  source: 'own data: S200-TREND-28 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TREND-28, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 102
+    gross: 0.496
+    gross_t: 2.6
+    net_usd: 0.469
+    t: 2.45
+    years: 7/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-037
+  name: 'One-side: session TSMOM Asia+London->NY, short side'
+  source: 'own data: S200-TREND-20 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TREND-20, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 202
+    gross: 0.206
+    gross_t: 2.34
+    net_usd: 0.173
+    t: 1.95
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-038
+  name: 'One-side: 1h Donchian-24 ATR-expansion, short side'
+  source: 'own data: S200-TREND-04 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TREND-04, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 700
+    gross: 0.187
+    gross_t: 3.11
+    net_usd: 0.103
+    t: 1.71
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-039
+  name: 'One-side: 4h Bollinger-width squeeze break, short side'
+  source: 'own data: S200-TREND-15 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TREND-15, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 96
+    gross: 0.311
+    net_usd: 0.265
+    t: 1.42
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - n<100
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-040
+  name: 'One-side: R3 reversal in trend 1h, short side'
+  source: 'own data: S200-PATTERNS-19 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-PATTERNS-19, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 601
+    gross: 0.319
+    gross_t: 3.08
+    net_usd: 0.21
+    t: 2.02
+    window: 2010-2017 explore
+  flags:
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-041
+  name: 'One-side: pin bar at EMA20 1h, short side'
+  source: 'own data: S200-PATTERNS-06 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-PATTERNS-06, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 174
+    gross: 0.522
+    gross_t: 2.3
+    net_usd: 0.385
+    t: 1.7
+    window: 2010-2017 explore
+  flags:
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-042
+  name: 'One-side: outside bar in trend 1h, short side'
+  source: 'own data: S200-PATTERNS-15 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-PATTERNS-15, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 234
+    gross: 0.3
+    gross_t: 2.08
+    net_usd: 0.205
+    t: 1.43
+    window: 2010-2017 explore
+  flags:
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-043
+  name: 'One-side: outside bar in trend 4h time-stop, short side'
+  source: 'own data: S200-PATTERNS-17 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-PATTERNS-17, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 124
+    gross: 0.284
+    net_usd: 0.251
+    t: 1.55
+    window: 2010-2017 explore
+  flags:
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-044
+  name: 'One-side: inside-bar break London open 15m, short side'
+  source: 'own data: S200-PATTERNS-13 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-PATTERNS-13, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 519
+    gross: 0.192
+    gross_t: 3.36
+    net_usd: 0.056
+    t: 0.97
+    window: 2010-2017 explore
+  flags:
+  - cost-killed at 15m
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-045
+  name: 'One-side: strong US down day continues into the London morning (short only)'
+  source: 'own data: S200-TIME-13 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TIME-13, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 373
+    gross: 0.098
+    gross_t: 2.32
+    net_usd: 0.048
+    t: 1.12
+    long_side:
+      gross: -0.088
+      gross_t: -2.26
+    window: 2010-2017 explore
+  flags:
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-046
+  name: 'One-side: COMEX settle fade of an up-move (short only)'
+  source: 'own data: S200-TIME-07 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-TIME-07, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 313
+    gross: 0.096
+    gross_t: 3.1
+    net_usd: 0.044
+    t: 1.4
+    window: 2010-2017 explore
+  flags:
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-047
+  name: 'One-side: 4h logistic direction model, short side'
+  source: 'own data: S200-STATS-26 (stats-screen.md on branch research/sprint200-stats)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-STATS-26, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    note: long -0.043 / short +0.093 net (stats-screen.md)
+    window: 2010-2017 explore
+  flags:
+  - swap + bear regime per the stats lane
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-048
+  name: 'One-side: 1h GBM direction model, short side'
+  source: 'own data: S200-STATS-25 (stats-screen.md on branch research/sprint200-stats)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-STATS-25, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    note: long -0.022 / short +0.050 net
+    window: 2010-2017 explore
+  flags:
+  - swap + bear regime
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-049
+  name: 'One-side: pre-event 24h hold, SHORT (inverse of the failed pre-event long)'
+  source: 'own data: S200-MACRO-17 explore side split (re-read of per-trade output)'
+  evidence_grade: own-data
+  mechanism: the parent rule's edge sits on one side; shorts pay no CFD swap
+  tf: per parent
+  rule:
+    entry: as S200-MACRO-17, short signals only
+    side: short_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent rule with side short_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 473
+    long_gross: -0.055
+    long_net: -0.111
+    long_t: -4.19
+    note: short pays no swap; inverse gross ~+0.055
+    window: 2010-2017 explore
+  flags:
+  - inverse of a failed rule = a new hypothesis
+  - '2010-2017 holds the 2011-2015 bear: a short-only edge must beat a same-side drift control (W2) before it counts'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-050
+  name: 'One-side: MTF-EMA-1H long side, swap-free'
+  source: 'own data: S200-TREND-24 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TREND-24, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 236
+    gross: 0.332
+    gross_t: 3.02
+    net_usd: 0.179
+    no_swap: 0.258
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-051
+  name: 'One-side: H4-DON30 long side, swap-free'
+  source: 'own data: S200-TREND-01 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TREND-01, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 162
+    gross: 0.245
+    gross_t: 2.3
+    net_usd: -0.012
+    no_swap: 0.216
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-052
+  name: 'One-side: MACD-4H long side, swap-free'
+  source: 'own data: S200-TREND-27 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TREND-27, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 155
+    gross: 0.223
+    gross_t: 1.98
+    net_usd: 0.039
+    no_swap: 0.195
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-053
+  name: 'One-side: PB-4H-EMA20 long side, swap-free'
+  source: 'own data: S200-TREND-31 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TREND-31, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 314
+    gross: 0.173
+    gross_t: 2.3
+    net_usd: 0.01
+    no_swap: 0.14
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-054
+  name: 'One-side: SGE-OR long side (intraday, no swap)'
+  source: 'own data: S200-TREND-10 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TREND-10, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 797
+    gross: 0.109
+    gross_t: 3.57
+    net_usd: 0.01
+    t: 0.32
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-055
+  name: 'One-side: Gao large-open long side'
+  source: 'own data: S200-TIME-04 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TIME-04, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 315
+    gross: 0.056
+    gross_t: 2.85
+    net_usd: 0.012
+    window: 2010-2017 explore
+  flags:
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-056
+  name: 'One-side: 10:00 NY burst long side'
+  source: 'own data: S200-TIME-02 explore side split'
+  evidence_grade: own-data
+  mechanism: long gross is positive even in the 2011-2015 bear; swap is the binding cost
+  tf: per parent
+  rule:
+    entry: as S200-TIME-02, long signals only
+    side: long_only
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: as parent with side long_only
+  data_needed: available locally; multi-day versions need a swap-free venue (OWNER decision)
+  evidence:
+    n: 339
+    gross: 0.13
+    gross_t: 2.23
+    net_usd: 0.074
+    t: 1.26
+    window: 2010-2017 explore
+  flags:
+  - '2018-2025 bull: long-only needs the W2 drift control'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-057
+  name: Friday-afternoon long (TIME-15 inverted on its short leg + H-72)
+  source: 'own data: S200-TIME-15 side split; time-structure-2026-10-26.md 2.2 (Friday +14.1 bp/day)'
+  evidence_grade: own-data
+  mechanism: end-of-week short covering / position squaring lifts gold into the Friday close
+  tf: 1m clock
+  rule:
+    entry: Friday 12:00 NY, long
+    side: long_only
+    stop: 1.5 ATR(1h,14)
+    exit: time exit 16:30 NY
+    hold: 4.5h
+  sprint3000_vocab: 'weekday([4]) filter + needs primitive: clock entry'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    window: 2010-2017 explore
+    time15_long_leg:
+      n: 99
+      gross: 0.227
+      net_usd: 0.176
+      t: 1.87
+    time15_short_leg:
+      n: 102
+      gross: -0.209
+      gross_t: -2.94
+    H72_friday_bp: 14.1
+    H72_t: 2.7
+    H72_years: 7/8
+  flags:
+  - 'slice B saw 2018-2025 for the Friday effect: CONFIRM CONTAMINATED; forward demo is the only clean test'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 5%
+- id: RT-OWNDATA-058
+  name: Inversion of S200-STATS-12
+  source: 'own data: S200-STATS-12 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: 'variance-ratio mean reversion is the wrong sign: short-horizon moves continue'
+  tf: 1h
+  rule:
+    entry: 'VR(4)<0.85 and |z24|>=1.5 on 1h: trade WITH sign(z24) (inverse of VR revert-fade)'
+    side: inverse of parent
+    stop: 1.5 ATR(1h,14)
+    exit: target 2R
+    hold: 24h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 310
+    parent_gross: -0.163
+    parent_net: -0.257
+    parent_t: -3.77
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-059
+  name: Inversion of S200-STATS-14
+  source: 'own data: S200-STATS-14 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: 'negative-autocorrelation fades lose: continuation'
+  tf: 1h
+  rule:
+    entry: 'AC1(128 bars)< -0.10 and |last 1h return| >= 1 ATR: trade WITH the last bar (inverse)'
+    side: inverse of parent
+    stop: 1.5 ATR(1h,14)
+    exit: target 2R
+    hold: 24h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 801
+    parent_gross: -0.07
+    parent_net: -0.17
+    parent_t: -3.78
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-060
+  name: Inversion of S200-STATS-02
+  source: 'own data: S200-STATS-02 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: stressed-regime overshoots continue in gold
+  tf: 1d
+  rule:
+    entry: 'HMM high-variance state, |z5|>=1.5: trade WITH sign(z5) (inverse), 1d'
+    side: inverse of parent
+    stop: 1.5 ATR(1d,14)
+    exit: time 7 days
+    hold: 7 days
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 78
+    parent_gross: -0.235
+    parent_net: -0.32
+    parent_t: -3.29
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-061
+  name: Inversion of S200-MEANREV-23
+  source: 'own data: S200-MEANREV-23 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: 'overextension fades in gold lose: momentum'
+  tf: 1h
+  rule:
+    entry: '1h close >= 3 ATR above SMA20 then a close below the prior low: go LONG on the next break of the extension high (continuation)'
+    side: inverse of parent
+    stop: 2 ATR(1h,14)
+    exit: target 2R
+    hold: 12h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 357
+    parent_gross: -0.149
+    parent_net: -0.233
+    parent_t: -4.87
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-062
+  name: Inversion of S200-MEANREV-02
+  source: 'own data: S200-MEANREV-02 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: weekly-value fades lose
+  tf: 1h
+  rule:
+    entry: 'weekly-VWAP 2-sigma re-entry: trade WITH the extension (inverse)'
+    side: inverse of parent
+    stop: max high of two bars + 0.1 ATR mirrored
+    exit: target 2R
+    hold: 48h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 1557
+    parent_gross: -0.088
+    parent_net: -0.215
+    parent_t: -5.79
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-063
+  name: Inversion of S200-TREND-25
+  source: 'own data: S200-TREND-25 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: pullbacks in a daily trend keep going
+  tf: 4h
+  rule:
+    entry: 'D1UP and RSI14(4h) crosses DOWN through 40: short (inverse of the pullback-end long)'
+    side: inverse of parent
+    stop: 1.5 ATR(4h,14)
+    exit: target 2.5R
+    hold: 18 bars
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 230
+    parent_gross: -0.137
+    parent_gross_t: -1.56
+    parent_net: -0.221
+    parent_t: -2.54
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-064
+  name: Inversion of S200-TREND-30
+  source: 'own data: S200-TREND-30 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: the owner's EMA20 retest fails more than random
+  tf: 1h
+  rule:
+    entry: 'daily-EMA20 retest in a daily uptrend: SHORT the retest (inverse)'
+    side: inverse of parent
+    stop: E20d + 0.75 ATRd
+    exit: target 2R
+    hold: 72 bars
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 138
+    parent_gross: -0.123
+    parent_net: -0.195
+    parent_t: -2.2
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-065
+  name: Inversion of S200-MACRO-02
+  source: 'own data: S200-MACRO-02 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: claims breaks are false breaks
+  tf: 1m event
+  rule:
+    entry: 'jobless-claims release-range breakout: FADE it back to the range midpoint'
+    side: inverse of parent
+    stop: beyond the [t,t+30m) extreme + 0.25 ATR15
+    exit: target 1R
+    hold: t+240m
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 259
+    parent_gross: -0.16
+    parent_net: -0.294
+    parent_t: -3.63
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-066
+  name: Inversion of S200-TIME-12
+  source: 'own data: S200-TIME-12 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: overnight information continues into NY
+  tf: 1m clock
+  rule:
+    entry: 'top-decile overnight move: trade WITH it at 09:00 NY (inverse of the fade)'
+    side: inverse of parent
+    stop: 1.5 ATR(1h,14)
+    exit: time 12:00 NY
+    hold: 3h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 189
+    parent_gross: -0.126
+    parent_net: -0.176
+    parent_t: -2.41
+    long_leg_gross: -0.246
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-067
+  name: Inversion of S200-TIME-26
+  source: 'own data: S200-TIME-26 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: closing-extreme US days revert overnight
+  tf: 1m clock
+  rule:
+    entry: 'strong US day closing at its extreme: FADE into Asia (inverse)'
+    side: inverse of parent
+    stop: 2 ATR(1h,14)
+    exit: time 08:00 London
+    hold: overnight
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 223
+    parent_gross: -0.106
+    parent_net: -0.144
+    parent_t: -2.89
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-068
+  name: Inversion of S200-TIME-09
+  source: 'own data: S200-TIME-09 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: Asia moves continue
+  tf: 1m clock
+  rule:
+    entry: 'large Asia move (>=2 ATRh): trade WITH it into London (inverse of the fade)'
+    side: inverse of parent
+    stop: 1.5 ATR(1h,14)
+    exit: time 12:00 London
+    hold: 4h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 151
+    parent_gross: -0.104
+    parent_net: -0.16
+    parent_t: -2.56
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-069
+  name: Inversion of S200-TIME-16
+  source: 'own data: S200-TIME-16 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: weekend gap continuation fails
+  tf: 1m clock
+  rule:
+    entry: 'weekend gap >= 1 ATRh at 08:00 London Monday: FADE it (inverse of continuation)'
+    side: inverse of parent
+    stop: 1.5 ATR(1h,14)
+    exit: time 12:00 NY
+    hold: Monday
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 216
+    parent_gross: -0.068
+    parent_net: -0.126
+    long_leg_gross: -0.19
+    long_leg_t: -2.07
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-070
+  name: Inversion of S200-PATTERNS-22
+  source: 'own data: S200-PATTERNS-22 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: big 1h up-bars mean-revert (long side)
+  tf: 1h
+  rule:
+    entry: 'bullish 1h marubozu (body>=0.8 range, range>=1.5 ATR): SHORT it (inverse, long side only)'
+    side: inverse of parent
+    stop: 1.0 ATR(1h,14)
+    exit: target 1R
+    hold: 12 bars
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 556
+    parent_long_gross: -0.15
+    parent_long_gross_t: -1.68
+    parent_long_net: -0.292
+    t: -3.25
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-071
+  name: Inversion of S200-PATTERNS-33
+  source: 'own data: S200-PATTERNS-33 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: daily-pullback longs keep falling
+  tf: 1h
+  rule:
+    entry: '1h ENG long in a daily pullback: SHORT instead (inverse, long setups only)'
+    side: inverse of parent
+    stop: structure
+    exit: VT2 target
+    hold: 24 bars
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 539
+    parent_long_gross: -0.113
+    parent_long_gross_t: -1.96
+    parent_long_net: -0.218
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-072
+  name: Inversion of S200-PATTERNS-26
+  source: 'own data: S200-PATTERNS-26 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: PDH breakouts on a big bar fail
+  tf: 1h
+  rule:
+    entry: 'marubozu closing above PDH: SHORT (inverse, long setups only)'
+    side: inverse of parent
+    stop: 1.0 ATR
+    exit: target 1R
+    hold: 12 bars
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 208
+    parent_long_gross: -0.216
+    parent_long_gross_t: -1.62
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-073
+  name: Inversion of S200-TIME-15
+  source: 'own data: S200-TIME-15 explore (significantly negative gross)'
+  evidence_grade: own-data
+  mechanism: merged into the Friday-long candidate; kept as its own id for K
+  tf: 1m clock
+  rule:
+    entry: 'short leg of the Friday strong-week fade inverted: Friday 12:00 NY after a down week, LONG'
+    side: inverse of parent
+    stop: 1.5 ATR(1h,14)
+    exit: time 16:30 NY
+    hold: 4.5h
+  sprint3000_vocab: 'maps only where the parent maps (most need primitive: the parent''s trigger)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 102
+    short_leg_gross: -0.209
+    short_leg_gross_t: -2.94
+    short_leg_net: -0.269
+    window: 2010-2017 explore
+  flags:
+  - inverting after a look is a new hypothesis, data-snooped by construction
+  - inverse gross must exceed the parent's cost (0.05-0.12R) to net positive
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-074
+  name: 'Pocket: S200-TREND-04 Tuesday only'
+  source: 'own data: slice re-read of S200-TREND-04 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-04 AND Tuesday only
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter weekday([1])
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 316
+    gross: 0.419
+    gross_t: 4.25
+    net_usd: 0.304
+    t: 3.1
+    years: 6/8
+    ctrl_excess: 0.198
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-075
+  name: 'Pocket: S200-TREND-21 Tuesday only'
+  source: 'own data: slice re-read of S200-TREND-21 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-21 AND Tuesday only
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter weekday([1])
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 124
+    net_usd: 0.238
+    t: 2.79
+    years: 7/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-076
+  name: 'Pocket: S200-TREND-16 Tuesday only'
+  source: 'own data: slice re-read of S200-TREND-16 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-16 AND Tuesday only
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter weekday([1])
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 156
+    net_usd: 0.147
+    t: 2.27
+    years: 7/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-077
+  name: 'Pocket: S200-TREND-20 high-vol tercile (ATR(1d,14) pct over 250 d > 2/3)'
+  source: 'own data: slice re-read of S200-TREND-20 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-20 AND high-vol tercile (ATR(1d,14) pct over 250 d > 2/3)
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter vol_regime(14,0.667,1.0)
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 110
+    gross: 0.337
+    net_usd: 0.316
+    t: 2.78
+    years: 8/8
+    ctrl_excess: 0.187
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-078
+  name: 'Pocket: S200-TREND-03 with the 20-day return sign'
+  source: 'own data: slice re-read of S200-TREND-03 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-03 AND with the 20-day return sign
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: 'parent mapping + filter needs primitive: momentum agreement filter (sign of 20d return = side)'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 383
+    net_usd: 0.226
+    t: 2.68
+    years: 8/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-079
+  name: 'Pocket: S200-TREND-04 with the 20-day return sign'
+  source: 'own data: slice re-read of S200-TREND-04 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-04 AND with the 20-day return sign
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: 'parent mapping + filter needs primitive: momentum agreement filter'
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 671
+    net_usd: 0.157
+    t: 2.48
+    years: 5/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-080
+  name: 'Pocket: S200-TREND-28 NY-late session entries (16:00-21:00 UTC)'
+  source: 'own data: slice re-read of S200-TREND-28 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-28 AND NY-late session entries (16:00-21:00 UTC)
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter session(ny)
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 94
+    net_usd: 0.468
+    t: 2.49
+    years: 7/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-081
+  name: 'Pocket: S200-TREND-03 low-vol tercile'
+  source: 'own data: slice re-read of S200-TREND-03 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TREND-03 AND low-vol tercile
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter vol_regime(14,0,0.333)
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 202
+    net_usd: 0.292
+    t: 2.34
+    years: 7/8
+    window: 2010-2017 explore
+  flags:
+  - 'CONFIRM NOT CLEAN: the mlnet lane published a 2018-2025 aggregate for an 11-rule pool of these trend rules (not used here); run TEST-OLD
+    2006-2009 first'
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-082
+  name: 'Pocket: S200-PATTERNS-19 London session entries'
+  source: 'own data: slice re-read of S200-PATTERNS-19 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-PATTERNS-19 AND London session entries
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter session(london)
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 294
+    net_usd: 0.34
+    t: 2.39
+    years: 6/8
+    window: 2010-2017 explore
+  flags:
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-083
+  name: 'Pocket: S200-TIME-02 long side with price above SMA200(1d)'
+  source: 'own data: slice re-read of S200-TIME-02 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TIME-02 AND long side with price above SMA200(1d)
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter trend(1d,200) + long_only
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 140
+    net_usd: 0.243
+    t: 2.24
+    years: 6/8
+    ctrl_excess: 0.303
+    window: 2010-2017 explore
+  flags:
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-084
+  name: 'Pocket: S200-TIME-05 Fridays only'
+  source: 'own data: slice re-read of S200-TIME-05 explore trades (this lane, 2026-11-02)'
+  evidence_grade: own-data
+  mechanism: a regime/calendar condition concentrates the parent's edge (no ex-ante mechanism beyond the parent's)
+  tf: per parent
+  rule:
+    entry: as S200-TIME-05 AND Fridays only
+    side: as parent
+    stop: as parent
+    exit: as parent
+    hold: as parent
+  sprint3000_vocab: parent mapping + filter weekday([4])
+  data_needed: 'available locally (Dukascopy 1m 2010-2025-09; TEST-OLD 2006-2009 1m not yet local: only 2009-01/02 fetched)'
+  evidence:
+    n: 152
+    net_usd: 0.139
+    t: 2.16
+    years: 7/8
+    ctrl_excess: 0.187
+    window: 2010-2017 explore
+  flags:
+  - 'selected from 2,106 slices; 22 met net>0 and t>=2 vs ~48 expected under the null: treat as NOISE until re-tested'
+  - three Tuesday pockets share days (correlated)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 2%
+- id: RT-OWNDATA-085
+  name: Daily turtle soup (failed 20-day low)
+  source: 'own data: S200-MEANREV-10, meanrev-results.md'
+  evidence_grade: own-data
+  mechanism: 'Raschke-Connors: failed 20-day breaks trap trend followers'
+  tf: 1d
+  rule:
+    entry: day low < prior 20-day low (>= 4 days old) and day close above it -> long next day
+    side: long_only
+    stop: day low - 0.1 ATR(1d)
+    exit: target 2R
+    hold: 5 days
+  sprint3000_vocab: 'needs primitive: failed-break entry'
+  data_needed: available locally
+  evidence:
+    n: 42
+    gross: 0.392
+    net_usd: 0.324
+    t: 1.76
+    window: 2010-2017 explore
+  flags:
+  - 'n<100: only more data (pre-2010) can test it'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-086
+  name: FOMC next-day drift
+  source: 'own data: S200-MACRO-15, macro-result.md'
+  evidence_grade: own-data
+  mechanism: slow digestion of policy news
+  tf: 1d
+  rule:
+    entry: '20:00 NY on FOMC day: m = P(20:00) - pre-event; if abs(m) >= 0.5 ATRd trade sign(m)'
+    side: signal
+    stop: 1.0 ATR(1d,20)
+    exit: 16:00 NY next weekday
+    hold: ~20h
+  sprint3000_vocab: 'needs primitive: event calendar'
+  data_needed: available locally
+  evidence:
+    n: 49
+    net_usd: 0.333
+    t: 2.74
+    ctrl: 0.253
+    ctrl_excess: 0.08
+    window: 2010-2017 explore
+  flags:
+  - most of it is the day's drift (control +0.25R); n<100; H-89 FOMC 60m confirm already failed
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-087
+  name: Monday unwind of a Friday shock / big prior week
+  source: 'own data: S200-MACRO-20 + S200-TIME-31'
+  evidence_grade: own-data
+  mechanism: weekend de-risking reverses Friday's extreme
+  tf: 1d
+  rule:
+    entry: 'Monday 08:00 London: previous day |r| >= 1.0 sd60 (MACRO-20) or prior week |r| >= 1.5 ATRd (TIME-31): trade -sign'
+    side: signal
+    stop: 1.0 ATR(1d,20)
+    exit: 16:00 NY Monday
+    hold: intraday
+  sprint3000_vocab: 'weekday([0]) + needs primitive: prior-period shock'
+  data_needed: available locally
+  evidence:
+    macro20:
+      n: 117
+      net_usd: 0.073
+      t: 1.39
+      years: 7/8
+    time31:
+      n: 127
+      net_usd: 0.098
+      t: 0.88
+    window: 2010-2017 explore
+  flags:
+  - two independent constructions point the same way, both weak
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-088
+  name: Month-start NY long
+  source: 'own data: S200-TIME-32'
+  evidence_grade: own-data
+  mechanism: new-month inflows
+  tf: 1m clock
+  rule:
+    entry: first 2 business days of the month, 08:35 NY, long
+    side: long_only
+    stop: 1.5 ATR(1h,14)
+    exit: 13:30 NY
+    hold: 5h
+  sprint3000_vocab: 'needs primitive: calendar day'
+  data_needed: available locally
+  evidence:
+    n: 191
+    net_usd: 0.062
+    t: 0.61
+    ctrl_excess: 0.189
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-089
+  name: Weekly-level (PWH/PWL) reclaim fade
+  source: 'own data: S200-MEANREV-07'
+  evidence_grade: own-data
+  mechanism: reclaims of weekly extremes trap breakout traders
+  tf: 1h
+  rule:
+    entry: first 1h reclaim of PWH in the week -> short (PWL mirror)
+    side: signal
+    stop: bar high + 0.1 ATR
+    exit: target 2R
+    hold: 3 days
+  sprint3000_vocab: 'prior_level_break(week) inverted: needs primitive: reclaim'
+  data_needed: available locally
+  evidence:
+    n: 344
+    gross: 0.089
+    net_usd: -0.04
+    ctrl_excess: 0.112
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-090
+  name: Daily-break gap fill
+  source: 'own data: S200-MEANREV-04'
+  evidence_grade: own-data
+  mechanism: thin re-quoting at the daily maintenance break
+  tf: 1h
+  rule:
+    entry: 'server 01:05: gap >= 0.3 ATR(1h) vs last close before 23:45 -> fade to that close'
+    side: signal
+    stop: 1.0 ATR(1h,14)
+    exit: target the prior close
+    hold: 4h
+  sprint3000_vocab: 'needs primitive: maintenance-break gap'
+  data_needed: available locally
+  evidence:
+    n: 239
+    gross: 0.065
+    net_usd: -0.017
+    ctrl_excess: 0.09
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-091
+  name: 1h run-exhaustion fade (8-bar runs)
+  source: 'own data: S200-MEANREV-31 moved from 15m to 1h'
+  evidence_grade: own-data
+  mechanism: runs exhaust
+  tf: 1h
+  rule:
+    entry: 8 consecutive higher 1h closes, cumulative >= 2.5 ATR -> short (mirror)
+    side: signal
+    stop: run high + 0.25 ATR
+    exit: target 1R
+    hold: 12h
+  sprint3000_vocab: 'consecutive_bars(8, fade): maps'
+  data_needed: available locally
+  evidence:
+    source_n: 385
+    source_gross: 0.1
+    source_ctrl_excess: 0.102
+    source_net: -0.024
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-092
+  name: F-1 Hurst-switched band breakout 15m (NY pit window)
+  source: 'own data: time-structure-2026-10-26.md 1.3 / H-70'
+  evidence_grade: own-data
+  mechanism: trade with band breaks from a low-persistence base, against after a persistent run
+  tf: 15m
+  rule:
+    entry: KC/BB/DC20 band break; hurst_128 low tercile -> with the break, high tercile -> against; NY pit 08:00-13:30 NY only
+    side: signal
+    stop: 1.0 ATR(15m,14)
+    exit: 4-bar time exit
+    hold: 4 bars
+  sprint3000_vocab: 'needs primitive: Hurst tercile'
+  data_needed: available locally
+  evidence:
+    all:
+      n: 10425
+      mean_ATR15: 0.087
+      t_day: 5.2
+      years: 8/8
+    ny_pit:
+      mean_ATR15: 0.18
+      t: 4.6
+    demo:
+      arm: hurst_band_break
+      n: 13
+      net_R: -0.408
+      note: noise
+    window: 2010-2017 explore (+ demo)
+  flags:
+  - pays only at <= measured broker cost; demo fills (n 13) cannot read it
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-093
+  name: C-1 first touch of a 30-day low, daily
+  source: 'own data: time-structure-2026-10-26.md 2.3'
+  evidence_grade: own-data
+  mechanism: first touch of a monthly extreme
+  tf: 1d
+  rule:
+    entry: first daily touch of the trailing 30-day low -> long (mirror for highs, if registered)
+    side: long_only
+    stop: 1.5 ATR(1d,20)
+    exit: 5-day time exit
+    hold: 5 days
+  sprint3000_vocab: 'prior_level_break(month) variant: needs primitive: first touch'
+  data_needed: available locally
+  evidence:
+    n: 310
+    mean_R: 0.277
+    t: 3.85
+    note: carried by 2013 and 2015; daily proxy did not reproduce in slice H
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-094
+  name: D-1 Asia trend persistence 1h
+  source: 'own data: time-structure-2026-10-26.md 2.4 / H-75'
+  evidence_grade: own-data
+  mechanism: Asia directional persistence
+  tf: 1h
+  rule:
+    entry: sign of the Asia session return at 1h bar k -> continue to Asia close
+    side: signal
+    stop: 1.0 ATR(1h,14)
+    exit: Asia close
+    hold: <= 8h
+  sprint3000_vocab: 'needs primitive: session-return sign'
+  data_needed: available locally
+  evidence:
+    mean_usd: 0.64
+    t: 2.7
+    cost_multiple: 4.4
+    note: did NOT reproduce in slice H's rebuild
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-095
+  name: D-2 CMF20 1h
+  source: 'own data: time-structure-2026-10-26.md 2.4 / H-77'
+  evidence_grade: own-data
+  mechanism: money-flow (tick-volume weighted) persistence
+  tf: 1h
+  rule:
+    entry: CMF(20) on 1h crosses 0 -> trade its sign
+    side: signal
+    stop: 1.0 ATR(1h,14)
+    exit: target 2R
+    hold: 24 bars
+  sprint3000_vocab: 'needs primitive: CMF'
+  data_needed: available locally
+  evidence:
+    mean_usd: 0.59
+    t: 3.2
+    note: redundancy with the MA regime unchecked; tick volume is an activity proxy
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-096
+  name: NR7 break with 4R target (GS-C4)
+  source: 'own data: growth-screens-2026-11.md C4'
+  evidence_grade: own-data
+  mechanism: compression -> expansion with a far target
+  tf: 1h/4h
+  rule:
+    entry: NR7 bar break on 1h/4h
+    side: signal
+    stop: 1 R per C4
+    exit: target 4R
+    hold: per C4
+  sprint3000_vocab: 'nr_breakout(7) + target_r(4): maps'
+  data_needed: available locally
+  evidence:
+    n: 290
+    gross: 0.2
+    net_usd: 0.05
+    vs_twin: 0.16
+    raw_p: 0.059
+    years: 5/8
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-097
+  name: News straddle k=1.0, tick re-measure (GS-C1b)
+  source: 'own data: growth-screens-2026-11.md C1b'
+  evidence_grade: own-data
+  mechanism: release-minute breakout
+  tf: 1m event
+  rule:
+    entry: +/- 1.0 x ATR15 straddle at tier-1 releases
+    side: signal
+    stop: per C1b
+    exit: 2 x ATR15 trail
+    hold: per C1b
+  sprint3000_vocab: 'needs primitive: straddle'
+  data_needed: Dukascopy ticks for ~250 release windows (free, fetch needed)
+  evidence:
+    n: 251
+    conservative_net: -0.42
+    optimistic_net: 0.14
+    note: truth is between; only tick data resolves it
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-098
+  name: Discovery-v2 closest miss 8c57acaa1349
+  source: 'own data: discovery-v2-screen-2026-11.md section 2'
+  evidence_grade: own-data
+  mechanism: Asia mean-reversion against the 4h move when implied vol is high
+  tf: 1h
+  rule:
+    entry: Asia session, GVZ in its top tercile, side against the 4h return
+    side: signal
+    stop: per v2 exit menu
+    exit: time exit 48 bars
+    hold: 48 bars
+  sprint3000_vocab: 'needs primitive: GVZ tercile gate'
+  data_needed: GVZ daily (free, FRED) + local 1m
+  evidence:
+    n: 557
+    net_usd: 0.322
+    excess: 0.451
+    at_1p5x_cost: 0.231
+    fitness: 0.867
+    null_bar: 1.43
+    window: 2010-2017 explore
+  flags:
+  - 'best of 288 searched specs: in-sample mean is what selection produces; pays the DSR at K ~3,330'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-099
+  name: X3 joint fair-value residual as an entry filter on the trend book
+  source: 'own data: cross-asset-screen-2026-11.md X3'
+  evidence_grade: own-data
+  mechanism: gold catches up to the silver/FX fair value within minutes
+  tf: 1h-4h
+  rule:
+    entry: RT-OWNDATA-001 entries kept only when the X3 residual points the same way at entry
+    side: signal
+    stop: per rule
+    exit: per rule
+    hold: per rule
+  sprint3000_vocab: 'needs primitive: cross-asset residual'
+  data_needed: HistData 1m XAG/EURUSD/USDJPY (local in raw/xasset, free)
+  evidence:
+    n: 11382
+    real_minus_twin: 0.019
+    bonf_p: 0.004
+    note: 1/8 of cost as a standalone; as a filter it costs nothing extra
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-100
+  name: ISM-day family (breakout + drift)
+  source: 'own data: S200-MACRO-03 / 12'
+  evidence_grade: own-data
+  mechanism: ISM is the one release with positive gross in both constructions
+  tf: 1m event
+  rule:
+    entry: ISM release range breakout (MACRO-03) or 30m drift to 16:00 NY (MACRO-12)
+    side: signal
+    stop: per parent
+    exit: per parent
+    hold: per parent
+  sprint3000_vocab: 'needs primitive: event calendar'
+  data_needed: available locally
+  evidence:
+    macro03:
+      n: 139
+      gross: 0.173
+      net_usd: 0.063
+    macro12:
+      n: 136
+      gross: 0.145
+      net_usd: 0.082
+      years: 5/8
+    window: 2010-2017 explore
+  flags:
+  - noise-sized per the macro lane
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-101
+  name: All-event drift with the 1d trend gate
+  source: 'own data: S200-MACRO-27'
+  evidence_grade: own-data
+  mechanism: event-day drift aligned with the daily trend
+  tf: 1m event
+  rule:
+    entry: MACRO-13 trades with side == sign(close - SMA50d)
+    side: signal
+    stop: 1.5 ATR(1h)
+    exit: 16:00 NY
+    hold: intraday
+  sprint3000_vocab: 'needs primitive: event calendar'
+  data_needed: available locally
+  evidence:
+    n: 465
+    gross: 0.09
+    net_usd: 0.009
+    ctrl_excess: 0.13
+    years: 5/8
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-102
+  name: Kalman 4h slope cross
+  source: 'own data: S200-STATS-07'
+  evidence_grade: own-data
+  mechanism: local-linear-trend slope
+  tf: 4h
+  rule:
+    entry: Kalman slope z crosses +2 / -2
+    side: signal
+    stop: 1.5 ATR(4h,14)
+    exit: target 2R
+    hold: 72h
+  sprint3000_vocab: 'needs primitive: Kalman slope'
+  data_needed: available locally
+  evidence:
+    n: 300
+    gross: 0.127
+    net_usd: 0.038
+    years: 6/8
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-103
+  name: 4h five-vote trend ensemble
+  source: 'own data: S200-STATS-31'
+  evidence_grade: own-data
+  mechanism: agreement of five trend measures
+  tf: 4h
+  rule:
+    entry: transition into all five of sign(r6), sign(r24), sign(r60), sign(SMA10-SMA40), sign(close - Donchian20 mid) equal
+    side: signal
+    stop: 1.5 ATR(4h,14)
+    exit: target 2R
+    hold: 72h
+  sprint3000_vocab: 'needs primitive: vote'
+  data_needed: available locally
+  evidence:
+    n: 670
+    gross: 0.112
+    net_usd: 0.021
+    window: 2010-2017 explore
+  flags:
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-104
+  name: H-01 slow TSMOM gated by real-yield and dollar, long only, swap-free
+  source: 'own data: H-84 V3 long split (h84-macro-screen-2026-11.md)'
+  evidence_grade: own-data
+  mechanism: slow trend when macro agrees
+  tf: 1d/4h
+  rule:
+    entry: H-06 rule, long only
+    side: long_only
+    stop: 1.5 ATR(1d)
+    exit: per H-84
+    hold: 5-20 days
+  sprint3000_vocab: 'needs primitive: macro gate'
+  data_needed: FRED (local macro-v1)
+  evidence:
+    n: 53
+    long_gross: 0.34
+    long_net_with_swap: 0.045
+    window: 2010-2017 explore
+  flags:
+  - side split chosen after the look; swap-free venue is owner-only
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-105
+  name: Runner exit alone on the 30m box break (H-80)
+  source: 'own data: exits-adaptive-targets-2026-10-26.md'
+  evidence_grade: own-data
+  mechanism: trail beats fixed 2R on 30m
+  tf: 30m
+  rule:
+    entry: owner box break-and-close on 30m
+    side: signal
+    stop: 1.5 ATR(30m,14)
+    exit: BE at +1R, 2.5 ATR chandelier, no target
+    hold: 72 bars
+  sprint3000_vocab: 'needs primitive: box'
+  data_needed: available locally
+  evidence:
+    runner_minus_fixed_30m: 0.085
+    t: 2.8
+    window: 2010-2017 explore
+  flags:
+  - 'H-80 R2 failed on 2018-2025-09 (already confirmed failed): listed only because the exit overlay is reused in RT-OWNDATA-007'
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 3%
+- id: RT-OWNDATA-106
+  name: 'Demo pocket: ema_pullback 1m, short side'
+  source: 'own data: brain learning ledger (perf-report source), this lane''s re-read'
+  evidence_grade: own-data
+  mechanism: none beyond the arm's own; the side split matches the week's drift (same-day same-side random brackets earn the same)
+  tf: 1m
+  rule:
+    entry: exploration arm ema_pullback as frozen in config/exploration_arms.yaml, restricted as named
+    side: as named
+    stop: arm's own
+    exit: arm's own
+    hold: arm's own
+  sprint3000_vocab: not in vocab (1m/5m scalp arms)
+  data_needed: brain state (read-only); history test on local 1m
+  evidence:
+    window: demo 2026-10-26..10-30 (5 trading days), icm-probe/icm-demo/vantage-demo, net of broker costs
+    n: 147
+    days: 4
+    net_R: 0.268
+    t_trade: 2.61
+    t_day: 1.17
+    family_excess_vs_same_day_same_side_random: -0.006
+  flags:
+  - '4-5 session-day clusters: NOISE; family excess vs same-day same-side random control is ~0'
+  - needs >= 40 session-day clusters before any read (ADR 0045 tier)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 1%
+- id: RT-OWNDATA-107
+  name: 'Demo pocket: nr4_break 5m, short side'
+  source: 'own data: brain learning ledger (perf-report source), this lane''s re-read'
+  evidence_grade: own-data
+  mechanism: none beyond the arm's own; the side split matches the week's drift (same-day same-side random brackets earn the same)
+  tf: 5m
+  rule:
+    entry: exploration arm nr4_break as frozen in config/exploration_arms.yaml, restricted as named
+    side: as named
+    stop: arm's own
+    exit: arm's own
+    hold: arm's own
+  sprint3000_vocab: not in vocab (1m/5m scalp arms)
+  data_needed: brain state (read-only); history test on local 1m
+  evidence:
+    window: demo 2026-10-26..10-30 (5 trading days), icm-probe/icm-demo/vantage-demo, net of broker costs
+    n: 48
+    days: 4
+    net_R: 0.324
+    t_trade: 2.32
+    t_day: 1.19
+    family_excess: 0.072
+  flags:
+  - '4-5 session-day clusters: NOISE; family excess vs same-day same-side random control is ~0'
+  - needs >= 40 session-day clusters before any read (ADR 0045 tier)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 1%
+- id: RT-OWNDATA-108
+  name: 'Demo pocket: halfhour_persist 5m, London + London/NY overlap'
+  source: 'own data: brain learning ledger (perf-report source), this lane''s re-read'
+  evidence_grade: own-data
+  mechanism: none beyond the arm's own; the side split matches the week's drift (same-day same-side random brackets earn the same)
+  tf: 5m
+  rule:
+    entry: exploration arm halfhour_persist as frozen in config/exploration_arms.yaml, restricted as named
+    side: as named
+    stop: arm's own
+    exit: arm's own
+    hold: arm's own
+  sprint3000_vocab: not in vocab (1m/5m scalp arms)
+  data_needed: brain state (read-only); history test on local 1m
+  evidence:
+    window: demo 2026-10-26..10-30 (5 trading days), icm-probe/icm-demo/vantage-demo, net of broker costs
+    n: 137
+    days: 4
+    net_R: 0.17
+    t_day: 0.85-1.19
+    family_excess: 0.036
+  flags:
+  - '4-5 session-day clusters: NOISE; family excess vs same-day same-side random control is ~0'
+  - needs >= 40 session-day clusters before any read (ADR 0045 tier)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 1%
+- id: RT-OWNDATA-109
+  name: 'Demo pocket: round_reject 1m, Asia session'
+  source: 'own data: brain learning ledger (perf-report source), this lane''s re-read'
+  evidence_grade: own-data
+  mechanism: none beyond the arm's own; the side split matches the week's drift (same-day same-side random brackets earn the same)
+  tf: 1m
+  rule:
+    entry: exploration arm round_reject as frozen in config/exploration_arms.yaml, restricted as named
+    side: as named
+    stop: arm's own
+    exit: arm's own
+    hold: arm's own
+  sprint3000_vocab: not in vocab (1m/5m scalp arms)
+  data_needed: brain state (read-only); history test on local 1m
+  evidence:
+    window: demo 2026-10-26..10-30 (5 trading days), icm-probe/icm-demo/vantage-demo, net of broker costs
+    n: 40
+    days: 3
+    net_R: 0.271
+    t_day: 2.64
+    family_excess: -0.046
+  flags:
+  - '4-5 session-day clusters: NOISE; family excess vs same-day same-side random control is ~0'
+  - needs >= 40 session-day clusters before any read (ADR 0045 tier)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 1%
+- id: RT-OWNDATA-110
+  name: 'Demo pocket: session_vwap_fade 5m (all)'
+  source: 'own data: brain learning ledger (perf-report source), this lane''s re-read'
+  evidence_grade: own-data
+  mechanism: none beyond the arm's own; the side split matches the week's drift (same-day same-side random brackets earn the same)
+  tf: 5m
+  rule:
+    entry: exploration arm session_vwap_fade as frozen in config/exploration_arms.yaml, restricted as named
+    side: as named
+    stop: arm's own
+    exit: arm's own
+    hold: arm's own
+  sprint3000_vocab: not in vocab (1m/5m scalp arms)
+  data_needed: brain state (read-only); history test on local 1m
+  evidence:
+    window: demo 2026-10-26..10-30 (5 trading days), icm-probe/icm-demo/vantage-demo, net of broker costs
+    n: 54
+    days: 5
+    net_R: 0.179
+    t_day: 0.63
+    family_excess: 0.25
+    excess_t_day: 1.3
+  flags:
+  - '4-5 session-day clusters: NOISE; family excess vs same-day same-side random control is ~0'
+  - needs >= 40 session-day clusters before any read (ADR 0045 tier)
+  - 'DATA-MINED: must be re-tested in a fresh pre-registered run (new id, K+1); evidence below is in-sample 2010-2017 explore or 11-day demo'
+  prior_pass_confirm: 1%
