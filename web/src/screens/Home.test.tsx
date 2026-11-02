@@ -41,12 +41,11 @@ function renderHome(role: apiModule.Role = "viewer", props: Parameters<typeof Ho
   mockIfFree("proposals", []);
   mockIfFree("recentProposals", []);
   mockIfFree("feeds", [{ account_id: "icm-demo", last_tick_age_s: 2, spread_points: 20, terminal_connected: true,
-    webhook_p99_latency_s: null, supervisor_heartbeat_age_s: 3 }]);
+    supervisor_heartbeat_age_s: 3 }]);
   mockIfFree("today", today());
   mockIfFree("openPositions", { as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [] });
   mockIfFree("strategyWatch", { as_of: "2026-10-19T10:00:00Z", unreadable: [], agents: [] });
   mockIfFree("tradesOverview", { as_of: "2026-10-19T10:00:00Z", periods: [], unreadable: [] });
-  mockIfFree("activity", { events: [], unreadable: [] });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Home {...props} /></QueryClientProvider>);
 }
@@ -194,12 +193,12 @@ describe("Home strategies and learning", () => {
     expect(list).toHaveTextContent("Box break close 4hunknown");
   });
 
-  it("puts the learning in one line, in R with n, tagged shadow, not money", async () => {
-    renderHome("viewer", { onOpenProgress: () => {} });
+  it("puts the learning in one line, in R with n, tagged shadow, not money, with no link to the retired Road to live", async () => {
+    renderHome("viewer");
     const card = await screen.findByRole("region", { name: "Learning" });
     await vi.waitFor(() => expect(card).toHaveTextContent("Shadow trades, 7 days: every candidate"));
     expect(card).toHaveTextContent("shadow, not money");
     expect(card).toHaveTextContent("Nothing changed enough to report since last week.");
-    expect(screen.getByRole("button", { name: "Road to live ›" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Road to live/ })).not.toBeInTheDocument();
   });
 });

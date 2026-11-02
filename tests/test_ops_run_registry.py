@@ -18,22 +18,22 @@ MOVED_FILES = sorted((ROOT / "goldbot" / "ops" / "services").glob("*.py")) + \
     sorted((ROOT / "goldbot" / "ops" / "commands").glob("*.py"))
 
 # every top-level name goldbot/ops/run.py defined before the split (and `main`, the dispatcher that replaced the
-# if/elif chain under `if __name__ == "__main__"`)
+# if/elif chain under `if __name__ == "__main__"`), less run_webhook: the TradingView webhook retired on 2026-11-02
 BEFORE_SPLIT = (
     "SESSIONS_TIMEOUT_S", "SessionRefresher", "refresh_sessions", "_set_bridge_verdict", "apply_bridge_compat",
     "expire_bridge_compat", "begin_bridge_check", "engine_pass", "_record_tick_error", "SUP_ERR_LOG_S", "_SUP_ERR_LOGGED",
     "supervisor_pass", "run_supervisor", "refuse_start", "start_loop_watch", "run_engine", "_run_engine",
     "paper_stand_in", "engine_limits", "record_gate_cli", "costs_uploader", "publish_costs_cli", "drift_review_cli",
-    "run_bridge", "run_api", "run_webhook", "_agent_runner", "_job_broker", "run_scheduler", "run_telegram",
+    "run_bridge", "run_api", "_agent_runner", "_job_broker", "run_scheduler", "run_telegram",
     "run_news", "log",
 )
 
-# the old dispatcher's branches, in its order
-ORDER = ("supervisor", "engine", "drift-review", "bridge", "bridge-order-lane", "api", "webhook", "scheduler", "telegram", "news",
+# the old dispatcher's branches, in its order (less webhook, tv-pull, tv-import and tv-repaint-check, retired on 2026-11-02)
+ORDER = ("supervisor", "engine", "drift-review", "bridge", "bridge-order-lane", "api", "scheduler", "telegram", "news",
          "record-gate", "gates", "gate-evidence", "publish-costs", "backup", "restore", "restore-drill", "setup",
          "preflight", "revoke-sessions", "mail-test", "owner-history", "health", "positions", "shadow-report", "fill-count",
          "broker-history-depth", "observe", "ruin", "monthly-report",
-         "perf-report", "sizing-feasibility", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "tv-ideas", "ledger",
+         "perf-report", "sizing-feasibility", "bridge-smoke", "tv-ideas", "ledger",
          "daily-review", "repair-lost-record", "autodisc-register")
 
 

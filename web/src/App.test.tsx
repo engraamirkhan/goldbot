@@ -53,20 +53,41 @@ describe("App header", () => {
     },
   );
 
-  it("has six destinations (the Chart tab is off for now); the phone bar holds Home, Trades, Limits, Research and More", () => {
+  it("has five destinations, all on the phone bar: Home, Trades, Limits, Health and Settings", () => {
     apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     renderApp();
     const rail = screen.getByRole("navigation", { name: "Main" });
     expect(Array.from(rail.querySelectorAll("button")).map((b) => b.textContent))
-      .toEqual(["Home", "Trades", "Limits", "Research", "Feeds", "Settings"]);
+      .toEqual(["Home", "Trades", "Limits", "Health", "Settings"]);
     const bar = screen.getByRole("navigation", { name: "Main, phone" });
-    expect(Array.from(bar.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["Home", "Trades", "Limits", "Research", "More"]);
+    expect(Array.from(bar.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["Home", "Trades", "Limits", "Health", "Settings"]);
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
     fireEvent.click(rail.querySelector('[data-nav-item="Limits"]')!);
     expect(screen.getByLabelText("Loading limits")).toBeInTheDocument();
     expect(window.location.hash).toBe("#/limits");
   });
 
-  it("opens a section and sub-tab from the address (#/feeds/news) and hides Users from a viewer", () => {
+  it("opens System health from an old Feeds bookmark (#/feeds/health) with no sub-tabs", () => {
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
+    history.replaceState(null, "", "/#/feeds/health");
+    renderApp();
+    expect(screen.getByRole("heading", { level: 1, name: "Health" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Main" }).querySelector('[data-nav-item="Health"]'))
+      .toHaveAttribute("aria-current", "page");
+    history.replaceState(null, "", "/");
+  });
+
+  it("shows Home with no Road to live link: the Progress screen is retired", () => {
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
+    history.replaceState(null, "", "/#/research/road");
+    renderApp();
+    expect(screen.queryByRole("button", { name: /Road to live/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Research" })).not.toBeInTheDocument();
+    history.replaceState(null, "", "/");
+  });
+
+  it("opens a section and sub-tab from the address (#/settings) and hides Users from a viewer", () => {
     apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     history.replaceState(null, "", "/#/settings");
     renderApp();

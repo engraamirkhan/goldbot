@@ -60,7 +60,7 @@ def health(entry: str = "ok", reconcile: str = "ok", other_fail: bool = False,
               {"name": "engine:icm-demo", "status": "ok", "reason": "fresh"},
               {"name": "reconcile:icm-demo", "status": reconcile, "reason": "positions match the broker"}]
     if other_fail:
-        checks.append({"name": "tv_pull", "status": "fail", "reason": "stale"})
+        checks.append({"name": "backup_age", "status": "fail", "reason": "stale"})
     return json.dumps({"ts": "2026-10-30T10:01:00Z", "status": "ok", "checks": checks})
 
 
@@ -188,7 +188,7 @@ def test_a_failing_entry_status_or_reconcile_or_an_unreadable_report_fails_with_
 
 def test_an_unrelated_failing_check_is_shown_but_does_not_fail_the_deploy(fakes):
     r, _ = run(fakes, SHA, FAKE_HEALTH=health(other_fail=True), FAKE_HEALTH_RC="1")
-    assert r.returncode == 0 and "tv_pull" in r.stdout
+    assert r.returncode == 0 and "backup_age" in r.stdout
 
 
 def test_remote_output_is_printed_without_terminal_escapes(fakes):

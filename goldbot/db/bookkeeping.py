@@ -13,10 +13,10 @@ Design rules quoted from the proposal:
   the monthly cap and books it in the same transaction, so concurrent runs can never be granted more than the cap.
 * "dual-write the JSON after the DB commit for one release, so rolling back the code is safe."
 
-Compatibility exports. Readers outside step 3 still open the old files: the dashboard (`api/app.py`: scheduler.json,
-agent_runs.jsonl), health (`ops/health.py`: agent_spend.json; scheduler.json only when aux.db has no heartbeat), the
-agents' `read_state` tool (scheduler.json), the VPS updater (fallback to scheduler.json) and the API's owner notices,
-which append to agent_runs.jsonl; and a rolled-back older release reads all four. So the DB is the record and the
+Compatibility exports. Readers outside step 3 still open the old files: the Telegram relay (agent_runs.jsonl),
+health (`ops/health.py`: agent_spend.json; scheduler.json only when aux.db has no heartbeat), the agents'
+`read_state` tool (scheduler.json), the VPS updater (fallback to scheduler.json) and the API's owner notices, which
+append to agent_runs.jsonl; and a rolled-back older release reads all four. So the DB is the record and the
 files are regenerated from it after each commit (`export_latest`), outside the transaction: a failed export (a
 Windows sharing violation on the rename) is logged and never undoes the booking. The runner still appends each run's
 line to agent_runs.jsonl (existing lines are never rewritten). The original of a rewritten file is copied once to
@@ -248,8 +248,9 @@ AGENT_RUNS = ImportSpec(source=RUNS_FILE, kind="aux", loader=import_agent_runs_j
 
 
 class AgentRunLog:
-    """The staff-agent run log in aux.db, with agent_runs.jsonl kept as an append-only mirror for the dashboard, the
-    API's owner notices and an older release after a rollback (see the module docstring)."""
+    """The staff-agent run log in aux.db, with agent_runs.jsonl kept as an append-only mirror for the Telegram relay
+    (goldbot/telegram/outbox.py), the API's owner notices and an older release after a rollback (see the module
+    docstring)."""
 
     def __init__(self, state_dir: str | Path):
         self.dir = Path(state_dir)
@@ -376,6 +377,11 @@ def save_jobs(conn: sqlite3.Connection, jobs: dict[str, str], heartbeat_ns: int 
                  "SET ts_ns = excluded.ts_ns, body = excluded.body",
                  (heartbeat_ns or now_ns(), status or json.dumps({"jobs": {}})))
     bump_export(conn, SCHEDULER_FILE)
+
+
+def delete_jobs(conn: sqlite3.Connection, names: list[str]) -> None:
+    """Drop the state rows of jobs the code no longer registers (Scheduler.prune)."""
+    conn.executemany("DELETE FROM scheduler_jobs WHERE name = ?", [(n,) for n in names])
 
 
 def scheduler_document(conn: sqlite3.Connection) -> str | None:

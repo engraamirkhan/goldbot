@@ -4,10 +4,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type TradesOverview } from "../lib/api";
-import { SOURCE_WORDS } from "../lib/activity";
 import {
   BREAKDOWNS, bestWorst, type Breakdown, counts, exits, headline, netPnl, type Period, PERIODS, resultTone, rows,
-  signedR, TRADES_POLL_MS, TYPE_WORDS, winRate,
+  signedR, SOURCE_WORDS, TRADES_POLL_MS, TYPE_WORDS, winRate,
 } from "../lib/tradesOverview";
 import { Card, EmptyState, ErrorState, MetricTile, Segmented, Skeleton, TimeText } from "../ui";
 

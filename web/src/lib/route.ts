@@ -5,9 +5,13 @@
 // the URL, "#/trades/list/<trade_id>" opens one trade; the old tabs (open, activity, summary) redirect.
 import { useEffect, useState } from "react";
 
-// "chart" is off for now (owner 2026-10-25: focus on the trading system); #/chart opens Home. Screens kept for later.
-export const SECTIONS = ["home", "trades", "limits", "research", "feeds", "settings"] as const;
+// "chart" is off (owner 2026-10-25: focus on the trading system); #/chart opens Home. Research and Feeds are retired
+// (owner 2026-11-02): an old #/research link opens Home, an old #/feeds link opens Health (SECTION_ALIAS).
+export const SECTIONS = ["home", "trades", "limits", "health", "settings"] as const;
 export type Section = (typeof SECTIONS)[number];
+
+/** Retired sections whose bookmarks open another section (its first screen: the old sub-tab is dropped). */
+export const SECTION_ALIAS: Record<string, Section> = { feeds: "health" };
 /** `sub`: a third path part (one trade's id); `query`: the part after "?" (filters), without the "?". */
 export type Route = { section: Section; tab: string | null; sub?: string | null; query?: string };
 
@@ -22,6 +26,8 @@ export function parseRoute(hash: string): Route {
   const path = q >= 0 ? raw.slice(0, q) : raw;
   const query = q >= 0 ? raw.slice(q + 1) : "";
   const [s, t, ...rest] = path.split("/");
+  const alias = SECTION_ALIAS[s ?? ""];
+  if (alias) return { section: alias, tab: null, sub: null, query: "" };
   const section = (SECTIONS as readonly string[]).includes(s ?? "") ? (s as Section) : "home";
   const known = section === s;
   const tab0 = known && t ? t : null;
