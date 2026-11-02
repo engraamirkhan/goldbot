@@ -44,6 +44,7 @@ from goldbot.data.daily import (  # noqa: E402
     CUTOFF,
     DAILY_ROOT,
     FRED_DAILY,
+    OECD_3M_RATES,
     POS1_SYMBOLS,
     SPECS,
     assert_before_cutoff,
@@ -53,6 +54,7 @@ from goldbot.data.daily import (  # noqa: E402
     hourly_mid,
     minutes_to_daily,
     months,
+    oecd_monthly_available_utc,
 )
 
 DATAFEED = "https://datafeed.dukascopy.com/datafeed"
@@ -210,7 +212,8 @@ def cmd_fred(args: argparse.Namespace) -> int:
     from goldbot.data.macro import fetch_fred_csv, fred_frame
     today = pd.Timestamp.now(tz="UTC").normalize()
     rc = 0
-    for sid in FRED_DAILY:
+    oecd = set(OECD_3M_RATES.values())
+    for sid in args.series or [*FRED_DAILY, *OECD_3M_RATES.values()]:
         try:
             obs = fetch_fred_csv(sid, "2002-01-01", end="2025-09-30")
         except RuntimeError as e:
@@ -219,6 +222,9 @@ def cmd_fred(args: argparse.Namespace) -> int:
             continue
         obs = obs[obs["value_date"] < CUTOFF.tz_localize(None)]
         f = fred_frame(sid, obs, today)
+        if sid in oecd:     # monthly MEI average: the conservative release-lag stamp, not the daily H.15 rule
+            f["available_utc"] = oecd_monthly_available_utc(f["value_date"])
+            f["ts_utc"] = f["available_utc"]
         f = f[f["available_utc"] < CUTOFF].reset_index(drop=True)
         _write_parquet(f, args.root / f"fred_{sid}.parquet")
         print(f"{sid}: {len(f):,} rows {f['value_date'].min():%Y-%m-%d}..{f['value_date'].max():%Y-%m-%d}", flush=True)
@@ -272,6 +278,11 @@ def quality(df: pd.DataFrame, date_col: str = "date") -> dict[str, object]:
     for c in ("n_hours", "n_minutes"):
         if c in df:
             out["short_days"] = int((df[c] < (6 if c == "n_hours" else 360)).sum())
+    if len(d) > 1 and float(np.median(gaps)) >= 28:      # a monthly series: count missing months, not weekdays
+        mons = pd.period_range(d.min(), d.max(), freq="M")
+        out["missing_weekdays"] = 0
+        out["missing_months"] = int(len(mons) - len(set(d.to_period("M"))))
+        return out
     if gaps.max() > 4:
         i = int(gaps.argmax())
         out["max_gap_at"] = f"{d[i]:%Y-%m-%d}..{d[i + 1]:%Y-%m-%d}"
@@ -315,6 +326,7 @@ def main() -> int:
     ap.add_argument("--pause", type=float, default=0.5)
     ap.add_argument("--out", default="~/tmp/daily_manifest.json")
     ap.add_argument("--tickers", nargs="*", default=["^GSPC"])
+    ap.add_argument("--series", nargs="*", default=None, help="fred step: these FRED ids only (default: all)")
     args = ap.parse_args()
     if args.symbols == ["all"]:
         args.symbols = list(SPECS)
