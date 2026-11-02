@@ -236,7 +236,7 @@ def test_health_names_mixed_currencies_and_the_offending_files(tmp_path):
 
 def test_the_startup_error_payload_carries_the_currency(tmp_path):
     class Dead(GbpPaper):
-        def positions(self, magic_prefix: int | None = None) -> list:
+        def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list:
             raise RuntimeError("terminal down")
     (tmp_path / "orders_icm-demo.json").write_text(json.dumps({"sent": {}, "open": {}}))
     with pytest.raises(RuntimeError):
