@@ -301,6 +301,20 @@ def costs_file(eng: Engine) -> Path:
     return book_dir(cfg.state_dir, cfg.account_id) / f"costs_{cfg.release_symbol}.json"
 
 
+def store_symbol(eng: Engine) -> str:
+    """The store's symbol for the active book's rows (ticks, decisions, fills, exit legs, dq events): gold keeps its
+    traded symbol as today; another book its unique `store_symbol`, so nothing is ever pooled with XAUUSD."""
+    return eng.cfg.symbol if is_primary(eng) else eng.cfg.release_symbol
+
+
+def live_key(eng: Engine) -> tuple[str, str]:
+    """(source, symbol) of the active book's `bars_1m_live` minutes. Plan: "store bars_1m_live keyed (source=account,
+    symbol=store_symbol), never pooled with XAUUSD" for a non-gold book; gold keeps (broker name, its symbol), the
+    history it has read and written since ADR 0062 ("XAUUSD paths byte-identical")."""
+    cfg = eng.cfg
+    return (cfg.broker_name, cfg.symbol) if is_primary(eng) else (cfg.account_id, cfg.release_symbol)
+
+
 # ------------------------------------------------------------------ instruments.db terms (non-gold books)
 def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = None) -> None:
     """A non-gold book's terms: written from symbol_info every broker_terms_every_s (and first thing), read back every

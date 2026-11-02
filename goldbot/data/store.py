@@ -56,7 +56,10 @@ TABLES = {
     "bars_quarantine",                         # 1m rows with an error-severity dq_flag, kept out of the bar tables
     "ticks_quarantine",                        # tick rows moved out of `ticks` (data/quarantine.py), kept for lineage
     "bars_1m_broker",                          # the broker's own M1 as its terminal reports it (D12/D23), never blended
-    "bars_1m_live",                            # the engine's minutes from the broker's ticks (engine/history.py), never blended
+    # the engine's minutes from the broker's ticks (engine/history.py), never blended. Gold: source = broker name,
+    # symbol = its traded symbol; any other instrument (multi-instrument plan): source = account, symbol = its unique
+    # store_symbol (goldbot/instruments.py), so it is never pooled with XAUUSD (engine/books.py `live_key`)
+    "bars_1m_live",
     "bars_15m_broker",                         # the broker's own M15, the key zones' long history (engine/key_zones.py)
     "positioning",                             # COT and GLD holdings (local files only), point in time
     "observe_bars_1m",                         # ADR 0063: an observe-only account's terminal M1 (source = account), local only

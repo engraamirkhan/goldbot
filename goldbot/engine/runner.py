@@ -918,7 +918,7 @@ class Engine:
         self._dq_bar_events, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
         if self._dq_bar_events and self.store is not None:
             self.store.append("dq_events", events_frame(self._dq_bar_events), source=self.cfg.account_id,
-                              symbol=self.cfg.symbol, dedupe=False)
+                              symbol=books.store_symbol(self), dedupe=False)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         if len(complete) < 400:
             return []
@@ -1600,7 +1600,7 @@ class Engine:
         try:
             rows = pd.DataFrame(self._exit_fills).astype({"client_order_id": "string", "agent_id": "string",
                                                           "kind": "string", "retcode": "Int64"})   # one schema
-            self.store.append("exit_fills", rows, source=self.cfg.account_id, symbol=self.cfg.symbol)   # keyed: a replay adds no second leg
+            self.store.append("exit_fills", rows, source=self.cfg.account_id, symbol=books.store_symbol(self))   # keyed: a replay adds no second leg
             self._exit_fills = []
         except Exception:
             log.exception("%d exit fills not written; kept for the next flush", len(self._exit_fills))
@@ -2810,7 +2810,7 @@ class Engine:
                          "proposal_id": d.get("proposal"), "detail": json.dumps(extra, default=str)})
         df = pd.DataFrame(rows)
         df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
-        self.store.append("decisions", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        self.store.append("decisions", df, source=self.cfg.account_id, symbol=books.store_symbol(self), dedupe=False)
         self._journaled = len(self.decisions)
 
     def _log_tick(self, t: Tick) -> None:
@@ -2840,7 +2840,7 @@ class Engine:
             return
         df = pd.DataFrame({"ts_utc": [x.ts_utc for x in self._tick_log], "bid": [x.bid for x in self._tick_log],
                            "ask": [x.ask for x in self._tick_log]})
-        self.store.append("ticks", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        self.store.append("ticks", df, source=self.cfg.account_id, symbol=books.store_symbol(self), dedupe=False)
         self._tick_log = []
 
     def _refresh_broker_terms(self, now: pd.Timestamp) -> None:

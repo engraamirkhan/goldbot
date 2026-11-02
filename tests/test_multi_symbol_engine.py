@@ -222,3 +222,20 @@ def test_only_atr_scaled_random_controls_run_on_another_instrument_each_under_it
     a = got.arms[0]
     assert a.tag == "explore:I0@XAGUSD" and a.key != cfg.arms[1].key and a.spec.id == "I0"
     assert X.book_config(cfg.model_copy(update={"arms": cfg.arms[:1]}), "XAGUSD") is None
+
+
+def test_a_non_gold_books_rows_are_keyed_by_account_and_store_symbol_never_pooled_with_gold(tmp_path):
+    """Plan: "store bars_1m_live keyed (source=account, symbol=store_symbol), never pooled with XAUUSD"."""
+    from goldbot.data.store import Store
+    pb = MultiPaper(equity=10_000)
+    spec = SILVER.model_copy(update={"symbol": "XAGUSD.x", "store_symbol": "XAGUSD"})
+    eng = _engine(tmp_path, pb, specs=(spec,), data_root=str(tmp_path / "data"))
+    assert books.live_key(eng) == ("icm", "XAUUSD")                  # gold: unchanged
+    with using(eng, eng.books["XAGUSD.x"]):
+        assert books.live_key(eng) == ("icm-probe", "XAGUSD") and books.store_symbol(eng) == "XAGUSD"
+        for k in range(3):
+            eng.on_tick(_quote(pb, "XAGUSD.x", 30.0 + k / 100, T0 + pd.Timedelta(seconds=k)))
+        eng.flush_ticks()
+    store = Store(tmp_path / "data")
+    assert len(store.read("ticks", source="icm-probe", symbol="XAGUSD")) == 3
+    assert store.read("ticks", source="icm-probe", symbol="XAUUSD").empty

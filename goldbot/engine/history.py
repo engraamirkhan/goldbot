@@ -330,7 +330,9 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     days = cfg.max_bars_in_memory // (60 * 23) * 7 // 5 + 3     # trading minutes -> calendar days
     lo = now - pd.Timedelta(days=days)
     rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.release_symbol, start=lo, end=now), now)
-    own = _clean(eng.store.read(LIVE_TABLE, source=cfg.broker_name, symbol=cfg.symbol, start=lo, end=now), now)
+    from goldbot.engine import books
+    src, sym = books.live_key(eng)       # gold: (broker, its symbol); another book: (account, store symbol)
+    own = _clean(eng.store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
     if not own.empty:
         h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
         rel = rel[rel["ts_utc"] < h.cutover] if not rel.empty else rel
@@ -414,7 +416,8 @@ def _write(eng: Engine, bars: pd.DataFrame) -> None:
     if eng.store is None or bars.empty:
         return
     if h.writer is None:
-        h.writer = BarWriter(eng.store, eng.cfg.broker_name, eng.cfg.symbol)
+        from goldbot.engine import books
+        h.writer = BarWriter(eng.store, *books.live_key(eng))
     h.writer.put(bars)
 
 

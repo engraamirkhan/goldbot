@@ -208,4 +208,5 @@ def record_fill(eng: Engine, prop: Proposal, agent: Specialist, res: OrderResult
     fill = pd.DataFrame([{"ts_utc": eng.broker.last_tick(eng.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
                           "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
                           "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
-    eng.store.append("fills", fill, source=eng.cfg.account_id, symbol=eng.cfg.symbol, dedupe=False)
+    from goldbot.engine import books
+    eng.store.append("fills", fill, source=eng.cfg.account_id, symbol=books.store_symbol(eng), dedupe=False)
