@@ -146,7 +146,7 @@ def test_wizard_needs_a_terminal(monkeypatch, capsys):
 
 # ------------------------------------------------------------------------------------------------ preflight
 GOOD_UNITS = {("is-active", "goldbot-bridge-tunnel"): "active", ("is-active", "chrony"): "active",
-              ("is-enabled", "goldbot-deploy.timer"): "enabled"}
+              ("is-enabled", "goldbot-deploy.timer"): "enabled", ("is-active", "goldbot-deploy.timer"): "active"}
 
 
 def fake_systemctl(units, *, ntp="yes"):
@@ -304,6 +304,14 @@ def test_missing_backups_only_warn(server):
     assert b.status == "warn" and not b.blocking and "backup --init" in b.fix
     assert pf.exit_code(items) == 0
     assert "READY: no blocking problems (1 warning(s))" in pf.render(items)
+
+
+def test_an_enabled_deploy_timer_that_is_not_running_fails(server):
+    """Incident 2026-11-02: the bootstrap enabled the timer without --now; it never ran until a reboot that never came."""
+    run, _ = fake_systemctl({**GOOD_UNITS, ("is-active", "goldbot-deploy.timer"): "inactive"})
+    item = next(i for i in pf.run_preflight(server(run_cmd=run)) if i.name == "deploy_timer")
+    assert item.status == "fail" and "enabled, inactive" in item.detail
+    assert item.fix == "sudo systemctl enable --now goldbot-deploy.timer"
 
 
 def test_no_bridge_configured_and_no_systemctl(server):

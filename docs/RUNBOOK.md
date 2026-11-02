@@ -2620,7 +2620,7 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 
   ```powershell
   cd C:\goldbot
-  foreach ($s in "goldbot-scheduler","goldbot-webhook","goldbot-news","goldbot-api","goldbot-telegram","goldbot-supervisor","goldbot-engine-icm","goldbot-engine-vantage") { nssm stop $s }
+  foreach ($s in "goldbot-scheduler","goldbot-news","goldbot-api","goldbot-telegram","goldbot-supervisor","goldbot-engine-icm","goldbot-engine-vantage") { nssm stop $s }
   .\.venv\Scripts\python.exe -c "import sqlite3; c = sqlite3.connect(r'state\aux.db'); v = c.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]; assert v == 5, f'schema {v}: do not run this'; c.execute('DELETE FROM schema_version WHERE version = 5'); c.execute('PRAGMA user_version = 4'); c.commit()"
   ```
 
