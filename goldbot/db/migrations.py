@@ -772,8 +772,29 @@ PROGRAM: tuple[Migration, ...] = (
     Migration(version=1, name="program_ledger", statements=_ledger_statements()),
 )
 
+# instruments.db (multi-instrument demo, plan 2026-11-02, lane L3: "costs/swap/lot terms per (account, symbol) in
+# state/instruments.db (SQLite WAL)"): one row per account and broker symbol, the terminal's lot terms and its swap as
+# money in the symbol's profit currency per lot per night (NULL: a swap mode the engine does not convert, so entries on
+# that symbol are refused). Written by the engine from symbol_info (goldbot/engine/instruments_db.py); never gold's
+# terms, which keep their own files (costs_<account>.json, broker_terms_<account>.json)
+INSTRUMENTS: tuple[Migration, ...] = (
+    Migration(version=1, name="instrument_terms", statements=(
+        """CREATE TABLE IF NOT EXISTS instrument_terms (
+    account_id TEXT NOT NULL, symbol TEXT NOT NULL, store_symbol TEXT NOT NULL,
+    contract_size REAL NOT NULL CHECK (contract_size > 0), digits INTEGER NOT NULL CHECK (digits >= 0),
+    point REAL NOT NULL CHECK (point > 0), volume_min REAL NOT NULL CHECK (volume_min > 0),
+    volume_step REAL NOT NULL CHECK (volume_step > 0), volume_max REAL NOT NULL CHECK (volume_max > 0),
+    currency_profit TEXT, swap_long_per_lot REAL, swap_short_per_lot REAL,
+    swap_triple_weekday INTEGER CHECK (swap_triple_weekday BETWEEN 0 AND 6),
+    swap_note TEXT NOT NULL, updated_utc TEXT NOT NULL,
+    PRIMARY KEY (account_id, symbol)
+) STRICT""",
+    )),
+)
+
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH,
-                                                   "program": PROGRAM, "tv_ideas": TV_IDEAS}
+                                                   "program": PROGRAM, "tv_ideas": TV_IDEAS,
+                                                   "instruments": INSTRUMENTS}
 
 
 def _check_sequence(kind: DbKind, migs: tuple[Migration, ...]) -> None:

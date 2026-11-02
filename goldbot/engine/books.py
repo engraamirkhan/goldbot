@@ -1,0 +1,451 @@
+"""One engine per account, one SymbolBook per instrument (multi-instrument demo plan 2026-11-02, Option B, lane L3).
+
+The plan's rules, as built here:
+
+* "one engine per account with N SymbolBooks; one AccountRisk (RiskGate, AccountState, kill switch) shared; serial
+  gate.check across symbols". The `Engine` stays the account's engine: its RiskGate (`gate`), its AccountState
+  (`state`), the kill switch and risk-period state, the approvals, the order sender and every account file are the
+  account's, once. What belongs to one instrument (its bars, resamplers, ticks, cost and contract caches, open trades
+  and order rows, exploration arms, session table, magic range, journal) lives on a `SymbolBook`. Engine attributes
+  named in BOOK_ATTRS are data descriptors that read and write the ACTIVE book, so every method runs on one
+  instrument at a time with the code that runs gold today. The run loop takes the books in turn (`account_pass`), one
+  thread, so gate.check is serial across symbols and every check sees the exposure the previous one left.
+* "XAUUSD paths byte-identical": gold is the primary book (`Engine.primary`), built from the EngineConfig as before.
+  An engine with no other instrument never switches books, so nothing here runs for it.
+* The AccountState holds the account's facts once (equity, stage, day start, open exposure, halts) plus the facts the
+  gate reads of the instrument being decided on (SYMBOL_STATE: spread, quote age, staleness, data quality, market
+  hours, the entry windows). A switch (`using`) keeps each book's own copy of SYMBOL_STATE, so an entry on one symbol
+  is never gated on another symbol's spread or market hours; a book that has not refreshed yet reads stale and
+  closed (fail closed).
+* "SymbolBook has no order method": a book is state only. Orders still go through `Engine._execute` after
+  `RiskGate.check`, and exits through the engine's close path, on the active book.
+* Exposure is account-wide (plan: "account-wide heat runner.py:1057, :2115"): with more than one book every refresh
+  counts every position on every book's symbol (`after_refresh`), priced on its own book's quote, contract and the
+  broker's conversion; one it cannot price makes the open risk unknown, which the RiskGate refuses (fail closed).
+* Each non-gold book keeps its order rows and open trades in state/books/<account>/orders_<store_symbol>.json (never
+  `orders_*.json` in state/, which the API reads as accounts); the risk file and engine_<account>.json stay the
+  primary's (`BookStore`). Its lot and swap terms come from state/instruments.db (`refresh_terms`); unreadable or
+  missing terms refuse that book's entries while its exits run.
+* Live and observe-only accounts never get a non-gold book (`open_books` refuses; the accounts loader refuses first).
+"""
+from __future__ import annotations
+
+import logging
+import math
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+import pandas as pd
+
+from goldbot.base import FrozenRecord
+from goldbot.engine import magic
+from goldbot.engine.exploration import ExplorationConfig
+from goldbot.engine.instruments_db import InstrumentsDb, InstrumentsDbError, InstrumentTerms, terms_from_info
+from goldbot.engine.store import JsonEngineStore, OrdersSnapshot, RiskSnapshot
+
+if TYPE_CHECKING:
+
+    from goldbot.engine.runner import Engine, EngineConfig
+    from goldbot.execution.broker import Tick
+    from goldbot.labels.triple_barrier import SwapSpec
+
+log = logging.getLogger("goldbot.engine")
+
+# Engine attributes that belong to one instrument (read and written on the active book). Everything else on the
+# Engine is the account's. A test holds every name here set on a new book and none left on the Engine itself.
+BOOK_ATTRS: tuple[str, ...] = (
+    "cfg", "sessions", "agents", "models", "live_shares", "live_versions", "shadow", "shadow_models", "_tv",
+    "probe", "exploration", "state_store",
+    "ticks", "bars_1m", "history", "broker_m1", "last_bar_close", "_closed_through", "_history_through",
+    "_ctx_cache", "_resamplers", "_bars_clean", "_last_tick", "_skew", "_unhealthy_at",
+    "_dq_pending", "_dq_bar_events", "_dq_repeats", "_late_ticks", "_late_since_warn", "_late_warned_at", "_late_bar",
+    "_late_streak", "_quote_invalid_since", "_invalid_state_written",
+    "_tick_log", "_tick_flush_retry", "ticks_dropped", "decisions", "_journaled", "_exit_fills", "_excursion_errors",
+    "_cost_cache", "_sym_cache", "_fx_cache", "_contract", "_contract_tried", "_min_lot_risk", "_open_fx",
+    "_price", "_ladder", "_lot_terms_warned", "_last_atr", "_last_terms", "_blackout_event",
+    "open", "sent_ids", "_orders", "_closes", "_records_lost", "_looks", "_unconfirmed", "_position_ids",
+    "_close_due", "_close_backoff", "_modify_backoff", "_foreign", "_kill_pending", "_kill_book_failing",
+    "_weekend_done", "_read_fails", "_read_fail_at", "_last_reconcile", "_last_state_write",
+)
+
+# AccountState fields that describe the instrument being decided on; every other field is the account's
+SYMBOL_STATE: tuple[str, ...] = (
+    "last_tick_age_s", "spread_points", "tick_ahead_s", "in_blackout", "dq_error", "stale_bars", "data_recovering",
+    "weekend", "market_closed", "clock_mismatch", "tier2_blackout", "reopen_window", "holiday_thin",
+    "calendar_unavailable",
+)
+# a book that has not refreshed yet: stale and closed, so the gate refuses its entries until its first refresh
+FRESH_SYMBOL_STATE: dict[str, Any] = {"last_tick_age_s": math.inf, "spread_points": math.inf, "tick_ahead_s": 0.0,
+                                      "in_blackout": False, "dq_error": True, "stale_bars": True,
+                                      "data_recovering": False, "weekend": False, "market_closed": True,
+                                      "clock_mismatch": False, "tier2_blackout": False, "reopen_window": False,
+                                      "holiday_thin": False, "calendar_unavailable": False}
+TERMS_READ_S = 60.0              # a book's instruments.db row is read again this often (a corruption is seen within it)
+
+T = TypeVar("T")
+
+
+class BookSpec(FrozenRecord):
+    """One non-gold instrument an account's engine trades (from goldbot/instruments.py InstrumentSpec and the account's
+    exploration block; built by ops.services.engine)."""
+    key: str                         # InstrumentSpec.key
+    symbol: str                      # the broker's symbol
+    store_symbol: str                # the store's symbol column: never XAUUSD's
+    magic_block: int
+    digits: int
+    point: float
+    contract_size: float
+    exploration_config: ExplorationConfig | None = None
+
+
+class BookAttr(Generic[T]):
+    """A data descriptor: `engine.<name>` is the active book's attribute."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __get__(self, obj: Any, owner: Any = None) -> Any:
+        if obj is None:
+            return self
+        try:
+            return obj.__dict__["book"].__dict__[self.name]
+        except KeyError:
+            raise AttributeError(self.name) from None
+
+    def __set__(self, obj: Any, value: Any) -> None:
+        obj.__dict__["book"].__dict__[self.name] = value
+
+    def __delete__(self, obj: Any) -> None:
+        del obj.__dict__["book"].__dict__[self.name]
+
+
+class SymbolBook:
+    """One instrument's state. Attributes are the BOOK_ATTRS the engine set on it, plus its own bookkeeping."""
+
+    def __init__(self, cfg: EngineConfig, *, primary: bool, spec: BookSpec | None = None) -> None:
+        self.__dict__["cfg"] = cfg
+        self.primary = primary
+        self.spec = spec
+        self.sym_state: dict[str, Any] = dict(FRESH_SYMBOL_STATE)
+        self.terms: InstrumentTerms | None = None
+        self.terms_problem: str | None = None if primary else "instrument_terms_missing"
+        self.terms_read: pd.Timestamp | None = None
+        self.terms_written: pd.Timestamp | None = None
+        self.fx: dict[tuple[pd.Timestamp, int], float | None] = {}
+
+    def __repr__(self) -> str:
+        return f"SymbolBook({self.__dict__['cfg'].symbol!r}, primary={self.primary})"
+
+
+def install(cls: type) -> None:
+    """Make every BOOK_ATTRS name of `cls` (the Engine) a BookAttr."""
+    for name in BOOK_ATTRS:
+        setattr(cls, name, BookAttr(name))
+
+
+def _switch(eng: Engine, into: SymbolBook) -> None:
+    out: SymbolBook = eng.__dict__["book"]
+    st = eng.state.__dict__
+    out.sym_state = {f: st[f] for f in SYMBOL_STATE}
+    st.update(into.sym_state)             # values validated when they were set; no re-validation per switch
+    eng.__dict__["book"] = into
+
+
+@contextmanager
+def using(eng: Engine, book: SymbolBook) -> Iterator[SymbolBook]:
+    """Run the block on `book` (re-entrant): its attributes and its SYMBOL_STATE are the engine's until the block ends."""
+    prev: SymbolBook = eng.__dict__["book"]
+    if prev is book:
+        yield book
+        return
+    _switch(eng, book)
+    try:
+        yield book
+    finally:
+        _switch(eng, prev)
+
+
+def multi(eng: Engine) -> bool:
+    return len(eng.books) > 1
+
+
+def is_primary(eng: Engine) -> bool:
+    return eng.__dict__["book"] is eng.primary
+
+
+def book_cfg(cfg: EngineConfig, spec: BookSpec) -> EngineConfig:
+    """The book's EngineConfig: the account's, with the instrument's symbol, store symbol, magic range and terms. No
+    cost probe, shadow book, broker M1 bars or 24/7 lane (gold-only machinery); its exploration arms its own."""
+    return cfg.model_copy(update={
+        "symbol": spec.symbol, "release_symbol": spec.store_symbol, "instrument": spec.key,
+        "magic_base": magic.book_base(cfg.magic_base, spec.magic_block),
+        "point": spec.point, "price_digits": spec.digits, "contract_size": spec.contract_size,
+        "exploration_config": spec.exploration_config, "cost_probe": False, "shadow_host": False,
+        "broker_bars": False, "always_open": False, "pauses": (), "weekend_window": None, "instruments": ()})
+
+
+def book_dir(state_dir: str | Path, account_id: str) -> Path:
+    return Path(state_dir, "books", account_id)
+
+
+class BookStore:
+    """A non-gold book's state files: its own order rows and open trades (state/books/<account>/orders_<store>.json);
+    the risk state is the account's (the primary's file, so a stage change seen on any book is saved at once); the
+    engine state file is written by the primary only (one engine_<account>.json per account, gold's view plus `books`)."""
+
+    def __init__(self, account: JsonEngineStore, state_dir: str | Path, account_id: str, store_symbol: str) -> None:
+        self.account = account
+        d = book_dir(state_dir, account_id)
+        d.mkdir(parents=True, exist_ok=True)
+        self.orders = JsonEngineStore(d, store_symbol)
+
+    def load_orders(self) -> OrdersSnapshot | None:
+        return self.orders.load_orders()
+
+    def save_orders(self, s: OrdersSnapshot) -> None:
+        self.orders.save_orders(s)
+
+    def load_risk(self) -> RiskSnapshot | None:
+        return self.account.load_risk()
+
+    def save_risk(self, s: RiskSnapshot) -> None:
+        self.account.save_risk(s)
+
+    def write_engine_state(self, payload: dict[str, Any], durable: bool = False) -> None:
+        return None                       # the primary publishes the account's file (`published`)
+
+
+def open_books(eng: Engine, specs: tuple[BookSpec, ...]) -> None:
+    """Create a book per spec (Engine.__init__, after gold's): its state, its exploration, its order rows reconciled
+    with the broker. Demo only: a live or observe-only account never trades a non-gold instrument (plan)."""
+    if not specs:
+        return
+    from goldbot.engine import exploration
+    cfg = eng.primary.__dict__["cfg"]
+    if cfg.mode != "demo":
+        raise ValueError(f"{cfg.account_id}: non-gold instruments run on demo accounts only (mode {cfg.mode})")
+    for spec in specs:
+        bcfg = book_cfg(cfg, spec)
+        if bcfg.symbol in eng.books:
+            raise ValueError(f"{cfg.account_id}: symbol {bcfg.symbol} has two books")
+        book = SymbolBook(bcfg, primary=False, spec=spec)
+        eng.books[bcfg.symbol] = book
+        with using(eng, book):
+            eng._init_book()
+            eng.agents, eng.models, eng.live_shares, eng.live_versions = {}, {}, {}, {}
+            eng.shadow, eng.shadow_models, eng.probe = None, {}, None
+            eng.state_store = BookStore(eng.primary.__dict__["state_store"], bcfg.state_dir, bcfg.account_id,
+                                        spec.store_symbol)
+            eng.exploration = exploration.Exploration.start(eng)
+            eng._kill_pending = eng._kill_everything
+            eng._load_orders()
+    on_decision = eng._on_decision                  # proposals are the primary's: applied on its book (its symbol)
+
+    def on_primary(p: Any) -> None:
+        with using(eng, eng.primary):
+            on_decision(p)
+    eng.center.on_decision = on_primary
+
+
+def account_pass(eng: Engine, broker: Any, one_pass: Any) -> bool:
+    """One loop pass over every book, gold first: `one_pass(eng, broker, symbol)` (ops.services.engine.engine_pass)
+    on each book in turn, serially. True when every book's pass was clean."""
+    ok = True
+    for book in list(eng.books.values()):
+        with using(eng, book):
+            ok = bool(one_pass(eng, broker, book.__dict__["cfg"].symbol)) and ok
+    return ok
+
+
+def positions(eng: Engine) -> list[Any]:
+    """The active book's broker positions: gold's call is unchanged (the adapter's own symbol); a non-gold book names
+    its symbol (`Broker.positions(symbol=...)`)."""
+    if is_primary(eng):
+        return list(eng.broker.positions())
+    return list(eng.broker.positions(symbol=eng.cfg.symbol))
+
+
+def unconfirmed(eng: Engine) -> bool:
+    """BACKLOG 72 across the account: an unsettled order row on ANY book refuses every entry."""
+    from goldbot.engine import unconfirmed as unc
+    return any(unc.pending(b.__dict__.get("_orders", {})) for b in eng.books.values())
+
+
+def costs_file(eng: Engine) -> Path:
+    """The cost table the nightly job writes for the active book: gold's costs_<account>.json; a non-gold book's own
+    file under state/books/<account>/ (absent until a job measures it: the configured cost then applies)."""
+    cfg = eng.cfg
+    if is_primary(eng):
+        return Path(cfg.state_dir, f"costs_{cfg.account_id}.json")
+    return book_dir(cfg.state_dir, cfg.account_id) / f"costs_{cfg.release_symbol}.json"
+
+
+# ------------------------------------------------------------------ instruments.db terms (non-gold books)
+def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = None) -> None:
+    """A non-gold book's terms: written from symbol_info every broker_terms_every_s (and first thing), read back every
+    TERMS_READ_S. Sets the book's `terms_problem` (None, `instruments_db_unreadable`, `instrument_terms_missing`,
+    `swap_unknown`), which refuses its entries; never raises."""
+    book: SymbolBook = eng.__dict__["book"]
+    if book.primary:
+        return
+    db = db or instruments_db(eng)
+    cfg = eng.cfg
+    if book.terms_written is None or (now - book.terms_written).total_seconds() >= cfg.broker_terms_every_s:
+        book.terms_written = now
+        try:
+            info = eng.broker.symbol_info(cfg.symbol)
+            db.save(terms_from_info(cfg.account_id, cfg.symbol, cfg.release_symbol, info, now))
+        except InstrumentsDbError as exc:
+            log.error("%s %s: %s; its entries are refused, exits run", cfg.account_id, cfg.symbol, exc)
+        except Exception as exc:          # the terminal: the row last written (if any) stands
+            log.warning("%s %s: symbol_info unavailable for instruments.db (%s)", cfg.account_id, cfg.symbol,
+                        type(exc).__name__)
+        book.terms_read = None            # read back what was written
+    if book.terms_read is not None and (now - book.terms_read).total_seconds() < TERMS_READ_S:
+        return
+    book.terms_read = now
+    try:
+        book.terms = db.load(cfg.account_id, cfg.symbol)
+    except InstrumentsDbError as exc:
+        if book.terms_problem != "instruments_db_unreadable":
+            log.error("%s %s: %s; its entries are refused, exits run", cfg.account_id, cfg.symbol, exc)
+        book.terms, book.terms_problem = None, "instruments_db_unreadable"
+        return
+    t = book.terms
+    book.terms_problem = ("instrument_terms_missing" if t is None
+                          else "swap_unknown" if t.swap_long_per_lot is None or t.swap_short_per_lot is None
+                          or t.swap_triple_weekday is None or not 1 <= t.swap_triple_weekday <= 5 else None)
+
+
+def instruments_db(eng: Engine) -> InstrumentsDb:
+    db = eng.__dict__.get("_instruments_db")
+    if db is None:
+        db = eng.__dict__["_instruments_db"] = InstrumentsDb(eng.cfg.state_dir)
+    return db
+
+
+def swap_spec(eng: Engine) -> SwapSpec | None:
+    """The active non-gold book's swap for the RiskGate's daily projection, per unit of its contract; None when
+    unknown (the caller prices NaN, which the gate refuses)."""
+    from goldbot.labels.triple_barrier import SwapSpec
+    book: SymbolBook = eng.__dict__["book"]
+    t = book.terms
+    if book.terms_problem is not None or t is None or t.swap_long_per_lot is None or t.swap_short_per_lot is None \
+            or t.swap_triple_weekday is None:
+        return None
+    return SwapSpec(long_usd_per_lot=t.swap_long_per_lot, short_usd_per_lot=t.swap_short_per_lot,
+                    triple_weekday=t.swap_triple_weekday - 1, server_tz=eng.cfg.server_tz,
+                    contract_oz=t.contract_size)
+
+
+# ------------------------------------------------------------------ account-wide exposure and refusals
+def after_refresh(eng: Engine, tick: Tick) -> None:
+    """`Engine._refresh_account`'s multi-book step (no-op with gold alone): the active non-gold book's terms (a
+    problem refuses its entries: `dq_error`), then the account's exposure over every book (`account_exposure`)."""
+    if not multi(eng):
+        return
+    book: SymbolBook = eng.__dict__["book"]
+    if not book.primary:
+        refresh_terms(eng, tick.ts_utc)
+        if book.terms_problem is not None:
+            eng.state.dq_error = True
+    account_exposure(eng, tick.ts_utc)
+
+
+def account_exposure(eng: Engine, now: pd.Timestamp) -> None:
+    """Every position on every book's symbol counts: open positions, lots and sides, the open risk at the stops
+    (account currency) and the notional (USD). One `account_positions()` read. A position whose book has no quote,
+    no contract or no conversion makes the open risk and the notional unknown: the risk None (RiskGate refuses while
+    the heat cap or the projection is on) and the entries refused (`dq_error`). An unreadable book is the same."""
+    from goldbot.risk import open_risk
+    st = eng.state
+    books = {b.__dict__["cfg"].symbol: b for b in eng.books.values()}
+    try:
+        held = [p for p in eng.broker.account_positions() if p.symbol in books]
+    except Exception as exc:
+        log.warning("account positions unreadable (%s): exposure unknown, entries refused", type(exc).__name__)
+        st.open_risk, st.dq_error = None, True
+        return
+    st.open_positions = len(held)
+    st.open_lots = round(sum(p.lots for p in held), 6)
+    st.open_long = sum(1 for p in held if p.side > 0)
+    st.open_short = sum(1 for p in held if p.side < 0)
+    usd = _usd_fx(eng, now)
+    total: float | None = 0.0
+    notional: float | None = 0.0
+    rows: list[dict[str, Any]] = []
+    for p in held:
+        b = books[p.symbol]
+        tick, contract = b.__dict__.get("_last_tick"), b.__dict__.get("_contract")
+        risk: float | None = None
+        n: float | None = None
+        if tick is not None and contract is not None:
+            px = tick.bid if p.side > 0 else tick.ask
+            fx = _profit_fx(eng, b, p.side, px, contract, now)
+            risk = open_risk.remaining_stop_risk(side=p.side, lots=p.lots, sl=p.sl, bid=tick.bid, ask=tick.ask,
+                                                 contract=contract, fx=fx)
+            mid = (tick.bid + tick.ask) / 2
+            n = None if fx is None or usd is None else p.lots * contract * mid * fx / usd
+        rows.append({"position_id": p.position_id, "symbol": p.symbol, "side": p.side, "lots": p.lots, "sl": p.sl,
+                     "risk": round(risk, 2) if risk is not None else None})
+        total = None if total is None or risk is None else total + risk
+        notional = None if notional is None or n is None else notional + n
+    st.open_risk = total
+    eng._open_risk_rows = rows
+    if notional is None:
+        st.dq_error = True                # a notional the combined caps cannot count: no entry anywhere
+    else:
+        st.open_notional = notional
+
+
+def _profit_fx(eng: Engine, b: SymbolBook, side: int, px: float, contract: float, now: pd.Timestamp) -> float | None:
+    """Account currency per unit of `b`'s profit currency, from the broker's loss on one lot (`loss_per_lot`), read at
+    most once a minute per side. None when the broker cannot say (never 1 by assumption)."""
+    key = (now.floor("min"), 1 if side > 0 else -1)
+    if key in b.fx:
+        return b.fx[key]
+    fn = getattr(eng.broker, "loss_per_lot", None)
+    dist = max(abs(px) * 0.01, b.__dict__["cfg"].point)
+    out: float | None = None
+    try:
+        loss = fn(b.__dict__["cfg"].symbol, side, px, dist) if callable(fn) else None
+        v = float(loss) / (dist * contract) if loss is not None else math.nan
+        out = v if math.isfinite(v) and v > 0 else None
+    except Exception as exc:
+        log.warning("broker conversion unavailable for %s (%s)", b.__dict__["cfg"].symbol, type(exc).__name__)
+    b.fx = {k: v for k, v in b.fx.items() if k[0] == key[0]}
+    b.fx[key] = out
+    return out
+
+
+def _usd_fx(eng: Engine, now: pd.Timestamp) -> float | None:
+    """Account currency per USD, from the primary (gold, a USD-profit symbol) book's conversion; 1 on a USD account."""
+    from goldbot.risk import sizing
+    p = eng.primary
+    tick, contract = p.__dict__.get("_last_tick"), p.__dict__.get("_contract")
+    currency = eng._account_currency()
+    if currency.strip().upper() == "USD":
+        return 1.0
+    if tick is None or contract is None:
+        return None
+    return sizing.account_fx(currency, _profit_fx(eng, p, 1, tick.ask, contract, now))
+
+
+def published(eng: Engine) -> dict[str, Any]:
+    """`books` in engine_<account>.json (multi-book only): each instrument's own view, for health and the dashboard."""
+    if not multi(eng):
+        return {}
+    out: dict[str, Any] = {}
+    for sym, b in eng.books.items():
+        d, s = b.__dict__, (eng.state.__dict__ if b is eng.__dict__["book"] else b.sym_state)
+        last = d.get("_last_tick")
+        out[sym] = {"instrument": d["cfg"].instrument, "store_symbol": d["cfg"].release_symbol,
+                    "magic_base": d["cfg"].magic_base, "primary": b.primary, "price": d.get("_price"),
+                    "last_tick_utc": last.ts_utc.isoformat() if last is not None else None,
+                    "open": sorted(d.get("open", {})), "closes_due": sorted(d.get("_close_due", {})),
+                    "foreign_positions": d.get("_foreign", []), "terms_problem": b.terms_problem,
+                    **{k: s.get(k) for k in ("spread_points", "last_tick_age_s", "market_closed", "stale_bars",
+                                             "dq_error")}}
+    return {"books": out}
