@@ -142,6 +142,12 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
 - **Opportunity days (`docs/research/opportunity-days.md` section 6).**
   - An event-count floor for H-18 (~690 events vs 1,000).
   - Whether to project the percentage daily caps (item 29). At £1,000 that means at most one full loss a day.
+- **News scoring key (item 142 (b), added 2026-11-02).** The news shock blackout has never fired, because headline
+  scoring needs a paid Anthropic API key and none is set (4,764 polls in 30 days, all `scored: 0`). Options: (1)
+  fund a key with a monthly cap (CFO to price it); (2) no spend: PD + PO choose between a deterministic keyword rule
+  and retiring the shock blackout, after trading-safety review. Recommendation: (2). No strategy has shown that it
+  needs the shock rail, and the scheduled calendar blackouts cover the known events. Revisit if an incident shows
+  an unscheduled-news loss the calendar did not cover.
 - Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
   item 2 lands; VM provisioning and every credential (item 1).
 
