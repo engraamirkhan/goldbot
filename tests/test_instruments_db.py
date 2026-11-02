@@ -97,5 +97,6 @@ def test_swap_unknown_refuses_that_books_entries(tmp_path):
     info = PaperBroker().symbol_info("XAGUSD").model_copy(update={"swap_mode": 4, "swap_long": -1.0,
                                                                   "swap_short": -1.0, "swap_rollover3days": 3})
     db.save(terms_from_info("icm-probe", "XAGUSD", "XAGUSD", info, T0))
-    assert db.load("icm-probe", "XAGUSD").swap_long_per_lot is None
+    row = db.load("icm-probe", "XAGUSD")
+    assert row is not None and row.swap_long_per_lot is None
     assert db.load("icm-probe", "XAUUSD") is None

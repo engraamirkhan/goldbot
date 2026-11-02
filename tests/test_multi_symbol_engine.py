@@ -24,6 +24,9 @@ SILVER = BookSpec(key="XAGUSD", symbol="XAGUSD", store_symbol="XAGUSD", magic_bl
 OIL = BookSpec(key="XTIUSD", symbol="XTIUSD", store_symbol="XTIUSD", magic_block=17, digits=2, point=0.01,
                contract_size=100.0)
 TREND = TrendSpecialist()
+INTENT: Any = "intent"     # stand-ins where only identity matters
+RES: Any = "res"
+OK: Any = "ok"
 
 
 class MultiPaper(PaperBroker):
@@ -195,19 +198,22 @@ def test_a_sent_entry_is_booked_on_the_one_shared_state_never_at_the_check(tmp_p
     eng = _engine(tmp_path, MultiPaper(equity=10_000))
     assert eng.gate.limits.multi_symbol
     seen: list[Any] = []
-    allowed = SimpleNamespace(allowed=True)
-    eng.gate.check = lambda intent, st, now, **k: seen.append(st) or allowed      # type: ignore[method-assign]
-    eng.gate.book = lambda st, intent, d: seen.append(("book", st, intent))        # type: ignore[method-assign]
-    assert books.check(eng, "intent", T0) is allowed and seen == [eng.state]       # the state itself, not a copy
-    books.book(eng, "intent", allowed, None)                                       # nothing sent
-    books.book(eng, "intent", allowed, "res")
-    assert seen[1:] == [("book", eng.state, "intent")]
+    allowed: Any = SimpleNamespace(allowed=True)
+    def fake_check(intent: Any, st: Any, now: Any, **k: Any) -> Any:
+        seen.append(st)
+        return allowed
+    setattr(eng.gate, "check", fake_check)
+    setattr(eng.gate, "book", lambda st, intent, d: seen.append(("book", st, intent)))
+    assert books.check(eng, INTENT, T0) is allowed and seen == [eng.state]       # the state itself, not a copy
+    books.book(eng, INTENT, allowed, None)                                       # nothing sent
+    books.book(eng, INTENT, allowed, RES)
+    assert seen[1:] == [("book", eng.state, INTENT)]
 
     gold = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path / "g")),
                   MultiPaper(), [], {})
     assert not gold.gate.limits.multi_symbol
-    gold.gate.book = lambda *a: seen.append(a)                                     # type: ignore[method-assign]
-    books.book(gold, "intent", allowed, "res")
+    setattr(gold.gate, "book", lambda *a: seen.append(a))
+    books.book(gold, INTENT, allowed, RES)
     assert len(seen) == 2
 
 
@@ -218,14 +224,17 @@ def test_a_non_gold_check_uses_the_instruments_own_spread_cap_or_refuses(tmp_pat
     spec = SILVER.model_copy(update={"instrument": reg.get("XAGUSD")})
     eng = _engine(tmp_path, MultiPaper(equity=10_000), specs=(spec,))
     seen: list[float] = []
-    eng.gate.check = lambda intent, st, now, **k: seen.append(eng.gate.limits.max_spread_points) or "ok"  # type: ignore
+    def fake_check(intent: Any, st: Any, now: Any, **k: Any) -> Any:
+        seen.append(eng.gate.limits.max_spread_points)
+        return OK
+    setattr(eng.gate, "check", fake_check)
     gold_cap = eng.gate.limits.max_spread_points
     with using(eng, eng.books["XAGUSD"]):
         if getattr(spec.instrument, "max_spread_points", None) is None:
-            assert books.check(eng, "intent", T0).reasons == ["spread_cap_missing"] and not seen
+            assert books.check(eng, INTENT, T0).reasons == ["spread_cap_missing"] and not seen
         else:
-            assert books.check(eng, "intent", T0) == "ok" and seen == [spec.instrument.max_spread_points]
-    assert eng.gate.limits.max_spread_points == gold_cap and books.check(eng, "intent", T0) == "ok"
+            assert books.check(eng, INTENT, T0) == OK and seen == [getattr(spec.instrument, "max_spread_points")]
+    assert eng.gate.limits.max_spread_points == gold_cap and books.check(eng, INTENT, T0) == OK
 
 
 def test_live_and_pilot_accounts_stay_xauusd_only(tmp_path):
