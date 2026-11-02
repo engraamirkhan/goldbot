@@ -71,7 +71,8 @@ def test_the_pass_rules_and_costs_come_from_config_as_amendment_c1_froze_them() 
 def test_the_windows_are_amendment_w2s_table() -> None:
     w = M.WINDOWS
     ts = lambda s: pd.Timestamp(s, tz="UTC")  # noqa: E731
-    assert (w["explore"].dec_from, w["explore"].end) == (ts("2010-01-01"), ts("2018-01-01"))
+    assert (w["explore"].data_from, w["explore"].dec_from, w["explore"].end) == \
+        (ts("2009-01-01"), ts("2010-01-01"), ts("2018-01-01"))                    # B3: 2009 is warm-up only
     assert (w["learn_old"].dec_from, w["learn_old"].end) == (ts("2003-01-01"), ts("2006-01-01"))
     assert (w["test_old"].dec_from, w["test_old"].end) == (ts("2006-02-01"), ts("2010-01-01"))   # 2006-01 embargo
     assert (w["confirm"].dec_from, w["confirm"].end) == (ts("2018-01-01"), M.HOLDOUT_FROM)
@@ -533,7 +534,8 @@ def test_more_than_a_tenth_of_nulls_passing_explore_voids_the_run() -> None:
     nc, void, audit = E.null_check("explore", ten, RULES)
     assert (nc.n, nc.evaluated, nc.passed, void, audit) == (11, 10, 1, False, False)     # 10%: not more than
     two = [_res(i, null=True, passed=i < 2) for i in range(10)] + [_res(50, passed=True)]
-    assert E.null_check("explore", two, RULES)[1] and E.null_check("learn_old", two, RULES)[1]
+    assert E.null_check("explore", two, RULES)[1]
+    assert not E.null_check("learn_old", two, RULES)[1]                               # ruling (b): report-only
 
 
 def test_any_null_passing_confirm_or_test_old_requires_an_engine_audit() -> None:
@@ -545,9 +547,138 @@ def test_any_null_passing_confirm_or_test_old_requires_an_engine_audit() -> None
 
 # ---------------------------------------------------------------- passer chains
 def _report(cat: V.Catalogue, passing: set[str], window: str = "explore", sha: str | None = None,
-            ensembles: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    return {"window": window, "catalogue_sha256": sha or cat.sha256, "status": "OK",
-            "results": [{"id": s.id, "passed": s.id in passing} for s in cat.specs], "ensembles": ensembles or []}
+            ensembles: list[dict[str, Any]] | None = None, **over: Any) -> dict[str, Any]:
+    return {"window": window, "catalogue_sha256": sha or cat.sha256, "status": "OK", "audit_required": False,
+            "rules_sha256": E.rules_sha256(), "engine_sha256": E.engine_provenance()[1],
+            "results": [{"id": s.id, "passed": s.id in passing} for s in cat.specs], "ensembles": ensembles or [],
+            **over}
+
+
+def test_a_report_scored_under_other_rules_or_by_another_engine_or_needing_an_audit_is_refused() -> None:
+    cat = V.load_catalogue(SAMPLE)
+    with pytest.raises(ValueError, match="rules"):
+        E.passer_ids(cat, _report(cat, {"S3K-0002"}, rules_sha256="0" * 64), "confirm")
+    with pytest.raises(ValueError, match="engine"):
+        E.passer_ids(cat, _report(cat, {"S3K-0002"}, engine_sha256="0" * 64), "confirm")
+    with pytest.raises(ValueError, match="audit"):                                  # M1
+        E.passer_ids(cat, _report(cat, {"S3K-0002"}, window="confirm", audit_required=True), "test_old")
+
+
+def test_confirm_is_read_once_unless_the_plan_hash_is_identical(tmp_path: Path) -> None:
+    cat = V.load_catalogue(SAMPLE)
+    ledger = tmp_path / "reads.jsonl"
+    p1 = E.plan(cat, _report(cat, {"S3K-0002", "S3K-0005"}), "confirm")
+    p2 = E.plan(cat, _report(cat, {"S3K-0002"}), "confirm")
+    h1, h2 = E.plan_hash(p1, "confirm", cat), E.plan_hash(p2, "confirm", cat)
+    assert h1 != h2
+    E.claim_read(ledger, "confirm", cat, h1)
+    E.claim_read(ledger, "confirm", cat, h1)                                        # the same plan again: allowed
+    with pytest.raises(ValueError, match="already read"):
+        E.claim_read(ledger, "confirm", cat, h2)
+    E.claim_read(ledger, "test_old", cat, h2)                                       # another window: its own read
+    assert len(ledger.read_text().splitlines()) == 2
+
+
+def test_the_report_carries_the_engine_sha_and_a_dirty_flag(tmp_path: Path) -> None:
+    head, esha, dirty = E.engine_provenance()
+    assert len(esha) == 64 and isinstance(dirty, bool)
+    rep = E.run_screen(V.load_catalogue(SAMPLE), synthetic_market(days=40), workers=1, cache_dir=tmp_path,
+                       ids=["S3K-0001"])
+    assert (rep.engine_git_sha, rep.engine_sha256, rep.engine_dirty) == (head, esha, dirty)
+    assert len(head) == 40 or head == ""
+
+
+def test_the_cli_refuses_ids_and_limit_on_confirm_and_test_old(tmp_path: Path) -> None:
+    import importlib.util
+    spec_ = importlib.util.spec_from_file_location("s3k_cli", ROOT / "scripts" / "sprint3000_screen.py")
+    assert spec_ and spec_.loader
+    cli = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(cli)
+    cat = V.load_catalogue(SAMPLE)
+    rep = tmp_path / "explore.json"
+    rep.write_text(json.dumps(_report(cat, {"S3K-0002"})))
+    base = ["--catalogue", str(SAMPLE), "--passers", str(rep), "--ledger", str(tmp_path / "l.jsonl"),
+            "--raw", str(tmp_path)]
+    for win in ("confirm", "test_old"):
+        for extra in (["--ids", "S3K-0002"], ["--limit", "1"]):
+            with pytest.raises(SystemExit, match="refused"):
+                cli.main([*base, "--window", win, *extra])
+    assert not (tmp_path / "l.jsonl").exists()                                      # refused before any read
+
+
+def test_the_reader_pushes_the_window_end_down_as_a_parquet_filter(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _fake_raw(tmp_path, (2025,))
+    seen: list[Any] = []
+    real_read = pd.read_parquet
+
+    def spy(path: Any, *a: Any, **k: Any) -> pd.DataFrame:
+        seen.append(k.get("filters"))
+        got = real_read(path, *a, **k)
+        assert pd.DatetimeIndex(got["ts_utc"]).max() < M.HOLDOUT_FROM                # nothing past the cut decoded
+        return got
+
+    monkeypatch.setattr(M.pd, "read_parquet", spy)
+    M.load_minutes(raw, pd.Timestamp("2025-01-01", tz="UTC"), M.HOLDOUT_FROM)
+    assert seen and ("ts_utc", "<", M.HOLDOUT_FROM) in seen[0]
+
+
+def test_near_reopen_marks_fills_within_5_minutes_of_a_reopen() -> None:
+    t = np.r_[np.arange(0, 100), np.arange(200, 300)].astype(np.int64) * MIN          # a 100-minute gap at 100
+    fills = np.array([0, 4, 5, 50, 200, 204, 205], dtype=np.int64) * MIN
+    assert E.near_reopen(t, fills).tolist() == [True, True, False, False, True, True, False]
+
+
+def test_learn_old_is_report_only_and_never_void() -> None:
+    net, yrs = _by_year(40, 0.4, range(2003, 2006))
+    res = E.summarize(spec(), _priced(net, yrs), "learn_old")
+    assert all(res.gates.values()) and not res.passed and res.verdict == "REPORT-ONLY"
+    two = [_res(i, null=True, passed=True) for i in range(10)]
+    assert not E.null_check("learn_old", two, RULES)[1]
+
+
+def test_null_controls_never_join_a_family_ensemble_and_a_null_ensemble_passing_confirm_requires_audit() -> None:
+    res = [_res(1, "a", passed=True), _res(2, "a", gross_t=2.5), _res(3, "a", null=True, passed=True),
+           _res(4, "a", null=True, gross_t=2.2), _res(5, "a", null=True, gross_t=1.0)]
+    ens = E.build_ensembles(res, RULES)
+    assert [(e.id, e.members, e.null_control) for e in ens] == [
+        ("ENS-a", ("S3K-0001", "S3K-0002"), False), ("ENS-NULL-a", ("S3K-0003", "S3K-0004"), True)]
+    ok = E.EnsembleResult(id="ENS-NULL-a", family="a", members=("S3K-0003", "S3K-0004"), window="confirm",
+                          null_control=True, passed=True)
+    assert E.null_check("confirm", [_res(1, passed=True)], RULES, [ok])[2]
+    assert E.null_check("test_old", [_res(1, passed=True)], RULES, [ok])[2]
+    cand = ok.model_copy(update={"id": "ENS-a", "null_control": False})
+    assert not E.null_check("confirm", [_res(1, passed=True)], RULES, [cand])[2]
+    cat = V.load_catalogue(SAMPLE)
+    rep = _report(cat, {"S3K-0002"}, ensembles=[{"id": "ENS-a", "family": "a", "members": ["S3K-0001", "S3K-0005"]},
+                                                {"id": "ENS-NULL-a", "family": "a", "members": ["S3K-0007", "S3K-0008"],
+                                                 "null_control": True}])
+    assert E.plan(cat, rep, "confirm").m == 2                                       # the null ensemble is not in m
+
+
+def _write_year_files(raw: Path, m: pd.DataFrame) -> None:
+    ts = pd.to_datetime(m.t, utc=True)
+    for y in sorted(set(ts.dt.year)):
+        part = m[ts.dt.year == y]
+        df = pd.DataFrame({"ts_utc": pd.to_datetime(part.t, utc=True).dt.as_unit("ms")})
+        for k, col in (("open", "o"), ("high", "h"), ("low", "l"), ("close", "c")):
+            df[f"bid_{k}"] = df[f"ask_{k}"] = part[col].to_numpy()
+        df.to_parquet(raw / f"xauusd_1m_dukascopy_{y}.parquet")
+
+
+def test_explore_opens_2009_for_warmup_only_and_no_trade_decides_before_2010(tmp_path: Path) -> None:
+    _write_year_files(tmp_path, synthetic_minutes(start="2009-10-05", days=150, seed=19))
+    mkt = M.Market.load(tmp_path, M.WINDOWS["explore"])
+    assert pd.Timestamp(int(mkt.tape.t[0]), tz="UTC").strftime("%Y-%m") == "2009-10"
+    assert 2009 not in mkt.years_missing and 2010 not in mkt.years_missing
+    sp = spec()
+    sig = V.spec_signals(sp, mkt)
+    assert (sig.dec < pd.Timestamp("2010-01-01", tz="UTC").value).sum() > 10        # 2009 bars do signal ...
+    real = E.simulate(sp, mkt).real
+    assert len(real) >= 10 and (real.t_dec >= pd.Timestamp("2010-01-01", tz="UTC").value).all()   # ... never trade
+    b = mkt.bars["1h"]
+    first = int(np.searchsorted(b.dec, pd.Timestamp("2010-01-01", tz="UTC").value))
+    assert np.isfinite(V.atr(b, 14)[first])                                          # warmed on the first 2010 bar
 
 
 def test_confirm_runs_explore_passers_only_in_rank_order() -> None:
@@ -598,6 +729,7 @@ def test_the_sample_catalogue_runs_end_to_end_identically_on_one_or_two_workers(
     for r in doc["results"]:
         for key in ("n", "n_signals", "gross_r", "gross_t", "net_r", "net_r_usd", "t", "t_day", "control_net_r",
                     "delta", "timing_delta", "drift_adj_gross_r", "legs", "year_net_r", "dsr", "dsr_keff", "verdict",
+                    "gap_share", "reopen_fill_share", "member_only",
                     "passed", "gates"):
             assert key in r
     assert doc["catalogue_sha256"] == cat.sha256 and doc["k"] == RULES.dsr.k_program
@@ -618,8 +750,9 @@ def test_a_confirm_run_applies_bh_fdr_over_singles_and_ensembles(tmp_path: Path)
     for r in rep.results:
         if r.id in ("S3K-0001", "S3K-0008"):
             assert "bh_fdr" in r.gates and r.passed == all(r.gates.values())
-        else:
-            assert r.verdict == "MEMBER-ONLY" and not r.passed
+        else:                                                                       # L3: marked, never gated
+            assert r.verdict == "MEMBER-ONLY" and not r.passed and r.member_only and r.member_of == ("ENS-trend_ma",)
+    assert rep.member_only_ids == ["S3K-0002", "S3K-0017"]
     assert "bh_fdr" in rep.ensembles[0].gates
 
 

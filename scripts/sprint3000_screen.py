@@ -21,7 +21,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from goldbot.research.registry import TrialRegistry  # noqa: E402
 from goldbot.research.sprint3000 import engine as E  # noqa: E402
+from goldbot.research.sprint3000 import trials as T  # noqa: E402
 from goldbot.research.sprint3000 import vocab as V  # noqa: E402
 from goldbot.research.sprint3000.market import WINDOWS, Market  # noqa: E402
 
@@ -55,7 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ids", nargs="*", help="a subset of catalogue ids (confirm/test_old: passers only)")
     ap.add_argument("--limit", type=int, help="the first N evaluable specs by rank (engine timing)")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--k", type=int, default=None, help="program trial count for the DSR (default: the rules file)")
+    ap.add_argument("--k", type=int, default=None,
+                    help="program trial count for the DSR (default: the registry at run time, else the rules file)")
+    ap.add_argument("--registry", type=Path, default=ROOT / "state" / "research_registry.jsonl")
+    ap.add_argument("--preregister", action="store_true",
+                    help="write the catalogue's pre-registration rows (no trial, no budget slot) and stop")
+    ap.add_argument("--ledger", type=Path, default=ROOT / "state" / "sprint3000_reads.jsonl",
+                    help="confirm/test_old read markers (one read per window and catalogue)")
     ap.add_argument("--out", type=Path, default=Path.home() / "tmp" / "sprint3000" / "explore.json")
     ap.add_argument("--validate", action="store_true", help="load and check the catalogue, read no bars")
     a = ap.parse_args(argv)
@@ -63,6 +71,13 @@ def main(argv: list[str] | None = None) -> int:
     if a.validate:
         validate(cat)
         return 0
+    if a.preregister:
+        n = T.preregister_catalogue(TrialRegistry(a.registry), cat)
+        print(f"pre-registered {n} rows in {a.registry} ({len(T.planned_rows(cat))} planned; not trials, no budget)")
+        return 0
+    one_shot = a.window in ("confirm", "test_old")
+    if one_shot and (a.ids or a.limit):               # quant review H3: a one-shot window reads its whole plan
+        raise SystemExit(f"{a.window} reads its whole plan once: --ids and --limit are refused")
     report = json.loads(a.passers.read_text()) if a.passers else None
     full = E.plan(cat, report, a.window)              # confirm's m: every passer and family sent, fixed before bars
     p = E.plan(cat, report, a.window, a.ids) if a.ids else full
@@ -72,13 +87,26 @@ def main(argv: list[str] | None = None) -> int:
     if not ids:
         print(f"no ids to run on {a.window}")
         return 0
+    if a.k is not None:
+        k, k_source = a.k, "cli --k"
+    elif a.registry.exists():
+        k, k_source = T.program_k(TrialRegistry(a.registry), cat)
+    else:
+        k, k_source = E.load_rules().dsr.k_program, f"rules (no registry at {a.registry} on this host)"
+    phash = ""
+    if one_shot:
+        if E.engine_provenance()[2]:
+            raise SystemExit(f"{a.window} refuses a dirty engine: commit the engine, rules and costs first")
+        phash = E.plan_hash(full, a.window, cat)
+        E.claim_read(a.ledger, a.window, cat, phash)  # before any bar of the window is read
     t0 = time.monotonic()
     mk = Market.load(a.raw or default_raw(), WINDOWS[a.window])
     t_load = time.monotonic() - t0
     if mk.years_missing:
         print(f"no data on disk for {list(mk.years_missing)}")
-    rep = E.run_screen(cat, mk, workers=a.workers, k=a.k, cache_dir=Path.home() / "tmp" / "sprint3000", ids=ids,
-                       m=full.m, singles=singles, ensembles=p.ensembles if report is not None else None)
+    rep = E.run_screen(cat, mk, workers=a.workers, k=k, cache_dir=Path.home() / "tmp" / "sprint3000", ids=ids,
+                       m=full.m, singles=singles, ensembles=p.ensembles if report is not None else None,
+                       k_source=k_source, plan_hash=phash)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(rep.model_dump_json(indent=1))
     ev = max(rep.n_evaluated, 1)

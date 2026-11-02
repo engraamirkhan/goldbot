@@ -28,6 +28,7 @@ Results hold summary statistics only: no trade row leaves the process."""
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import pickle
 import tempfile
@@ -501,6 +502,10 @@ class SpecResult(FrozenRecord):
     timing_net_r: float | None = None             # same-side timing twins (diagnostic)
     timing_delta: float | None = None
     n_timing: int = 0
+    gap_share: float | None = None                # trades whose stop filled at a minute open beyond it (no overshoot)
+    reopen_fill_share: float | None = None        # fills within 5 minutes of a reopen (after a >= 30 min gap)
+    member_only: bool = False                     # confirm/test_old: run only as an ensemble member, never gated
+    member_of: tuple[str, ...] = ()
     legs: dict[str, dict[str, float | None]] = Field(default_factory=dict)
     hit: float | None = None
     median_risk_usd: float | None = None
@@ -597,13 +602,17 @@ def summarize(spec: V.Spec, real: pd.DataFrame, window: Window | str, rules: Pas
         p_boot = boot_p(daily, r.confirm.bootstrap_resamples, _seed(spec.id))
     gates = _gates(w, spec.tf, r, n, float(net.mean()), t_day, years_pos, drift_adj, delta)
     passed, verdict = _verdict(gates)
+    if w.name == "learn_old":           # amendment ruling (b): a report-only side window, never a gate or a trim
+        passed, verdict = False, "REPORT-ONLY"
+    gap_share = float(real.gap.mean()) if "gap" in real else None
+    reopen = float(real.reopen.mean()) if "reopen" in real else None
     return SpecResult(
         **base, n=n, n_days=len(days), gross_r=_f(float(gross.mean())), gross_t=_f(_t(gross)),
         net_r=_f(float(net.mean())), net_r_usd=_f(float(real.net_r_usd.mean())),
         stress_net_r=_f(float(real.stress_r.mean())), cost_r=_f(float(real.cost_r.mean())),
         sd_r=_f(float(np.std(net, ddof=1)) if n > 1 else float("nan")), t=_f(_t(net)), t_day=_f(t_day),
         control_net_r=_f(ctrl), delta=_f(delta), drift_adj_gross_r=_f(drift_adj), timing_net_r=_f(t_net),
-        timing_delta=_f(t_d), n_timing=n_tw,
+        timing_delta=_f(t_d), n_timing=n_tw, gap_share=_f(gap_share), reopen_fill_share=_f(reopen),
         legs={"long": _leg(real[real.side > 0]), "short": _leg(real[real.side < 0])},
         hit=_f(float((net > 0).mean())), median_risk_usd=_f(float(real.risk.median())),
         exit_mix={str(a): round(float(b), 4) for a, b in real.kind.value_counts(normalize=True).items()},
@@ -615,6 +624,18 @@ def summarize(spec: V.Spec, real: pd.DataFrame, window: Window | str, rules: Pas
 
 
 Daily = tuple[np.ndarray, np.ndarray, int]      # (entry days, day-summed net R, trades)
+REOPEN_GAP = 30 * MIN                           # a tape gap at least this long is a close (weekend, daily break)
+REOPEN_WINDOW = 5 * MIN
+
+
+def near_reopen(t: np.ndarray, fills: np.ndarray) -> np.ndarray:
+    """True for a fill within REOPEN_WINDOW of the first minute after a REOPEN_GAP gap (quant review L2: reopen fills
+    are where the mid tape is least like a real fill)."""
+    if not len(fills) or not len(t):
+        return np.zeros(len(fills), bool)
+    starts = t[np.r_[0, np.flatnonzero(np.diff(t) >= REOPEN_GAP) + 1]]
+    last = starts[np.clip(np.searchsorted(starts, fills, side="right") - 1, 0, None)]
+    return np.asarray(fills - last < REOPEN_WINDOW)
 
 
 def run_spec(spec: V.Spec, mk: Market, rules: PassRules, k: int) -> tuple[SpecResult, np.ndarray, np.ndarray]:
@@ -623,6 +644,7 @@ def run_spec(spec: V.Spec, mk: Market, rules: PassRules, k: int) -> tuple[SpecRe
     sim = simulate(spec, mk, rules)
     real, opp, tim = (price(x, rules=rules) for x in (sim.real, sim.opposite, sim.timing))
     real = attach_controls(real, opp, window_drift_rate(mk))
+    real["reopen"] = near_reopen(mk.tape.t, real.t_fill.to_numpy(np.int64))
     res = summarize(spec, real, mk.window, rules, tim, k, n_signals=sim.n_signals)
     days, daily = day_sums(real.net_r.to_numpy(float), real.t_fill.to_numpy()) if len(real) else \
         (np.zeros(0, np.int64), np.zeros(0))
@@ -631,10 +653,12 @@ def run_spec(spec: V.Spec, mk: Market, rules: PassRules, k: int) -> tuple[SpecRe
 
 # ---------------------------------------------------------------- the ensemble stage
 class Ensemble(FrozenRecord):
-    """One family's composite, frozen at the end of explore: its members, equal weight."""
+    """One family's composite, frozen at the end of explore: its members, equal weight. A null-control ensemble
+    (ENS-NULL-<family>, built from the grade-D specs only) is a control, never a candidate (amendment ruling d)."""
     id: str
     family: str
     members: tuple[str, ...]
+    null_control: bool = False
 
 
 class EnsembleResult(FrozenRecord):
@@ -642,6 +666,7 @@ class EnsembleResult(FrozenRecord):
     family: str
     members: tuple[str, ...]
     window: str
+    null_control: bool = False
     n: int = 0
     n_days: int = 0
     net_r_day: float | None = None                # mean equal-weight composite net R per entry day
@@ -656,22 +681,25 @@ class EnsembleResult(FrozenRecord):
 
 def build_ensembles(results: Sequence[SpecResult], rules: PassRules) -> list[Ensemble]:
     """Per family: its explore passers and every evaluated member with per-trade gross t >= min_gross_t (rank order);
-    a family with fewer than min_members has no ensemble."""
-    fams: dict[str, list[str]] = {}
+    a family with fewer than min_members has no ensemble. Null controls never join a family ensemble (quant review
+    B1): they form ENS-NULL-<family> by the same rule, a control that must not pass."""
+    fams: dict[tuple[str, bool], list[str]] = {}
     for x in sorted(results, key=lambda s: s.rank):
         if x.status != "evaluated":
             continue
         if x.passed or (x.gross_t is not None and x.gross_t >= rules.ensemble.min_gross_t):
-            fams.setdefault(x.family, []).append(x.id)
-    return [Ensemble(id=f"ENS-{f}", family=f, members=tuple(m)) for f, m in fams.items()
-            if len(m) >= rules.ensemble.min_members]
+            fams.setdefault((x.family, x.null_control), []).append(x.id)
+    out = [Ensemble(id=f"ENS-NULL-{f}" if null else f"ENS-{f}", family=f, members=tuple(m), null_control=null)
+           for (f, null), m in fams.items() if len(m) >= rules.ensemble.min_members]
+    return sorted(out, key=lambda e: (e.null_control, e.id))
 
 
 def ensemble_result(ens: Ensemble, daily: dict[str, Daily], window: Window | str, rules: PassRules) -> EnsembleResult:
     """The equal-weight composite: each day's summed net R of every member, divided by the member count."""
     w = _window(window)
     parts = [daily[m] for m in ens.members if m in daily]
-    base: dict[str, Any] = {"id": ens.id, "family": ens.family, "members": ens.members, "window": w.name}
+    base: dict[str, Any] = {"id": ens.id, "family": ens.family, "members": ens.members, "window": w.name,
+                            "null_control": ens.null_control}
     if not parts or not any(len(p[0]) for p in parts):
         return EnsembleResult(**base, verdict="FAIL-COUNT" if w.name not in EXPLORE_LIKE else "FROZEN")
     days = np.unique(np.concatenate([p[0] for p in parts]))
@@ -731,19 +759,55 @@ class ScreenReport(FrozenRecord):
     elapsed_s: float
     results: list[SpecResult]
     ensembles: list[EnsembleResult] = Field(default_factory=list)
+    member_only_ids: list[str] = Field(default_factory=list)   # run as ensemble members only: never gated singles
+    k_source: str = "rules"                                   # where `k` came from (the registry at run time, or rules)
+    engine_git_sha: str = ""                                  # HEAD at run time (provenance)
+    engine_sha256: str = ""                                   # the engine, CLI and rules files' content (the check)
+    engine_dirty: bool = False                                # those files differ from HEAD
+    plan_hash: str = ""                                       # confirm/test_old: the read plan (one read per plan)
 
 
-def null_check(window: str, results: Sequence[SpecResult], rules: PassRules) -> tuple[NullCheck, bool, bool]:
-    """(counts, void, audit_required): prereg section 7 rule 1. On explore/learn_old more than
+def null_check(window: str, results: Sequence[SpecResult], rules: PassRules,
+               ensembles: Sequence[EnsembleResult] = ()) -> tuple[NullCheck, bool, bool]:
+    """(counts, void, audit_required): prereg section 7 rule 1 as amended. On explore more than
     `max_explore_pass_share` of the evaluated null controls passing voids the run ("the engine or its control is
-    leaking"); on confirm/test_old any null passing requires an engine audit before anything deploys."""
+    leaking"); on confirm/test_old any null single or null ensemble passing requires an engine audit before anything
+    deploys. learn_old is report-only (ruling b): never VOID."""
     nulls = [x for x in results if x.null_control]
     ev = [x for x in nulls if x.status == "evaluated"]
     passed = sum(x.passed for x in ev)
     share = passed / len(ev) if ev else None
-    void = window in EXPLORE_LIKE and share is not None and share > rules.nulls.max_explore_pass_share
-    audit = window in ("confirm", "test_old") and passed > 0
+    void = window == "explore" and share is not None and share > rules.nulls.max_explore_pass_share
+    null_ens_passed = sum(e.passed for e in ensembles if e.null_control)
+    audit = window in ("confirm", "test_old") and passed + null_ens_passed > 0
     return NullCheck(n=len(nulls), evaluated=len(ev), passed=passed, share=share), void, audit
+
+
+ENGINE_FILES = ("goldbot/research/sprint3000/__init__.py", "goldbot/research/sprint3000/control.py",
+                "goldbot/research/sprint3000/engine.py", "goldbot/research/sprint3000/market.py",
+                "goldbot/research/sprint3000/vocab.py", "scripts/sprint3000_screen.py",
+                "config/research/sprint3000_rules.yaml", "config/arm_costs.yaml", "config/cost_of_record.yaml")
+
+
+def engine_provenance(root: Path = ROOT) -> tuple[str, str, bool]:
+    """(HEAD sha, sha256 of the engine files' content, dirty): the content hash is what a later window checks, so an
+    unrelated commit on main never blocks a confirm run, and any change to the engine, rules or costs does."""
+    import subprocess
+    h = hashlib.sha256()
+    for f in ENGINE_FILES + tuple(sorted(str(p.relative_to(root)) for p in
+                                         (root / "goldbot/research/sprint3000").glob("vocab_*.py"))):
+        p = root / f
+        h.update(f.encode() + b"\0" + (p.read_bytes() if p.exists() else b"") + b"\0")
+
+    def git(*a: str) -> str:
+        try:
+            return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, timeout=30).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    head = git("rev-parse", "HEAD")
+    dirty = bool(git("status", "--porcelain", "--", "goldbot/research/sprint3000", "scripts/sprint3000_screen.py",
+                     "config/research/sprint3000_rules.yaml", "config/arm_costs.yaml", "config/cost_of_record.yaml"))
+    return head, h.hexdigest(), dirty
 
 
 _MK: Market | None = None
@@ -788,7 +852,8 @@ def _run_all(todo: list[V.Spec], mk: Market, r: PassRules, k: int, workers: int,
 
 def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = None, cache_dir: Path | None = None,
                ids: Sequence[str] | None = None, m: int | None = None, rules: PassRules | None = None,
-               singles: Sequence[str] | None = None, ensembles: Sequence[Ensemble] | None = None) -> ScreenReport:
+               singles: Sequence[str] | None = None, ensembles: Sequence[Ensemble] | None = None,
+               k_source: str = "rules", plan_hash: str = "") -> ScreenReport:
     """Every (or the listed) catalogue spec on the market's window. Specs using a pending type are reported
     not_evaluable; a window with no bars on disk reports no_data. `singles` are the ids eligible to pass (default: all
     run); the others run as ensemble members only. Explore/learn_old freeze the ensembles; confirm/test_old evaluate the
@@ -802,12 +867,17 @@ def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = N
     eligible = set(singles) if singles is not None else {s.id for s in specs}
     empty = len(mk.tape.t) == 0
     out = _run_all([s for s in specs if not s.pending], mk, r, k, workers, cache_dir) if not empty else {}
+    member_of: dict[str, list[str]] = {}
+    for e in ensembles or ():
+        for mid in e.members:
+            member_of.setdefault(mid, []).append(e.id)
     results: list[SpecResult] = []
     for s in specs:
         if s.id in out:
             res = out[s.id][0]
-            if s.id not in eligible:
-                res = res.model_copy(update={"passed": False, "verdict": "MEMBER-ONLY"})
+            if s.id not in eligible:       # quant review L3: shown as a member, never read as a single
+                res = res.model_copy(update={"passed": False, "verdict": "MEMBER-ONLY", "member_only": True,
+                                             "member_of": tuple(member_of.get(s.id, ()))})
             results.append(res)
             continue
         spec_status: Status = "not_evaluable" if s.pending else "no_data"
@@ -828,22 +898,29 @@ def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = N
     ens = list(ensembles) if ensembles is not None else (build_ensembles(final, r) if w in EXPLORE_LIKE else [])
     ens_res = [ensemble_result(e, daily, mk.window, r) for e in ens]
     if w == "confirm":
-        m = m if m is not None else len(eligible) + len(ens_res)
+        cand = [j for j, e in enumerate(ens_res) if not e.null_control]
+        nulls = [j for j, e in enumerate(ens_res) if e.null_control]
+        m = m if m is not None else len(eligible) + len(cand)
         ev = [i for i, x in enumerate(final) if x.status == "evaluated" and x.id in eligible]
         p = [final[i].p_boot if final[i].p_boot is not None else 1.0 for i in ev]
-        p += [e.p_boot if e.p_boot is not None else 1.0 for e in ens_res]
+        p += [ens_res[j].p_boot if ens_res[j].p_boot is not None else 1.0 for j in cand]
         rej = bh_fdr(np.array(p), m, r.confirm.fdr_q)
         for i, ok in zip(ev, rej[: len(ev)]):
             g = {**final[i].gates, "bh_fdr": bool(ok)}
             passed, verdict = _verdict(g)
             final[i] = final[i].model_copy(update={"gates": g, "passed": passed, "verdict": verdict})
-        for j, ok in enumerate(rej[len(ev):]):
+        # the candidates' BH family is singles + family ensembles (m); the null ensembles are read as their own family
+        # so a control never moves a candidate's threshold
+        rej_null = bh_fdr(np.array([ens_res[j].p_boot if ens_res[j].p_boot is not None else 1.0 for j in nulls]),
+                          len(nulls), r.confirm.fdr_q)
+        for j, ok in list(zip(cand, rej[len(ev):])) + list(zip(nulls, rej_null)):
             g = {**ens_res[j].gates, "bh_fdr": bool(ok)}
             passed, verdict = _verdict(g)
             ens_res[j] = ens_res[j].model_copy(update={"gates": g, "passed": passed, "verdict": verdict})
-    nc, void, audit = null_check(w, final, r)
+    nc, void, audit = null_check(w, final, r, ens_res)
     run_status: Literal["OK", "VOID", "NO-DATA"] = "NO-DATA" if empty else ("VOID" if void else "OK")
     t = mk.tape.t
+    head, esha, dirty = engine_provenance()
     return ScreenReport(
         window=w, status=run_status, audit_required=audit, catalogue_sha256=cat.sha256, catalogue_version=cat.version,
         rules_sha256=rules_sha256(), rules_version=r.version, cost_version=r.cost.version, k=k, k_eff_run=ke_run,
@@ -854,7 +931,8 @@ def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = N
         years_missing=list(mk.years_missing),
         data_first_utc=pd.Timestamp(int(t.min()), tz="UTC").isoformat() if len(t) else "",
         data_last_utc=mk.data_last_utc, workers=workers, elapsed_s=round(time.monotonic() - t0, 1), results=final,
-        ensembles=ens_res)
+        ensembles=ens_res, member_only_ids=[x.id for x in final if x.member_only], k_source=k_source,
+        engine_git_sha=head, engine_sha256=esha, engine_dirty=dirty, plan_hash=plan_hash)
 
 
 # ---------------------------------------------------------------- passer chains
@@ -873,6 +951,12 @@ def _check_report(cat: V.Catalogue, report: dict[str, Any] | None, window: str) 
         raise ValueError("the passers report was run on another catalogue (sha256 differs)")
     if report.get("status") == "VOID":
         raise ValueError(f"the {need} run is VOID (null controls passed): fix the engine and re-run it first")
+    if report.get("audit_required"):                       # quant review M1
+        raise ValueError(f"the {need} report requires an engine audit (a null control passed): audit before going on")
+    if report.get("rules_sha256") != rules_sha256():       # quant review H2: one rule set and one engine end to end
+        raise ValueError(f"the {need} report was scored under other rules (rules_sha256 differs)")
+    if report.get("engine_sha256") != engine_provenance()[1]:
+        raise ValueError(f"the {need} report was scored by another engine (engine_sha256 differs): re-run {need}")
     return need
 
 
@@ -915,9 +999,36 @@ def plan(cat: V.Catalogue, report: dict[str, Any] | None, window: str, ids: Sequ
     ens: list[Ensemble] = []
     if report is not None and NEEDS[window] is not None:
         for e in report.get("ensembles", []):
+            # confirm reads every frozen ensemble (null ones as controls); test_old the candidates that passed confirm
+            # and every null ensemble that did (a passing null already requires an audit, M1 refuses that report)
             if window == "confirm" or e.get("passed"):
-                ens.append(Ensemble(id=e["id"], family=e["family"], members=tuple(e["members"])))
+                ens.append(Ensemble(id=e["id"], family=e["family"], members=tuple(e["members"]),
+                                    null_control=bool(e.get("null_control", False))))
     members = {mid for e in ens for mid in e.members}
     run = [s.id for s in cat.specs if s.id in set(singles) | members]
     return Plan(singles=singles, ensembles=ens, run_ids=run,
-                m=len(singles) + len(ens) if window == "confirm" else None)
+                m=len(singles) + sum(not e.null_control for e in ens) if window == "confirm" else None)
+
+
+def plan_hash(p: Plan, window: str, cat: V.Catalogue) -> str:
+    """The identity of a one-shot read: window, catalogue, rules, engine, singles, ensembles and m."""
+    body = {"window": window, "catalogue": cat.sha256, "rules": rules_sha256(), "engine": engine_provenance()[1],
+            "plan": p.model_dump(mode="json")}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def claim_read(ledger: Path, window: str, cat: V.Catalogue, phash: str) -> None:
+    """Confirm and test_old are read once (quant review H2): the first run writes a marker; a later run of the same
+    window on the same catalogue is refused unless its plan hash is identical (a crashed run's exact repeat)."""
+    ledger = Path(ledger)
+    rows = [json.loads(x) for x in ledger.read_text().splitlines() if x.strip()] if ledger.exists() else []
+    prior = [x for x in rows if x.get("window") == window and x.get("catalogue_sha256") == cat.sha256]
+    if any(x.get("plan_hash") != phash for x in prior):
+        raise ValueError(f"{window} was already read on this catalogue with another plan "
+                         f"({prior[0].get('plan_hash', '')[:12]}): a window is read once")
+    if prior:
+        return
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with ledger.open("a") as fh:
+        fh.write(json.dumps({"window": window, "catalogue_sha256": cat.sha256, "plan_hash": phash,
+                             "ts": pd.Timestamp.now(tz="UTC").isoformat()}) + "\n")

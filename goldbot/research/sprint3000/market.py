@@ -68,7 +68,8 @@ def _w(name: str, data_from: str, dec_from: str, end: str) -> Window:
 # amendment W2's table; `goldbot.research.windows` (feat/research-windows-w1) is not on main at this writing, so the
 # table lives here and test_the_windows_are_amendment_w2s_table pins it. Warm-up (data_from) reads earlier bars only.
 WINDOWS: dict[str, Window] = {
-    "explore": _w("explore", "2010-01-01", "2010-01-01", "2018-01-01"),
+    # quant review B3: 2009 is read for indicator warm-up only (when its file is on disk); no trade decides before 2010
+    "explore": _w("explore", "2009-01-01", "2010-01-01", "2018-01-01"),
     "learn_old": _w("learn_old", "2002-01-01", "2003-01-01", "2006-01-01"),
     "test_old": _w("test_old", "2005-01-01", "2006-02-01", "2010-01-01"),          # 2006-01 is the embargo
     "confirm": _w("confirm", "2016-01-01", "2018-01-01", str(HOLDOUT_FROM.date())),  # 2016-17: warm-up only
@@ -90,7 +91,8 @@ def load_minutes(raw: Path, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFr
         path = Path(raw) / RAW_NAME.format(year=y)
         if pd.Timestamp(f"{y}-01-01", tz="UTC") >= end or not path.exists():
             continue
-        p = pd.read_parquet(path, columns=_COLS)
+        # pushed down to the reader (quant review L1): rows at or after `end` are not even decoded; cut again below
+        p = pd.read_parquet(path, columns=_COLS, filters=[("ts_utc", ">=", start), ("ts_utc", "<", end)])
         ts = np.asarray(epoch_ns(pd.DatetimeIndex(p["ts_utc"])), dtype=np.int64)
         keep = (ts >= start.value) & (ts < end.value)
         f = pd.DataFrame({"t": ts[keep]})
