@@ -21,6 +21,7 @@ import pandas as pd
 
 from goldbot.data.resample import BAR_COLUMNS
 from goldbot.data.store import Store
+from goldbot.data.timeutil import ROLLOVER_UTC_H
 from goldbot.db import Database
 from goldbot.engine import cost_probe, exploration
 from goldbot.engine.exploration import ExplorationRecord
@@ -59,6 +60,17 @@ def arm(conn: Any, cid: str, arm_id: str, account: str, sent: pd.Timestamp, *, t
         censored=False if closed else None, fx_acct_per_usd=0.8))
 
 
+def today_close(now: pd.Timestamp, minutes: float) -> pd.Timestamp:
+    """A close `minutes` before now, squeezed toward now so it stays inside today's opportunity day (from 22:00 UTC):
+    the list's default period is today, and a run just after the rollover would otherwise find yesterday's closes."""
+    day0 = (now - pd.Timedelta(hours=ROLLOVER_UTC_H)).floor("D") + pd.Timedelta(hours=ROLLOVER_UTC_H)
+    scale = min(1.0, max(0.0, (now - day0 - pd.Timedelta(minutes=1)) / pd.Timedelta(minutes=MAX_CLOSE_MIN)))
+    return now - pd.Timedelta(minutes=minutes) * scale
+
+
+MAX_CLOSE_MIN = 140   # the earliest of today's seeded closes, in minutes before now
+
+
 def seed(state: Path, now: pd.Timestamp) -> None:
     engine(state, SCALP, now, 2, 4.8)
     engine(state, DAY, now, 1, 7.2)
@@ -71,12 +83,12 @@ def seed(state: Path, now: pd.Timestamp) -> None:
                                     ("S2A", "5m", [-0.6, 1.4]), ("S3A", "5m", [0.8, -0.6]), ("S5A", "5m", [-0.6, 1.1])):
             for i, pnl in enumerate(results):
                 n += 1
-                arm(conn, f"e2e-{arm_id}-{i}", arm_id, SCALP, now - (20 + 9 * n) * m, tf=tf, minutes=6, pnl=pnl,
+                arm(conn, f"e2e-{arm_id}-{i}", arm_id, SCALP, today_close(now, 14 + 9 * n) - 6 * m, tf=tf, minutes=6, pnl=pnl,
                     side=1 if n % 2 else -1, reason="target" if pnl > 0 else "stop")
         arm(conn, "e2e-S1A-open", "S1A", SCALP, now - 14 * m, tf="5m", minutes=None, pnl=None, pid=501)
         # the day/swing lab: three read units on 1h (BXT/BXF would be the same unit as BXR, H-80 pooled: one unit)
         for i, (arm_id, pnl) in enumerate((("BXR1H", 2.1), ("MB1H", -1.4), ("G1A", 1.6))):
-            arm(conn, f"e2e-{arm_id}", arm_id, DAY, now - (200 - 30 * i) * m, tf="1h", minutes=95, pnl=pnl,
+            arm(conn, f"e2e-{arm_id}", arm_id, DAY, today_close(now, 105 - 30 * i) - 95 * m, tf="1h", minutes=95, pnl=pnl,
                 reason="target" if pnl > 0 else "stop")
         # earlier days for the 14-day strip (three arms a day on the scalp lab)
         for d in range(1, 10):
@@ -85,12 +97,13 @@ def seed(state: Path, now: pd.Timestamp) -> None:
                     tf="5m", minutes=8, pnl=round(((d * 7 + j * 3) % 11 - 4) * 0.9, 2))
         cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
             client_order_id="e2e-cp-1", account_id=SCALP, agent_id="mean_reversion-g0-ab", side=-1, lots=0.01,
-            requested_price=2401.0, spread_usd=0.25, sent_utc=now - 90 * m, fill_price=2400.9,
-            exit_utc=now - 80 * m, exit_price=2400.6, exit_reason="time_exit", swap=0.0, commission=0.07, pnl=0.17,
+            requested_price=2401.0, spread_usd=0.25, sent_utc=today_close(now, 80) - 10 * m, fill_price=2400.9,
+            exit_utc=today_close(now, 80), exit_price=2400.6, exit_reason="time_exit", swap=0.0, commission=0.07, pnl=0.17,
             stop_loss=3.0, fx_acct_per_usd=0.8))
+    shut = today_close(now, 40)
     gates_phase.append_closed_trade(state, ClosedTrade(
-        account_id=DAY, broker="icm", mode="demo", exit_utc=now - 40 * m, ret=0.001, pnl=3.95, equity_before=10_000.0,
-        position_id=41, agent_id="box_break_close-g0-1h", side=1, lots=0.05, entry_utc=now - 220 * m,
+        account_id=DAY, broker="icm", mode="demo", exit_utc=shut, ret=0.001, pnl=3.95, equity_before=10_000.0,
+        position_id=41, agent_id="box_break_close-g0-1h", side=1, lots=0.05, entry_utc=shut - 180 * m,
         entry_price=2400.0, exit_price=2401.2, exit_reason="trail_close", r=1.2, commission=0.35, swap=-0.12,
         timeframe="1h", initial_sl=2398.0, final_tp=2404.0))
     trade = {"position_id": 77, "agent_id": "box_break_close-g0-1h", "side": 1, "lots": 0.05, "max_bars": 8,
@@ -103,13 +116,13 @@ def seed(state: Path, now: pd.Timestamp) -> None:
     book = ShadowBook(state)
     book.track("v1", now - pd.Timedelta(days=1))
     book.books["v1"].closed.append(ShadowTrade(
-        version="v1", agent_id="tsmom-g0-x", side=1, entry_ts=now - 300 * m, entry=2400.0, stop=2390.0, target=2420.0,
-        max_bars=12, timeframe="1h", p=0.62, exit_ts=now - 120 * m, exit=2420.0, barrier="target", ret=20 / 2400))
+        version="v1", agent_id="tsmom-g0-x", side=1, entry_ts=today_close(now, 120) - 180 * m, entry=2400.0, stop=2390.0,
+        target=2420.0, max_bars=12, timeframe="1h", p=0.62, exit_ts=today_close(now, 120), exit=2420.0, barrier="target", ret=20 / 2400))
     book.save(now)
-    chart(state, now)
+    chart(state, now, shut)
 
 
-def chart(state: Path, now: pd.Timestamp) -> None:
+def chart(state: Path, now: pd.Timestamp, shut: pd.Timestamp) -> None:
     """The closed 1h engine trade's chart (item 133): the Day/swing lab's broker minutes over the last 36 hours in the
     server's store (state/data, scripts/e2e_server.py) and one accepted stop move of its position, 41."""
     store = Store(state / "data")
@@ -122,7 +135,7 @@ def chart(state: Path, now: pd.Timestamp) -> None:
     bars["tick_count"], bars["spread_mean"], bars["spread_max"] = 20.0, 0.2, 0.3
     store.append("bars_1m_broker", bars[BAR_COLUMNS], source=DAY)
     store.append("decisions", pd.DataFrame([{
-        "ts_utc": now - pd.Timedelta(minutes=150), "account_id": DAY, "agent_id": "box_break_close-g0-1h", "action": "trail",
+        "ts_utc": shut - pd.Timedelta(minutes=110), "account_id": DAY, "agent_id": "box_break_close-g0-1h", "action": "trail",
         "p": None, "mult": None, "proposal_id": None,
         "detail": json.dumps({"position": 41, "sl": 2399.5, "ok": True, "retcode": 10009})}]), source=DAY, dedupe=False)
 
