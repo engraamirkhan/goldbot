@@ -2,6 +2,7 @@
 the terms check per instrument, the arm caps per instrument copy and the wind-down across every book's range."""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,7 +11,7 @@ import pytest
 
 from goldbot.execution.broker import Position
 from goldbot.execution.paper import PaperBroker
-from goldbot.instruments import Instruments, load_instruments
+from goldbot.instruments import GOLD, Instruments, load_instruments, registry
 from goldbot.ops.services import engine as svc
 
 
@@ -20,11 +21,21 @@ def _acc(**kw: Any) -> Any:
     return SimpleNamespace(**{**base, **kw})
 
 
+@pytest.fixture(autouse=True)
+def _fresh_registry() -> Iterator[None]:
+    """`registry()` caches whatever `load_instruments` returns: a patched copy (`_confirmed`) never outlives a test."""
+    registry.cache_clear()
+    yield
+    registry.cache_clear()
+
+
 def _confirmed(monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:
-    """The registry as lane L1's symbol check leaves it: these instruments enabled and confirmed."""
+    """The registry as lane L1's symbol check leaves it: these instruments enabled and confirmed, every other
+    non-gold one a placeholder (`verify: true`), whatever config/instruments.yaml says today."""
     reg = load_instruments()
-    got = {k: (v.model_copy(update={"enabled": True, "verify": False, "digits": 2, "point": 0.01})
-               if k in keys else v) for k, v in reg.instruments.items()}
+    got = {k: (v.model_copy(update={"enabled": True, "verify": False, "digits": 2, "point": 0.01}) if k in keys
+               else v if k == GOLD else v.model_copy(update={"verify": True}))
+           for k, v in reg.instruments.items()}
     monkeypatch.setattr("goldbot.instruments.load_instruments", lambda *a, **k: Instruments(instruments=got))
 
 
