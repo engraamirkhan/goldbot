@@ -57,7 +57,7 @@ def test_a_refused_start_keeps_the_last_known_exposure(tmp_path):
 
 def test_an_unreadable_positions_read_at_start_keeps_the_last_known_exposure(tmp_path):
     class Dead(GbpPaper):
-        def positions(self, magic_prefix: int | None = None) -> list:
+        def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list:
             raise RuntimeError("terminal down")
 
     _running_file(tmp_path)
@@ -170,7 +170,7 @@ def test_the_engine_service_passes_the_configured_probe_flag_to_a_refused_start(
 
 def test_an_unreadable_positions_read_on_a_probe_engine_writes_the_probe_flag(tmp_path):
     class Dead(GbpPaper):
-        def positions(self, magic_prefix: int | None = None) -> list:
+        def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list:
             raise RuntimeError("terminal down")
 
     (tmp_path / "orders_icm-probe.json").write_text(json.dumps({"sent": {}, "open": {}}))
