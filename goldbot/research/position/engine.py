@@ -98,6 +98,7 @@ class VenueResult(FrozenRecord):
     venue: str
     gates: bool
     book: stats.PositionStats
+    book_null_nets: np.ndarray | None = None           # the gating venue's per-draw null nets (not written out)
     assets: dict[str, stats.PositionStats]
     daily: pd.DataFrame                                # the book: gross, cost, financing, net, long, short, units
     assets_daily: dict[str, pd.DataFrame]
@@ -346,8 +347,14 @@ class _Part:
     bh: dict[str, dict[str, pd.Series]] = field(default_factory=dict)
 
 
+def null_seed(cfg: EngineConfig, part: int, symbol_index: int) -> int:
+    """W3 addendum ruling 7: seed 20261102 + 1000 x the part's index in the composite + the market's index in the
+    spec, so a composite's parts draw independent nulls."""
+    return cfg.null_seed + 1000 * part + symbol_index
+
+
 def _run_part(spec: PositionSpec, panel: Panel, window: Window, cfg: EngineConfig, costs: Mapping[str, PointCosts],
-              venues: Mapping[str, Venue], rates: Rates) -> _Part | None:
+              venues: Mapping[str, Venue], rates: Rates, part_index: int = 0) -> _Part | None:
     view = truncate_panel(panel, window.last)          # the signal never sees a row known after the window's close
     present = tuple(s for s in spec.symbols if s in view and bool((view[s].index >= window.first).any()))
     if not present:
@@ -374,16 +381,16 @@ def _run_part(spec: PositionSpec, panel: Panel, window: Window, cfg: EngineConfi
             part.nulls[vname] = {}
             for s, p in paths.items():
                 g, c, f = null_parts(p, costs[s], venue, rates, kind=kind, draws=cfg.null_draws,
-                                     seed=cfg.null_seed + spec.symbols.index(s))
+                                     seed=null_seed(cfg, part_index, spec.symbols.index(s)))
                 part.nulls[vname][s] = g - c + f
     return part
 
 
 def run(spec: PositionSpec, panel: Panel, window: Window | Sequence[Window], *, cfg: EngineConfig,
         costs: Mapping[str, PointCosts], venues: Mapping[str, Venue], rates: Rates | None = None,
-        name: str | None = None) -> PositionResult:
+        name: str | None = None, first_part: int = 0) -> PositionResult:
     """One spec on one window, or a composite's parts read as one series (each part flat at its own edges, null draws
-    summed per draw with the same seeds), under each venue. Refuses (HoldoutViolation) any frame holding a holdout date
+    summed per draw; part k is seeded as part `first_part` + k, see `null_seed`), under each venue. Refuses (HoldoutViolation) any frame holding a holdout date
     or stamp, refuses frames that do not say when a row became known, hands the signal only rows known by each part's
     last close, and checks the signal point in time before booking anything."""
     rates = rates or Rates()
@@ -394,7 +401,8 @@ def run(spec: PositionSpec, panel: Panel, window: Window | Sequence[Window], *, 
             if col in v.columns:
                 assert_before_holdout(v[col], what=f"{k} {col}")
     windows = [window] if isinstance(window, Window) else list(window)
-    parts = {w.name: p for w in windows if (p := _run_part(spec, panel, w, cfg, costs, venues, rates)) is not None}
+    parts = {w.name: p for k, w in enumerate(windows)
+             if (p := _run_part(spec, panel, w, cfg, costs, venues, rates, first_part + k)) is not None}
     if not parts:
         raise ValueError(f"{spec.id}: no {'/'.join(spec.symbols)} bars inside {[w.name for w in windows]}")
     null_kind = "exposure" if spec.long_only else "sign"
@@ -413,11 +421,10 @@ def run(spec: PositionSpec, panel: Panel, window: Window | Sequence[Window], *, 
         book_daily = pd.concat([f[cols] for f in frames.values()]).groupby(level=0).sum().sort_index()
         book_daily["units"] = pd.concat([f["units"].ne(0).astype(int) for f in frames.values()]).groupby(level=0).max()
         bh_book = pd.concat(bh.values()).groupby(level=0).sum()
-        book = stats.summarise_book(book_daily, frames, cfg=cfg,
-                                    null=None if nulls is None else np.sum(list(nulls.values()), axis=0),
-                                    null_kind=null_kind, buy_hold=bh_book)
-        out[vname] = VenueResult(venue=venue.name, gates=venue.gates, book=book, assets=assets, daily=book_daily,
-                                 assets_daily=frames)
+        book_null = None if nulls is None else np.sum(list(nulls.values()), axis=0)
+        book = stats.summarise_book(book_daily, frames, cfg=cfg, null=book_null, null_kind=null_kind, buy_hold=bh_book)
+        out[vname] = VenueResult(venue=venue.name, gates=venue.gates, book=book, book_null_nets=book_null,
+                                 assets=assets, daily=book_daily, assets_daily=frames)
     return PositionResult(spec_id=spec.id, window=name or "+".join(w.name for w in windows),
                           windows_read=tuple(parts), rate_source="constant" if rates.uses_constant else "DTB3",
                           y_learn=y_learn(spec, panel, cfg), venues=out)
