@@ -30,6 +30,9 @@ export type ModeChangeResult = Schemas["ModeChangeResult"];
 export type ApprovalMode = Schemas["ModeChangeRequest"]["mode"];
 export type ChartLayoutsView = Schemas["ChartLayoutsView"];
 export type ChartLayoutIn = Schemas["ChartLayoutIn"];
+export type KeyLevelsView = Schemas["KeyLevelsView"];
+export type KeyLevelZone = Schemas["KeyLevelZone"];
+export type KeyLevelTf = KeyLevelsView["timeframe"];
 export type GatesView = Schemas["GatesView"];
 export type GateView = Schemas["GateView"];
 export type GateItemView = Schemas["GateItemView"];
@@ -227,6 +230,9 @@ export const api = {
   trade: (id: string) => req<Schemas["TradeRow"]>(`/api/trades/${encodeURIComponent(id)}`),
   // one trade on the stored bars of its timeframe with its levels and stop moves (backlog 133)
   tradeBars: (id: string) => req<Schemas["TradeBars"]>(`/api/trades/${encodeURIComponent(id)}/bars`),
+  // each account's current key zones and the recent bars of the timeframe (display only)
+  keyLevels: (tf: KeyLevelTf, account?: string) =>
+    req<KeyLevelsView>(`/api/key-levels?tf=${tf}${account ? `&account=${encodeURIComponent(account)}` : ""}`),
   // the strategy board (backlog 132): progress to each arm's read and the read's frozen figures (ADR 0050, 0051)
   strategyBoard: () => req<Schemas["StrategyBoardView"]>("/api/strategies/board"),
   // the strategy ranking (backlog 136-138, ADR 0053): families by the adjusted lower bound of net R per trade after
