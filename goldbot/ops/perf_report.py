@@ -99,6 +99,7 @@ from goldbot.ops.learning_ledger import (
 )
 from goldbot.ops.report_days import day_buckets, month_days, report_day
 from goldbot.ops.report_days import weekdays as weekdays_in
+from goldbot.research.arms import learning_arm_ids
 from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.entry_text import account_name
 
@@ -115,6 +116,7 @@ AGENT_ID = re.compile(r"^([a-z0-9_]+)-g\d+-[0-9a-f]{10}$")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
 VERSION_INFERRED = "version inferred (nearest p)"
+LEARNING_VERDICT = "learning class: unqualified, demo only; never ranked, never a qualification"
 NO_BAR, NO_SHADOW, NO_VERSION = ("no signal bar in the proposal id", "no shadow trade for this agent, side and signal bar",
                                  "model version not in the shadow book")
 
@@ -291,6 +293,9 @@ class LearningReport(FrozenRecord):
     days: DayStats | None = None
     north_star: NorthStar | None = None
     costs: CostReport | None = None
+    # ADR 0061 amendment 2026-11-02: the learning arms (`role: learning`, unqualified, demo only), one row each in their
+    # own section: never in `kinds` or `families` (the family rankings); their money stays in the book's days and costs
+    unqualified: list[GroupStats] = []
 
 
 class AccountReport(FrozenRecord):
@@ -1004,11 +1009,20 @@ def _learning_costs(rows: list[_LRow]) -> CostReport:
 
 def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str | None,
               *, classified: int = 0, opp: set[str] | None = None, have_bars: bool = False,
-              source: str = BARS_SOURCE) -> LearningReport | None:
+              source: str = BARS_SOURCE, learning_ids: frozenset[str] = frozenset()) -> LearningReport | None:
     """`rows` are the countable trades; the `censored` ones are counted beside their row, never in R or money. Days,
-    North star and Costs of the book are from the same countable rows."""
+    North star and Costs of the book are from the same countable rows. A learning arm's rows (`learning_ids`, ADR 0061
+    amendment 2026-11-02) are left out of the kind and family tables and read in `unqualified`, one row per arm."""
     if not rows and not censored:
         return None
+    book = rows
+
+    def learning(r: _LRow) -> bool:
+        return r.trade.arm_id is not None and r.trade.arm_id in learning_ids
+    unqualified = [_group(f"learning / {a}", [r for r in rows if r.trade.arm_id == a], weekdays,
+                          sum(r.trade.arm_id == a for r in censored)).model_copy(update={"verdict": LEARNING_VERDICT})
+                   for a in sorted({str(r.trade.arm_id) for r in (*rows, *censored) if learning(r)})]
+    rows, censored = [r for r in rows if not learning(r)], [r for r in censored if not learning(r)]
     order = {k: i for i, k in enumerate(KINDS)}
     control = [r for r in rows if r.trade.kind == "control"]
     both = [*rows, *censored]
@@ -1020,11 +1034,12 @@ def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str 
                                 sum((r.trade.kind, r.trade.family) == (k, f) for r in censored), weekdays, control,
                                 True) for k, f in keys]
     north = _north_star_of([_Entry(r.trade.opened_utc, report_day(r.trade.opened_utc), r.net_pnl, r.net_r)
-                            for r in rows], ccy, classified, opp or set(), have_bars, [], source)
+                            for r in book], ccy, classified, opp or set(), have_bars, [], source)
     return LearningReport(
         currency=ccy, kinds=kinds, families=families,
-        days=_days_of([(r.trade.exit_utc, r.net_pnl) for r in rows], weekdays, ccy),
-        north_star=north.model_copy(update={"pending_open": None}), costs=_learning_costs(rows))
+        days=_days_of([(r.trade.exit_utc, r.net_pnl) for r in book], weekdays, ccy),
+        north_star=north.model_copy(update={"pending_open": None}), costs=_learning_costs(book),
+        unqualified=unqualified)
 
 
 # ---------------------------------------------------------------------------------------------- build
@@ -1056,6 +1071,11 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
     listed = accounts_config.account_ids()
     known = {*(t.account_id for t in trades), *(listed.listed if listed is not None else ()), *([account] if account else ())}
     ids = {account_name(a): a for a in known}
+    try:                    # ADR 0061 amendment 2026-11-02: learning arms read apart, never in the family tables
+        learning_ids = learning_arm_ids()
+    except Exception as exc:                       # noqa: BLE001 - reporting only
+        learning_ids = frozenset()
+        errors.append(f"exploration spec unreadable ({type(exc).__name__}): learning arms not split out")
     learn_by: dict[str, list[LearningClose]] = {}
     for c in learn.rows if learn is not None else []:
         if start <= report_day(c.exit_utc) <= end:
@@ -1121,7 +1141,7 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
         lrows = [_lrow(c, lccy) for c in lcs]
         learning = _learning([r for r in lrows if not r.trade.censored], [r for r in lrows if r.trade.censored],
                              weekdays, lccy, classified=classified, opp=opp, have_bars=day_types is not None,
-                             source=bars_source)
+                             source=bars_source, learning_ids=learning_ids)
         out.append(AccountReport(
             account_id=acc, mode=next(iter(modes)) if len(modes) == 1 else ("mixed" if modes else None), currency=ccy,
             overall=_group("all", rows, weekdays), by=by, days=_days(rows, weekdays, ccy),
@@ -1135,7 +1155,8 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
             money_note=f"{excluded} trade(s) in another currency counted in trades and R, not in money"
             if excluded else None, learning=learning))
     groups = [g for a in out for gs in a.by.values() for g in gs]
-    learning_groups = sum(len(a.learning.kinds) + len(a.learning.families) for a in out if a.learning is not None)
+    learning_groups = sum(len(a.learning.kinds) + len(a.learning.families) + len(a.learning.unqualified)
+                          for a in out if a.learning is not None)
     growth = None
     if state.is_dir() and account in (None, GROWTH_ACCOUNT):
         try:
@@ -1271,6 +1292,13 @@ def format_markdown(rep: PerformanceReport) -> str:
                   "row, never in R or money; voided trades are left out. The bandit chooses which arms trade and when, so "
                   "a family's pooled arms carry selection bias; no row here is evidence: claims go through a registry "
                   "trial.", ""]
+            if a.learning.unqualified:
+                L += ["### Learning (unqualified, demo only)", "",
+                      "Learning arms (ADR 0061 amendment 2026-11-02, owner 2026-11-02) trade on demo without a history "
+                      "qualification, each inside its own K row, matched control, loss cap and end date. Their rows "
+                      "are never in the family tables above or in any ranking; their money is in the book below. A "
+                      "learning read is a lead for a pre-registered history qualification, never one.", ""]
+                L += _table("learning arm", a.learning.unqualified, lc, True) + [""]
             L += _learning_book_sections(a.learning)
         d = a.days
         L += ["### Days", "",

@@ -72,7 +72,8 @@ def test_both_demo_accounts_carry_the_adr_0042_limits_for_about_eleven_thousand_
         assert a.risk_overrides.profile == "demo-2026-10-18"                          # evidence in R is scale-free
         assert a.login is None                                                        # public repo
     cp = probe.cost_probe
-    assert (cp.budget_share, cp.max_open, cp.max_loss) == (0.1363, 3, 10.0)   # ADR 0057: the probe sleeve £30
+    # ADR 0057: the probe sleeve £30; demo-limits ADR 0072 (f, 2026-11-02): 0.1363 -> 0.2363 (£52)
+    assert (cp.budget_share, cp.max_open, cp.max_loss) == (0.2363, 3, 10.0)
     assert cp.max_loss <= cp.budget_share * 220            # one probe fits; budget_refusal binds the count at run time
 
 

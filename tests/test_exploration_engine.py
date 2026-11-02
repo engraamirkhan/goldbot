@@ -862,17 +862,17 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     £40 a trade and one open, intraday £17, scalp £6.50; 17 open at most on each (one host slot in reserve)."""
     accs = acc_mod.load_accounts(logins=False)
     probe, demo = accs["icm-probe"].exploration, accs["icm-demo"].exploration
-    assert probe.enabled and demo.enabled and probe.max_open_total == demo.max_open_total == 17
+    # demo-limits ADR 0072 (2026-11-02): host cap 24 (23 open), pots are slots only (pot_budgets false, x1.35) and the
+    # probe sleeve 0.2363; the exploration budgets (£168, £198) and every per-trade cap are unchanged
+    assert probe.enabled and demo.enabled and probe.max_open_total == demo.max_open_total == 23
     assert probe.budget_share * 220 == pytest.approx(168, abs=0.05)
     assert demo.budget_share * 220 == pytest.approx(198, abs=0.05)
-    assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(30, abs=0.05)
-    assert (probe.budget_share + accs["icm-probe"].cost_probe.budget_share) * 220 == pytest.approx(198, abs=0.01)
-    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (168, 14)}
-    # ADR 0049 D1a (CFO 2026-10-27): a scalp pot for H-81 carved inside the same £198 (was intraday 108 / 9, swing 90 / 2)
-    # growth sprint 2026-11-01: a growth pot for GS1/GS1C carved from the scalp pot inside the same £198
-    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (10, 8), "intraday": (68, 7),
-                                                                       "swing": (40, 2), "growth": (80, 2)}
-    assert sum(v.gbp for v in demo.pots.values()) == pytest.approx(198)
+    assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
+    assert (probe.budget_share + accs["icm-probe"].cost_probe.budget_share) * 220 == pytest.approx(220, abs=0.01)
+    assert not probe.pot_budgets and not demo.pot_budgets
+    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (None, 19)}
+    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
+                                                                       "swing": (None, 3), "growth": (None, 2)}
     assert {a.max_loss for a in probe.arms.values()} == {6.5}
     assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0, 30.0}   # £30: wave-1 1h arms
     assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
@@ -960,7 +960,8 @@ def test_a_demo_probe_only_account_may_hold_its_own_max_positions_and_every_othe
     assert engine_limits(s, _probe_account(max_positions=18), paper=True).max_positions == 2   # paper: the defaults
     assert engine_limits(s, _probe_account()).max_positions == 2
     accs = acc_mod.load_accounts(logins=False)
-    assert accs["icm-probe"].max_positions == accs["icm-demo"].max_positions == 18     # both learning hosts (PD 10-26)
+    # both learning hosts (PD 10-26: 18; demo-limits ADR 0072, 2026-11-02: 24)
+    assert accs["icm-probe"].max_positions == accs["icm-demo"].max_positions == 24
     assert all(a.max_positions is None and engine_limits(s, a).max_positions == 2
                for a in accs.values() if not a.probe_only and not a.pilot.enabled)
     assert engine_limits(s, accs["icm-live"]).max_positions == 1          # ADR 0055: the live pilot's one position
@@ -978,7 +979,7 @@ def test_the_max_positions_override_survives_the_limits_policy():
     from goldbot.ops.services.engine import engine_limits_policy
     acc = acc_mod.load_accounts(logins=False)["icm-probe"]
     pol = engine_limits_policy(load_settings(), acc)
-    assert pol.defaults.max_positions == 18
+    assert pol.defaults.max_positions == 24          # demo-limits ADR 0072 (2026-11-02): 18 -> 24
 
 
 

@@ -113,6 +113,11 @@ class RiskLimits(Record):
     # minimum lot (`accounts.growth_arm_ids`: `sizing: growth`, demo probe_only only). Every other check, the arm's
     # per-trade cap included, still applies; an arm not listed keeps the minimum-lot fence
     growth_arms: frozenset[str] = Field(default_factory=frozenset)
+    # demo-limits ADR (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not bound to
+    # test, learn and improve signals"): whether a tier-1 news blackout (`AccountState.in_blackout`) refuses entries.
+    # False only for a demo probe_only account whose accounts.yaml `news_blackout_entries` is false, against its real
+    # terminal (`ops.services.engine.blackout_entries`); True (refused, as before) on every other account
+    blackout_entries: bool = True
     # the live pilot (goldbot/risk/pilot.py, ADR 0055): the account's `pilot:` block when enabled, set only by
     # ops.services.engine.engine_limits for that account's real terminal. None (every other account): no change
     pilot: PilotRules | None = None
@@ -691,7 +696,7 @@ class RiskGate:
             reasons.append("equity_unconfirmed")
         if st.dq_error:
             reasons.append("data_quality_error")
-        if st.in_blackout:
+        if st.in_blackout and L.blackout_entries:
             reasons.append("news_blackout")
         reasons += self.window_reasons(st)
         if st.in_rollover:

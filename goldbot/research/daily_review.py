@@ -62,6 +62,7 @@ from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.db.connection import Database, db_path
 from goldbot.ops.report_days import day_bounds
 from goldbot.research.arm_stops import cost_states, load_stop_rules
+from goldbot.research.arms import learning_arm_ids
 
 if TYPE_CHECKING:
     from goldbot.config import DailyReviewSettings, Settings
@@ -216,6 +217,9 @@ class DailyReview(Record):
     # accounts with a recorded quarantine span and no recorded engine restart: their decisions are held out of
     # learning in memory, never voided, until scripts/evidence_exclusions.py records the restart (an alert line)
     spans_unresolved: list[str] = Field(default_factory=list)
+    # ADR 0061 amendment 2026-11-02: the learning arms' fills of the day (broker -> arm -> fills; a count only), their
+    # own section: unqualified demo evidence, never in a family ranking
+    learning: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     def cost(self, broker: str, host: str, session: str) -> SessionCosts:
         for c in self.costs:
@@ -784,7 +788,22 @@ def report_lines(r: DailyReview) -> list[str]:
     if r.evidence_void:
         out.append(f"Review: {r.evidence_void} trade{'s' if r.evidence_void != 1 else ''} void as evidence "
                    "(dq quarantine; H-61 stops and P&L keep it)")
+    if r.learning:
+        n_arms = sum(len(v) for v in r.learning.values())
+        n_fills = sum(sum(v.values()) for v in r.learning.values())
+        out.append(f"Review: learning (unqualified, demo only): {n_fills} fill{'s' if n_fills != 1 else ''} on "
+                   f"{n_arms} arm{'s' if n_arms != 1 else ''}, kept out of the family results")
     return [x for x in (scrub(x) for x in out) if x]
+
+
+def _learning_fills(d: _Day, learning: frozenset[str]) -> dict[str, dict[str, int]]:
+    """Per broker: each learning arm's fills of the day (sent and filled), only arms with one."""
+    out: dict[str, dict[str, int]] = {}
+    for t in d.sent:
+        if t.arm_id in learning and t.account_id in d.hosts:
+            per = out.setdefault(d.hosts[t.account_id], {})
+            per[t.arm_id] = per.get(t.arm_id, 0) + 1
+    return {b: dict(sorted(v.items())) for b, v in sorted(out.items())}
 
 
 def _status_body(r: DailyReview) -> str:
@@ -989,6 +1008,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     low = trading and of_plan is not None and of_plan < cfg.volume_alert_below
     carried = prev.volume_low_days if prev is not None else 0
     low_days = (carried + 1 if low else 0) if trading else carried
+    learning = _learning_fills(d, _learning_ids(incidents))
     review = DailyReview(day=day, generated_utc=now, dry_run=dry_run, trading_day=trading, costs=costs,
                          refusals=_refusals(d), volume=volume, volume_total=total, plan_total=plan_total,
                          of_plan=of_plan, fills_total=sum(v.fills for v in volume), fills_probes=probe_fills,
@@ -996,7 +1016,8 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          arms_retired={b: len(retired_arms(db, b)) for b in sorted(set(hosts.values()))},
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
                          evidence_void=_void(db, hosts, lo, hi),
-                         spans_unresolved=_unresolved(db, store, hosts, settings, now))
+                         spans_unresolved=_unresolved(db, store, hosts, settings, now),
+                         learning=learning)
     if dry_run:
         return review
     before = load_review(sd, day)
@@ -1015,6 +1036,16 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     write_atomic(review_path(sd, day), body)
     _ledger(sd, day, body)
     return review
+
+
+def _learning_ids(incidents: list[Incident]) -> frozenset[str]:
+    """The spec's learning arms; an unreadable spec is an incident and splits nothing out."""
+    try:
+        return learning_arm_ids()
+    except Exception as exc:                 # noqa: BLE001 - one unreadable source is an incident, not a crash
+        incidents.append(Incident(kind="unreadable", host="spec", count=1,
+                                  detail=f"exploration spec unreadable ({type(exc).__name__})"))
+        return frozenset()
 
 
 def _unresolved(db: Database, store: Any, hosts: Mapping[str, str], settings: Settings,

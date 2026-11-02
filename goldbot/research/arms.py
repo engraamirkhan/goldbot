@@ -297,6 +297,20 @@ COST_CONTROLS: dict[str, str] = {"F1A": "F1C", "G1A": "G1C"}
 # a measured slippage cell rests on this many fills at least (prereg 2026-10-26 Costs: "per (session x exit type) cell
 # with at least 30 fills")
 MIN_COST_CELL_FILLS = 30
+# ADR 0061 amendment 2026-11-02 (owner 2026-11-02: "fix the limits of our system to trade ... for the system to be not
+# bound to test, learn and improve signals"; the owner answered YES to a demo "learning" class): `role: learning` enters
+# on demo without a history qualification, inside its own block (`Learning`, `learning_refusal`): a K row of its own in
+# the registry, a prereg doc, a matched random control, an end at most LEARNING_MAX_DAYS away and a loss cap. The engine
+# retires it at LEARNING_READ_FILLS admissible fills, at its loss cap or past its end (`engine.exploration_learning`).
+# Unqualified demo evidence: never a qualification, never in a family ranking
+LEARNING_RULE = "learning class (owner 2026-11-02, ADR 0061 amendment)"
+LEARNING_FAMILY = "learning_class"          # the registry family of a learning arm's K row
+LEARNING_MAX_DAYS = 45
+LEARNING_READ_FILLS = 300
+# a control row dedicated to learning arms names them: params.control "learning:<id>,<id>" (`dedicated_control_of`)
+LEARNING_CONTROL_PREFIX = "learning:"
+# what a matched control repeats exactly: the arm's fixed bracket (one stop form, the target in R, the hold in bars)
+BRACKET_KEYS = ("stop_usd", "stop_atr", "target_r", "hold_bars")
 REGISTRY_PREFIX = "registry:"
 _REGISTRY_REF = re.compile(r"^registry:([A-Za-z0-9][A-Za-z0-9:_.#/-]{0,127})(?:@([0-9a-f]{40}))?$")
 _WINDOW = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$")
@@ -328,6 +342,109 @@ class Qualification(FrozenRecord):
     cost_cells: dict[str, CostCell]
 
 
+class Learning(FrozenRecord):
+    """A learning arm's block (ADR 0061 amendment 2026-11-02), read leniently by `learning_refusal` (a malformed block
+    refuses its arm, never the load): the prereg doc that lists it, its K row in the registry (`learning_k_id`), the
+    matched control row it is read against, the most it may lose in all (account currency) and its last UTC day."""
+    prereg: str = Field(min_length=1)
+    k_id: str = Field(pattern=r"^[0-9a-f]{12}$")
+    control: str = Field(min_length=1)
+    loss_cap_gbp: float = Field(gt=0)
+    until: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+def learning_arm_ids(path: Path | None = None) -> frozenset[str]:
+    """The ids of the spec's `role: learning` rows (default config/exploration_arms.yaml), read from the rows alone (no
+    registry, no stamp): what the reports keep in their own learning section, out of every family ranking."""
+    raw = yaml.safe_load(Path(REPO_ROOT / "config" / "exploration_arms.yaml" if path is None else path).read_text())
+    return frozenset(str(r["id"]) for r in (raw or {}).get("arms", []) if isinstance(r, dict)
+                     and r.get("role") == "learning" and "id" in r)
+
+
+def learning_k_config(arm_id: str, config_hash: str, prereg: str) -> dict[str, str]:
+    """The config of a learning arm's (or its dedicated control's) K row: the arm, its frozen hash and its prereg."""
+    return {"kind": LEARNING_FAMILY, "arm": arm_id, "arm_config_hash": config_hash, "prereg": prereg}
+
+
+def learning_k_id(arm_id: str, config_hash: str, prereg: str) -> str:
+    """The K row's registry config hash (`research.registry.config_hash` of `learning_k_config`): derived from the arm,
+    so a `k_id` can only name this arm's own row (scripts/record_learning_k_rows.py writes it)."""
+    from goldbot.research.registry import config_hash as registry_hash
+    return registry_hash(learning_k_config(arm_id, config_hash, prereg))
+
+
+def dedicated_control_of(arm: Arm) -> tuple[str, ...]:
+    """The learning arms a control row is dedicated to (params.control "learning:<id>,<id>"), () for any other row."""
+    named = arm.params.get("control") if arm.role == "control" else None
+    if not isinstance(named, str) or not named.startswith(LEARNING_CONTROL_PREFIX):
+        return ()
+    return tuple(x.strip() for x in named.removeprefix(LEARNING_CONTROL_PREFIX).split(",") if x.strip())
+
+
+def _bracket(arm: Arm) -> dict[str, float] | None:
+    """The arm's fixed bracket from its params (exactly one stop form, target_r, hold_bars), None without one."""
+    p = arm.params
+    if ("stop_usd" in p) == ("stop_atr" in p) or "target_r" not in p or "hold_bars" not in p or "exit" in p:
+        return None
+    try:
+        return {k: float(p[k]) for k in BRACKET_KEYS if k in p}
+    except (TypeError, ValueError):
+        return None
+
+
+def control_match_refusal(arm: Arm, control: Arm) -> str | None:
+    """Why `control` is not a matched control of `arm`, None when it is: a random control (`role` control) on the same
+    timeframe with the same fixed bracket (stop, target, hold). An arm whose stop or target is not a fixed bracket on
+    its row (a runner exit, a specialist's own stop, a VWAP target, a stop band) cannot be matched."""
+    mine = _bracket(arm)
+    if mine is None:
+        return f"{arm.id} has no fixed bracket (stop_usd or stop_atr, target_r, hold_bars) to match a control on"
+    if control.role != "control":
+        return f"control {control.id} is not a control row (role {control.role})"
+    if control.timeframe != arm.timeframe:
+        return f"control {control.id} timeframe {control.timeframe} is not {arm.timeframe}"
+    theirs = _bracket(control)
+    if theirs is None:
+        return f"control {control.id} has no fixed bracket"
+    for key, what in (("stop_usd", "stop"), ("stop_atr", "stop"), ("target_r", "target"), ("hold_bars", "hold")):
+        if (key in mine) != (key in theirs) or (key in mine and abs(theirs[key] - mine[key]) > 1e-9):
+            return f"control {control.id} {what} ({key}) does not match {arm.id}'s"
+    return None
+
+
+def learning_refusal(arm: Arm, root: Path | None = None, registry: Path | None = None,
+                     now: pd.Timestamp | None = None) -> str | None:
+    """Why a `role: learning` row may not enter, from the row alone (its control is judged against the control's row
+    by `load_arms` and by the engine): a valid `learning` block and no qualification block; the prereg doc exists in
+    the repo; the k_id is this arm's own K row (`learning_k_id`) and resolves in the registry (fail closed when the
+    registry cannot be read); `until` not past and at most LEARNING_MAX_DAYS away. Never raises."""
+    root = REPO_ROOT if root is None else root
+    registry = REGISTRY_PATH if registry is None else registry
+    if arm.qualification is not None:
+        return f"{LEARNING_RULE}: a learning row carries no qualification block"
+    try:
+        block = Learning.model_validate(arm.learning)
+    except ValidationError as exc:
+        return f"{LEARNING_RULE}: learning block invalid ({exc.error_count()} errors)"
+    if block.prereg.startswith(REGISTRY_PREFIX) or not _ref_exists(block.prereg, root, None):
+        return f"{LEARNING_RULE}: the prereg doc {block.prereg[:80]!r} does not exist"
+    if block.k_id != learning_k_id(arm.id, arm_hash(arm), block.prereg):
+        return f"{LEARNING_RULE}: k_id {block.k_id} is not {arm.id}'s own K row"
+    hashes = _registry_hashes(registry)
+    if hashes is None or block.k_id not in hashes:
+        return f"{LEARNING_RULE}: k_id {block.k_id} does not resolve in the registry"
+    try:
+        last = pd.Timestamp(block.until, tz="UTC")
+    except ValueError:
+        return f"{LEARNING_RULE}: until {block.until!r} invalid"
+    today = (_now() if now is None else pd.Timestamp(now).tz_convert("UTC")).normalize()
+    if today > last:
+        return f"{LEARNING_RULE}: the learning run of {arm.id} ended after {block.until}"
+    if last - today > pd.Timedelta(days=LEARNING_MAX_DAYS):
+        return f"{LEARNING_RULE}: until {block.until} is more than {LEARNING_MAX_DAYS} days away"
+    return None
+
+
 def _window(text: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     m = _WINDOW.match(text)
     if m is None:
@@ -339,16 +456,17 @@ def _window(text: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     return (start, end) if start <= end else None
 
 
-def _registry_hashes(path: Path) -> frozenset[str] | None:
-    """The config hashes of the registry's rows, None when the file is not there or cannot be read (a bad line is
-    skipped: one row never hides the others)."""
+def _registry_rows(path: Path) -> tuple[frozenset[str], frozenset[str]] | None:
+    """(the config hashes of the registry's rows, those of its learning K rows), None when the file is not there or
+    cannot be read (a bad line is skipped: one row never hides the others)."""
     try:
         if not path.is_file():
             return None
         lines = path.read_text().splitlines()
     except (OSError, ValueError):
         return None
-    out = set()
+    out: set[str] = set()
+    learning: set[str] = set()
     for line in lines:
         try:
             row = json.loads(line)
@@ -356,7 +474,21 @@ def _registry_hashes(path: Path) -> frozenset[str] | None:
             continue
         if isinstance(row, dict) and isinstance(row.get("config_hash"), str):
             out.add(row["config_hash"])
-    return frozenset(out)
+            if row.get("family") == LEARNING_FAMILY:
+                learning.add(row["config_hash"])
+    return frozenset(out), frozenset(learning)
+
+
+def _registry_hashes(path: Path) -> frozenset[str] | None:
+    """The config hashes of the registry's rows, None when the file is not there or cannot be read."""
+    got = _registry_rows(path)
+    return None if got is None else got[0]
+
+
+def _learning_hashes(path: Path) -> frozenset[str]:
+    """The config hashes of the registry's learning K rows (family LEARNING_FAMILY); empty when unreadable."""
+    got = _registry_rows(path)
+    return frozenset() if got is None else got[1]
 
 
 def _ref_exists(ref: str, root: Path, registry: frozenset[str] | None) -> bool:
@@ -424,14 +556,18 @@ def owner_experiment_refusal(arm: Arm, now: pd.Timestamp | None = None) -> str |
     return None
 
 
-def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REGISTRY_PATH,
+def qualification_refusal(arm: Arm, root: Path | None = None, registry: Path | None = None,
                           now: pd.Timestamp | None = None) -> str | None:
     """Why `arm` may send no demo entry under the owner rule 2026-10-30, or None when it may. Exempt: `role` control
     (a random control: a random_bracket rule or a body naming its `control`), or `role` cost on a COST_ARMS id naming
     its own cost read (`cost_read`). Any other arm needs a `qualification` that validates, with verdict `pass`,
     measured costs (`_cost_refusal`), a screen window that ends before the confirm window starts, a confirm window that
-    ends before the holdout (2025-10-01), and two distinct references that exist. Never raises: a malformed record is
-    a refusal (one bad row never stops the engine)."""
+    ends before the holdout (2025-10-01), and two distinct references that exist, neither a learning K row
+    (unqualified demo evidence never qualifies). `role` learning: `learning_refusal` (ADR 0061 amendment
+    2026-11-02). Never raises: a malformed record is a refusal (one bad row never stops the engine). `root` and
+    `registry` default to this checkout and REGISTRY_PATH, read at the call."""
+    root = REPO_ROOT if root is None else root
+    registry = REGISTRY_PATH if registry is None else registry
     if arm.role == "control" and not (arm.rule == "random_bracket" or "control" in arm.params):
         return f"{QUALIFY_RULE}: role control on a body that is not a control (no random_bracket rule, no params.control)"
     named = arm.params.get("control") if arm.role == "control" else None
@@ -452,6 +588,10 @@ def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REG
         return None
     if arm.role == "owner_experiment":
         return owner_experiment_refusal(arm, now)
+    if arm.role == "learning":
+        return learning_refusal(arm, root, registry, now)
+    if arm.learning is not None:
+        return f"{QUALIFY_RULE}: a learning block on a {arm.role} row (only role learning carries one)"
     if arm.qualification is None:
         return f"{QUALIFY_RULE}: no qualification record (a screen and a confirm, both pass)"
     try:
@@ -475,10 +615,18 @@ def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REG
     for name, ref in (("screen", q.screen), ("confirm", q.confirm)):
         if not _ref_exists(ref, root, hashes):
             return f"{QUALIFY_RULE}: the {name} reference {ref[:80]!r} does not exist"
+        if _ref_hash(ref) in _learning_hashes(registry):
+            return f"{QUALIFY_RULE}: the {name} reference {ref[:80]!r} is a learning K row (never a qualification)"
     return None
 
 
-def stamp_qualification(arm: Arm, root: Path = REPO_ROOT, registry: Path = REGISTRY_PATH) -> Arm:
+def _ref_hash(ref: str) -> str | None:
+    """The config hash a `registry:` reference names, None for a doc reference."""
+    m = _REGISTRY_REF.match(ref)
+    return m.group(1) if m is not None else None
+
+
+def stamp_qualification(arm: Arm, root: Path | None = None, registry: Path | None = None) -> Arm:
     """`arm` with `entry_refused` set from `qualification_refusal` (a value written on the row is overwritten)."""
     return arm.model_copy(update={"entry_refused": qualification_refusal(arm, root, registry) or ""})
 
@@ -514,8 +662,11 @@ class Arm(FrozenRecord):
     # arm with one stays configured, so an open position keeps every exit, and sends no new entry. Run policy, like
     # a retirement: not in the hash
     # `owner_experiment`: exempt until its day in OWNER_EXPERIMENTS (ADR 0061 amendment 2026-11-01), that list only
-    role: Literal["strategy", "control", "cost", "owner_experiment"] = "strategy"
+    # `learning`: the demo learning class (ADR 0061 amendment 2026-11-02), unqualified inside its `learning` block
+    # (`Learning`, read leniently by `learning_refusal`): run policy, not in the hash
+    role: Literal["strategy", "control", "cost", "owner_experiment", "learning"] = "strategy"
     qualification: Any = None
+    learning: Any = None
     # a cost arm's prereg cost read (COST_ARMS: F1A O-11, G1A O-12). A row field, not `params`: params are hashed, and
     # naming the read is run policy on a frozen body (trading-safety M2 asked for params.cost_read; the hash forbids it)
     cost_read: str = ""
@@ -620,8 +771,8 @@ def arm_hash(arm: Arm) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, root: Path = REPO_ROOT,
-              registry: Path = REGISTRY_PATH) -> list[Arm]:
+def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, root: Path | None = None,
+              registry: Path | None = None) -> list[Arm]:
     """The arms of `path`. With `check_hash` every arm must carry a `config_hash` equal to its own: an arm edited after
     it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id). With `live_class` (the
     arms are loaded for an account that is not demo) a `spec_rule` arm is refused: ADR 0058 "Demo arms are data rows
@@ -630,9 +781,15 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
     Owner rule 2026-10-30 (ADR 0061), first layer: every arm is stamped `entry_refused` from `qualification_refusal`
     (doc references resolved under `root`, registry references against `registry`) and each refusal is logged (INFO once per process, DEBUG after). The
     row is kept, never dropped: an arm no longer configured has its open positions closed at once, and the history
-    matrix must still run an arm to qualify it."""
+    matrix must still run an arm to qualify it.
+
+    ADR 0061 amendment 2026-11-02, across rows (`learning_cross_refusals`): a learning arm whose control row is missing
+    or not matched is refused; a control dedicated to learning arms is refused with them once none may enter; a
+    qualification citing a learning arm's K row is refused."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
     out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in raw.get("arms", [])]
+    cross = learning_cross_refusals(out)
+    out = [a.model_copy(update={"entry_refused": cross[a.id]}) if a.id in cross else a for a in out]
     if live_class and (spec := sorted(a.id for a in out if a.rule == SPEC_RULE)):
         raise ValueError(f"spec_rule arms {spec} load on demo accounts only (ADR 0058): refused for a live-class account")
     ids = [a.id for a in out]
@@ -659,6 +816,50 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
             _REFUSAL_LOGGED.add((a.id, a.entry_refused))
             log.log(logging.INFO if first else logging.DEBUG, "arm %s refuses new demo entries: %s", a.id,
                     a.entry_refused)
+    return out
+
+
+def learning_cross_refusals(rows: list[Arm]) -> dict[str, str]:
+    """The refusals that need more than one row (ADR 0061 amendment 2026-11-02), by arm id, for rows not refused yet:
+    a learning arm whose `learning.control` names no matched control row (`control_match_refusal`, the control not
+    retired); a strategy whose qualification cites a learning arm's K row; and a dedicated control
+    (`dedicated_control_of`) once every learning arm it serves is refused, retired or missing ("a control of a refused
+    or killed learning arm is refused with it"; a shared pre-registered control keeps its own role)."""
+    by_id = {a.id: a for a in rows}
+    out: dict[str, str] = {}
+    kids: set[str] = set()
+    for a in rows:
+        if a.role != "learning":
+            continue
+        try:
+            block = Learning.model_validate(a.learning)
+        except ValidationError:
+            continue                                    # refused by its own row already
+        kids.add(block.k_id)
+        if a.entry_refused:
+            continue
+        ctl = by_id.get(block.control)
+        if ctl is None:
+            out[a.id] = f"{LEARNING_RULE}: control {block.control!r} names no row of the spec"
+        elif ctl.retired or ctl.status != "run":
+            out[a.id] = f"{LEARNING_RULE}: control {ctl.id} does not run (retired or blocked)"
+        elif (why := control_match_refusal(a, ctl)) is not None:
+            out[a.id] = f"{LEARNING_RULE}: {why}"
+    for a in rows:
+        if a.role != "strategy" or a.entry_refused or not isinstance(a.qualification, dict):
+            continue
+        for key in ("screen", "confirm"):
+            ref = a.qualification.get(key)
+            if isinstance(ref, str) and _ref_hash(ref) in kids:
+                out[a.id] = f"{QUALIFY_RULE}: the {key} reference {ref[:80]!r} is a learning K row (never a qualification)"
+    for a in rows:
+        serves = dedicated_control_of(a)
+        if not serves or a.entry_refused:
+            continue
+        live = [s for s in serves if s in by_id and by_id[s].role == "learning" and not by_id[s].retired
+                and not by_id[s].entry_refused and s not in out]
+        if not live:
+            out[a.id] = f"{LEARNING_RULE}: the dedicated control of {', '.join(serves)} stops with them"
     return out
 
 

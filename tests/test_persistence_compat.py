@@ -555,6 +555,14 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/arms.py", "qualification_refusal", "Qualification"):
         "strict: an arm row's checked-in qualification (ADR 0061); a malformed or misspelt record must refuse the arm's "
         "demo entries (caught, never raised), not be read loosely as a pass",
+    ("goldbot/research/arms.py", "learning_refusal", "Learning"):
+        "strict: an arm row's checked-in learning block (ADR 0061 amendment 2026-11-02); a malformed block must refuse "
+        "the arm's demo entries (caught, never raised), never be read loosely as a learning arm",
+    ("goldbot/research/arms.py", "learning_cross_refusals", "Learning"):
+        "strict: the same checked-in learning block, read across rows (its control, its k_id); a bad block is skipped "
+        "there because learning_refusal has refused its arm already",
+    ("goldbot/engine/exploration_learning.py", "_block", "Learning"):
+        "strict: the same checked-in learning block in the engine; an invalid block refuses the arm (fail closed)",
     ("goldbot/engine/exploration.py", "_load_spec_arm_rows", "SpecArm"):
         "strict: the same frozen Arm rows from config/spec_arms.yaml (hash-checked), read one row at a time so a bad row "
         "is dropped and journalled, never a loosened read (ADR 0058 phase 4)",
