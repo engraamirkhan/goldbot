@@ -602,6 +602,16 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/api/strategy_labels.py", "_reads_file", "ReadsFile"):
         "strict: hand-edited checked-in config, not persisted state (a misspelt read fails closed: no arm counts as "
         "read, every arm its own unit, ADR 0050)",
+    ("goldbot/research/sprint3000/vocab.py", "load_catalogue", "Spec"):
+        "strict: the pre-registered sprint-3000 catalogue (sha256-pinned in the amendment); a misspelt or unknown key "
+        "must fail the load, never drop a filter or parameter silently",
+    ("goldbot/research/sprint3000/vocab.py", "_parse", "reg[rule.type].params"):
+        "strict: a catalogue rule's parameters, as load_catalogue (an unknown parameter must fail, not default)",
+    ("goldbot/research/sprint3000/engine.py", "load_rules", "PassRules"):
+        "strict: the frozen pass rules (config/research/sprint3000_rules.yaml, sha256 in every report); a misspelt "
+        "threshold must fail, never fall back to a default",
+    ("goldbot/research/sprint3000/engine.py", "run_screen", "DsrInputs"):
+        "not persisted: rebuilt from the model_dump made in the same run",
     ("goldbot/research/arm_stops.py", "_load", "StopRules"):
         "strict: hand-edited checked-in config, not persisted state (a misspelt stop rule fails closed: exploration "
         "entries refused as stop_rules_unreadable)",
