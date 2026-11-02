@@ -100,6 +100,11 @@ class BookSpec(FrozenRecord):
     point: float
     contract_size: float
     exploration_config: ExplorationConfig | None = None
+    # the account's first magic of this instrument (`accounts.instrument_magic_base`); None: `magic.book_base`
+    magic_base: int | None = None
+    # why this book takes no entry whatever its terms read (`instrument_unverified`: registry terms not confirmed by
+    # the symbol check, plan: "never trade a spec with verify: true"); its exits run
+    blocked: str | None = None
     # the registry entry (correlation group, leverage class, P&L currency, session profile, news currencies); None only
     # in unit tests, where the book keeps gold's rules
     instrument: InstrumentSpec | None = None
@@ -172,6 +177,12 @@ def using(eng: Engine, book: SymbolBook) -> Iterator[SymbolBook]:
         _switch(eng, prev)
 
 
+def problem(book: SymbolBook) -> str | None:
+    """Why the book takes no entry now (its `BookSpec.blocked`, else its instruments.db terms), or None."""
+    blocked = book.spec.blocked if book.spec is not None else None
+    return blocked or book.terms_problem
+
+
 def multi(eng: Engine) -> bool:
     return len(eng.books) > 1
 
@@ -185,7 +196,8 @@ def book_cfg(cfg: EngineConfig, spec: BookSpec) -> EngineConfig:
     cost probe, shadow book, broker M1 bars or 24/7 lane (gold-only machinery); its exploration arms its own."""
     return cfg.model_copy(update={
         "symbol": spec.symbol, "release_symbol": spec.store_symbol, "instrument": spec.key,
-        "magic_base": magic.book_base(cfg.magic_base, spec.magic_block),
+        "magic_base": spec.magic_base if spec.magic_base is not None else magic.book_base(cfg.magic_base,
+                                                                                        spec.magic_block),
         "point": spec.point, "price_digits": spec.digits, "contract_size": spec.contract_size,
         "exploration_config": spec.exploration_config, "cost_probe": False, "shadow_host": False,
         "broker_bars": False, "always_open": False, "pauses": (), "weekend_window": None, "instruments": (),
@@ -342,6 +354,12 @@ def costs_file(eng: Engine) -> Path:
     return book_dir(cfg.state_dir, cfg.account_id) / f"costs_{cfg.release_symbol}.json"
 
 
+def feature_ctx(eng: Engine) -> dict[str, Any] | None:
+    """The feature context of the active book: None for gold (every build as before); `{"symbol": key}` for another
+    instrument, so gold's dollar features (round numbers, ...) are off for it (features/survey.py, lane L1)."""
+    return None if is_primary(eng) else {"symbol": eng.cfg.instrument}
+
+
 def store_symbol(eng: Engine) -> str:
     """The store's symbol for the active book's rows (ticks, decisions, fills, exit legs, dq events): gold keeps its
     traded symbol as today; another book its unique `store_symbol`, so nothing is ever pooled with XAUUSD."""
@@ -470,7 +488,7 @@ def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
     st = eng.state
     if not book.primary:
         refresh_terms(eng, tick.ts_utc)
-        if book.terms_problem is not None:
+        if problem(book) is not None:
             st.dq_error = True
         spec = book.spec.instrument if book.spec is not None else None
         if spec is not None:
@@ -595,7 +613,7 @@ def published(eng: Engine) -> dict[str, Any]:
                     "magic_base": d["cfg"].magic_base, "primary": b.primary, "price": d.get("_price"),
                     "last_tick_utc": last.ts_utc.isoformat() if last is not None else None,
                     "open": sorted(d.get("open", {})), "closes_due": sorted(d.get("_close_due", {})),
-                    "foreign_positions": d.get("_foreign", []), "terms_problem": b.terms_problem,
+                    "foreign_positions": d.get("_foreign", []), "terms_problem": problem(b),
                     **{k: s.get(k) for k in ("spread_points", "last_tick_age_s", "market_closed", "stale_bars",
                                              "dq_error", "in_blackout", "weekend")}}
     st = eng.state

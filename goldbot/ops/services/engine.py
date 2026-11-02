@@ -216,11 +216,10 @@ def disabled_wind_down(acc: Account, broker: Any) -> bool:
     refused; the next restart after the wind-down is flat refuses the same way."""
     from goldbot.engine import magic
     try:
-        blocks = account_blocks(acc)
-        if len(blocks) == 1:
+        bases = account_magic_bases(acc)
+        if len(bases) == 1:
             own = [p for p in broker.positions() if acc.magic_base <= p.magic < acc.magic_base + 100]
         else:                  # multi-instrument (lane L3): any book's range, on any symbol
-            bases = magic.book_bases(acc.magic_base, blocks)
             own = [p for p in broker.account_positions() if magic.owns(p.magic, bases)]
     except Exception as exc:  # noqa: BLE001 - unknown exposure: manage it rather than strand it
         log.warning("%s is disabled and its positions are unreadable (%s): winding down, entries refused",
@@ -263,62 +262,66 @@ def symbol_terms_problem(info: Any) -> str | None:
 
 
 def account_instruments(acc: Account) -> list[str]:
-    """The registry keys of the non-gold instruments this account trades (accounts.yaml `instruments`, lane L1; none
-    configured or not a demo account: gold alone)."""
+    """The registry keys of the non-gold instruments this account trades (accounts.yaml `instruments`, lane L1, whose
+    loader refuses them on a live or observe-only account; refused here again: gold alone)."""
     keys = [str(k) for k in (getattr(acc, "instruments", None) or ()) if str(k) != "XAUUSD"]
     return keys if keys and acc.mode == "demo" and not acc.is_observe_only else []
 
 
-def account_blocks(acc: Account) -> tuple[int, ...]:
-    """The magic blocks of every instrument the account trades: 0 (gold) and each configured instrument's."""
-    keys = account_instruments(acc)
-    if not keys:
-        return (0,)
-    from goldbot.instruments import load_instruments
-    reg = load_instruments()
-    return (0, *(reg.get(k).magic_block for k in keys if k in reg.instruments))
+def account_magic_bases(acc: Account) -> tuple[int, ...]:
+    """Every book's first magic on the account: gold's magic_base and each instrument's
+    (`accounts.instrument_magic_base`: 3_000_000 + instrument_magic_index x 10_000 + magic_block x 100)."""
+    from goldbot.ops import accounts
+    return (acc.magic_base, *(accounts.instrument_magic_base(acc, k) for k in account_instruments(acc)))
 
 
 def book_terms_problem(spec: Any, info: Any) -> str | None:
-    """Why a non-gold instrument may not trade on this terminal, or None: placeholder registry terms (`verify: true`,
-    lane L1's symbol check has not confirmed them), not enabled, or the terminal's point and digits differ from the
-    registry's (every price the book sends is rounded to them)."""
+    """Why a non-gold instrument may take no entry on this terminal, or None. NEVER a spec with `verify: true` or not
+    `enabled` (placeholder terms until lane L1's symbol check confirms them on the brain), nor one whose terminal
+    point and digits differ from the registry's."""
     if not spec.enabled or spec.verify:
-        return f"{spec.key}: registry terms not confirmed (enabled={spec.enabled}, verify={spec.verify})"
+        return f"instrument_unverified: {spec.key} enabled={spec.enabled} verify={spec.verify}"
     point, digits = float(info.point), int(info.digits)
     if abs(point - spec.point) > 1e-12 or digits != spec.digits:
-        return f"{spec.key}: the terminal quotes point {point} with {digits} digits, the registry {spec.point}/{spec.digits}"
+        return (f"instrument_unverified: {spec.key} quotes point {point} / {digits} digits, the registry "
+                f"{spec.point} / {spec.digits}")
     return None
 
 
 def instrument_books(acc: Account, broker: Any, exploration_cfg: Any) -> tuple[Any, ...]:
-    """The account's non-gold books (engine/books.py BookSpec), demo only. An instrument whose terms are not confirmed
-    or not what the terminal quotes, or that its broker does not list, is left out (logged): that instrument never
-    trades, the rest do. Its exploration arms: `exploration.book_config` (ATR-scaled random controls)."""
+    """The account's non-gold books (engine/books.py BookSpec), demo only. Every listed instrument the broker lists
+    gets a book (its bars accumulate, its exits run); one whose terms are not confirmed (`book_terms_problem`) or that
+    the terminal cannot describe refuses every entry (`BookSpec.blocked`). Prices are rounded to the terminal's own
+    digits when it reports them. Its exploration arms: the account's registered S0-<key> / I0-<key>
+    (`exploration.book_config`)."""
     keys = account_instruments(acc)
     if not keys:
         return ()
     from goldbot.engine import exploration
     from goldbot.engine.books import BookSpec
     from goldbot.instruments import load_instruments
+    from goldbot.ops import accounts
     reg = load_instruments()
     out = []
     for key in keys:
         spec = reg.instruments.get(key)
         sym = spec.broker_symbols.get(acc.broker) if spec is not None else None
         if spec is None or sym is None:
-            log.error("%s: instrument %s is not in the registry for broker %s: not traded", acc.account_id, key,
+            log.error("%s: instrument %s is not in the registry for broker %s: no book", acc.account_id, key,
                       acc.broker)
             continue
+        digits, point = spec.digits, spec.point
         try:
-            why = book_terms_problem(spec, broker.symbol_info(sym))
-        except Exception as exc:  # noqa: BLE001 - a symbol the terminal cannot describe is never traded
-            why = f"{key}: symbol_info({sym}) unavailable ({type(exc).__name__})"
+            info = broker.symbol_info(sym)
+            why = book_terms_problem(spec, info)
+            digits, point = int(info.digits), float(info.point)
+        except Exception as exc:  # noqa: BLE001 - a symbol the terminal cannot describe takes no entry
+            why = f"instrument_unverified: symbol_info({sym}) unavailable ({type(exc).__name__})"
         if why:
-            log.error("%s: %s: not traded", acc.account_id, why)
-            continue
+            log.warning("%s: %s: entries refused, exits run", acc.account_id, why)
         out.append(BookSpec(key=key, symbol=sym, store_symbol=spec.store_symbol, magic_block=spec.magic_block,
-                            digits=spec.digits, point=spec.point, contract_size=spec.contract_size,
+                            magic_base=accounts.instrument_magic_base(acc, key), digits=digits, point=point,
+                            contract_size=spec.contract_size, blocked=why.split(":")[0] if why else None,
                             exploration_config=exploration.book_config(exploration_cfg, key), instrument=spec))
     return tuple(out)
 
@@ -392,6 +395,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.config import load_settings
     from goldbot.engine import Engine, EngineConfig, broker_bars, exploration, order_send
     from goldbot.execution.costs import settings_swap
+    from goldbot.instruments import GOLD
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
@@ -495,7 +499,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
                               cost_probe_scheduled=acc.cost_probe.scheduled,
-                              exploration_config=exploration.config_for(acc),   # None unless enabled (plan 2026-10-25)
+                              # None unless enabled (plan 2026-10-25); gold's book runs gold's arms only
+                              exploration_config=exploration.book_config(exploration.config_for(acc), GOLD),
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, wind_down=wind_down, halt_checks=True,
@@ -731,24 +736,13 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      # PD 2026-10-26: the probe host's own open-position cap (demo probe_only only)
                                      **({"max_positions": acc.max_positions}
                                         if acc.max_positions is not None and not paper else {}),
-                                     "exploration_arms": {} if paper else instrument_arm_caps(acc),
+                                     "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc),
                                      # L2: a multi-instrument account's daily limit holds across its symbols
                                      "multi_symbol": bool(account_instruments(acc)) and not paper,
                                      # growth sprint 2026-11-01: the arms the gate sizes (demo probe_only only)
                                      "growth_arms": frozenset() if paper else accounts.growth_arm_ids(acc),
                                      # demo-limits ADR 2026-11-02: news blackout entries (demo probe_only only)
                                      "blackout_entries": blackout_entries(acc, paper=paper)})
-
-
-def instrument_arm_caps(acc: Account) -> dict[str, float]:
-    """The account's exploration arm caps (`accounts.exploration_arm_caps`), and the same cap for each arm's copy on
-    every other instrument it trades (`<id>@<instrument>`, engine/exploration.py `book_config`): the RiskGate refuses an
-    arm it has no cap for."""
-    from goldbot.ops import accounts
-    caps = dict(accounts.exploration_arm_caps(acc))
-    for key in account_instruments(acc):
-        caps.update({f"{a}@{key}": v for a, v in list(caps.items()) if "@" not in a})
-    return caps
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

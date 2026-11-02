@@ -189,14 +189,16 @@ class Arm(FrozenRecord):
     adds: int = Field(0, ge=0, le=3)
     # quant Q2 2026-11-01: the most lots a growth unit takes (accounts.yaml `unit_lots`); None = the gate's sizing
     unit_lots: float | None = Field(None, gt=0)
-    # multi-instrument demo (lane L3): the registry key of the non-gold instrument this copy runs on; None = gold
-    instrument: str | None = None
 
     @property
     def arm_id(self) -> str:
-        """The spec's id; on a non-gold instrument `<id>@<instrument>` (plan: "learning-class arms per instrument
-        (never pooled)"): its own ledger rows, order ids, caps and evidence."""
-        return self.spec.id if self.instrument is None else f"{self.spec.id}@{self.instrument}"
+        return self.spec.id
+
+    @property
+    def instrument(self) -> str:
+        """The instrument the arm's frozen row trades (`params.instrument`, a config/instruments.yaml key: S0-<key>,
+        I0-<key>, lane L1); XAUUSD when the row names none (every arm before the multi-instrument plan)."""
+        return str(self.spec.params.get("instrument") or GOLD)
 
     @property
     def tf(self) -> str:
@@ -397,24 +399,25 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
 
 def instrument_ok(spec: SpecArm) -> bool:
     """Whether a frozen arm may run on a non-gold instrument (plan: "random controls S0/I0 and learning-class arms per
-    instrument (never pooled); no gold ML/specialists/dollar-constant arms; POS-1 only after qualification"): a
-    running random control whose geometry is in its own ATR, with no dollar figure (`*_usd` params: gold's dollars
-    mean nothing on another price scale). A strategy's gold qualification is no qualification on another instrument,
-    so strategies wait for their own."""
-    return (spec.status == "run" and spec.role == "control" and not spec.retired
-            and not any(str(k).endswith("_usd") for k in spec.params))
+    instrument (never pooled); no gold ML/specialists/dollar-constant arms; POS-1 only after qualification"): a control
+    or learning arm with no dollar figure (`*_usd` params: gold's dollars mean nothing on another price scale)."""
+    return spec.role in ("control", "learning") and not any(str(k).endswith("_usd") for k in spec.params)
 
 
 def book_config(cfg: ExplorationConfig | None, instrument: str) -> ExplorationConfig | None:
-    """The account's exploration block for one non-gold instrument: its registered arms that may run there
-    (`instrument_ok`), each as `<id>@<instrument>`; the account's pots and budget (counted across every book by
-    `_Pass`). None when none may run."""
+    """The exploration block of one book: the account's registered arms whose row trades `instrument`
+    (`Arm.instrument`; S0-<key> / I0-<key> for a non-gold one), with the account's pots and budget (counted across
+    every book by `_Pass`). Gold's book never runs another instrument's arm, nor a non-gold book gold's. A non-gold
+    arm that is not `instrument_ok` is dropped (journalled at its book's start). None for a non-gold book
+    with none; gold keeps its block whatever is left (as before)."""
     if cfg is None or not cfg.enabled:
         return None
-    arms = tuple(a.model_copy(update={"instrument": instrument}) for a in cfg.arms if instrument_ok(a.spec))
-    if not arms:
+    mine = [a for a in cfg.arms if a.instrument == instrument]
+    ok = [a for a in mine if instrument == GOLD or instrument_ok(a.spec)]
+    dropped = tuple(a.arm_id for a in mine if a not in ok) + (cfg.dropped if instrument == GOLD else ())
+    if instrument != GOLD and not ok and not dropped:
         return None
-    return cfg.model_copy(update={"arms": arms, "dropped": ()})
+    return cfg.model_copy(update={"arms": tuple(ok), "dropped": dropped})
 
 
 class ExplorationRecord(FrozenRecord):
@@ -1795,7 +1798,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"),
             decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id,
             evidence_class=EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
-            blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None)
+            blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
+            symbol=eng.cfg.instrument)      # the instrument KEY (never the store symbol): never pooled with XAUUSD
 
     from goldbot.engine import exploration_pyramid as pyr
     try:

@@ -50,13 +50,6 @@ def test_an_unconfirmed_or_misquoted_instrument_is_left_out_and_the_rest_trade(m
     assert svc.instrument_books(_acc(), ThreeDigits(), None) == ()
 
 
-def test_each_instrument_copy_of_an_arm_carries_the_arms_cap(monkeypatch):
-    monkeypatch.setattr("goldbot.ops.accounts.exploration_arm_caps", lambda acc: {"I0": 17.0, "S0": 6.5})
-    caps = svc.instrument_arm_caps(_acc())
-    assert caps == {"I0": 17.0, "S0": 6.5, "I0@XAGUSD": 17.0, "S0@XAGUSD": 6.5, "I0@XPTUSD": 17.0, "S0@XPTUSD": 6.5}
-    assert svc.instrument_arm_caps(_acc(instruments=[])) == {"I0": 17.0, "S0": 6.5}
-
-
 def test_a_disabled_account_winds_down_while_any_book_holds_a_position():
     pb = PaperBroker()
     t0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")

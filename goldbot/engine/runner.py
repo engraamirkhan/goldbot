@@ -865,7 +865,7 @@ class Engine:
         if len(dec) < 120:
             return None
         m = mid(dec)
-        X = build_features(m, DEFAULT_FEATURE_NAMES)
+        X = build_features(m, DEFAULT_FEATURE_NAMES, ctx=books.feature_ctx(self))   # non-gold: its symbol (L1)
         version = X.attrs["feature_version"]
         for ctf in context_tfs(tf):
             hit = self._context(complete, ctf, close_ts)
@@ -911,7 +911,8 @@ class Engine:
             return cached[1]
         hb = self._resample(complete, tf)
         hb = hb[hb["visible_at"] <= close_ts].reset_index(drop=True)
-        out = None if len(hb) < 30 else (hb, build_features(mid(hb), list(CONTEXT_FEATURES)))
+        out = None if len(hb) < 30 else (hb, build_features(mid(hb), list(CONTEXT_FEATURES),
+                                                             ctx=books.feature_ctx(self)))
         self._ctx_cache[tf] = (key, out)
         return out
 
