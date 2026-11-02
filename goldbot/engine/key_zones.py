@@ -10,9 +10,14 @@ Design rules:
   traceback, later ones in one line.
 - Full history (owner 2026-11-02). The engine holds about 62 trading days of 1m bars, too few for 1w swings (they
   live 540 days) and the 250-day strength pool. The worker keeps a long history of the broker's own M15 bars,
-  LONG_DAYS deep. They come from `get_bars_range` through its own bridge client (one paged pull, then a daily
-  refresh), are cached in the store (`bars_15m_broker`, source = account), and are used before the first of the
-  engine's 15m bars. 15m is the book's own evaluation clock, so a 15m input gives every zone timeframe and the same
+  LONG_DAYS deep. They come from `get_bars_range` through its own bridge client (`levels_client`: one attempt,
+  CLIENT_TIMEOUT_S) in PAGE_DAYS pages, PAGE_PAUSE_S apart, within PULL_BUDGET_S (history._Deadline). They are topped
+  up daily. Only one pull per bridge runs at a time, and the first pull after a restart waits a random delay. The
+  bars are cached in the store (`bars_15m_broker`, source = account, symbol = the account's symbol) and filtered
+  through the account's own sessions, and they are used before the first of the engine's 15m bars. A cache that
+  starts well after its target head is re-pulled from the head. An empty page over open market time counts as a
+  failed pull (EmptyPage). An account on short history (accounts.yaml `key_levels_history: short`, for instruments
+  that do not need it) gets no client. 15m is the book's own evaluation clock, so a 15m input gives every zone timeframe and the same
   definition research uses on 1m (`key_levels.zones_asof`). Without a client (paper, tests) the store cache, if any,
   and the engine's bars are used.
 - Density (display only; the research definition stays frozen, ADR 0068). `select` publishes at most NEAREST zones
@@ -24,6 +29,7 @@ Design rules:
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -32,8 +38,9 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.resample import BAR_COLUMNS
-from goldbot.engine.history import rates_to_bars
+from goldbot.engine.history import _Deadline, rates_to_bars
 from goldbot.features.key_levels import (
     CLUSTER_ATR,
     GRID_TF,
@@ -52,15 +59,45 @@ log = logging.getLogger(__name__)
 NEAREST = 3                         # zones published on each side of the price
 LONG_TF = GRID_TF                   # the long history's bars: the book's own clock (15m)
 LONG_DAYS = MATURE_DAYS + PCT_WINDOW_DAYS + 10   # 800: a mature book plus a full strength pool
-PAGE_DAYS = 90                      # one get_bars_range call (~6 000 M15 bars): the bridge also serves the engine
+PAGE_DAYS = 30                      # one get_bars_range call (~2 000 M15 bars): the bridge also serves the engine
+PAGE_PAUSE_S = 1.0                  # between pages
+PAGE_LIMIT_S = 30.0                 # a slower page defers the rest of the pull (bridge slow)
+PULL_BUDGET_S = 300.0               # a whole pull; past it the rest waits for the retry
+CLIENT_TIMEOUT_S = 20.0             # the levels client: one attempt, this timeout
 REFRESH = pd.Timedelta(days=1)      # the long history is topped up once a day
-RETRY = pd.Timedelta(hours=1)       # after a failed pull
+RETRY = pd.Timedelta(hours=1)       # after a failed, deferred or empty pull
+BUSY_RETRY = pd.Timedelta(minutes=5)   # another worker is pulling through the same bridge
+START_JITTER_S = 600.0              # the first pull after a restart waits a random 0 .. this long
 OVERLAP = pd.Timedelta(days=2)      # a refresh re-reads its last two days (a bar the broker corrected)
+HEAD_GAP = pd.Timedelta(days=5)     # a cache starting later than this after its target head is re-pulled from the head
 LONG_TABLE = "bars_15m_broker"
 SLOW_BUILD_S = 1.0
 DISPLAY_MIN_PCT = 50.0
 DISPLAY_MAX_WIDTH_ATR = 2 * CLUSTER_ATR
 _STEP = pd.Timedelta(GRID_TF)
+
+# one long-history pull per bridge at a time (M2: up to 26 instruments' engines share an MT5 box)
+_BRIDGE_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _bridge_lock(key: str) -> threading.Lock:
+    with _LOCKS_GUARD:
+        return _BRIDGE_LOCKS.setdefault(key, threading.Lock())
+
+
+class EmptyPage(RuntimeError):
+    """A page over open market time came back empty after bars were already known: the terminal had not loaded that
+    history yet. The pull counts as failed (retried after RETRY), never as a hole to keep."""
+
+
+def levels_client(url: str, token: str, account: str, *, post: Callable[..., Any] | None = None) -> Any:
+    """The bridge client of the long-history pulls: its own session, ONE attempt per read and CLIENT_TIMEOUT_S, so a
+    slow terminal costs one bounded request, never a retry storm."""
+    from goldbot.execution.bridge import RemoteBroker
+    client = RemoteBroker(url, token, name=f"mt5-remote-{account}-levels", timeout_s=CLIENT_TIMEOUT_S, post=post)
+    client.read_attempts = 1
+    return client
 
 
 class _Job:
@@ -76,14 +113,27 @@ class _Job:
 
 class KeyZoneWorker:
     """The long history and the background build (module docstring). `client`: a bridge client of its own
-    (`get_bars_range`, `symbol_info`), None without a bridge."""
+    (`levels_client`), None without a bridge (or for an account on short history)."""
 
-    def __init__(self, account: str, symbol: str, store: Any = None, client: Any = None):
+    def __init__(self, account: str, symbol: str, store: Any = None, client: Any = None,
+                 sessions: SessionTable = DEFAULT_SESSIONS):
         self.account, self.symbol, self.store, self.client = account, symbol, store, client
+        self.sessions = sessions                  # the account's own calendar (the engine's, set at each build)
+        self.bridge_key = account
         self.long = pd.DataFrame(columns=BAR_COLUMNS)
         self.loaded = False                       # the store cache was read
         self.next_pull: pd.Timestamp | None = None
+        self.broker_start: pd.Timestamp | None = None   # the first bar a pull from the head returned
         self.job: _Job | None = None
+        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")   # pacing (wall time)
+        self.sleep: Callable[[float], None] = time.sleep
+
+    def attach(self, client: Any, bridge_key: str, jitter_s: float | None = None) -> None:
+        """Pull through `client`; `bridge_key` names its MT5 box (one pull per box at a time). The first pull waits a
+        random 0 .. START_JITTER_S, so engines restarted together do not all pull at once."""
+        self.client, self.bridge_key = client, bridge_key
+        wait = random.uniform(0, START_JITTER_S) if jitter_s is None else jitter_s
+        self.next_pull = self.clock() + pd.Timedelta(seconds=wait)
 
     # ---------------------------------------------------------------- thread plumbing (tests run it inline)
     def _spawn(self, fn: Callable[[], None]) -> None:
@@ -110,8 +160,10 @@ class KeyZoneWorker:
     def _run(self, job: _Job) -> None:
         t0 = time.monotonic()
         try:
-            self.refresh(job.close_ts)
-            job.result = build(self.merged(job.recent), job.close_ts, job.price)
+            try:
+                self.refresh(job.close_ts)
+            finally:                               # a failed pull still builds on what is cached
+                job.result = build(self.merged(job.recent), job.close_ts, job.price)
         except Exception as exc:              # noqa: BLE001 - reported by the bar close that collects it
             job.error = exc
         finally:
@@ -120,39 +172,74 @@ class KeyZoneWorker:
 
     # ---------------------------------------------------------------- the long history
     def refresh(self, now: pd.Timestamp) -> None:
-        """Read the store cache once; pull from the broker when due (daily; hourly after a failure)."""
+        """Read the store cache once; pull from the broker when due (daily; hourly after a failure), one pull per
+        bridge at a time."""
         if not self.loaded:
             self.loaded = True
             if self.store is not None:
                 try:
-                    got = self.store.read(LONG_TABLE, source=self.account, start=now - pd.Timedelta(days=LONG_DAYS))
+                    got = self.store.read(LONG_TABLE, source=self.account, symbol=self.symbol,
+                                          start=now - pd.Timedelta(days=LONG_DAYS))
                     if got is not None and not got.empty:
                         self._absorb(got[BAR_COLUMNS], now)
                 except Exception as exc:      # noqa: BLE001 - the broker pull below refills it
                     log.warning("key zones: cache unreadable (%s)", type(exc).__name__)
         if self.client is None or (self.next_pull is not None and now < self.next_pull):
             return
+        lock = _bridge_lock(self.bridge_key)
+        if not lock.acquire(blocking=False):
+            self.next_pull = now + BUSY_RETRY
+            return
         try:
-            point = float(self.client.symbol_info(self.symbol).point)
-            start = now - pd.Timedelta(days=LONG_DAYS)
-            if not self.long.empty:
-                start = max(start, pd.Timestamp(self.long["ts_utc"].iloc[-1]) - OVERLAP)
-            pages = []
-            while start < now:
-                end = min(start + pd.Timedelta(days=PAGE_DAYS), now)
-                pages.append(rates_to_bars(self.client.get_bars_range(self.symbol, LONG_TF, start, end), point))
-                start = end
-            got = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame(columns=BAR_COLUMNS)
-            if not got.empty:
-                got["visible_at"] = pd.to_datetime(got["ts_utc"], utc=True) + _STEP     # an M15 bar is seen at its close
-                got = got[pd.to_datetime(got["visible_at"], utc=True) <= now]            # never the forming bar
-                if self.store is not None:
-                    self.store.append(LONG_TABLE, got, source=self.account)
-                self._absorb(got, now)
+            self._pull(now)
             self.next_pull = now + REFRESH
         except Exception:
             self.next_pull = now + RETRY
             raise
+        finally:
+            lock.release()
+
+    def _start(self, now: pd.Timestamp) -> pd.Timestamp:
+        """The head (now - LONG_DAYS) for an empty cache or one starting more than HEAD_GAP after it (unless the
+        broker's own history starts there), else the cache's last bars minus OVERLAP."""
+        head = now - pd.Timedelta(days=LONG_DAYS)
+        if self.long.empty:
+            return head
+        first, last = (pd.Timestamp(self.long["ts_utc"].iloc[i]) for i in (0, -1))
+        short_head = first > head + HEAD_GAP and (self.broker_start is None or first > self.broker_start + HEAD_GAP)
+        return head if short_head else max(head, last - OVERLAP)
+
+    def _pull(self, now: pd.Timestamp) -> None:
+        """Paged, paced and time-boxed (history._Deadline): PAGE_DAYS a page, PAGE_PAUSE_S between pages, PAGE_LIMIT_S
+        a page and PULL_BUDGET_S in all. Each page is cached as it arrives, so a deferred pull keeps its progress."""
+        pace = _Deadline(self.clock, self.sleep, pause_s=PAGE_PAUSE_S, page_limit_s=PAGE_LIMIT_S,
+                         budget_s=PULL_BUDGET_S)
+        point = float(self.client.symbol_info(self.symbol).point)
+        start = head = self._start(now)
+        seen = not self.long.empty and pd.Timestamp(self.long["ts_utc"].iloc[0]) <= start
+        while start < now:
+            end = min(start + pd.Timedelta(days=PAGE_DAYS), now)
+            began = pace.before_page()
+            page = rates_to_bars(self.client.get_bars_range(self.symbol, LONG_TF, start, end), point, self.sessions)
+            pace.after_page(began)
+            if not page.empty:
+                page["visible_at"] = pd.to_datetime(page["ts_utc"], utc=True) + _STEP   # an M15 bar is seen at its close
+                page = page[pd.to_datetime(page["visible_at"], utc=True) <= now]         # never the forming bar
+            if page.empty:
+                if seen and self._open_between(start, end):
+                    raise EmptyPage(f"{self.symbol} M15 {start} .. {end}: no bars over open market time")
+            else:
+                if not seen and start == head:
+                    self.broker_start = pd.Timestamp(page["ts_utc"].iloc[0])
+                seen = True
+                if self.store is not None:
+                    self.store.append(LONG_TABLE, page, source=self.account, symbol=self.symbol)
+                self._absorb(page, now)
+            start = end
+
+    def _open_between(self, start: pd.Timestamp, end: pd.Timestamp) -> bool:
+        grid = pd.date_range(start.ceil(_STEP), end, freq=_STEP)
+        return bool(len(grid)) and bool(np.asarray(self.sessions.is_open(grid)).any())
 
     def _absorb(self, got: pd.DataFrame, now: pd.Timestamp) -> None:
         b = pd.concat([self.long, got], ignore_index=True) if not self.long.empty else got.copy()
@@ -269,12 +356,12 @@ def _publish(eng: Engine, job: _Job | None) -> None:
         return
     if job.elapsed_s > SLOW_BUILD_S:
         log.warning("key zones: build took %.1f s (> %.1f s)", job.elapsed_s, SLOW_BUILD_S)
-    if job.error is not None:
+    if job.error is not None:                    # a failed pull still built on the cache (published below)
         _report(eng, job.error)
-    elif job.result is None:
-        log.warning("key zones: no finite price or ATR(1d) at %s: last zones kept", job.close_ts)
-    else:
+    if job.result is not None:
         eng.key_zones = job.result
+    elif job.error is None:
+        log.warning("key zones: no finite price or ATR(1d) at %s: last zones kept", job.close_ts)
 
 
 def update(eng: Engine, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
@@ -291,6 +378,7 @@ def update(eng: Engine, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
             log.warning("key zones: no finite price at %s: last zones kept", close_ts)
             eng.key_zones_at = key
             return
+        worker.sessions = eng.sessions                  # the account's own calendar for the broker's M15
         recent = eng._resample(complete, LONG_TF)
         recent = recent[pd.to_datetime(recent["visible_at"], utc=True) <= close_ts].reset_index(drop=True).copy()
         if worker.submit(recent, close_ts, price):

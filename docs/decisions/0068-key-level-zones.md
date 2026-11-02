@@ -59,13 +59,29 @@ before any screen result exists.
 
 ### Display (live dashboard and API only; the research definition above is unchanged)
 - **Long history.** The engine's zones are built on the broker's own M15 bars, 800 days deep (540-day mature book +
-  250-day pool + 10 days). They are pulled through the bridge's `get_bars_range` in 90-day pages on a separate client
-  and thread, cached in the store (`bars_15m_broker`, source = account) and topped up once a day from the last cached
-  bars minus two days. The engine's own 15m bars replace them from its first one on. 15m is the book's evaluation
+  250-day pool + 10 days). They are pulled through the bridge's `get_bars_range` on a separate client and thread,
+  cached in the store (`bars_15m_broker`, source = account, symbol = the account's symbol) and filtered through the
+  account's own sessions. They are topped up once a day from the last cached bars minus two days. The engine's own
+  15m bars replace them from its first one on. 15m is the book's evaluation
   clock, so the live book is the research book: on the 2026-10-23 bar it reproduces the 16-year build's zones and
   percentiles, for example 4001.62 at 68.3 and 3943.38 at 66.1. The build runs off the bar close (about 0.11 s). Builds
   over 1 s are logged, and the first failure of each exception type is logged with its traceback. A non-finite price
   or ATR keeps the last zones. The API marks zones over 30 minutes old as stale.
+- **Pacing (safety re-review of #281).** The bridge also serves the live engine, so pulls are kept small and bounded.
+  - The levels client gets one attempt and a 20 s timeout per read.
+  - Pages are 30 days, 1 s apart. A page over 30 s, or 300 s in all (history._Deadline), defers the rest of the pull
+    to a retry an hour later. Pages already cached are kept.
+  - Only one pull per bridge runs at a time; another account finding the bridge busy tries again in 5 minutes. The
+    first pull after a restart waits a random 0-600 s.
+  - A cache that starts more than 5 days after its target head is re-pulled from the head, unless the broker's own
+    history starts there.
+  - An empty page over open market time, after bars are known, is a failed pull (retried hourly), never a hole kept.
+  - An account can opt out with accounts.yaml `key_levels_history: short` (the engine's ~62 days only, no pull), for
+    the coming non-gold instruments.
+- **Deploy acceptance checks (M2).** Before this ships to the 26-instrument setup, two checks must pass on the MT5
+  boxes: the swapfile on icm-probe is not in use, and the terminal's peak RSS during a first full pull of every
+  account stays within the box's memory. Deploy only when both pass; otherwise set `key_levels_history: short` on
+  the non-gold accounts first.
 - **Density rule** (not fitted to any data; all thresholds follow from the frozen definition):
   - Only zones with strength_pct >= 50 (the median zone) are shown.
   - A lone single-touch 15m swing is never shown; it ages out of the book after 9 days anyway.

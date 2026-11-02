@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -32,6 +33,7 @@ POINT = 0.01
 
 def _inline(eng: Engine) -> Engine:
     setattr(eng.key_zone_worker, "_spawn", lambda fn: fn())     # the build runs on the calling thread in tests
+    eng.key_zone_worker.sleep = lambda s: None                  # no real pause between pages
     return eng
 
 
@@ -88,7 +90,7 @@ def test_zones_are_handed_to_the_worker_only_when_a_new_15m_bar_has_closed():
             calls.append(t)
             return True
 
-    eng: Any = SimpleNamespace(key_zones=None, key_zones_at=None, key_zone_worker=Worker(), key_zones_errors=set(),
+    eng: Any = SimpleNamespace(key_zones=None, key_zones_at=None, key_zone_worker=Worker(), key_zones_errors=set(), sessions=None,
                                _resample=lambda complete, tf: resample_bars(complete, tf))
     t0 = pd.Timestamp("2025-02-03 10:15", tz="UTC")
     for m in range(0, 31):
@@ -208,7 +210,7 @@ def test_zones_are_built_on_years_of_broker_m15_cached_in_the_store(tmp_path, m1
 
 
 def test_the_long_history_is_topped_up_once_a_day_from_its_last_bars(tmp_path, m15_rates):
-    w = key_zones.KeyZoneWorker("icm-demo", "XAUUSD", store=Store(tmp_path / "data"), client=Bridge(m15_rates))
+    w = _worker(m15_rates, tmp_path)
     now = pd.Timestamp("2025-02-10 12:00", tz="UTC")
     w.refresh(now)
     first = len(w.client.calls)
@@ -225,17 +227,142 @@ def test_the_long_history_is_topped_up_once_a_day_from_its_last_bars(tmp_path, m
     assert w.long["ts_utc"].is_unique
 
 
-def test_a_failed_pull_is_retried_within_the_hour_and_the_engines_bars_still_build(tmp_path, m15_rates):
+def test_a_failed_pull_is_reported_retried_within_the_hour_and_the_engines_bars_still_build(tmp_path, m15_rates,
+                                                                                          caplog):
     eng = _engine(tmp_path)
     eng.key_zone_worker.client = Bridge(m15_rates, fail=True)
-    _close(eng, _n_at_15m_close())
-    assert eng.key_zones is None                       # the pull raised: reported, the last (no) zones kept
-    w = eng.key_zone_worker
-    assert w.next_pull is not None and w.next_pull - pd.Timestamp(BARS["visible_at"].iloc[_n_at_15m_close() - 1]) \
-        <= key_zones.RETRY
-    w.client = None                                    # the bridge is gone: the engine's own bars still build
-    _close(eng, _n_at_15m_close(30))
-    assert eng.key_zones is not None and eng.key_zones["history_days"] < 60
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.key_zones"):
+        close_ts, _ = _close(eng, _n_at_15m_close())
+    assert any("ConnectionError" in r.getMessage() for r in caplog.records)
+    assert eng.key_zones is not None and eng.key_zones["history_days"] < 60     # built on the engine's own bars
+    assert eng.key_zone_worker.next_pull == close_ts + key_zones.RETRY
+    assert eng.key_zone_worker.sessions is eng.sessions                        # the account's own calendar
+
+
+# ------------------------------------------------------------------------------------------- pacing (safety M1, M2, L1, L2)
+NOW = pd.Timestamp("2025-02-10 12:00", tz="UTC")
+
+
+SLEEPS: list[float] = []
+
+
+def _worker(rates: pd.DataFrame, tmp_path: Path, symbol: str = "XAUUSD", **kw: Any) -> key_zones.KeyZoneWorker:
+    """A worker on a fake bridge whose pauses are recorded in SLEEPS, not slept."""
+    SLEEPS.clear()
+    w = key_zones.KeyZoneWorker("icm-demo", symbol, store=Store(tmp_path / "data"), client=Bridge(rates, **kw))
+    w.sleep = SLEEPS.append
+    return w
+
+
+def test_a_pull_is_paged_by_30_days_with_a_pause_between_pages(tmp_path, m15_rates):
+    w = _worker(m15_rates, tmp_path)
+    w.refresh(NOW)
+    calls = w.client.calls
+    assert len(calls) == -(-key_zones.LONG_DAYS // key_zones.PAGE_DAYS)
+    assert all(e - s <= pd.Timedelta(days=key_zones.PAGE_DAYS) for _, s, e in calls)
+    assert SLEEPS == [key_zones.PAGE_PAUSE_S] * (len(calls) - 1)
+
+
+def test_a_pull_stops_at_its_time_budget_keeps_its_pages_and_retries_within_the_hour(tmp_path, m15_rates):
+    from goldbot.data.ticks import PullDeferred
+    w = _worker(m15_rates, tmp_path)
+    t = [NOW]
+
+    def clock() -> pd.Timestamp:
+        t[0] += pd.Timedelta(seconds=10)            # every page takes 10 s of wall time
+        return t[0]
+
+    w.clock = clock
+    with pytest.raises(PullDeferred):
+        w.refresh(NOW)
+    assert 5 < len(w.client.calls) < 27 and not w.long.empty
+    assert w.next_pull == NOW + key_zones.RETRY
+    assert len(Store(tmp_path / "data").read(key_zones.LONG_TABLE, source="icm-demo")) == len(w.long)
+
+
+def test_a_bridge_that_times_out_gets_exactly_one_request_of_20_s(tmp_path):
+    import requests
+    posts: list[float] = []
+
+    def post(url: str, data: str, timeout: float, headers: dict[str, str]) -> Any:
+        posts.append(timeout)
+        time.sleep(0.05)                            # the terminal does not answer within the timeout
+        raise requests.Timeout("read timed out")
+
+    w = key_zones.KeyZoneWorker("icm-demo", "XAUUSD")
+    w.attach(key_zones.levels_client("http://bridge.invalid", "t", "icm-demo", post=post), "box-1", jitter_s=0)
+    with pytest.raises(Exception, match="symbol_info"):
+        w.refresh(w.clock() + pd.Timedelta(seconds=1))
+    assert posts == [key_zones.CLIENT_TIMEOUT_S]
+    assert w.next_pull is not None
+
+
+def test_one_pull_per_bridge_at_a_time_and_a_random_first_delay(tmp_path, m15_rates):
+    w = _worker(m15_rates, tmp_path)
+    before = w.clock()
+    w.attach(w.client, "box-2")
+    assert w.next_pull is not None
+    assert before <= w.next_pull <= w.clock() + pd.Timedelta(seconds=key_zones.START_JITTER_S)
+    w.next_pull = None
+    lock = key_zones._bridge_lock("box-2")
+    lock.acquire()                                  # another account's pull on the same MT5 box
+    try:
+        w.refresh(NOW)
+    finally:
+        lock.release()
+    assert w.client.calls == [] and w.next_pull == NOW + key_zones.BUSY_RETRY
+
+
+def test_two_symbols_of_one_account_keep_their_own_cache(tmp_path, m15_rates):
+    a = _worker(m15_rates, tmp_path, symbol="XAUUSD")
+    b = _worker(m15_rates.assign(**{c: m15_rates[c] + 1000.0 for c in ("open", "high", "low", "close")}), tmp_path,
+                symbol="XAUUSD+")
+    a.refresh(NOW)
+    b.refresh(NOW)
+    reread = key_zones.KeyZoneWorker("icm-demo", "XAUUSD", store=Store(tmp_path / "data"))
+    reread.refresh(NOW)
+    assert len(reread.long) == len(a.long) and (reread.long["bid_close"].to_numpy() == a.long["bid_close"].to_numpy()).all()
+
+
+def test_a_cache_missing_its_head_is_re_pulled_from_the_head(tmp_path, m15_rates):
+    late = m15_rates[m15_rates["ts_utc"] >= NOW - pd.Timedelta(days=200)]
+    _worker(late, tmp_path).refresh(NOW)            # a first pull that only got the last 200 days
+    w = _worker(m15_rates, tmp_path)
+    w.refresh(NOW + pd.Timedelta(days=1))
+    head = NOW + pd.Timedelta(days=1) - pd.Timedelta(days=key_zones.LONG_DAYS)
+    assert w.client.calls[0][1] == head
+    assert pd.Timestamp(w.long["ts_utc"].iloc[0]) < NOW - pd.Timedelta(days=700)
+
+
+def test_an_empty_weekday_page_counts_as_a_failed_pull(tmp_path, m15_rates):
+    hole = (m15_rates["ts_utc"] >= NOW - pd.Timedelta(days=300)) & (m15_rates["ts_utc"] < NOW - pd.Timedelta(days=260))
+    w = _worker(m15_rates[~hole], tmp_path)
+    with pytest.raises(key_zones.EmptyPage):
+        w.refresh(NOW)
+    assert w.next_pull == NOW + key_zones.RETRY
+
+
+def test_the_broker_bars_are_read_through_the_accounts_own_sessions(tmp_path, m15_rates, monkeypatch):
+    seen: list[Any] = []
+    real = key_zones.rates_to_bars
+
+    def spy(r: pd.DataFrame, point: float, sessions: Any = None) -> pd.DataFrame:
+        seen.append(sessions)
+        return real(r, point, sessions)
+
+    monkeypatch.setattr(key_zones, "rates_to_bars", spy)
+    from goldbot.data.calendar import SessionTable
+    own = SessionTable(always_open=True)
+    w = _worker(m15_rates, tmp_path)
+    w.sessions = own
+    w.refresh(NOW)
+    assert seen and all(s is own for s in seen)
+
+
+def test_an_account_can_opt_out_of_the_long_history():
+    from goldbot.ops.accounts import Account
+    fields = Account.model_fields["key_levels_history"]
+    assert fields.default == "long"
 
 
 def test_the_engines_own_bars_replace_the_long_history_from_its_first_15m_bar():
