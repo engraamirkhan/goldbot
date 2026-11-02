@@ -94,6 +94,31 @@ SPECS: dict[str, DailySpec] = {s.symbol: s for s in (
 FRED_DAILY = ("DTB3", "DFII10", "DTWEXBGS", "DTWEXB", "T10YIE")
 USD_BROAD_SPLICE = pd.Timestamp("2006-01-02")   # prereg: DTWEXB before, DTWEXBGS from this date on
 
+# OECD Main Economic Indicators, 3-month interbank rate, monthly average, % a year (FRED IR3TIB01<CC>M156N): the
+# non-USD short rates for FX differentials and non-USD index financing (W3.3). The euro-area series (EZ) serves EUR and
+# so GER40; GBP serves UK100, JPY serves JP225.
+OECD_3M_RATES: dict[str, str] = {
+    "EUR": "IR3TIB01EZM156N", "GBP": "IR3TIB01GBM156N", "JPY": "IR3TIB01JPM156N", "AUD": "IR3TIB01AUM156N",
+    "CAD": "IR3TIB01CAM156N", "CHF": "IR3TIB01CHM156N", "NZD": "IR3TIB01NZM156N",
+}
+# A month's average exists only after the month ends; OECD publishes it in the MEI update around mid next month and FRED
+# posts it a few days later (later for some countries). Without ALFRED vintages (an API key) the stamp is set
+# conservatively: month M becomes available on the first day of M+2 at 23:00 UTC. The cost is up to ~6 weeks of
+# staleness on a financing rate; the gain is never using a rate before it was public.
+OECD_MONTHLY_LAG = pd.DateOffset(months=2)
+
+
+def oecd_monthly_available_utc(value_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Conservative availability of an OECD monthly value dated `value_date` (the month's first day)."""
+    d = pd.DatetimeIndex(pd.to_datetime(value_date)).tz_localize(None).normalize()
+    first = d - pd.to_timedelta(d.day - 1, unit="D")
+    return pd.DatetimeIndex(first + OECD_MONTHLY_LAG + pd.Timedelta(hours=23)).tz_localize("UTC")
+
+
+def currency_rate_paths(root: str = "raw/daily") -> dict[str, str]:
+    """ISO -> fred_<ID>.parquet path, the shape of settings `research.position.currency_rate_paths`."""
+    return {iso: f"{root}/fred_{sid}.parquet" for iso, sid in OECD_3M_RATES.items()}
+
 
 def assert_before_cutoff(when: pd.Timestamp | dt.date | dt.datetime, what: str = "timestamp") -> None:
     """Raise if `when` (naive = UTC) is at or after CUTOFF. Fetch code calls this before building any URL."""

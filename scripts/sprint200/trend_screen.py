@@ -7,7 +7,8 @@
 
 Conventions (prereg section 1): mid prices; entry at the open of the first 1m bar at or after the decision close; stop
 first in a shared minute, a gap through the stop fills at the minute's open; ICM cost of record cor-2026-10-31.2 via
-`ArmCosts.screen_charges` (round trip upper bound, overshoot floor 0.12) plus the shipped swap per rollover. Four matched
+`ArmCosts.screen_charges` (round trip upper bound, overshoot floor 0.12) plus the shipped swap RATE per rollover (on the
+trade's own entry price, `SwapSpec.research_shipped`, ADR on swap as a rate). Four matched
 random-entry twins per trade (same day x session x side, post-fill minutes only). No row at or after 2025-10-01 is read:
 the 2026 file is never opened and the 2025 file is cut and asserted. Writes aggregate statistics only (JSON, not
 committed); no trade rows leave the process.
@@ -864,7 +865,8 @@ def _twin(ctx: Ctx, kk: int, r: Any, side: int, risk: float, hold: int | None, f
         return None
     te = min(int(t[kk]) + hold if hold is not None else np.iinfo(np.int64).max, dlt, ctx.end)
     g2, kind2, _, tx2 = walk(ctx, kk, side, risk, float(r.tgt), float(r.trail), te, fl)
-    return {"t_fill": int(t[kk]), "t_exit": tx2, "side": side, "risk": risk, "gross": g2, "kind": kind2, "id": n_id}
+    return {"t_fill": int(t[kk]), "t_exit": tx2, "side": side, "risk": risk, "gross": g2, "kind": kind2, "id": n_id,
+            "entry": float(ctx.o[kk])}
 
 
 def simulate(ctx: Ctx, sid: str, spec: Spec) -> dict[str, list[dict[str, Any]]]:
@@ -902,7 +904,7 @@ def simulate(ctx: Ctx, sid: str, spec: Spec) -> dict[str, list[dict[str, Any]]]:
         g, kind, kx, tx = walk(ctx, k0, side, risk, float(r.tgt), tr_, t_end, fl)
         n_id = len(real)
         real.append({"t_fill": int(t[k0]), "t_exit": tx, "side": side, "risk": risk, "gross": g, "kind": kind,
-                     "id": n_id})
+                     "id": n_id, "entry": e})
         busy_until = tx
         # twins: same session instance from the fill minute on (>= 30 minutes, else the next 60), before deadline - 15
         hi_k = int(ctx.run_end[k0])
@@ -932,7 +934,7 @@ def price(rows: list[dict[str, Any]], costs: A.ArmCosts, swap: SwapSpec) -> pd.D
     sess = DEFAULT_SESSIONS.session_label(ent)
     rt, os_ = costs.screen_charges(BROKER, sess, COST_VERSION)
     nights = rollover_nights(ent, ext, swap.server_tz, swap.triple_weekday)
-    sw = nights * swap.usd_per_oz(df.side.to_numpy())
+    sw = nights * swap.usd_per_oz_at(df.side.to_numpy(), df.entry.to_numpy(dtype=float))
     stop_exit = df.kind.isin(["stop", "trail"]).to_numpy()
     df["swap"] = sw
     df["cost"] = rt + os_ * stop_exit
@@ -1015,7 +1017,7 @@ def _count(sid: str) -> dict[str, Any]:
 def _run(sid: str) -> dict[str, Any]:
     assert _CTX is not None
     costs = A.load_costs(ROOT / "config" / "arm_costs.yaml")
-    swap = SwapSpec.shipped()
+    swap = SwapSpec.research_shipped()                # today's financing rate on each trade's own notional
     res = simulate(_CTX, sid, STRATS[sid](_CTX))
     real, tw, full = (price(res[k], costs, swap) for k in ("real", "twins", "full"))
     return summarize(sid, real, tw, _ARGS["window"], full)
