@@ -991,7 +991,8 @@ class Engine:
         when the terminal cannot answer. Remembers the contract size for the exposure figures (`_contract_size`)."""
         if cycle is not None and self._sym_cache is not None and self._sym_cache[0] == cycle:
             return self._sym_cache[1]
-        info = self.broker.symbol_info(self.cfg.symbol)
+        # outside a cycle another book's read is shared for books.SYMBOL_RETRY_S (gold reads now, as before)
+        info = self.broker.symbol_info(self.cfg.symbol) if cycle is not None else books.symbol_info(self)
         self._sym_cache = (cycle, info) if cycle is not None else self._sym_cache
         size = float(info.contract_size)
         if math.isfinite(size) and size > 0:
@@ -1000,7 +1001,8 @@ class Engine:
 
     def _contract_size(self) -> float | None:
         """Contract size for open notional and open risk (review LOW-2): the last one the terminal reported, asked
-        again while it has never answered. Unknown is None, never 100 oz (multi-instrument plan: "runner.py:971
+        again while it has never answered (gold on every refresh, another book at most every books.SYMBOL_RETRY_S).
+        Unknown is None, never 100 oz (multi-instrument plan: "runner.py:971
         fallback must REFUSE"): `_refresh_account` then refuses entries (`contract_unknown`); no exit reads it."""
         if self._contract is None:
             try:
@@ -1887,7 +1889,7 @@ class Engine:
         """The symbol's lot terms from the broker for the milestone ladder; None (retried on the next refresh) when
         the broker cannot say. Never the design defaults: the ladder then shows 'pending broker terms'."""
         try:
-            info = self.broker.symbol_info(self.cfg.symbol)
+            info = books.symbol_info(self)       # another book: shared for books.SYMBOL_RETRY_S
         except Exception as exc:                 # noqa: BLE001 - reporting only; trading never depends on it
             now = time.monotonic()               # retried every refresh (seconds apart): warn at most every 10 min
             if now - self._lot_terms_warned >= LOT_TERMS_WARN_S:
