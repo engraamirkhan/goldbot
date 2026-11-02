@@ -42,7 +42,8 @@ terminal that writes SymbolInfoSessionTrade to a file (not built).
 Another instrument of the account (multi-instrument demo, asked by lane L2: "Sessions per asset class checked vs broker
 trading_sessions"): the documented gold hours would be wrong for DE40 or wheat, so `trading_sessions` reports the
 hours the broker actually quoted the symbol: the minutes with an M1 bar over the last OBSERVE_DAYS days
-(copy_rates_range, read-only), per server weekday from the latest day of that weekday that traded, gaps up to
+(copy_rates_range, read-only), per server weekday from the latest COMPLETE day of that weekday that traded (never
+today, whose bars end at the read: incident 2026-11-02), gaps up to
 OBSERVE_GAP_S merged (a thin minute without a tick is not a close), resolved to UTC per date for the coming week.
 It is the broker's real schedule as observed, not announced: a holiday or early close ahead is not in it, which is
 why the engine intersects it with the instrument's session profile (calendar.SESSION_PROFILES, its exchange holidays)
@@ -55,7 +56,7 @@ import logging
 import math
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, AsyncIterator, Callable
 
 import pandas as pd
@@ -247,9 +248,10 @@ def measure_broker_terms(account_id: str, info: Any, *, account_currency: str, p
                        commission_per_lot_round_trip_usd=rt, commission_lots=lots, notes=notes)
 
 
-def _profit_ccy(i: Any) -> str | None:
-    """SYMBOL_CURRENCY_PROFIT, upper-case; None when the package does not report it (never taken as USD)."""
-    v = getattr(i, "currency_profit", None)
+def _profit_ccy(i: Any, field: str = "currency_profit") -> str | None:
+    """SYMBOL_CURRENCY_PROFIT (or `field`: currency_base, currency_margin), upper-case; None when the package does not
+    report it (never taken as USD)."""
+    v = getattr(i, field, None)
     return str(v).strip().upper() or None if v is not None else None
 
 
@@ -263,12 +265,24 @@ def _rollover(i: Any) -> int | None:
     return d if d is not None and 0 <= d <= 6 else None
 
 
-def observed_template(minutes: pd.Series, gap_s: int = OBSERVE_GAP_S) -> list[tuple[int, int, int]]:
+def _utcnow() -> pd.Timestamp:
+    """The wall clock (UTC); a seam for tests."""
+    return pd.Timestamp.now(tz="UTC")
+
+
+def observed_template(minutes: pd.Series, gap_s: int = OBSERVE_GAP_S, *,
+                      before: date | None = None) -> list[tuple[int, int, int]]:
     """A weekly server-time session template (weekday, start s, end s) from the opens of quoted M1 bars (naive server
-    wall clock): per weekday the latest date with bars, each run of minutes merged across gaps up to `gap_s`."""
+    wall clock): per weekday the latest date with bars, each run of minutes merged across gaps up to `gap_s`.
+    `before`: only server dates before it count (incident 2026-11-02: today's bars end at the moment of the read, so
+    today taken as its weekday's hours closed every market a minute after the engine read them)."""
     if minutes.empty:
         return []
     ts = pd.DatetimeIndex(minutes).sort_values().unique()
+    if before is not None:
+        ts = ts[ts < pd.Timestamp(before)]
+        if ts.empty:
+            return []
     dates = pd.Series(ts.normalize())
     latest: dict[int, pd.Timestamp] = {}
     for d in dates.unique():
@@ -377,7 +391,8 @@ class MT5Broker:
                           swap_mode=None if swap_mode is None else int(swap_mode), swap_long=opt("swap_long"),
                           swap_short=opt("swap_short"), margin_initial=opt("margin_initial"),
                           margin_maintenance=opt("margin_maintenance"), currency_profit=_profit_ccy(i),
-                          swap_rollover3days=_rollover(i))
+                          swap_rollover3days=_rollover(i), currency_base=_profit_ccy(i, "currency_base"),
+                          currency_margin=_profit_ccy(i, "currency_margin"))
 
     def symbols_get(self, pattern: str = "*") -> list[str]:
         """The names of the terminal's symbols matching `pattern` (MT5 symbols_get group filter, e.g. "XAUUSD*"),
@@ -482,16 +497,17 @@ class MT5Broker:
         """The broker's documented hours for the week from today's server date, resolved to UTC per date (the Python
         package exposes no session schedule: see the module docstring); for any symbol but the account's own, the hours
         the broker quoted it (`observed_template`, module docstring)."""
-        today = server_wall(pd.Timestamp.now(tz="UTC"), self.server_tz)[0].date()
+        now = _utcnow()
+        today = server_wall(now, self.server_tz)[0].date()
         if symbol != self.symbol:
-            now = pd.Timestamp.now(tz="UTC")
             rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, self._mt5_time(now - pd.Timedelta(days=OBSERVE_DAYS)),
                                          self._mt5_time(now))
             df = pd.DataFrame(rates) if rates is not None else pd.DataFrame()
-            if df.empty:
-                raise RuntimeError(f"{symbol}: no M1 bars in {OBSERVE_DAYS} days to read its sessions from "
-                                   f"({mt5.last_error()})")
-            tpl = observed_template(pd.Series(pd.to_datetime(df["time"], unit="s")))
+            # complete server days only: today's bars stop at this read (observed_template `before`)
+            tpl = [] if df.empty else observed_template(pd.Series(pd.to_datetime(df["time"], unit="s")), before=today)
+            if not tpl:
+                raise RuntimeError(f"{symbol}: no M1 bars on a complete server day in {OBSERVE_DAYS} days to read its "
+                                   f"sessions from ({mt5.last_error()})")
             return resolve_server_sessions(tpl, self.server_tz, today)
         if not self._sessions_noted:
             log.info("%s: MetaTrader5 Python exposes no session schedule; using the broker's documented hours", symbol)
