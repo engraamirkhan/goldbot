@@ -364,6 +364,53 @@ reached, or XAUUSD247 has had no new bar for 15 min. The account never appears i
 - the owner's master-password login and `unlock-live`;
 - the phase gate.
 
+### 0.3e Re-host an MT5 box (a new VM for the same account)
+Use this when a box must move to another VM: a shape OCI will not resize in place (an E2.1.Micro cannot become an
+E4/E5.Flex: "hardware series not compatible"), a lost or degraded host, or a region move. First use: `icm-probe` from
+the E2.1.Micro `goldbot-mt5-probe` to an E5.Flex like `goldbot-mt5-vantage` (incident 2026-11-02 multi-instrument,
+item 10). The account, its broker positions, its brain engine, its tunnel port and its bridge token do not change;
+only the box behind the tunnel does. Names below: `<old>` / `<new>` are SSH aliases in `~/.ssh/goldbot.conf`,
+`<account>` the account id. No address, OCID, login or token goes into the repo, a commit or a chat.
+
+**Spend and roles.** A paid shape needs the owner's approval with the real monthly figure, and the overlap counts:
+while the old box is kept stopped, its boot volume still bills above the free 200 GB of block storage. Leave the new
+boot volume at the image default (47 GB) so the total is unchanged once the old box is terminated. OCI writes (launch,
+stop, start, terminate) are run by the owner as one line, a script under `~/tmp` that prints no OCIDs; read-only
+`oci ... --query` and everything over SSH are Claude's. Terminating the old box is the owner's call, after 7 days.
+
+**When.** Steps R1 to R8 change nothing the engine uses and can run at any time. The switch (R9 to R12) runs in the
+daily break (22:00 to 23:00 UTC) or at the weekend. Open positions carry over: they live at the broker under the same
+login, keep their broker-side stops, and the engine reconciles them on start through the new bridge. Still prefer a
+moment with none open, because the engine has no exit path for the 2 to 5 minutes of the switch.
+
+| Step | What |
+|---|---|
+| R1 | Launch: the owner runs the launch script (copies the source box's image, subnet and SSH key; prints the new public and private IP when RUNNING). |
+| R2 | SSH alias for `<new>` on the Mac from the saved IPs; first connect with `accept-new`. |
+| R3 | `<SHA>` = the commit `<old>` runs (`ssh <old> 'sudo -u mt5 git -C /opt/goldbot rev-parse HEAD'`), on `main`; `<HASH>` = `git show <SHA>:goldbot/ops/linux/mt5_bootstrap.sh \| shasum -a 256` on the Mac. Same commit = same bridge protocol as today. |
+| R4 | Build `<new>` exactly as 0.3b B4 (`--account <account>`, inside `tmux new -s boot`). It installs the swapfile, the units, the watchdog, the probe and the root-owned `goldbot-deploy` from root's own clone at `<SHA>`. Do not start the terminal yet. |
+| R5 | Carry the account over box to box through the Mac, never to disk or screen: the secret store (`/opt/goldbot/state/.secrets.json`: only this account's password, login, bridge listen address and token, so the brain's token stays valid), and the terminal's `Config/servers.dat` (the broker server list, so no VNC "Open an Account") and `Config/common.ini` (`[Charts] MaxBars`, 0.5 "Multi-instrument"). Never copy `accounts.dat`. Check the key names only (never values), and that `MaxBars` reads the same on both boxes (100 000 bars). |
+| R6 | First login: `sudo systemctl start goldbot-mt5-terminal@<account>`, then `goldbot-mt5 login <account>` (ok/failed only). VNC (0.3 steps 1 to 5) only if it fails. Both terminals are logged in to the same account for a while; that is allowed and harmless, the engine still talks only to `<old>`. |
+| R7 | Start the bridge; `/health` ok on `<new>`'s 127.0.0.1:8765; `journalctl -u goldbot-bridge@<account> \| grep "not served"` empty; root-owned scripts and units match `<old>` (sha256 lists diffed); the rollback floor copied from `<old>`. |
+| R8 | Cold restart (0.3b B11) of `<new>`: within 5 minutes, no hands, one `terminal64.exe` and `/health` ok. Then authorise the brain's tunnel key on `<new>` (`goldbot-mt5-authorize`) and add `<new>`'s host key to the brain's tunnel `known_hosts` under its private IP (no trust-on-first-use on the private hop). |
+| R9 | Switch, in the break: stop `goldbot-engine@<account>` on the brain; on `<old>` stop and disable the watchdog timer, bridge and terminal (nothing restarts them on a reboot). |
+| R10 | On the brain rewrite `/etc/goldbot/bridge-<account>.env` with `<new>`'s private IP (same `LOCAL_PORT`), restart `goldbot-bridge-tunnel@<account>`; `curl -s 127.0.0.1:<LOCAL_PORT>/health` ok; `goldbot run preflight --account <account>` ok. |
+| R11 | Start `goldbot-engine@<account>`; positions reconciled (engine journal), `goldbot run health` shows `bridge:`, `terminal:` and `symbols:<account>` ok, the dashboard's entry status for the account matches before the switch. |
+| R12 | After 15 minutes or more with every book on: CPU pressure on `<new>` (`/proc/pressure/cpu`, `some avg300`) under 20 % and `vmstat 5 3` steal low. Record times and numbers in the deploy note. |
+| R13 | Rename aliases: `<old>` becomes `<old>-old`, `<new>` also answers to `<old>` (scripts and this RUNBOOK keep working). The owner stops (not terminates) the old VM with the stop script. Terminate after 7 days: owner's call. |
+
+**Rollback** (any of R10 to R12 fails, or within the 7 days): stop `goldbot-engine@<account>`; stop and disable the
+bridge, terminal and watchdog on `<new>`; if the old VM is stopped the owner starts it (start script); on `<old>`
+`sudo systemctl enable --now goldbot-mt5-terminal@<account> goldbot-bridge@<account> goldbot-bridge-watchdog@<account>.timer`;
+rewrite the brain's env file with `<old>`'s private IP, restart the tunnel, check `/health` and preflight, start the
+engine. The secrets on `<old>` were never changed, so it logs in as before.
+
+**Failure modes and detection.** A refused login on `<new>` (`-6` latched): "Terminal down" and the refusal-mark rules
+in 0.3 apply unchanged; never retry a refused password in a loop. Tunnel to the wrong host or a missing key: the tunnel
+unit restarts every 5 s and the brain pages `FAIL bridge:<account>` after 5 min; roll back. Two terminals left on
+after the switch: `<old>`'s units are disabled in R9 and the VM is stopped in R13; `pgrep -c -u mt5 -f '[t]erminal64[.]exe'`
+on `<old>` prints 0 before R13.
+
 ### 0.4 The brain
 ```bash
 ssh ubuntu@<brain public ip>
