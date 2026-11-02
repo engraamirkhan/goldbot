@@ -158,3 +158,21 @@ def test_without_the_flag_a_new_job_still_waits_for_its_next_slot(tmp_path):
     sch = Scheduler(tmp_path / "s.json", clock=Clock("2026-10-20 12:00"))
     sch.add("cpcv", quarterly(), lambda slot: {"ok": 1})
     assert sch.run_pending() == []
+
+
+def test_a_retired_job_is_pruned_from_the_saved_state_and_the_status_document(tmp_path):
+    """Trading-safety review of the ADR 0066 release: a job removed from the code (agents_daily, tv_reconcile) left
+    its aux.db row behind, so health listed `job:<name>` forever. `prune` drops every row not registered now."""
+    from goldbot.db.bookkeeping import scheduler_status
+    clock = Clock("2026-10-07 12:00")
+    old = Scheduler(tmp_path / "scheduler.json", clock=clock)
+    old.add("keep", Schedule(kind="daily", at="06:00"), lambda slot: None)
+    old.add("retired", Schedule(kind="daily", at="07:00"), lambda slot: None)
+    new = Scheduler(tmp_path / "scheduler.json", clock=clock)
+    new.add("keep", Schedule(kind="daily", at="06:00"), lambda slot: None)
+    assert new.prune() == ["retired"]
+    assert set(new.state) == {"keep"}
+    assert set(Scheduler(tmp_path / "scheduler.json", clock=clock).state) == {"keep"}
+    doc = scheduler_status(tmp_path)
+    assert doc is not None and set(doc["jobs"]) == {"keep"}
+    assert new.prune() == []                                # nothing left to drop

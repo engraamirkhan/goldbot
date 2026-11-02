@@ -15,6 +15,7 @@ from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.costs import CostTable
 from goldbot.ops.accounts import Account
 from goldbot.ops.jobs import (
+    JOBS,
     JobContext,
     attribution,
     build_scheduler,
@@ -194,6 +195,18 @@ def test_build_scheduler_registers_every_job(tmp_path):
     # quarterly: after October's run the next is the first Sunday of January
     later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
     assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"
+
+
+def test_build_scheduler_drops_the_state_of_a_job_no_longer_in_jobs(tmp_path):
+    """A job retired with ADR 0066 (agents_daily, tv_reconcile) must not stay in health as job:<name> forever."""
+    from goldbot.ops.scheduler import Schedule, Scheduler
+    ctx = _ctx(tmp_path / "data", tmp_path)
+    def clock() -> pd.Timestamp:
+        return pd.Timestamp("2026-10-02 12:00", tz="UTC")
+    old = Scheduler(ctx.state_dir / "scheduler.json", clock=clock)
+    old.add("agents_daily", Schedule(kind="daily", at="06:00"), lambda slot: None)
+    sch = build_scheduler(ctx, clock=clock)
+    assert set(sch.state) == set(JOBS)
 
 
 def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_trials(bars_store, tmp_path):

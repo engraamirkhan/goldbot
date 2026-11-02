@@ -1556,4 +1556,5 @@ def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = 
         sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
                                months=tuple(s.months), max_late_hours=s.max_late_hours,
                                run_if_never_run=s.run_if_never_run), functools.partial(fn, ctx))
+    sch.prune()                                   # a retired job (ADR 0066) leaves no job:<name> row in health
     return sch

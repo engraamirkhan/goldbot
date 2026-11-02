@@ -378,6 +378,11 @@ def save_jobs(conn: sqlite3.Connection, jobs: dict[str, str], heartbeat_ns: int 
     bump_export(conn, SCHEDULER_FILE)
 
 
+def delete_jobs(conn: sqlite3.Connection, names: list[str]) -> None:
+    """Drop the state rows of jobs the code no longer registers (Scheduler.prune)."""
+    conn.executemany("DELETE FROM scheduler_jobs WHERE name = ?", [(n,) for n in names])
+
+
 def scheduler_document(conn: sqlite3.Connection) -> str | None:
     r = conn.execute("SELECT body FROM scheduler_heartbeat WHERE id = 1").fetchone()
     return str(r[0]) if r else None

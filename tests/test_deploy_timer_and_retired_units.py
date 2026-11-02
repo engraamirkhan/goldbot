@@ -54,6 +54,18 @@ def test_an_approval_nothing_applied_fails_and_names_the_timer(tmp_path):
     assert c in health.run_checks(make_ctx(tmp_path)).checks
 
 
+def test_an_approval_held_back_by_a_pending_entry_names_the_entry_not_the_timer(tmp_path):
+    """Trading-safety review of the ADR 0066 release: goldbot-deploy.sh keeps an approved deploy while an entry
+    approval is pending (state/approvals/pending/*.json) and applies it once the entry is decided, so health names
+    the entry instead of blaming the timer."""
+    _approval(tmp_path, DEPLOY_APPROVAL_STUCK_S + 60)
+    write(tmp_path / "approvals" / "pending" / "icm-live-p42.json", {"created": NOW.timestamp(), "window_s": 90})
+    c = health.check_deploy_approval(make_ctx(tmp_path))
+    assert c is not None and c.status == "warn"
+    assert "icm-live-p42" in c.reason and "entry approval" in c.reason
+    assert "timer is not running" not in c.reason
+
+
 def test_retired_tradingview_units_are_gone():
     units = {p.name for p in (OPS / "linux" / "systemd").iterdir()}
     assert not {f"goldbot-{s}.service" for s in RETIRED} & units

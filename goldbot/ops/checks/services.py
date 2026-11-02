@@ -204,7 +204,10 @@ def check_deploy_approval(ctx: HealthContext) -> Check | None:
     applied: goldbot-deploy.timer runs the root deploy script every minute and removes the file on every outcome, so
     one older than DEPLOY_APPROVAL_STUCK_S means the timer is not running (found 2026-11-02: enabled by the bootstrap
     but never started since 2026-10-16, so a Telegram approval would have waited forever; every deploy ran by hand).
-    None while no approval waits (the MT5 box, and the brain between deploys)."""
+    None while no approval waits (the MT5 box, and the brain between deploys). The deploy script keeps the approval
+    while an entry approval is pending (state/approvals/pending/*.json) and applies it once that entry is decided, so
+    then the check warns and names those entries instead of blaming the timer (trading-safety review, ADR 0066
+    release); an entry stuck past its window is the `approvals` check's warn."""
     f = ctx.state_dir / "deploy" / "approved.json"
     try:
         age = _epoch(ctx.now) - f.stat().st_mtime
@@ -212,6 +215,12 @@ def check_deploy_approval(ctx: HealthContext) -> Check | None:
         return None
     if age <= DEPLOY_APPROVAL_STUCK_S:
         return Check(name="deploy_approval", status="ok", reason=f"approved deploy waiting {_age(max(age, 0.0))}")
+    pending_dir = ctx.state_dir / "approvals" / "pending"
+    pending = sorted(p.stem for p in pending_dir.glob("*.json")) if pending_dir.is_dir() else []
+    if pending:
+        return Check(name="deploy_approval", status="warn",
+                     reason=f"an approved deploy has waited {_age(age)} for {len(pending)} pending entry approval(s) "
+                            f"({', '.join(pending)}); it is applied once they are decided")
     return Check(name="deploy_approval", status="fail",
                  reason=f"an approved deploy has not been applied for {_age(age)}: goldbot-deploy.timer is not "
                         "running? `systemctl list-timers goldbot-deploy.timer`; fix: "
