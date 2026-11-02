@@ -384,6 +384,39 @@ class AutodiscSettings(_Section):
     cost_table: str | None = None                   # measured cost table JSON; None: the settings priors
 
 
+class PositionSettings(_Section):
+    """The daily position engine (goldbot/research/position/, amendment W3). W3.6: "Program-wide defaults, fixed and
+    never a free parameter: target 10%/yr per instrument ...; EWMA volatility with a 60-day span, lagged one day; cap
+    2x." Changing any value here is a W3 amendment, not a tuning step: a spec never varies them."""
+    day_close_utc: Literal["21:00"] = "21:00"        # W3.2 clock: the 1d mid bar closes at 21:00 UTC
+    target_vol: float = Field(0.10, gt=0, le=1)      # W3.6, per instrument, annual
+    vol_span_days: int = Field(60, ge=2)
+    max_leverage: float = Field(2.0, gt=0, le=10)
+    band: float = Field(0.10, ge=0, lt=1)            # W3.2: a spec stating no band trades only beyond 10% of its target
+    stop_atr: float = Field(3.0, gt=0)               # W3.2 disaster stop: 3 x ATR(20, 1d) from the last rebalance price
+    atr_days: int = Field(20, ge=2)
+    warmup_days: int = Field(260, ge=0)              # POS-1: a market enters on its first day with data + 260 days
+    null_draws: int = Field(1000, ge=10)             # W3.2 random-side null
+    null_seed: int = 20261102
+    boot_resamples: int = Field(4000, ge=100)        # W3.2 stationary day-block bootstrap
+    boot_block_days: float = Field(20.0, gt=1)
+    cost_broker: str = "icm"                         # C1 point costs from config/cost_of_record.yaml: this broker's
+    cost_session: str = "asia"                       #   cell of the 21:00 UTC fill (W3 addendum), bps at the reference
+    cost_reference_price: float = Field(4000.0, gt=0)
+    round_trip_bps_by_symbol: dict[str, float] = Field(default_factory=dict)   # other markets' point RT; none: refused
+    overshoot_bps_by_symbol: dict[str, float] = Field(default_factory=dict)
+    short_rate_path: str = "raw/daily/fred_DTB3.parquet"   # data lane: value_date, value, available_utc
+    currency_rate_paths: dict[str, str] = Field(default_factory=dict)   # ISO -> FRED OECD 3-month file (FX, indices)
+    short_rate_constant_pct: float = 4.02            # DTB3 at the swap measurement (W3.3); a fallback, never a gate
+    markup_pct_by_symbol: dict[str, tuple[float, float]] = Field(default_factory=dict)   # (long, short) % a year
+    default_markup_pct: float = Field(2.5, ge=0)     # W3.3: a symbol without measured terms, each side
+    triple_weekday_by_symbol: dict[str, int] = Field(default_factory=lambda: {"XAUUSD": 2})   # 0 = Monday; refused
+    read_registry: str = "state/position_reads.jsonl"   # read-once markers (spec, TEST-OLD/CONFIRM): a second read refused
+    etc_fee_pct: float = Field(0.12, ge=0)           # venue B (UK gold ETC): annual fee, no financing
+    etc_extra_rt_bps: float = Field(5.0, ge=0)       #   round trip = C1 point RT + 5 bp
+    cme_fee_usd_per_side: float = Field(2.0, ge=0)   # venue C (CME 1OZ): per oz a side, at the reference price
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -391,6 +424,9 @@ class ResearchSettings(_Section):
     # raises the budget of ONE quarter ({"2026Q4": 53}); a quarter not listed keeps trial_budget_quarter, a value must
     # be >= it. Every trial is still recorded and the deflated Sharpe still counts the full K (an owner decision)
     trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
+    # an override above OVERRIDE_CAP (500) trials stands only on a recorded owner decision: quarter -> the ADR path
+    # (repo-relative), whose text states that quarter and that trial count; never above OWNER_OVERRIDE_CEILING (5,000)
+    trial_budget_owner_decisions: dict[str, str] = Field(default_factory=dict)
     # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
     # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
     # the deflated Sharpe counts the full running K. 0 turns the loop off. Owner-recorded in
@@ -433,6 +469,7 @@ class ResearchSettings(_Section):
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
+    position: PositionSettings = Field(default_factory=PositionSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod
@@ -443,14 +480,41 @@ class ResearchSettings(_Section):
                 raise ValueError(f"reserved_trials_quarter maps a quarter like 2027Q1 to 0..500 trials, got {q!r}: {n!r}")
         return v
 
+    OVERRIDE_CAP: ClassVar[int] = 500                 # most trials a quarter override may name without an owner ADR
+    OWNER_OVERRIDE_CEILING: ClassVar[int] = 5000      # hard ceiling, even with one (owner, 2026-11-02)
+
     @model_validator(mode="after")
     def _budget_overrides(self) -> ResearchSettings:
+        """"Raising it is an owner decision": an override up to 500 trials is a dated settings entry; above 500 it must
+        cite `trial_budget_owner_decisions[quarter]`, an ADR that exists and states the same quarter and trial count
+        (owner, 2026-11-02: "the validator lifts the 500 cap only for 2026Q4 = 3,500, with a 5,000 hard ceiling").
+        Every trial still counts in K whatever the budget."""
         import re
         for q, n in self.trial_budget_overrides.items():
-            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= 500:
+            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= self.OWNER_OVERRIDE_CEILING:
                 raise ValueError(f"trial_budget_overrides maps a quarter like 2026Q4 to trial_budget_quarter "
-                                 f"({self.trial_budget_quarter})..500 trials, got {q!r}: {n!r}")
+                                 f"({self.trial_budget_quarter})..{self.OWNER_OVERRIDE_CEILING} trials, got {q!r}: {n!r}")
+            if n > self.OVERRIDE_CAP:
+                self._check_owner_decision(q, n)
+        orphan = sorted(set(self.trial_budget_owner_decisions) - set(self.trial_budget_overrides))
+        if orphan:
+            raise ValueError(f"trial_budget_owner_decisions names quarters without a trial_budget_overrides entry: {orphan}")
         return self
+
+    def _check_owner_decision(self, quarter: str, trials: int) -> None:
+        import re
+        cited = self.trial_budget_owner_decisions.get(quarter)
+        if not cited:
+            raise ValueError(f"trial_budget_overrides {quarter}: {trials} is above {self.OVERRIDE_CAP} trials: it needs an "
+                             f"owner decision, research.trial_budget_owner_decisions[{quarter!r}] = the ADR path")
+        path = Path(cited) if Path(cited).is_absolute() else ROOT / cited
+        if not path.is_file():
+            raise ValueError(f"trial_budget_owner_decisions {quarter}: {cited} does not exist")
+        text = path.read_text(encoding="utf-8")
+        count = rf"(?<![\d,])(?:{trials}|{trials:,})(?![\d,]*\d)"   # 3500 or 3,500, not part of 35000 or 13,500
+        if not re.search(rf"\b{quarter}\b", text) or not re.search(count, text):
+            raise ValueError(f"trial_budget_owner_decisions {quarter}: {cited} must state the quarter {quarter} and the "
+                             f"trial count {trials}")
 
     def budget_for(self, quarter: str) -> int:
         """The quarter's pre-registered trial budget: its override when it has one, else trial_budget_quarter."""
