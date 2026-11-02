@@ -104,6 +104,8 @@ about 75 min after the first deploy. It should have been found by:
 | 9 | Rule: no deploy to the probe box during active trading (a deploy costs about 4 min of bridge on that box) | runbook | RUNBOOK 0.5 "Daily use", "Bridge contention on an MT5 box" | shipped (fix/sre-mi-followups) |
 | 10 | Probe box upgraded to 1 OCPU / 2 GB (E4.Flex resize, else a new E5.Flex box); PSI `some` avg300 re-measured under 20 % with all books on | decision (owner-approved spend) | OCI; RUNBOOK 0.3b | open: owner approved 2026-11-02 19:37 UTC; in-place E5.Flex refused; E4.Flex resize or re-host by 2026-11-04 |
 | 11 | A CPU budget for MT5 boxes: PSI `some` avg300 under 20 % with every book on, measured after any change to an account's book list | runbook | RUNBOOK "Bridge contention on an MT5 box" | shipped (fix/sre-mi-followups) |
+| 12 | Review of #319: bridges stay un-restarted 30 s after their last answer (watcher 90 s from it); INT/TERM ignored from the switch to the record and the MT5 deploy run under `systemd-run --wait`; after a rollback the old bridges must answer or the record is `failed` | check + test | `goldbot-deploy.sh`, `mt5-box-upgrade.sh`; TRACEABILITY X24 | shipped (fix/sre-mi-followups) |
+| 13 | Review of #319: session tables cached only from bridge protocol v11 (unmarked rows ignored); a hung session read no longer holds the others; "x price" only for fx and metal pairs; the probe with an empty environment; the largest /health body within the probe's 1024 bytes | test | X25-X27 | shipped (fix/sre-mi-followups) |
 
 ## Lessons
 - **Went well.** Every exit had a broker-side stop, so the outages cost learning, not money. Entries on an unpriced

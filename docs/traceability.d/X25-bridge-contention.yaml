@@ -1,0 +1,5 @@
+id: X25
+requirement: 'Incident 2026-11-02: the bridge logs every call holding the terminal over 2 s (method, seconds, requests waiting) and reports lock_wait_s and slow_calls on GET /health (optional, the whole body within the root probe''s 1024 bytes); bridge_compat:<account> WARNs on a contended terminal from the same GET'
+status: in review (trading-safety, security, sre; PR #319)
+code: goldbot/execution/bridge.py `make_handler` (`let_go`, `lock_figures`, SLOW_HOLD_S, LOCK_WAIT_WINDOW_S, LOCK_WAIT_CAP_S); goldbot/ops/bridge_compat.py BridgeInfo, `contention`; goldbot/ops/checks/bridge.py `check_bridge_compat`
+test: tests/test_bridge_slow_calls.py

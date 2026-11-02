@@ -1,0 +1,5 @@
+id: X27
+requirement: 'Incident 2026-11-02: a mode 2/3 swap is priced only where its unit is known (the profit currency as is; the base currency x price for fx and metal pairs only); any other swap stays unknown and refuses entries, shown as "swap not priced: entries refused, exits still close" on the engine report, API, dashboard and health'
+status: in review (trading-safety, quant; PR #317 / #319)
+code: goldbot/engine/instruments_db.py `swap_per_lot`, `terms_from_info`; goldbot/engine/books.py `refresh_terms`, `_symbol_state`, STATE_TEXT; goldbot/ops/checks/engine.py SYMBOL_WARN_WORDS; goldbot/api/schema.py InstrumentState; web/src/screens/EntrySymbols.tsx
+test: tests/test_instruments_db.py::test_the_base_currency_times_price_rule_is_for_fx_and_metal_pairs_only; ::test_swap_in_the_profit_currency_is_converted_for_index_cfds; tests/test_swap_unknown_state.py; web/src/screens/MultiInstrument.test.tsx

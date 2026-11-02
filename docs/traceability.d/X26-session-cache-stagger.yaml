@@ -1,0 +1,5 @@
+id: X26
+requirement: 'Incident 2026-11-02: engine start makes no blocking non-gold trading_sessions call; a book uses its table cached in the last 24 h (instruments.db, only from bridge protocol v11, rows without the marker ignored) or its static profile; reads run one at a time after the loop starts, a read past twice its timeout no longer holds the others; observed hours from 8 complete days'
+status: in review (trading-safety, sre; PR #319)
+code: goldbot/engine/session_cache.py (`CachedSessions`, `SessionStagger`); goldbot/ops/services/engine.py `book_sessions`, `_run_engine`; goldbot/engine/instruments_db.py `save_sessions`, `load_sessions`; goldbot/db/migrations.py INSTRUMENTS v2; goldbot/execution/mt5_adapter.py OBSERVE_DAYS
+test: tests/test_session_cache.py
