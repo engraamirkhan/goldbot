@@ -153,7 +153,9 @@ install -d -m 755 -o root -g root /etc/needrestart/conf.d
 install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf
 install -m 644 "$OPS/systemd/goldbot-deploy.service" "$OPS/systemd/goldbot-deploy.timer" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable goldbot-deploy.timer
+# --now: `enable` alone starts a timer only at the next boot (incident 2026-11-02: the brain's timer was enabled
+# but never started, so no Telegram-approved deploy was ever applied). Safe here: it only applies an approval.
+systemctl enable --now goldbot-deploy.timer
 
 # Cloudflare Tunnel client for the dashboard (the tunnel token is entered by the owner, see the runbook). Pinned
 # version and SHA-256 (GitHub release asset digests); downloaded into the root-only directory and checked before dpkg.

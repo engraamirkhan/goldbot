@@ -373,7 +373,7 @@ def record_candidate(book: ShadowBook, *, version: str, model: Any, agent: Speci
     """Score `agent`'s candidate on the decision bar `bar` (row `last` of the scoring frame `Xm`) with `version`'s model
     and record it. Every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged not
     taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades. Entry: the bar's close
-    on the trade's side, or `entry` (a TradingView agent's: the price when its value arrived, engine/tv_context.py).
+    on the trade's side, or `entry` when the caller gives one.
     `candidate`: the candidates-frame row, whose own barriers the trade takes (`candidate_barriers`)."""
     feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
     feats["side"] = side

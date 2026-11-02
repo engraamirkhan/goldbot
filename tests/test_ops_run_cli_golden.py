@@ -41,7 +41,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 # subcommands whose --help only prints (argparse) or, for drift-review, only reads state/drift.json in the cwd
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
                  "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "broker-history-depth", "ruin", "monthly-report", "perf-report",
-                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "tv-ideas", "ledger",
+                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-ideas", "ledger",
                  "daily-review", "repair-lost-record", "autodisc-register")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
@@ -54,7 +54,6 @@ DISPATCH: dict[str, list[str]] = {
     "bridge-no-account": ["bridge"],
     "bridge-order-lane": ["bridge-order-lane", "vantage-demo"],      # BACKLOG 135: started by the bridge itself
     "api": ["api"],
-    "webhook": ["webhook"],
     "scheduler": ["scheduler"],
     "telegram": ["telegram"],
     "news": ["news"],
@@ -79,9 +78,6 @@ DISPATCH: dict[str, list[str]] = {
     "monthly-report": ["monthly-report", "--json"],
     "perf-report": ["perf-report", "--json"],
     "sizing-feasibility": ["sizing-feasibility", "--tiny-live"],
-    "tv-import": ["tv-import", "e.csv", "--indicator", "K", "--version", "1", "--tf", "15"],
-    "tv-repaint-check": ["tv-repaint-check", "--indicator", "K", "--version", "1", "--tf", "15"],
-    "tv-pull": ["tv-pull", "status"],
     "tv-ideas": ["tv-ideas", "summary"],
     "observe": ["observe", "once", "--account", "vantage-live-obs"],    # ADR 0063: the observe-only collector
     "ledger": ["ledger", "resume"],
@@ -95,7 +91,7 @@ DISPATCH: dict[str, list[str]] = {
 }
 
 # the run module's own functions a command reaches (the dispatcher's targets; helpers they call are not entries)
-RUN_ENTRIES = ("run_supervisor", "run_engine", "drift_review_cli", "run_bridge", "run_order_lane", "run_api", "run_webhook",
+RUN_ENTRIES = ("run_supervisor", "run_engine", "drift_review_cli", "run_bridge", "run_order_lane", "run_api",
                "run_scheduler", "run_telegram", "run_news", "record_gate_cli", "publish_costs_cli")
 
 # files that start goldbot services or call the CLI on a server
@@ -165,7 +161,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     labelled `goldbot.ops.run:<name>` wherever they are defined, so the label survives the move."""
     import goldbot.ops.run as run_mod
     from goldbot.api import auth, mailer
-    from goldbot.data import tv_csv
+    from goldbot.data import tv_ideas
     from goldbot.ops import (
         autodisc_register,
         backup,
@@ -180,7 +176,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         setup_wizard,
         smoke,
     )
-    from goldbot.research import daily_review, min_lot, owner_history, ruin, tv_repaint
+    from goldbot.research import daily_review, min_lot, owner_history, ruin
     out: dict[tuple[str, int, str], str] = {}
 
     def add(fn: Callable[..., Any], label: str) -> None:
@@ -190,7 +186,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         add(getattr(run_mod, name), f"goldbot.ops.run:{name}")
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
-               perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main, daily_review.main,
+               perf_report.main, min_lot.main, smoke.main, tv_ideas.main, daily_review.main,
                repair_records.main, broker_depth.main, autodisc_register.main, observe.main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
@@ -285,10 +281,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "perf-report": ("goldbot.ops.perf_report", "main"),
     "sizing-feasibility": ("goldbot.research.min_lot", "main"),
     "bridge-smoke": ("goldbot.ops.smoke", "main"),
-    "tv-import": ("goldbot.data.tv_csv", "main"),
-    "tv-repaint-check": ("goldbot.research.tv_repaint", "main"),
     "ledger": ("goldbot.ledger.cli", "main"),
-    "tv-pull": ("goldbot.data.tv_pull", "main"),             # `follow` loops, but exits with main()'s value
     "tv-ideas": ("goldbot.data.tv_ideas", "main"),
     "observe": ("goldbot.ops.observe", "main"),                # `follow` loops, but exits with main()'s value
     "daily-review": ("goldbot.research.daily_review", "main"),
@@ -296,11 +289,11 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "autodisc-register": ("goldbot.ops.autodisc_register", "main"),
 }
 # Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or
-# serves until stopped (api and webhook under uvicorn, bridge under serve), and the dispatcher never passed a return
+# serves until stopped (api under uvicorn, bridge under serve), and the dispatcher never passed a return
 # value to sys.exit for them; their exit code is the process's own (0 on return, non-zero on a refusal's SystemExit or
 # an uncaught error). Pinned the other way round: a value a service returns is NOT turned into an exit code.
 SERVICES: dict[str, str] = {s: f"run_{s}" for s in
-                            ("supervisor", "engine", "bridge", "api", "webhook", "scheduler", "telegram", "news")}
+                            ("supervisor", "engine", "bridge", "api", "scheduler", "telegram", "news")}
 SERVICES["bridge-order-lane"] = "run_order_lane"          # BACKLOG 135: started by the bridge, never by hand
 
 

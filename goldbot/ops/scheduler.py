@@ -10,9 +10,11 @@ Rules that make it safe to restart at any time:
 * job state lives in aux.db (tables scheduler_jobs, scheduler_heartbeat; state store step 3), written under
   BEGIN IMMEDIATE; the heartbeat row carries the whole status document, which health and the VPS updater read
   (`python -m goldbot.db scheduler-status`). state/scheduler.json is imported once, then regenerated after every
-  save for the dashboard (`/api/jobs`), the agents' read_state tool and a rolled-back release; a failed export is
-  logged and never stops a job. What a rolled-back release wrote there is merged back on the next start (the newer
-  slot per job wins). The supervisor does not read any of it.
+  save for the agents' read_state tool and a rolled-back release; a failed export is logged and never stops a job.
+  What a rolled-back release wrote there is merged back on the next start (the newer slot per job wins). The
+  supervisor does not read any of it;
+* a job the code no longer registers loses its state row at start (`prune`), so health does not list a retired job
+  (ADR 0066: agents_daily, tv_reconcile) forever.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database
 from goldbot.db.bookkeeping import (
     SCHEDULER_FILE,
+    delete_jobs,
     dual_read,
     export_latest,
     load_jobs,
@@ -188,6 +191,19 @@ class Scheduler:
             # once for that slot: `run_if_never_run`)
             self.state[name] = JobState(last_slot=None if schedule.run_if_never_run else schedule.last_slot(self.clock()))
         self._save()
+
+    def prune(self) -> list[str]:
+        """Drop the state of every job not registered now (call after the last `add`); returns the names dropped.
+        A rolled-back release that still has such a job anchors it to its current slot again, as for a new job."""
+        gone = sorted(set(self.state) - set(self.jobs))
+        if gone:
+            for name in gone:
+                del self.state[name]
+            with self.db.write() as conn:
+                delete_jobs(conn, gone)
+            self._save()
+            log.info("dropped the state of retired jobs: %s", ", ".join(gone))
+        return gone
 
     def due(self, now: pd.Timestamp) -> list[tuple[Job, pd.Timestamp]]:
         out = []

@@ -11,14 +11,11 @@ import pytest
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.db.connection import Database
+from goldbot.engine.agent_candidates import AgentCandidates
 from goldbot.engine.replica_context import ReplicaShadow
-from goldbot.engine.tv_context import TvShadowWatch
-from goldbot.execution.broker import Tick
 from goldbot.specialists.base import SPECIALISTS
 from goldbot.specialists.smc_structure import SmcStructureSpecialist
-from goldbot.specialists.tv_event import TvEventSpecialist
 
-TICK = Tick(ts_utc=pd.Timestamp('2010-02-01', tz='UTC'), bid=1.0, ask=1.1)
 TAIL = 800        # the engine's feature_window
 
 
@@ -135,20 +132,17 @@ def test_with_no_source_or_a_failing_source_the_agent_proposes_nothing(tmp_path,
 
     shadow = ReplicaShadow(Database.open(tmp_path, "aux"), broken, src.before)
     assert shadow.candidates(agent, _frame(src, 2000)).empty
-    watch = TvShadowWatch()                                    # the engine's holder: no replica set
-    out = watch.candidates(SimpleNamespace(shadow=None, cfg=SimpleNamespace(tv_max_lag_s=60)), "15m", _frame(src, 2000),
-                           [agent], pd.Timestamp("2010-02-01", tz="UTC"), TICK, 1.0, 0.1)
+    out = AgentCandidates().candidates(_frame(src, 2000), [agent])      # the engine's holder: no replica set
     assert out[agent.agent_id].empty
 
 
-def test_the_tv_watch_serves_replica_agents_from_the_shadow_and_other_agents_as_before(tmp_path, series):
+def test_the_engine_s_holder_serves_replica_agents_from_the_shadow(tmp_path, series):
     agent, src = _agent("tvr2"), Source(series)
-    watch = TvShadowWatch()
-    watch.replica = _shadow(tmp_path, src)
-    eng = SimpleNamespace(shadow=None, cfg=SimpleNamespace(tv_max_lag_s=60))
+    holder = AgentCandidates()
+    holder.replica = _shadow(tmp_path, src)
     fired = 0
     for e in range(2000, 2300):
-        out = watch.candidates(eng, "15m", _frame(src, e), [agent], pd.Timestamp("2010-02-01", tz="UTC"), TICK, 1.0, 0.1)
+        out = holder.candidates(_frame(src, e), [agent])
         fired += _fires(out[agent.agent_id], TAIL - 1) and _truth(series, agent, e)
     assert fired > 0
 
@@ -156,7 +150,6 @@ def test_the_tv_watch_serves_replica_agents_from_the_shadow_and_other_agents_as_
 def test_a_replica_reading_agent_is_shadow_only_like_a_tradingview_one():
     assert _agent().shadow_only and _agent("tvr2").shadow_only
     assert not SPECIALISTS["session_open"]().shadow_only
-    assert TvEventSpecialist.requires_tv       # its instances are shadow only through the same property
 
 
 class _AlwaysFires:
@@ -180,7 +173,7 @@ def test_the_engine_never_sends_a_replica_agent_to_the_broker(tmp_path):
     agent = _agent("tvr2")
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode="auto", state_dir=str(tmp_path)),
                  PaperBroker(equity=10_000), [agent], {agent.agent_id: ConstantModel(p=0.95)}, allocator=Full())
-    eng._tv.replica = _AlwaysFires()      # type: ignore[assignment]
+    eng._cands.replica = _AlwaysFires()      # type: ignore[assignment]
     ticks = synthetic_ticks("2025-03-03", "2025-03-06", ticks_per_minute=1, seed=5)
     out = []
     for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):

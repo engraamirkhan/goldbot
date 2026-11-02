@@ -3,7 +3,6 @@
   python -m goldbot.ops.run supervisor
   python -m goldbot.ops.run engine <account_id>
   python -m goldbot.ops.run api
-  python -m goldbot.ops.run webhook
   python -m goldbot.ops.run scheduler
   python -m goldbot.ops.run telegram
   python -m goldbot.ops.run news
@@ -33,12 +32,6 @@
   python -m goldbot.ops.run bridge-smoke <account_id> [--state DIR]
                                                          # demo only: one minimum-lot round trip after one owner click
                                                          # (engine stopped, supervisor running; RUNBOOK "bridge smoke")
-  python -m goldbot.ops.run tv-import <csv> --indicator NAME --version V --tf 15|60|240|1D [--symbol XAUUSD]
-                                                         # TradingView "Export chart data" CSV -> tv_indicators (unvalidated)
-  python -m goldbot.ops.run tv-repaint-check --indicator NAME --version V --tf TF [--report-only]
-                                                         # CSV vs live alerts on the same bars; flags repaint_validated
-  python -m goldbot.ops.run tv-pull sync|follow|status|graphics [--study PINE_ID[@V]] [--tf TF]
-                                                         # TradingView direct pull (read-only, cookie in the keyring)
   python -m goldbot.ops.run observe once|follow --account ID [--state DIR] [--data-root DIR]
                                                          # observe-only account (ADR 0063): bars, quotes and symbol
                                                          # terms through its bridge, read only; never an order
@@ -96,7 +89,6 @@ from goldbot.ops.services.news import run_news
 from goldbot.ops.services.scheduler import _agent_runner, _job_broker, run_scheduler
 from goldbot.ops.services.supervisor import _SUP_ERR_LOGGED, SUP_ERR_LOG_S, run_supervisor, supervisor_pass
 from goldbot.ops.services.telegram import run_telegram
-from goldbot.ops.services.webhook import run_webhook
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 # httpx logs every request URL at INFO, and a Telegram Bot API URL carries the bot token (/bot<token>/getUpdates),
@@ -136,7 +128,6 @@ __all__ = [
     "run_scheduler",
     "run_supervisor",
     "run_telegram",
-    "run_webhook",
     "start_loop_watch",
     "supervisor_pass",
 ]

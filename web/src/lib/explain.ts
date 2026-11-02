@@ -1,4 +1,4 @@
-// Helpers for the Health and Research screens (docs/ux/health-research.md): bands, formatting and chart scales.
+// Helpers for the Health screen (docs/ux/health-research.md; the Research screen was retired 2026-11-02): bands, formatting and chart scales.
 import type { components } from "./schema";
 
 type Schemas = components["schemas"];
@@ -8,10 +8,6 @@ export type PsiHeatmap = Schemas["PsiHeatmap"];
 export type ReliabilityCurve = Schemas["ReliabilityCurve"];
 export type CusumTrace = Schemas["CusumTrace"];
 export type HealthCheckRow = Schemas["HealthCheckRow"];
-export type ResearchView = Schemas["ResearchView"];
-export type TrialRow = Schemas["TrialRow"];
-export type ResearchPlanView = Schemas["ResearchPlanView"];
-export type HypothesisTable = Schemas["HypothesisTable"];
 
 export type Band = "ok" | "warn" | "bad";
 
@@ -51,6 +47,3 @@ export function scale(d0: number, d1: number, r0: number, r1: number): (v: numbe
 /** "M x,y L x,y …" through the points. */
 export const linePath = (pts: [number, number][]) =>
   pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-
-/** The failing gate names of a trial, for the compact gates cell. */
-export const failedGates = (t: TrialRow) => t.gates.filter((g) => !g.passed).map((g) => g.name);

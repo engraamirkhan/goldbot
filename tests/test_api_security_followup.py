@@ -24,7 +24,7 @@ def app_client(tmp_path):
     state, docs = tmp_path / "state", tmp_path / "docs"
     state.mkdir()
     docs.mkdir()
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", docs_dir=docs, owner_email=OWNER)
+    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email=OWNER)
     return app, TestClient(app), state, docs
 
 
@@ -186,19 +186,6 @@ def test_the_code_lockout_never_gates_halt_or_propose(app_client):
 
 
 # ------------------------------------------------------------------------------------- M2 redaction
-def test_job_errors_show_the_type_only_to_non_owner_roles(app_client):
-    app, c, state, _ = app_client
-    owner, _ = _owner_secret(c, app)
-    viewer = _viewer(c, owner)
-    err = "OSError: [Errno 2] No such file or directory: '/srv/goldbot/state/x.parquet'\nTraceback (most recent call last):"
-    (state / "scheduler.json").write_text(json.dumps({"ts": "2026-10-10T00:00:00+00:00", "jobs": {
-        "nightly_costs": {"last_ok": False, "last_error": err, "runs": 1, "failures": 1}}}))
-    (row,) = c.get("/api/jobs", headers=viewer).json()
-    assert row["last_error"] == "OSError"
-    (row,) = c.get("/api/jobs", headers=owner).json()
-    assert row["last_error"] == err.splitlines()[0]
-
-
 def test_drift_errors_show_the_type_only_to_non_owner_roles(app_client):
     app, c, state, _ = app_client
     owner, _ = _owner_secret(c, app)
@@ -220,15 +207,6 @@ def test_redaction_keeps_the_type_and_removes_paths():
 
 
 # ------------------------------------------------------------------------------------- LOW
-def test_account_security_notices_are_shown_to_the_owner_only(app_client):
-    app, c, state, _ = app_client
-    owner, _ = _owner_secret(c, app)
-    viewer = _viewer(c, owner)
-    _five_wrong_rearm_codes(c, owner)
-    assert any(r["role"] == "account_security" for r in c.get("/api/agent-runs", headers=owner).json())
-    assert not any(r["role"] == "account_security" for r in c.get("/api/agent-runs", headers=viewer).json())
-
-
 def test_revoke_sessions_cli_signs_everyone_out(store, capsys):
     s, secret = store
     tok = s.login(OWNER, PW, totp_code(secret))
