@@ -27,6 +27,7 @@ from goldbot.config import (
     tf_seconds,
 )
 from goldbot.data.timeutil import floor_tf, risk_day
+from goldbot.instruments import LEVERAGE_BY_CLASS, CorrelationGroup, InstrumentSpec, LeverageClass
 from goldbot.risk import sizing
 from goldbot.risk.pilot import PilotRules, PilotState
 from goldbot.risk.throttle import AgentThrottle
@@ -64,7 +65,10 @@ class RiskLimits(Record):
     margin_level_floor: float = 3.0      # 300%
     leverage_cap: float = 20.0           # FCA retail gold
     # combined exposure across all accounts, treated as one position: at most this many lots, and open notional at
-    # most this fraction of what the combined equity can carry at the leverage cap (30% x 20 = 6x combined equity)
+    # most this fraction of what the combined equity can carry at the leverage cap (30% x 20 = 6x combined equity).
+    # Multi-instrument plan 2026-11-02 ("max_combined_lots ... -> notional per correlation group"): on a multi-symbol
+    # state (`AccountState.group_notional` set) the notional cap is per correlation group, at the group's class
+    # leverage, and the lots cap holds for the gold group only (every gold symbol is 100 oz a lot)
     max_combined_lots: float = 3.0
     max_combined_notional_frac: float = 0.30
     # account class (design: Account classifier): on Standard the 15m specialists except session-open are disabled
@@ -116,6 +120,12 @@ class RiskLimits(Record):
     # the live pilot (goldbot/risk/pilot.py, ADR 0055): the account's `pilot:` block when enabled, set only by
     # ops.services.engine.engine_limits for that account's real terminal. None (every other account): no change
     pilot: PilotRules | None = None
+    # multi-instrument plan 2026-11-02 ("one AccountState per account and a serial gate so per-account loss limits
+    # cover all symbols"): the account trades more than one symbol (set by the engine from the account's instrument
+    # list). The daily projection then always adds the open positions' remaining stop risk (unknown refuses) and runs
+    # against the effective daily limit even when no absolute limit is set, so symbols deciding on the same bar cannot
+    # together pass it; the engine books each allowed entry on the shared state (`RiskGate.book`). False: as before
+    multi_symbol: bool = False
 
     @property
     def dynamic(self) -> bool:
@@ -214,6 +224,15 @@ class AccountState(Record):
     # the margin and combined-notional figures use min(leverage_cap, it) (ADR 0055: "using the real leverage"; it can
     # only tighten). None = unknown: leverage_cap alone
     broker_leverage: float | None = None
+    # multi-instrument plan 2026-11-02: open notional per correlation group, account currency (`open_risk.
+    # group_exposure`: lots x contract x mid x the account currency per unit of the quote currency), this account's and
+    # the other real accounts' (`supervisor.others_group_notional`). None: a single-instrument XAUUSD engine, whose
+    # combined cap is the lots and USD notional above, exactly as before. With a dict the cap is per group
+    # (`group_exposure_cap`) and `open_lots` / `other_lots` hold the gold group's lots. `exposure_unknown`: a position
+    # the engine could not value (no quote or conversion); entries are refused `exposure_unknown`, exits never read it
+    group_notional: dict[str, float] | None = None
+    other_group_notional: dict[str, float] = Field(default_factory=dict)
+    exposure_unknown: bool = False
 
 
 class Intent(Record):
@@ -279,6 +298,18 @@ class Intent(Record):
     # the live model version the intent comes from (runner `live_versions`): the key of `RiskLimits.strategy_risk`;
     # None (unknown) trades the base risk per trade
     model_version: str | None = None
+    # multi-instrument plan 2026-11-02: the instrument's registry terms (goldbot/instruments.py InstrumentSpec,
+    # `intent_terms`). The defaults are XAUUSD's, so a gold intent decides exactly as before (tests pin the grid).
+    # `correlation_group` picks the group notional cap, `leverage_class` the leverage ("FX 30, gold/major idx 20, other
+    # commodities 10, bonds 5"), `point` the stops-level and spread floor (None: `RiskLimits.point`). For a quote
+    # currency other than USD (`currency_profit`) the price-unit amounts (`atr_usd`, the stop, `swap_usd_per_oz`) are
+    # in that currency and `acct_per_profit` converts them (account currency per unit of it, from the broker's
+    # loss_per_lot); without it the entry is refused `fx_conversion_unavailable`, never sized on a guess (`profit_fx`)
+    correlation_group: CorrelationGroup = "gold"
+    leverage_class: LeverageClass = "gold_index"
+    currency_profit: str = "USD"
+    acct_per_profit: float | None = None
+    point: float | None = None
 
 
 class GateDecision(Record):
@@ -473,9 +504,10 @@ _STATE_NUMBERS = ("equity", "balance_closed_hwm", "day_start_equity", "week_star
                   "last_tick_age_s", "spread_points", "open_lots", "open_notional", "other_lots", "other_notional",
                   "other_equity", "tick_ahead_s")
 _INTENT_NUMBERS = ("p", "target_atr", "stop_atr", "atr_usd", "cost_atr", "multiplier", "price", "contract_oz",
-                   "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd", "swap_usd_per_oz")
+                   "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd", "swap_usd_per_oz",
+                   "acct_per_profit", "point")
 _POSITIVE_STATE = ("equity",)
-_POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max")
+_POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max", "point")
 _OPERATIONAL_NUMBERS = ("price", "contract_oz", "volume_step", "volume_min", "volume_max", "stops_level_points",
                         "acct_per_usd")
 _POSITIVE_OPERATIONAL = ("price", "contract_oz", "volume_step", "volume_min", "volume_max")
@@ -486,7 +518,7 @@ _POSITIVE_OPERATIONAL = ("price", "contract_oz", "volume_step", "volume_min", "v
 # refusal is an account reason (`RiskGate.account_reasons`, published as `entry_blocks`) or the intent's own filtering
 # (negative EV, cost floor, account class rules, same-direction cap), which is not published
 PER_TRADE_REFUSALS = frozenset({"fx_conversion_unavailable", "min_lot_exceeds_risk", "margin_level_floor",
-                                "combined_exposure_cap", "daily_loss_limit_abs", "heat_cap",
+                                "combined_exposure_cap", "group_exposure_cap", "daily_loss_limit_abs", "heat_cap",
                                 "pilot_stop_above_cap", "pilot_trade_risk_above_cap", "pilot_stop_projected"})
 
 
@@ -495,9 +527,40 @@ def _bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
     return v is not None and (not math.isfinite(v) or (f in positive and not v > 0))
 
 
+def _bad_amounts(d: dict[str, float] | None) -> bool:
+    """A group notional map the gate cannot compare: a value that is not a finite number >= 0."""
+    return d is not None and not all(isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 for v in d.values())
+
+
 def invalid_state_fields(st: AccountState) -> list[str]:
     """The account state fields the gate reads that it cannot compare (as `invalid_fields`)."""
-    return [f for f in _STATE_NUMBERS if _bad(st, f, _POSITIVE_STATE)]
+    return [f for f in _STATE_NUMBERS if _bad(st, f, _POSITIVE_STATE)] + \
+        [f for f in ("group_notional", "other_group_notional") if _bad_amounts(getattr(st, f))]
+
+
+def intent_terms(spec: InstrumentSpec) -> dict[str, Any]:
+    """The `Intent` fields an instrument's registry entry sets (multi-instrument plan 2026-11-02); XAUUSD's are the
+    Intent defaults' values. The engine adds them to every intent of that symbol; the contract terms (contract, volume
+    limits, stops level) still come from the terminal's symbol_info."""
+    return {"correlation_group": spec.correlation_group, "leverage_class": spec.leverage_class,
+            "currency_profit": spec.currency_profit, "point": spec.point}
+
+
+def profit_fx(intent: Intent) -> float | None:
+    """Account currency per unit of the instrument's P&L currency, or None when it is not known (the gate refuses
+    `fx_conversion_unavailable`; it never guesses). A USD quote is `sizing.account_fx` unchanged (XAUUSD's rule); a
+    quote in the deposit currency is 1 by definition and a broker figure more than 1% away from it is refused (the
+    terms are not what the sizing assumes); any other quote needs the broker's figure (`acct_per_profit`)."""
+    quote = intent.currency_profit.strip().upper()
+    if quote == "USD":
+        return sizing.account_fx(intent.account_currency, intent.acct_per_usd)
+    if not intent.account_currency.strip() or not quote:
+        return None
+    v = intent.acct_per_profit
+    fx = float(v) if v is not None and math.isfinite(v) and v > 0 else None
+    if quote == intent.account_currency.strip().upper():
+        return None if fx is not None and abs(fx - 1.0) > sizing.USD_FX_TOLERANCE else 1.0
+    return fx
 
 
 def invalid_fields(intent: Intent, st: AccountState) -> list[str]:
@@ -632,10 +695,13 @@ class RiskGate:
             out.append("calendar_unavailable")
         return out
 
-    def leverage(self, st: AccountState | None = None) -> float:
-        """The leverage the margin and combined-notional figures use: `leverage_cap`, or the terminal's own leverage
-        when it is known and lower (ADR 0055; it only tightens)."""
-        cap = self.limits.leverage_cap
+    def leverage(self, st: AccountState | None = None, leverage_class: str = "gold_index") -> float:
+        """The leverage the margin and combined-notional figures use: the class's (multi-instrument plan 2026-11-02:
+        "leverage per asset class (FX 30, gold/major idx 20, other commodities 10, bonds 5)", `LEVERAGE_BY_CLASS`; gold
+        and the major indices take `leverage_cap`, 20, as before), or the terminal's own leverage when it is known and
+        lower (ADR 0055; it only tightens). An unknown class takes the lowest class leverage (fail closed)."""
+        cap = self.limits.leverage_cap if leverage_class == "gold_index" else \
+            float(LEVERAGE_BY_CLASS.get(leverage_class, min(LEVERAGE_BY_CLASS.values())))
         lev = st.broker_leverage if st is not None else None
         return min(cap, lev) if lev is not None and math.isfinite(lev) and lev > 0 else cap
 
@@ -645,7 +711,7 @@ class RiskGate:
         `notional` is in the account currency (BACKLOG 28), as is the broker's figure. The larger of the broker's
         figure and notional / 20 is used; when the broker cannot answer (no source, None, a non-finite or negative figure, or an error) the 1:20 figure is used and the reason recorded. Never smaller
         than 1:20, so a broker fault can only make the check stricter-or-equal, never fail open."""
-        lev = self.leverage(st)
+        lev = self.leverage(st, getattr(intent, "leverage_class", "gold_index"))
         cap = notional / lev
         tag = f"1:{lev:g}"
         if margin_required is None:
@@ -714,6 +780,8 @@ class RiskGate:
             reasons.append("bridge_incompatible")
         if st.unconfirmed_order:
             reasons.append("unconfirmed_order_pending")
+        if st.exposure_unknown:
+            reasons.append("exposure_unknown")
         if st.data_recovering:
             reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:
@@ -735,7 +803,8 @@ class RiskGate:
             reasons.append("account_class_unknown")
         # BACKLOG 19/35: the heat cap, or the projection with an absolute daily limit, needs the open risk; unknown, or not
         # a finite amount >= 0, refuses (fail closed). Nothing while both are off, so the fact is never read then
-        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None) or L.pilot is not None
+        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None) or L.pilot is not None \
+            or L.multi_symbol
         if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
             reasons.append("open_risk_unknown")
         if bad:
@@ -781,14 +850,26 @@ class RiskGate:
         if level_after < L.margin_level_floor:
             return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
-        # combined exposure cap: both accounts trade one instrument, so their positions are one position. Open notional
-        # is published in USD (lots x contract x price); converted here so it meets equity in the account currency
-        # (the supervisor halts accounts of mixed currencies, so other_equity is in this one)
-        comb_lots = st.open_lots + st.other_lots + lots
-        comb_notional = (st.open_notional + st.other_notional) * fx + notional
-        if comb_lots > L.max_combined_lots + 1e-9 or \
-                comb_notional > L.max_combined_notional_frac * self.leverage(st) * (st.equity + st.other_equity):
-            return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
+        group: str = getattr(intent, "correlation_group", "gold")
+        lev = self.leverage(st, getattr(intent, "leverage_class", "gold_index"))
+        cap_notional = L.max_combined_notional_frac * lev * (st.equity + st.other_equity)
+        if st.group_notional is None:
+            # combined exposure cap: both accounts trade one instrument, so their positions are one position. Open
+            # notional is published in USD (lots x contract x price); converted here so it meets equity in the account
+            # currency (the supervisor halts accounts of mixed currencies, so other_equity is in this one)
+            comb_lots = st.open_lots + st.other_lots + lots
+            comb_notional = (st.open_notional + st.other_notional) * fx + notional
+            over_lots, over_notional = comb_lots > L.max_combined_lots + 1e-9, comb_notional > cap_notional
+        else:
+            # multi-instrument plan 2026-11-02: "notional in account currency per correlation group (gold, metals,
+            # equity, FX, energy, rates, ags)" at the group's class leverage, this account's and the other real
+            # accounts' together; the lots cap stays for the gold group (one 100 oz lot is one lot on every gold symbol)
+            held = st.group_notional.get(group, 0.0) + st.other_group_notional.get(group, 0.0)
+            over_lots = group == "gold" and st.open_lots + st.other_lots + lots > L.max_combined_lots + 1e-9
+            over_notional = held + notional > cap_notional
+        if over_lots or over_notional:
+            why = "group_exposure_cap" if st.group_notional is not None and not over_lots else "combined_exposure_cap"
+            return GateDecision(allowed=False, reasons=[why], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
         # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only.
         # Strict boundary (review LOW-3): refused only when the projection EXCEEDS the limit; exactly equal is allowed
@@ -802,9 +883,10 @@ class RiskGate:
         cost_amount = cost_per_oz * lots * intent.contract_oz * fx
         # BACKLOG 35 (review MEDIUM-4): with project_open_risk the projection also adds what the open positions can
         # still lose down to their stops (unknown open risk was refused above), so two open trades cannot carry the day
-        # past the limit. Off: as before
-        held = (st.open_risk or 0.0) if L.project_open_risk else 0.0
-        if L.daily_loss_limit_abs is not None:
+        # past the limit. Off: as before. Multi-instrument plan 2026-11-02: a multi-symbol account always projects,
+        # against the effective daily limit (the percentage alone when no absolute limit is set)
+        held = (st.open_risk or 0.0) if L.project_open_risk or L.multi_symbol else 0.0
+        if L.daily_loss_limit_abs is not None or L.multi_symbol:
             lost = max(0.0, st.day_start_equity - st.equity)
             if lost + held + risk_amount + cost_amount > self.daily_loss_limit(st) + 1e-9:
                 return GateDecision(allowed=False, reasons=["daily_loss_limit_abs"], stop_distance=stop_distance,
@@ -877,7 +959,7 @@ class RiskGate:
 
         # sizing, in the account currency (design Sizing; BACKLOG 28): the stop is USD per oz, so one lot's risk is
         # stop x contract x fx, fx being the broker's account currency per USD. The arithmetic is goldbot/risk/sizing.py
-        fx = sizing.account_fx(intent.account_currency, intent.acct_per_usd)
+        fx = profit_fx(intent)              # multi-instrument: per unit of the quote currency (USD: as before)
         if fx is None:                       # a non-USD account without a usable conversion: never sized on a guess
             return GateDecision(allowed=False, reasons=["fx_conversion_unavailable"])
         # per-trade risk is capped after the multiplier (design Hard limits: 1% max, clamped, not rejected)
@@ -885,7 +967,8 @@ class RiskGate:
         risk_frac = L.risk_for(intent.model_version)     # dynamic limits: the strategy's risk per trade (base: fixed)
         eff = sizing.effective_risk(L, size_down, intent.multiplier, risk_frac=risk_frac)
         stop_distance = sizing.stop_distance(intent.stop_atr, intent.atr_usd, stops_level_points=intent.stops_level_points,
-                                             spread_points=st.spread_points, point=L.point)
+                                             spread_points=st.spread_points,
+                                             point=L.point if intent.point is None else intent.point)
         sz = sizing.size_lots(equity=st.equity, risk=eff, stop_distance=stop_distance, contract_oz=intent.contract_oz,
                               volume_min=intent.volume_min, volume_step=intent.volume_step,
                               volume_max=intent.volume_max, acct_per_usd=fx)
@@ -940,6 +1023,36 @@ class RiskGate:
             d = d.model_copy(update={"risk_per_trade": eff.risk_frac,
                                      "risk_source": L.risk_source(intent.model_version)})
         return d
+
+    def book(self, st: AccountState, intent: Intent, d: GateDecision) -> None:
+        """Multi-instrument plan 2026-11-02 ("a serial gate so per-account loss limits cover all symbols"): reserve an
+        allowed entry on the shared account state, so the next symbol's `check` on the same bar sees it before the
+        next account refresh reads the broker's positions (which then replace these figures). Adds one position on its
+        side, its full stop risk and round trip to the open risk (unknown stays unknown), its lots to `open_lots` when
+        it is gold and its notional to its group (`group_notional`, account currency) or, on a single-instrument state,
+        to the USD `open_notional`. Only ever adds exposure, so it can only make later checks stricter. A refusal
+        books nothing. Entries only; exits never call it."""
+        if not d.allowed or not d.lots > 0:
+            return
+        st.open_positions += 1
+        if intent.side > 0:
+            st.open_long += 1
+        else:
+            st.open_short += 1
+        if st.open_risk is not None:
+            st.open_risk += d.risk_amount + d.cost_amount
+        if intent.correlation_group == "gold":
+            st.open_lots += d.lots
+        if st.group_notional is None:
+            st.open_notional += d.lots * intent.contract_oz * intent.price         # USD, as the refresh publishes it
+            return
+        fx = profit_fx(intent)
+        if fx is None:                       # cannot happen on an allowed decision; fail closed if it ever does
+            st.exposure_unknown = True
+            return
+        g = intent.correlation_group
+        st.group_notional = {**st.group_notional,
+                             g: st.group_notional.get(g, 0.0) + d.lots * intent.contract_oz * intent.price * fx}
 
     def check_operational(self, intent: OperationalIntent, st: AccountState, now_utc: pd.Timestamp | None,
                           margin_required: MarginFn | None) -> GateDecision:

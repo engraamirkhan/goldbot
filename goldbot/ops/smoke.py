@@ -146,6 +146,10 @@ STATE_SOURCES: dict[str, str] = {
     # ADR 0055: read only on a pilot account, which is live; the smoke is demo-only (F1), so both are none
     "pilot": "none: the live pilot's record is the engine's, and the smoke never runs on a live account (F1)",
     "broker_leverage": "none: read only on the live pilot account; the 1:20 figure applies (F1: demo only)",
+    # multi-instrument plan 2026-11-02: the smoke is an XAUUSD order, so the single-instrument combined cap applies
+    "group_notional": "none: an XAUUSD-only state (the lots and USD notional cap, as before)",
+    "other_group_notional": "none: an XAUUSD-only state",
+    "exposure_unknown": "false: an XAUUSD-only state values its book through open_lots / open_notional",
 }
 
 
@@ -502,6 +506,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         drift_halt=_drift_halt(state_dir), clock_mismatch=clock is None or clock.status == "mismatch",
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
         unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id), pilot=None, broker_leverage=None,
+        group_notional=None, other_group_notional={}, exposure_unknown=False,
         **_windows(cfg.limits, sessions, events, tick_ts, now),
         **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)

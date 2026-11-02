@@ -166,3 +166,15 @@ def holiday_end(hl: HolidayList, sessions: SessionTable, now: pd.Timestamp) -> t
     while hl.thin(day) is not None and day - today < timedelta(days=14):
         day += timedelta(days=1)
     return name, server_midnight_utc(day, sessions.server_tz)
+
+
+def weekend_cut(sessions: SessionTable, now: pd.Timestamp) -> bool:
+    """Multi-instrument plan 2026-11-02 ("a Friday cut per symbol"): True from the symbol's Friday cut (its session
+    profile's `friday_cut`, server time, on the table's week-close day) until the week reopens, i.e. on the server
+    weekend too. The engine's rule for gold (`EngineConfig.weekend_cut`, 21:30) is the metals profile's cut, and the
+    arithmetic is the engine's `_server_clock` (goldbot/ops/smoke.py mirrors it): what the cut does (no entries,
+    losers closed, winners tightened) stays the engine's."""
+    srv = server_wall(pd.DatetimeIndex([pd.Timestamp(now)]), sessions.server_tz)[0]
+    cut = sessions.friday_cut
+    at_cut = srv.weekday() == sessions.week_close_day and srv.hour * 60 + srv.minute >= cut.hour * 60 + cut.minute
+    return bool(at_cut or srv.weekday() >= 5)
