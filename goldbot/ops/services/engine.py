@@ -481,6 +481,11 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                                    timeout_s=broker_bars.FETCH_TIMEOUT_S)
         bars_client.read_attempts = 1
         eng.broker_m1.fetcher = broker_bars.Fetcher(bars_client)
+        # the key zones' long M15 history (engine/key_zones.py, display only): its own client (one attempt, 20 s) and
+        # thread, paced paged pulls, one per bridge at a time, a random first delay; none on short history
+        if acc.key_levels_history == "long":
+            from goldbot.engine import key_zones
+            eng.key_zone_worker.attach(key_zones.levels_client(bridge[0], bridge[1], account_id), bridge_key=bridge[0])
         # entry orders (engine/order_send.py) on their own thread and client, with this account's order timeout, so a
         # slow fill neither stalls the tick thread nor raises as a tick error
         eng.order_sender = order_send.bridge_sender(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-orders",

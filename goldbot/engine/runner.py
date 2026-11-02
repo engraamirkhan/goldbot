@@ -48,6 +48,7 @@ from goldbot.engine import (
     cost_probe,
     exploration,
     history,
+    key_zones,
     order_send,
     pilot,
     unconfirmed,
@@ -312,6 +313,9 @@ class Engine:
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
         self.history = history.History()     # cut-over, background fill and writer, history_gap
+        # the dashboard's key zones (engine/key_zones.py): display only, rebuilt once per 15m close
+        self.key_zones: dict[str, Any] | None = None
+        self.key_zones_at: pd.Timestamp | None = None
         self.broker_m1 = broker_bars.BrokerBars()   # the broker's finished 1m bars and the minutes awaiting theirs
         self.order_sender: order_send.Sender | None = None   # through the bridge: orders off the tick thread
         self.open: dict[int, OpenTrade] = {}
@@ -328,6 +332,10 @@ class Engine:
                                   account_disabled=cfg.wind_down)
         self.decisions: list[dict] = []
         self.store = Store(cfg.data_root) if cfg.data_root else None
+        # the key zones' long history and background build (engine/key_zones.py); its bridge client is set by
+        # goldbot/ops/services/engine.py. Display only.
+        self.key_zone_worker = key_zones.KeyZoneWorker(cfg.account_id, cfg.symbol, store=self.store)
+        self.key_zones_errors: set[str] = set()     # exception types already logged with their traceback
         self._tick_log: list[Tick] = []
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
@@ -936,6 +944,7 @@ class Engine:
             decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
         self._blackout_close(complete, close_ts, frames)
         cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
+        key_zones.update(self, complete, close_ts)       # display only, after every decision of this close; never raises
         if self.shadow is not None:
             self.shadow.save(close_ts)
         self._write_state()
@@ -3236,6 +3245,7 @@ class Engine:
             "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
             # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
             "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self), **broker_bars.published(self),
+            **key_zones.published(self),     # the dashboard's key zones: display only, never read for an order
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

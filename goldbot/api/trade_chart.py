@@ -26,7 +26,7 @@ from goldbot.data.resample import BAR_COLUMNS, resample_bars
 
 log = logging.getLogger(__name__)
 
-__all__ = ["BARS_AFTER", "BARS_BEFORE", "MAX_BARS", "MISSING", "REFERENCE", "trade_bars"]
+__all__ = ["BARS_AFTER", "BARS_BEFORE", "MAX_BARS", "MISSING", "REFERENCE", "recent_bars", "trade_bars"]
 
 BARS_BEFORE = 30                    # spec §3.3: "30 bars before entry to 5 after exit"
 BARS_AFTER = 5
@@ -97,6 +97,16 @@ def _bars(store: Any, account: str | None, tf: str, lo: pd.Timestamp,
                 for t, o, h, lo_, c in zip(pd.to_datetime(b["ts_utc"], utc=True), b["bid_open"], b["bid_high"],
                                            b["bid_low"], b["bid_close"], strict=True)], feed
     return [], None
+
+
+def recent_bars(store: Any, account: str | None, tf: str, n: int,
+                now: pd.Timestamp) -> tuple[list[ChartBar], Literal["broker", "reference"] | None]:
+    """The last `n` complete-or-forming bars of `tf` before now, from the same feeds in the same order as a trade's
+    chart (the key-level chart, api/key_levels_view.py)."""
+    step = pd.Timedelta(seconds=tf_seconds(tf))
+    days = pd.Timedelta(days=max(1.0, n * step / pd.Timedelta(days=1) * 1.6 + 3))   # weekends and the daily break
+    bars, feed = _bars(store, account, tf, now - days, now.ceil("min"))
+    return bars[-n:], feed
 
 
 def _stop_moves(store: Any, row: TradeRow, now: pd.Timestamp) -> list[StopMove]:
