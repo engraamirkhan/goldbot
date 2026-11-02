@@ -518,12 +518,20 @@ and the rest still arrives. It never contains account numbers or emails.
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
   positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
-* The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
-  release note mentions the bridge. On an MT5 box the deploy passes only once every bridge that ran before answers
-  GET /health (any terminal state) within 8 minutes of the switch, and rolls back otherwise (incident 2026-11-02:
-  "active" is not "serving" for a Wine bridge). The record says `bridge@<account> answers GET /health after N s`,
-  with `terminal <state>` when the terminal is not ok (for example `not_logged_in`: log it in, a rollback would not
-  help). `bridge /health not checked` means the box lacks `/usr/local/sbin/goldbot-bridge-probe` (install it: 0.3).
+* The MT5 box (terminal + bridge, rarely changed) is updated by hand only, always in its own unit so a dropped SSH
+  session or a Ctrl-C cannot stop it half way:
+  `sudo systemd-run --wait --unit goldbot-deploy-manual-$(date +%s) /usr/local/sbin/goldbot-deploy <sha>` when a
+  release note mentions the bridge (`goldbot-deploy` itself also ignores INT and TERM once it starts switching).
+  On an MT5 box the deploy passes only once every bridge that ran before answers GET /health (any terminal state)
+  within 8 minutes of the switch and then stays up, un-restarted, 30 s more; the watcher keeps checking 90 s after
+  the last answer. Otherwise it rolls back (incident 2026-11-02: "active" is not "serving" for a Wine bridge). The
+  record says `bridge@<account> answers GET /health after N s`, with `terminal <state>` when the terminal is not ok
+  (for example `not_logged_in`: log it in, a rollback would not help). `bridge /health not checked` means the box
+  lacks `/usr/local/sbin/goldbot-bridge-probe` (install it: 0.3).
+  After a rollback the old version's bridges must answer too; if not, the record is `failed` with
+  `bridge@<account> not answering GET /health after the rollback either` (Telegram alerts). On the probe box that
+  is the CPU, not the code: both versions time out on a starved terminal. Do not roll back further; follow
+  "Bridge contention on an MT5 box" (cut the book list or give the box CPU).
   **Never deploy to the probe box (`goldbot-mt5-probe`) while its markets trade**: a bridge restart there costs about
   4 minutes without a bridge for 20 books. Deploy it at the weekend or in the daily break (about 22:00-23:00 UTC in winter,
   server midnight to 01:00), and the brain's engine for that account after the box.
@@ -2539,6 +2547,9 @@ every position keeps its broker-side stop.
   terminal"` (method, seconds held, requests still waiting).
 - On the box: `curl -s 127.0.0.1:<port>/health` shows `lock_wait_s` and `slow_calls` (absent while no call ran in the
   last 5 minutes). `cat /proc/pressure/cpu` and `vmstat 5 6` show the CPU pressure and steal.
+- A deploy on the box that rolls back with `did not answer GET /health`, and then logs `failed` with `not answering
+  GET /health after the rollback either`: on the probe box this is CPU, not code (the old version starves the same
+  way). Check PSI before suspecting the release.
 
 **Budget.** PSI `some` avg300 under 20 %. Measured 2026-11-02: icm-probe on an E2.1.Micro with 20 books 47 % (steal
 58-77 %), icm-demo on the same shape with 1 symbol 13-17 %, vantage on E5.Flex (1 OCPU, 1/8 baseline, 2 GB) with 8

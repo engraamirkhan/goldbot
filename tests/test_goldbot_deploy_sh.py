@@ -54,7 +54,12 @@ export HARNESS_PID=$$
 source "$SCRIPT"
 [ -z "${TEST_POLL_S:-}" ] || POLL_S=$TEST_POLL_S   # fewer fake-clock polls: each one spawns python stubs
 PROBE=$T/bin/goldbot-bridge-probe                  # MT5 box: the bridge's /health token (present only when a test writes it)
-setpriv() { while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; "$@"; }   # no uid switch in a test
+setpriv() {                                         # no uid switch, and the test's env kept, in a test
+  echo "setpriv $*" >> "$T/setpriv.log"
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done; shift
+  if [ "${1:-}" = env ]; then shift; while [ $# -gt 0 ] && { [ "$1" = -i ] || [[ "$1" == *=* ]]; }; do shift; done; fi
+  "$@"
+}
 ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role; ROLLBACK_FLOOR=$T/floor
 APPROVED=$ROOT/state/deploy/approved.json; PY_BRAIN=$PYTHON
 STAGE=$T/stage; STAGE_LOCK=$T/stage.lock; WATCH_FILE=$VAR/watch; UV=$T/bin/uv
@@ -129,6 +134,8 @@ elif cmd == "show":
         n = int(open(calls).read()) + 1 if os.path.exists(calls) else 1
         open(calls, "w").write(str(n))
         bump = os.path.exists(os.path.join(T, "bump")) or (os.environ.get("BUMP_AFTER") and n > int(os.environ["BUMP_AFTER"]))
+        at = os.path.join(T, "bump_at_clock")          # NRestarts rises once the fake clock reaches this
+        bump = bump or (os.path.exists(at) and int(open(os.path.join(T, "clock")).read()) >= int(open(at).read()))
         print(1 if bump else 0)
     else:
         print(0)
@@ -1168,6 +1175,13 @@ def test_the_box_checkout_reads_nothing_of_the_machines_git(tmp_path, monkeypatc
 # every bridge that ran before answers (any terminal token) within BRIDGE_ANSWER_S of the switch; else it rolls back.
 FAKE_PROBE = """#!/bin/sh
 echo "$*" >> "$T/probe.log"
+if [ -f "$T/probe_kill" ] && [ ! -f "$T/probe_killed" ]; then    # the owner's Ctrl-C / a TERM mid-wait
+  : > "$T/probe_killed"; kill -"$(cat "$T/probe_kill")" "$HARNESS_PID"; /bin/sleep 1
+fi
+if [ -f "$T/probe_at_clock" ]; then
+  if [ "$(cat "$T/clock")" -ge "$(cat "$T/probe_at_clock")" ]; then echo ok; else echo noanswer; fi
+  exit 0
+fi
 n=$(wc -l < "$T/probe.log" | tr -d ' ')
 after=$(cat "$T/probe_after" 2>/dev/null || echo 0)
 if [ "$after" -gt 0 ] && [ "$n" -ge "$after" ]; then cat "$T/probe_answer" 2>/dev/null || echo ok; else echo noanswer; fi
@@ -1194,8 +1208,11 @@ def test_an_mt5_deploy_whose_bridge_never_answers_health_rolls_back_after_8_minu
     p = box.run(box.c2)
     assert p.returncode == 1, p.stdout + p.stderr
     rec = box.records()[-1]
-    assert rec["result"] == "rolled_back" and box.head() == box.c1
+    assert box.head() == box.c1
     assert "bridge@icm-probe did not answer GET /health" in rec["detail"]
+    # review F3: the old version is back, but its bridge does not answer either: `failed`, which alerts
+    assert rec["result"] == "failed" and "bridge@icm-probe not answering GET /health" in rec["detail"]
+    assert "CPU, not code" in rec["detail"]
     assert _clock(box) - t0 >= 480                                             # it waited its 8 minutes first
     assert all(ln.split() == ["8765", "20"] for ln in _lines(box, "probe.log"))   # the default port, 20 s each
     assert not (tmp_path / "watch_spawned").exists()
@@ -1245,3 +1262,57 @@ def test_a_brain_deploy_never_probes_a_bridge(tmp_path):
     probe.write_text(FAKE_PROBE)
     probe.chmod(0o755)
     assert box.run(box.c2).returncode == 0 and _lines(box, "probe.log") == []
+
+
+
+# ---------------------------------------------------------------- trading-safety review of #319
+def test_f1_a_bridge_restarting_after_it_answered_still_rolls_back(tmp_path):
+    """F1: answering once is not stable. Answers at 200 s, NRestarts rises at 230 s: rolled back."""
+    box = _mt5_box(tmp_path, answer_after=0)
+    t0 = _clock(box)
+    (tmp_path / "probe_at_clock").write_text(str(t0 + 200))
+    (tmp_path / "bump_at_clock").write_text(str(t0 + 230))
+    p = box.run(box.c2)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "rolled_back" and box.head() == box.c1, rec
+    assert "bridge@icm-probe stopped or restarted" in rec["detail"]
+
+
+def test_f1_after_the_last_answer_it_waits_stable_s_and_the_watcher_covers_watch_s_more(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=0)
+    t0 = _clock(box)
+    (tmp_path / "probe_at_clock").write_text(str(t0 + 200))
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.records()[-1]["result"] == "deployed"
+    assert _clock(box) - t0 >= 200 + 30                                        # STABLE_S after the answer
+    deadline = int((tmp_path / "var" / "watch").read_text().split()[2])
+    assert deadline >= t0 + 200 + 90                                           # last answer + WATCH_S
+
+
+@pytest.mark.parametrize("sig", ["INT", "TERM"])
+def test_f2_a_signal_while_waiting_for_the_bridge_still_rolls_back_and_records_it(tmp_path, sig):
+    box = _mt5_box(tmp_path, answer_after=0)
+    (tmp_path / "probe_kill").write_text(sig)
+    p = box.run(box.c2)
+    assert (tmp_path / "probe_killed").exists()
+    assert box.head() == box.c1, p.stdout + p.stderr
+    assert box.records() and box.records()[-1]["result"] in ("rolled_back", "failed")
+
+
+def test_f3_the_rollback_passes_when_the_old_bridge_answers(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=0)
+    t0 = _clock(box)
+    (tmp_path / "probe_at_clock").write_text(str(t0 + 600))                   # answers only after the forward window
+    p = box.run(box.c2)
+    assert p.returncode == 1
+    rec = box.records()[-1]
+    assert rec["result"] == "rolled_back" and box.head() == box.c1, rec
+
+
+def test_l1_the_probe_runs_unprivileged_with_an_empty_environment(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1)
+    assert box.run(box.c2).returncode == 0
+    calls = _lines(box, "setpriv.log")
+    assert calls and all("--reuid=nobody" in c and "-- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin " in c for c in calls)

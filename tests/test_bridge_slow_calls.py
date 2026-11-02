@@ -110,6 +110,33 @@ def test_the_figure_is_capped():
     assert bridge_mod.LOCK_WAIT_CAP_S < 1000                 # at most 3 digits before the decimal point
 
 
+# security review of #319, L2: the root watchdog's probe reads at most 1024 bytes of /health and calls anything longer
+# `noanswer`, which RESTARTS the bridge. The largest body the bridge can send must stay under it.
+PROBE_MAX_BYTES = 1024
+MAX_BODY_KEYS = {"ok", "login", "terminal", "terminal_for_s", "server_tz", "api_version", "min_compatible", "methods",
+                 "observe_only", "order_lane", "commit", "lock_wait_s", "slow_calls"}
+
+
+def test_the_largest_health_body_fits_the_root_probes_1024_bytes():
+    import json
+    import re
+    probe = (bridge_mod.__file__.rsplit("/goldbot/", 1)[0] + "/goldbot/ops/linux/goldbot-bridge-probe.sh")
+    assert re.search(r"^MAX_BYTES=1024$", open(probe).read(), re.M)
+    longest_tz = max(__import__("zoneinfo").available_timezones(), key=len)
+    body = {"ok": False, "login": max(bridge_mod.LOGIN_STATES, key=len), "terminal": max(bridge_mod.TERMINAL_STATES, key=len),
+            "terminal_for_s": bridge_mod.TERMINAL_FOR_CAP_S, "server_tz": longest_tz,
+            "api_version": bridge_mod.API_VERSION, "min_compatible": bridge_mod.MIN_COMPATIBLE,
+            "methods": sorted(bridge_mod.METHODS), "observe_only": True, "order_lane": "starting", "commit": "f" * 40,
+            "lock_wait_s": bridge_mod.LOCK_WAIT_CAP_S, "slow_calls": 4096}       # the deque's maxlen
+    assert set(body) == MAX_BODY_KEYS
+    assert len(json.dumps(body).encode()) <= PROBE_MAX_BYTES
+
+
+def test_health_sends_no_key_the_size_test_does_not_know(slow_bridge):
+    RemoteBroker(slow_bridge, TOKEN).last_tick("XAUUSD")
+    assert set(_health(slow_bridge)) <= MAX_BODY_KEYS
+
+
 # ------------------------------------------------------------------------------------------------ the brain's detection
 # The brain reads the figures from the /health GET its bridge_compat check already makes (no extra call on a contended
 # bridge) and WARNs `bridge_compat:<account>` when calls waited LOCK_WAIT_WARN_S or more, or SLOW_CALLS_WARN or more

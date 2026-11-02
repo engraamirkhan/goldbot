@@ -26,7 +26,10 @@
 # catches it). A rollback itself, and the recovery after a failed deploy, wait the full 90 s. Every outcome is
 # appended to deploys.jsonl. Restart order: supervisor, engines (so the trading gap is one restart), the rest.
 # MT5 box: a forward deploy also waits until every bridge that ran before answers GET /health (any terminal token),
-# at most BRIDGE_ANSWER_S (8 min) after the switch, else it rolls back (incident 2026-11-02, `bridges_answer`).
+# at most BRIDGE_ANSWER_S (8 min) after the switch, and stays un-restarted STABLE_S after the last answer, else it rolls
+# back (incident 2026-11-02, `bridges_answer`); the watcher's WATCH_S counts from that last answer. After a rollback
+# the old version's bridges must answer too, else the record is `failed` (alerted). From the switch to the record,
+# INT and TERM are ignored (review of #319, F2); run it by hand under `systemd-run --wait` (RUNBOOK 0.5).
 #
 # Staging (brain): `goldbot-deploy --stage <sha>` (run by scripts/release.sh right after the push, while CI runs)
 # fetches the commit, makes a worktree under /opt/goldbot-stage/<sha> and pre-builds there as the service user,
@@ -119,6 +122,8 @@ NEW_NOTE=""                               # newly enabled engines blocked by the
 NEW_FAIL=""                               # a newly enabled engine down with its bridge ok
 BRIDGE_NOTE=""                            # MT5 box: what each bridge answered on GET /health after the switch
 BRIDGE_FAIL=""                            # MT5 box: the bridges that did not answer within BRIDGE_ANSWER_S
+BRIDGE_SILENT=""                          # ... only those that never answered (not a restart)
+LAST_ANSWER=0                             # MT5 box: when the last bridge answered (the watcher counts WATCH_S from it)
 
 g() { sudo -u "$OWNER" -H env GIT_NO_REPLACE_OBJECTS=1 git -C "$ROOT" "$@"; }
 as_owner() { sudo -u "$OWNER" -H "$@"; }
@@ -737,11 +742,14 @@ bridge_port() {  # $1 bridge unit -> the port its watchdog probes (the mt5-insta
 
 bridge_token() {  # $1 port: one token from the unprivileged probe (noanswer, ok, not_logged_in, ...), never the body
   setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- \
-    "$PROBE" "$1" "$PROBE_TIMEOUT_S" 2>/dev/null | head -c 32 | tr -cd 'a-z_' || true
+    env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin "$PROBE" "$1" "$PROBE_TIMEOUT_S" 2>/dev/null \
+    | head -c 32 | tr -cd 'a-z_' || true
 }
 
-bridges_answer() {  # MT5 box: 0 once every bridge that ran before answers; 1 (BRIDGE_FAIL says why) otherwise
-  BRIDGE_NOTE=""; BRIDGE_FAIL=""
+bridges_answer() {  # MT5 box: 0 once every bridge that ran before answers and stays up; 1 (BRIDGE_FAIL says why)
+  # Review of #319, F1: every bridge's is-active and NRestarts are checked on every round, answered or not, and after
+  # the last answer each must stay un-restarted STABLE_S more (LAST_ANSWER moves the watcher's deadline too).
+  BRIDGE_NOTE=""; BRIDGE_FAIL=""; BRIDGE_SILENT=""; LAST_ANSWER=0
   [ "$ROLE" = mt5 ] || return 0
   if [ ! -x "$PROBE" ]; then BRIDGE_NOTE="bridge /health not checked ($PROBE missing: RUNBOOK 0.5); "; return 0; fi
   local s tok waiting
@@ -750,20 +758,26 @@ bridges_answer() {  # MT5 box: 0 once every bridge that ran before answers; 1 (B
     waiting=""
     for s in $(services); do
       enabled "$s" && pre_active "$s" || continue
-      [ -z "${said[$s]:-}" ] || continue
       if ! systemctl is-active --quiet "$s" || [ "$(systemctl show -p NRestarts --value "$s")" != "${RESTARTS[$s]:-0}" ]; then
-        BRIDGE_FAIL="$(short "$s") stopped or restarted before it answered GET /health"
+        if [ -n "${said[$s]:-}" ]; then
+          BRIDGE_FAIL="$(short "$s") stopped or restarted within $STABLE_S s of answering GET /health"
+        else
+          BRIDGE_FAIL="$(short "$s") stopped or restarted before it answered GET /health"
+        fi
         return 1
       fi
+      [ -z "${said[$s]:-}" ] || continue
       tok=$(bridge_token "$(bridge_port "$s")")
       if [ -n "$tok" ] && [ "$tok" != noanswer ]; then
-        said[$s]=$tok; at[$s]=$(( $(date +%s) - SETTLED ))
+        said[$s]=$tok; LAST_ANSWER=$(date +%s); at[$s]=$(( LAST_ANSWER - SETTLED ))
       else
         waiting+="${waiting:+, }$(short "$s")"
       fi
     done
-    [ -n "$waiting" ] || break
-    if [ $(( $(date +%s) - SETTLED )) -ge "$BRIDGE_ANSWER_S" ]; then
+    if [ -z "$waiting" ]; then
+      [ $(( $(date +%s) - LAST_ANSWER )) -lt "$STABLE_S" ] || break      # all answered, and stable since the last
+    elif [ $(( $(date +%s) - SETTLED )) -ge "$BRIDGE_ANSWER_S" ]; then
+      BRIDGE_SILENT=$waiting
       BRIDGE_FAIL="$waiting did not answer GET /health within $BRIDGE_ANSWER_S s of the switch"
       return 1
     fi
@@ -777,10 +791,23 @@ bridges_answer() {  # MT5 box: 0 once every bridge that ran before answers; 1 (B
   return 0
 }
 
+after_rollback_bridges() {  # MT5 box, after a rollback restored the old version: its bridges must answer too. Record
+  # only (review F3: no second switch); prints why not, empty when they answer (or this is not an MT5 box)
+  [ "$ROLE" = mt5 ] || return 0
+  bridges_answer && return 0
+  if [ -n "$BRIDGE_SILENT" ]; then
+    echo "$BRIDGE_SILENT not answering GET /health after the rollback either; on an MT5 box that is usually CPU, not code (RUNBOOK 'Bridge contention on an MT5 box')"
+  else
+    echo "after the rollback: $BRIDGE_FAIL"
+  fi
+}
+
 write_watch() {  # what the watcher needs, in the root-only folder: target, previous, deadline, then unit + restart count
   local s
   {
-    echo "$TARGET $CUR $((SETTLED + WATCH_S))"
+    local from=$SETTLED
+    [ "$LAST_ANSWER" -le "$from" ] || from=$LAST_ANSWER       # review F1: WATCH_S after the last bridge answered too
+    echo "$TARGET $CUR $((from + WATCH_S))"
     for s in "${!RESTARTS[@]}"; do
       enabled "$s" || continue
       [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
@@ -822,7 +849,11 @@ watch_run() {  # --watch (holds the deploy lock): until WATCH_S after the switch
   local rc=0
   switch_to "$TARGET" "$CUR" && healthy full || rc=1
   ensure_started
-  if [ "$rc" = 0 ]; then
+  local silent=""
+  if [ "$rc" = 0 ]; then silent=$(after_rollback_bridges); fi
+  if [ -n "$silent" ]; then
+    log failed "$CUR" "$TARGET" "$line; previous version restored, but ${silent}${RECOVERY:+; $RECOVERY}"
+  elif [ "$rc" = 0 ]; then
     log rolled_back "$CUR" "$TARGET" "$line; previous version restored${RECOVERY:+; $RECOVERY}"
   else
     log failed "$CUR" "$TARGET" "$line; rollback did not recover every service${RECOVERY:+ ($RECOVERY)}: check journalctl -u 'goldbot-*'"
@@ -986,6 +1017,7 @@ main() {
   if [ "$MODE" = watch ]; then               # started by spawn_watch after the report: wait for the deploy to let go
     flock -w 30 9 || exit 0
     set +e
+    trap '' INT TERM                                   # review F2, as the deploy itself
     watch_run
     exit $?
   fi
@@ -1051,6 +1083,9 @@ main() {
   fi
 
   set +e                                              # from here every failure leads to a rollback, never an abort
+  # review F2: a Ctrl-C or a TERM from here on would leave the services stopped or the switch half done: ignored until
+  # the outcome is logged (the process exits right after it). Run it under systemd-run --wait (RUNBOOK 0.5).
+  trap '' INT TERM
   local full=""; [ "$MODE" = deploy ] || full=full     # a manual rollback waits the whole 90 s; a forward deploy does not
   switch_to "$CUR" "$TARGET" && healthy $full
   local ok=$?
@@ -1093,7 +1128,12 @@ main() {
   local back=0
   switch_to "$TARGET" "$CUR" && healthy full || back=1
   ensure_started                                      # whatever happened above: nothing that ran before stays stopped
-  local why="${DROPPED}${NEW_FAIL:+$NEW_FAIL; }${BRIDGE_FAIL:+$BRIDGE_FAIL; }" rec="${RECOVERY:+; $RECOVERY}"
+  local why="${DROPPED}${NEW_FAIL:+$NEW_FAIL; }${BRIDGE_FAIL:+$BRIDGE_FAIL; }" rec="${RECOVERY:+; $RECOVERY}" silent=""
+  if [ "$back" = 0 ]; then silent=$(after_rollback_bridges); fi
+  if [ -n "$silent" ]; then
+    log failed "$CUR" "$TARGET" "${why}previous version restored, but ${silent}${rec}"
+    exit 1
+  fi
   if [ "$back" = 0 ]; then
     if [ "$MODE" = rollback ]; then
       log rollback_reverted "$CUR" "$TARGET" "${why}the rollback failed or a service was unstable; the version that ran before is restored$rec"

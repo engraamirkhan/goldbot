@@ -44,6 +44,11 @@ is_root() { [ -z "${NOT_ROOT:-}" ]; }
 mktemp() { mkdir -p "$T/ops"; echo "$T/ops"; }
 df() { printf 'Filesystem 1M-blocks Used Available Capacity Mounted\n/dev/x 9999 1 %s 1%% /\n' "${FREE_MB:-5000}"; }
 sleep() { :; }
+systemd-run() {                                       # records the unit, runs the command in place
+  echo "systemd-run $*" >> "$T/calls.log"
+  while [ $# -gt 0 ]; do case "$1" in --unit) shift 2 ;; --*) shift ;; *) break ;; esac; done
+  "$@"
+}
 mt5_head() { cat "$T/mt5head"; }
 sudo() {
   while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -H) shift ;; *) break ;; esac; done
@@ -195,6 +200,7 @@ def test_install_order_and_results(box):
     assert rc == 0, out
     c = calls(tmp)
     assert f"deployed {sha}" in c
+    assert "systemd-run --wait --quiet --collect --unit goldbot-deploy-manual-" in c   # review of #319, F2
     assert (c.index("deployed") < c.index("daemon-reload") < c.index("pkill")
             < c.index("enable goldbot-mt5-terminal@icm-demo"))
     assert "stop goldbot-mt5-terminal-check.service" in c

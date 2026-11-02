@@ -150,8 +150,9 @@ fi
 [ -z "$total" ] || set_baseline "$total"                     # settled: earlier restarts no longer count
 
 probe() {                     # one token from the unprivileged probe; never the body
+  # env -i: the probe starts with nothing of root's environment (security review of #319, L1)
   setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- \
-    "$PROBE" "$port" "$PROBE_TIMEOUT_S" \
+    env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin "$PROBE" "$port" "$PROBE_TIMEOUT_S" \
     2>/dev/null | head -c 32 | tr -cd 'a-z_' || true
 }
 
