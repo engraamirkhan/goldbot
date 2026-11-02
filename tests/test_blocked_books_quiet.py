@@ -7,6 +7,7 @@ never reads symbol terms."""
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -172,3 +173,80 @@ def test_an_unblocked_non_gold_book_reads_its_symbol_terms_at_most_once_over_sev
     for sym in _others(eng):
         names = [n for n, _ in pb.about(sym)]
         assert names.count("symbol_info") <= 1 and "positions" not in names, (sym, names)
+
+
+# ---------------------------------------------------------------- trading-safety follow-ups of #314
+def test_a_blocked_book_with_a_pending_order_row_sending_or_ambiguous_is_not_quiet(tmp_path):
+    from goldbot.engine import unconfirmed
+    for status in ("sending", unconfirmed.AMBIGUOUS):
+        eng, pb = _engine(tmp_path / status)
+        book = list(eng.books.values())[1]
+        sym = book.__dict__["cfg"].symbol
+        book.__dict__["_orders"]["p1"] = SimpleNamespace(status=status)
+        assert sym not in books.quiet_books(eng)
+        book.__dict__["_orders"]["p1"] = SimpleNamespace(status="filled")
+        eng.__dict__.pop("_quiet_held", None)
+        assert sym in books.quiet_books(eng)
+
+
+def test_no_book_is_quiet_before_the_account_positions_have_ever_been_read(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+
+    def down() -> list[Position]:
+        raise ConnectionError("bridge down")
+    monkeypatch.setattr(pb, "account_positions", down)
+    assert books.quiet_books(eng) == set()
+
+
+def test_a_failed_account_positions_read_keeps_the_last_successful_answer(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    now = [1000.0]
+    monkeypatch.setattr(books.time, "monotonic", lambda: now[0])
+    quiet = books.quiet_books(eng)
+    assert quiet == set(_others(eng))
+
+    def down() -> list[Position]:
+        raise ConnectionError("bridge down")
+    monkeypatch.setattr(pb, "account_positions", down)
+    now[0] += books.QUIET_RECHECK_S
+    assert books.quiet_books(eng) == quiet
+
+
+def _failing_symbol_info(eng: Engine, pb: CountingBroker, monkeypatch: Any) -> tuple[Any, list[int]]:
+    tries: list[int] = []
+
+    def fail(symbol: str) -> Any:
+        tries.append(1)
+        raise ConnectionError("not served")
+    monkeypatch.setattr(pb, "symbol_info", fail)
+    return list(eng.books.values())[1], tries
+
+
+def test_an_enabled_books_failed_symbol_info_is_retried_after_about_a_minute(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path, blocked=None)
+    now = [1000.0]
+    monkeypatch.setattr(books.time, "monotonic", lambda: now[0])
+    book, tries = _failing_symbol_info(eng, pb, monkeypatch)
+    with using(eng, book):
+        for step in (0.0, 30.0, books.SYMBOL_RETRY_ENABLED_S):
+            now[0] += step
+            try:
+                books.symbol_info(eng)
+            except ConnectionError:
+                pass
+    assert len(tries) == 2
+
+
+def test_a_blocked_books_failed_symbol_info_is_not_retried_for_thirty_minutes(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    now = [1000.0]
+    monkeypatch.setattr(books.time, "monotonic", lambda: now[0])
+    book, tries = _failing_symbol_info(eng, pb, monkeypatch)
+    with using(eng, book):
+        for step in (0.0, books.SYMBOL_RETRY_ENABLED_S, books.SYMBOL_RETRY_S - books.SYMBOL_RETRY_ENABLED_S):
+            now[0] += step
+            try:
+                books.symbol_info(eng)
+            except ConnectionError:
+                pass
+    assert len(tries) == 2

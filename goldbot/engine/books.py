@@ -102,9 +102,12 @@ PASS_BUDGET_S = 5.0
 # that holds nothing in its magic range is quiet, making no broker call at all (`quiet_books`). Whether it holds
 # anything is read from the account's positions at most this often (host clock); its own records are checked every pass
 QUIET_RECHECK_S = 10.0
-# a non-gold book's symbol_info read that failed (a symbol the bridge does not serve) is tried again at most this often
-# (host clock; `symbol_read_due`), never once per refresh. Gold's reads are unchanged
+# a non-gold book's symbol_info answer serves its contract, lot terms and terms row this long (host clock;
+# `symbol_info`); a failed read is tried again after this long on a blocked book (a symbol the bridge does not serve),
+# never once per refresh. Gold's reads are unchanged
 SYMBOL_RETRY_S = 1800.0
+# a failed symbol_info read on an enabled non-gold book is tried again after this long: its entries wait on it
+SYMBOL_RETRY_ENABLED_S = 60.0
 
 T = TypeVar("T")
 
@@ -434,10 +437,13 @@ def _exits_first(eng: Engine, quotes: PassQuotes, symbol: str) -> bool:
 
 
 def _quiet_ok(b: SymbolBook) -> bool:
-    """A blocked non-gold book with no record of its own to work on (no open trade, close due or kill pending)."""
+    """A blocked non-gold book with no record of its own to work on: no open trade, close due, kill pending, or
+    pending_orders row still `sending` or ambiguous (its reconciliation must run)."""
+    from goldbot.engine import unconfirmed
     d = b.__dict__
+    pending = any(o.status in ("sending", unconfirmed.AMBIGUOUS) for o in (d.get("_orders") or {}).values())
     return (not b.primary and b.spec is not None and b.spec.blocked is not None and not d.get("open")
-            and not d.get("_close_due") and not d.get("_kill_pending"))
+            and not d.get("_close_due") and not d.get("_kill_pending") and not pending)
 
 
 def _in_range(b: SymbolBook, m: int) -> bool:
@@ -452,14 +458,14 @@ def quiet_books(eng: Engine) -> set[str]:
     symbol the terminal could not describe at start, so one the bridge does not serve; `instrument_wind_down`), it
     holds no record of its own (`_quiet_ok`) and the account's positions show none on its symbol inside its magic
     range. The positions come from the pass's shared account_positions() read, at most every QUIET_RECHECK_S; a read
-    that fails keeps the last answer (none yet: only the books' own records count). A manual trade on the symbol
-    (outside the range) wakes nothing: the book would never touch it. A book that is not quiet runs its whole pass,
-    exits included, as before."""
+    that fails keeps the last successful answer, and with none yet no book is quiet (fail toward running the exits).
+    A manual trade on the symbol (outside the range) wakes nothing: the book would never touch it. A book that is not
+    quiet runs its whole pass, exits included, as before."""
     candidates = [b for b in eng.books.values() if _quiet_ok(b)]
     if not candidates:
         return set()
     now = time.monotonic()
-    at, held = eng.__dict__.get("_quiet_held", (None, frozenset()))
+    at, held = eng.__dict__.get("_quiet_held", (None, None))
     if at is None or now - at >= QUIET_RECHECK_S:
         try:
             every = list(eng.broker.account_positions())
@@ -469,6 +475,8 @@ def quiet_books(eng: Engine) -> set[str]:
             log.warning("account positions unreadable (%s): the blocked books' quiet check keeps its last answer",
                         type(exc).__name__)
         eng.__dict__["_quiet_held"] = (now, held)
+    if held is None:                               # never read successfully: no book is known to hold nothing
+        return set()
     quiet = {b.__dict__["cfg"].symbol for b in candidates} - held
     if quiet != eng.__dict__.get("_quiet_logged"):
         eng.__dict__["_quiet_logged"] = quiet
@@ -479,14 +487,18 @@ def quiet_books(eng: Engine) -> set[str]:
 
 def symbol_info(eng: Engine) -> SymbolInfo:
     """The active book's symbol_info outside the decision cycle (its contract size, the ladder's lot terms, its
-    instruments.db row). Gold: read now, as before. Another book: one read serves every use for SYMBOL_RETRY_S, an
-    answer or a failure alike (the failure is raised again), so a symbol the bridge does not serve is never asked
-    once per refresh (live demo issue 2026-11-02: "symbol terms are read at most once per symbol per N minutes")."""
+    instruments.db row). Gold: read now, as before. Another book: one answer serves every use for SYMBOL_RETRY_S; a
+    failure is raised again for SYMBOL_RETRY_S on a blocked book (a symbol the bridge does not serve is never asked
+    once per refresh: live demo issue 2026-11-02, "symbol terms are read at most once per symbol per N minutes") and
+    for SYMBOL_RETRY_ENABLED_S on an enabled one, whose entries wait on it."""
     book: SymbolBook = eng.__dict__["book"]
     if book.primary:
         return eng.broker.symbol_info(eng.cfg.symbol)
     now = time.monotonic()
-    if book.symbol_read is None or now - book.symbol_read[0] >= SYMBOL_RETRY_S:
+    blocked = book.spec is not None and book.spec.blocked is not None
+    keep = SYMBOL_RETRY_S if book.symbol_read is None or not isinstance(book.symbol_read[1], BaseException) \
+        or blocked else SYMBOL_RETRY_ENABLED_S
+    if book.symbol_read is None or now - book.symbol_read[0] >= keep:
         try:
             got: SymbolInfo | BaseException = eng.broker.symbol_info(eng.cfg.symbol)
         except Exception as exc:
