@@ -197,3 +197,12 @@ random control by >= 0.05 R" now uses the **forward control**: 4 twins per real 
 of the same UTC day and session at or after the real entry minute, same side, stop, target and hold; if no such minute
 exists, the same UTC time of day (within 15 minutes) on another day of the loaded window. The brief's same-day control
 is still computed and reported beside it. Nothing else changes.
+
+## Amendment 2 (2026-11-02, before any outcome): windows amendment W1 (owner directive)
+
+Learn and confirm windows unchanged; no pre-2010 year is added to this lane's learning. A confirm-passer is
+**qualified** only after one read on TEST-OLD (trades entered in 2004, 2006, 2008; warm-up from 2002; fitted rules keep
+the model fitted on 2010-2017): n >= 50 over the three years, net mean R > 0, t >= 1.5, net minus the leak-free
+forward control >= 0, at today's cost of record + overshoot + swap. `--window test_old --confirm-json <confirm result>`
+refuses any rule that did not pass confirm. Until the pre-2010 data is on disk a passer is "confirm-passed, old-test
+pending" and is not deployed.

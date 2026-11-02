@@ -52,6 +52,27 @@ BRACKET = {"1h": (2.0, 24 * HOUR), "4h": (2.0, 72 * HOUR), "1d": (math.nan, 7 * 
 ML_HOLD = {"1h": 6 * HOUR, "4h": 24 * HOUR, "1d": 7 * DAY}
 ML_H = {"1h": 6, "4h": 6, "1d": 5}
 TF_NS = {"1h": HOUR, "4h": 4 * HOUR}
+# amendment W1 (owner 2026-11-02): entry years of the pre-2010 windows; test_old is read once, confirm-passers only
+OLD_YEARS = {"test_old": (2004, 2006, 2008), "learn_old": (2003, 2005, 2007, 2009)}
+OLD_LOAD_FROM = pd.Timestamp("2002-01-01", tz="UTC")
+
+
+def window_bounds(window: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """[first decision, end of trade paths) of a window; the pre-2010 windows trade inside 2003..2009 only."""
+    if window == "explore":
+        return EXPLORE
+    if window == "confirm":
+        return CONFIRM
+    return pd.Timestamp("2003-01-01", tz="UTC"), EXPLORE[0]
+
+
+def in_window(t: np.ndarray, window: str) -> np.ndarray:
+    lo, hi = window_bounds(window)
+    ok = (t >= lo.value) & (t < hi.value)
+    if window in OLD_YEARS:
+        yrs = pd.DatetimeIndex(pd.to_datetime(t, utc=True)).year.to_numpy()
+        ok &= np.isin(yrs, OLD_YEARS[window])
+    return ok
 
 
 # ================================================================ data
@@ -375,12 +396,16 @@ def transition(v: np.ndarray) -> np.ndarray:
     return np.where((v != 0) & (v != p), v, 0)
 
 
-def year_folds(t: np.ndarray, first: int, window: str) -> list[tuple[int, int]]:
-    """(fit_end_ns, test_end_ns) per test year; confirm: one fold fit on explore, applied to the confirm window."""
+def year_folds(t: np.ndarray, first: int, window: str) -> list[tuple[int, int, int, int]]:
+    """(fit_lo, fit_end, test_lo, test_hi) in ns per fold. Explore: annual expanding walk-forward from `first`.
+    Confirm and the pre-2010 windows (amendment W1): one fold fit on the explore window only (2010-2017), frozen."""
+    e0, e1 = int(EXPLORE[0].value), int(EXPLORE[1].value)
     if window == "confirm":
-        return [(int(EXPLORE[1].value), int(CONFIRM[1].value))]
-    return [(int(pd.Timestamp(f"{y}-01-01", tz="UTC").value), int(pd.Timestamp(f"{y + 1}-01-01", tz="UTC").value))
-            for y in range(first, 2018)]
+        return [(e0, e1, e1, int(CONFIRM[1].value))]
+    if window in OLD_YEARS:
+        return [(e0, e1, int(pd.Timestamp("2000-01-01", tz="UTC").value), e0)]
+    return [(e0, int(pd.Timestamp(f"{y}-01-01", tz="UTC").value), int(pd.Timestamp(f"{y}-01-01", tz="UTC").value),
+             int(pd.Timestamp(f"{y + 1}-01-01", tz="UTC").value)) for y in range(first, 2018)]
 
 
 def hmm_rule(b: pd.DataFrame, window: str) -> np.ndarray:
@@ -388,13 +413,13 @@ def hmm_rule(b: pd.DataFrame, window: str) -> np.ndarray:
     x = b["r"].to_numpy()
     vis = b["vis"].to_numpy(np.int64)
     p = np.full(len(b), np.nan)
-    for fit_end, test_end in year_folds(vis, 2011, window):
-        fit = x[(vis < fit_end) & np.isfinite(x)]
+    for fit_lo, fit_end, test_lo, test_end in year_folds(vis, 2011, window):
+        fit = x[(vis >= fit_lo) & (vis < fit_end) & np.isfinite(x)]
         if len(fit) < 200:
             continue
         par = hmm_fit(fit)
         filt = hmm_filter(x, par)
-        sel = (vis >= fit_end) & (vis < test_end)
+        sel = (vis >= test_lo) & (vis < test_end)
         p[sel] = filt[sel]
     return p
 
@@ -417,9 +442,9 @@ def ml_rule(b: pd.DataFrame, tf: str, kind: str, window: str, shuffle: bool = Fa
     side = np.zeros(len(b), dtype=int)
     aucs = []
     rng = np.random.default_rng(SEED)
-    for fit_end, test_end in year_folds(vis, 2012, window):
-        fit = ok & np.isfinite(y) & (lab_end < fit_end - DAY) & (vis < fit_end - DAY)
-        test = ok & (vis >= fit_end) & (vis < test_end)
+    for fit_lo, fit_end, test_lo, test_end in year_folds(vis, 2012, window):
+        fit = ok & np.isfinite(y) & (lab_end < fit_end - DAY) & (vis < fit_end - DAY) & (vis >= fit_lo)
+        test = ok & (vis >= test_lo) & (vis < test_end)
         if fit.sum() < 200 or test.sum() == 0:
             continue
         yf = y[fit].copy()
@@ -456,9 +481,9 @@ def kmeans_rule(b: pd.DataFrame, window: str) -> np.ndarray:
     lab_end = np.r_[vis[5:], np.full(5, np.iinfo(np.int64).max)]
     ok = X.notna().all(axis=1).to_numpy()
     side = np.zeros(len(b), dtype=int)
-    for fit_end, test_end in year_folds(vis, 2012, window):
-        fit = ok & np.isfinite(fwd) & (lab_end < fit_end - DAY) & (vis < fit_end - DAY)
-        test = ok & (vis >= fit_end) & (vis < test_end)
+    for fit_lo, fit_end, test_lo, test_end in year_folds(vis, 2012, window):
+        fit = ok & np.isfinite(fwd) & (lab_end < fit_end - DAY) & (vis < fit_end - DAY) & (vis >= fit_lo)
+        test = ok & (vis >= test_lo) & (vis < test_end)
         if fit.sum() < 100 or test.sum() == 0:
             continue
         mu, sd = X[fit].mean(), X[fit].std()
@@ -679,13 +704,12 @@ def all_signals(m: pd.DataFrame, window: str, rules: list[str] | None = None,
         "28": lambda: ml(d1, "1d", "lr", "28"), "29": lambda: ml(d1, "1d", "gbm", "29"),
         "30": s30, "31": s31, "32": s32, "33": s33,
     }
-    lo, hi = (EXPLORE if window == "explore" else CONFIRM)
     res = {}
     for rid, fn in out.items():
         if rules and rid not in rules:
             continue
         d = fn()
-        d = d[(d["t"] >= lo.value) & (d["t"] < hi.value) & np.isfinite(d["risk"]) & (d["risk"] > 0)]
+        d = d[in_window(d["t"].to_numpy(np.int64), window) & np.isfinite(d["risk"]) & (d["risk"] > 0)]
         res[rid] = d.sort_values("t", kind="stable").reset_index(drop=True)
     return res
 
@@ -833,6 +857,10 @@ def summarise(rid: str, tr: pd.DataFrame, tw: pd.DataFrame, costs: A.ArmCosts, w
     if window == "explore":
         out["pass"] = bool(out["n"] >= 100 and out["net_mean_r"] > 0 and out["t"] >= 2.0
                            and out["minus_twin"] is not None and out["minus_twin"] >= 0.05)
+    elif window in OLD_YEARS:
+        # amendment W1: n >= 50 over the three years, net > 0, t >= 1.5, net minus the leak-free control >= 0
+        out["pass"] = bool(out["n"] >= 50 and out["net_mean_r"] > 0 and out["t"] >= 1.5
+                           and out["minus_twin"] is not None and out["minus_twin"] >= 0)
     else:
         from scipy import stats as st
         sd = float(np.std(net, ddof=1))
@@ -860,30 +888,39 @@ def _work(rid: str) -> dict[str, Any]:
 
 
 # ================================================================ leakage tests (prereg s.3)
-def lookahead_test(m: pd.DataFrame, window: str, n_cuts: int = 8) -> dict[str, Any]:
-    """Every decision at or before a cut time is identical when computed on 1m data truncated at the cut."""
-    full = all_signals(m, window)
-    rng = np.random.default_rng(SEED)
-    lo, hi = (EXPLORE if window == "explore" else CONFIRM)
+def _cut_check(cut: int) -> tuple[int, dict[str, int], int]:
+    m, full, window = _G["m"], _G["full"], _G["window"]
     t = m["t"].to_numpy(np.int64)
-    first = int(pd.Timestamp("2013-01-01", tz="UTC").value) if window == "explore" else lo.value
-    cuts = np.sort(rng.integers(first, hi.value, size=n_cuts))
+    part = all_signals(m[t < cut].reset_index(drop=True), window)
     bad: dict[str, int] = {}
     checked = 0
-    for cut in cuts:
-        cut = int(cut)
-        trunc = m[t < cut].reset_index(drop=True)
-        part = all_signals(trunc, window)
-        for rid, d in full.items():
-            a = d[d["t"] < cut - DAY].reset_index(drop=True)   # decisions visible a day before the cut
-            b = part[rid]
-            b = b[b["t"] < cut - DAY].reset_index(drop=True)
-            same = len(a) == len(b) and (len(a) == 0 or (np.array_equal(a["t"], b["t"]) and np.array_equal(
-                a["side"], b["side"]) and np.allclose(a["risk"], b["risk"], rtol=1e-9)))
-            checked += len(a)
-            if not same:
-                bad[rid] = bad.get(rid, 0) + 1
-    return {"cuts": [str(pd.Timestamp(int(c), tz="UTC")) for c in cuts], "decisions_checked": checked,
+    for rid, d in full.items():
+        a = d[d["t"] < cut].reset_index(drop=True)          # every decision made before the cut
+        b = part[rid]
+        b = b[b["t"] < cut].reset_index(drop=True)
+        same = len(a) == len(b) and (len(a) == 0 or (np.array_equal(a["t"], b["t"]) and np.array_equal(
+            a["side"], b["side"]) and np.allclose(a["risk"], b["risk"], rtol=1e-9)))
+        checked += len(a)
+        if not same:
+            bad[rid] = 1
+    return cut, bad, checked
+
+
+def lookahead_test(m: pd.DataFrame, window: str, n_cuts: int = 8, workers: int = 2) -> dict[str, Any]:
+    """Every decision made before a cut time is identical when computed on 1m data truncated at the cut."""
+    full = all_signals(m, window)
+    rng = np.random.default_rng(SEED)
+    lo, hi = window_bounds(window)
+    first = int(pd.Timestamp("2013-01-01", tz="UTC").value) if window == "explore" else lo.value
+    cuts = [int(c) for c in np.sort(rng.integers(first, hi.value, size=n_cuts))]
+    _G.update(m=m, full=full, window=window)
+    with get_context("fork").Pool(workers) as pool:
+        res = pool.map(_cut_check, cuts)
+    bad: dict[str, int] = {}
+    for _, b, _ in res:
+        for k in b:
+            bad[k] = bad.get(k, 0) + 1
+    return {"cuts": [str(pd.Timestamp(c, tz="UTC")) for c in cuts], "decisions_checked": int(sum(r[2] for r in res)),
             "mismatching_rules": bad, "pass": not bad}
 
 
@@ -901,7 +938,8 @@ def shuffle_test(m: pd.DataFrame, window: str) -> dict[str, Any]:
 # ================================================================ main
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--window", choices=["explore", "confirm"], required=True)
+    ap.add_argument("--window", choices=["explore", "confirm", "test_old", "learn_old"], required=True)
+    ap.add_argument("--confirm-json", default="", help="test_old: the confirm result; only its passers are read")
     ap.add_argument("--raw", default=str(ROOT / "raw"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--rules", default="")
@@ -909,16 +947,29 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=2)
     a = ap.parse_args()
     t0 = time.time()
-    lo, hi = (EXPLORE if a.window == "explore" else CONFIRM)
-    m = load_1m(Path(a.raw), EXPLORE[0], hi)
-    print(f"loaded {len(m):,} 1m rows to {pd.Timestamp(int(m['t'].max()), tz='UTC')}", flush=True)
+    lo, hi = window_bounds(a.window)
     rules = [r.zfill(2) for r in a.rules.split(",") if r]
+    if a.window == "test_old":
+        if not a.confirm_json:
+            raise SystemExit("test_old reads confirm-passers only: give --confirm-json")
+        conf = json.loads(Path(a.confirm_json).expanduser().read_text())["rules"]
+        passed = {k for k, v in conf.items() if v["pass"]}
+        refused = [r for r in rules if r not in passed]
+        if refused or not rules:
+            raise SystemExit(f"test_old refuses rules that did not pass confirm: {refused or 'none given'}")
+    if a.window in OLD_YEARS:
+        # warm-up from 2002; the fitted rules fit on 2010-2017 only, so the explore years are loaded too
+        m = load_1m(Path(a.raw), OLD_LOAD_FROM, EXPLORE[1])
+        assert int(m["t"].min()) < EXPLORE[0].value, "no pre-2010 data on disk yet: old-test pending"
+    else:
+        m = load_1m(Path(a.raw), EXPLORE[0], hi)
+    print(f"loaded {len(m):,} 1m rows to {pd.Timestamp(int(m['t'].max()), tz='UTC')}", flush=True)
     result: dict[str, Any] = {"window": a.window, "prereg": "docs/research/sprint200/stats-prereg.md",
                               "cost_version": COST_VERSION, "k_total": K_TOTAL}
     if a.leak_only:
         result["shuffle"] = shuffle_test(m, a.window)
         print(json.dumps(result["shuffle"]), flush=True)
-        result["lookahead"] = lookahead_test(m, a.window)
+        result["lookahead"] = lookahead_test(m, a.window, workers=a.workers)
         print(json.dumps(result["lookahead"]), flush=True)
     else:
         diag: dict[str, Any] = {}
