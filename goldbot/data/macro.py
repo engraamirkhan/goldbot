@@ -65,8 +65,9 @@ def fetch_fred(series_id: str, api_key: str, start: str = "2003-01-01") -> pd.Da
 # The series the data-macro workflow publishes: gold's best-documented macro drivers (docs/TRADER_LIFECYCLE.md).
 MACRO_RELEASE_SERIES = ("DFII10", "T10YIE", "DTWEXBGS", "GVZCLS", "DGS2")
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"   # public, no API key; latest vintage only
-# H.10 (broad dollar) is released weekly, on Monday ~16:15 ET, for the week to the previous Friday.
-WEEKLY_H10 = frozenset({"DTWEXBGS"})
+# H.10 (broad dollar) is released weekly, on Monday ~16:15 ET, for the week to the previous Friday. DTWEXB is the
+# discontinued (2020) broad index of the same release, used before 2006 by the POS-1 USD-broad splice.
+WEEKLY_H10 = frozenset({"DTWEXBGS", "DTWEXB"})
 # Availability stamp (point in time). A daily FRED value for date D is not known on D:
 # * H.15 rates (DFII10, DGS2, and T10YIE derived from them) are published the next business day at ~16:15 ET, which is
 #   21:15 UTC in winter (20:15 in summer). 23:00 UTC on the next US business day is after that in both seasons, with
@@ -117,14 +118,16 @@ def fred_frame(series_id: str, obs: pd.DataFrame, vintage: pd.Timestamp) -> pd.D
 
 
 def fetch_fred_csv(series_id: str, start: str = "2003-01-01", *, retries: int = 3,
-                   session: requests.Session | None = None) -> pd.DataFrame:
-    """One series from the public fredgraph CSV (value_date, value), retried with backoff."""
+                   session: requests.Session | None = None, end: str | None = None) -> pd.DataFrame:
+    """One series from the public fredgraph CSV (value_date, value), retried with backoff. `end` (YYYY-MM-DD, inclusive)
+    asks FRED for nothing later (coed), for research pulls that must not read past a cutoff."""
     import time as _time
     get = session.get if session is not None else requests.get
     last: Exception | None = None
     for i in range(retries):
         try:
-            r = get(FRED_CSV_URL, params={"id": series_id, "cosd": start}, timeout=60)
+            params = {"id": series_id, "cosd": start, **({"coed": end} if end else {})}
+            r = get(FRED_CSV_URL, params=params, timeout=60)
             r.raise_for_status()
             return parse_fredgraph_csv(r.text, series_id)
         except (requests.RequestException, ValueError) as exc:
