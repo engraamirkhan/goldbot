@@ -781,7 +781,7 @@ def walk(d: Data, e: int, side: int, sd: float, td: float | None, dl: int) -> tu
         fill = min(stop, o) if side > 0 else max(stop, o)
         return side * (fill - px), fill, True, e + s_i
     if t_i >= 0:
-        return side * td, px + side * td, False, e + t_i                 # type: ignore[operator]
+        return float(td), px + side * td, False, e + t_i                 # type: ignore[operator]
     return side * (d.c[last] - px), d.c[last], False, last
 
 
