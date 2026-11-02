@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, AsyncIterator, Callable
 
@@ -520,9 +521,13 @@ class MT5Broker:
             return _send_failed(position_id)
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=res.order, position_id=position_id, filled_lots=res.volume, price=res.price, message=res.comment)
 
-    def positions(self, magic_prefix: int | None = None) -> list[Position]:
-        return [self._position(p) for p in _positions_get(symbol=self.symbol)
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
+        return [self._position(p) for p in _positions_get(symbol=self.symbol if symbol is None else symbol)
                 if magic_prefix is None or str(p.magic).startswith(str(magic_prefix))]
+
+    def ticks_many(self, symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
+        """Multi-instrument demo step 0: the interface only; lane L4 implements the batched copy_ticks_from."""
+        raise NotImplementedError("ticks_many: lane L4 of the multi-instrument plan")
 
     def account_positions(self) -> list[Position]:
         """Every position on the account, any symbol (positions_get without a filter): the equity cross-check

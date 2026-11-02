@@ -97,7 +97,7 @@ def _dead_url() -> str:
 
 
 # ---------------------------------------------------------------------------------------------- the bridge reports
-PINNED = (9, 5, "606cd78e1fcef5fe5557d79d709c64a7dba006a1486626954279ce0a935b22ba")
+PINNED = (10, 5, "de95f3ee8ee1e0609a9d903a707b689d9d2206d0206392d80b9d79cbe5db5340")
 
 
 def test_api_version_is_bumped_whenever_the_method_table_signatures_or_records_change():

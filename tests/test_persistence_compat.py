@@ -560,6 +560,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
         "strict: the hash-chained arm registration journal (ADR 0058); a row that does not read must refuse",
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/instruments.py", "load_instruments", "Instruments"):
+        "strict: config/instruments.yaml (a misspelt key or a repeated magic_block must fail)",
     ("goldbot/research/autodisc/ledger.py", "SearchLedger.get_spec", "StrategySpec"):
         "strict: hash-chained spec; a field dropped on read would change spec_hash and break the ledger chain (ADR 0058)",
     ("goldbot/research/autodisc/gen_gp.py", "_spec", "base"):
