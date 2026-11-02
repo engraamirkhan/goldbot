@@ -100,3 +100,24 @@ prereg commit -> script + tests commit -> engine parity (V0 must reproduce the t
 the 11 rules; those numbers are already public) -> one explore run of V1-V5 -> one confirm run of explore passers ->
 TEST-OLD for confirm passers when that data is on disk. Max 2 worker processes. Aggregates only leave the process
 (JSON under ~/tmp, not committed).
+
+## Amendment 1 (2026-11-02, before the script commit and before any run): windows W2 and extra reporting
+
+Coordinator messages (owner directive, amendment W2 on the statistics expert's memo). The variants and the explore
+and confirm pass rules above are unchanged. Changes:
+
+- **TEST-OLD** is 2006-02-01..2009-12-31 (2006-01 embargo; warm-up from 2005-07-01; trade window = entry date),
+  replacing W1's 2004/2006/2008. Read ONCE, confirm passers only. Rule (W2): n >= 100 (>= 60 for 4h/1d rules: 01, 15,
+  28, 31), net mean R > 0, t >= 1.28, control excess >= 0. Missing data = "confirm-passed, old-test pending", no deploy.
+  V5 on TEST-OLD uses the model trained on all signals 2010-01-01..2025-09-30 (frozen).
+- **Reported, not gated** (every window):
+  - **bps costs**: round trip and overshoot as basis points of the entry price (cor dollars / 4,000 x entry), swap as
+    % a year of notional (cor swap / 4,000 x 365, i.e. the dollar swap x entry / 4,000 per night): net R (bps).
+  - **DRIFT control**: 4 twins per trade with the same side, R, exits (the variant's exit rule, market entry) and hold
+    length, filled at the same UTC time of day on another trading day drawn uniformly (sha256) from +/-20 trading days
+    (excluding 0) inside the window; dropped if that day has no minute within 30 minutes of the time. Excess = mean
+    of (real net R - mean drift-twin net R).
+  - **W2 statistics**: t on day-summed net R; confirm one-sided day-block bootstrap p of mean net R (2,000 resamples of
+    trading days, seed 0) for the BH-FDR read at q = 0.10 over the m explore passers; DSR at K = 3,400.
+  - **Excluding 2025**: confirm net R, t, gross R and uplift without 2025 trades (the statistics expert found the trend
+    lane's out-of-sample gross concentrated in Jan-Sep 2025).
