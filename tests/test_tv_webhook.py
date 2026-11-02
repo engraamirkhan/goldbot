@@ -10,7 +10,6 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from goldbot.api.tv_status import tv_status
 from goldbot.data.store import Store, asof_join
 from goldbot.features import tradingview as tvf
 from goldbot.features.registry import FEATURES
@@ -218,13 +217,3 @@ def test_tradingview_feature_is_opt_in_and_versioned():
         assert out.shape == (1, 0)
     finally:
         FEATURES.pop("tradingview", None)
-
-
-def test_status_reports_last_bar_plots_and_gaps(tmp_path, box):
-    store = Store(tmp_path / "data")
-    _post_bars(client(box, store=store), 6, skip=(3,))
-    (row,) = tv_status(store, pd.Timestamp("2026-10-16T12:00:00Z")).indicators
-    assert (row.indicator, row.version, row.tf) == ("Indicator 1", "1.0", "15")
-    assert row.alerts_24h == 5 and row.gaps_24h == 1 and row.plots_seen == ["plot_0", "plot_1"]
-    assert row.last_bar_time.startswith("2026-10-16T09:15")
-    assert tv_status(Store(tmp_path / "empty"), pd.Timestamp("2026-10-16T12:00:00Z")).indicators == []

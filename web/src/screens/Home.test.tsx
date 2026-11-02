@@ -46,7 +46,6 @@ function renderHome(role: apiModule.Role = "viewer", props: Parameters<typeof Ho
   mockIfFree("openPositions", { as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [] });
   mockIfFree("strategyWatch", { as_of: "2026-10-19T10:00:00Z", unreadable: [], agents: [] });
   mockIfFree("tradesOverview", { as_of: "2026-10-19T10:00:00Z", periods: [], unreadable: [] });
-  mockIfFree("activity", { events: [], unreadable: [] });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Home {...props} /></QueryClientProvider>);
 }
@@ -194,12 +193,12 @@ describe("Home strategies and learning", () => {
     expect(list).toHaveTextContent("Box break close 4hunknown");
   });
 
-  it("puts the learning in one line, in R with n, tagged shadow, not money", async () => {
-    renderHome("viewer", { onOpenProgress: () => {} });
+  it("puts the learning in one line, in R with n, tagged shadow, not money, with no link to the retired Road to live", async () => {
+    renderHome("viewer");
     const card = await screen.findByRole("region", { name: "Learning" });
     await vi.waitFor(() => expect(card).toHaveTextContent("Shadow trades, 7 days: every candidate"));
     expect(card).toHaveTextContent("shadow, not money");
     expect(card).toHaveTextContent("Nothing changed enough to report since last week.");
-    expect(screen.getByRole("button", { name: "Road to live ›" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Road to live/ })).not.toBeInTheDocument();
   });
 });

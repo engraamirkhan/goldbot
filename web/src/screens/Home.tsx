@@ -10,20 +10,20 @@ import { useDecide } from "./useDecide";
 import { ErrorState, Skeleton } from "../ui";
 import "./home.css";
 
-type Props = { onOpenProgress?: () => void; onOpenLimits?: () => void; onOpenTrades?: () => void };
+type Props = { onOpenLimits?: () => void; onOpenTrades?: () => void };
 
 /** Home is a calm status page (docs/ux/home-v2-2026-10-19.md, owner 2026-10-19): it answers in five seconds "is it OK
  *  and does it need me". Five cards, nothing else: what needs the owner (the unchanged ProposalCard, or the blocks with
  *  their fixes, or "Nothing needs you"), a one-line system status, today's money, the strategies in words and the
  *  learning in one line. Everything about trades lives on the Trades screen (Open, Activity, Summary). */
-export function Home({ onOpenProgress, onOpenTrades }: Props = {}) {
+export function Home({ onOpenTrades }: Props = {}) {
   return (
     <section className="home home-calm">
       <div className="home-needs"><CardBoundary name="Needs you"><NeedsYou onOpenTrades={onOpenTrades} /></CardBoundary></div>
       <div className="home-status"><CardBoundary name="System status"><SystemStatusLine /></CardBoundary></div>
       <div className="home-today"><CardBoundary name="Today"><TodayBrief onOpenTrades={onOpenTrades} /></CardBoundary></div>
       <div className="home-strategies"><CardBoundary name="Your strategies"><StrategiesCard /></CardBoundary></div>
-      <div className="home-learning"><CardBoundary name="Learning"><LearningCard onOpenProgress={onOpenProgress} /></CardBoundary></div>
+      <div className="home-learning"><CardBoundary name="Learning"><LearningCard /></CardBoundary></div>
     </section>
   );
 }

@@ -1,39 +1,33 @@
-"""The Home live feed (owner request 2026-10-19: "show what the system is doing"): `GET /api/activity`, one
-time-ordered list, newest first, merged from what the engines already write. Nothing here writes or decides.
+"""The trade readers behind the Home trades summary (api/trades_overview.py) and the ledger's account lookup: whole
+trades (`Trade`: the opened and the closed event) merged from what the engines already write. Nothing here writes or
+decides. (The Home live feed, `GET /api/activity`, that first used these readers was retired on 2026-11-02.)
 
 Sources, each read as its writer leaves it:
-* shadow trades opened and closed: state/shadow_book.json (engine/shadow.py). Taken trades only: a counterfactual
-  candidate (`taken` False) is a calibration sample, not activity. The book stamps bars by their open time, so a trade
-  shows at its signal bar's close (the entry) and at its exit bar's close.
+* shadow trades opened and closed: state/shadow_book.json (engine/shadow.py), counterfactual candidates included and
+  marked `taken` False (a calibration sample, not a trade). The book stamps bars by their open time, so a trade's
+  events sit at its signal bar's close (the entry) and at its exit bar's close.
 * account positions opened and closed: open ones from state/orders_<account>.json (engine/store.py `OpenTrade`),
   closed ones from the closed-trade record (ops/gates_phase.py `ClosedTrade`, opened at `entry_utc` when recorded).
 * cost-probe orders opened and closed: aux.db `cost_probes` (engine/cost_probe.py `probes`). A probe's open position
-  in the orders file is left to the ledger, so it is never shown twice.
-* entries the engine refused: the store's `decisions` journal (Engine.flush_journal) for the last `JOURNAL_DAYS`, the
-  rows whose action is a refusal (`REFUSED`). Scores below the threshold are every bar's routine and are left out.
+  in the orders file is left to the ledger, so it is never counted twice.
 
 Design rules kept: "accounts appear by config name. Any run of 5 or more digits is cut to its last two"
-(`entry_text.account_name`); no detail text from the journal (it can hold exception text), only the action code and
-the version. A source that cannot be read is named in `unreadable` and the others still show (a dashboard error never
-stops trading and never hides the rest).
-
-The readers return whole trades (`Trade`: the opened and the closed event), so the Home trades summary
-(api/trades_overview.py) counts the same records the feed shows, from one parse.
+(`entry_text.account_name`). A source that cannot be read is named in `unreadable` and the others still read (a
+dashboard error never stops trading and never hides the rest).
 """
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 import pandas as pd
 
-from goldbot.api.schema import ActivityEvent, ActivitySource, ActivityView
+from goldbot.api.schema import ActivityEvent, ActivitySource
 from goldbot.base import FrozenRecord, load_record
 from goldbot.config import tf_seconds
-from goldbot.data.store import Store
 from goldbot.engine import cost_probe
 from goldbot.engine.shadow import ShadowBook
 from goldbot.engine.store import OpenTrade
@@ -43,21 +37,9 @@ from goldbot.telegram.entry_text import account_name
 
 log = logging.getLogger(__name__)
 
-__all__ = ["ACTIVITY_TTL_S", "JOURNAL_DAYS", "MAX_EVENTS", "REFUSED", "Trade", "activity_view", "engines_by_account",
-           "read_trades"]
+__all__ = ["Trade", "engines_by_account", "read_trades"]
 
 T = TypeVar("T")
-
-MAX_EVENTS = 200                    # the most one call returns (and the cache holds)
-ACTIVITY_TTL_S = 10.0               # one build serves every poll for 10 s (the Home panel polls every 15 s)
-JOURNAL_DAYS = 2                    # refusals older than this are history, not activity
-# journal actions that are an entry refused or blocked (engine/runner.py, auto_entry.py, cost_probe.py)
-REFUSED = ("gate:", "gate_at_approval:", "auto_refused", "bridge_refused", "auto_rejected:", "auto_paused:",
-           "drift_halt", "feature_version_mismatch", "uncalibrated_rule_model", "cost_probe_refused:",
-           "cost_probe_budget:", "cost_probe:auto_rejected:")
-# at one instant a close is newer than an open, and both are newer than a refusal
-_RANK: dict[str, int] = {"refused": 0, "shadow_opened": 1, "position_opened": 1, "probe_opened": 1,
-                         "shadow_closed": 2, "position_closed": 2, "probe_closed": 2}
 
 
 def _side(s: int | None) -> Literal["long", "short"] | None:
@@ -75,9 +57,8 @@ def _r(ret: float | None, entry: float, stop: float) -> float | None:
 
 
 class Trade(FrozenRecord):
-    """One trade as the feed reads it, shared with the trades summary (api/trades_overview.py) so each source is parsed
-    once: its opened event (None for a closed-trade record without `entry_utc`) and its closed event (None while
-    open). `taken` False marks a counterfactual shadow candidate; `net` says the closed P&L is net of every cost."""
+    """One trade as the trades summary (api/trades_overview.py) reads it, each source parsed once: its opened event
+    (None for a closed-trade record without `entry_utc`) and its closed event (None while open). `taken` False marks a counterfactual shadow candidate; `net` says the closed P&L is net of every cost."""
     source: ActivitySource
     opened: ActivityEvent | None = None
     closed: ActivityEvent | None = None
@@ -90,7 +71,7 @@ class Trade(FrozenRecord):
 
 
 def _shadow(state: Path) -> list[Trade]:
-    """Every shadow trade, counterfactual candidates included (`taken` False; the feed leaves them out)."""
+    """Every shadow trade, counterfactual candidates included (`taken` False; the summary leaves them out)."""
     if not (state / "shadow_book.json").exists():
         return []
     out: list[Trade] = []
@@ -193,46 +174,3 @@ def _trades(state: Path, by_acc: dict[str, dict[str, Any]], unreadable: list[Act
     return [*_read("shadow", lambda: _shadow(state), unreadable),
             *_read("positions", lambda: _positions(state, by_acc), unreadable),
             *_read("probes", lambda: _probes(state, by_acc), unreadable)]
-
-
-def _version(detail: Any) -> str | None:
-    try:
-        v = json.loads(detail).get("version") if isinstance(detail, str) else None
-    except (ValueError, AttributeError):
-        return None
-    return v if isinstance(v, str) else None
-
-
-def _refusals(store: Store, now: pd.Timestamp, engines: dict[str, dict[str, Any]]) -> list[ActivityEvent]:
-    df = store.read("decisions", start=now - pd.Timedelta(days=JOURNAL_DAYS),
-                    columns=["ts_utc", "account_id", "agent_id", "action", "p", "detail"])
-    if df.empty:
-        return []
-    df = df[df["action"].astype(str).str.startswith(REFUSED)]
-    out = []
-    for row in df.to_dict("records"):
-        acc = row["account_id"] if isinstance(row["account_id"], str) else None
-        p = float(row["p"]) if isinstance(row["p"], (int, float)) and pd.notna(row["p"]) else None
-        out.append(ActivityEvent(ts=pd.Timestamp(row["ts_utc"]), kind="refused",
-                                 account=account_name(acc) if acc else None,
-                                 mode=_mode(engines.get(acc or "", {}).get("mode")),
-                                 agent_id=row["agent_id"] if isinstance(row["agent_id"], str) else None,
-                                 version=_version(row["detail"]), p=p, reason=str(row["action"])))
-    return out
-
-
-def _newest_first(events: Iterable[ActivityEvent]) -> list[ActivityEvent]:
-    return sorted(events, key=lambda e: (e.ts, _RANK[e.kind]), reverse=True)
-
-
-def activity_view(state_dir: str | Path, store: Store | None, now: pd.Timestamp,
-                  engines: list[dict[str, Any]] | None = None, limit: int = MAX_EVENTS) -> ActivityView:
-    """The newest `limit` events from every source (store None: no journal, so no refusals). A source that raises is
-    logged by exception type and named in `unreadable`; the others still show."""
-    state = Path(state_dir)
-    by_acc = engines_by_account(state, engines)
-    unreadable: list[ActivitySource] = []
-    events = [e for t in _trades(state, by_acc, unreadable) if t.taken for e in t.events]
-    if store is not None:
-        events += _read("journal", lambda: _refusals(store, now, by_acc), unreadable)
-    return ActivityView(events=_newest_first(events)[:max(0, limit)], unreadable=unreadable)
