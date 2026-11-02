@@ -97,7 +97,8 @@ describe("Trades > List (130)", () => {
     const row = within(list).getByRole("button", { name: "Box break + close 15m, long, plus £2.10, closed at target" });
     expect(row.textContent).toContain("+£2.10");
     expect(row.textContent).toContain(`+1.50${NB}R`);
-    expect(row.textContent).toContain("LONG · Day/swing lab · target");
+    expect(row.textContent).toContain("XAUUSD · long 0.01 · ");
+    expect(row.textContent).toContain(" · Day/swing lab · target");
     expect(row.textContent).toContain("Close above the 15m box after a squeeze");
     expect(within(list).getByText("CONTROL")).toBeInTheDocument();
     expect(within(list).getByText("COST PROBE")).toBeInTheDocument();

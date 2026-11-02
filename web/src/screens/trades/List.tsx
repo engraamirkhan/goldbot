@@ -17,7 +17,7 @@ import {
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, Card, EmptyState, ErrorState, Segmented, TimeText } from "../../ui";
-import { lots, money } from "../../ui/format";
+import { money } from "../../ui/format";
 import { SymbolTag } from "../../ui/SymbolTag";
 import { SkeletonRows } from "./Now";
 import { SymbolFilter } from "./SymbolFilter";
@@ -143,7 +143,7 @@ function ListRowPhone({ t, onOpen }: { t: TradeRow; onOpen: (id: string) => void
       {/* line 1 what and how much; line 2 when, side, where, how it ended; line 3 the kind in a word and why */}
       <span className="tr-l1"><span className="tr-name">{strategyLabel(t.family_label, t.family, t.timeframe, t.variant)}</span>
         <span className="tr-pnl num">{res.pnl}</span></span>
-      <span className="tr-l2"><span className="tr-meta"><strong className="tr-sym">{t.symbol}</strong> · {t.side}{t.lots != null ? ` ${lots(t.lots)}` : ""} · <TimeText iso={t.opened_utc} /> · {t.account_label} · {endWords(t)}
+      <span className="tr-l2"><span className="tr-meta"><strong className="tr-sym">{t.symbol}</strong> · {t.side}{t.lots != null ? ` ${t.lots}` : ""} · <TimeText iso={t.opened_utc} /> · {t.account_label} · {endWords(t)}
         {t.status === "closed" && t.held_s != null ? ` · ${heldWords(t.held_s, null)}` : ""}</span>
         <span className="tr-r num">{res.r}</span></span>
       <span className="tr-l3 small muted">{badge && <Badge tone="idle">{badge.toUpperCase()}</Badge>} {t.why}</span>

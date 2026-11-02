@@ -6,25 +6,45 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
 import { modeBadge } from "../../lib/home";
+import type { KeyLevelTf } from "../../lib/api";
 import { fmtPrice, GOLD } from "../../lib/instruments";
 import {
   groupOpen, heldWords, kindBadge, KIND_WORDS, moneyOrDash, type OpenGroup, type OpenPositionX, openRowName, type OpenTarget, openTarget, POLL, sideArrow,
   sideWords, signedR, strategyLabel, type TradeKind,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
-import { Badge, Card, EmptyState, ErrorState, TimeText } from "../../ui";
+import { Badge, Card, EmptyState, ErrorState, Segmented, TimeText } from "../../ui";
 import { lots, seconds } from "../../ui/format";
 import { Approvals } from "../Approvals";
+import { KeyLevelsChart } from "../KeyLevelsChart";
 import { CardBoundary } from "../HomeCards";
 import "./trades.css";
 
 const FIRST = 10;
 
-export function TradesNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
+// Key levels sit under the open trades (the Chart tab is retired, ADR 0066; no new page): one instrument at a time,
+// kept in the URL (#/trades/now?sym=US500&tf=4h).
+const KEY_TFS: KeyLevelTf[] = ["15m", "1h", "4h", "1d"];
+
+export function TradesNow({ onOpen, query = "", onQuery }: { onOpen?: (t: OpenTarget) => void; query?: string; onQuery?: (q: string) => void }) {
+  const p = new URLSearchParams(query);
+  const sym = p.get("sym") || GOLD;
+  const tf = (KEY_TFS as string[]).includes(p.get("tf") ?? "") ? (p.get("tf") as KeyLevelTf) : "1h";
+  const set = (k: string, v: string, dflt: string) => {
+    const next = new URLSearchParams(query);
+    if (v === dflt) next.delete(k); else next.set(k, v);
+    onQuery?.(next.toString());
+  };
   return (
     <div className="trades-page">
       <CardBoundary name="Decisions"><Approvals /></CardBoundary>
       <CardBoundary name="Open trades"><OpenNow onOpen={onOpen} /></CardBoundary>
+      <CardBoundary name="Key levels">
+        <Card title="Key levels" label="Key levels">
+          <Segmented label="Timeframe" items={KEY_TFS.map((id) => ({ id, label: id }))} value={tf} onChange={(v) => set("tf", v, "1h")} />
+          <KeyLevelsChart tf={tf} symbol={sym} onSymbol={(s) => set("sym", s, GOLD)} />
+        </Card>
+      </CardBoundary>
     </div>
   );
 }

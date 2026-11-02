@@ -18,7 +18,8 @@ export function TradesTabView({ tab, route, go }: { tab: TradesTab; route: Route
   const close = () => go("trades", tab, null, query, { keepScroll: true });
   return (
     <>
-      {tab === "now" && <TradesNow onOpen={(t) => ("id" in t ? open(t.id) : go("trades", "list", null, t.query))} />}
+      {tab === "now" && <TradesNow onOpen={(t) => ("id" in t ? open(t.id) : go("trades", "list", null, t.query))}
+                                   query={query} onQuery={(q) => go("trades", "now", null, q, { replace: true, keepScroll: true })} />}
       {tab === "list" && <TradesList query={query} onOpen={open}
                                      onQuery={(q) => go("trades", "list", null, q, { replace: true, keepScroll: true })} />}
       {tab === "strategies" && <TradesStrategies query={query} onQuery={(q) => go("trades", "strategies", null, q, { replace: true, keepScroll: true })}

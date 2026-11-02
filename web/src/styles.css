@@ -327,6 +327,13 @@ td a { color: inherit; }
 
 /* v2 review fixes (docs/ux/dashboard-v2.md section 6) */
 @media (min-width: 720px) { main { margin: 0; } }
+.key-levels-panel { margin-top: var(--s4); }
+.key-levels .chart-box { height: auto; }
+.zone rect { fill: var(--text-2); stroke: var(--text-2); }
+.zone.res rect { fill: var(--short); stroke: var(--short); }
+.zone.sup rect { fill: var(--long); stroke: var(--long); }
+.price-now { stroke: var(--accent); stroke-width: 1; }
+.zone-label { fill: var(--text); font-size: 11px; font-family: var(--font); font-variant-numeric: tabular-nums; }
 .mt5-box { border: 1px solid var(--border, var(--line)); border-radius: var(--r-lg, 8px); overflow: hidden; background: var(--surface-2, var(--surface)); }
 .mt5-box > p { margin: 0; padding: var(--s3, 12px); text-align: center; }
 .mt5-open { display: block; line-height: 0; }
