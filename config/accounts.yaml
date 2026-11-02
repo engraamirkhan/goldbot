@@ -301,7 +301,11 @@ accounts:
       max_open_total: 23
       pot_budgets: false
       learning_max_open: 6
-      pots: { scalp: { max_open: 19 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
+      # learning-mi-2026-11-02.md section 5: an intraday pot of 4 slots for the multi-instrument learning pairs (two
+      # pairs per session group at most, so the pot never binds them), carved inside the unchanged max_open_total 23
+      # (scalp 19 + intraday 4 = 23); no £ (pot_budgets false), no cap loosened. Rollback: drop the pot and the LB/LBC
+      # rows below, restart
+      pots: { scalp: { max_open: 19 }, intraday: { max_open: 4 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
         S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
@@ -342,6 +346,22 @@ accounts:
         LCZ4P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ5P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ7P: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        # multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md section 5): the 6 of this host's 19
+        # instruments ranked first, two per session group; each LB-<key> with its dedicated control LBC-<key>, minimum
+        # lot, £8 a trade (section 4: the min-lot loss at 2 x ATR15 is about £5.5 at most; loss cap 20 x 8 = £160).
+        # Blocked in the spec until lane L3 (the engine drops them, logged). Rollback: drop these lines, restart
+        LB-USDJPY: { style: intraday, max_loss: 8.0 }
+        LBC-USDJPY: { style: intraday, max_loss: 8.0, control_share: 0.05 }
+        LB-JP225: { style: intraday, max_loss: 8.0 }
+        LBC-JP225: { style: intraday, max_loss: 8.0, control_share: 0.05 }
+        LB-DE40: { style: intraday, max_loss: 8.0 }
+        LBC-DE40: { style: intraday, max_loss: 8.0, control_share: 0.05 }
+        LB-EURUSD: { style: intraday, max_loss: 8.0 }
+        LBC-EURUSD: { style: intraday, max_loss: 8.0, control_share: 0.05 }
+        LB-US500: { style: intraday, max_loss: 8.0 }
+        LBC-US500: { style: intraday, max_loss: 8.0, control_share: 0.05 }
+        LB-XTIUSD: { style: intraday, max_loss: 8.0 }
+        LBC-XTIUSD: { style: intraday, max_loss: 8.0, control_share: 0.05 }
   vantage-demo:
     broker: vantage
     mode: demo
@@ -454,6 +474,14 @@ accounts:
         # ZCV stays H-81's
         LCZ6V: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ7V: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        # multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md section 5): the 2 of this host's 7
+        # instruments ranked first, one pair per session group beside VI0 and VC1H in the intraday pot; LB-<key> with
+        # its dedicated control LBC-<key>, minimum lot, £8 a trade (loss cap £160). Blocked in the spec until lane L3
+        # (the engine drops them, logged). Rollback: drop these lines, restart
+        LB-BUND10Y: { style: intraday, max_loss: 8.0 }
+        LBC-BUND10Y: { style: intraday, max_loss: 8.0, control_share: 0.05 }
+        LB-UST10Y: { style: intraday, max_loss: 8.0 }
+        LBC-UST10Y: { style: intraday, max_loss: 8.0, control_share: 0.05 }
   icm-depth:
     broker: icm
     mode: demo

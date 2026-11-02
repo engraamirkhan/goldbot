@@ -21,6 +21,7 @@ from goldbot.ops import accounts as acc_mod
 from goldbot.ops import health
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _at, _engine, _rule
+from tests.test_learning_mi import MI_ARMS, MI_CONTROLS  # the multi-instrument learning pairs
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
@@ -196,11 +197,11 @@ def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_sto
 
 
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
-    dedicated = set().union(*LEARNING_CONTROLS.values())
+    dedicated = set().union(*LEARNING_CONTROLS.values()) | MI_CONTROLS
     assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS) | dedicated
     assert {i for i, a in spec.items() if a.role == "cost"} == set(COSTS)
     assert {i for i, a in spec.items() if a.role == "owner_experiment"} == OWNER_EXPERIMENTS
-    assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values())
+    assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values()) | MI_ARMS
     for arm_id, a in spec.items():
         if a.role == "owner_experiment":
             assert (a.entry_refused == "") == (pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL), arm_id

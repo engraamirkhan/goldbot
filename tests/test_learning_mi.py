@@ -1,0 +1,313 @@
+"""Multi-instrument learning arms (docs/research/learning-mi-2026-11-02.md; owner 2026-11-02: "all listed instruments
+live on DEMO", demo strategies as a K-counted learning class: ADR 0061 amendment, ADR 0072).
+
+One opening-range breakout per instrument in the instrument's OWN session (`session_range_break` with
+`session_local`), stop 2 x ATR(14) of its own 15m bars, 1.5 R, 16 bars (8 for the grains), each with a dedicated
+seeded control (`session_range_control`: one entry per eligible session, the same sessions and bracket). The top 8 of
+26 are in the spec and registered on the account that lists the instrument; the other 18 are queued in the doc only
+(no K row before registration). Blocked with S0-/I0-<key> until lane L3 runs an arm on its own instrument.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+import yaml
+
+from goldbot.instruments import GOLD, arm_instrument
+from goldbot.ops import accounts as acc_mod
+from goldbot.research import arm_rules_growth as G
+from goldbot.research import arms
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = ROOT / "config" / "exploration_arms.yaml"
+PREREG = "docs/research/learning-mi-2026-11-02.md"
+# the registered pairs, by account (the doc's ranking, section 5); every other listed instrument is queued
+MI_LEARNING: dict[str, tuple[str, ...]] = {"icm-probe": ("US500", "DE40", "XTIUSD", "EURUSD", "USDJPY", "JP225"),
+                                           "vantage-demo": ("UST10Y", "BUND10Y")}
+MI_ARMS = {f"LB-{k}" for keys in MI_LEARNING.values() for k in keys}
+MI_CONTROLS = {f"LBC-{k}" for keys in MI_LEARNING.values() for k in keys}
+# account -> the pair ids registered there (blocked until lane L3: the engine drops them, logged)
+MI_ON: dict[str, set[str]] = {acc: {f"{g}-{k}" for k in keys for g in ("LB", "LBC")} for acc, keys in MI_LEARNING.items()}
+MAX_LOSS = 8.0
+
+
+@pytest.fixture(autouse=True)
+def _today(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp("2026-11-02", tz="UTC"))
+
+
+def _spec() -> dict[str, arms.Arm]:
+    return {a.id: a for a in arms.load_arms(SPEC)}
+
+
+def _k_script() -> Any:
+    import importlib.util
+    mod_spec = importlib.util.spec_from_file_location("record_learning_k_rows",
+                                                      ROOT / "scripts" / "record_learning_k_rows.py")
+    assert mod_spec is not None and mod_spec.loader is not None
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    return mod
+
+
+# ------------------------------------------------------------------------------------------------ the spec rows
+def test_the_spec_loads_with_every_hash_and_holds_exactly_the_registered_pairs() -> None:
+    spec = _spec()                                       # load_arms checks every config_hash
+    mi = {i for i, a in spec.items() if arm_instrument(a.params) != GOLD and i.startswith(("LB-", "LBC-"))}
+    assert mi == MI_ARMS | MI_CONTROLS
+    for arm_id in MI_ARMS:
+        a = spec[arm_id]
+        assert (a.rule, a.timeframe, a.role, a.max_open) == ("session_range_break", "15m", "learning", 1)
+        assert a.params["stop_atr"] == 2.0 and a.params["target_r"] == 1.5 and "stop_usd" not in a.params
+        assert a.params["hold_bars"] == 16 and set(a.params["session_local"]) == G.SESSION_LOCAL_KEYS
+
+
+def test_every_learning_row_resolves_its_own_matched_control_on_the_same_instrument_and_session() -> None:
+    spec = _spec()
+    for arm_id in MI_ARMS:
+        a = spec[arm_id]
+        block = arms.Learning.model_validate(a.learning)
+        c = spec[block.control]
+        assert block.control == "LBC-" + arm_id.removeprefix("LB-")
+        assert arms.control_match_refusal(a, c) is None
+        assert c.rule == "session_range_control" and c.role == "control" and c.forward_only
+        assert arms.dedicated_control_of(c) == (arm_id,)
+        same = {k: v for k, v in c.params.items() if k != "control"}
+        assert same == a.params                                       # instrument, session, bracket: identical
+
+
+def test_each_learning_block_is_preregistered_with_its_own_k_row_a_45_day_end_and_twenty_times_its_cap() -> None:
+    spec = _spec()
+    accounts = acc_mod.load_accounts(logins=False)
+    text = (ROOT / PREREG).read_text()
+    for acc_id, keys in MI_LEARNING.items():
+        for key in keys:
+            a = spec[f"LB-{key}"]
+            block = arms.Learning.model_validate(a.learning)
+            assert block.prereg == PREREG and (block.since, block.until) == ("2026-11-02", "2026-12-17")
+            assert block.k_id == arms.learning_k_id(a.id, arms.arm_hash(a), PREREG)
+            cap = accounts[acc_id].exploration.arms[a.id].max_loss
+            assert cap == MAX_LOSS and block.loss_cap_gbp == pytest.approx(20 * cap)
+            c = spec[block.control]
+            assert a.id in text and block.k_id in text and c.id in text
+            assert arms.learning_k_id(c.id, arms.arm_hash(c), PREREG) in text
+
+
+def test_the_pairs_stay_blocked_until_lane_l3_trades_an_arm_on_its_own_instrument() -> None:
+    """Today's engine computes every rule on gold bars: a non-gold row must not run before lane L3. Both rows of a pair
+    move together (status is not hashed: the unblock changes no K row)."""
+    spec = _spec()
+    for arm_id in MI_ARMS:
+        c = spec["LBC-" + arm_id.removeprefix("LB-")]
+        assert spec[arm_id].status == c.status == "blocked"
+        assert "L3" in spec[arm_id].note and "L3" in c.note
+
+
+def test_the_queued_instruments_are_in_the_doc_and_not_in_the_spec() -> None:
+    """No K row before registration: a queued instrument is a frozen definition in the doc, never a spec row."""
+    spec = _spec()
+    accs = acc_mod.load_accounts(logins=False)
+    listed = {k for a in accs.values() for k in a.instruments}
+    registered = {k for keys in MI_LEARNING.values() for k in keys}
+    queued = listed - registered
+    assert len(listed) == 26 and len(queued) == 18
+    text = (ROOT / PREREG).read_text()
+    section = text.split("## 5.")[1].split("\n## ")[0]
+    for key in queued:
+        assert f"LB-{key}" not in spec and f"LBC-{key}" not in spec
+        assert f"| {key} |" in section and "queued" in section
+
+
+# ------------------------------------------------------------------------------------------------ the accounts
+def test_each_pair_is_registered_on_the_demo_account_that_lists_its_instrument() -> None:
+    accs = acc_mod.load_accounts(logins=False)
+    for acc_id, keys in MI_LEARNING.items():
+        acc = accs[acc_id]
+        assert acc.mode == "demo" and acc.probe_only and acc.exploration.learning_max_open >= 1
+        for key in keys:
+            assert key in acc.instruments
+            arm, ctl = acc.exploration.arms[f"LB-{key}"], acc.exploration.arms[f"LBC-{key}"]
+            assert arm.style == ctl.style == "intraday" and arm.style in acc.exploration.pots
+            assert arm.sizing == "min_lot" and arm.adds == 0 and arm.control_share is None
+            assert ctl.control_share is not None and ctl.max_loss == arm.max_loss
+
+
+def test_no_pair_lands_on_a_live_or_observe_only_account_or_another_brokers() -> None:
+    every = MI_ARMS | MI_CONTROLS
+    for acc in acc_mod.load_accounts(logins=False).values():
+        mine = every & set(acc.exploration.arms)
+        if acc.mode != "demo" or acc.kind != "trading" or not acc.probe_only:
+            assert not mine, acc.account_id
+        for arm_id in mine:
+            assert arm_id.split("-", 1)[1] in acc.instruments, (acc.account_id, arm_id)
+
+
+def test_the_registered_pairs_fit_the_slots_two_pairs_per_session_group_at_most() -> None:
+    """Section 5's capacity rule: at most two pairs per session group (Tokyo, Europe, New York) on an account, so the
+    pairs' open positions never pass the intraday pot's slots (icm-probe 4) and at most two new learning positions
+    are open at once beside the gold learning arms (learning_max_open 6). Vantage: one pair per group (VI0 and VC1H
+    share the pot)."""
+    spec = _spec()
+    zone_group = {"Asia/Tokyo": "tokyo", "Europe/London": "europe", "Europe/Berlin": "europe",
+                  "America/New_York": "new_york", "America/Chicago": "new_york"}
+    accs = acc_mod.load_accounts(logins=False)
+    for acc_id, keys in MI_LEARNING.items():
+        groups: dict[str, int] = {}
+        for key in keys:
+            g = zone_group[spec[f"LB-{key}"].params["session_local"]["zone"]]
+            groups[g] = groups.get(g, 0) + 1
+        per_group = 2 if acc_id == "icm-probe" else 1
+        assert max(groups.values()) <= per_group, (acc_id, groups)
+        assert 2 * per_group <= accs[acc_id].exploration.pots["intraday"].max_open
+        assert per_group <= accs[acc_id].exploration.learning_max_open
+
+
+def test_each_arm_carries_h61s_intraday_stop_and_each_control_none_of_its_own() -> None:
+    from goldbot.research.arm_stops import load_stop_rules
+    rules = load_stop_rules()
+    assert MI_ARMS <= set(rules.h61) and MI_CONTROLS <= set(rules.none)
+    assert not (MI_ARMS | MI_CONTROLS) & {a for u in rules.units.values() for a in u.arms}
+
+
+# ------------------------------------------------------------------------------------------------ the K rows
+def test_the_k_row_script_writes_one_row_per_pair_member_with_the_others(tmp_path) -> None:
+    rows = _k_script().k_rows(SPEC)
+    mi = {r["arm"] for r in rows.values() if r["arm"] in MI_ARMS | MI_CONTROLS}
+    assert mi == MI_ARMS | MI_CONTROLS
+    assert sum(1 for r in rows.values() if r["config"]["prereg"] == PREREG) == 16
+    for h, r in rows.items():
+        assert h == arms.learning_k_id(r["arm"], r["config"]["arm_config_hash"], r["config"]["prereg"])
+
+
+def test_with_their_k_rows_the_pairs_stay_refused_while_blocked_and_pass_once_l3_unblocks_them(tmp_path,
+                                                                                                 monkeypatch) -> None:
+    """Blocked, a pair is refused by the learning gate too (its control does not run): fail closed twice. The L3
+    unblock (status run on both rows, nothing hashed) is all that is left once the K rows are in."""
+    reg = tmp_path / "research_registry.jsonl"
+    reg.write_text("".join(json.dumps({"config_hash": h, "family": arms.LEARNING_FAMILY}) + "\n"
+                           for h in _k_script().k_rows(SPEC)))
+    monkeypatch.setattr(arms, "REGISTRY_PATH", reg)
+    spec = _spec()
+    for arm_id in MI_ARMS:
+        assert "does not run" in spec[arm_id].entry_refused, arm_id
+    raw = yaml.safe_load(SPEC.read_text())
+    for row in raw["arms"]:
+        if row["id"] in MI_ARMS | MI_CONTROLS:
+            row["status"] = "run"
+    unblocked = tmp_path / "exploration_arms.yaml"
+    unblocked.write_text(yaml.safe_dump(raw, sort_keys=False))
+    got = {a.id: a for a in arms.load_arms(unblocked, root=ROOT, registry=reg)}
+    for arm_id in MI_ARMS | MI_CONTROLS:
+        assert got[arm_id].entry_refused == "" and got[arm_id].status == "run", (arm_id, got[arm_id].entry_refused)
+
+
+def test_without_their_k_rows_the_pairs_are_refused_fail_closed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(arms, "REGISTRY_PATH", tmp_path / "missing.jsonl")
+    spec = _spec()
+    for arm_id in MI_ARMS | MI_CONTROLS:
+        assert spec[arm_id].entry_refused.startswith(arms.LEARNING_RULE), arm_id
+
+
+def test_the_budget_report_counts_the_rows_still_missing_against_the_quarter(tmp_path) -> None:
+    mod = _k_script()
+    reg = tmp_path / "research_registry.jsonl"
+    report = mod.budget_report(reg, SPEC, cap=3500, quarter="2026Q4")
+    assert report["missing"] == len(mod.k_rows(SPEC)) and report["used"] == 0
+    assert report["fits"] and report["cap"] == 3500 and report["quarter"] == "2026Q4"
+    assert mod.budget_report(reg, SPEC, cap=10, quarter="2026Q4")["fits"] is False
+
+
+# ------------------------------------------------------------------------------------------------ the rule
+def _bars(start: str, n: int, close: np.ndarray) -> pd.DataFrame:
+    ts = pd.date_range(start, periods=n, freq="15min", tz="UTC")
+    c = np.asarray(close, dtype=float)
+    return pd.DataFrame({"ts_utc": ts, "open": c, "high": c + 0.1, "low": c - 0.1, "close": c})
+
+
+def _run(arm: arms.Arm, m: pd.DataFrame) -> pd.DataFrame:
+    class Ctx:
+        mid = m
+        close_ts = pd.DatetimeIndex(m["ts_utc"]) + pd.Timedelta(minutes=15)
+        blackout_lo = np.zeros(0, dtype=np.int64)
+        blackout_hi = np.zeros(0, dtype=np.int64)
+    return (G.session_range_control if arm.rule == "session_range_control" else G.session_range_break)(arm, Ctx())  # type: ignore[arg-type]
+
+
+def _arm(rule: str = "session_range_break", **extra: Any) -> arms.Arm:
+    p: dict[str, Any] = {"instrument": "US500", "session_local": {"zone": "America/New_York", "range_from": "09:30",
+                         "range_to": "10:30", "break_to": "12:30"}, "stop_atr": 2.0, "target_r": 1.5, "hold_bars": 16,
+                         **extra}
+    if rule == "session_range_control":
+        p.setdefault("control", "learning:LB-T")
+    return arms.Arm(id="LB-T" if rule == "session_range_break" else "LBC-T", rule=rule, timeframe="15m", params=p)
+
+
+def test_the_own_session_breakout_takes_the_first_close_beyond_the_range_inside_the_break_window() -> None:
+    # Tuesday 2026-11-03 (EST): the range is 14:30-15:30 UTC, the break window closes in (15:30, 17:30] UTC
+    n = 96
+    close = np.full(n, 100.0)
+    start = pd.Timestamp("2026-11-03 00:00", tz="UTC")
+    i_break = int((pd.Timestamp("2026-11-03 16:00", tz="UTC") - start) / pd.Timedelta(minutes=15))
+    close[i_break:] = 101.0                                            # above the range's high (100.1)
+    close[i_break + 2:] = 103.0                                        # a later, bigger close: never a second entry
+    out = _run(_arm(), _bars("2026-11-03 00:00", n, close))
+    assert len(out) == 1 and int(out["idx"].iloc[0]) == i_break and int(out["side"].iloc[0]) == 1
+    assert out["target_r"].iloc[0] == 1.5 and out["max_bars"].iloc[0] == 15
+
+
+def test_a_break_before_the_range_ends_or_after_the_window_never_enters() -> None:
+    n = 96
+    start = pd.Timestamp("2026-11-03 00:00", tz="UTC")
+    late = int((pd.Timestamp("2026-11-03 17:45", tz="UTC") - start) / pd.Timedelta(minutes=15))
+    close = np.full(n, 100.0)
+    close[late:] = 101.0
+    assert _run(_arm(), _bars("2026-11-03 00:00", n, close)).empty
+
+
+def test_the_control_enters_once_per_eligible_session_at_its_seeded_close_inside_the_window() -> None:
+    n = 96 * 3
+    out = _run(_arm("session_range_control"), _bars("2026-11-03 00:00", n, np.full(n, 100.0)))
+    m = _bars("2026-11-03 00:00", n, np.full(n, 100.0))
+    close = pd.DatetimeIndex(m["ts_utc"]) + pd.Timedelta(minutes=15)
+    assert len(out) == 3                                               # Tue, Wed, Thu
+    for i in out["idx"]:
+        t = close[int(i)].tz_convert("America/New_York")
+        assert (t.hour, t.minute) > (10, 30) and (t.hour, t.minute) <= (12, 30)
+
+
+def test_the_session_follows_its_own_citys_clock_across_the_dst_switch() -> None:
+    a = _arm()
+    sessions = G.arm_sessions(a.params)
+    assert [s for s, _ in sessions] == [G.OWN]
+    summer = G._bounds(pd.Timestamp("2026-10-27", tz="UTC"), sessions[0][1])
+    winter = G._bounds(pd.Timestamp("2026-11-03", tz="UTC"), sessions[0][1])
+    assert summer[0].hour == 13 and winter[0].hour == 14                # 09:30 New York: EDT then EST
+
+
+@pytest.mark.parametrize("bad, why", [
+    ({"sessions": ["london_ny"]}, "not both"),
+    ({"session_local": {"zone": "Mars/Base", "range_from": "09:30", "range_to": "10:30", "break_to": "12:30"}},
+     "unknown time zone"),
+    ({"session_local": {"zone": "America/New_York", "range_from": "09:35", "range_to": "10:30", "break_to": "12:30"}},
+     "15m grid"),
+    ({"session_local": {"zone": "America/New_York", "range_from": "09:30", "range_to": "09:45", "break_to": "12:30"}},
+     "at least"),
+    ({"session_local": {"zone": "America/New_York", "range_from": "10:30", "range_to": "09:30", "break_to": "12:30"}},
+     "range_from < range_to"),
+    ({"session_local": {"zone": "America/New_York", "range_from": "09:30", "range_to": "10:30"}}, "exactly"),
+])
+def test_a_malformed_own_session_is_refused_at_load(bad: dict[str, Any], why: str) -> None:
+    with pytest.raises(ValueError, match=why):
+        _arm(**bad)
+
+
+def test_gs1_and_gs1c_keep_their_named_sessions_rows_and_hashes() -> None:
+    spec = _spec()
+    for arm_id, h in (("GS1", "04d238be1c1b9169"), ("GS1C", "4be30e28168b698f")):
+        assert "session_local" not in spec[arm_id].params and arms.arm_hash(spec[arm_id]) == h
+        assert [s for s, _ in G.arm_sessions(spec[arm_id].params)] == ["asia_london", "london_ny"]

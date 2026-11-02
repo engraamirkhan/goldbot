@@ -586,3 +586,13 @@ Prereg `prereg-2026-11-01-cross-asset.md`; results `cross-asset-screen-2026-11.m
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | XA-X1/X2/X3 | Gold lags silver (X1), the USD (X2: USDJPY up, EURUSD down) or the three jointly (X3) on 1m: when the lead's 5m move implies a gold move >= 2 residual sd and gold has done at most half of it, trade gold the implied way, 15m time exit, 1.5 x ATR15 stop, 1.5 x ICM cost of record | **failed** 2026-11-01, 0 of 3 (prereg `f2daf9b1` + amendments `a1876e41`, `4851c5f1`; `cross-asset-screen-2026-11.md`): net mean R X1 -0.097, X2 -0.103, X3 -0.081, 0/8 years positive each; X3 beats its random twin by +0.019 R (gross +$0.03/oz, Bonf-3 p 0.004), about 1/8 of the cost. Retired as a standalone rule; returns only with tick data and a round trip under ~$0.05/oz | K +3 (explore, no registry trials; ~3,023 on the brief's base of 3,020; parallel lanes add their own) | per variant: net mean R > 0 and beats a 4-twin random-entry control, each day-bootstrap Bonferroni-3 p < 0.10, >= 5 of 8 years positive; all FAIL -> 1-15m cross-asset lead-lag on 1m bars retired |
+
+## A29. Multi-instrument learning arms (strategy researcher, 2026-11-02)
+
+Prereg `learning-mi-2026-11-02.md` (owner 2026-11-02: all 26 listed instruments on DEMO; ADR 0061 amendment, ADR 0072).
+Learning class: unqualified demo evidence, never a qualification, never pooled across instruments or with XAUUSD. IDs
+carry the LM- prefix so parallel lanes cannot collide on numbers (renumber the section at merge if A29 is taken).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| LM-1 | Per instrument, an opening-range breakout in the instrument's own session (60-minute range, first 15m close beyond it within 2-3 h, 2 x ATR15 stop, 1.5 R, 4 h; grains 2 h) beats its seeded same-session control net of measured costs | **pre-registered**, 8 of 26 registered (US500, DE40, XTIUSD, EURUSD, USDJPY, JP225 on icm-probe; UST10Y, BUND10Y on vantage-demo), blocked until lane L3; 18 queued in rank order (prereg section 5) | K +16 at registration (8 arms + 8 controls, `record_learning_k_rows.py`); queued rows +2 each only when registered | per instrument at 2026-12-17 or an engine stop: COST-FAIL (cost/R > 0.20 at n >= 30), LEAD (excess >= +0.15 R, paired t >= 2, >= 15 days: one history prereg may follow), else NO-LEAD (underpowered, not a failure). MDE about 0.9 R: edge reads are expected inconclusive; the deliverable is per-instrument cost cells |

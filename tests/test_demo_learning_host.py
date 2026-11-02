@@ -22,6 +22,7 @@ from goldbot.ops.services.engine import engine_limits
 from goldbot.risk.supervisor import Supervisor
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Terminal
+from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
 
 SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
          "KA15", "XC15",                                                                     # wave 2 (8.8, 8.9)
@@ -91,7 +92,8 @@ def test_icm_probe_ships_the_scalp_arms_and_the_cost_probes(accs):
     ex = acc.exploration
     # demo-limits ADR 0072 (2026-11-02): the probe sleeve £30 -> £52; the scalp pot slots only, 23 of 24 host slots
     assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
-    assert ex.enabled and set(ex.arms) == SCALP and set(ex.pots) == {"scalp"}
+    # learning-mi-2026-11-02.md: the multi-instrument pairs in an intraday pot of 4 slots inside the unchanged 23
+    assert ex.enabled and set(ex.arms) == SCALP | MI_ON["icm-probe"] and set(ex.pots) == {"scalp", "intraday"}
     assert ex.pots["scalp"].gbp is None and ex.max_open_total == 23      # one slot of 24 kept for the scheduled probe
     assert ex.budget_share * 220 == pytest.approx(168, abs=0.05)
 
@@ -104,7 +106,8 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         clash = {arm: seen[arm] for arm in acc.exploration.arms if arm in seen}
         assert not clash, f"{aid} shares arms with another host: {clash}"
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
-    assert set(seen) == SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
+    assert set(seen) == (SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
+                         | MI_ON["icm-probe"] | MI_ON["vantage-demo"])
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):

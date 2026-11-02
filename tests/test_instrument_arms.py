@@ -16,9 +16,11 @@ ARMS = REPO_ROOT / "config" / "exploration_arms.yaml"
 
 
 def _per_instrument() -> dict[str, list]:
+    """Each instrument's S0-<key> / I0-<key> random controls (its learning pair, LB-/LBC-<key>, is
+    tests/test_learning_mi.py's)."""
     out: dict[str, list] = {}
     for a in load_arms(ARMS):
-        if arm_instrument(a.params) != GOLD:
+        if arm_instrument(a.params) != GOLD and a.id.startswith(("S0-", "I0-")):
             out.setdefault(arm_instrument(a.params), []).append(a)
     return out
 
@@ -64,6 +66,12 @@ def test_every_instrument_control_is_classified_never_stopped() -> None:
     from goldbot.research.arm_stops import load_stop_rules
     ids = {a.id for rows in _per_instrument().values() for a in rows}
     assert ids <= set(load_stop_rules().none)
+
+
+def test_every_non_gold_arm_is_an_instrument_control_or_a_learning_pair() -> None:
+    for a in load_arms(ARMS):
+        if arm_instrument(a.params) != GOLD:
+            assert a.id.split("-", 1) in ([p, arm_instrument(a.params)] for p in ("S0", "I0", "LB", "LBC")), a.id
 
 
 def test_gold_arms_carry_no_instrument() -> None:

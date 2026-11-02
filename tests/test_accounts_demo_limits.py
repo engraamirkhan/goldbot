@@ -121,7 +121,8 @@ def test_the_three_demo_learning_hosts_carry_the_demo_limits() -> None:
     pots = {k: {s: p.max_open for s, p in accs[k].exploration.pots.items()} for k in DEMO}
     assert accs["icm-demo"].exploration.pots["growth"].gbp == 80        # M1: GS1/GS1C's £80 day unchanged
     assert pots == {"icm-demo": {"scalp": 11, "intraday": 10, "swing": 3, "growth": 2},
-                    "icm-probe": {"scalp": 19}, "vantage-demo": {"scalp": 11, "intraday": 6, "swing": 2}}
+                    "icm-probe": {"scalp": 19, "intraday": 4},     # learning-mi-2026-11-02.md: 4 of the 23
+                    "vantage-demo": {"scalp": 11, "intraday": 6, "swing": 2}}
 
 
 def test_the_cost_probe_shares_grow_and_each_day_still_sums_to_at_most_one() -> None:
