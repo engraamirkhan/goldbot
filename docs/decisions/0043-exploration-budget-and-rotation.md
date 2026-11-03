@@ -273,3 +273,20 @@ improve signals".
 
 Rollback: `pot_budgets: true` with the old £ figures and slots (each account's comment in config/accounts.yaml), then
 restart.
+
+## Amendment 2026-11-03 (multi-instrument demo; trading-safety review of PR #325): X3 per book, in minimum lots
+Incident 2026-11-03: S0-JP225 was refused `same_side` 23 times overnight. JP225 and the bond futures trade whole lots
+and the indices and softs 0.1, so X3's 0.10 lot refused their first minimum lot and no entry on them could pass.
+
+- **X3's net same-side cap is per book, in minimum lots**: `net_lot_cap(volume_min) = max(0.10, 10 x volume_min)`
+  (goldbot/engine/exploration.py), summed over that book's own open trades. Gold is unchanged at 0.10 lot (10 x its
+  0.01 minimum), and so is the £150 gap arithmetic in section 1 for gold.
+- `_send` (the minimum-lot path) and `growth_lots` (a growth arm's size) judge the same cap, so a growth arm on a 0.1-lot
+  index can size up to 1.0 lot net, never to gold's 0.10 figure.
+- Still binding on every book: the RiskGate's risk per trade and its daily and weekly limits across symbols
+  (`multi_symbol`), the bridge's account-wide notional ceiling (6x equity) and MAX_ORDER_LOTS, and every pot, arm and
+  slot cap. The bridge guard ties each magic block to its own symbol (gold's base the account's symbol, each instrument's
+  base its broker symbol), so one book's cap cannot be spent on another symbol.
+
+Rollback: `MAX_NET_MIN_LOTS = 0` keeps 0.10 lot on every book (the non-gold books with a minimum of 0.1 or more then take
+no entry again).
