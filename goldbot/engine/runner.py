@@ -47,6 +47,7 @@ from goldbot.engine import (
     broker_bars,
     capital_flows,
     closed_record,
+    commission,
     cost_probe,
     exploration,
     history,
@@ -214,9 +215,7 @@ class EngineConfig(Record):
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
-    # demo non-gold fill audit 2026-11-03: the broker's commission per lot per side, USD (settings
-    # `costs.commission_per_lot_side_usd[broker]`, passed by ops.services.engine), until the cost table measures it.
-    # The cost and the planned risk count it (`_commission_usd_per_oz`); 0 = none configured
+    # broker commission per lot per side, USD, until the cost table measures it (ADR 0075; 0 = none configured)
     commission_per_lot_side_usd: float = Field(0.0, ge=0)
     max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
     feature_window: int = 800            # decision bars the features are computed on
@@ -2891,49 +2890,17 @@ class Engine:
         """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
         ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
         trained on labels that already pay the spread); the fallback stays the full configured cost (conservative).
-
-        Demo non-gold fill audit 2026-11-03 ("count spread (and commission) in the cost": a book without a table read
-        0.10 R against a spread of 0.52 R): never below the live spread (the active book's `spread_points` in its own
-        `point`; left out for ex_spread) plus the round-trip commission (`_commission_usd_per_oz`), over `atr_usd`.
-        Only ever raises the cost; an unknown spread (a book not refreshed yet) adds nothing, its entries are refused
-        `spread_too_wide` and `stale_data` anyway."""
+        Never below the live spread plus commission (`commission.floor_cost`, ADR 0075)."""
         table = self._cost_table()
         if table is None:
             c: float | None = self.cfg.cost_atr
         else:
             session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
             c = table.round_trip_ex_spread_atr(session, atr_usd) if ex_spread else table.round_trip_atr(session, atr_usd)
-        cost = c if c is not None else self.cfg.cost_atr
-        if not (math.isfinite(atr_usd) and atr_usd > 0):
-            return cost
-        spread = self.state.spread_points * self.cfg.point
-        live = spread if not ex_spread and math.isfinite(spread) and spread > 0 else 0.0
-        return max(cost, (live + self._commission_usd_per_oz()) / atr_usd)
+        return commission.floor_cost(self, c if c is not None else self.cfg.cost_atr, atr_usd, ex_spread)
 
     def _commission_usd_per_oz(self, price: float | None = None) -> float:
-        """The round-trip commission per unit of the active book's contract, in its price units (the Intent's
-        `commission_usd_per_oz`; demo non-gold fill audit 2026-11-03: the planned risk includes it). The cost table's
-        measured per-lot figure, else the broker's prior (`commission_per_lot_side_usd`) for the classes brokers
-        charge by the lot (gold, other metals, FX); index, energy, bond and soft CFDs are priced in their spread, 0.
-        Per lot both sides over the contract size, as `CostTable.round_trip_usd_per_oz`. USD on a USD quote; a USD-base
-        pair quoted in another currency (USDJPY, USDCAD, USDCHF) is converted at its price (`price`, else the last
-        quote's mid; none known: NaN, so the gate refuses `invalid:commission_usd_per_oz`). Another non-USD quote
-        (XAUEUR, XAUAUD) keeps the USD figure: a few percent of a term that is ~1% of a 100 oz stop."""
-        spec = self.book.spec.instrument if self.book.spec is not None else None
-        table = self._cost_table()
-        if table is not None:
-            side, contract = table.commission_per_lot_side_usd, table.contract_size
-        elif spec is None or spec.asset_class in ("metal", "fx"):
-            side, contract = self.cfg.commission_per_lot_side_usd, self.cfg.contract_size
-        else:
-            return 0.0
-        usd = 2 * max(side, 0.0) / contract
-        if spec is None or spec.currency_profit == "USD" or not spec.key.startswith("USD") or usd == 0.0:
-            return usd
-        if price is None:
-            t = self._last_tick
-            price = (t.bid + t.ask) / 2 if t is not None else math.nan
-        return usd * price if math.isfinite(price) and price > 0 else math.nan
+        return commission.usd_per_oz(self, price)
 
     def _drift(self) -> dict:
         """state/drift.json from the daily drift_watch job (cached by mtime): halted agents, size factors and the system

@@ -34,3 +34,13 @@ min-lot scalps £0.06 commission is 25-75% of the £0.08-0.25 planned risk (18/1
 - Small-stop scalps whose stop is under 3.3 spreads stop trading (gold: a $1 stop needs a spread of $0.30 or less).
 - Non-USD metal quotes (XAUEUR, XAUAUD) keep the USD commission figure unconverted (a few percent of a ~1% term).
   A per-symbol measured commission (deal history by symbol) replaces the class prior when a book gets its cost table.
+
+## Reading rule (quant review, 2026-11-03)
+- The S0/S0R random controls use a fixed $3 stop, so the guard refuses them at a different rate than ATR- or
+  structure-stopped edge arms. Every edge-arm vs control read from this change on compares the control only over the
+  entries the edge arm's own stop would admit (spread/stop <= 0.3 at the edge arm's stop), or stratifies by
+  spread/stop. Matched learning controls (Z1P/LCZ1P) are unaffected.
+- Reads that span the deploy of this ADR are split at its deploy timestamp (the generating filter changed). K is
+  unchanged: a filter tightened after the fact is not a new trial.
+- Research replays and twins (goldbot/research) do not apply spread_over_stop yet: a history read of an arm is not
+  compared with its live read across this change until the arm simulators apply the same predicate (follow-up).

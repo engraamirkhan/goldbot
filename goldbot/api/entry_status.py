@@ -216,6 +216,8 @@ REASONS: dict[str, Reason] = {
                              "stops trading.", "wait"),
     "data_recovering": _r("Prices just recovered: waiting a minute to be sure", f"{NOTHING}.", "wait"),
     "spread_too_wide": _r("Spread too wide right now", f"{NOTHING}: it narrows by itself (news or rollover).", "wait"),
+    "spread_over_stop": _r("Spread too wide for this trade's stop",
+                           f"{NOTHING}: the trade would start too close to its stop; it waits for a tighter spread.", "wait"),
     "max_positions": _r("Already the maximum number of open trades",
                         f"{NOTHING}: a new entry is possible once one closes.", "wait"),
     "heat_cap": _r("Too much risk already open", f"{NOTHING}: a new entry is possible once open risk falls.", "wait"),
