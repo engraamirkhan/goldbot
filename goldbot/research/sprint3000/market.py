@@ -173,7 +173,8 @@ def _resample(tape: Tape, key: np.ndarray, tday: np.ndarray, tf: str, dec_of: An
 class Market(FrozenRecord):
     """One window's tape, bars per timeframe (resampled once), each minute's session code (-1 outside), the last
     minute index of its session run (the control's draw range) and its trading day. `memo` caches indicators per
-    process (a spec's ATR(14) on 1h is computed once for all specs that use it)."""
+    process (a spec's ATR(14) on 1h is computed once for all specs that use it); `prepared` holds what the vocabulary's
+prepare hooks built in the parent before the workers start (the memo is not sent to them, `prepared` is)."""
     window: Window
     tape: Tape
     code: np.ndarray
@@ -183,6 +184,7 @@ class Market(FrozenRecord):
     bars: dict[str, Bars]
     years_missing: tuple[int, ...] = ()
     memo: dict[Any, Any] = Field(default_factory=dict)
+    prepared: dict[Any, Any] = Field(default_factory=dict)   # vocab prepare hooks (built once, sent to the workers)
 
     @classmethod
     def from_minutes(cls, m: pd.DataFrame, window: Window, years_missing: tuple[int, ...] = ()) -> Market:

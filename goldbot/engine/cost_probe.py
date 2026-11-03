@@ -832,7 +832,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
                     family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts),
-                    learning_probe=True, account_mode=eng.cfg.mode,
+                    commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode,
                     phase_file=_phase_file(eng), **terms)
     # architect trace 2026-10-25: the probe holds the agent's own time barrier, its shadow trade's (the candidate's
     # max_bars when it carries one), on every account; no probe_only cap
@@ -1054,7 +1054,7 @@ def _send_scheduled(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick:
     terms["volume_max"] = terms["volume_min"]                    # the minimum lot only
     intent = Intent(agent_id=SCHEDULED_ID, side=side, p=0.5, target_atr=1.0, stop_atr=1.0, atr_usd=sch.stop_usd,
                     cost_atr=eng._cost_atr(sch.stop_usd, close_ts), multiplier=1.0, price=price,
-                    timeframe=eng.cfg.decision_tf, family=SCHEDULED_FAMILY, has_target=False, learning_probe=True,
+                    commission_usd_per_oz=eng._commission_usd_per_oz(price), timeframe=eng.cfg.decision_tf, family=SCHEDULED_FAMILY, has_target=False, learning_probe=True,
                     account_mode=eng.cfg.mode, phase_file=_phase_file(eng), purpose="cost_measurement",
                     terminal_trade_mode=_terminal_trade_mode(eng), hold_s=sch.hold_s, probe_headroom=headroom,
                     probe_max_loss=lim.max_loss, **terms)

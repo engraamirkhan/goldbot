@@ -1,0 +1,12 @@
+- Sprint-3000 key-level batch is runnable (R100; not run, no level trial scored). `vocab_levels` registers level_break, level_reject, near_level and room_to_level on the frozen `level_vocab` semantics:
+  - entries read the zones of the previous decision close, filters the book at the close;
+  - nothing acts on a book under 540 days old;
+  - prefix and rewritten-future tests cover 15m/1h/4h, with cuts mid-bar and exactly at a bar close.
+- The 379 level specs form their own batch (amendment C1 ruling e):
+  - `--batch main` still reports them not_evaluable;
+  - `--batch levels` runs only them, with ENS-LV-* ensembles, its own passer chain, plan hash and one-time reads (old ledger rows count as main);
+  - the tape starts 860 days before the first decision (540 maturity + 250 percentile pool + 2 x 5 weekly swing lags). A synthetic test shows a later-starting book equals the whole-history one only after that; 540 alone left differences up to day 767.
+  - the warm-up never goes below the window's `LEVEL_DATA_FLOOR` (quant review F1). Explore stays at 2009-01-01 and never reads the test_old years. Its book matures about 2010-06; the percentile pool holds mature books from about 2011-03.
+- `python scripts/sprint3000_screen.py --validate --batch levels`: 379 specs, 0 pending, 39 null controls, 6 families.
+- Run `--preregister` before any level explore. It adds 12 ENS-LV-* rows, raising K by 12. That run, its K and its budget rows are the orchestrator's and owner's call.
+- The engine hash (`engine_provenance`) has changed. A main-batch confirm now refuses the old explore report, so re-run main explore before any main confirm.

@@ -127,7 +127,8 @@ def test_min_lot_is_used_only_while_it_keeps_risk_within_one_point_two_times_tar
 
 def test_entries_that_would_take_margin_level_below_300_percent_are_refused():
     g = RiskGate()
-    big = g.check(_intent(atr_usd=0.5), _state())       # 1.0 lot x 100 oz x 2400 / 20 = $12k margin on $10k equity
+    # 1.0 lot x 100 oz x 2400 / 20 = $12k margin on $10k equity (a $0.10 spread: within the spread-over-stop guard)
+    big = g.check(_intent(atr_usd=0.5), _state(spread_points=10.0))
     assert not big.allowed and big.reasons == ["margin_level_floor"]
     # an otherwise fine 0.12 lot trade ($1,440 margin) is refused when existing margin already uses most headroom
     assert g.check(_intent(), _state(margin_used=1_500)).allowed

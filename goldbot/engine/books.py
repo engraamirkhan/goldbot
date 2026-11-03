@@ -518,6 +518,16 @@ def symbol_info(eng: Engine) -> SymbolInfo:
     return v
 
 
+def _is_due(book: SymbolBook, now: pd.Timestamp) -> bool:
+    """Ordering hint only: a failure here must never stop the exits that follow (trading-safety L1, 2026-11-03)."""
+    from goldbot.engine import exploration
+    try:
+        return bool(exploration.due(book.__dict__.get("exploration"), now))
+    except Exception:
+        log.exception("exploration.due failed for %s; book keeps its rotation place", book.__dict__["cfg"].symbol)
+        return False
+
+
 def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None,
                  budget_s: float = PASS_BUDGET_S) -> bool:
     """One loop pass over every book: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass) on each book
@@ -529,6 +539,11 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     with a deadline": once `budget_s` (PASS_BUDGET_S) has passed no further book starts its pass, and the books left go first on
     the next one (after gold, whose pass polls the approvals). Gold and the next book in turn always run, so none
     starves however slow the bridge. Exits never wait on the deadline.
+
+    Live demo issue 2026-11-03 (icm-probe, 20 books: the 1m S0 controls fire on every book at once and the later
+    books' decisions passed their 10 s staleness): the books with an exploration decision due (`exploration.due`) run
+    right after gold, the rest after them, each group in the fair rotation; the rotation's next book in turn runs
+    even past the deadline, so due books never starve the others.
 
     A quiet book (`quiet_books`: blocked, holding nothing) takes no part at all: no quote, no exits step, no pass."""
     ok = True
@@ -545,21 +560,27 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
         quotes = PassQuotes(feed if feed is not None else broker)
         rest = [b for b in active if b is not eng.primary]
         start = eng.__dict__.get("_pass_cursor", 0) % len(rest) if rest else 0
-        order = [eng.primary, *rest[start:], *rest[:start]]
+        turn = [*rest[start:], *rest[:start]]
+        now = eng.clock()
+        due = [b for b in turn if _is_due(b, now)]
+        order = [eng.primary, *due, *(b for b in turn if b not in due)]
         for book in order:
             with using(eng, book):
                 ok = _exits_first(eng, quotes, book.__dict__["cfg"].symbol) and ok
+        left: list[SymbolBook] = []
         for i, book in enumerate(order):
-            if i > 1 and time.monotonic() - t0 >= budget_s:
-                eng.__dict__["_pass_cursor"] = (start + i - 1) % len(rest)
-                eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
-                if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
-                    log.warning("%s: pass budget %.1f s spent after %d of %d books; the rest go first next pass",
-                                cfg.account_id, budget_s, i, len(order))
-                deferred = True
-                break
+            if (left or (i > 1 and time.monotonic() - t0 >= budget_s)) and not (turn and book is turn[0]):
+                left.append(book)
+                continue
             with using(eng, book):
                 ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+        if left:
+            eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))
+            eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
+            if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
+                log.warning("%s: pass budget %.1f s spent after %d of %d books (%d due first); the rest go first "
+                            "next pass", cfg.account_id, budget_s, len(order) - len(left), len(order), len(due))
+            deferred = True
     finally:
         eng.__dict__["_pass_was_deferred"] = deferred
         eng.__dict__["broker"] = prev

@@ -619,7 +619,11 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
                               broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
-                              swap_prior=settings_swap(settings), instruments=instruments), broker, agents,
+                              swap_prior=settings_swap(settings), instruments=instruments,
+                              # demo non-gold fill audit 2026-11-03: the cost and the planned risk count commission
+                              commission_per_lot_side_usd=settings.costs.commission_per_lot_side_usd.get(acc.broker,
+                                                                                                         0.0)),
+                 broker, agents,
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
     if shadow_host and eng.store is not None:      # replica agents (box_break_close): carried state, shadow only

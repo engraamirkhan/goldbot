@@ -744,6 +744,21 @@ def test_failed_order_retcode_comes_from_the_decisions_journal(tmp_path):
     assert "retcode 10006" in c.reason
 
 
+def test_failed_order_retcode_reads_the_accounts_own_symbol(tmp_path):
+    """vantage journals gold under XAUUSD+, not settings.symbol: the retcode must still be found."""
+    from goldbot.data.store import Store
+    s = SETTINGS.model_copy(update={"data_root": str(tmp_path / "data")})
+    sent = NOW - pd.Timedelta("1h")
+    orders_file(tmp_path, {"p-bad": order_row("rejected", sent)})
+    journal = pd.DataFrame([{"ts_utc": sent + pd.Timedelta(seconds=2), "account_id": "icm-demo", "agent_id": "trend-0",
+                             "action": "order", "p": None, "mult": None, "proposal_id": None,
+                             "detail": json.dumps({"ok": False, "retcode": 10019, "price": None, "lots": 0.0})}])
+    Store(s.data_root).append("decisions", journal, source="icm-demo", symbol="XAUUSD+", dedupe=False)
+    acct = AccountRef(account_id="icm-demo", symbol="XAUUSD+")
+    c = health.check_failed_orders(make_ctx(tmp_path, settings=s), acct)[0]
+    assert "retcode 10019" in c.reason
+
+
 def test_bridge_health_through_the_tunnel(tmp_path):
     secrets = {"mt5-bridge-url-icm-demo": "http://127.0.0.1:18812"}
 

@@ -1851,6 +1851,21 @@ The reasons (from `goldbot/risk/gate.py`) and what to do:
 | `supervisor_halt` with `engine_heartbeat_future` | An `engine_<account>.json` is stamped more than 5 s ahead of the supervisor's clock: entries stop on every account. Health names the file on the `supervisor` line and fails that `engine:<account>` line. | Check the host clock, then restart that engine (its next state write clears the halt), or move a leftover file aside if that engine no longer runs. |
 | `data_quality_error` | Reserved; the engine does not set it today. | - |
 
+### Every close refused history_gap
+
+`WARN history_gap:<account>` (told on Telegram): over the last 6 h the account's agents were refused `history_gap:<tf>`
+at every decision close and decided nothing else, while `engine_<account>.json` publishes a hole under `history_gap`
+(its `from`/`to`/`open_min`). No specialist entry happens on that account until it clears. The engine re-fills a hole
+from the broker every 30 min (`history_backfill` shows the cut-over and the fill). A hole after the cut-over is filled
+from the broker's minutes; one before it that the release lacks moves the cut-over back to the hole (journal:
+`history: cut-over moved back from ... to ...`), when the broker's 1m bars reach back to it and it is within
+`backfill_max_days` (30). Read only: `sudo journalctl -u goldbot-engine@<account> | grep history`. If the warning
+stays: the broker bars do not reach the hole (older than 30 days, or a terminal with a short chart history) or the
+release lacks a span the broker never had. Re-fetch that release month (`data-dukascopy`, input `months`) so the
+store's release fills it (`reload_release` picks it up without a restart); otherwise it clears when the hole ages out
+of the window (about 62 trading days). Incident 2026-10-26..11-03: vantage-demo, release hole 10-09 20:57 -> 10-12
+00:00 before its 10-19 cut-over, zero specialist orders for eight days.
+
 ### Settings refuse to load: a day anchor
 
 A deploy is refused with "settings.local.yaml does not validate with the target code (keys: risk_day_anchor)" (or

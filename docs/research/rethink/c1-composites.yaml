@@ -1,0 +1,195 @@
+amendment: C1 (2026-11-02)
+rule: equal-weight day composite of explore passers + members with day-summed gross t >= 2; rules whose confirm was read
+  are excluded (TEST-OLD only)
+confirm: once, BH-FDR q=0.10 over singles + composites (one-sided day-bootstrap p), net > 0, >= 5/8 years, n >= 100
+singles:
+- S200-PATTERNS-01
+- S200-PATTERNS-06
+- S200-PATTERNS-19
+- S200-STATS-24
+- S200-STATS-25
+- S200-STATS-26
+- S200-TIME-02
+- S200-TIME-07
+- S200-TREND-01
+- S200-TREND-04
+- S200-TREND-10
+- S200-TREND-15
+- S200-TREND-16
+- S200-TREND-19
+- S200-TREND-20
+- S200-TREND-24
+- S200-TREND-28
+- S200-TREND-31
+- S200-TREND-32
+composites:
+  trend:
+    id: C1-COMP-TREND
+    members:
+    - S200-TREND-01
+    - S200-TREND-04
+    - S200-TREND-10
+    - S200-TREND-15
+    - S200-TREND-16
+    - S200-TREND-19
+    - S200-TREND-20
+    - S200-TREND-24
+    - S200-TREND-28
+    - S200-TREND-31
+    - S200-TREND-32
+    passers:
+    - S200-TREND-01
+    - S200-TREND-04
+    - S200-TREND-10
+    - S200-TREND-15
+    - S200-TREND-16
+    - S200-TREND-19
+    - S200-TREND-20
+    - S200-TREND-24
+    - S200-TREND-28
+    - S200-TREND-31
+    - S200-TREND-32
+    gross_t2_only: []
+    explore_read:
+      n_trades: 8890
+      n_days: 2120
+      day_net_r: 0.0358409553202747
+      day_t: 6.018823948292699
+      years_positive: 8
+      years:
+        '2010': 0.0218
+        '2011': 0.083
+        '2012': 0.0183
+        '2013': 0.045
+        '2014': 0.0361
+        '2015': 0.0088
+        '2016': 0.0258
+        '2017': 0.0474
+      day_gross_r: 0.04256906525883092
+      day_random_side_excess_r: 0.028238646236514658
+  meanrev:
+    id: C1-COMP-MEANREV
+    members:
+    - S200-MEANREV-10
+    - S200-MEANREV-31
+    passers: []
+    gross_t2_only:
+    - S200-MEANREV-10
+    - S200-MEANREV-31
+    explore_read:
+      n_trades: 427
+      n_days: 333
+      day_net_r: 0.06529944424118483
+      day_t: 2.2199415343528024
+      years_positive: 8
+      years:
+        '2010': 0.0151
+        '2011': 0.0895
+        '2012': 0.0749
+        '2013': 0.044
+        '2014': 0.2318
+        '2015': 0.0086
+        '2016': 0.0426
+        '2017': 0.0113
+      day_gross_r: 0.08271542728447778
+      day_random_side_excess_r: 0.08722334531943803
+  patterns:
+    id: C1-COMP-PATTERNS
+    members:
+    - S200-PATTERNS-01
+    - S200-PATTERNS-06
+    - S200-PATTERNS-09
+    - S200-PATTERNS-11
+    - S200-PATTERNS-15
+    - S200-PATTERNS-19
+    passers:
+    - S200-PATTERNS-01
+    - S200-PATTERNS-06
+    - S200-PATTERNS-19
+    gross_t2_only:
+    - S200-PATTERNS-09
+    - S200-PATTERNS-11
+    - S200-PATTERNS-15
+    explore_read:
+      n_trades: 8268
+      n_days: 2052
+      day_net_r: 0.06103538615611427
+      day_t: 3.4068522666833267
+      years_positive: 7
+      years:
+        '2010': -0.0221
+        '2011': 0.0943
+        '2012': 0.0493
+        '2013': 0.0407
+        '2014': 0.0585
+        '2015': 0.1022
+        '2016': 0.0371
+        '2017': 0.1337
+      day_gross_r: 0.0881610289823037
+      day_random_side_excess_r: 0.04433687339576626
+  stats:
+    id: C1-COMP-STATS
+    members:
+    - S200-STATS-03
+    - S200-STATS-17
+    - S200-STATS-24
+    - S200-STATS-25
+    - S200-STATS-26
+    - S200-STATS-31
+    passers:
+    - S200-STATS-24
+    - S200-STATS-25
+    - S200-STATS-26
+    gross_t2_only:
+    - S200-STATS-03
+    - S200-STATS-17
+    - S200-STATS-31
+    explore_read:
+      n_trades: 12307
+      n_days: 2175
+      day_net_r: 0.05161854398679969
+      day_t: 5.178289358225606
+      years_positive: 8
+      years:
+        '2010': 0.005
+        '2011': 0.0302
+        '2012': 0.0375
+        '2013': 0.091
+        '2014': 0.0378
+        '2015': 0.1026
+        '2016': 0.0604
+        '2017': 0.0455
+      day_gross_r: 0.06682170449707506
+      day_random_side_excess_r: 0.0473249392805236
+  time:
+    id: C1-COMP-TIME
+    members:
+    - S200-TIME-02
+    - S200-TIME-04
+    - S200-TIME-05
+    - S200-TIME-07
+    passers:
+    - S200-TIME-02
+    - S200-TIME-07
+    gross_t2_only:
+    - S200-TIME-04
+    - S200-TIME-05
+    explore_read:
+      n_trades: 2586
+      n_days: 1560
+      day_net_r: 0.02379056990050851
+      day_t: 3.957618848834635
+      years_positive: 6
+      years:
+        '2010': 0.0402
+        '2011': 0.0223
+        '2012': 0.0611
+        '2013': -0.0043
+        '2014': 0.0497
+        '2015': -0.0027
+        '2016': 0.0016
+        '2017': 0.0215
+      day_gross_r: 0.02892581492856853
+      day_random_side_excess_r: 0.020969055482582148
+confirm_read_excluded:
+- S200-TREND-03

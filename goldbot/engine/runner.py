@@ -47,6 +47,7 @@ from goldbot.engine import (
     broker_bars,
     capital_flows,
     closed_record,
+    commission,
     cost_probe,
     exploration,
     history,
@@ -214,6 +215,8 @@ class EngineConfig(Record):
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
+    # broker commission per lot per side, USD, until the cost table measures it (ADR 0075; 0 = none configured)
+    commission_per_lot_side_usd: float = Field(0.0, ge=0)
     max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
     feature_window: int = 800            # decision bars the features are computed on
     # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
@@ -1180,7 +1183,8 @@ class Engine:
             self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult, price=price, timeframe=tf, family=agent.family, model_version=self.live_versions.get(agent.agent_id),
-                            swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts), **terms)
+                            swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts),
+                            commission_usd_per_oz=self._commission_usd_per_oz(price), **terms)
             gd = books.check(self, intent, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
                                  throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
             self._note_refusal(agent.agent_id, gd, close_ts)
@@ -2885,13 +2889,18 @@ class Engine:
     def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
         """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
         ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
-        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative)."""
+        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative).
+        Never below the live spread plus commission (`commission.floor_cost`, ADR 0075)."""
         table = self._cost_table()
         if table is None:
-            return self.cfg.cost_atr
-        session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
-        c = table.round_trip_ex_spread_atr(session, atr_usd) if ex_spread else table.round_trip_atr(session, atr_usd)
-        return c if c is not None else self.cfg.cost_atr
+            c: float | None = self.cfg.cost_atr
+        else:
+            session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
+            c = table.round_trip_ex_spread_atr(session, atr_usd) if ex_spread else table.round_trip_atr(session, atr_usd)
+        return commission.floor_cost(self, c if c is not None else self.cfg.cost_atr, atr_usd, ex_spread)
+
+    def _commission_usd_per_oz(self, price: float | None = None) -> float:
+        return commission.usd_per_oz(self, price)
 
     def _drift(self) -> dict:
         """state/drift.json from the daily drift_watch job (cached by mtime): halted agents, size factors and the system

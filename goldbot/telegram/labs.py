@@ -60,7 +60,8 @@ _TF_STYLE = {"1m": "scalp", "5m": "scalp", "15m": "intraday", "30m": "intraday",
 # anything else is "other reason". Policy skips (not taken, no reason) are not refusals and are never shown
 REFUSAL_WORDS = {
     "global_cap": "slots full", "pot_slots": "slots full", "arm_max_open": "slots full",
-    "spread_too_wide": "spread wide", "news_blackout": "news window",
+    "spread_too_wide": "spread wide", "spread_over_stop": "spread too wide for the stop",
+    "news_blackout": "news window",
     "budget": "budget used", "pot": "budget used", "arm_budget": "budget used",
     "stale": "signal too old", "paused_dd": "paused (drawdown)", "weekend_hold": "would hold over the weekend",
     "same_side": "same-side limit", "not_auto": "auto entries off", "arm_cap": "stop over the arm's limit",

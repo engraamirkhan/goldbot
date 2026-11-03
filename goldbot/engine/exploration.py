@@ -998,6 +998,20 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
                     _signal(eng, ex, arm, bars, frame, through, late=late)
 
 
+def due(ex: Exploration | None, now: pd.Timestamp) -> bool:
+    """A decision waits on this book's pass (live demo issue 2026-11-03: on 20 books the 1m controls fire together and
+    "later books' S0 decisions exceed the 10 s stale limit"): a signal is queued, or a 1m/5m arm's minute is past
+    its GRACE_S and not decided yet (`_minutes`). Read only, no broker call; `books.account_pass` runs due books first."""
+    if ex is None:
+        return False
+    if ex.queue:
+        return True
+    through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
+    if ex.last_minute is not None and through <= ex.last_minute:
+        return False
+    return any(a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0 for a in ex.arms.values())
+
+
 def on_pass(eng: Engine, tick: Tick) -> None:
     """Every engine pass with a quote, after its exits and its bar close: queue the arms' new signals and send. Never
     raises (an error is journalled `exploration_error`; the pass and every exit go on)."""
@@ -1874,7 +1888,7 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
                       atr_usd=s.stop_usd, cost_atr=eng._cost_atr(s.stop_usd, now), multiplier=1.0, price=price,
                       timeframe=arm.tf, family=arm.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, now),
-                      learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
+                      commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
                       hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,

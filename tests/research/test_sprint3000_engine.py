@@ -766,7 +766,7 @@ def test_the_real_catalogue_runs_on_a_synthetic_tape_and_keeps_level_specs_as_no
     pick: list[str] = []
     for s in cat.specs:                                  # one spec per (tf, entry, first filter) and some level specs
         key = (s.tf, s.entry.type, s.filters[0].type if s.filters else "")
-        if key not in seen or (s.pending and sum(1 for i in pick if by_id[i].pending) < 5):
+        if key not in seen or (s.batch == "levels" and sum(1 for i in pick if by_id[i].batch == "levels") < 5):
             seen.add(key)
             pick.append(s.id)
     rep = E.run_screen(cat, synthetic_market(days=120, seed=5), workers=2, cache_dir=tmp_path, ids=pick)

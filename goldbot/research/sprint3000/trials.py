@@ -1,8 +1,8 @@
 """Sprint-3000 trials in the program registry (quant review H1): "Every spec counts in K whether it fires or not".
 
 Before the first score, every catalogue spec and every family ensemble (one candidate and one null-control ensemble
-per family, the most the ensemble stage can form) is written as a PRE-REGISTRATION row (`TrialRegistry.preregister`,
-queue=False, rule_ref = the C1 amendment). A pre-registration is a promise, not a look: it takes no trial-budget slot
+per family, the most the ensemble stage can form; the level batch forms its own, ENS-LV-*, per family of its specs) is
+written as a PRE-REGISTRATION row (`TrialRegistry.preregister`, queue=False, rule_ref = the C1 amendment). A pre-registration is a promise, not a look: it takes no trial-budget slot
 and does not raise the registry's count, so this module never touches `research.trial_budget_quarter` or its
 overrides. Turning these rows into trial rows after the run is a budget decision for the owner (the quarterly cap is
 500 at most, the catalogue holds 3,000): the result rows are not written here.
@@ -31,6 +31,11 @@ def planned_rows(cat: V.Catalogue) -> list[tuple[str, dict[str, Any]]]:
         for ens in (f"ENS-{fam}", f"ENS-NULL-{fam}"):
             rows.append((FAMILY_PREFIX + fam, {"sprint3000": ens, "catalogue_sha256": cat.sha256,
                                                "ensemble_of_family": fam}))
+    # the level batch's own ensembles (amendment C1 ruling e); the main rows above keep their config hashes
+    for fam in dict.fromkeys(s.family for s in cat.specs if s.batch == "levels"):
+        for ens in (f"ENS-LV-{fam}", f"ENS-LV-NULL-{fam}"):
+            rows.append((FAMILY_PREFIX + fam, {"sprint3000": ens, "catalogue_sha256": cat.sha256,
+                                               "ensemble_of_family": fam, "batch": "levels"}))
     return rows
 
 

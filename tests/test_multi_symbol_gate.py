@@ -218,9 +218,10 @@ def test_group_cap_rates_at_one_to_five():
     gate = RiskGate(RiskLimits())
     bund = _eurusd(correlation_group="rates", leverage_class="bond", price=130.0, contract_oz=1000.0, atr_usd=0.5,
                    point=0.01)
-    # 30% x 5 x 10,000 = 15,000; 0.10 lot is 13,000
-    assert gate.check(bund, _state(group_notional={"rates": 1_000.0}), NOW).allowed
-    assert gate.check(bund, _state(group_notional={"rates": 3_000.0}), NOW).reasons == ["group_exposure_cap"]
+    # 30% x 5 x 10,000 = 15,000; 0.10 lot is 13,000 (a 0.10 spread on the 0.5 stop, within the spread-over-stop guard)
+    assert gate.check(bund, _state(group_notional={"rates": 1_000.0}, spread_points=10.0), NOW).allowed
+    assert gate.check(bund, _state(group_notional={"rates": 3_000.0}, spread_points=10.0), NOW).reasons == \
+        ["group_exposure_cap"]
 
 
 def test_unknown_or_invalid_group_exposure_refuses_entries():
@@ -305,8 +306,8 @@ def test_profit_currency_conversion_is_never_guessed():
 
 
 def test_the_stop_floor_uses_the_instruments_point():
-    d = RiskGate().check(_eurusd(stops_level_points=100.0, atr_usd=0.0001), _state(spread_points=10.0), NOW)
-    assert d.stop_distance == pytest.approx((100 + 10) * 0.00001)      # the gold point (0.01) would make it 1.10
+    d = RiskGate().check(_eurusd(stops_level_points=100.0, atr_usd=0.0001), _state(spread_points=1.0), NOW)
+    assert d.stop_distance == pytest.approx((100 + 1) * 0.00001)       # the gold point (0.01) would make it 1.01
 
 
 # ---------------------------------------------------------------------------------------------- XAUUSD unchanged
@@ -321,6 +322,7 @@ def test_xauusd_gate_decisions_byte_identical_with_the_registry_terms(monkeypatc
     def explicit(mod: Any = grid.gate_module, **kw: Any) -> Any:
         return original(mod, **{**terms, **kw})
     monkeypatch.setattr(grid, "_intent", explicit)
+    monkeypatch.setattr(grid.gate_module, "spread_over_stop", lambda *a: False)   # the golden predates that guard
     got = grid._grid()
     diff = {k: (want[k], got[k]) for k in want if want[k] != got[k]}
     assert set(got) == set(want) and not diff, diff

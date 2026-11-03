@@ -1,0 +1,5 @@
+id: R101
+requirement: 'ADR 0075: no entry whose spread exceeds risk.max_spread_stop_frac (0.3) of its requested stop, on every entry path (signals, approval re-check, exploration, learning and cost probes, pyramid adds); the planned risk and the cost count the round-trip commission; exits are never gated'
+status: implemented
+code: goldbot/risk/gate.py (spread_over_stop in RiskGate.check); goldbot/risk/sizing.py (commission in risk per lot); goldbot/engine/commission.py (usd_per_oz, floor_cost); goldbot/engine/runner.py (Intent.commission_usd_per_oz, _cost_atr); goldbot/config.py (risk.max_spread_stop_frac); goldbot/api/entry_status.py (owner text)
+test: tests/test_spread_stop_guard.py

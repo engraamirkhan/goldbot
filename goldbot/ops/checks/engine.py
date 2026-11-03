@@ -19,6 +19,7 @@ from goldbot.ops.checks._base import (
     LOOP_STARTING_FAIL_S,
     LOOP_WARN_S,
     QUOTE_INVALID_FAIL_S,
+    AccountRef,
     Check,
     Status,
     _age,
@@ -297,13 +298,71 @@ def check_tick_errors(ctx: HealthContext, account_id: str) -> Check | None:
                         f"were blocked until a clean decision bar; read the engine log")
 
 
-def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp) -> list[tuple[pd.Timestamp, str, Any]]:
-    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal; [] when it cannot be read."""
+HISTORY_GAP_WINDOW_H = 6       # decisions journal read back this far for history_gap:<account>
+HISTORY_GAP_MIN_CLOSES = 4     # refused closes, spread over at least half the window, before it warns
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=45, pass_account=True)
+def check_history_gap(ctx: HealthContext, account: AccountRef) -> Check | None:
+    """history_gap:<account> (vantage-demo 2026-10-26..11-03: a release hole before the account's cut-over refused
+    every specialist close for eight days and nothing said so). Design rule: no decision on a window with a hole
+    (engine/history.py `refuse`); a hole the background fill cannot close starves the account, so it must be seen.
+
+    WARN, and the owner is told (NOTIFY_ON_WARN), when the engine publishes a hole now (`history_gap` in
+    engine_<account>.json) and over the last HISTORY_GAP_WINDOW_H hours at least HISTORY_GAP_MIN_CLOSES decision closes,
+    spread over at least half the window, refused `history_gap:<tf>` while the refused agents journalled no other
+    decision. OK while a published hole is younger than that, or once it is gone but refusals are still in the window
+    (so the warning is announced as recovered). The journal is read under the account's own symbol (vantage gold is
+    XAUUSD+). None without settings, an engine report, or any hole or refusal; reporting only."""
+    if ctx.settings is None:
+        return None
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account.account_id}.json")
+    except (ValueError, OSError):
+        return None                                  # engine:<account> reports a missing or unreadable file
+    name = f"history_gap:{account.account_id}"
+    raw = e.get("history_gap") if isinstance(e, dict) else None
+    gaps = {tf: g for tf, g in raw.items() if isinstance(g, dict)} if isinstance(raw, dict) else {}
+    from goldbot.data.store import Store
+    since = ctx.now - pd.Timedelta(hours=HISTORY_GAP_WINDOW_H)
+    d = Store(ctx.settings.data_root).read("decisions", source=account.account_id, symbol=account.symbol,
+                                           start=since, end=ctx.now + pd.Timedelta(seconds=1))   # end is exclusive
+    act = d["action"].astype(str) if not d.empty else pd.Series(dtype=str)
+    hit = act.str.startswith("history_gap:")
+    refused = d[hit] if not d.empty else d
+    if not gaps:
+        if refused.empty:
+            return None
+        return Check(name=name, status="ok", reason="every evaluated decision window is unbroken again")
+    agents = set(refused["agent_id"].astype(str)) if not refused.empty else set()
+    closes = pd.DatetimeIndex(pd.to_datetime(refused["ts_utc"], utc=True)).unique() if not refused.empty \
+        else pd.DatetimeIndex([], tz="UTC")
+    decided = bool((d["agent_id"].astype(str).isin(agents) & ~hit).any()) if agents else False
+    holes = "; ".join(f"{tf}: {g.get('from')} -> {g.get('to')} ({g.get('open_min')} open min)"
+                      for tf, g in sorted(gaps.items()))
+    starved = (len(closes) >= HISTORY_GAP_MIN_CLOSES and not decided
+               and closes.max() - closes.min() >= pd.Timedelta(hours=HISTORY_GAP_WINDOW_H / 2))
+    if not starved:
+        return Check(name=name, status="ok",
+                     reason=(f"hole published ({holes}); {len(closes)} refused close(s) in {HISTORY_GAP_WINDOW_H} h: "
+                             "the background fill is still closing it")[:600])
+    tfs = sorted({a.split(":", 1)[1] for a in refused["action"].astype(str)})
+    return Check(name=name, status="warn",
+                 reason=(f"{len(closes)} closes in {HISTORY_GAP_WINDOW_H} h refused history_gap:{','.join(tfs)} for "
+                         f"{len(agents)} agent(s) that decided nothing else: no specialist entry on this account; "
+                         f"{holes}; the broker fill has not closed it (history_backfill in the engine state, RUNBOOK "
+                         "'Every close refused history_gap')")[:600])
+
+
+def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp,
+                           symbol: str | None = None) -> list[tuple[pd.Timestamp, str, Any]]:
+    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal under the account's own gold symbol
+    (vantage: XAUUSD+); [] when it cannot be read."""
     if ctx.settings is None:
         return []
     from goldbot.data.store import Store
     try:
-        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=ctx.settings.symbol, start=since, end=ctx.now)
+        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=symbol or ctx.settings.symbol, start=since, end=ctx.now)
         if d.empty:
             return []
         d = d[d["action"] == "order"]
@@ -318,11 +377,13 @@ def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timest
         return []
 
 
-@register_check("account", block=BLOCK_ACCOUNT, pos=60, guard="order_failed")
-def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
+@register_check("account", block=BLOCK_ACCOUNT, pos=60, guard="order_failed", pass_account=True)
+def check_failed_orders(ctx: HealthContext, account: AccountRef | str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
     announced once (NOTIFY_ON_WARN), with account, side, lots and the retcode from the decisions journal."""
+    account_id = account if isinstance(account, str) else account.account_id
+    symbol = None if isinstance(account, str) else account.symbol
     f = ctx.state_dir / f"orders_{account_id}.json"
     if not f.exists():
         return []
@@ -335,7 +396,7 @@ def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     recent = [(cid, r, pd.Timestamp(r["ts_utc"])) for cid, r in rows if r.get("ts_utc") and pd.Timestamp(r["ts_utc"]) >= since]
     if not recent:
         return []
-    journal = _failed_order_retcodes(ctx, account_id, since)
+    journal = _failed_order_retcodes(ctx, account_id, since, symbol)
     out = []
     for cid, r, ts in sorted(recent, key=lambda x: x[2]):
         rc = next((code for jts, agent, code in journal
