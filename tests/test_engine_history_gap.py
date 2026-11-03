@@ -490,3 +490,80 @@ def test_reload_leaves_a_hole_after_the_cut_over_to_the_broker_fill(tmp_path):
     eng, _, _ = _holed_engine(tmp_path)
     eng.history.cutover = pd.Timestamp("2025-03-05 01:00", tz="UTC")
     assert history.reload_release(eng, pd.Timestamp("2025-03-05 23:00", tz="UTC")) == 0
+
+
+# ----------------------------------------------- a release hole the release never fills (vantage-demo 2026-10-26..11-03)
+# The release lacks 2026-10-09 20:57 -> 10-12 00:00 (the Sunday open); vantage-demo's own minutes start 10-19, so the
+# hole sat before its cut-over: the broker fill only probed it (keep=False), found the broker had minutes there, and
+# every 15m/30m/1h/4h close refused `history_gap` for eight days. icm-demo's cut-over (10-05) put the same span on the
+# broker's feed, so it never saw the hole.
+REL_HOLE = pd.Timestamp("2025-03-05 13:00", tz="UTC")
+OWN_FROM = pd.Timestamp("2025-03-10", tz="UTC")           # the broker's stored minutes (the cut-over) start here
+
+
+def _release_holed_store(tmp_path: Path) -> None:
+    """Release minutes to OWN_FROM with a 2h hole the release never fills, the broker's own minutes from OWN_FROM."""
+    rel = ticks_to_1m(TICKS[TICKS["ts_utc"] < OWN_FROM])
+    rel = rel[(rel["ts_utc"] < REL_HOLE) | (rel["ts_utc"] >= REL_HOLE + pd.Timedelta(hours=2))]
+    store = Store(tmp_path / "data")
+    store.append("bars_1m", rel, source="dukascopy")
+    store.append(LIVE_TABLE, ticks_to_1m(TICKS[(TICKS["ts_utc"] >= OWN_FROM) & (TICKS["ts_utc"] < LIVE_FROM)]),
+                 source="icm", symbol="XAUUSD")
+
+
+def test_a_release_hole_before_the_cut_over_moves_the_cut_over_to_the_broker_feed_at_the_hole(tmp_path):
+    _release_holed_store(tmp_path)
+    rates = _mt5_rates(TICKS[TICKS["ts_utc"] < LIVE_FROM])
+    broker = ShortTicksLongBars(TICKS.iloc[:0], rates)
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, broker)
+    assert eng.history.cutover == OWN_FROM and history.window_gaps(eng, eng.bars_1m)     # the hole, before the cut-over
+    _settle(eng)
+    # one feed per window, one cut-over: release minutes before the hole, the broker's from it on
+    assert eng.history.cutover == REL_HOLE and pd.Timestamp(eng.history.backfill["cutover"]) == REL_HOLE
+    assert history.window_gaps(eng, eng.bars_1m) == []
+    b = eng.bars_1m.set_index("ts_utc")
+    release = ticks_to_1m(TICKS[TICKS["ts_utc"] < REL_HOLE]).set_index("ts_utc")
+    pd.testing.assert_frame_equal(b.loc[b.index < REL_HOLE, release.columns], release, check_dtype=False)
+    rebased = b[(b.index >= REL_HOLE) & (b.index < OWN_FROM)]
+    want = history.rates_to_bars(rates, POINT).set_index("ts_utc")
+    want = want[(want.index >= REL_HOLE) & (want.index < OWN_FROM)]
+    pd.testing.assert_frame_equal(rebased[want.columns], want, check_dtype=False)
+    own = ticks_to_1m(TICKS[(TICKS["ts_utc"] >= OWN_FROM) & (TICKS["ts_utc"] < LIVE_FROM)]).set_index("ts_utc")
+    pd.testing.assert_frame_equal(b.loc[b.index >= OWN_FROM, own.columns], own, check_dtype=False)   # live minutes win
+    # stored, so a restart keeps the earlier cut-over and the whole window
+    again = _engine(tmp_path, **FAST)
+    again.warm_start(LIVE_FROM)
+    assert again.history.cutover == REL_HOLE and history.window_gaps(again, again.bars_1m) == []
+    # entries resume
+    decisions = _feed(eng, TICKS[(TICKS["ts_utc"] >= LIVE_FROM) & (TICKS["ts_utc"] < LIVE_FROM + pd.Timedelta(days=2))])
+    assert decisions and not any(d["action"].startswith("history_gap") for d in decisions)
+
+
+def test_the_cut_over_stays_and_entries_stay_refused_when_the_broker_bars_do_not_reach_the_hole(tmp_path):
+    """Fail closed: a broker pull that starts after the hole cannot vouch for one feed from the hole on."""
+    _release_holed_store(tmp_path)
+    rates = _mt5_rates(TICKS[(TICKS["ts_utc"] >= REL_HOLE + pd.Timedelta(hours=6)) & (TICKS["ts_utc"] < LIVE_FROM)])
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    _settle(eng)
+    assert eng.history.cutover == OWN_FROM
+    assert [g.start for g in history.window_gaps(eng, eng.bars_1m)] == [REL_HOLE]
+
+
+def test_a_cut_over_that_moved_while_the_fill_ran_discards_its_broker_minutes(tmp_path):
+    _release_holed_store(tmp_path)
+    eng = _engine(tmp_path, **FAST)
+    gate = threading.Event()
+
+    class Gated(ShortTicksLongBars):
+        def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
+            gate.wait(30)
+            return super().get_bars(symbol, tf, n)
+
+    eng.warm_start(LIVE_FROM, Gated(TICKS.iloc[:0], _mt5_rates(TICKS[TICKS["ts_utc"] < LIVE_FROM])))
+    moved = OWN_FROM + pd.Timedelta(days=1)
+    eng.history.cutover = moved
+    gate.set()
+    _settle(eng)
+    assert eng.history.cutover == moved and history.window_gaps(eng, eng.bars_1m)

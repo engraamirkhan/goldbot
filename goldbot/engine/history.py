@@ -15,6 +15,11 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   engine's session table calls open refuse that timeframe's entries, journalled `history_gap:<tf>`, unless a broker
   pull covered the span (the broker had no ticks then: a real closure, e.g. a holiday the table calls open). A window
   with a hole is re-filled from the broker in the background every REFILL_EVERY of engine clock.
+- A hole before the cut-over that the release cannot fill moves the cut-over back to the hole (`rebase`; vantage-demo
+  2026-10-26..11-03: the release lacked the 10-11 Sunday open, the account's own minutes began 10-19, and every close
+  refused for eight days). The broker's 1m bars from the hole to the old cut-over replace the release minutes there,
+  so the window stays one feed per span with one cut-over; only when a good bar pull reaches back to the hole (fail
+  closed), only within backfill_max_days, and only if the cut-over has not moved while the fill ran.
 """
 from __future__ import annotations
 
@@ -211,8 +216,10 @@ class HistoryFill:
 
     def __init__(self, broker: Any, symbol: str, spans: list[tuple[Span, bool]], *, page_ticks: int, budget_s: float,
                  clock: Callable[[], pd.Timestamp] | None = None, sleep: Callable[[float], None] = time.sleep,
-                 sessions: SessionTable = DEFAULT_SESSIONS):
+                 sessions: SessionTable = DEFAULT_SESSIONS, rebase: Span | None = None):
         self.broker, self.symbol, self.spans, self.page_ticks = broker, symbol, spans, page_ticks
+        self.rebase = rebase                  # (oldest pre-cut-over hole, cut-over): the broker's bars for a new cut-over
+        self.rebase_bars: pd.DataFrame | None = None     # set only when a good bar pull reached back to rebase[0]
         self.sessions = sessions              # the engine's bar table (ADR 0062)
         clk = clock or (lambda: pd.Timestamp.now("UTC"))
         self.pace = _Deadline(clk, sleep, pause_s=PAUSE_S, page_limit_s=PAGE_LIMIT_S, budget_s=budget_s)
@@ -226,7 +233,16 @@ class HistoryFill:
     def _run(self) -> None:
         try:
             rates = BrokerRates(self.broker, self.symbol, self.pace, self.sessions)
-            since = min(s[0] for s, _ in self.spans) if self.spans else None
+            starts = [s[0] for s, _ in self.spans] + ([self.rebase[0]] if self.rebase is not None else [])
+            since = min(starts) if starts else None
+            if self.rebase is not None and since is not None:
+                lo, hi = self.rebase
+                try:
+                    if rates.vouches(lo, since):            # fail closed: the pull must reach back to the hole
+                        self.rebase_bars = rates.minutes(lo, hi, since=since)
+                except PullDeferred:
+                    self.error = "budget"
+                    return
             for span, keep in self.spans:
                 bars, covered, err = pull_bars(self.broker, self.symbol, span, page_ticks=self.page_ticks,
                                                pace=self.pace, keep=keep, rates=rates, since=since,
@@ -363,15 +379,18 @@ def start_fill(eng: Engine, now: pd.Timestamp) -> None:
         h.backfill["cutover"] = tail.isoformat()
     cut = h.cutover if h.cutover is not None else tail
     spans: list[tuple[Span, bool]] = [((tail, now.floor("min")), True)] if tail < now.floor("min") else []
+    rebase: Span | None = None
     if not eng.bars_1m.empty:
         for g in open_gaps(pd.DatetimeIndex(eng.bars_1m["ts_utc"]), eng.sessions, max_open_min=cfg.history_gap_max_min,
                            covered=h.covered):
             if g.end > floor:
                 spans.append(((max(g.start, floor), g.end), bool(g.start >= cut)))
+            if h.cutover is not None and floor <= g.start < h.cutover and (rebase is None or g.start < rebase[0]):
+                rebase = (g.start, h.cutover)         # the release cannot fill it (reload_release ran): move the cut-over
     if not spans:
         return
     h.fill = HistoryFill(h.broker, cfg.symbol, spans, page_ticks=cfg.backfill_page_ticks, budget_s=cfg.backfill_budget_s,
-                         sessions=weekend_lane.bar_table(eng))
+                         sessions=weekend_lane.bar_table(eng), rebase=rebase)
     h.last_fill = now
     h.backfill.update({"from": spans[0][0][0].isoformat(), "running": True})
     log.info("history fill started in the background: %d spans from %s", len(spans), spans[0][0][0])
@@ -385,6 +404,7 @@ def absorb(eng: Engine) -> bool:
     if f is None or not f.done.is_set():
         return False
     h.fill = None
+    rebased = _rebase(eng, f)
     # a span counts as covered only where pulled bars can be merged (at or after the cut-over) or the broker had none
     # (keep=False spans are added by fill_spans only when empty); never a kept span before the cut-over
     cut = h.cutover
@@ -393,7 +413,7 @@ def absorb(eng: Engine) -> bool:
     got = pd.concat(f.bars, ignore_index=True) if f.bars else pd.DataFrame()
     h.backfill.update({"bars": int(h.backfill["bars"]) + len(got), "error": f.error, "running": False})
     if got.empty:
-        return False
+        return rebased
     if h.cutover is None:
         h.cutover = pd.Timestamp(got["ts_utc"].min())
         h.backfill["cutover"] = h.cutover.isoformat()
@@ -403,6 +423,30 @@ def absorb(eng: Engine) -> bool:
     eng.bars_1m = merged.tail(eng.cfg.max_bars_in_memory).reset_index(drop=True)
     eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None    # bars inserted before the last: rebuild
     _write(eng, got)
+    return True
+
+
+def _rebase(eng: Engine, f: HistoryFill) -> bool:
+    """Move the cut-over back to the oldest pre-cut-over hole the release could not fill: the broker's bars in
+    [hole, old cut-over) replace the release minutes there (one feed per span, one cut-over) and go to the store, so a
+    restart keeps the earlier cut-over. Nothing changes when the bar pull did not reach the hole, when it found no
+    minutes, or when the cut-over moved while the fill ran. True when bars changed."""
+    h = eng.history
+    if f.rebase is None or f.rebase_bars is None or f.rebase_bars.empty or h.cutover != f.rebase[1]:
+        return False
+    lo, old = f.rebase
+    bars = f.rebase_bars
+    ts = eng.bars_1m["ts_utc"]
+    keep = eng.bars_1m[(ts < lo) | (ts >= old)]
+    merged = pd.concat([keep, bars]).drop_duplicates("ts_utc", keep="first").sort_values("ts_utc", kind="stable")
+    eng.bars_1m = merged.tail(eng.cfg.max_bars_in_memory).reset_index(drop=True)
+    eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None
+    h.cutover = lo
+    h.backfill["cutover"] = lo.isoformat()
+    h.backfill["bars"] = int(h.backfill["bars"]) + len(bars)
+    _write(eng, bars)
+    log.warning("history: cut-over moved back from %s to %s: the release lacks that hole, %d broker minutes replace "
+                "the release from it on", old, lo, len(bars))
     return True
 
 
