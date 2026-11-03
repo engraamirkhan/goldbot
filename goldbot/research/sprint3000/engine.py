@@ -24,6 +24,10 @@ Conventions (sprint-3000 brief; amendments W2 and C1, which overrides the cost a
 - DSR is reported at program K and K_eff (this run's specs clustered by daily-return correlation), never gated.
 - Null controls (the catalogue's grade-D specs): more than 10% of them passing explore voids the run; any passing
   confirm or test_old marks it "engine audit required".
+- Batches, amendment C1 ruling e: "The 379 specs that use the ADDENDUM A level types ... form a separate later batch
+  ... That batch has its own ensembles and its own BH family. In this batch's reports they show as not_evaluable".
+  `batch="main"` reports the level specs not_evaluable; `batch="levels"` runs only them, with ENS-LV-* ensembles, its
+  own passer chain (a report of one batch is never the passers of the other) and its own one-time reads.
 Results hold summary statistics only: no trade row leaves the process."""
 from __future__ import annotations
 
@@ -679,17 +683,22 @@ class EnsembleResult(FrozenRecord):
     verdict: str = "FROZEN"
 
 
-def build_ensembles(results: Sequence[SpecResult], rules: PassRules) -> list[Ensemble]:
+ENSEMBLE_PREFIX: dict[str, str] = {"main": "ENS-", "levels": "ENS-LV-"}
+
+
+def build_ensembles(results: Sequence[SpecResult], rules: PassRules, batch: V.Batch = "main") -> list[Ensemble]:
     """Per family: its explore passers and every evaluated member with per-trade gross t >= min_gross_t (rank order);
     a family with fewer than min_members has no ensemble. Null controls never join a family ensemble (quant review
-    B1): they form ENS-NULL-<family> by the same rule, a control that must not pass."""
+    B1): they form ENS-NULL-<family> by the same rule, a control that must not pass. The level batch's are
+    ENS-LV-<family> and ENS-LV-NULL-<family> (its own ensembles, amendment C1 ruling e)."""
+    pre = ENSEMBLE_PREFIX[batch]
     fams: dict[tuple[str, bool], list[str]] = {}
     for x in sorted(results, key=lambda s: s.rank):
         if x.status != "evaluated":
             continue
         if x.passed or (x.gross_t is not None and x.gross_t >= rules.ensemble.min_gross_t):
             fams.setdefault((x.family, x.null_control), []).append(x.id)
-    out = [Ensemble(id=f"ENS-NULL-{f}" if null else f"ENS-{f}", family=f, members=tuple(m), null_control=null)
+    out = [Ensemble(id=f"{pre}NULL-{f}" if null else f"{pre}{f}", family=f, members=tuple(m), null_control=null)
            for (f, null), m in fams.items() if len(m) >= rules.ensemble.min_members]
     return sorted(out, key=lambda e: (e.null_control, e.id))
 
@@ -765,6 +774,7 @@ class ScreenReport(FrozenRecord):
     engine_sha256: str = ""                                   # the engine, CLI and rules files' content (the check)
     engine_dirty: bool = False                                # those files differ from HEAD
     plan_hash: str = ""                                       # confirm/test_old: the read plan (one read per plan)
+    batch: V.Batch = "main"                                   # amendment C1 ruling e: main, or the separate level batch
 
 
 def null_check(window: str, results: Sequence[SpecResult], rules: PassRules,
@@ -853,20 +863,24 @@ def _run_all(todo: list[V.Spec], mk: Market, r: PassRules, k: int, workers: int,
 def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = None, cache_dir: Path | None = None,
                ids: Sequence[str] | None = None, m: int | None = None, rules: PassRules | None = None,
                singles: Sequence[str] | None = None, ensembles: Sequence[Ensemble] | None = None,
-               k_source: str = "rules", plan_hash: str = "") -> ScreenReport:
+               k_source: str = "rules", plan_hash: str = "", batch: V.Batch = "main") -> ScreenReport:
     """Every (or the listed) catalogue spec on the market's window. Specs using a pending type are reported
     not_evaluable; a window with no bars on disk reports no_data. `singles` are the ids eligible to pass (default: all
     run); the others run as ensemble members only. Explore/learn_old freeze the ensembles; confirm/test_old evaluate the
-    given ones; confirm applies BH-FDR over `m` (default: singles + ensembles sent)."""
+    given ones; confirm applies BH-FDR over `m` (default: singles + ensembles sent). `batch="main"` reports the level
+    specs not_evaluable (their types in `pending_types`); `batch="levels"` runs only the level specs."""
     t0 = time.monotonic()
     r = rules or load_rules()
     k = k or r.dsr.k_program
     w = mk.window.name
     want = set(ids) if ids is not None else None
-    specs = [s for s in cat.specs if want is None or s.id in want]
+    specs = [s for s in cat.specs if (want is None or s.id in want) and (batch == "main" or s.batch == batch)]
     eligible = set(singles) if singles is not None else {s.id for s in specs}
     empty = len(mk.tape.t) == 0
-    out = _run_all([s for s in specs if not s.pending], mk, r, k, workers, cache_dir) if not empty else {}
+    todo = [s for s in specs if not s.pending and s.batch == batch]
+    if todo and not empty:
+        V.prepare(mk, todo)                    # shared inputs (the key-level book) built once, before the workers
+    out = _run_all(todo, mk, r, k, workers, cache_dir) if not empty else {}
     member_of: dict[str, list[str]] = {}
     for e in ensembles or ():
         for mid in e.members:
@@ -880,10 +894,11 @@ def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = N
                                              "member_of": tuple(member_of.get(s.id, ()))})
             results.append(res)
             continue
-        spec_status: Status = "not_evaluable" if s.pending else "no_data"
+        deferred = s.pending or (s.level_types if s.batch != batch else ())     # not this batch's to run
+        spec_status: Status = "not_evaluable" if deferred else "no_data"
         results.append(SpecResult(id=s.id, rank=s.rank, family=s.family, tf=s.tf, window=w, status=spec_status,
-                                  pending_types=s.pending, null_control=is_null_control(s, r), dsr_k=k,
-                                  verdict="NOT-EVALUABLE" if s.pending else "NO-DATA"))
+                                  pending_types=deferred, null_control=is_null_control(s, r), dsr_k=k,
+                                  verdict="NOT-EVALUABLE" if deferred else "NO-DATA"))
     # K_eff over every spec of the run (one with no trade is its own trial); DSR reported at K and K_eff, never gated
     all_days = np.unique(np.concatenate([v[1] for v in out.values()])) if out else np.zeros(0, np.int64)
     mat = np.zeros((len(results), max(len(all_days), 2)))
@@ -895,7 +910,8 @@ def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = N
     final = [x.model_copy(update={"dsr_keff": _f(DsrInputs.model_validate(x.dsr_inputs).dsr(ke))})
              if x.dsr_inputs is not None else x for x in results]
     daily: dict[str, Daily] = {sid: (v[1], v[2], v[0].n) for sid, v in out.items()}
-    ens = list(ensembles) if ensembles is not None else (build_ensembles(final, r) if w in EXPLORE_LIKE else [])
+    ens = list(ensembles) if ensembles is not None else (
+        build_ensembles(final, r, batch) if w in EXPLORE_LIKE else [])
     ens_res = [ensemble_result(e, daily, mk.window, r) for e in ens]
     if w == "confirm":
         cand = [j for j, e in enumerate(ens_res) if not e.null_control]
@@ -932,19 +948,21 @@ def run_screen(cat: V.Catalogue, mk: Market, workers: int = 8, k: int | None = N
         data_first_utc=pd.Timestamp(int(t.min()), tz="UTC").isoformat() if len(t) else "",
         data_last_utc=mk.data_last_utc, workers=workers, elapsed_s=round(time.monotonic() - t0, 1), results=final,
         ensembles=ens_res, member_only_ids=[x.id for x in final if x.member_only], k_source=k_source,
-        engine_git_sha=head, engine_sha256=esha, engine_dirty=dirty, plan_hash=plan_hash)
+        engine_git_sha=head, engine_sha256=esha, engine_dirty=dirty, plan_hash=plan_hash, batch=batch)
 
 
 # ---------------------------------------------------------------- passer chains
 NEEDS: dict[str, str | None] = {"explore": None, "learn_old": None, "confirm": "explore", "test_old": "confirm"}
 
 
-def _check_report(cat: V.Catalogue, report: dict[str, Any] | None, window: str) -> str | None:
+def _check_report(cat: V.Catalogue, report: dict[str, Any] | None, window: str, batch: V.Batch = "main") -> str | None:
     need = NEEDS[window]
     if need is None:
         return None
     if report is None:
         raise ValueError(f"a {window} run reads {need} passers only: pass the {need} report (--passers)")
+    if report.get("batch", "main") != batch:               # amendment C1 ruling e: a batch has its own passer chain
+        raise ValueError(f"the {need} report is of batch {report.get('batch', 'main')!r}, this run is batch {batch!r}")
     if report.get("window") != need:
         raise ValueError(f"a {window} run needs a {need} report, got a {report.get('window')!r} report")
     if report.get("catalogue_sha256") != cat.sha256:
@@ -961,11 +979,15 @@ def _check_report(cat: V.Catalogue, report: dict[str, Any] | None, window: str) 
 
 
 def passer_ids(cat: V.Catalogue, report: dict[str, Any] | None, window: str,
-               ids: Sequence[str] | None = None) -> list[str]:
-    """The single ids a `window` run may gate: explore/learn_old any catalogue id; confirm only explore passers,
-    test_old only confirm passers (of a report on this very catalogue), in rank order. An id outside is refused."""
-    need = _check_report(cat, report, window)
-    known = [s.id for s in cat.specs]
+               ids: Sequence[str] | None = None, batch: V.Batch = "main") -> list[str]:
+    """The single ids a `window` run may gate: explore/learn_old any catalogue id (the levels batch: its level specs
+    only); confirm only explore passers, test_old only confirm passers (of a report on this very catalogue and batch),
+    in rank order. An id outside is refused."""
+    need = _check_report(cat, report, window, batch)
+    known = [s.id for s in cat.specs if batch == "main" or s.batch == batch]
+    outside = [i for i in ids or () if i not in set(known)] if batch != "main" else []
+    if outside:
+        raise ValueError(f"not in the {batch} batch: {outside[:10]}")
     if need is None:
         if ids is None:
             return known
@@ -992,10 +1014,11 @@ class Plan(FrozenRecord):
     m: int | None = None
 
 
-def plan(cat: V.Catalogue, report: dict[str, Any] | None, window: str, ids: Sequence[str] | None = None) -> Plan:
+def plan(cat: V.Catalogue, report: dict[str, Any] | None, window: str, ids: Sequence[str] | None = None,
+         batch: V.Batch = "main") -> Plan:
     """Confirm: the explore passers and the ensembles frozen in the explore report, m = their count (fixed here,
     before any confirm bar is read). Test_old: the confirm passers and the ensembles that passed confirm."""
-    singles = passer_ids(cat, report, window, ids)
+    singles = passer_ids(cat, report, window, ids, batch)
     ens: list[Ensemble] = []
     if report is not None and NEEDS[window] is not None:
         for e in report.get("ensembles", []):
@@ -1010,19 +1033,24 @@ def plan(cat: V.Catalogue, report: dict[str, Any] | None, window: str, ids: Sequ
                 m=len(singles) + sum(not e.null_control for e in ens) if window == "confirm" else None)
 
 
-def plan_hash(p: Plan, window: str, cat: V.Catalogue) -> str:
-    """The identity of a one-shot read: window, catalogue, rules, engine, singles, ensembles and m."""
-    body = {"window": window, "catalogue": cat.sha256, "rules": rules_sha256(), "engine": engine_provenance()[1],
-            "plan": p.model_dump(mode="json")}
+def plan_hash(p: Plan, window: str, cat: V.Catalogue, batch: V.Batch = "main") -> str:
+    """The identity of a one-shot read: window, catalogue, rules, engine, singles, ensembles and m (and the batch,
+    outside the main one, whose hashes predate batches)."""
+    body: dict[str, Any] = {"window": window, "catalogue": cat.sha256, "rules": rules_sha256(),
+                            "engine": engine_provenance()[1], "plan": p.model_dump(mode="json")}
+    if batch != "main":
+        body["batch"] = batch
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
-def claim_read(ledger: Path, window: str, cat: V.Catalogue, phash: str) -> None:
+def claim_read(ledger: Path, window: str, cat: V.Catalogue, phash: str, batch: V.Batch = "main") -> None:
     """Confirm and test_old are read once (quant review H2): the first run writes a marker; a later run of the same
-    window on the same catalogue is refused unless its plan hash is identical (a crashed run's exact repeat)."""
+    window on the same catalogue and batch is refused unless its plan hash is identical (a crashed run's exact
+    repeat). A marker without a batch is the main batch's (written before batches existed)."""
     ledger = Path(ledger)
     rows = [json.loads(x) for x in ledger.read_text().splitlines() if x.strip()] if ledger.exists() else []
-    prior = [x for x in rows if x.get("window") == window and x.get("catalogue_sha256") == cat.sha256]
+    prior = [x for x in rows if x.get("window") == window and x.get("catalogue_sha256") == cat.sha256
+             and x.get("batch", "main") == batch]
     if any(x.get("plan_hash") != phash for x in prior):
         raise ValueError(f"{window} was already read on this catalogue with another plan "
                          f"({prior[0].get('plan_hash', '')[:12]}): a window is read once")
@@ -1030,5 +1058,6 @@ def claim_read(ledger: Path, window: str, cat: V.Catalogue, phash: str) -> None:
         return
     ledger.parent.mkdir(parents=True, exist_ok=True)
     with ledger.open("a") as fh:
-        fh.write(json.dumps({"window": window, "catalogue_sha256": cat.sha256, "plan_hash": phash,
-                             "ts": pd.Timestamp.now(tz="UTC").isoformat()}) + "\n")
+        row = {"window": window, "catalogue_sha256": cat.sha256, "plan_hash": phash,
+               "ts": pd.Timestamp.now(tz="UTC").isoformat()}
+        fh.write(json.dumps(row if batch == "main" else {**row, "batch": batch}) + "\n")

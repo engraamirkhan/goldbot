@@ -4,13 +4,19 @@
 `{id, rank, prior_score, family, tf, entry:{type,params}, filters:[{type,params}], side, stop:{atr_n, atr_mult},
 exit:{type,params}, max_hold_bars}`. Each type's params are a frozen pydantic model (extra keys refused), so a misspelt
 parameter fails the catalogue load, never a silent default. Types the registry does not know fail the load too, every
-one listed at once (`UnknownVocabulary`), except the four ADDENDUM A level types (PENDING_*): until the KEYLEVELS module
-registers them, their specs load and are reported "not_evaluable", never dropped.
+one listed at once (`UnknownVocabulary`), except the four ADDENDUM A level types (PENDING_*): a spec using one that no
+module has registered still loads and is reported "not_evaluable", never dropped.
 
 Pluggable: an entry or filter type is a function registered with `register_entry` / `register_filter` in any module
-named `goldbot/research/sprint3000/vocab_*.py`; those modules are imported on first use, so a new type (the KEYLEVELS
-lane's level_break, level_reject, near_level, room_to_level) is added in one module without touching the engine.
+named `goldbot/research/sprint3000/vocab_*.py`; those modules are imported on first use, so a new type is added in one
+module without touching the engine. `vocab_levels` registers the four level types (level_break, level_reject,
+near_level, room_to_level). A plugin can also `register_prepare` a hook the engine runs once per screen in the parent
+process, before the workers start (an expensive shared input, such as the key-level book, built once).
 Exit types are the engine's walk and stay closed here.
+
+Batches (prereg amendment C1, ruling e: "The 379 specs that use the ADDENDUM A level types ... form a separate later
+batch ... That batch has its own ensembles and its own BH family"): a spec using any level type belongs to batch
+"levels", every other spec to "main".
 
 Semantics, all at the close of entry-tf bar i and causal (a test cuts the tape and asserts no earlier signal changes):
   donchian_break(n)          close crosses above the prior n bars' high (below their low): first bar only
@@ -85,6 +91,11 @@ EXIT: dict[str, Registered] = {}
 # loads (its params unchecked) and is reported "not_evaluable", never dropped and never run
 PENDING_ENTRY = frozenset({"level_break", "level_reject"})
 PENDING_FILTER = frozenset({"near_level", "room_to_level"})
+LEVEL_TYPES = PENDING_ENTRY | PENDING_FILTER
+BATCHES = ("main", "levels")
+Batch = Literal["main", "levels"]
+PrepareFn = Callable[["Market", "list[Spec]"], None]
+PREPARE: list[PrepareFn] = []
 
 
 def register_entry(name: str, params: type[FrozenRecord]) -> Callable[[EntryFn], EntryFn]:
@@ -99,6 +110,20 @@ def register_filter(name: str, params: type[FrozenRecord]) -> Callable[[FilterFn
         FILTER[name] = Registered(params=params, fn=fn)
         return fn
     return deco
+
+
+def register_prepare(fn: PrepareFn) -> PrepareFn:
+    """A hook run once per screen on the market and the specs it will run, before any worker starts; it stores what
+    it builds in `Market.prepared` (which the workers receive)."""
+    if fn not in PREPARE:
+        PREPARE.append(fn)
+    return fn
+
+
+def prepare(mk: Market, specs: list[Spec]) -> None:
+    load_plugins()
+    for fn in PREPARE:
+        fn(mk, specs)
 
 
 _PLUGINS_LOADED = False
@@ -150,6 +175,7 @@ class Spec(FrozenRecord):
 
     @model_validator(mode="after")
     def _known(self) -> "Spec":
+        load_plugins()
         if self.entry.type not in PENDING_ENTRY or self.entry.type in ENTRY:
             _parse(ENTRY, "entry", self.entry)
         for f in self.filters:
@@ -164,6 +190,16 @@ class Spec(FrozenRecord):
         load_plugins()
         names = [self.entry.type] if self.entry.type not in ENTRY else []
         return tuple(names + [f.type for f in self.filters if f.type not in FILTER])
+
+    @property
+    def level_types(self) -> tuple[str, ...]:
+        """The ADDENDUM A level types this spec uses (entry first, then filters)."""
+        return tuple(t for t in (self.entry.type, *(f.type for f in self.filters)) if t in LEVEL_TYPES)
+
+    @property
+    def batch(self) -> Batch:
+        """"levels" when the spec uses a level type (amendment C1 ruling e), else "main"."""
+        return "levels" if self.level_types else "main"
 
     def exit_params(self) -> FrozenRecord:
         return _parse(EXIT, "exit", self.exit)
