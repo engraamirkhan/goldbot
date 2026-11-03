@@ -172,6 +172,9 @@ class RiskSettings(_Section):
     drawdown_stage1_clear: float = Field(gt=0, lt=1)
     max_positions_per_account: int = Field(ge=1)
     max_spread_points: float = Field(gt=0)
+    # demo non-gold fill audit 2026-11-03: an entry whose spread is more than this fraction of its stop distance is
+    # refused `spread_over_stop` on every entry path (RiskLimits.max_spread_stop_frac); (0, 1], tightening only
+    max_spread_stop_frac: float = Field(0.3, gt=0, le=1)
     stale_tick_seconds: int = Field(gt=0)
     blackout: Blackout
     min_target_over_cost: float = Field(gt=0)

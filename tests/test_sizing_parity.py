@@ -40,7 +40,9 @@ CASES = list(itertools.product(
 
 @pytest.mark.parametrize("stage_combined,mult,risk,equity,atr,fx", CASES)
 def test_sizing_module_matches_the_gate(stage_combined: tuple[Stage, bool], mult: float, risk: float, equity: float,
-                                        atr: float, fx: float):
+                                        atr: float, fx: float, monkeypatch: pytest.MonkeyPatch):
+    # sizing parity only: the spread-over-stop guard (tests/test_spread_stop_guard.py) would refuse the $0.5 stops
+    monkeypatch.setattr("goldbot.risk.gate.spread_over_stop", lambda *a: False)
     stage, combined = stage_combined
     limits = RiskLimits(risk_per_trade=risk)
     st = _state(equity, stage, combined)
@@ -64,7 +66,8 @@ def test_size_down_is_a_quarter_of_the_normal_risk_at_multiplier_one():
     assert eff.target == pytest.approx(0.25 * RiskLimits().risk_per_trade)
 
 
-def test_stop_floor_matches_the_gate():
+def test_stop_floor_matches_the_gate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("goldbot.risk.gate.spread_over_stop", lambda *a: False)   # the floor only, not the guard
     limits = RiskLimits()
     d = RiskGate(limits).check(_intent(0.1, 1.0, stops_level=50.0), _state(100_000.0, Stage.NORMAL, False))
     assert d.stop_distance == pytest.approx(stop_distance(1.0, 0.1, stops_level_points=50.0, spread_points=25.0))

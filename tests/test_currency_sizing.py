@@ -114,7 +114,8 @@ def _old_gate_lots(equity: float, mult: float, risk: float, stop: float) -> tupl
 
 @pytest.mark.parametrize("equity,mult,risk,stop", list(itertools.product(
     [1_000.0, 9_167.0, 20_000.0, 100_000.0], [0.25, 1.0, 1.5], [0.001, 0.005], [0.5, 10.9, 55.0])))
-def test_a_usd_account_decides_exactly_as_before(equity, mult, risk, stop):
+def test_a_usd_account_decides_exactly_as_before(equity, mult, risk, stop, monkeypatch):
+    monkeypatch.setattr("goldbot.risk.gate.spread_over_stop", lambda *a: False)   # the old sizing had no such guard
     d = RiskGate(RiskLimits(risk_per_trade=risk)).check(_intent(stop=stop, mult=mult, price=100.0), _state(equity))
     allowed, lots = _old_gate_lots(equity, mult, risk, stop)
     assert d.allowed == allowed
