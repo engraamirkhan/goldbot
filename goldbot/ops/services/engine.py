@@ -301,6 +301,21 @@ def account_magic_bases(acc: Account) -> tuple[int, ...]:
     return (acc.magic_base, *(accounts.instrument_magic_base(acc, k) for k in account_instruments(acc)))
 
 
+def account_block_symbols(acc: Account) -> dict[int, str]:
+    """{book base: broker symbol} for the bridge guard (trading-safety L1): gold's magic_base the account's symbol,
+    each listed instrument's base (`account_magic_bases`, same order) its registry `broker_symbols[acc.broker]`. Gold
+    alone on a live or observe-only account."""
+    from goldbot.instruments import registry
+    from goldbot.ops import accounts
+    reg = registry()
+    out = {acc.magic_base: acc.symbol}
+    for key in account_instruments(acc):
+        sym = reg.get(key).broker_symbols.get(acc.broker)
+        if sym is not None:
+            out[accounts.instrument_magic_base(acc, key)] = sym
+    return out
+
+
 def account_managed_bases(acc: Account) -> tuple[int, ...]:
     """Every non-gold registry block of a demo account's `instrument_magic_index` on its broker: the ranges whose
     positions the bridge lets the engine manage (stop changes), listed or not, so a wind-down book's exits run (M3).
