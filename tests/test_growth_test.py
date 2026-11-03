@@ -315,8 +315,11 @@ def test_growth_lots_bounds_a_book_by_its_own_minimum_lot_cap_not_golds_tenth() 
     capped = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, index, 1, 0.6)
     assert capped is not None and capped[0] == pytest.approx(0.4)
     whole = {"volume_step": 1.0, "volume_min": 1.0, "volume_max": 50.0}    # JP225: whole lots, cap 10
-    short = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, whole, -1, -3.0)
-    assert short is not None and short[0] == pytest.approx(7.0)
+    short = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, whole, -1, -8.0)
+    assert short is not None and short[0] == pytest.approx(2.0)                # 10 - 8 short already open
+    big = {"volume_step": 1.0, "volume_min": 1.0, "volume_max": 50.0}     # never above the bridge's 3.0 lots
+    top = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, big, 1, 0.0)
+    assert top is not None and top[0] == pytest.approx(3.0)
 
 
 class _Eng:

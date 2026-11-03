@@ -149,7 +149,7 @@ def _partial_lots(lots: float, volume: float, info: Any) -> float | None:
         return None
     return out
 
-log =logging.getLogger("goldbot.mt5")
+log = logging.getLogger("goldbot.mt5")
 
 
 def _precheck_failed(why: str) -> OrderResult:

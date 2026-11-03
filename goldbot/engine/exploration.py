@@ -1843,14 +1843,15 @@ def growth_lots(rooms: Mapping[str, float], arm_cap: float, loss_per_lot: float,
     """Growth sprint 2026-11-01 (`RiskLimits.growth_arms`): the largest lot, in the broker's steps, whose loss at the
     stop fits every room (`_send`'s budget, pot and arm day), whose loss plus round trip fits the arm's per-trade cap,
     whose net same-side lots stay within the book's `net_lot_cap` (ADR 0043 X3: 10 minimum lots, gold 0.10, as `_send`
-    judges it) and at most the broker's volume_max: (lots, loss,
+    judges it) and at most the broker's volume_max and the bridge's MAX_ORDER_LOTS: (lots, loss,
     cost). The RiskGate then sizes at its own risk per trade, never above it. None when no lot above the minimum fits
     (the minimum-lot path judges it as before): no cap is loosened, only the lot is no longer fixed at the minimum.
     `max_lots`: a pyramid add is at most its first unit's lots ("add a unit")."""
     step, lo, hi = (float(terms.get(k) or 0.0) for k in ("volume_step", "volume_min", "volume_max"))
     if not (step > 0 and lo > 0 and loss_per_lot > 0 and cost_per_lot >= 0):
         return None
-    bounds = [hi, arm_cap / (loss_per_lot + cost_per_lot), net_lot_cap(lo) - side * net_open]
+    from goldbot.execution.bridge import MAX_ORDER_LOTS  # the bridge refuses a larger order outright
+    bounds = [hi, MAX_ORDER_LOTS, arm_cap / (loss_per_lot + cost_per_lot), net_lot_cap(lo) - side * net_open]
     if max_lots is not None:
         bounds.append(max_lots)
     bounds += [room / loss_per_lot for k, room in rooms.items() if k != "arm_cap"]
