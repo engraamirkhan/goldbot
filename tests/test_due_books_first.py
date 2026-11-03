@@ -129,7 +129,11 @@ def test_a_due_check_that_raises_never_stops_any_books_exits(tmp_path, monkeypat
         raise ValueError("malformed exploration")
     monkeypatch.setattr(exploration, "due", boom)
     exits: list[str] = []
-    monkeypatch.setattr(books, "_exits_first", lambda e, q, s: exits.append(s) or True)
+
+    def exits_first(e: Engine, q: Any, s: str) -> bool:
+        exits.append(s)
+        return True
+    monkeypatch.setattr(books, "_exits_first", exits_first)
     seen: list[str] = []
 
     def one(e: Engine, q: Any, s: str) -> bool:
