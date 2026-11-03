@@ -139,7 +139,7 @@ LOOKBACK = 200                      # bars of an arm's timeframe its rule reads,
 LOOKBACK_MAX_1M = 90_000
 LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
-MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
+MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side lots on gold's book; other books net_lot_cap
 MAX_NET_MIN_LOTS = 10               # the same cap in minimum lots, for an instrument whose minimum lot is not gold's 0.01
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
