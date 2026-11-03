@@ -59,7 +59,7 @@ import logging
 import math
 import threading
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -714,8 +714,8 @@ class GuardedBroker:
     magic, both sides (gross). Any read that raises, is missing, non-finite or <= 0 refuses (`unreadable:<field>`).
     A refusal is a definite reject, never a raise: OrderResult retcode 10006 with the message
     "bridge_notional_ceiling: ...", so the engine records `rejected` and alerts the owner. Order of the checks: magic
-    -> 3.0 lots -> account (one read) -> F4 smoke magic on demo only -> verify -> ceiling -> the order's age again
-    (`order_sent_at`) -> send. `close` and `modify` are never sized.
+    -> the magic's symbol (`block_symbols`) -> 3.0 lots -> account (one read) -> F4 smoke magic on demo only -> verify
+    -> ceiling -> the order's age again (`order_sent_at`) -> send. `close` and `modify` are never sized.
 
     AutoTrading (incident 2026-10-20, trading-safety review): an entry is refused as a definite reject (10006,
     "terminal_autotrading_off: ...") when `terminal_info().trade_allowed` is False, checked after verify and before
@@ -724,8 +724,13 @@ class GuardedBroker:
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
                  leverage_cap: float | None = None, observe_only: bool = False,
-                 instrument_bases: Iterable[int] = (), managed_bases: Iterable[int] = ()) -> None:
+                 instrument_bases: Iterable[int] = (), managed_bases: Iterable[int] = (),
+                 block_symbols: Mapping[int, str] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
+        # trading-safety L1 (review of #325): each magic block is one symbol's, {block base: broker symbol}
+        # (ops/services/engine.account_block_symbols): gold's base the account's symbol, each instrument base its
+        # broker symbol. None: not judged (a guard built without it, as before)
+        self.block_symbols = None if block_symbols is None else {int(b): str(s) for b, s in block_symbols.items()}
         # the multi-instrument demo's books (ops/services/engine.account_magic_bases, demo only): each a block of 100
         self.instrument_bases = tuple(int(b) for b in instrument_bases)
         # stop changes only: the listed blocks and every other registry block of the account (wind-down, M3)
@@ -747,6 +752,18 @@ class GuardedBroker:
     def _managed(self, magic: int) -> bool:
         return self._ours(magic) or any(b <= int(magic) < b + 100 for b in self.managed_bases)
 
+    def _own_symbol(self, magic: int, symbol: str) -> None:
+        """L1: an order's magic block takes only its own symbol, so no block opens exposure on a symbol whose book does
+        not count it (a gold magic on an index, an index magic on gold). A block with no symbol in the map is refused."""
+        if self.block_symbols is None:
+            return
+        base = next(b for b in (self.magic_base, *self.instrument_bases) if b <= magic < b + 100)
+        tied = self.block_symbols.get(base)
+        if tied is None:
+            raise PermissionError(f"magic {magic}'s block has no symbol on this account: {symbol} refused")
+        if tied != symbol:
+            raise PermissionError(f"magic {magic} is {tied}'s block, not {symbol}")
+
     def _own_position(self, position_id: int) -> None:
         # every symbol: MT5Broker.positions() reads its own symbol only, so a book's position would never be found
         read = getattr(self._b, "account_positions", None)
@@ -764,6 +781,7 @@ class GuardedBroker:
         if not self._ours(intent.magic):
             extra = f" and its {len(self.instrument_bases)} instrument blocks" if self.instrument_bases else ""
             raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}{extra}")
+        self._own_symbol(int(intent.magic), intent.symbol)
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
             raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
         try:                                           # the one account() read: F4, verify and the ceiling use it

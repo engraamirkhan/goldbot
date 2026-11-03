@@ -137,6 +137,18 @@ def _send_failed(position_id: int) -> OrderResult:
     return OrderResult(ok=False, retcode=-1, order_id=None, position_id=position_id, filled_lots=0.0, price=None,
                        message=f"order_send failed: {mt5.last_error()}")
 
+
+def _partial_lots(lots: float, volume: float, info: Any) -> float | None:
+    """A partial close's lots in the position's own symbol's terms: rounded down to its volume_step, or None (not
+    sent) when the step is unknown, or the result is below its volume_min or leaves less than it open."""
+    step, lo = float(getattr(info, "volume_step", 0.0) or 0.0), float(getattr(info, "volume_min", 0.0) or 0.0)
+    if step <= 0:
+        return None
+    out = round(math.floor(lots / step + 1e-9) * step, 8)
+    if out < max(lo, step) - 1e-9 or volume - out < max(lo, step) - 1e-9:
+        return None
+    return out
+
 log = logging.getLogger("goldbot.mt5")
 
 
@@ -598,15 +610,14 @@ class MT5Broker:
         with that symbol's own quote and fill mode. The symbol is selected into Market Watch before its tick is read
         (a manual trade's symbol may not be shown); no symbol info or no tick is a refused close (10021, no quotes),
         never a raise, so the engine retries it and one symbol never stops the others. A full close sends the
-        position's own volume as the terminal reports it (no rounding); a partial close of another symbol is never sent
-        (the engine scales out only its own symbol, whose volume step it knows)."""
+        position's own volume as the terminal reports it (no rounding). A partial close (a scale-out, any symbol: a
+        non-gold book scales out through the gold terminal's bridge) is rounded down to the position's own symbol's
+        volume step; one below that symbol's minimum lot, or leaving less than it open, is refused unsent (10014), so
+        the whole position keeps its stop and the engine's bounded scale-out retries see a refusal."""
         pos = [p for p in _positions_get() if p.ticket == position_id]
         if not pos:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
-        if lots is not None and p.symbol != self.symbol:
-            return OrderResult(ok=False, retcode=RETCODE_INVALID_VOLUME, order_id=None, position_id=position_id,
-                               filled_lots=0.0, price=None, message=f"partial close of {p.symbol} not sent")
         mt5.symbol_select(p.symbol, True)
         info, tick = mt5.symbol_info(p.symbol), mt5.symbol_info_tick(p.symbol)
         if info is None or tick is None:
@@ -618,6 +629,12 @@ class MT5Broker:
             return OrderResult(ok=False, retcode=RETCODE_PRICE_OFF, order_id=None, position_id=position_id,
                                filled_lots=0.0, price=None, message=f"no {missing} for {p.symbol}")
         self._unquoted.discard(p.symbol)
+        if lots:
+            lots = _partial_lots(lots, float(p.volume), info)
+            if lots is None:
+                return OrderResult(ok=False, retcode=RETCODE_INVALID_VOLUME, order_id=None, position_id=position_id,
+                                   filled_lots=0.0, price=None,
+                                   message=f"partial close of {p.symbol} outside its lot terms: not sent")
         is_buy = p.type == mt5.POSITION_TYPE_BUY
         req = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "position": position_id,
                "volume": lots or p.volume, "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,

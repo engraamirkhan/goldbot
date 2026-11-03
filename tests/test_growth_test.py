@@ -305,6 +305,23 @@ def test_growth_lots_takes_the_largest_step_inside_every_room_and_the_net_lots_c
     assert X.growth_lots({"budget": 3.0}, 30.0, 375.0, 25.0, TERMS, 1, 0.0) is None
 
 
+def test_growth_lots_bounds_a_book_by_its_own_minimum_lot_cap_not_golds_tenth() -> None:
+    """ADR 0043 X3 (amended 2026-11-03): the same-side cap is 10 minimum lots per book (`net_lot_cap`), as `_send`
+    judges it; gold's 0.10 left an index (minimum 0.1) no growth lot at all."""
+    from goldbot.engine import exploration as X
+    index = {"volume_step": 0.1, "volume_min": 0.1, "volume_max": 50.0}
+    got = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, index, 1, 0.0)
+    assert got is not None and got[0] == pytest.approx(1.0)                 # 10 x 0.1
+    capped = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, index, 1, 0.6)
+    assert capped is not None and capped[0] == pytest.approx(0.4)
+    whole = {"volume_step": 1.0, "volume_min": 1.0, "volume_max": 50.0}    # JP225: whole lots, cap 10
+    short = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, whole, -1, -8.0)
+    assert short is not None and short[0] == pytest.approx(2.0)                # 10 - 8 short already open
+    big = {"volume_step": 1.0, "volume_min": 1.0, "volume_max": 50.0}     # never above the bridge's 3.0 lots
+    top = X.growth_lots({"budget": 1e6}, 1e6, 10.0, 1.0, big, 1, 0.0)
+    assert top is not None and top[0] == pytest.approx(3.0)
+
+
 class _Eng:
     def __init__(self) -> None:
         self.decisions: list[dict[str, Any]] = []

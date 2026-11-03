@@ -273,3 +273,25 @@ improve signals".
 
 Rollback: `pot_budgets: true` with the old £ figures and slots (each account's comment in config/accounts.yaml), then
 restart.
+
+## Amendment 2026-11-03 (multi-instrument demo; trading-safety review of PR #325): X3 per book, in minimum lots
+Incident 2026-11-03: S0-JP225 was refused `same_side` 23 times overnight. JP225 and the bond futures trade whole lots,
+so X3's 0.10 lot refused their first minimum lot and no entry on them could pass; the indices and softs (minimum 0.1)
+could hold one same-side minimum lot at most (their fills before the change are real evidence, not blocked ones).
+
+- **X3's net same-side cap is per book, in minimum lots**: `net_lot_cap(volume_min) = max(0.10, 10 x volume_min)`
+  (goldbot/engine/exploration.py), summed over that book's own open trades. Gold is unchanged at 0.10 lot (10 x its
+  0.01 minimum), and so is the £150 gap arithmetic in section 1 for gold.
+- `_send` (the minimum-lot path) and `growth_lots` (a growth arm's size) judge the same cap. No growth arm is
+  registered on a non-gold book today (GS1/GS1C trade gold only); adding one is a new pre-registered arm (one registry
+  trial), read in R on its own instrument and never pooled with GS1/GS1C or XAUUSD. Ten minimum lots is very different
+  notional per book (roughly 15x apart), so only R is comparable across books; the account-currency growth read stays
+  gold-only.
+- Still binding on every book: the RiskGate's risk per trade and its daily and weekly limits across symbols
+  (`multi_symbol`), the bridge's account-wide notional ceiling (6x equity) and MAX_ORDER_LOTS, and every pot, arm and
+  slot cap. The bridge guard ties each magic block to its own symbol (gold's base the account's symbol, each instrument's
+  base its broker symbol), so one book's cap cannot be spent on another symbol.
+
+Rollback: set `MAX_NET_MIN_LOTS = 0` in goldbot/engine/exploration.py (a code change: release, then restart) to keep
+0.10 lot on every book. JP225 and the bond futures then take no entry again; the 0.1-lot books hold one same-side
+minimum lot.

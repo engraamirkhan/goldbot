@@ -375,6 +375,52 @@ def test_the_managed_bases_cover_every_registry_block_on_demo_and_none_on_live()
     assert account_managed_bases(probe.model_copy(update={"mode": "live"})) == ()
 
 
+# trading-safety L1 (review of #325): each magic block is one symbol's. The gold base takes only the account's symbol,
+# an instrument base only its own broker symbol, so a magic never opens exposure the books do not count on its symbol.
+SYMBOLS = {260500: "XAUUSD", XAG_BASE: "XAGUSD"}
+
+
+def _tied(t: Any) -> GuardedBroker:
+    return GuardedBroker(t, magic_base=260500, instrument_bases=(XAG_BASE,), block_symbols=SYMBOLS)
+
+
+def test_the_guard_refuses_an_instrument_magic_on_gold_and_accepts_it_on_its_own_symbol():
+    t = _Terminal(contract=5000.0, bid=30.0, ask=30.0)
+    g = _tied(t)
+    with pytest.raises(PermissionError, match=f"magic {XAG_BASE + 95} is XAGUSD's block, not XAUUSD"):
+        g.place_order(_order(0.01).model_copy(update={"magic": XAG_BASE + 95}))
+    assert t.sent == []
+    assert g.place_order(_xag_order(XAG_BASE + 95)).ok and len(t.sent) == 1
+
+
+def test_the_guard_refuses_a_gold_magic_on_an_instrument_symbol_and_accepts_it_on_gold():
+    t = _Terminal()
+    g = _tied(t)
+    with pytest.raises(PermissionError, match="magic 260595 is XAUUSD's block, not XAGUSD"):
+        g.place_order(_xag_order(260595))
+    assert t.sent == []
+    assert g.place_order(_order(0.01).model_copy(update={"magic": 260595})).ok and len(t.sent) == 1
+
+
+def test_an_instrument_block_with_no_symbol_in_the_map_is_refused():
+    t = _Terminal(contract=5000.0, bid=30.0, ask=30.0)
+    g = GuardedBroker(t, magic_base=260500, instrument_bases=(XAG_BASE,), block_symbols={260500: "XAUUSD"})
+    with pytest.raises(PermissionError, match=f"magic {XAG_BASE + 95}.s block has no symbol on this account"):
+        g.place_order(_xag_order(XAG_BASE + 95))
+    assert t.sent == []
+
+
+def test_the_block_symbols_are_the_accounts_symbol_and_each_instruments_broker_symbol():
+    from goldbot.instruments import registry
+    from goldbot.ops.services.engine import account_block_symbols, account_instruments, account_magic_bases
+    probe = acc_mod.load_accounts()["icm-probe"]
+    tied = account_block_symbols(probe)
+    assert tuple(tied) == account_magic_bases(probe) and tied[probe.magic_base] == probe.symbol
+    for key in account_instruments(probe):
+        assert tied[acc_mod.instrument_magic_base(probe, key)] == registry().get(key).broker_symbols[probe.broker]
+    assert account_block_symbols(probe.model_copy(update={"mode": "live"})) == {probe.magic_base: probe.symbol}
+
+
 def test_the_bridge_bases_are_the_engines_books_on_demo_and_gold_alone_on_live():
     from goldbot.ops.services.engine import account_magic_bases
     accs = acc_mod.load_accounts()

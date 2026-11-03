@@ -1,0 +1,4 @@
+- Multi-instrument follow-ups to PR #325 (trading-safety review; R99, ADR 0043 amendment 2026-11-03):
+  - A growth arm's lot is bounded by its book's `net_lot_cap` (10 minimum lots, gold 0.10), as `_send` judges it.
+  - A non-gold book's scale-out passes the gold terminal's bridge. The MT5 adapter rounds a partial close down to the position's own symbol's volume step. It refuses one unsent (10014) below that symbol's minimum lot or leaving less than it open, so the whole position keeps its stop.
+  - The bridge guard ties each magic block to its own symbol (`block_symbols` from `ops.services.engine.account_block_symbols`). Gold's base takes the account's symbol and each instrument base its broker symbol; anything else is refused (PermissionError) before the terminal. The bridge and the order lane both pass the map. Takes effect on the next bridge restart on the MT5 boxes.
