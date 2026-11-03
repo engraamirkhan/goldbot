@@ -130,18 +130,22 @@ def stop_distance(stop_atr: float, atr_usd: float, *, stops_level_points: float 
 
 
 def size_lots(*, equity: float, risk: EffectiveRisk, stop_distance: float, contract_oz: float, volume_min: float,
-              volume_step: float, volume_max: float, acct_per_usd: float = 1.0) -> LotSize:
+              volume_step: float, volume_max: float, acct_per_usd: float = 1.0,
+              commission_per_oz: float = 0.0) -> LotSize:
     """Lots for a trade sized to lose risk.target x equity (account currency) at `stop_distance` (USD per oz).
     `acct_per_usd` converts the USD stop into the account currency (1 on a USD account; `account_fx`). The products
     keep the pre-conversion operand order (equity x risk_frac x mult, stop x contract, then x fx) so a USD account
-    (fx = 1.0, an exact multiply) rounds every boundary case as before."""
+    (fx = 1.0, an exact multiply) rounds every boundary case as before. `commission_per_oz` (price units, round trip)
+    is part of one lot's risk (demo non-gold fill audit 2026-11-03: the planned risk includes the commission); 0 adds
+    an exact 0.0, so every case without it rounds as before."""
     risk_amount = equity * risk.risk_frac * risk.mult
-    risk_per_lot = stop_distance * contract_oz * acct_per_usd
+    per_oz = stop_distance + commission_per_oz
+    risk_per_lot = per_oz * contract_oz * acct_per_usd
     lots_raw = risk_amount / risk_per_lot
     steps = math.floor(lots_raw / volume_step + 1e-9)   # 0.25 // 0.01 == 24.0 in floats: not here
     lots = max(volume_min, steps * volume_step)
     lots = min(lots, volume_max)
-    realised = lots * stop_distance * contract_oz * acct_per_usd / equity
+    realised = lots * per_oz * contract_oz * acct_per_usd / equity
     refused = realised > min(MIN_LOT_TOLERANCE * risk.risk_frac * risk.mult, risk.max_risk) and lots_raw < volume_min
     return LotSize(lots_raw=lots_raw, lots=lots, realised_risk=realised, refused=refused, risk_per_lot=risk_per_lot)
 

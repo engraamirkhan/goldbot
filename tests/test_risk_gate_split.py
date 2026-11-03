@@ -131,7 +131,9 @@ def pre_split_gate() -> ModuleType:
     return mod
 
 
-def test_check_decisions_unchanged_on_a_state_grid():
+def test_check_decisions_unchanged_on_a_state_grid(monkeypatch):
+    # the golden predates the spread-over-stop guard (tests/test_spread_stop_guard.py pins it, on this grid too)
+    monkeypatch.setattr(gate_module, "spread_over_stop", lambda *a: False)
     got = _grid()
     if WRITE:                                   # captured from the pre-split gate, never from HEAD
         got = _grid(pre_split_gate())                                   # one case per line, so a changed decision reads as a one-line diff
@@ -255,7 +257,9 @@ def test_operational_stop_is_at_or_beyond_the_stops_level_plus_spread(tmp_path):
 # ---------------------------------------------------------------------------------------------- dynamic limits
 # docs/design/dynamic-limits-2026-10-19.md (lane B): the gate sizes an entry at its strategy's risk per trade, only ever
 # within the 1% per-trade maximum; with no dynamic term every decision is the fixed-limits one (the grid above).
-def test_with_dynamic_limits_off_a_model_version_on_every_intent_leaves_the_grid_unchanged():
+def test_with_dynamic_limits_off_a_model_version_on_every_intent_leaves_the_grid_unchanged(monkeypatch):
+    # the golden predates the spread-over-stop guard (tests/test_spread_stop_guard.py pins it, on this grid too)
+    monkeypatch.setattr(gate_module, "spread_over_stop", lambda *a: False)
     want = json.loads(GRID.read_text())
     out: dict[str, list[Any]] = {}
     margins = ("none", "broker_high", "raises")

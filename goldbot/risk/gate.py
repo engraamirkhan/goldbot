@@ -55,6 +55,10 @@ class RiskLimits(Record):
     dd_stage1_clear: float = 0.05
     max_positions: int = 2
     max_spread_points: float = 45.0
+    # demo non-gold fill audit 2026-11-03 (S0-SUGAR: stop 0.00055 == spread, 12/12 stopped; BUND10Y spread 0.52 of the
+    # stop): an entry whose spread is more than this fraction of the stop it asks for is refused `spread_over_stop`,
+    # on every purpose, in the instrument's own points. The absolute cap above cannot see a stop inside the spread
+    max_spread_stop_frac: float = Field(0.3, gt=0, le=1)
     point: float = 0.01
     stale_tick_seconds: int = 20
     # a tick stamped more than this far ahead of the host clock: wrong server_tz, broker clock or host clock (entries
@@ -162,7 +166,8 @@ class RiskLimits(Record):
                    multiplier_bounds=risk.multiplier_bounds, daily_cap=risk.daily_cap, weekly_cap=risk.weekly_cap,
                    dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2,
                    dd_stage1_clear=risk.drawdown_stage1_clear, max_positions=risk.max_positions_per_account,
-                   max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
+                   max_spread_points=risk.max_spread_points, max_spread_stop_frac=risk.max_spread_stop_frac,
+                   stale_tick_seconds=risk.stale_tick_seconds,
                    min_target_over_cost=risk.min_target_over_cost,
                    min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
                    heat=risk.heat, project_open_risk=risk.project_open_risk,
@@ -257,6 +262,12 @@ class Intent(Record):
     # BACKLOG 36: the paid swap per oz (USD) the position would be charged at a broker rollover before the risk day
     # ends (engine `_swap_usd_per_oz`, ADR 0017's rule); 0 = none. Only the daily projection reads it
     swap_usd_per_oz: float = 0.0
+    # demo non-gold fill audit 2026-11-03 (FX min-lot scalps: £0.06 commission on £0.08-0.25 planned risk): the
+    # round-trip commission per oz (per unit of contract) in price units, as `swap_usd_per_oz` (engine
+    # `_commission_usd_per_oz`). It is part of the planned risk: one lot risks (stop + this) x contract x fx, so the
+    # sizing, `risk_amount` and every cap on it count it. 0 = none (the gold grid decides exactly as before); a value
+    # that is not a finite number >= 0 refuses `invalid:commission_usd_per_oz`
+    commission_usd_per_oz: float = 0.0
     multiplier: float         # from allocator x bet sizing, before bounds
     price: float
     # contract terms: the engine passes the terminal's symbol_info (runner `_sizing_terms`); volume_max is also the
@@ -520,7 +531,8 @@ _STATE_NUMBERS = ("equity", "balance_closed_hwm", "day_start_equity", "week_star
                   "other_equity", "tick_ahead_s")
 _INTENT_NUMBERS = ("p", "target_atr", "stop_atr", "atr_usd", "cost_atr", "multiplier", "price", "contract_oz",
                    "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd", "swap_usd_per_oz",
-                   "acct_per_profit", "point")
+                   "acct_per_profit", "point", "commission_usd_per_oz")
+_NON_NEGATIVE_INTENT = ("commission_usd_per_oz",)    # a negative commission would shrink the planned risk
 _POSITIVE_STATE = ("equity",)
 _POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max", "point")
 _OPERATIONAL_NUMBERS = ("price", "contract_oz", "volume_step", "volume_min", "volume_max", "stops_level_points",
@@ -584,10 +596,22 @@ def profit_fx(intent: Intent) -> float | None:
     return fx
 
 
+def spread_over_stop(intent: Intent, st: AccountState, limits: RiskLimits) -> bool:
+    """Demo non-gold fill audit 2026-11-03: "refuse any entry whose spread exceeds a configurable fraction of the stop
+    distance" (`RiskLimits.max_spread_stop_frac`). The spread is the active book's (`spread_points`, in the
+    instrument's own `point`: SUGAR 0.00001, BUND10Y 0.01, gold 0.01), the stop the one the entry asks for
+    (stop_atr x atr_usd), never the one the gate floors out to the stops level plus the spread: a rule's R and target
+    are measured on its own stop, and the floored one is never shorter, so judging the asked one is the stricter.
+    Equal to the fraction is allowed (a relative 1e-9 absorbs float noise). Entries only; exits never call the gate."""
+    point = limits.point if intent.point is None else intent.point
+    return st.spread_points * point > limits.max_spread_stop_frac * intent.stop_atr * intent.atr_usd * (1 + 1e-9)
+
+
 def invalid_fields(intent: Intent, st: AccountState) -> list[str]:
     """The state and intent fields the gate reads that are NaN or infinite, or not > 0 where only a positive number
     means anything (`_POSITIVE_*`). None is left to the explicit handling."""
-    return invalid_state_fields(st) + [f for f in _INTENT_NUMBERS if _bad(intent, f, _POSITIVE_INTENT)]
+    return invalid_state_fields(st) + [f for f in _INTENT_NUMBERS if _bad(intent, f, _POSITIVE_INTENT)
+                                       or (f in _NON_NEGATIVE_INTENT and getattr(intent, f) < 0)]
 
 
 def _family_has_target(intent: Intent) -> bool:
@@ -986,6 +1010,8 @@ class RiskGate:
             if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
                 reasons.append("standard_account_edge")
         reasons += self._same_direction(st, intent.side)
+        if spread_over_stop(intent, st, L):
+            reasons.append("spread_over_stop")
         if intent.symbol != "XAUUSD" and REGISTRY_TERMS - intent.model_fields_set:
             reasons.append("instrument_terms_missing")
         if L.pilot is not None:
@@ -1007,7 +1033,8 @@ class RiskGate:
                                              point=L.point if intent.point is None else intent.point)
         sz = sizing.size_lots(equity=st.equity, risk=eff, stop_distance=stop_distance, contract_oz=intent.contract_oz,
                               volume_min=intent.volume_min, volume_step=intent.volume_step,
-                              volume_max=intent.volume_max, acct_per_usd=fx)
+                              volume_max=intent.volume_max, acct_per_usd=fx,
+                              commission_per_oz=intent.commission_usd_per_oz)
         lots, realised_risk = sz.lots, sz.realised_risk
         notes: list[str] = []
         if L.pilot is not None:

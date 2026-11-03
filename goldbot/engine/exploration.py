@@ -1874,7 +1874,7 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
                       atr_usd=s.stop_usd, cost_atr=eng._cost_atr(s.stop_usd, now), multiplier=1.0, price=price,
                       timeframe=arm.tf, family=arm.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, now),
-                      learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
+                      commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
                       hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,

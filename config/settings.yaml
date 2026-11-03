@@ -60,6 +60,10 @@ risk:
   drawdown_stage1_clear: 0.05
   max_positions_per_account: 2
   max_spread_points: 45
+  # Spread against the stop (demo non-gold fill audit 2026-11-03: S0-SUGAR traded a stop equal to the spread, 12/12
+  # stopped; BUND10Y's spread was 0.52 of its stop): every entry, exploration and probes included, is refused
+  # `spread_over_stop` when the spread (the instrument's own points) is more than this fraction of the stop it asks for.
+  max_spread_stop_frac: 0.3
   stale_tick_seconds: 20
   # Tier-1 news blackout (design): entries refused -15/+30 min around CPI, NFP, FOMC, PCE.
   # Tier 2 (BACKLOG 18, playbook G-3): entries refused `tier2_blackout` from before_min before to after_min after a
