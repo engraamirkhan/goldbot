@@ -13,8 +13,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - `--batch main` still reports them not_evaluable;
   - `--batch levels` runs only them, with ENS-LV-* ensembles, its own passer chain, plan hash and one-time reads (old ledger rows count as main);
   - the tape starts 860 days before the first decision (540 maturity + 250 percentile pool + 2 x 5 weekly swing lags). A synthetic test shows a later-starting book equals the whole-history one only after that; 540 alone left differences up to day 767.
+  - the warm-up never goes below the window's `LEVEL_DATA_FLOOR` (quant review F1). Explore stays at 2009-01-01 and never reads the test_old years. Its book matures about 2010-06; the percentile pool holds mature books from about 2011-03.
 - `python scripts/sprint3000_screen.py --validate --batch levels`: 379 specs, 0 pending, 39 null controls, 6 families.
-- Before the level explore run: `--preregister` adds 12 ENS-LV-* rows, raising K by 12. That run, its K and its budget rows are the orchestrator's and owner's call.
+- Run `--preregister` before any level explore. It adds 12 ENS-LV-* rows, raising K by 12. That run, its K and its budget rows are the orchestrator's and owner's call.
+- The engine hash (`engine_provenance`) has changed. A main-batch confirm now refuses the old explore report, so re-run main explore before any main confirm.
 - Multi-instrument follow-ups to PR #325 (trading-safety review; R99, ADR 0043 amendment 2026-11-03):
   - A growth arm's lot is bounded by its book's `net_lot_cap` (10 minimum lots, gold 0.10), as `_send` judges it.
   - A non-gold book's scale-out passes the gold terminal's bridge. The MT5 adapter rounds a partial close down to the position's own symbol's volume step. It refuses one unsent (10014) below that symbol's minimum lot or leaving less than it open, so the whole position keeps its stop.

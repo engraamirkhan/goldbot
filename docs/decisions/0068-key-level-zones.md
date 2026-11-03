@@ -129,7 +129,13 @@ multi-instrument demo). The zone computation (`goldbot/engine/key_zones.py`, `go
   - Evidence: on a synthetic tape, a book started 60 days later differed from the whole-history book up to day 767
     with 540 days of warm-up, and equalled it exactly after 860 days
     (`test_after_the_warm_up_a_book_built_from_a_later_start_equals_the_whole_history_book`).
-  - Explore's tape already starts at the first file on disk (2010), so it is the whole history there. Its first level
-    signals come after 2011-06, as the Maturity bullet states.
+  - **Floor (quant review F1).** A warm-up never reads before its window's `LEVEL_DATA_FLOOR`, so it never reaches a
+    window held out from it. The floors are: explore 2009-01-01 (B3), confirm 2010-01-01 (the explore years only, never
+    test_old), test_old 2003-01-01 and learn_old 2002-01-01 (learn_old years).
+  - Explore therefore keeps its W2 start of 2009-01-01 and gets no full 860 days.
+    - Its book matures (540 days) on about 2010-06-25.
+    - The strength-percentile pool holds only mature books from about 2011-03 (790 days). Ahead of that, strength_pct
+      comes from a younger pool. This is not look-ahead.
+    - The other windows get the full 860 days. Confirm starts 2015-08-25.
 - **Own batch.** The level specs form their own batch (prereg amendment C1, ruling e): ENS-LV-* ensembles, their own BH
   family at confirm, their own passer chain and one-time reads.

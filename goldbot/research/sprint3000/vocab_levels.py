@@ -18,7 +18,9 @@ of tape behind it, the frozen definition).
 Warm-up (level batch only): a window's tape must start LEVEL_WARMUP_DAYS before its first decision so the book at every
 decision equals the one a longer history would give (`level_window`): the 540-day maturity covers the zones, the
 strength percentile pools 250 more days of books, and a 1w swing is confirmed SWING_LAG weeks late at both ends.
-"Warm-up may read earlier bars" (W2); trades still belong to the frozen window of their entry.
+"Warm-up may read earlier bars" (W2); trades still belong to the frozen window of their entry. It never reads before
+the window's LEVEL_DATA_FLOOR (no window held out from it): explore stays at 2009-01-01, so its earliest decisions see
+a younger percentile pool (ADR 0068, amendment 2026-11-03).
 
 The book is built once per decision timeframe, for every zone view the screen's specs need, in the parent process
 (`prepare_levels`, a vocab prepare hook) and sent to the workers in `Market.prepared`.
@@ -43,10 +45,23 @@ COLUMNS = ("res_lo", "res_hi", "sup_lo", "sup_hi", "atr_1d", "pct_ready", "book_
 LevelTf = Literal["15m", "1h", "4h", "1d", "1w", "1M"]
 
 
+# The earliest minute each window's level warm-up may read (quant review F1 of a6e4420f). A warm-up never reaches a
+# window that is held out from it: explore stops at 2009-01-01 (B3: 2009 for warm-up only, never the test_old decision
+# years 2006-02..2008); confirm may read the explore years it follows, never test_old; test_old and learn_old start
+# at the learn_old years (report-only), as W2 already lets test_old read 2005.
+LEVEL_DATA_FLOOR: dict[str, pd.Timestamp] = {
+    "explore": pd.Timestamp("2009-01-01", tz="UTC"),
+    "confirm": pd.Timestamp("2010-01-01", tz="UTC"),
+    "test_old": pd.Timestamp("2003-01-01", tz="UTC"),
+    "learn_old": pd.Timestamp("2002-01-01", tz="UTC"),
+}
+
+
 def level_window(w: Window) -> Window:
-    """The window with its tape starting LEVEL_WARMUP_DAYS before its first decision (never later than the frozen
-    warm-up start); its decisions and end are unchanged."""
-    start = min(w.data_from, w.dec_from - pd.Timedelta(days=LEVEL_WARMUP_DAYS))
+    """The window with its tape starting LEVEL_WARMUP_DAYS before its first decision, but never before the window's
+    LEVEL_DATA_FLOOR (KeyError for a window without one) nor later than its frozen warm-up start; its decisions and
+    end are unchanged."""
+    start = min(w.data_from, max(LEVEL_DATA_FLOOR[w.name], w.dec_from - pd.Timedelta(days=LEVEL_WARMUP_DAYS)))
     return w.model_copy(update={"data_from": start})
 
 
