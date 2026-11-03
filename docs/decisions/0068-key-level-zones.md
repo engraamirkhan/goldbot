@@ -116,3 +116,20 @@ before any screen result exists.
 display." The dashboard's key-level chart, its `GET /api/key-levels` route and view models were removed (lane L4 of the
 multi-instrument demo). The zone computation (`goldbot/engine/key_zones.py`, `goldbot/features/key_levels.py`,
 `goldbot/research/level_vocab.py`) stays for the strategies and the learning loop.
+
+## Amendment 2026-11-03 (level batch in the sprint-3000 screen; before any level score)
+
+- The screen gets the four primitives from `goldbot/research/sprint3000/vocab_levels.py`. That module feeds
+  `level_vocab` the screen's 1m mid tape, read at each decision bar's nominal close. The definition above is unchanged.
+- **Warm-up of 860 days.** A level-batch window's tape starts `LEVEL_WARMUP_DAYS` = 540 + 250 + 2 x 5 x 7 = 860 days
+  before its first decision (`level_window`). Decisions and window ends are unchanged ("warm-up may read earlier
+  bars", W2).
+  - Why: `book_mature` (540 days) makes the zones complete. The strength percentile, however, pools 250 more days of
+    books, and a 1w swing is confirmed 5 weeks late at each end.
+  - Evidence: on a synthetic tape, a book started 60 days later differed from the whole-history book up to day 767
+    with 540 days of warm-up, and equalled it exactly after 860 days
+    (`test_after_the_warm_up_a_book_built_from_a_later_start_equals_the_whole_history_book`).
+  - Explore's tape already starts at the first file on disk (2010), so it is the whole history there. Its first level
+    signals come after 2011-06, as the Maturity bullet states.
+- **Own batch.** The level specs form their own batch (prereg amendment C1, ruling e): ENS-LV-* ensembles, their own BH
+  family at confirm, their own passer chain and one-time reads.

@@ -232,15 +232,29 @@ def test_a_catalogue_with_unknown_types_fails_and_lists_every_one(tmp_path: Path
         assert name in msg
 
 
-def test_specs_using_the_pending_level_types_load_and_are_marked_not_evaluable(tmp_path: Path) -> None:
+def _level_specs() -> list[dict]:
     specs = _raw_specs()
     specs[0]["entry"] = {"type": "level_break", "params": {"min_strength_pct": 80, "min_tf": "4h"}}
     specs[1]["filters"] = [{"type": "room_to_level", "params": {"min_r": 2.0}}]
     specs[2]["entry"] = {"type": "level_reject", "params": {"min_strength_pct": 80, "min_tf": "1h"}}
     specs[3]["filters"] = [{"type": "near_level", "params": {"max_dist_atr": 0.5, "min_strength_pct": 70}}]
-    cat = V.load_catalogue(_write(tmp_path, specs))
-    assert len(cat.specs) == 20
-    assert [s.id for s in cat.specs if s.pending] == ["S3K-0001", "S3K-0002", "S3K-0003", "S3K-0004"]
+    return specs
+
+
+def test_specs_using_the_level_types_load_into_the_levels_batch(tmp_path: Path) -> None:
+    cat = V.load_catalogue(_write(tmp_path, _level_specs()))
+    assert len(cat.specs) == 20 and not any(s.pending for s in cat.specs)
+    assert [s.id for s in cat.specs if s.batch == "levels"] == ["S3K-0001", "S3K-0002", "S3K-0003", "S3K-0004"]
+    assert cat.specs[0].level_types == ("level_break",) and cat.specs[1].level_types == ("room_to_level",)
+
+
+def test_a_level_type_no_module_registered_loads_and_is_marked_pending(tmp_path: Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    V.load_plugins()
+    monkeypatch.delitem(V.ENTRY, "level_break")
+    monkeypatch.delitem(V.FILTER, "room_to_level")
+    cat = V.load_catalogue(_write(tmp_path, _level_specs()))
+    assert [s.id for s in cat.specs if s.pending] == ["S3K-0001", "S3K-0002"]
     assert cat.specs[0].pending == ("level_break",) and cat.specs[1].pending == ("room_to_level",)
 
 
