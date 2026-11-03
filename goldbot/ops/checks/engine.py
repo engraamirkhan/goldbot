@@ -354,13 +354,15 @@ def check_history_gap(ctx: HealthContext, account: AccountRef) -> Check | None:
                          "'Every close refused history_gap')")[:600])
 
 
-def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp) -> list[tuple[pd.Timestamp, str, Any]]:
-    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal; [] when it cannot be read."""
+def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp,
+                           symbol: str | None = None) -> list[tuple[pd.Timestamp, str, Any]]:
+    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal under the account's own gold symbol
+    (vantage: XAUUSD+); [] when it cannot be read."""
     if ctx.settings is None:
         return []
     from goldbot.data.store import Store
     try:
-        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=ctx.settings.symbol, start=since, end=ctx.now)
+        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=symbol or ctx.settings.symbol, start=since, end=ctx.now)
         if d.empty:
             return []
         d = d[d["action"] == "order"]
@@ -375,11 +377,13 @@ def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timest
         return []
 
 
-@register_check("account", block=BLOCK_ACCOUNT, pos=60, guard="order_failed")
-def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
+@register_check("account", block=BLOCK_ACCOUNT, pos=60, guard="order_failed", pass_account=True)
+def check_failed_orders(ctx: HealthContext, account: AccountRef | str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
     announced once (NOTIFY_ON_WARN), with account, side, lots and the retcode from the decisions journal."""
+    account_id = account if isinstance(account, str) else account.account_id
+    symbol = None if isinstance(account, str) else account.symbol
     f = ctx.state_dir / f"orders_{account_id}.json"
     if not f.exists():
         return []
@@ -392,7 +396,7 @@ def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     recent = [(cid, r, pd.Timestamp(r["ts_utc"])) for cid, r in rows if r.get("ts_utc") and pd.Timestamp(r["ts_utc"]) >= since]
     if not recent:
         return []
-    journal = _failed_order_retcodes(ctx, account_id, since)
+    journal = _failed_order_retcodes(ctx, account_id, since, symbol)
     out = []
     for cid, r, ts in sorted(recent, key=lambda x: x[2]):
         rc = next((code for jts, agent, code in journal

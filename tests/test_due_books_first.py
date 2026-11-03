@@ -118,3 +118,23 @@ def test_no_book_starves_when_every_pass_has_due_books_that_spend_the_budget(tmp
     for _ in range(len(SPECS)):
         books.account_pass(eng, eng.broker, slow, budget_s=1.5)
     assert set(seen) == set(eng.books)
+
+
+def test_a_due_check_that_raises_never_stops_any_books_exits(tmp_path, monkeypatch):
+    """Trading-safety L1: `due` is an ordering hint; if it raises, every book's exits still run and the pass goes on."""
+    eng = _engine(tmp_path)
+    _arm(eng, "SYM03", _ex())
+
+    def boom(ex: Any, now: pd.Timestamp) -> bool:
+        raise ValueError("malformed exploration")
+    monkeypatch.setattr(exploration, "due", boom)
+    exits: list[str] = []
+    monkeypatch.setattr(books, "_exits_first", lambda e, q, s: exits.append(s) or True)
+    seen: list[str] = []
+
+    def one(e: Engine, q: Any, s: str) -> bool:
+        seen.append(s)
+        return True
+    books.account_pass(eng, eng.broker, one)
+    assert sorted(exits) == sorted(["XAUUSD", *(s.symbol for s in SPECS)])
+    assert seen[0] == "XAUUSD" and len(seen) == 1 + len(SPECS)

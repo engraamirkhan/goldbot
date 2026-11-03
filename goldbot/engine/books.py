@@ -518,6 +518,16 @@ def symbol_info(eng: Engine) -> SymbolInfo:
     return v
 
 
+def _is_due(book: SymbolBook, now: pd.Timestamp) -> bool:
+    """Ordering hint only: a failure here must never stop the exits that follow (trading-safety L1, 2026-11-03)."""
+    from goldbot.engine import exploration
+    try:
+        return bool(exploration.due(book.__dict__.get("exploration"), now))
+    except Exception:
+        log.exception("exploration.due failed for %s; book keeps its rotation place", book.__dict__["cfg"].symbol)
+        return False
+
+
 def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None = None,
                  budget_s: float = PASS_BUDGET_S) -> bool:
     """One loop pass over every book: `one_pass(eng, quotes, symbol)` (ops.services.engine.engine_pass) on each book
@@ -536,7 +546,6 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     even past the deadline, so due books never starve the others.
 
     A quiet book (`quiet_books`: blocked, holding nothing) takes no part at all: no quote, no exits step, no pass."""
-    from goldbot.engine import exploration
     ok = True
     t0 = time.monotonic()
     cfg = eng.primary.__dict__["cfg"]
@@ -553,7 +562,7 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
         start = eng.__dict__.get("_pass_cursor", 0) % len(rest) if rest else 0
         turn = [*rest[start:], *rest[:start]]
         now = eng.clock()
-        due = [b for b in turn if exploration.due(b.__dict__.get("exploration"), now)]
+        due = [b for b in turn if _is_due(b, now)]
         order = [eng.primary, *due, *(b for b in turn if b not in due)]
         for book in order:
             with using(eng, book):
