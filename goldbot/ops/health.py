@@ -129,12 +129,15 @@ from goldbot.ops.checks.bridge import (
     check_terminal,
 )
 from goldbot.ops.checks.engine import (
+    HISTORY_GAP_MIN_CLOSES,
+    HISTORY_GAP_WINDOW_H,
     TICK_ERROR_RECENT_S,
     _failed_order_retcodes,
     check_engine,
     check_engine_loop,
     check_entry_status,
     check_failed_orders,
+    check_history_gap,
     check_symbols,
     check_tick_errors,
     check_weekend_247,
@@ -233,6 +236,8 @@ __all__ = [
     "HEARTBEAT_EVERY_S",
     "HEARTBEAT_SERVICES",
     "HEARTBEAT_SILENT_S",
+    "HISTORY_GAP_MIN_CLOSES",
+    "HISTORY_GAP_WINDOW_H",
     "HealthContext",
     "HealthReport",
     "HealthWatch",
@@ -326,6 +331,7 @@ __all__ = [
     "check_feature_versions",
     "check_halt",
     "check_heartbeat",
+    "check_history_gap",
     "check_kill_switch",
     "check_limits_controller",
     "check_loss_caps",
@@ -594,7 +600,8 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
-                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:")
+                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
+                  "history_gap:")
 
 
 def _alerting(name: str, status: str) -> bool:
