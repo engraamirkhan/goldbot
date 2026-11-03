@@ -301,6 +301,18 @@ def account_magic_bases(acc: Account) -> tuple[int, ...]:
     return (acc.magic_base, *(accounts.instrument_magic_base(acc, k) for k in account_instruments(acc)))
 
 
+def account_managed_bases(acc: Account) -> tuple[int, ...]:
+    """Every non-gold registry block of a demo account's `instrument_magic_index` on its broker: the ranges whose
+    positions the bridge lets the engine manage (stop changes), listed or not, so a wind-down book's exits run (M3).
+    None on a live or observe-only account, or one with no index."""
+    from goldbot.instruments import GOLD, instrument_magic_base, registry
+    index = getattr(acc, "instrument_magic_index", None)
+    if index is None or acc.mode != "demo" or acc.is_observe_only:
+        return ()
+    return tuple(instrument_magic_base(int(index), spec) for key, spec in registry().instruments.items()
+                 if key != GOLD and spec.broker_symbols.get(acc.broker) is not None)
+
+
 def book_terms_problem(spec: Any, info: Any) -> str | None:
     """Why a non-gold instrument may take no entry on this terminal, or None. NEVER a spec with `verify: true` or not
     `enabled` (placeholder terms until lane L1's symbol check confirms them on the brain), nor one whose terminal
