@@ -313,3 +313,48 @@ def test_closes_are_never_sized_whatever_the_other_symbols_hold():
     t = _MultiTerminal(equity=1.0, per_symbol={"XAGUSD": (5000.0, 30.0, 5000.0, "USD")},
                        positions=[_pos(3.0, symbol="XAGUSD")])
     assert GuardedBroker(t, magic_base=260100).close(7).ok and t.reads == []
+
+
+# ---------------------------------------------------------------------------------------------- instrument magics
+# Incident 2026-11-03: every non-gold entry on icm-probe failed with "magic 3051695 outside 260500..260599": the guard
+# knew gold's range only. Its account's instrument blocks (engine/magic.py book_bases: "the set reconciliation, the
+# wind-down check and the bridge guard accept") pass; any other magic is still refused before the terminal.
+XAG_BASE = 3_051_600
+
+
+def _xag_order(magic: int) -> Any:
+    return _order(0.01).model_copy(update={"symbol": "XAGUSD", "magic": magic})
+
+
+def test_the_guard_accepts_its_accounts_instrument_ranges_and_refuses_every_other_magic():
+    t = _Terminal(contract=5000.0, bid=30.0, ask=30.0)
+    g = GuardedBroker(t, magic_base=260500, instrument_bases=(XAG_BASE,))
+    assert g.place_order(_xag_order(XAG_BASE + 95)).ok and len(t.sent) == 1
+    for magic in (XAG_BASE + 100, XAG_BASE - 1, 3_061_695, 260100):
+        with pytest.raises(PermissionError, match=f"magic {magic} outside"):
+            g.place_order(_xag_order(magic))
+    assert len(t.sent) == 1
+
+
+def test_without_instrument_bases_the_guard_is_gold_only_as_before():
+    with pytest.raises(PermissionError, match="magic 3051695 outside 260500..260599"):
+        GuardedBroker(_Terminal(), magic_base=260500).place_order(_xag_order(3_051_695))
+
+
+def test_stop_changes_on_an_instrument_position_pass_and_a_foreign_one_is_refused():
+    t = _Terminal(positions=[_pos(0.01, magic=XAG_BASE + 95, symbol="XAGUSD", pid=11), _pos(0.01, magic=999, pid=12)])
+    g = GuardedBroker(t, magic_base=260500, instrument_bases=(XAG_BASE,))
+    assert g.modify(11, 29.0, 31.0).ok
+    with pytest.raises(PermissionError, match="not one of this account's goldbot positions"):
+        g.modify(12, 29.0, 31.0)
+
+
+def test_the_bridge_bases_are_the_engines_books_on_demo_and_gold_alone_on_live():
+    from goldbot.ops.services.engine import account_magic_bases
+    accs = acc_mod.load_accounts()
+    probe = accs["icm-probe"]
+    bases = account_magic_bases(probe)
+    assert bases[0] == probe.magic_base and len(bases) == 1 + len(probe.instruments)
+    assert any(b <= 3_051_695 < b + 100 for b in bases[1:])
+    live = probe.model_copy(update={"mode": "live"})
+    assert account_magic_bases(live) == (probe.magic_base,)

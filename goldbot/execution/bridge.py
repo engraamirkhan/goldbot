@@ -59,7 +59,7 @@ import logging
 import math
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -697,8 +697,8 @@ def _refusal(message: str) -> OrderResult:
 
 class GuardedBroker:
     """The terminal-side broker behind the bridge, refusing what goldbot never sends: orders outside this account's
-    magic range (magic_base .. magic_base + 99) or above MAX_ORDER_LOTS, and stop/target changes on positions outside
-    that range. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
+    magic range (magic_base .. magic_base + 99, plus each of its demo instruments' blocks of 100 from `instrument_bases`,
+    engine/magic.py) or above MAX_ORDER_LOTS, and stop/target changes on positions outside those ranges. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
     everything on the account (design: Drawdown kill switch). The bridge smoke's magic (magic_base + SMOKE_MAGIC_OFFSET)
     is refused unless the terminal reports a demo account (ADR 0021 F4).
 
@@ -721,8 +721,11 @@ class GuardedBroker:
     cannot be read, or has no such field, is not judged here. Closes and modifies are never gated by it."""
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
-                 leverage_cap: float | None = None, observe_only: bool = False) -> None:
+                 leverage_cap: float | None = None, observe_only: bool = False,
+                 instrument_bases: Iterable[int] = ()) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
+        # the multi-instrument demo's books (ops/services/engine.account_magic_bases, demo only): each a block of 100
+        self.instrument_bases = tuple(int(b) for b in instrument_bases)
         # ADR 0063: an observe-only account's terminal side refuses every order, stop change and close (PermissionError,
         # the bridge's 500): nothing of the owner's live account is ever touched, its own positions included
         self.observe_only = observe_only
@@ -735,7 +738,7 @@ class GuardedBroker:
         self.order_sent_at: float | None = None
 
     def _ours(self, magic: int) -> bool:
-        return self.magic_base <= int(magic) < self.magic_base + 100
+        return any(b <= int(magic) < b + 100 for b in (self.magic_base, *self.instrument_bases))
 
     def _own_position(self, position_id: int) -> None:
         if not any(p.position_id == position_id and self._ours(p.magic) for p in self._b.positions()):
@@ -749,7 +752,8 @@ class GuardedBroker:
         sent_at, self.order_sent_at = self.order_sent_at, None
         self._refuse_observed("place_order")
         if not self._ours(intent.magic):
-            raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
+            extra = f" and its {len(self.instrument_bases)} instrument blocks" if self.instrument_bases else ""
+            raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}{extra}")
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
             raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
         try:                                           # the one account() read: F4, verify and the ceiling use it
