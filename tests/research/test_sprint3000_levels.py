@@ -146,14 +146,23 @@ def test_nothing_fires_on_a_book_younger_than_the_frozen_540_days(rule: str, kin
     assert not L.any() and not S.any()
 
 
-def test_the_level_window_warms_up_long_enough_for_a_whole_history_book() -> None:
-    need = pd.Timedelta(days=kl.MATURE_DAYS + kl.PCT_WINDOW_DAYS)
+def test_the_level_window_warms_up_860_days_but_never_below_its_windows_data_floor() -> None:
     for name, w in WINDOWS.items():
         lw = VL.level_window(w)
         assert (lw.name, lw.dec_from, lw.end) == (w.name, w.dec_from, w.end), name   # trades: the same window
-        assert lw.data_from <= w.data_from and lw.dec_from - lw.data_from >= need, name
+        assert lw.data_from <= w.data_from and lw.data_from >= VL.LEVEL_DATA_FLOOR[name], name
+        want = max(VL.LEVEL_DATA_FLOOR[name], w.dec_from - pd.Timedelta(days=VL.LEVEL_WARMUP_DAYS))
+        assert lw.data_from == min(w.data_from, want), name
+    # quant review F1: explore never reads a test_old decision year (2006-02..2008); B3 lets it warm up on 2009 only
+    assert VL.level_window(WINDOWS["explore"]).data_from >= pd.Timestamp("2009-01-01", tz="UTC")
+    assert VL.level_window(WINDOWS["explore"]).data_from == WINDOWS["explore"].data_from
     assert VL.level_window(WINDOWS["confirm"]).data_from == pd.Timestamp("2015-08-25", tz="UTC")  # 2018-01-01 - 860 d
     assert VL.LEVEL_WARMUP_DAYS == kl.MATURE_DAYS + kl.PCT_WINDOW_DAYS + 2 * kl.SWING_LAG * 7
+
+
+def test_a_level_window_with_no_floor_is_refused() -> None:
+    with pytest.raises(KeyError):
+        VL.level_window(window("2012-01-02", "2012-03-20"))
 
 
 def test_after_the_warm_up_a_book_built_from_a_later_start_equals_the_whole_history_book() -> None:
