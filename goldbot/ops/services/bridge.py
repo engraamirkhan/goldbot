@@ -97,11 +97,12 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if observe_only:
         log.info("observe-only bridge: reads only, every order, stop change and close refused (ADR 0063)")
         select_symbols(mt5_adapter.mt5, broker, acc.observe_symbols)     # Market Watch, so ticks and bars answer
-    from goldbot.ops.services.engine import account_magic_bases
+    from goldbot.ops.services.engine import account_magic_bases, account_managed_bases
     guarded = GuardedBroker(broker, magic_base=acc.magic_base,
                             verify=lambda info: accounts.verify_terminal_account(acc, info),
-                            # the demo instruments' blocks (gold alone on a live or observed account)
-                            instrument_bases=account_magic_bases(acc)[1:],
+                            # the demo instruments' blocks (gold alone on a live or observed account); stop changes
+                            # also on every other registry block of the account (wind-down books, M3)
+                            instrument_bases=account_magic_bases(acc)[1:], managed_bases=account_managed_bases(acc),
                             # ADR 0055: the live pilot account's notional ceiling from its leverage cap (else 6x)
                             leverage_cap=acc.pilot.leverage_cap if acc.pilot.enabled and acc.is_live else None,
                             observe_only=observe_only)
@@ -153,8 +154,8 @@ def run_order_lane(account_id: str) -> None:  # pragma: no cover - needs the Met
                   spawned)
         broker.shutdown()
         raise SystemExit(TERMINAL_SPAWNED_EXIT)
-    from goldbot.ops.services.engine import account_magic_bases
+    from goldbot.ops.services.engine import account_magic_bases, account_managed_bases
     guarded = GuardedBroker(broker, magic_base=acc.magic_base,
                             verify=lambda info: accounts.verify_terminal_account(acc, info),
-                            instrument_bases=account_magic_bases(acc)[1:])
+                            instrument_bases=account_magic_bases(acc)[1:], managed_bases=account_managed_bases(acc))
     serve_lane(guarded, sys.stdin.buffer, out)

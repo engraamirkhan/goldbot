@@ -642,13 +642,13 @@ def test_three_lot_outer_bound_still_refuses_above_three():
 def test_close_of_a_three_lot_position_goes_through():
     t = _Terminal(equity=1.0, positions=[_pos(3.0)])                # far above the ceiling: closing only reduces risk
     res = GuardedBroker(t, magic_base=260100).close(7)
-    assert res.ok and t.reads == []
+    assert res.ok and set(t.reads) <= {"positions"}            # ownership (every symbol), never a sizing figure
 
 
 def test_modify_is_never_sized():
     t = _Terminal(equity=1.0, positions=[_pos(3.0)])
     res = GuardedBroker(t, magic_base=260100).modify(7, 2450.0, None)
-    assert res.ok and t.reads == []
+    assert res.ok and set(t.reads) <= {"positions"}            # ownership (every symbol), never a sizing figure
 
 
 def test_refusal_is_a_definite_reject_and_crosses_the_wire_with_its_reason(guarded_terminal):

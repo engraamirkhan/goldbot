@@ -140,6 +140,7 @@ LOOKBACK_MAX_1M = 90_000
 LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
+MAX_NET_MIN_LOTS = 10               # the same cap in minimum lots, for an instrument whose minimum lot is not gold's 0.01
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
 # ADR 0057: a strategy arm's day holds at least this many of its per-trade cap plus the round trip, never more than
@@ -1637,6 +1638,13 @@ def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float, first:
     room = max(share_gbp, floor_gbp) - lost - held
     return max(room, arm_cap) if first else room
 
+def net_lot_cap(volume_min: float | None) -> float:
+    """ADR 0043 X3's same-side cap on one book: MAX_NET_LOTS (gold, minimum lot 0.01: 10 of them), or 10 minimum lots
+    of an instrument whose minimum is larger (multi-instrument demo: JP225 and the bond futures trade whole lots, the
+    indices and softs 0.1), so its first lot is not refused by gold's figure. The notional caps still bind."""
+    return max(MAX_NET_LOTS, MAX_NET_MIN_LOTS * float(volume_min or 0.0))
+
+
 def _room_floor(arm: Arm, arm_cap: float, cost: float, pot_gbp: float) -> float:
     """ADR 0057: a strategy arm's day is at least ARM_ROOM_LOSSES x (its per-trade cap + the round trip), never above
     SHARE_CAP x its pot; a control's is its fixed share only (0)."""
@@ -1708,7 +1716,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         refuse("loss_unknown")
         return "refused"
     net = sum(t.side * t.lots for t in eng.open.values()) + side * float(lot)
-    if abs(net) > MAX_NET_LOTS + 1e-9:
+    if abs(net) > net_lot_cap(lot) + 1e-9:
         refuse("same_side")
         return "refused"
     if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, now):

@@ -341,12 +341,38 @@ def test_without_instrument_bases_the_guard_is_gold_only_as_before():
         GuardedBroker(_Terminal(), magic_base=260500).place_order(_xag_order(3_051_695))
 
 
+class _GoldTerminal(_Terminal):
+    """As MT5Broker on the box: positions() reads the terminal's own symbol only; account_positions() every symbol."""
+
+    def positions(self, magic_prefix: int | None = None) -> list[Any]:
+        return [p for p in self.open if p.symbol == "XAUUSD"]
+
+
 def test_stop_changes_on_an_instrument_position_pass_and_a_foreign_one_is_refused():
-    t = _Terminal(positions=[_pos(0.01, magic=XAG_BASE + 95, symbol="XAGUSD", pid=11), _pos(0.01, magic=999, pid=12)])
+    t = _GoldTerminal(positions=[_pos(0.01, magic=XAG_BASE + 95, symbol="XAGUSD", pid=11),
+                                 _pos(0.01, magic=999, pid=12), _pos(0.01, magic=260595, pid=13)])
     g = GuardedBroker(t, magic_base=260500, instrument_bases=(XAG_BASE,))
-    assert g.modify(11, 29.0, 31.0).ok
+    assert g.modify(11, 29.0, 31.0).ok and g.modify(13, 2400.0, 2600.0).ok
     with pytest.raises(PermissionError, match="not one of this account's goldbot positions"):
         g.modify(12, 29.0, 31.0)
+
+
+def test_a_wind_down_blocks_stops_still_change_but_it_takes_no_new_order():
+    xpt = 3_050_200                                   # an instrument the account no longer lists (M3 wind-down)
+    t = _GoldTerminal(positions=[_pos(0.01, magic=xpt + 95, symbol="XPTUSD", pid=21)])
+    g = GuardedBroker(t, magic_base=260500, instrument_bases=(XAG_BASE,), managed_bases=(XAG_BASE, xpt))
+    assert g.modify(21, 1400.0, 1500.0).ok
+    with pytest.raises(PermissionError, match="outside"):
+        g.place_order(_xag_order(xpt + 95))
+
+
+def test_the_managed_bases_cover_every_registry_block_on_demo_and_none_on_live():
+    from goldbot.ops.services.engine import account_magic_bases, account_managed_bases
+    probe = acc_mod.load_accounts()["icm-probe"]
+    managed = account_managed_bases(probe)
+    assert set(account_magic_bases(probe)[1:]) <= set(managed)
+    assert all(3_050_000 <= b < 3_060_000 for b in managed)
+    assert account_managed_bases(probe.model_copy(update={"mode": "live"})) == ()
 
 
 def test_the_bridge_bases_are_the_engines_books_on_demo_and_gold_alone_on_live():
@@ -358,3 +384,12 @@ def test_the_bridge_bases_are_the_engines_books_on_demo_and_gold_alone_on_live()
     assert any(b <= 3_051_695 < b + 100 for b in bases[1:])
     live = probe.model_copy(update={"mode": "live"})
     assert account_magic_bases(live) == (probe.magic_base,)
+
+
+# ---------------------------------------------------------------------------------------------- same-side cap
+# Incident 2026-11-03: S0-JP225 was refused "same_side" 23 times overnight: JP225's minimum lot (1.0) is above gold's
+# 0.10-lot cap, so no JP225 (or UST10Y/BUND10Y) entry could ever pass. The cap is 10 minimum lots per book.
+@pytest.mark.parametrize(("volume_min", "cap"), [(0.01, 0.10), (None, 0.10), (0.1, 1.0), (1.0, 10.0)])
+def test_the_same_side_cap_is_ten_minimum_lots_and_gold_keeps_its_tenth_of_a_lot(volume_min, cap):
+    from goldbot.engine.exploration import net_lot_cap
+    assert net_lot_cap(volume_min) == pytest.approx(cap)

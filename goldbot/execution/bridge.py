@@ -698,7 +698,9 @@ def _refusal(message: str) -> OrderResult:
 class GuardedBroker:
     """The terminal-side broker behind the bridge, refusing what goldbot never sends: orders outside this account's
     magic range (magic_base .. magic_base + 99, plus each of its demo instruments' blocks of 100 from `instrument_bases`,
-    engine/magic.py) or above MAX_ORDER_LOTS, and stop/target changes on positions outside those ranges. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
+    engine/magic.py) or above MAX_ORDER_LOTS, and stop/target changes on positions outside those ranges or the
+    `managed_bases` (every registry block of the account, so a wind-down book's exits run after its instrument is no
+    longer listed). Ownership is read from `account_positions()`, every symbol, not the terminal's own symbol alone. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
     everything on the account (design: Drawdown kill switch). The bridge smoke's magic (magic_base + SMOKE_MAGIC_OFFSET)
     is refused unless the terminal reports a demo account (ADR 0021 F4).
 
@@ -722,10 +724,12 @@ class GuardedBroker:
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
                  leverage_cap: float | None = None, observe_only: bool = False,
-                 instrument_bases: Iterable[int] = ()) -> None:
+                 instrument_bases: Iterable[int] = (), managed_bases: Iterable[int] = ()) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
         # the multi-instrument demo's books (ops/services/engine.account_magic_bases, demo only): each a block of 100
         self.instrument_bases = tuple(int(b) for b in instrument_bases)
+        # stop changes only: the listed blocks and every other registry block of the account (wind-down, M3)
+        self.managed_bases = tuple(sorted({*self.instrument_bases, *(int(b) for b in managed_bases)}))
         # ADR 0063: an observe-only account's terminal side refuses every order, stop change and close (PermissionError,
         # the bridge's 500): nothing of the owner's live account is ever touched, its own positions included
         self.observe_only = observe_only
@@ -740,8 +744,14 @@ class GuardedBroker:
     def _ours(self, magic: int) -> bool:
         return any(b <= int(magic) < b + 100 for b in (self.magic_base, *self.instrument_bases))
 
+    def _managed(self, magic: int) -> bool:
+        return self._ours(magic) or any(b <= int(magic) < b + 100 for b in self.managed_bases)
+
     def _own_position(self, position_id: int) -> None:
-        if not any(p.position_id == position_id and self._ours(p.magic) for p in self._b.positions()):
+        # every symbol: MT5Broker.positions() reads its own symbol only, so a book's position would never be found
+        read = getattr(self._b, "account_positions", None)
+        held = read() if callable(read) else self._b.positions()
+        if not any(p.position_id == position_id and self._managed(p.magic) for p in held):
             raise PermissionError(f"position {position_id} is not one of this account's goldbot positions")
 
     def _refuse_observed(self, what: str) -> None:
