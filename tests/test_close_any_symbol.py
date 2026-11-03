@@ -146,10 +146,52 @@ def test_close_with_no_symbol_info_for_another_symbol_returns_refused_not_raises
     assert broker.close(GOLD).ok                                        # one symbol's fault never stops the others
 
 
-def test_a_partial_close_of_another_symbol_is_never_sent(monkeypatch):
+# A non-gold book scales out through the gold terminal's bridge (multi-instrument demo, safety review 2026-11-03): the
+# partial is sized in the position's own symbol's lot terms, never gold's, and a size those terms cannot carry is
+# refused before anything is sent, so the whole position keeps its stop.
+IDX = 7003                                              # fake ticket: an index book's position, minimum lot 0.1
+
+
+def _index_terminal() -> SimpleNamespace:
+    infos = {s: Sym(s, 2, 0.01, 100.0, 0.01, 0.01, 50.0, 0, bits, 4, True) for s, bits in FILL_BITS.items()}
+    infos["US500"] = Sym("US500", 2, 0.01, 1.0, 0.1, 0.1, 100.0, 0, 1, 4, True)
+    fake = _terminal(ticks={"XAUUSD": MTick(MS, 2400.0, 2400.2, 6), "US500": MTick(MS, 5000.0, 5000.5, 6)},
+                     infos=infos)
+    fake.book.append(Pos(IDX, "US500", 0, 1.0, 5000.0, 4950.0, 5100.0, 3_051_695, "ours", MS, 0.0))
+    return fake
+
+
+def test_a_partial_close_of_another_symbol_rounds_down_to_that_symbols_own_volume_step(monkeypatch):
+    fake = _index_terminal()
+    res = _adapter(monkeypatch, fake).close(IDX, 0.55)
+    assert res.ok
+    [req] = fake.sent
+    assert req["symbol"] == "US500" and req["volume"] == pytest.approx(0.5)              # US500's 0.1 step, not 0.01
+    assert req["type_filling"] == fake.ORDER_FILLING_FOK and req["price"] == 5000.0
+
+
+@pytest.mark.parametrize("lots", [0.05, 0.09, 1.0, 1.5])
+def test_a_partial_close_its_symbol_cannot_carry_is_refused_unsent_and_the_position_keeps_its_stop(monkeypatch, lots):
+    """Below US500's 0.1 minimum, or leaving less than it open: MT5 would reject it (or close it all), so nothing is
+    sent and the engine's bounded retries see a refusal; the whole position stays with its stop."""
+    fake = _index_terminal()
+    res = _adapter(monkeypatch, fake).close(IDX, lots)
+    assert not res.ok and res.retcode == 10014 and res.filled_lots == 0 and "US500" in res.message
+    assert fake.sent == [] and [(p.volume, p.sl) for p in fake.book if p.ticket == IDX] == [(1.0, 4950.0)]
+
+
+def test_a_partial_close_of_another_symbol_without_its_symbol_info_is_refused_unsent(monkeypatch):
+    fake = _index_terminal()
+    gold = Sym("XAUUSD", 2, 0.01, 100.0, 0.01, 0.01, 50.0, 0, 2, 4, True)
+    fake.symbol_info = lambda s: None if s == "US500" else gold
+    res = _adapter(monkeypatch, fake).close(IDX, 0.5)
+    assert not res.ok and res.retcode == 10021 and fake.sent == []
+
+
+def test_a_gold_partial_close_is_still_sent_at_golds_step(monkeypatch):
     fake = _terminal()
-    res = _adapter(monkeypatch, fake).close(EUR, 0.1)
-    assert not res.ok and fake.sent == [] and [p.volume for p in fake.book if p.ticket == EUR] == [0.37]
+    assert _adapter(monkeypatch, fake).close(GOLD, 0.5).ok
+    assert fake.sent[0]["volume"] == pytest.approx(0.5) and fake.sent[0]["symbol"] == "XAUUSD"
 
 
 def test_a_partially_filled_close_is_not_ok_and_the_resend_closes_the_remaining_volume(monkeypatch):
