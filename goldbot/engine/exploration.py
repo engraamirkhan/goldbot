@@ -998,6 +998,20 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
                     _signal(eng, ex, arm, bars, frame, through, late=late)
 
 
+def due(ex: Exploration | None, now: pd.Timestamp) -> bool:
+    """A decision waits on this book's pass (live demo issue 2026-11-03: on 20 books the 1m controls fire together and
+    "later books' S0 decisions exceed the 10 s stale limit"): a signal is queued, or a 1m/5m arm's minute is past
+    its GRACE_S and not decided yet (`_minutes`). Read only, no broker call; `books.account_pass` runs due books first."""
+    if ex is None:
+        return False
+    if ex.queue:
+        return True
+    through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
+    if ex.last_minute is not None and through <= ex.last_minute:
+        return False
+    return any(a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0 for a in ex.arms.values())
+
+
 def on_pass(eng: Engine, tick: Tick) -> None:
     """Every engine pass with a quote, after its exits and its bar close: queue the arms' new signals and send. Never
     raises (an error is journalled `exploration_error`; the pass and every exit go on)."""
