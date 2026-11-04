@@ -179,3 +179,36 @@ def test_an_entry_booked_inside_a_pass_clears_the_passs_account_reads(tmp_path):
         return True
     books.account_pass(eng, pb, one, books.QuoteFeed(pb))
     assert seen[0] == 0 and seen[1] == 1
+
+
+def test_one_pass_asks_the_bridge_each_loss_per_lot_question_once_and_the_next_pass_asks_again(tmp_path):
+    """Live 2026-11-04 (brain, py-spy of icm-probe): 9 s in 150 s of the engine's pass went to `loss_per_lot` round
+    trips, the same open positions' loss at their stops asked again by every book's exploration pass. The answer is
+    the broker's figure for exactly those arguments, so one pass asks each question once; a different question, and
+    the next pass, go to the broker."""
+    eng, pb = _bridge_engine(tmp_path)
+    pb.latency_s = 0.0
+    got: list[Any] = []
+
+    def one(e: Engine, quotes: Any, symbol: str) -> bool:
+        got.append(e.broker.loss_per_lot("SYM01", 1, 30.0, 1.0))
+        got.append(e.broker.loss_per_lot("SYM01", -1, 30.0, 1.0))
+        return True
+    books.account_pass(eng, pb, one, books.QuoteFeed(pb))
+    asked = [c for c in pb.calls if c[0] == "loss_per_lot"]
+    assert len(asked) == 2 and len(got) == 2 * N_BOOKS
+    assert got[0] is not None and set(got[0::2]) == {got[0]}
+    books.account_pass(eng, pb, one, books.QuoteFeed(pb))
+    assert len([c for c in pb.calls if c[0] == "loss_per_lot"]) == 4
+
+
+def test_a_deferred_pass_logs_its_exits_time_and_its_slowest_books(tmp_path, caplog):
+    """Per-book timing in the journal (live 2026-11-04: the deferral line said how many books ran, never which one
+    took the budget), so the next measurement on the brain needs no profiler."""
+    eng, pb = _bridge_engine(tmp_path)
+    pb.latency_s = 0.02
+    with caplog.at_level("WARNING", logger="goldbot.engine"):
+        books.account_pass(eng, pb, engine_pass, books.QuoteFeed(pb), budget_s=0.3)
+    line = next(r.getMessage() for r in caplog.records if "pass budget" in r.getMessage())
+    import re
+    assert re.search(r"exits \d+\.\d\d s; slowest: (\w+ \d+\.\d\d s, ){2}\w+ \d+\.\d\d s$", line), line

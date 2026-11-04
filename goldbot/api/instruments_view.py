@@ -22,10 +22,12 @@ import logging
 import math
 from collections.abc import Iterable, Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import Any, get_args
 
 import pandas as pd
 
+import goldbot.instruments as registry_file
 from goldbot.api.schema import (
     EntrySymbol,
     GroupExposure,
@@ -58,14 +60,35 @@ LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+# config/instruments.yaml as last parsed: {path: ((mtime_ns, size), registry or None when unreadable)}
+_REGISTRY: dict[Path, tuple[tuple[int, int], Instruments | None]] = {}
+
+
 def _registry(reg: Instruments | None) -> Instruments | None:
+    """The registry given, else config/instruments.yaml parsed once per version of the file (its mtime and size).
+    Live 2026-11-04 (brain, py-spy): parsed once per ledger row, the api and telegram services each spent 96-97% of a
+    core in yaml, starving the engines on the 2-core host. An edit is read on the next call, as before; an unreadable
+    file is logged once per version and every view falls back to gold terms."""
     if reg is not None:
         return reg
+    path = Path(registry_file.DEFAULT_INSTRUMENTS)
     try:
-        return load_instruments()
+        st = path.stat()
+        version: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        version = None
+    hit = _REGISTRY.get(path)
+    if version is not None and hit is not None and hit[0] == version:
+        return hit[1]
+    got: Instruments | None
+    try:
+        got = load_instruments(path)
     except Exception:                                   # noqa: BLE001 - a bad registry: gold-only views, logged
         log.exception("instruments.yaml unreadable: the dashboard shows gold terms only")
-        return None
+        got = None
+    if version is not None:
+        _REGISTRY[path] = (version, got)
+    return got
 
 
 def instrument_key(raw: Any, reg: Instruments | None = None) -> str:
