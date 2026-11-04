@@ -50,6 +50,7 @@ from goldbot.engine import (
     commission,
     cost_probe,
     exploration,
+    frames,
     history,
     key_zones,
     order_send,
@@ -60,6 +61,7 @@ from goldbot.engine import (
 from goldbot.engine.agent_candidates import AgentCandidates
 from goldbot.engine.closed_record import EXCURSION_FREEZE_TOLERANCE_S  # noqa: F401  (re-exported)
 from goldbot.engine.cost_probe import ScheduledProbe
+from goldbot.engine.frames import Frame as _Frame
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -89,7 +91,6 @@ from goldbot.execution.classifier import StoredClass, effective_class, read_stor
 from goldbot.execution.costs import CostTable
 from goldbot.execution.not_placed import bridge_refused, not_placed, notice_text, refusal_code
 from goldbot.features import build_features
-from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.excursion import Excursion
@@ -291,14 +292,6 @@ class EngineConfig(Record):
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
     swap_prior: SwapSpec = Field(default_factory=lambda: SwapSpec.shipped())
-
-
-class _Frame(Record):
-    dec: pd.DataFrame
-    m: pd.DataFrame
-    X: pd.DataFrame
-    atr: pd.Series
-    by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
 
 
 class Engine:
@@ -860,20 +853,8 @@ class Engine:
 
     # ------------------------------------------------------------------ main step
     def _frame(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> _Frame | None:
-        """Completed bars of one decision timeframe with features and its context (the same rule as research)."""
-        dec = self._resample(complete, tf)
-        dec = dec[dec["visible_at"] <= close_ts].tail(self.cfg.feature_window).reset_index(drop=True)
-        if len(dec) < 120:
-            return None
-        m = mid(dec)
-        X = build_features(m, DEFAULT_FEATURE_NAMES, ctx=books.feature_ctx(self))   # non-gold: its symbol (L1)
-        version = X.attrs["feature_version"]
-        for ctf in context_tfs(tf):
-            hit = self._context(complete, ctf, close_ts)
-            if hit is not None:
-                X = merge_higher_tf(X, hit[1], hit[0], TF_LABEL[ctf])
-        X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
-        return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
+        """Completed bars of one decision timeframe; its features built on first read (engine/frames.py)."""
+        return frames.frame(self, complete, tf, close_ts)
 
     @staticmethod
     def _scoring_frame(fr: _Frame, model: Model) -> pd.DataFrame | None:
@@ -947,8 +928,7 @@ class Engine:
         self._manage_open(base.dec)
         exploration.trail(self, close_ts)    # H-80 BXR's runner stop and its virtual twins; never gated, never raises
         self.center.sweep_expired()
-        regime = self._regime(base.X, close_ts)
-        fam_w = self.allocator.weights(regime)
+        fam_w = self.allocator.weights(self._regime(base.X, close_ts)) if self.agents else {}   # agents' only input
         decisions: list[dict] = []
         tfs = {a.timeframe for a in self.agents.values()} | {self.cfg.decision_tf}
         tfs |= {t.timeframe for t in self.open.values() if t.policy is not None and t.timeframe}
@@ -1127,7 +1107,7 @@ class Engine:
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
-        dec, X, a = fr.dec, fr.X, fr.atr
+        dec, a = fr.dec, fr.atr                          # fr.X is built when an agent reads it (engine/frames.py)
         decisions = []
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
@@ -1163,7 +1143,7 @@ class Engine:
                 # design: a model only ever scores the feature frame it was trained on
                 d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
                 d.update(p=None, model_feature_version=getattr(model, "feature_version", ""),
-                         frame_feature_version=X.attrs.get("feature_version"))     # not scored
+                         frame_feature_version=fr.X.attrs.get("feature_version"))     # not scored
                 decisions.append(d)
                 continue
             sfv = str(Xm.attrs.get("feature_version", ""))
