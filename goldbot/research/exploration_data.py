@@ -413,6 +413,20 @@ def replay_label(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp
     return Replay(exit_utc=exit_t, sim_r=float(sim), mid_r=float(mid), barrier=barrier)
 
 
+def instrument_key(symbol: str, broker: str | None = None) -> str:
+    """The instrument key (config/instruments.yaml) a key, store symbol or broker symbol stands for: `broker`'s symbol
+    first (vantage XAUUSD+, vantage247 XAUUSD247 -> XAUUSD), else any; `symbol` itself when the registry does not
+    list it (an unknown symbol is never gold by accident)."""
+    from goldbot.instruments import registry
+    try:
+        reg = registry()
+    except (OSError, ValueError) as exc:
+        log.warning("instrument registry unreadable (%s): %s is read as itself", type(exc).__name__, symbol)
+        return symbol
+    spec = reg.resolve(symbol, broker) or reg.resolve(symbol)
+    return spec.key if spec is not None else symbol
+
+
 def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *, cutoff: pd.Timestamp,
                      account_id: str | None = None, symbol: str = GOLD,
                      instruments: Mapping[str, str] | None = None) -> int:
@@ -420,14 +434,16 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
     resolves by `cutoff` on the bars before it, and write label_sim_r / label_mid_r once. Returns the number labelled.
     The cost table must be effective by `cutoff`; another broker's rows are never labelled with it.
 
-    `bars_1m` are `symbol`'s; only candidates of an arm on that instrument are replayed (`instruments`: arm id ->
+    `bars_1m` are `symbol`'s (a key or a broker symbol: `instrument_key`, so Vantage's XAUUSD+ and XAUUSD247 are
+    gold; quant review of 75824e5c); only candidates of an arm on that instrument are replayed (`instruments`: arm id ->
     instrument, default the spec's `arms.arm_instruments`; an arm it does not name is gold's). `costs` is gold's per-oz
     model, so nothing is labelled for another symbol: brain 2026-11-04, the multi-instrument controls (S0-NZDUSD stop
     0.00019, S0-SUGAR 0.00026) were replayed on the account's XAUUSD bars with gold's costs, mean -2,679 R and
     -1,882 R. Another instrument's candidate stays NULL (unresolved, never censored) until its own replay exists."""
     if costs.effective_utc > cutoff:
         raise ValueError("cost model effective after the labelling cutoff: labels must be point in time")
-    if bars_1m.empty or symbol != GOLD:
+    key = instrument_key(symbol, costs.broker)
+    if bars_1m.empty or key != GOLD:
         return 0
     bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff]
     obs = read_obs(db, broker=costs.broker)
@@ -435,7 +451,7 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
     inst = arm_spec.arm_instruments() if instruments is None else instruments
-    obs = obs[obs["arm_id"].map(lambda a: inst.get(str(a), GOLD)) == symbol]
+    obs = obs[obs["arm_id"].map(lambda a: inst.get(str(a), GOLD)) == key]
     rows = []
     for r in obs.to_dict("records"):
         delay = arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), pd.Timestamp(r["decision_utc"]))
