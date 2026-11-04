@@ -369,6 +369,27 @@ def test_an_approval_error_never_skips_the_exits_of_that_tick_and_blocks_entries
     assert state["tick_error"] is False and state["tick_errors_total"] == 1
 
 
+def test_the_engine_publishes_when_the_current_tick_error_block_began_and_clears_it_with_the_block(tmp_path):
+    """tick_error_since: the first error of the current block, kept on a repeat (health tells a repeating error from
+    a single blip by it) and cleared with tick_error when a whole clean decision bar closes."""
+    eng, _, host = _engine(tmp_path)
+    eng.on_tick(_tick(WED))
+    eng.note_tick_error(RuntimeError("blip"))
+    host[0] = WED + pd.Timedelta(minutes=3)
+    eng.on_tick(_tick(host[0], 2400.5))
+    eng.note_tick_error(RuntimeError("again"))
+    eng._write_state()
+    e = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert e["tick_error"] is True and e["tick_error_since"] == WED.isoformat()
+    assert e["last_tick_error_at"] == host[0].isoformat()
+    for m in (16, 31, 46):     # the error is dated by the next tick (12:16): the clean bar 12:30-12:45 clears it
+        host[0] = WED + pd.Timedelta(minutes=m)
+        eng.on_tick(_tick(host[0], 2401.0))
+    e = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert e["tick_error"] is False and e["tick_error_since"] is None
+    assert e["last_tick_error_at"] == (WED + pd.Timedelta(minutes=3)).isoformat()   # the history stays for tick_errors
+
+
 def test_the_engine_loop_survives_any_exception_and_health_alerts_on_it(tmp_path):
     from goldbot.ops import health
 

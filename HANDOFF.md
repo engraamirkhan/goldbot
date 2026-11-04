@@ -5,6 +5,9 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- engine:<account> stays FAIL after a one-off tick error (2026-11-04: one BridgeUnavailable blip at 06:27:56 UTC on all three accounts kept `engine:<account>` at FAIL for 12+ min while the engines passed every minute):
+  - Cause: the engine's entry block is right (it clears only when a whole clean decision bar closes, up to ~30 min on 15m bars, exits never gated), but health FAILed for as long as `tick_error` was set.
+  - Fix: the engine publishes `tick_error_since` (first error of the current block, host clock; kept on a repeat, cleared with the block). `engine:<account>` now FAILs only while the error is current: one in the last 120 s (`TICK_ERROR_CURRENT_S`), or a block older than 2 decision periods + 5 min (`TICK_ERROR_STUCK_S`, 35 min, pinned to `EngineConfig.decision_tf` by a test) with the market open throughout (errors repeating). Otherwise WARN with the age ("tick error (BridgeUnavailable) 12 min ago"). An engine without `tick_error_since` falls back to `last_tick_error_at`; one without either FAILs as before. The entry block itself is unchanged; `tick_errors:<account>` still WARNs on each error.
 - **Due books first in the multi-book pass (2026-11-03; live demo issue, icm-probe).** On 20 books the 1m S0
   controls fire on every book at the same minute close; the 5 s pass budget covered 4-15 books and the later books'
   signals passed their 10 s staleness before their pass ran (`exploration_stale`, ~80 an hour, `explore:S0-<SYMBOL>`).

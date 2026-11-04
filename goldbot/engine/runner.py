@@ -376,6 +376,7 @@ class Engine:
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         self.tick_errors_total = 0                     # since the engine started (engine state, health)
         self._last_tick_error_at: pd.Timestamp | None = None   # host clock (live) for health and the state file
+        self._tick_error_since: pd.Timestamp | None = None     # the same clock: first error of the current block (health)
         # the same error on the TICK clock, which decision bars are cut on: the latest tick stamp seen when it happened,
         # moved to the next tick's stamp (`_error_awaits_tick`) so an error between ticks is never dated too early
         self._error_tick_ts: pd.Timestamp | None = None
@@ -606,10 +607,9 @@ class Engine:
         the engine state, alerted by health) and log it: the first of each type with its traceback, then at most every
         TICK_ERROR_LOG_S with the number suppressed. The state file is rewritten at most every TICK_ERROR_STATE_S."""
         kind = type(exc).__name__
-        self.state.tick_error = True
-        self._tick_error_detail = kind
+        self._last_tick_error_at = self._error_now()   # the block's start (`_tick_error_since`) is kept on a repeat
+        self.state.tick_error, self._tick_error_detail, self._tick_error_since = True, kind, self._tick_error_since or self._last_tick_error_at
         self.tick_errors_total += 1
-        self._last_tick_error_at = self._error_now()
         self._error_tick_ts = self._last_tick.ts_utc if self._last_tick is not None else None
         self._error_awaits_tick = True
         mono = time.monotonic()
@@ -685,7 +685,7 @@ class Engine:
             bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
             if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
                     and self._error_tick_ts < bar_open:
-                self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
+                self.state.tick_error, self._tick_error_detail, self._tick_error_since = False, None, None   # a whole clean decision bar closed
                 self._write_state()
         elif self._reread_account or self._reread_hwm or self._last_state_write is None \
                 or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:   # ADR 0016 re-read
@@ -3061,7 +3061,7 @@ class Engine:
             **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
             "lot_terms": self._ladder["lot_terms"], "limits": published_limits(self.gate.limits, self._min_lot_risk),
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
-            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail, "tick_error_since": self._tick_error_since.isoformat() if self._tick_error_since is not None else None,
             # host clock; None while quotes are valid (health FAILs after QUOTE_INVALID_FAIL_S of invalid quotes)
             "quote_invalid_since": self._quote_invalid_since.isoformat() if self._quote_invalid_since is not None else None,
             "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
