@@ -113,8 +113,10 @@ def test_the_immediate_list_is_explicit():
     (bridge 5 min, service heartbeat 5 min, engine state 45 min) or must not wait (a loss cap, a kill switch, a failed
     order, a broken backup, a terminal refusing every order, anything CRITICAL)."""
     assert health.IMMEDIATE_NAMES == ("kill_switch:", "daily_cap:", "weekly_cap:", "order_failed:", "backup_age",
-                                      "backup_prune", "object_storage", "bridge:", "heartbeat:", "engine:",
-                                      "engine_loop:")
+                                      "backup_prune", "object_storage", "bridge:", "heartbeat:", "engine_loop:")
+    # engine:<account> FAILs on a tick error under 120 s old (#328), so on the immediate list one refused order on
+    # vantage-demo emailed the owner down/up (live 2026-11-04 14:51-15:58); engine_loop: covers a dead engine
+    assert "engine:" not in health.IMMEDIATE_NAMES
     assert health.IMMEDIATE_REASONS == ("CRITICAL", "MT5 terminal AutoTrading is off",
                                         "MT5 terminal logged in to a different account")
 
@@ -129,7 +131,6 @@ def test_the_immediate_list_is_explicit():
     Check(name="object_storage", status="warn", reason="upload failed"),
     Check(name="bridge:icm-demo", status="fail", reason="MT5 bridge unreachable for 5 min"),
     Check(name="heartbeat:telegram", status="fail", reason="silent for 6 min"),
-    Check(name="engine:icm-demo", status="fail", reason="state 50 min old"),
     Check(name="engine_loop:icm-demo", status="fail", reason="engine loop silent for 160 s"),
     Check(name="terminal:icm-demo", status="fail", reason=bridge_checks._TERMINAL_FAIL["autotrading_off"]),
     Check(name="terminal:icm-demo", status="fail", reason=bridge_checks._TERMINAL_FAIL["wrong_account"]),
@@ -219,3 +220,12 @@ def test_the_step_names_what_it_sent(tmp_path):
         w.poll(rep(m, supervisor="fail"))
     step = w.step(rep(5, supervisor="fail"))
     assert step.text is not None and step.kinds == ("new",) and step.checks == ("supervisor",)
+
+
+def test_one_refused_order_on_an_engine_never_emails_the_owner(tmp_path):
+    """Live 2026-11-04 14:51-15:58: each single BridgeError on vantage-demo turned engine:<account> FAIL for under
+    120 s and, on the immediate list, pinged /fail (a down email) and ok (an up email) minutes later."""
+    w = watch(tmp_path)
+    blip = Check(name="engine:vantage-demo", status="fail", reason="tick error (BridgeError) 5 s ago")
+    assert not health.alerts_at_once(blip)
+    assert w.poll(HealthReport(ts=T0, status="fail", checks=[blip])) is None
