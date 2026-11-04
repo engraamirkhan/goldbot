@@ -435,12 +435,26 @@ def _rebase(eng: Engine, f: HistoryFill) -> bool:
     """Move the cut-over back to the oldest pre-cut-over hole the release could not fill: the broker's bars in
     [hole, old cut-over) replace the release minutes there (one feed per span, one cut-over) and go to the store, so a
     restart keeps the earlier cut-over. Nothing changes when the bar pull did not reach the hole, when it found no
-    minutes, or when the cut-over moved while the fill ran. True when bars changed."""
+    minutes, or when the cut-over moved while the fill ran. True when bars changed.
+
+    A vouched closure is not a hole (#327 trading-safety review L3): the target is re-checked with the gap rule the
+    history_gap refusal uses (`window_gaps`: the session table's closures, plus the spans this fill's good bar pull
+    found without minutes, `f.covered`), so the cut-over moves back only to the oldest hole still open; none left:
+    nothing changes."""
     h = eng.history
     if f.rebase is None or f.rebase_bars is None or f.rebase_bars.empty or h.cutover != f.rebase[1]:
         return False
-    lo, old = f.rebase
-    bars = f.rebase_bars
+    first, old = f.rebase
+    holes = open_gaps(pd.DatetimeIndex(eng.bars_1m["ts_utc"]), eng.sessions, max_open_min=eng.cfg.history_gap_max_min,
+                      covered=[*h.covered, *f.covered])
+    starts = [g.start for g in holes if first <= g.start < old]
+    if not starts:
+        log.info("history: the hole before the cut-over at %s is a vouched closure: the cut-over stays", first)
+        return False
+    lo = min(starts)
+    bars = f.rebase_bars[f.rebase_bars["ts_utc"] >= lo]
+    if bars.empty:
+        return False
     ts = eng.bars_1m["ts_utc"]
     keep = eng.bars_1m[(ts < lo) | (ts >= old)]
     merged = pd.concat([keep, bars]).drop_duplicates("ts_utc", keep="first").sort_values("ts_utc", kind="stable")

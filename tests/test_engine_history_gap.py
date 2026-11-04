@@ -636,3 +636,50 @@ def test_an_unreadable_cut_over_record_falls_back_to_the_stored_minutes(tmp_path
         eng.warm_start(LIVE_FROM)
     assert eng.history.cutover == OWN_FROM
     assert "cut-over record" in caplog.text
+
+
+# --------------------------------------------- a vouched closure never moves the cut-over (#327 review L3)
+def test_a_release_hole_the_broker_vouches_as_a_closure_does_not_move_the_cut_over(tmp_path):
+    """The release lacks a whole day the session table calls open; the broker's good bar pull reaches back past it
+    and has no minutes there either: a closure (`covered`, the history_gap rule), not a hole. The fill's rebase is
+    not taken, the cut-over stays, nothing is recorded, the release keeps its minutes and the window is whole."""
+    day = pd.Timestamp("2025-03-05", tz="UTC")
+    closed = (TICKS["ts_utc"] < day) | (TICKS["ts_utc"] >= day + pd.Timedelta(days=1))
+    rel = ticks_to_1m(TICKS[closed & (TICKS["ts_utc"] < OWN_FROM)])
+    store = Store(tmp_path / "data")
+    store.append("bars_1m", rel, source="dukascopy")
+    store.append(LIVE_TABLE, ticks_to_1m(TICKS[(TICKS["ts_utc"] >= OWN_FROM) & (TICKS["ts_utc"] < LIVE_FROM)]),
+                 source="icm", symbol="XAUUSD")
+    rates = _mt5_rates(TICKS[closed & (TICKS["ts_utc"] < LIVE_FROM)])
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    f = eng.history.fill
+    assert f is not None and f.rebase is not None and f.rebase[0] == day       # planned before the probe vouched
+    _settle(eng)
+    assert eng.history.cutover == OWN_FROM
+    assert history.saved_cutover(eng) is None
+    assert history.window_gaps(eng, eng.bars_1m) == []
+    b = eng.bars_1m.set_index("ts_utc")
+    after = rel.set_index("ts_utc")
+    after = after[after.index >= day]
+    pd.testing.assert_frame_equal(b.loc[after.index, after.columns], after, check_dtype=False,
+                                  check_index_type=False)   # still the release
+
+
+def test_a_vouched_closure_before_an_unvouched_hole_moves_the_cut_over_to_the_hole_only(tmp_path):
+    """The oldest pre-cut-over gap is a closure, a later one a real hole the broker has: the cut-over moves back to
+    the real hole, not to the closure, so the release keeps the span between them."""
+    day = pd.Timestamp("2025-03-04", tz="UTC")
+    closed = (TICKS["ts_utc"] < day) | (TICKS["ts_utc"] >= day + pd.Timedelta(days=1))
+    rel = ticks_to_1m(TICKS[closed & (TICKS["ts_utc"] < OWN_FROM)])
+    rel = rel[(rel["ts_utc"] < REL_HOLE) | (rel["ts_utc"] >= REL_HOLE + pd.Timedelta(hours=2))]
+    store = Store(tmp_path / "data")
+    store.append("bars_1m", rel, source="dukascopy")
+    store.append(LIVE_TABLE, ticks_to_1m(TICKS[(TICKS["ts_utc"] >= OWN_FROM) & (TICKS["ts_utc"] < LIVE_FROM)]),
+                 source="icm", symbol="XAUUSD")
+    rates = _mt5_rates(TICKS[closed & (TICKS["ts_utc"] < LIVE_FROM)])
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    _settle(eng)
+    assert eng.history.cutover == REL_HOLE and history.saved_cutover(eng) == REL_HOLE
+    assert history.window_gaps(eng, eng.bars_1m) == []

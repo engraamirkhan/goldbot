@@ -5,6 +5,10 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- #327 trading-safety review, the three Low follow-ups (branch `fix/safety-lows-327`):
+  - L1 commission currency (engine/commission.py `usd_per_oz`): a non-USD quote that is not a USD-base pair (XAUAUD, XAUEUR) now converts the USD commission into its quote currency at the broker's own figures, account per USD (`books._usd_fx`, the gold book) over account per quote (`books._profit_fx`, this book; both cached a minute). Before, the USD figure was added to an AUD spread in the cost floor and sized as AUD. Unknown conversion: NaN, the gate refuses `invalid:commission_usd_per_oz` (that book's sizing needs the same broker figure anyway). The spread-over-stop guard itself compares spread with stop only, both in quote units: unchanged, ADR 0075 not amended.
+  - L2 durable rebase (engine/history.py `save_cutover` / `saved_cutover`, aux.db migration 21 `history_cutover`, per account and live feed): a rebased cut-over is recorded and only ever moves back; `warm_start` takes the earlier of it and the first stored broker minute, so a lost writer batch no longer makes a restart rebase again (the span is then broker-filled as keep=True). A release that later gains the hole changes nothing (minutes from the cut-over on stay the broker's). An unreadable record falls back to the stored minutes (logged).
+  - L3 vouched closure (`_rebase`): the rebase target is re-checked against the gap rule with the fill's own covered spans (a good bar pull with no minutes for the day: a closure, as `history_gap`), so a closure never moves the cut-over; a real hole after a closure still does, to that hole.
 - **Due books first in the multi-book pass (2026-11-03; live demo issue, icm-probe).** On 20 books the 1m S0
   controls fire on every book at the same minute close; the 5 s pass budget covered 4-15 books and the later books'
   signals passed their 10 s staleness before their pass ran (`exploration_stale`, ~80 an hour, `explore:S0-<SYMBOL>`).
