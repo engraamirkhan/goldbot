@@ -3,6 +3,7 @@ training table, H-62 cross-fitting and the H-61 bandit weights."""
 from __future__ import annotations
 
 import ast
+import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -207,6 +208,51 @@ def test_label_candidates_labels_taken_and_untaken_once_point_in_time(tmp_path):
     with pytest.raises(ValueError, match="point in time"):
         ex.label_candidates(db, bars, COSTS.model_copy(update={"effective_utc": cutoff + pd.Timedelta(1, "s")}),
                             cutoff=cutoff)
+
+
+def test_an_fx_or_sugar_candidate_is_never_replayed_on_gold_bars_with_golds_costs(tmp_path):
+    """Brain 2026-11-04: S0-NZDUSD (stop 0.00019) and S0-SUGAR (stop 0.00026) were replayed on the account's XAUUSD
+    1m bars with gold's per-oz costs, giving a mean label of -2,679 R and -1,882 R. A candidate is replayed only on bars
+    and costs of its own instrument (the arm row's `params.instrument`); another instrument's stays unlabelled
+    (NULL: unresolved, never censored)."""
+    db = _db(tmp_path)
+    _cand(db, "gold", arm="S1a", stop=2.0, target=2.0)
+    _cand(db, "fx", arm="S0-NZDUSD", stop=0.00019, target=0.00019, is_control=True)
+    _cand(db, "sugar", arm="S0-SUGAR", stop=0.00026, target=0.00026, is_control=True)
+    bars = _m1(T0, [(2000.0, 2000.5, 1999.5)] * 60)
+    inst = {"S1a": "XAUUSD", "S0-NZDUSD": "NZDUSD", "S0-SUGAR": "SUGAR"}
+    assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30), instruments=inst) == 1
+    obs = ex.read_obs(db).set_index("candidate_id")
+    assert obs["label_sim_r"].abs().loc["gold"] <= ex.MAX_LABEL_R
+    assert pd.isna(obs.loc["fx", "label_sim_r"]) and pd.isna(obs.loc["sugar", "label_sim_r"])
+    assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30), symbol="NZDUSD",
+                               instruments=inst) == 0      # gold's per-oz cost model never prices another instrument
+
+
+def test_the_spec_names_each_arms_instrument_with_gold_for_a_row_without_one():
+    from goldbot.research.arms import arm_instruments
+    inst = arm_instruments()
+    assert inst["S0-NZDUSD"] == "NZDUSD" and inst["S0-SUGAR"] == "SUGAR" and inst["S5B"] == "XAUUSD"
+
+
+def test_the_learner_sets_aside_and_counts_a_label_beyond_twenty_r_instead_of_averaging_it(tmp_path):
+    """A label of more than MAX_LABEL_R (20 R) in size is a replay or units error, not an outcome: the bandit and the
+    style models never average it; the run counts it (`implausible_labels`) and warns."""
+    db = _db(tmp_path)
+    for i in range(6):
+        _cand(db, f"a{i}", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=i))
+        _label(db, f"a{i}", 0.5)
+    _cand(db, "bad", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=7))
+    _label(db, "bad", -2678.9)
+    out = ex.learn(db, broker="icm", as_of=T0 + pd.Timedelta(days=2), arms={"A": "intraday", "B": "intraday"},
+                   learning=())
+    assert out["implausible_labels"] == 1
+    with db.connection() as conn:
+        detail = json.loads(conn.execute("SELECT detail FROM exploration_broker_weights WHERE arm_id = 'A'"
+                                         ).fetchone()[0])
+    assert detail["n"] == 6 and detail["mean_r"] == pytest.approx(0.5)
+    table = ex.training_table(db, style="intraday", broker="icm", as_of=T0 + pd.Timedelta(days=2))
+    assert "bad" not in set(table["candidate_id"]) and len(table) == 6
 
 
 # ---------------------------------------------------------------------------------------------- training table

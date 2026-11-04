@@ -364,6 +364,16 @@ def learning_arm_ids(path: Path | None = None) -> frozenset[str]:
                      and r.get("role") == "learning" and "id" in r)
 
 
+def arm_instruments(path: Path | None = None) -> dict[str, str]:
+    """Each spec row's instrument (`goldbot.instruments.arm_instrument`: its `params.instrument`, XAUUSD for a row
+    without one; default config/exploration_arms.yaml), read from the rows alone like `learning_arm_ids`: what the
+    exploration labeller replays a candidate on (never another instrument's bars or costs)."""
+    from goldbot.instruments import arm_instrument
+    raw = yaml.safe_load(Path(REPO_ROOT / "config" / "exploration_arms.yaml" if path is None else path).read_text())
+    return {str(r["id"]): arm_instrument(r.get("params") or {}) for r in (raw or {}).get("arms", [])
+            if isinstance(r, dict) and "id" in r}
+
+
 def learning_k_config(arm_id: str, config_hash: str, prereg: str) -> dict[str, str]:
     """The config of a learning arm's (or its dedicated control's) K row: the arm, its frozen hash and its prereg."""
     return {"kind": LEARNING_FAMILY, "arm": arm_id, "arm_config_hash": config_hash, "prereg": prereg}

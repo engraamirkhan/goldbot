@@ -406,7 +406,8 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             no_bars.append(account)
             log.warning("no 1m bars for %s (%s) in bars_1m_live / bars_1m_broker / bars_1m: its exploration "
                         "candidates are not labelled tonight", account, broker)
-        n = label_candidates(db, bars, cm, cutoff=slot, account_id=account) if not bars.empty else 0
+        n = label_candidates(db, bars, cm, cutoff=slot, account_id=account,
+                             symbol=symbol_of.get(account, "XAUUSD")) if not bars.empty else 0
         labelled[account] = labelled.get(account, 0) + n
     seen = read_obs(db)["broker"].dropna()
     brokers = sorted({str(b) for b in seen} | {acc.broker for acc in ctx.accounts

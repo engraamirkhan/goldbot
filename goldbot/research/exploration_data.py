@@ -82,6 +82,10 @@ CAP_SHARE = 0.30
 MAX_WEIGHTS_AGE = pd.Timedelta(days=3)          # older bandit weights are stale: equal shares until the next run
 THOMPSON_DRAWS = 4000
 PRIOR_SD_R = 1.0                                # net-R spread of one trade under the flat prior
+# a replayed label beyond this many R in size is a replay or units error, not an outcome (brain 2026-11-04: FX and
+# sugar controls replayed on gold bars at -2,679 R): the bandit and the style models set it aside and count it
+MAX_LABEL_R = 20.0
+GOLD = "XAUUSD"                                 # ReplayCosts is gold's per-oz model: the only instrument it prices
 
 # H-60 priors: history 2019-01-01..2025-09-30 only (the current cost era); the holdout is never read
 PRIOR_HISTORY_START = pd.Timestamp("2019-01-01", tz="UTC")
@@ -410,19 +414,28 @@ def replay_label(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp
 
 
 def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *, cutoff: pd.Timestamp,
-                     account_id: str | None = None) -> int:
+                     account_id: str | None = None, symbol: str = GOLD,
+                     instruments: Mapping[str, str] | None = None) -> int:
     """Replay every unlabelled, unquarantined candidate of `costs.broker` (and `account_id` when given) whose label
     resolves by `cutoff` on the bars before it, and write label_sim_r / label_mid_r once. Returns the number labelled.
-    The cost table must be effective by `cutoff`; another broker's rows are never labelled with it."""
+    The cost table must be effective by `cutoff`; another broker's rows are never labelled with it.
+
+    `bars_1m` are `symbol`'s; only candidates of an arm on that instrument are replayed (`instruments`: arm id ->
+    instrument, default the spec's `arms.arm_instruments`; an arm it does not name is gold's). `costs` is gold's per-oz
+    model, so nothing is labelled for another symbol: brain 2026-11-04, the multi-instrument controls (S0-NZDUSD stop
+    0.00019, S0-SUGAR 0.00026) were replayed on the account's XAUUSD bars with gold's costs, mean -2,679 R and
+    -1,882 R. Another instrument's candidate stays NULL (unresolved, never censored) until its own replay exists."""
     if costs.effective_utc > cutoff:
         raise ValueError("cost model effective after the labelling cutoff: labels must be point in time")
-    if bars_1m.empty:
+    if bars_1m.empty or symbol != GOLD:
         return 0
     bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff]
     obs = read_obs(db, broker=costs.broker)
     obs = obs[obs["label_sim_r"].isna()]
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
+    inst = arm_spec.arm_instruments() if instruments is None else instruments
+    obs = obs[obs["arm_id"].map(lambda a: inst.get(str(a), GOLD)) == symbol]
     rows = []
     for r in obs.to_dict("records"):
         delay = arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), pd.Timestamp(r["decision_utc"]))
@@ -467,6 +480,7 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
                    held_out=held_out)
     dec = pd.DatetimeIndex(obs["decision_utc"])
     obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
+    obs = obs[~implausible(obs["label_sim_r"])].reset_index(drop=True)                     # MAX_LABEL_R
     if obs.empty:
         return pd.DataFrame(columns=[*_BASE, "y", *cols])
     snap = obs["features"].notna()
@@ -710,6 +724,12 @@ def _nig_draws(r: np.ndarray, prior: ArmPrior | None, draws: int, rng: np.random
     return np.asarray(rng.normal(mn, np.sqrt(var / kn)))
 
 
+def implausible(labels: pd.Series) -> pd.Series:
+    """True where a resolved label is beyond MAX_LABEL_R in size (a NULL label is unresolved, not implausible)."""
+    r = pd.to_numeric(labels, errors="coerce").astype(float)
+    return r.notna() & ~(r.abs() <= MAX_LABEL_R)
+
+
 def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | None = None,
                    floor: float = FLOOR_SHARE, cap: float = CAP_SHARE) -> dict[str, float]:
     """Shares proportional to `p`, each in [floor, min(cap, its ceiling)], summing to 1 when the caps allow it (less
@@ -881,6 +901,12 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     if not style_of:
         return out
     priors = read_priors(db) if broker in PRIOR_BROKERS else {}      # ICM-cost history: never another broker's
+    bad = implausible(strat["label_sim_r"])
+    if n_bad := int(bad.sum()):         # a units or replay error is set aside and counted, never averaged
+        log.warning("exploration %s: %d labels beyond %.0f R set aside (replay or units error)", broker, n_bad,
+                    MAX_LABEL_R)
+    out["implausible_labels"] = n_bad
+    strat = strat[~bad]
     r_by_arm = {a: strat.loc[strat["arm_id"] == a, "label_sim_r"].astype(float).tolist() for a in style_of}
     if not any(r_by_arm.values()):      # quant 2026-10-27 (LOW): a run on no evidence is not a learnt run
         log.warning("exploration %s: no labelled evidence by %s, no weights run written", broker, as_of)
@@ -895,8 +921,8 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     return out
 
 
-__all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
-           "bounded_shares", "cross_fit_meta", "equal_shares", "label_candidates", "learn", "model_columns",
+__all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LABEL_R", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
+           "bounded_shares", "cross_fit_meta", "equal_shares", "implausible", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
            "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "thompson_shares",
            "training_table", "weights", "write_prior", "write_weights"]
