@@ -24,6 +24,7 @@ from goldbot.ops import health, jobs
 from goldbot.research import exploration_data as ex
 from tests.test_health import make_ctx
 
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 T0 = pd.Timestamp("2026-10-26 08:00", tz="UTC")
 SLOT = pd.Timestamp("2026-10-26 23:10", tz="UTC")
 

@@ -24,6 +24,7 @@ from goldbot.ops.gates_phase import load_closed_trades, phase_record
 from goldbot.research import exploration_data as ex
 from goldbot.research.population import agent_trades
 
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 T0 = pd.Timestamp("2026-10-05 08:00", tz="UTC")          # a Monday after the holdout
 COSTS = ex.ReplayCosts(broker="icm", version="c1", effective_utc=T0 - pd.Timedelta(days=1), slippage_usd=0.05,
                        commission_rt_per_oz=0.07)
@@ -227,6 +228,30 @@ def test_an_fx_or_sugar_candidate_is_never_replayed_on_gold_bars_with_golds_cost
     assert pd.isna(obs.loc["fx", "label_sim_r"]) and pd.isna(obs.loc["sugar", "label_sim_r"])
     assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30), symbol="NZDUSD",
                                instruments=inst) == 0      # gold's per-oz cost model never prices another instrument
+
+
+def test_a_non_gold_row_labelled_on_gold_bars_never_reaches_the_training_table_or_the_retrain_count(tmp_path):
+    """Quant review of 75824e5c (HIGH): rows of XAUEUR, XAUAUD, JP225, DE40, US500, XTIUSD and XAGUSD were replayed on
+    gold bars before 2026-11-04 at plausible but wrong R (an XAUEUR control at 1.3 R). The learners read gold arms' rows
+    only; an arm the spec does not name (unknown or removed) is not gold either."""
+    db = _db(tmp_path)
+    for i in range(4):
+        _cand(db, f"g{i}", arm="S1a", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=i))
+        _label(db, f"g{i}", 0.5)
+    _cand(db, "eur", arm="S0-XAUEUR", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=5),
+          is_control=True)
+    _label(db, "eur", 1.3)
+    _cand(db, "gone", arm="RETIRED9", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=6))
+    _label(db, "gone", 0.7)
+    as_of = T0 + pd.Timedelta(days=2)
+    table = ex.training_table(db, style="intraday", broker="icm", as_of=as_of)          # the spec: S0-XAUEUR is XAUEUR
+    assert "eur" not in set(table["candidate_id"])
+    assert ex.retrain_due(db, "intraday", as_of, broker="icm")[2] == 5                    # 4 gold + the made-up arm
+    spec_only = {"S1a": "XAUUSD", "S0-XAUEUR": "XAUEUR"}                                   # RETIRED9 named nowhere
+    assert set(ex.training_table(db, style="intraday", broker="icm", as_of=as_of, instruments=spec_only)
+               ["candidate_id"]) == {"g0", "g1", "g2", "g3"}
+    assert ex.retrain_due(db, "intraday", as_of, broker="icm", instruments=spec_only)[2] == 4
+    assert set(ex.read_obs(db, instrument="XAUUSD", instruments=spec_only)["candidate_id"]) == {"g0", "g1", "g2", "g3"}
 
 
 def test_the_spec_names_each_arms_instrument_with_gold_for_a_row_without_one():
