@@ -5,6 +5,43 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- A failing regime, feature build or decision skipped the bar close's exits (trading-safety review of the pass-budget change, LOW, already in place before it):
+  - Cause: `on_bar_close` computed the family weights (regime, features) before the timeframe loop, so an exception there skipped `_manage_policies` (time exits, exit policies) for every timeframe and `_blackout_close` (pre-news exits); one raised by `_decide` skipped the later timeframes' policies the same way. Broker-side SL/TP still protected open trades.
+  - Fix: both are caught, entries are skipped for the rest of that close, every timeframe's exit policies and the pre-news exits still run, and the first error is raised after them, so it is a tick error and entries stay blocked until a clean decision bar as before. Test: `tests/test_cov_engine.py::test_a_failing_regime_or_decision_skips_entries_only_and_this_closes_exits_still_run`.
+- engine:<account> stays FAIL after a one-off tick error (2026-11-04: one BridgeUnavailable blip at 06:27:56 UTC on all three accounts kept `engine:<account>` at FAIL for 12+ min while the engines passed every minute):
+  - Cause: the engine's entry block is right (it clears only when a whole clean decision bar closes, up to ~30 min on 15m bars, exits never gated), but health FAILed for as long as `tick_error` was set.
+  - Fix: the engine publishes `tick_error_since` (first error of the current block, host clock; kept on a repeat, cleared with the block). `engine:<account>` now FAILs only while the error is current: one in the last 120 s (`TICK_ERROR_CURRENT_S`), or a block older than 2 decision periods + 5 min (`TICK_ERROR_STUCK_S`, 35 min, pinned to `EngineConfig.decision_tf` by a test) with the market open throughout (errors repeating). Otherwise WARN with the age ("tick error (BridgeUnavailable) 12 min ago"). An engine without `tick_error_since` falls back to `last_tick_error_at`; one without either FAILs as before. The entry block itself is unchanged; `tick_errors:<account>` still WARNs on each error.
+- **Multi-book pass under its budget (2026-11-04; live demo issue, icm-probe: "pass budget 5.0 s spent after
+  8|16|19 of 20 books").** Measured first with `scripts/bench_account_pass.py`. It runs icm-probe's 20 books and
+  registered arms on a paper terminal with 60 days of synthetic 1m history, one `account_pass` a second, counts every
+  bridge call and has optional `--latency-ms` and `--profile`. Bridge calls are not the cost: about one `ticks_many`
+  a pass. CPU is: the 15m close's pass took 11.3 s on the first close after a start and 4.2 s warm (Mac). Changes:
+  1. `Frame.X` (new `engine/frames.py`) builds the features on first read. Only agents, the shadow book and blackout
+     re-scores read them, so the 19 non-gold books (no agents) no longer build them. The regime is computed only on a
+     book with agents (its only reader).
+  2. `IncrementalResampler` compares datetime columns as epoch ns. Before, it built a Python Timestamp for every row
+     of `visible_at` on every call.
+  3. `history.window_gaps` keeps each hole's answer in a per-book `GapMemo`. Before, every close of every book
+     re-judged the same weekend holes minute by minute. A new session table, covered span or limit clears the memo.
+  4. `mid()` builds its frame in one go.
+  After (same harness): 15m close 1.9 s cold and 0.64 s warm; minute passes 190 ms against 202 ms. The budget,
+  `PASS_BUDGET_S` = 5 s, is unchanged. Key zones are left as they are: one build per 15m close on gold only, on its
+  own thread, 0.11-0.16 s on 800 days of 15m bars here. The brain's logged 1.6-1.8 s suggests the brain runs about
+  10x slower than this Mac, so warm 15m closes should now take about 6 s there instead of about 40 s.
+  Decisions are bit-identical: `tests/test_pass_budget.py` runs a 33-minute, 3-book session with icm-probe's arms
+  and real entries twice, through these fast paths and through reference copies of the old code. Every journal row,
+  deal, position, gap and queued signal must match. `tests/test_perf_equivalence.py` covers the resampler and `mid`.
+  One behaviour change, on the error path only: a feature build that raises no longer fails the bar close of a book
+  without agents, because that book never builds the features. A book with agents fails as before.
+  Not done:
+  - The 1m S0 rule (`arm_rules.random_bracket`) scores its whole lookback every minute, though the engine takes only
+    the last bar. This is about 5 ms a book a minute on the Mac and is the next lever; it needs quant review.
+  - Not measured on the brain itself.
+  Review: trading-safety (bar-close path: lazy features, regime only with agents).
+- #327 trading-safety review, the three Low follow-ups (branch `fix/safety-lows-327`):
+  - L1 commission currency (engine/commission.py `usd_per_oz`): a non-USD quote that is not a USD-base pair (XAUAUD, XAUEUR) now converts the USD commission into its quote currency at the broker's own figures, account per USD (`books._usd_fx`, the gold book) over account per quote (`books._profit_fx`, this book; both cached a minute). Before, the USD figure was added to an AUD spread in the cost floor and sized as AUD. Unknown conversion: NaN, the gate refuses `invalid:commission_usd_per_oz` (that book's sizing needs the same broker figure anyway). The spread-over-stop guard itself compares spread with stop only, both in quote units: unchanged, ADR 0075 not amended.
+  - L2 durable rebase (engine/history.py `save_cutover` / `saved_cutover`, aux.db migration 21 `history_cutover`, per account and live feed): a rebased cut-over is recorded and only ever moves back; `warm_start` takes the earlier of it and the first stored broker minute, so a lost writer batch no longer makes a restart rebase again (the span is then broker-filled as keep=True). A release that later gains the hole changes nothing (minutes from the cut-over on stay the broker's). An unreadable record falls back to the stored minutes (logged).
+  - L3 vouched closure (`_rebase`): the rebase target is re-checked against the gap rule with the fill's own covered spans (a good bar pull with no minutes for the day: a closure, as `history_gap`), so a closure never moves the cut-over; a real hole after a closure still does, to that hole.
 - **Due books first in the multi-book pass (2026-11-03; live demo issue, icm-probe).** On 20 books the 1m S0
   controls fire on every book at the same minute close; the 5 s pass budget covered 4-15 books and the later books'
   signals passed their 10 s staleness before their pass ran (`exploration_stale`, ~80 an hour, `explore:S0-<SYMBOL>`).

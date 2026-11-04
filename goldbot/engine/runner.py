@@ -50,6 +50,7 @@ from goldbot.engine import (
     commission,
     cost_probe,
     exploration,
+    frames,
     history,
     key_zones,
     order_send,
@@ -60,6 +61,7 @@ from goldbot.engine import (
 from goldbot.engine.agent_candidates import AgentCandidates
 from goldbot.engine.closed_record import EXCURSION_FREEZE_TOLERANCE_S  # noqa: F401  (re-exported)
 from goldbot.engine.cost_probe import ScheduledProbe
+from goldbot.engine.frames import Frame as _Frame
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -89,7 +91,6 @@ from goldbot.execution.classifier import StoredClass, effective_class, read_stor
 from goldbot.execution.costs import CostTable
 from goldbot.execution.not_placed import bridge_refused, not_placed, notice_text, refusal_code
 from goldbot.features import build_features
-from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.excursion import Excursion
@@ -293,14 +294,6 @@ class EngineConfig(Record):
     swap_prior: SwapSpec = Field(default_factory=lambda: SwapSpec.shipped())
 
 
-class _Frame(Record):
-    dec: pd.DataFrame
-    m: pd.DataFrame
-    X: pd.DataFrame
-    atr: pd.Series
-    by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
-
-
 class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
@@ -376,6 +369,7 @@ class Engine:
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         self.tick_errors_total = 0                     # since the engine started (engine state, health)
         self._last_tick_error_at: pd.Timestamp | None = None   # host clock (live) for health and the state file
+        self._tick_error_since: pd.Timestamp | None = None     # the same clock: first error of the current block (health)
         # the same error on the TICK clock, which decision bars are cut on: the latest tick stamp seen when it happened,
         # moved to the next tick's stamp (`_error_awaits_tick`) so an error between ticks is never dated too early
         self._error_tick_ts: pd.Timestamp | None = None
@@ -606,10 +600,9 @@ class Engine:
         the engine state, alerted by health) and log it: the first of each type with its traceback, then at most every
         TICK_ERROR_LOG_S with the number suppressed. The state file is rewritten at most every TICK_ERROR_STATE_S."""
         kind = type(exc).__name__
-        self.state.tick_error = True
-        self._tick_error_detail = kind
+        self._last_tick_error_at = self._error_now()   # the block's start (`_tick_error_since`) is kept on a repeat
+        self.state.tick_error, self._tick_error_detail, self._tick_error_since = True, kind, self._tick_error_since or self._last_tick_error_at
         self.tick_errors_total += 1
-        self._last_tick_error_at = self._error_now()
         self._error_tick_ts = self._last_tick.ts_utc if self._last_tick is not None else None
         self._error_awaits_tick = True
         mono = time.monotonic()
@@ -685,7 +678,7 @@ class Engine:
             bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
             if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
                     and self._error_tick_ts < bar_open:
-                self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
+                self.state.tick_error, self._tick_error_detail, self._tick_error_since = False, None, None   # a whole clean decision bar closed
                 self._write_state()
         elif self._reread_account or self._reread_hwm or self._last_state_write is None \
                 or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:   # ADR 0016 re-read
@@ -860,20 +853,8 @@ class Engine:
 
     # ------------------------------------------------------------------ main step
     def _frame(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> _Frame | None:
-        """Completed bars of one decision timeframe with features and its context (the same rule as research)."""
-        dec = self._resample(complete, tf)
-        dec = dec[dec["visible_at"] <= close_ts].tail(self.cfg.feature_window).reset_index(drop=True)
-        if len(dec) < 120:
-            return None
-        m = mid(dec)
-        X = build_features(m, DEFAULT_FEATURE_NAMES, ctx=books.feature_ctx(self))   # non-gold: its symbol (L1)
-        version = X.attrs["feature_version"]
-        for ctf in context_tfs(tf):
-            hit = self._context(complete, ctf, close_ts)
-            if hit is not None:
-                X = merge_higher_tf(X, hit[1], hit[0], TF_LABEL[ctf])
-        X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
-        return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
+        """Completed bars of one decision timeframe; its features built on first read (engine/frames.py)."""
+        return frames.frame(self, complete, tf, close_ts)
 
     @staticmethod
     def _scoring_frame(fr: _Frame, model: Model) -> pd.DataFrame | None:
@@ -947,8 +928,11 @@ class Engine:
         self._manage_open(base.dec)
         exploration.trail(self, close_ts)    # H-80 BXR's runner stop and its virtual twins; never gated, never raises
         self.center.sweep_expired()
-        regime = self._regime(base.X, close_ts)
-        fam_w = self.allocator.weights(regime)
+        err: Exception | None = None     # exits first (#1104 review): a failing regime/feature/decision skips entries only
+        try:
+            fam_w = self.allocator.weights(self._regime(base.X, close_ts)) if self.agents else {}   # agents' only input
+        except Exception as exc:                 # noqa: BLE001 - re-raised after this close's exits
+            err, fam_w = exc, {}
         decisions: list[dict] = []
         tfs = {a.timeframe for a in self.agents.values()} | {self.cfg.decision_tf}
         tfs |= {t.timeframe for t in self.open.values() if t.policy is not None and t.timeframe}
@@ -970,8 +954,14 @@ class Engine:
             if (refused := history.refuse(self, tf, fr, gaps, agents, close_ts)) is not None:
                 decisions += refused           # a hole in tf's window: no entry, live or shadow
                 continue
-            decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
+            if err is None:
+                try:
+                    decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
+                except Exception as exc:         # noqa: BLE001 - re-raised after this close's exits
+                    err = exc
         self._blackout_close(complete, close_ts, frames)
+        if err is not None:
+            raise err                          # as before: a tick error, entries blocked until a clean close
         cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
         if self.book is self.primary:                    # gold's zones (the account's chart), display only
             key_zones.update(self, complete, close_ts)   # after every decision of this close; never raises
@@ -1127,7 +1117,7 @@ class Engine:
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
-        dec, X, a = fr.dec, fr.X, fr.atr
+        dec, a = fr.dec, fr.atr                          # fr.X is built when an agent reads it (engine/frames.py)
         decisions = []
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
@@ -1163,7 +1153,7 @@ class Engine:
                 # design: a model only ever scores the feature frame it was trained on
                 d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
                 d.update(p=None, model_feature_version=getattr(model, "feature_version", ""),
-                         frame_feature_version=X.attrs.get("feature_version"))     # not scored
+                         frame_feature_version=fr.X.attrs.get("feature_version"))     # not scored
                 decisions.append(d)
                 continue
             sfv = str(Xm.attrs.get("feature_version", ""))
@@ -3061,7 +3051,7 @@ class Engine:
             **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
             "lot_terms": self._ladder["lot_terms"], "limits": published_limits(self.gate.limits, self._min_lot_risk),
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
-            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail, "tick_error_since": self._tick_error_since.isoformat() if self._tick_error_since is not None else None,
             # host clock; None while quotes are valid (health FAILs after QUOTE_INVALID_FAIL_S of invalid quotes)
             "quote_invalid_since": self._quote_invalid_since.isoformat() if self._quote_invalid_since is not None else None,
             "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,

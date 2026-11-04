@@ -537,6 +537,20 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS exploration_twins_open ON exploration_twins(account_id, closed)",
     )),
+    # additive (#327 trading-safety review L2; goldbot/engine/history.py `save_cutover`): the cut-over a history
+    # rebase moved back to, per account and live feed (source, symbol), so a restart starts from it instead of
+    # rebasing again. Only ever moves back. A release without it never reads the table (its restart derives the
+    # cut-over from the stored broker minutes, as before)
+    Migration(version=21, name="history_cutover", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS history_cutover (
+               account_id TEXT NOT NULL,
+               source TEXT NOT NULL,
+               symbol TEXT NOT NULL,
+               cutover_ns INTEGER NOT NULL,
+               updated_ns INTEGER NOT NULL,
+               PRIMARY KEY (account_id, source, symbol)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

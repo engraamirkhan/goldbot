@@ -9,6 +9,7 @@ commission on £0.08-0.25 planned risk)."""
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from pydantic import ValidationError
 from goldbot.config import RiskSettings, load_settings
 from goldbot.engine import ConstantModel, Engine, EngineConfig
 from goldbot.engine.books import BookSpec
+from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
 from goldbot.execution.paper import PaperBroker
 from goldbot.instruments import load_instruments
@@ -238,6 +240,64 @@ def test_a_non_gold_books_commission_follows_its_asset_class_and_quote(tmp_path:
     assert got == pytest.approx(want)
 
 
+# ---------------------------------------------------------------- the commission in the quote currency (#327 review L1)
+class _FxBroker(PaperBroker):
+    """A paper terminal in `currency` whose loss on one lot converts each symbol's profit currency at `acct_per`."""
+
+    def __init__(self, currency: str, acct_per: dict[str, float]) -> None:
+        super().__init__()
+        self.currency, self.acct_per = currency, acct_per
+
+    def account(self) -> AccountInfo:
+        return super().account().model_copy(update={"currency": self.currency})
+
+    def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
+        fx = self.acct_per.get(symbol)
+        return None if fx is None else abs(distance) * self.contract * fx
+
+
+def _aud_engine(tmp_path: Path, broker: PaperBroker) -> Engine:
+    spec = load_instruments().get("XAUAUD")
+    book = BookSpec(key="XAUAUD", symbol="XAUAUD", store_symbol="XAUAUD", magic_block=spec.magic_block,
+                    digits=spec.digits, point=spec.point, contract_size=spec.contract_size, instrument=spec)
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), cost_atr=0.10,
+                              commission_per_lot_side_usd=3.5, mode="demo", instruments=(book,)),
+                 broker, [], {"session_open": ConstantModel(p=0.6)})
+    eng.primary.__dict__["_last_tick"] = Tick(ts_utc=NOW, bid=2400.0, ask=2400.2)
+    eng.primary.__dict__["_contract"] = 100.0
+    return eng
+
+
+@pytest.mark.parametrize("currency, acct_per", [
+    ("USD", {"XAUUSD": 1.0, "XAUAUD": 0.65}),             # USD account: 1 AUD = 0.65 USD
+    ("GBP", {"XAUUSD": 0.78, "XAUAUD": 0.507}),           # GBP account: 0.78 GBP per USD, 0.507 per AUD
+])
+def test_an_aud_quoted_books_commission_is_converted_into_aud(tmp_path: Path, currency: str,
+                                                              acct_per: dict[str, float]) -> None:
+    """XAUAUD's spread, stop and ATR are AUD per oz, so the USD commission ($7 a lot round trip, 0.07 per oz) is
+    taken into AUD at the broker's own conversions (account per USD over account per AUD), never added as USD."""
+    eng = _aud_engine(tmp_path, _FxBroker(currency, acct_per))
+    from goldbot.engine import books
+    with books.using(eng, eng.books["XAUAUD"]):
+        got = eng._commission_usd_per_oz(3700.0)
+        eng._last_tick = Tick(ts_utc=NOW, bid=3699.75, ask=3700.25)        # the cost reads the book's own quote
+        eng.state.spread_points = 50.0
+        cost = eng._cost_atr(1.0, NOW)
+    aud = 0.07 * acct_per["XAUUSD"] / acct_per["XAUAUD"]
+    assert got == pytest.approx(aud)
+    assert cost == pytest.approx(0.50 + aud)                   # spread and commission both in AUD over a 1.0 ATR
+
+
+def test_an_aud_quoted_book_without_a_conversion_refuses_rather_than_counting_usd(tmp_path: Path) -> None:
+    eng = _aud_engine(tmp_path, _FxBroker("USD", {"XAUUSD": 1.0}))       # the broker cannot convert XAUAUD
+    from goldbot.engine import books
+    with books.using(eng, eng.books["XAUAUD"]):
+        got = eng._commission_usd_per_oz(3700.0)
+    assert math.isnan(got)                                     # the gate refuses `invalid:commission_usd_per_oz`
+    d = RiskGate(RiskLimits()).check(_gold(commission_usd_per_oz=got), _state(), NOW)
+    assert not d.allowed and "invalid:commission_usd_per_oz" in d.reasons
+
+
 # ---------------------------------------------------------------- tightening only, on the pinned decision grid
 def test_on_the_pinned_gate_grid_the_guard_only_ever_adds_a_refusal() -> None:
     """tests/test_risk_gate_split.py's golden (captured before the guard): with the guard on, every case it changes
@@ -250,3 +310,15 @@ def test_on_the_pinned_gate_grid_the_guard_only_ever_adds_a_refusal() -> None:
     for k in changed:
         before, after = want[k], got[k]
         assert after[0] is False and "spread_over_stop" in after[2], (k, before, after)
+
+
+def test_an_unknown_commission_floors_the_cost_on_the_spread_alone() -> None:
+    """#327 follow-up L2: max(cost, nan) kept `cost` and dropped the spread too; the floor keeps the spread."""
+    from types import SimpleNamespace
+
+    from goldbot.engine import commission
+
+    eng: Any = SimpleNamespace(state=SimpleNamespace(spread_points=50.0), cfg=SimpleNamespace(point=0.01),
+                          _commission_usd_per_oz=lambda: math.nan)
+    assert commission.floor_cost(eng, 0.05, 2.0, ex_spread=False) == pytest.approx(0.25)   # 0.50 / 2.0
+    assert commission.floor_cost(eng, 0.05, 2.0, ex_spread=True) == pytest.approx(0.05)

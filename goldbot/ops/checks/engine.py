@@ -124,9 +124,9 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
                          "entries blocked; decided closes, the kill switch, time exits and the Friday flatten still run "
                          "on the host clock, stops rest with the broker")
     if e.get("tick_error"):
-        statuses.append("fail")
-        parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
-                     f"entries blocked until a decision bar closes clean, exits unaffected (details in the engine log)")
+        status, text = _tick_error_block(ctx, e)
+        statuses.append(status)
+        parts.append(text)
     lost = e.get("closed_records_lost") or []
     if lost:
         statuses.append("fail")
@@ -157,6 +157,38 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if isinstance(b, dict) and b:
         parts.append(f"news blackout: {b.get('title', '?')}")
     return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
+
+
+TICK_ERROR_CURRENT_S = 120             # a tick error this recent is current: the cause may still be there
+TICK_ERROR_DECISION_S = 15 * 60         # the engine's decision period (EngineConfig.decision_tf, pinned by a test)
+TICK_ERROR_STUCK_S = 2 * TICK_ERROR_DECISION_S + 5 * 60   # a block older than this has missed its clean bar
+
+
+def _tick_error_block(ctx: HealthContext, e: dict[str, Any]) -> tuple[Status, str]:
+    """engine:<account> on a set `tick_error` (incident 2026-11-04: one BridgeUnavailable blip kept the check at FAIL
+    for 12+ minutes while the engine passed every minute). Design rule: the engine blocks entries until a whole
+    decision bar closes clean, exits unaffected; that block clears by itself, so health FAILs only while the error is
+    current: one in the last TICK_ERROR_CURRENT_S, or a block (`tick_error_since`, else the last error) older than
+    TICK_ERROR_STUCK_S while the market was open throughout (errors repeating, so no clean bar closes). Otherwise WARN
+    with the age shown; tick_errors:<account> announces each error on its own."""
+    def stamp(key: str) -> pd.Timestamp | None:
+        try:
+            ts = pd.Timestamp(e[key]) if e.get(key) else None
+        except (ValueError, TypeError):
+            return None
+        return None if ts is None else ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    last = stamp("last_tick_error_at")
+    since = stamp("tick_error_since") or last
+    what = f"tick error ({e.get('tick_error_detail') or 'unknown'})"
+    tail = "entries blocked until a decision bar closes clean, exits unaffected (details in the engine log)"
+    if last is None or since is None:      # an engine that does not date its errors: as before
+        return "fail", f"{what}: the engine logged it and carries on; {tail}"
+    last_s, since_s = (ctx.now - last).total_seconds(), (ctx.now - since).total_seconds()
+    if since_s > TICK_ERROR_STUCK_S and _market_open_throughout(ctx, TICK_ERROR_STUCK_S):
+        return "fail", (f"{what} repeating: entries blocked for {_age(since_s)} with no clean decision bar, last error "
+                        f"{_age(last_s)} ago; exits unaffected (details in the engine log)")
+    status: Status = "fail" if last_s <= TICK_ERROR_CURRENT_S else "warn"
+    return status, f"{what} {_age(last_s)} ago: the engine carries on; {tail}"
 
 
 # what the owner's halt alone makes of entry_status:<account>: a warning, as owner_halt (the owner chose it)

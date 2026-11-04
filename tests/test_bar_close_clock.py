@@ -323,7 +323,8 @@ def test_engine_bar_closes_inside_the_tier1_window_get_zero_allocator_weight(tmp
           "previous": p, "received_utc": t - pd.Timedelta(days=3)} for i, t, c, ti, im, tier, f, p in rows],
         columns=COLUMNS), source="forexfactory")
     eng = Engine(EngineConfig(account_id="x", broker_name="icm", state_dir=str(tmp_path),
-                              data_root=str(tmp_path / "data"), news_blackout=True), PaperBroker(equity=10_000), [], {})
+                              data_root=str(tmp_path / "data"), news_blackout=True), PaperBroker(equity=10_000),
+                 [SPECIALISTS["session_open"]()], {"session_open": ConstantModel(p=0.5)})   # weights are agents' input
     by_close: dict[pd.Timestamp, dict[str, float]] = {}
     real = eng._regime
 

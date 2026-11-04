@@ -202,3 +202,39 @@ def test_every_proposal_of_this_account_expired_or_not_is_archived_on_start(tmp_
     assert left == {"vantage-demo-1-bbbb.json"}
     assert (bus.done_dir / "icm-demo-1-aaaa.json").exists() and (bus.done_dir / "icm-demo-2-cccc.json").exists()
     assert bus.outcome("icm-demo-2-cccc") is None
+
+
+@pytest.mark.parametrize("where", ["_regime", "_decide"])
+def test_a_failing_regime_or_decision_skips_entries_only_and_this_closes_exits_still_run(tmp_path, monkeypatch, where):
+    """#1104 trading-safety review: an exception from the regime/features or a decision used to skip the close's
+    exit policies and pre-news exits; now they run and the error is raised after them (entries blocked as before)."""
+    from goldbot.engine import ConstantModel
+
+    pb = PaperBroker(equity=10_000)
+    spec = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path),
+                              owner_user_id=OWNER), pb, [spec], {"session_open": ConstantModel(p=0.65)},
+                 ApprovalCenter({OWNER}))
+    ticks = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
+    eng.bars_1m = ticks_to_1m(ticks)
+    last = pd.Timestamp(ticks["ts_utc"].iloc[-1])
+    tick = _tick(last, float(ticks["bid"].iloc[-1]))
+    pb.on_tick(tick)
+    seen: list[str] = []
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError(where)
+    monkeypatch.setattr(eng, where, boom)
+    def spy(name: str) -> Any:
+        real = getattr(eng, name)
+
+        def wrapped(*a: Any, **k: Any) -> Any:
+            seen.append(name)
+            return real(*a, **k)
+        return wrapped
+    for name in ("_manage_policies", "_blackout_close"):
+        monkeypatch.setattr(eng, name, spy(name))
+    close_ts = last.floor("15min")
+    with pytest.raises(RuntimeError, match=where):
+        eng.on_bar_close(close_ts, tick)
+    assert "_manage_policies" in seen and "_blackout_close" in seen
