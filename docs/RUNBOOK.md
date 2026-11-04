@@ -2017,9 +2017,15 @@ strategy's or cost probe's record, written by hand from the MT5 History), `no_ex
 ### Outside alert (dead man's switch)
 
 Telegram alerts come from the brain itself, so a dead brain cannot report itself. A free check on Healthchecks.io
-covers that: the Telegram service's health pass (every minute) pings it every `telegram.deadman_every_min` (2)
-minutes while health has no FAIL, and pings `<url>/fail` (body: the failing check names, nothing else) on a FAIL or
-when a Telegram alert could not be sent. Healthchecks.io emails you, or messages you on Telegram through its own bot,
+covers that: the Telegram service pings it from its own liveness thread every min(60 s, half of
+`telegram.deadman_every_min`) (2 min: every minute), whatever the health pass is doing, and pings `<url>/fail`
+(body: the failing check names, nothing else) only for a FAIL that held for the alert window (3 passes and 5 min,
+the same rule as the Telegram alerts; the immediate list at once), when a Telegram alert failed on two passes in a
+row, or when no health pass completed for 5 min (a frozen service). A FAIL still inside the window keeps the check up
+(the ok ping's body names it). It pings only once a health pass completed (or the last one, under 5 min old, was read
+back at start), so a service that crashes in every pass goes silent and the check turns down. A deploy restart is not
+an email: the liveness thread beats until the old process exits and at once in the new one. Healthchecks.io emails
+you, or messages you on Telegram through its own bot,
 when the pings stop or a fail ping arrives. It does not depend on this server. Code: `goldbot/ops/deadman.py`,
 ADR 0014.
 
@@ -2047,11 +2053,13 @@ as copied. The WARN is not sent to Telegram (it shows in `/status` and the diges
 3. Active, but no pings: `journalctl -u goldbot-telegram | grep "dead man"`. "ping failed: HTTP 404" -> the check was
    deleted or the URL is wrong (store it again). "URLError" or "TimeoutError" -> outbound HTTPS from the brain is
    blocked (Oracle security list or egress) or healthchecks.io is down. The log never prints the URL.
-4. "health pass" exceptions in the same log: the checks themselves crash. No ping is sent then, by design.
+4. "health pass" exceptions in the same log: the checks themselves crash. After 5 min without a completed
+   pass the switch pings `/fail` with `health_checks_not_completing`, by design.
 
 **Healthchecks.io says DOWN after a fail ping:** health has a FAIL, or a Telegram alert failed to send. The ping's
 body (Healthchecks.io -> the check -> Events) names the failing checks; run `goldbot run health` for the reasons. If
-the body says `telegram_alert_undelivered`, Telegram rejected the alert: check the bot token and `allowed_user_ids`
+the body says `health_checks_not_completing`, see 4 above; if it says `telegram_alert_undelivered`, Telegram rejected
+the alert: check the bot token and `allowed_user_ids`
 ("Telegram is silent" above). The check turns up again by itself at the first healthy pass.
 
 **Rehearse** (after any change to the brain's alerting, and once a quarter): `sudo systemctl stop goldbot-telegram`;
@@ -2066,7 +2074,8 @@ reconciles orders and positions with the broker, as after any restart. Stops sta
 and no exit waits on any of this. The start itself (bridge connect, warm start, model load) may take up to 15
 minutes; a start that hangs longer is ended and started again.
 
-**`engine_loop:<account>` FAIL** ("engine loop silent for ..."; alerted on Telegram after 150 s of silence, market
+**`engine_loop:<account>` FAIL** ("engine loop silent for ..."; fails after 150 s of silence,
+alerted on Telegram once that held 5 min, market
 open or not):
 1. `sudo journalctl -u goldbot-engine@<account> -n 300`. "Watchdog timeout" followed by a Python stack means systemd
    killed a stuck loop. Keep that stack: it is the root cause, and it goes into a postmortem in `docs/incidents/`.

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp
 from goldbot.data.calendar import WeekendWindow
@@ -157,6 +157,31 @@ def heartbeat_path(state_dir: str | Path, service: str) -> Path:
 WATCH_FILE = "health_last.json"
 
 
+class AlertStreak(Record):
+    """A check whose alert state differs from what the owner was last told, not yet confirmed (owner complaint
+    2026-11-04, "up and down"): `kind` is the message it would send, seen on `polls` consecutive health passes since
+    `first_seen`."""
+    kind: Literal["new", "recovered"]
+    first_seen: UtcTimestamp
+    polls: int = Field(1, ge=1)
+
+
 class WatchState(Record):
+    """state/health_last.json. `statuses` is the last report as run (read by the deploy and daily-review checks);
+    `announced` what the owner was last told per check (the alert baseline, behind `statuses` while a change waits in
+    `pending`); `flaps` the times a failure cleared before it was confirmed, `flap_noted` when the owner last heard
+    of a check's flapping. A file of the older shape (ts and statuses only) loads with announced = statuses: under the
+    old rule every status was announced at once."""
     ts: UtcTimestamp | None = None
     statuses: dict[str, Status] = Field(default_factory=dict)
+    announced: dict[str, Status] = Field(default_factory=dict)
+    pending: dict[str, AlertStreak] = Field(default_factory=dict)
+    flaps: dict[str, list[UtcTimestamp]] = Field(default_factory=dict)
+    flap_noted: dict[str, UtcTimestamp] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _old_shape(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "announced" not in data:
+            data = {**data, "announced": dict(data.get("statuses") or {})}
+        return data

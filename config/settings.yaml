@@ -416,7 +416,10 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
 
 telegram:                            # owner user ids go in config/settings.local.yaml (per server), never here
   digest_at: "06:45"                 # morning learning report at this UTC time, before London; Sundays the weekly digest (goldbot/telegram/digest.py, weekly_digest.py)
-  deadman_every_min: 2               # outside dead man's switch: healthy ping period (goldbot/ops/deadman.py); = the check's period
+  deadman_every_min: 2               # outside dead man's switch: the check's period there; liveness pings every min(60 s, half of it) (goldbot/ops/deadman.py)
+  alert_confirm_polls: 3             # health alerts: a failure (and its recovery) is told only after this many consecutive passes...
+  alert_confirm_min: 5               # ...AND this many minutes; the immediate list (health.IMMEDIATE_NAMES) alerts at once; /fail pings follow the same rule
+  alert_flap_note: 3                 # failed and cleared inside the window this often in an hour: one "flapping" line, at most hourly (0 = off)
 
 attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
   window_days: 180                   # closed shadow trades exited in the last 180 days

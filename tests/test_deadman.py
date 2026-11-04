@@ -44,27 +44,32 @@ def make(url: str | None = URL, every_min: float = 2, ping: Any = None) -> tuple
     return dm, sent, clock
 
 
-def test_healthy_pings_at_most_every_period():
+def test_liveness_pings_well_inside_the_monitors_period():
+    """Owner 2026-11-04: the monitor's period and grace must not matter. Liveness pings every min(60 s, half the
+    configured period), so a period of 2 min sees a ping every minute and one late ping never emails."""
+    assert deadman.live_every_s(2) == 60.0 and deadman.live_every_s(1) == 30.0 and deadman.live_every_s(30) == 60.0
     dm, sent, clock = make(every_min=2)
-    assert dm.after_health(report()) == "ok"           # first pass after a start: at once
-    for _ in range(3):                                  # the health pass runs every minute
-        clock.t += 60
-        dm.after_health(report())
-    assert sent == [(URL, None), (URL, None)]           # t=0 and t=120 s; not t=60, t=180
-    clock.t += 60
-    assert dm.after_health(report()) == "ok" and len(sent) == 3
+    dm.observe([])
+    assert dm.beat() == "ok"                            # first beat after the first verdict: at once
+    for _ in range(3):
+        clock.t += 30
+        dm.observe([])                                  # passes keep completing
+        dm.beat()
+    assert sent == [(URL, None), (URL, None)]           # t=0 and t=60 s; not t=30, t=90
+    clock.t += 30
+    assert dm.beat() == "ok" and len(sent) == 3
 
 
-def test_a_fail_pings_the_fail_url_at_once_with_check_names_only():
+def test_a_confirmed_fail_pings_the_fail_url_at_once_with_check_names_only():
     dm, sent, clock = make()
     dm.after_health(report())
     clock.t += 10
     assert dm.after_health(report("engine:icm-demo", "heartbeat:telegram")) == "fail"
     assert sent[-1] == ("https://hc-ping.com/0b5c2f4e-secret-uuid-7d1a/fail",
                         b"failing: engine:icm-demo, heartbeat:telegram")
-    clock.t += 60
-    assert dm.after_health(report("engine:icm-demo")) is None         # still failing: repeated only per period
-    clock.t += 60
+    clock.t += 30
+    assert dm.after_health(report("engine:icm-demo")) is None         # still failing: repeated only per cadence
+    clock.t += 30
     assert dm.after_health(report("engine:icm-demo")) == "fail"
     clock.t += 5
     assert dm.after_health(report()) == "ok"
@@ -73,10 +78,83 @@ def test_a_fail_pings_the_fail_url_at_once_with_check_names_only():
     assert [u for u, _ in sent].count(URL) == 2
 
 
-def test_an_undelivered_telegram_alert_is_a_fail_ping():
+def test_a_transient_fail_inside_the_window_pings_ok_naming_it():
+    """A FAIL the hysteresis has not confirmed (goldbot/ops/health.py step_alerts) keeps the monitor up: the ok ping
+    is a POST to the plain URL whose body names it (Healthchecks.io keeps a ping body in the check's log)."""
     dm, sent, _ = make()
+    assert dm.after_health(report("supervisor"), failing=set()) == "ok"
+    assert sent == [(URL, b"ok; failing, not confirmed yet: supervisor")]
+
+
+def test_a_frozen_pump_pings_fail_after_about_five_minutes():
+    """SRE review HIGH (b6ca26c2): a hung pump (a blocked send, a blocked event loop, a dead pump task) must not look
+    alive. The verdict goes stale after HEALTH_STALE_S, about 3 health periods plus the slowest pass (5 min), not the
+    15 min of the alerts check, and the beat then pings /fail."""
+    assert deadman.HEALTH_STALE_S == 300
+    dm, sent, clock = make()
+    dm.observe([], delivered=True)
+    clock.t += deadman.HEALTH_STALE_S - 1
+    assert dm.beat() == "ok"
+    clock.t += 2
+    assert dm.beat() == "fail" and sent[-1] == (URL + "/fail", b"failing: health_checks_not_completing")
+
+
+def test_no_verdict_means_no_ping():
+    """SRE review HIGH: before the first completed pass (and without a fresh seeded one) the switch says nothing, so
+    a service that crashes in every pass (OOM in run_checks) never looks alive; the monitor's own timeout reports it."""
+    dm, sent, clock = make()
+    assert dm.beat() is None
+    clock.t += 3600
+    assert dm.beat() is None and sent == []
+
+
+def test_a_seeded_verdict_keeps_a_confirmed_failure_across_a_restart():
+    dm, sent, _ = make()
+    dm.observe(["engine:icm-demo"], age_s=90)
+    assert dm.beat() == "fail" and sent == [(URL + "/fail", b"failing: engine:icm-demo")]
+
+
+def test_each_accepted_change_is_reported_once_for_the_alert_log():
+    changes: list[tuple[str, tuple[str, ...]]] = []
+    sent: list[tuple[str, bytes | None]] = []
+    clock = Clock()
+    dm = DeadMan(lambda k: URL, 2, ping=lambda u, b: sent.append((u, b)), clock=clock,
+                 on_change=lambda kind, names: changes.append((kind, names)))
+    dm.after_health(report())                           # the first ok after a start is not a change (no email)
+    clock.t += 60
+    dm.after_health(report("engine:x"))
+    clock.t += 60
+    dm.after_health(report("engine:x"))
+    clock.t += 60
+    dm.after_health(report())
+    assert changes == [("fail", ("engine:x",)), ("ok", ())]
+
+
+def test_the_liveness_loop_beats_from_its_own_thread():
+    dm, sent, _ = make()
+    dm.observe([])
+    stop = threading.Event()
+    t = deadman.start_liveness(dm, stop=stop, tick_s=0.01)
+    deadline = time.monotonic() + 5
+    while not sent and time.monotonic() < deadline:
+        time.sleep(0.01)
+    stop.set()
+    t.join(5)
+    assert sent and sent[0] == (URL, None) and t.daemon
+
+
+def test_two_undelivered_telegram_alerts_in_a_row_are_a_fail_ping():
+    """SRE review LOW: one failed send is retried by the next pass; only a second undelivered pass in a row pings
+    /fail, so a single Telegram hiccup is not a down/up email pair."""
+    dm, sent, clock = make()
+    assert dm.after_health(report(), delivered=False) == "ok"
+    clock.t += 60
+    assert dm.after_health(report(), delivered=True) == "ok"            # delivered: the count starts again
+    clock.t += 60
+    assert dm.after_health(report(), delivered=False) == "ok"
+    clock.t += 60
     assert dm.after_health(report(), delivered=False) == "fail"
-    assert sent == [(URL + "/fail", b"failing: telegram_alert_undelivered")]
+    assert sent[-1] == (URL + "/fail", b"failing: telegram_alert_undelivered")
 
 
 def test_fail_body_is_capped():
@@ -119,8 +197,8 @@ def test_fail_url_keeps_a_query_and_a_trailing_slash_does_not_double():
     RuntimeError(URL),
 ])
 def test_a_failed_ping_never_raises_never_logs_the_url_and_backs_off(exc, caplog):
-    """Security review M1: a failed attempt counts for the cadence, so a dead endpoint is tried once per period, not
-    on every one-minute pass. A change of state is still tried at once."""
+    """Security review M1: a failed attempt counts for the cadence, so a dead endpoint is tried once per liveness cadence, not
+    on every beat. A change of state is still tried at once."""
     calls: list[str] = []
 
     def boom(u: str, b: bytes | None) -> None:
@@ -129,11 +207,11 @@ def test_a_failed_ping_never_raises_never_logs_the_url_and_backs_off(exc, caplog
     dm, _, clock = make(ping=boom, every_min=2)
     with caplog.at_level(logging.DEBUG):
         assert dm.after_health(report()) is None
-        clock.t += 60
+        clock.t += 30
         assert dm.after_health(report()) is None              # backing off: not attempted
         assert len(calls) == 1
-        clock.t += 60
-        assert dm.after_health(report()) is None              # one period after the failed attempt: tried again
+        clock.t += 30
+        assert dm.after_health(report()) is None              # one cadence after the failed attempt: tried again
         assert len(calls) == 2
         clock.t += 1
         assert dm.after_health(report("engine:x")) is None     # a state change is tried at once
@@ -241,36 +319,26 @@ def test_ping_timeouts_are_short():
 
 
 # ------------------------------------------------------------------------------------------------ the Telegram pump
-def test_the_health_pass_does_not_wait_for_the_ping(monkeypatch):
-    """Security review M1: the pump that sends proposals (the owner's 90 s window) never waits on the ping."""
+def test_the_health_pass_never_pings_and_hands_the_confirmed_verdict_to_the_liveness_loop(monkeypatch, tmp_path):
+    """Security review M1 and owner 2026-11-04: the pump that sends proposals (the owner's 90 s window) never waits
+    on a ping, and the ping never waits on a health pass. The pass only records the verdict: confirmed failures
+    (goldbot/ops/health.py HealthWatch.failing) and the transient rest."""
     from goldbot.telegram import bot as botmod
-    release, started = threading.Event(), threading.Event()
-
-    def slow(u: str, b: bytes | None) -> None:
-        started.set()
-        release.wait(10)
-    monkeypatch.setattr(botmod, "run_checks", lambda ctx: report())
+    calls: list[str] = []
+    monkeypatch.setattr(botmod, "run_checks", lambda ctx: report("supervisor"))
     monkeypatch.setattr(botmod.HealthContext, "from_runtime", classmethod(lambda cls, state_dir: None))
 
     async def go() -> float:
-        tasks: list[asyncio.Task[Any]] = []
-
-        class App:
-            def create_task(self, coro: Any) -> asyncio.Task[Any]:
-                t = asyncio.get_running_loop().create_task(coro)
-                tasks.append(t)
-                return t
-
         b = object.__new__(botmod.TelegramBot)
-        b.app, b.owner_ids, b.state_dir = App(), set(), "unused"
-        b.health = type("W", (), {"alert": lambda self, r: None, "record": lambda self, r: None})()
-        b.deadman = make(ping=slow)[0]
+        b.owner_ids, b.state_dir = set(), str(tmp_path)
+        b.health = health.HealthWatch(tmp_path, policy=health.AlertPolicy(confirm_polls=3, confirm_s=300))
+        b.deadman = make(ping=lambda u, body: calls.append(u))[0]
         t0 = time.monotonic()
         await asyncio.wait_for(b._health_pass(), 3)
         took = time.monotonic() - t0
-        assert await asyncio.to_thread(started.wait, 5)          # the ping did start, off the pump
-        release.set()
-        await asyncio.gather(*tasks)
+        assert calls == []                                       # the pass itself pinged nothing
+        assert b.deadman.beat() == "ok"                          # a FAIL on its first poll is transient: ok
+        assert calls == [URL]
         return took
     assert asyncio.run(go()) < 1.0
 
