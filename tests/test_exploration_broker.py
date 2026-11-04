@@ -20,6 +20,7 @@ from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
 from goldbot.ops import jobs
 from goldbot.research import exploration_data as ex
 
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 T0 = pd.Timestamp("2026-10-05 08:00", tz="UTC")
 ICM_COSTS = ex.ReplayCosts(broker="icm", version="c-icm", effective_utc=T0 - pd.Timedelta(days=1),
                            slippage_usd=0.05, commission_rt_per_oz=0.07)

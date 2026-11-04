@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from goldbot.config import load_settings
 from goldbot.data.account_bars import account_bars_1m
@@ -23,6 +24,7 @@ from goldbot.ops import health, jobs
 from goldbot.research import exploration_data as ex
 from tests.test_health import make_ctx
 
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 T0 = pd.Timestamp("2026-10-26 08:00", tz="UTC")
 SLOT = pd.Timestamp("2026-10-26 23:10", tz="UTC")
 
@@ -47,6 +49,24 @@ def _cand(db: Database, cid: str, account: str, broker: str, decision: pd.Timest
     ex.record_candidate(db, candidate_id=cid, account_id=account, broker=broker, arm_id="S1A", family="vwap",
                         style="scalp", tf="1m", side=1, decision_utc=decision, stop_dist=2.0, target_dist=2.0,
                         max_hold_s=600, taken=True, mu=0.5, branch="random", u=0.9)
+
+
+@pytest.mark.parametrize("account, broker, symbol", [("vantage-demo", "vantage", "XAUUSD+"),
+                                                     ("vantage-247", "vantage247", "XAUUSD247")])
+def test_a_vantage_gold_account_whose_broker_symbol_is_not_xauusd_has_its_gold_rows_labelled(
+        tmp_path, account, broker, symbol):
+    """Quant review of 75824e5c (HIGH): the labeller compared the account's broker symbol with the literal "XAUUSD", so
+    Vantage gold (XAUUSD+, XAUUSD247) was never labelled. The broker symbol is resolved to its instrument key first."""
+    store = Store(tmp_path / "data")
+    store.append("bars_1m_broker", _m1(T0, 120), source=account, symbol=symbol)
+    db = Database.open(tmp_path, "aux")
+    _cand(db, "g", account, broker)
+    arm = SimpleNamespace(arm_id="S1A", style="scalp", control_share=None)
+    ctx: Any = SimpleNamespace(settings=load_settings(), store=store, state_dir=tmp_path,
+                               accounts=[_acc(account, broker, symbol, (arm,))])
+    rep = jobs.exploration_learn(ctx, SLOT)
+    assert rep["labelled"] == {account: 1}
+    assert ex.read_obs(db)["label_sim_r"].notna().all()
 
 
 # ---------------------------------------------------------------------------------------------- the reader

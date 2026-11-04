@@ -818,6 +818,23 @@ def test_the_engine_records_its_broker_on_every_candidate_and_reads_only_its_bro
         assert {r[0] for r in conn.execute("SELECT broker FROM exploration_obs")} == {"icm"}
 
 
+def test_a_growth_pot_arm_takes_equal_shares_without_asking_the_bandit_so_no_weights_run_is_reported_broken(
+        tmp_path, caplog):
+    """Quant Q5: the bandit never learns the growth pot (`exploration_data.STYLES`), so no run ever scores GS1. The
+    engine asked it anyway and logged "miss an arm" every minute on icm-demo (175 lines on 2026-11-03), burying the
+    real out-of-bounds warning; a style the bandit does not learn takes equal shares without a read."""
+    from goldbot.research.exploration_data import write_weights
+    pots = {"intraday": Pot(gbp=48, max_open=5), "growth": Pot(gbp=40, max_open=1)}
+    eng, _ = _engine(tmp_path, [_arm("s1"), _arm("s2", side=-1), _arm("g1", style="growth")], pots=pots)
+    assert eng.exploration is not None
+    write_weights(eng.exploration.db, CLOSE.value, {"s1": 0.25, "s2": 0.10}, {"s1": "intraday", "s2": "intraday"},
+                  broker="icm")
+    with caplog.at_level("WARNING"):
+        sh = exploration.shares(eng.exploration, CLOSE)
+    assert sh == pytest.approx({"s1": 0.25, "s2": 0.10, "g1": 0.30})
+    assert not [r for r in caplog.records if "miss an arm" in r.getMessage()]
+
+
 def test_the_equal_share_fallback_is_held_inside_five_to_thirty_percent(tmp_path, monkeypatch):
     from goldbot.research import exploration_data
 

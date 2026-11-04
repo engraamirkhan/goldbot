@@ -340,3 +340,20 @@ def test_clock(request: pytest.FixtureRequest) -> Any:
     finally:
         if clockshift._REAL:
             clockshift.set_offset(before)
+
+
+class _UnknownArmsAreGold(dict[str, str]):
+    """The spec's arm -> instrument map in which an arm the spec does not name reads as gold (`get` only)."""
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return super().get(key, "XAUUSD")
+
+
+@pytest.fixture
+def unknown_arms_are_gold(monkeypatch):
+    """The exploration learners read only gold arms' rows, and an arm the spec does not name is NOT gold
+    (`exploration_data.read_obs` `instrument`). Tests that record candidates under made-up arm ids ("S1a", "A", ...)
+    use this so those ids read as gold; the not-gold rule itself is tested with an explicit `instruments` map."""
+    from goldbot.research import arms
+    real = arms.arm_instruments
+    monkeypatch.setattr(arms, "arm_instruments", lambda path=None: _UnknownArmsAreGold(real(path)))

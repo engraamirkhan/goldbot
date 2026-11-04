@@ -37,6 +37,7 @@ V_WAVE1 = {"VXRIP1H": 30.0, "VXRT1H": 30.0, "VXFK1H": 30.0, "VXTL1H": 30.0, "VXT
            "VXBO15": 17.0, "VXTR1H": 30.0, "VC1H": 30.0}
 # arms expansion wave 2 (arms-2026-10-25.md section 8): Vantage's own hypotheses, per-trade cap by timeframe
 V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 # H-81 stage V1 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pot): the $7.00-bar strata and ZCV, £6.50
 V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
 # multi-instrument demo (lane L3): the random controls of the 7 Vantage instruments vantage-demo lists

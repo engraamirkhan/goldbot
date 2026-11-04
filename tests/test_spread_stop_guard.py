@@ -106,6 +106,29 @@ def test_the_spread_is_read_in_the_instruments_own_points(tmp_path: Path) -> Non
     assert d.allowed, d.reasons
 
 
+@pytest.mark.parametrize("key, stop, spread_points, commission", [
+    ("NZDUSD", 0.00019, 1.0, 7.0 / 100_000.0),     # 1-point spread 0.05 of the stop; with $7 a lot 0.42
+    ("EURUSD", 0.00012, 1.0, 7.0 / 100_000.0),     # 0.08; with commission 0.67 (the report's FX controls 0.6-0.8)
+])
+def test_an_fx_entry_whose_spread_plus_round_trip_commission_is_over_the_fraction_of_its_stop_is_refused(
+        tmp_path: Path, key: str, stop: float, spread_points: float, commission: float) -> None:
+    """P&L evidence 2026-11-04: after the spread-only guard went live, FX random controls kept entering with a spread
+    of 3-12% of the stop and a round trip of 60-83% (commission-dominated; cost/stop > 0.3: 108 trades, -£77.64, mean
+    R -0.54 at 0.3-0.5 and -0.73 above 0.5). The guard counts the spread and the round-trip commission together."""
+    gate = _explorer()
+    alone = gate.check(_arm(tmp_path, key, stop, price=1.0), _state(spread_points=spread_points), NOW)
+    assert "spread_over_stop" not in alone.reasons                                 # the spread alone is well inside
+    d = gate.check(_arm(tmp_path, key, stop, price=1.0, commission_usd_per_oz=commission),
+                   _state(spread_points=spread_points), NOW)
+    assert not d.allowed and "spread_over_stop" in d.reasons
+
+
+def test_a_gold_arm_at_its_smallest_stop_still_passes_with_spread_and_commission() -> None:
+    # the smallest gold arm stop is $3: a 0.25 spread + 0.07 commission is 0.11 of it
+    d = RiskGate(RiskLimits()).check(_gold(atr_usd=3.0, commission_usd_per_oz=0.07), _state(spread_points=25.0), NOW)
+    assert d.allowed, d.reasons
+
+
 def test_a_spread_of_exactly_the_fraction_is_allowed_and_one_point_more_is_refused() -> None:
     gate = RiskGate(RiskLimits(max_spread_stop_frac=0.3, max_spread_points=1e6))
     assert gate.check(_gold(atr_usd=2.0), _state(spread_points=60.0), NOW).allowed          # 0.60 of a $2 stop: 0.3
@@ -149,7 +172,8 @@ def test_an_fx_min_lot_scalps_planned_risk_counts_its_commission() -> None:
     # EURUSD 0.01 lot, a 2-pip stop: 0.01 x 100,000 x 0.0002 = 0.20 at the stop, + $7 a lot round trip x 0.01 = 0.07
     intent = _gold(atr_usd=0.0002, price=1.08, contract_oz=100_000.0, volume_max=50.0,
                    commission_usd_per_oz=7.0 / 100_000.0, **_registry("EURUSD"))
-    gate = RiskGate(RiskLimits(min_lot_risk_cap=0.001, max_spread_points=1e6))
+    # the stop guard is lifted here (its own tests below): 0.00005 + 0.00007 is 0.6 of this 2-pip stop
+    gate = RiskGate(RiskLimits(min_lot_risk_cap=0.001, max_spread_points=1e6, max_spread_stop_frac=1.0))
     d = gate.check(intent.model_copy(update={"volume_max": 0.01}), _state(equity=1_000.0, day_start_equity=1_000.0,
                                                                           week_start_equity=1_000.0,
                                                                           balance_closed_hwm=1_000.0,

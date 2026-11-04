@@ -3,6 +3,7 @@ training table, H-62 cross-fitting and the H-61 bandit weights."""
 from __future__ import annotations
 
 import ast
+import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from goldbot.ops.gates_phase import load_closed_trades, phase_record
 from goldbot.research import exploration_data as ex
 from goldbot.research.population import agent_trades
 
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 T0 = pd.Timestamp("2026-10-05 08:00", tz="UTC")          # a Monday after the holdout
 COSTS = ex.ReplayCosts(broker="icm", version="c1", effective_utc=T0 - pd.Timedelta(days=1), slippage_usd=0.05,
                        commission_rt_per_oz=0.07)
@@ -209,6 +211,79 @@ def test_label_candidates_labels_taken_and_untaken_once_point_in_time(tmp_path):
                             cutoff=cutoff)
 
 
+def test_an_fx_or_sugar_candidate_is_never_replayed_on_gold_bars_with_golds_costs(tmp_path):
+    """Brain 2026-11-04: S0-NZDUSD (stop 0.00019) and S0-SUGAR (stop 0.00026) were replayed on the account's XAUUSD
+    1m bars with gold's per-oz costs, giving a mean label of -2,679 R and -1,882 R. A candidate is replayed only on bars
+    and costs of its own instrument (the arm row's `params.instrument`); another instrument's stays unlabelled
+    (NULL: unresolved, never censored)."""
+    db = _db(tmp_path)
+    _cand(db, "gold", arm="S1a", stop=2.0, target=2.0)
+    _cand(db, "fx", arm="S0-NZDUSD", stop=0.00019, target=0.00019, is_control=True)
+    _cand(db, "sugar", arm="S0-SUGAR", stop=0.00026, target=0.00026, is_control=True)
+    bars = _m1(T0, [(2000.0, 2000.5, 1999.5)] * 60)
+    inst = {"S1a": "XAUUSD", "S0-NZDUSD": "NZDUSD", "S0-SUGAR": "SUGAR"}
+    assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30), instruments=inst) == 1
+    obs = ex.read_obs(db).set_index("candidate_id")
+    assert obs["label_sim_r"].abs().loc["gold"] <= ex.MAX_LABEL_R
+    assert pd.isna(obs.loc["fx", "label_sim_r"]) and pd.isna(obs.loc["sugar", "label_sim_r"])
+    assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30), symbol="NZDUSD",
+                               instruments=inst) == 0      # gold's per-oz cost model never prices another instrument
+
+
+def test_a_non_gold_row_labelled_on_gold_bars_never_reaches_the_training_table_or_the_retrain_count(tmp_path):
+    """Quant review of 75824e5c (HIGH): rows of XAUEUR, XAUAUD, JP225, DE40, US500, XTIUSD and XAGUSD were replayed on
+    gold bars before 2026-11-04 at plausible but wrong R (an XAUEUR control at 1.3 R). The learners read gold arms' rows
+    only; an arm the spec does not name (unknown or removed) is not gold either."""
+    db = _db(tmp_path)
+    for i in range(4):
+        _cand(db, f"g{i}", arm="S1a", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=i))
+        _label(db, f"g{i}", 0.5)
+    _cand(db, "eur", arm="S0-XAUEUR", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=5),
+          is_control=True)
+    _label(db, "eur", 1.3)
+    _cand(db, "gone", arm="RETIRED9", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=6))
+    _label(db, "gone", 0.7)
+    as_of = T0 + pd.Timedelta(days=2)
+    table = ex.training_table(db, style="intraday", broker="icm", as_of=as_of)          # the spec: S0-XAUEUR is XAUEUR
+    assert "eur" not in set(table["candidate_id"])
+    assert ex.retrain_due(db, "intraday", as_of, broker="icm")[2] == 5                    # 4 gold + the made-up arm
+    spec_only = {"S1a": "XAUUSD", "S0-XAUEUR": "XAUEUR"}                                   # RETIRED9 named nowhere
+    assert set(ex.training_table(db, style="intraday", broker="icm", as_of=as_of, instruments=spec_only)
+               ["candidate_id"]) == {"g0", "g1", "g2", "g3"}
+    assert ex.retrain_due(db, "intraday", as_of, broker="icm", instruments=spec_only)[2] == 4
+    assert set(ex.read_obs(db, instrument="XAUUSD", instruments=spec_only)["candidate_id"]) == {"g0", "g1", "g2", "g3"}
+
+
+def test_the_spec_names_each_arms_instrument_with_gold_for_a_row_without_one():
+    from goldbot.research.arms import arm_instruments
+    inst = arm_instruments()
+    assert inst["S0-NZDUSD"] == "NZDUSD" and inst["S0-SUGAR"] == "SUGAR" and inst["S5B"] == "XAUUSD"
+
+
+def test_a_gold_label_beyond_twenty_r_is_kept_counted_and_flagged_suspect_never_dropped(tmp_path, caplog):
+    """Quant review of 75824e5c (MEDIUM): with the learners on gold rows only, a gold label beyond MAX_LABEL_R (20 R)
+    can be real (a gap through a tight 1m stop), so it is kept in the bandit and the training table, counted
+    (`suspect_labels`, per arm in the run's detail) and logged, never set aside."""
+    db = _db(tmp_path)
+    for i in range(6):
+        _cand(db, f"a{i}", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=i))
+        _label(db, f"a{i}", 0.5)
+    _cand(db, "gap", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=7))
+    _label(db, "gap", -24.5)
+    with caplog.at_level("WARNING"):
+        out = ex.learn(db, broker="icm", as_of=T0 + pd.Timedelta(days=2), arms={"A": "intraday", "B": "intraday"},
+                       learning=())
+    assert out["suspect_labels"] == 1
+    assert any("suspect" in r.getMessage() and "A" in r.getMessage() for r in caplog.records)
+    with db.connection() as conn:
+        detail = json.loads(conn.execute("SELECT detail FROM exploration_broker_weights WHERE arm_id = 'A'"
+                                         ).fetchone()[0])
+    assert detail["n"] == 7 and detail["suspect"] == 1
+    assert detail["mean_r"] == pytest.approx((6 * 0.5 - 24.5) / 7)
+    table = ex.training_table(db, style="intraday", broker="icm", as_of=T0 + pd.Timedelta(days=2))
+    assert "gap" in set(table["candidate_id"]) and len(table) == 7
+
+
 # ---------------------------------------------------------------------------------------------- training table
 def test_the_feature_lists_are_the_frozen_v1_lists_of_40_inputs():
     assert set(ex.FEATURE_LISTS) == {"h62-v1-scalp", "h62-v1-intraday", "h62-v1-swing"}
@@ -371,6 +446,52 @@ def test_weights_never_exceed_ceilings(tmp_path):
     for n in (2, 3, 6, 12):
         eq = ex.equal_shares([f"a{i}" for i in range(n)])
         assert all(ex.FLOOR_SHARE <= v <= ex.CAP_SHARE for v in eq.values()) and sum(eq.values()) <= 1 + 1e-12
+
+
+def test_a_leader_capped_while_the_floors_bind_never_pushes_the_style_above_its_budget_so_the_run_is_applied(tmp_path):
+    """Brain run 2026-11-03 (vantage intraday): 16 arms, one leader at the 30% cap and fifteen at the 5% floor summed
+    to 1.05, so the engine read the run as out of bounds and allocated equal shares every minute. The floors bind
+    first: the leader gives up what they need, the style sums to exactly 1 and the engine applies the learnt run."""
+    p = {"lead": 0.97, **{f"a{i:02d}": 0.002 for i in range(15)}}
+    w = ex.bounded_shares(p)
+    assert sum(w.values()) == pytest.approx(1.0, abs=1e-12)
+    assert all(ex.FLOOR_SHARE - 1e-12 <= v <= ex.CAP_SHARE + 1e-12 for v in w.values())
+    assert w["lead"] == pytest.approx(0.25) and max(w, key=w.__getitem__) == "lead"
+    db = _db(tmp_path)
+    ex.write_weights(db, T0.value, w, {a: "intraday" for a in w}, broker="vantage")
+    assert ex.weights(db, list(w), broker="vantage") == pytest.approx(w)          # applied, not equal shares
+    assert ex.weights(db, list(w), broker="vantage") != pytest.approx(ex.equal_shares(list(w)))
+
+
+def test_bounded_shares_stay_proportional_inside_the_bounds_and_never_sum_above_one():
+    """The shares are the clipped proportional ones (s = clip(lambda * p, floor, cap) with one lambda for the style):
+    an arm's order is its p's order, every share is in its bounds, and the style never sums above 1."""
+    rng = np.random.default_rng(11)
+    for n in (1, 2, 3, 4, 7, 16, 21, 30):
+        for _ in range(40):
+            p = dict(zip([f"a{i}" for i in range(n)], rng.dirichlet(np.full(n, 0.2)), strict=True))
+            ceil = {"a0": 0.02} if n > 3 else None
+            w = ex.bounded_shares(p, ceilings=ceil)
+            lo = min(ex.FLOOR_SHARE, 1.0 / n)
+            assert sum(w.values()) <= 1 + 1e-9
+            assert all(min(lo, (ceil or {}).get(a, 1.0)) - 1e-12 <= v <= min(ex.CAP_SHARE, (ceil or {}).get(a, 1.0))
+                       + 1e-12 for a, v in w.items())
+            free = [a for a in p if a not in (ceil or {})]
+            assert all(w[a] <= w[b] + 1e-12 for a in free for b in free if p[a] <= p[b])
+            if n >= 5:      # the caps leave room for the whole budget here: it is used in full
+                assert sum(w.values()) == pytest.approx(1.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_ceiling_that_is_not_a_finite_number_holds_its_arm_at_zero_never_at_the_cap(tmp_path, bad):
+    """Trading-safety review (LOW): min(cap, nan) is cap, so a NaN ceiling lifted its arm to 30%. A ceiling that is not
+    a finite number is 0, in the learner's shares and in the engine's read of a run alike."""
+    p = {"a": 0.6, "b": 0.2, "c": 0.1, "d": 0.1}
+    w = ex.bounded_shares(p, ceilings={"a": bad})
+    assert w["a"] == 0.0 and all(v <= ex.CAP_SHARE + 1e-12 for v in w.values())
+    db = _db(tmp_path)
+    ex.write_weights(db, 1, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}, dict.fromkeys(p, "scalp"), broker="icm")
+    assert ex.weights(db, list(p), broker="icm", ceilings={"a": bad})["a"] == 0.0
 
 
 def test_corrupt_or_missing_weights_give_equal_shares(tmp_path):

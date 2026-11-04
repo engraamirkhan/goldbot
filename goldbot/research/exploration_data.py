@@ -82,6 +82,11 @@ CAP_SHARE = 0.30
 MAX_WEIGHTS_AGE = pd.Timedelta(days=3)          # older bandit weights are stale: equal shares until the next run
 THOMPSON_DRAWS = 4000
 PRIOR_SD_R = 1.0                                # net-R spread of one trade under the flat prior
+# a gold label beyond this many R in size is suspect (brain 2026-11-04: FX and sugar controls replayed on gold bars at
+# -2,679 R; the learners now read gold rows only, `read_obs` `instrument`). It is kept, never dropped (a real gap
+# through a tight 1m stop must stay; quant review of 75824e5c), counted per arm in the run's detail and logged
+MAX_LABEL_R = 20.0
+GOLD = "XAUUSD"                                 # ReplayCosts is gold's per-oz model: the only instrument it prices
 
 # H-60 priors: history 2019-01-01..2025-09-30 only (the current cost era); the holdout is never read
 PRIOR_HISTORY_START = pd.Timestamp("2019-01-01", tz="UTC")
@@ -281,12 +286,16 @@ def record_fill(db: Database, *, candidate_id: str, entry_utc: pd.Timestamp, exi
 
 def read_obs(db: Database, *, broker: str | None = None, style: str | None = None, arm_id: str | None = None,
              as_of: pd.Timestamp | None = None, include_quarantined: bool = False,
-             evidence: Scope | None = None, held_out: Collection[str] = ()) -> pd.DataFrame:
+             evidence: Scope | None = None, held_out: Collection[str] = (), instrument: str | None = None,
+             instruments: Mapping[str, str] | None = None) -> pd.DataFrame:
     """Candidates ordered by decision time; times as UTC datetimes (ns). `as_of`: only labels resolved by then;
     `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`. `evidence`:
     leave out the candidates void for that scope (aux.db `evidence_exclusions`, prereg Amendment 4: "void as evidence
     (n, posterior, cost cells, graduation)"); every learner passes "posterior". `held_out`: candidate ids left out in
-    memory only (decisions after a quarantine span whose engine restart is not recorded yet)."""
+    memory only (decisions after a quarantine span whose engine restart is not recorded yet). `instrument`: only the
+    rows of arms on that instrument key (`instruments`, default the spec's `arms.arm_instruments`); an arm the spec
+    does not name (unknown or removed) matches none. Every learner passes GOLD: quant review of 75824e5c, non-gold
+    rows labelled on gold bars before 2026-11-04 (XAUEUR, DE40, US500, ... at plausible but wrong R) never train."""
     where: list[str] = ["1 = 1"]
     params: list[Any] = []
     if not include_quarantined:
@@ -310,6 +319,9 @@ def read_obs(db: Database, *, broker: str | None = None, style: str | None = Non
             df = df[~df["candidate_id"].isin(excluded(conn, evidence))].reset_index(drop=True)
     if held_out:
         df = df[~df["candidate_id"].isin(set(held_out))].reset_index(drop=True)
+    if instrument is not None:
+        inst = arm_spec.arm_instruments() if instruments is None else instruments
+        df = df[df["arm_id"].map(lambda a: inst.get(str(a))) == instrument].reset_index(drop=True)
     for c, name in (("decision_ns", "decision_utc"), ("entry_ns", "entry_utc"), ("exit_ns", "exit_utc"),
                     ("label_exit_ns", "label_exit_utc"), ("available_utc_max_ns", "available_utc_max")):
         df[name] = pd.to_datetime(pd.to_numeric(df.pop(c), errors="coerce"), unit="ns", utc=True)
@@ -409,17 +421,40 @@ def replay_label(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp
     return Replay(exit_utc=exit_t, sim_r=float(sim), mid_r=float(mid), barrier=barrier)
 
 
+def instrument_key(symbol: str, broker: str | None = None) -> str:
+    """The instrument key (config/instruments.yaml) a key, store symbol or broker symbol stands for: `broker`'s symbol
+    first (vantage XAUUSD+, vantage247 XAUUSD247 -> XAUUSD), else any; `symbol` itself when the registry does not
+    list it (an unknown symbol is never gold by accident)."""
+    from goldbot.instruments import registry
+    try:
+        reg = registry()
+    except (OSError, ValueError) as exc:
+        log.warning("instrument registry unreadable (%s): %s is read as itself", type(exc).__name__, symbol)
+        return symbol
+    spec = reg.resolve(symbol, broker) or reg.resolve(symbol)
+    return spec.key if spec is not None else symbol
+
+
 def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *, cutoff: pd.Timestamp,
-                     account_id: str | None = None) -> int:
+                     account_id: str | None = None, symbol: str = GOLD,
+                     instruments: Mapping[str, str] | None = None) -> int:
     """Replay every unlabelled, unquarantined candidate of `costs.broker` (and `account_id` when given) whose label
     resolves by `cutoff` on the bars before it, and write label_sim_r / label_mid_r once. Returns the number labelled.
-    The cost table must be effective by `cutoff`; another broker's rows are never labelled with it."""
+    The cost table must be effective by `cutoff`; another broker's rows are never labelled with it.
+
+    `bars_1m` are `symbol`'s (a key or a broker symbol: `instrument_key`, so Vantage's XAUUSD+ and XAUUSD247 are
+    gold; quant review of 75824e5c); only candidates of an arm on that instrument are replayed (`instruments`: arm id ->
+    instrument, default the spec's `arms.arm_instruments`; an arm it does not name is never replayed). `costs` is gold's per-oz
+    model, so nothing is labelled for another symbol: brain 2026-11-04, the multi-instrument controls (S0-NZDUSD stop
+    0.00019, S0-SUGAR 0.00026) were replayed on the account's XAUUSD bars with gold's costs, mean -2,679 R and
+    -1,882 R. Another instrument's candidate stays NULL (unresolved, never censored) until its own replay exists."""
     if costs.effective_utc > cutoff:
         raise ValueError("cost model effective after the labelling cutoff: labels must be point in time")
-    if bars_1m.empty:
+    key = instrument_key(symbol, costs.broker)
+    if bars_1m.empty or key != GOLD:
         return 0
     bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff]
-    obs = read_obs(db, broker=costs.broker)
+    obs = read_obs(db, broker=costs.broker, instrument=key, instruments=instruments)
     obs = obs[obs["label_sim_r"].isna()]
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
@@ -453,7 +488,8 @@ _BASE = ["candidate_id", "broker", "arm_id", "family", "style", "tf", "side", "i
 
 def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp,
                    features: pd.DataFrame | None = None, arm_id: str | None = None,
-                   feature_cols: Sequence[str] | None = None, held_out: Collection[str] = ()) -> pd.DataFrame:
+                   feature_cols: Sequence[str] | None = None, held_out: Collection[str] = (),
+                   instruments: Mapping[str, str] | None = None) -> pd.DataFrame:
     """One broker's admissible rows of a style (spec section 2; never pooled across brokers): label resolved by `as_of`, not quarantined, no decision in the
     holdout, taken or not. `y` = 1[label_sim_r > 0]; label_fill_r and label_mid_r ride along as diagnostics. The
     columns are the style's frozen v1 list (or `feature_cols`), from each row's snapshot when it has one, else from
@@ -464,9 +500,12 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
     cols = list(feature_cols) if feature_cols is not None else list(FEATURE_LISTS[STYLE_FEATURE_LIST[style]])
     check_feature_cap([*cols, "side", "arm_id"])
     obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of, evidence="posterior",
-                   held_out=held_out)
+                   held_out=held_out, instrument=GOLD, instruments=instruments)
     dec = pd.DatetimeIndex(obs["decision_utc"])
     obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
+    if n_sus := int(suspect(obs["label_sim_r"]).sum()):          # kept: logged, never dropped
+        log.warning("exploration %s %s training rows: %d labels beyond %.0f R (suspect, kept)", broker, style, n_sus,
+                    MAX_LABEL_R)
     if obs.empty:
         return pd.DataFrame(columns=[*_BASE, "y", *cols])
     snap = obs["features"].notna()
@@ -583,10 +622,11 @@ def _last_cutoff(db: Database, style: str, broker: str) -> pd.Timestamp | None:
 
 
 def retrain_due(db: Database, style: str, cutoff: pd.Timestamp, *, broker: str,
-                held_out: Collection[str] = ()) -> tuple[bool, int, int]:
+                held_out: Collection[str] = (), instruments: Mapping[str, str] | None = None) -> tuple[bool, int, int]:
     """(due, new, total) of one broker's style: >= RETRAIN_MIN_NEW admissible labels resolved since its last fit's
-    cutoff and >= RETRAIN_MIN_TOTAL in all (spec section 5)."""
-    obs = read_obs(db, broker=broker, style=style, as_of=cutoff, evidence="posterior", held_out=held_out)
+    cutoff and >= RETRAIN_MIN_TOTAL in all (spec section 5); gold arms' rows only (`read_obs` `instrument`)."""
+    obs = read_obs(db, broker=broker, style=style, as_of=cutoff, evidence="posterior", held_out=held_out,
+                   instrument=GOLD, instruments=instruments)
     last = _last_cutoff(db, style, broker)
     new = int((obs["label_exit_utc"] > last).sum()) if last is not None else len(obs)
     return new >= RETRAIN_MIN_NEW and len(obs) >= RETRAIN_MIN_TOTAL, new, len(obs)
@@ -710,35 +750,64 @@ def _nig_draws(r: np.ndarray, prior: ArmPrior | None, draws: int, rng: np.random
     return np.asarray(rng.normal(mn, np.sqrt(var / kn)))
 
 
+def suspect(labels: pd.Series) -> pd.Series:
+    """True where a resolved label is beyond MAX_LABEL_R in size (a NULL label is unresolved, not suspect)."""
+    r = pd.to_numeric(labels, errors="coerce").astype(float)
+    return r.notna() & ~(r.abs() <= MAX_LABEL_R)
+
+
+def _ceiling(ceilings: Mapping[str, float] | None, arm: str, cap: float) -> float:
+    """`arm`'s share ceiling, `cap` when it has none; 0 when it is not a finite number (trading-safety review, LOW:
+    min(cap, nan) is cap, which lifted a broken ceiling to the cap)."""
+    if ceilings is None or arm not in ceilings:
+        return cap
+    try:
+        v = float(ceilings[arm])
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
+
+
 def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | None = None,
                    floor: float = FLOOR_SHARE, cap: float = CAP_SHARE) -> dict[str, float]:
     """Shares proportional to `p`, each in [floor, min(cap, its ceiling)], summing to 1 when the caps allow it (less
     when they do not: a cap never moves budget onto another arm past that arm's own cap). With more arms than 1/floor
-    the floor becomes 1/n."""
+    the floor becomes 1/n.
+
+    One scale for the whole style: s = clip(lambda x p, floor, cap), lambda found by bisection so the shares sum to
+    the budget (the clipped proportional shares). The floors bind with the cap together, never one after the other:
+    brain run 2026-11-03 (vantage intraday) fixed a leader at the 30% cap and then fifteen arms at the 5% floor, summed
+    to 1.05, and the engine discarded the run as out of bounds every minute (`weights`)."""
     arms = sorted(p)
     n = len(arms)
     if n == 0:
         return {}
-    hi = {a: max(0.0, min(cap, float((ceilings or {}).get(a, cap)))) for a in arms}
+    hi = {a: max(0.0, min(cap, _ceiling(ceilings, a, cap))) for a in arms}
     lo = {a: min(floor, 1.0 / n, hi[a]) for a in arms}
     total = min(1.0, sum(hi.values()))
     w = {a: max(float(p[a]), 0.0) if math.isfinite(float(p[a])) else 0.0 for a in arms}
-    fixed: dict[str, float] = {}
-    for _ in range(2 * n + 1):
-        free = [a for a in arms if a not in fixed]
-        if not free:
-            break
-        mass = total - sum(fixed.values())
-        sw = sum(w[a] for a in free)
-        s = {a: mass * (w[a] / sw if sw > 0 else 1.0 / len(free)) for a in free}
-        over = [a for a in free if s[a] > hi[a] + 1e-15]
-        under = [a for a in free if s[a] < lo[a] - 1e-15]
-        if not over and not under:
-            fixed.update(s)
-            break
-        for a in over or under:
-            fixed[a] = hi[a] if over else lo[a]
-    return {a: float(min(max(fixed.get(a, lo[a]), lo[a]), hi[a])) for a in arms}
+
+    def fill(group: list[str], mass: float, v: Mapping[str, float]) -> dict[str, float]:
+        """clip(lambda x v, lo, hi) over `group`, summing to `mass` when its caps allow (all at the cap otherwise)."""
+        def at(lam: float) -> dict[str, float]:
+            return {a: min(max(lam * v[a], lo[a]), hi[a]) for a in group}
+        low, top = 0.0, max(hi[a] / v[a] for a in group)
+        if sum(at(top).values()) <= mass:
+            return at(top)
+        for _ in range(200):        # the sum is continuous and non-decreasing in lambda
+            mid = (low + top) / 2
+            low, top = (low, mid) if sum(at(mid).values()) > mass else (mid, top)
+        return at(low)
+
+    pos = [a for a in arms if w[a] > 0]
+    zero = [a for a in arms if w[a] <= 0]
+    if not pos:
+        return fill(arms, total, dict.fromkeys(arms, 1.0))
+    # the arms with no p are held at their floor while the others share; what the others' caps leave is theirs, equally
+    out = fill(pos, total - sum(lo[a] for a in zero), w)
+    if zero:
+        out |= fill(zero, max(total - sum(out.values()), sum(lo[a] for a in zero)), dict.fromkeys(zero, 1.0))
+    return out
 
 
 def thompson_shares(r_by_arm: Mapping[str, Sequence[float]], style_of: Mapping[str, str], *,
@@ -807,7 +876,7 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
         log.warning("exploration weights of run %s miss an arm or mix styles: equal shares", run)
         return fallback
     floor = min(FLOOR_SHARE, 1.0 / len(want))
-    hi = {a: min(CAP_SHARE, float((ceilings or {}).get(a, CAP_SHARE))) for a in want}
+    hi = {a: max(0.0, min(CAP_SHARE, _ceiling(ceilings, a, CAP_SHARE))) for a in want}
     vals = {a: got[a][0] for a in want}
     if any(not (math.isfinite(v) and min(floor, hi[a]) - 1e-9 <= v <= CAP_SHARE + 1e-9) for a, v in vals.items()) \
             or sum(vals.values()) > 1 + 1e-9:
@@ -820,7 +889,8 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
 def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, str] | None = None,
           controls: Sequence[str] = (), ceilings: Mapping[str, float] | None = None, seed: int = 0,
           retrain: bool = False, models_dir: Path | None = None, held_out: Collection[str] = (),
-          learning: Collection[str] | None = None) -> dict[str, Any]:
+          learning: Collection[str] | None = None,
+          instruments: Mapping[str, str] | None = None) -> dict[str, Any]:
     """One broker's bandit (nightly) and, when `retrain` (Sundays), its H-62 style models whose retrain is due, on
     that broker's evidence only. `arms`: the strategy arm id -> style configured on the broker's accounts (joined
     with the arms seen in its candidates); control arms (random brackets) are never allocated by results. Shares use
@@ -837,7 +907,8 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
             log.warning("exploration spec unreadable (%s): no learning arm is set apart tonight", type(exc).__name__)
             learning = ()
     learning = frozenset(learning)
-    obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out)     # prereg Amendment 4
+    obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out,    # prereg Amendment 4
+                   instrument=GOLD, instruments=instruments)
     if learning:
         held_out = {*held_out, *(str(c) for c in read_obs(db, broker=broker).loc[
             lambda f: f["arm_id"].isin(learning), "candidate_id"])}
@@ -853,13 +924,14 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         cutoff, activation = model_cutoff(as_of)
         models: dict[str, Any] = {}
         for style in STYLES:
-            due, new, total = retrain_due(db, style, cutoff, broker=broker, held_out=held_out)
+            due, new, total = retrain_due(db, style, cutoff, broker=broker, held_out=held_out,
+                                          instruments=instruments)
             if not due:
                 models[style] = {"due": False, "new": new, "total": total}
                 continue
             try:
-                fit = cross_fit_meta(training_table(db, style=style, broker=broker, as_of=cutoff, held_out=held_out),
-                                     style)
+                fit = cross_fit_meta(training_table(db, style=style, broker=broker, as_of=cutoff, held_out=held_out,
+                                                    instruments=instruments), style)
                 models[style] = {"version": save_model(db, models_dir, fit, broker=broker, cutoff=cutoff,
                                                        activation=activation),
                                  "auc_net": fit["auc_net"], "auc_gross": fit["auc_gross"]}
@@ -870,6 +942,11 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     if not style_of:
         return out
     priors = read_priors(db) if broker in PRIOR_BROKERS else {}      # ICM-cost history: never another broker's
+    sus = strat.loc[suspect(strat["label_sim_r"]), "arm_id"].astype(str).value_counts().to_dict()
+    out["suspect_labels"] = int(sum(sus.values()))
+    if sus:                             # kept in the evidence (a real gap may be one); counted and logged
+        log.warning("exploration %s: labels beyond %.0f R (suspect, kept) by arm: %s", broker, MAX_LABEL_R,
+                    ", ".join(f"{a} {n}" for a, n in sorted(sus.items())))
     r_by_arm = {a: strat.loc[strat["arm_id"] == a, "label_sim_r"].astype(float).tolist() for a in style_of}
     if not any(r_by_arm.values()):      # quant 2026-10-27 (LOW): a run on no evidence is not a learnt run
         log.warning("exploration %s: no labelled evidence by %s, no weights run written", broker, as_of)
@@ -878,14 +955,14 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     shares =thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed)
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,
                   "prior": priors[a].prior_version if a in priors else None, "ceiling": (ceilings or {}).get(a),
-                  "method": "thompson_nig_net_r_within_style"} for a in style_of}
+                  "method": "thompson_nig_net_r_within_style", "suspect": int(sus.get(a, 0))} for a in style_of}
     write_weights(db, _ns(as_of), shares, style_of, detail, broker=broker)
     out["weights"] = shares
     return out
 
 
-__all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
+__all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LABEL_R", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
            "bounded_shares", "cross_fit_meta", "equal_shares", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
-           "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "thompson_shares",
+           "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "suspect", "thompson_shares",
            "training_table", "weights", "write_prior", "write_weights"]

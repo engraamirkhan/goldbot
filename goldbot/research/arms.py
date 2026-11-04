@@ -364,6 +364,25 @@ def learning_arm_ids(path: Path | None = None) -> frozenset[str]:
                      and r.get("role") == "learning" and "id" in r)
 
 
+def arm_instruments(path: Path | None = None) -> dict[str, str]:
+    """Each spec row's instrument (`goldbot.instruments.arm_instrument`: its `params.instrument`, XAUUSD for a row
+    without one), read from the rows alone like `learning_arm_ids`: what the exploration labeller replays a candidate
+    on and what the learners read it as (never another instrument's bars, costs or evidence). Default: the ARM-SPEC
+    (config/exploration_arms.yaml) and the discovered arms (config/spec_arms.yaml, when present); an ARM-SPEC row wins
+    an id both name, as in the engine. An arm neither names is absent: the readers take it as NOT gold."""
+    from goldbot.instruments import arm_instrument
+    paths = [path] if path is not None else [REPO_ROOT / "config" / "spec_arms.yaml",
+                                             REPO_ROOT / "config" / "exploration_arms.yaml"]
+    out: dict[str, str] = {}
+    for p in paths:
+        if path is None and not Path(p).exists():
+            continue
+        raw = yaml.safe_load(Path(p).read_text())
+        out |= {str(r["id"]): arm_instrument(r.get("params") or {}) for r in (raw or {}).get("arms", [])
+                if isinstance(r, dict) and "id" in r}
+    return out
+
+
 def learning_k_config(arm_id: str, config_hash: str, prereg: str) -> dict[str, str]:
     """The config of a learning arm's (or its dedicated control's) K row: the arm, its frozen hash and its prereg."""
     return {"kind": LEARNING_FAMILY, "arm": arm_id, "arm_config_hash": config_hash, "prereg": prereg}
