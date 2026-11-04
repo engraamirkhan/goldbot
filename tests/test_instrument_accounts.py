@@ -16,9 +16,11 @@ from goldbot import instruments as inst_mod
 from goldbot.instruments import GOLD, instrument_magic_base, load_instruments, registry
 from goldbot.ops import accounts as acc_mod
 
-ICM_19 = {"XAGUSD", "XPTUSD", "XAUEUR", "XAUAUD", "US500", "USTEC", "DE40", "UK100", "JP225", "EURUSD", "USDJPY",
-          "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XTIUSD", "XBRUSD", "XNGUSD"}
-VANTAGE_7 = {"UST10Y", "BUND10Y", "COPPER", "WHEAT", "SOYBEAN", "SUGAR", "COFFEE"}
+# owner decision 2026-11-04 (trade only the owner's 25; tests/test_owner_instrument_list.py): icm-probe keeps 14 of its
+# 19, vantage-demo drops its 7 and trades the 10 added instruments
+ICM_14 = {"XAGUSD", "XAUEUR", "US500", "USTEC", "DE40", "UK100", "EURUSD", "USDJPY", "GBPUSD", "AUDUSD", "USDCAD",
+          "USDCHF", "NZDUSD", "XTIUSD"}
+VANTAGE_10 = {"GBPJPY", "EURGBP", "EURJPY", "AUDJPY", "EURAUD", "GBPAUD", "BTCUSD", "XAUJPY", "USINDEX", "US30"}
 
 
 def _accounts() -> dict[str, acc_mod.Account]:
@@ -33,10 +35,10 @@ def _with(acc_id: str, **change: Any) -> acc_mod.Account:
 
 # --- the configured lists ---
 
-def test_icm_probe_lists_the_19_icm_instruments_and_vantage_demo_the_7_vantage_ones() -> None:
+def test_icm_probe_lists_its_14_kept_instruments_and_vantage_demo_the_10_added_ones() -> None:
     accs = _accounts()
-    assert set(accs["icm-probe"].instruments) == ICM_19 and len(accs["icm-probe"].instruments) == 19
-    assert set(accs["vantage-demo"].instruments) == VANTAGE_7 and len(accs["vantage-demo"].instruments) == 7
+    assert set(accs["icm-probe"].instruments) == ICM_14 and len(accs["icm-probe"].instruments) == 14
+    assert set(accs["vantage-demo"].instruments) == VANTAGE_10 and len(accs["vantage-demo"].instruments) == 10
 
 
 def test_every_other_account_trades_its_gold_symbol_only() -> None:

@@ -1711,7 +1711,7 @@ export interface components {
              * Group
              * @enum {string}
              */
-            group: "gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags";
+            group: "gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags" | "crypto";
             /** Lots By Symbol */
             lots_by_symbol?: {
                 [key: string]: number;
@@ -1790,7 +1790,7 @@ export interface components {
              * Group
              * @enum {string}
              */
-            group: "gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags";
+            group: "gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags" | "crypto";
             /** Label */
             label: string;
             /** Quote Ccy */
@@ -4632,7 +4632,7 @@ export interface operations {
                 cursor?: string | null;
                 limit?: number;
                 symbol?: string[];
-                group?: ("gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags")[];
+                group?: ("gold" | "metals" | "equity" | "fx" | "energy" | "rates" | "ags" | "crypto")[];
             };
             header?: never;
             path?: never;

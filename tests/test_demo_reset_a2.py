@@ -51,7 +51,11 @@ def test_every_a2_id_is_retired_on_its_own_registry_row_with_the_rule_and_keeps_
 
 
 def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_stays_active(spec) -> None:
-    assert {i for i, a in spec.items() if a.retired} == set(A2)
+    # besides A2: the owner's instrument decision of 2026-11-04 retired every row of a removed instrument
+    from tests.test_learning_mi import REMOVED
+    owner = {i for i, a in spec.items() if a.params.get("instrument") in REMOVED}
+    assert all(spec[i].retired_day == "2026-11-04" for i in owner)
+    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner
     for arm_id in (*EXEMPT, "XBB15", "S1A", "S1B"):          # S1A/S1B: evaluator R3, read at their own read
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 

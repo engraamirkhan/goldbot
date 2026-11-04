@@ -48,7 +48,7 @@ def _acc(aid: str) -> acc_mod.Account:
     return acc_mod.load_accounts(logins=False)[aid]
 
 
-@pytest.mark.parametrize("aid, broker, n", [("icm-probe", "icm", 19), ("vantage-demo", "vantage", 7)])
+@pytest.mark.parametrize("aid, broker, n", [("icm-probe", "icm", 14), ("vantage-demo", "vantage", 10)])   # 2026-11-04
 def test_every_listed_instrument_passes_on_a_terminal_with_the_declared_terms(aid: str, broker: str, n: int) -> None:
     out = symbol_check.check_instruments(_acc(aid), Terminal(broker))
     assert len(out) == n and all(p == [] for p in out.values())
@@ -63,7 +63,7 @@ def test_every_listed_instrument_passes_on_a_terminal_with_the_declared_terms(ai
     ("US500", {"volume_step": 0.01}, "lot step"),
     ("DE40", {"currency_profit": "USD"}, "profit currency"),
     ("XTIUSD", {"swap_rollover3days": 3}, "triple swap"),
-    ("XNGUSD", {"trade_allowed": False}, "trading disabled"),
+    ("XAGUSD", {"trade_allowed": False}, "trading disabled"),
 ])
 def test_each_term_that_differs_from_the_registry_is_named(key: str, change: dict[str, Any], why: str) -> None:
     out = symbol_check.check_instruments(_acc("icm-probe"), Terminal("icm", {key: change}))
@@ -72,8 +72,8 @@ def test_each_term_that_differs_from_the_registry_is_named(key: str, change: dic
 
 
 def test_a_symbol_the_terminal_does_not_list_is_named() -> None:
-    out = symbol_check.check_instruments(_acc("icm-probe"), Terminal("icm", missing=("JP225",)))
-    assert out["JP225"] and "not listed" in out["JP225"][0]
+    out = symbol_check.check_instruments(_acc("icm-probe"), Terminal("icm", missing=("NZDUSD",)))
+    assert out["NZDUSD"] and "not listed" in out["NZDUSD"][0]
 
 
 def test_terms_the_terminal_does_not_report_are_not_failed() -> None:

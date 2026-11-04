@@ -40,8 +40,9 @@ V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
 pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 # H-81 stage V1 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pot): the $7.00-bar strata and ZCV, £6.50
 V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
-# multi-instrument demo (lane L3): the random controls of the 7 Vantage instruments vantage-demo lists
-V_INSTRUMENTS = {f"{p}-{k}" for k in ['UST10Y', 'BUND10Y', 'COPPER', 'WHEAT', 'SOYBEAN', 'SUGAR', 'COFFEE'] for p in ("S0", "I0")}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
+# multi-instrument demo (lane L3): the random controls of the instruments vantage-demo lists (owner decision 2026-11-04:
+# the 10 added instruments, the 7 Vantage ones removed)
+V_INSTRUMENTS = {f"{p}-{k}" for k in ['GBPJPY', 'EURGBP', 'EURJPY', 'AUDJPY', 'EURAUD', 'GBPAUD', 'BTCUSD', 'XAUJPY', 'USINDEX', 'US30'] for p in ("S0", "I0")}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
 
 
 @pytest.fixture(scope="module")
@@ -139,7 +140,7 @@ def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_
     assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
     assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
                                             | V_INSTRUMENTS | MI_ON["vantage-demo"])
-    assert len(cfg.arms) == 28 + 14 + 14               # + the instruments' S0/I0 and LB/LBC pairs (lane L3)
+    assert len(cfg.arms) == 28 + 20 + 20               # + the instruments' S0/I0 and LB/LBC pairs (lane L3)
     gold = exploration.book_config(cfg, "XAUUSD")       # gold's book runs gold's 28 only
     assert gold is not None and {a.arm_id for a in gold.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1)
                                                                   | set(V_WAVE2) | V_SCALP)

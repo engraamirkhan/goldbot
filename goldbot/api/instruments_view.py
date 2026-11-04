@@ -55,6 +55,11 @@ LABELS: dict[str, tuple[str, str]] = {
     "XTIUSD": ("WTI crude", "USD/bbl"), "XBRUSD": ("Brent crude", "USD/bbl"), "XNGUSD": ("Natural gas", "USD/MMBtu"),
     "UST10Y": ("US 10-year note", ""), "BUND10Y": ("German 10-year Bund", ""), "COPPER": ("Copper", "USD/lb"),
     "WHEAT": ("Wheat", ""), "SOYBEAN": ("Soybeans", ""), "SUGAR": ("Sugar", ""), "COFFEE": ("Coffee", ""),
+    # owner decision 2026-11-04: the 10 added instruments
+    "GBPJPY": ("Pound / yen", ""), "EURGBP": ("Euro / pound", ""), "EURJPY": ("Euro / yen", ""),
+    "AUDJPY": ("Aussie / yen", ""), "EURAUD": ("Euro / Aussie", ""), "GBPAUD": ("Pound / Aussie", ""),
+    "BTCUSD": ("Bitcoin", "USD"), "XAUJPY": ("Gold in yen", "JPY/oz"), "USINDEX": ("US dollar index", "pts"),
+    "US30": ("Dow Jones 30", "pts"),
 }
 
 

@@ -45,7 +45,7 @@ describe("fmtPrice", () => {
 
 describe("groups and tones", () => {
   it("keeps the spec's fixed group order", () => {
-    expect(GROUP_ORDER).toEqual(["gold", "metals", "equity", "fx", "energy", "rates", "ags"]);
+    expect(GROUP_ORDER).toEqual(["gold", "metals", "equity", "fx", "energy", "rates", "ags", "crypto"]);
   });
 
   it("is grey when closed or disabled, amber when stale or unknown, red only for a spent cap", () => {

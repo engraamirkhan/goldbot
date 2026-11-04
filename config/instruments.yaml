@@ -22,14 +22,31 @@
 #   symbol check corrected a point, the ceiling kept its width in price (points x point): XNGUSD, UST10Y; Sugar and
 #   Coffee also moved from cents to dollars per lb (contract x 100), so their ceiling is a hundredth in dollars;
 #   Wheat and Soybean read as dollars per bushel (3 cents).
-# - correlation_group: the group the RiskGate caps notional by (gold, metals, equity, fx, energy, rates, ags).
-# - leverage_class: fx 30, gold_index 20, commodity 10, bond 5 (goldbot/instruments.py LEVERAGE_BY_CLASS).
+# - correlation_group: the group the RiskGate caps notional by (gold, metals, equity, fx, energy, rates, ags, crypto).
+# - leverage_class: fx 30, gold_index 20, commodity 10, bond 5, crypto 2 (goldbot/instruments.py LEVERAGE_BY_CLASS).
 # - session_profile: trading-hours family, checked against the broker's trading_sessions (lane L2).
 # - news_currencies: news blackouts by these currencies; L2 adds EIA (crude, gas) and WASDE (grains) by group.
 # - enabled: true only once the symbol check confirmed the terms (`verify: false`); never with `verify: true`
 #   (tests/test_instruments.py). The accounts loader refuses non-XAUUSD instruments on a live or observe-only account
 #   whatever this says, and the RiskGate refuses an entry whose minimum lot risks more than the cap.
 # Corn is out: the brokers list dated contracts only, no continuous CFD.
+#
+# Owner decision 2026-11-04: trade ONLY these 25 (owner name = key here): EURUSD GBPUSD USDJPY GBPJPY XAUUSD XAGUSD
+# USOIL=XTIUSD US30 NAS100=USTEC UK100 GER40=DE40 EURGBP EURJPY AUDJPY AUDUSD NZDUSD USDCAD USDCHF EURAUD GBPAUD BTCUSD
+# XAUEUR XAUJPY USINDEX US500 (tests/test_owner_instrument_list.py). REMOVED, `enabled: false`, entries and magic
+# blocks KEPT (open positions are reconciled by block; a block is never renumbered or reused): XPTUSD XAUAUD JP225
+# XBRUSD XNGUSD UST10Y BUND10Y COPPER WHEAT SOYBEAN SUGAR COFFEE. No account lists them; a position still open in
+# one's range gets a wind-down book (entries refused, exits run; goldbot/ops/services/engine.py wind_down_books).
+# The 10 added ones (blocks 27-36) were read from both terminals on 2026-11-04 by a read-only symbols_get/symbol_info
+# query on the brain (the symbol check's own calls); their terms below are the terminals' own. One broker per
+# instrument (tests/test_instrument_accounts.py: one set of terms): all 10 trade on vantage-demo, so icm-probe's box
+# (no CPU for 20 books, incident 2026-11-02) drops to 15. ICM lists 9 of them with the same terms (GBPJPY EURGBP
+# EURJPY AUDJPY EURAUD GBPAUD BTCUSD XAUJPY US30, no suffix) if one is ever moved there.
+# USINDEX: ICM lists only a dated DXY future (DXY_Z6, min 1 lot), so it is Vantage's continuous USDX alone. BTCUSD:
+# ICM reports no triple-swap day, Vantage 5; crypto trades 7 days at both brokers but the `fx` profile keeps its
+# entries to the weekdays (it only narrows). max_spread_points of the new ones: FALLBACK, about 3 x a typical raw
+# spread (crosses 0.4-1.1 pips, XAUJPY as XAUEUR's EUR 1.50 in yen, BTCUSD ~$20, US30 ~2 pts, USDX ~0.05), until the
+# nightly spread profile measures them.
 instruments:
   XAUUSD:   # today's gold: the terms the engine and RiskGate use now (contract 100 oz, 2 digits, 0.01 lot)
     key: XAUUSD
@@ -62,7 +79,7 @@ instruments:
     { key: XPTUSD, broker_symbols: { icm: XPTUSD }, store_symbol: XPTUSD, asset_class: metal,
       correlation_group: metals, magic_block: 2, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 400, currency_profit: USD, swap_rollover3days: 3, session_profile: metals, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
   XAUEUR:
     { key: XAUEUR, broker_symbols: { icm: XAUEUR }, store_symbol: XAUEUR, asset_class: metal,
       correlation_group: gold, magic_block: 3, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
@@ -72,7 +89,7 @@ instruments:
     { key: XAUAUD, broker_symbols: { icm: XAUAUD }, store_symbol: XAUAUD, asset_class: metal,
       correlation_group: gold, magic_block: 4, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 300, currency_profit: AUD, swap_rollover3days: 3, session_profile: metals,
-      news_currencies: [USD, AUD], leverage_class: gold_index, enabled: true, verify: false }
+      news_currencies: [USD, AUD], leverage_class: gold_index, enabled: false, verify: false }
   US500:
     { key: US500, broker_symbols: { icm: US500 }, store_symbol: US500, asset_class: index,
       correlation_group: equity, magic_block: 5, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.1,
@@ -97,7 +114,7 @@ instruments:
     { key: JP225, broker_symbols: { icm: JP225 }, store_symbol: JP225, asset_class: index,
       correlation_group: equity, magic_block: 9, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 1.0,
       lot_step: 1.0, max_spread_points: 3000, currency_profit: JPY, swap_rollover3days: 5, session_profile: index_jp,
-      news_currencies: [JPY, USD], leverage_class: gold_index, enabled: true, verify: false }
+      news_currencies: [JPY, USD], leverage_class: gold_index, enabled: false, verify: false }
   EURUSD:
     { key: EURUSD, broker_symbols: { icm: EURUSD }, store_symbol: EURUSD, asset_class: fx, correlation_group: fx,
       magic_block: 10, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01, lot_step: 0.01, max_spread_points: 10,
@@ -142,46 +159,99 @@ instruments:
     { key: XBRUSD, broker_symbols: { icm: XBRUSD }, store_symbol: XBRUSD, asset_class: energy,
       correlation_group: energy, magic_block: 18, contract_size: 100.0, digits: 3, point: 0.001, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 100, currency_profit: USD, swap_rollover3days: 5, session_profile: energy, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
   XNGUSD:
     { key: XNGUSD, broker_symbols: { icm: XNGUSD }, store_symbol: XNGUSD, asset_class: energy,
       correlation_group: energy, magic_block: 19, contract_size: 10000.0, digits: 4, point: 0.0001, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 200, currency_profit: USD, swap_rollover3days: 5, session_profile: energy, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
 
   # --- Vantage (vantage-demo), 7 ---
   UST10Y:
     { key: UST10Y, broker_symbols: { vantage: USNote10Y }, store_symbol: UST10Y, asset_class: bond,
       correlation_group: rates, magic_block: 20, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 1.0,
       lot_step: 1.0, max_spread_points: 9, currency_profit: USD, swap_rollover3days: 3, session_profile: rates_us,
-      news_currencies: [USD], leverage_class: bond, enabled: true, verify: false }
+      news_currencies: [USD], leverage_class: bond, enabled: false, verify: false }
   BUND10Y:
     { key: BUND10Y, broker_symbols: { vantage: EUB10Y }, store_symbol: BUND10Y, asset_class: bond,
       correlation_group: rates, magic_block: 21, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 1.0,
       lot_step: 1.0, max_spread_points: 15, currency_profit: EUR, swap_rollover3days: 3, session_profile: rates_eu,
-      news_currencies: [EUR], leverage_class: bond, enabled: true, verify: false }
+      news_currencies: [EUR], leverage_class: bond, enabled: false, verify: false }
   COPPER:
     { key: COPPER, broker_symbols: { vantage: COPPER-C }, store_symbol: COPPER, asset_class: metal,
       correlation_group: metals, magic_block: 22, contract_size: 25000.0, digits: 4, point: 0.0001, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 120, currency_profit: USD, swap_rollover3days: 5, session_profile: metals, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
   WHEAT:
     { key: WHEAT, broker_symbols: { vantage: Wheat-C }, store_symbol: WHEAT, asset_class: agri,
       correlation_group: ags, magic_block: 23, contract_size: 1000.0, digits: 3, point: 0.001, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 30, currency_profit: USD, swap_rollover3days: 5, session_profile: ags, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
   SOYBEAN:
     { key: SOYBEAN, broker_symbols: { vantage: Soybean-C }, store_symbol: SOYBEAN, asset_class: agri,
       correlation_group: ags, magic_block: 24, contract_size: 500.0, digits: 3, point: 0.001, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 30, currency_profit: USD, swap_rollover3days: 5, session_profile: ags, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
   SUGAR:
     { key: SUGAR, broker_symbols: { vantage: Sugar-C }, store_symbol: SUGAR, asset_class: agri,
       correlation_group: ags, magic_block: 25, contract_size: 112000.0, digits: 5, point: 0.00001, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 150, currency_profit: USD, swap_rollover3days: 5, session_profile: softs, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
   COFFEE:
     { key: COFFEE, broker_symbols: { vantage: Coffee-C }, store_symbol: COFFEE, asset_class: agri,
       correlation_group: ags, magic_block: 26, contract_size: 37500.0, digits: 4, point: 0.0001, min_lot: 0.1,
       lot_step: 0.1, max_spread_points: 150, currency_profit: USD, swap_rollover3days: 5, session_profile: softs, news_currencies: [USD],
-      leverage_class: commodity, enabled: true, verify: false }
+      leverage_class: commodity, enabled: false, verify: false }
+
+  # --- Owner decision 2026-11-04: added, terms read from both terminals that day (icm-probe and vantage-demo,
+  # read-only); traded on vantage-demo (accounts.yaml), icm-probe keeps the kept ICM instruments ---
+  GBPJPY:
+    { key: GBPJPY, broker_symbols: { vantage: GBPJPY+ }, store_symbol: GBPJPY, asset_class: fx,
+      correlation_group: fx, magic_block: 27, contract_size: 100000.0, digits: 3, point: 0.001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 30, currency_profit: JPY, swap_rollover3days: 3, session_profile: fx,
+      news_currencies: [GBP, JPY], leverage_class: fx, enabled: true, verify: false }
+  EURGBP:
+    { key: EURGBP, broker_symbols: { vantage: EURGBP+ }, store_symbol: EURGBP, asset_class: fx,
+      correlation_group: fx, magic_block: 28, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 15, currency_profit: GBP, swap_rollover3days: 3, session_profile: fx,
+      news_currencies: [EUR, GBP], leverage_class: fx, enabled: true, verify: false }
+  EURJPY:
+    { key: EURJPY, broker_symbols: { vantage: EURJPY+ }, store_symbol: EURJPY, asset_class: fx,
+      correlation_group: fx, magic_block: 29, contract_size: 100000.0, digits: 3, point: 0.001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 15, currency_profit: JPY, swap_rollover3days: 3, session_profile: fx,
+      news_currencies: [EUR, JPY], leverage_class: fx, enabled: true, verify: false }
+  AUDJPY:
+    { key: AUDJPY, broker_symbols: { vantage: AUDJPY+ }, store_symbol: AUDJPY, asset_class: fx,
+      correlation_group: fx, magic_block: 30, contract_size: 100000.0, digits: 3, point: 0.001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 20, currency_profit: JPY, swap_rollover3days: 3, session_profile: fx,
+      news_currencies: [AUD, JPY], leverage_class: fx, enabled: true, verify: false }
+  EURAUD:
+    { key: EURAUD, broker_symbols: { vantage: EURAUD+ }, store_symbol: EURAUD, asset_class: fx,
+      correlation_group: fx, magic_block: 31, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 25, currency_profit: AUD, swap_rollover3days: 3, session_profile: fx,
+      news_currencies: [EUR, AUD], leverage_class: fx, enabled: true, verify: false }
+  GBPAUD:
+    { key: GBPAUD, broker_symbols: { vantage: GBPAUD+ }, store_symbol: GBPAUD, asset_class: fx,
+      correlation_group: fx, magic_block: 32, contract_size: 100000.0, digits: 5, point: 0.00001, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 35, currency_profit: AUD, swap_rollover3days: 3, session_profile: fx,
+      news_currencies: [GBP, AUD], leverage_class: fx, enabled: true, verify: false }
+  BTCUSD:   # its own `crypto` group at the crypto class (2:1); weekday entries only (fx profile); see the header
+    { key: BTCUSD, broker_symbols: { vantage: BTCUSD }, store_symbol: BTCUSD, asset_class: crypto,
+      correlation_group: crypto, magic_block: 33, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 6000, currency_profit: USD, swap_rollover3days: 5, session_profile: fx,
+      news_currencies: [USD], leverage_class: crypto, enabled: true, verify: false }
+  XAUJPY:
+    { key: XAUJPY, broker_symbols: { vantage: XAUJPY+ }, store_symbol: XAUJPY, asset_class: metal,
+      correlation_group: gold, magic_block: 34, contract_size: 100.0, digits: 0, point: 1.0, min_lot: 0.01,
+      lot_step: 0.01, max_spread_points: 270, currency_profit: JPY, swap_rollover3days: 3, session_profile: metals,
+      news_currencies: [USD, JPY], leverage_class: gold_index, enabled: true, verify: false }
+  USINDEX:  # the US dollar index: Vantage's continuous USDX only (ICM lists the dated DXY future alone)
+    { key: USINDEX, broker_symbols: { vantage: USDX }, store_symbol: USINDEX, asset_class: index,
+      correlation_group: fx, magic_block: 35, contract_size: 100.0, digits: 3, point: 0.001, min_lot: 0.1,
+      lot_step: 0.1, max_spread_points: 150, currency_profit: USD, swap_rollover3days: 5, session_profile: fx,
+      news_currencies: [USD, EUR], leverage_class: gold_index, enabled: true, verify: false }
+  US30:
+    { key: US30, broker_symbols: { vantage: DJ30 }, store_symbol: US30, asset_class: index,
+      correlation_group: equity, magic_block: 36, contract_size: 1.0, digits: 2, point: 0.01, min_lot: 0.1,
+      lot_step: 0.1, max_spread_points: 600, currency_profit: USD, swap_rollover3days: 5, session_profile: index_us,
+      news_currencies: [USD], leverage_class: gold_index, enabled: true, verify: false }

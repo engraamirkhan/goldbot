@@ -333,3 +333,46 @@ on a live or observe-only account (`tests/test_learning_mi.py` and `tests/test_i
 - **15m entry patterns on gold generally.** The strategy memo freezes new trials of this kind. These arms are on other
   instruments and are a learning line, not a qualification trial.
 - **Intraday momentum on gold** (first and last half-hour): academic memo, section 7.
+
+## 11. Amendment 2026-11-04: the owner's instrument list
+
+**The decision (owner, 2026-11-04).** Trade only 25 instruments. Twelve of the 26 above are no longer traded: XPTUSD,
+XAUAUD, JP225, XBRUSD, XNGUSD, UST10Y, BUND10Y, COPPER, WHEAT, SOYBEAN, SUGAR and COFFEE. Ten instruments are added:
+GBPJPY, EURGBP, EURJPY, AUDJPY, EURAUD, GBPAUD, BTCUSD, XAUJPY, USINDEX and US30.
+
+**The removed pairs.** Their 24 rows are retired in the spec (`retired_day: "2026-11-04"`), registered on no
+account, and refused by the loader. Rows, ids and K rows stay; the read of each runs on the fills it has (section 7),
+marked "ended by the owner's instrument decision", which is neither a kill nor a verdict.
+
+**The added pairs.** The frozen rule of section 2, unchanged: one geometry for all; only the session clock is the
+instrument's own market, chosen from the market's opening hours before any of these instruments' prices were looked
+at. All ten are on vantage-demo, the host that trades these instruments (config/accounts.yaml), at the same £8 per
+trade and 20 x 8 = £160 loss cap. `since` 2026-11-04, `until` 2026-12-17 (the 26 pairs' end, inside 45 days).
+
+| Rank | Instrument | Account | Session (zone, range, break until) | Hold | Group | Arm / control | k_id arm / control |
+|---|---|---|---|---|---|---|---|
+| 27 | GBPJPY | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-GBPJPY / LBC-GBPJPY | `4159486d191f` / `84e9a38913f5` |
+| 28 | EURGBP | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURGBP / LBC-EURGBP | `b4966b84d9e5` / `cacfd8cb595b` |
+| 29 | EURJPY | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURJPY / LBC-EURJPY | `f5f03b4a3c12` / `db24b02c4663` |
+| 30 | AUDJPY | vantage-demo | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-AUDJPY / LBC-AUDJPY | `e2d4bd6f412e` / `1a19a1bf9901` |
+| 31 | EURAUD | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURAUD / LBC-EURAUD | `2eba6c3b2e5f` / `168cc63a8761` |
+| 32 | GBPAUD | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-GBPAUD / LBC-GBPAUD | `42c50f315f4d` / `e4829648ddbe` |
+| 33 | BTCUSD | vantage-demo | New York 09:30-10:30, 12:30 | 16 | New York | LB-BTCUSD / LBC-BTCUSD | `e62ec2d7c5e2` / `a0b810d03ae3` |
+| 34 | XAUJPY | vantage-demo | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-XAUJPY / LBC-XAUJPY | `c4c38556f24f` / `df4a16dd4d26` |
+| 35 | USINDEX | vantage-demo | New York 08:30-09:30, 11:30 | 16 | New York | LB-USINDEX / LBC-USINDEX | `f09242d8ea77` / `9a45e2df94b6` |
+| 36 | US30 | vantage-demo | New York 09:30-10:30, 12:30 | 16 | New York | LB-US30 / LBC-US30 | `f505320dfb1c` / `f39f617b60e3` |
+
+Session choices, stated before any fill: the EUR and GBP crosses take London (their liquid open); the JPY cross with
+AUD and gold in yen take Tokyo, as USDJPY, AUDUSD and XAUAUD did; US30 takes the New York cash open, as US500; the
+dollar index takes New York 08:30, the US data release, as XAGUSD; BTCUSD trades all day, so it takes the New York
+cash open, when the US spot ETFs trade. BTCUSD's entries are weekday-only (its registry session profile is `fx`).
+
+**K and the budget.** 20 more K rows (10 arms, 10 controls), family `learning_class`: the script now holds 102 rows
+(30 gold, 72 here). The removed pairs' 24 rows were already recorded and stay counted. Run
+`scripts/record_learning_k_rows.py --budget` on the brain first; if the 20 do not fit, nothing is written, the ten
+pairs stay refused (fail closed), and raising the budget is the owner's decision.
+
+**Slots.** None raised. vantage-demo keeps `learning_max_open` 6 and its intraday pot of 10 for 10 pairs beside Z6V,
+Z7V, VI0 and VC1H, so slot refusals will be more frequent than on 2026-11-02; section 7's bias diagnostic (refusals
+over 10% mark a verdict selection-affected) applies unchanged. icm-probe keeps 14 learning slots for its 14 pairs and
+7 gold learning arms.

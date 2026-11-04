@@ -25,12 +25,17 @@ from goldbot.instruments import (
 
 ICM = ["XAGUSD", "XPTUSD", "XAUEUR", "XAUAUD", "US500", "USTEC", "DE40", "UK100", "JP225", "EURUSD", "USDJPY",
        "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XTIUSD", "XBRUSD", "XNGUSD"]
-VANTAGE = ["USNote10Y", "EUB10Y", "COPPER-C", "Wheat-C", "Soybean-C", "Sugar-C", "Coffee-C"]
+# owner decision 2026-11-04: the 10 added instruments are Vantage's (one broker per instrument)
+VANTAGE = ["USNote10Y", "EUB10Y", "COPPER-C", "Wheat-C", "Soybean-C", "Sugar-C", "Coffee-C",
+           "GBPJPY+", "EURGBP+", "EURJPY+", "AUDJPY+", "EURAUD+", "GBPAUD+", "BTCUSD", "XAUJPY+", "USDX", "DJ30"]
+# owner decision 2026-11-04: removed from trading, entries and magic blocks kept (tests/test_owner_instrument_list.py)
+REMOVED = {"XPTUSD", "XAUAUD", "JP225", "XBRUSD", "XNGUSD", "UST10Y", "BUND10Y", "COPPER", "WHEAT", "SOYBEAN", "SUGAR",
+           "COFFEE"}
 
 
-def test_the_instrument_file_loads_gold_and_the_26_planned_instruments() -> None:
+def test_the_instrument_file_loads_gold_and_the_36_registered_instruments() -> None:
     inst = load_instruments()
-    assert len(inst.instruments) == 27
+    assert len(inst.instruments) == 37
     icm = [i.broker_symbols["icm"] for i in inst.instruments.values() if "icm" in i.broker_symbols]
     vantage = [i.broker_symbols["vantage"] for i in inst.instruments.values() if "vantage" in i.broker_symbols]
     assert sorted(icm) == sorted(["XAUUSD", *ICM])
@@ -124,6 +129,17 @@ TERMINAL_TERMS: dict[str, tuple[float, int, float, float, float, str, int, str]]
     "SOYBEAN": (500.0, 3, 0.001, 0.1, 0.1, "USD", 5, "Soybean-C"),
     "SUGAR": (112000.0, 5, 0.00001, 0.1, 0.1, "USD", 5, "Sugar-C"),
     "COFFEE": (37500.0, 4, 0.0001, 0.1, 0.1, "USD", 5, "Coffee-C"),
+    # owner decision 2026-11-04, read from both terminals that day (symbols_get + symbol_info, read-only, on the brain)
+    "GBPJPY": (100000.0, 3, 0.001, 0.01, 0.01, "JPY", 3, "GBPJPY+"),
+    "EURGBP": (100000.0, 5, 0.00001, 0.01, 0.01, "GBP", 3, "EURGBP+"),
+    "EURJPY": (100000.0, 3, 0.001, 0.01, 0.01, "JPY", 3, "EURJPY+"),
+    "AUDJPY": (100000.0, 3, 0.001, 0.01, 0.01, "JPY", 3, "AUDJPY+"),
+    "EURAUD": (100000.0, 5, 0.00001, 0.01, 0.01, "AUD", 3, "EURAUD+"),
+    "GBPAUD": (100000.0, 5, 0.00001, 0.01, 0.01, "AUD", 3, "GBPAUD+"),
+    "BTCUSD": (1.0, 2, 0.01, 0.01, 0.01, "USD", 5, "BTCUSD"),
+    "XAUJPY": (100.0, 0, 1.0, 0.01, 0.01, "JPY", 3, "XAUJPY+"),
+    "USINDEX": (100.0, 3, 0.001, 0.1, 0.1, "USD", 5, "USDX"),
+    "US30": (1.0, 2, 0.01, 0.1, 0.1, "USD", 5, "DJ30"),
 }
 # the terminal did not report it (symbol_info failed: BridgeUnavailable), so its terms stay placeholders
 UNCONFIRMED: set[str] = set()
@@ -140,7 +156,7 @@ def test_each_instruments_terms_are_the_terminals_own(key: str) -> None:
 
 def test_an_instrument_the_terminal_confirmed_is_enabled_and_one_it_did_not_stays_a_placeholder() -> None:
     inst = load_instruments().instruments
-    assert {k for k, i in inst.items() if i.enabled} == {"XAUUSD", *TERMINAL_TERMS}
+    assert {k for k, i in inst.items() if i.enabled} == {"XAUUSD", *TERMINAL_TERMS} - REMOVED
     assert {k for k, i in inst.items() if i.verify} == UNCONFIRMED
     assert all(not inst[k].enabled for k in UNCONFIRMED)
 
@@ -166,7 +182,9 @@ def test_the_spread_ceiling_keeps_its_price_width_when_the_point_is_corrected(ke
 def test_for_broker_lists_an_accounts_instruments_and_finds_one_by_broker_symbol() -> None:
     inst = load_instruments()
     assert {i.key for i in inst.for_broker("vantage")} == {"XAUUSD", "UST10Y", "BUND10Y", "COPPER", "WHEAT",
-                                                            "SOYBEAN", "SUGAR", "COFFEE"}
+                                                            "SOYBEAN", "SUGAR", "COFFEE", "GBPJPY", "EURGBP",
+                                                            "EURJPY", "AUDJPY", "EURAUD", "GBPAUD", "BTCUSD",
+                                                            "XAUJPY", "USINDEX", "US30"}
     found = inst.by_broker_symbol("vantage", "COPPER-C")
     assert found is not None and found.key == "COPPER"
     assert inst.by_broker_symbol("icm", "NOPE") is None
@@ -174,7 +192,7 @@ def test_for_broker_lists_an_accounts_instruments_and_finds_one_by_broker_symbol
 
 def test_every_leverage_class_has_a_leverage() -> None:
     assert {i.leverage_class for i in load_instruments().instruments.values()} <= set(LEVERAGE_BY_CLASS)
-    assert LEVERAGE_BY_CLASS == {"fx": 30, "gold_index": 20, "commodity": 10, "bond": 5}
+    assert LEVERAGE_BY_CLASS == {"fx": 30, "gold_index": 20, "commodity": 10, "bond": 5, "crypto": 2}
 
 
 def test_an_instrument_spec_is_immutable() -> None:

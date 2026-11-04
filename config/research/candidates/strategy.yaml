@@ -8,6 +8,9 @@
 #  - Every rule is long/short unless the side says otherwise; long_only variants exist for the ETC venue.
 #  - Data: "local" = raw/xauusd_1m_dukascopy_* or raw/positioning (CFTC 1986+, SPDR 2004+); "free" = Dukascopy other
 #    symbols, FRED, CFTC, World Bank, Yahoo daily; nothing paid is required by any candidate.
+#  - Owner decision 2026-11-04: only the 25 instruments enabled in config/instruments.yaml are traded. The rows below
+#    stay as written (a candidate list is a dated record); a pre-registration that selects one trades its legs on
+#    those 25 only, so XPT (025) and JP225 (026) are out of any book unless the owner adds them back.
 version: rethink-strategy-v1
 lane: strategy
 candidates:
