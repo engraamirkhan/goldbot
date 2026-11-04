@@ -482,6 +482,18 @@ def test_bounded_shares_stay_proportional_inside_the_bounds_and_never_sum_above_
                 assert sum(w.values()) == pytest.approx(1.0, abs=1e-9)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_ceiling_that_is_not_a_finite_number_holds_its_arm_at_zero_never_at_the_cap(tmp_path, bad):
+    """Trading-safety review (LOW): min(cap, nan) is cap, so a NaN ceiling lifted its arm to 30%. A ceiling that is not
+    a finite number is 0, in the learner's shares and in the engine's read of a run alike."""
+    p = {"a": 0.6, "b": 0.2, "c": 0.1, "d": 0.1}
+    w = ex.bounded_shares(p, ceilings={"a": bad})
+    assert w["a"] == 0.0 and all(v <= ex.CAP_SHARE + 1e-12 for v in w.values())
+    db = _db(tmp_path)
+    ex.write_weights(db, 1, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}, dict.fromkeys(p, "scalp"), broker="icm")
+    assert ex.weights(db, list(p), broker="icm", ceilings={"a": bad})["a"] == 0.0
+
+
 def test_corrupt_or_missing_weights_give_equal_shares(tmp_path):
     db = _db(tmp_path)
     arms = ["a", "b", "c", "d"]

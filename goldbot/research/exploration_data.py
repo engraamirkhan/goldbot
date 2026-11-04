@@ -756,6 +756,18 @@ def suspect(labels: pd.Series) -> pd.Series:
     return r.notna() & ~(r.abs() <= MAX_LABEL_R)
 
 
+def _ceiling(ceilings: Mapping[str, float] | None, arm: str, cap: float) -> float:
+    """`arm`'s share ceiling, `cap` when it has none; 0 when it is not a finite number (trading-safety review, LOW:
+    min(cap, nan) is cap, which lifted a broken ceiling to the cap)."""
+    if ceilings is None or arm not in ceilings:
+        return cap
+    try:
+        v = float(ceilings[arm])
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
+
+
 def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | None = None,
                    floor: float = FLOOR_SHARE, cap: float = CAP_SHARE) -> dict[str, float]:
     """Shares proportional to `p`, each in [floor, min(cap, its ceiling)], summing to 1 when the caps allow it (less
@@ -770,7 +782,7 @@ def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | No
     n = len(arms)
     if n == 0:
         return {}
-    hi = {a: max(0.0, min(cap, float((ceilings or {}).get(a, cap)))) for a in arms}
+    hi = {a: max(0.0, min(cap, _ceiling(ceilings, a, cap))) for a in arms}
     lo = {a: min(floor, 1.0 / n, hi[a]) for a in arms}
     total = min(1.0, sum(hi.values()))
     w = {a: max(float(p[a]), 0.0) if math.isfinite(float(p[a])) else 0.0 for a in arms}
@@ -864,7 +876,7 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
         log.warning("exploration weights of run %s miss an arm or mix styles: equal shares", run)
         return fallback
     floor = min(FLOOR_SHARE, 1.0 / len(want))
-    hi = {a: min(CAP_SHARE, float((ceilings or {}).get(a, CAP_SHARE))) for a in want}
+    hi = {a: max(0.0, min(CAP_SHARE, _ceiling(ceilings, a, CAP_SHARE))) for a in want}
     vals = {a: got[a][0] for a in want}
     if any(not (math.isfinite(v) and min(floor, hi[a]) - 1e-9 <= v <= CAP_SHARE + 1e-9) for a, v in vals.items()) \
             or sum(vals.values()) > 1 + 1e-9:
