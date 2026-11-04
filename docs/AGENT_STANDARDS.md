@@ -68,7 +68,7 @@ Two executives sit above the principals (owner, 2026-10-16). The `cto` owns tech
 roadmap: architecture direction (the architect reports to it), build-vs-buy, technical debt and its budget, the
 engineering quality bar (gates, CI, test strategy), reliability and security posture with the sre and
 security-reviewer, technical risks and ADRs, and capacity and tooling; it arbitrates technical disagreements between
-principals and edits only `docs/decisions/`, `docs/ROADMAP.md` and `docs/process/` (code goes to the implementer).
+principals and edits only `docs/decisions/`, `docs/ROADMAP.md`, `docs/process/` and `docs/incidents/` (code goes to the implementer).
 The `cfo` owns the money strategy: capital allocation and the growth plan within ADR 0004, the operating budget,
 break-even and ROI of every recurring cost and of research spend, the recommended risk appetite, UK tax and
 reporting readiness as owner flags, and the monthly finance review; the finance-auditor reports to it. **Decision
