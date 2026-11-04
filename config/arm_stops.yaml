@@ -83,7 +83,9 @@ h61: [S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B, S6, I1, I2A, I2B, MB15, MB30, 
       # learning class's own (300 fills, loss cap, until); each instrument is its own unit, never pooled
       LB-US500, LB-DE40, LB-XTIUSD, LB-UST10Y, LB-EURUSD, LB-USDJPY, LB-BUND10Y, LB-JP225, LB-XAGUSD, LB-USTEC,
       LB-GBPUSD, LB-COPPER, LB-UK100, LB-XPTUSD, LB-AUDUSD, LB-USDCAD, LB-XBRUSD, LB-USDCHF, LB-NZDUSD, LB-XNGUSD,
-      LB-WHEAT, LB-SOYBEAN, LB-COFFEE, LB-SUGAR, LB-XAUEUR, LB-XAUAUD]
+      LB-WHEAT, LB-SOYBEAN, LB-COFFEE, LB-SUGAR, LB-XAUEUR, LB-XAUAUD,
+      # owner decision 2026-11-04: the 10 added instruments' learning arms (vantage-demo), the same stop
+      LB-GBPJPY, LB-EURGBP, LB-EURJPY, LB-AUDJPY, LB-EURAUD, LB-GBPAUD, LB-BTCUSD, LB-XAUJPY, LB-USINDEX, LB-US30]
 
 # No stop: the controls (the null; HV amendment 3, Z 4, arms 8.9) and the virtual twins BXT/BXF (H-80: scored on
 # BXR's fills, they place no order).
@@ -110,7 +112,12 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        # multi-instrument learning arms' dedicated controls (learning-mi-2026-11-02.md): stop with their arm
        LBC-US500, LBC-DE40, LBC-XTIUSD, LBC-UST10Y, LBC-EURUSD, LBC-USDJPY, LBC-BUND10Y, LBC-JP225, LBC-XAGUSD,
        LBC-USTEC, LBC-GBPUSD, LBC-COPPER, LBC-UK100, LBC-XPTUSD, LBC-AUDUSD, LBC-USDCAD, LBC-XBRUSD, LBC-USDCHF,
-       LBC-NZDUSD, LBC-XNGUSD, LBC-WHEAT, LBC-SOYBEAN, LBC-COFFEE, LBC-SUGAR, LBC-XAUEUR, LBC-XAUAUD]
+       LBC-NZDUSD, LBC-XNGUSD, LBC-WHEAT, LBC-SOYBEAN, LBC-COFFEE, LBC-SUGAR, LBC-XAUEUR, LBC-XAUAUD,
+       # owner decision 2026-11-04: the 10 added instruments' controls and dedicated learning controls (vantage-demo)
+       S0-GBPJPY, I0-GBPJPY, S0-EURGBP, I0-EURGBP, S0-EURJPY, I0-EURJPY, S0-AUDJPY, I0-AUDJPY, S0-EURAUD, I0-EURAUD,
+       S0-GBPAUD, I0-GBPAUD, S0-BTCUSD, I0-BTCUSD, S0-XAUJPY, I0-XAUJPY, S0-USINDEX, I0-USINDEX, S0-US30, I0-US30,
+       LBC-GBPJPY, LBC-EURGBP, LBC-EURJPY, LBC-AUDJPY, LBC-EURAUD, LBC-GBPAUD, LBC-BTCUSD, LBC-XAUJPY, LBC-USINDEX,
+       LBC-US30]
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above

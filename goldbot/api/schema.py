@@ -37,7 +37,7 @@ class EntryBlock(BaseModel):
 # ============================================================================= Instruments (multi-instrument demo)
 # goldbot/api/instruments_view.py (multi-instrument plan lane L4; UI spec 2026-11-02). Groups are the RiskGate's
 # correlation groups (goldbot/instruments.py), in the dashboard's fixed order
-InstrumentGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags"]
+InstrumentGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags", "crypto"]
 # what a symbol of an account can do now (the engine's per-symbol report): grey = market_closed/disabled, amber =
 # stale/terms_missing/swap_unknown, red = group_cap only (UI spec). swap_unknown (incident 2026-11-02): terms loaded,
 # but a swap the engine cannot price, so entries are refused and exits still close

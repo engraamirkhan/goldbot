@@ -224,8 +224,12 @@ accounts:
     # non-XAUUSD instrument on a live or observe_only account. An instrument trades only once it is `enabled` with its
     # terms verified by `python -m goldbot.ops.symbol_check icm-probe`; its random controls S0-<key> / I0-<key>
     # (config/exploration_arms.yaml) are registered here by lane L3. Rollback: drop the list, restart.
-    instruments: [XAGUSD, XPTUSD, XAUEUR, XAUAUD, US500, USTEC, DE40, UK100, JP225, EURUSD, USDJPY, GBPUSD, AUDUSD,
-                  USDCAD, USDCHF, NZDUSD, XTIUSD, XBRUSD, XNGUSD]
+    # Owner decision 2026-11-04 (trade only the owner's 25): XPTUSD, XAUAUD, JP225, XBRUSD and XNGUSD are off this list
+    # and their S0/I0/LB/LBC rows below are gone (retired in the spec); 14 instruments + gold = 15 books (was 20; the
+    # box had no CPU for 20, incident 2026-11-02). A position left open in a removed block keeps a wind-down book
+    # (entries refused, exits run). The 10 new instruments trade on vantage-demo. Rollback: restore the 19, restart.
+    instruments: [XAGUSD, XAUEUR, US500, USTEC, DE40, UK100, EURUSD, USDJPY, GBPUSD, AUDUSD, USDCAD, USDCHF, NZDUSD,
+                  XTIUSD]
     instrument_magic_index: 5
     # ADR 0037 amendment 4 (owner 2026-10-19: "a dedicated demo account for learning probes", GBP; directors' ruling:
     # "probes must never consume the real trades' allowance"). Off until its credentials and terminal exist; enable it
@@ -354,12 +358,8 @@ accounts:
         # check confirms the instrument's terms (verify: false). Rollback: drop these lines, restart
         S0-XAGUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         I0-XAGUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
-        S0-XPTUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-XPTUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-XAUEUR: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         I0-XAUEUR: { style: intraday, max_loss: 17.0, control_share: 0.02 }
-        S0-XAUAUD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-XAUAUD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-US500: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         I0-US500: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-USTEC: { style: scalp, max_loss: 6.5, control_share: 0.01 }
@@ -368,8 +368,6 @@ accounts:
         I0-DE40: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-UK100: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         I0-UK100: { style: intraday, max_loss: 17.0, control_share: 0.02 }
-        S0-JP225: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-JP225: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-EURUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         I0-EURUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-USDJPY: { style: scalp, max_loss: 6.5, control_share: 0.01 }
@@ -386,14 +384,10 @@ accounts:
         I0-NZDUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         S0-XTIUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         I0-XTIUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
-        S0-XBRUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-XBRUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
-        S0-XNGUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-XNGUSD: { style: intraday, max_loss: 17.0, control_share: 0.02 }
         # multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md section 5): all 19 of this host's instruments;
         # each LB-<key> with its dedicated control LBC-<key>, minimum lot, £8 a trade (loss cap 20 x 8 = £160).
         # Run on their own instrument's book (lane L3), entries refused while its terms are unverified.
-        # Rollback: drop these lines, restart
+        # Rollback: drop these lines, restart. Owner decision 2026-11-04: 14 pairs, the 5 removed ones' rows are gone
         LB-US500: { style: intraday, max_loss: 8.0 }
         LBC-US500: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-DE40: { style: intraday, max_loss: 8.0 }
@@ -404,8 +398,6 @@ accounts:
         LBC-EURUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-USDJPY: { style: intraday, max_loss: 8.0 }
         LBC-USDJPY: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-JP225: { style: intraday, max_loss: 8.0 }
-        LBC-JP225: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-XAGUSD: { style: intraday, max_loss: 8.0 }
         LBC-XAGUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-USTEC: { style: intraday, max_loss: 8.0 }
@@ -414,24 +406,16 @@ accounts:
         LBC-GBPUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-UK100: { style: intraday, max_loss: 8.0 }
         LBC-UK100: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-XPTUSD: { style: intraday, max_loss: 8.0 }
-        LBC-XPTUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-AUDUSD: { style: intraday, max_loss: 8.0 }
         LBC-AUDUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-USDCAD: { style: intraday, max_loss: 8.0 }
         LBC-USDCAD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-XBRUSD: { style: intraday, max_loss: 8.0 }
-        LBC-XBRUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-USDCHF: { style: intraday, max_loss: 8.0 }
         LBC-USDCHF: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-NZDUSD: { style: intraday, max_loss: 8.0 }
         LBC-NZDUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-XNGUSD: { style: intraday, max_loss: 8.0 }
-        LBC-XNGUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-XAUEUR: { style: intraday, max_loss: 8.0 }
         LBC-XAUEUR: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-XAUAUD: { style: intraday, max_loss: 8.0 }
-        LBC-XAUAUD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
   vantage-demo:
     broker: vantage
     mode: demo
@@ -443,7 +427,11 @@ accounts:
     magic_base: 260200
     # Multi-instrument demo (plan 2026-11-02, as icm-probe): the 7 Vantage instruments (bond, copper, grain and soft
     # CFDs) beside its gold; magics from index 2 (3_020_000 ..). Rollback: drop the list, restart.
-    instruments: [UST10Y, BUND10Y, COPPER, WHEAT, SOYBEAN, SUGAR, COFFEE]
+    # Owner decision 2026-11-04 (trade only the owner's 25): the 7 above are removed (a position left open in their
+    # blocks keeps a wind-down book: entries refused, exits run). This host trades the 10 new instruments instead (their
+    # Vantage terms read from this terminal 2026-11-04; config/instruments.yaml): 10 + gold = 11 books (was 8), so
+    # icm-probe's CPU-bound box drops from 20 to 15. Rollback: restore the 7, restart.
+    instruments: [GBPJPY, EURGBP, EURJPY, AUDJPY, EURAUD, GBPAUD, BTCUSD, XAUJPY, USINDEX, US30]
     instrument_magic_index: 2
     # third learning host (PD 2026-10-26, owner: "all three accounts learn"); broker-separated evidence (loop lane L1,
     # ADR 0043 broker amendment) has merged: Vantage labels, costs, weights and models never pool with ICM's, and the
@@ -503,14 +491,21 @@ accounts:
       budget_share: 0.825
       max_open_total: 23
       pot_budgets: false
-      learning_max_open: 6
+      # learning-mi-2026-11-02.md section 11 option (a) (quant review of the owner-instrument-list change, PD
+      # 2026-11-04): 6 -> 12 learning slots so the 10 new pairs' LB arms (5 in London together) never starve on
+      # scan order. Slot count only: £8 per trade, the £160 learning caps and every loss limit unchanged.
+      # Rollback: 6, restart
+      learning_max_open: 12
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 V1): a scalp pot carved inside the unchanged £180 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 98 / 9 -> 40 / 4, swing 82 / 2 -> 40 / 1.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
       # Rollback: drop the scalp pot and the H-81 arms, restore intraday 98 / 9 and swing 82 / 2, restart.
       # research lead 2026-11-02 (learning-mi-2026-11-02.md section 5): intraday 6 -> 10 slots for the 7 multi-
       # instrument pairs beside VI0 and VC1H; slot count only, max_open_total 23 still binds. Rollback: 6, restart
-      pots: { scalp: { max_open: 11 }, intraday: { max_open: 10 }, swing: { max_open: 2 } }
+      # section 11 option (a) (PD 2026-11-04): intraday 10 -> 14 for the 10 new pairs and their I0 controls; the
+      # modelled London refusal share falls from ~28% to ~4%. Slot count only, max_open_total 23 and max_positions 24
+      # still bind. Rollback: 10, restart
+      pots: { scalp: { max_open: 11 }, intraday: { max_open: 14 }, swing: { max_open: 2 } }
       arms:
         VI0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         VI2A: { style: intraday, max_loss: 17.0 }
@@ -549,38 +544,54 @@ accounts:
         # multi-instrument demo (plan 2026-11-02, lane L3): each listed instrument's random controls S0-<key>
         # (1m, 2 ATR stop) and I0-<key> (15m, 1.5 ATR), never pooled with XAUUSD; no entry until the symbol
         # check confirms the instrument's terms (verify: false). Rollback: drop these lines, restart
-        S0-UST10Y: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-UST10Y: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        S0-BUND10Y: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-BUND10Y: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        S0-COPPER: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-COPPER: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        S0-WHEAT: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-WHEAT: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        S0-SOYBEAN: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-SOYBEAN: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        S0-SUGAR: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-SUGAR: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        S0-COFFEE: { style: scalp, max_loss: 6.5, control_share: 0.01 }
-        I0-COFFEE: { style: intraday, max_loss: 17.0, control_share: 0.03 }
-        # multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md section 5): all 7 of this host's instruments;
-        # each LB-<key> with its dedicated control LBC-<key>, minimum lot, £8 a trade (loss cap 20 x 8 = £160).
-        # Run on their own instrument's book (lane L3), entries refused while its terms are unverified.
-        # Rollback: drop these lines, restart
-        LB-UST10Y: { style: intraday, max_loss: 8.0 }
-        LBC-UST10Y: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-BUND10Y: { style: intraday, max_loss: 8.0 }
-        LBC-BUND10Y: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-COPPER: { style: intraday, max_loss: 8.0 }
-        LBC-COPPER: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-WHEAT: { style: intraday, max_loss: 8.0 }
-        LBC-WHEAT: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-SOYBEAN: { style: intraday, max_loss: 8.0 }
-        LBC-SOYBEAN: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-COFFEE: { style: intraday, max_loss: 8.0 }
-        LBC-COFFEE: { style: intraday, max_loss: 8.0, control_share: 0.02 }
-        LB-SUGAR: { style: intraday, max_loss: 8.0 }
-        LBC-SUGAR: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        # Owner decision 2026-11-04: the 7 Vantage instruments' rows are gone (retired in the spec) and the 10 new
+        # instruments' S0/I0 and LB/LBC rows are here, the set icm-probe's instruments run. I0 0.03 -> 0.015 each so the
+        # intraday controls keep the pot's old 0.90 (VI0 0.30 + VC1H 0.25 + 10 x 0.015 + 10 x 0.02); S0 0.01 each.
+        # Slots, budget and every cap unchanged. Rollback: drop these lines, restore the 7, restart
+        S0-GBPJPY: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-GBPJPY: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-EURGBP: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-EURGBP: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-EURJPY: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-EURJPY: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-AUDJPY: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-AUDJPY: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-EURAUD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-EURAUD: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-GBPAUD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-GBPAUD: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-BTCUSD: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-BTCUSD: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-XAUJPY: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-XAUJPY: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-USINDEX: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-USINDEX: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        S0-US30: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        I0-US30: { style: intraday, max_loss: 17.0, control_share: 0.015 }
+        # multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md section 5, amendment 2026-11-04 in
+        # section 11): the 10 instruments of this host; each LB-<key> with its dedicated control LBC-<key>, minimum
+        # lot, £8 a trade (loss cap 20 x 8 = £160). Refused until their K rows are recorded on the brain
+        # (scripts/record_learning_k_rows.py, `--budget` first). Rollback: drop these lines, restart
+        LB-GBPJPY: { style: intraday, max_loss: 8.0 }
+        LBC-GBPJPY: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-EURGBP: { style: intraday, max_loss: 8.0 }
+        LBC-EURGBP: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-EURJPY: { style: intraday, max_loss: 8.0 }
+        LBC-EURJPY: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-AUDJPY: { style: intraday, max_loss: 8.0 }
+        LBC-AUDJPY: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-EURAUD: { style: intraday, max_loss: 8.0 }
+        LBC-EURAUD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-GBPAUD: { style: intraday, max_loss: 8.0 }
+        LBC-GBPAUD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-BTCUSD: { style: intraday, max_loss: 8.0 }
+        LBC-BTCUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-XAUJPY: { style: intraday, max_loss: 8.0 }
+        LBC-XAUJPY: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-USINDEX: { style: intraday, max_loss: 8.0 }
+        LBC-USINDEX: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        LB-US30: { style: intraday, max_loss: 8.0 }
+        LBC-US30: { style: intraday, max_loss: 8.0, control_share: 0.02 }
   icm-depth:
     broker: icm
     mode: demo

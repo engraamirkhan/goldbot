@@ -79,7 +79,7 @@ def test_each_host_registers_its_wave_one_arms_at_the_timeframe_cap(spec, accoun
 # ceiling do not move
 @pytest.mark.parametrize(("account", "gbp", "slots", "swing_slots", "cap"),
                          [("icm-demo", None, 10, 3, 220),
-                          ("vantage-demo", None, 10, 2, 200)])   # vantage 6 -> 10: learning-mi-2026-11-02.md
+                          ("vantage-demo", None, 14, 2, 200)])   # vantage 6 -> 10 -> 14: learning-mi 5, 11 (a)
 def test_the_intraday_pot_is_the_cfos_and_no_other_limit_moves(accounts, account, gbp, slots, swing_slots, cap) -> None:
     acc = accounts[account]
     ex = acc.exploration

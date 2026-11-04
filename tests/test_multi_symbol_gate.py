@@ -249,7 +249,7 @@ def test_a_lowered_leverage_cap_scales_every_class():
     """Review M2: class leverage = min(class, leverage_cap x class / 20), so lowering the cap tightens every class."""
     gate = RiskGate(RiskLimits(leverage_cap=5.0))
     assert {c: gate.leverage(None, c) for c in LEVERAGE_BY_CLASS} == \
-        {"fx": 7.5, "gold_index": 5.0, "commodity": 2.5, "bond": 1.25}
+        {"fx": 7.5, "gold_index": 5.0, "commodity": 2.5, "bond": 1.25, "crypto": 0.5}
     assert RiskGate(RiskLimits(leverage_cap=40.0)).leverage(None, "fx") == 30.0        # never above the class
     d = gate.check(_eurusd(), _state(), NOW)
     assert d.margin_needed == pytest.approx(d.lots * 100_000 * 1.08 / 7.5)

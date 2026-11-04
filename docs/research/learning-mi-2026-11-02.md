@@ -333,3 +333,68 @@ on a live or observe-only account (`tests/test_learning_mi.py` and `tests/test_i
 - **15m entry patterns on gold generally.** The strategy memo freezes new trials of this kind. These arms are on other
   instruments and are a learning line, not a qualification trial.
 - **Intraday momentum on gold** (first and last half-hour): academic memo, section 7.
+
+## 11. Amendment 2026-11-04: the owner's instrument list
+
+**The decision (owner, 2026-11-04).** Trade only 25 instruments. Twelve of the 26 above are no longer traded: XPTUSD,
+XAUAUD, JP225, XBRUSD, XNGUSD, UST10Y, BUND10Y, COPPER, WHEAT, SOYBEAN, SUGAR and COFFEE. Ten instruments are added:
+GBPJPY, EURGBP, EURJPY, AUDJPY, EURAUD, GBPAUD, BTCUSD, XAUJPY, USINDEX and US30.
+
+**The removed pairs.** Their 24 rows are retired in the spec (`retired_day: "2026-11-04"`), registered on no
+account, and refused by the loader. Rows, ids and K rows stay; the read of each runs on the fills it has (section 7),
+marked "ended by the owner's instrument decision", which is neither a kill nor a verdict.
+
+**The added pairs.** The frozen rule of section 2, unchanged: one geometry for all; only the session clock is the
+instrument's own market, chosen from the market's opening hours before any of these instruments' prices were looked
+at. All ten are on vantage-demo, the host that trades these instruments (config/accounts.yaml), at the same £8 per
+trade and 20 x 8 = £160 loss cap. `since` 2026-11-04, `until` 2026-12-17 (the 26 pairs' end, inside 45 days).
+
+| Rank | Instrument | Account | Session (zone, range, break until) | Hold | Group | Arm / control | k_id arm / control |
+|---|---|---|---|---|---|---|---|
+| 27 | GBPJPY | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-GBPJPY / LBC-GBPJPY | `4159486d191f` / `84e9a38913f5` |
+| 28 | EURGBP | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURGBP / LBC-EURGBP | `b4966b84d9e5` / `cacfd8cb595b` |
+| 29 | EURJPY | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURJPY / LBC-EURJPY | `f5f03b4a3c12` / `db24b02c4663` |
+| 30 | AUDJPY | vantage-demo | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-AUDJPY / LBC-AUDJPY | `e2d4bd6f412e` / `1a19a1bf9901` |
+| 31 | EURAUD | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-EURAUD / LBC-EURAUD | `2eba6c3b2e5f` / `168cc63a8761` |
+| 32 | GBPAUD | vantage-demo | London 08:00-09:00, 11:00 | 16 | Europe | LB-GBPAUD / LBC-GBPAUD | `42c50f315f4d` / `e4829648ddbe` |
+| 33 | BTCUSD | vantage-demo | New York 09:30-10:30, 12:30 | 16 | New York | LB-BTCUSD / LBC-BTCUSD | `e62ec2d7c5e2` / `a0b810d03ae3` |
+| 34 | XAUJPY | vantage-demo | Tokyo 09:00-10:00, 12:00 | 16 | Tokyo | LB-XAUJPY / LBC-XAUJPY | `c4c38556f24f` / `df4a16dd4d26` |
+| 35 | USINDEX | vantage-demo | New York 08:30-09:30, 11:30 | 16 | New York | LB-USINDEX / LBC-USINDEX | `f09242d8ea77` / `9a45e2df94b6` |
+| 36 | US30 | vantage-demo | New York 09:30-10:30, 12:30 | 16 | New York | LB-US30 / LBC-US30 | `f505320dfb1c` / `f39f617b60e3` |
+
+Session choices, stated before any fill: the EUR and GBP crosses take London (their liquid open); the JPY cross with
+AUD and gold in yen take Tokyo, as USDJPY, AUDUSD and XAUAUD did; US30 takes the New York cash open, as US500; the
+dollar index takes New York 08:30, the US data release, as XAGUSD; BTCUSD trades all day, so it takes the New York
+cash open, when the US spot ETFs trade. BTCUSD's entries are weekday-only (its registry session profile is `fx`).
+
+**K and the budget.** 20 more K rows (10 arms, 10 controls), family `learning_class`: the script now holds 102 rows
+(30 gold, 72 here). The removed pairs' 24 rows were already recorded and stay counted. Run
+`scripts/record_learning_k_rows.py --budget` on the brain first; if the 20 do not fit, nothing is written, the ten
+pairs stay refused (fail closed), and raising the budget is the owner's decision.
+
+**Slots: option (a) chosen (quant review HIGH, PD decision 2026-11-04).** The first draft raised none. The quant
+review blocked it: five London pairs (GBPJPY, EURGBP, EURJPY, EURAUD, GBPAUD) open together with Z6V/Z7V and the ten
+I0 controls, so on trend days the later crosses lose on scan order and most pairs would read selection-affected,
+wasting their K rows. Option (a) raises vantage-demo's slot counts only:
+
+- `learning_max_open` 6 -> **12**: the ten LB arms and Z6V/Z7V each hold one position at most, so the learning cap no
+  longer binds in practice;
+- intraday pot 10 -> **14**.
+
+Unchanged and still binding: £8 per trade, each pair's £160 loss cap, the £200 day, the weekly 6%, `max_open_total`
+23, `max_positions` 24, the margin floor and the group notional caps. These are demo slot counts, not loss limits.
+
+**Expected London refusal share.** Read-only on the brain, vantage-demo 2026-11-02 18:00 to 2026-11-04: 0
+`learning_slots` refusals (the 7 old pairs were mostly in New York and Chicago hours); intraday positions open in
+07:00-11:00 UTC averaged 3.75 (max 7), of which VI0 and I0 2.4; I0 held 1.65 h, LB 4.0 h, LBC 2.6 h on average; an
+I0 control filled on about 40% of its hourly tries. A Monte Carlo of the London window on those figures (five LBC
+entries per day, five LB breaks on 60% of days or all together on a 30% share of trend days, ten I0 controls) gives
+a London pair refusal share of about **4%** (7% on trend days) at a pot of 14, against about 28% (35%) at 10. That is
+under section 7's 10% mark. The model leaves out the host-wide `max_open_total` 23 shared with the scalp arms, so the
+measured share is the one reported; section 7's per-arm diagnostic applies unchanged.
+
+icm-probe keeps 14 learning slots for its 14 pairs and 7 gold learning arms.
+
+**Short windows.** The added pairs start on 2026-11-04 and end with the others on 2026-12-17. An arm with fewer than 30
+admissible fills at the end of its window reads **"INCONCLUSIVE (short window)"**: no verdict, not a pass, not a kill,
+and not counted as evidence against the rule.

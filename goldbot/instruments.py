@@ -7,8 +7,11 @@ this file carries, quoted from the plan:
   instrument has a unique magic_block in [0, 100), so blocks never collide inside one account's 10_000 range.
   XAUUSD is block 0.
 - "store bars_1m_live keyed (source=account, symbol=store_symbol), never pooled with XAUUSD": store_symbol is unique.
-- "leverage per asset class (FX 30, gold/major idx 20, other commodities 10, bonds 5)": LEVERAGE_BY_CLASS.
-- "notional per correlation group (gold, metals, equity, FX, energy, rates, ags)": correlation_group.
+- "leverage per asset class (FX 30, gold/major idx 20, other commodities 10, bonds 5)": LEVERAGE_BY_CLASS; crypto 2
+  (owner decision 2026-11-04, BTCUSD: "use the most conservative existing class unless a lower one exists"; ESMA's
+  retail cap for crypto CFDs is 2:1, below every other class, so it can only tighten).
+- "notional per correlation group (gold, metals, equity, FX, energy, rates, ags)": correlation_group; crypto is its own
+  group (BTCUSD), capped at its own class leverage like every other group.
 - "XAUUSD paths byte-identical": a non-gold entry is a placeholder (`verify: true`, `enabled: false`) until the
   symbol check (L1) confirms its terms against the terminal; then it is `verify: false` and may be enabled.
 """
@@ -34,16 +37,17 @@ MAGIC_INSTRUMENT_BASE = 3_000_000
 MAGIC_ACCOUNT_STEP = 10_000
 MAGIC_BLOCK_STEP = 100
 
-AssetClass = Literal["metal", "index", "fx", "energy", "bond", "agri"]
-CorrelationGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags"]
-LeverageClass = Literal["fx", "gold_index", "commodity", "bond"]
+AssetClass = Literal["metal", "index", "fx", "energy", "bond", "agri", "crypto"]
+CorrelationGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags", "crypto"]
+LeverageClass = Literal["fx", "gold_index", "commodity", "bond", "crypto"]
 # the broker's trading-hours family; L2 checks each against the broker's own trading_sessions (TRACEABILITY D13)
 SessionProfile = Literal["metals", "fx", "index_us", "index_eu", "index_uk", "index_jp", "energy", "rates_us",
                          "rates_eu", "ags", "softs"]
 
 # Plan: "leverage per asset class (FX 30, gold/major idx 20, other commodities 10, bonds 5)" (ESMA retail caps; bonds
-# held to 5 by the plan). The RiskGate's margin check takes the larger of the broker's figure and this one (L2)
-LEVERAGE_BY_CLASS: dict[str, int] = {"fx": 30, "gold_index": 20, "commodity": 10, "bond": 5}
+# held to 5 by the plan); crypto 2 (ESMA retail crypto CFDs; owner decision 2026-11-04, BTCUSD). The RiskGate's margin
+# check takes the larger of the broker's figure and this one (L2)
+LEVERAGE_BY_CLASS: dict[str, int] = {"fx": 30, "gold_index": 20, "commodity": 10, "bond": 5, "crypto": 2}
 # the quote currencies a six-letter pair name ends in (InstrumentSpec._terms_agree): COPPER or COFFEE end in none
 QUOTE_CURRENCIES = frozenset({"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"})
 

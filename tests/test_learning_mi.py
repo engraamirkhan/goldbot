@@ -26,14 +26,25 @@ from goldbot.research import arms
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "config" / "exploration_arms.yaml"
 PREREG = "docs/research/learning-mi-2026-11-02.md"
-# the registered pairs, by account, in the doc's rank order (section 5): every listed instrument
-MI_LEARNING: dict[str, tuple[str, ...]] = {
+# the pairs registered on 2026-11-02, by account, in the doc's rank order (section 5)
+MI_1102: dict[str, tuple[str, ...]] = {
     "icm-probe": ("US500", "DE40", "XTIUSD", "EURUSD", "USDJPY", "JP225", "XAGUSD", "USTEC", "GBPUSD", "UK100", "XPTUSD",
                   "AUDUSD", "USDCAD", "XBRUSD", "USDCHF", "NZDUSD", "XNGUSD", "XAUEUR", "XAUAUD"),
     "vantage-demo": ("UST10Y", "BUND10Y", "COPPER", "WHEAT", "SOYBEAN", "COFFEE", "SUGAR")}
+# owner decision 2026-11-04 (section 11): these instruments are no longer traded; their pairs are retired in the spec
+# (rows, ids and K stay) and registered nowhere. The 10 added instruments' pairs are vantage-demo's, since 2026-11-04
+REMOVED = {"XPTUSD", "XAUAUD", "JP225", "XBRUSD", "XNGUSD", "UST10Y", "BUND10Y", "COPPER", "WHEAT", "SOYBEAN", "SUGAR",
+           "COFFEE"}
+ADDED_1104 = ("GBPJPY", "EURGBP", "EURJPY", "AUDJPY", "EURAUD", "GBPAUD", "BTCUSD", "XAUJPY", "USINDEX", "US30")
+# the pairs registered now, by account: every listed instrument
+MI_LEARNING: dict[str, tuple[str, ...]] = {
+    "icm-probe": tuple(k for k in MI_1102["icm-probe"] if k not in REMOVED), "vantage-demo": ADDED_1104}
+SINCE = {**{k: "2026-11-02" for keys in MI_1102.values() for k in keys}, **{k: "2026-11-04" for k in ADDED_1104}}
 GRAINS = {"WHEAT", "SOYBEAN"}                  # CBOT day session closes 13:20 Chicago: 8 bars
-MI_ARMS = {f"LB-{k}" for keys in MI_LEARNING.values() for k in keys}
-MI_CONTROLS = {f"LBC-{k}" for keys in MI_LEARNING.values() for k in keys}
+# every pair row in the spec (retired ones included: a row is never deleted)
+MI_ARMS = {f"LB-{k}" for k in SINCE}
+MI_CONTROLS = {f"LBC-{k}" for k in SINCE}
+LIVE_PAIRS = {f"{g}-{k}" for keys in MI_LEARNING.values() for k in keys for g in ("LB", "LBC")}
 # account -> the pair ids registered there (blocked until lane L3: the engine drops them, logged)
 MI_ON: dict[str, set[str]] = {acc: {f"{g}-{k}" for k in keys for g in ("LB", "LBC")} for acc, keys in MI_LEARNING.items()}
 MAX_LOSS = 8.0
@@ -89,17 +100,17 @@ def test_each_learning_block_is_preregistered_with_its_own_k_row_a_45_day_end_an
     spec = _spec()
     accounts = acc_mod.load_accounts(logins=False)
     text = (ROOT / PREREG).read_text()
-    for acc_id, keys in MI_LEARNING.items():
-        for key in keys:
-            a = spec[f"LB-{key}"]
-            block = arms.Learning.model_validate(a.learning)
-            assert block.prereg == PREREG and (block.since, block.until) == ("2026-11-02", "2026-12-17")
-            assert block.k_id == arms.learning_k_id(a.id, arms.arm_hash(a), PREREG)
-            cap = accounts[acc_id].exploration.arms[a.id].max_loss
-            assert cap == MAX_LOSS and block.loss_cap_gbp == pytest.approx(20 * cap)
-            c = spec[block.control]
-            assert a.id in text and block.k_id in text and c.id in text
-            assert arms.learning_k_id(c.id, arms.arm_hash(c), PREREG) in text
+    on = {k: acc_id for acc_id, keys in MI_LEARNING.items() for k in keys}
+    for key, since in SINCE.items():
+        a = spec[f"LB-{key}"]
+        block = arms.Learning.model_validate(a.learning)
+        assert block.prereg == PREREG and (block.since, block.until) == (since, "2026-12-17")
+        assert block.k_id == arms.learning_k_id(a.id, arms.arm_hash(a), PREREG)
+        cap = accounts[on[key]].exploration.arms[a.id].max_loss if key in on else MAX_LOSS   # a removed one: nowhere
+        assert cap == MAX_LOSS and block.loss_cap_gbp == pytest.approx(20 * cap)
+        c = spec[block.control]
+        assert a.id in text and block.k_id in text and c.id in text
+        assert arms.learning_k_id(c.id, arms.arm_hash(c), PREREG) in text
 
 
 def test_the_pairs_run_now_lane_l3_routes_each_to_its_own_instrument() -> None:
@@ -125,9 +136,10 @@ def test_every_listed_instrument_has_its_pair_in_the_spec_and_in_the_docs_table(
     accs = acc_mod.load_accounts(logins=False)
     listed = {k for a in accs.values() for k in a.instruments}
     registered = {k for keys in MI_LEARNING.values() for k in keys}
-    assert len(listed) == 26 and registered == listed
-    section = (ROOT / PREREG).read_text().split("## 5.")[1].split("\n## ")[0]
-    for key in listed:
+    assert len(listed) == 24 and registered == listed
+    text = (ROOT / PREREG).read_text()
+    for key in listed:                     # the 2026-11-02 pairs in section 5, the 2026-11-04 ones in section 11
+        section = text.split("## 11." if key in ADDED_1104 else "## 5.")[1].split("\n## ")[0]
         assert f"| {key} |" in section and f"LB-{key}" in section
 
 
@@ -162,7 +174,7 @@ def test_only_slot_counts_were_raised_for_the_pairs_and_every_cap_still_binds() 
     accs = acc_mod.load_accounts(logins=False)
     probe, van = accs["icm-probe"], accs["vantage-demo"]
     assert (probe.exploration.learning_max_open, probe.exploration.pots["intraday"].max_open) == (14, 12)
-    assert (van.exploration.learning_max_open, van.exploration.pots["intraday"].max_open) == (6, 10)
+    assert (van.exploration.learning_max_open, van.exploration.pots["intraday"].max_open) == (12, 14)   # 11-04 (a)
     for acc in (probe, van):
         ex = acc.exploration
         assert ex.max_open_total == 23 and acc.max_positions == 24 and not ex.pot_budgets
@@ -182,20 +194,24 @@ def test_the_k_row_script_writes_one_row_per_pair_member_with_the_others(tmp_pat
     rows = _k_script().k_rows(SPEC)
     mi = {r["arm"] for r in rows.values() if r["arm"] in MI_ARMS | MI_CONTROLS}
     assert mi == MI_ARMS | MI_CONTROLS
-    assert sum(1 for r in rows.values() if r["config"]["prereg"] == PREREG) == 52
+    assert sum(1 for r in rows.values() if r["config"]["prereg"] == PREREG) == 72      # 52 (11-02) + 20 (11-04)
     for h, r in rows.items():
         assert h == arms.learning_k_id(r["arm"], r["config"]["arm_config_hash"], r["config"]["prereg"])
 
 
 def test_with_their_k_rows_the_pairs_pass_now_lane_l3_runs_them(tmp_path, monkeypatch) -> None:
-    """Lane L3 set both rows of every pair to run (nothing hashed): with the K rows in, nothing refuses them."""
+    """Lane L3 set both rows of every pair to run (nothing hashed): with the K rows in, nothing refuses a pair of a
+    traded instrument; a removed instrument's pair (retired 2026-11-04) stays refused."""
+    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp("2026-11-04", tz="UTC"))   # the added pairs' first day
     reg = tmp_path / "research_registry.jsonl"
     reg.write_text("".join(json.dumps({"config_hash": h, "family": arms.LEARNING_FAMILY}) + "\n"
                            for h in _k_script().k_rows(SPEC)))
     monkeypatch.setattr(arms, "REGISTRY_PATH", reg)
     got = {a.id: a for a in arms.load_arms(SPEC, root=ROOT, registry=reg)}
-    for arm_id in MI_ARMS | MI_CONTROLS:
+    for arm_id in LIVE_PAIRS:
         assert got[arm_id].entry_refused == "" and got[arm_id].status == "run", (arm_id, got[arm_id].entry_refused)
+    for arm_id in (MI_ARMS | MI_CONTROLS) - LIVE_PAIRS:
+        assert got[arm_id].retired_day == "2026-11-04", arm_id
 
 
 def test_without_their_k_rows_the_pairs_are_refused_fail_closed(tmp_path, monkeypatch) -> None:
@@ -211,8 +227,8 @@ def test_the_budget_report_counts_the_rows_still_missing_against_the_quarter(tmp
     report = mod.budget_report(reg, SPEC, cap=3500, quarter="2026Q4")
     assert report["missing"] == len(mod.k_rows(SPEC)) and report["used"] == 0
     assert report["fits"] and report["cap"] == 3500 and report["quarter"] == "2026Q4"
-    assert report["by_prereg"] == {"docs/research/learning-2026-11-02.md": 30, PREREG: 52}
-    assert report["left_after"] == 3500 - 82
+    assert report["by_prereg"] == {"docs/research/learning-2026-11-02.md": 30, PREREG: 72}
+    assert report["left_after"] == 3500 - 102
     assert mod.budget_report(reg, SPEC, cap=10, quarter="2026Q4")["fits"] is False
 
 

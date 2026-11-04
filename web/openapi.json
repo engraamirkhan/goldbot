@@ -2342,7 +2342,8 @@
        "fx",
        "energy",
        "rates",
-       "ags"
+       "ags",
+       "crypto"
       ],
       "title": "Group",
       "type": "string"
@@ -2550,7 +2551,8 @@
        "fx",
        "energy",
        "rates",
-       "ags"
+       "ags",
+       "crypto"
       ],
       "title": "Group",
       "type": "string"
@@ -9772,7 +9774,8 @@
          "fx",
          "energy",
          "rates",
-         "ags"
+         "ags",
+         "crypto"
         ],
         "type": "string"
        },

@@ -119,6 +119,47 @@ arms:
   I0-SUGAR: {variant: "SUGAR"}
   S0-COFFEE: {variant: "COFFEE"}
   I0-COFFEE: {variant: "COFFEE"}
+  # owner decision 2026-11-04: the 10 added instruments (vantage-demo)
+  S0-GBPJPY: {variant: "GBPJPY"}
+  I0-GBPJPY: {variant: "GBPJPY"}
+  S0-EURGBP: {variant: "EURGBP"}
+  I0-EURGBP: {variant: "EURGBP"}
+  S0-EURJPY: {variant: "EURJPY"}
+  I0-EURJPY: {variant: "EURJPY"}
+  S0-AUDJPY: {variant: "AUDJPY"}
+  I0-AUDJPY: {variant: "AUDJPY"}
+  S0-EURAUD: {variant: "EURAUD"}
+  I0-EURAUD: {variant: "EURAUD"}
+  S0-GBPAUD: {variant: "GBPAUD"}
+  I0-GBPAUD: {variant: "GBPAUD"}
+  S0-BTCUSD: {variant: "BTCUSD"}
+  I0-BTCUSD: {variant: "BTCUSD"}
+  S0-XAUJPY: {variant: "XAUJPY"}
+  I0-XAUJPY: {variant: "XAUJPY"}
+  S0-USINDEX: {variant: "USINDEX"}
+  I0-USINDEX: {variant: "USINDEX"}
+  S0-US30: {variant: "US30"}
+  I0-US30: {variant: "US30"}
+  LB-GBPJPY: {variant: "GBPJPY"}
+  LBC-GBPJPY: {variant: "GBPJPY control"}
+  LB-EURGBP: {variant: "EURGBP"}
+  LBC-EURGBP: {variant: "EURGBP control"}
+  LB-EURJPY: {variant: "EURJPY"}
+  LBC-EURJPY: {variant: "EURJPY control"}
+  LB-AUDJPY: {variant: "AUDJPY"}
+  LBC-AUDJPY: {variant: "AUDJPY control"}
+  LB-EURAUD: {variant: "EURAUD"}
+  LBC-EURAUD: {variant: "EURAUD control"}
+  LB-GBPAUD: {variant: "GBPAUD"}
+  LBC-GBPAUD: {variant: "GBPAUD control"}
+  LB-BTCUSD: {variant: "BTCUSD"}
+  LBC-BTCUSD: {variant: "BTCUSD control"}
+  LB-XAUJPY: {variant: "XAUJPY"}
+  LBC-XAUJPY: {variant: "XAUJPY control"}
+  LB-USINDEX: {variant: "USINDEX"}
+  LBC-USINDEX: {variant: "USINDEX control"}
+  LB-US30: {variant: "US30"}
+  LBC-US30: {variant: "US30 control"}
   LB-XAGUSD: {variant: "XAGUSD"}
   LBC-XAGUSD: {variant: "XAGUSD control"}
   LB-XPTUSD: {variant: "XPTUSD"}

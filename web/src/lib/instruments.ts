@@ -12,9 +12,10 @@ export type Instrument = components["schemas"]["InstrumentView"];
 export type InstrumentGroup = Instrument["group"];
 export type InstrumentState = Instrument["state"];
 
-export const GROUP_ORDER: readonly InstrumentGroup[] = ["gold", "metals", "equity", "fx", "energy", "rates", "ags"];
+export const GROUP_ORDER: readonly InstrumentGroup[] = ["gold", "metals", "equity", "fx", "energy", "rates", "ags", "crypto"];
 export const GROUP_WORDS: Record<InstrumentGroup, string> = {
   gold: "Gold", metals: "Metals", equity: "Equity", fx: "FX", energy: "Energy", rates: "Rates", ags: "Ags",
+  crypto: "Crypto",
 };
 export const GOLD = "XAUUSD";
 
@@ -34,6 +35,11 @@ export const TERMS: Record<string, Terms> = {
   XNGUSD: T(4, "USD/MMBtu", "Natural gas", "energy"),
   UST10Y: T(2, "", "US 10-year note", "rates"), BUND10Y: T(2, "", "German 10-year Bund", "rates"),
   WHEAT: T(3, "", "Wheat", "ags"), SOYBEAN: T(3, "", "Soybeans", "ags"), SUGAR: T(5, "", "Sugar", "ags"), COFFEE: T(4, "", "Coffee", "ags"),
+  // owner decision 2026-11-04: the 10 added instruments
+  GBPJPY: T(3, "", "Pound / yen", "fx"), EURGBP: T(5, "", "Euro / pound", "fx"), EURJPY: T(3, "", "Euro / yen", "fx"),
+  AUDJPY: T(3, "", "Aussie / yen", "fx"), EURAUD: T(5, "", "Euro / Aussie", "fx"), GBPAUD: T(5, "", "Pound / Aussie", "fx"),
+  BTCUSD: T(2, "USD", "Bitcoin", "crypto"), XAUJPY: T(0, "JPY/oz", "Gold in yen", "gold"),
+  USINDEX: T(3, "pts", "US dollar index", "fx"), US30: T(2, "pts", "Dow Jones 30", "equity"),
 };
 
 const live = new Map<string, Terms>();
