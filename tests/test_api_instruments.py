@@ -234,3 +234,50 @@ def test_the_dashboards_snapshot_of_the_terms_matches_the_registry_and_the_apis_
         spec = reg.get(key)
         assert (digits, group) == (spec.digits, spec.correlation_group), key
         assert (label, unit) == iv.LABELS[key], key
+
+
+def test_the_registry_is_parsed_once_while_instruments_yaml_is_unchanged_and_again_after_an_edit(tmp_path, monkeypatch):
+    """Live 2026-11-04 (brain, py-spy): the api and telegram services each spent 96-97% of a core re-parsing
+    config/instruments.yaml once per ledger row (`instrument_key` -> `_registry`), starving the engines on the
+    2-core host. One parse serves every row until the file changes."""
+    import goldbot.instruments as ins
+    src = Path(ins.DEFAULT_INSTRUMENTS).read_text()
+    path = tmp_path / "instruments.yaml"
+    path.write_text(src)
+    monkeypatch.setattr(ins, "DEFAULT_INSTRUMENTS", path)
+    parsed: list[Path] = []
+    real = iv.load_instruments
+
+    def counted(p: Any = path) -> Any:
+        parsed.append(Path(p))
+        return real(p)
+    monkeypatch.setattr(iv, "load_instruments", counted)
+    iv._REGISTRY.clear()
+    for _ in range(50):
+        assert iv.instrument_key("XAUUSD+") == "XAUUSD"
+    assert parsed == [path]
+    path.write_text(src + "\n# edited\n")
+    assert iv.instrument_key("XAUUSD") == "XAUUSD"
+    assert len(parsed) == 2
+
+
+def test_an_unreadable_registry_is_logged_once_per_file_version_and_views_fall_back_to_gold(tmp_path, monkeypatch,
+                                                                                             caplog):
+    import goldbot.instruments as ins
+    path = tmp_path / "instruments.yaml"
+    path.write_text("not: [valid")
+    monkeypatch.setattr(ins, "DEFAULT_INSTRUMENTS", path)
+    iv._REGISTRY.clear()
+    with caplog.at_level("ERROR"):
+        assert [iv.instrument_key("COPPER-C") for _ in range(5)] == ["COPPER-C"] * 5
+    assert sum("instruments.yaml unreadable" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_missing_registry_file_is_not_parsed_or_logged_on_every_call(tmp_path, monkeypatch, caplog):
+    """Trading-safety review (LOW): a missing file is remembered as missing until it appears."""
+    import goldbot.instruments as ins
+    monkeypatch.setattr(ins, "DEFAULT_INSTRUMENTS", tmp_path / "absent.yaml")
+    iv._REGISTRY.clear()
+    with caplog.at_level("ERROR"):
+        assert [iv.instrument_key("COPPER-C") for _ in range(5)] == ["COPPER-C"] * 5
+    assert sum("instruments.yaml unreadable" in r.getMessage() for r in caplog.records) == 1

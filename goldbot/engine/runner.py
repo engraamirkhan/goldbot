@@ -46,6 +46,7 @@ from goldbot.engine import (
     books,
     broker_bars,
     capital_flows,
+    close_retry,
     closed_record,
     commission,
     cost_probe,
@@ -1534,8 +1535,8 @@ class Engine:
         (NO_QUOTES_RETCODE) on a symbol other than the engine's (a hidden or delisted symbol the kill switch closes,
         BACKLOG 62: one journal row per backoff step, not per tick), it is backed off reconcile_every_s
         of tick time, doubling per consecutive refusal up to modify_backoff_max_s; any other refusal (requote, price
-        changed) or a raising call is retried on the first tick CLOSE_RETRY_MIN_S later (`_retry_wait`). Automatic:
-        never gated."""
+        changed) or a raising call is retried on the first tick CLOSE_RETRY_MIN_S later (`_retry_wait`), backed off
+        past 30 in a row (`close_retry.refused`: at most 5 s apart, 30 s for a scheduled exit short of its stop). Automatic: never gated."""
         now = now if now is not None else self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
         tr = self.open.get(pid)
         err: str | None = None
@@ -1570,8 +1571,9 @@ class Engine:
             fails = self._close_backoff.get(pid, (0, now))[0]
             wait = min(self.cfg.reconcile_every_s * 2 ** fails, self.cfg.modify_backoff_max_s)
             self._close_backoff[pid] = (fails + 1, now + pd.Timedelta(seconds=wait))
+            close_retry.market_closed(self, pid)
         else:
-            self._close_backoff.pop(pid, None)            # transient: again CLOSE_RETRY_MIN_S later (`_retry_wait`)
+            close_retry.refused(self, pid, now, res, action)   # transient: CLOSE_RETRY_MIN_S, backed off past 30
         return res
 
     def _log_exit_fill(self, pid: int, tr: OpenTrade, kind: str, lots: float, filled: float | None, *,
@@ -1630,9 +1632,9 @@ class Engine:
         exit, hard flat, trail, blackout, engine stop), unless it is backing off after a market-closed refusal or was
         tried less than CLOSE_RETRY_MIN_S ago (`_retry_wait`). The book is the kill switch's (`_read_kill_book`): while
         it closes the whole account, `account_positions()`, so a due close of another symbol is re-sent too. A position
-        a book that would list it no longer lists is left to `_sweep_closed`, which records it once its exit deal is
-        seen; a close of another symbol missing from the fallback book (the engine's symbol only) stays due (BACKLOG
-        62, trading-safety C3). An unreadable book skips this tick (the next one retries)."""
+        a book that would list it no longer lists is never sent its close again (`close_retry.gone`: recorded from its
+        exit deal, else kept for `_sweep_closed`); a close of another symbol missing from the fallback book (the
+        engine's symbol only) stays due (BACKLOG 62, trading-safety C3). An unreadable book skips this tick."""
         cost_probe.hold_exits(self, now)       # the scheduled probes' 30 s close, every pass, never gated; never raises
         exploration.exits(self, now)           # the 1m/5m arms' holds on the host clock, likewise
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
@@ -1649,8 +1651,7 @@ class Engine:
                 # the fallback is complete for the engine's symbol (every due close names its symbol, `_try_close`), so
                 # only another symbol's close, or one that names none, waits for an account read
                 if complete or extra.get("symbol") == self.cfg.symbol:
-                    self._close_due.pop(pid, None)
-                    self._close_backoff.pop(pid, None)
+                    close_retry.gone(self, pid, action, now)   # recorded from its exit deal, never sent again
                 continue
             self._try_close(pid, action, now, **extra)
         self._save_orders()

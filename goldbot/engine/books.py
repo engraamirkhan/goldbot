@@ -373,21 +373,43 @@ class PassQuotes:
 # what the pass serves once to every book (trading-safety review of #310, M1); any order call clears them
 PASS_READS = frozenset({"account", "account_positions"})
 PASS_WRITES = frozenset({"place_order", "close", "modify"})
+# the broker's figures asked once a pass per exact question (live 2026-11-04, brain py-spy of icm-probe: 9 s in 150 s
+# of passes were `loss_per_lot` round trips, every book's exploration pass asking the loss at the stop of the same
+# open positions again). A conversion of the arguments given, no position in it: an order call does not clear it
+PASS_FIGURES = frozenset({"loss_per_lot"})
 
 
 class PassBroker:
     """The account's broker for one multi-book pass (M1: "read account() and account_positions() ONCE per pass and
     share them across books"): each of PASS_READS is read once and the same answer (or the same exception: a failing
     bridge is not asked 26 times) is served to every book; an order, close or modify sent through it clears them, so
-    no book decides on positions read before an order of this pass. Everything else goes straight to the broker."""
+    no book decides on positions read before an order of this pass. Each of PASS_FIGURES is asked once a pass per
+    exact arguments (the same answer or exception for the same question). Everything else goes straight to the
+    broker."""
 
     def __init__(self, broker: Any) -> None:
         self.__dict__["_inner"] = broker
         self.__dict__["_memo"] = {}
+        self.__dict__["_figures"] = {}
 
     def __getattr__(self, name: str) -> Any:
         inner, memo = self.__dict__["_inner"], self.__dict__["_memo"]
         attr = getattr(inner, name)
+        if name in PASS_FIGURES:
+            figures = self.__dict__["_figures"]
+
+            def figure(*a: Any) -> Any:
+                key = (name, *a)
+                if key not in figures:
+                    try:
+                        figures[key] = attr(*a)
+                    except Exception as exc:
+                        figures[key] = exc
+                v = figures[key]
+                if isinstance(v, BaseException):
+                    raise v
+                return v
+            return figure
         if name in PASS_READS:
             def read() -> Any:
                 if name not in memo:
@@ -564,22 +586,29 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
         now = eng.clock()
         due = [b for b in turn if _is_due(b, now)]
         order = [eng.primary, *due, *(b for b in turn if b not in due)]
+        t_exits = time.monotonic()
         for book in order:
             with using(eng, book):
                 ok = _exits_first(eng, quotes, book.__dict__["cfg"].symbol) and ok
+        t_exits = time.monotonic() - t_exits
         left: list[SymbolBook] = []
+        took: dict[str, float] = {}
         for i, book in enumerate(order):
             if (left or (i > 1 and time.monotonic() - t0 >= budget_s)) and not (turn and book is turn[0]):
                 left.append(book)
                 continue
+            t_book = time.monotonic()
             with using(eng, book):
                 ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+            took[book.__dict__["cfg"].symbol] = time.monotonic() - t_book
         if left:
             eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))
             eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
             if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
+                slow = ", ".join(f"{s} {t:.2f} s" for s, t in sorted(took.items(), key=lambda x: -x[1])[:3])
                 log.warning("%s: pass budget %.1f s spent after %d of %d books (%d due first); the rest go first "
-                            "next pass", cfg.account_id, budget_s, len(order) - len(left), len(order), len(due))
+                            "next pass; exits %.2f s; slowest: %s", cfg.account_id, budget_s, len(order) - len(left),
+                            len(order), len(due), t_exits, slow)
             deferred = True
     finally:
         eng.__dict__["_pass_was_deferred"] = deferred
