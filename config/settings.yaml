@@ -63,6 +63,8 @@ risk:
   # Spread against the stop (demo non-gold fill audit 2026-11-03: S0-SUGAR traded a stop equal to the spread, 12/12
   # stopped; BUND10Y's spread was 0.52 of its stop): every entry, exploration and probes included, is refused
   # `spread_over_stop` when the spread (the instrument's own points) is more than this fraction of the stop it asks for.
+  # The round-trip commission counts with the spread (P&L evidence 2026-11-04: FX random controls entered at 0.6-0.8 of
+  # the stop with a spread of only 0.03-0.12; cost over 0.3 of the stop lost £77.64 on 108 trades).
   max_spread_stop_frac: 0.3
   stale_tick_seconds: 20
   # Tier-1 news blackout (design): entries refused -15/+30 min around CPI, NFP, FOMC, PCE.

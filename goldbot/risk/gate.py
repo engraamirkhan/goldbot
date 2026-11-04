@@ -56,7 +56,8 @@ class RiskLimits(Record):
     max_positions: int = 2
     max_spread_points: float = 45.0
     # demo non-gold fill audit 2026-11-03 (S0-SUGAR: stop 0.00055 == spread, 12/12 stopped; BUND10Y spread 0.52 of the
-    # stop): an entry whose spread is more than this fraction of the stop it asks for is refused `spread_over_stop`,
+    # stop): an entry whose spread plus round-trip commission (P&L evidence 2026-11-04: FX controls at 0.6-0.8 of the
+    # stop with a spread of 0.03-0.12) is more than this fraction of the stop it asks for is refused `spread_over_stop`,
     # on every purpose, in the instrument's own points. The absolute cap above cannot see a stop inside the spread
     max_spread_stop_frac: float = Field(0.3, gt=0, le=1)
     point: float = 0.01
@@ -598,13 +599,18 @@ def profit_fx(intent: Intent) -> float | None:
 
 def spread_over_stop(intent: Intent, st: AccountState, limits: RiskLimits) -> bool:
     """Demo non-gold fill audit 2026-11-03: "refuse any entry whose spread exceeds a configurable fraction of the stop
-    distance" (`RiskLimits.max_spread_stop_frac`). The spread is the active book's (`spread_points`, in the
-    instrument's own `point`: SUGAR 0.00001, BUND10Y 0.01, gold 0.01), the stop the one the entry asks for
-    (stop_atr x atr_usd), never the one the gate floors out to the stops level plus the spread: a rule's R and target
-    are measured on its own stop, and the floored one is never shorter, so judging the asked one is the stricter.
-    Equal to the fraction is allowed (a relative 1e-9 absorbs float noise). Entries only; exits never call the gate."""
+    distance" (`RiskLimits.max_spread_stop_frac`); P&L evidence 2026-11-04: the round trip counts, so the spread PLUS
+    the round-trip commission (`Intent.commission_usd_per_oz`, the same price units) is held to that fraction. FX
+    random controls with a spread of 3-12% of the stop kept entering at 60-83% once commission was in (cost over 0.3
+    of the stop: 108 trades, -£77.64; mean R -0.54 at 0.3-0.5, -0.73 above 0.5). The spread is the active book's
+    (`spread_points`, in the instrument's own `point`: SUGAR 0.00001, BUND10Y 0.01, gold 0.01), the stop the one the
+    entry asks for (stop_atr x atr_usd), never the one the gate floors out to the stops level plus the spread: a rule's
+    R and target are measured on its own stop, and the floored one is never shorter, so judging the asked one is the
+    stricter. Equal to the fraction is allowed (a relative 1e-9 absorbs float noise). A commission that is not a finite
+    number >= 0 is refused on its own (`invalid:commission_usd_per_oz`). Entries only; exits never call the gate."""
     point = limits.point if intent.point is None else intent.point
-    return st.spread_points * point > limits.max_spread_stop_frac * intent.stop_atr * intent.atr_usd * (1 + 1e-9)
+    cost = st.spread_points * point + intent.commission_usd_per_oz
+    return cost > limits.max_spread_stop_frac * intent.stop_atr * intent.atr_usd * (1 + 1e-9)
 
 
 def invalid_fields(intent: Intent, st: AccountState) -> list[str]:
