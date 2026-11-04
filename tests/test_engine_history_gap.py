@@ -567,3 +567,119 @@ def test_a_cut_over_that_moved_while_the_fill_ran_discards_its_broker_minutes(tm
     gate.set()
     _settle(eng)
     assert eng.history.cutover == moved and history.window_gaps(eng, eng.bars_1m)
+
+
+# --------------------------------------------- the rebased cut-over is durable (#327 trading-safety review L2)
+def test_a_rebased_cut_over_is_kept_by_a_restart_even_when_its_broker_minutes_were_never_stored(tmp_path, monkeypatch):
+    """The stored broker minutes alone carried the rebase over a restart; a dropped writer batch or a stop before the
+    queue flushed lost it, and the restart rebased again. The cut-over is recorded in aux.db (`history_cutover`): the
+    restart starts from it, plans no rebase, and fills [hole, old cut-over) as broker feed (keep=True)."""
+    _release_holed_store(tmp_path)
+    rates = _mt5_rates(TICKS[TICKS["ts_utc"] < LIVE_FROM])
+    eng = _engine(tmp_path, **FAST)
+    monkeypatch.setattr(history, "_write", lambda eng, bars: None)       # nothing reaches the store
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    _settle(eng)
+    assert eng.history.cutover == REL_HOLE
+    monkeypatch.undo()
+    again = _engine(tmp_path, **FAST)
+    again.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    assert again.history.cutover == REL_HOLE
+    f = again.history.fill
+    assert f is not None and f.rebase is None
+    assert any(keep and s[0] <= REL_HOLE for s, keep in f.spans)        # the hole is now the broker's to fill
+    _settle(again)
+    assert again.history.cutover == REL_HOLE and history.window_gaps(again, again.bars_1m) == []
+
+
+def test_a_restart_after_the_release_gains_the_hole_keeps_the_broker_feed_from_the_rebased_cut_over(tmp_path):
+    """Idempotent and one feed per span: the release re-published with the hole filled never puts release minutes
+    after the recorded cut-over, and nothing is rebased again."""
+    _release_holed_store(tmp_path)
+    rates = _mt5_rates(TICKS[TICKS["ts_utc"] < LIVE_FROM])
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    _settle(eng)
+    hole = ticks_to_1m(TICKS[(TICKS["ts_utc"] >= REL_HOLE) & (TICKS["ts_utc"] < REL_HOLE + pd.Timedelta(hours=2))])
+    Store(tmp_path / "data").append("bars_1m", hole, source="dukascopy")
+    again = _engine(tmp_path, **FAST)
+    again.warm_start(LIVE_FROM)
+    assert again.history.cutover == REL_HOLE
+    b = again.bars_1m.set_index("ts_utc")
+    want = history.rates_to_bars(rates, POINT).set_index("ts_utc")
+    span = want[(want.index >= REL_HOLE) & (want.index < REL_HOLE + pd.Timedelta(hours=2))]
+    pd.testing.assert_frame_equal(b.loc[span.index, span.columns], span, check_dtype=False, check_index_type=False)
+    assert history.saved_cutover(again) == REL_HOLE
+
+
+def test_the_recorded_cut_over_only_ever_moves_back(tmp_path):
+    eng = _engine(tmp_path)
+    history.save_cutover(eng, REL_HOLE)
+    history.save_cutover(eng, OWN_FROM)                              # a later one never replaces an earlier one
+    assert history.saved_cutover(eng) == REL_HOLE
+    history.save_cutover(eng, REL_HOLE - pd.Timedelta(days=1))
+    assert history.saved_cutover(eng) == REL_HOLE - pd.Timedelta(days=1)
+    other = _engine(tmp_path / "other")
+    assert history.saved_cutover(other) is None
+
+
+def test_an_unreadable_cut_over_record_falls_back_to_the_stored_minutes(tmp_path, monkeypatch, caplog):
+    _release_holed_store(tmp_path)
+
+    def broken(*a: Any, **k: Any) -> Any:
+        raise OSError("disk")
+
+    from goldbot.db import connection
+    monkeypatch.setattr(connection.Database, "open", broken)
+    eng = _engine(tmp_path, **FAST)
+    with caplog.at_level(logging.WARNING):
+        eng.warm_start(LIVE_FROM)
+    assert eng.history.cutover == OWN_FROM
+    assert "cut-over record" in caplog.text
+
+
+# --------------------------------------------- a vouched closure never moves the cut-over (#327 review L3)
+def test_a_release_hole_the_broker_vouches_as_a_closure_does_not_move_the_cut_over(tmp_path):
+    """The release lacks a whole day the session table calls open; the broker's good bar pull reaches back past it
+    and has no minutes there either: a closure (`covered`, the history_gap rule), not a hole. The fill's rebase is
+    not taken, the cut-over stays, nothing is recorded, the release keeps its minutes and the window is whole."""
+    day = pd.Timestamp("2025-03-05", tz="UTC")
+    closed = (TICKS["ts_utc"] < day) | (TICKS["ts_utc"] >= day + pd.Timedelta(days=1))
+    rel = ticks_to_1m(TICKS[closed & (TICKS["ts_utc"] < OWN_FROM)])
+    store = Store(tmp_path / "data")
+    store.append("bars_1m", rel, source="dukascopy")
+    store.append(LIVE_TABLE, ticks_to_1m(TICKS[(TICKS["ts_utc"] >= OWN_FROM) & (TICKS["ts_utc"] < LIVE_FROM)]),
+                 source="icm", symbol="XAUUSD")
+    rates = _mt5_rates(TICKS[closed & (TICKS["ts_utc"] < LIVE_FROM)])
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    f = eng.history.fill
+    assert f is not None and f.rebase is not None and f.rebase[0] == day       # planned before the probe vouched
+    _settle(eng)
+    assert eng.history.cutover == OWN_FROM
+    assert history.saved_cutover(eng) is None
+    assert history.window_gaps(eng, eng.bars_1m) == []
+    b = eng.bars_1m.set_index("ts_utc")
+    after = rel.set_index("ts_utc")
+    after = after[after.index >= day]
+    pd.testing.assert_frame_equal(b.loc[after.index, after.columns], after, check_dtype=False,
+                                  check_index_type=False)   # still the release
+
+
+def test_a_vouched_closure_before_an_unvouched_hole_moves_the_cut_over_to_the_hole_only(tmp_path):
+    """The oldest pre-cut-over gap is a closure, a later one a real hole the broker has: the cut-over moves back to
+    the real hole, not to the closure, so the release keeps the span between them."""
+    day = pd.Timestamp("2025-03-04", tz="UTC")
+    closed = (TICKS["ts_utc"] < day) | (TICKS["ts_utc"] >= day + pd.Timedelta(days=1))
+    rel = ticks_to_1m(TICKS[closed & (TICKS["ts_utc"] < OWN_FROM)])
+    rel = rel[(rel["ts_utc"] < REL_HOLE) | (rel["ts_utc"] >= REL_HOLE + pd.Timedelta(hours=2))]
+    store = Store(tmp_path / "data")
+    store.append("bars_1m", rel, source="dukascopy")
+    store.append(LIVE_TABLE, ticks_to_1m(TICKS[(TICKS["ts_utc"] >= OWN_FROM) & (TICKS["ts_utc"] < LIVE_FROM)]),
+                 source="icm", symbol="XAUUSD")
+    rates = _mt5_rates(TICKS[closed & (TICKS["ts_utc"] < LIVE_FROM)])
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, ShortTicksLongBars(TICKS.iloc[:0], rates))
+    _settle(eng)
+    assert eng.history.cutover == REL_HOLE and history.saved_cutover(eng) == REL_HOLE
+    assert history.window_gaps(eng, eng.bars_1m) == []

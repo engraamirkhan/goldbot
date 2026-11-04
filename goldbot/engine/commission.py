@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
 
@@ -16,8 +18,11 @@ def usd_per_oz(eng: Engine, price: float | None = None) -> float:
     charge by the lot (gold, other metals, FX); index, energy, bond and soft CFDs are priced in their spread, 0.
     Per lot both sides over the contract size, as `CostTable.round_trip_usd_per_oz`. USD on a USD quote; a USD-base
     pair quoted in another currency (USDJPY, USDCAD, USDCHF) is converted at its price (`price`, else the last
-    quote's mid; none known: NaN, so the gate refuses `invalid:commission_usd_per_oz`). Another non-USD quote
-    (XAUEUR, XAUAUD) keeps the USD figure: a few percent of a term that is ~1% of a 100 oz stop."""
+    quote's mid). Another non-USD quote (XAUEUR, XAUAUD) is converted at the broker's own figures (#327 safety review
+    L1: the spread, stop and ATR it is added to and compared with are in that currency): account currency per USD
+    (`books._usd_fx`, the gold book's) over account currency per unit of the quote (`books._profit_fx`, this book's),
+    the conversions the gate sizes with. None known: NaN, so the gate refuses `invalid:commission_usd_per_oz`; a USD
+    figure is never counted as AUD."""
     spec = eng.book.spec.instrument if eng.book.spec is not None else None
     table = eng._cost_table()
     if table is not None:
@@ -27,12 +32,28 @@ def usd_per_oz(eng: Engine, price: float | None = None) -> float:
     else:
         return 0.0
     usd = 2 * max(side, 0.0) / contract
-    if spec is None or spec.currency_profit == "USD" or not spec.key.startswith("USD") or usd == 0.0:
+    if spec is None or spec.currency_profit == "USD" or usd == 0.0:
         return usd
     if price is None:
         t = eng._last_tick
         price = (t.bid + t.ask) / 2 if t is not None else math.nan
-    return usd * price if math.isfinite(price) and price > 0 else math.nan
+    if not (math.isfinite(price) and price > 0):
+        return math.nan
+    if spec.key.startswith("USD"):
+        return usd * price
+    per_usd = _quote_per_usd(eng, price)
+    return usd * per_usd if per_usd is not None else math.nan
+
+
+def _quote_per_usd(eng: Engine, price: float) -> float | None:
+    """Units of the active book's profit currency per USD: the account's conversion of USD (the gold book's) over its
+    conversion of the quote (this book's, read at `price`; both cached a minute); None when either is unknown."""
+    from goldbot.engine import books
+    now = pd.Timestamp.now("UTC")
+    contract = eng._contract_size()
+    usd = books._usd_fx(eng, now)
+    quote = books._profit_fx(eng, eng.book, 1, price, contract, now) if contract is not None else None
+    return usd / quote if usd is not None and quote is not None else None
 
 
 def floor_cost(eng: Engine, cost: float, atr_usd: float, ex_spread: bool) -> float:
