@@ -551,6 +551,20 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (account_id, source, symbol)
            ) STRICT""",
     )),
+    # additive (owner complaint 2026-11-04, health alerts "up and down"; goldbot/ops/alert_log.py): one row per health
+    # message the owner was sent (channel telegram) and per state change the outside dead man's switch accepted
+    # (channel deadman, each one an email from the monitor), so the alert volume can be measured. A release without
+    # it never reads the table
+    Migration(version=22, name="health_alerts", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS health_alerts (
+               id INTEGER PRIMARY KEY,
+               ts_ns INTEGER NOT NULL,
+               channel TEXT NOT NULL CHECK (channel IN ('telegram', 'deadman')),
+               kinds TEXT NOT NULL,
+               checks TEXT NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS health_alerts_ts ON health_alerts(ts_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

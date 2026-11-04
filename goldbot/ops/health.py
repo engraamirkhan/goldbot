@@ -39,7 +39,7 @@ import threading
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import pandas as pd
 from pydantic import Field
@@ -52,7 +52,7 @@ from goldbot.base import (
     schema_skew_summary,
     write_atomic,
 )
-from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
+from goldbot.config import DEFAULT_SETTINGS, Settings, TelegramSettings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.crossfeed import check_reconciliation
 from goldbot.data.ticks import check_tick_record
@@ -99,6 +99,7 @@ from goldbot.ops.checks._base import (
     WATCH_FILE,
     WATCH_STALE_S,
     AccountRef,
+    AlertStreak,
     Check,
     ObserveLaneRef,
     Status,
@@ -241,6 +242,12 @@ __all__ = [
     "HealthContext",
     "HealthReport",
     "HealthWatch",
+    "AlertPolicy",
+    "AlertStep",
+    "AlertStreak",
+    "FLAP_WINDOW",
+    "IMMEDIATE_NAMES",
+    "IMMEDIATE_REASONS",
     "Heartbeat",
     "JOB_OVERDUE_GRACE_S",
     "JOB_RUNNING_FAIL_H",
@@ -299,6 +306,8 @@ __all__ = [
     "_skipped",
     "_worst",
     "alert_text",
+    "alerts_at_once",
+    "step_alerts",
     "bridge_tick_reader",
     "check_accounts",
     "check_agent_spend",
@@ -603,22 +612,68 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
                   "history_gap:")
 
+# Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
+# and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the
+# bridge, service heartbeat and engine state checks already wait 5 min (BRIDGE_DOWN_FAIL_S, HEARTBEAT_SILENT_S) or
+# 45 min (ENGINE_FAIL_S) before they fail, so a second window would only delay a real outage. `engine:` is a prefix
+# of `engine:<account>` only, never of `engine_loop:` (150 s, which waits).
+IMMEDIATE_NAMES = ("kill_switch:", "daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune",
+                   "object_storage", "bridge:", "heartbeat:", "engine:")
+# ...and any check whose reason starts with one of these: CRITICAL (open positions goldbot cannot close; the generic
+# marker for a check that adds one, e.g. open_risk), a terminal refusing every order (goldbot/ops/checks/bridge.py
+# _TERMINAL_FAIL autotrading_off, wrong_account)
+IMMEDIATE_REASONS = ("CRITICAL", "MT5 terminal AutoTrading is off", "MT5 terminal logged in to a different account")
+FLAP_WINDOW = pd.Timedelta(hours=1)
+
 
 def _alerting(name: str, status: str) -> bool:
     return status == "fail" or (status == "warn" and name.startswith(NOTIFY_ON_WARN))
 
 
-def alert_text(prev: dict[str, Status], report: HealthReport) -> str | None:
-    """The message for checks that turned fail (or a NOTIFY_ON_WARN warning) since `prev` and for alerted checks that
-    recovered; None when nothing changed state. A check that stays failing is not repeated; one that flaps
-    fail -> ok -> fail alerts again. A notice that simply ages out of the report (an old failed order) is not
-    announced as recovered."""
+def alerts_at_once(check: Check) -> bool:
+    """True for an alerting check on the immediate list (IMMEDIATE_NAMES, IMMEDIATE_REASONS)."""
+    return _alerting(check.name, check.status) and (check.name.startswith(IMMEDIATE_NAMES)
+                                                     or check.reason.startswith(IMMEDIATE_REASONS))
+
+
+class AlertPolicy(FrozenRecord):
+    """When a change of a check's alert state is told to the owner (telegram.alert_confirm_polls / alert_confirm_min /
+    alert_flap_note). The defaults are the rule before 2026-11-04 (every change at once), kept for the check-level
+    tests; the Telegram service uses `from_settings`."""
+    confirm_polls: int = Field(1, ge=1)
+    confirm_s: float = Field(0.0, ge=0)
+    flap_note_at: int = Field(0, ge=0)          # 0: no flapping note
+
+    @classmethod
+    def from_settings(cls, t: TelegramSettings) -> AlertPolicy:
+        return cls(confirm_polls=t.alert_confirm_polls, confirm_s=t.alert_confirm_min * 60.0,
+                   flap_note_at=t.alert_flap_note)
+
+
+class AlertStep(FrozenRecord):
+    """One health pass through the alert rule: the message (None: nothing to tell), the state to persist once it was
+    delivered, and what the message carries (for the alert log)."""
+    text: str | None
+    state: WatchState
+    kinds: tuple[str, ...] = ()
+    checks: tuple[str, ...] = ()
+
+
+def _changes(prev: dict[str, Status], report: HealthReport) -> tuple[list[Check], list[str]]:
+    """Checks that turned fail (or a NOTIFY_ON_WARN warning) since `prev`, and alerted checks that recovered. A check
+    that stays failing is not repeated; a fail that eases to a notice is not news; a notice that simply ages out of the
+    report (an old failed order) is not announced as recovered."""
     now = {c.name: c.status for c in report.checks}
     new = [c for c in report.checks if _alerting(c.name, c.status) and prev.get(c.name) != c.status
            and prev.get(c.name) != "fail"]
     recovered = sorted(n for n, s in prev.items() if _alerting(n, s) and not _alerting(n, now.get(n, "ok"))
                        and (s == "fail" or n in now))
-    if not new and not recovered:
+    return new, recovered
+
+
+def _message(new: list[Check], recovered: list[str], now: dict[str, Status], still: list[str],
+             flapping: list[str]) -> str | None:
+    if not new and not recovered and not flapping:
         return None
     lines = []
     if new:
@@ -629,40 +684,119 @@ def alert_text(prev: dict[str, Status], report: HealthReport) -> str | None:
         lines += [f"{c.status.upper()} {c.name}: {c.reason}" for c in new]
     if recovered:
         lines.append("recovered: " + ", ".join(f"{n} ({now.get(n, 'gone')})" for n in recovered))
-    still = sorted(report.failing() - {c.name for c in new})
     if still:
         lines.append("still failing: " + ", ".join(still))
+    lines += flapping
     text = "\n".join(lines)
     return text if len(text) <= MAX_ALERT else text[:MAX_ALERT - 40].rstrip() + "\n... (python -m goldbot.ops.run health)"
 
 
-class HealthWatch:
-    """Persisted dedupe for health alerts (state/health_last.json). `poll()` is called by the Telegram service."""
+def alert_text(prev: dict[str, Status], report: HealthReport) -> str | None:
+    """The message for checks that turned fail (or a NOTIFY_ON_WARN warning) since `prev` and for alerted checks that
+    recovered, every change at once (no hysteresis); None when nothing changed state. A check that stays failing is
+    not repeated. A notice that simply ages out of the report (an old failed order) is not announced as recovered."""
+    new, recovered = _changes(prev, report)
+    now = {c.name: c.status for c in report.checks}
+    return _message(new, recovered, now, sorted(report.failing() - {c.name for c in new}), [])
 
-    def __init__(self, state_dir: str | Path):
+
+def step_alerts(state: WatchState, report: HealthReport, policy: AlertPolicy) -> AlertStep:
+    """The alert rule with hysteresis (owner complaint 2026-11-04: one-off blips sent a FAIL and a "recovered"
+    minutes later). A change against what the owner was last told (`state.announced`) is told only once it held on
+    `confirm_polls` consecutive passes AND for `confirm_s` since first seen; a new failure on the immediate list
+    (`alerts_at_once`) is told at once. A failure that clears inside the window sends nothing and counts as a flap; a
+    check with `flap_note_at` flaps in the last hour gets one "flapping" line, at most once an hour. Pure: the caller
+    persists `state` after the message was delivered."""
+    ts = report.ts
+    told = state.announced
+    new, recovered = _changes(told, report)
+    now = {c.name: c.status for c in report.checks}
+    by_name = {c.name: c for c in report.checks}
+    events: dict[str, Literal["new", "recovered"]] = {c.name: "new" for c in new}
+    events |= {n: "recovered" for n in recovered}
+    announced = {n: s for n, s in now.items() if n not in events}       # no change to tell: follow the report
+    announced |= {n: told[n] for n in events if n in told}               # a change waiting: the owner's view stays
+    pending: dict[str, AlertStreak] = {}
+    sent_new: list[Check] = []
+    sent_rec: list[str] = []
+    for name, kind in events.items():
+        old = state.pending.get(name)
+        streak = (AlertStreak(kind=kind, first_seen=old.first_seen, polls=old.polls + 1)
+                  if old is not None and old.kind == kind else AlertStreak(kind=kind, first_seen=ts))
+        held = (streak.polls >= policy.confirm_polls
+                and (ts - streak.first_seen).total_seconds() >= policy.confirm_s)
+        if not held and not (kind == "new" and alerts_at_once(by_name[name])):
+            pending[name] = streak
+        elif kind == "new":
+            sent_new.append(by_name[name])
+            announced[name] = now[name]
+        else:
+            sent_rec.append(name)
+            if name in now:
+                announced[name] = now[name]
+            else:
+                announced.pop(name, None)
+    flaps = {n: [t for t in v if ts - t < FLAP_WINDOW] for n, v in state.flaps.items()}
+    for name, s in state.pending.items():
+        if s.kind == "new" and events.get(name) != "new":                  # cleared before it was confirmed
+            flaps.setdefault(name, []).append(ts)
+    flaps = {n: v for n, v in flaps.items() if v}
+    noted = {n: t for n, t in state.flap_noted.items() if ts - t < FLAP_WINDOW}
+    sent_names = {c.name for c in sent_new}
+    flapping: list[str] = []
+    for name in sorted(flaps):
+        if (policy.flap_note_at and len(flaps[name]) >= policy.flap_note_at and name not in noted
+                and name not in sent_names):
+            flapping.append(f"flapping (not alerted): {name} failed and cleared {len(flaps[name])} times in the last "
+                            "hour, each time inside the alert window")
+            noted[name] = ts
+    still = sorted(n for n, s in announced.items() if s == "fail" and n not in sent_names)
+    text = _message(sent_new, sorted(sent_rec), now, still, flapping)
+    kinds = tuple(k for k, on in (("new", sent_new), ("recovered", sent_rec), ("flapping", flapping)) if on)
+    names = (*(c.name for c in sent_new), *sorted(sent_rec),
+             *(n for n in sorted(flaps) if noted.get(n) == ts and n not in state.flap_noted))
+    new_state = WatchState(ts=ts, statuses=now, announced=announced, pending=pending, flaps=flaps, flap_noted=noted)
+    return AlertStep(text=text, state=new_state, kinds=kinds, checks=names)
+
+
+class HealthWatch:
+    """Persisted alert state (state/health_last.json). `poll()` is called by the Telegram service; `policy` is the
+    hysteresis (AlertPolicy.from_settings there; none, every change at once, for the check-level tests)."""
+
+    def __init__(self, state_dir: str | Path, policy: AlertPolicy | None = None):
         self.path = Path(state_dir) / WATCH_FILE
+        self.policy = policy or AlertPolicy()
         try:
             self.state = (load_record_json(WatchState, self.path.read_text(encoding="utf-8"), source=WATCH_FILE)
                           if self.path.exists() else WatchState())
         except (ValueError, OSError):
             self.state = WatchState()       # unreadable: start clean (current fails are announced once more)
 
-    def alert(self, report: HealthReport) -> str | None:
-        """The text to send for this report (None: nothing changed state). Does not record anything."""
-        return alert_text(self.state.statuses, report)
+    def step(self, report: HealthReport) -> AlertStep:
+        """The message for this report and the state after it. Records nothing."""
+        return step_alerts(self.state, report, self.policy)
 
-    def record(self, report: HealthReport) -> None:
-        """Remember this report's statuses; call after the alert was delivered so a failed send is retried."""
-        self.state = WatchState(ts=report.ts, statuses={c.name: c.status for c in report.checks})
+    def alert(self, report: HealthReport) -> str | None:
+        """The text to send for this report (None: nothing to tell). Does not record anything."""
+        return self.step(report).text
+
+    def record(self, report: HealthReport, step: AlertStep | None = None) -> None:
+        """Advance the state past this report; call after the alert was delivered so a failed send is retried."""
+        self.state = (step or self.step(report)).state
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(self.state.model_dump_json(), encoding="utf-8")
         tmp.replace(self.path)
 
     def poll(self, report: HealthReport) -> str | None:
-        text = self.alert(report)
-        self.record(report)
-        return text
+        step = self.step(report)
+        self.record(report, step)
+        return step.text
+
+    def failing(self) -> set[str]:
+        """The failures the owner was told about and not told recovered: the confirmed ones (the dead man's switch
+        pings /fail for these only)."""
+        return {n for n, s in self.state.announced.items() if s == "fail"}
 
 
 # --------------------------------------------------------------------------------------------- CLI

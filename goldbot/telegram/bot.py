@@ -18,9 +18,10 @@ from goldbot.execution.not_confirmed import card_text as nc_card_text
 from goldbot.execution.not_placed import card_text
 from goldbot.ops import accounts
 from goldbot.ops.account_view import proposal_budget_from_state
-from goldbot.ops.deadman import DeadMan
+from goldbot.ops.alert_log import log_alert
+from goldbot.ops.deadman import HEALTH_STALE_S, DeadMan, start_liveness
 from goldbot.ops.deploy import DeployWatch
-from goldbot.ops.health import HealthContext, HealthWatch, run_checks
+from goldbot.ops.health import AlertPolicy, HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal, decision_callbacks, decision_channel, parse_decision_callback
 from goldbot.telegram.bus import ApprovalBus
@@ -163,9 +164,11 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.poll_s = poll_s
         self.state_dir = state_dir
         self.audit = OffLoopAudit(state_dir)        # who acted, off the event loop (A15, review M1)
-        self.health = HealthWatch(state_dir)
         self.settings = settings or TelegramSettings()
-        self.deadman = DeadMan(accounts.get_secret, self.settings.deadman_every_min)   # outside switch, ADR 0014
+        self.health = HealthWatch(state_dir, policy=AlertPolicy.from_settings(self.settings))   # hysteresis
+        self.deadman = DeadMan(accounts.get_secret, self.settings.deadman_every_min,   # outside switch, ADR 0014
+                               on_change=self._deadman_changed)
+        self._seed_deadman()
         self.offer = automode.AutoModeOffer(state_dir)
         self.digest = DigestSchedule(state_dir, self.settings.digest_at)     # goldbot/telegram/digest.py
         # one-click deploys (Linux servers; the systemd unit sets GOLDBOT_DEPLOY=1): goldbot/ops/deploy.py
@@ -181,7 +184,20 @@ class TelegramBot:  # pragma: no cover - needs network + token
 
     # ------------------------------------------------------------ outbound: proposals, outcomes, reports
     async def _start_pump(self, app: "Application") -> None:
+        start_liveness(self.deadman)            # its own thread: beats at once, never waits on a health pass
         app.create_task(self._pump())
+
+    def _seed_deadman(self) -> None:
+        """A restart keeps a confirmed failure: the last pass's verdict (state/health_last.json) seeds the switch when
+        fresh, so the first beat does not ping ok (an "up" email) before the first pass confirms it again."""
+        ts = self.health.state.ts
+        if ts is not None:
+            age = (pd.Timestamp.now("UTC") - ts).total_seconds()
+            if 0 <= age < HEALTH_STALE_S:
+                self.deadman.observe(self.health.failing(), age_s=age)
+
+    def _deadman_changed(self, kind: str, names: tuple[str, ...]) -> None:
+        log_alert(self.state_dir, pd.Timestamp.now("UTC"), channel="deadman", kinds=(kind,), checks=names)
 
     async def _on_shutdown(self, app: "Application") -> None:
         """After run_polling stops: let the audit rows still being written land, for at most AUDIT_DRAIN_S (A15)."""
@@ -213,25 +229,32 @@ class TelegramBot:  # pragma: no cover - needs network + token
             await asyncio.sleep(self.poll_s)
 
     async def _health_pass(self) -> None:
-        """Run the health checks and tell the owner about checks that turned fail or recovered (dedupe in
-        state/health_last.json, see goldbot.ops.health.HealthWatch), then ping the outside dead man's switch: ok
-        while healthy, /fail on a FAIL or an undelivered alert, nothing when the checks themselves did not run."""
+        """Run the health checks and tell the owner about checks whose failure or recovery held for the alert window
+        (telegram.alert_confirm_polls / alert_confirm_min; the immediate list at once; state/health_last.json, see
+        goldbot.ops.health.step_alerts), log each message sent (aux.db health_alerts), then hand the verdict to the
+        dead man's switch: confirmed failures, the transient rest, and whether the alert went out. The switch pings
+        from its own liveness thread (goldbot/ops/deadman.py start_liveness), never from here, so neither a slow pass
+        nor a hung ping delays the other or a proposal (security review M1)."""
         report, delivered = None, True
         try:
             report = await asyncio.to_thread(lambda: run_checks(HealthContext.from_runtime(self.state_dir)))
-            text = self.health.alert(report)
-            if text:
+            step = self.health.step(report)
+            if step.text:
                 try:
                     for uid in self.owner_ids:
-                        await self.app.bot.send_message(uid, text)
+                        await self.app.bot.send_message(uid, step.text)
                 except Exception:
                     delivered = False
                     raise
-            self.health.record(report)          # only after delivery: a failed send is retried next pass
+            self.health.record(report, step)    # only after delivery: a failed send is retried next pass
+            if step.text and self.owner_ids:
+                await asyncio.to_thread(log_alert, self.state_dir, report.ts, channel="telegram", kinds=step.kinds,
+                                        checks=step.checks)
         except Exception:
             log.exception("health pass")
-        if report is not None:      # off the pump (security review M1): a hung ping never delays a proposal
-            self.app.create_task(asyncio.to_thread(self.deadman.after_health, report, delivered=delivered))
+        if report is not None:
+            confirmed = self.health.failing()
+            self.deadman.observe(confirmed, transient=report.failing() - confirmed, delivered=delivered)
 
     async def _digest_pass(self) -> None:
         """The owner's morning message, once per slot (state/telegram_digest.json): the daily learning report, and on

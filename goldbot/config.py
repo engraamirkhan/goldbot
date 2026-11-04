@@ -596,6 +596,15 @@ class TelegramSettings(_Section):
     # outside dead man's switch (goldbot/ops/deadman.py, ADR 0014): healthy pings at most this often; the check's
     # period on Healthchecks.io must match (grace 3 min), so a dead brain is reported within ~6 min
     deadman_every_min: int = Field(2, ge=1, le=60)
+    # health alert hysteresis (owner complaint 2026-11-04, "up and down"; goldbot/ops/health.py step_alerts): a check
+    # is told failing, and told recovered, only once the change held on this many consecutive health passes AND for
+    # this many minutes; the immediate list (health.IMMEDIATE_NAMES / IMMEDIATE_REASONS) alerts at once. The dead man's
+    # switch pings /fail for a confirmed failure only
+    alert_confirm_polls: int = Field(3, ge=1, le=60)
+    alert_confirm_min: float = Field(5, ge=0, le=60)
+    # a check that failed and cleared inside the window this many times in an hour gets one "flapping" line (at most
+    # once an hour per check); 0 turns the note off
+    alert_flap_note: int = Field(3, ge=0, le=60)
 
 
 class DailyReviewSettings(_Section):
