@@ -113,7 +113,8 @@ def test_the_immediate_list_is_explicit():
     (bridge 5 min, service heartbeat 5 min, engine state 45 min) or must not wait (a loss cap, a kill switch, a failed
     order, a broken backup, a terminal refusing every order, anything CRITICAL)."""
     assert health.IMMEDIATE_NAMES == ("kill_switch:", "daily_cap:", "weekly_cap:", "order_failed:", "backup_age",
-                                      "backup_prune", "object_storage", "bridge:", "heartbeat:", "engine:")
+                                      "backup_prune", "object_storage", "bridge:", "heartbeat:", "engine:",
+                                      "engine_loop:")
     assert health.IMMEDIATE_REASONS == ("CRITICAL", "MT5 terminal AutoTrading is off",
                                         "MT5 terminal logged in to a different account")
 
@@ -129,6 +130,7 @@ def test_the_immediate_list_is_explicit():
     Check(name="bridge:icm-demo", status="fail", reason="MT5 bridge unreachable for 5 min"),
     Check(name="heartbeat:telegram", status="fail", reason="silent for 6 min"),
     Check(name="engine:icm-demo", status="fail", reason="state 50 min old"),
+    Check(name="engine_loop:icm-demo", status="fail", reason="engine loop silent for 160 s"),
     Check(name="terminal:icm-demo", status="fail", reason=bridge_checks._TERMINAL_FAIL["autotrading_off"]),
     Check(name="terminal:icm-demo", status="fail", reason=bridge_checks._TERMINAL_FAIL["wrong_account"]),
     Check(name="terminal:icm-demo", status="fail", reason="CRITICAL: 2 open position(s) on this account cannot be"),
@@ -141,7 +143,6 @@ def test_money_and_position_safety_checks_alert_on_the_first_poll(tmp_path, chec
 
 
 @pytest.mark.parametrize("check", [
-    Check(name="engine_loop:icm-demo", status="fail", reason="silent for 160 s"),
     Check(name="tick_errors:icm-demo", status="warn", reason="3 tick errors"),
     Check(name="history_gap:icm-demo", status="warn", reason="gap"),
     Check(name="open_risk:icm-demo", status="warn", reason="open risk unknown"),

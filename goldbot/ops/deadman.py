@@ -11,14 +11,17 @@ monitor's period made the pings late, and (c) a deploy's restart left minutes wi
 
 * Liveness has its own cadence: a daemon thread (`start_liveness`) beats every `live_every_s` = min(60 s, half of
   `telegram.deadman_every_min`), never waiting on a health pass, so the monitor's period and grace no longer matter.
-  It beats at once on start and keeps beating through a slow shutdown until the process exits, so a restart's gap is
-  the time the process is really down (under a minute on 2026-11-04).
+  It beats only on a health verdict (SRE review HIGH on b6ca26c2): the first completed pass after a start, or the
+  last pass read back from state/health_last.json when fresh (bot.py `_seed_deadman`). Without one it sends nothing,
+  so a service that crashes in every pass never looks alive. It keeps beating through a slow shutdown until the
+  process exits, so a clean restart's gap is the time the process is really down (under a minute on 2026-11-04).
 * The health pass only hands over its verdict (`observe`): the failures the owner was told about
   (goldbot/ops/health.py `HealthWatch.failing`, the same hysteresis as the Telegram alerts: 3 polls and 5 min, or the
   immediate list) and the transient rest.
 * Healthy: a GET of the URL; with a transient FAIL a POST to the URL naming it (Healthchecks.io keeps the body in
   the check's log; the check stays up).
-* Unhealthy (a confirmed FAIL, an undelivered Telegram alert, or no health verdict for HEALTH_STALE_S): a POST to
+* Unhealthy (a confirmed FAIL, a Telegram alert undelivered on two passes in a row, or no health verdict for
+  HEALTH_STALE_S, i.e. a frozen pump: a blocked send, a blocked event loop or a dead pump task): a POST to
   `<url>/fail` (the Healthchecks.io convention; Better Stack heartbeats use it too) naming the checks. The ok ping is
   not sent while unhealthy, so a service that does not understand `/fail` still sees missing pings.
 * A change of state (ok -> fail, fail -> ok) pings at once. A dead service or host: no ping, the outside service
@@ -44,14 +47,18 @@ import urllib.request
 from typing import Callable, Iterable, Literal
 from urllib.parse import urlsplit
 
-from goldbot.ops.health import WATCH_STALE_S, HealthReport
+from goldbot.ops.health import HealthReport
 
 log = logging.getLogger("goldbot.deadman")
 
 DEADMAN_KEY = "deadman-url"
 DEADMAN_EVERY_MIN = 2            # the monitor's period (telegram.deadman_every_min); liveness beats well inside it
 LIVE_EVERY_S = 60.0              # the slowest liveness beat, whatever the period (owner 2026-11-04: 60 s if unknown)
-HEALTH_STALE_S = WATCH_STALE_S   # no health verdict this long: the health loop is stuck, /fail (15 min)
+# no health verdict this long: the pump is frozen, /fail. 3 health periods (bot.HEALTH_EVERY_S, 60 s) plus the
+# slowest pass seen (about 2 min before the 2026-11-04 CPU fix's runs of over 3 min were cut to ~10 s), not the
+# alerts check's 15 min (SRE review HIGH on b6ca26c2: a frozen pump looked alive for 15 min)
+HEALTH_STALE_S = 300.0
+UNDELIVERED_FAIL_PASSES = 2      # a failed Telegram send is retried next pass; two in a row ping /fail (SRE review LOW)
 PING_TIMEOUT_S = 5.0             # per socket operation (connect, each read)
 PING_DEADLINE_S = 8.0            # the whole attempt, DNS included; it runs off the Telegram pump either way
 _NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.:-]")
@@ -142,7 +149,7 @@ class DeadMan:
                  on_change: Callable[[Kind, tuple[str, ...]], None] | None = None):
         self.get_secret, self.every_s, self.ping, self.clock = get_secret, live_every_s(every_min), ping, clock
         self.on_change = on_change
-        self._started = clock()
+        self._undelivered = 0                     # consecutive passes whose Telegram alert was not delivered
         self._last_kind: Kind | None = None       # kind of the last attempt, accepted or not
         self._last_attempt: float | None = None   # a failed attempt counts too: a dead endpoint is tried once a beat
         self._accepted: Kind | None = None        # kind of the last ping the service accepted
@@ -181,18 +188,19 @@ class DeadMan:
                 age_s: float = 0.0) -> None:
         """The health pass's verdict: `failing` are the confirmed failures (HealthWatch.failing), `transient` the
         FAILs still inside the alert window. `age_s` dates a verdict read back from state/health_last.json at start."""
+        self._undelivered = 0 if delivered else self._undelivered + 1
         self._verdict = (tuple(sorted(failing)), tuple(sorted(transient)), delivered, self.clock() - age_s)
 
-    def _state(self) -> tuple[Kind, list[str], list[str]]:
-        """(kind, failing names, transient names) from the last verdict and its age."""
-        now = self.clock()
+    def _state(self) -> tuple[Kind, list[str], list[str]] | None:
+        """(kind, failing names, transient names) from the last verdict and its age; None without a verdict (no ping:
+        a service that never completes a pass must not look alive)."""
         if self._verdict is None:
-            stale = now - self._started > HEALTH_STALE_S
-            return ("fail", ["health_checks_not_completing"], []) if stale else ("ok", [], [])
-        failing, transient, delivered, at = self._verdict
-        if now - at > HEALTH_STALE_S:
+            return None
+        failing, transient, _, at = self._verdict
+        if self.clock() - at > HEALTH_STALE_S:
             return "fail", ["health_checks_not_completing"], []
-        names = list(failing) + ([] if delivered else ["telegram_alert_undelivered"])
+        names = list(failing) + (["telegram_alert_undelivered"]
+                                 if self._undelivered >= UNDELIVERED_FAIL_PASSES else [])
         return ("fail" if names else "ok"), names, list(transient)
 
     def beat(self) -> Kind | None:
@@ -210,7 +218,10 @@ class DeadMan:
             url = self._url()
             if url is None:
                 return None
-            kind, names, transient = self._state()
+            state = self._state()
+            if state is None:
+                return None
+            kind, names, transient = state
             if not self.due(kind):
                 return None
             self._last_kind, self._last_attempt = kind, self.clock()

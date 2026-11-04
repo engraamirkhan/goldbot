@@ -614,11 +614,11 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the
-# bridge, service heartbeat and engine state checks already wait 5 min (BRIDGE_DOWN_FAIL_S, HEARTBEAT_SILENT_S) or
-# 45 min (ENGINE_FAIL_S) before they fail, so a second window would only delay a real outage. `engine:` is a prefix
-# of `engine:<account>` only, never of `engine_loop:` (150 s, which waits).
+# bridge, service heartbeat, engine state and engine loop checks already wait before they fail: 5 min
+# (BRIDGE_DOWN_FAIL_S, HEARTBEAT_SILENT_S), 45 min (ENGINE_FAIL_S) and 150 s (LOOP_FAIL_S; SRE review MEDIUM on
+# b6ca26c2: a dead or hung engine alerts in about 3 min, not 8), so a second window would only delay a real outage.
 IMMEDIATE_NAMES = ("kill_switch:", "daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune",
-                   "object_storage", "bridge:", "heartbeat:", "engine:")
+                   "object_storage", "bridge:", "heartbeat:", "engine:", "engine_loop:")
 # ...and any check whose reason starts with one of these: CRITICAL (open positions goldbot cannot close; the generic
 # marker for a check that adds one, e.g. open_risk), a terminal refusing every order (goldbot/ops/checks/bridge.py
 # _TERMINAL_FAIL autotrading_off, wrong_account)

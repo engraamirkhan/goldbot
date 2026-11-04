@@ -2020,10 +2020,12 @@ Telegram alerts come from the brain itself, so a dead brain cannot report itself
 covers that: the Telegram service pings it from its own liveness thread every min(60 s, half of
 `telegram.deadman_every_min`) (2 min: every minute), whatever the health pass is doing, and pings `<url>/fail`
 (body: the failing check names, nothing else) only for a FAIL that held for the alert window (3 passes and 5 min,
-the same rule as the Telegram alerts; the immediate list at once), when a Telegram alert could not be sent, or when
-no health pass completed for 15 min. A FAIL still inside the window keeps the check up (the ok ping's body names
-it). A deploy restart is not an email: the liveness thread beats until the old process exits and at once in the
-new one. Healthchecks.io emails you, or messages you on Telegram through its own bot,
+the same rule as the Telegram alerts; the immediate list at once), when a Telegram alert failed on two passes in a
+row, or when no health pass completed for 5 min (a frozen service). A FAIL still inside the window keeps the check up
+(the ok ping's body names it). It pings only once a health pass completed (or the last one, under 5 min old, was read
+back at start), so a service that crashes in every pass goes silent and the check turns down. A deploy restart is not
+an email: the liveness thread beats until the old process exits and at once in the new one. Healthchecks.io emails
+you, or messages you on Telegram through its own bot,
 when the pings stop or a fail ping arrives. It does not depend on this server. Code: `goldbot/ops/deadman.py`,
 ADR 0014.
 
@@ -2051,7 +2053,7 @@ as copied. The WARN is not sent to Telegram (it shows in `/status` and the diges
 3. Active, but no pings: `journalctl -u goldbot-telegram | grep "dead man"`. "ping failed: HTTP 404" -> the check was
    deleted or the URL is wrong (store it again). "URLError" or "TimeoutError" -> outbound HTTPS from the brain is
    blocked (Oracle security list or egress) or healthchecks.io is down. The log never prints the URL.
-4. "health pass" exceptions in the same log: the checks themselves crash. After 15 min without a completed
+4. "health pass" exceptions in the same log: the checks themselves crash. After 5 min without a completed
    pass the switch pings `/fail` with `health_checks_not_completing`, by design.
 
 **Healthchecks.io says DOWN after a fail ping:** health has a FAIL, or a Telegram alert failed to send. The ping's

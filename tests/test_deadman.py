@@ -49,9 +49,11 @@ def test_liveness_pings_well_inside_the_monitors_period():
     configured period), so a period of 2 min sees a ping every minute and one late ping never emails."""
     assert deadman.live_every_s(2) == 60.0 and deadman.live_every_s(1) == 30.0 and deadman.live_every_s(30) == 60.0
     dm, sent, clock = make(every_min=2)
-    assert dm.beat() == "ok"                            # first beat after a start: at once, no health pass needed
+    dm.observe([])
+    assert dm.beat() == "ok"                            # first beat after the first verdict: at once
     for _ in range(3):
         clock.t += 30
+        dm.observe([])                                  # passes keep completing
         dm.beat()
     assert sent == [(URL, None), (URL, None)]           # t=0 and t=60 s; not t=30, t=90
     clock.t += 30
@@ -84,18 +86,26 @@ def test_a_transient_fail_inside_the_window_pings_ok_naming_it():
     assert sent == [(URL, b"ok; failing, not confirmed yet: supervisor")]
 
 
-def test_the_beat_never_waits_for_a_health_pass_and_a_stale_verdict_fails():
-    """The liveness beat runs on its own cadence: a health pass that takes minutes delays nothing. A verdict older
-    than HEALTH_STALE_S (the health loop stopped completing) pings /fail, so a hung loop still reaches the owner."""
+def test_a_frozen_pump_pings_fail_after_about_five_minutes():
+    """SRE review HIGH (b6ca26c2): a hung pump (a blocked send, a blocked event loop, a dead pump task) must not look
+    alive. The verdict goes stale after HEALTH_STALE_S, about 3 health periods plus the slowest pass (5 min), not the
+    15 min of the alerts check, and the beat then pings /fail."""
+    assert deadman.HEALTH_STALE_S == 300
     dm, sent, clock = make()
     dm.observe([], delivered=True)
     clock.t += deadman.HEALTH_STALE_S - 1
     assert dm.beat() == "ok"
     clock.t += 2
     assert dm.beat() == "fail" and sent[-1] == (URL + "/fail", b"failing: health_checks_not_completing")
-    dm2, sent2, clock2 = make()                         # no pass yet after a start: alive for HEALTH_STALE_S
-    clock2.t += deadman.HEALTH_STALE_S + 1
-    assert dm2.beat() == "fail"
+
+
+def test_no_verdict_means_no_ping():
+    """SRE review HIGH: before the first completed pass (and without a fresh seeded one) the switch says nothing, so
+    a service that crashes in every pass (OOM in run_checks) never looks alive; the monitor's own timeout reports it."""
+    dm, sent, clock = make()
+    assert dm.beat() is None
+    clock.t += 3600
+    assert dm.beat() is None and sent == []
 
 
 def test_a_seeded_verdict_keeps_a_confirmed_failure_across_a_restart():
@@ -122,6 +132,7 @@ def test_each_accepted_change_is_reported_once_for_the_alert_log():
 
 def test_the_liveness_loop_beats_from_its_own_thread():
     dm, sent, _ = make()
+    dm.observe([])
     stop = threading.Event()
     t = deadman.start_liveness(dm, stop=stop, tick_s=0.01)
     deadline = time.monotonic() + 5
@@ -132,10 +143,18 @@ def test_the_liveness_loop_beats_from_its_own_thread():
     assert sent and sent[0] == (URL, None) and t.daemon
 
 
-def test_an_undelivered_telegram_alert_is_a_fail_ping():
-    dm, sent, _ = make()
+def test_two_undelivered_telegram_alerts_in_a_row_are_a_fail_ping():
+    """SRE review LOW: one failed send is retried by the next pass; only a second undelivered pass in a row pings
+    /fail, so a single Telegram hiccup is not a down/up email pair."""
+    dm, sent, clock = make()
+    assert dm.after_health(report(), delivered=False) == "ok"
+    clock.t += 60
+    assert dm.after_health(report(), delivered=True) == "ok"            # delivered: the count starts again
+    clock.t += 60
+    assert dm.after_health(report(), delivered=False) == "ok"
+    clock.t += 60
     assert dm.after_health(report(), delivered=False) == "fail"
-    assert sent == [(URL + "/fail", b"failing: telegram_alert_undelivered")]
+    assert sent[-1] == (URL + "/fail", b"failing: telegram_alert_undelivered")
 
 
 def test_fail_body_is_capped():
