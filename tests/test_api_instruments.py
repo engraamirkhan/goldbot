@@ -271,3 +271,13 @@ def test_an_unreadable_registry_is_logged_once_per_file_version_and_views_fall_b
     with caplog.at_level("ERROR"):
         assert [iv.instrument_key("COPPER-C") for _ in range(5)] == ["COPPER-C"] * 5
     assert sum("instruments.yaml unreadable" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_missing_registry_file_is_not_parsed_or_logged_on_every_call(tmp_path, monkeypatch, caplog):
+    """Trading-safety review (LOW): a missing file is remembered as missing until it appears."""
+    import goldbot.instruments as ins
+    monkeypatch.setattr(ins, "DEFAULT_INSTRUMENTS", tmp_path / "absent.yaml")
+    iv._REGISTRY.clear()
+    with caplog.at_level("ERROR"):
+        assert [iv.instrument_key("COPPER-C") for _ in range(5)] == ["COPPER-C"] * 5
+    assert sum("instruments.yaml unreadable" in r.getMessage() for r in caplog.records) == 1

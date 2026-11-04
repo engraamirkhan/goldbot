@@ -35,7 +35,12 @@
      - A gone position is recorded at once from its exit deal (`broker_close`, journalled `close_due_gone`). With no
        deal yet it is kept due, without sending a close, for the sweep.
      - A close refused while the position is still open keeps being sent: every 1 s for 30 refusals, then backed
-       off, doubling to at most 30 s, with one warning per try.
+       off, doubling, with one warning per try. The cap is 5 s, except for a scheduled exit (probe or arm hold,
+       time exit) whose price is still short of the engine's stop, which gets 30 s. So kill, Friday cut, hard
+       flat and engine-stop closes are never more than 5 s apart (trading-safety review MEDIUM).
+     - The refusal count is kept apart from the market-closed backoff count, and a market-closed refusal resets
+       it. `gone()` keeps its own look count.
+     - A missing instruments.yaml is cached as missing, so it is not re-read or logged on every call.
      A paper replay of the incident sent 560 closes before and 1 after. Exploration hold exits skip due closes, so
      they are covered too.
   Not done: the effect on the brain is modelled, not observed (needs a deploy). The serial order path still caps a

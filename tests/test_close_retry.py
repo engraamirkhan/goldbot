@@ -88,3 +88,83 @@ def test_a_close_refused_while_the_position_is_open_keeps_being_sent_backed_off_
     pb.close = type(pb).close.__get__(pb)                   # type: ignore[method-assign]  # accepts again
     _passes(eng, at[-1] + pd.Timedelta(seconds=close_retry.CLOSE_RETRY_MAX_S + 1), 2)
     assert pid not in pb._positions and pid not in eng.open
+
+
+def _refusing(pb: Any, codes: list[int]) -> list[int]:
+    """The broker refuses each close with the next retcode of `codes` (the last one repeated)."""
+    sent: list[int] = []
+
+    def close(pid: int, lots: float | None = None) -> OrderResult:
+        sent.append(pid)
+        code = codes[min(len(sent), len(codes)) - 1]
+        return OrderResult(ok=False, retcode=code, order_id=None, position_id=pid, filled_lots=0.0, price=None,
+                           message="refused")
+    pb.close = close
+    return sent
+
+
+def _send_times(eng: Any, sent: list[int], start: pd.Timestamp, seconds: int) -> list[pd.Timestamp]:
+    at: list[pd.Timestamp] = []
+    for k in range(int(seconds / 0.5)):
+        now = start + pd.Timedelta(seconds=k * 0.5)
+        n = len(sent)
+        eng._retry_closes(now)
+        if len(sent) > n:
+            at.append(now)
+    return at
+
+
+def test_a_refused_kill_close_is_never_more_than_the_protective_cap_apart_however_often_it_is_refused(tmp_path: Path):
+    """Trading-safety review (MEDIUM): a kill, Friday cut, hard flat or engine stop close protects an open position;
+    past 30 refusals it is backed off to at most CLOSE_PROTECT_MAX_S, never 30 s."""
+    eng, pb, tick, pid = _sent(tmp_path)
+    eng._last_tick = tick
+    sent = _refusing(pb, [10013])
+    t0 = tick.ts_utc
+    eng._try_close(pid, "kill_switch_close", t0)
+    at = [t0, *_send_times(eng, sent, t0 + pd.Timedelta(seconds=1), 180)]
+    gaps = [(b - a).total_seconds() for a, b in zip(at, at[1:])]
+    assert len(sent) > close_retry.CLOSE_FREE_TRIES + 5
+    assert max(gaps) <= close_retry.CLOSE_PROTECT_MAX_S + 0.5, max(gaps)
+    assert pid in eng._close_due and pid in pb._positions
+
+
+def test_a_refused_hold_close_of_a_position_through_its_stop_is_held_to_the_protective_cap(tmp_path: Path):
+    """A scheduled exit backs off to 30 s only while the price is short of the engine's stop."""
+    eng, pb, tick, pid = _sent(tmp_path)
+    tr = eng.open[pid]
+    assert tr.sl is not None
+    through = tr.sl - tr.side * 1.0
+    eng._last_tick = tick.model_copy(update={"bid": through, "ask": through + 0.3})
+    sent = _refusing(pb, [10013])
+    t0 = eng.probe.held[pid] + pd.Timedelta(seconds=30)     # type: ignore[union-attr]
+    at = _send_times(eng, sent, t0, 180)
+    gaps = [(b - a).total_seconds() for a, b in zip(at, at[1:])]
+    assert len(sent) > close_retry.CLOSE_FREE_TRIES + 5
+    assert max(gaps) <= close_retry.CLOSE_PROTECT_MAX_S + 0.5, max(gaps)
+
+
+def test_a_market_closed_refusal_resets_the_refusals_in_a_row_and_keeps_its_own_count(tmp_path: Path):
+    """Trading-safety review (LOW): the transient count and the market-closed backoff count are kept apart."""
+    eng, pb, tick, pid = _sent(tmp_path)
+    eng._last_tick = tick
+    _refusing(pb, [10013] * 10 + [10018, 10013])
+    t = tick.ts_utc
+    for k in range(10):
+        eng._try_close(pid, "time_exit", t + pd.Timedelta(seconds=k))
+    assert close_retry.refusals(eng, pid) == 10
+    eng._try_close(pid, "time_exit", t + pd.Timedelta(seconds=10))     # market closed
+    assert close_retry.refusals(eng, pid) == 0 and eng._close_backoff[pid][0] == 1
+    eng._try_close(pid, "time_exit", t + pd.Timedelta(seconds=11))
+    assert close_retry.refusals(eng, pid) == 1
+
+
+def test_looking_again_at_a_gone_position_leaves_the_market_closed_count_alone(tmp_path: Path):
+    eng, pb, tick, pid = _sent(tmp_path)
+    eng._last_tick = tick
+    del pb._positions[pid]
+    eng._close_backoff[pid] = (3, tick.ts_utc)                # three market-closed refusals before it went
+    eng._close_due[pid] = ("time_exit", {"symbol": eng.cfg.symbol}, tick.ts_utc)
+    for k in range(1, 4):
+        close_retry.gone(eng, pid, "time_exit", tick.ts_utc + pd.Timedelta(seconds=60 * k))
+    assert eng._close_backoff[pid][0] == 3

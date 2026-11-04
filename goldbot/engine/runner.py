@@ -1536,7 +1536,7 @@ class Engine:
         BACKLOG 62: one journal row per backoff step, not per tick), it is backed off reconcile_every_s
         of tick time, doubling per consecutive refusal up to modify_backoff_max_s; any other refusal (requote, price
         changed) or a raising call is retried on the first tick CLOSE_RETRY_MIN_S later (`_retry_wait`), backed off
-        past 30 in a row (`close_retry.refused`, at most 30 s apart, logged). Automatic: never gated."""
+        past 30 in a row (`close_retry.refused`: at most 5 s apart, 30 s for a scheduled exit short of its stop). Automatic: never gated."""
         now = now if now is not None else self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
         tr = self.open.get(pid)
         err: str | None = None
@@ -1571,8 +1571,9 @@ class Engine:
             fails = self._close_backoff.get(pid, (0, now))[0]
             wait = min(self.cfg.reconcile_every_s * 2 ** fails, self.cfg.modify_backoff_max_s)
             self._close_backoff[pid] = (fails + 1, now + pd.Timedelta(seconds=wait))
+            close_retry.market_closed(self, pid)
         else:
-            close_retry.refused(self, pid, now, res)      # transient: again CLOSE_RETRY_MIN_S later, backed off past 30
+            close_retry.refused(self, pid, now, res, action)   # transient: CLOSE_RETRY_MIN_S, backed off past 30
         return res
 
     def _log_exit_fill(self, pid: int, tr: OpenTrade, kind: str, lots: float, filled: float | None, *,

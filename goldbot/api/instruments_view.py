@@ -60,15 +60,15 @@ LABELS: dict[str, tuple[str, str]] = {
 }
 
 
-# config/instruments.yaml as last parsed: {path: ((mtime_ns, size), registry or None when unreadable)}
-_REGISTRY: dict[Path, tuple[tuple[int, int], Instruments | None]] = {}
+# config/instruments.yaml as last parsed: {path: ((mtime_ns, size) or None when missing, registry or None)}
+_REGISTRY: dict[Path, tuple[tuple[int, int] | None, Instruments | None]] = {}
 
 
 def _registry(reg: Instruments | None) -> Instruments | None:
     """The registry given, else config/instruments.yaml parsed once per version of the file (its mtime and size).
     Live 2026-11-04 (brain, py-spy): parsed once per ledger row, the api and telegram services each spent 96-97% of a
     core in yaml, starving the engines on the 2-core host. An edit is read on the next call, as before; an unreadable
-    file is logged once per version and every view falls back to gold terms."""
+    or missing file is logged once per version (missing is one) and every view falls back to gold terms."""
     if reg is not None:
         return reg
     path = Path(registry_file.DEFAULT_INSTRUMENTS)
@@ -78,7 +78,7 @@ def _registry(reg: Instruments | None) -> Instruments | None:
     except OSError:
         version = None
     hit = _REGISTRY.get(path)
-    if version is not None and hit is not None and hit[0] == version:
+    if hit is not None and hit[0] == version:
         return hit[1]
     got: Instruments | None
     try:
@@ -86,8 +86,7 @@ def _registry(reg: Instruments | None) -> Instruments | None:
     except Exception:                                   # noqa: BLE001 - a bad registry: gold-only views, logged
         log.exception("instruments.yaml unreadable: the dashboard shows gold terms only")
         got = None
-    if version is not None:
-        _REGISTRY[path] = (version, got)
+    _REGISTRY[path] = (version, got)
     return got
 
 
