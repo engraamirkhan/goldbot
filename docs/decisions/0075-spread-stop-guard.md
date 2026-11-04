@@ -44,3 +44,17 @@ min-lot scalps £0.06 commission is 25-75% of the £0.08-0.25 planned risk (18/1
   unchanged: a filter tightened after the fact is not a new trial.
 - Research replays and twins (goldbot/research) do not apply spread_over_stop yet: a history read of an arm is not
   compared with its live read across this change until the arm simulators apply the same predicate (follow-up).
+
+## Amendment 2026-11-04: the commission counts with the spread
+- Context: P&L evidence 2026-11-04 (data through 09:19 UTC): after the guard went live, FX random controls kept
+  entering with a spread of 0.03-0.12 of the stop but spread + round-trip commission of 0.6-0.83 (commission-dominated
+  min-lot FX). Across all accounts, cost (spread + commission) over 0.3 of the £ stop: 108 trades, -£77.64; mean net
+  R -0.54 at 0.3-0.5 and -0.73 above 0.5 (spread alone over 0.3: 56 trades).
+- Decision: `spread_over_stop` compares the spread PLUS `Intent.commission_usd_per_oz` (round trip, same price units)
+  with `risk.max_spread_stop_frac` x the stop asked for. The fraction stays 0.3. One guard on every purpose, rather
+  than a second exploration-only rule at 0.5: the evidence bin 0.3-0.5 is as negative, and one predicate keeps the
+  reading rule above (and the replay follow-up) a single filter.
+- Consequences: tightening only (the commission is >= 0; a non-finite one is refused `invalid:commission_usd_per_oz`).
+  Gold is unaffected in practice: the smallest gold arm stop is $3, where a 0.25 spread + 0.07 commission is 0.11.
+  The reading rule's "spread/stop <= 0.3" reads "(spread + commission)/stop <= 0.3" for entries from this deploy on;
+  reads spanning it are split at its deploy timestamp. K unchanged.
