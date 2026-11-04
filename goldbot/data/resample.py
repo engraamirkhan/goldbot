@@ -178,6 +178,16 @@ def _group_keys(idx: pd.DatetimeIndex, tf: str, feature_day_tz: str, feature_day
     return epoch_ns(floor_tf(idx, tf_seconds(tf)))
 
 
+def _comparable(col: pd.Series) -> np.ndarray:
+    """A column as the array IncrementalResampler compares between calls: a datetime column as epoch nanoseconds
+    (`to_numpy` of a tz-aware one builds a Python Timestamp per row; live 2026-11-04, icm-probe's 20 books: most of a
+    15m close's resample time), everything else as is. The dtypes are checked separately, so equal nanoseconds are
+    equal values."""
+    if isinstance(col.dtype, (pd.DatetimeTZDtype, np.dtypes.DateTime64DType)):
+        return epoch_ns(col)
+    return col.to_numpy()
+
+
 class IncrementalResampler:
     """`resample_bars(bars_1m, tf)` for a 1m history that grows at the end and is trimmed at the start (the live
     engine's rolling buffer): only the groups whose 1m bars changed are aggregated again.
@@ -214,7 +224,7 @@ class IncrementalResampler:
             self._reset()
             return self._resample(bars)
         checked = [*_AGG_INPUTS, *(["visible_at"] if "visible_at" in bars.columns else [])]   # visibility too
-        cols = {c: bars[c].to_numpy() for c in checked}
+        cols = {c: _comparable(bars[c]) for c in checked}
         dtypes = tuple(bars[c].dtype for c in ("ts_utc", *checked))
         out = self._update(bars, idx, ts, cols, dtypes)
         if out is None:
@@ -275,10 +285,11 @@ class IncrementalResampler:
 
 
 def mid(bars: pd.DataFrame) -> pd.DataFrame:
-    """Derived mid OHLC, computed at feature time rather than stored."""
-    m = pd.DataFrame({"ts_utc": bars["ts_utc"], "visible_at": bars["visible_at"]})
+    """Derived mid OHLC, computed at feature time rather than stored. One frame from its columns (half the time of
+    inserting them one by one; several calls per book and minute on a 20-book engine, live 2026-11-04)."""
+    m = {"ts_utc": bars["ts_utc"], "visible_at": bars["visible_at"]}
     for c in ("open", "high", "low", "close"):
         m[c] = (bars[f"bid_{c}"] + bars[f"ask_{c}"]) / 2.0
     m["spread"] = bars["spread_mean"]
     m["tick_count"] = bars["tick_count"]
-    return m
+    return pd.DataFrame(m)

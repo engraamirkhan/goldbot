@@ -228,6 +228,45 @@ def test_incremental_resampler_equals_full_resample(bars_1m, tf):
     assert rs(frame.iloc[0:0]).empty
 
 
+def test_incremental_resampler_keeps_utc_datetime_columns_as_int64_nanoseconds(bars_1m):
+    """Live 2026-11-04 (icm-probe, 20 books, pass budget spent): the check of the previous call's 1m bars turned the
+    tz-aware visible_at column into Python Timestamps on every call (~60 % of a 15m close's resample time). It is
+    compared as epoch nanoseconds now: same answer, no per-row objects."""
+    rs = IncrementalResampler("15m")
+    rs(bars_1m.iloc[:3000])
+    assert rs._cols["visible_at"].dtype == np.int64
+
+
+def test_incremental_resampler_rebuilds_a_group_whose_minute_became_visible_later(bars_1m):
+    """A corrected minute (visible_at moved later, data/quarantine.py) is a changed input: never a reused group."""
+    rs = IncrementalResampler("15m")
+    frame = bars_1m.iloc[:3000].copy()
+    rs(frame)
+    i = frame.index[-40]
+    frame.loc[i, "visible_at"] = frame.loc[i, "visible_at"] + pd.Timedelta(hours=1)
+    pd.testing.assert_frame_equal(rs(frame), resample_bars(frame, "15m"), check_exact=True)
+    assert rs.full_builds == 2
+
+
+def ref_mid(bars):
+    m = pd.DataFrame({"ts_utc": bars["ts_utc"], "visible_at": bars["visible_at"]})
+    for c in ("open", "high", "low", "close"):
+        m[c] = (bars[f"bid_{c}"] + bars[f"ask_{c}"]) / 2.0
+    m["spread"] = bars["spread_mean"]
+    m["tick_count"] = bars["tick_count"]
+    return m
+
+
+def test_mid_built_in_one_frame_equals_the_column_by_column_build(bars_1m):
+    """mid() runs several times per book and minute (live 2026-11-04, icm-probe's 20 books): one DataFrame from a dict
+    of columns instead of six inserts, bit for bit the same frame (index, order, dtypes, NaN)."""
+    for frame in (bars_1m, bars_1m.tail(800), resample_bars(bars_1m, "15m").iloc[100:900], bars_1m.iloc[0:0]):
+        pd.testing.assert_frame_equal(mid(frame), ref_mid(frame), check_exact=True)
+    holed = bars_1m.tail(50).copy()
+    holed.loc[holed.index[3], "bid_close"] = np.nan
+    pd.testing.assert_frame_equal(mid(holed), ref_mid(holed), check_exact=True)
+
+
 def test_group_keys_are_the_resample_groups(bars_1m):
     idx = pd.DatetimeIndex(bars_1m["ts_utc"])
     from goldbot.data.resample import _group_keys

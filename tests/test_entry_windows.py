@@ -503,7 +503,7 @@ def test_a_failing_account_read_at_a_bar_close_still_manages_open_trades(tmp_pat
     close = pd.Timestamp("2026-01-15 14:00", tz="UTC")
     eng.bars_1m = pd.DataFrame({"visible_at": pd.date_range(close - pd.Timedelta(minutes=500), close, freq="1min")})
     dec = pd.DataFrame({"ts_utc": [close], "visible_at": [close]})
-    frame = _Frame(dec=dec, m=pd.DataFrame(), X=pd.DataFrame({"f": [1.0]}), atr=pd.Series(np.ones(1)))
+    frame = _Frame(dec=dec, m=pd.DataFrame(), features=lambda: pd.DataFrame({"f": [1.0]}), atr=pd.Series(np.ones(1)))
     managed: list[pd.DataFrame] = []
     monkeypatch.setattr(eng, "_rebuild_bars", lambda: None)
     monkeypatch.setattr(eng, "_frame", lambda *a, **k: frame)

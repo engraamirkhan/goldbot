@@ -67,27 +67,53 @@ class HistoryGap(FrozenRecord):
     open_min: int
 
 
+class GapMemo:
+    """`open_gaps`' answer per hole, kept between bar closes (live 2026-11-04, icm-probe: every close of every book
+    re-judged the same weekend holes minute by minute). A hole's answer depends only on its two bars, the session
+    table, the covered spans and `max_open_min`: any of the last three changing forgets every answer, and a hole that
+    left the window is dropped."""
+
+    def __init__(self) -> None:
+        self.inputs: tuple[Any, ...] | None = None
+        self.holes: dict[tuple[int, int], HistoryGap | None] = {}
+
+
 def open_gaps(ts_utc: pd.DatetimeIndex, sessions: SessionTable, *, max_open_min: int,
-              covered: list[Span] | tuple[Span, ...] = ()) -> list[HistoryGap]:
+              covered: list[Span] | tuple[Span, ...] = (), memo: GapMemo | None = None) -> list[HistoryGap]:
     """Every hole in `ts_utc` (sorted 1m bar opens) with more than `max_open_min` missing minutes that the session
     table calls open and no `covered` span (a broker pull that found the market without ticks) explains. Only spans
-    longer than `max_open_min` wall minutes are examined, so a 60000-bar window costs one diff."""
+    longer than `max_open_min` wall minutes are examined, so a 60000-bar window costs one diff. `memo`: the holes
+    already judged with the same table, spans and limit (GapMemo)."""
     if len(ts_utc) < 2:
         return []
     ns = epoch_ns(ts_utc)
     idx = np.flatnonzero(np.diff(ns) > (max_open_min + 1) * MINUTE_NS)
-    out = []
+    holes: dict[tuple[int, int], HistoryGap | None] = {}
+    if memo is not None:
+        inputs = (sessions, tuple(covered), max_open_min)
+        if memo.inputs is None or memo.inputs[0] is not sessions or memo.inputs[1:] != inputs[1:]:
+            memo.inputs, memo.holes = inputs, {}
+        holes = memo.holes
+    seen: dict[tuple[int, int], HistoryGap | None] = {}
     for i in idx:
-        start = pd.Timestamp(ns[i] + MINUTE_NS, unit="ns", tz="UTC")
-        end = pd.Timestamp(ns[i + 1], unit="ns", tz="UTC")
-        minutes = pd.date_range(start, end, freq="min", inclusive="left")
-        missing = np.asarray(sessions.expected_open(minutes), dtype=bool)     # CME holiday closures are not holes
-        for lo, hi in covered:
-            missing &= ~((minutes >= lo) & (minutes < hi))
-        n = int(missing.sum())
-        if n > max_open_min:
-            out.append(HistoryGap(start=start, end=end, open_min=n))
-    return out
+        key = (int(ns[i]), int(ns[i + 1]))
+        seen[key] = holes[key] if key in holes else _hole(ns[i], ns[i + 1], sessions, max_open_min, covered)
+    if memo is not None:
+        memo.holes = seen
+    return [g for g in seen.values() if g is not None]
+
+
+def _hole(before_ns: int, after_ns: int, sessions: SessionTable, max_open_min: int,
+          covered: list[Span] | tuple[Span, ...]) -> HistoryGap | None:
+    """The hole between two consecutive bars, or None when at most `max_open_min` of its minutes are open, uncovered."""
+    start = pd.Timestamp(before_ns + MINUTE_NS, unit="ns", tz="UTC")
+    end = pd.Timestamp(after_ns, unit="ns", tz="UTC")
+    minutes = pd.date_range(start, end, freq="min", inclusive="left")
+    missing = np.asarray(sessions.expected_open(minutes), dtype=bool)     # CME holiday closures are not holes
+    for lo, hi in covered:
+        missing &= ~((minutes >= lo) & (minutes < hi))
+    n = int(missing.sum())
+    return HistoryGap(start=start, end=end, open_min=n) if n > max_open_min else None
 
 
 class _Deadline(Pace):
@@ -320,6 +346,7 @@ class History:
                                          "dropped": 0}
         self.gaps: dict[str, dict[str, Any]] = {}
         self.covered: list[Span] = []
+        self.gap_memo = GapMemo()             # window_gaps' holes already judged (GapMemo)
         self.cutover: pd.Timestamp | None = None
         self.broker: Any = None
         self.fill: HistoryFill | None = None
@@ -588,7 +615,7 @@ def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
 def window_gaps(eng: Engine, complete: pd.DataFrame) -> list[HistoryGap]:
     """The holes in the completed 1m bars a bar close decides on (the engine's session table, covered spans out)."""
     return open_gaps(pd.DatetimeIndex(complete["ts_utc"]), eng.sessions, max_open_min=eng.cfg.history_gap_max_min,
-                     covered=eng.history.covered)
+                     covered=eng.history.covered, memo=eng.history.gap_memo)
 
 
 def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[Specialist],

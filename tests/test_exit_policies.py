@@ -345,7 +345,7 @@ def test_policy_trades_on_the_base_clock_keep_the_time_exit(tmp_path):
 def _frame(n: int = 5) -> _Frame:
     ts = pd.date_range("2025-03-03 12:00", periods=n, freq="15min", tz="UTC")
     X = pd.DataFrame({"ts_utc": ts, "f1": np.arange(n, dtype=float)})
-    return _Frame(dec=pd.DataFrame({"ts_utc": ts}), m=pd.DataFrame(), X=X, atr=pd.Series(np.ones(n)))
+    return _Frame(dec=pd.DataFrame({"ts_utc": ts}), m=pd.DataFrame(), features=lambda: X, atr=pd.Series(np.ones(n)))
 
 
 @pytest.mark.parametrize("p,event,closed", [
