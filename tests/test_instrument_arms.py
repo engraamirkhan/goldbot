@@ -30,7 +30,9 @@ def test_every_listed_instrument_has_its_own_s0_and_i0_control() -> None:
     accs = acc_mod.load_accounts(logins=False)
     listed = {k for a in accs.values() for k in a.instruments}
     arms = _per_instrument()
-    assert set(arms) == listed and len(listed) == 26
+    # owner decision 2026-11-04: 24 listed; the 12 removed instruments keep their (retired) rows
+    retired = {k for k, rows in arms.items() if all(a.retired_day == "2026-11-04" for a in rows)}
+    assert set(arms) - retired == listed and len(listed) == 24 and len(retired) == 12
     for key, rows in arms.items():
         assert sorted(a.id for a in rows) == [f"I0-{key}", f"S0-{key}"]
         assert all(a.role == "control" and a.rule == "random_bracket" and a.forward_only for a in rows)

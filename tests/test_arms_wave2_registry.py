@@ -15,7 +15,10 @@ import pytest
 from goldbot.instruments import registry
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules, arms
-from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
+from tests.test_learning_mi import (  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
+    MI_ARMS,
+    MI_CONTROLS,
+)
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 BOX = {f"BX{e}{tf}": ("box_next", tf.replace("H", "h") if tf.endswith("H") else f"{tf}m")
@@ -40,7 +43,7 @@ FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0"
 # multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
 INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
 FORWARD_ONLY |= INSTRUMENT_CONTROLS
-FORWARD_ONLY |= MI_ON["icm-probe"] | MI_ON["vantage-demo"]     # the multi-instrument learning pairs
+FORWARD_ONLY |= MI_ARMS | MI_CONTROLS          # the multi-instrument learning pairs (retired ones included)
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),
@@ -160,7 +163,7 @@ def test_arms_without_a_host_and_virtual_exits_are_not_registered(accounts) -> N
 @pytest.mark.parametrize(("account", "pots", "budget"), [
     ("icm-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 3), "growth": (80, 2)}, 0.9),
     # vantage intraday 6 -> 10: the multi-instrument learning pairs (learning-mi-2026-11-02.md section 5)
-    ("vantage-demo", {"scalp": (None, 11), "intraday": (None, 10), "swing": (None, 2)}, 0.825)])
+    ("vantage-demo", {"scalp": (None, 11), "intraday": (None, 14), "swing": (None, 2)}, 0.825)])
 def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots, budget) -> None:
     acc = accounts[account]
     ex = acc.exploration

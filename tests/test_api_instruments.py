@@ -53,7 +53,7 @@ def test_every_registry_instrument_has_a_label_and_gold_alone_of_the_non_metals_
     reg = load_instruments()
     assert set(reg.instruments) <= set(iv.LABELS)
     per_oz = {k for k, (_, unit) in iv.LABELS.items() if unit.endswith("/oz")}
-    assert per_oz == {"XAUUSD", "XAGUSD", "XPTUSD", "XAUEUR", "XAUAUD"}
+    assert per_oz == {"XAUUSD", "XAGUSD", "XPTUSD", "XAUEUR", "XAUAUD", "XAUJPY"}
     assert all(reg.get(k).correlation_group in ("gold", "metals") for k in per_oz)
 
 
@@ -73,7 +73,7 @@ def test_group_exposure_lists_every_group_in_the_fixed_order_including_zero_ones
                            "open_n": 1},
                     "equity": {"notional": 0.0, "cap": None}}, "heat_used": 12.0, "heat_limit": 50.0}
     groups, used, limit = iv.group_exposure(e)
-    assert [g.group for g in groups] == ["gold", "metals", "equity", "fx", "energy", "rates", "ags"]
+    assert [g.group for g in groups] == ["gold", "metals", "equity", "fx", "energy", "rates", "ags", "crypto"]
     fx = groups[3]
     assert (fx.notional, fx.cap, fx.lots_by_symbol, fx.open_n) == (1200.5, 3000.0, {"EURUSD": 0.01}, 1)
     assert groups[2].cap is None and groups[0].notional == 0.0 and (used, limit) == (12.0, 50.0)

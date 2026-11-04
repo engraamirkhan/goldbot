@@ -41,8 +41,9 @@ GROWTH = {"GS1", "GS1C"}           # growth sprint 2026-11-01: icm-demo only
 VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
 WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
 # multi-instrument demo (lane L3): each listed instrument's random controls, on the account that lists it
-ICM_INSTRUMENTS = {f"{p}-{k}" for k in ['XAGUSD', 'XPTUSD', 'XAUEUR', 'XAUAUD', 'US500', 'USTEC', 'DE40', 'UK100', 'JP225', 'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'XTIUSD', 'XBRUSD', 'XNGUSD'] for p in ("S0", "I0")}
-VANTAGE_INSTRUMENTS = {f"{p}-{k}" for k in ['UST10Y', 'BUND10Y', 'COPPER', 'WHEAT', 'SOYBEAN', 'SUGAR', 'COFFEE'] for p in ("S0", "I0")}
+# owner decision 2026-11-04: icm-probe keeps 14 of its 19, vantage-demo trades the 10 added instruments
+ICM_INSTRUMENTS = {f"{p}-{k}" for k in ['XAGUSD', 'XAUEUR', 'US500', 'USTEC', 'DE40', 'UK100', 'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'XTIUSD'] for p in ("S0", "I0")}
+VANTAGE_INSTRUMENTS = {f"{p}-{k}" for k in ['GBPJPY', 'EURGBP', 'EURJPY', 'AUDJPY', 'EURAUD', 'GBPAUD', 'BTCUSD', 'XAUJPY', 'USINDEX', 'US30'] for p in ("S0", "I0")}
 VANTAGE = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
            "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",   # wave 1
            "KSQ1", "PDC1", "DON4"}                                                                     # wave 2

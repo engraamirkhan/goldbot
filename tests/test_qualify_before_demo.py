@@ -244,7 +244,7 @@ def test_with_their_k_rows_the_learning_arms_and_their_dedicated_controls_run_to
     reg.write_text("".join(json.dumps({"config_hash": h, "family": arms.LEARNING_FAMILY}) + "\n"
                            for h in mod.k_rows(SPEC)))
     monkeypatch.setattr(arms, "REGISTRY_PATH", reg)
-    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp("2026-11-02", tz="UTC"))
+    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp("2026-11-04", tz="UTC"))   # vantage-demo pairs: 11-04
     for acc in acc_mod.load_accounts(logins=False).values():
         cfg = exploration.config_for(acc)
         if cfg is None:
