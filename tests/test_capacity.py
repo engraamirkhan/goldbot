@@ -211,4 +211,5 @@ def test_a_deferred_pass_logs_its_exits_time_and_its_slowest_books(tmp_path, cap
         books.account_pass(eng, pb, engine_pass, books.QuoteFeed(pb), budget_s=0.3)
     line = next(r.getMessage() for r in caplog.records if "pass budget" in r.getMessage())
     import re
-    assert re.search(r"exits \d+\.\d\d s; slowest: (\w+ \d+\.\d\d s, ){2}\w+ \d+\.\d\d s$", line), line
+    # up to 3 slowest books: how many ran before the budget went depends on the runner's speed (CI flake 2026-11-04)
+    assert re.search(r"exits \d+\.\d\d s; slowest: (\w+ \d+\.\d\d s, ){0,2}\w+ \d+\.\d\d s$", line), line
