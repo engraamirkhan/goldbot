@@ -82,8 +82,9 @@ CAP_SHARE = 0.30
 MAX_WEIGHTS_AGE = pd.Timedelta(days=3)          # older bandit weights are stale: equal shares until the next run
 THOMPSON_DRAWS = 4000
 PRIOR_SD_R = 1.0                                # net-R spread of one trade under the flat prior
-# a replayed label beyond this many R in size is a replay or units error, not an outcome (brain 2026-11-04: FX and
-# sugar controls replayed on gold bars at -2,679 R): the bandit and the style models set it aside and count it
+# a gold label beyond this many R in size is suspect (brain 2026-11-04: FX and sugar controls replayed on gold bars at
+# -2,679 R; the learners now read gold rows only, `read_obs` `instrument`). It is kept, never dropped (a real gap
+# through a tight 1m stop must stay; quant review of 75824e5c), counted per arm in the run's detail and logged
 MAX_LABEL_R = 20.0
 GOLD = "XAUUSD"                                 # ReplayCosts is gold's per-oz model: the only instrument it prices
 
@@ -502,7 +503,9 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
                    held_out=held_out, instrument=GOLD, instruments=instruments)
     dec = pd.DatetimeIndex(obs["decision_utc"])
     obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
-    obs = obs[~implausible(obs["label_sim_r"])].reset_index(drop=True)                     # MAX_LABEL_R
+    if n_sus := int(suspect(obs["label_sim_r"]).sum()):          # kept: logged, never dropped
+        log.warning("exploration %s %s training rows: %d labels beyond %.0f R (suspect, kept)", broker, style, n_sus,
+                    MAX_LABEL_R)
     if obs.empty:
         return pd.DataFrame(columns=[*_BASE, "y", *cols])
     snap = obs["features"].notna()
@@ -747,8 +750,8 @@ def _nig_draws(r: np.ndarray, prior: ArmPrior | None, draws: int, rng: np.random
     return np.asarray(rng.normal(mn, np.sqrt(var / kn)))
 
 
-def implausible(labels: pd.Series) -> pd.Series:
-    """True where a resolved label is beyond MAX_LABEL_R in size (a NULL label is unresolved, not implausible)."""
+def suspect(labels: pd.Series) -> pd.Series:
+    """True where a resolved label is beyond MAX_LABEL_R in size (a NULL label is unresolved, not suspect)."""
     r = pd.to_numeric(labels, errors="coerce").astype(float)
     return r.notna() & ~(r.abs() <= MAX_LABEL_R)
 
@@ -927,12 +930,11 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     if not style_of:
         return out
     priors = read_priors(db) if broker in PRIOR_BROKERS else {}      # ICM-cost history: never another broker's
-    bad = implausible(strat["label_sim_r"])
-    if n_bad := int(bad.sum()):         # a units or replay error is set aside and counted, never averaged
-        log.warning("exploration %s: %d labels beyond %.0f R set aside (replay or units error)", broker, n_bad,
-                    MAX_LABEL_R)
-    out["implausible_labels"] = n_bad
-    strat = strat[~bad]
+    sus = strat.loc[suspect(strat["label_sim_r"]), "arm_id"].astype(str).value_counts().to_dict()
+    out["suspect_labels"] = int(sum(sus.values()))
+    if sus:                             # kept in the evidence (a real gap may be one); counted and logged
+        log.warning("exploration %s: labels beyond %.0f R (suspect, kept) by arm: %s", broker, MAX_LABEL_R,
+                    ", ".join(f"{a} {n}" for a, n in sorted(sus.items())))
     r_by_arm = {a: strat.loc[strat["arm_id"] == a, "label_sim_r"].astype(float).tolist() for a in style_of}
     if not any(r_by_arm.values()):      # quant 2026-10-27 (LOW): a run on no evidence is not a learnt run
         log.warning("exploration %s: no labelled evidence by %s, no weights run written", broker, as_of)
@@ -941,14 +943,14 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     shares =thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed)
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,
                   "prior": priors[a].prior_version if a in priors else None, "ceiling": (ceilings or {}).get(a),
-                  "method": "thompson_nig_net_r_within_style"} for a in style_of}
+                  "method": "thompson_nig_net_r_within_style", "suspect": int(sus.get(a, 0))} for a in style_of}
     write_weights(db, _ns(as_of), shares, style_of, detail, broker=broker)
     out["weights"] = shares
     return out
 
 
 __all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LABEL_R", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
-           "bounded_shares", "cross_fit_meta", "equal_shares", "implausible", "label_candidates", "learn", "model_columns",
+           "bounded_shares", "cross_fit_meta", "equal_shares", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
-           "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "thompson_shares",
+           "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "suspect", "thompson_shares",
            "training_table", "weights", "write_prior", "write_weights"]

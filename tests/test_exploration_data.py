@@ -260,24 +260,28 @@ def test_the_spec_names_each_arms_instrument_with_gold_for_a_row_without_one():
     assert inst["S0-NZDUSD"] == "NZDUSD" and inst["S0-SUGAR"] == "SUGAR" and inst["S5B"] == "XAUUSD"
 
 
-def test_the_learner_sets_aside_and_counts_a_label_beyond_twenty_r_instead_of_averaging_it(tmp_path):
-    """A label of more than MAX_LABEL_R (20 R) in size is a replay or units error, not an outcome: the bandit and the
-    style models never average it; the run counts it (`implausible_labels`) and warns."""
+def test_a_gold_label_beyond_twenty_r_is_kept_counted_and_flagged_suspect_never_dropped(tmp_path, caplog):
+    """Quant review of 75824e5c (MEDIUM): with the learners on gold rows only, a gold label beyond MAX_LABEL_R (20 R)
+    can be real (a gap through a tight 1m stop), so it is kept in the bandit and the training table, counted
+    (`suspect_labels`, per arm in the run's detail) and logged, never set aside."""
     db = _db(tmp_path)
     for i in range(6):
         _cand(db, f"a{i}", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=i))
         _label(db, f"a{i}", 0.5)
-    _cand(db, "bad", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=7))
-    _label(db, "bad", -2678.9)
-    out = ex.learn(db, broker="icm", as_of=T0 + pd.Timedelta(days=2), arms={"A": "intraday", "B": "intraday"},
-                   learning=())
-    assert out["implausible_labels"] == 1
+    _cand(db, "gap", arm="A", style="intraday", tf="15m", decision=T0 + pd.Timedelta(hours=7))
+    _label(db, "gap", -24.5)
+    with caplog.at_level("WARNING"):
+        out = ex.learn(db, broker="icm", as_of=T0 + pd.Timedelta(days=2), arms={"A": "intraday", "B": "intraday"},
+                       learning=())
+    assert out["suspect_labels"] == 1
+    assert any("suspect" in r.getMessage() and "A" in r.getMessage() for r in caplog.records)
     with db.connection() as conn:
         detail = json.loads(conn.execute("SELECT detail FROM exploration_broker_weights WHERE arm_id = 'A'"
                                          ).fetchone()[0])
-    assert detail["n"] == 6 and detail["mean_r"] == pytest.approx(0.5)
+    assert detail["n"] == 7 and detail["suspect"] == 1
+    assert detail["mean_r"] == pytest.approx((6 * 0.5 - 24.5) / 7)
     table = ex.training_table(db, style="intraday", broker="icm", as_of=T0 + pd.Timedelta(days=2))
-    assert "bad" not in set(table["candidate_id"]) and len(table) == 6
+    assert "gap" in set(table["candidate_id"]) and len(table) == 7
 
 
 # ---------------------------------------------------------------------------------------------- training table
