@@ -928,7 +928,11 @@ class Engine:
         self._manage_open(base.dec)
         exploration.trail(self, close_ts)    # H-80 BXR's runner stop and its virtual twins; never gated, never raises
         self.center.sweep_expired()
-        fam_w = self.allocator.weights(self._regime(base.X, close_ts)) if self.agents else {}   # agents' only input
+        err: Exception | None = None     # exits first (#1104 review): a failing regime/feature/decision skips entries only
+        try:
+            fam_w = self.allocator.weights(self._regime(base.X, close_ts)) if self.agents else {}   # agents' only input
+        except Exception as exc:                 # noqa: BLE001 - re-raised after this close's exits
+            err, fam_w = exc, {}
         decisions: list[dict] = []
         tfs = {a.timeframe for a in self.agents.values()} | {self.cfg.decision_tf}
         tfs |= {t.timeframe for t in self.open.values() if t.policy is not None and t.timeframe}
@@ -950,8 +954,14 @@ class Engine:
             if (refused := history.refuse(self, tf, fr, gaps, agents, close_ts)) is not None:
                 decisions += refused           # a hole in tf's window: no entry, live or shadow
                 continue
-            decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
+            if err is None:
+                try:
+                    decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
+                except Exception as exc:         # noqa: BLE001 - re-raised after this close's exits
+                    err = exc
         self._blackout_close(complete, close_ts, frames)
+        if err is not None:
+            raise err                          # as before: a tick error, entries blocked until a clean close
         cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
         if self.book is self.primary:                    # gold's zones (the account's chart), display only
             key_zones.update(self, complete, close_ts)   # after every decision of this close; never raises
