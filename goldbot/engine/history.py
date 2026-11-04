@@ -19,7 +19,8 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   2026-10-26..11-03: the release lacked the 10-11 Sunday open, the account's own minutes began 10-19, and every close
   refused for eight days). The broker's 1m bars from the hole to the old cut-over replace the release minutes there,
   so the window stays one feed per span with one cut-over; only when a good bar pull reaches back to the hole (fail
-  closed), only within backfill_max_days, and only if the cut-over has not moved while the fill ran.
+  closed), only within backfill_max_days, and only if the cut-over has not moved while the fill ran. The new cut-over
+  is recorded in aux.db (`history_cutover`, only ever moving back) and a restart starts from it (#327 review L2).
 """
 from __future__ import annotations
 
@@ -310,9 +311,9 @@ class BarWriter:
 
 # ------------------------------------------------------------------------------------------- the engine's side
 class History:
-    """The engine's continuity state (runtime, not persisted): the cut-over and fill status published as
-    history_backfill, each decision timeframe's hole at its last close (history_gap), the spans broker pulls covered,
-    the running fill and the writer."""
+    """The engine's continuity state (runtime; only a rebased cut-over is persisted, `save_cutover`): the cut-over and
+    fill status published as history_backfill, each decision timeframe's hole at its last close (history_gap), the
+    spans broker pulls covered, the running fill and the writer."""
 
     def __init__(self) -> None:
         self.backfill: dict[str, Any] = {"cutover": None, "from": None, "bars": 0, "error": None, "running": False,
@@ -351,6 +352,10 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     own = _clean(eng.store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
     if not own.empty:
         h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
+    saved = saved_cutover(eng)              # a rebased cut-over (#327 review L2): kept even if its minutes were lost
+    if saved is not None and (h.cutover is None or saved < h.cutover):
+        h.cutover = saved
+    if h.cutover is not None:
         rel = rel[rel["ts_utc"] < h.cutover] if not rel.empty else rel
     b = pd.concat([x for x in (rel, own) if not x.empty]) if not (rel.empty and own.empty) else pd.DataFrame()
     eng.bars_1m = b.tail(cfg.max_bars_in_memory).reset_index(drop=True) if not b.empty else pd.DataFrame()
@@ -445,9 +450,49 @@ def _rebase(eng: Engine, f: HistoryFill) -> bool:
     h.backfill["cutover"] = lo.isoformat()
     h.backfill["bars"] = int(h.backfill["bars"]) + len(bars)
     _write(eng, bars)
+    save_cutover(eng, lo)
     log.warning("history: cut-over moved back from %s to %s: the release lacks that hole, %d broker minutes replace "
                 "the release from it on", old, lo, len(bars))
     return True
+
+
+def _cutover_key(eng: Engine) -> tuple[str, str, str]:
+    from goldbot.engine import books
+    src, sym = books.live_key(eng)
+    return eng.cfg.account_id, src, sym
+
+
+def saved_cutover(eng: Engine) -> pd.Timestamp | None:
+    """The cut-over a rebase recorded for this account's live feed (aux.db `history_cutover`), or None. An unreadable
+    record is logged and None: the restart then derives the cut-over from the stored broker minutes, as before, and
+    at worst rebases again (fail safe: never a cut-over later than the stored minutes say)."""
+    from goldbot.db.connection import Database
+    try:
+        with Database.open(eng.cfg.state_dir, "aux").connection() as conn:
+            r = conn.execute("SELECT cutover_ns FROM history_cutover WHERE account_id = ? AND source = ? AND symbol = ?",
+                             _cutover_key(eng)).fetchone()
+    except Exception as exc:                          # noqa: BLE001 - a broken record never stops a warm start
+        log.warning("history cut-over record unreadable (%s): the stored minutes set the cut-over", type(exc).__name__)
+        return None
+    return pd.Timestamp(int(r[0]), unit="ns", tz="UTC") if r is not None else None
+
+
+def save_cutover(eng: Engine, cutover: pd.Timestamp) -> None:
+    """Record a rebased cut-over (#327 trading-safety review L2: the rebase lived in memory and in the stored broker
+    minutes only, so a dropped writer batch made every restart redo it). Idempotent and only ever moves back: an
+    existing earlier cut-over is kept. A release that later gains the hole changes nothing: minutes from the cut-over
+    on stay the broker's (one feed per span). A failed write is logged; the stored minutes still carry it."""
+    from goldbot.db.connection import Database, now_ns
+    ns = int(epoch_ns(pd.DatetimeIndex([cutover]))[0])
+    try:
+        with Database.open(eng.cfg.state_dir, "aux").write() as conn:
+            conn.execute("INSERT INTO history_cutover (account_id, source, symbol, cutover_ns, updated_ns) "
+                         "VALUES (?, ?, ?, ?, ?) ON CONFLICT (account_id, source, symbol) DO UPDATE SET "
+                         "cutover_ns = MIN(cutover_ns, excluded.cutover_ns), updated_ns = excluded.updated_ns",
+                         (*_cutover_key(eng), ns, now_ns()))
+    except Exception as exc:                          # noqa: BLE001 - recording never stops trading
+        log.warning("history cut-over record not written (%s): a restart derives it from the stored minutes",
+                    type(exc).__name__)
 
 
 def _kept_before(f: HistoryFill, span: Span) -> bool:
