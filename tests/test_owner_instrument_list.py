@@ -189,3 +189,20 @@ def test_vantage_demo_trades_the_new_instruments_and_icm_probe_keeps_the_kept_on
     assert set(vantage) == set(NEW)
     assert set(probe) == OWNER_25 - set(NEW) - {"XAUUSD"}
     assert len(probe) + 1 <= 20 and len(vantage) + 1 <= 11
+
+
+def test_vantage_demo_gets_option_a_slots_and_every_money_cap_stays_as_it_was():
+    """learning-mi-2026-11-02.md section 11, option (a) (quant review HIGH, PD 2026-11-04): "Raise vantage-demo
+    `learning_max_open` to 12 and the intraday pot to 14. Keep the £8 per-trade and £160 learning caps and every loss
+    limit unchanged (this is a demo slot count, not a loss limit)"."""
+    acc = ACCOUNTS["vantage-demo"]
+    ex = acc.exploration
+    assert ex.learning_max_open == 12 and ex.pots["intraday"].max_open == 14
+    assert (ex.max_open_total, acc.max_positions, ex.budget_share, ex.pot_budgets) == (23, 24, 0.825, False)
+    assert acc.daily_loss_limit_abs == 200 and acc.risk_overrides is not None
+    assert acc.risk_overrides.ceilings.weekly == 0.06 and acc.risk_overrides.ceilings.daily == 0.05
+    spec = {a.id: a for a in load_arms(SPEC)}
+    for key in NEW:
+        assert ex.arms[f"LB-{key}"].max_loss == ex.arms[f"LBC-{key}"].max_loss == 8.0, key
+        assert spec[f"LB-{key}"].learning["loss_cap_gbp"] == 160.0, key
+        assert ex.arms[f"S0-{key}"].max_loss == 6.5 and ex.arms[f"I0-{key}"].max_loss == 17.0, key

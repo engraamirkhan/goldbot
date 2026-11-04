@@ -372,7 +372,29 @@ cash open, when the US spot ETFs trade. BTCUSD's entries are weekday-only (its r
 `scripts/record_learning_k_rows.py --budget` on the brain first; if the 20 do not fit, nothing is written, the ten
 pairs stay refused (fail closed), and raising the budget is the owner's decision.
 
-**Slots.** None raised. vantage-demo keeps `learning_max_open` 6 and its intraday pot of 10 for 10 pairs beside Z6V,
-Z7V, VI0 and VC1H, so slot refusals will be more frequent than on 2026-11-02; section 7's bias diagnostic (refusals
-over 10% mark a verdict selection-affected) applies unchanged. icm-probe keeps 14 learning slots for its 14 pairs and
-7 gold learning arms.
+**Slots: option (a) chosen (quant review HIGH, PD decision 2026-11-04).** The first draft raised none. The quant
+review blocked it: five London pairs (GBPJPY, EURGBP, EURJPY, EURAUD, GBPAUD) open together with Z6V/Z7V and the ten
+I0 controls, so on trend days the later crosses lose on scan order and most pairs would read selection-affected,
+wasting their K rows. Option (a) raises vantage-demo's slot counts only:
+
+- `learning_max_open` 6 -> **12**: the ten LB arms and Z6V/Z7V each hold one position at most, so the learning cap no
+  longer binds in practice;
+- intraday pot 10 -> **14**.
+
+Unchanged and still binding: £8 per trade, each pair's £160 loss cap, the £200 day, the weekly 6%, `max_open_total`
+23, `max_positions` 24, the margin floor and the group notional caps. These are demo slot counts, not loss limits.
+
+**Expected London refusal share.** Read-only on the brain, vantage-demo 2026-11-02 18:00 to 2026-11-04: 0
+`learning_slots` refusals (the 7 old pairs were mostly in New York and Chicago hours); intraday positions open in
+07:00-11:00 UTC averaged 3.75 (max 7), of which VI0 and I0 2.4; I0 held 1.65 h, LB 4.0 h, LBC 2.6 h on average; an
+I0 control filled on about 40% of its hourly tries. A Monte Carlo of the London window on those figures (five LBC
+entries per day, five LB breaks on 60% of days or all together on a 30% share of trend days, ten I0 controls) gives
+a London pair refusal share of about **4%** (7% on trend days) at a pot of 14, against about 28% (35%) at 10. That is
+under section 7's 10% mark. The model leaves out the host-wide `max_open_total` 23 shared with the scalp arms, so the
+measured share is the one reported; section 7's per-arm diagnostic applies unchanged.
+
+icm-probe keeps 14 learning slots for its 14 pairs and 7 gold learning arms.
+
+**Short windows.** The added pairs start on 2026-11-04 and end with the others on 2026-12-17. An arm with fewer than 30
+admissible fills at the end of its window reads **"INCONCLUSIVE (short window)"**: no verdict, not a pass, not a kill,
+and not counted as evidence against the rule.

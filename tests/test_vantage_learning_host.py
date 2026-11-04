@@ -78,9 +78,9 @@ def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of
                                            | V_INSTRUMENTS | MI_ON["vantage-demo"])
     # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
     assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 14),
                                                                      "swing": (None, 2)}
-    assert not ex.pot_budgets and ex.learning_max_open == 6
+    assert not ex.pot_budgets and ex.learning_max_open == 12        # learning-mi section 11 option (a), 2026-11-04
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in V_SCALP} == {("scalp", 6.5)}
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}

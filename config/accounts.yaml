@@ -491,14 +491,21 @@ accounts:
       budget_share: 0.825
       max_open_total: 23
       pot_budgets: false
-      learning_max_open: 6
+      # learning-mi-2026-11-02.md section 11 option (a) (quant review of the owner-instrument-list change, PD
+      # 2026-11-04): 6 -> 12 learning slots so the 10 new pairs' LB arms (5 in London together) never starve on
+      # scan order. Slot count only: £8 per trade, the £160 learning caps and every loss limit unchanged.
+      # Rollback: 6, restart
+      learning_max_open: 12
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 V1): a scalp pot carved inside the unchanged £180 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 98 / 9 -> 40 / 4, swing 82 / 2 -> 40 / 1.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
       # Rollback: drop the scalp pot and the H-81 arms, restore intraday 98 / 9 and swing 82 / 2, restart.
       # research lead 2026-11-02 (learning-mi-2026-11-02.md section 5): intraday 6 -> 10 slots for the 7 multi-
       # instrument pairs beside VI0 and VC1H; slot count only, max_open_total 23 still binds. Rollback: 6, restart
-      pots: { scalp: { max_open: 11 }, intraday: { max_open: 10 }, swing: { max_open: 2 } }
+      # section 11 option (a) (PD 2026-11-04): intraday 10 -> 14 for the 10 new pairs and their I0 controls; the
+      # modelled London refusal share falls from ~28% to ~4%. Slot count only, max_open_total 23 and max_positions 24
+      # still bind. Rollback: 10, restart
+      pots: { scalp: { max_open: 11 }, intraday: { max_open: 14 }, swing: { max_open: 2 } }
       arms:
         VI0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         VI2A: { style: intraday, max_loss: 17.0 }

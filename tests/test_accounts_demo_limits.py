@@ -117,14 +117,14 @@ def test_the_three_demo_learning_hosts_carry_the_demo_limits() -> None:
         assert a.mode == "demo" and a.probe_only, acc_id
         # icm-probe 6 -> 14: the 19 multi-instrument learning pairs (learning-mi-2026-11-02.md section 5)
         assert a.exploration.pot_budgets is False, acc_id
-        assert a.exploration.learning_max_open == (14 if acc_id == "icm-probe" else 6), acc_id
+        assert a.exploration.learning_max_open == {"icm-probe": 14, "vantage-demo": 12}.get(acc_id, 6), acc_id
         assert a.demo_weekend_flat is True and a.news_blackout_entries is False, acc_id
         assert a.max_positions == 24 and a.exploration.max_open_total == 23, acc_id
     pots = {k: {s: p.max_open for s, p in accs[k].exploration.pots.items()} for k in DEMO}
     assert accs["icm-demo"].exploration.pots["growth"].gbp == 80        # M1: GS1/GS1C's £80 day unchanged
     assert pots == {"icm-demo": {"scalp": 11, "intraday": 10, "swing": 3, "growth": 2},
                     "icm-probe": {"scalp": 19, "intraday": 12},    # learning-mi-2026-11-02.md: slots only
-                    "vantage-demo": {"scalp": 11, "intraday": 10, "swing": 2}}
+                    "vantage-demo": {"scalp": 11, "intraday": 14, "swing": 2}}   # 11-04 (a)
 
 
 def test_the_cost_probe_shares_grow_and_each_day_still_sums_to_at_most_one() -> None:

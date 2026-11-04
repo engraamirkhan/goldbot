@@ -174,7 +174,7 @@ def test_only_slot_counts_were_raised_for_the_pairs_and_every_cap_still_binds() 
     accs = acc_mod.load_accounts(logins=False)
     probe, van = accs["icm-probe"], accs["vantage-demo"]
     assert (probe.exploration.learning_max_open, probe.exploration.pots["intraday"].max_open) == (14, 12)
-    assert (van.exploration.learning_max_open, van.exploration.pots["intraday"].max_open) == (6, 10)
+    assert (van.exploration.learning_max_open, van.exploration.pots["intraday"].max_open) == (12, 14)   # 11-04 (a)
     for acc in (probe, van):
         ex = acc.exploration
         assert ex.max_open_total == 23 and acc.max_positions == 24 and not ex.pot_budgets
