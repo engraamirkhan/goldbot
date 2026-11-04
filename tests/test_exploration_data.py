@@ -373,6 +373,40 @@ def test_weights_never_exceed_ceilings(tmp_path):
         assert all(ex.FLOOR_SHARE <= v <= ex.CAP_SHARE for v in eq.values()) and sum(eq.values()) <= 1 + 1e-12
 
 
+def test_a_leader_capped_while_the_floors_bind_never_pushes_the_style_above_its_budget_so_the_run_is_applied(tmp_path):
+    """Brain run 2026-11-03 (vantage intraday): 16 arms, one leader at the 30% cap and fifteen at the 5% floor summed
+    to 1.05, so the engine read the run as out of bounds and allocated equal shares every minute. The floors bind
+    first: the leader gives up what they need, the style sums to exactly 1 and the engine applies the learnt run."""
+    p = {"lead": 0.97, **{f"a{i:02d}": 0.002 for i in range(15)}}
+    w = ex.bounded_shares(p)
+    assert sum(w.values()) == pytest.approx(1.0, abs=1e-12)
+    assert all(ex.FLOOR_SHARE - 1e-12 <= v <= ex.CAP_SHARE + 1e-12 for v in w.values())
+    assert w["lead"] == pytest.approx(0.25) and max(w, key=w.__getitem__) == "lead"
+    db = _db(tmp_path)
+    ex.write_weights(db, T0.value, w, {a: "intraday" for a in w}, broker="vantage")
+    assert ex.weights(db, list(w), broker="vantage") == pytest.approx(w)          # applied, not equal shares
+    assert ex.weights(db, list(w), broker="vantage") != pytest.approx(ex.equal_shares(list(w)))
+
+
+def test_bounded_shares_stay_proportional_inside_the_bounds_and_never_sum_above_one():
+    """The shares are the clipped proportional ones (s = clip(lambda * p, floor, cap) with one lambda for the style):
+    an arm's order is its p's order, every share is in its bounds, and the style never sums above 1."""
+    rng = np.random.default_rng(11)
+    for n in (1, 2, 3, 4, 7, 16, 21, 30):
+        for _ in range(40):
+            p = dict(zip([f"a{i}" for i in range(n)], rng.dirichlet(np.full(n, 0.2)), strict=True))
+            ceil = {"a0": 0.02} if n > 3 else None
+            w = ex.bounded_shares(p, ceilings=ceil)
+            lo = min(ex.FLOOR_SHARE, 1.0 / n)
+            assert sum(w.values()) <= 1 + 1e-9
+            assert all(min(lo, (ceil or {}).get(a, 1.0)) - 1e-12 <= v <= min(ex.CAP_SHARE, (ceil or {}).get(a, 1.0))
+                       + 1e-12 for a, v in w.items())
+            free = [a for a in p if a not in (ceil or {})]
+            assert all(w[a] <= w[b] + 1e-12 for a in free for b in free if p[a] <= p[b])
+            if n >= 5:      # the caps leave room for the whole budget here: it is used in full
+                assert sum(w.values()) == pytest.approx(1.0, abs=1e-9)
+
+
 def test_corrupt_or_missing_weights_give_equal_shares(tmp_path):
     db = _db(tmp_path)
     arms = ["a", "b", "c", "d"]

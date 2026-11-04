@@ -1195,7 +1195,7 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     95% UB of signal-time cost per R is above 0.10 at >= 30 fills has its share "halved (ADR 0047 ladder)", above 0.20
     it is 0 here and the daily review suspends it (no entry at all). The share freed is not handed on. A read error
     keeps the scales last read. Entries only: no open position is touched."""
-    from goldbot.research.exploration_data import weights
+    from goldbot.research.exploration_data import STYLES, weights
     minute = now.floor("min")
     if ex.weights_cache is not None and ex.weights_cache[0] == minute:
         return ex.weights_cache[1]
@@ -1208,7 +1208,9 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
         strat = [a.arm_id for a in arms if a.control_share is None and a.arm_id not in learn]
         rest = max(0.0, 1.0 - sum(a.control_share or 0.0 for a in arms))
         try:
-            w = weights(ex.db, strat, broker=ex.broker, now=now) if strat else {}
+            # quant Q5: the bandit never learns a style outside STYLES (the growth pot): equal shares, no read
+            w = weights(ex.db, strat, broker=ex.broker, now=now) if strat and style in STYLES else \
+                {a: min(SHARE_CAP, max(SHARE_FLOOR, 1.0 / len(strat))) for a in strat}
         except Exception as exc:                    # the reader falls back itself; this is the last line
             log.warning("exploration weights unreadable (%s): equal shares", type(exc).__name__)
             w = {a: min(SHARE_CAP, max(SHARE_FLOOR, 1.0 / len(strat))) for a in strat}

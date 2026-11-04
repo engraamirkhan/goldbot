@@ -714,7 +714,12 @@ def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | No
                    floor: float = FLOOR_SHARE, cap: float = CAP_SHARE) -> dict[str, float]:
     """Shares proportional to `p`, each in [floor, min(cap, its ceiling)], summing to 1 when the caps allow it (less
     when they do not: a cap never moves budget onto another arm past that arm's own cap). With more arms than 1/floor
-    the floor becomes 1/n."""
+    the floor becomes 1/n.
+
+    One scale for the whole style: s = clip(lambda x p, floor, cap), lambda found by bisection so the shares sum to
+    the budget (the clipped proportional shares). The floors bind with the cap together, never one after the other:
+    brain run 2026-11-03 (vantage intraday) fixed a leader at the 30% cap and then fifteen arms at the 5% floor, summed
+    to 1.05, and the engine discarded the run as out of bounds every minute (`weights`)."""
     arms = sorted(p)
     n = len(arms)
     if n == 0:
@@ -723,22 +728,28 @@ def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | No
     lo = {a: min(floor, 1.0 / n, hi[a]) for a in arms}
     total = min(1.0, sum(hi.values()))
     w = {a: max(float(p[a]), 0.0) if math.isfinite(float(p[a])) else 0.0 for a in arms}
-    fixed: dict[str, float] = {}
-    for _ in range(2 * n + 1):
-        free = [a for a in arms if a not in fixed]
-        if not free:
-            break
-        mass = total - sum(fixed.values())
-        sw = sum(w[a] for a in free)
-        s = {a: mass * (w[a] / sw if sw > 0 else 1.0 / len(free)) for a in free}
-        over = [a for a in free if s[a] > hi[a] + 1e-15]
-        under = [a for a in free if s[a] < lo[a] - 1e-15]
-        if not over and not under:
-            fixed.update(s)
-            break
-        for a in over or under:
-            fixed[a] = hi[a] if over else lo[a]
-    return {a: float(min(max(fixed.get(a, lo[a]), lo[a]), hi[a])) for a in arms}
+
+    def fill(group: list[str], mass: float, v: Mapping[str, float]) -> dict[str, float]:
+        """clip(lambda x v, lo, hi) over `group`, summing to `mass` when its caps allow (all at the cap otherwise)."""
+        def at(lam: float) -> dict[str, float]:
+            return {a: min(max(lam * v[a], lo[a]), hi[a]) for a in group}
+        low, top = 0.0, max(hi[a] / v[a] for a in group)
+        if sum(at(top).values()) <= mass:
+            return at(top)
+        for _ in range(200):        # the sum is continuous and non-decreasing in lambda
+            mid = (low + top) / 2
+            low, top = (low, mid) if sum(at(mid).values()) > mass else (mid, top)
+        return at(low)
+
+    pos = [a for a in arms if w[a] > 0]
+    zero = [a for a in arms if w[a] <= 0]
+    if not pos:
+        return fill(arms, total, dict.fromkeys(arms, 1.0))
+    # the arms with no p are held at their floor while the others share; what the others' caps leave is theirs, equally
+    out = fill(pos, total - sum(lo[a] for a in zero), w)
+    if zero:
+        out |= fill(zero, max(total - sum(out.values()), sum(lo[a] for a in zero)), dict.fromkeys(zero, 1.0))
+    return out
 
 
 def thompson_shares(r_by_arm: Mapping[str, Sequence[float]], style_of: Mapping[str, str], *,
