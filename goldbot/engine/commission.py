@@ -66,4 +66,6 @@ def floor_cost(eng: Engine, cost: float, atr_usd: float, ex_spread: bool) -> flo
         return cost
     spread = eng.state.spread_points * eng.cfg.point
     live = spread if not ex_spread and math.isfinite(spread) and spread > 0 else 0.0
-    return max(cost, (live + eng._commission_usd_per_oz()) / atr_usd)
+    fee = eng._commission_usd_per_oz()
+    fee = fee if math.isfinite(fee) else 0.0      # unknown commission: floor on the spread alone, the gate refuses it
+    return max(cost, (live + fee) / atr_usd)

@@ -683,3 +683,16 @@ def test_a_vouched_closure_before_an_unvouched_hole_moves_the_cut_over_to_the_ho
     _settle(eng)
     assert eng.history.cutover == REL_HOLE and history.saved_cutover(eng) == REL_HOLE
     assert history.window_gaps(eng, eng.bars_1m) == []
+
+
+def test_a_saved_cut_over_older_than_the_window_never_drops_the_release(tmp_path):
+    """#327 follow-up L1: a re-host restores aux.db but not the broker's stored minutes. A recorded cut-over from
+    before the window start must not hide the release (a gap at the window start would go unseen)."""
+    _seed_store(tmp_path, end=LIVE_FROM)
+    eng = _engine(tmp_path, **FAST)
+    history.save_cutover(eng, pd.Timestamp("2020-01-06", tz="UTC"))
+    assert history.saved_cutover(eng) == pd.Timestamp("2020-01-06", tz="UTC")
+    again = _engine(tmp_path, **FAST)
+    again.warm_start(LIVE_FROM)
+    assert again.history.cutover is None
+    assert not again.bars_1m.empty and history.window_gaps(again, again.bars_1m) == []

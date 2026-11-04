@@ -310,3 +310,15 @@ def test_on_the_pinned_gate_grid_the_guard_only_ever_adds_a_refusal() -> None:
     for k in changed:
         before, after = want[k], got[k]
         assert after[0] is False and "spread_over_stop" in after[2], (k, before, after)
+
+
+def test_an_unknown_commission_floors_the_cost_on_the_spread_alone() -> None:
+    """#327 follow-up L2: max(cost, nan) kept `cost` and dropped the spread too; the floor keeps the spread."""
+    from types import SimpleNamespace
+
+    from goldbot.engine import commission
+
+    eng: Any = SimpleNamespace(state=SimpleNamespace(spread_points=50.0), cfg=SimpleNamespace(point=0.01),
+                          _commission_usd_per_oz=lambda: math.nan)
+    assert commission.floor_cost(eng, 0.05, 2.0, ex_spread=False) == pytest.approx(0.25)   # 0.50 / 2.0
+    assert commission.floor_cost(eng, 0.05, 2.0, ex_spread=True) == pytest.approx(0.05)

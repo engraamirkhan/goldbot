@@ -353,7 +353,9 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     if not own.empty:
         h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
     saved = saved_cutover(eng)              # a rebased cut-over (#327 review L2): kept even if its minutes were lost
-    if saved is not None and (h.cutover is None or saved < h.cutover):
+    # only inside the window: an older saved cut-over with no own minutes behind it (aux.db restored without
+    # bars_1m_live after a re-host) would drop the release and hide a gap at the window start (#327 follow-up L1)
+    if saved is not None and lo <= saved and (h.cutover is None or saved < h.cutover):
         h.cutover = saved
     if h.cutover is not None:
         rel = rel[rel["ts_utc"] < h.cutover] if not rel.empty else rel
