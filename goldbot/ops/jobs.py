@@ -86,6 +86,11 @@
                     explore window, every spec ledgered first (state/discovery_real.db), its G0 null, RC/SPA, PBO,
                     DSR, circular-shift and plateau checks -> state/autodisc/survivors-<day>.md and a health line.
                     Skips unless research.autodisc.nightly_enabled (the owner's Mac only). Creates no arm.
+* tva_scores        daily after feed_reconcile and nightly_costs (prereg-2026-10-28-tv-author-ideas.md section 6,
+                    research/tv_ideas.py): the shadow score of the followed authors' live gold ideas from their
+                    first-seen snapshot (state/tv_ideas.db read-only), direction read for both sides net of costs on
+                    the canonical broker's own minutes -> aux.db tva_scores; counts and forward-read progress only.
+                    No order, no RiskGate path, no arm. Every idea is `unlabelled` until an extractor is admitted.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -1534,6 +1539,15 @@ def autodisc_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_nightly_job(ctx.settings, ctx.state_dir, slot)
 
 
+def tva_scores(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """The TradingView author ideas' nightly shadow score (research/tv_ideas.py): costs from the canonical broker's
+    cost table (`research_costs`, priors before one exists), minutes from its own feeds. Reporting only."""
+    from goldbot.research.tv_ideas import ScoreCosts, run_job
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    costs = ScoreCosts.from_research(ctx.settings, found[0] if found is not None else None)
+    return run_job(ctx.settings, ctx.state_dir, store=ctx.store, accounts=ctx.accounts, slot=slot, costs=costs)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1557,6 +1571,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
     "autodisc_nightly": autodisc_nightly,         # ADR 0058 phase 2 discovery search (off unless enabled; Mac only)
+    "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
 }
 
 

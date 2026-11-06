@@ -183,6 +183,7 @@ scheduler:
   limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
   daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
   autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
+  tva_scores:       { kind: daily,   at: "23:35", max_late_hours: 20 }                  # TradingView author ideas shadow score (prereg-2026-10-28 section 6), after feed_reconcile and nightly_costs
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)

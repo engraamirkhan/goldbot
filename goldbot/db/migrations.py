@@ -565,6 +565,38 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS health_alerts_ts ON health_alerts(ts_ns)",
     )),
+    # additive (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; goldbot/research/tv_ideas.py): the
+    # nightly shadow score of every followed author's idea, one row per idea, from its first-seen snapshot. A row whose
+    # status is final is never rescored (only `edited` can still go 0 -> 1, and an unlabelled row takes the label of a
+    # later-admitted frozen extractor). Holds no idea text and no author level. A release without it never reads it
+    Migration(version=23, name="tva_scores", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS tva_scores (
+               idea_id INTEGER PRIMARY KEY,
+               author TEXT NOT NULL,
+               bucket TEXT NOT NULL CHECK (bucket IN ('I', 'D', 'W')),
+               symbol_class TEXT NOT NULL CHECK (symbol_class IN ('spot', 'futures', 'other')),
+               published_utc TEXT NOT NULL,
+               available_utc TEXT NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('scored', 'pending', 'no_bars', 'backfilled', 'not_gold',
+                                                      'holdout')),
+               edited INTEGER NOT NULL,
+               label TEXT NOT NULL CHECK (label IN ('long', 'short', 'abstain', 'unlabelled')),
+               extractor TEXT,
+               extractor_sha TEXT,
+               decision_eligible INTEGER NOT NULL,
+               entry_utc TEXT,
+               atr_usd REAL,
+               r_long REAL, r_short REAL, r_long_stress REAL, r_short_stress REAL,
+               exit_long TEXT, exit_short TEXT,
+               r_long_pub REAL, r_short_pub REAL,
+               r_side REAL, r_side_stress REAL,
+               levels_status TEXT, levels_r REAL, levels_r_stress REAL,
+               cost_source TEXT NOT NULL,
+               scorer_sha TEXT NOT NULL,
+               scored_utc TEXT NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS tva_scores_author ON tva_scores(author, published_utc)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
