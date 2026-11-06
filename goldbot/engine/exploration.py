@@ -31,9 +31,9 @@ The plan's rules, as built here:
     the stop alone (trading-safety LOW, 2026-10-25);
   - `max_open` positions of one arm;
   - the account's daily entry budget (`exploration.daily`, owner decision 2026-10-30: demo 150-250 fills a day in
-    total): fills a day and an hour, at most one random-control fill per strategy/learning fill, the unpaired
-    per-instrument controls thinned first and stopped at their cost cell's 30 fills (`daily_refusal`;
-    prereg-amendment-2026-11-06-control-thinning.md).
+    total): fills a day, an hour and a session (sub-budgets), paired controls admitted per pair by matched-time thinning, unpaired per-instrument controls
+    capped and stopped at their cost cell's 30 fills (`exploration_budget`; prereg-amendment-2026-11-06-control-
+    thinning.md).
   An unknown figure (equity, the conversion, a position's stop loss, the ledger) refuses: fail closed.
 * Exits are never gated: the engine's server stop and target, its stop check, the Friday cut and the kill switch act
   on exploration positions as on any of this engine's magic range (`Engine._own`). A 1m/5m arm's hold is judged on the
@@ -518,6 +518,7 @@ LEDGER: RecordRepo[ExplorationRecord] = RecordRepo(
     "exploration_trades", ExplorationRecord, key="client_order_id", tolerant=True, columns={
         "client_order_id": lambda r: r.client_order_id, "account_id": lambda r: r.account_id,
         "arm_id": lambda r: r.arm_id, "position_id": lambda r: r.position_id, "ts_ns": lambda r: _ns(r.sent_utc),
+        "signal_ns": lambda r: _ns(r.signal_utc),            # aux migrations 23-24: the daily budget counts on it
         "closed": lambda r: int(r.exit_utc is not None),
         "exit_ns": lambda r: _ns(r.exit_utc) if r.exit_utc is not None else None})
 
@@ -595,6 +596,7 @@ class Exploration:
         self.ahead_seen: pd.Timestamp | None = None   # the last bar skipped as ahead of the host clock (journalled once)
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
+        self.budget_cache: dict[Any, Any] = {}         # the daily budget's day and minute reads (`exploration_budget`)
         self.cost_scale: dict[str, float] = {}         # H-81 cost stop: arm -> its share's scale (`shares`)
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
         # arms retired at their stop (`refresh_retired`), from the start every arm its spec row retires (`spec_retired`)
@@ -1458,71 +1460,6 @@ def _add(d: dict[str, float | None], k: str, v: float | None) -> None:
 
 
 LEARNING_SLOT = "learning"          # `_Pass.count` key: open learning positions (`learning_slots`)
-EntryKind = Literal["edge", "control", "thin"]
-ARM_FILLS = "arm:"                  # `_Pass.entries` key prefix: an unpaired control's fills on the account, ever
-
-
-def entry_kind(arm: Arm) -> EntryKind:
-    """How the daily entry budget counts an arm's fill (`DailyEntries`): `edge` a strategy, learning, cost or owner
-    experiment arm; `control` a random control that pairs first (gold's own controls, and a control dedicated to
-    learning arms, `params.control` "learning:<ids>", on any instrument); `thin` an unpaired per-instrument control
-    (S0-<key>, I0-<key>), thinned first (prereg-amendment-2026-11-06-control-thinning.md)."""
-    if arm.control_share is None:
-        return "edge"
-    paired = str(arm.spec.params.get("control", "")).startswith("learning:")
-    return "thin" if arm.instrument != GOLD and not paired else "control"
-
-
-def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, int],
-                  arm_fills: int = 0) -> str | None:
-    """Why the daily entry budget refuses one more fill of `kind`, or None (owner decision 2026-10-30: 150-250 demo
-    fills a day in total). `n`: today's fills (`day`), this clock hour's (`hour`) and today's by kind; `arm_fills`:
-    the arm's fills on the account, ever. An unpaired per-instrument control whose cost cell has its
-    `thin_control_fills` (PD+PO 2026-11-06: 30) is refused for good (`thin_cell_complete`). Refused when the day's or
-    the hour's budget is spent; a control when control + 1 > controls_per_edge x edge fills ("<= 1 control fill per
-    1 edge/learning fill"); an unpaired per-instrument control when it would also pass its thin_control_share of
-    that allowance. Entries only: no exit is ever counted or refused here."""
-    if daily is None:
-        return None
-    if kind == "thin" and daily.thin_control_fills is not None and arm_fills >= daily.thin_control_fills:
-        return "thin_cell_complete"
-    if n.get("day", 0) >= daily.max_per_day:
-        return "daily_entries"
-    if daily.max_per_hour is not None and n.get("hour", 0) >= daily.max_per_hour:
-        return "hourly_entries"
-    if kind == "edge":
-        return None
-    allowed = daily.controls_per_edge * n.get("edge", 0)
-    if n.get("control", 0) + n.get("thin", 0) + 1 > allowed + 1e-9:
-        return "control_ratio"
-    if kind == "thin" and n.get("thin", 0) + 1 > daily.thin_control_share * allowed + 1e-9:
-        return "thin_controls"
-    return None
-
-
-def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Timestamp,
-                  arms: Mapping[str, Arm]) -> dict[str, int]:
-    """Today's exploration fills of this account (every book: the ledger is the account's) since the day's reset
-    (`day`), in this clock hour (`hour`) and by `entry_kind` (an arm no longer configured counts in the day and the
-    hour only), and each unpaired per-instrument control's fills ever (ARM_FILLS + its id). Raises when the ledger
-    cannot be read (the caller refuses: fail closed)."""
-    hour = max(since, now.floor("h"))
-    with ex.db.connection() as conn:
-        rows = conn.execute(
-            "SELECT arm_id, ts_ns >= ? FROM exploration_trades WHERE account_id = ? AND ts_ns >= ? "
-            "AND position_id IS NOT NULL", (_ns(hour), eng.cfg.account_id, _ns(since))).fetchall()
-        thin = sorted(a for a, arm in arms.items() if entry_kind(arm) == "thin")
-        marks = ",".join("?" * len(thin))
-        ever = conn.execute(
-            f"SELECT arm_id, COUNT(*) FROM exploration_trades WHERE account_id = ? AND position_id IS NOT NULL "
-            f"AND arm_id IN ({marks}) GROUP BY arm_id", (eng.cfg.account_id, *thin)).fetchall() if thin else []
-    out = {"day": len(rows), "hour": sum(int(h) for _, h in rows)}
-    for arm_id, _ in rows:
-        if (arm := arms.get(str(arm_id))) is not None:
-            k = entry_kind(arm)
-            out[k] = out.get(k, 0) + 1
-    out.update({ARM_FILLS + str(a): int(c) for a, c in ever})
-    return out
 
 
 class _Pass:
@@ -1573,9 +1510,23 @@ class _Pass:
                         self.count[LEARNING_SLOT] = self.count.get(LEARNING_SLOT, 0) + 1
         self.cap: int | None = -1                   # -1: not read yet (the first signal's terms read it)
         self.why: str | None = None                 # the last signal's refusal
-        # the daily entry budget's counts (`entries_today`), read only when the account has one
-        self.entries: dict[str, int] = entries_today(eng, ex, since, now, self.arms) \
-            if ex.cfg.daily is not None else {}
+        self.mu: float | None = None                # the last control's admission propensity (`budget`)
+        # the daily entry budget (`exploration_budget`), read only when the account has one
+        from goldbot.engine import exploration_budget as budget
+        # the budget's day is the risk day, the UTC date (`capital_flows.roll_risk_period`), from its midnight: a first
+        # start's reset time (the first tick) would leave out the day's earlier fills
+        self.since = now.tz_convert("UTC").floor("D")
+        self.entries: dict[str, int] = {}
+        self.sessions: dict[str, int] = {}
+        self.pairs: dict[str, tuple[str, ...]] = {}
+        self.active: frozenset[str] = frozenset()
+        if ex.cfg.daily is not None:
+            self.entries = budget.entries_today(eng, ex, self.since, now, self.arms)
+            self.sessions = budget.session_budgets(eng, ex, ex.cfg.daily, self.since)
+            self.pairs = budget.pairs(self.arms)
+            self.active = frozenset(a for a, arm in self.arms.items() if not arm.spec.retired
+                                    and a not in ex.retired and not (arm.spec.entry_refused
+                                                                     or qualification_refusal(arm.spec)))
 
     def lost_in(self, ex: Exploration, style: str | None = None) -> float:
         return sum(v for a, v in self.lost.items() if style is None or (a in self.arms and self.arms[a].style == style))
@@ -1588,8 +1539,6 @@ class _Pass:
         if arm.spec.role == "learning":
             self.count[LEARNING_SLOT] = self.count.get(LEARNING_SLOT, 0) + 1
         self.count["host"] += 1
-        for k in ("day", "hour", entry_kind(arm), ARM_FILLS + arm.arm_id):
-            self.entries[k] = self.entries.get(k, 0) + 1
 
 
 def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
@@ -1646,7 +1595,9 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
             return
         ex.queue.remove(s)
         if ps.why != "duplicate":
-            candidate(eng, ex, s, now, None if res == "sent" else ps.why, ps.share.get(arm.arm_id))
+            # a control's admission draw (quant Q1 2026-11-06): its p is the propensity, taken or thinned
+            mu = ps.mu if res == "sent" or ps.why == "control_thinned" else None
+            candidate(eng, ex, s, now, None if res == "sent" else ps.why, ps.share.get(arm.arm_id), mu=mu)
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
@@ -1696,7 +1647,7 @@ def draw(candidate_id: str) -> float:
 
 
 def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, blocked: str | None,
-              share: float | None = None) -> None:
+              share: float | None = None, mu: float | None = None) -> None:
     """Every candidate, taken or not, to lane L3's `exploration_data.record_candidate` with its propensity: the random
     branch takes an admissible candidate when u < PI_RANDOM (mu = PI_RANDOM); a candidate a cap, the budget, the gate,
     staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
@@ -1714,7 +1665,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
                          stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
-                         mu=PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
+                         mu=mu if mu is not None else PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
                          arm_share=share if share is not None else shares(ex, now).get(arm.arm_id))
     except Exception as exc:
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
@@ -1769,12 +1720,27 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if pid in eng.sent_ids:
         ps.why = "duplicate"
         return "refused"
-    if (why := daily_refusal(ex.cfg.daily, entry_kind(arm), ps.entries,
-                             ps.entries.get(ARM_FILLS + arm.arm_id, 0))) is not None:
-        # the daily entry budget (owner decision 2026-10-30): the day or the hour spent stops every signal of this
-        # pass ("cap": recorded blocked at once); a control past its ratio stops that control only
-        refuse(why)
-        return "cap" if why in ("daily_entries", "hourly_entries") else "refused"
+    ps.mu = None
+    if (daily := ex.cfg.daily) is not None:
+        # the daily entry budget (owner decision 2026-10-30; `exploration_budget`): the day, the hour or the session
+        # spent stops every signal of this pass ("cap": recorded blocked at once); the rest stop this signal only
+        from goldbot.engine import exploration_budget as budget
+        from goldbot.research.arm_rules import hash_u
+        kind = budget.entry_kind(arm)
+        if (why := budget.daily_refusal(daily, kind, ps.entries, session=budget.session_of(s.bar_ts),
+                                        budgets=ps.sessions,
+                                        cell_fills=budget.cell_fills(eng, ex, now).get(arm.instrument, 0))) is not None:
+            refuse(why)
+            return "cap" if why in budget.PASS_WIDE else "refused"
+        if kind != "edge":
+            paired = arm.arm_id in ps.pairs
+            arms_of = tuple(a for a in ps.pairs.get(arm.arm_id, ()) if a in ps.active)
+            ps.mu = 0.0 if paired and not arms_of else budget.control_propensity(
+                eng, ex, arm.arm_id, arms_of, s.bar_ts, ps.since, daily.controls_per_edge)
+            applied["admission_p"] = round(ps.mu, 4)
+            if hash_u(arm.arm_id, s.bar_ts) >= ps.mu:
+                refuse("control_thinned")
+                return "refused"
     if arm.arm_id in ex.learning_group and not ex.learning_ok:
         # ADR 0061 amendment 2026-11-02: its fills and loss are not known (no read of the ledger yet, or it failed)
         refuse("learning_unread")
@@ -1930,6 +1896,10 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     ex.open_loss[pos] = at_gate[0] if at_gate else loss
     ps.note(arm, ex.open_loss[pos], slot=not add)
+    if ex.cfg.daily is not None:
+        from goldbot.engine import exploration_budget as budget
+        budget.counted(ps.entries, arm, s.bar_ts, now)
+        budget.cell_counted(ex, arm)
     if plan is not None:
         pyr.heal(eng, ex, arm, plan.group, now, force=True)     # again from the add's fill and the stop it got
     open_twins(eng, ex, arm, s, pid, pos)

@@ -812,18 +812,28 @@ def bounded_shares(p: Mapping[str, float], *, ceilings: Mapping[str, float] | No
 
 def thompson_shares(r_by_arm: Mapping[str, Sequence[float]], style_of: Mapping[str, str], *,
                     priors: Mapping[str, ArmPrior] | None = None, ceilings: Mapping[str, float] | None = None,
-                    draws: int = THOMPSON_DRAWS, seed: int = 0) -> dict[str, float]:
+                    draws: int = THOMPSON_DRAWS, seed: int = 0, cold: Collection[str] = ()) -> dict[str, float]:
     """Per style: P(arm has the highest mean net R among its style's arms) under NIG posteriors, then
-    `bounded_shares`. Shares are within the style (each style's sum at most 1)."""
+    `bounded_shares`. Shares are within the style (each style's sum at most 1). A `cold` arm (enterable, no labelled
+    fill yet; quant ruling 2026-11-06 Q2) is drawn by no one and holds the cold-start floor min(FLOOR_SHARE, 1/n),
+    n the style's weighted arms, so it can still enter and earn its first labels."""
     rng = np.random.default_rng(seed)
     out: dict[str, float] = {}
+    cold = set(cold)
     for style in sorted({style_of[a] for a in r_by_arm}):
-        arms = sorted(a for a in r_by_arm if style_of[a] == style)
-        samples = np.column_stack([
-            _nig_draws(np.asarray([v for v in r_by_arm[a] if math.isfinite(v)], dtype=float),
-                       (priors or {}).get(a), draws, rng) for a in arms])
-        best = np.bincount(samples.argmax(axis=1), minlength=len(arms)) / draws
-        out.update(bounded_shares({a: float(best[j]) for j, a in enumerate(arms)}, ceilings=ceilings))
+        arms = sorted(a for a in r_by_arm if style_of[a] == style and a not in cold)
+        frozen = sorted(a for a in r_by_arm if style_of[a] == style and a in cold)
+        floor = min(FLOOR_SHARE, 1.0 / (len(arms) + len(frozen)))
+        best: dict[str, float] = {}
+        if arms:
+            samples = np.column_stack([
+                _nig_draws(np.asarray([v for v in r_by_arm[a] if math.isfinite(v)], dtype=float),
+                           (priors or {}).get(a), draws, rng) for a in arms])
+            hits = np.bincount(samples.argmax(axis=1), minlength=len(arms)) / draws
+            best = {a: float(hits[j]) for j, a in enumerate(arms)}
+        shares = bounded_shares({**best, **dict.fromkeys(frozen, 0.0)}, ceilings=ceilings)
+        out.update({a: v for a, v in shares.items() if a not in cold})
+        out.update({a: min(floor, shares[a]) for a in frozen})
     return out
 
 
@@ -893,13 +903,15 @@ SPEC_PATHS: tuple[Path, ...] = (arm_spec.REPO_ROOT / "config" / "exploration_arm
 
 
 def entry_exclusions(db: Database, arm_ids: Collection[str], *, broker: str,
-                     spec_paths: Sequence[Path] = SPEC_PATHS) -> dict[str, str]:
+                     spec_paths: Sequence[Path] = SPEC_PATHS, as_of: pd.Timestamp | None = None) -> dict[str, str]:
     """The arms of `arm_ids` that can send no entry on `broker`'s accounts, with why (PD 2026-11-06: "retired arms,
     blocked arms ... get no weight"): `retired` (the spec row's `retired_day`, never undone, or the broker's
     `exploration_arm_status`, the daily review's stop) or `blocked` (spec status not run, or refused at load: ADR
     0061 qualification, a learning arm's cross refusal: `research.arms.load_arms`). An arm no spec names is not judged
     here (the engine drops it at load, so it has no new fill). An unreadable spec raises: the learner does not run on
-    arms it cannot judge (its weights age into equal shares); a missing status table reads as no retirement."""
+    arms it cannot judge (its weights age into equal shares); a missing status table reads as no retirement.
+    Point in time (quant ruling 2026-11-06 Q5): with `as_of`, a spec retirement counts from its `retired_day` and a
+    stop from its `recorded_ns`, so a replayed run never knows a later retirement."""
     want = set(arm_ids)
     rows: dict[str, arm_spec.Arm] = {}
     for path in spec_paths:
@@ -908,14 +920,15 @@ def entry_exclusions(db: Database, arm_ids: Collection[str], *, broker: str,
     out: dict[str, str] = {}
     for a in sorted(rows):
         row = rows[a]
-        if row.retired:
+        if row.retired and (as_of is None or str(row.retired_day) <= str(as_of.tz_convert("UTC").date())):
             out[a] = "retired"
         elif row.status != "run" or row.entry_refused:
             out[a] = "blocked"
     try:
         with db.connection() as conn:
             stopped = {str(a) for (a,) in conn.execute(
-                "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired'", (broker,))}
+                "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired' "
+                "AND recorded_ns <= ?", (broker, _ns(as_of) if as_of is not None else 2**63 - 1))}
     except sqlite3.Error as exc:
         log.warning("exploration_arm_status unreadable (%s): spec retirements only", type(exc).__name__)
         stopped = set()
@@ -937,9 +950,9 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     training rows, as a control is never allocated.
 
     PD 2026-11-06 (its top weights sat on retired and non-trading arms and never steered an entry): only arms that can
-    actually enter are weighted. A retired or blocked arm (`entry_exclusions`), an arm with no labelled fill in the
-    evidence and, when `arms` is given, an arm not configured on the broker are written at 0 (`detail.excluded` says
-    why); the shares renormalise over the rest within each style. A run on labelled evidence is written even when no
+    actually enter are weighted. A retired or blocked arm (`entry_exclusions`, point in time) and, when `arms` is
+    given, an arm not configured on the broker are written at 0 (`detail.excluded` says why); the shares renormalise
+    over the rest within each style, where an arm with no labelled fill holds the cold-start floor (Q2). A run on labelled evidence is written even when no
     arm can enter (all at 0): the learner ran."""
     if not broker:
         raise ValueError("exploration evidence is learnt per broker")
@@ -996,21 +1009,23 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         log.warning("exploration %s: no labelled evidence by %s, no weights run written", broker, as_of)
         out["weights"] = None
         return out
-    excluded = entry_exclusions(db, style_of, broker=broker, spec_paths=spec_paths)
+    excluded = entry_exclusions(db, style_of, broker=broker, spec_paths=spec_paths, as_of=as_of)
     if arms is not None:
         excluded.update({a: "not_on_broker" for a in style_of if a not in arms and a not in excluded})
-    excluded.update({a: "no_fills" for a in style_of
-                     if a not in excluded and not any(math.isfinite(v) for v in r_by_arm[a])})
     if excluded:
         log.info("exploration %s: no weight for %s", broker,
                  ", ".join(f"{a} ({why})" for a, why in sorted(excluded.items())))
     live = {a: r for a, r in r_by_arm.items() if a not in excluded}
-    shares = {**thompson_shares(live, style_of, priors=priors, ceilings=ceilings, seed=seed),
+    # quant ruling 2026-11-06 Q2: an enterable arm without a labelled fill (new, a swing arm, a non-gold arm the gold
+    # labeller never reads) holds the cold-start floor, never 0
+    cold = {a for a, r in live.items() if not any(math.isfinite(v) for v in r)}
+    shares = {**thompson_shares(live, style_of, priors=priors, ceilings=ceilings, seed=seed, cold=cold),
               **dict.fromkeys(excluded, 0.0)}
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,
                   "prior": priors[a].prior_version if a in priors else None, "ceiling": (ceilings or {}).get(a),
                   "method": "thompson_nig_net_r_within_style", "suspect": int(sus.get(a, 0)),
-                  **({"excluded": excluded[a]} if a in excluded else {})} for a in style_of}
+                  **({"excluded": excluded[a]} if a in excluded else {}),
+                  **({"cold_start": True} if a in cold else {})} for a in style_of}
     write_weights(db, _ns(as_of), shares, style_of, detail, broker=broker)
     out["weights"] = shares
     return out

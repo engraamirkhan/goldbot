@@ -162,6 +162,36 @@ def check_costs_published(ctx: HealthContext) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
+# quant ruling 2026-11-06 Q9: research screens, qualification and the cost stop charge config/cost_of_record.yaml; a
+# broker's cells last measured longer ago than this are stale (the probes were halved on ICM the same day)
+COST_OF_RECORD_PATH = Path(__file__).resolve().parents[3] / "config" / "cost_of_record.yaml"
+COST_OF_RECORD_STALE_DAYS = 30.0
+
+
+@register_check("global", block=BLOCK_COSTS_PUBLISHED, pos=20)
+def check_cost_of_record(ctx: HealthContext) -> Check:
+    """WARN when the cost of record's measurement window (config/cost_of_record.yaml `window_utc`, every broker's
+    cells: ICM and Vantage) ended more than COST_OF_RECORD_STALE_DAYS ago, or the file is unreadable; never FAIL (no
+    entry depends on it)."""
+    import yaml
+    name = "costs:of_record"
+    try:
+        raw = yaml.safe_load(COST_OF_RECORD_PATH.read_text()) or {}
+        end = pd.Timestamp(raw["window_utc"][1])
+        brokers = sorted(raw.get("cells") or {})
+    except (OSError, ValueError, KeyError, IndexError, TypeError, yaml.YAMLError) as exc:
+        return Check(name=name, status="warn", reason=f"cost of record unreadable: {type(exc).__name__}")
+    end = end.tz_localize("UTC") if end.tzinfo is None else end
+    days = (ctx.now - end).total_seconds() / 86400
+    if days > COST_OF_RECORD_STALE_DAYS:
+        return Check(name=name, status="warn", reason=(
+            f"cost of record cells of {', '.join(brokers)} last measured {days:.0f} d ago (> "
+            f"{COST_OF_RECORD_STALE_DAYS:.0f} d): research and qualification charge stale costs; rebuild with "
+            "`python -m goldbot.research.cost_of_record`"))
+    return Check(name=name, status="ok",
+                 reason=f"every broker's cost-of-record cells measured within {COST_OF_RECORD_STALE_DAYS:.0f} d")
+
+
 @register_check("global", block=BLOCK_TAIL, pos=10)
 def check_data_quality(ctx: HealthContext) -> Check:
     """Design (Data quality): errors quarantine the batch and alert. Error-severity events (duplicate stamps, bid >

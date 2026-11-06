@@ -571,9 +571,8 @@ def test_learn_allocates_strategy_arms_per_style_never_controls_and_retrains_whe
                    models_dir=tmp_path / "models")
     w = rep["weights"]
     assert set(w) == {"S1a", "S1b", "S5a", "S5b", "S9"} and "S0" not in w
-    assert w["S9"] == 0.0                                   # configured, never filled: no weight (PD 2026-11-06)
-    assert w["S1a"] == pytest.approx(0.30) and all(ex.FLOOR_SHARE - 1e-12 <= v <= 0.30 + 1e-12
-                                                   for a, v in w.items() if a != "S9")
+    assert w["S9"] == pytest.approx(ex.FLOOR_SHARE)          # configured, never filled: cold-start floor (quant Q2)
+    assert w["S1a"] == pytest.approx(0.30) and all(ex.FLOOR_SHARE - 1e-12 <= v <= 0.30 + 1e-12 for v in w.values())
     assert ex.weights(db, list(w), broker="icm", now=as_of) == w
     m = rep["models"]["scalp"]
     assert m["version"] == "h62-icm-scalp-20261009T2100" and rep["models"]["swing"]["due"] is False

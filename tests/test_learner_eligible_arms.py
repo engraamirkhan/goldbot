@@ -1,8 +1,11 @@
 """The nightly learner weights only arms that can actually enter on the broker (PD 2026-11-06: its top weights, 0.3,
 sat on retired or non-trading arms PDC4, DON4, VW1A, S4 and never steered an entry). A retired arm (its spec row or the
-broker's `exploration_arm_status`), a blocked or refused one (spec status, ADR 0061 qualification), an arm with no
-labelled fill in the evidence and an arm not configured on the broker get 0; the shares renormalise over the rest."""
+broker's `exploration_arm_status`), a blocked or refused one (spec status, ADR 0061 qualification) and an arm not
+configured on the broker get 0, point in time; an enterable arm with no labelled fill holds the cold-start floor
+(quant ruling 2026-11-06 Q2, Q5); the shares renormalise over the rest."""
 from __future__ import annotations
+
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -12,7 +15,8 @@ from goldbot.research import exploration_data as ex
 from tests.test_exploration_data import T0, _cand, _label
 
 pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
-AS_OF = T0 + pd.Timedelta(days=6)
+ROOT = Path(__file__).parents[1]
+AS_OF = pd.Timestamp("2026-11-07 23:00", tz="UTC")       # after every spec retirement these tests read
 LIVE = ("S1a", "S1b", "S5a", "S5b")                     # made-up strategy arms: unknown to the spec, free to enter
 
 
@@ -64,11 +68,50 @@ def test_a_blocked_or_unqualified_spec_arm_gets_zero(tmp_path):
     assert w["S6"] == 0.0 and w["S1A"] == 0.0 and sum(w[a] for a in LIVE) == pytest.approx(1.0)
 
 
-def test_an_arm_with_no_fill_in_the_evidence_and_an_arm_not_configured_on_the_broker_get_zero(tmp_path):
+def test_an_arm_not_configured_on_the_broker_gets_zero(tmp_path):
     db = Database.open(tmp_path, "aux")
     _evidence(db, {"S1a": 0.5, "S1b": -0.5, "S5a": 0.0, "S5b": 0.1, "GONE": 3.0})
-    w = _learn(db, {**{a: "scalp" for a in LIVE}, "S9": "scalp"})       # S9 configured, never filled; GONE not here
-    assert w["S9"] == 0.0 and w["GONE"] == 0.0 and sum(w[a] for a in LIVE) == pytest.approx(1.0)
+    w = _learn(db, {a: "scalp" for a in LIVE})                           # GONE: filled once, no longer configured
+    assert w["GONE"] == 0.0 and sum(w[a] for a in LIVE) == pytest.approx(1.0)
+
+
+def test_an_enterable_arm_with_no_labelled_fill_holds_the_cold_start_floor_never_zero(tmp_path):
+    """Quant Q2 2026-11-06 (and code review LOW 2/3: a non-gold arm the gold labeller never reads, a new swing arm):
+    an arm that may enter but has no label yet holds min(FLOOR_SHARE, 1/n); the engine reads it, so no taken
+    candidate of an enterable arm carries a share of 0."""
+    db = Database.open(tmp_path, "aux")
+    _evidence(db, {"S1a": 0.5, "S1b": -0.5, "S5a": 0.0, "S5b": 0.1})
+    w = _learn(db, {**{a: "scalp" for a in LIVE}, "S9": "scalp"})       # S9 configured, never filled
+    assert w["S9"] == pytest.approx(min(ex.FLOOR_SHARE, 1 / 5)) and sum(w.values()) <= 1 + 1e-9
+    read = ex.weights(db, [*LIVE, "S9"], broker="icm", now=AS_OF)
+    assert read == w and all(v > 0 for v in read.values())
+    with db.connection() as conn:
+        detail = conn.execute("SELECT detail FROM exploration_broker_weights WHERE arm_id = 'S9'").fetchone()[0]
+    assert '"cold_start": true' in detail
+
+
+def test_an_arm_retired_after_the_runs_as_of_keeps_its_share(tmp_path):
+    """Quant Q5: point in time. A stop recorded on this broker after the run's as_of, and a spec row whose retired_day
+    is after it, are unknown to that run; a run after both knows them."""
+    db = Database.open(tmp_path, "aux")
+    _evidence(db, {"S1a": 0.5, "S1b": -0.5, "S5a": 0.0, "S5b": 0.1})
+    early = T0 + pd.Timedelta(days=6)
+    with db.write() as conn:
+        conn.execute("INSERT INTO exploration_arm_status (broker, arm_id, status, day, rule, recorded_ns) "
+                     "VALUES ('icm', 'S1a', 'retired', '2026-10-20', 'H-61', ?)",
+                     (pd.Timestamp("2026-10-20", tz="UTC").value,))
+    w = ex.learn(db, broker="icm", as_of=early, arms={a: "scalp" for a in LIVE}, seed=1)["weights"]
+    assert w["S1a"] > 0
+    late = ex.learn(db, broker="icm", as_of=AS_OF, arms={a: "scalp" for a in LIVE}, seed=1)["weights"]
+    assert late["S1a"] == 0.0
+    # a spec retirement: S0R's row retired 2026-11-06 here (a control row: no qualification needed to enter)
+    row = next(line for line in (ROOT / "config" / "exploration_arms.yaml").read_text().splitlines()
+               if line.startswith("  - { id: S0R,"))
+    spec = tmp_path / "arms.yaml"
+    spec.write_text("arms:\n" + row.replace(", config_hash:", ', retired_day: "2026-11-06", retired_rule: "t",'
+                                                              " config_hash:") + "\n")
+    assert ex.entry_exclusions(db, ["S0R"], broker="icm", spec_paths=[spec], as_of=early) == {}
+    assert ex.entry_exclusions(db, ["S0R"], broker="icm", spec_paths=[spec], as_of=AS_OF) == {"S0R": "retired"}
 
 
 def test_a_broker_whose_configured_arms_cannot_enter_still_records_its_run_all_at_zero(tmp_path):

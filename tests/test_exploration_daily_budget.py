@@ -1,10 +1,12 @@
 """The daily exploration entry budget (owner decision 2026-10-30: 150-250 demo fills a day in total; accounts.yaml
-`exploration.daily`, `ops.accounts.DailyEntries`): fills a day and an hour per account, at most one random-control
-fill per strategy or learning fill, the unpaired per-instrument controls thinned first. Entries only: exits are never
-counted or gated."""
+`exploration.daily`, `ops.accounts.DailyEntries`, goldbot/engine/exploration_budget.py): fills a day, an hour and a
+session per account counted by signal close; paired controls admitted per pair by matched-time thinning (quant ruling
+2026-11-06 Q1); unpaired per-instrument controls capped and stopped at their cost cell's 30 fills. Entries only: exits
+are never counted or gated."""
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -13,9 +15,13 @@ import yaml
 
 from goldbot.data.resample import ticks_to_1m
 from goldbot.engine import Engine, exploration
-from goldbot.engine.exploration import Arm, Pot, daily_refusal, entry_kind
+from goldbot.engine import exploration_budget as budget
+from goldbot.engine.exploration import LEDGER, Arm, ExplorationRecord, Pot
+from goldbot.engine.exploration_budget import daily_refusal, entry_kind
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops.accounts import DailyEntries
+from goldbot.research import exploration_data as ed
+from goldbot.research.arm_rules import hash_u
 from goldbot.research.arms import Arm as SpecArm
 from tests.test_exploration_engine import (
     CLOSE,
@@ -33,6 +39,7 @@ from tests.test_exploration_engine import _engine as _base_engine
 ROOT = Path(__file__).parents[1]
 pytestmark = pytest.mark.usefixtures("_rules")
 START = CLOSE - pd.Timedelta(hours=6)                     # Tuesday 14:00 UTC: London and New York both open
+ALL = {"asia": 100, "london": 100, "newyork": 100}         # session budgets that never bind
 
 
 def _engine(tmp_path: Path, arms: list[Arm], daily: DailyEntries | None) -> tuple[Engine, Any]:
@@ -49,22 +56,44 @@ def _passes(eng: Engine, pb: Any, n: int, start: pd.Timestamp = START) -> None:
         exploration.on_pass(eng, _at(eng, pb, start + pd.Timedelta(minutes=15 * k)))
 
 
-def _sent_at_signal(tmp_path: Path) -> None:
-    """The ledger's sent time (`ts_ns`, the host clock at send: wall time in a test) set to each order's signal close,
-    as it is live, where the host clock and the bars agree."""
-    with exploration.ledger_db(str(tmp_path)).write() as conn:
-        for rec in exploration.LEDGER.select(conn):
-            conn.execute("UPDATE exploration_trades SET ts_ns = ? WHERE client_order_id = ?",
-                         (rec.signal_utc.value, rec.client_order_id))
-
-
-def _spec(arm_id: str, params: dict[str, Any]) -> SpecArm:
+def _spec(arm_id: str, params: dict[str, Any], role: str = "strategy") -> SpecArm:
     return SpecArm(id=arm_id, rule=LONG, timeframe="1m", max_open=1, params=params, status="run",
-                   qualification=QUALIFIED)
+                   qualification=QUALIFIED, role=role)  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def _sessions_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Session budgets that never bind: the day's and the hour's are under test."""
+    monkeypatch.setattr(budget, "session_budgets", lambda *a, **k: dict(ALL))
+
+
+def _rec(i: int, arm: str, at: pd.Timestamp, *, filled: bool = True, symbol: str = "XAUUSD",
+         account: str = "icm-probe") -> ExplorationRecord:
+    return ExplorationRecord(client_order_id=f"o{i}", account_id=account, arm_id=arm, family="f", tf="15m", side=1,
+                             lots=0.01, signal_utc=at, sent_utc=pd.Timestamp("2030-01-01", tz="UTC"), atr_usd=1.0,
+                             stop_usd=1.0, target_usd=1.0, hold_s=60, position_id=i if filled else None, symbol=symbol)
+
+
+def _history(tmp_path: Path, fills: dict[str, list[pd.Timestamp]], signals: dict[str, list[pd.Timestamp]]) -> None:
+    """Earlier days' ledger fills (by signal close) and control candidates (exploration_obs) of icm-probe."""
+    db = exploration.ledger_db(str(tmp_path))
+    i = 1000
+    with db.write() as conn:
+        for arm, ts in fills.items():
+            for t in ts:
+                i += 1
+                LEDGER.upsert(conn, _rec(i, arm, t))
+    for arm, ts in signals.items():
+        for t in ts:
+            i += 1
+            ed.record_candidate(db, candidate_id=f"h{i}", account_id="icm-probe", broker="icm", arm_id=arm,
+                                family="random_bracket", style="intraday", tf="15m", side=1, decision_utc=t,
+                                stop_dist=5.0, target_dist=10.0, max_hold_s=3600, taken=True, is_control=True,
+                                mu=1.0, branch="random", u=0.5)
 
 
 # ------------------------------------------------------------------------------------------------ the rule alone
-def test_an_unpaired_per_instrument_control_is_thin_and_gold_or_learning_paired_controls_pair_first():
+def test_an_unpaired_per_instrument_control_is_thin_and_gold_or_learning_paired_controls_are_not():
     edge = Arm(spec=_spec("e", {"stop_usd": 3.0}), style="scalp")
     gold = Arm(spec=_spec("S0", {"stop_usd": 3.0}), style="scalp", control_share=0.25)
     twin = Arm(spec=_spec("LCS5A", {"stop_usd": 3.0, "control": "learning:S5A"}), style="scalp", control_share=0.05)
@@ -74,35 +103,104 @@ def test_an_unpaired_per_instrument_control_is_thin_and_gold_or_learning_paired_
     assert [entry_kind(a) for a in (edge, gold, twin, lbc, thin)] == ["edge", "control", "control", "control", "thin"]
 
 
+def test_each_control_pairs_the_arms_its_rows_and_the_quant_ruling_name():
+    arms = {"LBC-US500": Arm(spec=_spec("LBC-US500", {"instrument": "US500", "stop_atr": 2.0,
+                                                     "control": "learning:LB-US500"}, "control"), style="scalp",
+                             control_share=0.02)}
+    got = budget.pairs(arms)
+    assert got["LBC-US500"] == ("LB-US500",) and got["F1C"] == ("F1A",) and got["G1C"] == ("G1A",)
+    assert got["ZCD"] == ("Z10D", "Z3D", "Z9D") and set(got["I0"]) >= {"OBR15"}
+
+
 def test_the_day_and_the_hour_budgets_refuse_every_kind_once_spent():
     d = DailyEntries(max_per_day=3, max_per_hour=2)
-    assert daily_refusal(None, "edge", {"day": 10**6}) is None                       # no budget configured: no bound
-    assert daily_refusal(d, "edge", {"day": 2, "hour": 1}) is None
-    assert daily_refusal(d, "edge", {"day": 3, "hour": 0}) == "daily_entries"
-    assert daily_refusal(d, "edge", {"day": 2, "hour": 2}) == "hourly_entries"
+    kw: dict[str, Any] = {"session": "london", "budgets": ALL}
+    assert daily_refusal(None, "edge", {"day": 10**6}, **kw) is None                 # no budget configured: no bound
+    assert daily_refusal(d, "edge", {"day": 2, "hour": 1}, **kw) is None
+    assert daily_refusal(d, "edge", {"day": 3, "hour": 0}, **kw) == "daily_entries"
+    assert daily_refusal(d, "edge", {"day": 2, "hour": 2}, **kw) == "hourly_entries"
 
 
-def test_a_control_fills_only_while_it_stays_at_most_one_per_edge_fill_and_thin_controls_take_their_share_only():
-    d = DailyEntries(max_per_day=100, controls_per_edge=1.0, thin_control_share=0.25)
-    assert daily_refusal(d, "control", {"day": 0}) == "control_ratio"               # no edge fill yet: no control
-    assert daily_refusal(d, "control", {"day": 1, "edge": 1}) is None
-    assert daily_refusal(d, "control", {"day": 2, "edge": 1, "control": 1}) == "control_ratio"
-    assert daily_refusal(d, "thin", {"day": 4, "edge": 4}) is None                   # 1 <= 0.25 x 4
-    assert daily_refusal(d, "thin", {"day": 5, "edge": 4, "thin": 1}) == "thin_controls"
-    assert daily_refusal(d, "control", {"day": 5, "edge": 4, "thin": 1}) is None     # the paired controls still pair
+def test_a_saturated_asia_does_not_stop_the_first_new_york_fill():
+    d = DailyEntries(max_per_day=30)
+    budgets = {"asia": 10, "london": 10, "newyork": 10}
+    n = {"day": 10, "session:asia": 10}
+    assert daily_refusal(d, "edge", n, session="asia", budgets=budgets) == "session_entries"
+    assert daily_refusal(d, "edge", n, session="newyork", budgets=budgets) is None
+
+
+def test_session_budgets_follow_the_trailing_edge_signal_shares_and_split_equally_with_none(tmp_path):
+    d = DailyEntries(max_per_day=90)
+    db = exploration.ledger_db(str(tmp_path))
+    ex = SimpleNamespace(db=db, budget_cache={})
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    day = START.floor("D")
+    assert budget.session_budgets(eng, ex, d, day) == {"asia": 30, "london": 30, "newyork": 30}  # type: ignore[arg-type]
+    t_a, t_b = day - pd.Timedelta(hours=20), day - pd.Timedelta(hours=5)       # Monday 04:00 and 19:00 UTC
+    assert budget.session_of(t_a) != budget.session_of(t_b)
+    for i, at in enumerate([t_a] * 6 + [t_b] * 3):
+        ed.record_candidate(db, candidate_id=f"c{i}-{at.value}", account_id="icm-probe", broker="icm", arm_id="e",
+                            family="f", style="scalp", tf="1m", side=1, decision_utc=at + pd.Timedelta(minutes=i),
+                            stop_dist=3.0, target_dist=3.0, max_hold_s=60, taken=True)
+    ex.budget_cache = {}
+    got = budget.session_budgets(eng, ex, d, day)  # type: ignore[arg-type]
+    rest = ({"asia", "london", "newyork"} - {budget.session_of(t_a), budget.session_of(t_b)}).pop()
+    assert (got[budget.session_of(t_a)], got[budget.session_of(t_b)], got[rest]) == (60, 30, 1)
+
+
+def test_unpaired_per_instrument_controls_take_their_share_of_the_day_and_stop_at_their_cost_cells_30_fills():
+    d = DailyEntries(max_per_day=100, thin_control_share=0.25)
+    kw: dict[str, Any] = {"session": "london", "budgets": ALL}
+    assert daily_refusal(d, "thin", {"day": 10, "thin": 24}, **kw) is None
+    assert daily_refusal(d, "thin", {"day": 10, "thin": 25}, **kw) == "thin_controls"
+    assert daily_refusal(d, "thin", {"day": 10}, cell_fills=29, **kw) is None
+    assert daily_refusal(d, "thin", {"day": 10}, cell_fills=30, **kw) == "thin_cell_complete"
+    assert daily_refusal(d, "control", {"day": 10}, cell_fills=500, **kw) is None     # gold and paired: no such stop
+    assert daily_refusal(d.model_copy(update={"thin_control_fills": None}), "thin", {"day": 10}, cell_fills=500,
+                         **kw) is None
+
+
+def test_the_cost_cell_of_an_instrument_counts_every_arms_fills_of_it_lb_and_lbc_too(tmp_path):
+    db = exploration.ledger_db(str(tmp_path))
+    with db.write() as conn:
+        for i, arm in enumerate(["S0-US500", "I0-US500", "LB-US500", "LBC-US500", "LB-US500"]):
+            LEDGER.upsert(conn, _rec(i, arm, START, symbol="US500"))
+        LEDGER.upsert(conn, _rec(10, "LB-US500", START, symbol="US500", filled=False))     # never filled
+        LEDGER.upsert(conn, _rec(11, "S0", START))
+    ex = SimpleNamespace(db=db, budget_cache={})
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    assert budget.cell_fills(eng, ex, START) == {"US500": 5, "XAUUSD": 1}  # type: ignore[arg-type]
+
+
+def test_todays_counts_are_by_signal_close_never_the_hosts_send_time(tmp_path):
+    """Code review LOW-1: a replay's sends happen at the host's wall clock (2030 here); its day is its signals'."""
+    db = exploration.ledger_db(str(tmp_path))
+    thin = Arm(spec=_spec("S0-US500", {"instrument": "US500", "stop_atr": 2.0}), style="scalp", control_share=0.01)
+    edge = Arm(spec=_spec("e", {"stop_usd": 3.0}), style="scalp")
+    day = START.floor("D")
+    with db.write() as conn:
+        LEDGER.upsert(conn, _rec(1, "S0-US500", day - pd.Timedelta(hours=1)))        # yesterday by signal
+        LEDGER.upsert(conn, _rec(2, "S0-US500", START, symbol="US500"))
+        LEDGER.upsert(conn, _rec(3, "e", START))
+        LEDGER.upsert(conn, _rec(4, "e", START, filled=False))
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    n = budget.entries_today(eng, SimpleNamespace(db=db), day, START + pd.Timedelta(minutes=5),  # type: ignore[arg-type]
+                             {"S0-US500": thin, "e": edge})
+    assert (n["day"], n["hour"], n["thin"], n["edge"], n["session:" + budget.session_of(START)]) == (2, 2, 1, 1, 2)
 
 
 # ------------------------------------------------------------------------------------------------ in the engine
+@pytest.mark.usefixtures("_sessions_open")
 def test_the_engine_sends_no_more_exploration_fills_than_the_days_budget_and_records_the_rest_blocked(tmp_path):
     eng, pb = _engine(tmp_path, [_arm("a", max_open=10)], DailyEntries(max_per_day=2))
     _passes(eng, pb, 4)
     assert len(_sent(eng)) == 2 and len(eng.open) == 2
     assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:daily_entries"}
-    from goldbot.research.exploration_data import read_obs
-    obs = read_obs(exploration.ledger_db(str(tmp_path)))
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
     assert sorted(obs["blocked_reason"].fillna("taken")) == ["daily_entries", "daily_entries", "taken", "taken"], obs
 
 
+@pytest.mark.usefixtures("_sessions_open")
 def test_the_days_count_is_read_from_the_ledger_so_a_restart_never_resets_the_budget(tmp_path):
     eng, pb = _engine(tmp_path, [_arm("a", max_open=10)], DailyEntries(max_per_day=2))
     _passes(eng, pb, 2)
@@ -112,25 +210,68 @@ def test_the_days_count_is_read_from_the_ledger_so_a_restart_never_resets_the_bu
     assert not _sent(eng2) and _actions(eng2, "exploration_refused:daily_entries")
 
 
+@pytest.mark.usefixtures("_sessions_open")
 def test_the_hourly_budget_spreads_the_day_and_the_next_hour_sends_again(tmp_path):
     eng, pb = _engine(tmp_path, [_arm("a", max_open=10)], DailyEntries(max_per_day=50, max_per_hour=1))
     _passes(eng, pb, 3)                                      # 14:00, 14:15, 14:30: one hour
     assert len(_sent(eng)) == 1 and _actions(eng, "exploration_refused:hourly_entries")
-    _sent_at_signal(tmp_path)
     _passes(eng, pb, 1, START + pd.Timedelta(hours=1))
     assert len(_sent(eng)) == 2
 
 
-def test_a_control_waits_for_its_edge_fill_and_then_pairs_one_for_one(tmp_path):
-    ctrl = _arm("c", max_open=10, control_share=0.5)
-    eng, pb = _engine(tmp_path, [ctrl], DailyEntries(max_per_day=50))
-    _passes(eng, pb, 2)
-    assert not _sent(eng) and {d["action"] for d in _actions(eng, "exploration_refused:")} == \
-        {"exploration_refused:control_ratio"}
-    eng2, pb2 = _engine(tmp_path / "paired", [_arm("e", max_open=10), ctrl], DailyEntries(max_per_day=50))
-    _passes(eng2, pb2, 3)
-    arms = [d["arm"] for d in _sent(eng2)]
-    assert arms.count("e") == 3 and 1 <= arms.count("c") <= 3
+def test_control_admitted_before_first_edge_fill(tmp_path, monkeypatch):
+    """Quant Q1: a paired control is admitted by its pair's trailing matched-time rate, never "after an edge fill":
+    its arm filled in this (session, hour) cell on earlier days as often as it signalled there, so p = 1 today before
+    the arm's first fill; p is the candidate's recorded propensity."""
+    monkeypatch.setitem(budget.EXTRA_PAIRS, "c", ("e",))
+    before = [START - pd.Timedelta(days=d) for d in (1, 7)]                 # Monday, last Tuesday: same cell
+    _history(tmp_path, fills={"e": before}, signals={"c": before})
+    eng, pb = _engine(tmp_path, [_arm("c", max_open=10, control_share=0.5), _arm("e", max_open=10, side=-1)],
+                      DailyEntries(max_per_day=50))
+    eng.exploration.queue.clear()                                            # type: ignore[union-attr]
+    exploration.on_pass(eng, _at(eng, pb, START))
+    first = [d["arm"] for d in _sent(eng)]
+    assert first[0] == "c" or "c" in first, eng.decisions
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    today = obs[(obs["arm_id"] == "c") & (obs["decision_utc"] == START)]
+    assert list(today["mu"]) == [1.0] and bool(today["taken"].iloc[0])
+
+
+def test_control_allowance_is_per_pair(tmp_path, monkeypatch):
+    """Quant Q1: not pooled. c1's arm filled in this cell as often as c1 signalled (p = 1); c2's arm filled only in
+    another hour (p = 0 here). Today's fills of e1 never admit c2."""
+    monkeypatch.setitem(budget.EXTRA_PAIRS, "c1", ("e1",))
+    monkeypatch.setitem(budget.EXTRA_PAIRS, "c2", ("e2",))
+    cell = [START - pd.Timedelta(days=1)]
+    elsewhere = [START - pd.Timedelta(days=1, hours=5)]
+    _history(tmp_path, fills={"e1": cell, "e2": elsewhere}, signals={"c1": cell, "c2": cell})
+    eng, pb = _engine(tmp_path, [_arm("c1", max_open=10, control_share=0.3), _arm("c2", max_open=10, control_share=0.3),
+                                 _arm("e1", max_open=10)], DailyEntries(max_per_day=50))
+    exploration.on_pass(eng, _at(eng, pb, START))
+    sent = {d["arm"] for d in _sent(eng)}
+    assert {"c1", "e1"} <= sent and "c2" not in sent
+    [thinned] = [d for d in _actions(eng, "exploration_refused:control_thinned")]
+    assert thinned["arm"] == "c2" and thinned["admission_p"] == 0.0
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    c2 = obs[(obs["arm_id"] == "c2") & (obs["decision_utc"] == START)]
+    assert list(c2["blocked_reason"]) == ["control_thinned"] and list(c2["mu"]) == [0.0]
+
+
+def test_a_thinned_draw_is_the_seeded_hash_of_the_control_and_its_signal_close():
+    """p in (0, 1): admitted exactly when hash_u(control, signal close) < p (restart-safe, identical in a replay)."""
+    u = hash_u("c", START)
+    assert 0.0 <= u < 1.0 and hash_u("c", START) == u
+
+
+def test_an_unreadable_ledger_sends_no_entry_and_says_so(tmp_path, monkeypatch):
+    """Trading-safety LOW-2: the budget's read raising refuses every entry of the pass (fail closed)."""
+    eng, pb = _engine(tmp_path, [_arm("a", max_open=10)], DailyEntries(max_per_day=50))
+
+    def boom(*a: Any, **k: Any) -> dict[str, int]:
+        raise OSError("disk")
+    monkeypatch.setattr(budget, "entries_today", boom)
+    exploration.on_pass(eng, _at(eng, pb, START))
+    assert not _sent(eng) and not eng.open and _actions(eng, "exploration_refused:ledger_unreadable")
 
 
 def test_a_position_open_when_the_budget_is_spent_still_exits_at_its_own_hold(tmp_path):
@@ -172,42 +313,6 @@ def test_a_daily_budget_out_of_bounds_is_refused_at_load(bad):
         DailyEntries.model_validate(bad)
 
 
-# ------------------------------------------------------------------------------------------------ PD+PO 2026-11-06
-def test_an_unpaired_per_instrument_control_stops_for_good_once_its_cost_cell_has_30_fills():
-    d = DailyEntries(max_per_day=100)
-    busy = {"day": 10, "edge": 10}
-    assert daily_refusal(d, "thin", busy, arm_fills=29) is None
-    assert daily_refusal(d, "thin", busy, arm_fills=30) == "thin_cell_complete"
-    assert daily_refusal(d, "control", busy, arm_fills=500) is None              # gold and paired controls: no stop
-    assert daily_refusal(d.model_copy(update={"thin_control_fills": None}), "thin", busy, arm_fills=500) is None
-
-
-def test_the_ledger_counts_each_unpaired_controls_fills_ever_and_todays_by_kind(tmp_path):
-    from types import SimpleNamespace
-
-    from goldbot.engine.exploration import ARM_FILLS, LEDGER, ExplorationRecord, entries_today
-    db = exploration.ledger_db(str(tmp_path))
-    thin = Arm(spec=_spec("S0-US500", {"instrument": "US500", "stop_atr": 2.0}), style="scalp", control_share=0.01)
-    edge = Arm(spec=_spec("e", {"stop_usd": 3.0}), style="scalp")
-    day = START.floor("D")
-
-    def rec(i: int, arm: str, at: pd.Timestamp, filled: bool = True) -> ExplorationRecord:
-        return ExplorationRecord(client_order_id=f"o{i}", account_id="icm-probe", arm_id=arm, family="f", tf="1m",
-                                 side=1, lots=0.01, signal_utc=at, sent_utc=at, atr_usd=1.0, stop_usd=1.0,
-                                 target_usd=1.0, hold_s=60, position_id=i if filled else None)
-
-    with db.write() as conn:
-        for i in range(31):                                  # 31 fills of the control, 30 on earlier days
-            LEDGER.upsert(conn, rec(i, "S0-US500", day - pd.Timedelta(days=1) if i < 30 else START))
-        LEDGER.upsert(conn, rec(100, "e", START))
-        LEDGER.upsert(conn, rec(101, "e", START, filled=False))                 # not filled: never counted
-    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
-    n = entries_today(eng, SimpleNamespace(db=db), day, START + pd.Timedelta(minutes=5),  # type: ignore[arg-type]
-                      {"S0-US500": thin, "e": edge})
-    assert (n["day"], n["hour"], n["thin"], n["edge"], n[ARM_FILLS + "S0-US500"]) == (2, 2, 1, 1, 31)
-    assert ARM_FILLS + "e" not in n
-
-
 def test_the_kill_list_and_a5_retire_their_rows_and_the_paired_controls_stay():
     """Performance-analyst kill list 2026-11-06 (A2: H-80 R2 failed; XBB15 < 2 fills a session day), the unpaired gold
     controls (PD+PO 2026-11-06) and kill rule A5 (quant-reviewer signed 2026-11-06) with its learning twins: retired
@@ -221,5 +326,23 @@ def test_the_kill_list_and_a5_retire_their_rows_and_the_paired_controls_stay():
     assert all(str(rows[a].retired_day) == "2026-11-06" and rows[a].retired_rule for a in [*gone, *a5])
     assert all(str(rows[a].retired_rule).startswith("A5 history-bounded entries, signed 2026-11-06") for a in a5)
     # ZCD still pairs Z3D, Z9D and Z10D on icm-demo; ZCV paired only Z6V/Z7V (A5 sign-off section 7)
-    keep = ["S0", "S0R", "ZCD", "Z3D", "Z9D", "Z10D", "LCZ3D", "F1C", "GS1C",             *(a for a in rows if a.startswith("LBC-") and not rows["LB-" + a[4:]].retired)]
+    keep = ["S0", "S0R", "ZCD", "Z3D", "Z9D", "Z10D", "LCZ3D", "F1C", "GS1C",
+            *(a for a in rows if a.startswith("LBC-") and not rows["LB-" + a[4:]].retired)]
     assert all(a in rows and not rows[a].retired for a in keep)
+
+
+def test_aux_migrations_23_24_backfill_each_rows_signal_close_and_index_it(tmp_path):
+    """Code review LOW-1 / trading-safety LOW-1: an older ledger row gets its signal close from its body, indexed."""
+    import sqlite3
+
+    from goldbot.db.migrations import AUX, migrate
+    rec = _rec(1, "e", START)
+    with sqlite3.connect(tmp_path / "aux.db") as conn:
+        migrate(conn, "aux", migrations=AUX[:22])
+        conn.execute("INSERT INTO exploration_trades (client_order_id, account_id, arm_id, position_id, ts_ns, closed, "
+                     "exit_ns, body) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
+                     (rec.client_order_id, rec.account_id, rec.arm_id, 1, 0, rec.model_dump_json()))
+        conn.commit()
+        assert migrate(conn, "aux") == [23, 24]
+        assert conn.execute("SELECT signal_ns FROM exploration_trades").fetchone()[0] == START.value
+        assert "exploration_trades_signal" in {r[1] for r in conn.execute("PRAGMA index_list(exploration_trades)")}

@@ -191,24 +191,26 @@ class ExplorationPot(FrozenRecord):
 class DailyEntries(FrozenRecord):
     """The account's daily exploration entry budget (owner decision 2026-10-30: 150-250 demo fills a day in total;
     measured 830-860 a day on 2026-11-04..06, 69% random controls). Entries only, counted as fills (an order the broker
-    filled) since the engine's day reset, every book of the account together; exits are never counted or gated. Each
-    refusal is journalled and its candidate recorded blocked (`exploration_refused:<why>`), as every other cap.
-    Demo only by construction: exploration loads on demo probe_only accounts only (`Account._exploration_fenced`)."""
-    # fills a day at most, every exploration arm of the account together (`daily_entries`)
+    filled) by signal close since the engine's day reset, every book of the account together; exits are never counted
+    or gated. Each refusal is journalled and its candidate recorded blocked (`exploration_refused:<why>`), as every
+    other cap (goldbot/engine/exploration_budget.py). Demo only by construction: exploration loads on demo probe_only
+    accounts only (`Account._exploration_fenced`)."""
+    # fills a day at most, every exploration arm of the account together (`daily_entries`); each session (asia, london,
+    # newyork) has its share of it from the trailing 10 trading days' edge signals (`session_entries`, quant Q3)
     max_per_day: int = Field(ge=1)
     # fills in one clock hour at most (`hourly_entries`), so the day's budget is not spent in the first busy hour and
     # every session keeps its evidence; None: no hourly bound
     max_per_hour: int | None = Field(None, ge=1)
-    # random-control fills a day at most this many per strategy or learning fill (`control_ratio`): a control pairs
-    # its arms, it is never the volume on its own. Counted as control + 1 <= ratio x edge fills
+    # quant ruling 2026-11-06 Q1: a paired control is admitted per pair with p = min(1, controls_per_edge x its arms'
+    # fills / its own signals) in the signal's (session, hour) cell over the trailing 10 trading days
+    # (`control_thinned`; p is the candidate's propensity)
     controls_per_edge: float = Field(1.0, gt=0)
-    # of that control allowance, the share the unpaired per-instrument controls (a non-gold control that names no
-    # learning arm: S0-<key>, I0-<key>) may take (`thin_controls`), so the gold controls and the dedicated learning
-    # twins pair first (docs/research/prereg-amendment-2026-11-06-control-thinning.md)
+    # the unpaired per-instrument controls (a non-gold control that names no learning arm: S0-<key>, I0-<key>) take
+    # at most this share of max_per_day a day (`thin_controls`; prereg-amendment-2026-11-06-control-thinning.md)
     thin_control_share: float = Field(0.25, ge=0, le=1)
     # PD+PO 2026-11-06 (the unpaired per-instrument controls cost about £58 a day; their only consumer is the
-    # per-instrument cost cell, n >= 30): an unpaired per-instrument control sends no entry once it has this many
-    # fills on the account (`thin_cell_complete`), for good; None: no such stop
+    # per-instrument cost cell, n >= 30): an unpaired per-instrument control sends no entry once its instrument's cost
+    # cell (every arm's fills of it on the account, LB/LBC too) has this many (`thin_cell_complete`); None: no stop
     thin_control_fills: int | None = Field(30, ge=1)
 
 

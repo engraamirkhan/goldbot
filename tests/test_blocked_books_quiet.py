@@ -22,7 +22,7 @@ N_BLOCKED = 19
 COUNTED = frozenset({"account", "account_positions", "positions", "last_tick", "ticks_many", "symbol_info",
                      "broker_terms", "loss_per_lot", "margin_required", "modify", "close", "place_order",
                      "deals_since", "get_bars", "get_bars_range", "copy_ticks", "trading_sessions"})
-T_PASS = pd.Timestamp.now("UTC").floor("s")
+T_PASS = pd.Timestamp("2025-03-04 14:00", tz="UTC")   # a Tuesday afternoon: never after a Friday cut or a weekend
 
 
 class CountingBroker(PaperBroker):
