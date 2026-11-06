@@ -153,6 +153,9 @@ def committed(root: Path, rel: str, what: str) -> str:
 
 def claim_reads(registry: Path, specs: list[str], window: str, blob: str) -> None:
     """One marker per (spec, window), written BEFORE the read (a crashed read still counts); refuse any repeat."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and registry.resolve().is_relative_to(ROOT / "state"):
+        # 2026-11-06: a test fixture's claims leaked into the real registry and marked POS1-001 as read in CONFIRM
+        raise SystemExit(f"refusing to claim reads in the real registry {registry} from a test run")
     done = set()
     if registry.exists():
         for line in registry.read_text().splitlines():
