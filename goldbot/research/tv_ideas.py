@@ -1,5 +1,5 @@
 """TradingView author ideas: the frozen shadow scorer the pre-registration owes (prereg-2026-10-28-tv-author-ideas.md
-section 6, amendment T-1; docs/research/tv-ideas-score-2026-11-06.md section 5.2). Scheduler job `tva_scores`, nightly
+section 6, amendments T-1 and T-2; docs/research/tv-ideas-score-2026-11-06.md section 5.2). Scheduler job `tva_scores`, nightly
 after the bars are in. It places no order, has no RiskGate path and feeds no engine, arm or feature: the forward read
 (prereg 3.3) is "on the shadow score of all ideas, never on arm fills".
 
@@ -14,10 +14,15 @@ read-only (`mode=ro`):
   never scored ("The scorer refuses HO-window ideas through the existing `holdout_window` guard", prereg 5).
 * Edited = the text changed after first sight (more than one `tv_idea_versions` hash). The collector's own `edited`
   flag also counts the author's later notes ("target reached"); using it would drop winners from the decision read,
-  a selection on the outcome. Edited ideas are scored but never `decision_eligible` ("Excluded from every decision
-  read; scored separately").
+  a selection on the outcome. Amendment T-2 (7): "edited live ideas stay in the decision read, edited-excluded mean
+  as sensitivity"; `edited` is recorded for that read.
+* Decision-eligible (T-2 (6)): resolved, labelled long or short, and available at or after the dated admission of
+  the author's extractor; earlier ideas are descriptive only.
+* Minutes (T-2 (2)): a hole over 15 minutes in the hold or in the 15 ATR days, outside the server daily break
+  (23:55-01:05) and the weekly close, or an ATR day under 80% of the median day's minutes, makes the idea `no_bars`,
+  rescored nightly. No holdout minute is read.
 
-Point in time: the entry is the first 1m minute at or after the idea's `available_utc` (the moment we held its text;
+Point in time (T-2 (1)): the entry is the first 1m minute at or after the idea's `available_utc` (we held its text;
 the prereg's `first_seen_utc` is the listing sighting, at or before it, so this is the stricter of the two), found
 with `asof_join` on `available_utc`; R = ATR14 of daily bars (the broker's server day, mid prices) joined with
 `asof_join` on each day's close, so "as of the prior daily close". A descriptive second entry at `published_utc + 60
@@ -62,7 +67,7 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.store import asof_join
-from goldbot.data.timeutil import epoch_ns, server_wall
+from goldbot.data.timeutil import NY_PLUS_7, epoch_ns, server_wall
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
 
 if TYPE_CHECKING:
@@ -91,6 +96,14 @@ PUBLISH_LAG = pd.Timedelta(seconds=60)                         # 1.2 entry at pu
 READ_MIN_IDEAS = 100                                           # 3.3 forward read: >= 100 resolved ideas ...
 READ_MIN_DAYS = 60                                             #   ... and >= 60 publish-day clusters
 MINUTE = pd.Timedelta(minutes=1)
+MAX_GAP = pd.Timedelta(minutes=15)                             # T-2 (2): a hole longer than this -> no_bars ...
+BREAK_FROM, BREAK_TO = pd.Timedelta(hours=23, minutes=55), pd.Timedelta(hours=1, minutes=5)   # ... outside the
+#   server daily break 23:55-01:05 and the weekly close (Friday 23:55 to Monday 01:05, server time)
+# the break's clock: gold's daily break is 17:00 New York, which is server midnight on NY+7. The configured broker
+# clock (Europe/Athens) drifts an hour from it in the weeks the US and EU change clocks on different dates (measured
+# 2026-10-26..30: the break sat at 22:58-00:02 Athens), and every day of those weeks would read as holed
+BREAK_CLOCK = NY_PLUS_7
+FULL_DAY_SHARE = 0.8                                           # a day with < 80% of the median day's minutes: no ATR
 FINAL: frozenset[str] = frozenset({"scored", "backfilled", "not_gold", "holdout"})
 SCORER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 DB_FILE = "tv_ideas.db"                                        # = goldbot.data.tv_ideas.DB_FILE
@@ -111,13 +124,18 @@ class Call(FrozenRecord):
 
 
 class Extractor(FrozenRecord):
-    """A frozen direction (and levels) extractor of (title, description). `sha` pins its source on every score row."""
+    """A frozen direction (and levels) extractor of (title, description), admitted for an author at `admitted_utc` (the
+    dated amendment). `sha` pins its source and admission time on every score row. Amendment T-2 (6): "forward
+    universe per author = ideas with available_utc >= the dated amendment admitting that author's extractor; earlier
+    ideas descriptive only"."""
     name: str
     fn: Callable[[str, str], Call]
+    admitted_utc: UtcTimestamp
 
     @property
     def sha(self) -> str:
-        return hashlib.sha256(inspect.getsource(self.fn).encode()).hexdigest()[:16]
+        body = inspect.getsource(self.fn) + "\n" + self.admitted_utc.isoformat()
+        return hashlib.sha256(body.encode()).hexdigest()[:16]
 
 
 # author (lower case) -> extractor. Empty: amendment T-1's one direction audit failed (tv-ideas-direction-audit-
@@ -163,6 +181,36 @@ class Minutes:
 
     def ts(self, i: int) -> pd.Timestamp:
         return pd.Timestamp(int(self.ts_ns[i]), unit="ns", tz="UTC")
+
+    def holes(self, server_tz: str) -> np.ndarray:
+        """holes[i]: the minutes missing before minute i form a hole longer than MAX_GAP outside the daily break and
+        the weekly close (`bad_gaps`)."""
+        return bad_gaps(self.ts_ns, server_tz)
+
+
+def bad_gaps(ts_ns: np.ndarray, server_tz: str) -> np.ndarray:
+    """For each minute, True when the minutes missing just before it (from the previous minute's close) last more than
+    MAX_GAP and do not lie inside one break: the server daily break 23:55-01:05, or the weekly close from Friday 23:55
+    to Monday 01:05 (server wall clock)."""
+    out = np.zeros(len(ts_ns), dtype=bool)
+    if len(ts_ns) < 2:
+        return out
+    missing = np.diff(ts_ns) - MINUTE.value
+    for j in np.flatnonzero(missing > MAX_GAP.value):
+        start = pd.Timestamp(int(ts_ns[j]), unit="ns", tz="UTC") + MINUTE
+        end = pd.Timestamp(int(ts_ns[j + 1]), unit="ns", tz="UTC")
+        s_wall, e_wall = server_wall(start, server_tz)[0], server_wall(end, server_tz)[0]
+        tod = s_wall - s_wall.normalize()
+        if tod >= BREAK_FROM:
+            opened = s_wall.normalize() + BREAK_FROM
+        elif tod <= BREAK_TO:
+            opened = s_wall.normalize() - pd.Timedelta(days=1) + BREAK_FROM
+        else:
+            out[j + 1] = True
+            continue
+        days = 3 if opened.dayofweek == 4 else 1                  # Friday's close reopens on Monday
+        out[j + 1] = e_wall > opened.normalize() + pd.Timedelta(days=days) + BREAK_TO
+    return out
 
 
 def add_trading_days(t: pd.Timestamp, n: int) -> pd.Timestamp:
@@ -307,22 +355,29 @@ def levels_read(m: Minutes, t0: pd.Timestamp, call: Call, *, atr: float, bucket:
 
 # ------------------------------------------------------------------------------------------------- point in time
 def daily_atr(bars: pd.DataFrame, server_tz: str) -> pd.DataFrame:
-    """ATR14 of daily mid bars cut at the broker's server midnight (weekday server days), each available at its last
-    minute's close: `available_utc`, `atr_usd`."""
+    """T-2 (4): the simple mean of 14 true ranges of daily mid bars cut at the broker's server midnight (weekday server
+    days), each available at its last minute's close: `available_utc`, `atr_usd`. The 15 days an ATR rests on (14 TR
+    and the close before the first) must all be whole: a day with under 80% of the median day's minutes, or with a hole
+    (`bad_gaps`), makes every ATR it enters NaN (the idea is then `no_bars`)."""
     if bars.empty:
         return pd.DataFrame({"available_utc": pd.DatetimeIndex([], tz="UTC"), "atr_usd": []})
-    ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
-    day = server_wall(ts, server_tz).normalize()
-    f = pd.DataFrame({"day": day, "ts": ts,
-                      "h": (bars["bid_high"].to_numpy() + bars["ask_high"].to_numpy()) / 2,
-                      "l": (bars["bid_low"].to_numpy() + bars["ask_low"].to_numpy()) / 2,
-                      "c": (bars["bid_close"].to_numpy() + bars["ask_close"].to_numpy()) / 2})
-    f = f[f["day"].dt.dayofweek < 5].sort_values("ts", kind="stable")
-    d = f.groupby("day").agg(h=("h", "max"), l=("l", "min"), c=("c", "last"), last=("ts", "max"))
+    b = bars.sort_values("ts_utc", kind="stable")
+    ts = pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True))
+    f = pd.DataFrame({"day": server_wall(ts, server_tz).normalize(), "ts": ts,
+                      "h": (b["bid_high"].to_numpy() + b["ask_high"].to_numpy()) / 2,
+                      "l": (b["bid_low"].to_numpy() + b["ask_low"].to_numpy()) / 2,
+                      "c": (b["bid_close"].to_numpy() + b["ask_close"].to_numpy()) / 2,
+                      "hole": bad_gaps(epoch_ns(ts), BREAK_CLOCK)})
+    f = f[f["day"].dt.dayofweek < 5]
+    d = f.groupby("day").agg(h=("h", "max"), l=("l", "min"), c=("c", "last"), last=("ts", "max"),
+                             n=("ts", "size"), hole=("hole", "max"))
     prev = d["c"].shift()
     tr = pd.concat([d["h"] - d["l"], (d["h"] - prev).abs(), (d["l"] - prev).abs()], axis=1).max(axis=1)
-    out = pd.DataFrame({"available_utc": d["last"] + MINUTE, "atr_usd": tr.rolling(ATR_DAYS).mean()})
-    return out.dropna().reset_index(drop=True)
+    tr[prev.isna()] = np.nan                                   # a true range needs the previous close
+    bad = ((d["n"] < FULL_DAY_SHARE * d["n"].median()) | d["hole"]).astype(float)
+    atr = tr.rolling(ATR_DAYS).mean().where(bad.rolling(ATR_DAYS + 1, min_periods=1).max() == 0)
+    out = pd.DataFrame({"available_utc": d["last"] + MINUTE, "atr_usd": atr})
+    return out.reset_index(drop=True)
 
 
 def atr_at(points: pd.DataFrame, atr: pd.DataFrame) -> np.ndarray:
@@ -350,9 +405,11 @@ def entry_minutes(m: Minutes, times: pd.Series) -> np.ndarray:
 
 # ------------------------------------------------------------------------------------------------- ideas
 def bucket_of(tf: str | None) -> Bucket:
-    """Prereg 1.1: I = chart timeframe up to 4h, D = 1d (and any other intraday-day length), W = 1w and above; a
+    """T-2 (5): I = up to 240 minutes or a seconds chart; D = over 240 minutes and 1D..6D; W = weeks and months; a
     missing timeframe is D."""
     s = (tf or "").strip().upper()
+    if s.endswith("S"):                                        # seconds charts
+        return "I"
     if s.isdigit():
         return "I" if int(s) <= 240 else "D"
     if s.endswith("W") or s.endswith("M"):
@@ -439,11 +496,19 @@ def score_ideas(ideas: pd.DataFrame, bars: pd.DataFrame, *, costs: ScoreCosts,
                 holdout: tuple[pd.Timestamp, pd.Timestamp] | None, as_of: pd.Timestamp,
                 extractors: Mapping[str, Extractor] = ADMITTED_EXTRACTORS) -> list[ScoreRow]:
     """Score `ideas` (read_ideas) on `bars` (1m bid/ask) visible by `as_of`. Module docstring for the rules."""
-    vis = bars[pd.to_datetime(bars["ts_utc"], utc=True) < as_of] if not bars.empty else bars
+    if not bars.empty:
+        t = pd.to_datetime(bars["ts_utc"], utc=True)
+        keep = t < as_of
+        if holdout is not None:                                # no holdout minute is ever read
+            keep &= ~((t >= holdout[0]) & (t < holdout[1]))
+        vis = bars[keep]
+    else:
+        vis = bars
     m = Minutes.from_frame(vis) if not vis.empty else Minutes(np.zeros(0, dtype=np.int64),
                                                              {f"{s}_{c}": np.zeros(0) for s in ("bid", "ask")
                                                               for c in ("open", "high", "low", "close")})
     atr_table = daily_atr(vis, costs.swap.server_tz)
+    holes = m.holes(BREAK_CLOCK)
     t_live = ideas["available_utc"]
     t_pub = ideas["published_utc"] + PUBLISH_LAG
     i_live, i_pub = entry_minutes(m, t_live), entry_minutes(m, t_pub)
@@ -487,18 +552,27 @@ def score_ideas(ideas: pd.DataFrame, bars: pd.DataFrame, *, costs: ScoreCosts,
         out: dict[str, Any] = dict(entry_utc=entry_ts[k], atr_usd=atr, r_long=lo.r, r_short=sh.r,
                                    r_long_stress=lo.r_stress, r_short_stress=sh.r_stress, exit_long=lo.exit,
                                    exit_short=sh.exit)
-        if i_pub[k] < m.n and np.isfinite(atr_pub[k]) and atr_pub[k] > 0:
+        last = max(lo.exit_utc, sh.exit_utc)
+        if holes[i_live[k] + 1: m.at_or_after(last) + 1].any():   # T-2 (2): a hole in the hold, rescored nightly
+            rows.append(ScoreRow(status="no_bars", entry_utc=entry_ts[k], atr_usd=atr, **base))
+            continue
+        pub_pending = False
+        if i_pub[k] < m.n and np.isfinite(atr_pub[k]) and atr_pub[k] > 0:   # descriptive capture read
             for side, key in ((1, "r_long_pub"), (-1, "r_short_pub")):
                 p = direction_read(m, pub_ts[k], side=side, atr=float(atr_pub[k]), bucket=bucket, costs=costs)
                 out[key] = p.r if p is not None and p.resolved else None
+                pub_pending |= p is None or not p.resolved
         if label in ("long", "short"):
             chosen = lo if label == "long" else sh
             out.update(r_side=chosen.r, r_side_stress=chosen.r_stress)
             if call is not None and call.has_levels and base["symbol_class"] == "spot":
                 lv = levels_read(m, entry_ts[k], call, atr=atr, bucket=bucket, costs=costs)
                 out.update(levels_status=lv.status, levels_r=lv.r, levels_r_stress=lv.r_stress)
-        status: Status = "scored" if lo.resolved and sh.resolved else "pending"
-        eligible = status == "scored" and label in ("long", "short") and not base["edited"]
+        status: Status = "scored" if lo.resolved and sh.resolved and not pub_pending else "pending"
+        # T-2 (6)/(7): only ideas available after the author's extractor was admitted; an edited live idea stays in
+        # (scored on its first snapshot; `edited` is kept for the edited-excluded sensitivity read)
+        eligible = (status == "scored" and label in ("long", "short") and ex is not None
+                    and idea["available_utc"] >= ex.admitted_utc)
         rows.append(ScoreRow(status=status, decision_eligible=eligible, **base, **out))
     return rows
 
@@ -517,7 +591,7 @@ def _db_value(v: Any) -> Any:
 
 def save_scores(aux: Database, rows: Iterable[ScoreRow], *, scored_utc: pd.Timestamp) -> int:
     """Upsert `rows` into aux.db `tva_scores`; returns the rows written. A final stored row is never rescored: only its
-    `edited` can go 0 -> 1 (decision_eligible then 0), and an unlabelled one takes a later-admitted extractor's
+    `edited` can go 0 -> 1 (it stays decision-eligible, T-2 (7)), and an unlabelled one takes a later-admitted extractor's
     label (the first snapshot and the frozen extractor are both fixed, so the label is point in time)."""
     rows = list(rows)
     cols = [*_COLUMNS, "scored_utc"]
@@ -532,7 +606,7 @@ def save_scores(aux: Database, rows: Iterable[ScoreRow], *, scored_utc: pd.Times
                 relabel = old[4] == "unlabelled" and row.label != "unlabelled" and row.final
                 if not relabel:
                     if row.edited and not old[3]:
-                        conn.execute("UPDATE tva_scores SET edited = 1, decision_eligible = 0 WHERE idea_id = ?",
+                        conn.execute("UPDATE tva_scores SET edited = 1 WHERE idea_id = ?",
                                      (row.idea_id,))
                         n += 1
                     continue
@@ -595,9 +669,17 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
     work = ideas[~ideas["idea_id"].isin(done)].reset_index(drop=True)
     edited = ideas[ideas["n_versions"] > 1]["idea_id"].tolist()
     canonical = {b for b, cfg in settings.brokers.items() if cfg.canonical_costs}
+    holdout = settings.research.holdout_window()
+    # the minutes are read only from the earliest idea that can still be scored (never the back catalogue, another
+    # symbol or a holdout idea: the first night must not load years of 1m bars), and never from inside the holdout
+    live = work[(work["symbol"].map(symbol_class) != "other") & ~work["backfilled"]
+                & ~work["published_utc"].map(lambda t: _holdout(t, holdout))
+                & ~work["available_utc"].map(lambda t: _holdout(t, holdout))]
     bars, bars_from = pd.DataFrame(), None
-    if not work.empty:
-        start = work["available_utc"].min() - pd.Timedelta(days=3 * ATR_DAYS)
+    if not live.empty:
+        start = live["available_utc"].min() - pd.Timedelta(days=3 * ATR_DAYS)
+        if holdout is not None and start < holdout[1]:
+            start = holdout[1]
         for acc in accounts:
             if acc.broker not in canonical:
                 continue
@@ -606,11 +688,11 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
             if not got.empty:
                 bars, bars_from = got, acc.account_id
                 break
-    rows = score_ideas(work, bars, costs=costs, holdout=settings.research.holdout_window(), as_of=slot)
+    rows = score_ideas(work, bars, costs=costs, holdout=holdout, as_of=slot)
     written = save_scores(aux, rows, scored_utc=slot)
     if edited:
         with aux.write() as conn:
-            conn.executemany("UPDATE tva_scores SET edited = 1, decision_eligible = 0 WHERE idea_id = ? AND edited = 0",
+            conn.executemany("UPDATE tva_scores SET edited = 1 WHERE idea_id = ? AND edited = 0",
                              [(int(i),) for i in edited])
     return {"ideas": len(ideas), "rescored": len(work), "written": written, "bars_account": bars_from,
             "cost_source": costs.source, "extractors": sorted(ADMITTED_EXTRACTORS),

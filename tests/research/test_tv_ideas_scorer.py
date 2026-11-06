@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from goldbot.data import tv_ideas as ti
+from goldbot.data.timeutil import server_wall
 from goldbot.db.connection import Database
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.research import tv_ideas as tva
@@ -31,9 +32,14 @@ T0 = pd.Timestamp("2026-11-02 10:00", tz="UTC")                       # a Monday
 
 
 def flat_bars(start: str = "2026-10-01", end: str = "2026-11-21") -> pd.DataFrame:
-    """1m bid/ask minutes on weekdays (UTC), mid flat at MID, each minute's high/low at mid +- WIGGLE."""
+    """1m bid/ask minutes outside the weekly close (Friday 23:55 to Monday 01:05 on NY+7, gold's clock), mid flat at
+    MID, each minute's high/low at mid +- WIGGLE."""
     ts = pd.date_range(start, end, freq="1min", tz="UTC", inclusive="left")
-    ts = ts[ts.dayofweek < 5]
+    wall = server_wall(ts, "NY+7")
+    tod = wall - wall.normalize()
+    closed = (((wall.dayofweek == 4) & (tod >= pd.Timedelta(hours=23, minutes=55))) | (wall.dayofweek >= 5)
+              | ((wall.dayofweek == 0) & (tod < pd.Timedelta(hours=1, minutes=5))))
+    ts = ts[~closed]
     mid = np.full(len(ts), MID)
     out: dict[str, object] = {"ts_utc": ts}
     for side, sgn in (("bid", -1), ("ask", 1)):
@@ -178,7 +184,8 @@ def _synth_extractor(title: str, description: str) -> tva.Call:
     return tva.Call(label="abstain")
 
 
-SYNTH = {"syntha": tva.Extractor(name="synth-updown-v1", fn=_synth_extractor)}
+ADMITTED = pd.Timestamp("2026-10-01", tz="UTC")
+SYNTH = {"syntha": tva.Extractor(name="synth-updown-v1", fn=_synth_extractor, admitted_utc=ADMITTED)}
 LIVE_SINCE = pd.Timestamp("2026-10-30", tz="UTC")
 
 
@@ -188,13 +195,13 @@ def _score(tmp_path: Path, bars: pd.DataFrame, *, extractors=SYNTH, as_of=pd.Tim
                                                   extractors=extractors)}
 
 
-def test_an_edited_live_idea_is_scored_on_its_first_snapshot_and_kept_out_of_decisions(tmp_path):
+def test_an_edited_live_idea_is_scored_on_its_first_snapshot_and_stays_in_the_decision_read(tmp_path):
     db = _db(tmp_path)
     i = _record(db, 1, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE, text="UP")
     _record(db, 1, published=T0 - pd.Timedelta(minutes=5), seen=T0 + pd.Timedelta(hours=6), live_since=LIVE_SINCE,
             text="DOWN")                                              # the author rewrote it to the other side
     row = _score(tmp_path, flat_bars())[i]
-    assert row.label == "long" and row.edited and not row.decision_eligible
+    assert row.label == "long" and row.edited and row.decision_eligible       # T-2 (7): edited live ideas stay in
     assert row.r_side == row.r_long
 
 
@@ -258,18 +265,21 @@ def test_a_futures_idea_is_scored_direction_only_and_its_levels_are_discarded(tm
 
     i = _record(db, 8, published=T0, seen=T0 + pd.Timedelta(minutes=5), live_since=LIVE_SINCE, ticker="GC1!",
                 exchange="COMEX")
-    row = _score(tmp_path, flat_bars(), extractors={"syntha": tva.Extractor(name="x", fn=levels_extractor)})[i]
+    row = _score(tmp_path, flat_bars(), extractors={"syntha": tva.Extractor(name="x", fn=levels_extractor,
+                                                                                    admitted_utc=ADMITTED)})[i]
     assert row.symbol_class == "futures" and row.levels_status is None and row.r_side is not None
 
 
 def test_the_timeframe_buckets_follow_the_prereg():
-    assert [tva.bucket_of(tf) for tf in ("15", "60", "240", "1D", "1W", "1M", None)] == \
-        ["I", "I", "I", "D", "W", "W", "D"]
+    assert [tva.bucket_of(tf) for tf in ("30S", "15", "60", "240", "480", "1D", "2D", "1W", "1M", None)] == \
+        ["I", "I", "I", "I", "D", "D", "D", "W", "W", "D"]
 
 
 def test_the_extractor_hash_pins_its_source():
     e = SYNTH["syntha"]
-    assert len(e.sha) == 16 and e.sha == tva.Extractor(name="other", fn=_synth_extractor).sha
+    assert len(e.sha) == 16 and e.sha == tva.Extractor(name="other", fn=_synth_extractor, admitted_utc=ADMITTED).sha
+    later = tva.Extractor(name="other", fn=_synth_extractor, admitted_utc=ADMITTED + pd.Timedelta(days=1))
+    assert later.sha != e.sha                                     # the admission time is part of the frozen record
 
 
 # ------------------------------------------------------------------------------------------------- the job
@@ -392,7 +402,85 @@ def test_an_unlabelled_final_row_takes_a_later_admitted_extractor_s_label_and_a_
 
     assert tva.save_scores(aux, score({}), scored_utc=at) == 1
     assert tva.save_scores(aux, score(SYNTH), scored_utc=at) == 1                  # unlabelled -> long
-    flipped = {"syntha": tva.Extractor(name="flip", fn=_always_short)}
+    flipped = {"syntha": tva.Extractor(name="flip", fn=_always_short, admitted_utc=ADMITTED)}
     assert tva.save_scores(aux, score(flipped), scored_utc=at) == 0                # a frozen label is never rewritten
     row = {r.idea_id: r for r in tva.stored_rows(aux)}[i]
     assert row.label == "long" and row.extractor == "synth-updown-v1" and row.decision_eligible
+
+
+def test_ideas_before_the_extractor_s_admission_are_scored_but_never_decision_eligible(tmp_path):
+    """T-2 (6): the forward universe starts at the dated amendment that admits the author's extractor."""
+    db = _db(tmp_path)
+    before = _record(db, 15, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE)
+    after = _record(db, 16, published=T0 + pd.Timedelta(hours=1), seen=T0 + pd.Timedelta(hours=1, minutes=4),
+                    live_since=LIVE_SINCE)
+    late = {"syntha": tva.Extractor(name="synth-updown-v1", fn=_synth_extractor,
+                                    admitted_utc=T0 + pd.Timedelta(minutes=30))}
+    rows = _score(tmp_path, flat_bars(), extractors=late)
+    assert rows[before].label == "long" and rows[before].status == "scored" and not rows[before].decision_eligible
+    assert rows[after].decision_eligible
+
+
+def _drop(bars: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    t = pd.DatetimeIndex(bars["ts_utc"])
+    return bars[~((t >= start) & (t < end))].reset_index(drop=True)
+
+
+def test_a_hole_in_the_minutes_mid_hold_is_no_bars_until_filled(tmp_path):
+    """T-2 (2): a hole over 15 minutes outside the daily break and the weekly close makes the idea `no_bars` (not
+    final: rescored nightly), and the filled minutes score it."""
+    db = _db(tmp_path)
+    i = _record(db, 17, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE, interval="1D")
+    hole = _drop(flat_bars(), T0 + pd.Timedelta(days=1, hours=2), T0 + pd.Timedelta(days=1, hours=2, minutes=30))
+    row = _score(tmp_path, hole)[i]
+    assert row.status == "no_bars" and not row.final and row.r_side is None
+    short = _drop(flat_bars(), T0 + pd.Timedelta(days=1, hours=2), T0 + pd.Timedelta(days=1, hours=2, minutes=10))
+    assert _score(tmp_path, short)[i].status == "scored"            # 10 minutes missing: within tolerance
+    assert _score(tmp_path, flat_bars())[i].status == "scored"
+
+
+def test_the_daily_break_and_the_weekly_close_are_not_holes_even_when_the_us_and_eu_clocks_differ():
+    """The break is 17:00 New York (NY+7 midnight); 2026-10-26..30 it sat at 22:58-00:02 Athens, an hour off the
+    configured broker clock, and must still read as the break."""
+    bars = flat_bars()
+    wall = server_wall(pd.DatetimeIndex(bars["ts_utc"]), "NY+7")
+    tod = wall - wall.normalize()
+    in_break = (tod >= pd.Timedelta(hours=23, minutes=58)) | (tod < pd.Timedelta(hours=1, minutes=2))
+    m = tva.Minutes.from_frame(bars[~in_break])
+    assert not m.holes(tva.BREAK_CLOCK).any()
+    assert m.holes("Europe/Athens").any()                     # the configured broker clock would hole that week
+    late =(tod >= pd.Timedelta(hours=12)) & (tod < pd.Timedelta(hours=12, minutes=30)) & \
+        (pd.DatetimeIndex(bars["ts_utc"]).normalize() == pd.Timestamp("2026-10-28", tz="UTC"))
+    assert tva.Minutes.from_frame(bars[~(in_break | late)]).holes(tva.BREAK_CLOCK).sum() == 1
+
+
+def test_a_partial_day_is_not_used_for_atr(tmp_path):
+    """An ATR day with under 80% of the median day's minutes poisons every ATR whose 15 days include it."""
+    thin = pd.Timestamp("2026-10-27 12:00", tz="UTC")                 # a Tuesday, inside the 15 days before T0
+    bars = _drop(flat_bars(), thin, thin + pd.Timedelta(hours=8))
+    atr = tva.daily_atr(bars, "Europe/Athens")
+    got = tva.atr_at(pd.DataFrame({"ts_utc": [T0, T0 + pd.Timedelta(days=21)]}), atr)
+    assert np.isnan(got[0]) and got[1] == pytest.approx(ATR)
+    db = _db(tmp_path)
+    i = _record(db, 18, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE)
+    assert _score(tmp_path, bars)[i].status == "no_bars"
+
+
+def test_a_final_row_does_not_change_when_later_bars_are_appended_or_perturbed(tmp_path):
+    db = _db(tmp_path)
+    ids = [_record(db, 20 + k, published=T0 + pd.Timedelta(hours=k), seen=T0 + pd.Timedelta(hours=k, minutes=6),
+                   live_since=LIVE_SINCE, interval=tf, text=txt)
+           for k, (tf, txt) in enumerate((("60", "UP"), ("1D", "DOWN"), ("240", "UP"), ("1D", "UP")))]
+    at = pd.Timestamp("2026-11-21", tz="UTC")
+    first = _score(tmp_path, flat_bars(), as_of=at)
+    final = {i: first[i] for i in ids if first[i].final}
+    assert len(final) == len(ids)
+    cut = max(max(r.entry_utc for r in final.values()) + pd.Timedelta(days=15), at - pd.Timedelta(days=5))
+    later = flat_bars(end="2026-12-21")
+    after = pd.DatetimeIndex(later["ts_utc"]) >= cut
+    walk = np.cumsum(np.random.default_rng(7).normal(0, 2.0, int(after.sum())))
+    walk[len(walk) // 2] += 300.0                                     # a spike
+    for c in [c for c in later.columns if c != "ts_utc"]:
+        later.loc[after, c] = later.loc[after, c] + walk
+    again = _score(tmp_path, later, as_of=pd.Timestamp("2026-12-21", tz="UTC"))
+    assert {i: again[i].model_dump() for i in final} == {i: r.model_dump() for i, r in final.items()}

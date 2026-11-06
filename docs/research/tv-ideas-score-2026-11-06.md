@@ -190,6 +190,8 @@ Notes the owner should weigh:
    costs nothing and fills the forward read (>= 60 clusters and >= 100 ideas) by about 2027-02 for an author who
    posts daily. It needs a direction source, so:
 2. **An author-specific direction parser for A (one outcome-blind audit, per the T-1 bar).**
+   - **Out of order this quarter** (quant review 2026-11-06): amendment T-1 parks the line to the Q1 refresh after
+     its one failed audit, so re-opening it for A only is not allowed before then. Kept below as the Q1 proposal.
    - New evidence justifies re-opening the parked line for A only: A's live posts use a fixed bias template.
    - A written amendment, dated before the audit, would freeze a template parser for A (its fixed bias sentence: a
      bias word, a verb of state or change, then bullish or bearish). It is then audited on a fresh pre-2025-10 sample of
