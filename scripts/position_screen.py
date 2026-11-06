@@ -186,6 +186,15 @@ def load_rates(s: PositionSettings, root: Path, symbols: list[str], allow_consta
     return financing.build_rates(symbols, usd, currency, constant_pct=s.short_rate_constant_pct)
 
 
+def _extra(net: pd.Series) -> dict[str, float]:
+    """Report-only: daily profit factor, max drawdown (equity units, no compounding) and the net without 2025 (W2)."""
+    pos, neg = float(net[net > 0].sum()), float(-net[net < 0].sum())
+    cum = net.cumsum()
+    yr = pd.DatetimeIndex(net.index).year
+    return {"pf_daily": pos / neg if neg > 0 else float("inf"), "max_dd": float((cum.cummax() - cum).max()),
+            "net_ex2025": float(net[yr != 2025].sum())}
+
+
 def _commit() -> str:
     try:
         return _git(ROOT, "rev-parse", "HEAD")
@@ -209,6 +218,7 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
     ap.add_argument("--from-explore", help="the EXPLORE result JSON the confirm set is taken from")
     ap.add_argument("--ensemble", action="append", default=[], help="an eligible C1 ensemble id (repeatable)")
     ap.add_argument("--out")
+    ap.add_argument("--daily-out", help="local dir (never committed) for each spec's venue-A book daily P&L parquet")
     args = ap.parse_args(argv)
 
     s = load_settings(args.settings).research.position
@@ -259,10 +269,14 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
                          venues=financing.venues_from_settings(s, long_only=sp.long_only), rates=rates,
                          name=args.window)
         a = res.venues["A"].book
+        if args.daily_out:
+            Path(args.daily_out).expanduser().mkdir(parents=True, exist_ok=True)
+            res.venues["A"].daily.to_parquet(Path(args.daily_out).expanduser() / f"{sp.id}_{args.window}.parquet")
         rows.append({"id": sp.id, "rate_source": res.rate_source, "windows_read": list(res.windows_read),
                      "y_learn": res.y_learn, "p_boot": stats.p_one_sided(a.t_boot),
                      "explore_checks": stats.explore_checks(a),
                      "venues": {k: {"venue": v.venue, "gates": v.gates, "book": v.book.model_dump(),
+                                    **_extra(v.daily["net"]),
                                     "per_year_net": {str(y): float(x) for y, x in v.daily["net"].groupby(
                                         pd.DatetimeIndex(v.daily.index).year).sum().items()},
                                     "assets": {m: st.model_dump() for m, st in v.assets.items()}}
