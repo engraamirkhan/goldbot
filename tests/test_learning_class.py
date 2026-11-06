@@ -276,7 +276,8 @@ def test_the_spec_registers_every_fixed_bracket_arm_the_gate_refused_as_a_learni
         for arm_id, control in per.items():
             a = spec[arm_id]
             block = arms.Learning.model_validate(a.learning)
-            assert a.entry_refused == "", (arm_id, a.entry_refused)
+            # A5 (signed 2026-11-06) retired some arms with their controls: a retired pair is refused for that reason
+            assert a.entry_refused == "" or (a.retired and spec[control].retired), (arm_id, a.entry_refused)
             assert block.control == control and spec[control].role == "control"
             assert arms.control_match_refusal(a, spec[control]) is None
             assert block.prereg == PREREG and block.until == "2026-12-17" and block.since == "2026-11-02"

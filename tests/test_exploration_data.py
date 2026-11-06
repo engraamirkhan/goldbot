@@ -566,11 +566,14 @@ def test_learn_allocates_strategy_arms_per_style_never_controls_and_retrains_whe
     monkeypatch.setattr(ex, "RETRAIN_MIN_TOTAL", 100)
     monkeypatch.setattr(ex, "H62_PARAMS", {**ex.H62_PARAMS, "min_child_samples": 5})
     as_of = pd.Timestamp("2026-10-11 23:00", tz="UTC")                  # a Sunday: retrain day
-    rep = ex.learn(db, broker="icm", as_of=as_of, arms={"S9": "scalp"}, controls=["S0"], seed=1, retrain=True,
+    configured = {a: "scalp" for a in ("S1a", "S1b", "S5a", "S5b", "S9")}
+    rep = ex.learn(db, broker="icm", as_of=as_of, arms=configured, controls=["S0"], seed=1, retrain=True,
                    models_dir=tmp_path / "models")
     w = rep["weights"]
     assert set(w) == {"S1a", "S1b", "S5a", "S5b", "S9"} and "S0" not in w
-    assert w["S1a"] == pytest.approx(0.30) and all(ex.FLOOR_SHARE - 1e-12 <= v <= 0.30 + 1e-12 for v in w.values())
+    assert w["S9"] == 0.0                                   # configured, never filled: no weight (PD 2026-11-06)
+    assert w["S1a"] == pytest.approx(0.30) and all(ex.FLOOR_SHARE - 1e-12 <= v <= 0.30 + 1e-12
+                                                   for a, v in w.items() if a != "S9")
     assert ex.weights(db, list(w), broker="icm", now=as_of) == w
     m = rep["models"]["scalp"]
     assert m["version"] == "h62-icm-scalp-20261009T2100" and rep["models"]["swing"]["due"] is False

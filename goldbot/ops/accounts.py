@@ -188,6 +188,30 @@ class ExplorationPot(FrozenRecord):
     max_open: int = Field(ge=1)
 
 
+class DailyEntries(FrozenRecord):
+    """The account's daily exploration entry budget (owner decision 2026-10-30: 150-250 demo fills a day in total;
+    measured 830-860 a day on 2026-11-04..06, 69% random controls). Entries only, counted as fills (an order the broker
+    filled) since the engine's day reset, every book of the account together; exits are never counted or gated. Each
+    refusal is journalled and its candidate recorded blocked (`exploration_refused:<why>`), as every other cap.
+    Demo only by construction: exploration loads on demo probe_only accounts only (`Account._exploration_fenced`)."""
+    # fills a day at most, every exploration arm of the account together (`daily_entries`)
+    max_per_day: int = Field(ge=1)
+    # fills in one clock hour at most (`hourly_entries`), so the day's budget is not spent in the first busy hour and
+    # every session keeps its evidence; None: no hourly bound
+    max_per_hour: int | None = Field(None, ge=1)
+    # random-control fills a day at most this many per strategy or learning fill (`control_ratio`): a control pairs
+    # its arms, it is never the volume on its own. Counted as control + 1 <= ratio x edge fills
+    controls_per_edge: float = Field(1.0, gt=0)
+    # of that control allowance, the share the unpaired per-instrument controls (a non-gold control that names no
+    # learning arm: S0-<key>, I0-<key>) may take (`thin_controls`), so the gold controls and the dedicated learning
+    # twins pair first (docs/research/prereg-amendment-2026-11-06-control-thinning.md)
+    thin_control_share: float = Field(0.25, ge=0, le=1)
+    # PD+PO 2026-11-06 (the unpaired per-instrument controls cost about £58 a day; their only consumer is the
+    # per-instrument cost cell, n >= 30): an unpaired per-instrument control sends no entry once it has this many
+    # fills on the account (`thin_cell_complete`), for good; None: no such stop
+    thin_control_fills: int | None = Field(30, ge=1)
+
+
 class Exploration(FrozenRecord):
     """Exploration arms (plan 2026-10-25, lane L1): minimum-lot demo entries that trade to MEASURE an edge, so the
     RiskGate's purpose `exploration` skips only its expected-value rules, inside its fence (goldbot/risk/gate.py
@@ -212,6 +236,8 @@ class Exploration(FrozenRecord):
     # ADR 0061 amendment 2026-11-02: learning arms (`role: learning`) open at once on this account, all together
     # (`learning_slots`); 0 (the default): no learning arm enters
     learning_max_open: int = Field(0, ge=0)
+    # the daily entry budget (`DailyEntries`); None: no count bound (the £ budgets and slots still bind)
+    daily: DailyEntries | None = None
 
 
 def growth_arm_ids(acc: Account) -> frozenset[str]:

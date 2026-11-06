@@ -849,7 +849,7 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
             now: pd.Timestamp | None = None, max_age: pd.Timedelta = MAX_WEIGHTS_AGE) -> dict[str, float]:
     """`broker`'s newest run's share of each of ONE style's strategy arms in that style's budget (learnt from that
     broker's evidence only), each in
-    [FLOOR_SHARE, min(CAP_SHARE, its ceiling)]. Equal shares in the same bounds when there is no run, it is older
+    [FLOOR_SHARE, min(CAP_SHARE, its ceiling)], or 0 for an arm the run found unable to enter. Equal shares in the same bounds when there is no run, it is older
     than `max_age` at `now`, it does not score every requested arm, the arms span styles, a share is out of bounds,
     the shares sum above 1, or aux.db is unreadable."""
     want = list(dict.fromkeys(arms))
@@ -878,25 +878,69 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
     floor = min(FLOOR_SHARE, 1.0 / len(want))
     hi = {a: max(0.0, min(CAP_SHARE, _ceiling(ceilings, a, CAP_SHARE))) for a in want}
     vals = {a: got[a][0] for a in want}
-    if any(not (math.isfinite(v) and min(floor, hi[a]) - 1e-9 <= v <= CAP_SHARE + 1e-9) for a, v in vals.items()) \
-            or sum(vals.values()) > 1 + 1e-9:
+    # PD 2026-11-06: a share of exactly 0 is an arm the learner found unable to enter (`entry_exclusions`); the others
+    # keep their bounds
+    if any(not (math.isfinite(v) and (v == 0.0 or min(floor, hi[a]) - 1e-9 <= v <= CAP_SHARE + 1e-9))
+           for a, v in vals.items()) or sum(vals.values()) > 1 + 1e-9:
         log.warning("exploration weights of run %s out of bounds: equal shares", run)
         return fallback
     return {a: float(min(v, hi[a])) for a, v in vals.items()}
 
 
 # ---------------------------------------------------------------------------------------------- the nightly run
+SPEC_PATHS: tuple[Path, ...] = (arm_spec.REPO_ROOT / "config" / "exploration_arms.yaml",
+                                arm_spec.REPO_ROOT / "config" / "spec_arms.yaml")
+
+
+def entry_exclusions(db: Database, arm_ids: Collection[str], *, broker: str,
+                     spec_paths: Sequence[Path] = SPEC_PATHS) -> dict[str, str]:
+    """The arms of `arm_ids` that can send no entry on `broker`'s accounts, with why (PD 2026-11-06: "retired arms,
+    blocked arms ... get no weight"): `retired` (the spec row's `retired_day`, never undone, or the broker's
+    `exploration_arm_status`, the daily review's stop) or `blocked` (spec status not run, or refused at load: ADR
+    0061 qualification, a learning arm's cross refusal: `research.arms.load_arms`). An arm no spec names is not judged
+    here (the engine drops it at load, so it has no new fill). An unreadable spec raises: the learner does not run on
+    arms it cannot judge (its weights age into equal shares); a missing status table reads as no retirement."""
+    want = set(arm_ids)
+    rows: dict[str, arm_spec.Arm] = {}
+    for path in spec_paths:
+        if path.exists():
+            rows.update({a.id: a for a in arm_spec.load_arms(path) if a.id in want})
+    out: dict[str, str] = {}
+    for a in sorted(rows):
+        row = rows[a]
+        if row.retired:
+            out[a] = "retired"
+        elif row.status != "run" or row.entry_refused:
+            out[a] = "blocked"
+    try:
+        with db.connection() as conn:
+            stopped = {str(a) for (a,) in conn.execute(
+                "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired'", (broker,))}
+    except sqlite3.Error as exc:
+        log.warning("exploration_arm_status unreadable (%s): spec retirements only", type(exc).__name__)
+        stopped = set()
+    out.update({a: "retired" for a in sorted(stopped & want)})
+    return out
+
+
 def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, str] | None = None,
           controls: Sequence[str] = (), ceilings: Mapping[str, float] | None = None, seed: int = 0,
           retrain: bool = False, models_dir: Path | None = None, held_out: Collection[str] = (),
           learning: Collection[str] | None = None,
-          instruments: Mapping[str, str] | None = None) -> dict[str, Any]:
+          instruments: Mapping[str, str] | None = None,
+          spec_paths: Sequence[Path] = SPEC_PATHS) -> dict[str, Any]:
     """One broker's bandit (nightly) and, when `retrain` (Sundays), its H-62 style models whose retrain is due, on
     that broker's evidence only. `arms`: the strategy arm id -> style configured on the broker's accounts (joined
     with the arms seen in its candidates); control arms (random brackets) are never allocated by results. Shares use
     each arm's net R labels (label_sim_r) resolved by `as_of`. `learning` (default: the spec's `role: learning` rows,
     ADR 0061 amendment 2026-11-02): unqualified demo arms, never allocated by results and never in a style model's
-    training rows, as a control is never allocated."""
+    training rows, as a control is never allocated.
+
+    PD 2026-11-06 (its top weights sat on retired and non-trading arms and never steered an entry): only arms that can
+    actually enter are weighted. A retired or blocked arm (`entry_exclusions`), an arm with no labelled fill in the
+    evidence and, when `arms` is given, an arm not configured on the broker are written at 0 (`detail.excluded` says
+    why); the shares renormalise over the rest within each style. A run on labelled evidence is written even when no
+    arm can enter (all at 0): the learner ran."""
     if not broker:
         raise ValueError("exploration evidence is learnt per broker")
     if learning is None:
@@ -952,17 +996,28 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         log.warning("exploration %s: no labelled evidence by %s, no weights run written", broker, as_of)
         out["weights"] = None
         return out
-    shares =thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed)
+    excluded = entry_exclusions(db, style_of, broker=broker, spec_paths=spec_paths)
+    if arms is not None:
+        excluded.update({a: "not_on_broker" for a in style_of if a not in arms and a not in excluded})
+    excluded.update({a: "no_fills" for a in style_of
+                     if a not in excluded and not any(math.isfinite(v) for v in r_by_arm[a])})
+    if excluded:
+        log.info("exploration %s: no weight for %s", broker,
+                 ", ".join(f"{a} ({why})" for a, why in sorted(excluded.items())))
+    live = {a: r for a, r in r_by_arm.items() if a not in excluded}
+    shares = {**thompson_shares(live, style_of, priors=priors, ceilings=ceilings, seed=seed),
+              **dict.fromkeys(excluded, 0.0)}
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,
                   "prior": priors[a].prior_version if a in priors else None, "ceiling": (ceilings or {}).get(a),
-                  "method": "thompson_nig_net_r_within_style", "suspect": int(sus.get(a, 0))} for a in style_of}
+                  "method": "thompson_nig_net_r_within_style", "suspect": int(sus.get(a, 0)),
+                  **({"excluded": excluded[a]} if a in excluded else {})} for a in style_of}
     write_weights(db, _ns(as_of), shares, style_of, detail, broker=broker)
     out["weights"] = shares
     return out
 
 
 __all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LABEL_R", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
-           "bounded_shares", "cross_fit_meta", "equal_shares", "label_candidates", "learn", "model_columns",
+           "bounded_shares", "cross_fit_meta", "entry_exclusions", "equal_shares", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
            "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "suspect", "thompson_shares",
            "training_table", "weights", "write_prior", "write_weights"]

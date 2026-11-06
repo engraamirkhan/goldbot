@@ -589,11 +589,12 @@ def test_on_an_hourly_cadence_a_close_that_is_not_the_hours_slot_sends_and_journ
     assert len(_rows(tmp_path)) == 1
 
 
-def test_icm_probe_runs_hourly_probes_and_vantage_keeps_every_15m_close():
-    """Demo trim (cost of record 2026-10-31 section 6): ICM 24 a day; Vantage kept at 40 a day until its exit legs are
-    recorded and it has 200 strategy fills per session (then every_min 120, 12 a day)."""
+def test_icm_probe_runs_a_probe_every_two_hours_and_vantage_keeps_every_15m_close():
+    """Demo trim (cost of record 2026-10-31 section 6): ICM 24 a day, then 12 (CFO/finance 2026-11-06: every ICM session
+    already past PROBE_MIN_FILLS); Vantage kept at 40 a day until its exit legs are recorded, it has 200 strategy fills
+    per session and its london and newyork scheduled fills reach PROBE_MIN_FILLS (then every_min 120, 12 a day)."""
     accts = acc_mod.load_accounts(logins=False)
-    assert accts["icm-probe"].cost_probe.scheduled.every_min == 60
+    assert accts["icm-probe"].cost_probe.scheduled.every_min == 120
     assert accts["vantage-demo"].cost_probe.scheduled.every_min == 15
 
 

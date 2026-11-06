@@ -123,6 +123,15 @@ accounts:
       max_open_total: 23
       pot_budgets: false
       learning_max_open: 6
+      # Daily entry budget (owner decision 2026-10-30: demo 150-250 fills a day in total; PD 2026-11-06, measured
+      # 830-860 a day on 2026-11-04..06, 69% random controls): icm-demo 70 (intraday, swing, learning twins).
+      # At most `max_per_day` exploration fills a day on this account (every book), `max_per_hour` in one clock hour (no session spends
+      # the day), one control fill per strategy/learning fill, the unpaired per-instrument controls (S0-<key>,
+      # I0-<key>) at most 0.25 of that (docs/research/prereg-amendment-2026-11-06-control-thinning.md). Entries
+      # only; exits are never gated. The three accounts' budgets + daily_review.probe_plan stay <= 250
+      # (tests/test_exploration_daily_budget.py). PD+PO 2026-11-06: an unpaired per-instrument control stops for good at
+      # 30 fills (its cost cell). Rollback: drop the line, restart
+      daily: { max_per_day: 70, max_per_hour: 7, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30 }
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 option B): a scalp pot carved inside the unchanged £198 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 108 / 9 -> 68 / 7, swing 90 / 2 -> 40 / 2.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
@@ -265,7 +274,11 @@ accounts:
     # slippage are settled by strategy fills; 24 a day keeps the fixed-time control series. Rollback: drop every_min.
     # demo-limits ADR 2026-11-02 (f): the probe sleeve 0.1363 -> 0.2363 (£30 -> £52) with exploration's unchanged
     # 0.7637, so the day's shares sum to 1.0 (the £220 still binds). Rollback: 0.1363, restart
-    cost_probe: { enabled: true, budget_share: 0.2363, max_open: 3, max_loss: 10.0, scheduled: { enabled: true, budget_share: 0.5, every_min: 60 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # CFO/finance 2026-11-06 (scheduled probes -£107 over 12 days, t -5.3): every_min 60 -> 120, <= 12 a day. Each
+    # ICM session already holds more than the prereg's PROBE_MIN_FILLS 50 scheduled fills (asia 227, london 113,
+    # newyork 178 on 2026-11-06), so the cost table keeps every measured cell; half the rate keeps the fixed-time
+    # series. Rollback: every_min 60, restart
+    cost_probe: { enabled: true, budget_share: 0.2363, max_open: 3, max_loss: 10.0, scheduled: { enabled: true, budget_share: 0.5, every_min: 120 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
@@ -307,6 +320,15 @@ accounts:
       # research lead 2026-11-02 (learning-mi-2026-11-02.md section 5): 6 -> 14 learning positions open at once, for the
       # 19 multi-instrument pairs beside the 7 gold learning arms; slot count only. Rollback: 6, restart
       learning_max_open: 14
+      # Daily entry budget (owner decision 2026-10-30: demo 150-250 fills a day in total; PD 2026-11-06, measured
+      # 830-860 a day on 2026-11-04..06, 69% random controls): icm-probe 85 (scalp, instrument pairs).
+      # At most `max_per_day` exploration fills a day on this account (every book), `max_per_hour` in one clock hour (no session spends
+      # the day), one control fill per strategy/learning fill, the unpaired per-instrument controls (S0-<key>,
+      # I0-<key>) at most 0.25 of that (docs/research/prereg-amendment-2026-11-06-control-thinning.md). Entries
+      # only; exits are never gated. The three accounts' budgets + daily_review.probe_plan stay <= 250
+      # (tests/test_exploration_daily_budget.py). PD+PO 2026-11-06: an unpaired per-instrument control stops for good at
+      # 30 fills (its cost cell). Rollback: drop the line, restart
+      daily: { max_per_day: 85, max_per_hour: 8, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30 }
       # learning-mi-2026-11-02.md section 5 (research lead 2026-11-02, all 26 pairs registered): an intraday pot of 12
       # slots for the multi-instrument learning pairs. Slot counts only: max_open_total 23, max_positions 24, every
       # per-trade cap, the margin floor and the notional ceiling are unchanged and still bind (the pots' slots sum past
@@ -457,6 +479,9 @@ accounts:
     # stays (plan 40 a day; probes are Vantage's only exit-slip measurement) until its exit legs are recorded AND its
     # strategy fills reach 200 per session, then `every_min: 120` (12 a day). Manual switch: the engine does not read
     # fill counts; the weekly cost-of-record refresh checks both conditions.
+    # CFO/finance 2026-11-06 (probe cadence halved on icm-probe): NOT halved here. Its london (43) and newyork (47)
+    # scheduled fills are still under the prereg's PROBE_MIN_FILLS 50 a session (execution/costs.py), so half the rate
+    # would hold the prior on those cells longer; the switch above stands, plus both sessions at 50.
     # demo-limits ADR 2026-11-02 (f): 0.075 -> 0.175 (£15 -> £35), exploration 0.9 -> 0.825 (£180 -> £165): the day's
     # shares sum to 1.0 under the unchanged £200. Rollback: 0.075 and 0.9, restart
     cost_probe: { enabled: true, budget_share: 0.175, max_open: 1, max_loss: 4.0, scheduled: { enabled: true, budget_share: 0.5 } }
@@ -496,6 +521,15 @@ accounts:
       # scan order. Slot count only: £8 per trade, the £160 learning caps and every loss limit unchanged.
       # Rollback: 6, restart
       learning_max_open: 12
+      # Daily entry budget (owner decision 2026-10-30: demo 150-250 fills a day in total; PD 2026-11-06, measured
+      # 830-860 a day on 2026-11-04..06, 69% random controls): vantage-demo 40 (its scheduled probes run beside).
+      # At most `max_per_day` exploration fills a day on this account (every book), `max_per_hour` in one clock hour (no session spends
+      # the day), one control fill per strategy/learning fill, the unpaired per-instrument controls (S0-<key>,
+      # I0-<key>) at most 0.25 of that (docs/research/prereg-amendment-2026-11-06-control-thinning.md). Entries
+      # only; exits are never gated. The three accounts' budgets + daily_review.probe_plan stay <= 250
+      # (tests/test_exploration_daily_budget.py). PD+PO 2026-11-06: an unpaired per-instrument control stops for good at
+      # 30 fills (its cost cell). Rollback: drop the line, restart
+      daily: { max_per_day: 40, max_per_hour: 4, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30 }
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 V1): a scalp pot carved inside the unchanged £180 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 98 / 9 -> 40 / 4, swing 82 / 2 -> 40 / 1.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
