@@ -41,6 +41,9 @@ driven by trend and macro, and the one intraday "when + exit" idea with publishe
 | 7 | **Book integrity** (money leaks, account mixing) | Losses that are not edge distort every read | performance-analyst + data-engineer | Closes when items 89, 90 and 101 are answered | icm-probe 10-19..10-25 excluded from every read and balance figure |
 
 **Retired this cycle, with the reason:**
+- *TREND-XASSET / POS-1 A1* (closed 2026-11-06): 0 of 16 pass EXPLORE (best net t 1.58, need 2.0). The 13-market
+  1d trend book has gross SR 0.50 (t 1.70) but CFD financing takes 70 % of it (net SR 0.09); gold-only month-end rules
+  trade 10-18 times in 10 years. CONFIRM and TEST-OLD not read. `docs/research/pos1/results-a1.md`. Not reopened.
 - *Exits* (was line 2): H-80 R2 FAIL (runner -0.018 R gross, t -1.12; 2 of 4 TF) and H-82 FAIL on all 5 variants
   (DiD |x| <= 0.0017 R, CIs +/-0.001 R). Fixed-$ scalp brackets rarely reach a target, so exits cannot matter there;
   box-family exits do not replicate. Not reopened: H-82's volatility-scaled replication (item 97).

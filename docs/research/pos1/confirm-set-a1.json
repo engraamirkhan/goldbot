@@ -1,0 +1,14 @@
+{
+ "window_read": "EXPLORE",
+ "engine_commit": "4456824371d317c812a3d91c595394042ce36ab5",
+ "eligible": [
+  "POS1-026A",
+  "POS1-057A"
+ ],
+ "explore_passers": [],
+ "ensembles": [],
+ "ids": [],
+ "m": 0,
+ "prereg_blob": "0f9ecd99eea2384e7f3f8c0e3c16ec0e66207766",
+ "explore_sha256": "02d87bbcebdf98fb28eba60f33ad3b77d592ba51fcae6bdce637bfd82ba32420"
+}

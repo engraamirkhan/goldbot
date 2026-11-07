@@ -456,3 +456,9 @@ def test_the_engine_reports_y_learn_from_live_years_in_learn_old_and_learn() -> 
                get_windows("EXPLORE"), cfg=FAST.model_copy(update={"warmup_days": 260}))
     assert res.windows_read == ("LEARN",) and 7.5 <= res.y_learn <= 8.0
     assert stats.p_explore(0.4, res.y_learn) < 0.5
+
+
+def test_a_test_run_never_claims_reads_in_the_real_registry() -> None:
+    ps = _screen()
+    with pytest.raises(SystemExit, match="real registry"):
+        ps.claim_reads(ROOT / "state" / "position_reads.jsonl", ["POS1-XXX"], "CONFIRM", "0" * 40)
