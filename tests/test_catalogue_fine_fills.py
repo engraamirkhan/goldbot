@@ -161,3 +161,16 @@ def test_a_1m_fill_outside_the_bar_range_is_a_fine_miss() -> None:
     r = _one(b, _stop_entry(), fine=fine, counts=counts)
     assert counts == {"fine_miss": 1}
     assert r[COL["fill"]] == pytest.approx(101.0)
+
+
+def test_a_limit_entry_is_not_credited_a_target_touched_in_its_fill_minute() -> None:
+    """Buy limit at 100, target 100.3: the fill minute opens 100.4 (touching the target BEFORE the fill) and falls to
+    99.9; the next minute closes at 100.1 below the target. No target exit."""
+    b = flat_bars()
+    _bar(b, 41, 100.6, 100.6, 99.9, 100.1)
+    fine = fine_bars(b, 41, [(100.6, 100.6, 100.45, 100.5), (100.4, 100.45, 99.9, 100.0), (100.0, 100.2, 99.95, 100.1)])
+    eb = EB()
+    eb.add(40, 1, kind=2, px=100.0, valid=1, stop=99.0, tgt=100.3, hold=1)
+    r = _one(b, eb, fine=fine)
+    assert r[COL["kind"]] == 0
+    assert r[COL["gross"]] == pytest.approx(0.1)

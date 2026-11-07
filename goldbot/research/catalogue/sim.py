@@ -202,9 +202,12 @@ def fine_fill(fine: Bars, b: Bars, f: int, side: int, kind: int, px: float) -> F
     return FineFill(m, z, fill)
 
 
-def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: float) -> Walk | None:
+def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: float,
+               limit_entry: bool = False) -> Walk | None:
     """The exit inside bar f on its finer bars from the fill bar m (same rules as `walk`; the fill bar m itself is still
-    checked whole: the residual pre-fill part is one finer bar)."""
+    checked whole for the stop: the residual pre-fill part is one finer bar). `limit_entry`: a limit order's fill bar
+    m is not credited its target (price came from the target side to the limit, so a touch of the target in m may be
+    before the fill; quant re-verify)."""
     o, h, lo = fine.o[ff.m:ff.z], fine.h[ff.m:ff.z], fine.l[ff.m:ff.z]
     later = np.arange(len(o)) > 0
     gs = later & (side * (o - stop) <= 0)
@@ -214,6 +217,8 @@ def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: fl
         ht = h >= tgt if side > 0 else lo <= tgt
     else:
         gt = ht = np.zeros(len(o), bool)
+    if limit_entry:
+        ht = ht & later
     hit = gs | hs | gt | ht
     if not hit.any():
         return None
@@ -229,9 +234,9 @@ def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: fl
 
 
 def walk_fine(b: Bars, fine: Bars, ff: FineFill, f: int, side: int, fill: float, stop: float, tgt: float, last: int,
-              mask: np.ndarray | None) -> Walk:
+              mask: np.ndarray | None, limit_entry: bool = False) -> Walk:
     """Walk of an order filled inside bar f at finer bar ff.m: the rest of bar f on its finer bars, then `walk`."""
-    w = _fine_exit(fine, ff, f, side, stop, tgt)
+    w = _fine_exit(fine, ff, f, side, stop, tgt, limit_entry)
     if w is not None:
         return w
     if mask is not None and mask[f]:
@@ -381,7 +386,7 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         elif np.isfinite(tgt) and side * (tgt - fill) <= 0:
             w, instant = Walk(f, fill, 2, t_fill), True
         elif fine is not None and ff is not None:
-            w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask)
+            w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask, kind_k == 2)
         else:
             w = walk(b, start, side, fill, stop, tgt, last, mask, at_open)
         busy_until = w.exit_bar
