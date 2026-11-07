@@ -1,0 +1,543 @@
+{
+ "specs_sha256": "87975f069457579242b3cc7ea9a1c3893537801a490c6dab880b43aae2211256",
+ "harness_commit": "b3f14388ff0ffb10a0596d0b09465a47bd823f08",
+ "quarter": "2026Q4",
+ "cap": 3500,
+ "used": 3173,
+ "used_rows_local": 3173,
+ "plan_floor": 3173,
+ "reserved_other_ws": 12,
+ "n_units": 90,
+ "n_real": 79,
+ "n_null": 11,
+ "headroom_after": 225,
+ "k_registry_after": 3263,
+ "dropped_infeasible": [
+  "B04-V2",
+  "B05-V0",
+  "B05-V2",
+  "B05-V3",
+  "B07-V2",
+  "B08-V0",
+  "B08-V1",
+  "B08-V2",
+  "B09-V0",
+  "B09-V1",
+  "B09-V2",
+  "B09-V3",
+  "B10-V0",
+  "B10-V1",
+  "B10-V2",
+  "B10-V3",
+  "C01-V0",
+  "C01-V1",
+  "C01-V3",
+  "C02-V1",
+  "C02-V2",
+  "C02-V3",
+  "C03-V2",
+  "C04-V3",
+  "C05-V1",
+  "C05-V3",
+  "C06-V0",
+  "C06-V1",
+  "C06-V2",
+  "C06-V3",
+  "C07-V0",
+  "C07-V1",
+  "C07-V2",
+  "C07-V3",
+  "C08-V0",
+  "C08-V1",
+  "C08-V2",
+  "C08-V3",
+  "C09-V0",
+  "C09-V1",
+  "C09-V3",
+  "C10-V0",
+  "C10-V3",
+  "F02-V0",
+  "F02-V2",
+  "F02-V3",
+  "F04-V0",
+  "F04-V1",
+  "F04-V2",
+  "F04-V3",
+  "F08-V3",
+  "F10-V0",
+  "F10-V1",
+  "F10-V2",
+  "F10-V3",
+  "S02-V1",
+  "S03-V0",
+  "S03-V1",
+  "S03-V2",
+  "S03-V3",
+  "S04-V2",
+  "S04-V3",
+  "S05-V0",
+  "S05-V1",
+  "S16-V2",
+  "S16-V3",
+  "S22-V1",
+  "S23-V3",
+  "S24-V0",
+  "S24-V1",
+  "S24-V2",
+  "S24-V3",
+  "S26-V0"
+ ],
+ "units": [
+  {
+   "unit": "S02-V0",
+   "family": "catalogue:S02",
+   "config_hash": "5e444fbc9bca"
+  },
+  {
+   "unit": "S02-V2",
+   "family": "catalogue:S02",
+   "config_hash": "07d42f343b0a"
+  },
+  {
+   "unit": "S02-V3",
+   "family": "catalogue:S02",
+   "config_hash": "4427d73d8c7c"
+  },
+  {
+   "unit": "S04-V0",
+   "family": "catalogue:S04",
+   "config_hash": "2558bab8f55a"
+  },
+  {
+   "unit": "S04-V1",
+   "family": "catalogue:S04",
+   "config_hash": "613958c83b8c"
+  },
+  {
+   "unit": "S06-V0",
+   "family": "catalogue:S06",
+   "config_hash": "587a33ab546b"
+  },
+  {
+   "unit": "S06-V1",
+   "family": "catalogue:S06",
+   "config_hash": "6dc167776168"
+  },
+  {
+   "unit": "S06-V2",
+   "family": "catalogue:S06",
+   "config_hash": "3f2d36b877fd"
+  },
+  {
+   "unit": "S07-V0",
+   "family": "catalogue:S07",
+   "config_hash": "6316b0453660"
+  },
+  {
+   "unit": "S07-V1",
+   "family": "catalogue:S07",
+   "config_hash": "a10f7cce2d62"
+  },
+  {
+   "unit": "S08-V0",
+   "family": "catalogue:S08",
+   "config_hash": "378549e137fe"
+  },
+  {
+   "unit": "S08-V1",
+   "family": "catalogue:S08",
+   "config_hash": "4c9cd989af4d"
+  },
+  {
+   "unit": "S08-V2",
+   "family": "catalogue:S08",
+   "config_hash": "9f80f9d7bb95"
+  },
+  {
+   "unit": "S11-V0",
+   "family": "catalogue:S11",
+   "config_hash": "0dec7ba5cfe3"
+  },
+  {
+   "unit": "S11-V1",
+   "family": "catalogue:S11",
+   "config_hash": "9c29c2f7cced"
+  },
+  {
+   "unit": "S11-V2",
+   "family": "catalogue:S11",
+   "config_hash": "1dae294a4bb4"
+  },
+  {
+   "unit": "S15-V0",
+   "family": "catalogue:S15",
+   "config_hash": "e44ab7692100"
+  },
+  {
+   "unit": "S15-V1",
+   "family": "catalogue:S15",
+   "config_hash": "ef82ce057e20"
+  },
+  {
+   "unit": "S15-V2",
+   "family": "catalogue:S15",
+   "config_hash": "eb590d866e55"
+  },
+  {
+   "unit": "S16-V0",
+   "family": "catalogue:S16",
+   "config_hash": "0d2852e992fe"
+  },
+  {
+   "unit": "S16-V1",
+   "family": "catalogue:S16",
+   "config_hash": "28e3e3b4e1cc"
+  },
+  {
+   "unit": "S17-V0",
+   "family": "catalogue:S17",
+   "config_hash": "bb40718b4307"
+  },
+  {
+   "unit": "S17-V1",
+   "family": "catalogue:S17",
+   "config_hash": "cb2a301fcf1d"
+  },
+  {
+   "unit": "S17-V2",
+   "family": "catalogue:S17",
+   "config_hash": "5bad50136f0f"
+  },
+  {
+   "unit": "S20-V0",
+   "family": "catalogue:S20",
+   "config_hash": "47af8c062aed"
+  },
+  {
+   "unit": "S20-V1",
+   "family": "catalogue:S20",
+   "config_hash": "ed0ba8fa19f1"
+  },
+  {
+   "unit": "S20-V2",
+   "family": "catalogue:S20",
+   "config_hash": "cdac8ce71433"
+  },
+  {
+   "unit": "S20-V3",
+   "family": "catalogue:S20",
+   "config_hash": "7e0817888000"
+  },
+  {
+   "unit": "S21-V0",
+   "family": "catalogue:S21",
+   "config_hash": "ddcb112c4584"
+  },
+  {
+   "unit": "S21-V1",
+   "family": "catalogue:S21",
+   "config_hash": "b9307edd9050"
+  },
+  {
+   "unit": "S21-V2",
+   "family": "catalogue:S21",
+   "config_hash": "a6d73896179c"
+  },
+  {
+   "unit": "S21-V3",
+   "family": "catalogue:S21",
+   "config_hash": "c620dd9f627f"
+  },
+  {
+   "unit": "S22-V0",
+   "family": "catalogue:S22",
+   "config_hash": "ffe5c540b0ff"
+  },
+  {
+   "unit": "S22-V2",
+   "family": "catalogue:S22",
+   "config_hash": "209e57eb97f4"
+  },
+  {
+   "unit": "S22-V3",
+   "family": "catalogue:S22",
+   "config_hash": "17804cef89d1"
+  },
+  {
+   "unit": "S23-V0",
+   "family": "catalogue:S23",
+   "config_hash": "055ac3cae160"
+  },
+  {
+   "unit": "S23-V1",
+   "family": "catalogue:S23",
+   "config_hash": "785c9e14602b"
+  },
+  {
+   "unit": "S23-V2",
+   "family": "catalogue:S23",
+   "config_hash": "a3fff266b6d8"
+  },
+  {
+   "unit": "S27-V0",
+   "family": "catalogue:S27",
+   "config_hash": "80dd0aa1077e"
+  },
+  {
+   "unit": "S27-V1",
+   "family": "catalogue:S27",
+   "config_hash": "8c79a6ca1bae"
+  },
+  {
+   "unit": "S27-V2",
+   "family": "catalogue:S27",
+   "config_hash": "87e86bae886b"
+  },
+  {
+   "unit": "S30-V0",
+   "family": "catalogue:S30",
+   "config_hash": "07aef283fcc0"
+  },
+  {
+   "unit": "S30-V1",
+   "family": "catalogue:S30",
+   "config_hash": "8dd6d1ed0726"
+  },
+  {
+   "unit": "B04-V0",
+   "family": "catalogue:B04",
+   "config_hash": "0c6e201c56ca"
+  },
+  {
+   "unit": "B04-V1",
+   "family": "catalogue:B04",
+   "config_hash": "a5a9e1e1bead"
+  },
+  {
+   "unit": "B04-V3",
+   "family": "catalogue:B04",
+   "config_hash": "ae6382904867"
+  },
+  {
+   "unit": "B05-V1",
+   "family": "catalogue:B05",
+   "config_hash": "8f0f9707c41b"
+  },
+  {
+   "unit": "B07-V0",
+   "family": "catalogue:B07",
+   "config_hash": "5668e5306db2"
+  },
+  {
+   "unit": "B07-V1",
+   "family": "catalogue:B07",
+   "config_hash": "9cda9ec0647b"
+  },
+  {
+   "unit": "B07-V3",
+   "family": "catalogue:B07",
+   "config_hash": "3f0204786e0f"
+  },
+  {
+   "unit": "F02-V1",
+   "family": "catalogue:F02",
+   "config_hash": "7cedf4834765"
+  },
+  {
+   "unit": "F03-V0",
+   "family": "catalogue:F03",
+   "config_hash": "4fbb903bacc5"
+  },
+  {
+   "unit": "F03-V1",
+   "family": "catalogue:F03",
+   "config_hash": "b4cc5f564f02"
+  },
+  {
+   "unit": "F03-V2",
+   "family": "catalogue:F03",
+   "config_hash": "cf386bc247f7"
+  },
+  {
+   "unit": "F03-V3",
+   "family": "catalogue:F03",
+   "config_hash": "01d0038d0197"
+  },
+  {
+   "unit": "F05-V0",
+   "family": "catalogue:F05",
+   "config_hash": "778e28b51c07"
+  },
+  {
+   "unit": "F05-V2",
+   "family": "catalogue:F05",
+   "config_hash": "85c659f26420"
+  },
+  {
+   "unit": "F05-V3",
+   "family": "catalogue:F05",
+   "config_hash": "396334de2a6f"
+  },
+  {
+   "unit": "F07-V0",
+   "family": "catalogue:F07",
+   "config_hash": "cc6567e4dc4e"
+  },
+  {
+   "unit": "F07-V1",
+   "family": "catalogue:F07",
+   "config_hash": "2945e9415d60"
+  },
+  {
+   "unit": "F07-V2",
+   "family": "catalogue:F07",
+   "config_hash": "3af58c9a6ae7"
+  },
+  {
+   "unit": "F07-V3",
+   "family": "catalogue:F07",
+   "config_hash": "288d6888f5f5"
+  },
+  {
+   "unit": "F08-V0",
+   "family": "catalogue:F08",
+   "config_hash": "686d4bfc5a8c"
+  },
+  {
+   "unit": "F08-V1",
+   "family": "catalogue:F08",
+   "config_hash": "8cc58cbbbec7"
+  },
+  {
+   "unit": "F08-V2",
+   "family": "catalogue:F08",
+   "config_hash": "43225840cef4"
+  },
+  {
+   "unit": "F09-V0",
+   "family": "catalogue:F09",
+   "config_hash": "93a633d540c8"
+  },
+  {
+   "unit": "F09-V1",
+   "family": "catalogue:F09",
+   "config_hash": "286c38660da5"
+  },
+  {
+   "unit": "F09-V2",
+   "family": "catalogue:F09",
+   "config_hash": "6080637e8bb8"
+  },
+  {
+   "unit": "F09-V3",
+   "family": "catalogue:F09",
+   "config_hash": "2e4ea966abe5"
+  },
+  {
+   "unit": "C02-V0",
+   "family": "catalogue:C02",
+   "config_hash": "9ac68215aabf"
+  },
+  {
+   "unit": "C03-V0",
+   "family": "catalogue:C03",
+   "config_hash": "05b304dd6c18"
+  },
+  {
+   "unit": "C03-V1",
+   "family": "catalogue:C03",
+   "config_hash": "6e69228d7c1e"
+  },
+  {
+   "unit": "C04-V0",
+   "family": "catalogue:C04",
+   "config_hash": "0861bc8bb9ca"
+  },
+  {
+   "unit": "C04-V1",
+   "family": "catalogue:C04",
+   "config_hash": "9d0be4fd86c7"
+  },
+  {
+   "unit": "C04-V2",
+   "family": "catalogue:C04",
+   "config_hash": "6c5a99914b85"
+  },
+  {
+   "unit": "C05-V0",
+   "family": "catalogue:C05",
+   "config_hash": "c4a41b645617"
+  },
+  {
+   "unit": "C05-V2",
+   "family": "catalogue:C05",
+   "config_hash": "2e615d54b76c"
+  },
+  {
+   "unit": "C09-V2",
+   "family": "catalogue:C09",
+   "config_hash": "c20630fe45cc"
+  },
+  {
+   "unit": "C10-V1",
+   "family": "catalogue:C10",
+   "config_hash": "38682dbdd9d6"
+  },
+  {
+   "unit": "NULL-RAND-5m",
+   "family": "catalogue:NULL",
+   "config_hash": "4cca2d28e914"
+  },
+  {
+   "unit": "NULL-RAND-15m",
+   "family": "catalogue:NULL",
+   "config_hash": "aba5082c05fb"
+  },
+  {
+   "unit": "NULL-RAND-30m",
+   "family": "catalogue:NULL",
+   "config_hash": "fd2e23f4d634"
+  },
+  {
+   "unit": "NULL-RAND-1h",
+   "family": "catalogue:NULL",
+   "config_hash": "c080c80205f7"
+  },
+  {
+   "unit": "NULL-RAND-4h",
+   "family": "catalogue:NULL",
+   "config_hash": "23e3ac6b23e7"
+  },
+  {
+   "unit": "NULL-RAND-1d",
+   "family": "catalogue:NULL",
+   "config_hash": "5df74d95c396"
+  },
+  {
+   "unit": "NULL-RAND-1w",
+   "family": "catalogue:NULL",
+   "config_hash": "f5f9bf0b2a2c"
+  },
+  {
+   "unit": "NULL-LONGCLOSE-US500",
+   "family": "catalogue:NULL",
+   "config_hash": "3ec21ac6f5d0"
+  },
+  {
+   "unit": "NULL-LONGCLOSE-IDX",
+   "family": "catalogue:NULL",
+   "config_hash": "0d60f8e5ad9e"
+  },
+  {
+   "unit": "NULL-LONGCLOSE-GOLD",
+   "family": "catalogue:NULL",
+   "config_hash": "779df1308070"
+  },
+  {
+   "unit": "NULL-XS-RANDOM",
+   "family": "catalogue:NULL",
+   "config_hash": "e77731e03a63"
+  }
+ ],
+ "harness_commit_preregistered_rows": "87771d810a9c3ea41cac6eceed3e7d7557631072"
+}

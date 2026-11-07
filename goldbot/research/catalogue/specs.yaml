@@ -1,0 +1,4120 @@
+version: catalogue-screen-2026-11-07.1
+sources:
+  top30_catalogue_1107.json: 5948c7521d6dd2f9b1d292fcafcc786b90db653d450b733bf08a89e369ed5270
+  patterns_top30_1107.json: c01ba254b9e2d445f3b4232ea5bb0c89f9e5a1dbea22980910d3d1b9cdf9224c
+card_text:
+  B04:
+    name: Round-number stop-cascade breakout
+    spec: 'Level L = nearest grid multiple above (long) / below (short) the close. Setup: bar close within 0.5*ATR14 of L
+      and L untouched in the last 20 bars. Entry: BUY STOP at L + 0.1*ATR14 (SELL mirrors), valid 6 bars. Confirmation V2:
+      wait for a CLOSE beyond L + 0.1*ATR, enter at next open. Stop: L - 0.5*ATR14 (back inside = cascade failed). Target:
+      1.5*ATR14 beyond entry. Time exit 12 bars. Skip within 30 min of tier-1 news (event leg is B08).'
+    params_grid: V0 stop-entry | V1 close-confirmed | V2 gold grid $100 only | V3 V0 + 4h ADX14 > 20
+  B05:
+    name: Multi-touch horizontal S/R break-and-retest
+    spec: 'Level = SR(3) (common.level_cluster, ZZ k per TF). Break: first CLOSE beyond level by >= 0.25*ATR14. Retest entry
+      (differs from failed box_break_close): LIMIT at level +- 0.1*ATR14 valid 8 bars after the break; cancelled if price
+      first closes back inside (that event goes to F02). Stop: 0.75*ATR14 beyond the level on the inside. Target: 2.0*ATR14
+      from entry or the next opposite SR(2) level if nearer but >= 1.5*ATR. Time exit 20 bars.'
+    params_grid: V0 SR(3) retest | V1 SR(2) | V2 enter on break close (no retest; neighbour of failed box family, control
+      only) | V3 V0 + break bar tick-volume > 1.5x 20-bar median
+  B07:
+    name: Triangle breakout (symmetrical / ascending / descending) from zigzag trendlines
+    spec: 'Last 4 confirmed ZZ pivots alternate H1,L1,H2,L2 (5 for V1) within 60 bars. Symmetrical: H2 < H1 - 0.25*ATR and
+      L2 > L1 + 0.25*ATR. Ascending: |H2-H1| <= 0.25*ATR and L2 > L1 + 0.25*ATR; descending mirrors. Upper line through H1,H2,
+      lower through L1,L2, projected to the current bar. Breakout: CLOSE beyond the projected line by 0.1*ATR while lines
+      have not crossed and current bar <= apex - 3 bars. Entry next open, side = break side (asc: long only, desc: short only,
+      sym: either). Stop: opposite line value at entry or 1.0*ATR, whichever is nearer (min 0.6*ATR). Target: measured move
+      = pattern height at H1/L1, capped 3*ATR. Time exit = 2x pattern length.'
+    params_grid: V0 all 3 types | V1 5-pivot pattern | V2 asc/desc only | V3 V0 + break in direction of SMA50
+  B08:
+    name: Macro-release pre-range breakout (news jump continuation)
+    spec: 'Events: point-in-time tier-1 calendar (NFP, CPI, FOMC statement, Core PCE, ISM). Pre-range R = high/low of the
+      60 min before release. At T+5 min (V1: T+15) if price has CLOSED a 5m bar beyond R by >= 0.25*ATR(5m,20): enter next
+      open in that direction. Stop: midpoint of R or 1.0*ATR(15m) whichever nearer (min 0.6*ATR15). Target 2.0*ATR(1h,14).
+      Time exit T+4h. One trade per event per instrument. Spread gate: skip if quoted spread at entry > 3x median (spread-state,
+      N-1).'
+    params_grid: V0 T+5 5m close | V1 T+15 15m close | V2 V0 FOMC/NFP/CPI only | V3 V0 + surprise sign agrees (when consensus
+      data exists, else drop)
+  B09:
+    name: Breakaway gap continuation (session/weekly gap beyond prior range)
+    spec: 'Gap up: open_t > high_{t-1} + 0.25*ATR14 (weekly: Monday open vs Friday high). Confirmation: first 4h bar (daily-only
+      data: day t) closes above open_t and the gap is not filled (low > high_{t-1}). Entry next open long (gap down mirrors).
+      Stop: high_{t-1} (gap filled = fail). Target 2*ATR14. Time exit 5 days (1w: 3 weeks).'
+    params_grid: V0 0.25 ATR gap | V1 0.5 ATR | V2 weekly gaps only | V3 V0 in SMA50 direction
+  B10:
+    name: Floor-pivot R1/S1 breakout with trend gate
+    spec: 'P = (H+L+C)/3 of the prior UTC day (gold: 22:00 UTC rollover day); R1 = 2P - L, S1 = 2P - H. Long: first 30m CLOSE
+      above R1 after 07:00 UTC while close > P at 07:00; enter next open. Stop P or 1*ATR(1h) nearer (min 0.5 ATR1h). Target
+      R2 = P + (H-L) if >= 1.5x stop else skip. Time exit 22:00 UTC. Short mirrors at S1.'
+    params_grid: V0 R1/S1 | V1 30m close required twice | V2 London+NY only (07-17 UTC) | V3 15m bars
+  C01:
+    name: Head-and-shoulders / inverse H&S (zigzag detector, neckline break)
+    spec: 'Last 5 confirmed ZZ pivots P1..P5 alternate H,L,H,L,H (top). Head P3 > max(P1,P5) + 0.5*ATR; shoulders |P1-P5|
+      <= 1.0*ATR (LMW: within 1.5 % at 1d); troughs |P2-P4| <= 1.0*ATR (neckline slope bounded); pattern span 15-80 bars;
+      P1 preceded by an uptrend (P1 > ZZ low before it). Neckline = line P2-P4. Confirmation: CLOSE below neckline by 0.1*ATR
+      within 20 bars of P5 confirmation; void if price exceeds P3 first. Entry next open short. Stop: P5 + 0.2*ATR (right
+      shoulder). Target: measured move = P3 - neckline at P3, cap 3*ATR (V2: 1R partial then trail). Time exit 2x span. IHS
+      mirrors.'
+    params_grid: V0 measured move | V1 LMW kernel extrema (common.kernel_LMW) instead of ZZ | V2 V0 + 1R partial/trail | V3
+      V0 only against SMA200-trend reversal (top below SMA200 slope up excluded)
+  C02:
+    name: Double top / double bottom (Eve & Eve / Adam variants)
+    spec: 'Top: confirmed ZZ pivots H1, L1, H2 with |H2-H1| <= 0.5*ATR, bars(H1->H2) in 10-60, H1-L1 >= 2*ATR (V: depth 10
+      % at 1w). Confirmation: CLOSE below L1 by 0.1*ATR within 20 bars of H2; void if > max(H1,H2)+0.25 ATR first. Entry next
+      open short. Stop max(H1,H2) + 0.2*ATR. Target L1 - (max(H1,H2) - L1), cap 3*ATR. Time exit 2x pattern span. Bottom mirrors.'
+    params_grid: V0 base | V1 tighter |H2-H1| <= 0.25 ATR | V2 V0 + second peak tick volume < first | V3 V0 1d/1w only
+  C03:
+    name: Bull / bear flag and pennant (pole + counter-trend channel)
+    spec: 'Pole: move >= 3*ATR14 over <= 10 bars ending at confirmed ZZ high Hp (bull). Flag: next 4-20 bars, retracement
+      <= 50 % of pole, highs and lows each fitted by OLS on bar highs/lows with slope <= 0 (flag) or converging (pennant),
+      channel width <= 1.5*ATR. Confirmation: CLOSE above the flag upper line. Entry next open long. Stop: flag low - 0.1*ATR.
+      Target: pole length x 0.5 from breakout (V1 x 1.0), cap 4*ATR. Time exit 20 bars. Bear mirrors.'
+    params_grid: V0 0.5 pole target | V1 1.0 pole | V2 retracement <= 38 % | V3 V0 + higher-TF (x4) SMA50 agrees
+  C04:
+    name: LMW kernel-regression 10-pattern ensemble
+    spec: 'common.kernel_LMW detector with LMW''s exact definitions for the 10 patterns (e.g. HS: E1 max, E3 > E1,E5, E1/E5
+      within 1.5 % of mean, E2/E4 within 1.5 %). Signal at completion + 3 bars: direction = LMW''s documented sign (tops short,
+      bottoms long; RTOP/RBOT/TTOP/TBOT: breakout side of the last extremum). Entry next open, stop 1.0*ATR14, target 2.0*ATR14,
+      time exit 10 bars. Rectangles (box family, failed) reported but excluded from the verdict.'
+    params_grid: V0 all 8 non-rectangle patterns pooled | V1 reversal patterns only (HS/IHS/DTOP/DBOT/BTOP/BBOT) | V2 h =
+      0.5 x CV | V3 V0 1w only
+  C05:
+    name: Candlestick 3-day reversal patterns at 5-bar extremes (morning/evening star, three inside/outside)
+    spec: 'Caginalp-Laurent definitions: downtrend = close below SMA5 of closes for the 3 prior bars; morning star = long
+      black body (>= 0.6 ATR), small body (<= 0.25 ATR) gapping/below, white body closing above midpoint of bar 1; three inside
+      up = harami + next close above bar-1 open; three outside up = bullish engulfing + higher close. Entry next open long;
+      stop pattern low - 0.1 ATR; target 1.5x stop; exit at 2-bar close (CL horizon) if earlier. Bearish mirrors.'
+    params_grid: V0 all 3 types | V1 morning/evening star only | V2 exit 2 bars no target | V3 V0 at SR(2) level only
+  C06:
+    name: Rising / falling wedge reversal
+    spec: 'Last 5 ZZ pivots, highs and lows both rising (rising wedge) with converging lines: slope_low > slope_high > 0 (per
+      bar, ATR-normalised), width at last pivot <= 60 % of width at first. Confirmation: CLOSE below the lower line by 0.1*ATR
+      before the apex. Entry next open short; stop last pivot high + 0.2*ATR; target wedge start price (first pivot low),
+      cap 3*ATR; time exit 2x pattern length. Falling wedge mirrors (long).'
+    params_grid: V0 5 pivots | V1 4 pivots | V2 V0 + prior trend >= 3 ATR into the wedge | V3 1d/1w only
+  C07:
+    name: Broadening top / bottom (LMW BTOP/BBOT, megaphone)
+    spec: '5 confirmed ZZ pivots H1,L1,H2,L2,H3 with H1<H2<H3 and L1>L2 (diverging). Confirmation: CLOSE below L2 by 0.1*ATR
+      within 15 bars of H3. Entry next open short; stop H3 + 0.2*ATR; target L2 - (H3 - L2) x 0.5, cap 3*ATR; time exit 20
+      bars. Bottom mirrors.'
+    params_grid: V0 base | V1 entry at H3 rejection (close back below H2) | V2 4-pivot | V3 1d/1w only
+  C08:
+    name: Cup-with-handle breakout
+    spec: 'Cup: confirmed ZZ high A, low B, then price returns to within 0.5*ATR of A at C; depth (A-B) 12-35 % (1w) or 3-8
+      ATR (1d); bars A->C 30-150 (1d); B in middle third of A..C (U-shape: >= 30 % of cup bars within lower 25 % of depth).
+      Handle: after C, pullback <= 1/3 of depth lasting 5-25 bars. Confirmation: CLOSE above C + 0.1*ATR. Entry next open
+      long; stop handle low - 0.1 ATR; target A + 0.5*(A-B), cap 4 ATR; time exit 40 bars (1d).'
+    params_grid: V0 base | V1 no handle required | V2 V0 + above SMA200 | V3 1w only
+  C09:
+    name: Harmonic patterns (Gartley / Bat / ABCD with Fibonacci ratios)
+    spec: 'ZZ pivots X,A,B,C,D (confirmed). Gartley bullish: AB = 0.618 XA (+-0.05), BC 0.382-0.886 AB, CD 1.27-1.618 BC,
+      D = 0.786 XA (+-0.05). ABCD: CD = AB (+-10 %) and C = 0.618-0.786 of AB. Entry: LIMIT at the projected D (PRZ) once
+      A,B,C are confirmed; stop 0.5*ATR beyond X (Gartley) or 1*ATR beyond D (ABCD); target 0.382 then 0.618 of AD; time exit
+      20 bars.'
+    params_grid: V0 Gartley | V1 Bat (B 0.382-0.5, D 0.886) | V2 ABCD | V3 V0 + D at SR(2)
+  C10:
+    name: Pin bar / hammer / shooting star at a tested S/R level
+    spec: 'Level SR(2). Bullish pin: low_t pierces level by 0-0.5*ATR, lower wick >= 2/3 of range, body in upper third, range
+      >= 0.8*ATR14, close above level. Entry next open long; stop low_t - 0.1*ATR; target 2x stop; time exit 10 bars. Bearish
+      mirrors.'
+    params_grid: V0 SR(2) | V1 no level (pin at 20-bar extreme) | V2 V0 + 1d trend agrees on 1h/4h | V3 range >= 1.2 ATR
+  F02:
+    name: Multi-touch S/R false-break fade (close back inside)
+    spec: 'Level = SR(3). Penetration: bar extreme beyond level by 0.1-1.0*ATR14 (more = real break, skip). Confirmation:
+      within 3 bars a CLOSE back inside by >= 0.1*ATR. Entry next open toward the inside. Stop: penetration extreme + 0.2*ATR14
+      (min 0.5*ATR). Target: 2.0*stop distance or the opposite SR(2) level if nearer and >= 1.5R. Time exit 15 bars. Same
+      event set as B05 (break bars that close back inside go here, held breaks go to B05).'
+    params_grid: V0 SR(3) | V1 SR(2) | V2 SR(3) + rejection bar wick >= 50% of range | V3 V0 counter to ADX14 > 25 trend excluded
+  F03:
+    name: Round-number rejection fade (take-profit cluster)
+    spec: 'Grid L as B04. Event: bar high reaches within [L - 0.1*ATR, L + 0.3*ATR] after an approach of >= 1.5*ATR14 over
+      the last 10 bars, and bar CLOSES below L - 0.1*ATR (short; long mirrors). Entry next open. Stop L + 0.5*ATR14. Target
+      1.5*ATR14. Time exit 10 bars. Shares events with B04 (crossing held -> B04, rejected -> F03).'
+    params_grid: V0 gold $50 | V1 gold $100 | V2 V0 + penetration required (true false-break) | V3 V0 London/NY hours only
+  F04:
+    name: Busted chart pattern reversal (failed H&S / double / triangle breakout)
+    spec: 'Base patterns from C01, C02, B07 detectors (same code). Bust: after the confirmed breakout, price fails to move
+      >= 1.0*ATR14 (intraday TF) / 10 % of entry (1w) beyond the breakout level within 10 bars, then CLOSES beyond the opposite
+      pattern boundary (H&S: back above right shoulder; double top: above the tops; triangle: through the other line). Entry
+      next open in the bust direction. Stop: the failed-breakout extreme + 0.2*ATR. Target: pattern height from the boundary,
+      cap 3*ATR. Time exit 2x pattern length.'
+    params_grid: V0 all bases | V1 H&S + double only | V2 triangles only | V3 V0 1d/1w only
+  F05:
+    name: Raschke 80-20 (prior-day extreme-close reversal)
+    spec: 'Setup: day t-1 opened in the top 20 % of its range and closed in the bottom 20 % (range >= 0.8*ATR14). Day t: price
+      trades >= 0.1*ATR below low_{t-1}; BUY STOP at low_{t-1} (back inside) valid day t. Stop: day-t low - 0.1*ATR. Target
+      1.0*ATR14 or exit at day-t close +1 (V1: trail under each new higher low on 1h). Short mirrors.'
+    params_grid: V0 20 % bands | V1 V0 trail on 1h | V2 10 % bands | V3 V0 only in SMA200 direction
+  F07:
+    name: Prior-week high/low false break (weekly liquidity sweep, daily close back inside)
+    spec: 'Level = prior ISO-week high (short) / low (long). Event: a daily bar trades beyond the level by 0.1-1.0*ATR14(d)
+      and CLOSES back inside. Entry next open. Stop: sweep extreme + 0.2*ATR(d). Target: 50 % of prior-week range or prior-week
+      opposite extreme if nearer than 2R; min 1.5R. Time exit 5 days.'
+    params_grid: V0 prior week | V1 prior month | V2 V0 + close in outer 30 % of day range (rejection) | V3 V0 Mon-Wed sweeps
+      only
+  F08:
+    name: Key outside reversal at N-bar extreme
+    spec: Bar t makes a new 20-bar high, then closes below low_{t-1} (outside reversal down; engulfs prior range). Entry next
+      open short. Stop high_t + 0.1*ATR. Target 1.5x stop. Time exit 5 bars. Long mirrors at 20-bar lows.
+    params_grid: V0 20-bar extreme | V1 50-bar | V2 V0 + range_t >= 1.5*ATR14 | V3 1w bars only
+  F09:
+    name: Bollinger band re-entry fade (close outside then back inside)
+    spec: 'BB(20,2) on closes. Event: close_{t-1} > upper band, close_t < upper band and close_t < close_{t-1}. Entry next
+      open short; stop max(high_{t-1},high_t) + 0.2*ATR; target SMA20 (skip if < 1.2x stop distance); time exit 10 bars. Long
+      mirrors.'
+    params_grid: V0 BB(20,2) | V1 BB(20,2.5) | V2 V0 only when ADX14 < 20 | V3 1d only
+  F10:
+    name: Failed macro-release breakout (news spike reversal)
+    spec: 'Same events and pre-range R as B08. Event: by T+30 min the first-5m breakout direction has reversed and a 5m bar
+      CLOSES back inside R beyond its midpoint. Entry next open opposite the spike. Stop: spike extreme + 0.2*ATR(15m). Target:
+      opposite side of R + 0.5*ATR(1h) (min 1.5R). Time exit T+4h.'
+    params_grid: V0 midpoint re-entry | V1 any close back inside R | V2 FOMC/NFP/CPI only | V3 V0 + spike >= 1.5*ATR(1h)
+  S02:
+    name: Internal Bar Strength (IBS) next-day reversion on equity indices
+    spec: 'IBS_t = (close - low) / (high - low) of the cash session. LONG at the cash close if IBS_t < ibs_long. EXIT at the
+      next cash close (V2: hold until a close with IBS > 0.60, max 3 days). SHORT cell: IBS_t > 0.80, exit next close. Catastrophe
+      stop 2.5 x ATR20 (1R). Sizing: risk 0.25% of balance at the stop (high turnover); one position per instrument; max 3
+      concurrent index positions.'
+    params_grid: V0 ibs_long=0.20, exit next close | V1 ibs_long=0.10 | V2 ibs_long=0.20, exit IBS>0.60 or 3 days | V3 short
+      cell ibs>0.80
+  S03:
+    name: Volatility-conditioned 3-day reversal (Nagel liquidity-provision premium)
+    spec: 'Gate: 20-day Yang-Zhang realised vol (cash OHLC) in its top tercile of the trailing 504-day window (point-in-time).
+      Signal: z3 = ret_3d / (sqrt(3) x sd20 of daily returns). LONG at the close when z3 <= -z_thr; SHORT when z3 >= +z_thr
+      (own cell). EXIT when z3 crosses 0 against the sign, or after 5 trading days. Stop 2.0 x ATR20 (1R). Sizing: constant-risk
+      vol-targeted notional = 0.5% daily-vol budget / realised vol (size falls as vol rises; the premium is per unit of risk).
+      Max 2 concurrent index positions. Control: random-side twin INSIDE the same vol gate so the gate itself cannot create
+      the edge.'
+    params_grid: V0 z_thr=1.5, top-tercile gate | V1 z_thr=2.0 | V2 z_thr=1.5, top-quintile gate | V3 short cell z>=+1.5
+  S04:
+    name: Opening-gap day direction on equity indices (continuation vs inside-range fade)
+    spec: 'gap_t = open_t / close_{t-1} - 1 on cash OHLC. Trade only if |gap_t| >= g x ATR20. Cell CONT: long if gap>0, short
+      if gap<0, at the open; exit at the cash close. Cell FADE: the opposite direction, only when open_t lies inside [low_{t-1},
+      high_{t-1}]; exit at the cash close or on a touch of close_{t-1}. Stop 1.0 x ATR20 from the open (1R). Sizing: vol-targeted
+      0.5% daily-vol budget; one gap trade per instrument per day; max 3 concurrent. Cost model adds +1 spread opening slippage;
+      demo cost probe at the cash open required before confirm.'
+    params_grid: V0 CONT g=0.3 | V1 CONT g=0.5 | V2 FADE-inside g=0.3 | V3 FADE-inside g=0.5
+  S05:
+    name: Pre-holiday long on equity indices (exchange-calendar, point-in-time)
+    spec: 'Holiday list = the cash exchange''s point-in-time calendar (exchange_calendars). LONG at the close of the second-to-last
+      trading day before an exchange holiday (T-2 close); EXIT at the T-1 cash close (early closes honoured). Flat over the
+      holiday. Stop 2.0 x ATR20 (1R). Sizing: risk 0.25% of balance at the stop per index; equity correlation-group cap when
+      several indices share a holiday. V1 adds a trend gate close > SMA200 at T-2.'
+    params_grid: V0 plain | V1 + close>SMA200 gate
+  S06:
+    name: Scheduled macro-announcement-day premium (CPI/PPI/NFP/FOMC) on US indices
+    spec: 'Event list: scheduled US CPI, PPI, NFP and FOMC decision days (point-in-time calendar-v1; PPI to be added as a
+      static list). LONG at the close of the trading day before the event; EXIT at the event day''s cash close. No re-entry
+      the same day. Stop 2.0 x ATR20 (1R). Sizing: risk 0.25% at the stop; US500/USTEC/US30 on the same day count as one cluster.
+      Control: matched non-announcement day (same weekday, same month) random-side twin; the announcement-day mean R must
+      exceed it by >= 0.03 R.'
+    params_grid: V0 all four events | V1 FOMC+NFP only | V2 CPI+PPI only
+  S07:
+    name: FOMC-cycle even-week long (Cieslak-Morse-Vissing-Jorgensen)
+    spec: 'Day 0 = scheduled FOMC statement day (static dates file 1994-2025, unscheduled meetings excluded); count trading
+      days; cycle restarts at the next meeting. LONG at the close of day -2 (holding days -1..3), day 8 (days 9..13), day
+      18 (days 19..23), day 28 (days 29..33 when the cycle is long enough); EXIT at the close of day 3/13/23/33. Flat in odd
+      weeks (built-in control: even-week mean R must exceed odd-week mean R). Stop 2.5 x ATR20 (1R). Sizing: risk 0.25% at
+      the stop; one position per index.'
+    params_grid: V0 weeks {0,2,4,6} | V1 weeks {0,2,4} | V2 V0 with 10% vol-scaled notional
+  S08:
+    name: USD around-the-clock fix pattern on G10 pairs (long USD into the London fix, short after)
+    spec: 'Leg A: at the 08:00 UTC bar open go LONG USD in each pair (short EURUSD/GBPUSD/AUDUSD/NZDUSD, long USDJPY/USDCAD/USDCHF);
+      close at 16:00 UTC (the 12:00-16:00 bar contains the fix in both DST regimes). Leg B: at 16:00 UTC reverse to SHORT
+      USD; close at the 20:00 UTC bar close. Always flat across the 22:00 UTC rollover (swap = 0). Stop per leg 1.5 x ATR(4h,20)
+      (1R). Sizing: risk 0.1% per pair-leg; fx correlation-group cap limits total USD exposure to ~0.5% equity-risk. Control:
+      time-of-day-shuffled windows on the same pairs; rule must beat it by >= 0.03 R.'
+    params_grid: V0 both legs | V1 leg A only | V2 leg A from 12:00 UTC only (pre-fix hours) + leg B
+  S11:
+    name: Time-series carry + trend per FX pair (hold the credited side only when 3-month momentum agrees)
+    spec: 'carry_t = r3m(base) - r3m(quote) from published rates (asof); historical markup m per pair estimated from today''s
+      measured swap_long+swap_short (fallback 2.5%). mom_t = close_t/close_{t-L} - 1. LONG when carry_t > m AND mom_t > 0;
+      SHORT when carry_t < -m AND mom_t < 0; else flat. EXIT when either condition fails for 5 consecutive closes (hysteresis),
+      or at the disaster stop 3 x ATR20 from the last rebalance price. Crash guard: close the position on a 2 x (60d vol)
+      drawdown from its peak equity. Sizing: 10% vol target per pair, cap 2x; min_live=3 (book flat when fewer than 3 pairs
+      qualify); max 4 concurrent pairs, net USD exposure capped. V2 (Carver): forecast = carry/(annualised 60d vol) x 30,
+      capped +-20, trade when |forecast| > 5, weekly rebalance with a 10% position-inertia buffer.'
+    params_grid: V0 L=63 | V1 L=126 | V2 Carver forecast form, weekly
+  S15:
+    name: Cross-sectional 12-1 momentum within asset class (commodities, indices, FX books)
+    spec: 'At month-end compute R12-1 = close[t-21]/close[t-252] - 1 per instrument (FX: per currency vs USD, netted into
+      pairs). Per class book: LONG the top third, SHORT the bottom third; enter at the next open. EXIT at the next ranking
+      or when leaving the tercile; hard time stop 21 trading days then re-rank. Stop 3 x ATR20 per leg (catastrophe only).
+      Class-book drawdown > 12% of its risk budget pauses new entries until the next re-rank. Sizing: inverse 60d vol weights,
+      class book scaled to 8% annualised vol, three class books equal-risk; strategy vol scaled by its trailing 126d realised
+      vol (Barroso & Santa-Clara 2015); cap any leg at 30% of book notional; per-instrument risk <= 0.5%. V2: take a long
+      only if its 12m return beats the 3m T-bill (DTB3) rate, else flat on that leg.'
+    params_grid: V0 12-1, thirds, monthly | V1 6-1 | V2 12-1 + Antonacci absolute filter on longs | V3 12-1 weekly, 4 tranches
+  S16:
+    name: 52-week-high proximity momentum (cross-sectional) and fresh-approach breakout (time-series)
+    spec: 'P_t = close_t / max(high, 252 bars). Lookback is RESET at every source cutover (manifest.json ''sources'') so a
+      futures-basis level is never compared with a spot level. XS: at month-end LONG the top third by P, SHORT the bottom
+      third; enter next open; monthly re-rank; stop 3 x ATR20; inverse-60d-vol weights, book vol target 8%. TS: LONG when
+      close crosses above 0.98 x 252-day high having been below 0.90 x it within the last 60 days (fresh approach to the anchor);
+      EXIT on close < 20-day low or after 30 trading days; initial stop at the 20-day low (1R), trailed at the 20-day low;
+      risk 0.5% at the stop. Per-instrument risk <= 0.5%. Pre-registered sub-read: XS gross pass / net fail -> one rerun with
+      the S14 swap-sign filter, counted as +1 K.'
+    params_grid: V0 XS all-instrument thirds, 252d | V1 XS within class | V2 TS 0.98 entry / 0.90 dip / 20d-low exit | V3
+      TS with 126d high
+  S17:
+    name: Same-calendar-month return seasonality (time-series and cross-sectional)
+    spec: 'HARD DATA PREREQUISITE: futures-sourced segments (source = yahoo:*=F) must be ratio back-adjusted with a roll-date
+      log; the screen re-runs with roll days masked, and if the two disagree in sign on > 20% of instrument-months the trial
+      is VOID (not failed). At the last close of month m-1 compute, per instrument, the mean and t-stat of its calendar-month-m
+      return over the prior 20 years (min 10, rolling, point-in-time). V0 (TS): LONG at that close if mean > 0 and t >= 1.0,
+      SHORT if mean < 0 and t <= -1.0, else flat; EXIT at the last close of month m (positions may continue). V1 (XS, the
+      paper''s form): LONG the top third, SHORT the bottom third of instruments ranked by their same-month historical mean,
+      equal risk. Stop 2.5 x ATR20 (1R); a stopped position stays flat until the next month-end. Sizing: risk 0.25% per instrument
+      at the stop; vol-scaled to 10%/yr per leg in V1; correlation-group caps. Control: shuffled-month assignment on the same
+      instrument, rule must beat it by >= 0.05 R.'
+    params_grid: V0 TS, 20y lookback, t>=1.0 | V1 XS thirds | V2 TS, 30y lookback (min 15), t>=1.0
+  S20:
+    name: Crabel NR7 / ID-NR4 range-contraction breakout, one-overnight hold
+    spec: 'Setup at the close of day t-1: true range of t-1 is the narrowest of the last 7 days (NR7); V2 requires inside
+      day AND narrowest of 4. Cost gate (pre-registered): skip if range_{t-1} < 4 x round-trip cost in price terms; if the
+      gate removes > 60% of events the instrument is retired for CFD costs. Orders for session t: BUY STOP at high_{t-1} +
+      0.05 x ATR20, SELL STOP at low_{t-1} - 0.05 x ATR20, OCO, valid that session only; one reversal entry allowed on the
+      other side the same day if stopped (Crabel). EXIT at the close of session t+1 (one overnight) or at target 1.5 x ATR20,
+      whichever first. Stop: opposite side of the setup bar; if < 0.3 ATR20 use 0.3 ATR20; move to breakeven at +0.75 ATR20.
+      Sizing: risk 0.5% at the stop, notional cap 1.0x capital per position; max 6 concurrent per account. V3: take only the
+      side agreeing with sign(close - SMA50).'
+    params_grid: V0 NR7 + inside day | V1 NR7 only | V2 ID/NR4 | V3 V1 trend-side only (SMA50)
+  S21:
+    name: Williams/Crabel daily volatility breakout from the open (prior-range stretch)
+    spec: 'At the open O_t of day t: BUY STOP at O_t + k x TR_{t-1}, SELL STOP at O_t - k x TR_{t-1} (TR = previous day''s
+      true range; V3 uses Crabel stretch = 10-day mean of min(|O-H|, |O-L|)). First fill cancels the other; one entry per
+      day. EXIT at the next day''s open (V3: same day''s close). Stop = the opposite trigger (risk = 2k x TR_{t-1}), hard
+      cap 1.5 x ATR14. Sizing: fixed fractional 0.5% of equity at the stop; one position per instrument; news blackout (tier-1)
+      honoured.'
+    params_grid: V0 k=0.7, exit next open | V1 k=0.5 | V2 k=1.0 | V3 Crabel stretch k=1.0, exit same close
+  S22:
+    name: Bollinger/Keltner squeeze release breakout (TTM squeeze; BandWidth-low variant)
+    spec: 'BB = SMA20 +- 2 x sd20(close); KC = EMA20 +- 1.5 x ATR20. Squeeze ON when BB_upper < KC_upper AND BB_lower > KC_lower
+      for >= 6 consecutive closed bars. Release = first close where BB moves outside KC. On release: BUY STOP at the squeeze-range
+      high + 0.1 x ATR20, SELL STOP at the range low - 0.1 x ATR20, valid 3 bars, first fill cancels the other. EXIT at target
+      2.0 x ATR20, or a close beyond the opposite BB band, or time stop 10 bars (30 on 4h). Stop: initial at the EMA20 midline
+      (typically 0.7-1.0 ATR), to breakeven after +1 ATR. Sizing: risk 0.5% at the stop; one squeeze trade per instrument;
+      max 5 concurrent. V2 (Bollinger): BandWidth = (BB_upper-BB_lower)/SMA20 at its 120-bar low, enter on a close outside
+      the band in that direction, same exits.'
+    params_grid: V0 TTM kc_mult=1.5, >=6 bars | V1 kc_mult=1.0 | V2 BandWidth 120-bar low | V3 V0 on 4h bars
+  S23:
+    name: Turtle Soup / Turtle Soup Plus One (failed 20-day breakout fade)
+    spec: 'BUY setup: low_t is a new 20-day low AND the previous 20-day low was set >= A trading days earlier. Once price
+      trades below that previous 20-day low, place a BUY STOP at previous_20d_low + 0.1 x ATR20; cancel at the close if unfilled
+      (V1 Plus One: the order may fill on day t+1). SELL setup mirrors on new 20-day highs. EXIT at target = entry + 0.5 x
+      (20-day range), or time stop 5 days; trail the stop under each subsequent higher low. Stop 0.1 x ATR20 below the sweep
+      low (low_t). Sizing: risk 0.5% at the stop, ATR-scaled; one position per instrument.'
+    params_grid: V0 A=4, same-day fill | V1 Plus One (next-day fill allowed) | V2 A=3 | V3 V0 on 4h gold (20-bar extremes)
+  S24:
+    name: 'Raschke Holy Grail: ADX(14)>30 pullback to the 20-EMA, short hold'
+    spec: 'ADX14 (Wilder), +DI/-DI, EMA20, ATR20. LONG setup: ADX14 > adx_min AND ADX14_t > ADX14_{t-3} AND +DI > -DI; price
+      has been above EMA20 for >= 5 bars and bar t touches or closes below EMA20. Order: BUY STOP at high_t + 0.05 x ATR20,
+      valid 3 bars. SHORT mirrors. EXIT at target = min(most recent 5-bar fractal swing high confirmed by closed bars, entry
+      + 2R), or at the close if ADX turns down 3 bars running, or time stop 15 bars. Stop 0.1 x ATR20 below the lowest low
+      of the pullback bars (typically 0.8-1.5 ATR); to breakeven at +1R. Sizing: risk 0.5% at the stop; one trade per pullback;
+      max 6 concurrent per account, 2 per correlation group.'
+    params_grid: V0 adx_min=30, EMA20 | V1 adx_min=25 | V2 EMA50 pullback | V3 V0 on 4h
+  S26:
+    name: Fear-spike contrarian long index (realised-vol z-score primary; VIX stretch when data lands)
+    spec: 'V0: RV21 = 21-day Yang-Zhang realised vol of the index (cash OHLC); z = (RV21 - mean252(RV21)) / sd252(RV21). LONG
+      at the next open when z > 2.0. EXIT at the close when RV21 < its 10-day SMA, or time stop 10 trading days. V1: VIX close
+      > 1.05 x SMA10(VIX) for 3 consecutive days -> long next open; exit when VIX closes below SMA10 or 10 days. V2: VIX z-score
+      vs 252d > 2. Stop 3 x ATR14 below entry (tail-reversal bet; no averaging down). Sizing: risk 0.5% at the 3-ATR stop;
+      cap 2% of equity at risk; one position at a time per index. Low-N pre-registration: day-block bootstrap p; retire if
+      N < 150 across learn+confirm.'
+    params_grid: V0 RV21 z>2 | V1 VIX stretch (5%, 10d, 3 days) | V2 VIX z>2 (252d)
+  S27:
+    name: Multi-speed EWMA trend (Baz et al.) with response function and strength gate -- REOPENS the closed trend line, one
+      trial only
+    spec: 'For k in {(8,24),(16,48),(32,96)}: x_k = (EWMA_S - EWMA_L)/sd(price,63); y_k = x_k/sd(x_k,252); u_k = y_k*exp(-y_k^2/4)/0.89.
+      S = mean(u_k). ENTER long when S > gate_in (short when S < -gate_in); flat when |S| <= gate_in. EXIT when S crosses
+      back inside |S| < gate_out or flips sign. Stop 3 x ATR20 from entry; book drawdown pause at 15% of risk budget. Sizing:
+      |S| (capped 1.0) x inverse 60d vol at 10% per-instrument vol target; notional cap 1.5x capital; per-instrument risk
+      <= 0.5%. Control: the UN-GATED version of the same signal (always in) on the same instruments; the gated net must exceed
+      it by >= 0.03 R per position-month, else the trend family is retired on CFDs permanently with no neighbours.'
+    params_grid: V0 gate_in=0.5, gate_out=0.25 | V1 fast speeds only (8/24, 16/48) | V2 gate_in=0.75, gate_out=0.35
+  S30:
+    name: FX cross-sectional 1-month momentum on majors (currency-ranked, spread-cheap)
+    spec: 'At month-end compute each currency''s L-month total return vs USD (spot + swap accrual as the carry proxy). LONG
+      the top 2 currencies, SHORT the bottom 2, expressed as the cheapest pairs available on the account (e.g. long AUD/short
+      JPY -> AUDJPY on vantage, AUDUSD + USDJPY on ICM). Monthly re-rank; close pairs whose currencies leave the extreme ranks;
+      time stop 21 trading days. Stop 3 x ATR20; book drawdown > 10% of risk budget pauses entries until the next re-rank.
+      Sizing: equal risk per currency leg (inverse 60d vol), book vol target 6%; per-pair risk <= 0.4%. Net read includes
+      the actually quoted swap per leg.'
+    params_grid: V0 L=1 month | V1 L=3 months | V2 L=1, weekly, 4 tranches
+units:
+- unit: S02-V0
+  family: S02
+  variant: V0
+  detector: S02
+  xs: false
+  params:
+    ibs: 0.2
+  instruments: &id001
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: cash session built from 4h CFD bars (US 12-20 UTC, EU 08-16 UTC), flagged approximate per the card's data pin;
+    fill at the next CFD open after the cash close
+- unit: S02-V1
+  family: S02
+  variant: V1
+  detector: S02
+  xs: false
+  params:
+    ibs: 0.1
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: as V0
+- unit: S02-V2
+  family: S02
+  variant: V2
+  detector: S02
+  xs: false
+  params:
+    ibs: 0.2
+    exit: ibs60
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: as V0; exit at the first cash close with IBS > 0.60, cap 3 days (18 4h bars)
+- unit: S02-V3
+  family: S02
+  variant: V3
+  detector: S02
+  xs: false
+  params:
+    ibs: 0.8
+    side: -1
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: short cell
+- unit: S03-V0
+  family: S03
+  variant: V0
+  detector: S03
+  xs: false
+  params:
+    z: 1.5
+    gate: 0.6666666666666666
+  instruments: &id002
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - XAUUSD
+  - EURUSD
+  timeframes:
+  - 1d
+  control: random_side
+  impl_notes: YZ vol on the CFD 1d OHLC (23h session, not cash); random-side control on the same bar is inside the vol gate
+    (card-internal control); vol-target sizing does not change R; long cell
+- unit: S03-V1
+  family: S03
+  variant: V1
+  detector: S03
+  xs: false
+  params:
+    z: 2.0
+    gate: 0.6666666666666666
+  instruments: *id002
+  timeframes:
+  - 1d
+  control: random_side
+  impl_notes: YZ vol on the CFD 1d OHLC (23h session, not cash); random-side control on the same bar is inside the vol gate
+    (card-internal control); vol-target sizing does not change R; long cell
+- unit: S03-V2
+  family: S03
+  variant: V2
+  detector: S03
+  xs: false
+  params:
+    z: 1.5
+    gate: 0.8
+  instruments: *id002
+  timeframes:
+  - 1d
+  control: random_side
+  impl_notes: YZ vol on the CFD 1d OHLC (23h session, not cash); random-side control on the same bar is inside the vol gate
+    (card-internal control); vol-target sizing does not change R; long cell, top quintile
+- unit: S03-V3
+  family: S03
+  variant: V3
+  detector: S03
+  xs: false
+  params:
+    z: 1.5
+    gate: 0.6666666666666666
+    side: -1
+  instruments: *id002
+  timeframes:
+  - 1d
+  control: random_side
+  impl_notes: YZ vol on the CFD 1d OHLC (23h session, not cash); random-side control on the same bar is inside the vol gate
+    (card-internal control); vol-target sizing does not change R; short cell
+- unit: S04-V0
+  family: S04
+  variant: V0
+  detector: S04
+  xs: false
+  params:
+    g: 0.3
+    mode: cont
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: cash open/close from 4h CFD bars; gap = CFD price at the cash open vs the previous cash close; daily cash ATR20;
+    +1 spread opening slippage NOT added beyond the bar spread (reported in the stress column)
+- unit: S04-V1
+  family: S04
+  variant: V1
+  detector: S04
+  xs: false
+  params:
+    g: 0.5
+    mode: cont
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: cash open/close from 4h CFD bars; gap = CFD price at the cash open vs the previous cash close; daily cash ATR20;
+    +1 spread opening slippage NOT added beyond the bar spread (reported in the stress column)
+- unit: S04-V2
+  family: S04
+  variant: V2
+  detector: S04
+  xs: false
+  params:
+    g: 0.3
+    mode: fade
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: cash open/close from 4h CFD bars; gap = CFD price at the cash open vs the previous cash close; daily cash ATR20;
+    +1 spread opening slippage NOT added beyond the bar spread (reported in the stress column)
+- unit: S04-V3
+  family: S04
+  variant: V3
+  detector: S04
+  xs: false
+  params:
+    g: 0.5
+    mode: fade
+  instruments: *id001
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: cash open/close from 4h CFD bars; gap = CFD price at the cash open vs the previous cash close; daily cash ATR20;
+    +1 spread opening slippage NOT added beyond the bar spread (reported in the stress column)
+- unit: S05-V0
+  family: S05
+  variant: V0
+  detector: S05
+  xs: false
+  params: {}
+  instruments: *id001
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: holiday schedule = weekdays missing from the exchange's cash index history (long files), an exogenous calendar
+    known in advance; trade on the CFD 1d bar
+- unit: S05-V1
+  family: S05
+  variant: V1
+  detector: S05
+  xs: false
+  params:
+    trend: true
+  instruments: *id001
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: holiday schedule = weekdays missing from the exchange's cash index history (long files), an exogenous calendar
+    known in advance; trade on the CFD 1d bar
+- unit: S06-V0
+  family: S06
+  variant: V0
+  detector: S06
+  xs: false
+  params:
+    events: s06_all
+  instruments:
+  - US500
+  - USTEC
+  - US30
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: calendar-v1 US releases 2010+ (no learn_pre); PPI from calendar-v1; card control 'matched non-announcement day'
+    implemented as the random-time same-side twin (+-20 trading days)
+- unit: S06-V1
+  family: S06
+  variant: V1
+  detector: S06
+  xs: false
+  params:
+    events: s06_fomc_nfp
+  instruments:
+  - US500
+  - USTEC
+  - US30
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: calendar-v1 US releases 2010+ (no learn_pre); PPI from calendar-v1; card control 'matched non-announcement day'
+    implemented as the random-time same-side twin (+-20 trading days)
+- unit: S06-V2
+  family: S06
+  variant: V2
+  detector: S06
+  xs: false
+  params:
+    events: s06_cpi_ppi
+  instruments:
+  - US500
+  - USTEC
+  - US30
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: calendar-v1 US releases 2010+ (no learn_pre); PPI from calendar-v1; card control 'matched non-announcement day'
+    implemented as the random-time same-side twin (+-20 trading days)
+- unit: S07-V0
+  family: S07
+  variant: V0
+  detector: S07
+  xs: false
+  params:
+    weeks:
+    - 0
+    - 2
+    - 4
+    - 6
+  instruments: *id001
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: FOMC statement days from calendar-v1 (2010+, no learn_pre); odd-week card control approximated by the random-time
+    same-side twin; V2 (vol-scaled notional) is identical to V0 in R and is not a unit
+- unit: S07-V1
+  family: S07
+  variant: V1
+  detector: S07
+  xs: false
+  params:
+    weeks:
+    - 0
+    - 2
+    - 4
+  instruments: *id001
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: FOMC statement days from calendar-v1 (2010+, no learn_pre); odd-week card control approximated by the random-time
+    same-side twin; V2 (vol-scaled notional) is identical to V0 in R and is not a unit
+- unit: S08-V0
+  family: S08
+  variant: V0
+  detector: S08
+  xs: false
+  params:
+    leg_a: true
+    leg_b: true
+  instruments: &id003
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  control: random_time
+  impl_notes: 4h UTC bars; leg A 08-16, leg B 16-20; time-shuffled card control approximated by the random-time same-side
+    twin (same UTC day)
+- unit: S08-V1
+  family: S08
+  variant: V1
+  detector: S08
+  xs: false
+  params:
+    leg_a: true
+    leg_b: false
+  instruments: *id003
+  timeframes:
+  - 4h
+  control: random_time
+  impl_notes: 4h UTC bars; leg A 08-16, leg B 16-20; time-shuffled card control approximated by the random-time same-side
+    twin (same UTC day)
+- unit: S08-V2
+  family: S08
+  variant: V2
+  detector: S08
+  xs: false
+  params:
+    leg_a: true
+    leg_b: true
+    a_from: 12
+  instruments: *id003
+  timeframes:
+  - 4h
+  control: random_time
+  impl_notes: 4h UTC bars; leg A 08-16, leg B 16-20; time-shuffled card control approximated by the random-time same-side
+    twin (same UTC day)
+- unit: S11-V0
+  family: S11
+  variant: V0
+  detector: S11
+  xs: false
+  params:
+    L: 63
+  instruments:
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  - AUDJPY
+  - EURAUD
+  - GBPAUD
+  - EURGBP
+  - EURJPY
+  - GBPJPY
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: published 3m rates via asof on available_utc (FRED IR3TIB01*/DTB3); markup m = 2.5 %/yr fallback (no measured
+    swap); crash guard and vol-target sizing omitted (sizing does not change R)
+- unit: S11-V1
+  family: S11
+  variant: V1
+  detector: S11
+  xs: false
+  params:
+    L: 126
+  instruments:
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  - AUDJPY
+  - EURAUD
+  - GBPAUD
+  - EURGBP
+  - EURJPY
+  - GBPJPY
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: published 3m rates via asof on available_utc (FRED IR3TIB01*/DTB3); markup m = 2.5 %/yr fallback (no measured
+    swap); crash guard and vol-target sizing omitted (sizing does not change R)
+- unit: S11-V2
+  family: S11
+  variant: V2
+  detector: S11
+  xs: false
+  params:
+    carver: true
+  instruments:
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  - AUDJPY
+  - EURAUD
+  - GBPAUD
+  - EURGBP
+  - EURJPY
+  - GBPJPY
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: published 3m rates via asof on available_utc (FRED IR3TIB01*/DTB3); markup m = 2.5 %/yr fallback (no measured
+    swap); crash guard and vol-target sizing omitted (sizing does not change R); Carver forecast, Friday rebalance, no inertia
+    buffer
+- unit: S15-V0
+  family: S15
+  variant: V0
+  detector: S15
+  xs: true
+  params:
+    lb: 252
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'month-end rank per class (commodity XAU/XAG/XTI, index 5, FX 7 USD pairs by currency); exit and re-rank at
+    the next month-end (a held leg pays a round trip each month: conservative); inverse-vol weights, vol scaling and the book
+    drawdown pause do not change per-trade R and are omitted'
+- unit: S15-V1
+  family: S15
+  variant: V1
+  detector: S15
+  xs: true
+  params:
+    lb: 126
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'month-end rank per class (commodity XAU/XAG/XTI, index 5, FX 7 USD pairs by currency); exit and re-rank at
+    the next month-end (a held leg pays a round trip each month: conservative); inverse-vol weights, vol scaling and the book
+    drawdown pause do not change per-trade R and are omitted; 6-1'
+- unit: S15-V2
+  family: S15
+  variant: V2
+  detector: S15
+  xs: true
+  params:
+    lb: 252
+    abs_filter: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'month-end rank per class (commodity XAU/XAG/XTI, index 5, FX 7 USD pairs by currency); exit and re-rank at
+    the next month-end (a held leg pays a round trip each month: conservative); inverse-vol weights, vol scaling and the book
+    drawdown pause do not change per-trade R and are omitted; longs only when 12m return > DTB3'
+- unit: S16-V0
+  family: S16
+  variant: V0
+  detector: S16XS
+  xs: true
+  params:
+    lb: 252
+  instruments: &id004
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  - AUDJPY
+  - EURAUD
+  - GBPAUD
+  - EURGBP
+  - EURJPY
+  - GBPJPY
+  - USINDEX
+  - XAUEUR
+  - XAUJPY
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'month-end rank per class (commodity XAU/XAG/XTI, index 5, FX 7 USD pairs by currency); exit and re-rank at
+    the next month-end (a held leg pays a round trip each month: conservative); inverse-vol weights, vol scaling and the book
+    drawdown pause do not change per-trade R and are omitted; lookback restarts at source cutovers (segments run separately)'
+- unit: S16-V1
+  family: S16
+  variant: V1
+  detector: S16XS
+  xs: true
+  params:
+    lb: 252
+    within_class: true
+  instruments: *id004
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'month-end rank per class (commodity XAU/XAG/XTI, index 5, FX 7 USD pairs by currency); exit and re-rank at
+    the next month-end (a held leg pays a round trip each month: conservative); inverse-vol weights, vol scaling and the book
+    drawdown pause do not change per-trade R and are omitted; lookback restarts at source cutovers (segments run separately)'
+- unit: S16-V2
+  family: S16
+  variant: V2
+  detector: S16TS
+  xs: false
+  params:
+    lb: 252
+  instruments: &id005
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - USTEC
+  - US500
+  - DE40
+  - BTCUSD
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: lookback restarts at source cutovers (segments run separately); trailing at the 20-day low replaced by the exit
+    on a close below the prior 20-day low
+- unit: S16-V3
+  family: S16
+  variant: V3
+  detector: S16TS
+  xs: false
+  params:
+    lb: 126
+  instruments: *id005
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: lookback restarts at source cutovers (segments run separately); as V2 with a 126d high
+- unit: S17-V0
+  family: S17
+  variant: V0
+  detector: S17
+  xs: true
+  params:
+    years: 20
+    min_years: 10
+  instruments: &id006
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - USINDEX
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  - AUDJPY
+  - EURAUD
+  - GBPAUD
+  - EURGBP
+  - EURJPY
+  - GBPJPY
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: monthly return history from the long daily files (raw/daily/long), futures-sourced (yahoo =F) months masked;
+    trades on the Dukascopy 1d bars; random-time same-side twin stands for the month-shuffle control
+- unit: S17-V1
+  family: S17
+  variant: V1
+  detector: S17
+  xs: true
+  params:
+    years: 20
+    min_years: 10
+    xs: true
+  instruments: *id006
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: monthly return history from the long daily files (raw/daily/long), futures-sourced (yahoo =F) months masked;
+    trades on the Dukascopy 1d bars; random-time same-side twin stands for the month-shuffle control
+- unit: S17-V2
+  family: S17
+  variant: V2
+  detector: S17
+  xs: true
+  params:
+    years: 30
+    min_years: 15
+  instruments: *id006
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: monthly return history from the long daily files (raw/daily/long), futures-sourced (yahoo =F) months masked;
+    trades on the Dukascopy 1d bars; random-time same-side twin stands for the month-shuffle control
+- unit: S20-V0
+  family: S20
+  variant: V0
+  detector: S20
+  xs: false
+  params:
+    nr: 7
+    inside: true
+  instruments: &id007
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily OHLC fills for every instrument (gold too: no 1m path), a bar touching both OCO triggers = full loss;
+    breakeven move and Crabel reversal entry omitted; cost gate range >= 4 x round trip'
+- unit: S20-V1
+  family: S20
+  variant: V1
+  detector: S20
+  xs: false
+  params:
+    nr: 7
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily OHLC fills for every instrument (gold too: no 1m path), a bar touching both OCO triggers = full loss;
+    breakeven move and Crabel reversal entry omitted; cost gate range >= 4 x round trip'
+- unit: S20-V2
+  family: S20
+  variant: V2
+  detector: S20
+  xs: false
+  params:
+    nr: 4
+    inside: true
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily OHLC fills for every instrument (gold too: no 1m path), a bar touching both OCO triggers = full loss;
+    breakeven move and Crabel reversal entry omitted; cost gate range >= 4 x round trip'
+- unit: S20-V3
+  family: S20
+  variant: V3
+  detector: S20
+  xs: false
+  params:
+    nr: 7
+    trend: true
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily OHLC fills for every instrument (gold too: no 1m path), a bar touching both OCO triggers = full loss;
+    breakeven move and Crabel reversal entry omitted; cost gate range >= 4 x round trip'
+- unit: S21-V0
+  family: S21
+  variant: V0
+  detector: S21
+  xs: false
+  params:
+    k: 0.7
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'continuous CFD 1d bars: day t open = close of t-1; exit at the close of the trigger day (= next open); tier-1
+    news blackout not applied'
+- unit: S21-V1
+  family: S21
+  variant: V1
+  detector: S21
+  xs: false
+  params:
+    k: 0.5
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'continuous CFD 1d bars: day t open = close of t-1; exit at the close of the trigger day (= next open); tier-1
+    news blackout not applied'
+- unit: S21-V2
+  family: S21
+  variant: V2
+  detector: S21
+  xs: false
+  params:
+    k: 1.0
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'continuous CFD 1d bars: day t open = close of t-1; exit at the close of the trigger day (= next open); tier-1
+    news blackout not applied'
+- unit: S21-V3
+  family: S21
+  variant: V3
+  detector: S21
+  xs: false
+  params:
+    k: 1.0
+    crabel: true
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'continuous CFD 1d bars: day t open = close of t-1; exit at the close of the trigger day (= next open); tier-1
+    news blackout not applied'
+- unit: S22-V0
+  family: S22
+  variant: V0
+  detector: S22
+  xs: false
+  params:
+    kc: 1.5
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: breakeven move omitted; stop = EMA20 at the release bar, at least 0.3 ATR from the trigger
+- unit: S22-V1
+  family: S22
+  variant: V1
+  detector: S22
+  xs: false
+  params:
+    kc: 1.0
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: breakeven move omitted; stop = EMA20 at the release bar, at least 0.3 ATR from the trigger
+- unit: S22-V2
+  family: S22
+  variant: V2
+  detector: S22
+  xs: false
+  params:
+    bandwidth: true
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: breakeven move omitted; stop = EMA20 at the release bar, at least 0.3 ATR from the trigger; BandWidth at its
+    120-bar low within the last 6 bars, close outside the band
+- unit: S22-V3
+  family: S22
+  variant: V3
+  detector: S22
+  xs: false
+  params:
+    kc: 1.5
+  instruments: *id007
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: breakeven move omitted; stop = EMA20 at the release bar, at least 0.3 ATR from the trigger; 4h
+- unit: S23-V0
+  family: S23
+  variant: V0
+  detector: S23
+  xs: false
+  params:
+    A: 4
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily bars cannot order the sweep and the reclaim inside one day: V0 enters at the next open when the day CLOSED
+    back above the old low + 0.1 ATR; V1 adds a next-day buy stop; trailing stop omitted'
+- unit: S23-V1
+  family: S23
+  variant: V1
+  detector: S23
+  xs: false
+  params:
+    A: 4
+    plus_one: true
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily bars cannot order the sweep and the reclaim inside one day: V0 enters at the next open when the day CLOSED
+    back above the old low + 0.1 ATR; V1 adds a next-day buy stop; trailing stop omitted'
+- unit: S23-V2
+  family: S23
+  variant: V2
+  detector: S23
+  xs: false
+  params:
+    A: 3
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily bars cannot order the sweep and the reclaim inside one day: V0 enters at the next open when the day CLOSED
+    back above the old low + 0.1 ATR; V1 adds a next-day buy stop; trailing stop omitted'
+- unit: S23-V3
+  family: S23
+  variant: V3
+  detector: S23
+  xs: false
+  params:
+    A: 4
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: 'daily bars cannot order the sweep and the reclaim inside one day: V0 enters at the next open when the day CLOSED
+    back above the old low + 0.1 ATR; V1 adds a next-day buy stop; trailing stop omitted; gold 4h'
+- unit: S24-V0
+  family: S24
+  variant: V0
+  detector: S24
+  xs: false
+  params:
+    adx: 30
+    ema: 20
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: target = entry + 2R (the 5-bar fractal target omitted); breakeven omitted; pullback low = min of the last 3
+    lows
+- unit: S24-V1
+  family: S24
+  variant: V1
+  detector: S24
+  xs: false
+  params:
+    adx: 25
+    ema: 20
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: target = entry + 2R (the 5-bar fractal target omitted); breakeven omitted; pullback low = min of the last 3
+    lows
+- unit: S24-V2
+  family: S24
+  variant: V2
+  detector: S24
+  xs: false
+  params:
+    adx: 30
+    ema: 50
+  instruments: *id007
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: target = entry + 2R (the 5-bar fractal target omitted); breakeven omitted; pullback low = min of the last 3
+    lows
+- unit: S24-V3
+  family: S24
+  variant: V3
+  detector: S24
+  xs: false
+  params:
+    adx: 30
+    ema: 20
+  instruments: *id007
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: target = entry + 2R (the 5-bar fractal target omitted); breakeven omitted; pullback low = min of the last 3
+    lows; 4h
+- unit: S26-V0
+  family: S26
+  variant: V0
+  detector: S26
+  xs: false
+  params:
+    z: 2.0
+  instruments:
+  - US500
+  - USTEC
+  - US30
+  - DE40
+  timeframes:
+  - 1d
+  control: random_time
+  impl_notes: 'YZ RV21 on the CFD 1d OHLC; V1/V2 need VIX (not local): not run'
+- unit: S27-V0
+  family: S27
+  variant: V0
+  detector: S27
+  xs: false
+  params:
+    gin: 0.5
+    gout: 0.25
+  instruments: *id005
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'position size |S| and inverse-vol do not change R; card control (un-gated always-in) not computed: the A2 random-side
+    twin is the gate'
+- unit: S27-V1
+  family: S27
+  variant: V1
+  detector: S27
+  xs: false
+  params:
+    gin: 0.5
+    gout: 0.25
+    fast: true
+  instruments: *id005
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'position size |S| and inverse-vol do not change R; card control (un-gated always-in) not computed: the A2 random-side
+    twin is the gate'
+- unit: S27-V2
+  family: S27
+  variant: V2
+  detector: S27
+  xs: false
+  params:
+    gin: 0.75
+    gout: 0.35
+  instruments: *id005
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'position size |S| and inverse-vol do not change R; card control (un-gated always-in) not computed: the A2 random-side
+    twin is the gate'
+- unit: S30-V0
+  family: S30
+  variant: V0
+  detector: S30
+  xs: true
+  params:
+    months: 1
+  instruments: *id003
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: currencies ranked vs USD on the 7 USD pairs (crosses not used); spot return only (no swap accrual in the score)
+- unit: S30-V1
+  family: S30
+  variant: V1
+  detector: S30
+  xs: true
+  params:
+    months: 3
+  instruments: *id003
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: currencies ranked vs USD on the 7 USD pairs (crosses not used); spot return only (no swap accrual in the score)
+- unit: B04-V0
+  family: B04
+  variant: V0
+  detector: B04
+  xs: false
+  params:
+    gold_grid: 50
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: 'gold grid $50; non-gold grid = 10^(floor(log10 p)-1) (FX: -2); daily-or-coarser bars use OHLC fills, stop first
+    when a bar touches stop and target'
+- unit: B04-V1
+  family: B04
+  variant: V1
+  detector: B04
+  xs: false
+  params:
+    gold_grid: 50
+    confirm: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: close-confirmed
+- unit: B04-V2
+  family: B04
+  variant: V2
+  detector: B04
+  xs: false
+  params:
+    gold_grid: 100
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: gold grid $100 only
+- unit: B04-V3
+  family: B04
+  variant: V3
+  detector: B04
+  xs: false
+  params:
+    gold_grid: 50
+    adx: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: 'ADX14 > 20 on the bar''s own TF (not 4h) '
+- unit: B05-V0
+  family: B05
+  variant: V0
+  detector: B05
+  xs: false
+  params:
+    n: 3
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: nearest-opposite-level target omitted (2 ATR target)
+- unit: B05-V1
+  family: B05
+  variant: V1
+  detector: B05
+  xs: false
+  params:
+    n: 2
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: B05-V2
+  family: B05
+  variant: V2
+  detector: B05
+  xs: false
+  params:
+    n: 3
+    no_retest: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: enter on the break close
+- unit: B05-V3
+  family: B05
+  variant: V3
+  detector: B05
+  xs: false
+  params:
+    n: 3
+    vol: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: tick volume
+- unit: B07-V0
+  family: B07
+  variant: V0
+  detector: B07
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: B07-V1
+  family: B07
+  variant: V1
+  detector: B07
+  xs: false
+  params:
+    five: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: B07-V2
+  family: B07
+  variant: V2
+  detector: B07
+  xs: false
+  params:
+    asc_desc: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: B07-V3
+  family: B07
+  variant: V3
+  detector: B07
+  xs: false
+  params:
+    trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: B08-V0
+  family: B08
+  variant: V0
+  detector: B08
+  xs: false
+  params:
+    events: tier1
+    delay_min: 5
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: B08-V1
+  family: B08
+  variant: V1
+  detector: B08
+  xs: false
+  params:
+    events: tier1
+    delay_min: 15
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: B08-V2
+  family: B08
+  variant: V2
+  detector: B08
+  xs: false
+  params:
+    events: fomc_nfp_cpi
+    delay_min: 5
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: B09-V0
+  family: B09
+  variant: V0
+  detector: B09
+  xs: false
+  params:
+    g: 0.25
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: 'CFD 23h bars: daily gaps exist mostly over weekends'
+- unit: B09-V1
+  family: B09
+  variant: V1
+  detector: B09
+  xs: false
+  params:
+    g: 0.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: B09-V2
+  family: B09
+  variant: V2
+  detector: B09
+  xs: false
+  params:
+    g: 0.25
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1w
+  control: null
+  impl_notes: weekly gaps only
+- unit: B09-V3
+  family: B09
+  variant: V3
+  detector: B09
+  xs: false
+  params:
+    g: 0.25
+    trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: B10-V0
+  family: B10
+  variant: V0
+  detector: B10
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 30m
+  - 1h
+  control: null
+  impl_notes: gold only; trading day rolls at 22:00 UTC; ATR(1h) scaled from the bar TF ATR
+- unit: B10-V1
+  family: B10
+  variant: V1
+  detector: B10
+  xs: false
+  params:
+    twice: true
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 30m
+  - 1h
+  control: null
+  impl_notes: gold only; trading day rolls at 22:00 UTC; ATR(1h) scaled from the bar TF ATR
+- unit: B10-V2
+  family: B10
+  variant: V2
+  detector: B10
+  xs: false
+  params:
+    ldn_ny: true
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 30m
+  - 1h
+  control: null
+  impl_notes: gold only; trading day rolls at 22:00 UTC; ATR(1h) scaled from the bar TF ATR
+- unit: B10-V3
+  family: B10
+  variant: V3
+  detector: B10
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 15m
+  control: null
+  impl_notes: gold only; trading day rolls at 22:00 UTC; ATR(1h) scaled from the bar TF ATR; 15m bars
+- unit: F02-V0
+  family: F02
+  variant: V0
+  detector: F02
+  xs: false
+  params:
+    n: 3
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: opposite-level target omitted (2R target)
+- unit: F02-V1
+  family: F02
+  variant: V1
+  detector: F02
+  xs: false
+  params:
+    n: 2
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F02-V2
+  family: F02
+  variant: V2
+  detector: F02
+  xs: false
+  params:
+    n: 3
+    wick: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F02-V3
+  family: F02
+  variant: V3
+  detector: F02
+  xs: false
+  params:
+    n: 3
+    no_trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F03-V0
+  family: F03
+  variant: V0
+  detector: F03
+  xs: false
+  params:
+    gold_grid: 50
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: ''
+- unit: F03-V1
+  family: F03
+  variant: V1
+  detector: F03
+  xs: false
+  params:
+    gold_grid: 100
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: gold $100 grid
+- unit: F03-V2
+  family: F03
+  variant: V2
+  detector: F03
+  xs: false
+  params:
+    gold_grid: 50
+    penetrate: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: ''
+- unit: F03-V3
+  family: F03
+  variant: V3
+  detector: F03
+  xs: false
+  params:
+    gold_grid: 50
+    ldn_ny: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 30m
+  - 1h
+  - 4h
+  control: null
+  impl_notes: 07-21 UTC
+- unit: F04-V0
+  family: F04
+  variant: V0
+  detector: F04
+  xs: false
+  params:
+    hs: true
+    tri: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: bust = close beyond the base pattern's stop level within 10 bars
+- unit: F04-V1
+  family: F04
+  variant: V1
+  detector: F04
+  xs: false
+  params:
+    hs: true
+    tri: false
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F04-V2
+  family: F04
+  variant: V2
+  detector: F04
+  xs: false
+  params:
+    hs: false
+    tri: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F04-V3
+  family: F04
+  variant: V3
+  detector: F04
+  xs: false
+  params:
+    hs: true
+    tri: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F05-V0
+  family: F05
+  variant: V0
+  detector: F05
+  xs: false
+  params:
+    band: 0.2
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily bars only (no 1h path): buy stop at the prior low valid one day; stop 0.1 ATR below an assumed sweep
+    of 1 ATR; trail variant not built'
+- unit: F05-V2
+  family: F05
+  variant: V2
+  detector: F05
+  xs: false
+  params:
+    band: 0.1
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily bars only (no 1h path): buy stop at the prior low valid one day; stop 0.1 ATR below an assumed sweep
+    of 1 ATR; trail variant not built'
+- unit: F05-V3
+  family: F05
+  variant: V3
+  detector: F05
+  xs: false
+  params:
+    band: 0.2
+    trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'daily bars only (no 1h path): buy stop at the prior low valid one day; stop 0.1 ATR below an assumed sweep
+    of 1 ATR; trail variant not built'
+- unit: F07-V0
+  family: F07
+  variant: V0
+  detector: F07
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F07-V1
+  family: F07
+  variant: V1
+  detector: F07
+  xs: false
+  params:
+    month: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F07-V2
+  family: F07
+  variant: V2
+  detector: F07
+  xs: false
+  params:
+    reject: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F07-V3
+  family: F07
+  variant: V3
+  detector: F07
+  xs: false
+  params:
+    monwed: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F08-V0
+  family: F08
+  variant: V0
+  detector: F08
+  xs: false
+  params:
+    n: 20
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F08-V1
+  family: F08
+  variant: V1
+  detector: F08
+  xs: false
+  params:
+    n: 50
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F08-V2
+  family: F08
+  variant: V2
+  detector: F08
+  xs: false
+  params:
+    n: 20
+    big: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F08-V3
+  family: F08
+  variant: V3
+  detector: F08
+  xs: false
+  params:
+    n: 20
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: F09-V0
+  family: F09
+  variant: V0
+  detector: F09
+  xs: false
+  params:
+    k: 2.0
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F09-V1
+  family: F09
+  variant: V1
+  detector: F09
+  xs: false
+  params:
+    k: 2.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F09-V2
+  family: F09
+  variant: V2
+  detector: F09
+  xs: false
+  params:
+    k: 2.0
+    low_adx: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F09-V3
+  family: F09
+  variant: V3
+  detector: F09
+  xs: false
+  params:
+    k: 2.0
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: F10-V0
+  family: F10
+  variant: V0
+  detector: F10
+  xs: false
+  params:
+    events: tier1
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: F10-V1
+  family: F10
+  variant: V1
+  detector: F10
+  xs: false
+  params:
+    events: tier1
+    any_inside: true
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: F10-V2
+  family: F10
+  variant: V2
+  detector: F10
+  xs: false
+  params:
+    events: fomc_nfp_cpi
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: F10-V3
+  family: F10
+  variant: V3
+  detector: F10
+  xs: false
+  params:
+    events: tier1
+    big_spike: true
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  - 15m
+  - 30m
+  control: null
+  impl_notes: gold only; calendar-v1 tier-1 US (NFP, CPI, FOMC statement, PCE, ISM manufacturing), 2010+ (no learn_pre); ATR(15m)/ATR(1h)
+    scaled from the bar TF ATR by sqrt(time); spread gate not applied
+- unit: C01-V0
+  family: C01
+  variant: V0
+  detector: C01
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C01-V1
+  family: C01
+  variant: V1
+  detector: C01
+  xs: false
+  params:
+    lmw: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: LMW kernel extrema; bandwidth rule of thumb (not CV)
+- unit: C01-V3
+  family: C01
+  variant: V3
+  detector: C01
+  xs: false
+  params:
+    counter_trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C02-V0
+  family: C02
+  variant: V0
+  detector: C02
+  xs: false
+  params:
+    tol: 0.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: depth 2 ATR on every TF (10 % weekly rule not applied)
+- unit: C02-V1
+  family: C02
+  variant: V1
+  detector: C02
+  xs: false
+  params:
+    tol: 0.25
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C02-V2
+  family: C02
+  variant: V2
+  detector: C02
+  xs: false
+  params:
+    tol: 0.5
+    vol_div: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C02-V3
+  family: C02
+  variant: V3
+  detector: C02
+  xs: false
+  params:
+    tol: 0.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C03-V0
+  family: C03
+  variant: V0
+  detector: C03
+  xs: false
+  params:
+    retr: 0.5
+    tgt: 0.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 15m
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: pole ends at a confirmed ZZ pivot; flag lines OLS on highs/lows
+- unit: C03-V1
+  family: C03
+  variant: V1
+  detector: C03
+  xs: false
+  params:
+    retr: 0.5
+    tgt: 1.0
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 15m
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: pole ends at a confirmed ZZ pivot; flag lines OLS on highs/lows
+- unit: C03-V2
+  family: C03
+  variant: V2
+  detector: C03
+  xs: false
+  params:
+    retr: 0.38
+    tgt: 0.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 15m
+  - 30m
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: pole ends at a confirmed ZZ pivot; flag lines OLS on highs/lows
+- unit: C04-V0
+  family: C04
+  variant: V0
+  detector: C04
+  xs: false
+  params:
+    h: 0.3
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: LMW extrema with a rule-of-thumb bandwidth (not CV-optimal); 8 non-rectangle patterns (HS/IHS/BTOP/BBOT/TTOP/TBOT/DTOP/DBOT)
+- unit: C04-V1
+  family: C04
+  variant: V1
+  detector: C04
+  xs: false
+  params:
+    h: 0.3
+    reversal_only: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: LMW extrema with a rule-of-thumb bandwidth (not CV-optimal); 8 non-rectangle patterns (HS/IHS/BTOP/BBOT/TTOP/TBOT/DTOP/DBOT)
+- unit: C04-V2
+  family: C04
+  variant: V2
+  detector: C04
+  xs: false
+  params:
+    h: 0.5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: LMW extrema with a rule-of-thumb bandwidth (not CV-optimal); 8 non-rectangle patterns (HS/IHS/BTOP/BBOT/TTOP/TBOT/DTOP/DBOT)
+- unit: C04-V3
+  family: C04
+  variant: V3
+  detector: C04
+  xs: false
+  params:
+    h: 0.3
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1w
+  control: null
+  impl_notes: LMW extrema with a rule-of-thumb bandwidth (not CV-optimal); 8 non-rectangle patterns (HS/IHS/BTOP/BBOT/TTOP/TBOT/DTOP/DBOT)
+- unit: C05-V0
+  family: C05
+  variant: V0
+  detector: C05
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C05-V1
+  family: C05
+  variant: V1
+  detector: C05
+  xs: false
+  params:
+    stars_only: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C05-V2
+  family: C05
+  variant: V2
+  detector: C05
+  xs: false
+  params:
+    no_target: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C05-V3
+  family: C05
+  variant: V3
+  detector: C05
+  xs: false
+  params:
+    at_level: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C06-V0
+  family: C06
+  variant: V0
+  detector: C06
+  xs: false
+  params:
+    pivots: 5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C06-V1
+  family: C06
+  variant: V1
+  detector: C06
+  xs: false
+  params:
+    pivots: 4
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C06-V2
+  family: C06
+  variant: V2
+  detector: C06
+  xs: false
+  params:
+    pivots: 5
+    prior_trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C06-V3
+  family: C06
+  variant: V3
+  detector: C06
+  xs: false
+  params:
+    pivots: 5
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C07-V0
+  family: C07
+  variant: V0
+  detector: C07
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C07-V1
+  family: C07
+  variant: V1
+  detector: C07
+  xs: false
+  params:
+    h3_reject: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C07-V2
+  family: C07
+  variant: V2
+  detector: C07
+  xs: false
+  params:
+    four: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C07-V3
+  family: C07
+  variant: V3
+  detector: C07
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C08-V0
+  family: C08
+  variant: V0
+  detector: C08
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C08-V1
+  family: C08
+  variant: V1
+  detector: C08
+  xs: false
+  params:
+    no_handle: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C08-V2
+  family: C08
+  variant: V2
+  detector: C08
+  xs: false
+  params:
+    trend: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C08-V3
+  family: C08
+  variant: V3
+  detector: C08
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1w
+  control: null
+  impl_notes: ''
+- unit: C09-V0
+  family: C09
+  variant: V0
+  detector: C09
+  xs: false
+  params:
+    kind: gartley
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: single target 0.618 AD (no partial)
+- unit: C09-V1
+  family: C09
+  variant: V1
+  detector: C09
+  xs: false
+  params:
+    kind: bat
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C09-V2
+  family: C09
+  variant: V2
+  detector: C09
+  xs: false
+  params:
+    kind: abcd
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C09-V3
+  family: C09
+  variant: V3
+  detector: C09
+  xs: false
+  params:
+    kind: gartley
+    at_level: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C10-V0
+  family: C10
+  variant: V0
+  detector: C10
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C10-V1
+  family: C10
+  variant: V1
+  detector: C10
+  xs: false
+  params:
+    no_level: true
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: C10-V3
+  family: C10
+  variant: V3
+  detector: C10
+  xs: false
+  params:
+    range: 1.2
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1h
+  - 4h
+  - 1d
+  control: null
+  impl_notes: ''
+- unit: NULL-RAND-5m
+  family: 'NULL'
+  variant: 5m
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.01
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 5m
+  control: null
+  impl_notes: random-side entries at 1% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-RAND-15m
+  family: 'NULL'
+  variant: 15m
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.01
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 15m
+  control: null
+  impl_notes: random-side entries at 1% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-RAND-30m
+  family: 'NULL'
+  variant: 30m
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.02
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 30m
+  control: null
+  impl_notes: random-side entries at 2% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-RAND-1h
+  family: 'NULL'
+  variant: 1h
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.04
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 1h
+  control: null
+  impl_notes: random-side entries at 4% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-RAND-4h
+  family: 'NULL'
+  variant: 4h
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.01
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 4h
+  control: null
+  impl_notes: random-side entries at 1% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-RAND-1d
+  family: 'NULL'
+  variant: 1d
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.03
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: random-side entries at 3% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-RAND-1w
+  family: 'NULL'
+  variant: 1w
+  detector: NULL_RAND
+  xs: false
+  params:
+    rate: 0.2
+  instruments:
+  - XAUUSD
+  - XAGUSD
+  - XTIUSD
+  - BTCUSD
+  - US500
+  - USTEC
+  - DE40
+  - UK100
+  - US30
+  - EURUSD
+  - GBPUSD
+  - AUDUSD
+  - NZDUSD
+  - USDJPY
+  - USDCAD
+  - USDCHF
+  timeframes:
+  - 1w
+  control: null
+  impl_notes: random-side entries at 20% of bars (hash of the bar time), stop 1 ATR14, target 2 ATR14, hold 10; rate set so
+    the null can reach its n floor
+- unit: NULL-LONGCLOSE-US500
+  family: 'NULL'
+  variant: US500
+  detector: NULL_LONGCLOSE
+  xs: false
+  params: {}
+  instruments:
+  - US500
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: buy every 1d close, exit next close, catastrophe stop 2.5 ATR20 (must FAIL explore)
+- unit: NULL-LONGCLOSE-IDX
+  family: 'NULL'
+  variant: IDX
+  detector: NULL_LONGCLOSE
+  xs: false
+  params: {}
+  instruments: *id001
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: buy every 1d close, exit next close, catastrophe stop 2.5 ATR20 (must FAIL explore)
+- unit: NULL-LONGCLOSE-GOLD
+  family: 'NULL'
+  variant: GOLD
+  detector: NULL_LONGCLOSE
+  xs: false
+  params: {}
+  instruments:
+  - XAUUSD
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: buy every 1d close, exit next close, catastrophe stop 2.5 ATR20 (must FAIL explore)
+- unit: NULL-XS-RANDOM
+  family: 'NULL'
+  variant: XS
+  detector: NULL_XS
+  xs: true
+  params: {}
+  instruments: *id004
+  timeframes:
+  - 1d
+  control: null
+  impl_notes: 'month-end cross-sectional book ranked by a hash of (instrument, month): thirds long/short'
+not_run:
+  S01: closed 11-07 (RSI2/Double-7s failed TEST-OLD)
+  S09: 'data-gated: needs a non-US tier-1 calendar (calendar-v1 is US only)'
+  S10: 'pre-gate (card, no K): no measured per-pair swap; the 2.5 %/yr fallback markup exceeds the 1.5 %/yr gate'
+  S12: 'n-infeasible: 1-3 trades/yr on one instrument cannot reach the n >= 300 explore floor'
+  S13: 'data-gated: no futures expiry calendar / roll log (basis not computable)'
+  S14: 'data-gated: no swap history and no commodity/index roll-yield carry proxy'
+  S18: 'n-infeasible: 2 trades/yr (16 in explore) vs n >= 300; needs its own low-N card'
+  S19: 'n-infeasible: 1 trade/yr/index vs n >= 300; needs its own low-N card'
+  S25: 'n-infeasible: 4-8 trades/yr per pair vs n >= 300'
+  S28: 'data-gated: CPI vintages not local'
+  S29: 'n-infeasible: 2-5 events/yr vs n >= 300; needs its own low-N card'
+  S26-V1: 'data-gated: VIX not local'
+  S26-V2: 'data-gated: VIX not local'
+  S07-V2: 'identical to V0 in R (vol-scaled notional): not a separate unit'
+  S15-V3: 'not built: weekly 4-tranche book needs overlapping positions per instrument'
+  S30-V2: 'not built: weekly 4-tranche book'
+  S16-sub: the card's 'XS gross pass / net fail -> rerun with S14 swap filter' sub-read is not run (S14 data-gated)
+  F06: 'n-infeasible on 23h CFD bars: no daily opening gap beyond the prior extreme except weekends; needs cash-session bars'
+  F05-V1: 'not built: 1h trail exit'
+  C01-V2: 'not built: 1R partial + trail'
+  C10-V2: 'not built: 1d trend filter on 1h/4h (multi-TF join)'
+  C03-V3: 'not built: x4 higher-TF SMA50 (multi-TF join)'
+  B08-V3: 'card: drop when no consensus data (none local)'
+  B01/B02/B03/B06/F01: duplicates, screened once under S16/S20/S21/S22/S23
