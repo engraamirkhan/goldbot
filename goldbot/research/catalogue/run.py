@@ -390,9 +390,15 @@ def _load_trades(win: str, uid: str) -> Any:
     return pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["t_fill", "excess"])
 
 
+def confirm_k_eff(ex: dict[str, Any], reg: Any) -> int:
+    """K for promotion at CONFIRM (EVAL-1 section 6, quant G3): the larger of the explore read's K and the registry's
+    `n_trials_effective` now, so trials recorded after explore count."""
+    return max(int(ex["k_registry"]), int(reg.n_trials_effective))
+
+
 def cmd_confirm(a: argparse.Namespace) -> None:
     us = registered_units(_dropped())
-    _check_ready(a, us)
+    reg = _check_ready(a, us)
     ex = json.loads((out_dir() / "explore.json").read_text())
     if ex["void"]:
         raise SystemExit("explore run is VOID (null passes above the bound): confirm not read")
@@ -407,14 +413,15 @@ def cmd_confirm(a: argparse.Namespace) -> None:
     res.sort(key=lambda r: r["unit"])
     p = np.array([r["boot_p"] for r in res])
     rej = S.bh(p)
+    k_eff = confirm_k_eff(ex, reg)
     for r, ok in zip(res, rej):
         g = S.confirm_gates(r["summary"])
         g["bh"] = bool(ok)
         r["gates"] = g
         r["pass"] = all(g.values())
         tr = _load_trades("confirm", r["unit"])                          # section 6 (C5): DSR on the CONFIRM series
-        r["promotion"] = S.promotion_gates(S.book_daily(tr, _market(tr, "confirm")).to_numpy(), ex["k_registry"])
-    out = {"window": "confirm", "head": head(), "m": len(res), "q": S.BH_Q,
+        r["promotion"] = S.promotion_gates(S.book_daily(tr, _market(tr, "confirm")).to_numpy(), k_eff)
+    out = {"window": "confirm", "head": head(), "m": len(res), "q": S.BH_Q, "k_eff_confirm": k_eff,
            "passers": [r["unit"] for r in res if r["pass"]], "results": res}
     (out_dir() / "confirm.json").write_text(json.dumps(out, indent=1, default=float))
     print(json.dumps({k: v for k, v in out.items() if k != "results"}, indent=1))

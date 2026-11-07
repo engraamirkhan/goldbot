@@ -255,3 +255,14 @@ def test_the_run_stops_when_a_traded_instrument_has_no_daily_closes(monkeypatch:
     monkeypatch.setattr(D, "get_bars", no_bars)
     with pytest.raises(FileNotFoundError, match="EVAL-1 book: no 1d closes for EURUSD in explore"):
         R._market(pd.DataFrame({"inst": ["EURUSD"]}), "explore")
+
+
+def test_promotion_k_at_confirm_is_the_larger_of_the_explore_k_and_the_registry_k_now() -> None:
+    """Quant G3: trials recorded after explore count at promotion; K never falls below the explore K."""
+    from goldbot.research.catalogue import run as R
+
+    class Reg:
+        def __init__(self, k: int) -> None:
+            self.n_trials_effective = k
+    assert R.confirm_k_eff({"k_registry": 3352}, Reg(3400)) == 3400
+    assert R.confirm_k_eff({"k_registry": 3352}, Reg(3000)) == 3352
