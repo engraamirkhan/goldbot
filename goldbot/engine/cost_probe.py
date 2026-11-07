@@ -72,6 +72,10 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   owner-approved 2026-10-20): the gate skips only the EV requirement, and only for the minimum lot on a terminal that
   reads demo now, a stop <= $3, a hold <= 60 s and a loss at the stop within the budget headroom and the dynamic
   per-probe ceiling; every other limit applies. No p is invented to pass it.
+* Probe hours (prereg-amendment-2026-11-07-kill-only.md section 4: "scheduled cost probes send only with a slot time
+  in [07:00, 21:00) UTC ... Mirror probes on icm-probe follow the same hours"): an account's `cost_probe.hours_utc`
+  stops both kinds outside its UTC window (`outside_hours`; journalled `cost_probe_scheduled_skip:hours` and
+  `cost_probe_skip:hours`). Entries only: an open probe keeps its hold, stop and every exit.
 """
 from __future__ import annotations
 
@@ -544,6 +548,9 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
         if probes_open:
             _make_way(eng, close_ts)
         return
+    if signals and outside_hours(eng, close_ts):       # amendment 2026-11-07 section 4: no mirror probe outside
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_skip:hours"})
+        return
     # amendment 3 (directors' ruling 2026-10-19): up to PER_CLOSE new probes per bar close, from different agents, each
     # checked afresh (slots, budget, untaken caps, the same-side cap) after the one before it
     for _ in range(PER_CLOSE):
@@ -963,8 +970,19 @@ def scheduled_slot(ts: pd.Timestamp, every_min: int) -> bool:
     return k <= 1 or i % k == (i // k + i // (86_400 // SLOT_S)) % k
 
 
+def outside_hours(eng: Engine, ts: pd.Timestamp) -> bool:
+    """prereg-amendment-2026-11-07-kill-only.md section 4: the account's probes (mirror and scheduled) send only with
+    a slot time (the bar close `ts`) in `cost_probe_hours_utc` [from, to) UTC; None: every hour."""
+    hours = eng.cfg.cost_probe_hours_utc
+    if hours is None:
+        return False
+    hm = ts.tz_convert("UTC").strftime("%H:%M")
+    return not hours[0] <= hm < hours[1]
+
+
 def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
-    """Why no scheduled probe is sent at `ts`, or None: a weekend day (UTC or server), the rollover blackout (the
+    """Why no scheduled probe is sent at `ts`, or None: outside the account's probe hours (`outside_hours`, "hours"),
+    a weekend day (UTC or server), the rollover blackout (the
     configured window in its own zone, New York by default, so it moves with US DST; the daily break and the reopen
     inside it) or past the Friday weekend cut (server time, `weekend_cut`). ADR 0062: on an always-open account the
     weekend and the Friday cut do not apply; outside a weekend_only account's window it is `weekend_lane`."""
@@ -973,6 +991,8 @@ def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
     lane = eng.cfg.always_open      # ADR 0062: an always-open account measures its own weekend; no Friday cut
     if lane and eng.cfg.weekend_window is not None and not eng.cfg.weekend_window.inside(ts):
         return "weekend_lane"
+    if outside_hours(eng, ts):
+        return "hours"
     if not lane and (ts.weekday() >= 5 or srv.weekday() >= 5):
         return "weekend"
     hm, (a, b) = ts.tz_convert(sch.blackout_tz).strftime("%H:%M"), sch.blackout

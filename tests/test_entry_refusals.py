@@ -322,3 +322,12 @@ def test_in_send_the_refusals_run_before_the_order_core_and_the_riskgate_check_i
     hook = ast.parse((ROOT / "goldbot" / "engine" / "entry_refusals.py").read_text())
     for name in ("_execute", "_place", "order_send", "broker", "_try_close", "check", "send"):
         assert not _calls_in(hook, name), name
+
+
+def test_a_shifted_signal_is_judged_at_its_own_decision_time_not_the_close_it_was_released_at():
+    """A shifted XC15 decided at 06:45 and released at the 07:00 close is a 02:00-07:00 decision: refused."""
+    arm = _spec_arm("XC15", role="control")
+    s = _sig(arm, _at_utc(TUE, "07:00")).model_copy(update={"decision_utc": _at_utc(TUE, "06:45"), "shifted": True})
+    assert entry_refusals.window_0207(_cfg_engine(), arm, s)
+    late = s.model_copy(update={"decision_utc": _at_utc(TUE, "07:00")})
+    assert not entry_refusals.window_0207(_cfg_engine(), arm, late)

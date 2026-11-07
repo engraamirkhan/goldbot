@@ -279,7 +279,10 @@ accounts:
     # ICM session already holds more than the prereg's PROBE_MIN_FILLS 50 scheduled fills (asia 227, london 113,
     # newyork 178 on 2026-11-06), so the cost table keeps every measured cell; half the rate keeps the fixed-time
     # series. Rollback: every_min 60, restart
-    cost_probe: { enabled: true, budget_share: 0.2363, max_open: 3, max_loss: 10.0, scheduled: { enabled: true, budget_share: 0.5, every_min: 120 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # prereg-amendment-2026-11-07-kill-only.md section 4 (WS-1): scheduled and mirror probes only with a slot time in
+    # [07:00, 21:00) UTC (hours_utc); every_min stays 120 (the CFO's halving: fewer probes only, never more). The
+    # Asia cells stop accruing (ICM asia already holds 227 scheduled fills). Rollback: drop hours_utc, restart
+    cost_probe: { enabled: true, budget_share: 0.2363, max_open: 3, max_loss: 10.0, hours_utc: ["07:00", "21:00"], scheduled: { enabled: true, budget_share: 0.5, every_min: 120 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
@@ -486,7 +489,11 @@ accounts:
     # would hold the prior on those cells longer; the switch above stands, plus both sessions at 50.
     # demo-limits ADR 2026-11-02 (f): 0.075 -> 0.175 (£15 -> £35), exploration 0.9 -> 0.825 (£180 -> £165): the day's
     # shares sum to 1.0 under the unchanged £200. Rollback: 0.075 and 0.9, restart
-    cost_probe: { enabled: true, budget_share: 0.175, max_open: 1, max_loss: 4.0, scheduled: { enabled: true, budget_share: 0.5 } }
+    # prereg-amendment-2026-11-07-kill-only.md section 4 (WS-1; Vantage probes -£65.8 on 306 fills, 22.9% of the
+    # account's loss): scheduled probes only with a slot time in [07:00, 21:00) UTC, every_min 15 -> 60 (about 14 a
+    # day); the Vantage Asia slippage cell (202 fills) is frozen at its last fit. Measurement only, no K. Rollback: drop
+    # hours_utc and every_min, restart
+    cost_probe: { enabled: true, budget_share: 0.175, max_open: 1, max_loss: 4.0, hours_utc: ["07:00", "21:00"], scheduled: { enabled: true, budget_share: 0.5, every_min: 60 } }
     shadow_host: false        # icm-probe hosts the shadow book (one host per deployment)
     # a learning host (ADR 0037 amendment 6): no live agent, every non-learning entry refused, out of the supervisor's
     # combined limits, the limits evidence and the phase gate

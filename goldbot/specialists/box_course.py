@@ -30,7 +30,7 @@ Shared rules (section 3), implemented once (`goldbot.features.box_course`):
 * Time exit per signal timeframe: 96 bars (15m) / 48 (1h) / 24 (4h), carried per candidate (`max_bars`), so pooled
   rungs keep each member's own exit.
 * One position at a time in total (`labels.one_at_a_time`); stop first when stop and target fall in one bar
-  (`labels.triple_barrier`). Placeable: the engine's own entry gate (target >= 2.5 x (bar spread + 0.37 $/oz), stop >=
+  (`labels.triple_barrier`). Placeable: the engine's own entry gate (target >= 2.5 x (bar spread + 0.38 $/oz), stop >=
   $0.20). Lot fit at 0.01 lot is reported by `research.yml -f lot_fit=true` (H-27 overlay: a stop the minimum lot cannot
   carry is skipped, never upsized); candidates are not filtered by it, so they equal the pre-registered definitions.
 * Calendar: candidates on a decision bar inside the tier-1 blackout are dropped when the frame carries `in_blackout`

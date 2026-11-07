@@ -19,8 +19,9 @@ The amendment's rules, as built here:
   `exploration.candidate(..., blocked=<name>)` into `exploration_obs` (`taken = 0`, `blocked_reason = <name>`, side,
   `stop_dist`, `target_dist`, `max_hold_s`, `decision_ns`, `is_control`, broker), scored later by
   `exploration_data.label_candidates` (amendment 3.2). Controls in scope are refused and shadowed by the same path.
-* Decision time is the signal bar's close (`Pending.bar_ts` = `exploration_obs.decision_ns`), in UTC; every window is
-  inclusive of its start and exclusive of its end (amendment section 2: "02:00:00 is inside, 07:00:00 is outside").
+* Decision time is the rule's own decision close (`Pending.decision_utc` of a shifted signal, else `Pending.bar_ts`),
+  in UTC; every window is inclusive of its start and exclusive of its end (amendment section 2: "02:00:00 is inside,
+  07:00:00 is outside").
 
 The refusals (`REFUSALS`, in order; the first that applies names the refusal):
 
@@ -75,7 +76,9 @@ class EntryRefusal(FrozenRecord):
 
 
 def _decision_utc(s: Pending) -> pd.Timestamp:
-    t = pd.Timestamp(s.bar_ts)
+    """The rule's own decision close: a shifted XC15 keeps it in `decision_utc` (its `bar_ts` is the later close it
+    was released at), so a signal decided at 06:45 and released at 07:00 is still a 02:00-07:00 decision."""
+    t = pd.Timestamp(s.decision_utc if s.decision_utc is not None else s.bar_ts)
     return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
 

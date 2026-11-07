@@ -56,7 +56,6 @@ from goldbot.data.release import read_bar_files, read_macro_files, read_us_calen
 from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.data.store import asof_join  # noqa: E402
 from goldbot.data.timeutil import epoch_ns, utc_index  # noqa: E402
-from goldbot.execution.costs import settings_extra_cost_usd  # noqa: E402
 from goldbot.features import day_type as dt  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.technical import atr  # noqa: E402
@@ -609,7 +608,10 @@ def main() -> int:
     retire_floor = (research.screen_min_events_daily if research.screen_min_events_daily is not None
                     else research.screen_min_events)
     result = run(b1, macro if len(macro) else None, cal if len(cal) else None, holdout_from=holdout_from,
-                 extra_cost_usd=settings_extra_cost_usd(settings), retire_floor=int(retire_floor),
+                 # H-14 counts at its pre-registered extra cost (Q1/Q2: 0.37 $/oz) whatever the settings prior is now
+                 # (the ICM commission prior rose 3.5 -> 4.0 on 2026-11-07: settings 0.38): a frozen count stays frozen
+                 extra_cost_usd=FROZEN_EXTRA_COST_USD,
+                 retire_floor=int(retire_floor),
                  pass_floor=int(research.screen_min_events))
     Path(args.out_json).write_text(json.dumps(result, indent=2, default=str))
     text = markdown(result)
