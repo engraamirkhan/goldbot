@@ -198,7 +198,8 @@ def reward_ratio(entry: float, stop: float, target: float, side: int) -> float:
 
 
 def placeable(entry: float, stop: float, target: float, spread: float) -> bool:
-    """Section 3 "Placeable": target distance >= 2.5 x (bar spread + 0.37 $/oz) and stop distance >= $0.20."""
+    """Section 3 "Placeable": target distance >= 2.5 x (bar spread + COST_PRIOR_USD 0.38 $/oz) and stop distance
+    >= $0.20."""
     cost = (spread if np.isfinite(spread) else 0.0) + COST_PRIOR_USD
     return bool(abs(target - entry) >= MIN_TARGET_OVER_COST * cost and abs(entry - stop) >= MIN_STOP_USD)
 

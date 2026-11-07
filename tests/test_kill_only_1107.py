@@ -218,3 +218,12 @@ def test_the_engine_starts_journals_the_bad_hash_arm_and_runs_the_others(tmp_pat
     assert "bad" in fresh.retired and "bad" in fresh.arms               # configured: its exits run
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert [d["agent"] for d in _sent(eng)] == ["explore:good"]
+
+
+def test_one_bad_hash_row_leaves_the_spec_rule_families_resolvable_and_is_not_runnable(tmp_path):
+    """A bad-hash row never makes the family loader raise (which would drop every spec_rule arm and orphan-close its
+    positions); the bad row is left out of the runnable set, every other row resolves."""
+    from goldbot.research import arm_rules_spec
+    path = _spec_with_bad_hash(tmp_path, "S0R")
+    rows = {a.id for a in arm_rules_spec._family_arms(str(path))}
+    assert "S0R" not in rows and "S0" in rows and len(rows) == len(load_arms(SPEC)) - 1

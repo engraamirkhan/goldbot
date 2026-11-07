@@ -43,9 +43,10 @@ Families and warm-up (n bars before the first value):
   reverts (stop cascade) needs news timing and is a later trial. Warm-up: 61 bars.
 - `expected_move` (family `volatility`): forecast move in units of an assumed round-trip cost, a feature only (the
   cost-to-move filter is a later trial). Cost per unit = the median bar spread over the last 96 bars plus
-  `ctx['round_trip_extra']` (0.37 USD/oz: 2 x the 0.15 slippage prior plus 2 x 3.5 USD/lot commission over 100 oz,
-  config/settings.yaml `costs`). `em_yz_<h>_cost` = close x YZ20 x sqrt(h) / cost for horizons h of
-  `ctx['em_horizons']` (4, 16, 48 bars); `em_atr_cost` = ATR14 / cost. Warm-up: 95 bars (the spread median). That
+  `ctx['round_trip_extra']` (default ROUND_TRIP_EXTRA_USD 0.37 USD/oz: 2 x the 0.15 slippage prior plus 2 x 3.5
+  USD/lot commission over 100 oz, the frozen feature default; the live settings prior is 0.38 since the ICM
+  commission became 4.0 USD/lot on 2026-11-07, config/settings.yaml `costs`). `em_yz_<h>_cost` = close x YZ20 x
+  sqrt(h) / cost for horizons h of `ctx['em_horizons']` (4, 16, 48 bars); `em_atr_cost` = ATR14 / cost. Warm-up: 95 bars (the spread median). That
   default is gold's (per oz of a 100 oz lot): a `ctx['symbol']` outside the gold group needs its own
   `ctx['round_trip_extra']` in its price units, else every column is NaN.
 """
