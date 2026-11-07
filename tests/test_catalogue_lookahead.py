@@ -200,7 +200,7 @@ def test_enumerator_aborts_over_quarter_budget() -> None:
 
 def test_bh_and_null_bound() -> None:
     assert S.bh(np.array([0.001, 0.2, 0.03])).tolist() == [True, False, True]
-    assert S.null_void_bound(11) in (2, 3)
+    assert S.null_void_k(4) == 2
 
 
 def test_zigzag_pivots_known_only_from_confirmation() -> None:

@@ -11,7 +11,9 @@ Explore pass (all must hold):
 CONFIRM (explore passers only, read once): BH-FDR q = 0.10 over the explore passers on one-sided day-block bootstrap
   p of the daily excess; >= 5 of the 7 full years 2018-2024 positive; net > 0; 2025-01..09 reported separately.
 TEST-OLD (CONFIRM passers only): n >= 60, net > 0, t_excess >= 1.28.
-Void: the run is void when the null units' explore passes exceed the binomial 99 % upper bound at 5 %.
+Void (quant C1): k or more passes among the random nulls that can reach their n floor (k: P(X >= k) <= 0.02 at
+5 %; 2 of 4), or any buy-every-close sentinel passing.
+t (explore and TEST-OLD) is the Newey-West t with the unit's overlap lag L (C2); bootstrap block = max(5, L).
 DSR is reported at the registry K and at K_cells, never gated."""
 from __future__ import annotations
 
@@ -49,6 +51,35 @@ def _t(x: np.ndarray) -> float:
     return float(np.mean(x) / (s / math.sqrt(len(x)))) if s > 0 else float("nan")
 
 
+def overlap_lag(tr: pd.DataFrame) -> int:
+    """L (quant C2): fill days inside one typical hold = max(1, ceil(median nights held x trading days / calendar
+    span in days)). 1 for intraday or overnight holds."""
+    if not len(tr):
+        return 1
+    days = np.unique(tr["t_fill"].to_numpy(np.int64) // DAY)
+    span = max(1.0, float(days.max() - days.min() + 1))
+    return max(1, int(math.ceil(float(tr["nights"].median()) * len(days) / span)))
+
+
+def hac_t(x: np.ndarray, L: int) -> float:
+    """Newey-West t of mean(x) > 0 for daily sums that overlap through holds of about L fill days (quant C2).
+    L = 1: the plain t. L > 1: Bartlett kernel with bandwidth 2L. Deviation from 'lag L', recorded in prereg section 14:
+    a Bartlett window of L understates an MA(L) long-run variance by about 30 % (t too large by ~20 %); 2L brings it
+    within ~10 % (test_hac_t_on_overlapping_holds)."""
+    x = np.asarray(x, float)
+    n = len(x)
+    if L <= 1 or n < 3:
+        return _t(x)
+    lag = min(2 * L, n - 1)
+    d = x - x.mean()
+    lrv = float(d @ d) / n
+    for k in range(1, lag + 1):
+        lrv += 2 * (1 - k / (lag + 1)) * float(d[k:] @ d[:-k]) / n
+    if lrv <= 0:
+        return float("nan")
+    return float(x.mean() / math.sqrt(lrv / n))
+
+
 def daily(tr: pd.DataFrame, col: str = "excess") -> pd.Series:
     if not len(tr):
         return pd.Series(dtype=float)
@@ -72,7 +103,10 @@ def summarize(tr: pd.DataFrame) -> dict[str, Any]:
         "gross": float(tr["gross"].mean()), "cost": float(tr["cost"].mean()), "net": float(net.mean()),
         "net_stress": float((tr["gross"] - STRESS * tr["cost"]).mean()),
         "excess": float(tr["excess"].mean()), "ctrl_gross": float(tr["ctrl_gross"].mean()),
-        "t_excess": _t(d.to_numpy()), "t_net": _t(daily(tr.assign(net=net), "net").to_numpy()),
+        "lag_L": overlap_lag(tr),
+        "t_excess_plain": _t(d.to_numpy()),
+        "t_excess": hac_t(d.to_numpy(), overlap_lag(tr)),          # gated (HAC, quant C2)
+        "t_net": _t(daily(tr.assign(net=net), "net").to_numpy()),
         "drift_adj": float(tr["drift_adj"].mean()),
         "long_share": float((tr["side"] > 0).mean()),
         "years": {int(k): float(v) for k, v in zip(yrs.index.to_numpy(), yrs.to_numpy())},
@@ -104,7 +138,8 @@ def explore_gates(s: dict[str, Any], timeframes: list[str], pre: dict[str, Any] 
 
 def block_boot_p(daily_x: np.ndarray, *, resamples: int = BOOT_RESAMPLES, block: int = BOOT_BLOCK,
                  seed: int = 0) -> float:
-    """One-sided p of mean > 0 by a moving-block bootstrap of the centred daily series."""
+    """One-sided p of mean > 0 by a moving-block bootstrap of the centred daily series (block = max(5, L), C2)."""
+    block = max(BOOT_BLOCK, int(block))
     x = np.asarray(daily_x, float)
     n = len(x)
     if n < 2 * block:
@@ -151,10 +186,31 @@ def test_old_gates(s: dict[str, Any]) -> dict[str, bool]:
             "t_excess": bool(np.isfinite(s["t_excess"]) and s["t_excess"] >= TEST_OLD_T)}
 
 
-def null_void_bound(n_null: int, rate: float = NULL_RATE) -> int:
-    """The largest null pass count NOT voiding the run: the binomial 99 % quantile at `rate`."""
+VOID_P = 0.02
+
+
+def null_void_k(m: int, rate: float = NULL_RATE, p_max: float = VOID_P) -> int:
+    """Smallest pass count k >= 1 with P(X >= k) <= p_max for X ~ Bin(m, rate): k null passes void the run
+    (m = 4 -> k = 2, P = 0.014). m = 0 -> never void by count."""
     from scipy.stats import binom
-    return int(binom.ppf(0.99, n_null, rate))
+    if m <= 0:
+        return 10**9
+    for k in range(1, m + 1):
+        if binom.sf(k - 1, m, rate) <= p_max:
+            return k
+    return m + 1
+
+
+def null_void(nulls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Quant C1. Each item: unit, pass, n_events, floor. Random nulls (NULL-RAND-*, NULL-XS-RANDOM) count only when
+    their explore events reach their n floor; any LONGCLOSE drift sentinel passing is a harness defect and voids."""
+    feas = [r for r in nulls if "LONGCLOSE" not in r["unit"] and r["n_events"] >= r["floor"]]
+    infeas = [r["unit"] for r in nulls if "LONGCLOSE" not in r["unit"] and r["n_events"] < r["floor"]]
+    sentinels = [r["unit"] for r in nulls if "LONGCLOSE" in r["unit"] and r["pass"]]
+    k = null_void_k(len(feas))
+    passes = sum(bool(r["pass"]) for r in feas)
+    return {"feasible_nulls": [r["unit"] for r in feas], "cannot_reach_floor": infeas, "feasible_passes": passes,
+            "void_at": k, "sentinel_passes": sentinels, "void": passes >= k or bool(sentinels)}
 
 
 def deflated_sharpe(daily_x: np.ndarray, k: int) -> dict[str, float]:

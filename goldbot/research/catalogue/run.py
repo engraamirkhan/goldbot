@@ -28,7 +28,15 @@ import numpy as np
 
 from goldbot.research.catalogue import dispatcher as D
 from goldbot.research.catalogue import stats as S
-from goldbot.research.catalogue.data import INTRADAY, TF_NS, Bars, _gold_minutes, _resample_minutes, window
+from goldbot.research.catalogue.data import (
+    DAY,
+    INTRADAY,
+    TF_NS,
+    Bars,
+    _gold_minutes,
+    _resample_minutes,
+    window,
+)
 from goldbot.research.registry import PREREGISTERED, TrialRegistry, config_hash, quarter_of
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -40,6 +48,7 @@ FEATURE_VERSION = "catalogue-screen-2026-11-07"
 RULE_REF = "docs/research/prereg-2026-11-07-catalogue-screen.md"
 AGENT = "strategy-researcher"
 READS_LEDGER = "catalogue_reads.jsonl"
+EX2009_FAMILIES = ("S11", "S15", "S16", "S27", "S30")      # quant T4: TEST-OLD also reported without 2009
 CODE_PATH = "goldbot/research/catalogue"
 
 
@@ -183,11 +192,18 @@ def _window_work(args: tuple[str, str, str]) -> dict[str, Any]:
     tr, _, _ = D.unit_trades(u, win, _CTX[win], control=ctrl, allow_test_old=(win == "test_old"))
     s = S.summarize(tr)
     d = S.daily(tr)
-    p = S.block_boot_p(d.to_numpy(), seed=int.from_bytes(uid.encode()[:4].ljust(4, b"0"), "big")) if len(d) else 1.0
+    block = max(S.BOOT_BLOCK, int(s.get("lag_L", 1)))                       # quant C2
+    p = S.block_boot_p(d.to_numpy(), block=block,
+                       seed=int.from_bytes(uid.encode()[:4].ljust(4, b"0"), "big")) if len(d) else 1.0
     if len(tr):
         tr.to_parquet(out_dir() / "trades" / f"{win}_{uid}.parquet")
     y2025 = {k: v for k, v in s.get("years", {}).items() if k == 2025}
-    return {"unit": uid, "window": win, "summary": s, "boot_p": p, "y2025": y2025}
+    out = {"unit": uid, "window": win, "summary": s, "boot_p": p, "boot_block": block, "y2025": y2025}
+    if win == "test_old" and u["family"] in EX2009_FAMILIES and len(tr):       # T4: reported, not gated
+        yr = S.year_of_day(tr["t_fill"].to_numpy(np.int64) // DAY)
+        s2 = S.summarize(tr[yr != 2009])
+        out["ex_2009"] = {k: s2.get(k) for k in ("n", "net", "excess", "t_excess")}
+    return out
 
 
 def _pool(fn: Callable[[Any], Any], items: list[Any], wins: list[str], workers: int,
@@ -199,14 +215,19 @@ def _pool(fn: Callable[[Any], Any], items: list[Any], wins: list[str], workers: 
 
 
 # ------------------------------------------------------------------ commands
+def _floor(u: dict[str, Any]) -> int:
+    return S.N_MIN_DAILY if all(t in ("1d", "1w") for t in u["timeframes"]) else S.N_MIN_INTRADAY
+
+
 def cmd_counts(a: argparse.Namespace) -> None:
-    us = D.units()
+    us = [u for u in D.units() if not a.only or u["unit"].startswith(a.only)]
+    sfx = "_" + a.only if a.only else ""
     prebuild("explore", us)
     res = {}
     for uid, c in _pool(_counts_work, [u["unit"] for u in us], ["explore"], a.workers):
         res[uid] = c
         print(f"{uid:24s} events {sum(c.values()):8d}", flush=True)
-    (out_dir() / "counts_explore.json").write_text(json.dumps(res, indent=1))
+    (out_dir() / f"counts_explore{sfx}.json").write_text(json.dumps(res, indent=1))
     drops = []
     for u in us:
         total = sum(res[u["unit"]].values())
@@ -214,7 +235,7 @@ def cmd_counts(a: argparse.Namespace) -> None:
         if total < floor and u["family"] != "NULL":
             drops.append(u["unit"])
     print("infeasible (events < n floor):", drops)
-    (out_dir() / "infeasible_proposed.json").write_text(json.dumps({"units": drops}, indent=1))
+    (out_dir() / f"infeasible_proposed{sfx}.json").write_text(json.dumps({"units": drops}, indent=1))
 
 
 def cmd_enumerate(a: argparse.Namespace) -> None:
@@ -294,8 +315,8 @@ def cmd_explore(a: argparse.Namespace) -> None:
               f"{'PASS' if r['pass'] else ''} {r['secs']}s", flush=True)
     res.sort(key=lambda r: r["unit"])
     nulls = [r for r in res if r["family"] == "NULL"]
-    null_pass = sum(r["pass"] for r in nulls)
-    bound = S.null_void_bound(len(nulls))
+    nv = S.null_void([{"unit": r["unit"], "pass": r["pass"], "n_events": r["n_events"],
+                       "floor": _floor(D.unit_by_id(r["unit"]))} for r in nulls])
     units_doc = json.loads(Path(a.units_out).read_text())
     k_reg = int(units_doc["k_registry_after"])        # program K: Q4 rows incl. sprint-3000 pre-registrations + units
     for r in res:
@@ -305,7 +326,7 @@ def cmd_explore(a: argparse.Namespace) -> None:
             r["dsr_registry_k"] = S.deflated_sharpe(d, k_reg)
             r["dsr_k_cells"] = S.deflated_sharpe(d, len(us))
     summary = {"window": "explore", "head": head(), "n_units": len(us), "null_units": len(nulls),
-               "null_passes": null_pass, "null_bound": bound, "void": null_pass > bound,
+               "null_void": nv, "void": nv["void"],
                "passers": [r["unit"] for r in res if r["pass"] and r["family"] != "NULL"], "k_registry": k_reg,
                "results": res}
     (out_dir() / "explore.json").write_text(json.dumps(summary, indent=1, default=float))
@@ -401,6 +422,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--write-registry", action="store_true")
     ap.add_argument("--extra-used", type=int, default=0, help="Q4 rows known to exist outside the local registry")
     ap.add_argument("--resume", action="store_true", help="continue a crashed read of the same frozen commit")
+    ap.add_argument("--only", default="", help="counts: only units whose id starts with this prefix")
     a = ap.parse_args(argv)
     {"counts": cmd_counts, "enumerate": cmd_enumerate, "explore": cmd_explore, "confirm": cmd_confirm,
      "test_old": cmd_test_old}[a.cmd](a)

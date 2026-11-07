@@ -449,6 +449,9 @@ def xs17_seasonal(bs: dict[str, Bars], p: dict, ctx: Ctx) -> dict[str, Events]:
         mr = pd.Series(np.log((mc / mc.shift(1)).to_numpy(float)), index=mc.index)
         bad = fm.astype(bool) | fm.shift(1).fillna(1).astype(bool)
         mr[bad] = np.nan
+        if ctx.window != "test_old":     # quant C4: TEST-OLD's own monthly outcomes never feed the other windows
+            mi = pd.DatetimeIndex(mr.index)
+            mr[(mi >= pd.Timestamp("2006-02-01")) & (mi < pd.Timestamp("2010-01-01"))] = np.nan
         mr_t = mr.index + pd.Timedelta(days=1)          # a month's return is known after its last day
         for j in np.flatnonzero(me):
             now = pd.Timestamp(int(b.ta[j]), unit="ns")

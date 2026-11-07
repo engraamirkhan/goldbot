@@ -67,7 +67,7 @@ def swap_rate(inst: str, side: int) -> float:
 
 
 def nights(t0: int, t1: int) -> int:
-    return max(0, int((t1 - ROLL_OFFSET) // DAY - (t0 - ROLL_OFFSET) // DAY))
+    return max(0, int((t1 - 1 - ROLL_OFFSET) // DAY - (t0 - ROLL_OFFSET) // DAY))   # an exit AT 21:00 pays no swap
 
 
 @dataclass
