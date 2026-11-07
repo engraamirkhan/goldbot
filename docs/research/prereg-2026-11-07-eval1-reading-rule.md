@@ -70,8 +70,9 @@ E5), DSR at the registry K and at K_cells. The null-unit void rule and the buy-e
 6. **Side-0 trades** (both OCO legs on one bar, quant C8) are left out of the beta estimate and kept in the alpha (the
    intercept plus their mean daily net).
 7. **A year with no data** is not a year beaten (E9) nor a positive year (E4).
-8. **A missing twin t (NaN)** fails the kill; a missing daily close for an instrument leaves its book unmarked and its
-   E9 leg absent, and a unit without any book fails E1, E4, E8 and E9.
+8. **A missing twin t (NaN)** fails the kill; a traded instrument without daily closes in the window stops the run
+   before any result is written; E9 is never computed against a partial book (amended, quant G1). A unit without any
+   book fails E1, E4, E8 and E9.
 9. **Drawdown at the registered sizing** is linear in R (0.5 % x max drawdown in R), not compounded: larger.
 10. **E7** requires a non-zero sign: a learn_pre mean net of exactly 0 fails.
 

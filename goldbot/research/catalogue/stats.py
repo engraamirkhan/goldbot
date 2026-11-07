@@ -306,6 +306,8 @@ def drift_guard(tr: pd.DataFrame, m: Market, book: pd.Series, lag: int) -> dict[
     intercept + the side-0 trades' mean daily net (they stay in the unit's return)."""
     grid = book.index.to_numpy(np.int64)
     insts = sorted(str(i) for i in tr["inst"].unique())
+    if any(i not in m.closes or not len(m.closes[i]) for i in insts):      # quant G1: never against a partial book
+        return {"missing": {"alpha_t": float("nan"), "alpha_share": float("nan"), "years": {}, "beta": float("nan")}}
     rfrac = _risk_frac(tr)
     expo = gross_exposure(tr, rfrac, grid, len(insts))
     sided = tr[tr["side"].to_numpy(float) != 0]

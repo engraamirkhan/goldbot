@@ -232,3 +232,26 @@ def test_promotion_needs_dsr_095_on_the_confirm_net_series_at_registry_k() -> No
     weak = rng.normal(0.02, 1.0, 1700)
     assert S.promotion_gates(strong, k_eff=3263)["dsr"]
     assert not S.promotion_gates(weak, k_eff=3263)["dsr"]
+
+
+def test_a_unit_with_one_traded_instrument_missing_its_daily_closes_fails_e9() -> None:
+    """Quant G1: E9 is never computed against a partial buy-and-hold book."""
+    m = market(FX[:2], drift=0.0, seed=11)
+    tr = trades(m, hold=2, every=1, side_fn=foresight(0.58), seed=2)
+    partial = S.Market(closes={FX[0]: m.closes[FX[0]]}, day_from=m.day_from, day_to=m.day_to)
+    s = S.summarize(tr, partial)
+    assert set(s["book"]["e9"]) == {"missing"}
+    assert not S.explore_gates(s, ["1d"], None)["E9"]
+    assert S.explore_gates(S.summarize(tr, m), ["1d"], None)["E9"]
+
+
+def test_the_run_stops_when_a_traded_instrument_has_no_daily_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant G1: a traded instrument without daily closes stops the run before any result is written."""
+    from goldbot.research.catalogue import dispatcher as D
+    from goldbot.research.catalogue import run as R
+
+    def no_bars(*a: Any, **k: Any) -> Any:
+        raise FileNotFoundError("none")
+    monkeypatch.setattr(D, "get_bars", no_bars)
+    with pytest.raises(FileNotFoundError, match="EVAL-1 book: no 1d closes for EURUSD in explore"):
+        R._market(pd.DataFrame({"inst": ["EURUSD"]}), "explore")

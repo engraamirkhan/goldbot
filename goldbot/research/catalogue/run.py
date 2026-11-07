@@ -175,7 +175,8 @@ def _market(tr: Any, win: str, *, allow_test_old: bool = False) -> S.Market:
         try:
             bars[inst] = D.get_bars(inst, "1d", win, allow_test_old=allow_test_old)
         except FileNotFoundError:
-            continue                    # no closes: the book cannot be marked and E9 cannot pass (stricter)
+            raise FileNotFoundError(f"EVAL-1 book: no 1d closes for {inst} in {win}; the run stops (reading rule "
+                                    "section 4.8 amended)") from None
     return S.market_from_bars(bars, w.dec_from, w.end)
 
 
