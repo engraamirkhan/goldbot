@@ -304,8 +304,12 @@ research:
     cost_broker: icm                 # C1 point costs: config/cost_of_record.yaml, the cell of the 21:00 UTC fill (asia,
     cost_session: asia               #   W3 addendum), in bps of the reference (0.204 $ RT -> 0.51 bp; 0.10 $ overshoot -> 0.25 bp)
     cost_reference_price: 4000.0
-    round_trip_bps_by_symbol: {}     # other markets' point RT in bps (data lane / cost of record); a market without one
-    overshoot_bps_by_symbol: {}      #   is refused, never priced at gold's cost
+    round_trip_bps_by_symbol:        # other markets' point RT in bps (a market without one is refused, never priced at
+                                     #   gold's cost). POS-1 amendment A1 (docs/research/pos1/amendment-a1.md): the ICM/
+                                     #   Vantage demo fills' measured median spread + commission + adverse slippage, rounded UP
+      { XAGUSD: 3.5, XPTUSD: 5.0, WTI: 3.0, US500: 1.0, US100: 1.5, GER40: 1.0, JP225: 1.0, UK100: 1.5,
+        EURUSD: 1.0, USDJPY: 1.0, GBPUSD: 1.0, AUDUSD: 1.5 }
+    overshoot_bps_by_symbol: {}      #   overshoot defaults to half the round trip
     short_rate_path: raw/daily/fred_DTB3.parquet   # data lane FRED DTB3 (value_date, value, available_utc), local only;
                                      #   joined on its stored available_utc, cut before 2025-10-01 on both stamps
     currency_rate_paths:             # ISO -> FRED OECD 3-month file for FX differentials and non-USD indices (data lane,
@@ -323,7 +327,7 @@ research:
     markup_pct_by_symbol:            # W3.3 measured markups, % a year (long, short), swap-icm-2026-11-02: long -52.22 /
       XAUUSD: [0.74, 0.74]           #   short +36.00 USD/lot/night at 4,000 = 4.76 / 3.29 %/yr against DTB3 4.02
     default_markup_pct: 2.5          # W3.3: a symbol without measured terms pays this each side (conservative)
-    triple_weekday_by_symbol: {XAUUSD: 2}   # triple rollover per symbol (0 = Monday; ICM XAUUSD Wednesday): 3 nights,
+    triple_weekday_by_symbol: {XAUUSD: 2, XAGUSD: 2, XPTUSD: 2, EURUSD: 2, USDJPY: 2, GBPUSD: 2, AUDUSD: 2, WTI: 4, US500: 4, US100: 4, GER40: 4, JP225: 4, UK100: 4}   # triple rollover per symbol (config/instruments.yaml swap_rollover3days - 1) (0 = Monday; ICM XAUUSD Wednesday): 3 nights,
                                      #   weekend none; a symbol not listed is refused
     read_registry: state/position_reads.jsonl   # one marker per (spec, TEST-OLD/CONFIRM) read; a second read is refused
     etc_fee_pct: 0.12                # venue B (UK gold ETC, report only): long/flat, 0.12%/yr fee, no financing,
