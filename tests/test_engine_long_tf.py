@@ -145,7 +145,26 @@ def test_settings_and_engine_ship_1d_and_1w_dark() -> None:
 def test_the_engine_service_passes_the_settings_to_the_engine() -> None:
     src = Path(__file__).parents[1].joinpath("goldbot/ops/services/engine.py").read_text()
     assert "timeframes_live=tuple(settings.engine.timeframes_live)" in src
-    assert "long_history_dir=settings.engine.long_history_dir" in src
+    assert "long_history_dir=settings.engine.history_root(settings.data_root)" in src
+
+
+def test_the_long_history_dir_resolves_under_the_data_root_not_the_working_directory(tmp_path) -> None:
+    e = EngineSettings(long_history_dir="raw/daily")
+    assert Path(e.history_root(str(tmp_path))) == tmp_path / "raw" / "daily"
+    assert Path(e.history_root("~/gb")) == Path("~/gb").expanduser() / "raw" / "daily"
+    absolute = EngineSettings(long_history_dir=str(tmp_path / "hist"))
+    assert Path(absolute.history_root("/elsewhere")) == tmp_path / "hist"
+
+
+@pytest.mark.parametrize("tf", ["1d", "1w"])
+def test_settings_refuse_1d_or_1w_live_naming_the_open_go_live_blockers(tf: str) -> None:
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError) as err:
+        EngineSettings(timeframes_live=[*INTRADAY_LIVE, tf])  # type: ignore[list-item]
+    msg = str(err.value)
+    assert "go-live blockers" in msg and "engine-1d-1w-golive" in msg
+    for blocker in ("22:15 UTC", "Sunday open", "catch-up", "preflight", "common filter", "is_bar_close", "CONFIRM"):
+        assert blocker in msg, blocker
 
 
 def test_every_spec_1d_arm_is_retired_or_blocked_so_the_21_utc_roll_moves_no_running_arm() -> None:
@@ -284,6 +303,31 @@ def test_an_unreadable_history_file_is_a_gap_never_a_crash(b1, tmp_path, seen) -
     assert _step(eng, TUE_21) == []
     [row] = _actions(eng, "history_gap")
     assert row["reason"].startswith("error:")
+
+
+def test_a_window_missing_a_weekday_inside_it_is_a_gap(b1, hist_dir, seen) -> None:
+    """No daily bar may be missing inside the engine's window either: a weekday with no minutes is a hole (LOW-4/5)."""
+    day = pd.Timestamp("2025-02-05 21:00", tz="UTC")                   # Wednesday's bar: its minutes removed
+    holed = b1[(b1["ts_utc"] < day - pd.Timedelta(days=1)) | (b1["ts_utc"] >= day)].reset_index(drop=True)
+    assert long_bars.joined(long_bars.read_history(hist_dir, "XAUUSD"), holed, TUE_21) == long_bars.GAP  # type: ignore[arg-type]
+    eng = _engine(holed, [_arm("D1", "1d")], TUE_21, hist_dir)
+    assert _step(eng, TUE_21) == [] and seen == []
+    [row] = _actions(eng, "history_gap")
+    assert row["reason"] == long_bars.GAP
+
+
+def test_a_long_timeframe_arm_that_needs_a_replica_state_is_held_back_never_run_without_it(b1, hist_dir, seen,
+                                                                                          monkeypatch) -> None:
+    """The long path hands a rule no spec_ctx: an arm whose rule resumes a carried replica state
+    (`exploration_context.replica_bars` > 0) is held back and journalled, never decided without it."""
+    from goldbot.engine import exploration_context
+    monkeypatch.setattr(exploration_context, "replica_bars", lambda arm: 40 if arm.id == "D1" else 0)
+    eng = _engine(b1, [_arm("D1", "1d"), _arm("D2", "1d")], TUE_21, hist_dir)
+    eng.exploration.needs_context = frozenset({"D1"})
+    [p] = _step(eng, TUE_21)
+    assert p.arm_id == "D2" and [r["arm"] for r in seen] == ["D2"]
+    [row] = _actions(eng, "history_gap")
+    assert (row["arm"], row["reason"]) == ("D1", long_bars.NEEDS_REPLICA)
 
 
 # ------------------------------------------------------------------------------------------------ the entry side

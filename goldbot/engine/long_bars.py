@@ -46,6 +46,7 @@ DAY_CLOSE = pd.Timedelta(hours=21)              # the long history's daily roll,
 MIN_ROWS = {"1d": 250, "1w": 52}                # warm-up bars at least (a rule may declare more)
 WEEKEND = "weekend"                             # a Friday-close decision: recorded blocked, never queued
 MISSING_FILE, GAP, SHORT = "missing_file", "gap", "short"
+NEEDS_REPLICA = "needs_replica_state"            # the long path carries no spec_ctx
 GAP_ACTION = "history_gap:"
 _MID = ("open", "high", "low", "close")
 
@@ -157,11 +158,16 @@ def weekly(daily: pd.DataFrame) -> pd.DataFrame:
 
 def joined(history: pd.DataFrame, window_1m: pd.DataFrame, through: pd.Timestamp) -> pd.DataFrame | str:
     """The daily bars at `through`: the history's before the window's first complete day, then the window's (its
-    first, possibly partial, day left out). GAP when the window has no complete day or the history does not reach the
-    day before it (no bar may be missing between them)."""
+    first, possibly partial, day left out). GAP when the window has no complete day, when its days are not consecutive
+    weekday closes (a weekday with no minutes, a holiday included) or the history does not reach the day before it (no
+    bar may be missing between them)."""
     win = daily_from_1m(window_1m).iloc[1:]
     win = win[pd.DatetimeIndex(win["visible_at"]) <= through].reset_index(drop=True)
     if win.empty:
+        return GAP
+    vis = pd.DatetimeIndex(win["visible_at"])
+    step = pd.to_timedelta(np.where(vis[:-1].dayofweek == 4, 3, 1), unit="D")
+    if len(vis) > 1 and not (vis[1:] == vis[:-1] + step).all():       # a weekday with no minutes inside the window
         return GAP
     first = pd.Timestamp(win["visible_at"].iloc[0])
     pre = as_of(history, through)
@@ -227,6 +233,7 @@ def step(eng: Engine, ex: Exploration, arms: list[Arm], complete: pd.DataFrame, 
     its rule on its warm-up and the engine's bars (`exploration._signal`). A Friday decision is recorded blocked
     WEEKEND, never queued. An arm held back, or whose inputs raise, is journalled and the others go on."""
     from goldbot.engine import exploration as X
+    from goldbot.engine import exploration_context
     live = set(getattr(eng.cfg, "timeframes_live", INTRADAY_LIVE))
     arms = [a for a in arms if a.arm_id not in ex.retired and a.tf in live]
     if not arms:
@@ -239,6 +246,9 @@ def step(eng: Engine, ex: Exploration, arms: list[Arm], complete: pd.DataFrame, 
     for arm in arms:
         due = is_bar_close("1d", close_ts) if arm.tf == "1d" else week_open(minutes, close_ts, base_s) is not None
         if not due:
+            continue
+        if arm.arm_id in ex.needs_context and exploration_context.replica_bars(arm.spec) > 0:
+            _held(eng, state, arm, NEEDS_REPLICA, close_ts)             # never decided without its replica state
             continue
         try:
             got = state.bars(arm, complete, close_ts)
