@@ -297,7 +297,8 @@ def test_a_candidate_over_the_arms_gbp_cap_is_skipped_and_logged_with_its_propen
     (mu 0); a penny above, it is sent at that stop."""
     full, _ = _closes(b1, name, tf)
     wk = full[(full["close"] >= LIVE_FROM) & (full["close"] < LIVE_TO)]
-    wk = wk[(wk["close"].dt.dayofweek <= 1) & (wk["close"].dt.hour.between(2, 17))]    # far from the Friday cut
+    # far from the Friday cut, and outside gold's 02:00-07:00 UTC entry block (prereg-amendment-2026-11-07)
+    wk = wk[(wk["close"].dt.dayofweek <= 2) & (wk["close"].dt.hour.between(7, 17))]
     assert len(wk) > 0
     row = wk.iloc[0]
     close = pd.Timestamp(row["close"])

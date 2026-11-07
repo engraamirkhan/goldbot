@@ -35,6 +35,10 @@ The plan's rules, as built here:
     capped and stopped at their cost cell's 30 fills (`exploration_budget`; prereg-amendment-2026-11-06-control-
     thinning.md).
   An unknown figure (equity, the conversion, a position's stop loss, the ledger) refuses: fail closed.
+* Engine-level entry refusals (prereg-amendment-2026-11-07-kill-only.md, `entry_refusals`): "applied after the arm's
+  rule has produced the signal and before any room, slot or cap check", in `_send` only (gold 02:00-07:00 UTC
+  `window_0207`, the F-1 pit window `f1_pit`); fail closed (`refusal_error:<name>`); each refused signal is recorded
+  blocked through `candidate`, the shadow log. Exits, `_pyramid`'s stop moves and the Friday rule never call it.
 * Exits are never gated: the engine's server stop and target, its stop check, the Friday cut and the kill switch act
   on exploration positions as on any of this engine's magic range (`Engine._own`). A 1m/5m arm's hold is judged on the
   host clock on every pass with or without a quote (`exits`, from `Engine._retry_closes`), halted or not; a 15m+ arm's
@@ -95,7 +99,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry, cost_probe, weekend_lane
+from goldbot.engine import auto_entry, cost_probe, entry_refusals, weekend_lane
 from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.ops.accounts import DailyEntries
@@ -1721,6 +1725,13 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         ps.why = "duplicate"
         return "refused"
     ps.mu = None
+    # prereg-amendment-2026-11-07 (`entry_refusals`): the engine-level refusals of the signal the rule produced, before
+    # any room, slot or cap check; fail closed (a refusal that raises refuses as `refusal_error:<name>`). The journal
+    # row carries the quote at the refusal (amendment 3.2, informational); the candidate is the shadow log
+    if (no := entry_refusals.first_refusal(eng, arm, s)) is not None:
+        applied.update(bid=tick.bid, ask=tick.ask, **({"error": no.error} if no.error else {}))
+        refuse(no.reason)
+        return "refused"
     if (daily := ex.cfg.daily) is not None:
         # the daily entry budget (owner decision 2026-10-30; `exploration_budget`): the day, the hour or the session
         # spent stops every signal of this pass ("cap": recorded blocked at once); the rest stop this signal only

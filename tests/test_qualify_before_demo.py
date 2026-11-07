@@ -353,6 +353,10 @@ def test_the_runtime_qualification_view_matches_the_engine_per_account(_no_regis
 
 
 # ------------------------------------------------------------------------------------------------ the cost read's end
+# 10:00 New York: inside F1A's pit window (prereg-amendment-2026-11-07 section 8 refuses F1A/F1C entries outside it)
+PIT = pd.Timestamp("2025-03-04 15:00", tz="UTC")
+
+
 def _cost_arm(arm_id: str = "F1A", read: str = "O-11") -> exploration.Arm:
     arm = _arm(arm_id)
     return arm.model_copy(update={"spec": arm.spec.model_copy(update={"qualification": None, "entry_refused": "",
@@ -375,7 +379,7 @@ def _fills(tmp_path: Path, arm_id: str, n: int, *, censored: int = 0) -> None:
 def test_a_cost_arm_runs_until_its_cost_read_has_its_admissible_fills(tmp_path, _fixed) -> None:
     _fills(tmp_path, "F1A", 199, censored=5)                                 # censored closes never count
     eng, pb = _engine(tmp_path, [_cost_arm()], qualify=False)
-    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    exploration.on_pass(eng, _at(eng, pb, PIT))
     assert _sent(eng) == ["F1A"]
 
 
@@ -400,7 +404,7 @@ def test_an_unreadable_fill_count_keeps_the_cost_arm_running_and_warns(tmp_path,
     def boom(*a: Any, **k: Any) -> Any:
         raise OSError("disk")
     monkeypatch.setattr(exploration, "admissible_fills", boom)
-    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    exploration.on_pass(eng, _at(eng, pb, PIT))
     assert _sent(eng) == ["F1A"]
     assert [d["arm"] for d in eng.decisions if d.get("action") == "exploration_cost_read_unread"] == ["F1A"]
 
