@@ -5,6 +5,17 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-07 WS-6 (branch feat/n3-n1a, from the WS-1 hook cb3e52a4): **N-3 HAR low-range-day abstention** and the
+  **N-1a ICM routing guard** as entry refusals in `goldbot/engine/refusals_novel.py`, registered after window_0207 and
+  f1_pit (`learning_icm_only`, `har_unavailable`, `har_low_range`). Scope: gold learning arms and controls read only
+  against learning arms (LC*, ZCD). The nightly job `har_days` (22:05 UTC, `goldbot/research/har_abstention.py`, aux
+  migration 26) writes the next trading day's forecast from bars visible at 22:00, with one frozen fit before the
+  holdout. A low day is hat <= the 20 % quantile of the trailing 250 forecasts. Once a row exists, a day without one
+  refuses learning entries (fail closed). Before the first row nothing is refused, and
+  `research.har_abstention.enabled: false` writes an `off` row (the kill path). Prereg:
+  docs/research/prereg-2026-11-07-n3-har.md (K +1 for N-3; N-1a K +0: Vantage gold learning arms were already
+  retired under A5, and they are not recreated). **Deploy dry run:** run the job once on the brain
+  (`har_days`). With no `ok` row, N-3 stays unregistered (nothing refused) and moves to Wed 11-11 per the plan.
 - TradingView author ideas shadow scorer (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; branch
   `feat/tv-ideas-shadow-scorer`): `goldbot/research/tv_ideas.py`, scheduler job `tva_scores` daily 23:35 UTC (after
   feed_reconcile and nightly_costs). It opens brain `state/tv_ideas.db` read-only (`mode=ro`) and scores each live

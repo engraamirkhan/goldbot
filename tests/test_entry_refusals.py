@@ -193,8 +193,9 @@ def test_the_first_refusal_that_applies_names_it_and_a_later_one_is_not_consulte
     assert entry_refusals.first_refusal(_cfg_engine(), arm, _sig(arm, _at_utc(TUE, "12:00")), ()) is None
 
 
-def test_the_shipped_refusals_are_window_0207_then_f1_pit():
-    assert [r.name for r in entry_refusals.REFUSALS] == [WINDOW_0207, F1_PIT]
+def test_the_shipped_refusals_start_with_window_0207_then_f1_pit():
+    """The rest (WS-6, `refusals_novel`) are pinned in tests/test_refusals_novel.py."""
+    assert [r.name for r in entry_refusals.REFUSALS][:2] == [WINDOW_0207, F1_PIT]
 
 
 # ------------------------------------------------------------------------------------------------ exits untouched

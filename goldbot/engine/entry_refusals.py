@@ -30,6 +30,8 @@ The refusals (`REFUSALS`, in order; the first that applies names the refusal):
   Scope is the amendment's three accounts; the ADR 0062 weekend lane (an engine with a `weekend_window`) is outside it.
 * `f1_pit` (amendment section 8): "F1A/F1C entries are refused outside 08:00-13:30 America/New_York (13:00-18:30 UTC
   under US winter time), as an engine-level refusal with the control on the same tz-aware window".
+* `learning_icm_only`, `har_unavailable`, `har_low_range` (signed plan 2026-11-07 WS-6, `refusals_novel`): gold
+  learning entries on ICM only (N-1a) and the N-3 HAR low-range-day abstention, fail closed once its job has run.
 
 Adding a refusal: append an `EntryRefusal` to REFUSALS (its `name` is the journalled and recorded reason), with a
 pre-registered rule that can only refuse, and a boundary test.
@@ -45,6 +47,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from goldbot.base import FrozenRecord
+from goldbot.engine import refusals_novel
 from goldbot.instruments import GOLD
 from goldbot.research.arms import COST_CONTROLS
 
@@ -106,6 +109,11 @@ def f1_pit(eng: Engine, arm: Arm, s: Pending) -> bool:
 REFUSALS: tuple[EntryRefusal, ...] = (
     EntryRefusal(name=WINDOW_0207, applies=window_0207),
     EntryRefusal(name=F1_PIT, applies=f1_pit),
+    # signed plan 2026-11-07 WS-6 (`refusals_novel`, prereg-2026-11-07-n3-har.md): gold learning entries on ICM only
+    # (N-1a), then N-3's fail-closed availability check and its low-range day
+    EntryRefusal(name=refusals_novel.LEARNING_ICM_ONLY, applies=refusals_novel.learning_icm_only),
+    EntryRefusal(name=refusals_novel.HAR_UNAVAILABLE, applies=refusals_novel.har_unavailable),
+    EntryRefusal(name=refusals_novel.HAR_LOW_RANGE, applies=refusals_novel.har_low_range),
 )
 
 
