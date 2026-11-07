@@ -346,12 +346,17 @@ decision rules of section 3 and K (section 5) are unchanged.
 1. **Entry.** The entry is the first 1m minute at or after `available_utc` (the moment we held the text). The capture
    loss is reported against an entry at `published_utc + 60 s`.
 2. **Bars (LV).** The live read uses the canonical-cost broker's own 1m bid/ask minutes, with quarantined minutes
-   excluded; Dukascopy stays the source for BC and HO. A hole of more than 15 minutes in the hold or the ATR window,
-   outside the daily break and the weekly close, makes the idea `no_bars` (not final; rescored nightly).
+   excluded; Dukascopy stays the source for BC and HO. A hole of more than 15 minutes in the hold, outside gold's
+   daily break (17:00 New York, timed as 23:55-01:05 on the NY+7 clock) and the weekly close (Friday 23:55 to Monday
+   01:05, NY+7), makes the idea `no_bars` (not final; rescored nightly). The ATR day (item 4) still cuts at the
+   broker's configured server midnight. A hole inside a date listed in config/holidays_cme_metals.yaml (CME trading
+   day, NY+7; inside its validity only) is not a hole. A hold still holed 5 weekdays after its horizon end is final
+   no_bars, counted per author, never decision-eligible.
 3. **Calendar.** The horizon, the fill window and the maximum hold are counted in UTC weekdays from the fill minute;
    holidays count as days.
 4. **R.** R is the simple mean of 14 true ranges of mid daily bars cut at the broker's server midnight, as of the last
-   completed server day before the fill.
+   completed server day before the fill, over the 14 most recent server weekdays with >= 80% of the median day's
+   minutes, among the last 20; fewer than 14 such days -> no_bars.
 5. **Buckets.** Up to 240 minutes, or a seconds chart: I. Over 240 minutes, and 1D to 6D: D. Weeks and months: W. A
    missing timeframe: D.
 6. **Forward universe.** Per author, the ideas with `available_utc` at or after the dated amendment that admits that

@@ -24,10 +24,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   feature. Smoke on the 11-06 brain dump: 17 live ideas, 8 holdout and 6 non-gold refused, the long/short reads equal
   the 11-06 scratch read on 10 of 12; the 2 that differ are Sunday ideas, whose 1-day horizon now runs from the fill
   (Monday open), not from the post.
-  Quant review amendment T-2 (prereg section 8, adopted PD+PO 2026-11-06) is applied: a hole over 15 min in the hold or
-  the 15 ATR days (outside the daily break and weekly close, timed on NY+7 because the Athens broker clock is an hour
-  off gold's 17:00 New York break in the US/EU clock-change weeks) or an ATR day under 80% of the median minutes ->
-  `no_bars`, rescored nightly; decision-eligible only from the dated admission of the author's extractor
+  Quant review amendment T-2 (prereg section 8, adopted PD+PO 2026-11-06) is applied: a hole over 15 min in the hold
+  (outside the daily break and weekly close, timed on NY+7 because the Athens broker clock is an hour off gold's 17:00
+  New York break in the US/EU clock-change weeks; a hole on one listed CME holiday is exempt) -> `no_bars`, rescored
+  nightly, final `no_bars_final` 5 weekdays after the horizon; R = mean TR of the 14 most recent whole server weekdays
+  (>= 80% of the median minutes) among the last 20, else `no_bars`; decision-eligible only from the dated admission of the author's extractor
   (`Extractor.admitted_utc`, in its sha); seconds charts bucket I; no holdout minute read; minutes fetched only from
   the earliest still-scoreable idea. Operational note: the brain's ICM minutes start 2026-10-25, so live ideas before
   about 2026-11-13 stay `no_bars` (no 15 whole ATR days); none of them can be decision-eligible under T-2 (6) anyway.

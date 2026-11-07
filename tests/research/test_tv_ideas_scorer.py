@@ -189,10 +189,11 @@ SYNTH = {"syntha": tva.Extractor(name="synth-updown-v1", fn=_synth_extractor, ad
 LIVE_SINCE = pd.Timestamp("2026-10-30", tz="UTC")
 
 
-def _score(tmp_path: Path, bars: pd.DataFrame, *, extractors=SYNTH, as_of=pd.Timestamp("2026-11-21", tz="UTC")):
+def _score(tmp_path: Path, bars: pd.DataFrame, *, extractors=SYNTH, as_of=pd.Timestamp("2026-11-21", tz="UTC"),
+           holidays=None):
     ideas = tva.read_ideas(tmp_path / "tv_ideas.db", authors=["SynthA", "SynthB"])
     return {r.idea_id: r for r in tva.score_ideas(ideas, bars, costs=COSTS, holdout=HOLDOUT, as_of=as_of,
-                                                  extractors=extractors)}
+                                                  extractors=extractors, holidays=holidays)}
 
 
 def test_an_edited_live_idea_is_scored_on_its_first_snapshot_and_stays_in_the_decision_read(tmp_path):
@@ -432,7 +433,7 @@ def test_a_hole_in_the_minutes_mid_hold_is_no_bars_until_filled(tmp_path):
     db = _db(tmp_path)
     i = _record(db, 17, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE, interval="1D")
     hole = _drop(flat_bars(), T0 + pd.Timedelta(days=1, hours=2), T0 + pd.Timedelta(days=1, hours=2, minutes=30))
-    row = _score(tmp_path, hole)[i]
+    row = _score(tmp_path, hole, as_of=pd.Timestamp("2026-11-12", tz="UTC"))[i]  # < 5 weekdays after the horizon
     assert row.status == "no_bars" and not row.final and row.r_side is None
     short = _drop(flat_bars(), T0 + pd.Timedelta(days=1, hours=2), T0 + pd.Timedelta(days=1, hours=2, minutes=10))
     assert _score(tmp_path, short)[i].status == "scored"            # 10 minutes missing: within tolerance
@@ -454,16 +455,70 @@ def test_the_daily_break_and_the_weekly_close_are_not_holes_even_when_the_us_and
     assert tva.Minutes.from_frame(bars[~(in_break | late)]).holes(tva.BREAK_CLOCK).sum() == 1
 
 
-def test_a_partial_day_is_not_used_for_atr(tmp_path):
-    """An ATR day with under 80% of the median day's minutes poisons every ATR whose 15 days include it."""
-    thin = pd.Timestamp("2026-10-27 12:00", tz="UTC")                 # a Tuesday, inside the 15 days before T0
+def test_one_short_outage_day_does_not_void_the_next_three_weeks_of_atr(tmp_path):
+    """T-2 (4): the mean TR of the 14 most recent WHOLE server weekdays among the last 20. A day with an 8-hour outage
+    (under 80% of the median minutes) is skipped, its wild range with it; holes no longer matter for the ATR."""
+    thin = pd.Timestamp("2026-10-27 08:00", tz="UTC")                 # a Tuesday, inside the 20 days before T0
     bars = _drop(flat_bars(), thin, thin + pd.Timedelta(hours=8))
-    atr = tva.daily_atr(bars, "Europe/Athens")
-    got = tva.atr_at(pd.DataFrame({"ts_utc": [T0, T0 + pd.Timedelta(days=21)]}), atr)
-    assert np.isnan(got[0]) and got[1] == pytest.approx(ATR)
+    set_minute(bars, thin - pd.Timedelta(hours=1), low=MID - 400, high=MID + 400)
+    got = tva.atr_at(pd.DataFrame({"ts_utc": [T0]}), tva.daily_atr(bars, "Europe/Athens"))
+    assert got[0] == pytest.approx(ATR)
     db = _db(tmp_path)
     i = _record(db, 18, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE)
+    assert _score(tmp_path, bars)[i].status == "scored"
+
+
+def test_atr_is_nan_with_fewer_than_14_whole_days_in_20(tmp_path):
+    bars = flat_bars()
+    for day in pd.date_range("2026-10-19", "2026-10-27", freq="B", tz="UTC"):    # 7 thin weekdays
+        bars = _drop(bars, day + pd.Timedelta(hours=8), day + pd.Timedelta(hours=16))
+    got = tva.atr_at(pd.DataFrame({"ts_utc": [T0, T0 + pd.Timedelta(days=21)]}),
+                     tva.daily_atr(bars, "Europe/Athens"))
+    assert np.isnan(got[0]) and got[1] == pytest.approx(ATR)
+    db = _db(tmp_path)
+    i = _record(db, 19, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE)
     assert _score(tmp_path, bars)[i].status == "no_bars"
+
+
+THANKSGIVING = pd.Timestamp("2026-11-26", tz="UTC")                   # listed in config/holidays_cme_metals.yaml
+MON = pd.Timestamp("2026-11-23 10:00", tz="UTC")
+
+
+def _early_close(bars: pd.DataFrame, day: pd.Timestamp) -> pd.DataFrame:
+    """CME's 13:45 New York early close of `day` (NY+7 20:45) until the 01:00 NY+7 reopen of the next day."""
+    ny7 = server_wall(pd.DatetimeIndex(bars["ts_utc"]), "NY+7")
+    start = day.tz_localize(None) + pd.Timedelta(hours=20, minutes=45)
+    end = day.tz_localize(None) + pd.Timedelta(days=1, hours=1)
+    return bars[~((ny7 >= start) & (ny7 < end))].reset_index(drop=True)
+
+
+def test_a_hole_on_a_listed_holiday_does_not_void_the_hold(tmp_path):
+    from goldbot.risk.windows import load_holidays
+    cal = load_holidays("config/holidays_cme_metals.yaml")
+    db = _db(tmp_path)
+    i = _record(db, 30, published=MON - pd.Timedelta(minutes=5), seen=MON, live_since=LIVE_SINCE, interval="1D")
+    at = pd.Timestamp("2026-12-10", tz="UTC")
+    holiday = _early_close(flat_bars(end="2026-12-10"), THANKSGIVING)
+    assert _score(tmp_path, holiday, as_of=at, holidays=cal)[i].status == "scored"
+    assert _score(tmp_path, holiday, as_of=at - pd.Timedelta(days=12))[i].status == "no_bars"    # no calendar
+    expired = cal.model_copy(update={"valid_through": pd.Timestamp("2026-11-01").date(),
+                                     "days": {d: n for d, n in cal.days.items() if d <= pd.Timestamp("2026-11-01").date()}})
+    assert _score(tmp_path, holiday, as_of=at - pd.Timedelta(days=12), holidays=expired)[i].status == "no_bars"
+    plain = _early_close(flat_bars(end="2026-12-10"), THANKSGIVING - pd.Timedelta(days=1))   # not listed
+    assert _score(tmp_path, plain, as_of=at - pd.Timedelta(days=12), holidays=cal)[i].status == "no_bars"
+
+
+def test_a_hole_unfilled_five_weekdays_after_the_horizon_is_final_no_bars_and_counted(tmp_path):
+    db = _db(tmp_path)
+    i = _record(db, 31, published=T0 - pd.Timedelta(minutes=5), seen=T0, live_since=LIVE_SINCE, interval="1D")
+    hole = _drop(flat_bars(), T0 + pd.Timedelta(days=1, hours=2), T0 + pd.Timedelta(days=1, hours=3))
+    horizon = pd.Timestamp("2026-11-09 10:00", tz="UTC")              # 5 weekdays from Monday's fill
+    early = _score(tmp_path, hole, as_of=horizon + pd.Timedelta(days=6))[i]      # 4 weekdays after
+    assert early.status == "no_bars" and not early.final
+    rows = _score(tmp_path, hole, as_of=horizon + pd.Timedelta(days=7, hours=1))  # 5 weekdays after
+    late = rows[i]
+    assert late.status == "no_bars_final" and late.final and not late.decision_eligible and late.r_side is None
+    assert tva.summarise(rows.values())["SynthA"]["no_bars_final"] == 1
 
 
 def test_a_final_row_does_not_change_when_later_bars_are_appended_or_perturbed(tmp_path):

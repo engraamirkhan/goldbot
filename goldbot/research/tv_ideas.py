@@ -18,9 +18,10 @@ read-only (`mode=ro`):
   as sensitivity"; `edited` is recorded for that read.
 * Decision-eligible (T-2 (6)): resolved, labelled long or short, and available at or after the dated admission of
   the author's extractor; earlier ideas are descriptive only.
-* Minutes (T-2 (2)): a hole over 15 minutes in the hold or in the 15 ATR days, outside the server daily break
-  (23:55-01:05) and the weekly close, or an ATR day under 80% of the median day's minutes, makes the idea `no_bars`,
-  rescored nightly. No holdout minute is read.
+* Minutes (T-2 (2)): a hole over 15 minutes in the hold, outside gold's daily break (23:55-01:05 NY+7) and the weekly
+  close and not on one listed CME holiday, makes the idea `no_bars`, rescored nightly; still holed 5 weekdays after
+  its horizon it is final `no_bars_final`, counted, never decision-eligible. R needs 14 whole server weekdays among
+  the last 20 (T-2 (4)), else `no_bars`. No holdout minute is read.
 
 Point in time (T-2 (1)): the entry is the first 1m minute at or after the idea's `available_utc` (we held its text;
 the prereg's `first_seen_utc` is the listing sighting, at or before it, so this is the stricter of the two), found
@@ -74,12 +75,13 @@ if TYPE_CHECKING:
     from goldbot.config import Settings
     from goldbot.db.connection import Database
     from goldbot.execution.costs import CostTable
+    from goldbot.risk.windows import HolidayList
 
 
 Bucket = Literal["I", "D", "W"]
 Label = Literal["long", "short", "abstain", "unlabelled"]
 SymbolClass = Literal["spot", "futures", "other"]
-Status = Literal["scored", "pending", "no_bars", "backfilled", "not_gold", "holdout"]
+Status = Literal["scored", "pending", "no_bars", "no_bars_final", "backfilled", "not_gold", "holdout"]
 LevelsStatus = Literal["target", "stop", "time", "pending", "no_fill", "invalidated", "demoted"]
 
 # ---- the pre-registration's constants (prereg 1.1-1.4; none is tunable)
@@ -87,7 +89,9 @@ HORIZON_DAYS: dict[str, int] = {"I": 1, "D": 5, "W": 20}       # 1.3(b) directio
 FILL_WINDOW_DAYS: dict[str, int] = {"I": 1, "D": 3, "W": 10}   # 1.2 limit validity
 MAX_HOLD_DAYS: dict[str, int] = {"I": 3, "D": 10, "W": 20}     # 1.3(a) maximum hold
 CAT_STOP_R = 2.0                                               # 1.3(b) catastrophic stop
-ATR_DAYS = 14                                                  # R = ATR14 on daily bars
+ATR_DAYS = 14                                                  # R = ATR14 on daily bars: the 14 most recent ...
+ATR_WINDOW_DAYS = 20                                           #   ... whole server weekdays among the last 20 (T-2 (4))
+HOLE_FINAL_DAYS = 5                                            # T-2 (2): still holed 5 weekdays after the horizon: final
 MARKET_BAND_ATR = 0.25                                         # 1.2 within 0.25 x ATR of the entry: market
 SANITY_ENTRY_ATR = 3.0                                         # 1.1 |entry - price at publish| > 3 x ATR: demote
 SANITY_MIN_STOP_RT = 2.0                                       # 1.1 stop distance below 2 x the round trip: demote
@@ -104,7 +108,7 @@ BREAK_FROM, BREAK_TO = pd.Timedelta(hours=23, minutes=55), pd.Timedelta(hours=1,
 # 2026-10-26..30: the break sat at 22:58-00:02 Athens), and every day of those weeks would read as holed
 BREAK_CLOCK = NY_PLUS_7
 FULL_DAY_SHARE = 0.8                                           # a day with < 80% of the median day's minutes: no ATR
-FINAL: frozenset[str] = frozenset({"scored", "backfilled", "not_gold", "holdout"})
+FINAL: frozenset[str] = frozenset({"scored", "no_bars_final", "backfilled", "not_gold", "holdout"})
 SCORER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 DB_FILE = "tv_ideas.db"                                        # = goldbot.data.tv_ideas.DB_FILE
 
@@ -182,16 +186,18 @@ class Minutes:
     def ts(self, i: int) -> pd.Timestamp:
         return pd.Timestamp(int(self.ts_ns[i]), unit="ns", tz="UTC")
 
-    def holes(self, server_tz: str) -> np.ndarray:
+    def holes(self, clock: str, holidays: HolidayList | None = None) -> np.ndarray:
         """holes[i]: the minutes missing before minute i form a hole longer than MAX_GAP outside the daily break and
-        the weekly close (`bad_gaps`)."""
-        return bad_gaps(self.ts_ns, server_tz)
+        the weekly close, and not on one listed holiday (`bad_gaps`)."""
+        return bad_gaps(self.ts_ns, clock, holidays)
 
 
-def bad_gaps(ts_ns: np.ndarray, server_tz: str) -> np.ndarray:
+def bad_gaps(ts_ns: np.ndarray, server_tz: str, holidays: HolidayList | None = None) -> np.ndarray:
     """For each minute, True when the minutes missing just before it (from the previous minute's close) last more than
-    MAX_GAP and do not lie inside one break: the server daily break 23:55-01:05, or the weekly close from Friday 23:55
-    to Monday 01:05 (server wall clock)."""
+    MAX_GAP and do not lie inside one break: the daily break 23:55-01:05, or the weekly close from Friday 23:55 to
+    Monday 01:05 (`server_tz` wall clock). T-2 (2): "A hole inside a date listed in config/holidays_cme_metals.yaml
+    (CME trading day, NY+7; inside its validity only) is not a hole": the missing minutes, less the daily break at
+    either end, all fall on one listed date the list covers."""
     out = np.zeros(len(ts_ns), dtype=bool)
     if len(ts_ns) < 2:
         return out
@@ -206,11 +212,26 @@ def bad_gaps(ts_ns: np.ndarray, server_tz: str) -> np.ndarray:
         elif tod <= BREAK_TO:
             opened = s_wall.normalize() - pd.Timedelta(days=1) + BREAK_FROM
         else:
-            out[j + 1] = True
+            out[j + 1] = not _on_holiday(s_wall, e_wall, holidays)
             continue
         days = 3 if opened.dayofweek == 4 else 1                  # Friday's close reopens on Monday
-        out[j + 1] = e_wall > opened.normalize() + pd.Timedelta(days=days) + BREAK_TO
+        beyond = e_wall > opened.normalize() + pd.Timedelta(days=days) + BREAK_TO
+        out[j + 1] = beyond and not _on_holiday(s_wall, e_wall, holidays)
     return out
+
+
+def _on_holiday(s_wall: pd.Timestamp, e_wall: pd.Timestamp, holidays: HolidayList | None) -> bool:
+    """The missing minutes [s_wall, e_wall) (wall clock), less the daily break at either end, lie on one date the
+    holiday list covers and names."""
+    if holidays is None:
+        return False
+    first = s_wall.normalize() + pd.Timedelta(days=1) if s_wall - s_wall.normalize() >= BREAK_FROM \
+        else s_wall.normalize()
+    last_min = e_wall - MINUTE
+    last = last_min.normalize() - pd.Timedelta(days=1) if last_min - last_min.normalize() < BREAK_TO \
+        else last_min.normalize()
+    d = first.date()
+    return first == last and holidays.covers(d) and holidays.thin(d) is not None
 
 
 def add_trading_days(t: pd.Timestamp, n: int) -> pd.Timestamp:
@@ -355,10 +376,10 @@ def levels_read(m: Minutes, t0: pd.Timestamp, call: Call, *, atr: float, bucket:
 
 # ------------------------------------------------------------------------------------------------- point in time
 def daily_atr(bars: pd.DataFrame, server_tz: str) -> pd.DataFrame:
-    """T-2 (4): the simple mean of 14 true ranges of daily mid bars cut at the broker's server midnight (weekday server
-    days), each available at its last minute's close: `available_utc`, `atr_usd`. The 15 days an ATR rests on (14 TR
-    and the close before the first) must all be whole: a day with under 80% of the median day's minutes, or with a hole
-    (`bad_gaps`), makes every ATR it enters NaN (the idea is then `no_bars`)."""
+    """T-2 (4): R = the mean true range of mid daily bars cut at the broker's server midnight, over the 14 most recent
+    WHOLE server weekdays among the last 20 (whole: at least 80% of the median day's minutes; a weekday with no minute
+    at all counts as not whole). A true range uses the previous whole day's close. Each day's ATR is available at its
+    last minute's close: `available_utc`, `atr_usd`; NaN (the idea is then `no_bars`) with fewer than 14."""
     if bars.empty:
         return pd.DataFrame({"available_utc": pd.DatetimeIndex([], tz="UTC"), "atr_usd": []})
     b = bars.sort_values("ts_utc", kind="stable")
@@ -366,18 +387,25 @@ def daily_atr(bars: pd.DataFrame, server_tz: str) -> pd.DataFrame:
     f = pd.DataFrame({"day": server_wall(ts, server_tz).normalize(), "ts": ts,
                       "h": (b["bid_high"].to_numpy() + b["ask_high"].to_numpy()) / 2,
                       "l": (b["bid_low"].to_numpy() + b["ask_low"].to_numpy()) / 2,
-                      "c": (b["bid_close"].to_numpy() + b["ask_close"].to_numpy()) / 2,
-                      "hole": bad_gaps(epoch_ns(ts), BREAK_CLOCK)})
+                      "c": (b["bid_close"].to_numpy() + b["ask_close"].to_numpy()) / 2})
     f = f[f["day"].dt.dayofweek < 5]
-    d = f.groupby("day").agg(h=("h", "max"), l=("l", "min"), c=("c", "last"), last=("ts", "max"),
-                             n=("ts", "size"), hole=("hole", "max"))
-    prev = d["c"].shift()
-    tr = pd.concat([d["h"] - d["l"], (d["h"] - prev).abs(), (d["l"] - prev).abs()], axis=1).max(axis=1)
-    tr[prev.isna()] = np.nan                                   # a true range needs the previous close
-    bad = ((d["n"] < FULL_DAY_SHARE * d["n"].median()) | d["hole"]).astype(float)
-    atr = tr.rolling(ATR_DAYS).mean().where(bad.rolling(ATR_DAYS + 1, min_periods=1).max() == 0)
+    d = f.groupby("day").agg(h=("h", "max"), l=("l", "min"), c=("c", "last"), last=("ts", "max"), n=("ts", "size"))
+    d = d.reindex(pd.bdate_range(d.index.min(), d.index.max()))          # a weekday with no minute is not whole
+    d["n"] = d["n"].fillna(0)
+    whole = (d["n"] >= FULL_DAY_SHARE * d.loc[d["n"] > 0, "n"].median()).to_numpy()
+    w = d[whole]
+    prev = w["c"].shift()
+    tr_whole = pd.concat([w["h"] - w["l"], (w["h"] - prev).abs(), (w["l"] - prev).abs()], axis=1).max(axis=1)
+    tr_whole[prev.isna()] = np.nan                             # a true range needs the previous whole close
+    tr = tr_whole.reindex(d.index).to_numpy(dtype=float)
+    atr = np.full(len(d), np.nan)
+    for i in range(len(d)):
+        window = tr[max(0, i - ATR_WINDOW_DAYS + 1): i + 1]
+        valid = window[np.isfinite(window)]
+        if len(valid) >= ATR_DAYS:
+            atr[i] = valid[-ATR_DAYS:].mean()
     out = pd.DataFrame({"available_utc": d["last"] + MINUTE, "atr_usd": atr})
-    return out.reset_index(drop=True)
+    return out.dropna(subset=["available_utc"]).reset_index(drop=True)
 
 
 def atr_at(points: pd.DataFrame, atr: pd.DataFrame) -> np.ndarray:
@@ -494,8 +522,10 @@ def _holdout(t: pd.Timestamp, window: tuple[pd.Timestamp, pd.Timestamp] | None) 
 
 def score_ideas(ideas: pd.DataFrame, bars: pd.DataFrame, *, costs: ScoreCosts,
                 holdout: tuple[pd.Timestamp, pd.Timestamp] | None, as_of: pd.Timestamp,
-                extractors: Mapping[str, Extractor] = ADMITTED_EXTRACTORS) -> list[ScoreRow]:
-    """Score `ideas` (read_ideas) on `bars` (1m bid/ask) visible by `as_of`. Module docstring for the rules."""
+                extractors: Mapping[str, Extractor] = ADMITTED_EXTRACTORS,
+                holidays: HolidayList | None = None) -> list[ScoreRow]:
+    """Score `ideas` (read_ideas) on `bars` (1m bid/ask) visible by `as_of`; `holidays` exempts holes on its listed
+    dates (None: no exemption). Module docstring for the rules."""
     if not bars.empty:
         t = pd.to_datetime(bars["ts_utc"], utc=True)
         keep = t < as_of
@@ -508,7 +538,7 @@ def score_ideas(ideas: pd.DataFrame, bars: pd.DataFrame, *, costs: ScoreCosts,
                                                              {f"{s}_{c}": np.zeros(0) for s in ("bid", "ask")
                                                               for c in ("open", "high", "low", "close")})
     atr_table = daily_atr(vis, costs.swap.server_tz)
-    holes = m.holes(BREAK_CLOCK)
+    holes = m.holes(BREAK_CLOCK, holidays)
     t_live = ideas["available_utc"]
     t_pub = ideas["published_utc"] + PUBLISH_LAG
     i_live, i_pub = entry_minutes(m, t_live), entry_minutes(m, t_pub)
@@ -553,8 +583,11 @@ def score_ideas(ideas: pd.DataFrame, bars: pd.DataFrame, *, costs: ScoreCosts,
                                    r_long_stress=lo.r_stress, r_short_stress=sh.r_stress, exit_long=lo.exit,
                                    exit_short=sh.exit)
         last = max(lo.exit_utc, sh.exit_utc)
-        if holes[i_live[k] + 1: m.at_or_after(last) + 1].any():   # T-2 (2): a hole in the hold, rescored nightly
-            rows.append(ScoreRow(status="no_bars", entry_utc=entry_ts[k], atr_usd=atr, **base))
+        if holes[i_live[k] + 1: m.at_or_after(last) + 1].any():   # T-2 (2): a hole in the hold, rescored nightly ...
+            horizon = add_trading_days(entry_ts[k], HORIZON_DAYS[bucket])
+            final = as_of >= add_trading_days(horizon, HOLE_FINAL_DAYS)   # ... until 5 weekdays after the horizon
+            rows.append(ScoreRow(status="no_bars_final" if final else "no_bars", entry_utc=entry_ts[k], atr_usd=atr,
+                                 **base))
             continue
         pub_pending = False
         if i_pub[k] < m.n and np.isfinite(atr_pub[k]) and atr_pub[k] > 0:   # descriptive capture read
@@ -632,7 +665,8 @@ def summarise(rows: Iterable[ScoreRow]) -> dict[str, dict[str, Any]]:
     ideas and their distinct UTC publish days, against >= 100 and >= 60). Deliberately no running skill statistic."""
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
-        a = out.setdefault(r.author, {"ideas": 0, "scored": 0, "pending": 0, "no_bars": 0, "backfilled": 0,
+        a = out.setdefault(r.author, {"ideas": 0, "scored": 0, "pending": 0, "no_bars": 0, "no_bars_final": 0,
+                                      "backfilled": 0,
                                       "not_gold": 0, "holdout": 0, "labelled": 0, "unlabelled": 0, "abstain": 0,
                                       "edited": 0, "eligible_resolved": 0, "_days": set()})
         a["ideas"] += 1
@@ -688,12 +722,24 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
             if not got.empty:
                 bars, bars_from = got, acc.account_id
                 break
-    rows = score_ideas(work, bars, costs=costs, holdout=holdout, as_of=slot)
+    holidays, calendar = _holidays(settings)
+    rows = score_ideas(work, bars, costs=costs, holdout=holdout, as_of=slot, holidays=holidays)
     written = save_scores(aux, rows, scored_utc=slot)
     if edited:
         with aux.write() as conn:
             conn.executemany("UPDATE tva_scores SET edited = 1 WHERE idea_id = ? AND edited = 0",
                              [(int(i),) for i in edited])
     return {"ideas": len(ideas), "rescored": len(work), "written": written, "bars_account": bars_from,
-            "cost_source": costs.source, "extractors": sorted(ADMITTED_EXTRACTORS),
+            "cost_source": costs.source, "extractors": sorted(ADMITTED_EXTRACTORS), "holidays": calendar,
             "authors": summarise(stored_rows(aux))}
+
+
+def _holidays(settings: Settings) -> tuple[HolidayList | None, str]:
+    """The CME metals holiday list (`risk.holidays.file`) for the hole exemption, and a line naming it. Unreadable:
+    no exemption (a holiday hole then stays `no_bars`, conservative), said in the job's output."""
+    from goldbot.risk.windows import load_holidays
+    try:
+        cal = load_holidays(settings.risk.holidays.file)
+    except (OSError, ValueError) as exc:
+        return None, f"unavailable ({type(exc).__name__}): no holiday exemption"
+    return cal, f"{cal.version} {cal.valid_from}..{cal.valid_through}"
