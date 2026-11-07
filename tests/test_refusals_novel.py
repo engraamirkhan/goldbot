@@ -64,17 +64,56 @@ def _write(eng: Any, *rows: har.HarRow) -> None:
         har.write_row(eng.exploration.db, r)
 
 
-LEARN = "LX"
-ARMS = [_spec(LEARN, learning_control="LCLX"), _spec("LCLX", role="control", control="learning:LX"),
-        _spec("ZCD", role="control"), _spec("Z3D"), _spec("S0", role="control"), _spec("S1A", role="strategy")]
+LEARN = "Z3D"
+ARMS = [_spec(LEARN, learning_control="LCZ3D"), _spec("LCZ3D", role="control", control="learning:Z3D"),
+        _spec("ZCD", role="control"), _spec("Z9D"), _spec("S0", role="control"), _spec("S1A", role="strategy"),
+        _spec("LCNEW", role="control", control="learning:Z9D")]
 
 
 # ------------------------------------------------------------------------------------------------ scope
-@pytest.mark.parametrize("arm_id, in_scope", [("LX", True), ("LCLX", True), ("ZCD", True), ("Z3D", True),
-                                              ("S0", False), ("S1A", False)])
-def test_scope_is_gold_learning_arms_and_the_controls_read_only_against_learning_arms(tmp_path, arm_id, in_scope):
+@pytest.mark.parametrize("arm_id, in_scope", [("Z3D", True), ("LCZ3D", True), ("ZCD", True), ("Z9D", True),
+                                              ("S0", False), ("S1A", False), ("LCNEW", False)])
+def test_scope_is_gold_learning_arms_and_the_preregistered_learning_controls(tmp_path, arm_id, in_scope):
+    """A control is in scope only when the prereg names it (LC* twins, ZCD): a new learning twin needs an amendment."""
     eng = _eng(tmp_path, ARMS)
     assert refusals_novel.in_scope(eng, eng.exploration.arms[arm_id]) is in_scope
+
+
+def test_retiring_every_strategy_arm_does_not_widen_the_scope_to_a_shared_control(tmp_path):
+    """LOW-4: a shared control read against a strategy and a learning arm stays out of scope once the strategy arm is
+    retired and only the learning arm is left in its pairs."""
+    shared = _spec("SHC", role="control", control="learning:Z9D,S1A")
+    eng = _eng(tmp_path, [*ARMS, shared])
+    assert not refusals_novel.in_scope(eng, shared)
+    retired = _eng(tmp_path, [*(a for a in ARMS if a.arm_id != "S1A"), shared])
+    assert not refusals_novel.in_scope(retired, shared)
+
+
+def test_a_raising_pairs_never_refuses_a_strategy_control(tmp_path, monkeypatch):
+    from goldbot.engine import exploration_budget
+
+    def broken(arms: Any) -> Any:
+        raise RuntimeError("pairs broke")
+    monkeypatch.setattr(exploration_budget, "pairs", broken)
+    eng = _eng(tmp_path, ARMS)
+    _write(eng, _row("2025-03-04", low=True))
+    arm = eng.exploration.arms["S0"]
+    assert entry_refusals.first_refusal(eng, arm, _sig(arm, TUE + pd.Timedelta(hours=10))) is None
+    assert refusals_novel.in_scope(eng, eng.exploration.arms["LCZ3D"])
+
+
+def test_the_scope_controls_are_every_learning_twin_and_zcd_in_the_arm_config():
+    """The pinned set matches the config: every gold LC* twin and every gold learning arm's control is named, none is
+    missing from the config (an added twin must be named by a prereg amendment, else its arm is refused alone)."""
+    import yaml
+    every = yaml.safe_load((ROOT / "config" / "exploration_arms.yaml").read_text())["arms"]
+    ids = {r["id"] for r in every}
+    rows = [r for r in every if (r.get("params") or {}).get("instrument", "XAUUSD") == "XAUUSD"]     # gold only
+    twins = {r["id"] for r in rows if str((r.get("params") or {}).get("control", "")).startswith("learning:")}
+    learning_controls = {r["learning"]["control"] for r in rows if r.get("role") == "learning"
+                         and isinstance(r.get("learning"), dict) and r["learning"].get("control")}
+    assert twins | learning_controls | {"ZCD"} == set(refusals_novel.SCOPE_CONTROLS)
+    assert set(refusals_novel.SCOPE_CONTROLS) <= ids
 
 
 def test_a_learning_arm_on_another_instrument_is_out_of_scope(tmp_path):
@@ -93,7 +132,7 @@ def test_nothing_is_refused_before_the_nightly_job_has_written_any_row(tmp_path)
 def test_a_low_day_refuses_a_learning_signal_and_its_control_as_har_low_range(tmp_path):
     eng = _eng(tmp_path, ARMS)
     _write(eng, _row("2025-03-04", low=True))
-    for arm_id in (LEARN, "LCLX"):
+    for arm_id in (LEARN, "LCZ3D"):
         arm = eng.exploration.arms[arm_id]
         s = _sig(arm, TUE + pd.Timedelta(hours=10))
         assert not refusals_novel.har_unavailable(eng, arm, s)
@@ -122,6 +161,22 @@ def test_after_the_first_row_a_day_without_a_row_fails_closed_as_har_unavailable
     _write(eng, _row("2025-03-03", low=False))
     arm = eng.exploration.arms[LEARN]
     assert refusals_novel.har_unavailable(eng, arm, _sig(arm, TUE + pd.Timedelta(hours=10)))
+
+
+def test_in_the_first_30_minutes_after_the_cut_off_a_missing_row_refuses_without_a_warning(tmp_path, monkeypatch,
+                                                                                            caplog):
+    """LOW-3: the job runs at 22:05 and needs a few minutes; before 22:30 a missing row is expected, still refused."""
+    monkeypatch.setattr(refusals_novel, "_warned", set())
+    eng = _eng(tmp_path, ARMS)
+    _write(eng, _row("2025-03-04"))
+    arm = eng.exploration.arms[LEARN]
+    close = TUE + pd.Timedelta(hours=22)
+    with caplog.at_level("WARNING", logger=refusals_novel.__name__):
+        assert refusals_novel.har_unavailable(eng, arm, _sig(arm, close + pd.Timedelta(minutes=29)))
+    assert not caplog.records
+    with caplog.at_level("WARNING", logger=refusals_novel.__name__):
+        assert refusals_novel.har_unavailable(eng, arm, _sig(arm, close + pd.Timedelta(minutes=30)))
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
 
 
 def test_a_row_written_after_the_decision_time_is_not_read_point_in_time(tmp_path):
@@ -162,7 +217,7 @@ def test_an_unreadable_har_table_raises_so_the_hook_refuses_as_refusal_error(tmp
 @pytest.mark.parametrize("broker, refused", [("icm", False), ("vantage", True), ("vantage247", True)])
 def test_gold_learning_entries_run_on_icm_only(tmp_path, broker, refused):
     eng = _eng(tmp_path, ARMS, broker=broker)
-    for arm_id in (LEARN, "LCLX"):
+    for arm_id in (LEARN, "LCZ3D"):
         arm = eng.exploration.arms[arm_id]
         assert refusals_novel.learning_icm_only(eng, arm, _sig(arm, TUE + pd.Timedelta(hours=10))) is refused
 

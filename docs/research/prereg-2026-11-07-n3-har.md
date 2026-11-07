@@ -25,18 +25,27 @@ No direction is read.
 - Threshold: q20 = the 20 % quantile of the trailing 250 forecasts emitted before this one by the same fit. **Low day**:
   hat <= q20.
 - A row is written only when the last stub-free input day is the trading day before the forecast day, the fit has at
-  least 500 rows and 250 trailing forecasts exist; otherwise the job fails (scheduler health alerts) and writes nothing.
+  least 500 rows, 250 trailing forecasts exist and no two consecutive input days across those 250 forecasts and their
+  HAR(22) lookback are more than 4 calendar days apart (`max_gap_days`; a Thursday -> Monday holiday is 4; a longer gap
+  is a data hole); otherwise the job fails and writes nothing, and the alert is the scheduler's nightly job-failure
+  health alert (`job:har_days` FAIL).
 - First row wins: a later run for the same day never changes a row that was already available (point in time).
 
 ## 3. The rule (engine, `refusals_novel`, registered in `entry_refusals.REFUSALS`)
 
-- Scope: gold (XAUUSD) exploration signals of `role: learning` arms and of the controls read only against learning
-  arms (`exploration_budget.pairs`: LCZ*, ZCD). Strategy, cost, owner-experiment arms and shared controls (S0, S0R,
-  F1C, G1C, GS1C) are outside it. Exits, stops, targets, holds and the RiskGate are untouched (entry hook only).
+- Scope: gold (XAUUSD) exploration signals of `role: learning` arms and of these learning controls, a fixed set
+  (`refusals_novel.SCOPE_CONTROLS`): ZCD and the LC* twins LCS5A, LCS5B, LCZ1P, LCZ2P, LCZ3D, LCZ4D, LCZ4P, LCZ5P,
+  LCZ6D, LCZ6V, LCZ7D, LCZ7P, LCZ7V, LCZ9D, LCZ10D. Retiring an arm never moves a control into scope; a new learning
+  twin needs an amendment (a test pins the set to the arm config). Strategy, cost, owner-experiment arms and shared
+  controls (S0, S0R, F1C, G1C, GS1C) are outside it. Exits, stops, targets, holds and the RiskGate are untouched
+  (entry hook only).
 - `har_low_range`: the row for the signal's opportunity day says low -> refused, shadowed (`exploration_obs`,
   `blocked_reason = har_low_range`).
 - `har_unavailable` (**fails closed**, trading-safety objection 1): once the job has written any row, a signal whose
-  opportunity day has no row available at its decision time is refused and a warning is logged once per day.
+  opportunity day has no row available at its decision time is refused and a warning is logged once per day. The
+  alert for a missing row is the nightly job-failure health alert above; the engine's warning is a log line.
+  Expected behaviour: a signal less than 30 minutes after the 22:00 UTC cut-off (the job runs at 22:05) usually finds
+  no row yet; it is refused as `har_unavailable` without the warning.
 - Not registered while no row exists (the job never ran on this host): N-3 then refuses nothing (signed plan: "If the
   nightly HAR job has not written a row by the dry run, N-3 is not registered tonight ... and moves to Wed").
 - Off switch: `research.har_abstention.enabled: false` makes the job write an `off` row; from its availability the

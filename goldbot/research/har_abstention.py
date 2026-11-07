@@ -11,8 +11,10 @@ Design rules, as built here:
   holdout start (checked at load): the holdout trains nothing; recent days enter only as regressors.
 * Low day: hat <= the `quantile` (0.2) of the `trailing_days` (250) forecasts emitted before it by the same fit.
 * "A missing or stale HAR row gives har_unavailable plus an alert (fails closed)": a stale input (the last stub-free
-  day is not the trading day before the forecast day), a short fit or a short trailing window raise `HarUnavailable`;
-  the job then fails (scheduler health alerts) and writes nothing, and the engine refuses learning entries that day.
+  day is not the trading day before the forecast day), a short fit, a short trailing window or a hole in it (two
+  consecutive input days more than `max_gap_days` apart, across the trailing forecasts and their HAR(22) lookback)
+  raise `HarUnavailable`; the job then fails (the scheduler's job-failure health alert) and writes nothing, and the
+  engine refuses learning entries that day.
 * Point in time in the table: one row per (day, status), the first kept (`INSERT OR IGNORE`); `available_ns` is when
   it was written, and the engine reads only rows available at the signal's decision time.
 * `enabled: false` writes an `off` row for the next trading day: from its availability the engine refuses nothing
@@ -24,7 +26,6 @@ both as mid prices: one feed per span, one cut-over (engine/history.py).
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date
 from typing import Any, Literal
@@ -32,7 +33,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record_json
 from goldbot.config import HarAbstentionSettings
 from goldbot.data.timeutil import ROLLOVER_UTC_H, epoch_ns, opportunity_day, utc_index
 from goldbot.db import Database
@@ -147,6 +148,21 @@ def frozen_fit(inputs: pd.DataFrame, cfg: HarAbstentionSettings) -> dt.HarFit:
     return dt.fit_har(rows, hi, purge=pd.Timedelta(0), min_rows=cfg.min_fit_rows)
 
 
+def _check_gaps(inputs: pd.DataFrame, finite: np.ndarray, cfg: HarAbstentionSettings) -> None:
+    """HarUnavailable when two consecutive input days of the window are more than `max_gap_days` calendar days apart.
+    The window runs from the first of the trailing forecasts, less the HAR(22) lookback, to the last input day: a hole
+    there (missing release months, a dead feed) would make w22 and the trailing quantile mix distant regimes."""
+    first = int(finite[-cfg.trailing_days])
+    days = pd.DatetimeIndex(inputs["day"].iloc[max(0, first - max(dt.HAR_LAGS)):])
+    if len(days) < 2:
+        return
+    gaps = np.diff(days.to_numpy()).astype("timedelta64[D]").astype(int)
+    worst = int(np.argmax(gaps))
+    if gaps[worst] > cfg.max_gap_days:
+        raise HarUnavailable(f"input gap of {gaps[worst]} days ({days[worst].date()} -> {days[worst + 1].date()}) "
+                             f"in the trailing window (> {cfg.max_gap_days})")
+
+
 def forecast(bars: pd.DataFrame, cut: pd.Timestamp, cfg: HarAbstentionSettings, *, now: pd.Timestamp) -> HarRow:
     """The `ok` row for the next trading day after `cut`, or HarUnavailable (module docstring)."""
     day = next_trading_day(cut)
@@ -167,6 +183,7 @@ def forecast(bars: pd.DataFrame, cut: pd.Timestamp, cfg: HarAbstentionSettings, 
         raise HarUnavailable("no forecast: a regressor of the last input day is missing")
     if len(trailing) < cfg.trailing_days:
         raise HarUnavailable(f"trailing forecasts {len(trailing)} < {cfg.trailing_days}")
+    _check_gaps(inputs, np.flatnonzero(np.isfinite(hats[:-1])), cfg)
     q = float(np.quantile(trailing, cfg.quantile))
     return HarRow(for_day=day, status="ok", available_utc=now, inputs_close_utc=cut, hat=hat, q20=q, low=hat <= q,
                   n_trailing=len(trailing), fit_rows=fit.n_rows, fit_to=cfg.fit_to, last_input_day=last)
@@ -188,7 +205,7 @@ def write_row(db: Database, row: HarRow) -> bool:
 def _one(db: Database, sql: str, args: tuple[Any, ...]) -> HarRow | None:
     with db.connection() as conn:
         got = conn.execute(sql, args).fetchone()
-    return HarRow.model_validate(json.loads(got[0])) if got else None
+    return load_record_json(HarRow, got[0], source=TABLE) if got else None
 
 
 def latest_row(db: Database, at: pd.Timestamp) -> HarRow | None:

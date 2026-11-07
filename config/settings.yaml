@@ -297,6 +297,8 @@ research:
     quantile: 0.2                    # low day: forecast <= the 20 % quantile of the trailing forecasts
     trailing_days: 250               # trailing forecasts the quantile is taken over (pre-registered)
     min_fit_rows: 500                # fewer fit rows: no row is written and the job fails
+    max_gap_days: 4                  # a longer calendar gap between input days in the trailing window + HAR(22)
+                                     #   lookback (a data hole): no row, the job fails (Thu -> Mon holiday = 4)
   position:                          # daily position engine (goldbot/research/position/, amendment W3, PR #285). These are
                                      #   W3's program-wide fixed values: a spec never varies them; a change is a W3 amendment
     day_close_utc: "21:00"           # W3.2 clock: decide on the 1d mid bar closing 21:00 UTC, fill at the next 1m open

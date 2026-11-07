@@ -416,6 +416,7 @@ class HarAbstentionSettings(_Section):
     quantile: float = Field(0.2, gt=0, lt=1)          # bottom quintile: hat <= this quantile of the trailing forecasts
     trailing_days: int = Field(250, ge=20)
     min_fit_rows: int = Field(500, ge=50)
+    max_gap_days: int = Field(4, ge=3)                # a longer gap between input days in the window: no row
 
 
 class PositionSettings(_Section):

@@ -111,6 +111,35 @@ def test_too_few_trailing_forecasts_write_no_row():
                      now=TUE_SLOT)
 
 
+def test_a_three_month_hole_in_the_trailing_window_writes_no_row():
+    """MED-2: a gap of more than `max_gap_days` (4) calendar days between consecutive input days, anywhere in the
+    trailing 250 forecasts or their HAR(22) lookback, fails the job: the quantile would rest on a broken series."""
+    cut = har.cut_off(TUE_SLOT)
+    hole = BARS[~((BARS["ts_utc"] >= "2025-03-01") & (BARS["ts_utc"] < "2025-06-01"))]
+    with pytest.raises(har.HarUnavailable, match="gap"):
+        har.forecast(har.mid_1h(hole), cut, CFG, now=TUE_SLOT)
+
+
+def test_a_hole_in_the_window_also_fails_the_job_and_writes_nothing(tmp_path):
+    hole = BARS[~((BARS["ts_utc"] >= "2025-03-01") & (BARS["ts_utc"] < "2025-06-01"))].reset_index(drop=True)
+    with pytest.raises(har.HarUnavailable, match="gap"):
+        har.run_job(_ctx(tmp_path, _Store(hole, pd.DataFrame())), TUE_SLOT, now=TUE_SLOT)
+    assert har.latest_row(Database.open(str(tmp_path), "aux"), TUE_SLOT + pd.Timedelta(days=1)) is None
+
+
+def test_a_long_weekend_of_four_days_is_not_a_gap():
+    """Thursday -> Monday (a Friday holiday) is 4 calendar days: allowed."""
+    cut = har.cut_off(TUE_SLOT)
+    holiday = BARS[~((BARS["ts_utc"] >= "2025-06-05 22:00") & (BARS["ts_utc"] < "2025-06-06 22:00"))]
+    assert har.forecast(har.mid_1h(holiday), cut, CFG, now=TUE_SLOT).status == "ok"
+
+
+def test_a_hole_older_than_the_window_and_its_lookback_is_allowed():
+    cut = har.cut_off(TUE_SLOT)
+    old = BARS[~((BARS["ts_utc"] >= "2023-06-01") & (BARS["ts_utc"] < "2023-09-01"))]
+    assert har.forecast(har.mid_1h(old), cut, CFG, now=TUE_SLOT).status == "ok"
+
+
 def test_a_fit_window_after_the_holdout_start_is_refused_at_load():
     with pytest.raises(ValidationError, match="holdout"):
         ResearchSettings(har_abstention=HarAbstentionSettings(fit_to=date(2025, 11, 1)))

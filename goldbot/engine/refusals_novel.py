@@ -3,16 +3,20 @@ registered in `entry_refusals.REFUSALS` and reached only through its hook (the e
 kill-only, fail closed, shadowed through the untaken-candidate path. Exits, stops, targets, holds and the RiskGate are
 untouched.
 
-Scope (`in_scope`): gold (XAUUSD) signals of `role: learning` arms and of the controls read only against learning arms
-(`exploration_budget.pairs`: the LC* twins, ZCD). Strategy, cost and owner-experiment arms and shared controls (S0, S0R,
-F1C, G1C, GS1C) are outside it: "learning arms and their controls only".
+Scope (`in_scope`): gold (XAUUSD) signals of `role: learning` arms and of the pre-registered learning controls
+`SCOPE_CONTROLS` (prereg section 3: the LC* twins and ZCD), a fixed set: retiring an arm cannot move a shared control
+into it, and nothing is derived at run time (`exploration_budget.pairs` is not read). Strategy, cost and
+owner-experiment arms and shared controls (S0, S0R, F1C, G1C, GS1C) are outside it: "learning arms and their controls
+only". A new learning twin enters only by a prereg amendment (a test pins the set to the arm config).
 
 * `learning_icm_only` (N-1a): "Gold learning arms run on ICM" (allocation rule). An in-scope signal on an engine whose
   broker is not ICM is refused. Today no such arm is active (Z6V/Z7V/ZCV retired under A5 on 2026-11-06); the guard
   keeps a future registration from breaking the routing. Vantage gold cost probes never pass `_send`.
 * `har_unavailable` (N-3, trading-safety objection 1: "A missing or stale HAR row gives har_unavailable plus an alert
   (fails closed)"): once the nightly job has written any row available at the decision time, an in-scope signal whose
-  opportunity day has no `ok` row available then is refused, with a warning once a day. Before the job's first row
+  opportunity day has no `ok` row available then is refused, with a warning once a day; in the first WARN_GRACE (30
+  min) after the 22:00 UTC cut-off the row is expected to be still in the making (job at 22:05), so it is refused
+  without the warning. Before the job's first row
   nothing is refused ("If the nightly HAR job has not written a row ... N-3 is not registered"); after an `off` row
   (research.har_abstention.enabled false, the kill path) nothing is refused either.
 * `har_low_range` (N-3): the day's row says low (forecast <= the trailing 250 forecasts' 20 % quantile): refused.
@@ -41,6 +45,11 @@ LEARNING_ICM_ONLY = "learning_icm_only"
 HAR_UNAVAILABLE = "har_unavailable"
 HAR_LOW_RANGE = "har_low_range"
 LEARNING_BROKER = "icm"
+# prereg-2026-11-07-n3-har.md section 3: the learning controls in scope (LC* twins of the learning class, ZCD)
+SCOPE_CONTROLS = frozenset({
+    "ZCD", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ3D", "LCZ4D", "LCZ4P", "LCZ5P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P",
+    "LCZ7V", "LCZ9D", "LCZ10D"})
+WARN_GRACE = pd.Timedelta(minutes=30)           # after the cut-off a missing row is expected: refused, not warned
 _warned: set[tuple[str, date]] = set()          # (account, day) whose har_unavailable was logged
 
 
@@ -52,17 +61,10 @@ def _ex(eng: Engine) -> Exploration:
 
 
 def in_scope(eng: Engine, arm: Arm) -> bool:
-    """A gold learning arm, or a gold control whose paired arms (`exploration_budget.pairs`) are all learning arms."""
+    """A gold learning arm, or a gold control named in `SCOPE_CONTROLS` (the prereg's fixed set)."""
     if arm.instrument != GOLD:
         return False
-    if arm.spec.role == "learning":
-        return True
-    if arm.spec.role != "control":
-        return False
-    from goldbot.engine.exploration_budget import pairs
-    arms = _ex(eng).arms
-    served = [a for a in pairs(arms).get(arm.arm_id, ()) if a in arms]
-    return bool(served) and all(arms[a].spec.role == "learning" for a in served)
+    return arm.spec.role == "learning" or (arm.spec.role == "control" and arm.arm_id in SCOPE_CONTROLS)
 
 
 def _decision(s: Pending) -> pd.Timestamp:
@@ -93,7 +95,10 @@ def har_unavailable(eng: Engine, arm: Arm, s: Pending) -> bool:
     registered, row = _today(eng, s)
     if not registered or row is not None:
         return False
-    key = (str(getattr(eng.cfg, "account_id", "")), har.signal_day(_decision(s)))
+    at = _decision(s)
+    if at - har.cut_off(at) < WARN_GRACE:
+        return True
+    key = (str(getattr(eng.cfg, "account_id", "")), har.signal_day(at))
     if key not in _warned:
         _warned.add(key)
         log.warning("har_days has no row for %s on %s: learning entries refused (har_unavailable)", key[1], key[0])
