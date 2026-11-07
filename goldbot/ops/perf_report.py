@@ -915,11 +915,15 @@ def _lrow(c: LearningClose, ccy: str | None) -> _LRow:
                  gross_pnl=c.gross if c.net and same_ccy else None, gross_r=gross_r)
 
 
+UNCOVERED_MAX = 0.10      # quant ruling 2026-11-06 Q1: a matched read with more of its fills uncovered is not readable
+
+
 def _excess(key: str, fam: list[_LRow], control: list[_LRow], weekdays: int) -> GroupStats:
     """The family's group, read against the random control on the same cells (risk day x session x side).
 
     excess = the family's mean net R less the control's mean net R in each trade's own cell (the control weighted by the
-    family's cell mix); a family trade whose cell has no control trade is dropped and counted. The 90% interval is
+    family's cell mix); a family trade whose cell has no control trade is dropped and counted, and with more than
+    UNCOVERED_MAX of them uncovered the read is "not readable" (quant ruling 2026-11-06 Q1). The 90% interval is
     Welch's on the difference and only when both sides have MIN_TRADES trades; the verdict is against the control,
     never against zero (a family riding the day's drift reads "not distinguishable")."""
     from scipy import stats
@@ -962,7 +966,16 @@ def _excess(key: str, fam: list[_LRow], control: list[_LRow], weekdays: int) -> 
         else:
             half = 0.0
         ci = (excess - half, excess + half)
-    note = f"{_r(excess)} vs control on {len(used)} cells, {dropped} unmatched"
+    uncovered = dropped / len(mine)
+    note = f"{_r(excess)} vs control on {len(used)} cells, {dropped} unmatched ({uncovered:.0%} uncovered)"
+    if uncovered > UNCOVERED_MAX:
+        # quant ruling 2026-11-06 Q1: control admission is thinned per pair (engine/exploration_budget.py), so a read
+        # whose arm fills sit in cells with no control fill is not a matched read
+        verdict = (f"not readable: {uncovered:.0%} of the arm's fills are in cells with no control fill "
+                   f"(> {UNCOVERED_MAX:.0%}): {note}")
+        return g.model_copy(update={"excess_r": excess, "excess_ci90": ci, "excess_cells": len(used),
+                                    "excess_dropped": dropped, "r_ci90": None, "sufficient": False,
+                                    "verdict": verdict})
     if ci is None:
         verdict = f"insufficient sample (< {MIN_TRADES} trades on a side): {note}"
     elif ci[0] > 0:

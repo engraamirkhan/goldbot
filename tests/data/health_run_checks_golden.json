@@ -241,6 +241,11 @@
    "no broker tick day recorded yet (scheduler job tick_record)"
   ],
   [
+   "costs:of_record",
+   "ok",
+   "every broker's cost-of-record cells measured within 30 d"
+  ],
+  [
    "data_quality",
    "ok",
    "no data-quality events recorded"
@@ -708,6 +713,11 @@
    "costs:published",
    "warn",
    "cost table never published to release costs-v1: research charges the priors"
+  ],
+  [
+   "costs:of_record",
+   "ok",
+   "every broker's cost-of-record cells measured within 30 d"
   ],
   [
    "data_quality",

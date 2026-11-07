@@ -56,6 +56,11 @@ LEARNING_CONTROLS = {k: {"LC" + a for a in v} for k, v in LEARNING.items()}     
 MI_PAIRS = {a.account_id: {f"{g}-{k}" for k in a.instruments for g in ("LB", "LBC")}
             for a in acc_mod.load_accounts(logins=False).values() if a.account_id in LEARNING}
 NO_REGISTRY = Path("/nonexistent/research_registry.jsonl")
+# retired 2026-11-06 (spec rows; prereg-amendment-2026-11-06-control-thinning.md, a5-signoff-2026-11-06.md): neither
+# running nor in the qualification view's refused list (a retirement is its own refusal); still configured
+RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30", "1H", "4H")} | {
+    "XBB15", "I0", "VI0", "C1H", "VC1H", "W0", "VW0", "ZCV", "S5A", "S5B", "Z4D", "Z4P", "Z6D", "Z6V", "Z7D", "Z7P",
+    "Z7V", "LCS5A", "LCS5B", "LCZ4D", "LCZ4P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P", "LCZ7V"}
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:
@@ -227,10 +232,11 @@ def test_every_account_runs_only_its_exempt_arms_and_keeps_every_refused_arm_con
             continue
         configured = {a.arm_id for a in cfg.arms}
         refused = exploration.entry_refused(cfg)
-        assert configured - set(refused) - exploration.spec_retired(cfg) == RUNNING[acc.account_id]
-        assert NEWLY_REFUSED[acc.account_id] | LEARNING_CONTROLS[acc.account_id] <= set(refused) <= configured
+        assert configured - set(refused) - exploration.spec_retired(cfg) == RUNNING[acc.account_id] - RETIRED_1106
+        assert (NEWLY_REFUSED[acc.account_id] | LEARNING_CONTROLS[acc.account_id]) - RETIRED_1106 <= set(refused) \
+            <= configured
         learning = LEARNING[acc.account_id] | LEARNING_CONTROLS[acc.account_id]
-        assert all(refused[i].startswith(RULE) for i in NEWLY_REFUSED[acc.account_id] - learning)
+        assert all(refused[i].startswith(RULE) for i in NEWLY_REFUSED[acc.account_id] - learning - RETIRED_1106)
         assert all(refused[i].startswith(arms.LEARNING_RULE) for i in learning)
 
 
@@ -252,7 +258,7 @@ def test_with_their_k_rows_the_learning_arms_and_their_dedicated_controls_run_to
         running = {a.arm_id for a in cfg.arms} - set(exploration.entry_refused(cfg)) - exploration.spec_retired(cfg)
         want = RUNNING[acc.account_id] | LEARNING[acc.account_id] | LEARNING_CONTROLS[acc.account_id] \
             | MI_PAIRS[acc.account_id]
-        assert running == want, acc.account_id
+        assert running == want - RETIRED_1106, acc.account_id
 
 
 # ------------------------------------------------------------------------------------------------ the engine layer
@@ -341,8 +347,9 @@ def test_health_warns_when_an_exploring_account_has_no_arm_that_may_enter(tmp_pa
 def test_the_runtime_qualification_view_matches_the_engine_per_account(_no_registry) -> None:
     view = exploration.qualification_by_account(acc_mod.enabled_accounts())
     for account_id, (running, refused) in view.items():
-        assert set(running) == RUNNING[account_id]
-        assert set(refused) == NEWLY_REFUSED[account_id] | LEARNING_CONTROLS[account_id] | MI_PAIRS[account_id]
+        assert set(running) == RUNNING[account_id] - RETIRED_1106
+        assert set(refused) == (NEWLY_REFUSED[account_id] | LEARNING_CONTROLS[account_id] | MI_PAIRS[account_id]) \
+            - RETIRED_1106
 
 
 # ------------------------------------------------------------------------------------------------ the cost read's end
