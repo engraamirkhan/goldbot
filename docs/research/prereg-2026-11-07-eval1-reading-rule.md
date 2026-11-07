@@ -76,14 +76,32 @@ E5), DSR at the registry K and at K_cells. The null-unit void rule and the buy-e
 9. **Drawdown at the registered sizing** is linear in R (0.5 % x max drawdown in R), not compounded: larger.
 10. **E7** requires a non-zero sign: a learn_pre mean net of exactly 0 fails.
 
-## 5. Not covered here
+## 5. Costs, data and the random-walk guard
 
 - Costs (section 1, C2) are in `goldbot/research/catalogue/costs.py` with the table `config/catalogue_costs.yaml`
   (version measured-2026-11-07-v1). Swap terms follow C2 with point-in-time benchmark rates. Spread and commission
   are used only from a sample of 20 or more trading days (quant ruling 2026-11-07); every instrument has 3-11 days
   today, so the frozen fallback round trip stays. E9's buy-and-hold book uses the same model.
+- Cost model details after the quant and code reviews: the rollover is 17:00 New York (21:00 UTC in summer, 22:00 UTC
+  in winter); a short spread sample never lowers the fallback round trip but can raise it; BTCUSD's unmeasured swap is
+  20 %/yr per side (`SWAP_FALLBACK_CRYPTO`); the daily book marks a trade only on closes after its fill instant.
+- Benchmark-rate vintage (code review LOW-3): the OECD IR3TIB01 3-month rates (EUR, JPY, GBP, AUD, CAD, CHF, NZD) are the
+  2026-11-02 download vintage, not first release. Revisions to these monthly averages are small, but using them is a
+  small look-ahead, in the cost model only (no signal or gate reads it). ALFRED first-release values are a backlog item.
+  USD uses DTB3 (daily T-bill), which is not revised.
+- Oil series (quant review 5): the Dukascopy XTIUSD 1d bars carry one source segment (`seg` = 0 on all 1,529 explore
+  bars, no cutover). Nothing in the data marks a roll. The largest daily moves are known market days (2015-08-26,
+  2016-02-02, 2016-11-29) plus two data gaps (2011-09-23..11-10 and 2013-02-22..05-23). Whether the series is
+  roll-adjusted is therefore unverified, and it is treated as NOT roll-adjusted: futures carry is in neither its price
+  nor its financing.
 - Precondition (ii)'s random-walk regression, including the C1 check that the buy-every-close sentinel and every
   long-only control fail E9 on a drifting walk, lives in `tests/test_catalogue_random_walk.py`
   (`test_long_only_controls_and_the_sentinel_fail_e9_on_a_drifting_walk`).
   `tests/test_catalogue_lookahead.py::test_buy_every_close_null_fails_explore_on_the_eval1_drift_guard` covers the
   sentinel on one synthetic drifting walk.
+
+## 6. Survivor conditions (quant review 5, verbatim)
+
+- "Any XTIUSD card passes only if it also passes with both sides charged max(|long_pct|, |short_credit_pct|,
+  two_sided/2) = 21.16 %/yr."
+- "Any short-side UK100/US500/JP225 card must also pass with heavy ex-dividend weeks excluded."

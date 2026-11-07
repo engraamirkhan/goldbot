@@ -16,8 +16,9 @@ As implemented
                spread sample is NOT a pinned measurement; the fallback cost stays ... until 20 trading days have been
                measured, with the version and dates recorded"): max(measured rt_bps x price, the fill bar's Dukascopy
                spread + 2 x measured commission); rt_bps = median spread + 2 x commission per side (bps of price).
-               Otherwise (fewer days, or no commission/spread): the frozen fallback, max(FALLBACK_RT (+ FX commission),
-               the fill bar's spread). Swap terms are broker terms (symbol_info), not a sample: C2 uses them as is.
+               Otherwise (fewer days, or no commission/spread): max(the frozen fallback FALLBACK_RT (+ FX commission),
+               the short sample's rt_bps or median spread, the fill bar's spread): a short sample never lowers the
+               fallback, it can raise it (quant review 1). Swap terms are broker terms (symbol_info), not a sample: C2 uses them as is.
   overshoot    not measured outside gold: stays the fallback's (0.5 x the FALLBACK round trip; sim.overshoot)
   financing    %/yr of notional per night, / 365 (the broker convention of the measured file):
                benchmark  side x (r_quote - r_base) + markup_side; r asof the fill's `available_utc` (FRED, the same
@@ -28,8 +29,10 @@ As implemented
                two_sided  futures-referenced CFDs (energies): no benchmark split is measured; each side pays the larger
                           of today's measured rate and half the two-sided markup (never today's carry as a credit)
                off        the broker charges no swap (USINDEX): 0
-               missing    swap not measured (BTCUSD): the frozen fallback SWAP_FALLBACK per calendar night, both sides
-  nights       rollovers at 21:00 UTC on Mon-Fri; the broker's triple day counts 3, Sat/Sun 0 (BTCUSD: every night 1)
+               missing    swap not measured: BTCUSD pays SWAP_FALLBACK_CRYPTO (20 %/yr) per calendar night both sides,
+                          any other instrument the frozen SWAP_FALLBACK
+  nights       rollovers at 17:00 New York (21:00 UTC in summer, 22:00 UTC in winter) on Mon-Fri; the broker's triple
+               day counts 3, Sat/Sun 0 (BTCUSD: every night 1)
   duplicates   an instrument measured on two brokers takes the larger cost of each field (stricter)
   fail closed  an instrument not in the table raises MissingCost; in a window model a benchmark rate unknown at the fill
                raises too. `default_model()` (synthetic tests only) sets every benchmark rate to 0."""
@@ -45,13 +48,15 @@ from typing import Any
 import numpy as np
 import yaml
 
-from goldbot.research.catalogue.data import DAY, HOUR
+from goldbot.research.catalogue.data import DAY
 
 TABLE_PATH = Path(__file__).resolve().parents[3] / "config" / "catalogue_costs.yaml"
-ROLL_OFFSET = 21 * HOUR
+ROLL_TZ = "America/New_York"     # the rollover is 17:00 New York: 21:00 UTC in summer (EDT), 22:00 UTC in winter
+ROLL_HOUR = 17
 GOLD_RT_USD = 0.166              # cost_of_record cor-2026-10-31.2, ICM all sessions, round trip incl. $4.0/lot/side
 DAYS_PER_YEAR = 365.0            # measured file: "per night x 365 / (contract x mid)"
 SWAP_FALLBACK = 2.5              # %/yr per side, the frozen fallback where no swap is measured
+SWAP_FALLBACK_CRYPTO = 20.0      # %/yr per side, unmeasured crypto CFD (typical 10-25); never lowered without 20 days of measured swap
 MIN_MEASURED_DAYS = 20           # a spread/commission measurement is pinned only from 20 trading days (quant ruling)
 BENCH_SERIES = {"USD": "DTB3", "EUR": "IR3TIB01EZM156N", "JPY": "IR3TIB01JPM156N", "GBP": "IR3TIB01GBM156N",
                 "AUD": "IR3TIB01AUM156N", "CAD": "IR3TIB01CAM156N", "CHF": "IR3TIB01CHM156N", "NZD": "IR3TIB01NZM156N"}
@@ -93,10 +98,35 @@ class InstCost:
     long_pct: float | None          # measured today: long pays %/yr (negative = receives)
     short_credit_pct: float | None  # measured today: short receives %/yr (negative = pays)
     spread_days: int = 0            # trading days of the spread sample (the fewest of the brokers merged)
+    spread_bps: float | None = None # the sample's median spread, bps of price
     markup_long: float = 0.0        # %/yr, floored at 0
     markup_short: float = 0.0
     two_sided: float = 0.0
     triple: int | None = None       # weekday of the triple swap (0 = Mon); None: every calendar night counts 1
+
+
+@lru_cache(maxsize=1)
+def _roll_table() -> tuple[int, np.ndarray]:
+    """(first epoch day, rollover instant ns per day): 17:00 America/New_York on each date 1990-2040."""
+    import pandas as pd
+    d = pd.date_range("1990-01-01", "2040-12-31", freq="D")
+    roll = (d + pd.Timedelta(hours=ROLL_HOUR)).tz_localize(ROLL_TZ).tz_convert("UTC")
+    from goldbot.data.timeutil import epoch_ns
+    return int(epoch_ns(d[:1].tz_localize("UTC"))[0] // DAY), np.asarray(epoch_ns(roll), np.int64)
+
+
+def rollovers_between(t0: int, t1: int) -> np.ndarray:
+    """New York dates (epoch days) whose 17:00 rollover falls in [t0, t1): a position opened AT the rollover is open
+    through it and pays (stricter); one closed AT the rollover does not."""
+    d0, r = _roll_table()
+    a = int(np.searchsorted(r, t0, "left"))
+    b = int(np.searchsorted(r, t1, "left"))
+    return np.arange(a, b, dtype=np.int64) + d0
+
+
+def hold_nights(t0: int, t1: int) -> int:
+    """Calendar rollovers held (unweighted), the reported hold length."""
+    return int(len(rollovers_between(t0, t1)))
 
 
 def legs(inst: str) -> tuple[str | None, str]:
@@ -137,8 +167,10 @@ class CostModel:
         c = self.inst(inst)
         if inst == "XAUUSD":
             return GOLD_RT_USD
+        bar = spr if np.isfinite(spr) else 0.0
         if c.rt_bps is None or c.commission_side_bps is None or c.spread_days < MIN_MEASURED_DAYS:
-            return max(fallback_rt(inst, price), spr if np.isfinite(spr) else 0.0)
+            # a short sample never lowers the fallback; it can raise it (quant review 1)
+            return max(fallback_rt(inst, price), (c.rt_bps or c.spread_bps or 0.0) * 1e-4 * price, bar)
         hist = (spr if np.isfinite(spr) else 0.0) + 2 * c.commission_side_bps * 1e-4 * price
         return max(c.rt_bps * 1e-4 * price, hist)
 
@@ -148,7 +180,7 @@ class CostModel:
         if c.kind == "off":
             return 0.0
         if c.kind == "missing":
-            return SWAP_FALLBACK
+            return SWAP_FALLBACK_CRYPTO if inst == "BTCUSD" else SWAP_FALLBACK
         if c.kind == "two_sided":
             today = c.long_pct if side > 0 else -(c.short_credit_pct or 0.0)
             return max(float(today or 0.0), 0.5 * c.two_sided)
@@ -160,15 +192,15 @@ class CostModel:
         return out
 
     def swap_nights(self, inst: str, t0: int, t1: int) -> int:
-        """Rollovers (21:00 UTC) after t0 and before t1, weighted: the broker's triple day 3, Sat/Sun 0."""
-        k0 = (t0 - ROLL_OFFSET) // DAY + 1
-        k1 = (t1 - 1 - ROLL_OFFSET) // DAY
-        if k1 < k0:
+        """Rollovers (17:00 New York) in [t0, t1) (`rollovers_between`), weighted: the broker's triple day 3, Sat/Sun 0.
+        An instrument without a triple day counts every night 1."""
+        k = rollovers_between(t0, t1)
+        if not len(k):
             return 0
         triple = self.inst(inst).triple
         if triple is None:
-            return int(k1 - k0 + 1)
-        wd = (np.arange(k0, k1 + 1) + 3) % 7                 # epoch day 0 was a Thursday; Mon = 0
+            return int(len(k))
+        wd = (k + 3) % 7                                     # NY date of the rollover; epoch day 0 a Thursday, Mon = 0
         return int(np.where(wd == triple, 3, np.where(wd < 5, 1, 0)).sum())
 
     def financing(self, inst: str, side: int, price: float, t0: int, t1: int) -> float:
@@ -234,7 +266,7 @@ def model_from_table(doc: dict[str, Any], rates: dict[str, tuple[np.ndarray, np.
     for inst, r in doc["instruments"].items():
         table[inst] = InstCost(
             rt_bps=r["rt_bps"], commission_side_bps=r["commission_side_bps"], kind=r["kind"],
-            spread_days=int(r.get("spread_days") or 0), long_pct=r["long_pct"],
+            spread_days=int(r.get("spread_days") or 0), spread_bps=r.get("spread_bps"), long_pct=r["long_pct"],
             short_credit_pct=r["short_credit_pct"], markup_long=float(r["markup_long"]),
             markup_short=float(r["markup_short"]), two_sided=float(r["two_sided"]),
             triple=None if inst == "BTCUSD" or not r.get("triple") else WEEKDAYS[r["triple"]])

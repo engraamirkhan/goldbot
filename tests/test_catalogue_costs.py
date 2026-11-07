@@ -116,7 +116,7 @@ def test_a_spread_sample_under_20_trading_days_is_not_pinned_and_the_fallback_st
     assert all(r["spread_days"] < C.MIN_MEASURED_DAYS for r in tab.values())
     assert all(r["spread_window"] for r in tab.values())                  # dates recorded
     for inst in ("EURUSD", "US500", "XAGUSD"):
-        fb = max(C.fallback_rt(inst, 100.0), 0.0)
+        fb = max(C.fallback_rt(inst, 100.0), tab[inst]["rt_bps"] * 1e-2)       # a short sample can only raise it
         assert C.default_model().round_trip(inst, 100.0, float("nan")) == pytest.approx(fb)
         assert pinned(19).round_trip(inst, 100.0, float("nan")) == pytest.approx(fb)
         assert pinned(20).round_trip(inst, 100.0, float("nan")) == pytest.approx(tab[inst]["rt_bps"] * 1e-2)
@@ -129,10 +129,11 @@ def test_a_wider_historical_bar_spread_is_never_undercut_by_the_measured_spread(
 
 
 def test_unmeasured_fields_keep_the_frozen_fallback() -> None:
-    """BTCUSD: no commission and no swap measured: the fallback round trip and SWAP_FALLBACK per calendar night."""
+    """BTCUSD: no commission and no swap measured: the fallback round trip (its 4-day spread sample is below it) and
+    SWAP_FALLBACK_CRYPTO per calendar night, both sides."""
     m = C.default_model()
     assert m.round_trip("BTCUSD", 20_000.0, float("nan")) == C.FALLBACK_RT["BTCUSD"]
-    assert m.debit_pct("BTCUSD", 1, T2026) == m.debit_pct("BTCUSD", -1, T2026) == C.SWAP_FALLBACK
+    assert m.debit_pct("BTCUSD", 1, T2026) == m.debit_pct("BTCUSD", -1, T2026) == C.SWAP_FALLBACK_CRYPTO
     assert m.swap_nights("BTCUSD", T2026, T2026 + 7 * DAY) == 7
 
 
@@ -170,3 +171,40 @@ def test_the_screen_passes_the_windows_cost_model_to_the_sim() -> None:
     u = next(x for x in D.units() if x["unit"] == "NULL-LONGCLOSE-GOLD")
     with pytest.raises(KeyError, match="costs"):
         D.unit_trades(u, "explore", Ctx("explore"))
+
+
+def test_a_short_sample_above_the_fallback_raises_it() -> None:
+    """Quant review 1: a sample under 20 days never lowers the fallback, but it can raise it (XPTUSD: 46.6 bps spread on
+    3 days against a 3 bps generic fallback)."""
+    m = C.default_model()
+    assert m.inst("XPTUSD").spread_days < C.MIN_MEASURED_DAYS
+    assert m.round_trip("XPTUSD", 1000.0, float("nan")) >= 46.6e-4 * 1000.0
+    assert m.round_trip("EURUSD", 1.0, float("nan")) == pytest.approx(C.fallback_rt("EURUSD", 1.0))   # below: no change
+
+
+def test_btc_swap_falls_back_to_a_crypto_rate_not_the_generic_one() -> None:
+    assert C.default_model().debit_pct("BTCUSD", 1, T2026) == C.SWAP_FALLBACK_CRYPTO == 20.0
+
+
+def test_the_rollover_is_17_00_new_york_so_22_00_utc_in_winter() -> None:
+    """Quant review 3: a Wednesday in 2026-01 (EST): a fill at 21:30 UTC exiting 22:30 UTC crosses Wednesday's
+    rollover at 22:00 UTC (gold's triple night); in summer (EDT) the same instants cross none."""
+    wed = int(pd.Timestamp("2026-01-07", tz="UTC").value)
+    m = C.default_model()
+    assert m.swap_nights("XAUUSD", wed + 21 * HOUR + 30 * 60 * 10**9, wed + 22 * HOUR + 30 * 60 * 10**9) == 3
+    assert m.swap_nights("XAUUSD", wed + 22 * HOUR, wed + 22 * HOUR + 1) == 3      # opened AT the rollover: pays
+    assert m.swap_nights("XAUUSD", wed + 21 * HOUR, wed + 22 * HOUR) == 0          # closed AT the rollover: does not
+    jul = int(pd.Timestamp("2026-07-08", tz="UTC").value)                # a Wednesday, EDT: rollover 21:00 UTC
+    assert m.swap_nights("XAUUSD", jul + 21 * HOUR + 30 * 60 * 10**9, jul + 22 * HOUR + 30 * 60 * 10**9) == 0
+    assert m.swap_nights("XAUUSD", jul + 20 * HOUR + 30 * 60 * 10**9, jul + 21 * HOUR + 30 * 60 * 10**9) == 3
+
+
+def test_a_rate_published_after_the_fill_is_not_used() -> None:
+    t = 10**18
+    m = C.model_from_table(C.load_table(), {"USD": (np.array([t - 1, t + 1], np.int64), np.array([1.0, 9.0]))})
+    assert m.rate("USD", t) == 1.0
+    assert m.debit_pct("US500", 1, t) == pytest.approx(1.0 + C.load_table()["instruments"]["US500"]["markup_long"])
+
+
+def test_trades_report_calendar_hold_nights_and_weighted_swap_nights() -> None:
+    assert "hold_nights" in SIM.TRADE_COLS and "swap_nights" in SIM.TRADE_COLS and "nights" not in SIM.TRADE_COLS

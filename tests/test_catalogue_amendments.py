@@ -53,9 +53,9 @@ def test_hac_t_on_overlapping_holds() -> None:
 
 def test_overlap_lag_from_holds() -> None:
     days = np.arange(0, 400, 2)                                   # a fill every other day
-    tr = pd.DataFrame({"t_fill": days * DAY, "nights": np.full(len(days), 20.0)})
+    tr = pd.DataFrame({"t_fill": days * DAY, "hold_nights": np.full(len(days), 20.0)})
     assert S.overlap_lag(tr) == 11                               # ceil(20 nights x 200 fill days / 399 days)
-    assert S.overlap_lag(tr.assign(nights=0.0)) == 1
+    assert S.overlap_lag(tr.assign(hold_nights=0.0)) == 1
 
 
 def test_sim_reproduces_sprint3000_fixture() -> None:
@@ -64,7 +64,7 @@ def test_sim_reproduces_sprint3000_fixture() -> None:
     Gross R must match exactly. Costs follow different conventions, so they are checked against hand values:
     sprint3000 scales the round trip by entry / reference price (bps model) and charges its measured swap with a
     Wednesday triple; the catalogue charges the cost of record in USD ($0.166 + $0.11 overshoot on stop exits) and
-    2.5 %/yr per 21:00 UTC rollover crossed (a Thursday-22:00 to Monday-21:00 hold = 3 rollovers, Fri/Sat/Sun).
+    the C2 financing per 17:00 New York rollover held (see the comment below).
     This test found that an exit exactly AT 21:00 was charged that night's rollover; fixed before the run."""
     from goldbot.research.sprint3000.engine import walk as s3walk
     from goldbot.research.sprint3000.market import Tape
@@ -96,15 +96,17 @@ def test_sim_reproduces_sprint3000_fixture() -> None:
         ex = s3walk(tp, int(tr["f"][k]), w0 + last, side, risk, tgt_r, np.nan, -1)
         assert tr["gross"][k] == pytest.approx(ex.gross / risk, abs=1e-9)
     assert tr["gross"].tolist() == pytest.approx([-2.0, 1.2, 0.6])
-    assert tr["nights"].tolist() == [1, 1, 3]                     # fills at 22:00, one 21:00 rollover each
-    # EVAL-1 C2 financing (benchmark rates 0 in the default model: the measured markup only, /365) with the broker's
-    # rollover weights: gold's triple day is Wednesday, Sat/Sun 0. Tue 22:00 -> Wed 22:00 = 3 nights, Mon -> Tue = 1,
-    # Thu 22:00 -> Mon 21:00 = Fri only (an exit AT 21:00 pays no swap).
+    # EVAL-1 C2 financing (benchmark rates 0 in the default model: the measured markup only, /365); the rollover is
+    # 17:00 New York (22:00 UTC in December), a position opened AT it pays that night, one closed AT it does not; gold's
+    # triple day is Wednesday, Sat/Sun 0. Tue 22:00 -> Wed 22:00: Tuesday's night; Mon -> Tue: Monday's;
+    # Thu 22:00 -> Mon 21:00: Thursday and Friday (calendar: Thu, Fri, Sat, Sun).
+    assert tr["hold_nights"].tolist() == [1, 1, 4]
+    assert tr["swap_nights"].tolist() == [1, 1, 2]
     tab = load_table()["instruments"]["XAUUSD"]
     lng, sht = tab["markup_long"] / 100 / 365 * 1300.0, tab["markup_short"] / 100 / 365 * 1300.0
-    assert tr["cost"][0] == pytest.approx((0.166 + 0.11 + 3 * lng) / 5.0, abs=1e-9)   # gapped stop: overshoot
+    assert tr["cost"][0] == pytest.approx((0.166 + 0.11 + lng) / 5.0, abs=1e-9)        # gapped stop: overshoot
     assert tr["cost"][1] == pytest.approx((0.166 + sht) / 5.0, abs=1e-9)
-    assert tr["cost"][2] == pytest.approx((0.166 + lng) / 10.0, abs=1e-9)
+    assert tr["cost"][2] == pytest.approx((0.166 + 2 * lng) / 10.0, abs=1e-9)
 
 
 def test_s17_history_masks_test_old_months() -> None:

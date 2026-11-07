@@ -92,7 +92,7 @@ def overlap_lag(tr: pd.DataFrame) -> int:
         return 1
     days = np.unique(tr["t_fill"].to_numpy(np.int64) // DAY)
     span = max(1.0, float(days.max() - days.min() + 1))
-    return max(1, int(math.ceil(float(tr["nights"].median()) * len(days) / span)))
+    return max(1, int(math.ceil(float(tr["hold_nights"].median()) * len(days) / span)))
 
 
 def hac_t(x: np.ndarray, L: int) -> float:
@@ -139,13 +139,16 @@ class Market:
     day_from: int
     day_to: int
     costs: CostModel | None = None
+    close_t: dict[str, np.ndarray] | None = None   # close instant (ns) of each close in `closes` (None: end of its day)
 
 
 def market_from_bars(bars: dict[str, Any], dec_from_ns: int, end_ns: int, costs: CostModel | None = None) -> Market:
     """A `Market` from 1d `Bars` per instrument (close day = the UTC day of the bar's close, `(ta - 1) // DAY`)."""
     closes = {i: pd.Series(np.asarray(b.c, float), index=(np.asarray(b.ta, np.int64) - 1) // DAY)
               for i, b in bars.items() if len(b)}
-    return Market(closes=closes, day_from=int(dec_from_ns // DAY), day_to=int(-(-end_ns // DAY)), costs=costs)
+    close_t = {i: np.asarray(b.ta, np.int64) for i, b in bars.items() if len(b)}
+    return Market(closes=closes, day_from=int(dec_from_ns // DAY), day_to=int(-(-end_ns // DAY)), costs=costs,
+                  close_t=close_t)
 
 
 def _asof(c: pd.Series, days: np.ndarray) -> np.ndarray:
@@ -219,8 +222,9 @@ def book_daily(tr: pd.DataFrame, m: Market, grid: np.ndarray | None = None) -> p
     its exit day. Days with no position are 0 (benchmark cash, zero on a margin account)."""
     net_days: dict[int, float] = {}
     if len(tr):
-        d0 = tr["t_fill"].to_numpy(np.int64) // DAY
-        d1 = np.maximum(d0, (tr["t_exit"].to_numpy(np.int64) - 1) // DAY)
+        t_fill, t_exit = tr["t_fill"].to_numpy(np.int64), tr["t_exit"].to_numpy(np.int64)
+        d0 = t_fill // DAY
+        d1 = np.maximum(d0, (t_exit - 1) // DAY)
         gross, cost = tr["gross"].to_numpy(float), tr["cost"].to_numpy(float)
         side, fill, risk = tr["side"].to_numpy(float), tr["fill"].to_numpy(float), tr["risk"].to_numpy(float)
         inst = tr["inst"].astype(str).to_numpy()
@@ -233,7 +237,8 @@ def book_daily(tr: pd.DataFrame, m: Market, grid: np.ndarray | None = None) -> p
             booked = 0.0
             if c is not None and side[k] != 0:
                 cd = c.index.to_numpy(np.int64)
-                sel = (cd >= d0[k]) & (cd < d1[k])
+                ct = m.close_t[inst[k]] if m.close_t and inst[k] in m.close_t else (cd + 1) * DAY - 1
+                sel = (ct > t_fill[k]) & (ct < t_exit[k]) & (cd < d1[k])      # marks only after the fill (LOW-1)
                 prev = fill[k]
                 for d, px in zip(cd[sel], c.to_numpy(float)[sel]):
                     if not np.isfinite(px):
@@ -263,12 +268,12 @@ def buy_hold_daily(m: Market, insts: list[str], side: int, rfrac: dict[str, floa
     market)", in R per day on `grid`: each instrument held on `side` from its first close in the window at 1 R =
     rfrac x price (the unit's own median risk), books side x return / rfrac per day, pays the cost model's round trip
     once and its C2 financing (`CostModel.swap_nights` x `debit_pct` / 365) between consecutive book days (a book day
-    is marked after its 21:00 UTC rollover)."""
+    is marked at 23:00 UTC, after its 17:00 New York rollover)."""
     cm = m.costs or default_model()
     out = np.zeros(len(grid))
     if len(grid) < 2:
         return pd.Series(out, index=grid)
-    tg = np.asarray(grid, np.int64) * DAY + 22 * 3_600_000_000_000
+    tg = np.asarray(grid, np.int64) * DAY + 23 * 3_600_000_000_000     # after the 17:00 NY rollover, summer or winter
     for inst in insts:
         c = m.closes.get(inst)
         r = rfrac.get(inst, float("nan"))
@@ -396,7 +401,7 @@ def summarize(tr: pd.DataFrame, market: Market | None = None) -> dict[str, Any]:
         "by_cell": {f"{i}|{t}": {"n": int(len(g)), "excess": float(g["excess"].mean()),
                                  "net": float((g["gross"] - g["cost"]).mean())}
                     for (i, t), g in tr.groupby(["inst", "tf"])},
-        "median_hold_nights": float(tr["nights"].median()),
+        "median_hold_nights": float(tr["hold_nights"].median()),
     }
     if market is not None:
         out["book"] = book_summary(tr, market)

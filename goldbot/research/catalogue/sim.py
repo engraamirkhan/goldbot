@@ -58,10 +58,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from goldbot.research.catalogue.core import Events, atr
-from goldbot.research.catalogue.costs import CostModel, default_model, fallback_rt
-from goldbot.research.catalogue.data import DAY, HOUR, Bars
+from goldbot.research.catalogue.costs import CostModel, default_model, fallback_rt, hold_nights
+from goldbot.research.catalogue.data import DAY, Bars
 
-ROLL_OFFSET = 21 * HOUR          # swap is charged per 21:00 UTC rollover crossed (calendar nights: weekend = 3)
 GOLD_OVERSHOOT_USD = 0.11
 STRESS = 1.5
 RISK_FLOOR_ATR = 0.25            # EVAL-1 (iii): stop distance >= max(0.25 x ATR20, 3 x round trip)
@@ -82,7 +81,8 @@ def overshoot(inst: str, rt_fallback: float) -> float:
 
 
 def nights(t0: int, t1: int) -> int:
-    return max(0, int((t1 - 1 - ROLL_OFFSET) // DAY - (t0 - ROLL_OFFSET) // DAY))   # an exit AT 21:00 pays no swap
+    """Calendar rollovers (17:00 New York) held: the reported `hold_nights` (an exit AT the rollover pays no swap)."""
+    return hold_nights(t0, t1)
 
 
 @dataclass
@@ -281,8 +281,8 @@ def _u(*key: object) -> float:
     return int.from_bytes(d[:8], "big") / 2**64
 
 
-TRADE_COLS = ("i", "f", "x", "side", "t_dec", "t_fill", "t_exit", "fill", "risk", "gross", "cost", "kind", "nights",
-              "ctrl_gross", "excess", "drift_adj")
+TRADE_COLS = ("i", "f", "x", "side", "t_dec", "t_fill", "t_exit", "fill", "risk", "gross", "cost", "kind",
+              "hold_nights", "swap_nights", "ctrl_gross", "excess", "drift_adj")
 
 
 def cost_price(inst: str, side: int, fill: float, spr: float, kind: int, t_fill: int, t_exit: int,
@@ -416,7 +416,7 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
                 ctrl = side * (cw.exit_px - cfill) / crisk
         drift_adj = gross - side * drift_per_ns * (w.t_exit - t_fill) * fill / risk
         out.append((i, f, w.exit_bar, side, int(b.ta[i]), t_fill, w.t_exit, fill, risk, gross, cost, w.kind,
-                    nights(t_fill, w.t_exit), ctrl, gross - ctrl, drift_adj))
+                    nights(t_fill, w.t_exit), cm.swap_nights(b.inst, t_fill, w.t_exit), ctrl, gross - ctrl, drift_adj))
     return np.array(out, float).reshape(-1, len(TRADE_COLS))
 
 

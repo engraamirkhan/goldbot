@@ -53,7 +53,7 @@ def trades(m: S.Market, *, hold: int, every: int, side_fn, risk_frac: float = 0.
             cost = SIM.cost_price(inst, side, fill, float("nan"), 0, t_fill, t_exit) / risk
             ctrl = float(rng.normal(0, 1))
             rows.append({"t_fill": t_fill, "t_exit": t_exit, "side": side, "fill": fill, "risk": risk,
-                         "gross": gross, "cost": cost, "nights": SIM.nights(t_fill, t_exit), "ctrl_gross": ctrl,
+                         "gross": gross, "cost": cost, "hold_nights": SIM.nights(t_fill, t_exit), "ctrl_gross": ctrl,
                          "excess": gross - ctrl, "drift_adj": gross, "inst": inst, "tf": "1d"})
     return pd.DataFrame(rows)
 
@@ -108,7 +108,7 @@ def test_a_real_timing_edge_net_of_financing_passes_every_explore_gate() -> None
     tr = trades(m, hold=2, every=1, side_fn=foresight(0.58), seed=2)
     tr["ctrl_gross"] = 0.0
     tr["excess"] = tr["gross"]
-    assert (tr["cost"] > 0).all() and tr["nights"].min() >= 1      # financing is charged on every hold
+    assert (tr["cost"] > 0).all() and tr["hold_nights"].min() >= 1      # financing is charged on every hold
     s = S.summarize(tr, m)
     g = S.explore_gates(s, ["1d"], None)
     assert s["net"] > 0
@@ -266,3 +266,15 @@ def test_promotion_k_at_confirm_is_the_larger_of_the_explore_k_and_the_registry_
             self.n_trials_effective = k
     assert R.confirm_k_eff({"k_registry": 3352}, Reg(3400)) == 3400
     assert R.confirm_k_eff({"k_registry": 3352}, Reg(3000)) == 3352
+
+
+def test_the_book_marks_a_trade_only_on_closes_after_its_fill() -> None:
+    """Code review LOW-1: a long filled Mon 23:00 at 110, after Monday's 22:00 close of 100; Tuesday closes 110 and the
+    trade exits Wednesday at +11 points: the book is 0, 0, +11 (not -10, +10, +11)."""
+    mon = int(pd.Timestamp("2026-01-05", tz="UTC").value) // DAY
+    closes = {"EURUSD": pd.Series([100.0, 110.0, 121.0], index=[mon, mon + 1, mon + 2])}
+    close_t = {"EURUSD": np.array([mon, mon + 1, mon + 2], np.int64) * DAY + 22 * HOUR}
+    m = S.Market(closes=closes, day_from=mon, day_to=mon + 3, close_t=close_t)
+    tr = pd.DataFrame({"t_fill": [mon * DAY + 23 * HOUR], "t_exit": [(mon + 2) * DAY + 12 * HOUR], "side": [1],
+                       "fill": [110.0], "risk": [1.0], "gross": [11.0], "cost": [0.0], "inst": ["EURUSD"]})
+    assert S.book_daily(tr, m).tolist() == [0.0, 0.0, 11.0]

@@ -13,7 +13,7 @@ import pytest
 from goldbot.research.catalogue import dispatcher as D
 from goldbot.research.catalogue import sim as SIM
 from goldbot.research.catalogue.core import EB, Ctx
-from goldbot.research.catalogue.costs import default_model
+from goldbot.research.catalogue.costs import default_model, load_table
 from goldbot.research.catalogue.data import MIN, Bars
 from tests.test_catalogue_fill_rules import COL, OVER, RT, _bar
 from tests.test_catalogue_random_walk import flat_bars
@@ -49,6 +49,12 @@ def _stop_entry() -> EB:
     return eb
 
 
+
+def _swap(r: np.ndarray) -> float:
+    """One long gold night of C2 financing at the fill (default model: benchmark 0, the measured markup)."""
+    return float(r[COL["swap_nights"]]) * load_table()["instruments"]["XAUUSD"]["markup_long"] / 100 / 365 * float(
+        r[COL["fill"]])
+
 def test_a_stop_entry_inside_a_bar_is_walked_from_its_fill_minute() -> None:
     b, fine = _stop_entry_bars()
     assert _one(b, _stop_entry())[COL["gross"]] == pytest.approx(-1.0)      # no finer bars: the pre-fill low stops it
@@ -61,7 +67,8 @@ def test_a_stop_entry_inside_a_bar_is_walked_from_its_fill_minute() -> None:
 def test_stop_entry_fills_pay_the_stop_overshoot() -> None:
     b, fine = _stop_entry_bars()
     r = _one(b, _stop_entry(), fine=fine)
-    assert r[COL["cost"]] == pytest.approx((RT + OVER) / 1.5)
+    assert r[COL["swap_nights"]] == 1                                        # the bar spans one 17:00 NY rollover
+    assert r[COL["cost"]] == pytest.approx((RT + OVER + _swap(r)) / 1.5)
 
 
 def test_a_stop_entry_fills_at_the_minute_open_when_that_minute_gaps_past_the_price() -> None:
@@ -96,7 +103,7 @@ def test_a_limit_entry_random_side_twin_is_walked_from_the_fill_minute() -> None
     r = _one(b, eb, fine=fine)
     assert r[COL["gross"]] == pytest.approx(gross)
     assert r[COL["ctrl_gross"]] == pytest.approx(0.0)
-    assert r[COL["cost"]] == pytest.approx(RT / 1.5)                      # a limit fill pays no overshoot
+    assert r[COL["cost"]] == pytest.approx((RT + _swap(r)) / 1.5)          # a limit fill pays no overshoot
 
 
 # ------------------------------------------------------------------ C10: which cells get finer bars
