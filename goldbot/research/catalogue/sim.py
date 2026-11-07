@@ -5,6 +5,14 @@ Fills
   stop     first bar in i+1..i+valid whose high (long) / low (short) reaches px, at max(open, px) / min(open, px)
   limit    first bar in i+1..i+valid whose low (long) / high (short) reaches px, at min(open, px) / max(open, px)
   close-only bars (co): orders, stops and targets are checked and filled AT THE CLOSE
+Fill bar from finer bars (quant C10, audit D5): "the fill bar is resolved from 1m bars wherever they exist; otherwise
+the unit is excluded and listed (dispatcher.unit_trades); stop-entry fills pay the measured stop overshoot of the
+cost of record, the same as stop exits". A stop/limit order filled INSIDE bar f (not at its open) is filled at the
+first finer bar of f that reaches px (at max/min(that bar's open, px)) and walked on the finer bars of f from there;
+from bar f+1 the walk goes on as below. The random-side twin starts from the same finer bar. Without finer bars the
+fill bar's stop is checked against its whole range, including the part before the fill: B04 lost 0.49 R/trade on
+zero-edge data (false kills). A fill bar whose finer bars never reach px (source mismatch) keeps that whole-bar rule
+and is counted ("fine_miss").
 Exits, per bar from the fill bar: gap through the stop at the open (after the fill bar) -> open; stop touched ->
 stop (+ overshoot); target touched -> target; both on one bar -> STOP (conservative); then the exit mask at the close;
 then the time exit at the close of the hold-th bar; data end -> last close. One position per cell at a time: an event
@@ -25,7 +33,7 @@ R: risk = the ORDER's stop distance |order price - stop| (market: the decision c
 risk the position is sized on when the order is placed; gross R = side (exit - fill) / risk. A fill that gaps toward
 the stop therefore risks less than 1 R and one that gaps past a stop entry more; measuring R on the fill's own distance
 would turn a gap to just short of the stop into the D1 tiny-risk blow-up the floor exists to stop. Cost (price units) =
-round trip + overshoot on stop exits + swap per 21:00 UTC rollover held; cost R = cost / risk. Stress = 1.5 x cost.
+round trip + overshoot on stop exits + overshoot on stop-entry fills (C10) + swap per 21:00 UTC rollover held; cost R = cost / risk. Stress = 1.5 x cost.
 
 Controls (A2), one twin per trade, simulated by the same walk:
   random_side  same fill bar and price, OPPOSITE side, mirrored stop/target distances, exit no later than the real
@@ -106,11 +114,12 @@ class Walk:
 
 
 def walk(b: Bars, f: int, side: int, fill: float, stop: float, tgt: float, last: int,
-         mask: np.ndarray | None, fill_is_open: bool) -> Walk:
-    """Walk from fill bar f to `last` (inclusive). `fill_is_open`: the fill was at bar f's open (market), so bar f's
-    full range follows the fill; for a stop/limit fill inside bar f the stop is still checked on bar f (conservative)."""
+         mask: np.ndarray | None, fill_is_open: bool, j0: int | None = None) -> Walk:
+    """Walk from fill bar f (or from bar `j0` > f, when bar f was walked on finer bars) to `last` (inclusive).
+    `fill_is_open`: the fill was at bar f's open (market), so bar f's full range follows the fill; for a stop/limit
+    fill inside bar f the stop is still checked on bar f (conservative; the no-finer-bars case)."""
     o, h, lo, c, co = b.o, b.h, b.l, b.c, b.co
-    for j in range(f, last + 1):
+    for j in range(f if j0 is None else j0, last + 1):
         if co[j]:
             if side * (c[j] - stop) <= 0:
                 return Walk(j, c[j], 1, int(b.ta[j]))
@@ -160,6 +169,72 @@ def _fill(b: Bars, i: int, side: int, kind: int, px: float, valid: int) -> tuple
     return None
 
 
+INTRABAR = (1, 2)               # stop and limit orders: may fill inside a bar
+
+
+@dataclass
+class FineFill:
+    """An order resolved on the finer bars of its fill bar: first finer bar m, the end of the bar's finer bars z."""
+    m: int
+    z: int
+    fill: float
+
+
+def fine_fill(fine: Bars, b: Bars, f: int, side: int, kind: int, px: float) -> FineFill | None:
+    """The first finer bar inside bar f that reaches the order price, and the fill (stop: max/min(open, px); limit:
+    min/max(open, px)); None when no finer bar of f reaches it."""
+    a = int(np.searchsorted(fine.t, b.t[f], "left"))
+    z = int(np.searchsorted(fine.t, b.ta[f], "left"))
+    if z <= a:
+        return None
+    up = (kind == 1) == (side > 0)                 # buy stop / sell limit trigger on the high
+    hit = fine.h[a:z] >= px if up else fine.l[a:z] <= px
+    if not hit.any():
+        return None
+    m = a + int(np.argmax(hit))
+    o = float(fine.o[m])
+    return FineFill(m, z, max(o, px) if up else min(o, px))
+
+
+def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: float) -> Walk | None:
+    """The exit inside bar f on its finer bars from the fill bar m (same rules as `walk`; the fill bar m itself is still
+    checked whole: the residual pre-fill part is one finer bar)."""
+    o, h, lo = fine.o[ff.m:ff.z], fine.h[ff.m:ff.z], fine.l[ff.m:ff.z]
+    later = np.arange(len(o)) > 0
+    gs = later & (side * (o - stop) <= 0)
+    hs = lo <= stop if side > 0 else h >= stop
+    if np.isfinite(tgt):
+        gt = later & (side * (o - tgt) >= 0)
+        ht = h >= tgt if side > 0 else lo <= tgt
+    else:
+        gt = ht = np.zeros(len(o), bool)
+    hit = gs | hs | gt | ht
+    if not hit.any():
+        return None
+    k = int(np.argmax(hit))
+    t = int(fine.t[ff.m + k])
+    if gs[k]:
+        return Walk(f, float(o[k]), 1, t)
+    if hs[k]:
+        return Walk(f, stop, 1, t)
+    if gt[k]:
+        return Walk(f, float(o[k]), 2, t)
+    return Walk(f, tgt, 2, t)
+
+
+def walk_fine(b: Bars, fine: Bars, ff: FineFill, f: int, side: int, fill: float, stop: float, tgt: float, last: int,
+              mask: np.ndarray | None) -> Walk:
+    """Walk of an order filled inside bar f at finer bar ff.m: the rest of bar f on its finer bars, then `walk`."""
+    w = _fine_exit(fine, ff, f, side, stop, tgt)
+    if w is not None:
+        return w
+    if mask is not None and mask[f]:
+        return Walk(f, float(b.c[f]), 3, int(b.ta[f]))
+    if last <= f:
+        return Walk(f, float(b.c[f]), 0, int(b.ta[f]))
+    return walk(b, f, side, fill, stop, tgt, last, mask, True, j0=f + 1)
+
+
 def _count(counts: dict[str, int] | None, key: str) -> None:
     if counts is not None:
         counts[key] = counts.get(key, 0) + 1
@@ -199,11 +274,14 @@ def order_risk(b: Bars, ev: Events, k: int, a20: np.ndarray) -> float | None:
 
 
 def _opposite(b: Bars, start: int, side: int, fill: float, dist: float, risk: float, tgt: float, last: int,
-              at_open: bool) -> float:
-    """R (on the real trade's order risk) of the opposite-side twin of a trade: same bar and price, mirrored stop
-    distance `dist` and target distance."""
+              at_open: bool, fine: Bars | None = None, ff: FineFill | None = None) -> float:
+    """R (on the real trade's order risk) of the opposite-side twin of a trade: same bar and price (and the same finer
+    fill bar `ff`, when resolved), mirrored stop distance `dist` and target distance."""
     ctgt = fill - (tgt - fill) if np.isfinite(tgt) else np.nan
-    cw = walk(b, start, -side, fill, fill + side * dist, ctgt, last, None, at_open)
+    if fine is not None and ff is not None:
+        cw = walk_fine(b, fine, ff, start, -side, fill, fill + side * dist, ctgt, last, None)
+    else:
+        cw = walk(b, start, -side, fill, fill + side * dist, ctgt, last, None, at_open)
     return -side * (cw.exit_px - fill) / risk
 
 
@@ -216,9 +294,11 @@ TRADE_COLS = ("i", "f", "x", "side", "t_dec", "t_fill", "t_exit", "fill", "risk"
               "ctrl_gross", "excess", "drift_adj")
 
 
-def cost_price(inst: str, side: int, fill: float, spr: float, kind: int, t_fill: int, t_exit: int) -> float:
+def cost_price(inst: str, side: int, fill: float, spr: float, kind: int, t_fill: int, t_exit: int,
+               stop_entry: bool = False) -> float:
+    """Round trip + the stop overshoot on a stop exit (kind 1) and on a stop-entry fill (C10) + swap per rollover."""
     rt = round_trip(inst, fill, spr)
-    c = rt + (overshoot(inst, rt) if kind == 1 else 0.0)
+    c = rt + (overshoot(inst, rt) if kind == 1 else 0.0) + (overshoot(inst, rt) if stop_entry else 0.0)
     return c + nights(t_fill, t_exit) * swap_rate(inst, side) / 360.0 * fill
 
 
@@ -230,10 +310,12 @@ def risk_floor(inst: str, fill: float, spr: float, atr20: float) -> float:
 
 
 def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: float = 0.0,
-             counts: dict[str, int] | None = None) -> np.ndarray:
+             counts: dict[str, int] | None = None, fine: Bars | None = None) -> np.ndarray:
     """Trades of one cell as a float array with columns TRADE_COLS (decisions before the window's dec_from and fills
-    at or after its end are dropped; a trade still open at the data end exits at the last close). `counts`, when
-    given, gets "risk_floor" += the events not traded because their stop was inside the risk floor."""
+    at or after its end are dropped; a trade still open at the data end exits at the last close). `fine`: finer bars
+    of the same instrument (1m) that resolve stop/limit fills inside a bar (C10). `counts`, when given, gets
+    "risk_floor" += the events not traded because their stop was inside the risk floor, and "fine_miss" += the
+    intrabar fills whose finer bars never reach the order price."""
     n = len(b)
     out: list[tuple[float, ...]] = []
     if not len(ev) or n < 3:
@@ -269,6 +351,14 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
             fr1 = _fill(b, i, int(ev.side[sib]), int(ev.kind[sib]), float(ev.px[sib]), int(ev.valid[sib]))
             if fr1 is not None and fr1[0] <= f:
                 continue                      # the first leg filled first or on the same bar (handled there)
+        ff: FineFill | None = None
+        kind_k = int(ev.kind[k])
+        if fine is not None and kind_k in INTRABAR and not at_open and not b.co[f]:
+            ff = fine_fill(fine, b, f, side, kind_k, float(ev.px[k]))
+            if ff is None:
+                _count(counts, "fine_miss")
+            else:
+                fill = ff.fill
         stop, tgt = _levels(ev, k, fill)
         dist = side * (fill - stop)           # the fill's own stop distance (<= 0: filled through the stop)
         start = f + 1 if int(ev.kind[k]) == 3 else f
@@ -276,36 +366,42 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
             continue
         last = min(n - 1, start + int(ev.hold[k]) - 1)
         mask = ev.exit_long if side > 0 else ev.exit_short
-        t_fill = int(b.t[f])
+        t_fill = int(fine.t[ff.m]) if fine is not None and ff is not None else int(b.t[f])
         instant = False                       # exits at the fill: through its stop or past its target (C7)
         if both:                              # both OCO legs on one bar: full loss (card S20/S21 conservative rule)
-            w = Walk(f, stop, 1, int(b.t[f]))
+            w = Walk(f, stop, 1, t_fill)
         elif dist <= 0:
             w, instant = Walk(f, fill, 1, t_fill), True
         elif np.isfinite(tgt) and side * (tgt - fill) <= 0:
             w, instant = Walk(f, fill, 2, t_fill), True
+        elif fine is not None and ff is not None:
+            w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask)
         else:
             w = walk(b, start, side, fill, stop, tgt, last, mask, at_open)
         busy_until = w.exit_bar
         gross = side * (w.exit_px - fill) / risk
         if instant and w.kind == 1:
             gross = min(-1.0, gross)          # a fill at or beyond its stop: a loss of at least -1 R
-        cost = cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, int(b.t[f]), w.t_exit) / risk
+        cost = cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, t_fill, w.t_exit, kind_k == 1) / risk
         # ---- control twin
         if control == "random_side":
             clast = w.exit_bar if w.kind in (0, 3) else last
             # an instant exit: the opposite at the same price and instant is closed at once too (0 R)
-            opp = 0.0 if instant else _opposite(b, start, side, fill, dist, risk, tgt, clast, at_open)
+            opp = 0.0 if instant else _opposite(b, start, side, fill, dist, risk, tgt, clast, at_open, fine, ff)
             if both and fr2 is not None and sib is not None:
                 # the same bar touched the other leg too: the twin also takes the opposite of that leg, so every leg
                 # the market touched has its opposite counted once (unbiased on a martingale; audit D2)
                 side2 = int(ev.side[sib])
-                stop2, tgt2 = _levels(ev, sib, fr2[1])
-                dist2 = side2 * (fr2[1] - stop2)
+                kind2 = int(ev.kind[sib])
+                ff2 = fine_fill(fine, b, f, side2, kind2, float(ev.px[sib])) if (
+                    fine is not None and kind2 in INTRABAR and not fr2[2] and not b.co[f]) else None
+                fill2 = ff2.fill if ff2 is not None else fr2[1]
+                stop2, tgt2 = _levels(ev, sib, fill2)
+                dist2 = side2 * (fill2 - stop2)
                 risk2 = order_risk(b, ev, sib, a20)
                 if dist2 > 0 and risk2 is not None:
                     last2 = min(n - 1, start + int(ev.hold[sib]) - 1)
-                    opp += _opposite(b, start, side2, fr2[1], dist2, risk2, tgt2, last2, fr2[2])
+                    opp += _opposite(b, start, side2, fill2, dist2, risk2, tgt2, last2, fr2[2], fine, ff2)
             ctrl = 0.5 * (gross + opp)
         else:
             hold_bars = max(1, w.exit_bar - start + 1)
@@ -319,9 +415,9 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
                 ctgt = cfill + (tgt - fill) / risk * crisk if np.isfinite(tgt) else np.nan    # tgt - fill: side
                 cw = walk(b, g, side, cfill, cstop, ctgt, g + hold_bars - 1, None, not b.co[g])
                 ctrl = side * (cw.exit_px - cfill) / crisk
-        drift_adj = gross - side * drift_per_ns * (w.t_exit - int(b.t[f])) * fill / risk
-        out.append((i, f, w.exit_bar, side, int(b.ta[i]), int(b.t[f]), w.t_exit, fill, risk, gross, cost, w.kind,
-                    nights(int(b.t[f]), w.t_exit), ctrl, gross - ctrl, drift_adj))
+        drift_adj = gross - side * drift_per_ns * (w.t_exit - t_fill) * fill / risk
+        out.append((i, f, w.exit_bar, side, int(b.ta[i]), t_fill, w.t_exit, fill, risk, gross, cost, w.kind,
+                    nights(t_fill, w.t_exit), ctrl, gross - ctrl, drift_adj))
     return np.array(out, float).reshape(-1, len(TRADE_COLS))
 
 

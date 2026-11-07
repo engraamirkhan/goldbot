@@ -186,6 +186,29 @@ def _resample_minutes(m: pd.DataFrame, tf: str) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+FINE_INSTRUMENTS = ("XAUUSD",)   # instruments with 1m bars: the fill bar of a stop/limit entry is resolved there (C10)
+
+
+def load_minutes(win: str, *, allow_test_old: bool = False) -> Bars:
+    """Gold 1m mid bars of one window (from the intraday warm-up start to the window end): the finer bars that resolve
+    stop/limit fills inside a bar of any gold timeframe (quant C10). Raises on the holdout."""
+    w = window(win, allow_test_old=allow_test_old)
+    lo = max(w.data_from, w.dec_from - INTRADAY_WARMUP_NS)
+    y0 = pd.Timestamp(lo, unit="ns").year
+    y1 = pd.Timestamp(w.end - 1, unit="ns").year
+    m = _gold_minutes(range(y0, y1 + 1))
+    t = epoch_ns(m["t"]) if len(m) else np.zeros(0, np.int64)
+    keep = (t >= lo) & (t + MIN <= w.end)
+    m, t = m[keep], t[keep]
+    n = len(t)
+    o, h, l, c = (m[k].to_numpy(float) for k in ("open", "high", "low", "close"))  # noqa: E741
+    b = Bars("XAUUSD", "1m", t, t + MIN, o, h, l, c, m["spr"].to_numpy(float), np.zeros(n, bool),
+             np.zeros(n, np.int32), m["vol"].to_numpy(float))
+    assert_sealed(b.ta, b.t)
+    b.meta.update(window=w.name, dec_from=w.dec_from, end=w.end)
+    return b
+
+
 # ------------------------------------------------------------------ stored daily/4h bars
 BAR_KEYS = {  # instrument -> file key in raw/daily/bars
     "XAUUSD": "xauusd", "XAGUSD": "xagusd", "XAUEUR": "xaueur", "XAUJPY": "xaujpy", "XTIUSD": "xtiusd",

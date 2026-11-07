@@ -30,6 +30,7 @@ from goldbot.research.catalogue import dispatcher as D
 from goldbot.research.catalogue import stats as S
 from goldbot.research.catalogue.data import (
     DAY,
+    FINE_INSTRUMENTS,
     INTRADAY,
     TF_NS,
     Bars,
@@ -155,6 +156,8 @@ def prebuild(win: str, all_units: list[dict[str, Any]], *, allow_test_old: bool 
             D.get_bars(i, t, win, allow_test_old=allow_test_old)
         except FileNotFoundError:
             pass
+    if any(i in FINE_INSTRUMENTS for i, _ in need):
+        D.get_minutes(win, allow_test_old=allow_test_old)       # 1m fill bars (C10), built once before the workers
 
 
 # ------------------------------------------------------------------ workers
@@ -182,7 +185,8 @@ def _explore_work(uid: str) -> dict[str, Any]:
     d = S.daily(tr).to_numpy() if len(tr) else np.zeros(0)
     tr.to_parquet(out_dir() / "trades" / f"explore_{uid}.parquet") if len(tr) else None
     return {"unit": uid, "family": u["family"], "control": ctrl, "n_events": cnt["events"],
-            "n_trades": cnt["trades"], "n_risk_floor": cnt["risk_floor"], "explore": s,
+            "n_trades": cnt["trades"], "n_risk_floor": cnt["risk_floor"], "n_fine_miss": cnt["fine_miss"],
+            "excluded_no_1m": bool(cnt["excluded_no_1m"]), "no_1m_cells": cnt["no_1m_cells"], "explore": s,
             "learn_pre": {k: pre.get(k) for k in ("n", "excess", "net", "t_excess")}, "gates": gates,
             "pass": bool(gates) and all(gates.values()), "daily_len": int(len(d)), "secs": round(time.time() - t0, 1)}
 
@@ -329,6 +333,7 @@ def cmd_explore(a: argparse.Namespace) -> None:
     summary = {"window": "explore", "head": head(), "n_units": len(us), "null_units": len(nulls),
                "null_void": nv, "void": nv["void"],
                "passers": [r["unit"] for r in res if r["pass"] and r["family"] != "NULL"], "k_registry": k_reg,
+               "excluded_no_1m": [r["unit"] for r in res if r.get("excluded_no_1m")],          # quant C10: listed
                "results": res}
     (out_dir() / "explore.json").write_text(json.dumps(summary, indent=1, default=float))
     with reg.locked():
@@ -353,7 +358,8 @@ def _prereg_row(reg: TrialRegistry, u: dict[str, Any]) -> dict[str, Any] | None:
 def _slim(r: dict[str, Any]) -> dict[str, Any]:
     s = r["explore"]
     return {"n": s.get("n"), "n_trades": r.get("n_trades"), "n_events": r.get("n_events"),
-            "n_risk_floor": r.get("n_risk_floor"), "gross": s.get("gross"), "cost": s.get("cost"), "net": s.get("net"),
+            "n_risk_floor": r.get("n_risk_floor"), "excluded_no_1m": r.get("excluded_no_1m"), "gross": s.get("gross"),
+            "cost": s.get("cost"), "net": s.get("net"),
             "excess": s.get("excess"), "t_excess": s.get("t_excess"), "pass": r["pass"], "gates": r["gates"],
             "control": r["control"]}
 

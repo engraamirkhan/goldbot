@@ -53,15 +53,10 @@ PRICE = {"XAUUSD": 1500.0, "XAGUSD": 25.0, "XTIUSD": 80.0, "US500": 1500.0, "UST
 N_BARS = {"5m": 20_000, "15m": 16_000, "30m": 12_000, "1h": 10_000, "4h": 6_000, "1d": 4_000, "1w": 1_200}
 XS_BARS = 2_000
 
-# Pairs that still fail with D1-D4 fixed, for a reason outside this change. strict: the marker must go when fixed.
-# D5 (found by this test, 2026-11-07): a stop/limit entry filled INSIDE a bar has its stop checked against that bar's
-# whole range, including the part before the fill ("conservative", sim.walk). B04's stop sits 0.6 ATR below a buy
-# stop whose fill bar usually opened below it, so 60 % of its zero-edge trades are stopped by the pre-fill low:
-# gross -0.49 R/trade, t -4 to -6. Conservative for a pass, but it fails EVAL-1 (ii) and would trip the EVAL-1 twin
-# kill (excess t <= -2) on a zero-edge unit. Fix needs a fill-bar rule from finer bars; escalated to quant-reviewer.
-# B04-V2 (gold $100 grid, fewer trades) carries the same bias but does not replicate at |t| >= 2 on these seeds, so
-# it is not listed (the seeds are fixed: the list is deterministic).
-KNOWN_D5 = {"B04-V0", "B04-V3"}
+# Finer bars of a cell with stop/limit entries (quant C10: the fill bar is resolved from 1m bars): the same path cut
+# into at most FINE_MAX bars per bar (1m up to 4h, 6 minutes on 1d, 30 minutes on 1w). Without them (D5, found by this
+# guard) B04 lost 0.49 R/trade on zero-edge data, t -4 to -6.
+FINE_MAX = 240
 
 
 def _seed(*key: object) -> int:
@@ -89,6 +84,12 @@ def _times(tf: str, n: int) -> tuple[np.ndarray, np.ndarray]:
 def rw_bars(inst: str, tf: str, seed: int, n: int, hot: np.ndarray | None = None) -> Bars:
     """A driftless random walk (the price, not only its log, is a martingale) with this timeframe's bar structure.
     `hot`: release instants; bars opening within the hour after one are RELEASE_VOL times more volatile."""
+    return rw_cell(inst, tf, seed, n, hot)[0]
+
+
+def rw_cell(inst: str, tf: str, seed: int, n: int, hot: np.ndarray | None = None, *, fine: bool = False
+            ) -> tuple[Bars, Bars | None]:
+    """`rw_bars`, and with `fine` the finer bars of the same path (each bar cut into min(its minutes, FINE_MAX))."""
     rng = np.random.default_rng(seed)
     t, ta = _times(tf, n)
     days_per_bar = 5.0 if tf == "1w" else TF_NS[tf] / DAY
@@ -106,7 +107,17 @@ def rw_bars(inst: str, tf: str, seed: int, n: int, hot: np.ndarray | None = None
     b = Bars(inst, tf, t, ta, path[:, 0], path.max(axis=1), path.min(axis=1), path[:, -1], np.full(n, np.nan),
              np.zeros(n, bool), np.zeros(n, np.int32), rng.integers(100, 1000, n).astype(float))
     b.meta.update(dec_from=int(ta[min(WARM, n // 4)]), end=int(ta[-1]) + 1)
-    return b
+    if not fine:
+        return b, None
+    m = min(sub, FINE_MAX, int((ta[0] - t[0]) // MIN))
+    st = np.arange(m) * sub // m
+    end = np.append(st[1:], sub) - 1
+    ft = (t[:, None] + (ta - t)[:, None] * st[None, :] // sub).ravel()
+    k = len(ft)
+    fb = Bars(inst, "1m", ft, np.append(ft[1:], int(ta[-1])), path[:, st].ravel(),
+              np.maximum.reduceat(path, st, axis=1).ravel(), np.minimum.reduceat(path, st, axis=1).ravel(),
+              path[:, end].ravel(), np.full(k, np.nan), np.zeros(k, bool), np.zeros(k, np.int32), np.zeros(k))
+    return b, fb
 
 
 def rw_ctx(t_from: int, t_to: int, seed: int) -> Ctx:
@@ -138,29 +149,31 @@ def _span(tf: str, n: int) -> tuple[int, int]:
     return int(t[0]), int(ta[-1])
 
 
-@lru_cache(maxsize=None)
-def walk_events(uid: str, walk: int) -> tuple[tuple[Bars, Events], ...]:
-    """One driftless walk of every cell of the unit, and the unit's events on it."""
+@lru_cache(maxsize=4)        # finer bars are large: a pair walks each sample once, the cache only spares the twin pair
+def walk_events(uid: str, walk: int) -> tuple[tuple[Bars, Events, Bars | None], ...]:
+    """One driftless walk of every cell of the unit, the unit's events on it, and the cell's finer bars where the
+    cell has stop/limit entries (the harness gives those cells gold 1m bars, C10)."""
     u = D.unit_by_id(uid)
-    out: list[tuple[Bars, Events]] = []
+    out: list[tuple[Bars, Events, Bars | None]] = []
     for tf in u["timeframes"]:
         n = XS_BARS if u.get("xs") else N_BARS[tf]
         ctx = rw_ctx(*_span(tf, n), _seed(uid, walk, "ctx", tf))
         hot = np.sort(np.concatenate([v for k, v in ctx.events.items() if not k.startswith("holiday")]))
         if u.get("xs"):
             bs = {k: rw_bars(k, tf, _seed(uid, walk, k, tf), n) for k in u["instruments"]}
-            out += [(bs[k], ev) for k, ev in D.XS_DETECTORS[u["detector"]](bs, u["params"], ctx).items()]
+            out += [(bs[k], ev, None) for k, ev in D.XS_DETECTORS[u["detector"]](bs, u["params"], ctx).items()]
         else:
             inst = "XAUUSD" if "XAUUSD" in u["instruments"] else u["instruments"][0]
-            b = rw_bars(inst, tf, _seed(uid, walk, inst, tf), n, hot)
-            out.append((b, D.detect_cell(u, b, ctx)))
+            b, fine = rw_cell(inst, tf, _seed(uid, walk, inst, tf), n, hot, fine=True)
+            ev = D.detect_cell(u, b, ctx)
+            out.append((b, ev, fine if D.intrabar(b, ev) else None))
     return tuple(out)
 
 
 def walk_trades(uid: str, control: str, walk: int) -> pd.DataFrame:
     frames = []
-    for b, ev in walk_events(uid, walk):
-        tr = SIM.simulate(b, ev, control=control, seed_key=f"{uid}|{walk}")
+    for b, ev, fine in walk_events(uid, walk):
+        tr = SIM.simulate(b, ev, control=control, seed_key=f"{uid}|{walk}", fine=fine)
         if len(tr):
             df = pd.DataFrame(tr, columns=SIM.TRADE_COLS)
             df["inst"], df["tf"] = b.inst, b.tf
@@ -198,12 +211,7 @@ def pairs() -> list[tuple[str, str]]:
     return out
 
 
-def _params() -> list:
-    return [pytest.param(uid, c, marks=pytest.mark.xfail(strict=True, reason="D5 fill-bar stop, see KNOWN_D5"))
-            if uid in KNOWN_D5 else (uid, c) for uid, c in pairs()]
-
-
-@pytest.mark.parametrize("uid,control", _params())
+@pytest.mark.parametrize("uid,control", pairs())
 def test_detector_and_control_show_no_edge_on_a_driftless_random_walk(uid: str, control: str) -> None:
     first = pair_stats(uid, control, 0)
     if first["n"] < MIN_TRADES:
@@ -315,3 +323,14 @@ def test_daily_and_weekly_random_time_twin_starts_after_the_fill(tf: str, span: 
     g = SIM.twin_candidates(b, 300, hold_bars=2)
     assert g.tolist() == list(range(301, 301 + span))
     assert SIM.twin_candidates(b, 598, hold_bars=2).tolist() == []    # the hold does not fit: no twin, no trade
+
+
+@pytest.mark.parametrize("tf", ["5m", "1h", "1d", "1w"])
+def test_the_guard_finer_bars_are_the_same_path_as_their_bar(tf: str) -> None:
+    b, fine = rw_cell("XAUUSD", tf, 3, 400, fine=True)
+    assert fine is not None and (np.diff(fine.t) > 0).all()
+    a = np.searchsorted(fine.t, b.t)
+    z = np.searchsorted(fine.t, b.ta)
+    assert (z > a).all()
+    assert np.allclose(fine.o[a], b.o) and np.allclose(fine.c[z - 1], b.c)
+    assert np.allclose(np.maximum.reduceat(fine.h, a), b.h) and np.allclose(np.minimum.reduceat(fine.l, a), b.l)

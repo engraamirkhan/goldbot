@@ -17,7 +17,7 @@ import yaml
 
 from goldbot.research.catalogue import core as K
 from goldbot.research.catalogue.core import EB, Ctx, Events
-from goldbot.research.catalogue.data import DAY, Bars, load, raw_dir, window
+from goldbot.research.catalogue.data import DAY, FINE_INSTRUMENTS, Bars, load, load_minutes, raw_dir, window
 from goldbot.research.catalogue.detectors_catalogue import (
     CATALOGUE_DETECTORS,
     CATALOGUE_XS,
@@ -25,7 +25,7 @@ from goldbot.research.catalogue.detectors_catalogue import (
     _month_end,
 )
 from goldbot.research.catalogue.detectors_patterns import PATTERN_DETECTORS
-from goldbot.research.catalogue.sim import TRADE_COLS, simulate, window_drift_per_ns
+from goldbot.research.catalogue.sim import INTRABAR, TRADE_COLS, simulate, window_drift_per_ns
 
 SPECS_PATH = Path(__file__).with_name("specs.yaml")
 
@@ -216,6 +216,32 @@ def get_bars(inst: str, tf: str, win: str, *, allow_test_old: bool = False) -> B
     return b
 
 
+_MINUTES: dict[str, Bars] = {}
+
+
+def get_minutes(win: str, *, allow_test_old: bool = False) -> Bars:
+    """Gold 1m bars of the window (cached in memory and as $CATALOGUE_CACHE/<win>/XAUUSD_1m.npz)."""
+    if win in _MINUTES:
+        return _MINUTES[win]
+    w = window(win, allow_test_old=allow_test_old)
+    f = cache_dir() / win / "XAUUSD_1m.npz"
+    if f.exists():
+        z = np.load(f, allow_pickle=False)
+        b = Bars("XAUUSD", "1m", z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"], z["seg"], z["vol"],
+                 meta={"window": win, "dec_from": w.dec_from, "end": w.end})
+    else:
+        b = load_minutes(win, allow_test_old=allow_test_old)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(f, t=b.t, ta=b.ta, o=b.o, h=b.h, l=b.l, c=b.c, spr=b.spr, co=b.co, seg=b.seg, vol=b.vol)
+    _MINUTES[win] = b
+    return b
+
+
+def intrabar(b: Bars, ev: Events) -> bool:
+    """The cell has stop or limit entries decided inside the window (they may fill inside a bar)."""
+    return bool(np.isin(ev.kind[in_window(b, ev)], INTRABAR).any())
+
+
 def unit_events(u: dict[str, Any], win: str, ctx: Ctx, *, allow_test_old: bool = False
                 ) -> dict[tuple[str, str], tuple[Bars, Events]]:
     out: dict[tuple[str, str], tuple[Bars, Events]] = {}
@@ -267,22 +293,35 @@ def choose_control(u: dict[str, Any], share: float) -> str:
 def unit_trades(u: dict[str, Any], win: str, ctx: Ctx, control: str | None = None, *,
                 allow_test_old: bool = False) -> tuple[pd.DataFrame, str, dict[str, int]]:
     """Trades of a unit pooled over its cells, the control used, and the counts EVAL-1 (iv) reports separately:
-    "events" (decided inside the window, each OCO leg one event), "trades" (simulated; the unit's n) and
-    "risk_floor" (events not traded because the stop was inside the risk floor)."""
+    "events" (decided inside the window, each OCO leg one event), "trades" (simulated; the unit's n), "risk_floor"
+    (events not traded because the stop was inside the risk floor), "fine_miss" (intrabar fills the 1m bars did not
+    resolve), "no_1m_cells" and "excluded_no_1m".
+
+    Quant C10: "Every unit with intrabar stop or limit entries ... is screened only after D5 is fixed: the fill bar is
+    resolved from 1m bars wherever they exist; otherwise the unit is excluded and listed". A unit with a stop/limit
+    entry in any cell without 1m bars (every instrument but gold) is excluded WHOLE (no trades; "excluded_no_1m" 1,
+    "no_1m_cells" the cells): screening only its gold cells would be a different unit from the one registered."""
     evd = unit_events(u, win, ctx, allow_test_old=allow_test_old)
     n_ev, share = long_share(evd)
     ctrl = control or choose_control(u, share)
     frames = []
-    counts: dict[str, int] = {"risk_floor": 0}
+    counts: dict[str, int] = {"risk_floor": 0, "fine_miss": 0, "no_1m_cells": 0, "excluded_no_1m": 0}
+    need = {cell: intrabar(b, ev) for cell, (b, ev) in evd.items()}
+    counts["no_1m_cells"] = sum(1 for (inst, _), v in need.items() if v and inst not in FINE_INSTRUMENTS)
+    if counts["no_1m_cells"]:
+        counts["excluded_no_1m"] = 1
+        evd = {}
     for (inst, tf), (b, ev) in evd.items():
-        tr = simulate(b, ev, control=ctrl, seed_key=u["unit"], drift_per_ns=window_drift_per_ns(b), counts=counts)
+        fine = get_minutes(win, allow_test_old=allow_test_old) if need[(inst, tf)] else None
+        tr = simulate(b, ev, control=ctrl, seed_key=u["unit"], drift_per_ns=window_drift_per_ns(b), counts=counts,
+                      fine=fine)
         if len(tr):
             df = pd.DataFrame(tr, columns=TRADE_COLS)
             df["inst"] = inst
             df["tf"] = tf
             frames.append(df)
     out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=[*TRADE_COLS, "inst", "tf"])
-    return out, ctrl, {"events": n_ev, "trades": len(out), "risk_floor": counts["risk_floor"]}
+    return out, ctrl, {"events": n_ev, "trades": len(out), **counts}
 
 
 def unit_event_counts(u: dict[str, Any], win: str, ctx: Ctx) -> dict[str, int]:
