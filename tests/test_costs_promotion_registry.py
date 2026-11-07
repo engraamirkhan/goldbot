@@ -158,7 +158,7 @@ def test_retraining_is_charged_the_brokers_measured_costs(tmp_path):
                      models=ModelRegistry(tmp_path / "m"), trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[acc],
                      population=Population(tmp_path / "p.json"))
     # no live week yet: the configured slippage prior both ways plus commission both sides, never 0
-    assert live_extra_cost_usd(ctx) == pytest.approx(2 * 0.15 + 2 * 3.5 / 100)
+    assert live_extra_cost_usd(ctx) == pytest.approx(2 * 0.15 + 2 * 4.0 / 100)          # ICM 4.0 $/lot/side (11-07)
     CostTable(account_id="icm-demo", built_utc=pd.Timestamp("2026-10-05", tz="UTC"),
               spread={"london": SpreadStat(median=0.1, p90=0.2, n=100)},
               slippage={"london:market": SlippageStat(mean=0.04, n=80, from_prior=False),

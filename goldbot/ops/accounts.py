@@ -140,6 +140,18 @@ class CostProbe(FrozenRecord):
     max_loss: float = Field(4.0, gt=0)
     # the measured-cost protocol's scheduled market probes (M1); off by default
     scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)
+    # prereg-amendment-2026-11-07-kill-only.md section 4: "scheduled cost probes send only with a slot time in
+    # [07:00, 21:00) UTC ... Mirror probes on icm-probe follow the same hours". HH:MM UTC, start inclusive, end
+    # exclusive (cost_probe.outside_hours): a probe of either kind with its bar close outside is not sent. None (the
+    # default): every hour, as before. Entries only: an open probe keeps every exit; fewer probes only, never more
+    hours_utc: tuple[str, str] | None = None
+
+    @field_validator("hours_utc")
+    @classmethod
+    def _hours(cls, v: tuple[str, str] | None) -> tuple[str, str] | None:
+        if v is not None and not (all(_HHMM.fullmatch(x) for x in v) and v[0] < v[1]):
+            raise ValueError("cost_probe.hours_utc is two HH:MM UTC times, start before end")
+        return v
 
     @model_validator(mode="after")
     def _scheduled_needs_probes(self) -> CostProbe:

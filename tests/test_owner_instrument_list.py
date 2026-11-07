@@ -106,7 +106,9 @@ def test_each_new_instrument_runs_the_same_controls_and_learning_pair_as_the_exi
         assert arms <= _registered(ACCOUNTS[name]), key
         for arm_id in arms:
             row = spec[arm_id]
-            assert row.params["instrument"] == key and row.status == "run" and not row.retired_day, arm_id
+            # S0-XAUJPY: retired 2026-11-07 (prereg-amendment-2026-11-07-kill-only.md section 4), row and id kept
+            assert row.params["instrument"] == key and row.status == "run", arm_id
+            assert not row.retired_day or (arm_id == "S0-XAUJPY" and row.retired_day == "2026-11-07"), arm_id
         assert spec[f"LB-{key}"].role == "learning" and spec[f"LBC-{key}"].role == "control"
 
 

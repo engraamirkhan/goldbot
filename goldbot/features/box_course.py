@@ -35,7 +35,7 @@ NS = 1_000_000_000
 # (entry-bar spread + the round-trip cost prior), stop >= stops level 0 + the 20-point spread prior. Pinned to the
 # settings by tests/test_box_course.py, so a settings change cannot drift silently from these rules.
 MIN_TARGET_OVER_COST = 2.5
-COST_PRIOR_USD = 0.37
+COST_PRIOR_USD = 0.38          # 0.37 until the ICM commission prior 3.5 -> 4.0 $/lot/side (plan 2026-11-07 WS-1)
 MIN_STOP_USD = 0.20
 
 

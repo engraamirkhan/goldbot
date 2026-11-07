@@ -275,7 +275,10 @@ def test_h14_names_its_cost_prior_and_checks_the_frozen_extra_cost(b1: pd.DataFr
     assert "spread_mean" in ok["source"] and ok["extra_cost_check"] == "ok: 0.37 $/oz as frozen"
     assert off["extra_cost_check"].startswith("DEVIATION")
     from goldbot.config import load_settings
-    assert abs(co.settings_extra_cost_usd(load_settings()) - co.FROZEN_EXTRA_COST_USD) < 1e-9   # what main() passes
+    from goldbot.execution.costs import settings_extra_cost_usd
+    # main() passes the frozen prior: the settings prior may only have risen since (ICM commission 4.0, 2026-11-07)
+    assert settings_extra_cost_usd(load_settings()) >= co.FROZEN_EXTRA_COST_USD - 1e-9
+    assert "extra_cost_usd=FROZEN_EXTRA_COST_USD," in Path(str(co.__file__)).read_text()
 
 
 def test_h16_count_matches_evaluate_h16_on_real_prices(b1: pd.DataFrame):
