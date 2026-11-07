@@ -182,9 +182,12 @@ class FineFill:
 
 def fine_fill(fine: Bars, b: Bars, f: int, side: int, kind: int, px: float) -> FineFill | None:
     """The first finer bar inside bar f that reaches the order price, and the fill (stop: max/min(open, px); limit:
-    min/max(open, px)); None when no finer bar of f reaches it."""
+    min/max(open, px)); None when no finer bar of f reaches it or the fill lies outside bar f's [low, high] (a source
+    mismatch: the caller keeps the whole-bar rule and counts a fine_miss). Bar f's finer bars end at its close or at
+    the next bar's open, whichever is first (quant re-verify R2: a late close stamp must not reach into bar f+1)."""
     a = int(np.searchsorted(fine.t, b.t[f], "left"))
-    z = int(np.searchsorted(fine.t, b.ta[f], "left"))
+    end = int(b.t[f + 1]) if f + 1 < len(b) else int(b.ta[f])
+    z = int(np.searchsorted(fine.t, min(int(b.ta[f]), end), "left"))
     if z <= a:
         return None
     up = (kind == 1) == (side > 0)                 # buy stop / sell limit trigger on the high
@@ -193,7 +196,10 @@ def fine_fill(fine: Bars, b: Bars, f: int, side: int, kind: int, px: float) -> F
         return None
     m = a + int(np.argmax(hit))
     o = float(fine.o[m])
-    return FineFill(m, z, max(o, px) if up else min(o, px))
+    fill = max(o, px) if up else min(o, px)
+    if not (b.l[f] <= fill <= b.h[f]):
+        return None
+    return FineFill(m, z, fill)
 
 
 def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: float) -> Walk | None:
