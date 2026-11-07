@@ -105,3 +105,4 @@ E5), DSR at the registry K and at K_cells. The null-unit void rule and the buy-e
 - "Any XTIUSD card passes only if it also passes with both sides charged max(|long_pct|, |short_credit_pct|,
   two_sided/2) = 21.16 %/yr."
 - "Any short-side UK100/US500/JP225 card must also pass with heavy ex-dividend weeks excluded."
+- "Any future oil card must exclude trades spanning the XTIUSD data gaps 2011-09-23..11-10 and 2013-02-22..05-23."

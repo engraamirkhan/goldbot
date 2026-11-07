@@ -192,8 +192,7 @@ def test_the_rollover_is_17_00_new_york_so_22_00_utc_in_winter() -> None:
     wed = int(pd.Timestamp("2026-01-07", tz="UTC").value)
     m = C.default_model()
     assert m.swap_nights("XAUUSD", wed + 21 * HOUR + 30 * 60 * 10**9, wed + 22 * HOUR + 30 * 60 * 10**9) == 3
-    assert m.swap_nights("XAUUSD", wed + 22 * HOUR, wed + 22 * HOUR + 1) == 3      # opened AT the rollover: pays
-    assert m.swap_nights("XAUUSD", wed + 21 * HOUR, wed + 22 * HOUR) == 0          # closed AT the rollover: does not
+    assert m.swap_nights("XAUUSD", wed + 21 * HOUR, wed + 22 * HOUR) == 0          # closed AT the rollover: not held
     jul = int(pd.Timestamp("2026-07-08", tz="UTC").value)                # a Wednesday, EDT: rollover 21:00 UTC
     assert m.swap_nights("XAUUSD", jul + 21 * HOUR + 30 * 60 * 10**9, jul + 22 * HOUR + 30 * 60 * 10**9) == 0
     assert m.swap_nights("XAUUSD", jul + 20 * HOUR + 30 * 60 * 10**9, jul + 21 * HOUR + 30 * 60 * 10**9) == 3
@@ -208,3 +207,11 @@ def test_a_rate_published_after_the_fill_is_not_used() -> None:
 
 def test_trades_report_calendar_hold_nights_and_weighted_swap_nights() -> None:
     assert "hold_nights" in SIM.TRADE_COLS and "swap_nights" in SIM.TRADE_COLS and "nights" not in SIM.TRADE_COLS
+
+
+def test_a_fill_or_exit_at_the_rollover_instant_is_not_held_through_it() -> None:
+    """Quant: a winter fill at 22:00 UTC (17:00 New York) exiting 22:00 the next day holds no rollover; a fill at 21:59
+    holds one."""
+    tue = int(pd.Timestamp("2026-01-06", tz="UTC").value)
+    assert len(C.rollovers_between(tue + 22 * HOUR, tue + DAY + 22 * HOUR)) == 0
+    assert len(C.rollovers_between(tue + 22 * HOUR - 60 * 10**9, tue + DAY + 22 * HOUR)) == 1

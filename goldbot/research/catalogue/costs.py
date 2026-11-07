@@ -116,11 +116,11 @@ def _roll_table() -> tuple[int, np.ndarray]:
 
 
 def rollovers_between(t0: int, t1: int) -> np.ndarray:
-    """New York dates (epoch days) whose 17:00 rollover falls in [t0, t1): a position opened AT the rollover is open
-    through it and pays (stricter); one closed AT the rollover does not."""
+    """New York dates whose 17:00 rollover falls strictly inside (t0, t1). A position filled at the rollover instant
+    opened after it, and one closed at it closed before it; neither pays that night."""
     d0, r = _roll_table()
-    a = int(np.searchsorted(r, t0, "left"))
-    b = int(np.searchsorted(r, t1, "left"))
+    a = int(np.searchsorted(r, t0, "right"))     # a rollover AT the fill: the fill is the first tick after it, not held
+    b = int(np.searchsorted(r, t1, "left"))      # a rollover AT the exit: the exit is the last tick before it, not held
     return np.arange(a, b, dtype=np.int64) + d0
 
 
@@ -192,7 +192,7 @@ class CostModel:
         return out
 
     def swap_nights(self, inst: str, t0: int, t1: int) -> int:
-        """Rollovers (17:00 New York) in [t0, t1) (`rollovers_between`), weighted: the broker's triple day 3, Sat/Sun 0.
+        """Rollovers (17:00 New York) strictly inside (t0, t1) (`rollovers_between`), weighted: the broker's triple day 3, Sat/Sun 0.
         An instrument without a triple day counts every night 1."""
         k = rollovers_between(t0, t1)
         if not len(k):
