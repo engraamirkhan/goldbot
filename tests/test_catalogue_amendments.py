@@ -68,29 +68,31 @@ def test_sim_reproduces_sprint3000_fixture() -> None:
     from goldbot.research.sprint3000.engine import walk as s3walk
     from goldbot.research.sprint3000.market import Tape
 
-    bd = pd.bdate_range("2012-01-02", periods=12, tz="UTC")
+    w0 = 20                                                      # flat warm-up bars: ATR20 (risk floor) defined
+    m = w0 + 12
+    bd = pd.bdate_range("2011-12-05", periods=m, tz="UTC")       # 20 business days = 4 weeks: weekdays unchanged
     t = np.array([int((d - pd.Timedelta(hours=2)).value) for d in bd], np.int64)     # prior day 22:00
     ta = np.array([int((d + pd.Timedelta(hours=21)).value) for d in bd], np.int64)
-    o = np.full(12, 1300.0)
-    h = np.full(12, 1302.0)
-    lo = np.full(12, 1298.0)
-    c = np.full(12, 1300.0)
-    o[3], h[3], lo[3], c[3] = 1290.0, 1291.0, 1288.0, 1289.0     # trade 1: gap through the 1295 stop
-    o[7], h[7], lo[7], c[7] = 1299.0, 1301.0, 1293.0, 1295.0     # trade 2: short target 1294 hit, no gap
-    c[10], h[10] = 1306.0, 1307.0                                # trade 3: Monday close 1306
-    b = Bars("XAUUSD", "1d", t, ta, o, h, lo, c, np.full(12, 0.3), np.zeros(12, bool), np.zeros(12, np.int32),
-             np.zeros(12))
-    b.meta.update(dec_from=int(t[0]), end=int(ta[-1]) + DAY)
-    assert pd.Timestamp(ta[10]).day_name() == "Monday" and pd.Timestamp(t[9]).day_name() == "Thursday"
+    o = np.full(m, 1300.0)
+    h = np.full(m, 1302.0)
+    lo = np.full(m, 1298.0)
+    c = np.full(m, 1300.0)
+    o[w0 + 3], h[w0 + 3], lo[w0 + 3], c[w0 + 3] = 1290.0, 1291.0, 1288.0, 1289.0     # trade 1: gap through the stop
+    o[w0 + 7], h[w0 + 7], lo[w0 + 7], c[w0 + 7] = 1299.0, 1301.0, 1293.0, 1295.0     # trade 2: short target 1294 hit
+    c[w0 + 10], h[w0 + 10] = 1306.0, 1307.0                                          # trade 3: Monday close 1306
+    b = Bars("XAUUSD", "1d", t, ta, o, h, lo, c, np.full(m, 0.3), np.zeros(m, bool), np.zeros(m, np.int32),
+             np.zeros(m))
+    b.meta.update(dec_from=int(t[w0]), end=int(ta[-1]) + DAY)
+    assert pd.Timestamp(ta[w0 + 10]).day_name() == "Monday" and pd.Timestamp(t[w0 + 9]).day_name() == "Thursday"
     eb = EB()
-    eb.add(1, 1, stop_d=5.0, hold=5)
-    eb.add(5, -1, stop_d=5.0, tgt_d=6.0, hold=5)
-    eb.add(8, 1, stop_d=10.0, hold=2)
+    eb.add(w0 + 1, 1, stop_d=5.0, hold=5)
+    eb.add(w0 + 5, -1, stop_d=5.0, tgt_d=6.0, hold=5)
+    eb.add(w0 + 8, 1, stop_d=10.0, hold=2)
     tr = pd.DataFrame(SIM.simulate(b, eb.build(), control="random_side", seed_key="fx"), columns=SIM.TRADE_COLS)
     assert len(tr) == 3
     tp = Tape.of(t, o, h, lo, c)
     for k, (side, risk, tgt_r, last) in enumerate(((1, 5.0, np.nan, 6), (-1, 5.0, 1.2, 10), (1, 10.0, np.nan, 10))):
-        ex = s3walk(tp, int(tr["f"][k]), last, side, risk, tgt_r, np.nan, -1)
+        ex = s3walk(tp, int(tr["f"][k]), w0 + last, side, risk, tgt_r, np.nan, -1)
         assert tr["gross"][k] == pytest.approx(ex.gross / risk, abs=1e-9)
     assert tr["gross"].tolist() == pytest.approx([-2.0, 1.2, 0.6])
     assert tr["nights"].tolist() == [1, 1, 3]                     # fills at 22:00, one 21:00 rollover each

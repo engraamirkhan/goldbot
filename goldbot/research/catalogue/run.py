@@ -174,14 +174,15 @@ def _counts_work(uid: str) -> tuple[str, dict[str, int]]:
 def _explore_work(uid: str) -> dict[str, Any]:
     t0 = time.time()
     u = D.unit_by_id(uid)
-    tr, ctrl, n_ev = D.unit_trades(u, "explore", _CTX["explore"])
+    tr, ctrl, cnt = D.unit_trades(u, "explore", _CTX["explore"])
     pre_tr, _, _ = D.unit_trades(u, "learn_pre", _CTX["learn_pre"], control=ctrl)
     s = S.summarize(tr)
     pre = S.summarize(pre_tr)
     gates = S.explore_gates(s, u["timeframes"], pre)
     d = S.daily(tr).to_numpy() if len(tr) else np.zeros(0)
     tr.to_parquet(out_dir() / "trades" / f"explore_{uid}.parquet") if len(tr) else None
-    return {"unit": uid, "family": u["family"], "control": ctrl, "n_events": n_ev, "explore": s,
+    return {"unit": uid, "family": u["family"], "control": ctrl, "n_events": cnt["events"],
+            "n_trades": cnt["trades"], "n_risk_floor": cnt["risk_floor"], "explore": s,
             "learn_pre": {k: pre.get(k) for k in ("n", "excess", "net", "t_excess")}, "gates": gates,
             "pass": bool(gates) and all(gates.values()), "daily_len": int(len(d)), "secs": round(time.time() - t0, 1)}
 
@@ -310,7 +311,7 @@ def cmd_explore(a: argparse.Namespace) -> None:
     for r in _pool(_explore_work, [u["unit"] for u in us], ["explore", "learn_pre"], a.workers):
         res.append(r)
         s = r["explore"]
-        print(f"{r['unit']:24s} n {s.get('n', 0):7d} ex {s.get('excess', float('nan')):+.3f} "
+        print(f"{r['unit']:24s} trades {s.get('n', 0):7d} events {r['n_events']:7d} ex {s.get('excess', float('nan')):+.3f} "
               f"t {s.get('t_excess', float('nan')):+.2f} net {s.get('net', float('nan')):+.3f} "
               f"{'PASS' if r['pass'] else ''} {r['secs']}s", flush=True)
     res.sort(key=lambda r: r["unit"])
@@ -351,7 +352,8 @@ def _prereg_row(reg: TrialRegistry, u: dict[str, Any]) -> dict[str, Any] | None:
 
 def _slim(r: dict[str, Any]) -> dict[str, Any]:
     s = r["explore"]
-    return {"n": s.get("n"), "gross": s.get("gross"), "cost": s.get("cost"), "net": s.get("net"),
+    return {"n": s.get("n"), "n_trades": r.get("n_trades"), "n_events": r.get("n_events"),
+            "n_risk_floor": r.get("n_risk_floor"), "gross": s.get("gross"), "cost": s.get("cost"), "net": s.get("net"),
             "excess": s.get("excess"), "t_excess": s.get("t_excess"), "pass": r["pass"], "gates": r["gates"],
             "control": r["control"]}
 

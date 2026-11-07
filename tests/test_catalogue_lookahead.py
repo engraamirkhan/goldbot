@@ -137,23 +137,24 @@ def test_daily_decision_never_sees_a_later_bar() -> None:
 
 
 def test_close_only_bar_fills_and_stops_at_the_close() -> None:
-    b = synth(n=50)
-    b.co[11] = True
-    b.l[11] = b.h[11] = b.c[11]
+    j = 30                                                  # after the ATR20 warm-up (risk floor)
+    b = synth(n=60)
+    b.co[j + 1] = True
+    b.l[j + 1] = b.h[j + 1] = b.c[j + 1]
     ev = EB()
-    ev.add(10, 1, stop=b.c[11] * 0.5, hold=3)
+    ev.add(j, 1, stop=b.c[j + 1] * 0.5, hold=3)
     tr = SIM.simulate(b, ev.build(), control="random_side", seed_key="x")
-    assert tr[0, SIM.TRADE_COLS.index("fill")] == pytest.approx(b.c[11])
-    b2 = synth(n=50)
-    b2.co[12] = True
-    b2.c[12] = b2.o[11] * 0.9
-    b2.h[12] = b2.l[12] = b2.c[12]
-    b2.l[11] = min(b2.l[11], b2.o[11])
+    assert tr[0, SIM.TRADE_COLS.index("fill")] == pytest.approx(b.c[j + 1])
+    b2 = synth(n=60)
+    b2.co[j + 2] = True
+    b2.c[j + 2] = b2.o[j + 1] * 0.9
+    b2.h[j + 2] = b2.l[j + 2] = b2.c[j + 2]
+    b2.l[j + 1] = min(b2.l[j + 1], b2.o[j + 1])
     ev2 = EB()
-    ev2.add(10, 1, stop=b2.o[11] * 0.95, hold=5)
+    ev2.add(j, 1, stop=b2.o[j + 1] * 0.95, hold=5)
     tr2 = SIM.simulate(b2, ev2.build(), control="random_side", seed_key="x")
-    assert tr2[0, SIM.TRADE_COLS.index("x")] == 12          # stopped on the close-only bar, at its close
-    assert tr2[0, SIM.TRADE_COLS.index("gross")] == pytest.approx((b2.c[12] - b2.o[11]) / (b2.o[11] * 0.05))
+    assert tr2[0, SIM.TRADE_COLS.index("x")] == j + 2      # stopped on the close-only bar, at its close
+    assert tr2[0, SIM.TRADE_COLS.index("gross")] == pytest.approx((b2.c[j + 2] - b2.o[j + 1]) / (b2.o[j + 1] * 0.05))
 
 
 def test_oco_both_legs_on_one_bar_is_a_full_loss() -> None:

@@ -10,16 +10,27 @@ stop (+ overshoot); target touched -> target; both on one bar -> STOP (conservat
 then the time exit at the close of the hold-th bar; data end -> last close. One position per cell at a time: an event
 whose fill would land before the open trade's exit is skipped.
 
+Risk floor (EVAL-1 precondition iii, audit D1): "stop distance >= max(0.25 x ATR20 of the decision timeframe,
+3 x round-trip cost), else the event is not traded (counted as an event, not as a trade)". ATR20 is the Wilder ATR at
+the decision bar i; an event whose ATR20 is not yet defined is not traded either. Without it a flat holiday bar gave a
+risk of 0.01 points and one trade of +9,331 R (S21-V2, US30 2013-12-26).
+
 R: risk = |fill - stop|; gross R = side (exit - fill) / risk. Cost (price units) = round trip + overshoot on stop
 exits + swap per 21:00 UTC rollover held; cost R = cost / risk. Stress = 1.5 x cost.
 
 Controls (A2), one twin per trade, simulated by the same walk:
   random_side  same fill bar and price, OPPOSITE side, mirrored stop/target distances, exit no later than the real
                trade's exit bar; the random-side twin's expected gross = (real + opposite) / 2, so the matched excess
-               is (real - opposite) / 2
-  random_time  same side, same risk as a fraction of price and same target R multiple, entered at the open of a
-               seeded random bar of the same instrument/TF near the real fill (same UTC day intraday; +-20 bars 1d;
-               +-8 bars 1w), held the same number of bars; excess = real - twin"""
+               is (real - opposite) / 2. When both OCO legs trigger on one bar the REAL trade is a full loss (card rule)
+               but the opposite twin is walked like any other: forcing it to -1 too (audit D2) zeroed the excess on
+               exactly the bars that cost the straddle, while the surviving straddles were selected on the bar's range
+  random_time  same side, same risk as a fraction of price and the same target R multiple ON THE TRADE'S SIDE (a short
+               twin's target is below its entry; audit D3), entered at the open of a seeded random bar of the same
+               instrument/TF AFTER the real fill, held the same number of bars; excess = real - twin. Intraday: the
+               same time of day on one of the next 7 calendar days that has that bar (same session, independent of
+               the signal); 1d: one of the next 20 bars; 1w: the next 8. Never before the fill: a twin drawn from the
+               bars that made the signal inherits its selection (audit D4: a reversal entry's twin bought into the
+               move that triggered it)"""
 from __future__ import annotations
 
 import hashlib
@@ -27,7 +38,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from goldbot.research.catalogue.core import Events
+from goldbot.research.catalogue.core import Events, atr
 from goldbot.research.catalogue.data import DAY, HOUR, Bars
 
 ROLL_OFFSET = 21 * HOUR          # swap is charged per 21:00 UTC rollover crossed (calendar nights: weekend = 3)
@@ -36,6 +47,11 @@ GOLD_OVERSHOOT_USD = 0.11
 SWAP_DEFAULT = 0.025             # %/yr/leg when not measured
 SWAP_INDEX_LONG = 0.07           # index longs: SOFR + 2.5-3 % ~ 6.5-7 %/yr
 STRESS = 1.5
+RISK_FLOOR_ATR = 0.25            # EVAL-1 (iii): stop distance >= max(0.25 x ATR20, 3 x round trip)
+RISK_FLOOR_RT = 3.0
+RISK_FLOOR_ATR_N = 20
+TWIN_DAYS = 7                    # intraday random-time twin: same time of day on one of the next 7 calendar days
+TWIN_SPAN = {"1d": 20, "1w": 8}  # daily/weekly random-time twin: one of the next N bars
 
 # fallback round trip in price units = 3 x a typical raw spread (instruments.yaml max_spread_points x point) +
 # commission; the cost actually charged is the worse of this and the Dukascopy spread of the fill bar
@@ -133,6 +149,52 @@ def _fill(b: Bars, i: int, side: int, kind: int, px: float, valid: int) -> tuple
     return None
 
 
+def _count(counts: dict[str, int] | None, key: str) -> None:
+    if counts is not None:
+        counts[key] = counts.get(key, 0) + 1
+
+
+def _oco_sibling(ev: Events, k: int) -> int | None:
+    """The other leg of the OCO pair event k belongs to (pairs are (long, short) rows on the same bar), else None."""
+    if ev.oco is None:
+        return None
+    if ev.oco[k] and k + 1 < len(ev) and int(ev.i[k + 1]) == int(ev.i[k]):
+        return k + 1
+    if k > 0 and ev.oco[k - 1] and int(ev.i[k - 1]) == int(ev.i[k]):
+        return k - 1
+    return None
+
+
+def _leg(ev: Events, k: int, fill: float) -> tuple[float, float, float] | None:
+    """(stop, risk, target) of event k filled at `fill`; None when the stop or target is on the wrong side."""
+    side = int(ev.side[k])
+    stop = float(ev.stop[k]) if np.isfinite(ev.stop[k]) else fill - side * float(ev.stop_d[k])
+    risk = side * (fill - stop)
+    if not np.isfinite(risk) or risk <= 0:
+        return None
+    tgt = float(ev.tgt[k]) if np.isfinite(ev.tgt[k]) else (
+        fill + side * float(ev.tgt_d[k]) if np.isfinite(ev.tgt_d[k]) else np.nan)
+    if np.isfinite(tgt) and side * (tgt - fill) <= 0:
+        return None
+    return stop, risk, tgt
+
+
+def _nominal_ok(b: Bars, ev: Events, k: int, a20: np.ndarray) -> bool:
+    """Leg k's stop distance at its order price clears the risk floor (decided at the signal bar, before any fill)."""
+    i = int(ev.i[k])
+    px = float(ev.px[k]) if np.isfinite(ev.px[k]) else float(b.c[i])
+    leg = _leg(ev, k, px)
+    return leg is not None and leg[1] >= risk_floor(b.inst, px, float(b.spr[min(i + 1, len(b) - 1)]), float(a20[i]))
+
+
+def _opposite(b: Bars, start: int, side: int, fill: float, risk: float, tgt: float, last: int,
+              at_open: bool) -> float:
+    """R of the opposite-side twin of a trade: same bar and price, mirrored stop and target distances."""
+    ctgt = fill - (tgt - fill) if np.isfinite(tgt) else np.nan
+    cw = walk(b, start, -side, fill, fill + side * risk, ctgt, last, None, at_open)
+    return -side * (cw.exit_px - fill) / risk
+
+
 def _u(*key: object) -> float:
     d = hashlib.sha256("|".join(map(str, key)).encode()).digest()
     return int.from_bytes(d[:8], "big") / 2**64
@@ -148,9 +210,18 @@ def cost_price(inst: str, side: int, fill: float, spr: float, kind: int, t_fill:
     return c + nights(t_fill, t_exit) * swap_rate(inst, side) / 360.0 * fill
 
 
-def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: float = 0.0) -> np.ndarray:
+def risk_floor(inst: str, fill: float, spr: float, atr20: float) -> float:
+    """Smallest tradable stop distance (price units): max(0.25 x ATR20, 3 x round trip); nan when ATR20 is unknown."""
+    if not np.isfinite(atr20):
+        return float("nan")
+    return max(RISK_FLOOR_ATR * atr20, RISK_FLOOR_RT * round_trip(inst, fill, spr))
+
+
+def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: float = 0.0,
+             counts: dict[str, int] | None = None) -> np.ndarray:
     """Trades of one cell as a float array with columns TRADE_COLS (decisions before the window's dec_from and fills
-    at or after its end are dropped; a trade still open at the data end exits at the last close)."""
+    at or after its end are dropped; a trade still open at the data end exits at the last close). `counts`, when
+    given, gets "risk_floor" += the events not traded because their stop was inside the risk floor."""
     n = len(b)
     out: list[tuple[float, ...]] = []
     if not len(ev) or n < 3:
@@ -158,6 +229,7 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
     dec_from = int(b.meta.get("dec_from", -2**62))
     end = int(b.meta.get("end", 2**62))
     busy_until = -1
+    a20 = atr(b, RISK_FLOOR_ATR_N)
     for k in range(len(ev)):
         i = int(ev.i[k])
         if i >= n - 1 or int(b.ta[i]) < dec_from or int(b.ta[i]) >= end:
@@ -170,22 +242,27 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         if f <= busy_until or int(b.t[f]) >= end:
             continue
         both = False
-        if ev.oco is not None and ev.oco[k] and k + 1 < len(ev) and int(ev.i[k + 1]) == i:
-            fr2 = _fill(b, i, int(ev.side[k + 1]), int(ev.kind[k + 1]), float(ev.px[k + 1]), int(ev.valid[k + 1]))
+        fr2: tuple[int, float, bool] | None = None
+        sib = _oco_sibling(ev, k)
+        if sib is not None and not all(_nominal_ok(b, ev, q, a20) for q in (k, sib)):
+            _count(counts, "risk_floor")      # an OCO pair is placed whole or not at all
+            continue
+        if sib is not None and sib > k:
+            fr2 = _fill(b, i, int(ev.side[sib]), int(ev.kind[sib]), float(ev.px[sib]), int(ev.valid[sib]))
             if fr2 is not None and fr2[0] < f:
                 continue                      # the other leg filled first: this one is cancelled
             both = fr2 is not None and fr2[0] == f
-        elif k > 0 and ev.oco is not None and ev.oco[k - 1] and int(ev.i[k - 1]) == i:
-            fr1 = _fill(b, i, int(ev.side[k - 1]), int(ev.kind[k - 1]), float(ev.px[k - 1]), int(ev.valid[k - 1]))
+        elif sib is not None:
+            fr1 = _fill(b, i, int(ev.side[sib]), int(ev.kind[sib]), float(ev.px[sib]), int(ev.valid[sib]))
             if fr1 is not None and fr1[0] <= f:
                 continue                      # the first leg filled first or on the same bar (handled there)
-        stop = float(ev.stop[k]) if np.isfinite(ev.stop[k]) else fill - side * float(ev.stop_d[k])
-        risk = side * (fill - stop)
-        if not np.isfinite(risk) or risk <= 0:
+        leg = _leg(ev, k, fill)
+        if leg is None:
             continue
-        tgt = float(ev.tgt[k]) if np.isfinite(ev.tgt[k]) else (
-            fill + side * float(ev.tgt_d[k]) if np.isfinite(ev.tgt_d[k]) else np.nan)
-        if np.isfinite(tgt) and side * (tgt - fill) <= 0:
+        stop, risk, tgt = leg
+        floor = risk_floor(b.inst, fill, float(b.spr[f]), float(a20[i]))
+        if not risk >= floor:                 # nan floor (ATR20 unknown) is not traded either
+            _count(counts, "risk_floor")
             continue
         start = f + 1 if int(ev.kind[k]) == 3 else f
         if start >= n:
@@ -201,22 +278,26 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         cost = cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, int(b.t[f]), w.t_exit) / risk
         # ---- control twin
         if control == "random_side":
-            cstop = fill + side * risk
-            ctgt = fill - (tgt - fill) if np.isfinite(tgt) else np.nan
             clast = w.exit_bar if w.kind in (0, 3) else last
-            cw = Walk(f, cstop, 1, int(b.t[f])) if both else walk(b, start, -side, fill, cstop, ctgt, clast, None,
-                                                                   at_open)
-            opp = -side * (cw.exit_px - fill) / risk
+            opp = _opposite(b, start, side, fill, risk, tgt, clast, at_open)
+            if both and fr2 is not None and sib is not None:
+                # the same bar touched the other leg too: the twin also takes the opposite of that leg, so every leg
+                # the market touched has its opposite counted once (unbiased on a martingale; audit D2)
+                leg2 = _leg(ev, sib, fr2[1])
+                if leg2 is not None:
+                    side2 = int(ev.side[sib])
+                    last2 = min(n - 1, start + int(ev.hold[sib]) - 1)
+                    opp += _opposite(b, start, side2, fr2[1], leg2[1], leg2[2], last2, fr2[2])
             ctrl = 0.5 * (gross + opp)
         else:
             hold_bars = max(1, w.exit_bar - start + 1)
-            g = _pick_bar(b, f, seed_key, i)
-            if g is None or g + hold_bars - 1 >= n:
+            g = _pick_bar(b, f, seed_key, i, hold_bars)
+            if g is None:
                 continue
             cfill = b.c[g] if b.co[g] else b.o[g]
             crisk = risk / fill * cfill
             cstop = cfill - side * crisk
-            ctgt = cfill + side * (tgt - fill) / risk * crisk if np.isfinite(tgt) else np.nan
+            ctgt = cfill + (tgt - fill) / risk * crisk if np.isfinite(tgt) else np.nan     # tgt - fill carries the side
             cw = walk(b, g, side, cfill, cstop, ctgt, g + hold_bars - 1, None, not b.co[g])
             ctrl = side * (cw.exit_px - cfill) / crisk
         drift_adj = gross - side * drift_per_ns * (w.t_exit - int(b.t[f])) * fill / risk
@@ -225,19 +306,26 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
     return np.array(out, float).reshape(-1, len(TRADE_COLS))
 
 
-def _pick_bar(b: Bars, f: int, seed_key: str, i: int) -> int | None:
-    tf = b.tf
-    if tf in ("1d", "1w"):
-        span = 20 if tf == "1d" else 8
-        lo, hi = max(1, f - span), min(len(b) - 1, f + span)
+def twin_candidates(b: Bars, f: int, hold_bars: int) -> np.ndarray:
+    """Bars the random-time twin of a trade filled at bar f may start at: strictly after f, and its whole hold fits in
+    the data. Intraday: the bar opening at the same time of day 1..TWIN_DAYS calendar days later (where one exists);
+    1d/1w: the next TWIN_SPAN bars."""
+    n = len(b)
+    if b.tf in TWIN_SPAN:
+        g = np.arange(f + 1, min(n, f + 1 + TWIN_SPAN[b.tf]))
     else:
-        day = int(b.t[f]) // DAY
-        lo = int(np.searchsorted(b.t, day * DAY))
-        hi = int(np.searchsorted(b.t, (day + 1) * DAY)) - 1
-        lo = max(lo, 1)
-    if hi < lo:
+        want = int(b.t[f]) + np.arange(1, TWIN_DAYS + 1, dtype=np.int64) * DAY
+        g = np.searchsorted(b.t, want)
+        g = g[g < n]
+        g = g[b.t[g] == want[: len(g)]]
+    return g[g + hold_bars - 1 < n]
+
+
+def _pick_bar(b: Bars, f: int, seed_key: str, i: int, hold_bars: int) -> int | None:
+    g = twin_candidates(b, f, hold_bars)
+    if not len(g):
         return None
-    return lo + int(_u(seed_key, b.inst, b.tf, i) * (hi - lo + 1))
+    return int(g[int(_u(seed_key, b.inst, b.tf, i) * len(g))])
 
 
 def window_drift_per_ns(b: Bars) -> float:

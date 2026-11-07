@@ -265,20 +265,24 @@ def choose_control(u: dict[str, Any], share: float) -> str:
 
 
 def unit_trades(u: dict[str, Any], win: str, ctx: Ctx, control: str | None = None, *,
-                allow_test_old: bool = False) -> tuple[pd.DataFrame, str, int]:
+                allow_test_old: bool = False) -> tuple[pd.DataFrame, str, dict[str, int]]:
+    """Trades of a unit pooled over its cells, the control used, and the counts EVAL-1 (iv) reports separately:
+    "events" (decided inside the window, each OCO leg one event), "trades" (simulated; the unit's n) and
+    "risk_floor" (events not traded because the stop was inside the risk floor)."""
     evd = unit_events(u, win, ctx, allow_test_old=allow_test_old)
     n_ev, share = long_share(evd)
     ctrl = control or choose_control(u, share)
     frames = []
+    counts: dict[str, int] = {"risk_floor": 0}
     for (inst, tf), (b, ev) in evd.items():
-        tr = simulate(b, ev, control=ctrl, seed_key=u["unit"], drift_per_ns=window_drift_per_ns(b))
+        tr = simulate(b, ev, control=ctrl, seed_key=u["unit"], drift_per_ns=window_drift_per_ns(b), counts=counts)
         if len(tr):
             df = pd.DataFrame(tr, columns=TRADE_COLS)
             df["inst"] = inst
             df["tf"] = tf
             frames.append(df)
     out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=[*TRADE_COLS, "inst", "tf"])
-    return out, ctrl, n_ev
+    return out, ctrl, {"events": n_ev, "trades": len(out), "risk_floor": counts["risk_floor"]}
 
 
 def unit_event_counts(u: dict[str, Any], win: str, ctx: Ctx) -> dict[str, int]:
