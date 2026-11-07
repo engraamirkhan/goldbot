@@ -136,6 +136,7 @@ def prebuild(win: str, all_units: list[dict[str, Any]], *, allow_test_old: bool 
             need |= {(i, t) for i in u["instruments"] for t in u["timeframes"]}
         else:
             need |= set(D.cells(u))
+    need |= {(i, "1d") for i, _ in need}            # EVAL-1 book: daily closes of every instrument (S.Market)
     gold_intra = sorted(t for i, t in need if i == "XAUUSD" and t in INTRADAY and t != "4h")
     cdir = D.cache_dir() / win
     cdir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +167,18 @@ def prebuild(win: str, all_units: list[dict[str, Any]], *, allow_test_old: bool 
 _CTX: dict[str, Any] = {}
 
 
+def _market(tr: Any, win: str, *, allow_test_old: bool = False) -> S.Market:
+    """The daily closes of the instruments a unit traded in `win` (EVAL-1 section 2 book, E9 buy-and-hold book)."""
+    w = window(win, allow_test_old=allow_test_old)
+    bars = {}
+    for inst in (sorted({str(i) for i in tr["inst"]}) if len(tr) else []):
+        try:
+            bars[inst] = D.get_bars(inst, "1d", win, allow_test_old=allow_test_old)
+        except FileNotFoundError:
+            continue                    # no closes: the book cannot be marked and E9 cannot pass (stricter)
+    return S.market_from_bars(bars, w.dec_from, w.end)
+
+
 def _init(wins: list[str], allow_test_old: bool) -> None:
     for w in wins:
         _CTX[w] = D.build_ctx(w, allow_test_old=allow_test_old)
@@ -181,8 +194,8 @@ def _explore_work(uid: str) -> dict[str, Any]:
     u = D.unit_by_id(uid)
     tr, ctrl, cnt = D.unit_trades(u, "explore", _CTX["explore"])
     pre_tr, _, _ = D.unit_trades(u, "learn_pre", _CTX["learn_pre"], control=ctrl)
-    s = S.summarize(tr)
-    pre = S.summarize(pre_tr)
+    s = S.summarize(tr, _market(tr, "explore"))
+    pre = S.summarize(pre_tr, _market(pre_tr, "learn_pre"))
     gates = S.explore_gates(s, u["timeframes"], pre)
     d = S.daily(tr).to_numpy() if len(tr) else np.zeros(0)
     tr.to_parquet(out_dir() / "trades" / f"explore_{uid}.parquet") if len(tr) else None
@@ -190,26 +203,28 @@ def _explore_work(uid: str) -> dict[str, Any]:
             "n_trades": cnt["trades"], "n_risk_floor": cnt["risk_floor"], "n_fine_miss": cnt["fine_miss"],
             "excluded_no_1m": bool(cnt["excluded_no_1m"]), "no_1m_cells": cnt["no_1m_cells"], "explore": s,
             "learn_pre": {k: pre.get(k) for k in ("n", "excess", "net", "t_excess")}, "gates": gates,
-            "pass": bool(gates) and all(gates.values()), "daily_len": int(len(d)), "secs": round(time.time() - t0, 1)}
+            "pass": S.explore_pass(gates), "daily_len": int(len(d)), "secs": round(time.time() - t0, 1)}
 
 
 def _window_work(args: tuple[str, str, str]) -> dict[str, Any]:
     uid, win, ctrl = args
     u = D.unit_by_id(uid)
     tr, _, _ = D.unit_trades(u, win, _CTX[win], control=ctrl, allow_test_old=(win == "test_old"))
-    s = S.summarize(tr)
-    d = S.daily(tr)
-    block = max(S.BOOT_BLOCK, int(s.get("lag_L", 1)))                       # quant C2
+    mk = _market(tr, win, allow_test_old=(win == "test_old"))
+    s = S.summarize(tr, mk)
+    d = S.book_daily(tr, mk)                                                # EVAL-1 section 5: the daily NET book
+    block = max(S.BOOT_BLOCK, int(s.get("book", {}).get("lag", 1)))
     p = S.block_boot_p(d.to_numpy(), block=block,
                        seed=int.from_bytes(uid.encode()[:4].ljust(4, b"0"), "big")) if len(d) else 1.0
     if len(tr):
         tr.to_parquet(out_dir() / "trades" / f"{win}_{uid}.parquet")
-    y2025 = {k: v for k, v in s.get("years", {}).items() if k == 2025}
+    y2025 = {k: v for k, v in s.get("book", {}).get("years", {}).items() if k == 2025}
     out = {"unit": uid, "window": win, "summary": s, "boot_p": p, "boot_block": block, "y2025": y2025}
     if win == "test_old" and u["family"] in EX2009_FAMILIES and len(tr):       # T4: reported, not gated
         yr = S.year_of_day(tr["t_fill"].to_numpy(np.int64) // DAY)
-        s2 = S.summarize(tr[yr != 2009])
-        out["ex_2009"] = {k: s2.get(k) for k in ("n", "net", "excess", "t_excess")}
+        s2 = S.summarize(tr[yr != 2009], mk)
+        out["ex_2009"] = {"n": s2.get("n"), "net": s2.get("net"), "excess": s2.get("excess"),
+                          "t_net": s2.get("book", {}).get("t")}
     return out
 
 
@@ -318,8 +333,8 @@ def cmd_explore(a: argparse.Namespace) -> None:
     for r in _pool(_explore_work, [u["unit"] for u in us], ["explore", "learn_pre"], a.workers):
         res.append(r)
         s = r["explore"]
-        print(f"{r['unit']:24s} trades {s.get('n', 0):7d} events {r['n_events']:7d} ex {s.get('excess', float('nan')):+.3f} "
-              f"t {s.get('t_excess', float('nan')):+.2f} net {s.get('net', float('nan')):+.3f} "
+        print(f"{r['unit']:24s} trades {s.get('n', 0):7d} events {r['n_events']:7d} net {s.get('net', float('nan')):+.3f} "
+              f"t_book {s.get('book', {}).get('t', float('nan')):+.2f} ex {s.get('excess', float('nan')):+.3f} "
               f"{'PASS' if r['pass'] else ''} {r['secs']}s", flush=True)
     res.sort(key=lambda r: r["unit"])
     nulls = [r for r in res if r["family"] == "NULL"]
@@ -330,7 +345,7 @@ def cmd_explore(a: argparse.Namespace) -> None:
     for r in res:
         if r["explore"].get("n"):
             tr = _load_trades("explore", r["unit"])
-            d = S.daily(tr).to_numpy()
+            d = S.book_daily(tr, _market(tr, "explore")).to_numpy()       # reported only (EVAL-1 C5)
             r["dsr_registry_k"] = S.deflated_sharpe(d, k_reg)
             r["dsr_k_cells"] = S.deflated_sharpe(d, len(us))
     summary = {"window": "explore", "head": head(), "n_units": len(us), "null_units": len(nulls),
@@ -363,7 +378,8 @@ def _slim(r: dict[str, Any]) -> dict[str, Any]:
     return {"n": s.get("n"), "n_trades": r.get("n_trades"), "n_events": r.get("n_events"),
             "n_risk_floor": r.get("n_risk_floor"), "excluded_no_1m": r.get("excluded_no_1m"), "gross": s.get("gross"),
             "cost": s.get("cost"), "net": s.get("net"),
-            "excess": s.get("excess"), "t_excess": s.get("t_excess"), "pass": r["pass"], "gates": r["gates"],
+            "excess": s.get("excess"), "t_excess": s.get("t_excess"), "t_book": s.get("book", {}).get("t"),
+            "pass": r["pass"], "gates": r["gates"],
             "control": r["control"]}
 
 
@@ -395,6 +411,8 @@ def cmd_confirm(a: argparse.Namespace) -> None:
         g["bh"] = bool(ok)
         r["gates"] = g
         r["pass"] = all(g.values())
+        tr = _load_trades("confirm", r["unit"])                          # section 6 (C5): DSR on the CONFIRM series
+        r["promotion"] = S.promotion_gates(S.book_daily(tr, _market(tr, "confirm")).to_numpy(), ex["k_registry"])
     out = {"window": "confirm", "head": head(), "m": len(res), "q": S.BH_Q,
            "passers": [r["unit"] for r in res if r["pass"]], "results": res}
     (out_dir() / "confirm.json").write_text(json.dumps(out, indent=1, default=float))

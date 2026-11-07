@@ -175,23 +175,26 @@ def test_gold_cost_is_the_cost_of_record() -> None:
     assert SIM.overshoot("XAUUSD", rt) == pytest.approx(0.11)
 
 
-def test_buy_every_close_null_fails_explore() -> None:
-    """A drifting market: buying every close earns gross, but the random-time same-side twin earns the same drift,
-    so the matched excess t stays below 2 and the null fails explore (A2 drift guard)."""
-    frames = []
-    for i in range(2):
-        b = synth("US500", "1d", n=2400, seed=i + 1, drift=0.0006)
+def test_buy_every_close_null_fails_explore_on_the_eval1_drift_guard() -> None:
+    """EVAL-1 precondition (ii) (C1): on a random walk with drift, the buy-every-close sentinel fails E9. It earns the
+    drift, but its alpha over the financed buy-and-hold book of the same instruments and side is not >= 1 t."""
+    frames, bars = [], {}
+    for i, inst in enumerate(("US500", "US30")):              # both index longs: the same 7 % financing as the sim
+        b = synth(inst, "1d", n=2400, seed=i + 1, drift=0.0006)
         b.meta.update(dec_from=int(b.t[260]), end=int(b.ta[-1]) + 1)
         ev = D.null_longclose(b, {}, Ctx("explore"))
         tr = SIM.simulate(b, ev, control="random_time", seed_key=f"null{i}")
         df = pd.DataFrame(tr, columns=SIM.TRADE_COLS)
-        df["inst"], df["tf"] = f"I{i}", "1d"
+        df["inst"], df["tf"] = inst, "1d"
         frames.append(df)
-    s = S.summarize(pd.concat(frames, ignore_index=True))
+        bars[inst] = b
+    m = S.market_from_bars(bars, int(bars["US500"].meta["dec_from"]), int(bars["US500"].meta["end"]))
+    s = S.summarize(pd.concat(frames, ignore_index=True), m)
     assert s["gross"] > 0
-    g = S.explore_gates(s, ["1d"], None)
-    assert not all(g.values())
-    assert not g["t_excess"]
+    g = S.explore_gates(s, ["1d"], None, years=tuple(range(2012, 2019)))
+    assert not S.explore_pass(g)
+    assert not g["E9"]
+    assert s["book"]["e9"]["long"]["beta"] > 0.3
 
 
 def test_enumerator_aborts_over_quarter_budget() -> None:
