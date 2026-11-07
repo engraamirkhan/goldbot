@@ -5,7 +5,8 @@ git-ignored `raw/daily/_long_cache/`, outputs go to `raw/daily/` (`scripts/gold_
 `scripts/long_daily_history.py`). This module holds the pure parts: loaders/parsers, the point-in-time stamps,
 the stitch and its checks, so they are unit-tested without a network.
 
-Row contract (LONG_COLUMNS): date (naive session date), open/high/low/close (NaN where a source has only a fixing),
+Row contract (LONG_COLUMNS): date (naive session date), open/high/low/close (NaN where a source has only a fixing;
+close always finite and > 0),
 source (`<provider>:<series>`), available_utc (tz-aware UTC; when the value became knowable). One row per date,
 dates strictly increasing, available_utc strictly increasing, on or after the date's 00:00 UTC and before the next
 day's end, and before the research cutoff (goldbot.data.daily.CUTOFF: the holdout stays sealed).
@@ -180,7 +181,9 @@ def to_long(df: pd.DataFrame, source: str) -> pd.DataFrame:
     out.loc[rng_bad & (out["close"] > 0), ["open", "high", "low"]] = np.nan
     out["available_utc"] = pd.DatetimeIndex(pd.to_datetime(out["available_utc"], utc=True)).as_unit("ns")
     out["source"] = source
-    out = out[np.isfinite(out["close"].to_numpy()) & (out["available_utc"] < CUTOFF)]
+    # a close must be finite and positive (log returns): a zero/negative print (a bad tick, an error placeholder,
+    # WTI 2020-04-20) is dropped here so every source and the stitch see the same rule
+    out = out[np.isfinite(out["close"].to_numpy()) & (out["close"] > 0) & (out["available_utc"] < CUTOFF)]
     out = out.drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
     return out[list(LONG_COLUMNS)]
 
@@ -292,8 +295,11 @@ def validate_long(df: pd.DataFrame) -> None:
         raise ValueError("available_utc outside [date, date + 2 days)")
     if (a >= CUTOFF).any():
         raise ValueError(f"rows at or after the research cutoff {CUTOFF}")
-    if not np.isfinite(df["close"].to_numpy(dtype="float64")).all():
+    close = df["close"].to_numpy(dtype="float64")
+    if not np.isfinite(close).all():
         raise ValueError("non-finite close")
+    if not (close > 0).all():
+        raise ValueError("non-positive close")
 
 
 def gap_report(df: pd.DataFrame, min_weekdays: int = 5) -> list[tuple[str, str, int]]:

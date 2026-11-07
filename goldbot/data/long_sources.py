@@ -39,6 +39,8 @@ LONG_ROOT = DAILY_ROOT / "long"
 UA = {"User-Agent": "Mozilla/5.0 (goldbot research; local use)"}
 YAHOO_P1 = int(pd.Timestamp("1920-01-01", tz="UTC").timestamp())
 YAHOO_P2 = int((CUTOFF - pd.Timedelta(seconds=1)).timestamp())
+# last ECB reference-rate date requested: the day before the research cutoff (the holdout stays sealed at source)
+ECB_END = f"{CUTOFF - pd.Timedelta(days=1):%Y-%m-%d}"
 
 LICENCES: dict[str, str] = {
     "dukascopy": "Dukascopy historical data: no redistribution (ADR 0048); local research only.",
@@ -62,25 +64,61 @@ def licence_for(source: str) -> str:
 # ----------------------------------------------------------------------------------------------------- download
 
 
-def fetch_cached(url: str, path: Path, refresh: bool = False, tries: int = 4) -> bytes:
-    """GET `url` once into `path` (atomic), then serve the cached bytes; exponential backoff on failure."""
+def fetch_cached(url: str, path: Path, refresh: bool = False, tries: int = 4,
+                 check: Callable[[Path], object] | None = None) -> bytes:
+    """GET `url` once into `path` (atomic), then serve the cached bytes; exponential backoff on failure.
+
+    `check` parses the downloaded file before it is cached: a body that does not parse (an HTTP-200 error page, a
+    truncated or rate-limited response) is never written to `path`, so it cannot poison every later offline run.
+    A cached file that no longer passes `check` is re-downloaded."""
     if path.exists() and path.stat().st_size > 0 and not refresh:
-        return path.read_bytes()
+        try:
+            if check is not None:
+                check(path)
+            return path.read_bytes()
+        except Exception:  # noqa: BLE001 - a bad cache entry is replaced by a fresh download
+            path.unlink(missing_ok=True)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.stem}.tmp{path.suffix}")  # keeps the suffix the parser sniffs
     err: Exception | None = None
     for k in range(tries):
         try:
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 - fixed https hosts
                 data: bytes = r.read()
-            tmp = path.with_suffix(path.suffix + ".tmp")
             tmp.write_bytes(data)
+            if check is not None:
+                check(tmp)
             tmp.replace(path)
             return data
         except Exception as e:  # noqa: BLE001 - retried, then re-raised
             err = e
+            tmp.unlink(missing_ok=True)
             time.sleep(2.0 * 2**k)
     raise RuntimeError(f"download failed after {tries} tries: {url}: {err}")
+
+
+def _nonempty(s: pd.Series | pd.DataFrame, what: str) -> None:
+    if s.empty:
+        raise ValueError(f"{what}: parsed to no rows")
+
+
+def _yahoo_check(p: Path) -> None:
+    res = json.loads(p.read_bytes())["chart"]["result"][0]
+    if not res.get("timestamp"):
+        raise ValueError("yahoo: no timestamps")
+
+
+def _bbk_check(p: Path) -> None:
+    _nonempty(parse_bbk_csv(p.read_bytes().decode("utf-8-sig")), "bbk")
+
+
+def _ecb_check(p: Path) -> None:
+    _nonempty(parse_ecb_csv(p.read_bytes().decode("utf-8")), "ecb")
+
+
+def _eia_check(p: Path) -> None:
+    _nonempty(parse_eia_xls(p), "eia")
 
 
 def yahoo(ticker: str, refresh: bool = False, stamp_hour: int = 23, stamp_minute: int = 0) -> pd.DataFrame:
@@ -89,7 +127,7 @@ def yahoo(ticker: str, refresh: bool = False, stamp_hour: int = 23, stamp_minute
     url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}"
            f"?period1={YAHOO_P1}&period2={YAHOO_P2}&interval=1d&events=history")
     name = "".join(ch for ch in ticker.lower() if ch.isalnum())
-    js = json.loads(fetch_cached(url, CACHE / f"yahoo_{name}.json", refresh))
+    js = json.loads(fetch_cached(url, CACHE / f"yahoo_{name}.json", refresh, check=_yahoo_check))
     res = js["chart"]["result"][0]
     q = res["indicators"]["quote"][0]
     tz = res["meta"].get("exchangeTimezoneName") or "America/New_York"
@@ -97,7 +135,6 @@ def yahoo(ticker: str, refresh: bool = False, stamp_hour: int = 23, stamp_minute
     df = pd.DataFrame({"date": pd.DatetimeIndex(ts.dt.tz_localize(None)).as_unit("ns").normalize(),
                        "open": q["open"], "high": q["high"], "low": q["low"], "close": q["close"]})
     df = df.dropna(subset=["close"])
-    df = df[df["close"] > 0]
     df["available_utc"] = utc_stamp(df["date"], stamp_hour, stamp_minute)
     return to_long(df, f"yahoo:{ticker}")
 
@@ -105,21 +142,22 @@ def yahoo(ticker: str, refresh: bool = False, stamp_hour: int = 23, stamp_minute
 def bbk(key: str, refresh: bool = False) -> pd.Series:
     """One Bundesbank BBEX3 daily series, e.g. `D.USD.DEM.AA.AC.000` (DEM per USD, Frankfurt fixing)."""
     url = f"https://api.statistiken.bundesbank.de/rest/data/BBEX3/{key}?format=csv&lang=en"
-    return parse_bbk_csv(fetch_cached(url, CACHE / f"bbk_{key}.csv", refresh).decode("utf-8-sig"))
+    return parse_bbk_csv(fetch_cached(url, CACHE / f"bbk_{key}.csv", refresh, check=_bbk_check)
+                         .decode("utf-8-sig"))
 
 
 def ecb(currency: str, refresh: bool = False) -> pd.Series:
     """ECB euro reference rate: units of `currency` per EUR, 1999-01-04 on."""
     url = (f"https://data-api.ecb.europa.eu/service/data/EXR/D.{currency}.EUR.SP00.A?format=csvdata"
-           "&startPeriod=1999-01-01&endPeriod=2025-09-30")
-    return parse_ecb_csv(fetch_cached(url, CACHE / f"ecb_{currency}.csv", refresh).decode("utf-8"))
+           f"&startPeriod=1999-01-01&endPeriod={ECB_END}")
+    return parse_ecb_csv(fetch_cached(url, CACHE / f"ecb_{currency}.csv", refresh, check=_ecb_check).decode("utf-8"))
 
 
 def eia(series: str, refresh: bool = False) -> pd.Series:
     """EIA daily spot series, e.g. RWTC (WTI Cushing), RBRTE (Brent), RNGWHHD (Henry Hub)."""
     path = CACHE / f"eia_{series}.xls"
     fetch_cached(f"https://www.eia.gov/dnav/pet/hist_xls/{series}d.xls" if series != "RNGWHHD"
-                 else "https://www.eia.gov/dnav/ng/hist_xls/RNGWHHDd.xls", path, refresh)
+                 else "https://www.eia.gov/dnav/ng/hist_xls/RNGWHHDd.xls", path, refresh, check=_eia_check)
     return parse_eia_xls(path)
 
 
