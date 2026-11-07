@@ -79,7 +79,7 @@ def test_nightly_costs_from_logged_ticks_and_fills(tmp_path):
     table = CostTable.load(tmp_path / "costs_icm-demo.json")
     assert table is not None and set(table.spread) >= {"london", "newyork"}
     assert not table.slippage["london:market"].from_prior and table.slippage["london:market"].mean == pytest.approx(0.04)
-    assert table.commission_per_lot_side_usd == 3.5
+    assert table.commission_per_lot_side_usd == 4.0         # the settings prior for ICM (3.5 until 2026-11-07)
     # Friday's run also classifies the account (persisted for the engine and the dashboard)
     assert row["account_class"] in {"raw", "standard", "unknown"}
     assert json.loads((tmp_path / "classifier_icm-demo.json").read_text())["class"] == row["account_class"]

@@ -83,7 +83,7 @@ def test_the_placeable_rule_is_the_engines_gate_as_the_settings_hold_it():
     assert bc.MIN_STOP_USD == pytest.approx((s.research.lot_fit_spread_points + s.research.lot_fit_stops_level_points)
                                             * 0.01)
     assert bc.placeable(100.0, 99.8, 101.5, 0.2) and not bc.placeable(100.0, 99.85, 101.5, 0.2)   # stop < $0.20
-    assert not bc.placeable(100.0, 99.0, 101.4, 0.2)                          # target < 2.5 x (0.2 + 0.37)
+    assert not bc.placeable(100.0, 99.0, 101.4, 0.2)                          # target < 2.5 x (0.2 + 0.38)
 
 
 # ------------------------------------------------------------------------------------------- crafted bars

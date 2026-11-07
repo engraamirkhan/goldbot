@@ -601,6 +601,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
                               cost_probe_scheduled=acc.cost_probe.scheduled,
+                              cost_probe_hours_utc=acc.cost_probe.hours_utc,
                               # None unless enabled (plan 2026-10-25); gold's book runs gold's arms only
                               exploration_config=exploration.book_config(exploration.config_for(acc), GOLD),
                               shadow_max_open=settings.shadow.max_open_per_agent,

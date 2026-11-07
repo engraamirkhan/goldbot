@@ -200,6 +200,7 @@ class EngineConfig(Record):
     cost_probe_max_open: int = Field(2, ge=1, le=4)     # ADR 0037 amendment 3: concurrent probe positions at most
     cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
     cost_probe_scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)   # prereg M1 arm (cost_probe.scheduled_step)
+    cost_probe_hours_utc: tuple[str, str] | None = None     # accounts CostProbe.hours_utc (amendment 2026-11-07, 4)
     exploration_config: exploration.ExplorationConfig | None = None   # plan 2026-10-25: demo probe_only arms (ADR 0043)
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"

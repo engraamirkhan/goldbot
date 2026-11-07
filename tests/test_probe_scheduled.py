@@ -589,13 +589,14 @@ def test_on_an_hourly_cadence_a_close_that_is_not_the_hours_slot_sends_and_journ
     assert len(_rows(tmp_path)) == 1
 
 
-def test_icm_probe_runs_a_probe_every_two_hours_and_vantage_keeps_every_15m_close():
+def test_icm_probe_runs_a_probe_every_two_hours_and_vantage_one_an_hour_both_in_0700_2100_utc():
     """Demo trim (cost of record 2026-10-31 section 6): ICM 24 a day, then 12 (CFO/finance 2026-11-06: every ICM session
-    already past PROBE_MIN_FILLS); Vantage kept at 40 a day until its exit legs are recorded, it has 200 strategy fills
-    per session and its london and newyork scheduled fills reach PROBE_MIN_FILLS (then every_min 120, 12 a day)."""
+    already past PROBE_MIN_FILLS). Vantage: every 15m close until prereg-amendment-2026-11-07-kill-only.md section 4,
+    then one an hour in [07:00, 21:00) UTC on both probe accounts (tests/test_kill_only_1107.py)."""
     accts = acc_mod.load_accounts(logins=False)
     assert accts["icm-probe"].cost_probe.scheduled.every_min == 120
-    assert accts["vantage-demo"].cost_probe.scheduled.every_min == 15
+    assert accts["vantage-demo"].cost_probe.scheduled.every_min == 60
+    assert accts["icm-probe"].cost_probe.hours_utc == accts["vantage-demo"].cost_probe.hours_utc == ("07:00", "21:00")
 
 
 def test_scheduled_probes_need_the_cost_probe_on():
