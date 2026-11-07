@@ -1,6 +1,6 @@
 {
  "specs_sha256": "87975f069457579242b3cc7ea9a1c3893537801a490c6dab880b43aae2211256",
- "harness_commit": "87771d810a9c3ea41cac6eceed3e7d7557631072",
+ "harness_commit": "b3f14388ff0ffb10a0596d0b09465a47bd823f08",
  "quarter": "2026Q4",
  "cap": 3500,
  "used": 3173,
@@ -538,5 +538,6 @@
    "family": "catalogue:NULL",
    "config_hash": "e77731e03a63"
   }
- ]
+ ],
+ "harness_commit_preregistered_rows": "87771d810a9c3ea41cac6eceed3e7d7557631072"
 }

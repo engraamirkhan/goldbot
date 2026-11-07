@@ -82,8 +82,10 @@ box_break_close, opening-range, Donchian/Turtle 55/20 and sweep_absorb were excl
 
 ## 6. Controls (A2) and the pass statistic
 
-- Default: random-SIDE twin at the same fill bar and price, mirrored stop/target, exit no later than the real
-  trade's exit; matched excess per trade = (real - opposite) / 2.
+- Default: random-SIDE twin at the same fill bar and price, mirrored stop/target; when the real trade exits on
+  its time cap, exit mask or the data end, the twin is capped at that bar; when the real trade exits on its stop or
+  target, the twin runs to the real trade's nominal time cap (T6: unbiased for gross under a martingale by optional
+  stopping); matched excess per trade = (real - opposite) / 2.
 - Side-biased units (explore events with long share outside 40-60 %) and the card-internal controls of
   S05/S06/S07/S08/S17/S26 (calendar or long-only rules): random-TIME same-side twin, same risk as a fraction of price,
   same target R and same bars held, entered at a seeded random bar of the same UTC day (intraday), +-20 bars (1d) or
@@ -100,7 +102,8 @@ price path or return.
 ## 8. Reading rule (decided before any return)
 
 Explore pass, ALL of:
-1. t (day-summed gross matched excess) >= 2;
+1. t (day-summed gross matched excess) >= 2, where t is the Newey-West t with the unit's overlap lag L (section 14,
+   C2; the plain t is reported beside it);
 2. own mean net R > 0 (measured costs, 1.0x);
 3. own mean gross R >= 2 x mean cost R;
 4. >= 5 of the 8 years 2010-2017 with positive summed excess;
@@ -108,15 +111,19 @@ Explore pass, ALL of:
 6. n >= 300 trades when every timeframe of the unit is 1d/1w, else n >= 1,000;
 7. learn_pre (2003-05..2005) mean excess of the same sign, where learn_pre has >= 60 trades (else not required).
 
-Void: if the null units pass explore more often than the binomial 99 % quantile at 5 % the whole run is
-VOID: no CONFIRM read, reported as void, nothing continues. With 11 nulls the bound is 3 (P(X <= 3) = 0.998 at 5 %):
-4 or more null passes void the run.
+Void (amended, section 14 C1): the run is VOID (no CONFIRM read, reported as void, nothing continues) when
+k or more of the random nulls whose explore events reach their n floor pass explore, with k the smallest count with
+P(X >= k) <= 0.02 at 5 % (today 4 feasible nulls: NULL-RAND-5m, -15m, -4h, NULL-XS-RANDOM, so k = 2, P = 0.014),
+OR when any buy-every-close sentinel (NULL-LONGCLOSE-*) passes (a harness defect). The four nulls that cannot reach
+their floor (NULL-RAND-30m, -1h, -1d, -1w) stay registered (K is conservative) and are reported as "cannot reach the
+floor".
 
 CONFIRM (explore passers only, read once): Benjamini-Hochberg q = 0.10 over the m explore passers on the one-sided
-moving-block (5-day) bootstrap p of the daily excess; AND >= 5 of the 7 full years 2018-2024 with positive summed
+moving-block (block = max(5, L) fill days, C2) bootstrap p of the daily excess; AND >= 5 of the 7 full years 2018-2024 with positive summed
 excess; AND own net > 0. 2025-01..09 is reported separately and is not gated.
 
-TEST-OLD (CONFIRM passers only): n >= 60, net > 0, t (day-summed excess) >= 1.28.
+TEST-OLD (CONFIRM passers only): n >= 60, net > 0, t (day-summed excess, Newey-West with lag L) >= 1.28. For
+S11/S15/S16/S27/S30 TEST-OLD is also reported excluding 2009 (T4; reported, not gated).
 
 Decision:
 - **Zero CONFIRM passers closes the line today (11-07): no re-run, widening, renaming or neighbour variants.** The
@@ -131,7 +138,8 @@ Decision:
 
 ## 9. Registered units
 
-Frozen: harness commit `87771d810a9c3ea41cac6eceed3e7d7557631072`, specs.yaml sha256
+Frozen: harness commit `b3f14388ff0ffb10a0596d0b09465a47bd823f08` (re-frozen after the quant amendments, section 14; the
+registry rows were written against `87771d81` and carry over), specs.yaml sha256
 `87975f069457579242b3cc7ea9a1c3893537801a490c6dab880b43aae2211256`, unit list
 `docs/research/catalogue-units-2026-11-07.json` (sha256 `52021f2a...b0fa1d7701`, one `config_hash` per unit; the
 registry rows carry the same hashes). 90 units: 79 real across 30 families + 11 null. The run refuses to start if the catalogue code differs from that
@@ -369,5 +377,51 @@ matter most:
 ## 13. Signature
 
 - Pre-registration commit: (this file's commit)
-- Harness commit: `87771d81` (code under goldbot/research/catalogue; the run refuses any other)
+- Harness commit: `b3f14388` (code under goldbot/research/catalogue; the run refuses any other)
 - quant-reviewer: ______________________ (UTC time) ______
+
+## 14. Amendments before the run (quant sign-off 2026-11-07 09:45 UTC, SIGN-WITH-CHANGES)
+
+Landed 2026-11-07 before any return was computed. They change no K, registry row, unit, config hash, threshold or
+window. Harness re-frozen at `b3f14388ff0ffb10a0596d0b09465a47bd823f08`; specs.yaml unchanged (sha256 `87975f06...2211256`).
+
+- **C1 null void rule** (stats.null_void, run.cmd_explore; test_null_void_rule): as in section 8. Reason: four of
+  the eleven nulls cannot reach their n floor and the three LONGCLOSE units are drift sentinels, so the original
+  bound (void at 4 of 11) only fired if all four feasible nulls passed.
+- **C2 overlapping holds** (stats.overlap_lag, stats.hac_t, run._window_work; tests test_hac_t_on_overlapping_holds,
+  test_overlap_lag_from_holds): L = max(1, ceil(median nights held x fill days / calendar span in days)); the gated t
+  (explore gate 1 and TEST-OLD) is the Newey-West t; bootstrap block = max(5, L). Deviation from the sign-off's
+  "lag L": the Bartlett kernel uses bandwidth 2L, because a Bartlett window of L understates an MA(L) long-run
+  variance by about 30 % (t about 20 % too large) and fails the sign-off's own 15 % test; 2L passes it. At L = 1 the t
+  is the plain t exactly.
+- **C3 sprint3000 fixture** (test_sim_reproduces_sprint3000_fixture): a gap through the stop (filled at the open), a
+  short target hit and a Thursday-22:00 to Monday-21:00 hold; gross R equals sprint3000.engine.walk exactly; costs
+  are checked against hand values (the conventions differ: sprint3000 uses a bps-scaled round trip and a Wednesday
+  triple swap; the catalogue uses the USD cost of record and one swap per 21:00 UTC rollover crossed). The test
+  found a defect, fixed here: an exit exactly AT 21:00 UTC was charged that night's rollover (one extra swap night
+  on every daily-close exit; conservative, about 0.7 bp a trade). Nights now count rollovers strictly before the
+  exit.
+- **C4 S17 seasonal history**: outside the TEST-OLD read, monthly returns of 2006-02..2009-12 are masked from the
+  same-month history (test_s17_history_masks_test_old_months: changing any monthly return in that span leaves the
+  explore events unchanged). S17 explore events recounted (counts only): V0 625 -> 646, V1 1,194 -> 1,054,
+  V2 599 -> 536; all stay above their 300 floor. The t >= 1.645 fallback is not needed.
+- **T1 feasibility drop**: ruled sound (counts only; events bound trades). The 73 dropped variants are closed with
+  this line under the kill rule. They return only under a new card counted in K, never as "untested".
+- **T2 low-N conflict**: the plan floor governs this screen. S12/S18/S19/S25/S29 are not run and carry no K. A later
+  low-N card needs its own K and floors and must state that at 1-8 trades a year it cannot meet the DESIGN gate
+  (DSR >= 0.95 on 200+ trades), so its ceiling is a demo learning arm or a feature; the quant recommends the
+  research-director deprioritise them.
+- **T3 card deviations**: accepted and disclosed; the verdict reads "failed as implemented". Stop-first and the OCO
+  full loss on daily OHLC are conservative (about -0.05 to -0.15 R a trade on S20/S21); no 1m path for gold daily is
+  conservative; no breakeven/trail goes either way; the S02/S04 4h cash session carries up to 1 h of DST error
+  (noise, no look-ahead). A fail of S06/S07/S17 is a fail against an attenuated nearby-time control; a pass is
+  valid. The kill rule still applies.
+- **T4 warm-up**: not contamination of TEST-OLD apart from S17 (C4). TEST-OLD is also reported excluding 2009 for
+  S11/S15/S16/S27/S30 (reported, not gated).
+- **T5 control choice**: sound (side share only, fixed on explore, reused).
+- **T6**: section 6 twin text corrected to the code's behaviour.
+- **T7 re-freeze**: new harness commit above; `catalogue-units-2026-11-07.json` `harness_commit` updated; enumerate
+  was NOT re-run; Q4 registry rows = 3,263 after the re-freeze (checked); the 90 pre-registration rows (plan field
+  `harness_commit` = 87771d81) carry over.
+- Also recorded: passing this screen does NOT meet the DESIGN gates for real money (3 positive years including
+  2021-22, DSR >= 0.95 on 200+ trades); WS-5 cards are demo learning arms only.
