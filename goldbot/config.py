@@ -852,6 +852,20 @@ class ShadowSettings(_Section):
     max_open_per_agent: int = Field(default=3, ge=1, le=10)
 
 
+INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
+
+
+class EngineSettings(_Section):
+    """1d and 1w exploration arms (WS-4, consolidated plan 2026-11-07: "ships dark unless two conditions hold": the
+    7-day replay gives an identical decision set for every existing arm AND a CONFIRM passer passes lot-fit). An arm
+    whose timeframe is not in `timeframes_live` is held as retired from the start (no entry, exits managed). A 1d/1w
+    arm warms up from the long daily history under `long_history_dir` (`bars/<symbol>_1d.parquet`, else
+    `long/<symbol>_daily_long.parquet`; engine/long_bars.py), read point in time; a missing file or a history that
+    does not reach the engine's window keeps the arm quiet (`history_gap:<tf>`), never a crash."""
+    timeframes_live: list[Timeframe] = Field(default_factory=lambda: list(INTRADAY_LIVE))
+    long_history_dir: str = "raw/daily"
+
+
 class Mt5LoginSettings(_Section):
     """MT5 terminal login from the keyring (goldbot/ops/login.py; owner directive 2026-10-20: "MT5 terminal logins on
     the boxes must happen without the owner (no VNC step)"). Used by `goldbot-mt5 login <account>`, by the bridge when
@@ -906,6 +920,7 @@ class Settings(_Section):
     observe: ObserveSettings = Field(default_factory=ObserveSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
+    engine: EngineSettings = Field(default_factory=EngineSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)

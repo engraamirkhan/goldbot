@@ -99,7 +99,8 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry, cost_probe, entry_refusals, weekend_lane
+from goldbot.engine import auto_entry, cost_probe, entry_refusals, long_bars, weekend_lane
+from goldbot.engine.long_bars import LONG_TFS, LongHistory, is_bar_close
 from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.ops.accounts import DailyEntries
@@ -618,6 +619,16 @@ class Exploration:
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
                                   "arm": a, "rule": self.unqualified[a]})
         self.retired = self.retired | frozenset(self.unqualified)
+        # WS-4 (plan 2026-11-07): an arm whose timeframe is not in settings engine.timeframes_live (1d/1w ship dark) is
+        # held as a retirement is (no new entry, exits managed); journalled once each at start
+        live = set(eng.cfg.timeframes_live)
+        for a in sorted(k for k, v in self.arms.items() if v.tf not in live and k not in self.retired):
+            log.warning("exploration arm %s (%s) dark: its timeframe is not in engine.timeframes_live", a,
+                        self.arms[a].tf)
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_dark", "arm": a,
+                                  "tf": self.arms[a].tf})
+            self.retired = self.retired | {a}
+        self.long: LongHistory | None = None            # the 1d/1w warm-up, read at their first close (long_bars)
         # ADR 0061 amendment 2026-11-01: each owner experiment running under its exemption, journalled once at start
         # with its last day (`research.arms.OWNER_EXPERIMENTS`); its expiry is re-read once a minute
         for a in sorted(k for k, v in self.arms.items() if v.spec.role == "owner_experiment" and k not in self.retired):
@@ -867,12 +878,15 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
     if not arms or eng.bars_1m.empty:
         return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
+    if any(a.tf in LONG_TFS for a in arms):            # 1d/1w: their warm-up and their own closes (long_bars)
+        long_bars.step(eng, ex, [a for a in arms if a.tf in LONG_TFS], complete, close_ts)
+        arms = [a for a in arms if a.tf not in LONG_TFS]
     for arm in (a for a in arms if a.arm_id in ex.needs_context):
         _with_context(eng, ex, arm, complete, close_ts)
     arms = [a for a in arms if a.arm_id not in ex.needs_context]
     # one resample per timeframe (`_shared_bars`), one slice per lookback, shared by the arms that read it
     for tf in sorted({a.tf for a in arms}, key=tf_seconds):
-        if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
+        if not is_bar_close(tf, close_ts):
             continue
         group = [a for a in arms if a.tf == tf]
         ns = sorted({lookback(a.spec) for a in group})
@@ -943,7 +957,7 @@ def _with_context(eng: Engine, ex: Exploration, arm: Arm, complete: pd.DataFrame
     or held back (`exploration_held_back`, journalled once each time the reason changes) and nothing queued. A
     retired arm reads nothing."""
     from goldbot.engine.exploration_context import NO_BAR
-    if arm.arm_id in ex.retired or (arm.tf != "1d" and int(close_ts.timestamp()) % tf_seconds(arm.tf)):
+    if arm.arm_id in ex.retired or not is_bar_close(arm.tf, close_ts):
         return
     got = ex.context.inputs(arm.spec, complete, close_ts)
     if isinstance(got, str):

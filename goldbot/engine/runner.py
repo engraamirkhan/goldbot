@@ -27,7 +27,7 @@ from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, load_record_json, schema_skew_summary
-from goldbot.config import tf_seconds
+from goldbot.config import INTRADAY_LIVE, tf_seconds
 from goldbot.data.calendar import (
     DEFAULT_SESSIONS,
     PauseWindow,
@@ -220,6 +220,8 @@ class EngineConfig(Record):
     # broker commission per lot per side, USD, until the cost table measures it (ADR 0075; 0 = none configured)
     commission_per_lot_side_usd: float = Field(0.0, ge=0)
     max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
+    timeframes_live: tuple[str, ...] = INTRADAY_LIVE   # settings engine.timeframes_live: 1d/1w ship dark (WS-4)
+    long_history_dir: str | None = None   # settings engine.long_history_dir: the 1d/1w warm-up (long_bars)
     feature_window: int = 800            # decision bars the features are computed on
     # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
     backfill_max_days: int = Field(30, ge=0, le=30)

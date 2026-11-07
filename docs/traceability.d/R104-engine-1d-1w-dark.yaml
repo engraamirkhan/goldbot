@@ -1,0 +1,5 @@
+id: R104
+requirement: '"1d closes at 21:00 UTC. ''1w'' added to the Timeframe literal and TF_SECONDS. Warm-up from the long daily history via asof on available_utc. The 1w decision runs as a fresh decision on the first pass after the week opens ... A Fri 21:00 decision is refused as ''weekend'' and is never queued." Ships dark unless the 7-day replay is identical for every existing arm (consolidated plan 2026-11-07, WS-4)'
+status: implemented (dark)
+code: 'goldbot/engine/long_bars.py; goldbot/engine/exploration.py `step`, `Exploration.__init__` (exploration_arm_dark); goldbot/config.py `EngineSettings` (engine.timeframes_live, engine.long_history_dir); goldbot/engine/runner.py `EngineConfig`; goldbot/ops/services/engine.py'
+test: tests/test_engine_long_tf.py; tests/test_engine_replay_identity.py::test_the_seven_day_replay_of_the_existing_15m_1h_4h_arms_is_byte_identical_to_the_golden; ::test_dark_1d_and_1w_arms_leave_every_existing_arms_replay_byte_identical; ::test_live_1d_and_1w_arms_with_their_warm_up_leave_every_existing_arms_replay_byte_identical
