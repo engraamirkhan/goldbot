@@ -105,6 +105,52 @@ def test_a_stale_input_day_writes_no_row():
         har.forecast(har.mid_1h(gap), cut, CFG, now=TUE_SLOT)
 
 
+def _closed_day(bars: pd.DataFrame, day: str) -> pd.DataFrame:
+    """`bars` without the opportunity day `day` (D-1 22:00 to D 22:00 UTC): a full CME closure."""
+    d = pd.Timestamp(day, tz="UTC")
+    return bars[~((bars["ts_utc"] >= d - pd.Timedelta(hours=2)) & (bars["ts_utc"] < d + pd.Timedelta(hours=22)))]
+
+
+@pytest.mark.parametrize("slot, closed, day, last", [
+    ("2025-04-18 22:05", "2025-04-18", "2025-04-21", "2025-04-17"),    # Good Friday -> Monday
+    ("2024-12-25 22:05", "2024-12-25", "2024-12-26", "2024-12-24"),    # Christmas (Wednesday) -> Thursday
+    ("2025-01-01 22:05", "2025-01-01", "2025-01-02", "2024-12-31"),    # New Year (Wednesday) -> Thursday
+], ids=["good_friday", "25_dec", "1_jan"])
+def test_the_day_after_a_full_close_holiday_gets_a_row(slot, closed, day, last):
+    """Review (quant): the input is fresh when every weekday between the last input day and the forecast day is a
+    gold full-close holiday (Good Friday, 25 Dec, 1 Jan; goldbot/data/cme_holidays.py)."""
+    at = pd.Timestamp(slot, tz="UTC")
+    row = har.forecast(har.mid_1h(_closed_day(BARS, closed)), har.cut_off(at), CFG, now=at)
+    assert row.for_day == pd.Timestamp(day).date() and row.last_input_day == pd.Timestamp(last).date()
+
+
+def test_the_monday_after_good_friday_gets_a_row():
+    at = pd.Timestamp("2025-04-18 22:05", tz="UTC")
+    row = har.forecast(har.mid_1h(_closed_day(BARS, "2025-04-18")), har.cut_off(at), CFG, now=at)
+    assert row.for_day == pd.Timestamp("2025-04-21").date()
+
+
+def test_a_missing_ordinary_weekday_before_a_holiday_is_still_stale():
+    """Thursday 2025-04-17 is missing too: only the holiday itself may be skipped."""
+    at = pd.Timestamp("2025-04-18 22:05", tz="UTC")
+    bars = _closed_day(_closed_day(BARS, "2025-04-18"), "2025-04-17")
+    with pytest.raises(har.HarUnavailable, match="stale"):
+        har.forecast(har.mid_1h(bars), har.cut_off(at), CFG, now=at)
+
+
+def test_the_gap_window_reaches_back_over_the_atr_warm_up_of_the_first_har_lookback_day():
+    """Review: w = W / ATR(20) shifted, so the HAR(22) lookback's first day reads ATR_DAYS more input days."""
+    from goldbot.features import day_type as dt
+    days = pd.bdate_range("2024-01-01", periods=300)
+    days = days.where(np.arange(300) < 16, days + pd.Timedelta(days=14))     # a 14-day hole between rows 15 and 16
+    inputs = pd.DataFrame({"day": days})
+    cfg = CFG.model_copy(update={"trailing_days": 250})
+    first = 300 - 250
+    assert first - max(dt.HAR_LAGS) - dt.ATR_DAYS <= 15 < first - max(dt.HAR_LAGS)
+    with pytest.raises(har.HarUnavailable, match="gap"):
+        har._check_gaps(inputs, np.arange(300), cfg)
+
+
 def test_too_few_trailing_forecasts_write_no_row():
     with pytest.raises(har.HarUnavailable, match="trailing"):
         har.forecast(har.mid_1h(BARS), har.cut_off(TUE_SLOT), CFG.model_copy(update={"trailing_days": 5000}),
@@ -212,6 +258,27 @@ def test_a_job_without_bars_fails_and_writes_nothing(tmp_path):
     with pytest.raises(har.HarUnavailable):
         har.run_job(_ctx(tmp_path, _Store(pd.DataFrame(), pd.DataFrame())), TUE_SLOT, now=TUE_SLOT)
     assert har.latest_row(Database.open(str(tmp_path), "aux"), TUE_SLOT + pd.Timedelta(days=1)) is None
+
+
+def test_a_retry_slot_runs_the_same_job_at_2235_and_keeps_the_first_row(tmp_path):
+    """Review: a second slot (har_days_retry, 22:35 UTC) writes the row when 22:05 failed; INSERT OR IGNORE keeps a
+    row the first slot already wrote."""
+    from goldbot.config import load_settings
+    from goldbot.ops.jobs import JOBS
+    s = load_settings().scheduler.har_days_retry
+    assert JOBS["har_days_retry"] is JOBS["har_days"] and s.kind == "daily" and s.at == "22:35"
+    store = _split()
+    first = har.run_job(_ctx(tmp_path, store), TUE_SLOT, now=TUE_SLOT)
+    retry_slot = TUE_SLOT.normalize() + pd.Timedelta(hours=22, minutes=35)
+    again = har.run_job(_ctx(tmp_path, store), retry_slot, now=retry_slot)
+    assert first["written"] and not again["written"] and again["for_day"] == first["for_day"]
+
+
+def test_n3_ships_disabled_until_the_k_row_and_the_overlap_measurement():
+    """Quant R7: research.har_abstention.enabled is false by default and in config/settings.yaml."""
+    from goldbot.config import load_settings
+    assert HarAbstentionSettings().enabled is False
+    assert load_settings().research.har_abstention.enabled is False
 
 
 def test_the_job_is_scheduled_after_the_daily_close():

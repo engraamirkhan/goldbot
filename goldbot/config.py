@@ -289,6 +289,9 @@ class SchedulerSettings(_Section):
     # close (goldbot/research/har_abstention.py); before the winter reopen at 23:00. A missed night refuses learning
     # entries (har_unavailable), so it runs once late and on first sight
     har_days: ScheduleSettings = ScheduleSettings(kind="daily", at="22:05", max_late_hours=20, run_if_never_run=True)
+    # the same job 30 min later: writes the row when 22:05 failed (a late bar, a busy store); INSERT OR IGNORE keeps a
+    # row 22:05 already wrote
+    har_days_retry: ScheduleSettings = ScheduleSettings(kind="daily", at="22:35", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -409,7 +412,7 @@ class HarAbstentionSettings(_Section):
     days (trailing 250-day quintiles, computed at 22:00 UTC from closed daily bars)". The fit reads only rows whose
     target day closed in [fit_from, fit_to); fit_to never passes research.holdout_from (checked in ResearchSettings).
     `enabled: false` makes the job write an `off` row: from it the engine refuses nothing (the kill path)."""
-    enabled: bool = True
+    enabled: bool = False                             # quant R7: on after the K row and the overlap check
     broker: str = "icm"                               # the canonical gold feed after the release (bars_1m_live source)
     fit_from: date = date(2015, 1, 1)
     fit_to: date = date(2025, 10, 1)                  # exclusive; at most the holdout start

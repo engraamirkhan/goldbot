@@ -166,6 +166,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:har_days_retry",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:limits_job",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -616,6 +621,11 @@
   ],
   [
    "job:har_days",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:har_days_retry",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],

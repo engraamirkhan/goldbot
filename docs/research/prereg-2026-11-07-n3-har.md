@@ -4,10 +4,11 @@ Status: **registered before any outcome**, with the release that carries `goldbo
 plan 2026-11-07, WS-6; card N-3 of docs/research/novel-techniques-2026-11-07.md). Kill-only: the rule can only refuse
 an entry. Family `novel:2026-11`, **K +1** (N-3). N-1a adds **K +0** (section 6).
 
-## 1. Hypothesis and why it is a cost rule, not an edge claim
+## 1. Hypothesis: a conditional-gross claim, not an edge claim
 
-On a day whose predicted range is low, cost per R is highest and the learning arms' gross is about zero, so standing
-aside on the bottom quintile of predicted range keeps that day's cost. The predictor is H-16's HAR baseline, the only
+On a day whose predicted window range relative to ATR is low, learning arms' gross per trade is expected to be lower
+than on other days while costs are unchanged; standing aside saves that day's net loss. This is a conditional-gross
+claim, tested by the per-candidate comparison in §4. The predictor is H-16's HAR baseline, the only
 range input that survived the H-16 screen (quintile ratio 1.165; the forward quintile split held in all 6 OOS years).
 No direction is read.
 
@@ -15,7 +16,8 @@ No direction is read.
 
 - Inputs: gold 1h mid bars of the release feed (`bars_1h`, source dukascopy) up to the first minute of the canonical
   broker's own feed (`bars_1m_live`, source `research.har_abstention.broker`, ICM), that feed from it on: one feed
-  per span, one cut-over (engine/history.py's rule). Only minutes visible at the cut-off are read.
+  per span, one cut-over (engine/history.py's rule). Only minutes visible at the cut-off are read. The cut-over
+  between the Duka release and ICM's first minute must be contiguous.
 - Cut-off: the latest opportunity-day close (22:00 UTC) at or before the job's slot. **Nothing after it is read.**
 - Daily inputs, HAR regressors and the forecast are `features.day_type`'s (H-16): `hat` = exp(b0 + b1 ln w1 + b5 ln w5
   + b22 ln w22) for the next trading opportunity day.
@@ -27,8 +29,15 @@ No direction is read.
 - A row is written only when the last stub-free input day is the trading day before the forecast day, the fit has at
   least 500 rows, 250 trailing forecasts exist and no two consecutive input days across those 250 forecasts and their
   HAR(22) lookback are more than 4 calendar days apart (`max_gap_days`; a Thursday -> Monday holiday is 4; a longer gap
-  is a data hole); otherwise the job fails and writes nothing, and the alert is the scheduler's nightly job-failure
-  health alert (`job:har_days` FAIL).
+  is a data hole; the window reaches back over the ATR(20) warm-up of the lookback's first day too); otherwise the job
+  fails and writes nothing, and the alert is the scheduler's nightly job-failure health alert (`job:har_days` FAIL).
+  A second slot (`har_days_retry`, 22:35 UTC) runs the same job again; the first row written is kept.
+- Fresh input: the last stub-free input day is the trading day before the forecast day, or every weekday strictly
+  between them is a gold full-close holiday (Good Friday, 25 Dec, 1 Jan; CME metals full closures,
+  goldbot/data/cme_holidays.py).
+- Before the first `ok` row, the data-engineer measures on the Duka/ICM overlap days: median ln(ICM/Duka) of daily TR,
+  W and w. If |median ln ratio of w| > 0.02, N-3 does not start until amended. The read reports the realised low-day
+  rate; outside 12-28% (binomial band for 20 days ~ 4 +/- 3.6) the window is void and re-run.
 - First row wins: a later run for the same day never changes a row that was already available (point in time).
 
 ## 3. The rule (engine, `refusals_novel`, registered in `entry_refusals.REFUSALS`)
@@ -49,7 +58,10 @@ No direction is read.
 - Not registered while no row exists (the job never ran on this host): N-3 then refuses nothing (signed plan: "If the
   nightly HAR job has not written a row by the dry run, N-3 is not registered tonight ... and moves to Wed").
 - Off switch: `research.har_abstention.enabled: false` makes the job write an `off` row; from its availability the
-  rule refuses nothing. That is the kill path.
+  rule refuses nothing. That is the kill path. The release ships with `enabled: false` (quant R7).
+- If `har_days` fails 3 consecutive weekday nights, the research director sets `research.har_abstention.enabled:
+  false` (off row: nothing refused) within 24 h, logs the cause, and the 20-day read restarts after the fix and a fresh
+  `ok` row.
 - Order: window_0207, f1_pit, learning_icm_only, har_unavailable, har_low_range. A signal inside 02:00-07:00 UTC is
   counted as window_0207, so N-3's saving excludes the overlap with the 02-07 block.
 
@@ -57,15 +69,22 @@ No direction is read.
 
 - Saving = minus the summed net (GBP at the arm's size, measured costs) of the `har_low_range` shadow candidates as
   labelled by `exploration_data.label_candidates`; per week = saving / weeks.
-- Fill change = learning fills per session day in the window vs the 20 session days before it, all accounts.
-- **Pass**: saving >= GBP 25/week and learning fills on non-low days unchanged (within 10 %).
-- **Kill** (signed plan): learning fills fall by more than 25 %, or saving < GBP 10/week. Between the two: continue
-  one more 20-day window, then kill unless it passes.
+- Fill change is measured on session days with an `ok`, non-low row, excluding 02:00-07:00 UTC, against the same
+  subset of the prior 20 session days with the same arms active. Kill if it falls more than 25%. `har_unavailable`
+  days are reported separately and excluded from both fill and saving.
+- **Pass**: saving >= GBP 25/week and learning fills on non-low days unchanged (within 10 %), and the mean net per
+  candidate (GBP, measured costs) of `har_low_range` shadow candidates is below the mean net per candidate on non-low,
+  non-unavailable days of the same arms in the same window, with a day-clustered one-sided bootstrap p < 0.10 (10,000
+  resamples of days). Without this the rule is read as 'no HAR effect' and killed, whatever the saving.
+- With about 4 low days per 20-day window the read is low-powered; a continue is the expected outcome, not a pass.
+- **Kill** (signed plan): the fill change above falls by more than 25 %, or saving < GBP 10/week. Between the two:
+  continue one more 20-day window, then kill unless it passes.
 - A pass is never evidence of an edge for any arm; it keeps a cost rule.
 
 ## 5. Integrity
 
 - Holdout >= 2025-10-01: no fit row, no quantile fit; only inference regressors from live minutes.
+- q20 is taken over forecasts of holdout-period days: inference on bars, no label or outcome read; not evidence.
 - The demo outcomes of refused candidates are read only for this rule's saving, never for any arm's qualification.
 - No parameter (quantile, 250 days, fit window) changes after the first row without a new amendment and K row.
 
@@ -89,3 +108,5 @@ No direction is read.
   The K row is not written to the research registry by this change; it is written at sign-off, before the first `ok`
   row, by the research director.
 - trading-safety-reviewer: **pending** (entry-only refusals; fail-closed `har_unavailable`).
+- The research director writes the registry row (family novel:2026-11, unit N-3, K+1) before the deploy that carries
+  `har_days`; until it exists `enabled` stays false.

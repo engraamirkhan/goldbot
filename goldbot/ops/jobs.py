@@ -1584,6 +1584,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "autodisc_nightly": autodisc_nightly,         # ADR 0058 phase 2 discovery search (off unless enabled; Mac only)
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
+    "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
 }
 
 

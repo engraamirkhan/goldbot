@@ -21,8 +21,9 @@ only". A new learning twin enters only by a prereg amendment (a test pins the se
   (research.har_abstention.enabled false, the kill path) nothing is refused either.
 * `har_low_range` (N-3): the day's row says low (forecast <= the trailing 250 forecasts' 20 % quantile): refused.
 
-The decision time is the signal bar's close (`Pending.bar_ts`), its day the opportunity day rolling at 22:00 UTC. An
-unreadable table raises, and the hook refuses as `refusal_error:<name>`.
+The decision time is the rule's decision close (`Pending.decision_utc`, else the signal bar's close `bar_ts`), its
+day the opportunity day rolling at 22:00 UTC. An unreadable table raises, and the hook refuses as
+`refusal_error:<name>`.
 """
 from __future__ import annotations
 
@@ -68,8 +69,9 @@ def in_scope(eng: Engine, arm: Arm) -> bool:
 
 
 def _decision(s: Pending) -> pd.Timestamp:
-    t = pd.Timestamp(s.bar_ts)
-    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+    """The rule's own decision close (`decision_utc`, else `bar_ts`): one definition with the other refusals."""
+    from goldbot.engine.entry_refusals import _decision_utc
+    return _decision_utc(s)
 
 
 def learning_icm_only(eng: Engine, arm: Arm, s: Pending) -> bool:
@@ -99,6 +101,7 @@ def har_unavailable(eng: Engine, arm: Arm, s: Pending) -> bool:
     if at - har.cut_off(at) < WARN_GRACE:
         return True
     key = (str(getattr(eng.cfg, "account_id", "")), har.signal_day(at))
+    _warned.difference_update({k for k in _warned if k[1] < key[1]})      # days already past: bounded memory
     if key not in _warned:
         _warned.add(key)
         log.warning("har_days has no row for %s on %s: learning entries refused (har_unavailable)", key[1], key[0])

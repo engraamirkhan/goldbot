@@ -179,6 +179,28 @@ def test_in_the_first_30_minutes_after_the_cut_off_a_missing_row_refuses_without
     assert [r.levelname for r in caplog.records] == ["WARNING"]
 
 
+def test_the_decision_time_is_the_rules_decision_close_when_the_signal_was_released_later(tmp_path):
+    """Code review: a shifted XC15 keeps its decision close in `decision_utc` (entry_refusals._decision_utc): a
+    Monday 21:45 decision released at 22:15 belongs to Monday's opportunity day, not Tuesday's."""
+    eng = _eng(tmp_path, ARMS)
+    _write(eng, _row("2025-03-03", low=True, available=MON_CLOSE - pd.Timedelta(days=1)),
+           _row("2025-03-04", available=MON_CLOSE - pd.Timedelta(days=1)))
+    arm = eng.exploration.arms[LEARN]
+    s = Pending(arm_id=arm.arm_id, side=1, bar_ts=MON_CLOSE + pd.Timedelta(minutes=15), stop_usd=5.0,
+                target_usd=10.0, hold_bars=4, decision_utc=MON_CLOSE - pd.Timedelta(minutes=15))
+    assert refusals_novel.har_low_range(eng, arm, s)
+
+
+def test_warned_days_older_than_the_signal_day_are_pruned(tmp_path, monkeypatch):
+    monkeypatch.setattr(refusals_novel, "_warned", {("", pd.Timestamp("2025-02-01").date()),
+                                                    ("", pd.Timestamp("2025-03-03").date())})
+    eng = _eng(tmp_path, ARMS)
+    _write(eng, _row("2025-03-03"))
+    arm = eng.exploration.arms[LEARN]
+    assert refusals_novel.har_unavailable(eng, arm, _sig(arm, TUE + pd.Timedelta(hours=10)))
+    assert refusals_novel._warned == {("", TUE.date())}
+
+
 def test_a_row_written_after_the_decision_time_is_not_read_point_in_time(tmp_path):
     eng = _eng(tmp_path, ARMS)
     _write(eng, _row("2025-03-03"), _row("2025-03-04", low=True, available=TUE + pd.Timedelta(hours=11)))

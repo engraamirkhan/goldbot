@@ -11,10 +11,11 @@ Design rules, as built here:
   holdout start (checked at load): the holdout trains nothing; recent days enter only as regressors.
 * Low day: hat <= the `quantile` (0.2) of the `trailing_days` (250) forecasts emitted before it by the same fit.
 * "A missing or stale HAR row gives har_unavailable plus an alert (fails closed)": a stale input (the last stub-free
-  day is not the trading day before the forecast day), a short fit, a short trailing window or a hole in it (two
-  consecutive input days more than `max_gap_days` apart, across the trailing forecasts and their HAR(22) lookback)
-  raise `HarUnavailable`; the job then fails (the scheduler's job-failure health alert) and writes nothing, and the
-  engine refuses learning entries that day.
+  day is not the trading day before the forecast day, unless only gold full-close holidays lie between them), a short
+  fit, a short trailing window or a hole in it (two consecutive input days more than `max_gap_days` apart, across the
+  trailing forecasts, their HAR(22) lookback and its ATR(20) warm-up) raise `HarUnavailable`; the job then fails (the
+  scheduler's job-failure health alert) and writes nothing; `har_days_retry` runs it again at 22:35 UTC. Without a
+  row the engine refuses learning entries that day.
 * Point in time in the table: one row per (day, status), the first kept (`INSERT OR IGNORE`); `available_ns` is when
   it was written, and the engine reads only rows available at the signal's decision time.
 * `enabled: false` writes an `off` row for the next trading day: from its availability the engine refuses nothing
@@ -87,6 +88,19 @@ def _previous_trading_day(day: date) -> date:
     return d.date()
 
 
+def _fresh(last: date, day: date) -> bool:
+    """The last input day is the trading day before `day`, or every weekday strictly between them is a gold
+    full-close holiday (Good Friday, 25 Dec, 1 Jan; CME metals `full` closures, data/cme_holidays.py)."""
+    from goldbot.data.cme_holidays import cme_metals_holidays
+    if last == _previous_trading_day(day):
+        return True
+    if last >= day:
+        return False
+    between = pd.bdate_range(pd.Timestamp(last) + pd.Timedelta(days=1), pd.Timestamp(day) - pd.Timedelta(days=1))
+    full = {d for y in {last.year, day.year} for d, c in cme_metals_holidays(y).items() if c.kind == "full"}
+    return all(d.date() in full for d in between)
+
+
 def mid_1h(bars: pd.DataFrame) -> pd.DataFrame:
     """ts_utc, visible_at and mid OHLC of bid/ask bars (hourly or finer), aggregated to UTC hours."""
     cols = ["ts_utc", "visible_at", "open", "high", "low", "close"]
@@ -150,10 +164,11 @@ def frozen_fit(inputs: pd.DataFrame, cfg: HarAbstentionSettings) -> dt.HarFit:
 
 def _check_gaps(inputs: pd.DataFrame, finite: np.ndarray, cfg: HarAbstentionSettings) -> None:
     """HarUnavailable when two consecutive input days of the window are more than `max_gap_days` calendar days apart.
-    The window runs from the first of the trailing forecasts, less the HAR(22) lookback, to the last input day: a hole
+    The window runs from the first of the trailing forecasts, less the HAR(22) lookback and the ATR(20) warm-up of
+    its first day (w = W / ATR shifted one day), to the last input day: a hole
     there (missing release months, a dead feed) would make w22 and the trailing quantile mix distant regimes."""
     first = int(finite[-cfg.trailing_days])
-    days = pd.DatetimeIndex(inputs["day"].iloc[max(0, first - max(dt.HAR_LAGS)):])
+    days = pd.DatetimeIndex(inputs["day"].iloc[max(0, first - max(dt.HAR_LAGS) - dt.ATR_DAYS):])
     if len(days) < 2:
         return
     gaps = np.diff(days.to_numpy()).astype("timedelta64[D]").astype(int)
@@ -170,7 +185,7 @@ def forecast(bars: pd.DataFrame, cut: pd.Timestamp, cfg: HarAbstentionSettings, 
     if len(inputs) == 0:
         raise HarUnavailable("no daily inputs visible at the cut-off")
     last = pd.Timestamp(inputs["day"].iloc[-1]).date()
-    if last != _previous_trading_day(day):
+    if not _fresh(last, day):
         raise HarUnavailable(f"stale input: last stub-free day {last}, forecast day {day}")
     fit = frozen_fit(inputs, cfg)
     if fit.coef is None:

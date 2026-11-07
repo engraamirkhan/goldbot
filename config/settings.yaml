@@ -187,6 +187,7 @@ scheduler:
   autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
   tva_scores:       { kind: daily,   at: "23:35", max_late_hours: 20 }                  # TradingView author ideas shadow score (prereg-2026-10-28 section 6), after feed_reconcile and nightly_costs
   har_days:         { kind: daily,   at: "22:05", max_late_hours: 20, run_if_never_run: true }   # N-3 HAR forecast for the next trading day from bars visible at 22:00 UTC (prereg-2026-11-07-n3-har.md); a missed night refuses learning entries (har_unavailable)
+  har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -292,7 +293,8 @@ research:
     cost_table: null                 # measured cost table JSON (costs_measured.json); null: the settings priors
   har_abstention:                    # N-3 (prereg-2026-11-07-n3-har.md): learning arms and their controls refused on predicted
                                      #   bottom-quintile range days (refusals_novel.har_low_range); job `har_days`
-    enabled: true                    # false: the job writes an `off` row and the engine refuses nothing from it (kill path)
+    enabled: false                   # false: the job writes an `off` row and the engine refuses nothing from it (kill path).
+                                     #   Ships off (quant R7): on only after the K row and the Duka/ICM overlap check
     broker: icm                      # canonical gold feed after the release's last minute (bars_1m_live source)
     fit_from: 2015-01-01             # one frozen OLS fit on target days in [fit_from, fit_to); fit_to <= holdout_from
     fit_to: 2025-10-01               #   (the holdout trains nothing; recent days enter only as regressors)

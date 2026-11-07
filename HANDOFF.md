@@ -31,7 +31,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   f1_pit (`learning_icm_only`, `har_unavailable`, `har_low_range`). Scope: gold learning arms and the prereg's fixed
   control set `SCOPE_CONTROLS` (LC* twins, ZCD; retiring arms cannot widen it). A gap of more than 4 calendar days
   between input days in the trailing window + HAR(22) lookback fails the job (`max_gap_days`); a missing row in the
-  first 30 min after 22:00 UTC is refused without the engine warning. The nightly job `har_days` (22:05 UTC, `goldbot/research/har_abstention.py`, aux
+  first 30 min after 22:00 UTC is refused without the engine warning. Review round 2: the gap window also covers the
+  ATR(20) warm-up; the day after a full-close holiday (Good Friday, 25 Dec, 1 Jan) is fresh; retry slot
+  `har_days_retry` 22:35 UTC; decision time = `decision_utc` (entry_refusals); **ships `enabled: false`** until the
+  2026 Duka holes are refilled, the Duka/ICM overlap check passes and the K row exists (BACKLOG 144). The nightly job `har_days` (22:05 UTC, `goldbot/research/har_abstention.py`, aux
   migration 26) writes the next trading day's forecast from bars visible at 22:00, with one frozen fit before the
   holdout. A low day is hat <= the 20 % quantile of the trailing 250 forecasts. Once a row exists, a day without one
   refuses learning entries (fail closed). Before the first row nothing is refused, and
