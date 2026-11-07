@@ -609,6 +609,20 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS tva_scores_author ON tva_scores(author, published_utc)",
     )),
+    # additive (N-3, prereg-2026-11-07-n3-har.md; goldbot/research/har_abstention.py): the nightly HAR forecast of each
+    # trading opportunity day (`ok`) or the job's `off` mark, one row per (day, status), the first one kept (point in
+    # time: `available_ns` is when the engine may read it). The engine's `refusals_novel` reads it; a release without
+    # it never reads the table
+    Migration(version=26, name="har_days", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS har_days (
+               for_day TEXT NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('ok', 'off')),
+               available_ns INTEGER NOT NULL,
+               body TEXT NOT NULL,
+               PRIMARY KEY (for_day, status)
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS har_days_available ON har_days(available_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

@@ -40,6 +40,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   place, then the Mac and brain sha256 compared; idempotent). Never in git or a release (ADR 0048); nothing at or
   after the research cutoff. Cache downloads are validated before they are cached; ECB end date derives from CUTOFF.
   Gold has a hole 1999-01..2000-08 until a Goldhub workbook is supplied.
+- 2026-11-07 WS-6 (branch feat/n3-n1a, from the WS-1 hook cb3e52a4): **N-3 HAR low-range-day abstention** and the
+  **N-1a ICM routing guard** as entry refusals in `goldbot/engine/refusals_novel.py`, registered after window_0207 and
+  f1_pit (`learning_icm_only`, `har_unavailable`, `har_low_range`). Scope: gold learning arms and the prereg's fixed
+  control set `SCOPE_CONTROLS` (LC* twins, ZCD; retiring arms cannot widen it). A gap of more than 4 calendar days
+  between input days in the trailing window + HAR(22) lookback fails the job (`max_gap_days`); a missing row in the
+  first 30 min after 22:00 UTC is refused without the engine warning. Review round 2: the gap window also covers the
+  ATR(20) warm-up; the day after a full-close holiday (Good Friday, 25 Dec, 1 Jan) is fresh; retry slot
+  `har_days_retry` 22:35 UTC; decision time = `decision_utc` (entry_refusals); **ships `enabled: false`** until the
+  2026 Duka holes are refilled, the Duka/ICM overlap check passes and the K row exists (BACKLOG 145). The nightly job `har_days` (22:05 UTC, `goldbot/research/har_abstention.py`, aux
+  migration 26) writes the next trading day's forecast from bars visible at 22:00, with one frozen fit before the
+  holdout. A low day is hat <= the 20 % quantile of the trailing 250 forecasts. Once a row exists, a day without one
+  refuses learning entries (fail closed). Before the first row nothing is refused, and
+  `research.har_abstention.enabled: false` writes an `off` row (the kill path). Prereg:
+  docs/research/prereg-2026-11-07-n3-har.md (K +1 for N-3; N-1a K +0: Vantage gold learning arms were already
+  retired under A5, and they are not recreated). **Deploy dry run:** run the job once on the brain
+  (`har_days`). With no `ok` row, N-3 stays unregistered (nothing refused) and moves to Wed 11-11 per the plan.
 - TradingView author ideas shadow scorer (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; branch
   `feat/tv-ideas-shadow-scorer`): `goldbot/research/tv_ideas.py`, scheduler job `tva_scores` daily 23:35 UTC (after
   feed_reconcile and nightly_costs). It opens brain `state/tv_ideas.db` read-only (`mode=ro`) and scores each live
