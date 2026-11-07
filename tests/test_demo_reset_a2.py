@@ -31,6 +31,8 @@ EXEMPT = ("S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1A F1C G1A G1C BXR15 BXR30 BXR
 RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30", "1H", "4H")} | {
     "XBB15", "I0", "VI0", "C1H", "VC1H", "W0", "VW0", "ZCV", "S5A", "S5B", "Z4D", "Z4P", "Z6D", "Z6V", "Z7D", "Z7P",
     "Z7V", "LCS5A", "LCS5B", "LCZ4D", "LCZ4P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P", "LCZ7V"}
+# retired 2026-11-07 (prereg-amendment-2026-11-07-kill-only.md section 4): the free-standing XAUJPY control
+RETIRED_1107 = {"S0-XAUJPY"}
 
 
 @pytest.fixture(scope="module")
@@ -61,7 +63,7 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
     owner = {i for i, a in spec.items() if a.params.get("instrument") in REMOVED}
     assert all(spec[i].retired_day == "2026-11-04" for i in owner)
     assert all(str(spec[i].retired_day) == "2026-11-06" for i in RETIRED_1106)
-    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner | RETIRED_1106
+    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner | RETIRED_1106 | RETIRED_1107
     for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106:   # S1A/S1B: evaluator R3, read at their own read
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 

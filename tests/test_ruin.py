@@ -195,6 +195,12 @@ def _ct(day: int, r: float | None, **kw: Any) -> Any:
                        ret=0.0, pnl=0.0, equity_before=1000, r=r, **(kw or net))
 
 
+def _icm_commission() -> float:
+    """The ICM commission prior the imputer reads (settings `costs`; 4.0 $/lot/side since 2026-11-07)."""
+    from goldbot.config import load_settings
+    return load_settings().costs.commission_per_lot_side_usd["icm"]
+
+
 def _priors() -> Any:
     from goldbot.config import load_settings
     from goldbot.ops.cost_imputation import CostImputer
@@ -215,7 +221,7 @@ def test_a_price_return_row_without_r_is_priced_from_its_stop_and_charged_not_dr
     price = dict(ret_basis="price", money_source="broker", side=-1, entry_price=2_000.0, exit_price=2_015.0,
                  initial_sl=2_010.0, entry_utc=pd.Timestamp("2026-10-02 10:00", tz="UTC"))
     s = r_from_closed_trades([_ct(1, 2.0), _ct(2, None, **price)], costs=_priors())
-    charge = 2 * 3.5 / 100 / 10.0                                   # icm commission both sides, intraday, 10 $/oz risk
+    charge = 2 * _icm_commission() / 100 / 10.0                     # icm commission both sides, intraday, 10 $/oz risk
     assert s.r.tolist() == pytest.approx([2.0, -1.5 - charge])     # a short stopped through: -15 / 10 = -1.5R
     assert s.cost_basis == "net+imputed" and s.n_imputed == 1 and s.n_excluded == 0
     # a net row whose R is missing is priced from its stop as well, and pays the full imputed charge (its R is gross)
@@ -237,7 +243,7 @@ def test_gross_closed_trades_are_kept_and_charged_their_imputed_cost_in_r():
     gross = dict(pnl_basis="gross", side=1, entry_price=2_000.0, initial_sl=1_990.0,
                  entry_utc=pd.Timestamp("2026-10-02 10:00", tz="UTC"))
     s = r_from_closed_trades([_ct(1, 2.0), _ct(2, -1.0, **gross)], costs=_priors())
-    charge = 2 * 3.5 / 100 / 10.0                                   # icm commission both sides, intraday, 10 $/oz risk
+    charge = 2 * _icm_commission() / 100 / 10.0                     # icm commission both sides, intraday, 10 $/oz risk
     assert s.r.tolist() == pytest.approx([2.0, -1.0 - charge])
     assert s.cost_basis == "net+imputed" and s.n_imputed == 1
     rep = simulate(RuinConfig(limits=_live(), trades_per_week=5, weeks=4, n_paths=10, horizons_weeks=(4,)),

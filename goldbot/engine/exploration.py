@@ -35,6 +35,10 @@ The plan's rules, as built here:
     capped and stopped at their cost cell's 30 fills (`exploration_budget`; prereg-amendment-2026-11-06-control-
     thinning.md).
   An unknown figure (equity, the conversion, a position's stop loss, the ledger) refuses: fail closed.
+* Engine-level entry refusals (prereg-amendment-2026-11-07-kill-only.md, `entry_refusals`): "applied after the arm's
+  rule has produced the signal and before any room, slot or cap check", in `_send` only (gold 02:00-07:00 UTC
+  `window_0207`, the F-1 pit window `f1_pit`); fail closed (`refusal_error:<name>`); each refused signal is recorded
+  blocked through `candidate`, the shadow log. Exits, `_pyramid`'s stop moves and the Friday rule never call it.
 * Exits are never gated: the engine's server stop and target, its stop check, the Friday cut and the kill switch act
   on exploration positions as on any of this engine's magic range (`Engine._own`). A 1m/5m arm's hold is judged on the
   host clock on every pass with or without a quote (`exits`, from `Engine._retry_closes`), halted or not; a 15m+ arm's
@@ -95,7 +99,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry, cost_probe, weekend_lane
+from goldbot.engine import auto_entry, cost_probe, entry_refusals, weekend_lane
 from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.ops.accounts import DailyEntries
@@ -264,6 +268,9 @@ class ExplorationConfig(FrozenRecord):
     pots: dict[str, Pot] = Field(default_factory=dict)
     arms: tuple[Arm, ...] = ()
     dropped: tuple[str, ...] = ()
+    # ARM-SPEC rows whose `config_hash` does not match the row (`config_for`): kept configured with their entries
+    # refused, journalled at the engine's start (`exploration_arm_hash_mismatch`); never an abort
+    hash_refused: tuple[str, ...] = ()
     # demo-limits ADR (owner 2026-11-02): False = the pots' £ sleeves and each arm's day (its share of its pot) do not
     # bind (`_send` drops the `pot` and `arm_budget` rooms); the per-trade cap, the exploration budget, every slot and
     # the RiskGate still do. True (the default) is the ADR 0043 sleeves as before
@@ -368,11 +375,15 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
     demo accounts": on any other account they are refused, loudly; a bad row is dropped and journalled, never fatal:
     `_load_spec_arm_rows`); the account registers the
     arms it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm
-    the spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
+    the spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`).
+    An ARM-SPEC row whose frozen hash does not match ("an arm edited after it was frozen is refused") never aborts the
+    start (plan 2026-11-07 WS-1, CTO): it is logged, kept configured with its entries refused (`HASH_RULE`) and
+    journalled at the start (`hash_refused`). Kept, not dropped: a dropped arm's open positions would be closed at once
+    as orphans; kept, they keep their stop, target, hold and every exit, as a retired arm's do."""
     ex = acc.exploration
     if not ex.enabled:
         return None
-    specs = {a.id: a for a in load_arms(spec_path)}
+    specs, hash_refused = _hash_checked(load_arms(spec_path, check_hash=False))
     rejected: list[str] = []
     if spec_arms_path.exists():
         found, rejected = _load_spec_arm_rows(spec_arms_path, live_class=acc.mode != "demo")
@@ -402,7 +413,27 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
                              arms=tuple(arms), dropped=tuple(dropped), pot_budgets=ex.pot_budgets,
-                             learning_max_open=ex.learning_max_open, daily=ex.daily)
+                             learning_max_open=ex.learning_max_open, daily=ex.daily,
+                             hash_refused=tuple(i for i in hash_refused if i in running))
+
+
+HASH_RULE = "arm hash mismatch"         # an ARM-SPEC row edited after it was frozen: entries refused (`_hash_checked`)
+
+
+def _hash_checked(rows: list[SpecArm]) -> tuple[dict[str, SpecArm], list[str]]:
+    """The ARM-SPEC rows by id, each row whose `config_hash` is not its own (`research.arms.arm_hash`) stamped
+    `entry_refused` (HASH_RULE) and named in the second result; logged as an error, never raised."""
+    out: dict[str, SpecArm] = {}
+    bad: list[str] = []
+    for a in rows:
+        if a.config_hash != (want := arm_hash(a)):
+            log.error("exploration arm %s: config_hash %r does not match the arm (expected %r); entries refused",
+                      a.id, a.config_hash, want)
+            a = a.model_copy(update={"entry_refused": f"{HASH_RULE}: config_hash {a.config_hash!r} != {want!r} "
+                                                      f"(an arm is frozen; amend it under a new id)"})
+            bad.append(a.id)
+        out[a.id] = a
+    return out, bad
 
 
 def instrument_ok(spec: SpecArm) -> bool:
@@ -609,7 +640,11 @@ class Exploration:
         # ADR 0061, second layer: every unqualified strategy arm, refused from the start as a spec retirement is (no new
         # entry; configured, so its open positions keep every exit); journalled once each, a spec retirement aside
         self.unqualified: dict[str, str] = {k: v for k, v in entry_refused(cfg).items() if k in self.arms}
-        for a in sorted(set(self.unqualified) - self.retired):
+        for a in sorted(set(cfg.hash_refused) & set(self.arms)):
+            # plan 2026-11-07 WS-1: a row edited after it was frozen never stops the start; its entries are refused
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_hash_mismatch",
+                                  "arm": a, "rule": self.unqualified.get(a, HASH_RULE)})
+        for a in sorted(set(self.unqualified) - self.retired - set(cfg.hash_refused)):
             log.warning("exploration arm %s refused: %s", a, self.unqualified[a])
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
                                   "arm": a, "rule": self.unqualified[a]})
@@ -1721,6 +1756,13 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         ps.why = "duplicate"
         return "refused"
     ps.mu = None
+    # prereg-amendment-2026-11-07 (`entry_refusals`): the engine-level refusals of the signal the rule produced, before
+    # any room, slot or cap check; fail closed (a refusal that raises refuses as `refusal_error:<name>`). The journal
+    # row carries the quote at the refusal (amendment 3.2, informational); the candidate is the shadow log
+    if (no := entry_refusals.first_refusal(eng, arm, s)) is not None:
+        applied.update(bid=tick.bid, ask=tick.ask, **({"error": no.error} if no.error else {}))
+        refuse(no.reason)
+        return "refused"
     if (daily := ex.cfg.daily) is not None:
         # the daily entry budget (owner decision 2026-10-30; `exploration_budget`): the day, the hour or the session
         # spent stops every signal of this pass ("cap": recorded blocked at once); the rest stop this signal only
