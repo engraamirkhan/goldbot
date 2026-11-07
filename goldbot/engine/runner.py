@@ -27,7 +27,7 @@ from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, load_record_json, schema_skew_summary
-from goldbot.config import tf_seconds
+from goldbot.config import INTRADAY_LIVE, tf_seconds
 from goldbot.data.calendar import (
     DEFAULT_SESSIONS,
     PauseWindow,
@@ -200,6 +200,7 @@ class EngineConfig(Record):
     cost_probe_max_open: int = Field(2, ge=1, le=4)     # ADR 0037 amendment 3: concurrent probe positions at most
     cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
     cost_probe_scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)   # prereg M1 arm (cost_probe.scheduled_step)
+    cost_probe_hours_utc: tuple[str, str] | None = None     # accounts CostProbe.hours_utc (amendment 2026-11-07, 4)
     exploration_config: exploration.ExplorationConfig | None = None   # plan 2026-10-25: demo probe_only arms (ADR 0043)
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
@@ -220,6 +221,8 @@ class EngineConfig(Record):
     # broker commission per lot per side, USD, until the cost table measures it (ADR 0075; 0 = none configured)
     commission_per_lot_side_usd: float = Field(0.0, ge=0)
     max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
+    timeframes_live: tuple[str, ...] = INTRADAY_LIVE   # settings engine.timeframes_live: 1d/1w ship dark (WS-4)
+    long_history_dir: str | None = None   # settings engine.long_history_dir: the 1d/1w warm-up (long_bars)
     feature_window: int = 800            # decision bars the features are computed on
     # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
     backfill_max_days: int = Field(30, ge=0, le=30)

@@ -35,6 +35,7 @@ and the RiskGate apply unchanged.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -45,7 +46,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.timeutil import utc_index
 from goldbot.features.technical import atr
 from goldbot.research import arm_rules as R
-from goldbot.research.arms import Arm, load_arms
+from goldbot.research.arms import Arm, arm_hash, load_arms
 from goldbot.research.autodisc.contracts import BoolArr, SideArr
 from goldbot.research.autodisc.gen_combine import MAX_BARS
 from goldbot.research.autodisc.outcomes import barrier_exit
@@ -62,6 +63,7 @@ ATR_BARS = 14
 RANK_WARMUP = RANK_BARS + 100            # trailing-rank leaves: the rank window plus the indicator under it (ADX 14, 20-bar vol)
 HURST_WARMUP = 1_000                     # arm_rules_bands.LOOKBACK_BARS: the Hurst tercile is defined from bar 378 and settles
 NO = np.zeros(0, dtype=np.int64)
+log = logging.getLogger(__name__)
 
 
 class LiveProvider(PrimitiveProvider):
@@ -77,11 +79,21 @@ class LiveProvider(PrimitiveProvider):
 
 @lru_cache(maxsize=1)
 def _family_arms(path: str) -> tuple[Arm, ...]:
-    return tuple(load_arms(Path(path)))
+    """The spec's rows, each checked against its frozen hash on its own: a row edited after it was frozen is logged and
+    left out (no spec_rule leaf resolves to it), never raised, so one bad row cannot drop every spec_rule arm and
+    have their open positions closed as orphans (plan 2026-11-07 WS-1 review)."""
+    out = []
+    for a in load_arms(Path(path), check_hash=False):
+        if a.config_hash != arm_hash(a):
+            log.error("arm %s: config_hash %r does not match the arm; left out of the family arms", a.id, a.config_hash)
+            continue
+        out.append(a)
+    return tuple(out)
 
 
 def family_arms() -> list[Arm]:
-    """The frozen exploration arms a `family_rule` leaf resolves against (config/exploration_arms.yaml, hash-checked once)."""
+    """The frozen exploration arms a `family_rule` leaf resolves against (config/exploration_arms.yaml, hash-checked
+    once per row: `_family_arms`)."""
     return list(_family_arms(str(ARMS_YAML)))
 
 

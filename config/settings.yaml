@@ -14,6 +14,18 @@ timeframes:
   decision: [15m, 1h, 4h]   # 4h (proposal P4) is also a context timeframe of 15m/1h agents; 1d stays research-only
   context:  [4h, 1d, 1w]
 
+# 1d and 1w exploration arms (WS-4, plan 2026-11-07; engine/long_bars.py). They SHIP DARK: an arm whose timeframe is
+# not listed here is held as retired from the start (no entry, exits managed). 1d/1w go live only when the 7-day replay
+# keeps every existing arm's decisions identical AND a CONFIRM passer passes lot-fit. A 1d bar closes at 21:00 UTC
+# (the long history's roll); a 1w bar at Friday 21:00 UTC and is decided fresh at the weekly open, never on Friday.
+# Warm-up: <long_history_dir>/bars/<symbol>_1d.parquet, else long/<symbol>_daily_long.parquet, read point in time;
+# a missing file, a gap to (or inside) the engine's window keeps the arm quiet (journal history_gap:<tf>).
+# long_history_dir is resolved under data_root unless absolute. Listing 1d or 1w in timeframes_live is refused by the
+# settings validator until the go-live blockers (docs/backlog.d engine-1d-1w-golive) are closed.
+engine:
+  timeframes_live: [1m, 5m, 15m, 30m, 1h, 4h]
+  long_history_dir: raw/daily
+
 brokers:
   icm:
     server_tz: Europe/Athens          # EET/EEST; resolved per bar, never a fixed offset
@@ -138,7 +150,9 @@ risk:
 
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist
-  commission_per_lot_side_usd: { icm: 3.5, vantage: 3.0 }
+  # ICM 3.5 -> 4.0 (cost-floor card 2026-11-07, WS-1 of the 2026-11-07 plan): the prior tightened toward the
+  # measured commission; a tightening only, about £1 a week. Rollback: 3.5
+  commission_per_lot_side_usd: { icm: 4.0, vantage: 3.0 }
   # Swap, USD per lot (100 oz) per night, negative = paid. Prior; replace with the broker cost table. Long -60 is the
   # 2024-25 retail level at ~5% USD rates (~9-11% a year at $2,000-2,500 gold), so it overcharges the low-rate
   # 2010-2021 years (conservative). Short 0: the positive short swap of 2023-25 was negative before the 2022 hikes,
@@ -184,6 +198,8 @@ scheduler:
   daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
   autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
   tva_scores:       { kind: daily,   at: "23:35", max_late_hours: 20 }                  # TradingView author ideas shadow score (prereg-2026-10-28 section 6), after feed_reconcile and nightly_costs
+  har_days:         { kind: daily,   at: "22:05", max_late_hours: 20, run_if_never_run: true }   # N-3 HAR forecast for the next trading day from bars visible at 22:00 UTC (prereg-2026-11-07-n3-har.md); a missed night refuses learning entries (har_unavailable)
+  har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -287,6 +303,18 @@ research:
     max_candidates: 20               # best candidates whose grid neighbours (plateau, counted in K) and shift null are run
     seed: 0                          # base seed; each night adds its day number, so nights search new ground
     cost_table: null                 # measured cost table JSON (costs_measured.json); null: the settings priors
+  har_abstention:                    # N-3 (prereg-2026-11-07-n3-har.md): learning arms and their controls refused on predicted
+                                     #   bottom-quintile range days (refusals_novel.har_low_range); job `har_days`
+    enabled: false                   # false: the job writes an `off` row and the engine refuses nothing from it (kill path).
+                                     #   Ships off (quant R7): on only after the K row and the Duka/ICM overlap check
+    broker: icm                      # canonical gold feed after the release's last minute (bars_1m_live source)
+    fit_from: 2015-01-01             # one frozen OLS fit on target days in [fit_from, fit_to); fit_to <= holdout_from
+    fit_to: 2025-10-01               #   (the holdout trains nothing; recent days enter only as regressors)
+    quantile: 0.2                    # low day: forecast <= the 20 % quantile of the trailing forecasts
+    trailing_days: 250               # trailing forecasts the quantile is taken over (pre-registered)
+    min_fit_rows: 500                # fewer fit rows: no row is written and the job fails
+    max_gap_days: 4                  # a longer calendar gap between input days in the trailing window + HAR(22)
+                                     #   lookback (a data hole): no row, the job fails (Thu -> Mon holiday = 4)
   position:                          # daily position engine (goldbot/research/position/, amendment W3, PR #285). These are
                                      #   W3's program-wide fixed values: a spec never varies them; a change is a W3 amendment
     day_close_utc: "21:00"           # W3.2 clock: decide on the 1d mid bar closing 21:00 UTC, fill at the next 1m open

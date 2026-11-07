@@ -91,6 +91,11 @@
                     first-seen snapshot (state/tv_ideas.db read-only), direction read for both sides net of costs on
                     the canonical broker's own minutes -> aux.db tva_scores; counts and forward-read progress only.
                     No order, no RiskGate path, no arm. Every idea is `unlabelled` until an extractor is admitted.
+* har_days          daily at 22:05 (N-3, prereg-2026-11-07-n3-har.md, research/har_abstention.py): the next trading
+                    day's HAR range forecast from bars visible at the 22:00 UTC close, one frozen fit before the
+                    holdout, low = bottom quintile of the trailing 250 forecasts -> aux.db har_days (first row kept).
+                    The engine refuses learning entries on a low day and, once a row exists, on a day without one
+                    (`engine/refusals_novel.py`); a stale or short input fails the job and writes nothing.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -1548,6 +1553,12 @@ def tva_scores(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_job(ctx.settings, ctx.state_dir, store=ctx.store, accounts=ctx.accounts, slot=slot, costs=costs)
 
 
+def har_days(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """N-3: the next trading day's HAR forecast row (research/har_abstention.py); fails when it cannot write one."""
+    from goldbot.research.har_abstention import run_job
+    return run_job(ctx, slot)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1572,6 +1583,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
     "autodisc_nightly": autodisc_nightly,         # ADR 0058 phase 2 discovery search (off unless enabled; Mac only)
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
+    "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
+    "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
 }
 
 

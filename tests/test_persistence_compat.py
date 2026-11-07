@@ -44,6 +44,7 @@ from goldbot.ops.observe import ObserveStatus
 from goldbot.research import ruin
 from goldbot.research.attribution import AttributionReport
 from goldbot.research.director import ResearchPlan
+from goldbot.research.har_abstention import HarRow
 from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
@@ -342,6 +343,20 @@ def case_exploration_twin(tmp: Path) -> None:
     assert exploration.twins(str(tmp), "icm-probe") == [rec]
 
 
+def case_har_row(tmp: Path) -> None:
+    """aux.db har_days row (N-3, research/har_abstention.py HarRow) with a field from a newer release: the engine's
+    refusals still read the day's forecast."""
+    from goldbot.db import Database
+    from goldbot.research import har_abstention as har
+    rec = har.HarRow(for_day=T0.date(), status="ok", available_utc=T0, inputs_close_utc=T0, hat=0.8, q20=1.0, low=True)
+    db = Database.open(str(tmp), "aux")
+    with db.write() as conn:
+        conn.execute(f"INSERT INTO {har.TABLE} (for_day, status, available_ns, body) VALUES (?, ?, ?, ?)",
+                     (rec.for_day.isoformat(), rec.status, har._ns(rec.available_utc),
+                      json.dumps(_newer(json.loads(rec.model_dump_json())))))
+    assert har.row_for(db, rec.for_day, pd.Timestamp(T0) + pd.Timedelta(minutes=1)) == rec
+
+
 def case_hwm_confirmation(tmp: Path) -> None:
     """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
     conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
@@ -472,7 +487,8 @@ CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_pilot_state, case_limits_profile, case_risk_term,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index,
-         case_daily_review, case_exploration_trade, case_exploration_twin]
+         case_daily_review, case_exploration_trade, case_exploration_twin,
+         case_har_row]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -515,6 +531,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                limits_profile.LimitsChange, adaptive.AdaptiveState, adaptive.RiskTerm, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex, cost_probe.ProbeRecord, cost_probe.SkipRecord, exploration.ExplorationRecord,
                exploration.TwinRecord,
+               HarRow,                 # aux.db har_days: case_har_row
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

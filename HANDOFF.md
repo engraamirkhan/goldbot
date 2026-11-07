@@ -48,6 +48,57 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   outside the bar's range is a fine_miss; a limit entry is not credited a target touched in its 1m fill bar.
   Guard: 316 passed, 18 skipped (sparse); B04 (D5), B08-V1 and C04-V1 pass. No real-data window read or re-run;
   WS-3 stays closed (prereg 8).
+- **1d and 1w exploration arms in the engine, shipped dark (WS-4, consolidated plan 2026-11-07; implementer).**
+  `goldbot/engine/long_bars.py`: a 1d bar closes at 21:00 UTC Monday-Friday (the long daily history's roll), a 1w bar
+  is the W-FRI week of those days and is decided fresh at the first base close after the weekly open (never on
+  Friday); a 1d decision at Friday 21:00 is journalled `exploration_skipped:weekend`, never queued. Warm-up from
+  `<engine.long_history_dir>/bars/<symbol>_1d.parquet` (else `long/<symbol>_daily_long.parquet`), point in time on
+  `visible_at`/`available_utc`; a missing/unreadable file, a gap to the engine's window or too few rows hold the arm
+  back with a `history_gap:<tf>` journal row, never a crash. Dark flag: settings `engine.timeframes_live` (default
+  1m-4h, no 1d/1w): an arm on any other timeframe is held retired from the start (`exploration_arm_dark`, exits
+  managed). Replay identity: `tests/test_engine_replay_identity.py` pins a 7-day replay of 15m/1h/4h arms to a golden
+  captured on cb3e52a4 (verified on a clean checkout of it) and shows it unchanged with 1d/1w arms dark and live.
+  Weekend cut, rollover, stale and common-filter code are hash-pinned unchanged. Go-live blocker found: the standing
+  common filter (rollover 20:45-22:15 UTC, Friday from 19:00) drops every ARM-SPEC rule's 1d candidate at its 21:00
+  close and every 1w candidate, so live 1d/1w would trade nothing until that is decided. Not done: the catalogue
+  adapter. Review owed: trading-safety-reviewer (exploration step), code-reviewer.
+- Kill-only fixes of 2026-11-07 (plan WS-1; signed amendment docs/research/prereg-amendment-2026-11-07-kill-only.md). Every change can only stop an entry or a probe; exits, stops, targets, holds, the Friday cut and the RiskGate are untouched.
+  - `goldbot/engine/entry_refusals.py`: engine-level refusals of an exploration signal, called only from the entry branch of `exploration._send`, after the duplicate check and before any room, slot or cap check. Fail closed: a refusal that raises refuses the entry as `refusal_error:<name>` with the exception type journalled. The refused signal is recorded blocked through `exploration.candidate` (the shadow log, `exploration_obs.blocked_reason`); the journal row carries bid/ask. New refusals append to `REFUSALS` (WS-4 and WS-6 branch from this hook).
+  - `window_0207`: gold arms of every role but `cost` and not F1C/G1C, decision time in [02:00, 07:00) UTC, on the three demo accounts (the ADR 0062 weekend lane is outside). No `window_utc` was edited: every arm hash and K row is unchanged. Revert only by amendment 3.3 (300 shadowed refusals, about 2026-11-20).
+  - `f1_pit`: F1A and F1C refused outside [08:00, 13:30) America/New_York. Hard close 2026-12-18 if under 100 pit fills.
+  - Probes: `cost_probe.hours_utc` ["07:00", "21:00"] on icm-probe and vantage-demo (mirror and scheduled); vantage-demo scheduled every_min 15 -> 60 (14 a day); icm-probe keeps 120 (the amendment's "one per 60 min" would add probes there, so the CFO's halving stands).
+  - S0-XAUJPY retired in the spec (retired_day 2026-11-07); it stays registered on vantage-demo so an open position keeps its exits. Before the deploy, list open positions under retired ids from the brain DB and the broker. A retired id that fills is switched off the same day.
+  - ICM commission prior 3.5 -> 4.0 USD a lot a side (settings `costs`). ICM is the canonical-cost broker, so the research extra-cost prior (`settings_extra_cost_usd`) rises 0.37 -> 0.38 $/oz: autodisc floors and the box-course placeable rule (`features/box_course.COST_PRIOR_USD`, pinned to settings) charge 0.38; the pre-registered H-14 count (`scripts/count_owed_events.py`) keeps its frozen 0.37. For quant review.
+  - An ARM-SPEC row whose hash does not match no longer aborts the engine's start: it is logged, kept configured with its entries refused (`arm hash mismatch`) and journalled `exploration_arm_hash_mismatch`. It is kept rather than dropped because a dropped arm's open positions would be closed at once as orphans. Other `load_arms` errors (duplicate ids, a bad twin) still raise.
+  - Dry-run checks after the deploy: `exploration_refused:window_0207` and `exploration_refused:f1_pit` journalled, no refusal on any exit, `cost_probe_scheduled_skip:hours` on Vantage before 07:00.
+  - Review follow-ups: the refusal windows judge a shifted XC15 at its own decision close (`Pending.decision_utc`), not the later close it was released at; the `family_rule`/spec_rule leaf resolver (`arm_rules_spec._family_arms`) checks hashes row by row and logs and leaves out a bad row instead of raising, so one edited row cannot drop every spec_rule arm (and orphan-close its positions).
+- Long daily history (branch `feat/gold-history-1978`, WS-2 of the 2026-11-07 plan): `goldbot/data/long_history.py`
+  (row contract: date, OHLC, close finite and > 0, `source` per row, `available_utc` point in time; ranked stitch,
+  one cut-over per source, overlap gap reported), `goldbot/data/long_sources.py` (free sources: Bundesbank/ECB
+  fixings, EIA spot, Yahoo indices/futures, WGC Goldhub when downloaded), `scripts/gold_history.py`,
+  `scripts/long_daily_history.py`. 33 Parquet files (32 instruments + XAUUSD 1968-06..2025-09) live only in the
+  Mac's git-ignored `raw/daily/` and on the brain in `/opt/goldbot/state/daily_history/` (goldbot:goldbot, 0750/0640),
+  with `manifest.json` (sha256, rows, first/last, source segments = cut-over dates) and `manifest.sha256`.
+  Copy: `scripts/ship_long_history.py --host <brain alias>` (BatchMode scp, `sha256sum -c` before files move into
+  place, then the Mac and brain sha256 compared; idempotent). Never in git or a release (ADR 0048); nothing at or
+  after the research cutoff. Cache downloads are validated before they are cached; ECB end date derives from CUTOFF.
+  Gold has a hole 1999-01..2000-08 until a Goldhub workbook is supplied.
+- 2026-11-07 WS-6 (branch feat/n3-n1a, from the WS-1 hook cb3e52a4): **N-3 HAR low-range-day abstention** and the
+  **N-1a ICM routing guard** as entry refusals in `goldbot/engine/refusals_novel.py`, registered after window_0207 and
+  f1_pit (`learning_icm_only`, `har_unavailable`, `har_low_range`). Scope: gold learning arms and the prereg's fixed
+  control set `SCOPE_CONTROLS` (LC* twins, ZCD; retiring arms cannot widen it). A gap of more than 4 calendar days
+  between input days in the trailing window + HAR(22) lookback fails the job (`max_gap_days`); a missing row in the
+  first 30 min after 22:00 UTC is refused without the engine warning. Review round 2: the gap window also covers the
+  ATR(20) warm-up; the day after a full-close holiday (Good Friday, 25 Dec, 1 Jan) is fresh; retry slot
+  `har_days_retry` 22:35 UTC; decision time = `decision_utc` (entry_refusals); **ships `enabled: false`** until the
+  2026 Duka holes are refilled, the Duka/ICM overlap check passes and the K row exists (BACKLOG 145). The nightly job `har_days` (22:05 UTC, `goldbot/research/har_abstention.py`, aux
+  migration 26) writes the next trading day's forecast from bars visible at 22:00, with one frozen fit before the
+  holdout. A low day is hat <= the 20 % quantile of the trailing 250 forecasts. Once a row exists, a day without one
+  refuses learning entries (fail closed). Before the first row nothing is refused, and
+  `research.har_abstention.enabled: false` writes an `off` row (the kill path). Prereg:
+  docs/research/prereg-2026-11-07-n3-har.md (K +1 for N-3; N-1a K +0: Vantage gold learning arms were already
+  retired under A5, and they are not recreated). **Deploy dry run:** run the job once on the brain
+  (`har_days`). With no `ok` row, N-3 stays unregistered (nothing refused) and moves to Wed 11-11 per the plan.
 - TradingView author ideas shadow scorer (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; branch
   `feat/tv-ideas-shadow-scorer`): `goldbot/research/tv_ideas.py`, scheduler job `tva_scores` daily 23:35 UTC (after
   feed_reconcile and nightly_costs). It opens brain `state/tv_ideas.db` read-only (`mode=ro`) and scores each live

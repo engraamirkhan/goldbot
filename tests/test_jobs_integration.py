@@ -79,7 +79,7 @@ def test_nightly_costs_from_logged_ticks_and_fills(tmp_path):
     table = CostTable.load(tmp_path / "costs_icm-demo.json")
     assert table is not None and set(table.spread) >= {"london", "newyork"}
     assert not table.slippage["london:market"].from_prior and table.slippage["london:market"].mean == pytest.approx(0.04)
-    assert table.commission_per_lot_side_usd == 3.5
+    assert table.commission_per_lot_side_usd == 4.0         # the settings prior for ICM (3.5 until 2026-11-07)
     # Friday's run also classifies the account (persisted for the engine and the dashboard)
     assert row["account_class"] in {"raw", "standard", "unknown"}
     assert json.loads((tmp_path / "classifier_icm-demo.json").read_text())["class"] == row["account_class"]
@@ -191,7 +191,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "cpcv_quarterly": "2026-10-04T14:00:00+00:00",
                    "calendar_archive_sunday": "2026-10-04T18:00:00+00:00",
                    "limits_job": "2026-10-02T23:05:00+00:00", "daily_review": "2026-10-03T06:15:00+00:00",
-                   "autodisc_nightly": "2026-10-03T01:30:00+00:00", "tva_scores": "2026-10-02T23:35:00+00:00"}
+                   "autodisc_nightly": "2026-10-03T01:30:00+00:00", "tva_scores": "2026-10-02T23:35:00+00:00",
+                   "har_days": "2026-10-02T22:05:00+00:00", "har_days_retry": "2026-10-02T22:35:00+00:00"}
     # quarterly: after October's run the next is the first Sunday of January
     later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
     assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"

@@ -156,8 +156,10 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 140 | Autonomous discovery phase 1: spec DSL, search ledger, explore-window evaluator, family-combination generator | Research (discovery) · ADR 0058 | L | proposed 2026-10-28 · accountable: research-director (spec), implementer (build, 3 parallel staff slices) · reviews: quant-reviewer, code-reviewer · target 2026-11-06 |
 | 141 | Record Vantage exit legs (exit_fills) so its cost of record measures exit slippage and overshoot | Data (execution ledger) · cost of record | S | proposed, severity MEDIUM · accountable: data-engineer then implementer · reviews: quant-reviewer, trading-safety-reviewer |
 | 143 | goldbot accounts delete <key>: remove a secret from the store | Ops (secrets) | S | proposed, severity LOW · accountable: implementer · reviews: code-reviewer, security-reviewer |
-| 144 | Session-split gold cost of record in the catalogue sim | Research (costs) | S | proposed · accountable: implementer · reviews: quant-reviewer |
-| 145 | ALFRED first-release benchmark rates for the cost model | Research (data) | S | proposed · accountable: data-engineer · reviews: quant-reviewer |
+| 144 | 1d/1w engine go-live blockers (WS-4) | Engine · BUILD | M | proposed 2026-11-07 (WS-4 shipped dark; trading-safety APPROVE to ship dark) · accountable: implementer |
+| 145 | Enable N-3 HAR abstention: refill 2026 Duka holes, overlap check, K row | research ops (N-3, prereg-2026-11-07-n3-har.md) | S | proposed · accountable: data-engineer (holes, overlap), research-director (K row, enable) · reviews: quant-reviewer |
+| 146 | Session-split gold cost of record in the catalogue sim | Research (costs) | S | proposed · accountable: implementer · reviews: quant-reviewer |
+| 147 | ALFRED first-release benchmark rates for the cost model | Research (data) | S | proposed · accountable: data-engineer · reviews: quant-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1502,8 +1504,24 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 
   Dependencies: the ADR 0066 cleanup release is merged and deployed (phase 1). (b) option 1 needs the owner. TRACEABILITY: D16, G1-G6, G11, M16, M29, M39.
 - **143. goldbot accounts delete <key>: remove a secret from the store.** Value: retiring a feature leaves its secrets behind (ADR 0066: `tradingview-sessionid`, `-sign`, `tradingview-webhook-secret`, `tradingview-ideas-cookie`), and today the only way to remove one is a hand-written Python line against `state/.secrets.json` (RUNBOOK 2.3, "Retired keys") or `python -m keyring del` on a keyring host. A stale credential that nothing reads is still a credential to leak. Acceptance: `python -m goldbot.ops.accounts delete <key>` removes the key from the OS keyring and from the plaintext fallback under `_fallback_lock` (file stays mode 600, the file is removed when empty); it never prints a value; an unknown key exits 1 with "not stored"; an MT5 key (`mt5-<account>`, `mt5-login-<account>`) of an enabled account in `config/accounts.yaml` is refused unless `--force`; tests for keyring, fallback, missing key, refusal and no-value-in-output. RUNBOOK 2.3 "Retired keys" then uses it.
-- **144. Session-split gold cost of record in the catalogue sim.** Value: the catalogue sim charges gold one round trip ($0.166, cor-2026-10-31.2 "all"), while the cost of record measures Asia $0.204, London $0.164 and New York $0.166; Asia entries are under-charged by about 0.04 $/oz. Acceptance: `costs.CostModel.round_trip` takes the fill instant and returns the cost-of-record cell of its session (worse of the two brokers); a test pins an Asia fill at $0.204; the reading rule names the session boundaries.
-- **145. ALFRED first-release benchmark rates for the cost model.** Value: the catalogue cost model's OECD IR3TIB01 3-month rates (EUR, JPY, GBP, AUD, CAD, CHF, NZD) are the 2026-11-02 vintage, a small look-ahead in financing (code review LOW-3). Acceptance: the first-release value of each monthly observation is pulled from ALFRED (free) into raw/daily with its real `available_utc`; `costs.window_model` reads it; a test shows a revised month uses the first-release value before the revision date; the reading-rule note is removed.
+- **144. 1d/1w engine go-live blockers (WS-4).** Value: WS-4 lets the engine run 1d and 1w exploration arms
+  (`goldbot/engine/long_bars.py`), but it ships dark and the settings validator (`EngineSettings.timeframes_live`,
+  `GO_LIVE_BLOCKERS_1D_1W`) refuses 1d/1w until each blocker below is closed; as built a live 1d/1w arm would trade
+  nothing or trade at the worst hour. Blockers:
+  1. Send 1d entries after 22:15 UTC once the broker has reopened, the bracket from the send price; tests in EET and
+     EEST.
+  2. Move the 1w decision out of the first 15-60 minutes after the Sunday open.
+  3. The 1w missed-week catch-up (a restart across the weekly open), persisted.
+  4. A daily refresh of the long-history file, a preflight check that it reaches the engine window (resolved under
+     `data_root`: `engine.long_history_dir`), and an alert when `history_gap:<tf>` lasts more than a day.
+  5. The rules' standing common filter at the 21:00 UTC close drops every 1d/1w candidate (quant decision).
+  6. `_trail_runners` and `score_twins` on `long_bars.is_bar_close`.
+  7. A CONFIRM pass and a trading-safety sign-off on the settings diff that lifts the guard.
+  Acceptance: each blocker has a test that fails without it; the guard is lifted only in the same change as 7, with
+  the replay-identity test (`tests/test_engine_replay_identity.py`) still byte-identical for the existing arms.
+- **145. Enable N-3 HAR abstention: refill 2026 Duka holes, overlap check, K row.** Value: N-3 ships with `research.har_abstention.enabled: false` (quant R7); it starts only when its inputs are whole and its feed cut-over is measured. Acceptance: (1) the 2026 Dukascopy holes inside the trailing window are refilled (in progress: `scripts/local_bars.sh refresh 2026` then `push`; on the Mac copy 2026-04-01..04-06, 04-10..04-16, 06-09..06-16, 07-09..07-21 and 07-29..08-03 exceed `max_gap_days` 4, so `har_days` would fail every night) and a dry run of `har_days` on the brain writes an `ok` row; (2) the data-engineer's Duka/ICM overlap measurement (median ln(ICM/Duka) of daily TR, W and w) is recorded and |median ln ratio of w| <= 0.02, else an amendment first; (3) the research director writes the registry row (family novel:2026-11, unit N-3, K+1); then `enabled: true` in config/settings.yaml with the three results cited.
+- **146. Session-split gold cost of record in the catalogue sim.** Value: the catalogue sim charges gold one round trip ($0.166, cor-2026-10-31.2 "all"), while the cost of record measures Asia $0.204, London $0.164 and New York $0.166; Asia entries are under-charged by about 0.04 $/oz. Acceptance: `costs.CostModel.round_trip` takes the fill instant and returns the cost-of-record cell of its session (worse of the two brokers); a test pins an Asia fill at $0.204; the reading rule names the session boundaries.
+- **147. ALFRED first-release benchmark rates for the cost model.** Value: the catalogue cost model's OECD IR3TIB01 3-month rates (EUR, JPY, GBP, AUD, CAD, CHF, NZD) are the 2026-11-02 vintage, a small look-ahead in financing (code review LOW-3). Acceptance: the first-release value of each monthly observation is pulled from ALFRED (free) into raw/daily with its real `available_utc`; `costs.window_model` reads it; a test shows a revised month uses the first-release value before the revision date; the reading-rule note is removed.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only

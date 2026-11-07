@@ -320,28 +320,27 @@ def test_a_swing_hold_that_reaches_the_friday_cut_is_refused_as_the_tsmom_swing_
 
 
 # ------------------------------------------------------------------------------------------------ the engine
-def test_the_engine_queues_the_history_candidate_of_a_stored_bars_arm_and_holds_it_back_without_a_store(tmp_path,
-                                                                                                    b1) -> None:
-    """`exploration.step`: with the store, DOND's signal at a 1d close is the history run's (side, stop, hold); without
-    one it is journalled held back once (`exploration_held_back`), never decided on the short window."""
+def test_a_1d_stored_bars_arm_is_dark_by_default_and_when_live_reads_the_long_history_not_the_store(tmp_path,
+                                                                                                   b1) -> None:
+    """WS-4 (consolidated plan 2026-11-07): every 1d/1w arm in the engine decides on the long daily history's 21:00 UTC
+    roll (engine/long_bars.py), DOND's stored-bars context included, and ships dark (settings engine.timeframes_live).
+    Dark: held retired from the start, journalled once. Live without a long history: held back `history_gap:1d`
+    (missing_file) at its 21:00 close, nothing queued, the store never asked (no `exploration_held_back`)."""
+    from goldbot.config import INTRADAY_LIVE
     from tests.test_arms_smc import _close_at
     from tests.test_arms_smc import _engine as smc_engine
     arm = _arm("DOND", "donchian_break", "1d", {"hold_bars": 10})
-    hist, close = _hist(arm, b1)
-    i = int(hist["idx"].iloc[-1])
-    c, row = close[i], hist.iloc[-1]
     eng, pb = smc_engine(tmp_path, arm, cap=40.0)
     ex = eng.exploration
-    assert ex is not None and ex.needs_context == {"DOND"}
-    _close_at(eng, pb, b1, c)
-    assert exploration.step(eng, c) and exploration.step(eng, c + pd.Timedelta(days=1))
-    assert not ex.queue
-    held = [d for d in eng.decisions if d.get("action") == "exploration_held_back"]
-    assert [(d["agent"], d["reason"]) for d in held] == [("explore:DOND", "history_unavailable")]
-    ex.context = ArmContext(ex.db, FakeStore(b1), "XAUUSD", eng.cfg.account_id)
-    ex.last_bar.clear()
+    assert ex is not None and "DOND" in ex.retired
+    assert [d["arm"] for d in eng.decisions if d.get("action") == "exploration_arm_dark"] == ["DOND"]
+    eng.cfg = eng.cfg.model_copy(update={"timeframes_live": (*INTRADAY_LIVE, "1d"),
+                                         "long_history_dir": str(tmp_path / "nowhere")})
+    ex.retired = frozenset()
+    c = pd.Timestamp("2024-01-16 21:00", tz="UTC")                  # a Tuesday 1d close on the 21:00 UTC roll
     _close_at(eng, pb, b1, c)
     assert exploration.step(eng, c)
-    [pending] = list(ex.queue)
-    assert (pending.side, pending.bar_ts, pending.hold_bars) == (int(row["side"]), c, int(row["max_bars"]) + 1)
-    assert pending.stop_usd == pytest.approx(float(row["risk_usd"]), rel=1e-6)
+    assert not ex.queue
+    assert not [d for d in eng.decisions if d.get("action") == "exploration_held_back"]
+    [gap] = [d for d in eng.decisions if d.get("action") == "history_gap:1d"]
+    assert (gap["arm"], gap["reason"]) == ("DOND", "missing_file")

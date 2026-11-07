@@ -285,6 +285,13 @@ class SchedulerSettings(_Section):
     # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
     # (goldbot/research/tv_ideas.py), after feed_reconcile has stored the broker's M1 and nightly_costs the cost table
     tva_scores: ScheduleSettings = ScheduleSettings(kind="daily", at="23:35", max_late_hours=20)
+    # N-3 (prereg-2026-11-07-n3-har.md): the next trading day's HAR range forecast from bars visible at the 22:00 UTC
+    # close (goldbot/research/har_abstention.py); before the winter reopen at 23:00. A missed night refuses learning
+    # entries (har_unavailable), so it runs once late and on first sight
+    har_days: ScheduleSettings = ScheduleSettings(kind="daily", at="22:05", max_late_hours=20, run_if_never_run=True)
+    # the same job 30 min later: writes the row when 22:05 failed (a late bar, a busy store); INSERT OR IGNORE keeps a
+    # row 22:05 already wrote
+    har_days_retry: ScheduleSettings = ScheduleSettings(kind="daily", at="22:35", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -399,6 +406,22 @@ class AutodiscSettings(_Section):
     cost_table: str | None = None                   # measured cost table JSON; None: the settings priors
 
 
+class HarAbstentionSettings(_Section):
+    """N-3 HAR low-range-day abstention (docs/research/prereg-2026-11-07-n3-har.md, goldbot/research/har_abstention.py):
+    the nightly `har_days` job's frozen fit and threshold. "Learning and control entries refused on HAR bottom-quintile
+    days (trailing 250-day quintiles, computed at 22:00 UTC from closed daily bars)". The fit reads only rows whose
+    target day closed in [fit_from, fit_to); fit_to never passes research.holdout_from (checked in ResearchSettings).
+    `enabled: false` makes the job write an `off` row: from it the engine refuses nothing (the kill path)."""
+    enabled: bool = False                             # quant R7: on after the K row and the overlap check
+    broker: str = "icm"                               # the canonical gold feed after the release (bars_1m_live source)
+    fit_from: date = date(2015, 1, 1)
+    fit_to: date = date(2025, 10, 1)                  # exclusive; at most the holdout start
+    quantile: float = Field(0.2, gt=0, lt=1)          # bottom quintile: hat <= this quantile of the trailing forecasts
+    trailing_days: int = Field(250, ge=20)
+    min_fit_rows: int = Field(500, ge=50)
+    max_gap_days: int = Field(4, ge=3)                # a longer gap between input days in the window: no row
+
+
 class PositionSettings(_Section):
     """The daily position engine (goldbot/research/position/, amendment W3). W3.6: "Program-wide defaults, fixed and
     never a free parameter: target 10%/yr per instrument ...; EWMA volatility with a 60-day span, lagged one day; cap
@@ -484,6 +507,7 @@ class ResearchSettings(_Section):
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
+    har_abstention: HarAbstentionSettings = Field(default_factory=HarAbstentionSettings)
     position: PositionSettings = Field(default_factory=PositionSettings)
 
     @field_validator("reserved_trials_quarter")
@@ -553,6 +577,9 @@ class ResearchSettings(_Section):
             raise ValueError("research.holdout_from and research.holdout_to are set together or not at all")
         if self.holdout_from is not None and self.holdout_to is not None and self.holdout_from > self.holdout_to:
             raise ValueError("research.holdout_from is after research.holdout_to")
+        if self.holdout_from is not None and self.har_abstention.fit_to > self.holdout_from:
+            raise ValueError("research.har_abstention.fit_to is after research.holdout_from: the HAR fit would read the "
+                             "holdout")
         return self
 
     def reserved_for(self, quarter: str) -> int:
@@ -852,6 +879,45 @@ class ShadowSettings(_Section):
     max_open_per_agent: int = Field(default=3, ge=1, le=10)
 
 
+INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
+GO_LIVE_BLOCKERS_1D_1W = (
+    "1d entries sent after 22:15 UTC once the broker has reopened, bracket from the send price (EET and EEST tests)",
+    "the 1w decision moved out of the first 15-60 minutes after the Sunday open",
+    "the 1w missed-week catch-up, persisted",
+    "a daily long-history refresh, a preflight check that it reaches the engine window, an alert on a history_gap "
+    "older than a day",
+    "the rules' common filter at the 21:00 UTC close (quant decision)",
+    "_trail_runners and score_twins on is_bar_close",
+    "a CONFIRM pass and trading-safety sign-off on the settings diff",
+)
+
+
+class EngineSettings(_Section):
+    """1d and 1w exploration arms (WS-4, consolidated plan 2026-11-07: "ships dark unless two conditions hold": the
+    7-day replay gives an identical decision set for every existing arm AND a CONFIRM passer passes lot-fit). An arm
+    whose timeframe is not in `timeframes_live` is held as retired from the start (no entry, exits managed). A 1d/1w
+    arm warms up from the long daily history under `long_history_dir` (`bars/<symbol>_1d.parquet`, else
+    `long/<symbol>_daily_long.parquet`; engine/long_bars.py), read point in time; a missing file or a history that
+    does not reach the engine's window keeps the arm quiet (`history_gap:<tf>`), never a crash."""
+    timeframes_live: list[Timeframe] = Field(default_factory=lambda: list(INTRADAY_LIVE))
+    long_history_dir: str = "raw/daily"
+
+    @field_validator("timeframes_live")
+    @classmethod
+    def _dark_until_go_live(cls, v: list[Timeframe]) -> list[Timeframe]:
+        """Go-live guard (WS-4 reviews 2026-11-07): 1d/1w stay dark until every blocker of BACKLOG item
+        `engine-1d-1w-golive` is closed; lifting this guard is that item's last step, with trading-safety sign-off."""
+        if bad := sorted(set(v) & {"1d", "1w"}):
+            raise ValueError(f"engine.timeframes_live may not list {bad} yet: open go-live blockers "
+                             f"(docs/backlog.d engine-1d-1w-golive): {'; '.join(GO_LIVE_BLOCKERS_1D_1W)}")
+        return v
+
+    def history_root(self, data_root: str) -> str:
+        """`long_history_dir` under `data_root` (never the working directory); an absolute path is kept."""
+        p = Path(self.long_history_dir).expanduser()
+        return str(p if p.is_absolute() else Path(data_root).expanduser() / p)
+
+
 class Mt5LoginSettings(_Section):
     """MT5 terminal login from the keyring (goldbot/ops/login.py; owner directive 2026-10-20: "MT5 terminal logins on
     the boxes must happen without the owner (no VNC step)"). Used by `goldbot-mt5 login <account>`, by the bridge when
@@ -906,6 +972,7 @@ class Settings(_Section):
     observe: ObserveSettings = Field(default_factory=ObserveSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
+    engine: EngineSettings = Field(default_factory=EngineSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)

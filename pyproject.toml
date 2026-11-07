@@ -28,6 +28,8 @@ dependencies = [
 live = ["MetaTrader5>=5.0.45; sys_platform == 'win32'", "python-telegram-bot>=21"]
 # Local-only chart rendering (scripts/replica_render.py); never imported by goldbot/.
 viz = ["matplotlib>=3.8"]
+# Local-only long daily history (scripts/gold_history.py, scripts/long_daily_history.py): Goldhub .xlsx, EIA .xls.
+research-data = ["openpyxl>=3.1", "xlrd>=2.0"]
 dev = [
     "pytest>=8",
     "pytest-xdist>=3.5",
@@ -40,6 +42,7 @@ dev = [
     "types-requests",
     "pre-commit",
     "pytest-testmon>=2.2.0",
+    "openpyxl>=3.1",     # tests/test_long_history.py writes a synthetic Goldhub workbook
 ]
 
 [tool.pytest.ini_options]
