@@ -81,10 +81,14 @@ def hac_t(x: np.ndarray, L: int) -> float:
 
 
 def daily(tr: pd.DataFrame, col: str = "excess") -> pd.Series:
+    """Per-UTC-fill-day sums of `col`. Rows where `col` is NaN are left out (a trade with no random-time twin has a NaN
+    excess: "leave it out of the excess statistic only", quant item 4), so such a day is not a zero."""
     if not len(tr):
         return pd.Series(dtype=float)
-    day = (tr["t_fill"].to_numpy(np.int64) // DAY)
-    return pd.Series(tr[col].to_numpy(float)).groupby(day).sum()
+    x = tr[col].to_numpy(float)
+    ok = ~np.isnan(x)
+    day = (tr["t_fill"].to_numpy(np.int64) // DAY)[ok]
+    return pd.Series(x[ok]).groupby(day).sum()
 
 
 def year_of_day(days: np.ndarray) -> np.ndarray:

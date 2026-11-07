@@ -15,8 +15,17 @@ Risk floor (EVAL-1 precondition iii, audit D1): "stop distance >= max(0.25 x ATR
 the decision bar i; an event whose ATR20 is not yet defined is not traded either. Without it a flat holiday bar gave a
 risk of 0.01 points and one trade of +9,331 R (S21-V2, US30 2013-12-26).
 
-R: risk = |fill - stop|; gross R = side (exit - fill) / risk. Cost (price units) = round trip + overshoot on stop
-exits + swap per 21:00 UTC rollover held; cost R = cost / risk. Stress = 1.5 x cost.
+Order risk (quant C7, eval1_signoff_1107): "The floor is decided once, at the signal bar, on the nominal order price
+(market orders: the decision close). A filled order is never dropped. A fill at or beyond its stop exits at the fill
+bar's price at once, as a loss of at least -1 R." The frozen fix checked the floor again at the fill and dropped a fill
+through the stop: the worst fills a limit order gets vanished (net up 0.01-0.05 R/trade). A fill at or past its target
+exits at once at the fill too (a take-profit already through is closed at market).
+
+R: risk = the ORDER's stop distance |order price - stop| (market: the decision close; a distance stop: stop_d), the
+risk the position is sized on when the order is placed; gross R = side (exit - fill) / risk. A fill that gaps toward
+the stop therefore risks less than 1 R and one that gaps past a stop entry more; measuring R on the fill's own distance
+would turn a gap to just short of the stop into the D1 tiny-risk blow-up the floor exists to stop. Cost (price units) =
+round trip + overshoot on stop exits + swap per 21:00 UTC rollover held; cost R = cost / risk. Stress = 1.5 x cost.
 
 Controls (A2), one twin per trade, simulated by the same walk:
   random_side  same fill bar and price, OPPOSITE side, mirrored stop/target distances, exit no later than the real
@@ -26,9 +35,11 @@ Controls (A2), one twin per trade, simulated by the same walk:
                exactly the bars that cost the straddle, while the surviving straddles were selected on the bar's range
   random_time  same side, same risk as a fraction of price and the same target R multiple ON THE TRADE'S SIDE (a short
                twin's target is below its entry; audit D3), entered at the open of a seeded random bar of the same
-               instrument/TF AFTER the real fill, held the same number of bars; excess = real - twin. Intraday: the
-               same time of day on one of the next 7 calendar days that has that bar (same session, independent of
-               the signal); 1d: one of the next 20 bars; 1w: the next 8. Never before the fill: a twin drawn from the
+               instrument/TF AFTER the real fill, held the same number of bars; excess = real - twin. No twin bar (the hold does not
+               fit in the data): the real trade is kept, its control and excess are NaN (left out of the excess
+               statistic only; item 4). Intraday: the
+               same time of day on one of the next 7 calendar days that has that bar (same session,
+               independent of the signal); 1d: one of the next 20 bars; 1w: the next 8. Never before the fill: a twin drawn from the
                bars that made the signal inherits its selection (audit D4: a reversal entry's twin bought into the
                move that triggered it)"""
 from __future__ import annotations
@@ -165,33 +176,34 @@ def _oco_sibling(ev: Events, k: int) -> int | None:
     return None
 
 
-def _leg(ev: Events, k: int, fill: float) -> tuple[float, float, float] | None:
-    """(stop, risk, target) of event k filled at `fill`; None when the stop or target is on the wrong side."""
+def _levels(ev: Events, k: int, fill: float) -> tuple[float, float]:
+    """(stop, target) of event k filled at `fill`: absolute prices, or distances from the fill (target nan: none)."""
     side = int(ev.side[k])
     stop = float(ev.stop[k]) if np.isfinite(ev.stop[k]) else fill - side * float(ev.stop_d[k])
-    risk = side * (fill - stop)
-    if not np.isfinite(risk) or risk <= 0:
-        return None
     tgt = float(ev.tgt[k]) if np.isfinite(ev.tgt[k]) else (
         fill + side * float(ev.tgt_d[k]) if np.isfinite(ev.tgt_d[k]) else np.nan)
-    if np.isfinite(tgt) and side * (tgt - fill) <= 0:
-        return None
-    return stop, risk, tgt
+    return stop, tgt
 
 
-def _nominal_ok(b: Bars, ev: Events, k: int, a20: np.ndarray) -> bool:
-    """Leg k's stop distance at its order price clears the risk floor (decided at the signal bar, before any fill)."""
+def order_risk(b: Bars, ev: Events, k: int, a20: np.ndarray) -> float | None:
+    """Event k's risk at its order price (market: the decision close), decided at the signal bar before any fill (C7);
+    None when the stop or target is on the wrong side of the order price or the stop is inside the risk floor."""
     i = int(ev.i[k])
+    side = int(ev.side[k])
     px = float(ev.px[k]) if np.isfinite(ev.px[k]) else float(b.c[i])
-    leg = _leg(ev, k, px)
-    return leg is not None and leg[1] >= risk_floor(b.inst, px, float(b.spr[min(i + 1, len(b) - 1)]), float(a20[i]))
+    stop, tgt = _levels(ev, k, px)
+    risk = side * (px - stop)
+    if not np.isfinite(risk) or risk <= 0 or (np.isfinite(tgt) and side * (tgt - px) <= 0):
+        return None
+    return risk if risk >= risk_floor(b.inst, px, float(b.spr[i]), float(a20[i])) else None
 
 
-def _opposite(b: Bars, start: int, side: int, fill: float, risk: float, tgt: float, last: int,
+def _opposite(b: Bars, start: int, side: int, fill: float, dist: float, risk: float, tgt: float, last: int,
               at_open: bool) -> float:
-    """R of the opposite-side twin of a trade: same bar and price, mirrored stop and target distances."""
+    """R (on the real trade's order risk) of the opposite-side twin of a trade: same bar and price, mirrored stop
+    distance `dist` and target distance."""
     ctgt = fill - (tgt - fill) if np.isfinite(tgt) else np.nan
-    cw = walk(b, start, -side, fill, fill + side * risk, ctgt, last, None, at_open)
+    cw = walk(b, start, -side, fill, fill + side * dist, ctgt, last, None, at_open)
     return -side * (cw.exit_px - fill) / risk
 
 
@@ -235,6 +247,11 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         if i >= n - 1 or int(b.ta[i]) < dec_from or int(b.ta[i]) >= end:
             continue
         side = int(ev.side[k])
+        risk = order_risk(b, ev, k, a20)
+        sib = _oco_sibling(ev, k)
+        if risk is None or (sib is not None and order_risk(b, ev, sib, a20) is None):
+            _count(counts, "risk_floor")      # decided at the signal bar; an OCO pair is placed whole or not at all
+            continue
         fr = _fill(b, i, side, int(ev.kind[k]), float(ev.px[k]), int(ev.valid[k]))
         if fr is None:
             continue
@@ -243,10 +260,6 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
             continue
         both = False
         fr2: tuple[int, float, bool] | None = None
-        sib = _oco_sibling(ev, k)
-        if sib is not None and not all(_nominal_ok(b, ev, q, a20) for q in (k, sib)):
-            _count(counts, "risk_floor")      # an OCO pair is placed whole or not at all
-            continue
         if sib is not None and sib > k:
             fr2 = _fill(b, i, int(ev.side[sib]), int(ev.kind[sib]), float(ev.px[sib]), int(ev.valid[sib]))
             if fr2 is not None and fr2[0] < f:
@@ -256,50 +269,56 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
             fr1 = _fill(b, i, int(ev.side[sib]), int(ev.kind[sib]), float(ev.px[sib]), int(ev.valid[sib]))
             if fr1 is not None and fr1[0] <= f:
                 continue                      # the first leg filled first or on the same bar (handled there)
-        leg = _leg(ev, k, fill)
-        if leg is None:
-            continue
-        stop, risk, tgt = leg
-        floor = risk_floor(b.inst, fill, float(b.spr[f]), float(a20[i]))
-        if not risk >= floor:                 # nan floor (ATR20 unknown) is not traded either
-            _count(counts, "risk_floor")
-            continue
+        stop, tgt = _levels(ev, k, fill)
+        dist = side * (fill - stop)           # the fill's own stop distance (<= 0: filled through the stop)
         start = f + 1 if int(ev.kind[k]) == 3 else f
         if start >= n:
             continue
         last = min(n - 1, start + int(ev.hold[k]) - 1)
         mask = ev.exit_long if side > 0 else ev.exit_short
+        t_fill = int(b.t[f])
+        instant = False                       # exits at the fill: through its stop or past its target (C7)
         if both:                              # both OCO legs on one bar: full loss (card S20/S21 conservative rule)
             w = Walk(f, stop, 1, int(b.t[f]))
+        elif dist <= 0:
+            w, instant = Walk(f, fill, 1, t_fill), True
+        elif np.isfinite(tgt) and side * (tgt - fill) <= 0:
+            w, instant = Walk(f, fill, 2, t_fill), True
         else:
             w = walk(b, start, side, fill, stop, tgt, last, mask, at_open)
         busy_until = w.exit_bar
         gross = side * (w.exit_px - fill) / risk
+        if instant and w.kind == 1:
+            gross = min(-1.0, gross)          # a fill at or beyond its stop: a loss of at least -1 R
         cost = cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, int(b.t[f]), w.t_exit) / risk
         # ---- control twin
         if control == "random_side":
             clast = w.exit_bar if w.kind in (0, 3) else last
-            opp = _opposite(b, start, side, fill, risk, tgt, clast, at_open)
+            # an instant exit: the opposite at the same price and instant is closed at once too (0 R)
+            opp = 0.0 if instant else _opposite(b, start, side, fill, dist, risk, tgt, clast, at_open)
             if both and fr2 is not None and sib is not None:
                 # the same bar touched the other leg too: the twin also takes the opposite of that leg, so every leg
                 # the market touched has its opposite counted once (unbiased on a martingale; audit D2)
-                leg2 = _leg(ev, sib, fr2[1])
-                if leg2 is not None:
-                    side2 = int(ev.side[sib])
+                side2 = int(ev.side[sib])
+                stop2, tgt2 = _levels(ev, sib, fr2[1])
+                dist2 = side2 * (fr2[1] - stop2)
+                risk2 = order_risk(b, ev, sib, a20)
+                if dist2 > 0 and risk2 is not None:
                     last2 = min(n - 1, start + int(ev.hold[sib]) - 1)
-                    opp += _opposite(b, start, side2, fr2[1], leg2[1], leg2[2], last2, fr2[2])
+                    opp += _opposite(b, start, side2, fr2[1], dist2, risk2, tgt2, last2, fr2[2])
             ctrl = 0.5 * (gross + opp)
         else:
             hold_bars = max(1, w.exit_bar - start + 1)
             g = _pick_bar(b, f, seed_key, i, hold_bars)
             if g is None:
-                continue
-            cfill = b.c[g] if b.co[g] else b.o[g]
-            crisk = risk / fill * cfill
-            cstop = cfill - side * crisk
-            ctgt = cfill + (tgt - fill) / risk * crisk if np.isfinite(tgt) else np.nan     # tgt - fill carries the side
-            cw = walk(b, g, side, cfill, cstop, ctgt, g + hold_bars - 1, None, not b.co[g])
-            ctrl = side * (cw.exit_px - cfill) / crisk
+                ctrl = np.nan                 # no room for a twin: the real trade is kept (item 4)
+            else:
+                cfill = b.c[g] if b.co[g] else b.o[g]
+                crisk = risk / fill * cfill
+                cstop = cfill - side * crisk
+                ctgt = cfill + (tgt - fill) / risk * crisk if np.isfinite(tgt) else np.nan    # tgt - fill: side
+                cw = walk(b, g, side, cfill, cstop, ctgt, g + hold_bars - 1, None, not b.co[g])
+                ctrl = side * (cw.exit_px - cfill) / crisk
         drift_adj = gross - side * drift_per_ns * (w.t_exit - int(b.t[f])) * fill / risk
         out.append((i, f, w.exit_bar, side, int(b.ta[i]), int(b.t[f]), w.t_exit, fill, risk, gross, cost, w.kind,
                     nights(int(b.t[f]), w.t_exit), ctrl, gross - ctrl, drift_adj))

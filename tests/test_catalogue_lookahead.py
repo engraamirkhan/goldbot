@@ -154,7 +154,8 @@ def test_close_only_bar_fills_and_stops_at_the_close() -> None:
     ev2.add(j, 1, stop=b2.o[j + 1] * 0.95, hold=5)
     tr2 = SIM.simulate(b2, ev2.build(), control="random_side", seed_key="x")
     assert tr2[0, SIM.TRADE_COLS.index("x")] == j + 2      # stopped on the close-only bar, at its close
-    assert tr2[0, SIM.TRADE_COLS.index("gross")] == pytest.approx((b2.c[j + 2] - b2.o[j + 1]) / (b2.o[j + 1] * 0.05))
+    order_risk = b2.c[j] - b2.o[j + 1] * 0.95               # R on the order's risk at the decision close (quant C7)
+    assert tr2[0, SIM.TRADE_COLS.index("gross")] == pytest.approx((b2.c[j + 2] - b2.o[j + 1]) / order_risk)
 
 
 def test_oco_both_legs_on_one_bar_is_a_full_loss() -> None:
