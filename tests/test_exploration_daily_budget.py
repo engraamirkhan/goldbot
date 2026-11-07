@@ -245,8 +245,9 @@ def test_control_allowance_is_per_pair(tmp_path, monkeypatch):
     cell = [START - pd.Timedelta(days=1)]
     elsewhere = [START - pd.Timedelta(days=1, hours=5)]
     _history(tmp_path, fills={"e1": cell, "e2": elsewhere}, signals={"c1": cell, "c2": cell})
+    # e2 is configured and active: c2's p = 0 is "its arms never filled in this cell", not "no active arm" (quant C1)
     eng, pb = _engine(tmp_path, [_arm("c1", max_open=10, control_share=0.3), _arm("c2", max_open=10, control_share=0.3),
-                                 _arm("e1", max_open=10)], DailyEntries(max_per_day=50))
+                                 _arm("e1", max_open=10), _arm("e2", max_open=10)], DailyEntries(max_per_day=50))
     exploration.on_pass(eng, _at(eng, pb, START))
     sent = {d["arm"] for d in _sent(eng)}
     assert {"c1", "e1"} <= sent and "c2" not in sent
@@ -346,3 +347,94 @@ def test_aux_migrations_23_24_backfill_each_rows_signal_close_and_index_it(tmp_p
         assert migrate(conn, "aux") == [23, 24]
         assert conn.execute("SELECT signal_ns FROM exploration_trades").fetchone()[0] == START.value
         assert "exploration_trades_signal" in {r[1] for r in conn.execute("PRAGMA index_list(exploration_trades)")}
+
+
+# ------------------------------------------------------------------------------------------------ round 3 (quant d, C2)
+def _ctx(tmp_path: Path) -> tuple[Any, Any]:
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    return eng, SimpleNamespace(db=exploration.ledger_db(str(tmp_path)), budget_cache={})
+
+
+def test_s0_is_thinned_at_its_gold_scalp_arms_matched_rate(tmp_path):
+    """Quant (d): S0 and S0R are paired with the account's active gold scalp edge arms that name no other non-learning
+    control (icm-probe: Z1P, Z2P, Z5P, ...). Z1P filled once where S0 signalled twice in the cell: p = 0.5, recorded as
+    today's S0 candidate's propensity, admitted or thinned."""
+    arms = {"S0": _arm("S0", style="scalp", control_share=0.25), "S0R": _arm("S0R", style="scalp", control_share=0.05),
+            "Z1P": _arm("Z1P", style="scalp"), "I9": _arm("I9", style="intraday"), "F1A": _arm("F1A", style="scalp")}
+    got = budget.pairs(arms)
+    assert got["S0"] == got["S0R"] == ("Z1P",)                    # F1A pairs F1C; an intraday arm is not S0's
+    before = [START - pd.Timedelta(days=1), START - pd.Timedelta(days=7)]
+    _history(tmp_path, fills={"Z1P": before[:1]}, signals={"S0": before})
+    eng, pb = _engine(tmp_path, [arms["S0"], arms["Z1P"]], DailyEntries(max_per_day=50))
+    exploration.on_pass(eng, _at(eng, pb, START))
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    today = obs[(obs["arm_id"] == "S0") & (obs["decision_utc"] == START)]
+    assert list(today["mu"]) == [0.5]
+    assert bool(today["taken"].iloc[0]) == (hash_u("S0", START) < 0.5)
+
+
+def test_a_pairs_p_for_day_d_is_unchanged_when_fills_and_signals_on_or_after_d_are_added(tmp_path):
+    day = START.floor("D")
+    _history(tmp_path, fills={"e": [START - pd.Timedelta(days=1)]},
+             signals={"c": [START - pd.Timedelta(days=1), START - pd.Timedelta(days=7)]})
+    eng, ex = _ctx(tmp_path)
+    p = budget.control_propensity(eng, ex, "c", ("e",), START, day, 1.0)
+    assert p == 0.5
+    with ex.db.write() as conn:                        # today's and later rows: outside day D's trailing window
+        for i, t in enumerate([START, START + pd.Timedelta(days=1)]):
+            LEDGER.upsert(conn, _rec(5000 + i, "e", t))
+    _history(tmp_path, fills={}, signals={"c": [START + pd.Timedelta(minutes=1)]})
+    ex.budget_cache = {}
+    assert budget.control_propensity(eng, ex, "c", ("e",), START, day, 1.0) == p
+
+
+def test_a_pair_whose_active_arms_never_filled_in_the_window_is_cold_p_1(tmp_path):
+    _history(tmp_path, fills={"e": [START - pd.Timedelta(days=30)]},          # before the 10 trading days
+             signals={"c": [START - pd.Timedelta(days=1)]})
+    eng, ex = _ctx(tmp_path)
+    assert budget.control_propensity(eng, ex, "c", ("e",), START, START.floor("D"), 1.0) == 1.0
+
+
+def test_a_pair_with_every_arm_retired_is_p_0_and_thinned(tmp_path, monkeypatch):
+    monkeypatch.setitem(budget.EXTRA_PAIRS, "c", ("e",))
+    gone = _arm("e", max_open=10)
+    gone = gone.model_copy(update={"spec": gone.spec.model_copy(update={"retired_day": "2026-11-06",
+                                                                        "retired_rule": "t"})})
+    eng, pb = _engine(tmp_path, [_arm("c", max_open=10, control_share=0.5), gone], DailyEntries(max_per_day=50))
+    exploration.on_pass(eng, _at(eng, pb, START))
+    assert not _sent(eng)
+    [thinned] = _actions(eng, "exploration_refused:control_thinned")
+    assert thinned["arm"] == "c" and thinned["admission_p"] == 0.0
+
+
+def test_a_fractional_p_admits_exactly_when_hash_u_is_below_it(tmp_path, monkeypatch):
+    """p = 0.5 in the 14:00 cell (one fill of e for two signals of c): each of today's four quarter-hour signals of c
+    is admitted iff hash_u(c, its close) < 0.5."""
+    monkeypatch.setitem(budget.EXTRA_PAIRS, "c", ("e",))
+    before = [START - pd.Timedelta(days=1), START - pd.Timedelta(days=7)]
+    _history(tmp_path, fills={"e": before[:1]}, signals={"c": before})
+    eng, pb = _engine(tmp_path, [_arm("c", max_open=10, control_share=0.5), _arm("e", max_open=10, side=-1)],
+                      DailyEntries(max_per_day=50))
+    closes = [START + pd.Timedelta(minutes=15 * k) for k in range(4)]
+    for t in closes:
+        exploration.on_pass(eng, _at(eng, pb, t))
+    admitted = {pd.Timestamp(d["ts"]).floor("min") for d in _sent(eng) if d["arm"] == "c"}
+    assert admitted == {t for t in closes if hash_u("c", t) < 0.5}
+    assert any(hash_u("c", t) >= 0.5 for t in closes) or admitted == set(closes)
+
+
+def test_a_filled_row_written_without_signal_ns_during_a_rollback_still_counts(tmp_path):
+    """Trading-safety LOW (round 3): an older release leaves signal_ns NULL; its send time counts instead."""
+    db = exploration.ledger_db(str(tmp_path))
+    rec = _rec(1, "e", START)
+    with db.write() as conn:
+        LEDGER.upsert(conn, rec)
+        conn.execute("UPDATE exploration_trades SET signal_ns = NULL, ts_ns = ?", (START.value,))
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    edge = Arm(spec=_spec("e", {"stop_usd": 3.0}), style="scalp")
+    n = budget.entries_today(eng, SimpleNamespace(db=db), START.floor("D"), START, {"e": edge})  # type: ignore[arg-type]
+    assert n["day"] == 1 and n["edge"] == 1
+    eng2, ex = _ctx(tmp_path)
+    _history(tmp_path, fills={}, signals={"c": [START, START + pd.Timedelta(minutes=15)]})
+    day_after = START.floor("D") + pd.Timedelta(days=1)                    # the NULL row's fill is in the window: 1 / 2
+    assert budget.control_propensity(eng2, ex, "c", ("e",), START + pd.Timedelta(days=1), day_after, 1.0) == 0.5

@@ -191,7 +191,7 @@ class ExplorationPot(FrozenRecord):
 class DailyEntries(FrozenRecord):
     """The account's daily exploration entry budget (owner decision 2026-10-30: 150-250 demo fills a day in total;
     measured 830-860 a day on 2026-11-04..06, 69% random controls). Entries only, counted as fills (an order the broker
-    filled) by signal close since the engine's day reset, every book of the account together; exits are never counted
+    filled) by signal time from UTC midnight, every book of the account together; exits are never counted
     or gated. Each refusal is journalled and its candidate recorded blocked (`exploration_refused:<why>`), as every
     other cap (goldbot/engine/exploration_budget.py). Demo only by construction: exploration loads on demo probe_only
     accounts only (`Account._exploration_fenced`)."""

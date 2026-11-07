@@ -19,7 +19,8 @@ The rules, as built here (`exploration._send` asks them before any other cap; en
   UTC hour) cell over the trailing TRAIL_DAYS trading days before today), admitted when hash_u(control, signal
   close) < p; p is the candidate's recorded propensity. A cell where its arms filled but it never signalled takes
   p = 1, a cell where its arms never filled p = 0; a pair whose arms have no fill in the window at all (new or
-  quiet) takes p = 1 (cold start; the day, hour and session budgets bind). An unpaired gold control has p = 1.
+  quiet) takes p = 1 (cold start; the day, hour and session budgets bind), a pair with no active arm p = 0. S0 and
+  S0R pair the account's active gold scalp edge arms that no other non-learning control is read against (quant (d)).
 """
 from __future__ import annotations
 
@@ -45,6 +46,9 @@ TRAIL_DAYS = 10                     # trading days the session shares and the pa
 PASS_WIDE = frozenset({"daily_entries", "hourly_entries", "session_entries"})
 # controls that pair arms no row names (quant ruling 2026-11-06 Q1: ZCD -> Z3D/Z9D/Z10D; ZCV and GS1C likewise)
 EXTRA_PAIRS: dict[str, tuple[str, ...]] = {"ZCD": ("Z3D", "Z9D", "Z10D"), "ZCV": ("Z6V", "Z7V"), "GS1C": ("GS1",)}
+# quant ruling 2026-11-06 (d): gold's own scalp controls pair the account's gold scalp edge arms
+GOLD_SCALP_CONTROLS = ("S0", "S0R")
+SIGNAL = "COALESCE(signal_ns, ts_ns)"   # a fill's signal close; its send time on a row written without one
 
 
 def _ns(ts: pd.Timestamp) -> int:
@@ -75,6 +79,13 @@ def pairs(arms: Mapping[str, Arm]) -> dict[str, tuple[str, ...]]:
         out.setdefault(control, set()).add(arm_id)
     for arm_id, (control, _tf) in CONTROLS.items():
         out.setdefault(control, set()).add(arm_id)
+    # (d): S0 and S0R pair the gold scalp edge arms no other non-learning control is read against (a learning arm's
+    # dedicated twin does not take it out: the H-81 strata were registered against the borrowed S0)
+    other = {a for c, v in out.items() if c not in GOLD_SCALP_CONTROLS and not c.startswith("LC") for a in v}
+    scalp = {a.arm_id for a in arms.values() if entry_kind(a) == "edge" and a.instrument == GOLD and a.style == "scalp"
+             and a.arm_id not in other}
+    for c in GOLD_SCALP_CONTROLS:
+        out[c] = set(scalp)
     return {c: tuple(sorted(v)) for c, v in out.items()}
 
 
@@ -121,7 +132,8 @@ def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Tim
     Raises when the ledger cannot be read (the caller refuses: fail closed)."""
     hour = max(since, now.floor("h"))
     with ex.db.connection() as conn:
-        rows = conn.execute("SELECT arm_id, signal_ns FROM exploration_trades WHERE account_id = ? AND signal_ns >= ? "
+        # COALESCE: a row an older release wrote during a rollback has no signal_ns; its send time counts instead
+        rows = conn.execute(f"SELECT arm_id, {SIGNAL} FROM exploration_trades WHERE account_id = ? AND {SIGNAL} >= ? "
                             "AND position_id IS NOT NULL", (eng.cfg.account_id, _ns(since))).fetchall()
     out = {"day": len(rows), "hour": sum(int(t) >= _ns(hour) for _, t in rows)}
     for (arm_id, _), (sess, _h) in zip(rows, _cells([int(t) for _, t in rows]), strict=True):
@@ -196,7 +208,7 @@ def control_propensity(eng: Engine, ex: Exploration, control: str, arms_of: tupl
         marks = ",".join("?" * len(arms_of))
         with ex.db.connection() as conn:
             edge = [int(r[0]) for r in conn.execute(
-                f"SELECT signal_ns FROM exploration_trades WHERE account_id = ? AND signal_ns >= ? AND signal_ns < ? "
+                f"SELECT {SIGNAL} FROM exploration_trades WHERE account_id = ? AND {SIGNAL} >= ? AND {SIGNAL} < ? "
                 f"AND position_id IS NOT NULL AND arm_id IN ({marks})", (eng.cfg.account_id, lo, hi, *arms_of))]
             mine = [int(r[0]) for r in conn.execute(
                 "SELECT decision_ns FROM exploration_obs WHERE account_id = ? AND arm_id = ? AND decision_ns >= ? "

@@ -35,8 +35,10 @@ book together (quant ruling 2026-11-06 Q1/Q3 amend the first draft of this secti
    UTC hour) cell over the trailing 10 trading days before today; admitted when hash_u(control id, signal close) < p
    (seeded, restart-safe). p is the candidate's recorded propensity, taken or thinned (`control_thinned`). A cell
    where its arms filled and it never signalled takes p = 1, one where they never filled p = 0; a pair whose active
-   arms have no fill in the window at all takes p = 1 (cold start), and a pair with no active arm p = 0. An unpaired
-   gold control (S0, S0R) takes p = 1 inside the day, hour and session budgets.
+   arms have no fill in the window at all takes p = 1 (cold start), and a pair with no active arm p = 0. An unpaired gold
+   control (S0, S0R) is paired with the account's active gold scalp edge arms that name no other control, and is
+   thinned like any paired control (quant ruling 2026-11-06 (d); a learning arm's dedicated twin does not count as
+   another control: the H-81 strata were registered against the borrowed S0).
 3. An **unpaired per-instrument control** (a non-gold control whose row names no learning arm: S0-<key>, I0-<key>)
    takes at most `thin_control_share` (0.25) x max_per_day fills a day (`thin_controls`).
 
