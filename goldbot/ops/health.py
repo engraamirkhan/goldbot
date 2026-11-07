@@ -146,6 +146,7 @@ from goldbot.ops.checks.engine import (
 from goldbot.ops.checks.feeds import (
     PNL_BASIS_GROSS_WARN_PCT,
     PNL_BASIS_WINDOW_DAYS,
+    check_cost_of_record,
     check_costs,
     check_costs_published,
     check_data_quality,
@@ -319,6 +320,7 @@ __all__ = [
     "check_bridge",
     "check_bridge_compat",
     "check_costs",
+    "check_cost_of_record",
     "check_costs_published",
     "check_data_quality",
     "check_deadman",

@@ -390,7 +390,7 @@ def test_the_engine_publishes_when_the_current_tick_error_block_began_and_clears
     assert e["last_tick_error_at"] == (WED + pd.Timedelta(minutes=3)).isoformat()   # the history stays for tick_errors
 
 
-def test_the_engine_loop_survives_any_exception_and_health_alerts_on_it(tmp_path):
+def test_the_engine_loop_survives_any_exception_and_health_alerts_on_it(tmp_path, monkeypatch):
     from goldbot.ops import health
 
     class Dead(PaperBroker):
@@ -403,6 +403,8 @@ def test_the_engine_loop_survives_any_exception_and_health_alerts_on_it(tmp_path
     e = json.loads((tmp_path / "engine_icm-demo.json").read_text())
     assert e["tick_error"] is True and "RuntimeError" in e["tick_error_detail"]
     ctx = health.HealthContext(state_dir=tmp_path, now=pd.Timestamp.now("UTC"), get_secret=lambda k: None)
+    from goldbot.ops.checks import engine as engine_check
+    monkeypatch.setattr(engine_check, "_market_open_throughout", lambda *a, **k: True)   # not the wall clock's weekend
     c = health.check_engine(ctx, "icm-demo")
     assert c.status == "fail" and "tick error" in c.reason
 

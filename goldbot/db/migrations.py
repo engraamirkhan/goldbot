@@ -565,6 +565,50 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS health_alerts_ts ON health_alerts(ts_ns)",
     )),
+    # additive (daily entry budget, PD 2026-11-06; code review LOW-1, trading-safety LOW-1): `signal_ns`, each
+    # exploration order's signal close (the engine's clock, so a replay counts its own day, never the host's wall clock
+    # at send), backfilled from the row's JSON body, and an index on (account, signal time, arm) for the budget's
+    # per-pass reads. A release without it never reads the column (its rows leave it NULL)
+    Migration(version=23, name="exploration_signal_time", additive=True, statements=(),
+              add_columns=(("exploration_trades", "signal_ns", "INTEGER"),)),
+    # additive, with 23 (the column exists before its backfill and index): idempotent on a re-apply
+    Migration(version=24, name="exploration_signal_index", additive=True, statements=(
+        "UPDATE exploration_trades SET signal_ns = CAST(strftime('%s', json_extract(body, '$.signal_utc')) AS INTEGER) "
+        "* 1000000000 WHERE signal_ns IS NULL AND json_valid(body) AND json_extract(body, '$.signal_utc') IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS exploration_trades_signal ON exploration_trades(account_id, signal_ns, arm_id)",
+    )),
+    # additive (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; goldbot/research/tv_ideas.py): the
+    # nightly shadow score of every followed author's idea, one row per idea, from its first-seen snapshot. A row whose
+    # status is final is never rescored (only `edited` can still go 0 -> 1, and an unlabelled row takes the label of a
+    # later-admitted frozen extractor). Holds no idea text and no author level. A release without it never reads it
+    Migration(version=25, name="tva_scores", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS tva_scores (
+               idea_id INTEGER PRIMARY KEY,
+               author TEXT NOT NULL,
+               bucket TEXT NOT NULL CHECK (bucket IN ('I', 'D', 'W')),
+               symbol_class TEXT NOT NULL CHECK (symbol_class IN ('spot', 'futures', 'other')),
+               published_utc TEXT NOT NULL,
+               available_utc TEXT NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('scored', 'pending', 'no_bars', 'no_bars_final',
+                                                      'backfilled', 'not_gold', 'holdout')),
+               edited INTEGER NOT NULL,
+               label TEXT NOT NULL CHECK (label IN ('long', 'short', 'abstain', 'unlabelled')),
+               extractor TEXT,
+               extractor_sha TEXT,
+               decision_eligible INTEGER NOT NULL,
+               entry_utc TEXT,
+               atr_usd REAL,
+               r_long REAL, r_short REAL, r_long_stress REAL, r_short_stress REAL,
+               exit_long TEXT, exit_short TEXT,
+               r_long_pub REAL, r_short_pub REAL,
+               r_side REAL, r_side_stress REAL,
+               levels_status TEXT, levels_r REAL, levels_r_stress REAL,
+               cost_source TEXT NOT NULL,
+               scorer_sha TEXT NOT NULL,
+               scored_utc TEXT NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS tva_scores_author ON tva_scores(author, published_utc)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

@@ -27,7 +27,7 @@ from goldbot.execution import mt5_adapter
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops.services import engine as engine_svc
 
-NOW = pd.Timestamp.now("UTC").floor("s")
+NOW = pd.Timestamp("2026-11-03 14:00:00", tz="UTC")   # a Tuesday in session: the wall clock made these fail when the market is shut
 TZ = DEFAULT_SESSIONS.server_tz
 
 

@@ -5,6 +5,63 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- TradingView author ideas shadow scorer (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; branch
+  `feat/tv-ideas-shadow-scorer`): `goldbot/research/tv_ideas.py`, scheduler job `tva_scores` daily 23:35 UTC (after
+  feed_reconcile and nightly_costs). It opens brain `state/tv_ideas.db` read-only (`mode=ro`) and scores each live
+  gold idea's first-seen snapshot on the canonical broker's own 1m minutes (`account_bars_1m`) into aux.db
+  `tva_scores` (migration 23): entry at the first minute at or after `available_utc` and R = ATR14 as of the prior
+  server-day close, both through `asof_join`; the direction read (1.3(b)) for BOTH sides net of spread,
+  `research_costs` extra and swap (drift and random-direction baselines at the author's timestamps), the 1.5x stress,
+  a descriptive publish + 60 s capture read, and the levels read (1.2-1.3(a)) only where an admitted extractor gives
+  entry, stop and T1 on spot. Holdout ideas are refused, back-catalogue ideas counted (`backfilled`), non-gold
+  counted, futures direction-only. Edited = the text changed after first sight (versions), not the collector's
+  `edited` flag (which counts "target reached" notes and would drop winners); edited live ideas stay
+  decision-eligible (T-2 (7)). A final row is never rescored.
+  `ADMITTED_EXTRACTORS` is EMPTY: T-1's one direction audit failed (2026-10-31), so every idea is `unlabelled` and
+  counted; no LLM, no collector-parsed direction or levels. A's bias-template extractor needs a dated amendment and
+  its outcome-blind audit first (research-director). The job reports counts and forward-read progress only (>= 100
+  resolved ideas and >= 60 publish days per author), no running skill statistic. No order, RiskGate path, arm or
+  feature. Smoke on the 11-06 brain dump: 17 live ideas, 8 holdout and 6 non-gold refused, the long/short reads equal
+  the 11-06 scratch read on 10 of 12; the 2 that differ are Sunday ideas, whose 1-day horizon now runs from the fill
+  (Monday open), not from the post.
+  Quant review amendment T-2 (prereg section 8, adopted PD+PO 2026-11-06) is applied: a hole over 15 min in the hold
+  (outside the daily break and weekly close, timed on NY+7 because the Athens broker clock is an hour off gold's 17:00
+  New York break in the US/EU clock-change weeks; a hole on one listed CME holiday is exempt) -> `no_bars`, rescored
+  nightly, final `no_bars_final` 5 weekdays after the horizon; R = mean TR of the 14 most recent whole server weekdays
+  (>= 80% of the median minutes) among the last 20, else `no_bars`; decision-eligible only from the dated admission of the author's extractor
+  (`Extractor.admitted_utc`, in its sha); seconds charts bucket I; no holdout minute read; minutes fetched only from
+  the earliest still-scoreable idea. Operational note: the brain's ICM minutes start 2026-10-25, so live ideas before
+  about 2026-11-13 stay `no_bars` (no 15 whole ATR days); none of them can be decision-eligible under T-2 (6) anyway.
+- Volume cap and learner (branch `fix/volume-cap-learner`, PD 2026-11-06; measured 830-860 demo fills a day against
+  the owner's 150-250, 69% random controls; review round: quant Q1-Q9, trading-safety LOW-1/2, code review LOW-1):
+  - Daily entry budget (accounts.yaml `exploration.daily`, `ops.accounts.DailyEntries`; engine
+    `engine/exploration_budget.py`): icm-probe 85 / 8 an hour, icm-demo 70 / 7, vantage-demo 40 / 4 exploration
+    fills, counted by signal close (aux migrations 23-24 `signal_ns`, backfilled; index on account, signal time, arm)
+    from the UTC day's start, every book together; each session (asia / london / newyork) gets its trailing-10-day
+    share of the day. A paired control is admitted per pair by matched-time Bernoulli thinning (p = min(1, its
+    arms' fills / its signals in the same session x hour cell, trailing 10 trading days), seeded hash_u, p recorded
+    as the propensity); unpaired per-instrument controls (S0-<key>, I0-<key>) take at most 0.25 of the day and stop
+    once their instrument's cost cell has 30 fills (counts cached a minute, only rising)
+    (docs/research/prereg-amendment-2026-11-06-control-thinning.md). Refusals: `exploration_refused:daily_entries|
+    hourly_entries|session_entries|control_thinned|thin_controls|thin_cell_complete`, candidates recorded blocked.
+    Entries only: exits are never counted or gated; the RiskGate is still the only path to an order. Rollback: drop
+    `daily:` and restart.
+  - Matched reads (`ops/perf_report.py` `_excess`) report the share of the arm's fills in cells with no control fill;
+    above 10% the read is "not readable".
+  - Control stops and retirements (PD+PO 2026-11-06, kill list; A5 signed by the quant-reviewer,
+    docs/research/a5-signoff-2026-11-06.md). Spec rows retired 2026-11-06 (unhashed `retired_day`/`retired_rule`
+    only, K unchanged): BXR/BXT/BXF 15/30/1H/4H and XBB15 (A2); the unpaired controls I0, VI0, C1H, VC1H, W0, VW0; A5:
+    S5A, S5B, Z4D, Z4P, Z6D, Z6V, Z7D, Z7P, Z7V with their LC* controls; ZCV (its vantage arms gone). ZCD stays (Z3D,
+    Z9D, Z10D). Open positions keep every exit. icm-demo's swing pot has no active arm.
+  - Learner (`exploration_data.learn`, `entry_exclusions`): retired arms (spec row from its `retired_day`, or the
+    broker's `exploration_arm_status` from its `recorded_ns`: point in time), blocked or unqualified arms and arms not
+    configured on the broker are written at weight 0 (`detail.excluded`); an enterable arm with no labelled fill holds
+    the cold-start floor min(FLOOR_SHARE, 1/n) (`detail.cold_start`); the rest renormalise. `weights` reads a 0 as
+    "cannot enter" instead of falling back to equal shares.
+  - Cost probes (CFO/finance 2026-11-06, -£107 in 12 days): icm-probe scheduled every_min 60 -> 120 (every ICM session
+    is past PROBE_MIN_FILLS 50). Vantage NOT halved: its london (43) and newyork (47) scheduled fills are under it.
+    `probe_plan` ICM 30 -> 15; trades_view targets now 100 / 70 / 80 (budget + probes). Health `costs:of_record` WARNs
+    when the cost of record's cells (ICM, Vantage) were last measured more than 30 days ago.
 - A failing regime, feature build or decision skipped the bar close's exits (trading-safety review of the pass-budget change, LOW, already in place before it):
   - Cause: `on_bar_close` computed the family weights (regime, features) before the timeframe loop, so an exception there skipped `_manage_policies` (time exits, exit policies) for every timeframe and `_blackout_close` (pre-news exits); one raised by `_decide` skipped the later timeframes' policies the same way. Broker-side SL/TP still protected open trades.
   - Fix: both are caught, entries are skipped for the rest of that close, every timeframe's exit policies and the pre-news exits still run, and the first error is raised after them, so it is a tick error and entries stay blocked until a clean decision bar as before. Test: `tests/test_cov_engine.py::test_a_failing_regime_or_decision_skips_entries_only_and_this_closes_exits_still_run`.

@@ -216,6 +216,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tva_scores",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "costs:icm-demo",
    "ok",
    "built 0.6 d ago"
@@ -234,6 +239,11 @@
    "ticks:icm-demo",
    "ok",
    "no broker tick day recorded yet (scheduler job tick_record)"
+  ],
+  [
+   "costs:of_record",
+   "ok",
+   "every broker's cost-of-record cells measured within 30 d"
   ],
   [
    "data_quality",
@@ -655,6 +665,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tva_scores",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "costs:icm-demo",
    "ok",
    "built 0.6 d ago"
@@ -698,6 +713,11 @@
    "costs:published",
    "warn",
    "cost table never published to release costs-v1: research charges the priors"
+  ],
+  [
+   "costs:of_record",
+   "ok",
+   "every broker's cost-of-record cells measured within 30 d"
   ],
   [
    "data_quality",

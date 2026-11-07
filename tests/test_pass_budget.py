@@ -62,6 +62,9 @@ def _engine(tmp_path: Path, bars: dict[int, pd.DataFrame]) -> tuple[Engine, _Ter
     acc = load_accounts(logins=False)["icm-probe"]
     cfg = exploration.config_for(acc)
     assert cfg is not None
+    # the pass's paths, not the account's daily entry budget (tests/test_exploration_daily_budget.py): without it the
+    # session's controls trade before any edge arm fills
+    cfg = cfg.model_copy(update={"daily": None})
     reg = load_instruments()
     specs = tuple(BookSpec(key=k, symbol=k, store_symbol=reg.get(k).store_symbol, magic_block=reg.get(k).magic_block,
                            digits=2, point=0.01, contract_size=reg.get(k).contract_size,

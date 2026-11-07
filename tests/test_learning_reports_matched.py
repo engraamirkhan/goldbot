@@ -77,7 +77,21 @@ def test_cells_without_control_trades_are_dropped_and_counted(tmp_path):
     _paired(tmp_path, skip_control_day="2026-10-30")
     g = _family(_report(tmp_path))
     assert g.excess_dropped == 8 and g.excess_cells == 4
-    assert "8 unmatched" in g.verdict
+    assert "8 unmatched" in g.verdict and "20% uncovered" in g.verdict
+
+
+def test_a_matched_read_with_more_than_a_tenth_of_its_fills_uncovered_is_not_readable(tmp_path):
+    """Quant ruling 2026-11-06 Q1: the controls are thinned per pair, so the share of arm fills in cells with no
+    control fill is reported, and above 10% the read says "not readable" (never above, below or not distinguishable)."""
+    _engine(tmp_path)
+    _paired(tmp_path, edge=0.3)                                                           # every fill covered
+    assert _family(_report(tmp_path)).verdict.startswith("above the random control")
+    other = tmp_path / "other"
+    other.mkdir()
+    _engine(other)
+    _paired(other, n_days=5, per_day=8, edge=0.3, skip_control_day="2026-10-30")          # 8 of 40 = 20%
+    g = _family(_report(other))
+    assert g.verdict.startswith("not readable: 20% of the arm's fills") and not g.sufficient
 
 
 def test_fewer_than_thirty_on_a_side_gives_no_interval_on_the_difference(tmp_path):

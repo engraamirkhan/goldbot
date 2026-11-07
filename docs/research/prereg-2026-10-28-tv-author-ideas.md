@@ -336,3 +336,36 @@ scorer, baselines, decision rules (3) and K (5) are unchanged.
   its reads of ambiguous text are not outcome-blind.
 - **K:** unchanged (the 9 cells of section 3). Abstention can shrink cells below 100 ideas; such cells read
   `insufficient` and stay counted.
+
+## 8. Amendment T-2 (quant review, 2026-11-06; adopted PD+PO 2026-11-06)
+
+Written at the quant review of the shadow scorer (`goldbot/research/tv_ideas.py`) and before any forward-read idea
+is decision-eligible (no extractor is admitted, so none is). It fixes how the forward read (3.3) is computed; the
+decision rules of section 3 and K (section 5) are unchanged.
+
+1. **Entry.** The entry is the first 1m minute at or after `available_utc` (the moment we held the text). The capture
+   loss is reported against an entry at `published_utc + 60 s`.
+2. **Bars (LV).** The live read uses the canonical-cost broker's own 1m bid/ask minutes, with quarantined minutes
+   excluded; Dukascopy stays the source for BC and HO. A hole of more than 15 minutes in the hold, outside gold's
+   daily break (17:00 New York, timed as 23:55-01:05 on the NY+7 clock) and the weekly close (Friday 23:55 to Monday
+   01:05, NY+7), makes the idea `no_bars` (not final; rescored nightly). The ATR day (item 4) still cuts at the
+   broker's configured server midnight. A hole inside a date listed in config/holidays_cme_metals.yaml (CME trading
+   day, NY+7; inside its validity only) is not a hole. A hold still holed 5 weekdays after its horizon end is final
+   no_bars, counted per author, never decision-eligible.
+3. **Calendar.** The horizon, the fill window and the maximum hold are counted in UTC weekdays from the fill minute;
+   holidays count as days.
+4. **R.** R is the simple mean of 14 true ranges of mid daily bars cut at the broker's server midnight, as of the last
+   completed server day before the fill, over the 14 most recent server weekdays with >= 80% of the median day's
+   minutes, among the last 20; fewer than 14 such days -> no_bars.
+5. **Buckets.** Up to 240 minutes, or a seconds chart: I. Over 240 minutes, and 1D to 6D: D. Weeks and months: W. A
+   missing timeframe: D.
+6. **Forward universe.** Per author, the ideas with `available_utc` at or after the dated amendment that admits that
+   author's extractor. Earlier ideas are descriptive only: the 2026-11-06 read exposed outcomes up to that date.
+7. **Edited (LV).** Edited means more than one content hash. Live ideas are scored on their first snapshot; edited
+   live ideas stay in the decision read, and the edited-excluded mean is reported as a sensitivity. The 1.5
+   exclusion still applies to BC.
+8. **Multiplicity.** Holm with m = 3 at the forward read, however many authors have an extractor. An author without
+   one is INCONCLUSIVE at 2027-10-28.
+
+**Consequence.** The earliest SKILL read is about 3.5 months after the first extractor admission, so not before Q1
+2027.

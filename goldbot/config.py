@@ -282,6 +282,9 @@ class SchedulerSettings(_Section):
     daily_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:15", max_late_hours=12)
     # ADR 0058 phase 2: the bounded discovery search; skips unless research.autodisc.nightly_enabled (the Mac only)
     autodisc_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:30", max_late_hours=6)
+    # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
+    # (goldbot/research/tv_ideas.py), after feed_reconcile has stored the broker's M1 and nightly_costs the cost table
+    tva_scores: ScheduleSettings = ScheduleSettings(kind="daily", at="23:35", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -617,8 +620,9 @@ class DailyReviewSettings(_Section):
         "icm": {"scalp": 160, "intraday": 35, "swing": 5}, "vantage": {"scalp": 0, "intraday": 35, "swing": 5}})
     # cost probes a day per broker (aux.db cost_probes), from the ADR 0043 probe sleeves: ICM P0 60-90 + mirrors ~8,
     # Vantage scheduled M1 probes only (half ICM's scheduled share, no shadow book to mirror); demo trim 2026-11-01
-    # (cost of record 2026-10-31 section 6): ICM 90 -> 24, one scheduled probe per open hour
-    probe_plan: dict[str, int] = Field(default_factory=lambda: {"icm": 24, "vantage": 40})
+    # (cost of record 2026-10-31 section 6): ICM 90 -> 24, one scheduled probe per open hour; CFO/finance 2026-11-06:
+    # ICM -> 15 (icm-probe scheduled every_min 120), Vantage 40 until its sessions reach PROBE_MIN_FILLS
+    probe_plan: dict[str, int] = Field(default_factory=lambda: {"icm": 15, "vantage": 40})
     volume_alert_below: float = Field(0.5, gt=0, le=1)     # a trading day under this fraction of the plan is low ...
     volume_alert_days: int = Field(2, ge=1)                #   ... and this many low trading days running open an issue
     refit_min_fills: int = Field(200, ge=50)               # a (broker, session) cost cell is refit after this many fills
@@ -636,7 +640,8 @@ class TradesViewSettings(_Section):
     Reporting only: nothing here sizes, gates or limits a trade."""
     # fills a day for a demo account without its own target; a live account has no target
     fills_target: int = Field(200, ge=0)
-    # account id -> its own target (ADR 0049 D1/D1a: icm-probe about 323, icm-demo about 120, vantage-demo about 90)
+    # account id -> its own target (ADR 0049 D1/D1a: icm-probe about 323, icm-demo about 120, vantage-demo about 90;
+    # PD 2026-11-06: the accounts' exploration.daily budgets plus their probe plans, 250 a day in total)
     fills_target_by_account: dict[str, int] = Field(default_factory=dict)
     # ADR 0004 north-star: GBP 50 a day on the GBP 1,000 basis = 5% of the day's starting equity, scaled per account
     daily_target_share: float = Field(0.05, gt=0, le=1)

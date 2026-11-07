@@ -163,7 +163,7 @@ def test_refusal_skip_and_stale_reasons_are_counted_from_the_journal_and_the_can
                                             "journal:exploration_refused:ledger_unreadable": 1}
 
 
-def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_300_a_day_on_icm(tmp_path):
+def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_285_a_day_on_icm(tmp_path):
     db = _db(tmp_path)
     for i in range(6):
         _cand(db, f"s{i}", at=LONDON + pd.Timedelta(minutes=i))
@@ -173,16 +173,17 @@ def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_300_
     review = _run(tmp_path)
     cfg = S.daily_review
     # the prereg's ~290 a day, less the demo trim (cost of record 2026-10-31 section 6): ICM probes 90 -> 24; the
-    # demo-limits ADR 2026-11-02 restatement: arms x1.35 and the learning class (ICM 270 + probes 30)
-    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 300
-    assert cfg.probe_plan == {"icm": 30, "vantage": 40}
+    # demo-limits ADR 2026-11-02 restatement: arms x1.35 and the learning class (ICM 270 + probes 30); CFO/finance
+    # 2026-11-06: icm-probe's scheduled probes every 120 min, ICM probes 30 -> 15
+    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 285
+    assert cfg.probe_plan == {"icm": 15, "vantage": 40}
     vol = {(v.broker, v.style): v for v in review.volume}
     icm = vol["icm", "scalp"]
     assert (icm.candidates, icm.fills, icm.plan) == (6, 1, 216)
     assert vol["icm", "intraday"].candidates == 1 and vol["vantage", "intraday"].candidates == 1  # never pooled
-    assert vol["icm", "probe"].plan == 30 and vol["icm", "swing"].candidates == 0
-    assert review.volume_total == 8 and review.plan_total == 300 + 134     # ICM 300, Vantage 94 + 40 probes
-    assert review.of_plan == pytest.approx(8 / 434, abs=1e-6)
+    assert vol["icm", "probe"].plan == 15 and vol["icm", "swing"].candidates == 0
+    assert review.volume_total == 8 and review.plan_total == 285 + 134     # ICM 285, Vantage 94 + 40 probes
+    assert review.of_plan == pytest.approx(8 / 419, abs=1e-6)
 
 
 @pytest.mark.parametrize(("arm", "host", "n", "breached"), [
@@ -322,7 +323,7 @@ def test_volume_under_half_the_plan_on_two_trading_days_running_opens_an_issue_w
     second = _run(tmp_path, sink=sink)
     assert second.volume_low_days == 2
     [(_, title, body)] = sink.issues
-    assert "volume" in title.lower() and "global_cap" in body and "of 434 planned" in body
+    assert "volume" in title.lower() and "global_cap" in body and "of 419 planned" in body
     _blinded(body)
 
 
@@ -471,7 +472,7 @@ def test_the_owner_report_carries_the_blinded_review_lines(tmp_path):
     _run(tmp_path)
     text = build_digest(tmp_path, NOW + pd.Timedelta(minutes=30), settings=S)
     line = next(x for x in text.splitlines() if x.startswith("Review:"))
-    assert "ICM $0.37/oz" in line and "3 of 434 planned" in line
+    assert "ICM $0.37/oz" in line and "3 of 419 planned" in line
     _blinded(line)
 
 

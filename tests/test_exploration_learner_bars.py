@@ -157,7 +157,7 @@ def test_the_nightly_learner_labels_from_the_live_minutes_when_bars_1m_has_only_
     obs = ex.read_obs(db).set_index("candidate_id")
     assert obs["label_sim_r"].notna().all() and obs["labelled_ns"].notna().all()
     for broker in ("icm", "vantage"):
-        assert rep["brokers"][broker]["weights"] == {"S1A": 0.3}        # one arm: its cap
+        assert rep["brokers"][broker]["weights"] == {"S1A": 0.0}        # run written; S1A unqualified: no weight
 
 
 def test_an_account_with_pending_candidates_and_no_minutes_is_reported_never_silent(tmp_path, caplog):
