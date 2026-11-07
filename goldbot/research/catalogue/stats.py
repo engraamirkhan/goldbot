@@ -44,8 +44,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from goldbot.research.catalogue.costs import CostModel, default_model
 from goldbot.research.catalogue.data import DAY
-from goldbot.research.catalogue.sim import STRESS, round_trip, swap_rate
+from goldbot.research.catalogue.sim import STRESS
 
 EXPLORE_YEARS = tuple(range(2010, 2018))
 CONFIRM_YEARS = tuple(range(2018, 2025))
@@ -133,17 +134,18 @@ def year_of_day(days: np.ndarray) -> np.ndarray:
 class Market:
     """Daily closes of a window: the base of the mark-to-market book and of the E9 buy-and-hold book.
     `closes[inst]`: the 1d close indexed by the UTC day (epoch days) its bar closes on; [day_from, day_to) is the
-    window's decision span in UTC days."""
+    window's decision span in UTC days; `costs` the window's cost model (None: costs.default_model(), synthetic)."""
     closes: dict[str, pd.Series]
     day_from: int
     day_to: int
+    costs: CostModel | None = None
 
 
-def market_from_bars(bars: dict[str, Any], dec_from_ns: int, end_ns: int) -> Market:
+def market_from_bars(bars: dict[str, Any], dec_from_ns: int, end_ns: int, costs: CostModel | None = None) -> Market:
     """A `Market` from 1d `Bars` per instrument (close day = the UTC day of the bar's close, `(ta - 1) // DAY`)."""
     closes = {i: pd.Series(np.asarray(b.c, float), index=(np.asarray(b.ta, np.int64) - 1) // DAY)
               for i, b in bars.items() if len(b)}
-    return Market(closes=closes, day_from=int(dec_from_ns // DAY), day_to=int(-(-end_ns // DAY)))
+    return Market(closes=closes, day_from=int(dec_from_ns // DAY), day_to=int(-(-end_ns // DAY)), costs=costs)
 
 
 def _asof(c: pd.Series, days: np.ndarray) -> np.ndarray:
@@ -259,12 +261,14 @@ def _risk_frac(tr: pd.DataFrame) -> dict[str, float]:
 def buy_hold_daily(m: Market, insts: list[str], side: int, rfrac: dict[str, float], grid: np.ndarray) -> pd.Series:
     """C1's "financed buy-and-hold book of the same instruments and side (equal risk, same cost model, always in the
     market)", in R per day on `grid`: each instrument held on `side` from its first close in the window at 1 R =
-    rfrac x price (the unit's own median risk), books side x return / rfrac per day, pays the frozen sim's round trip
-    once and its financing (`sim.swap_rate`, per calendar night between book days, / 360) every night."""
+    rfrac x price (the unit's own median risk), books side x return / rfrac per day, pays the cost model's round trip
+    once and its C2 financing (`CostModel.swap_nights` x `debit_pct` / 365) between consecutive book days (a book day
+    is marked after its 21:00 UTC rollover)."""
+    cm = m.costs or default_model()
     out = np.zeros(len(grid))
     if len(grid) < 2:
         return pd.Series(out, index=grid)
-    nights = np.diff(grid).astype(float)
+    tg = np.asarray(grid, np.int64) * DAY + 22 * 3_600_000_000_000
     for inst in insts:
         c = m.closes.get(inst)
         r = rfrac.get(inst, float("nan"))
@@ -275,10 +279,11 @@ def buy_hold_daily(m: Market, insts: list[str], side: int, rfrac: dict[str, floa
         if not ok.any():
             continue
         k0 = int(np.argmax(ok))
-        out[k0] -= round_trip(inst, float(px[k0]), float("nan")) / (r * float(px[k0]))
+        out[k0] -= cm.round_trip(inst, float(px[k0]), float("nan")) / (r * float(px[k0]))
         both = ok[1:] & ok[:-1]
         ret = np.where(both, px[1:] / np.where(both, px[:-1], 1.0) - 1.0, 0.0)
-        fin = np.where(both, nights * swap_rate(inst, side) / 360.0, 0.0)
+        fin = np.array([cm.swap_nights(inst, int(a), int(b)) * cm.debit_pct(inst, side, int(a)) / 100.0 / 365.0
+                        if ok_ else 0.0 for a, b, ok_ in zip(tg[:-1], tg[1:], both)])
         out[1:] += (side * ret - fin) / r
     return pd.Series(out, index=grid)
 

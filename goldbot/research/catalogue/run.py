@@ -28,6 +28,7 @@ import numpy as np
 
 from goldbot.research.catalogue import dispatcher as D
 from goldbot.research.catalogue import stats as S
+from goldbot.research.catalogue.costs import window_model
 from goldbot.research.catalogue.data import (
     DAY,
     FINE_INSTRUMENTS,
@@ -177,7 +178,7 @@ def _market(tr: Any, win: str, *, allow_test_old: bool = False) -> S.Market:
         except FileNotFoundError:
             raise FileNotFoundError(f"EVAL-1 book: no 1d closes for {inst} in {win}; the run stops (reading rule "
                                     "section 4.8 amended)") from None
-    return S.market_from_bars(bars, w.dec_from, w.end)
+    return S.market_from_bars(bars, w.dec_from, w.end, window_model(win, allow_test_old=allow_test_old))
 
 
 def _init(wins: list[str], allow_test_old: bool) -> None:

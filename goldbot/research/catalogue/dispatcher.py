@@ -18,6 +18,7 @@ import yaml
 
 from goldbot.research.catalogue import core as K
 from goldbot.research.catalogue.core import EB, Ctx, Events
+from goldbot.research.catalogue.costs import window_model
 from goldbot.research.catalogue.data import DAY, FINE_INSTRUMENTS, Bars, load, load_minutes, raw_dir, window
 from goldbot.research.catalogue.detectors_catalogue import (
     CATALOGUE_DETECTORS,
@@ -153,6 +154,7 @@ def build_ctx(win: str, *, allow_test_old: bool = False) -> Ctx:
             ctx.events[f"holiday_{ex}"] = np.setdiff1d(wk, days)
     for ccy, series in RATES.items():
         ctx.aux[f"rate_{ccy}"] = fred(series, win, allow_test_old=allow_test_old)
+    ctx.aux["costs"] = window_model(win, allow_test_old=allow_test_old)       # EVAL-1 section 1, C2
     for inst, key in LONG_KEYS.items():
         f = raw_dir() / "daily" / "long" / f"{key}_daily_long.parquet"
         if not f.exists():
@@ -316,6 +318,7 @@ def unit_trades(u: dict[str, Any], win: str, ctx: Ctx, control: str | None = Non
     resolved from 1m bars wherever they exist; otherwise the unit is excluded and listed". A unit with a stop/limit
     entry in any cell without 1m bars (every instrument but gold) is excluded WHOLE (no trades; "excluded_no_1m" 1,
     "no_1m_cells" the cells): screening only its gold cells would be a different unit from the one registered."""
+    costs = ctx.aux["costs"]          # the window's measured cost model (EVAL-1 section 1); none: the run stops
     evd = unit_events(u, win, ctx, allow_test_old=allow_test_old)
     n_ev, share = long_share(evd)
     ctrl = control or choose_control(u, share)
@@ -329,7 +332,7 @@ def unit_trades(u: dict[str, Any], win: str, ctx: Ctx, control: str | None = Non
     for (inst, tf), (b, ev) in evd.items():
         fine = get_minutes(win, allow_test_old=allow_test_old) if need[(inst, tf)] else None
         tr = simulate(b, ev, control=ctrl, seed_key=u["unit"], drift_per_ns=window_drift_per_ns(b), counts=counts,
-                      fine=fine)
+                      fine=fine, costs=costs)
         if len(tr):
             df = pd.DataFrame(tr, columns=TRADE_COLS)
             df["inst"] = inst

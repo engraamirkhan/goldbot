@@ -11,6 +11,7 @@ from goldbot.research.catalogue import dispatcher as D
 from goldbot.research.catalogue import sim as SIM
 from goldbot.research.catalogue import stats as S
 from goldbot.research.catalogue.core import EB
+from goldbot.research.catalogue.costs import load_table
 from goldbot.research.catalogue.data import DAY, Bars
 from tests.test_catalogue_lookahead import ctx_for, synth
 
@@ -96,10 +97,14 @@ def test_sim_reproduces_sprint3000_fixture() -> None:
         assert tr["gross"][k] == pytest.approx(ex.gross / risk, abs=1e-9)
     assert tr["gross"].tolist() == pytest.approx([-2.0, 1.2, 0.6])
     assert tr["nights"].tolist() == [1, 1, 3]                     # fills at 22:00, one 21:00 rollover each
-    sw = 0.025 / 360 * 1300.0
-    assert tr["cost"][0] == pytest.approx((0.166 + 0.11 + sw) / 5.0, abs=1e-9)  # gapped stop: overshoot + 1 night
-    assert tr["cost"][1] == pytest.approx((0.166 + sw) / 5.0, abs=1e-9)
-    assert tr["cost"][2] == pytest.approx((0.166 + 3 * sw) / 10.0, abs=1e-9)
+    # EVAL-1 C2 financing (benchmark rates 0 in the default model: the measured markup only, /365) with the broker's
+    # rollover weights: gold's triple day is Wednesday, Sat/Sun 0. Tue 22:00 -> Wed 22:00 = 3 nights, Mon -> Tue = 1,
+    # Thu 22:00 -> Mon 21:00 = Fri only (an exit AT 21:00 pays no swap).
+    tab = load_table()["instruments"]["XAUUSD"]
+    lng, sht = tab["markup_long"] / 100 / 365 * 1300.0, tab["markup_short"] / 100 / 365 * 1300.0
+    assert tr["cost"][0] == pytest.approx((0.166 + 0.11 + 3 * lng) / 5.0, abs=1e-9)   # gapped stop: overshoot
+    assert tr["cost"][1] == pytest.approx((0.166 + sht) / 5.0, abs=1e-9)
+    assert tr["cost"][2] == pytest.approx((0.166 + lng) / 10.0, abs=1e-9)
 
 
 def test_s17_history_masks_test_old_months() -> None:

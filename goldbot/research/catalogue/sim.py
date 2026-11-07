@@ -58,13 +58,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from goldbot.research.catalogue.core import Events, atr
+from goldbot.research.catalogue.costs import CostModel, default_model, fallback_rt
 from goldbot.research.catalogue.data import DAY, HOUR, Bars
 
 ROLL_OFFSET = 21 * HOUR          # swap is charged per 21:00 UTC rollover crossed (calendar nights: weekend = 3)
-GOLD_RT_USD = 0.166              # cost_of_record cor-2026-10-31.2, ICM all sessions, round trip incl. $4.0/lot/side
 GOLD_OVERSHOOT_USD = 0.11
-SWAP_DEFAULT = 0.025             # %/yr/leg when not measured
-SWAP_INDEX_LONG = 0.07           # index longs: SOFR + 2.5-3 % ~ 6.5-7 %/yr
 STRESS = 1.5
 RISK_FLOOR_ATR = 0.25            # EVAL-1 (iii): stop distance >= max(0.25 x ATR20, 3 x round trip)
 RISK_FLOOR_RT = 3.0
@@ -72,33 +70,15 @@ RISK_FLOOR_ATR_N = 20
 TWIN_DAYS = 7                    # intraday random-time twin: same time of day on one of the next 7 calendar days
 TWIN_SPAN = {"1d": 20, "1w": 8}  # daily/weekly random-time twin: one of the next N bars
 
-# fallback round trip in price units = 3 x a typical raw spread (instruments.yaml max_spread_points x point) +
-# commission; the cost actually charged is the worse of this and the Dukascopy spread of the fill bar
-FALLBACK_RT = {
-    "XAGUSD": 0.060, "XAUEUR": 1.50, "XAUJPY": 250.0, "XTIUSD": 0.09, "US500": 1.50, "USTEC": 4.50, "DE40": 3.0,
-    "UK100": 3.0, "US30": 6.0, "USINDEX": 0.05, "BTCUSD": 20.0, "EURUSD": 0.00010, "GBPUSD": 0.00012,
-    "AUDUSD": 0.00012, "NZDUSD": 0.00015, "USDJPY": 0.010, "USDCAD": 0.00015, "USDCHF": 0.00015,
-    "AUDJPY": 0.016, "EURAUD": 0.00025, "GBPAUD": 0.00030, "EURGBP": 0.00012, "EURJPY": 0.015, "GBPJPY": 0.020,
-}
-FX_COMMISSION_FRAC = 7.0 / 100_000          # ICM $3.5/lot/side on 100k notional, as a fraction of notional (USD-ish)
-INDICES = ("US500", "USTEC", "DE40", "UK100", "US30")
+def round_trip(inst: str, price: float, spr: float, costs: CostModel | None = None) -> float:
+    """Round trip in price units from the cost model (EVAL-1 section 1; costs.CostModel.round_trip)."""
+    return (costs or default_model()).round_trip(inst, price, spr)
 
 
-def round_trip(inst: str, price: float, spr: float) -> float:
-    if inst == "XAUUSD":
-        return GOLD_RT_USD
-    fb = FALLBACK_RT.get(inst, 0.0003 * price)
-    if len(inst) == 6 and inst not in ("XAGUSD", "XAUEUR", "XAUJPY", "XTIUSD", "BTCUSD"):
-        fb += FX_COMMISSION_FRAC * price
-    return max(fb, spr if np.isfinite(spr) else 0.0)
-
-
-def overshoot(inst: str, rt: float) -> float:
-    return GOLD_OVERSHOOT_USD if inst == "XAUUSD" else 0.5 * rt
-
-
-def swap_rate(inst: str, side: int) -> float:
-    return SWAP_INDEX_LONG if (inst in INDICES and side > 0) else SWAP_DEFAULT
+def overshoot(inst: str, rt_fallback: float) -> float:
+    """Stop overshoot: gold's measured (cost of record); elsewhere not measured, so it stays the frozen fallback's half
+    round trip (EVAL-1 section 1: "no cost is lowered without a measurement"). `rt_fallback`: costs.fallback_rt."""
+    return GOLD_OVERSHOOT_USD if inst == "XAUUSD" else 0.5 * rt_fallback
 
 
 def nights(t0: int, t1: int) -> int:
@@ -271,7 +251,7 @@ def _levels(ev: Events, k: int, fill: float) -> tuple[float, float]:
     return stop, tgt
 
 
-def order_risk(b: Bars, ev: Events, k: int, a20: np.ndarray) -> float | None:
+def order_risk(b: Bars, ev: Events, k: int, a20: np.ndarray, costs: CostModel | None = None) -> float | None:
     """Event k's risk at its order price (market: the decision close), decided at the signal bar before any fill (C7);
     None when the stop or target is on the wrong side of the order price or the stop is inside the risk floor."""
     i = int(ev.i[k])
@@ -281,7 +261,7 @@ def order_risk(b: Bars, ev: Events, k: int, a20: np.ndarray) -> float | None:
     risk = side * (px - stop)
     if not np.isfinite(risk) or risk <= 0 or (np.isfinite(tgt) and side * (tgt - px) <= 0):
         return None
-    return risk if risk >= risk_floor(b.inst, px, float(b.spr[i]), float(a20[i])) else None
+    return risk if risk >= risk_floor(b.inst, px, float(b.spr[i]), float(a20[i]), costs) else None
 
 
 def _opposite(b: Bars, start: int, side: int, fill: float, dist: float, risk: float, tgt: float, last: int,
@@ -306,27 +286,35 @@ TRADE_COLS = ("i", "f", "x", "side", "t_dec", "t_fill", "t_exit", "fill", "risk"
 
 
 def cost_price(inst: str, side: int, fill: float, spr: float, kind: int, t_fill: int, t_exit: int,
-               stop_entry: bool = False) -> float:
-    """Round trip + the stop overshoot on a stop exit (kind 1) and on a stop-entry fill (C10) + swap per rollover."""
-    rt = round_trip(inst, fill, spr)
-    c = rt + (overshoot(inst, rt) if kind == 1 else 0.0) + (overshoot(inst, rt) if stop_entry else 0.0)
-    return c + nights(t_fill, t_exit) * swap_rate(inst, side) / 360.0 * fill
+               stop_entry: bool = False, costs: CostModel | None = None) -> float:
+    """Round trip + the stop overshoot on a stop exit (kind 1) and on a stop-entry fill (C10) + the C2 financing over
+    the hold (positive = paid, a credit lowers the cost; costs.CostModel.financing)."""
+    cm = costs or default_model()
+    rt = cm.round_trip(inst, fill, spr)
+    osh = overshoot(inst, fallback_rt(inst, fill))
+    c = rt + (osh if kind == 1 else 0.0) + (osh if stop_entry else 0.0)
+    return c + cm.financing(inst, side, fill, t_fill, t_exit)
 
 
-def risk_floor(inst: str, fill: float, spr: float, atr20: float) -> float:
+def risk_floor(inst: str, fill: float, spr: float, atr20: float, costs: CostModel | None = None) -> float:
     """Smallest tradable stop distance (price units): max(0.25 x ATR20, 3 x round trip); nan when ATR20 is unknown."""
     if not np.isfinite(atr20):
         return float("nan")
-    return max(RISK_FLOOR_ATR * atr20, RISK_FLOOR_RT * round_trip(inst, fill, spr))
+    return max(RISK_FLOOR_ATR * atr20, RISK_FLOOR_RT * round_trip(inst, fill, spr, costs))
 
 
 def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: float = 0.0,
-             counts: dict[str, int] | None = None, fine: Bars | None = None) -> np.ndarray:
+             counts: dict[str, int] | None = None, fine: Bars | None = None,
+             costs: CostModel | None = None) -> np.ndarray:
     """Trades of one cell as a float array with columns TRADE_COLS (decisions before the window's dec_from and fills
     at or after its end are dropped; a trade still open at the data end exits at the last close). `fine`: finer bars
     of the same instrument (1m) that resolve stop/limit fills inside a bar (C10). `counts`, when given, gets
     "risk_floor" += the events not traded because their stop was inside the risk floor, and "fine_miss" += the
-    intrabar fills whose finer bars never reach the order price."""
+    intrabar fills whose finer bars never reach the order price. `costs`: the window's cost model (the screen always
+    passes `costs.window_model`; None = `costs.default_model()`, benchmark rates 0, for synthetic tests). An instrument
+    missing from the cost table raises MissingCost before anything is simulated (fail closed)."""
+    cm = costs or default_model()
+    cm.inst(b.inst)
     n = len(b)
     out: list[tuple[float, ...]] = []
     if not len(ev) or n < 3:
@@ -340,9 +328,9 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         if i >= n - 1 or int(b.ta[i]) < dec_from or int(b.ta[i]) >= end:
             continue
         side = int(ev.side[k])
-        risk = order_risk(b, ev, k, a20)
+        risk = order_risk(b, ev, k, a20, cm)
         sib = _oco_sibling(ev, k)
-        if risk is None or (sib is not None and order_risk(b, ev, sib, a20) is None):
+        if risk is None or (sib is not None and order_risk(b, ev, sib, a20, cm) is None):
             _count(counts, "risk_floor")      # decided at the signal bar; an OCO pair is placed whole or not at all
             continue
         fr = _fill(b, i, side, int(ev.kind[k]), float(ev.px[k]), int(ev.valid[k]))
@@ -393,7 +381,7 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         gross = side * (w.exit_px - fill) / risk
         if instant and w.kind == 1:
             gross = min(-1.0, gross)          # a fill at or beyond its stop: a loss of at least -1 R
-        cost = cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, t_fill, w.t_exit, kind_k == 1) / risk
+        cost = cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, t_fill, w.t_exit, kind_k == 1, cm) / risk
         # ---- control twin
         if control == "random_side":
             clast = w.exit_bar if w.kind in (0, 3) else last
@@ -409,7 +397,7 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
                 fill2 = ff2.fill if ff2 is not None else fr2[1]
                 stop2, tgt2 = _levels(ev, sib, fill2)
                 dist2 = side2 * (fill2 - stop2)
-                risk2 = order_risk(b, ev, sib, a20)
+                risk2 = order_risk(b, ev, sib, a20, cm)
                 if dist2 > 0 and risk2 is not None:
                     last2 = min(n - 1, start + int(ev.hold[sib]) - 1)
                     opp += _opposite(b, start, side2, fill2, dist2, risk2, tgt2, last2, fr2[2], fine, ff2)

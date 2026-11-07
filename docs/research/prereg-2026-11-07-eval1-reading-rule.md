@@ -78,9 +78,12 @@ E5), DSR at the registry K and at K_cells. The null-unit void rule and the buy-e
 
 ## 5. Not covered here
 
-- The section 1 cost changes (measured spreads and financing, C2 sign convention) live in the cost model of the sim,
-  not in these statistics; E9 uses whatever that model charges.
+- Costs (section 1, C2) are in `goldbot/research/catalogue/costs.py` with the table `config/catalogue_costs.yaml`
+  (version measured-2026-11-07-v1). Swap terms follow C2 with point-in-time benchmark rates. Spread and commission
+  are used only from a sample of 20 or more trading days (quant ruling 2026-11-07); every instrument has 3-11 days
+  today, so the frozen fallback round trip stays. E9's buy-and-hold book uses the same model.
 - Precondition (ii)'s random-walk regression, including the C1 check that the buy-every-close sentinel and every
-  long-only control fail E9 on a drifting walk, lives in `tests/test_catalogue_random_walk.py` (harness lane).
+  long-only control fail E9 on a drifting walk, lives in `tests/test_catalogue_random_walk.py`
+  (`test_long_only_controls_and_the_sentinel_fail_e9_on_a_drifting_walk`).
   `tests/test_catalogue_lookahead.py::test_buy_every_close_null_fails_explore_on_the_eval1_drift_guard` covers the
   sentinel on one synthetic drifting walk.

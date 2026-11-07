@@ -491,7 +491,7 @@ def s20_nr(b: Bars, p: dict, ctx: Ctx) -> Events:
     eb = EB()
     for j in np.flatnonzero(setup & np.isfinite(a)):
         rng = b.h[j] - b.l[j]
-        if rng < 4 * round_trip(b.inst, b.c[j], b.spr[j]):
+        if rng < 4 * round_trip(b.inst, b.c[j], b.spr[j], ctx.aux.get("costs")):
             continue
         bl, ss = b.h[j] + 0.05 * a[j], b.l[j] - 0.05 * a[j]
         smin = 0.3 * a[j]

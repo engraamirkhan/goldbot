@@ -13,6 +13,7 @@ import pytest
 from goldbot.research.catalogue import dispatcher as D
 from goldbot.research.catalogue import sim as SIM
 from goldbot.research.catalogue.core import EB, Ctx
+from goldbot.research.catalogue.costs import default_model
 from goldbot.research.catalogue.data import MIN, Bars
 from tests.test_catalogue_fill_rules import COL, OVER, RT, _bar
 from tests.test_catalogue_random_walk import flat_bars
@@ -121,21 +122,21 @@ def _unit_with(inst: str, kind: int, monkeypatch: pytest.MonkeyPatch) -> tuple[d
 def test_a_unit_with_intrabar_entries_on_an_instrument_without_1m_bars_is_excluded_and_listed(
         monkeypatch: pytest.MonkeyPatch) -> None:
     u, seen = _unit_with("XAGUSD", 1, monkeypatch)
-    tr, _, counts = D.unit_trades(u, "explore", Ctx(window="explore"))
+    tr, _, counts = D.unit_trades(u, "explore", Ctx(window="explore", aux={"costs": default_model()}))
     assert len(tr) == 0 and seen == []
     assert counts["no_1m_cells"] == 1 and counts["excluded_no_1m"] == 1
 
 
 def test_gold_cells_with_intrabar_entries_are_simulated_on_the_1m_bars(monkeypatch: pytest.MonkeyPatch) -> None:
     u, seen = _unit_with("XAUUSD", 2, monkeypatch)
-    _, _, counts = D.unit_trades(u, "explore", Ctx(window="explore"))
+    _, _, counts = D.unit_trades(u, "explore", Ctx(window="explore", aux={"costs": default_model()}))
     assert len(seen) == 1 and seen[0] is not None
     assert counts["excluded_no_1m"] == 0
 
 
 def test_market_entry_units_need_no_1m_bars(monkeypatch: pytest.MonkeyPatch) -> None:
     u, seen = _unit_with("XAGUSD", 0, monkeypatch)
-    _, _, counts = D.unit_trades(u, "explore", Ctx(window="explore"))
+    _, _, counts = D.unit_trades(u, "explore", Ctx(window="explore", aux={"costs": default_model()}))
     assert seen == [None] and counts["excluded_no_1m"] == 0
 
 

@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.research.catalogue import costs as C
 from goldbot.research.catalogue import sim as SIM
 from goldbot.research.catalogue import stats as S
 from goldbot.research.catalogue.core import EB
@@ -20,7 +21,7 @@ from goldbot.research.catalogue.data import Bars
 from tests.test_catalogue_random_walk import flat_bars
 
 COL = {k: j for j, k in enumerate(SIM.TRADE_COLS)}
-RT = SIM.GOLD_RT_USD
+RT = C.GOLD_RT_USD
 OVER = SIM.GOLD_OVERSHOOT_USD
 
 
