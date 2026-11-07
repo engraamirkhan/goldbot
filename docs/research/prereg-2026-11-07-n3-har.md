@@ -37,7 +37,8 @@ No direction is read.
   goldbot/data/cme_holidays.py).
 - Before the first `ok` row, the data-engineer measures on the Duka/ICM overlap days: median ln(ICM/Duka) of daily TR,
   W and w. If |median ln ratio of w| > 0.02, N-3 does not start until amended. The read reports the realised low-day
-  rate; outside 12-28% (binomial band for 20 days ~ 4 +/- 3.6) the window is void and re-run.
+  rate; if a 20-day window has 0 low days or 9 or more (outside 1-8 of 20; about 2 % of windows by chance at a 20 %
+  rate), the window is void and re-run once (`har_abstention.LOW_DAYS_VOID`).
 - First row wins: a later run for the same day never changes a row that was already available (point in time).
 
 ## 3. The rule (engine, `refusals_novel`, registered in `entry_refusals.REFUSALS`)

@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 
 RELEASE_SOURCE = "dukascopy"            # engine/history.py RELEASE_SOURCE: the release bars research trained on
 TABLE = "har_days"                      # aux migration 26
+LOW_DAYS_VOID = (0, 9)                  # prereg §2: a 20-day read with 0 or >= 9 low days is void (outside 1-8 of 20)
 HOUR = pd.Timedelta(hours=1)
 
 

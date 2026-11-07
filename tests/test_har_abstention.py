@@ -286,3 +286,14 @@ def test_the_job_is_scheduled_after_the_daily_close():
     from goldbot.ops.jobs import JOBS
     s = load_settings().scheduler.har_days
     assert "har_days" in JOBS and s.kind == "daily" and "22:00" < s.at < "23:00"
+
+
+def test_the_void_band_is_0_or_9_plus_low_days_of_20_as_the_prereg_states():
+    """Quant re-verify 2026-11-07: a 20-day window with 0 low days or 9 or more is void (about 2 % by chance)."""
+    from pathlib import Path
+
+    from goldbot.research import har_abstention as H
+
+    assert H.LOW_DAYS_VOID == (0, 9)
+    text = Path(__file__).resolve().parents[1].joinpath("docs/research/prereg-2026-11-07-n3-har.md").read_text()
+    assert "0 low days or 9 or more" in text and "12-28%" not in text
