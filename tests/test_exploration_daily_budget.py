@@ -344,7 +344,7 @@ def test_aux_migrations_23_24_backfill_each_rows_signal_close_and_index_it(tmp_p
                      "exit_ns, body) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
                      (rec.client_order_id, rec.account_id, rec.arm_id, 1, 0, rec.model_dump_json()))
         conn.commit()
-        assert migrate(conn, "aux") == [23, 24]
+        assert migrate(conn, "aux", migrations=AUX[:24]) == [23, 24]
         assert conn.execute("SELECT signal_ns FROM exploration_trades").fetchone()[0] == START.value
         assert "exploration_trades_signal" in {r[1] for r in conn.execute("PRAGMA index_list(exploration_trades)")}
 

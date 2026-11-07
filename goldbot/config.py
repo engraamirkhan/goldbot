@@ -282,6 +282,9 @@ class SchedulerSettings(_Section):
     daily_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:15", max_late_hours=12)
     # ADR 0058 phase 2: the bounded discovery search; skips unless research.autodisc.nightly_enabled (the Mac only)
     autodisc_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:30", max_late_hours=6)
+    # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
+    # (goldbot/research/tv_ideas.py), after feed_reconcile has stored the broker's M1 and nightly_costs the cost table
+    tva_scores: ScheduleSettings = ScheduleSettings(kind="daily", at="23:35", max_late_hours=20)
 
 
 class BackupSettings(_Section):
