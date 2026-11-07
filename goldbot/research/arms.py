@@ -39,7 +39,7 @@ CLOCK_BOX_RULES = ("friday_long", "clock_anchor", "clock_anchor_control", "box_n
 SCALP_RULES = ("tick_surge", "run_fade", "round_break", "round_reject", "extreme_break", "nr4_break",
                "halfhour_persist", "absorb_fade", "htf_reclaim", "three_horizon", "scalp_control")
 SPEC_RULE = "spec_rule"
-Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]   # 1d/1w: engine/long_bars.py (WS-4)
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
          "ema_pullback", "tsmom", "specialist", *CLOCK_BOX_RULES, "blocked",
          # wave 2 (ARM-SPEC section 8)

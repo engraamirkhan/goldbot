@@ -605,6 +605,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               # None unless enabled (plan 2026-10-25); gold's book runs gold's arms only
                               exploration_config=exploration.book_config(exploration.config_for(acc), GOLD),
                               shadow_max_open=settings.shadow.max_open_per_agent,
+                              # WS-4: 1d/1w exploration arms ship dark; their warm-up (engine/long_bars.py)
+                              timeframes_live=tuple(settings.engine.timeframes_live),
+                              long_history_dir=settings.engine.history_root(settings.data_root),
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, wind_down=wind_down, halt_checks=True,
                               # ADR 0062: a 24/7 symbol's own calendar and weekend window (off on every other account)

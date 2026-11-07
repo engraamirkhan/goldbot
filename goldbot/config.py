@@ -879,6 +879,45 @@ class ShadowSettings(_Section):
     max_open_per_agent: int = Field(default=3, ge=1, le=10)
 
 
+INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
+GO_LIVE_BLOCKERS_1D_1W = (
+    "1d entries sent after 22:15 UTC once the broker has reopened, bracket from the send price (EET and EEST tests)",
+    "the 1w decision moved out of the first 15-60 minutes after the Sunday open",
+    "the 1w missed-week catch-up, persisted",
+    "a daily long-history refresh, a preflight check that it reaches the engine window, an alert on a history_gap "
+    "older than a day",
+    "the rules' common filter at the 21:00 UTC close (quant decision)",
+    "_trail_runners and score_twins on is_bar_close",
+    "a CONFIRM pass and trading-safety sign-off on the settings diff",
+)
+
+
+class EngineSettings(_Section):
+    """1d and 1w exploration arms (WS-4, consolidated plan 2026-11-07: "ships dark unless two conditions hold": the
+    7-day replay gives an identical decision set for every existing arm AND a CONFIRM passer passes lot-fit). An arm
+    whose timeframe is not in `timeframes_live` is held as retired from the start (no entry, exits managed). A 1d/1w
+    arm warms up from the long daily history under `long_history_dir` (`bars/<symbol>_1d.parquet`, else
+    `long/<symbol>_daily_long.parquet`; engine/long_bars.py), read point in time; a missing file or a history that
+    does not reach the engine's window keeps the arm quiet (`history_gap:<tf>`), never a crash."""
+    timeframes_live: list[Timeframe] = Field(default_factory=lambda: list(INTRADAY_LIVE))
+    long_history_dir: str = "raw/daily"
+
+    @field_validator("timeframes_live")
+    @classmethod
+    def _dark_until_go_live(cls, v: list[Timeframe]) -> list[Timeframe]:
+        """Go-live guard (WS-4 reviews 2026-11-07): 1d/1w stay dark until every blocker of BACKLOG item
+        `engine-1d-1w-golive` is closed; lifting this guard is that item's last step, with trading-safety sign-off."""
+        if bad := sorted(set(v) & {"1d", "1w"}):
+            raise ValueError(f"engine.timeframes_live may not list {bad} yet: open go-live blockers "
+                             f"(docs/backlog.d engine-1d-1w-golive): {'; '.join(GO_LIVE_BLOCKERS_1D_1W)}")
+        return v
+
+    def history_root(self, data_root: str) -> str:
+        """`long_history_dir` under `data_root` (never the working directory); an absolute path is kept."""
+        p = Path(self.long_history_dir).expanduser()
+        return str(p if p.is_absolute() else Path(data_root).expanduser() / p)
+
+
 class Mt5LoginSettings(_Section):
     """MT5 terminal login from the keyring (goldbot/ops/login.py; owner directive 2026-10-20: "MT5 terminal logins on
     the boxes must happen without the owner (no VNC step)"). Used by `goldbot-mt5 login <account>`, by the bridge when
@@ -933,6 +972,7 @@ class Settings(_Section):
     observe: ObserveSettings = Field(default_factory=ObserveSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
+    engine: EngineSettings = Field(default_factory=EngineSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
