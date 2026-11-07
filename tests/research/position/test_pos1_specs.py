@@ -16,7 +16,7 @@ def _panel(symbols: tuple[str, ...], n: int = 900) -> dict[str, pd.DataFrame]:
     for s in symbols:
         c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
         f = pd.DataFrame({"open": c, "high": c * 1.004, "low": c * 0.996, "close": c}, index=idx)
-        f["close_utc"] = (f.index + pd.Timedelta(hours=21)).tz_localize("UTC")
+        f["close_utc"] = pd.DatetimeIndex(f.index + pd.Timedelta(hours=21)).tz_localize("UTC")
         out[s] = f
     return out
 
