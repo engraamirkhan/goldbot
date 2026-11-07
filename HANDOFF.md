@@ -36,11 +36,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   C10 (D5) a stop/limit entry filled inside a bar is filled and walked on gold 1m bars (`data.load_minutes`,
   `dispatcher.get_minutes`; random-side twins too); stop-entry fills pay the stop overshoot; a unit with a stop/limit
   entry on an instrument without 1m bars is excluded whole and listed (`excluded_no_1m`).
-  C9 the random-walk guard pools 3 samples (<= 8 walks each) per pair: fail if |t| >= 3.5, or |mean| >= 0.03 R with
-  |t| >= 2, on the first 3 samples and on a retest of 3 fresh ones; `goldbot/research/catalogue/rw_guard.json` lists
-  the 9 sparse units (< 30 trades on 24 walks) and the 3 failed pairs (B08-V1 both controls, C04-V1 random_time;
-  strict xfail, both flip sign between test and retest); `run.py` leaves those units out. Result: 311 passed,
-  18 skipped (sparse), 3 xfailed; B04 (D5) passes. No real-data window read or re-run; WS-3 stays closed (prereg 8).
+  C9 (amended at the re-verify, R1) the random-walk guard pools 3 samples per pair, each until 1,000 trades (at most
+  8 walks): fail if |t| >= 3.5, or |mean| >= 0.03 R with |t| >= 2, confirmed only if a retest on 3 fresh samples fails
+  with the same sign; `goldbot/research/catalogue/rw_guard.json` lists the 9 sparse units (< 30 trades on 24 walks),
+  which `run.py` leaves out, and no failed pairs. R2: a bar's 1m window ends at the next bar's open and a 1m fill
+  outside the bar's range is a fine_miss; a limit entry is not credited a target touched in its 1m fill bar.
+  Guard: 316 passed, 18 skipped (sparse); B04 (D5), B08-V1 and C04-V1 pass. No real-data window read or re-run;
+  WS-3 stays closed (prereg 8).
 - TradingView author ideas shadow scorer (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; branch
   `feat/tv-ideas-shadow-scorer`): `goldbot/research/tv_ideas.py`, scheduler job `tva_scores` daily 23:35 UTC (after
   feed_reconcile and nightly_costs). It opens brain `state/tv_ideas.db` read-only (`mode=ro`) and scores each live

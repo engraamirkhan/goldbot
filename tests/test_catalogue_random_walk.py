@@ -16,16 +16,15 @@ Construction
   stats    the harness's own: HAC t of the daily-summed excess ("t_excess", the gated number) and the same HAC t of
            the daily-summed gross R (= net + cost drag), and the mean excess and gross R per trade
 
-Decision rule (quant C9, eval1_signoff_1107): "Every pair always runs 3 samples, pooled. It fails if |t_pooled| >= 3.5,
-or if the pooled mean gross or excess has |mean| >= 0.03 R/trade with |t_pooled| >= 2. A failure is re-tested once,
-on 3 fresh seeds. A pair with fewer than 30 trades after 24 walks is excluded from EVAL-1 screening, and it is
-listed." A sample pools walks until it has MIN_TRADES trades (at most MAX_WALKS = 8, so 3 samples are 24 walks); the
-retest is samples 3-5 (walks 24-47) and the pair fails only if the retest fails too. Listed in goldbot/research/catalogue/rw_guard.json,
-which this guard keeps exact both ways and run.py leaves out of the screen: "sparse" units (the real trades do not
-depend on the control) and "failed" pairs (strict xfail here). Under a correct harness the rule fails about 1.4 of
-the ~640 statistics by chance (|t| >= 2 twice in a row, 0.046^2, whatever its sign: the mean branch rarely binds at
-these n); the two failed pairs of 2026-11-07 flip sign between the first test and the retest. The rule it replaces (|t| >= 2, same sign, on all 3 samples) let
-a bias of expected t 2 per sample escape 87 % of the time and skipped 32 sparse pairs unverified."""
+Decision rule (quant C9, eval1_signoff_1107, amended at the re-verify): "Each of the 3 samples pools walks until
+1,000 trades (at most 8 walks). A pair fails if |t_pooled| >= 3.5, or if |mean| >= 0.03 R/trade with |t_pooled| >= 2.
+A failure is re-tested once on 3 fresh samples, and it is confirmed only if the retest fails with the same sign." The
+retest is samples 3-5 (walks 24-47). A pair with fewer than MIN_TRADES (30) trades after 24 walks is excluded from
+EVAL-1 screening and listed. Listed in goldbot/research/catalogue/rw_guard.json, which this guard keeps exact both
+ways and run.py leaves out of the screen: "sparse" units (the real trades do not depend on the control) and "failed"
+pairs (strict xfail here). The first rule (|t| >= 2, same sign, on all 3 samples) let a bias of expected t 2 per
+sample escape 87 % of the time and skipped 32 sparse pairs unverified; the C9 rule without the same-sign
+confirmation and with 30-trade samples failed two zero-edge pairs whose retest flipped sign."""
 from __future__ import annotations
 
 import hashlib
@@ -46,6 +45,7 @@ PATH_POINTS = 6_000_000      # path steps per cell (sub-steps per bar = PATH_POI
 SUB_MAX = 1_536
 REPS = 3                     # samples per test, pooled (C9)
 MAX_WALKS = 8                # walks per sample at most: 3 samples = 24 walks
+MIN_TRADES_SAMPLE = 1_000    # a sample pools walks until this many trades (re-verify R1)
 T_FAIL = 3.5                 # |t_pooled| at or above: fail
 T_MEAN = 2.0                 # |t_pooled| at or above AND |mean| >= MEAN_FAIL: fail
 MEAN_FAIL = 0.03             # R/trade
@@ -189,8 +189,8 @@ def walk_trades(uid: str, control: str, walk: int) -> pd.DataFrame:
 
 
 def pair_stats(uid: str, control: str, first: int = 0) -> dict[str, float]:
-    """REPS samples first.. of the pair, pooled. Sample r: walks r*MAX_WALKS.. pooled until MIN_TRADES trades (samples
-    never share a walk); every walk keeps its own block of days."""
+    """REPS samples first.. of the pair, pooled. Sample r: walks r*MAX_WALKS.. pooled until MIN_TRADES_SAMPLE trades
+    (samples never share a walk); every walk keeps its own block of days."""
     frames: list[pd.DataFrame] = []
     for rep in range(first, first + REPS):
         n = 0
@@ -199,7 +199,7 @@ def pair_stats(uid: str, control: str, first: int = 0) -> dict[str, float]:
             tr["walk"] = w
             frames.append(tr)
             n += len(tr)
-            if n >= MIN_TRADES:
+            if n >= MIN_TRADES_SAMPLE:
                 break
     frames = [f for f in frames if len(f)]
     if not frames:
@@ -221,6 +221,12 @@ def guard_failures(st: dict[str, float]) -> dict[str, tuple[float, float]]:
         if not np.isfinite(t) or abs(t) >= T_FAIL or (abs(m) >= MEAN_FAIL and abs(t) >= T_MEAN):
             bad[t_key] = (t, m)
     return bad
+
+
+def confirmed_failures(bad: dict[str, tuple[float, float]], retest: dict[str, tuple[float, float]]
+                       ) -> dict[str, tuple[tuple[float, float], tuple[float, float]]]:
+    """The first test's failures that the retest repeats with the same sign of t."""
+    return {k: (bad[k], retest[k]) for k in bad if k in retest and np.sign(retest[k][0]) == np.sign(bad[k][0])}
 
 
 def rw_sparse() -> set[str]:
@@ -252,9 +258,9 @@ def test_detector_and_control_show_no_edge_on_a_driftless_random_walk(uid: str, 
     confirmed = {}
     if bad:
         retest = guard_failures(pair_stats(uid, control, REPS))
-        confirmed = {k: (bad[k], retest[k]) for k in bad if k in retest}
+        confirmed = confirmed_failures(bad, retest)
     assert not confirmed, f"{uid} x {control}: pooled |t| >= {T_FAIL} or |mean| >= {MEAN_FAIL} R with |t| >= {T_MEAN}, " \
-                    f"on the first 3 samples and on the retest ((t, mean), (t, mean)): {confirmed} (n {first['n']})"
+                    f"on the first 3 samples and, same sign, on the retest ((t, mean), (t, mean)): {confirmed} (n {first['n']})"
 
 
 @pytest.mark.parametrize("st,fails", [
@@ -375,3 +381,14 @@ def test_the_guard_finer_bars_are_the_same_path_as_their_bar(tf: str) -> None:
     assert (z > a).all()
     assert np.allclose(fine.o[a], b.o) and np.allclose(fine.c[z - 1], b.c)
     assert np.allclose(np.maximum.reduceat(fine.h, a), b.h) and np.allclose(np.minimum.reduceat(fine.l, a), b.l)
+
+
+def test_a_retest_that_fails_with_the_opposite_sign_does_not_fail_the_pair() -> None:
+    first = {"t_excess": (2.4, 0.2), "t_gross": (2.1, 0.3)}
+    assert confirmed_failures(first, {"t_excess": (-2.7, -0.3), "t_gross": (2.2, 0.25)}) == {
+        "t_gross": ((2.1, 0.3), (2.2, 0.25))}
+    assert confirmed_failures(first, {}) == {}
+
+
+def test_each_sample_pools_walks_until_1000_trades() -> None:
+    assert MIN_TRADES_SAMPLE == 1_000 and MAX_WALKS == 8 and MIN_TRADES == 30

@@ -137,3 +137,40 @@ def test_market_entry_units_need_no_1m_bars(monkeypatch: pytest.MonkeyPatch) -> 
     u, seen = _unit_with("XAGUSD", 0, monkeypatch)
     _, _, counts = D.unit_trades(u, "explore", Ctx(window="explore"))
     assert seen == [None] and counts["excluded_no_1m"] == 0
+
+
+# ------------------------------------------------------------------ quant re-verify R2: the 1m window stays inside the bar
+def test_the_1m_window_of_a_bar_whose_close_lies_past_the_next_open_ends_at_the_next_open() -> None:
+    """Bar 41's ta overlaps bar 42 (a source with a late close stamp): a 1m bar after bar 42's open is not bar 41's."""
+    b = flat_bars()
+    b.ta[41] = b.t[42] + 5 * MIN
+    b.h[41] = 101.5
+    t42 = int(b.t[42])
+    fine = Bars("XAUUSD", "1m", np.array([int(b.t[41]), t42 + MIN]), np.array([int(b.t[41]) + MIN, t42 + 2 * MIN]),
+                np.array([100.0, 101.0]), np.array([100.4, 101.2]), np.array([99.9, 100.9]), np.array([100.2, 101.1]),
+                np.full(2, np.nan), np.zeros(2, bool), np.zeros(2, np.int32), np.zeros(2))
+    assert SIM.fine_fill(fine, b, 41, 1, 1, 101.0) is None
+
+
+def test_a_1m_fill_outside_the_bar_range_is_a_fine_miss() -> None:
+    """The 1m open gaps to 101.8, above the bar's high 101.5 (source mismatch): the whole-bar rule, counted."""
+    b, fine = _stop_entry_bars()
+    fine.o[1], fine.h[1] = 101.8, 101.9
+    assert SIM.fine_fill(fine, b, 41, 1, 1, 101.0) is None
+    counts: dict[str, int] = {}
+    r = _one(b, _stop_entry(), fine=fine, counts=counts)
+    assert counts == {"fine_miss": 1}
+    assert r[COL["fill"]] == pytest.approx(101.0)
+
+
+def test_a_limit_entry_is_not_credited_a_target_touched_in_its_fill_minute() -> None:
+    """Buy limit at 100, target 100.3: the fill minute opens 100.4 (touching the target BEFORE the fill) and falls to
+    99.9; the next minute closes at 100.1 below the target. No target exit."""
+    b = flat_bars()
+    _bar(b, 41, 100.6, 100.6, 99.9, 100.1)
+    fine = fine_bars(b, 41, [(100.6, 100.6, 100.45, 100.5), (100.4, 100.45, 99.9, 100.0), (100.0, 100.2, 99.95, 100.1)])
+    eb = EB()
+    eb.add(40, 1, kind=2, px=100.0, valid=1, stop=99.0, tgt=100.3, hold=1)
+    r = _one(b, eb, fine=fine)
+    assert r[COL["kind"]] == 0
+    assert r[COL["gross"]] == pytest.approx(0.1)

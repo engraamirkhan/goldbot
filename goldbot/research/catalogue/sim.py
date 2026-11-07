@@ -182,9 +182,12 @@ class FineFill:
 
 def fine_fill(fine: Bars, b: Bars, f: int, side: int, kind: int, px: float) -> FineFill | None:
     """The first finer bar inside bar f that reaches the order price, and the fill (stop: max/min(open, px); limit:
-    min/max(open, px)); None when no finer bar of f reaches it."""
+    min/max(open, px)); None when no finer bar of f reaches it or the fill lies outside bar f's [low, high] (a source
+    mismatch: the caller keeps the whole-bar rule and counts a fine_miss). Bar f's finer bars end at its close or at
+    the next bar's open, whichever is first (quant re-verify R2: a late close stamp must not reach into bar f+1)."""
     a = int(np.searchsorted(fine.t, b.t[f], "left"))
-    z = int(np.searchsorted(fine.t, b.ta[f], "left"))
+    end = int(b.t[f + 1]) if f + 1 < len(b) else int(b.ta[f])
+    z = int(np.searchsorted(fine.t, min(int(b.ta[f]), end), "left"))
     if z <= a:
         return None
     up = (kind == 1) == (side > 0)                 # buy stop / sell limit trigger on the high
@@ -193,12 +196,18 @@ def fine_fill(fine: Bars, b: Bars, f: int, side: int, kind: int, px: float) -> F
         return None
     m = a + int(np.argmax(hit))
     o = float(fine.o[m])
-    return FineFill(m, z, max(o, px) if up else min(o, px))
+    fill = max(o, px) if up else min(o, px)
+    if not (b.l[f] <= fill <= b.h[f]):
+        return None
+    return FineFill(m, z, fill)
 
 
-def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: float) -> Walk | None:
+def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: float,
+               limit_entry: bool = False) -> Walk | None:
     """The exit inside bar f on its finer bars from the fill bar m (same rules as `walk`; the fill bar m itself is still
-    checked whole: the residual pre-fill part is one finer bar)."""
+    checked whole for the stop: the residual pre-fill part is one finer bar). `limit_entry`: a limit order's fill bar
+    m is not credited its target (price came from the target side to the limit, so a touch of the target in m may be
+    before the fill; quant re-verify)."""
     o, h, lo = fine.o[ff.m:ff.z], fine.h[ff.m:ff.z], fine.l[ff.m:ff.z]
     later = np.arange(len(o)) > 0
     gs = later & (side * (o - stop) <= 0)
@@ -208,6 +217,8 @@ def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: fl
         ht = h >= tgt if side > 0 else lo <= tgt
     else:
         gt = ht = np.zeros(len(o), bool)
+    if limit_entry:
+        ht = ht & later
     hit = gs | hs | gt | ht
     if not hit.any():
         return None
@@ -223,9 +234,9 @@ def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: fl
 
 
 def walk_fine(b: Bars, fine: Bars, ff: FineFill, f: int, side: int, fill: float, stop: float, tgt: float, last: int,
-              mask: np.ndarray | None) -> Walk:
+              mask: np.ndarray | None, limit_entry: bool = False) -> Walk:
     """Walk of an order filled inside bar f at finer bar ff.m: the rest of bar f on its finer bars, then `walk`."""
-    w = _fine_exit(fine, ff, f, side, stop, tgt)
+    w = _fine_exit(fine, ff, f, side, stop, tgt, limit_entry)
     if w is not None:
         return w
     if mask is not None and mask[f]:
@@ -375,7 +386,7 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
         elif np.isfinite(tgt) and side * (tgt - fill) <= 0:
             w, instant = Walk(f, fill, 2, t_fill), True
         elif fine is not None and ff is not None:
-            w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask)
+            w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask, kind_k == 2)
         else:
             w = walk(b, start, side, fill, stop, tgt, last, mask, at_open)
         busy_until = w.exit_bar
