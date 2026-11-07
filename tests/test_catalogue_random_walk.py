@@ -392,3 +392,72 @@ def test_a_retest_that_fails_with_the_opposite_sign_does_not_fail_the_pair() -> 
 
 def test_each_sample_pools_walks_until_1000_trades() -> None:
     assert MIN_TRADES_SAMPLE == 1_000 and MAX_WALKS == 8 and MIN_TRADES == 30
+
+
+# ------------------------------------------------------------------ EVAL-1 precondition (ii), C1: the drift guard
+E9_SEEDS = tuple(range(20))          # fixed before the first run (quant G2)
+E9_DRIFT = 0.0005                    # log drift per daily bar
+E9_BARS = 2_400                      # weekday 1d bars from 2010-01-04: decisions from bar WARM (2011-02) to 2019-03
+E9_YEARS = tuple(range(2011, 2019))  # the 8 full years the decisions cover
+E9_SHARE_MAX = 0.05
+
+
+def drift_bars(inst: str, seed: int) -> Bars:
+    """The guard's 1d random walk (`rw_cell`) with a log drift of E9_DRIFT per bar added (prices of bar k scaled by
+    exp(E9_DRIFT x k): the path inside a bar is unchanged, the drift arrives at the bar boundary)."""
+    b = rw_bars(inst, "1d", seed, E9_BARS)
+    f = np.exp(E9_DRIFT * np.arange(E9_BARS))
+    return Bars(b.inst, b.tf, b.t, b.ta, b.o * f, b.h * f, b.l * f, b.c * f, b.spr, b.co, b.seg, b.vol, dict(b.meta))
+
+
+def long_only_null_units() -> list[str]:
+    """Every NULL-family 1d unit whose events are all side +1 (on the first walk), cross-sectional ones included."""
+    out = []
+    for u in D.units():
+        if u["family"] != "NULL" or u["timeframes"] != ["1d"]:
+            continue
+        sides = np.concatenate([ev.side for _, ev in e9_walk_events(u["unit"], E9_SEEDS[0])[1]] or [np.zeros(0)])
+        if len(sides) and (sides == 1).all():
+            out.append(u["unit"])
+    return out
+
+
+def e9_walk_events(uid: str, seed: int) -> tuple[dict[str, Bars], list[tuple[Bars, Events]]]:
+    u = D.unit_by_id(uid)
+    bs = {k: drift_bars(k, _seed(uid, seed, "e9", k)) for k in u["instruments"]}
+    ctx = rw_ctx(*_span("1d", E9_BARS), _seed(uid, seed, "e9ctx"))
+    if u.get("xs"):
+        return bs, [(bs[k], ev) for k, ev in D.XS_DETECTORS[u["detector"]](bs, u["params"], ctx).items()]
+    return bs, [(b, D.detect_cell(u, b, ctx)) for b in bs.values()]
+
+
+def e9_gates(uid: str, seed: int) -> dict[str, bool]:
+    bs, evs = e9_walk_events(uid, seed)
+    frames = []
+    for b, ev in evs:
+        tr = SIM.simulate(b, ev, control="random_time", seed_key=f"{uid}|e9|{seed}")
+        if len(tr):
+            df = pd.DataFrame(tr, columns=SIM.TRADE_COLS)
+            df["inst"], df["tf"] = b.inst, b.tf
+            frames.append(df)
+    if not frames:
+        return {"E1": False, "E9": False}
+    first = next(iter(bs.values()))
+    m = S.market_from_bars(bs, int(first.meta["dec_from"]), int(first.meta["end"]))
+    s = S.summarize(pd.concat(frames, ignore_index=True), m)
+    return S.explore_gates(s, ["1d"], None, years=E9_YEARS)
+
+
+def test_long_only_controls_and_the_sentinel_fail_e9_on_a_drifting_walk() -> None:
+    """EVAL-1 precondition (ii) (C1): on 20 seeded 1d walks with drift 0.0005/day, the buy-every-close sentinel passes
+    E9 on none, and pooled over every long-only NULL unit x walk the share with E1 and E9 both passing is <= 5 %."""
+    units = long_only_null_units()
+    sentinels = [u for u in units if "LONGCLOSE" in u]
+    assert sentinels, "no buy-every-close sentinel found among the long-only NULL units"
+    res = {(u, sd): e9_gates(u, sd) for u in units for sd in E9_SEEDS}
+    sentinel_e9 = [(u, sd) for (u, sd), g in res.items() if u in sentinels and g["E9"]]
+    both = sum(1 for g in res.values() if g["E1"] and g["E9"])
+    print(f"long-only NULL units {units}; walks {len(E9_SEEDS)}; sentinel E9 passes {sentinel_e9}; "
+          f"E1 passes {sum(g['E1'] for g in res.values())}/{len(res)}; E9 passes {sum(g['E9'] for g in res.values())}; E1&E9 {both}/{len(res)}")
+    assert not sentinel_e9
+    assert both / len(res) <= E9_SHARE_MAX
