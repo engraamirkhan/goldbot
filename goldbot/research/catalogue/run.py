@@ -231,7 +231,7 @@ def cmd_enumerate(a: argparse.Namespace) -> None:
            "used": used, "used_rows_local": used_rows, "plan_floor": floor, "reserved_other_ws": RESERVED_OTHER_WS,
            "n_units": len(us), "n_real": sum(u["family"] != "NULL" for u in us),
            "n_null": sum(u["family"] == "NULL" for u in us), "headroom_after": left,
-           "k_registry_after": reg.n_trials_effective + len(us), "dropped_infeasible": sorted(dropped),
+           "k_registry_after": max(reg.n_trials_effective, used) + len(us), "dropped_infeasible": sorted(dropped),
            "units": rows}
     Path(a.units_out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.units_out).write_text(json.dumps(doc, indent=1) + "\n")
@@ -296,7 +296,8 @@ def cmd_explore(a: argparse.Namespace) -> None:
     nulls = [r for r in res if r["family"] == "NULL"]
     null_pass = sum(r["pass"] for r in nulls)
     bound = S.null_void_bound(len(nulls))
-    k_reg = reg.n_trials_effective + len(us)
+    units_doc = json.loads(Path(a.units_out).read_text())
+    k_reg = int(units_doc["k_registry_after"])        # program K: Q4 rows incl. sprint-3000 pre-registrations + units
     for r in res:
         if r["explore"].get("n"):
             tr = _load_trades("explore", r["unit"])
