@@ -1,6 +1,8 @@
 # Pre-registration (DRAFT): the catalogue screen under EVAL-1, 2026-11-07
 
-Status: **DRAFT, not registrable.** Nothing in this file has been run and no registry row exists for it. It becomes
+Status: WITHDRAWN (quant ruling (c), 2026-11-07); never registered.
+
+Previous status: **DRAFT, not registrable.** Nothing in this file has been run and no registry row exists for it. It becomes
 binding only when the quant-reviewer signs section 12 and the blockers in section 1 are cleared in writing.
 Owner of the text: research director. Signs: quant-reviewer. Runs: strategy-researcher. Verdict: evaluator.
 

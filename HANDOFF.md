@@ -5,6 +5,11 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
+  is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
+  charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured
+  spread and commission only from a 20-trading-day sample (none qualifies yet: the fallback stays), financing =
+  side x point-in-time benchmark differential + measured markup (floored at 0), broker triple day, fail closed.
 - Catalogue screen gates moved to EVAL-1 (evaluation audit 2026-11-07 section (b), quant C1-C6; branch
   `fix/catalogue-eval1-gates`). `goldbot/research/catalogue/stats.py`: the unit is a daily net book marked to market on
   daily closes at the card's one sizing (0.5 % per R), benchmark cash. Explore = E1 Newey-West t >= 2 at
