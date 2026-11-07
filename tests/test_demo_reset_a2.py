@@ -26,6 +26,11 @@ A2 = ("S2A S2B S3A S3B MSA15 VMS15 S4 I2A I2B VI2A VI2B W1A W1B VW1A VW1B W2 VW2
       "Z8P KA15 OBR15 KSQ1 KSQ4 DON4 DOND C30A PDC1 PDC4 F2A "
       "F2C C30C XC15 S6 I1 I3 W3 VS0 VS1A VS1B VS2A VS2B VS3A VS3B VS5A VS5B").split()
 EXEMPT = ("S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1A F1C G1A G1C BXR15 BXR30 BXR1H BXR4H").split()
+# retired 2026-11-06 (performance-analyst kill list: BXR*/XBB15 under A2, the controls they left unpaired; A5 signed:
+# its learning arms and their twins, ZCV with Z6V/Z7V; prereg-amendment-2026-11-06-control-thinning.md)
+RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30", "1H", "4H")} | {
+    "XBB15", "I0", "VI0", "C1H", "VC1H", "W0", "VW0", "ZCV", "S5A", "S5B", "Z4D", "Z4P", "Z6D", "Z6V", "Z7D", "Z7P",
+    "Z7V", "LCS5A", "LCS5B", "LCZ4D", "LCZ4P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P", "LCZ7V"}
 
 
 @pytest.fixture(scope="module")
@@ -55,8 +60,9 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
     from tests.test_learning_mi import REMOVED
     owner = {i for i, a in spec.items() if a.params.get("instrument") in REMOVED}
     assert all(spec[i].retired_day == "2026-11-04" for i in owner)
-    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner
-    for arm_id in (*EXEMPT, "XBB15", "S1A", "S1B"):          # S1A/S1B: evaluator R3, read at their own read
+    assert all(str(spec[i].retired_day) == "2026-11-06" for i in RETIRED_1106)
+    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner | RETIRED_1106
+    for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106:   # S1A/S1B: evaluator R3, read at their own read
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 
 
@@ -84,7 +90,7 @@ def test_every_retired_arm_on_every_account_is_refused_by_the_engines_arm_select
         for arm_id in registered & set(A2):
             # blocked rows were never selected; every other retired arm is selected only to keep managing its exits
             assert arm_id in refused or arm_id in cfg.dropped, (acc.account_id, arm_id)
-        assert not refused & set(EXEMPT)
+        assert not refused & (set(EXEMPT) - RETIRED_1106)
         assert refused <= running
 
 
@@ -111,7 +117,10 @@ def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active
             assert sum(ex.arms[i].control_share or 0.0 for i in mine) <= 1
             # a pot of multi-instrument learning pairs only (learning-mi-2026-11-02.md) waits for lane L3 as they do
             waits = bool(mine) and all(spec[i].status == "blocked" and "L3" in spec[i].note for i in mine)
-            assert waits or any(not spec[i].retired and spec[i].status == "run" for i in mine), (acc.account_id, style)
+            # a pot whose last arms the 2026-11-06 decisions retired (icm-demo swing: W0) is empty on purpose
+            emptied = any(i in RETIRED_1106 for i in mine)
+            assert waits or emptied or any(not spec[i].retired and spec[i].status == "run" for i in mine), \
+                (acc.account_id, style)
 
 
 def _retired(arm: exploration.Arm) -> exploration.Arm:

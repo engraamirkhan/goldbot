@@ -565,6 +565,18 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS health_alerts_ts ON health_alerts(ts_ns)",
     )),
+    # additive (daily entry budget, PD 2026-11-06; code review LOW-1, trading-safety LOW-1): `signal_ns`, each
+    # exploration order's signal close (the engine's clock, so a replay counts its own day, never the host's wall clock
+    # at send), backfilled from the row's JSON body, and an index on (account, signal time, arm) for the budget's
+    # per-pass reads. A release without it never reads the column (its rows leave it NULL)
+    Migration(version=23, name="exploration_signal_time", additive=True, statements=(),
+              add_columns=(("exploration_trades", "signal_ns", "INTEGER"),)),
+    # additive, with 23 (the column exists before its backfill and index): idempotent on a re-apply
+    Migration(version=24, name="exploration_signal_index", additive=True, statements=(
+        "UPDATE exploration_trades SET signal_ns = CAST(strftime('%s', json_extract(body, '$.signal_utc')) AS INTEGER) "
+        "* 1000000000 WHERE signal_ns IS NULL AND json_valid(body) AND json_extract(body, '$.signal_utc') IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS exploration_trades_signal ON exploration_trades(account_id, signal_ns, arm_id)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
