@@ -6,6 +6,7 @@ from one source is never compared with another source's prices (A3)."""
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -28,6 +29,7 @@ from goldbot.research.catalogue.detectors_patterns import PATTERN_DETECTORS
 from goldbot.research.catalogue.sim import INTRABAR, TRADE_COLS, simulate, window_drift_per_ns
 
 SPECS_PATH = Path(__file__).with_name("specs.yaml")
+RW_GUARD_PATH = Path(__file__).with_name("rw_guard.json")
 
 
 # ------------------------------------------------------------------ nulls
@@ -79,6 +81,19 @@ def specs_sha256() -> str:
 
 def units() -> list[dict[str, Any]]:
     return list(specs()["units"])
+
+
+def rw_guard() -> dict[str, Any]:
+    """The random-walk guard's listing (quant C9): "sparse" units (fewer than 30 trades after 24 driftless walks:
+    "excluded from EVAL-1 screening, and it is listed") and "failed" unit|control pairs (the pooled rule failed on the
+    first 3 samples and on the retest). tests/test_catalogue_random_walk.py keeps both lists exact."""
+    return dict(json.loads(RW_GUARD_PATH.read_text()))
+
+
+def rw_excluded_units() -> set[str]:
+    """Units the screen leaves out under EVAL-1 (ii): sparse on the guard, or a pair of theirs failed it."""
+    g = rw_guard()
+    return set(g["sparse"]) | {p.split("|")[0] for p in g["failed"]}
 
 
 def unit_by_id(uid: str) -> dict[str, Any]:

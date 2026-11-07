@@ -19,11 +19,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   own bar structure, |t_excess| and |t_gross| < 2 (a pair fails only if |t| >= 2 with the same sign on 3 independent
   samples: one walk per pair would fail a correct harness by chance at ~300 pairs). On b3f14388 about 100 pairs show
   |t| >= 2 on the first sample, with t up to 41.
-  Open, not fixed here (D5, found by the new test): a stop/limit entry filled inside a bar has its stop checked
-  against the whole bar, including the part before the fill. B04-V0 loses -0.49 R/trade on zero-edge data (t -4 to
-  -6; B04-V0/V3 strict xfail, V2 has the same bias below the replication bar). Conservative for a pass, but it fails EVAL-1 (ii) and would trip the EVAL-1 twin kill;
-  B04 cannot be screened under EVAL-1 until the fill bar is resolved from finer bars (quant-reviewer).
-  No real-data window read or re-run; WS-3 stays closed (prereg section 8).
+  Quant re-review (NO-GO until C7, C9, C10; eval1_signoff_1107) applied on the same branch:
+  C7 the risk floor is decided once at the signal bar on the order price (market: the decision close); R is measured
+  on that order risk; a filled order is never dropped (a fill through its stop exits at once as -1 R, past its
+  target at once at the fill); a trade with no random-time twin bar is kept, control NaN, left out of the excess only.
+  C10 (D5) a stop/limit entry filled inside a bar is filled and walked on gold 1m bars (`data.load_minutes`,
+  `dispatcher.get_minutes`; random-side twins too); stop-entry fills pay the stop overshoot; a unit with a stop/limit
+  entry on an instrument without 1m bars is excluded whole and listed (`excluded_no_1m`).
+  C9 the random-walk guard pools 3 samples (<= 8 walks each) per pair: fail if |t| >= 3.5, or |mean| >= 0.03 R with
+  |t| >= 2, on the first 3 samples and on a retest of 3 fresh ones; `goldbot/research/catalogue/rw_guard.json` lists
+  the 9 sparse units (< 30 trades on 24 walks) and the 3 failed pairs (B08-V1 both controls, C04-V1 random_time;
+  strict xfail, both flip sign between test and retest); `run.py` leaves those units out. Result: 311 passed,
+  18 skipped (sparse), 3 xfailed; B04 (D5) passes. No real-data window read or re-run; WS-3 stays closed (prereg 8).
 - TradingView author ideas shadow scorer (prereg-2026-10-28-tv-author-ideas.md section 6, amendment T-1; branch
   `feat/tv-ideas-shadow-scorer`): `goldbot/research/tv_ideas.py`, scheduler job `tva_scores` daily 23:35 UTC (after
   feed_reconcile and nightly_costs). It opens brain `state/tv_ideas.db` read-only (`mode=ro`) and scores each live

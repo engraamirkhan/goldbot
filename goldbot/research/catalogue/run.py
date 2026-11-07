@@ -72,7 +72,9 @@ def unit_config(u: dict[str, Any]) -> dict[str, Any]:
 
 
 def registered_units(dropped: set[str]) -> list[dict[str, Any]]:
-    return [u for u in D.units() if u["unit"] not in dropped]
+    """The units a screen registers and runs: every spec unit but the infeasible ones and those the random-walk guard
+    excludes (rw_guard.json, quant C9: sparse, or a pair failed; listed in the enumerate output)."""
+    return [u for u in D.units() if u["unit"] not in dropped and u["unit"] not in D.rw_excluded_units()]
 
 
 def _dropped() -> set[str]:
@@ -258,6 +260,7 @@ def cmd_enumerate(a: argparse.Namespace) -> None:
            "n_units": len(us), "n_real": sum(u["family"] != "NULL" for u in us),
            "n_null": sum(u["family"] == "NULL" for u in us), "headroom_after": left,
            "k_registry_after": max(reg.n_trials_effective, used) + len(us), "dropped_infeasible": sorted(dropped),
+           "excluded_rw_guard": D.rw_guard(),
            "units": rows}
     Path(a.units_out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.units_out).write_text(json.dumps(doc, indent=1) + "\n")

@@ -1,0 +1,19 @@
+{
+ "rule": "quant C9 (eval1_signoff_1107). sparse: units with fewer than 30 trades after 24 driftless random walks, excluded from EVAL-1 screening and listed. failed: unit|control pairs that fail the pooled rule on the first 3 samples and on the retest (the guard marks them strict xfail; their units are not screened until the quant rules). tests/test_catalogue_random_walk.py keeps both lists exact.",
+ "sparse": [
+  "C08-V0",
+  "C08-V2",
+  "C08-V3",
+  "C09-V1",
+  "C09-V3",
+  "C10-V3",
+  "F10-V3",
+  "S22-V1",
+  "S24-V2"
+ ],
+ "failed": [
+  "B08-V1|random_side",
+  "B08-V1|random_time",
+  "C04-V1|random_time"
+ ]
+}

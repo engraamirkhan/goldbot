@@ -12,15 +12,20 @@ Construction
            instrument (gold when it has gold; cross-sectional units: all of their instruments)
   context  synthetic release/FOMC/holiday schedules, two-level policy rates, 40 years of driftless daily history
   pair     every registered unit x its registered control, or both controls when the unit has none (the harness picks
-           by long share, so either can run); cells pooled as in dispatcher.unit_trades; walks are pooled until the
-           pair has MIN_TRADES trades (at most MAX_WALKS), else the pair is skipped as uninformative
+           by long share, so either can run); cells pooled as in dispatcher.unit_trades
   stats    the harness's own: HAC t of the daily-summed excess ("t_excess", the gated number) and the same HAC t of
-           the daily-summed gross R (= net + cost drag)
+           the daily-summed gross R (= net + cost drag), and the mean excess and gross R per trade
 
-Multiplicity. ~300 pairs x 2 statistics: a literal "|t| < 2 on one walk" fails a CORRECT harness with probability
-1 - 0.954^600. A pair fails only when |t| >= 2 with the same sign on each of REPS independent samples (false-fail rate
-per statistic 2 x 0.023^3 ~ 2e-5; a bias of t >= 4 per sample still fails with probability > 0.9). The D1-D4 defects
-gave t of 4-40 here."""
+Decision rule (quant C9, eval1_signoff_1107): "Every pair always runs 3 samples, pooled. It fails if |t_pooled| >= 3.5,
+or if the pooled mean gross or excess has |mean| >= 0.03 R/trade with |t_pooled| >= 2. A failure is re-tested once,
+on 3 fresh seeds. A pair with fewer than 30 trades after 24 walks is excluded from EVAL-1 screening, and it is
+listed." A sample pools walks until it has MIN_TRADES trades (at most MAX_WALKS = 8, so 3 samples are 24 walks); the
+retest is samples 3-5 (walks 24-47) and the pair fails only if the retest fails too. Listed in goldbot/research/catalogue/rw_guard.json,
+which this guard keeps exact both ways and run.py leaves out of the screen: "sparse" units (the real trades do not
+depend on the control) and "failed" pairs (strict xfail here). Under a correct harness the rule fails about 1.4 of
+the ~640 statistics by chance (|t| >= 2 twice in a row, 0.046^2, whatever its sign: the mean branch rarely binds at
+these n); the two failed pairs of 2026-11-07 flip sign between the first test and the retest. The rule it replaces (|t| >= 2, same sign, on all 3 samples) let
+a bias of expected t 2 per sample escape 87 % of the time and skipped 32 sparse pairs unverified."""
 from __future__ import annotations
 
 import hashlib
@@ -39,9 +44,11 @@ from goldbot.research.catalogue.data import DAY, HOUR, MIN, TF_NS, Bars
 T0 = int(pd.Timestamp("2010-01-04", tz="UTC").value)          # a Monday
 PATH_POINTS = 6_000_000      # path steps per cell (sub-steps per bar = PATH_POINTS / bars, within 64..SUB_MAX)
 SUB_MAX = 1_536
-REPS = 3
-MAX_WALKS = 6
-T_MAX = 2.0
+REPS = 3                     # samples per test, pooled (C9)
+MAX_WALKS = 8                # walks per sample at most: 3 samples = 24 walks
+T_FAIL = 3.5                 # |t_pooled| at or above: fail
+T_MEAN = 2.0                 # |t_pooled| at or above AND |mean| >= MEAN_FAIL: fail
+MEAN_FAIL = 0.03             # R/trade
 MIN_TRADES = 30
 WARM = 300
 DAILY_VOL = 0.01
@@ -113,10 +120,10 @@ def rw_cell(inst: str, tf: str, seed: int, n: int, hot: np.ndarray | None = None
     st = np.arange(m) * sub // m
     end = np.append(st[1:], sub) - 1
     ft = (t[:, None] + (ta - t)[:, None] * st[None, :] // sub).ravel()
-    k = len(ft)
+    nf = len(ft)
     fb = Bars(inst, "1m", ft, np.append(ft[1:], int(ta[-1])), path[:, st].ravel(),
               np.maximum.reduceat(path, st, axis=1).ravel(), np.minimum.reduceat(path, st, axis=1).ravel(),
-              path[:, end].ravel(), np.full(k, np.nan), np.zeros(k, bool), np.zeros(k, np.int32), np.zeros(k))
+              path[:, end].ravel(), np.full(nf, np.nan), np.zeros(nf, bool), np.zeros(nf, np.int32), np.zeros(nf))
     return b, fb
 
 
@@ -181,26 +188,49 @@ def walk_trades(uid: str, control: str, walk: int) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=[*SIM.TRADE_COLS, "inst", "tf"])
 
 
-def pair_stats(uid: str, control: str, rep: int) -> dict[str, float]:
-    """Sample `rep` of the pair: walks rep*MAX_WALKS.. pooled until MIN_TRADES trades (samples never share a walk)."""
+def pair_stats(uid: str, control: str, first: int = 0) -> dict[str, float]:
+    """REPS samples first.. of the pair, pooled. Sample r: walks r*MAX_WALKS.. pooled until MIN_TRADES trades (samples
+    never share a walk); every walk keeps its own block of days."""
     frames: list[pd.DataFrame] = []
-    n = 0
-    for w in range(rep * MAX_WALKS, (rep + 1) * MAX_WALKS):
-        tr = walk_trades(uid, control, w)
-        tr["day_offset"] = w - rep * MAX_WALKS
-        frames.append(tr)
-        n += len(tr)
-        if n >= MIN_TRADES:
-            break
-    if n == 0:
+    for rep in range(first, first + REPS):
+        n = 0
+        for w in range(rep * MAX_WALKS, (rep + 1) * MAX_WALKS):
+            tr = walk_trades(uid, control, w)
+            tr["walk"] = w
+            frames.append(tr)
+            n += len(tr)
+            if n >= MIN_TRADES:
+                break
+    frames = [f for f in frames if len(f)]
+    if not frames:
         return {"n": 0, "t_excess": 0.0, "t_gross": 0.0, "excess": 0.0, "gross": 0.0}
-    tr = pd.concat([f for f in frames if len(f)], ignore_index=True)
+    tr = pd.concat(frames, ignore_index=True)
     # walks share a calendar; shift each to its own block of days so a day sums one walk's trades only
-    tr["t_fill"] = tr["t_fill"].astype(np.int64) + tr["day_offset"].astype(np.int64) * 6_000 * DAY
+    tr["t_fill"] = tr["t_fill"].astype(np.int64) + tr["walk"].astype(np.int64) * 6_000 * DAY
     s = S.summarize(tr)
     t_gross = S.hac_t(S.daily(tr, "gross").to_numpy(), S.overlap_lag(tr))
     return {"n": int(s["n"]), "t_excess": float(s["t_excess"]), "t_gross": float(t_gross),
             "excess": float(s["excess"]), "gross": float(s["gross"])}
+
+
+def guard_failures(st: dict[str, float]) -> dict[str, tuple[float, float]]:
+    """The statistics of one pooled test that fail C9: {name: (t, mean)}; a NaN t (no variance) fails."""
+    bad = {}
+    for t_key, m_key in (("t_excess", "excess"), ("t_gross", "gross")):
+        t, m = st[t_key], st[m_key]
+        if not np.isfinite(t) or abs(t) >= T_FAIL or (abs(m) >= MEAN_FAIL and abs(t) >= T_MEAN):
+            bad[t_key] = (t, m)
+    return bad
+
+
+def rw_sparse() -> set[str]:
+    return set(D.rw_guard()["sparse"])
+
+
+def _params() -> list:
+    failed = set(D.rw_guard()["failed"])
+    return [pytest.param(uid, c, marks=pytest.mark.xfail(strict=True, reason="listed C9 guard failure (rw_guard.json)"))
+            if f"{uid}|{c}" in failed else (uid, c) for uid, c in pairs()]
 
 
 def pairs() -> list[tuple[str, str]]:
@@ -211,19 +241,30 @@ def pairs() -> list[tuple[str, str]]:
     return out
 
 
-@pytest.mark.parametrize("uid,control", pairs())
+@pytest.mark.parametrize("uid,control", _params())
 def test_detector_and_control_show_no_edge_on_a_driftless_random_walk(uid: str, control: str) -> None:
     first = pair_stats(uid, control, 0)
     if first["n"] < MIN_TRADES:
-        pytest.skip(f"{uid}: {first['n']} trades on {MAX_WALKS} walks, too rare for an informative t")
-    bad: dict[str, list[float]] = {}
-    for key in ("t_excess", "t_gross"):
-        ts = [first[key]]
-        while len(ts) < REPS and abs(ts[-1]) >= T_MAX and np.sign(ts[-1]) == np.sign(ts[0]):
-            ts.append(pair_stats(uid, control, len(ts))[key])
-        if len(ts) == REPS and abs(ts[-1]) >= T_MAX and np.sign(ts[-1]) == np.sign(ts[0]):
-            bad[key] = ts
-    assert not bad, f"{uid} x {control}: |t| >= {T_MAX}, same sign, on all {REPS} driftless samples: {bad}"
+        assert uid in rw_sparse(), f"{uid}: {first['n']} trades on {REPS * MAX_WALKS} walks: list it in rw_guard.json"
+        pytest.skip(f"{uid}: {first['n']} trades on {REPS * MAX_WALKS} walks: excluded from EVAL-1 screening (listed)")
+    assert uid not in rw_sparse(), f"{uid} has {first['n']} trades on the guard: remove it from rw_guard.json"
+    bad = guard_failures(first)
+    confirmed = {}
+    if bad:
+        retest = guard_failures(pair_stats(uid, control, REPS))
+        confirmed = {k: (bad[k], retest[k]) for k in bad if k in retest}
+    assert not confirmed, f"{uid} x {control}: pooled |t| >= {T_FAIL} or |mean| >= {MEAN_FAIL} R with |t| >= {T_MEAN}, " \
+                    f"on the first 3 samples and on the retest ((t, mean), (t, mean)): {confirmed} (n {first['n']})"
+
+
+@pytest.mark.parametrize("st,fails", [
+    ({"t_excess": 3.6, "excess": 0.001, "t_gross": 0.0, "gross": 0.0}, {"t_excess"}),
+    ({"t_excess": 0.0, "excess": 0.0, "t_gross": -2.1, "gross": -0.031}, {"t_gross"}),
+    ({"t_excess": 2.5, "excess": 0.02, "t_gross": 3.4, "gross": 0.029}, set()),
+    ({"t_excess": 1.9, "excess": 0.5, "t_gross": float("nan"), "gross": 0.0}, {"t_gross"}),
+])
+def test_a_pair_fails_on_a_pooled_t_of_3_5_or_a_mean_of_0_03_r_with_t_2(st: dict[str, float], fails: set[str]) -> None:
+    assert set(guard_failures(st)) == fails
 
 
 @pytest.mark.parametrize("uid", ["S21-V1", "S20-V1", "S02-V0", "F08-V0", "NULL-RAND-1h", "NULL-XS-RANDOM"])
