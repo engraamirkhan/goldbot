@@ -151,6 +151,18 @@ def counted(n: dict[str, int], arm: Arm, signal: pd.Timestamp, now: pd.Timestamp
         n[k] = n.get(k, 0) + 1
 
 
+def session_split(ns: list[int], max_per_day: int) -> dict[str, int]:
+    """Each session's fills a day (Q3): max(1, round(max_per_day x its share of the edge candidates `ns`, epoch ns));
+    equal thirds with none. Pure: `session_budgets` reads the candidates, health's entry_silence check (goldbot/ops/
+    entry_silence.py) reads the same split."""
+    by = {s: 0 for s in SESSIONS}
+    for sess, _h in _cells(ns):
+        by[sess] = by.get(sess, 0) + 1
+    total = sum(by.values())
+    shares = {s: by[s] / total for s in SESSIONS} if total else {s: 1 / len(SESSIONS) for s in SESSIONS}
+    return {s: max(1, round(max_per_day * shares[s])) for s in SESSIONS}
+
+
 def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start: pd.Timestamp) -> dict[str, int]:
     """Each session's fills a day (Q3), from the account's edge candidates over the trailing TRAIL_DAYS trading days;
     read once a day."""
@@ -161,12 +173,7 @@ def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start
         ns = [int(r[0]) for r in conn.execute(
             "SELECT decision_ns FROM exploration_obs WHERE account_id = ? AND is_control = 0 AND decision_ns >= ? "
             "AND decision_ns < ?", (eng.cfg.account_id, _ns(trailing_start(day_start)), _ns(day_start)))]
-    by = {s: 0 for s in SESSIONS}
-    for sess, _h in _cells(ns):
-        by[sess] = by.get(sess, 0) + 1
-    total = sum(by.values())
-    shares = {s: by[s] / total for s in SESSIONS} if total else {s: 1 / len(SESSIONS) for s in SESSIONS}
-    out = {s: max(1, round(daily.max_per_day * shares[s])) for s in SESSIONS}
+    out = session_split(ns, daily.max_per_day)
     ex.budget_cache = {k: v for k, v in ex.budget_cache.items() if k[0] != "sessions"}
     ex.budget_cache[key] = out
     return dict(out)
@@ -235,4 +242,4 @@ def control_propensity(eng: Engine, ex: Exploration, control: str, arms_of: tupl
 
 __all__ = ["EXTRA_PAIRS", "PASS_WIDE", "SESSIONS", "TRAIL_DAYS", "EntryKind", "cell_counted", "cell_fills",
            "control_propensity", "counted", "daily_refusal", "entries_today", "entry_kind", "pairs", "session_budgets",
-           "session_of", "trailing_start"]
+           "session_of", "session_split", "trailing_start"]
