@@ -196,11 +196,33 @@ EXEMPT_WITHDRAWAL_RE = re.compile(r"^(unevaluable|never formed): \S")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
+EVIDENCE_KEYS: tuple[tuple[str, str], ...] = (("path", "sha256"), ("source_file", "source_sha256"))
+
+
+def _evidence_file_ok(e: Any) -> bool:
+    """One evidence entry: a non-empty file name and its 64-hex sha256, under either key pair (EVIDENCE_KEYS)."""
+    if not isinstance(e, dict):
+        return False
+    for file_key, sha_key in EVIDENCE_KEYS:
+        f, sha = e.get(file_key), e.get(sha_key)
+        if isinstance(f, str) and f.strip() and isinstance(sha, str) and _SHA256_RE.match(sha.lower()):
+            return True
+    return False
+
+
 def evidence_ok(evidence: Any) -> bool:
-    """`evidence` is a non-empty list of run output files, each {"path": <non-empty>, "sha256": <64 hex>}."""
-    return isinstance(evidence, list) and bool(evidence) and all(
-        isinstance(e, dict) and isinstance(e.get("path"), str) and bool(e["path"].strip())
-        and isinstance(e.get("sha256"), str) and bool(_SHA256_RE.match(e["sha256"].lower())) for e in evidence)
+    """`evidence` is a non-empty list of run output files, each {"path", "sha256"} (`TrialRegistry.withdraw`) or
+    {"source_file", "source_sha256"} (the applied sprint-3000 backfill), the sha256 64 hex."""
+    return isinstance(evidence, list) and bool(evidence) and all(_evidence_file_ok(e) for e in evidence)
+
+
+def withdrawal_evidence(row: dict[str, Any]) -> Any:
+    """A withdrawal's evidence: top-level `evidence` (`TrialRegistry.withdraw`), else `results.evidence` (the
+    sprint-3000 backfill's layout; the registry is append-only, so those rows stay as written)."""
+    if row.get("evidence") is not None:
+        return row["evidence"]
+    results = row.get("results")
+    return results.get("evidence") if isinstance(results, dict) else None
 
 
 def exempting_withdrawal(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> dict[str, Any] | None:
@@ -208,15 +230,20 @@ def exempting_withdrawal(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> 
     2026-11-09: "unless a `withdrawn` row linked to it by (ts, config_hash) exists. That row must state `reason` in
     {`unevaluable: <cause>`, `never formed: <cause>`} and `evidence` (the run output files and their sha256 showing the
     spec has no score), and it must be written before any read of that spec. ... Self-declared 'not a trial' text in a
-    writer's output exempts nothing." A read is a trial row of the same family and config hash stamped from the
-    pre-registration's `ts` up to the withdrawal's; a spec read after its withdrawal needs a new pre-registration."""
+    writer's output exempts nothing." The link is the withdrawal's `withdraws` (`row_ref`: ts and config hash). A read
+    is a trial row of the same family and config hash stamped from the pre-registration's `ts` up to the withdrawal's
+    (a withdrawal with no readable stamp cannot show it came first: any read after the pre-registration voids it); a
+    spec read after its withdrawal needs a new pre-registration."""
     start = _row_when(prereg)
+    unreadable = datetime.min.replace(tzinfo=timezone.utc)
     for w in rows:
         if w.get("status") != WITHDRAWN or not refers_to(w.get("withdraws"), prereg):
             continue
-        if not EXEMPT_WITHDRAWAL_RE.match(str(w.get("reason") or "")) or not evidence_ok(w.get("evidence")):
+        if not EXEMPT_WITHDRAWAL_RE.match(str(w.get("reason") or "")) or not evidence_ok(withdrawal_evidence(w)):
             continue
         end = _row_when(w)
+        if end == unreadable:
+            end = datetime.max.replace(tzinfo=timezone.utc)
         if any(is_trial(t) and t.get("family") == prereg.get("family") and row_hash(t) == prereg.get("config_hash")
                and start <= _row_when(t) <= end for t in rows):
             continue

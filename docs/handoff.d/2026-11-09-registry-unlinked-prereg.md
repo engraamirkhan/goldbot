@@ -5,6 +5,7 @@
   counts; queued rows stay under `director.reserved_trials`; loop rows stay out of the quarter budget (ADR 0029) but in
   K. Both functions take `now=` (default the registry clock). Exemption (quant ruling 2026-11-09): only a `withdrawn`
   row naming the pre-registration by (ts, config_hash) with `reason` "unevaluable: <cause>" or "never formed: <cause>"
-  and `evidence` (run output files with sha256), written before any read of the spec (`exempting_withdrawal`),
+  and `evidence` (run output files with sha256; top-level `evidence` [{path, sha256}] or the applied sprint-3000
+  backfill's `results.evidence` [{source_file, source_sha256}]), written before any read of the spec (`exempting_withdrawal`),
   exempts it; `TrialRegistry.withdraw(..., evidence=)` records it. Any other withdrawal, or a "not a trial" note,
   exempts nothing. Tests: `tests/test_registry_unlinked_prereg.py`.

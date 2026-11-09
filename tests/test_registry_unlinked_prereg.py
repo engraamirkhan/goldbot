@@ -155,3 +155,44 @@ def test_the_registry_budget_and_k_count_a_stale_preregistration(tmp_path: Any, 
     monkeypatch.setattr(registry_mod, "_utcnow", lambda: NOW)
     assert reg.budget_used(Q) == 1
     assert reg.n_trials_effective == 1
+
+
+def _backfill_withdrawal(p: dict[str, Any], reason: str, evidence: Any) -> dict[str, Any]:
+    """A withdrawal in the exact shape the applied sprint-3000 backfill wrote (append-only, cannot be rewritten):
+    evidence under `results.evidence` as source_file/source_sha256, the link in `withdraws`."""
+    return {"status": "withdrawn", "ts": (OLD + timedelta(hours=1)).isoformat(),
+            "withdraws": {"ts": p["ts"], "config_hash": p["config_hash"], "trial": 105},
+            "reason": reason, "results": {"evidence": evidence}}
+
+
+def test_a_backfill_withdrawal_with_results_evidence_exempts_the_preregistration() -> None:
+    for reason in ("never formed: no events in the window", "unevaluable: vocabulary pending"):
+        p = _prereg(OLD)
+        rows = [p, _backfill_withdrawal(p, reason, [{"source_file": "~/tmp/s3k/explore.json",
+                                                      "source_sha256": "ab" * 32}])]
+        assert quarter_trials(rows, Q, now=NOW) == 0, reason
+        assert n_trials_effective(rows, now=NOW) == 0, reason
+
+
+def test_a_backfill_withdrawal_with_a_bad_sha_or_another_reason_does_not_exempt() -> None:
+    p = _prereg(OLD)
+    for w in (_backfill_withdrawal(p, "never formed: x", [{"source_file": "a.json", "source_sha256": "abc"}]),
+              _backfill_withdrawal(p, "never formed: x", [{"source_file": "", "source_sha256": SHA}]),
+              _backfill_withdrawal(p, "never formed: x", []),
+              _backfill_withdrawal(p, "superseded", [{"source_file": "a.json", "source_sha256": SHA}])):
+        assert quarter_trials([p, w], Q, now=NOW) == 1, w
+
+
+def test_a_withdrawal_without_a_readable_stamp_exempts_only_a_spec_never_read() -> None:
+    p = _prereg(OLD)
+    w = {k: v for k, v in _backfill_withdrawal(p, "never formed: x", [{"source_file": "a", "source_sha256": SHA}]).items()
+         if k != "ts"}
+    assert quarter_trials([p, w], Q, now=NOW) == 0
+    read = _result(NOW - timedelta(days=1), h="abc")             # a read at any time after the pre-registration
+    assert quarter_trials([p, read, w], Q, now=NOW) == 2
+
+
+def test_a_withdrawal_naming_another_preregistration_does_not_exempt() -> None:
+    p, other = _prereg(OLD), _prereg(OLD - timedelta(days=1), h="zzz")
+    rows = [p, other, _backfill_withdrawal(other, "never formed: x", [{"source_file": "a", "source_sha256": SHA}])]
+    assert quarter_trials(rows, Q, now=NOW) == 1
