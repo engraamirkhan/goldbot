@@ -1,10 +1,10 @@
 <!-- Copied verbatim from the signed v6 method (quant-reviewer, 2026-11-09). Scanned 2026-11-09: no secrets or account ids. Paths under ~/tmp are local working files and are not published. Figures superseded by the quant-verified update of 2026-11-09 (DSR K 21,333, sensitivity 20,151, n_trials_effective 3,471, quarter_trials 3,395, headroom 105, registry 6,961 rows; reads ordered by results.backfill.true_read_ts): see docs/research/prereg-2026-11-09-eval2.md section 2. -->
 
-# EVAL-2: how goldbot judges a strategy (method v6, 2026-11-09; v7 vantage S5 wording 2026-11-09, quant sign-off pending)
+# EVAL-2: how goldbot judges a strategy (method v6, 2026-11-09; v7 2026-11-09, signed with conditions C1-C10)
 
-**v7 (2026-11-09, quant sign-off pending):** the quant's vantage exit-price ruling (`~/tmp/vcal5_ruling_1109.md`)
+**v7 (2026-11-09, signed with conditions C1-C10 by the quant-reviewer):** the quant's vantage exit-price ruling
 replaces "vantage S5 blocked until exit deal price recorded" in sections 5 and 6, in the quant's exact words. Change
-record and the Lane 5A choices awaiting the same signature: section (e) at the end.
+record, the Lane 5A choices and the conditions as built: section (e) at the end.
 
 Chair: research director. **v3** applies the quant's addendum (holdout partly spent, per-window batch numbering,
 C02 15m CONFIRM-SEEN), the PD's K ruling (`~/tmp/pd_k_ruling_1109.md`) and the PD + PO volume ruling
@@ -110,7 +110,7 @@ by 1.2-1.7x.
 | **L2 tradable** (carry to confirm) | Explore 2010-17 (spent: selection only, no significance claimed) | EB hierarchical model (REML, Student-t): θ_c = μ_F + a_TF + b_inst + u_c, on day-clustered cell means of excess. The prior is fitted leave-family-out on **every cell ever viewed**, real and NULL-RAND, de-duplicated by config hash. The empirical null comes from the controls (Efron). **Carry** if P(θ_c > 0) ≥ 0.80 and P(net_c > 0 at 1.5x deciding cost) ≥ 0.80. L2 carries at most 3 cells per family, mechanically, by posterior mean. **Cell kill:** P(net > 0.05 R) < 0.05. The 0.80 is raised, never lowered, until the null carry rate is ≤ 5 % (S1). **Frozen before the L2 run on real cells:** the thresholds, the model (terms, REML, Student-t df, prior population and its de-duplication) and the code hash are recorded in the card; no threshold changes after it | Unshrunk: 1.68 sd/√n gives 0.13 R at n 300 and 0.07 R at n 1,000 (sd 1.3); 0.125 R for C03 30m. Shrinkage lowers it |
 | **Futility retire** (ruling 11-09, all units incl. 1d) | Any screen at 300-999 events | One-sided 90 % UB of the statistic named in the card before the read (gross, or Δ vs twins) < +0.03 R **and** clustered SE ≤ 0.055 R, both pre-registered and counted in K. Else "inconclusive" | SE ≤ 0.055 needs n ≈ 560 at sd 1.3 and ≈ 800 at sd 1.56. **Ruling A (150, daily, retire on sign) fails this power test** (SE 0.106 at n 150); its withdrawal goes to an ADR (section 8, item 19) |
 | **L3 confirm** (read once per family) | **TEST-OLD 2006-02..2009 primary** (own sequence), 2018-25 corroboration (one-sided p ≤ 0.10 on net as an extra AND; its BatchPRDS p reported). Before the freeze, the 2006-09 data-quality check must pass (1m density; sqrt-time ATR scaling within 15 % from 15m to 4h), or intraday cells read NOT TESTED. **DQ result (`~/tmp/testold_dq_1109.md`, bars and ranges only, no outcomes):** 1m density passes every year (90-97 % of a full day, no gap over 4 days); ATR sqrt-time FAILS at 4h in 2006 (0.783) and 2007 (0.784), 2008-2009 pass at all timeframes (1.02-1.04); whole weekdays missing 9 / 20 / 19 / 6 per year (2008 includes Sep-Nov crisis dates); 2006 median 1m range about 12 bp vs 3-4 bp later, so quote noise likely inflates the 2006-07 15m ATR by 20-25 %. **Quant ruling 2026-11-09:** intraday cells (≤ 4h) on TEST-OLD use 2008-01..2009-12 only. 2006-07 is added back only if, after the refill, both the 4h sqrt-time ratio is within 15 % and the median 1m range (bp) is within 1.5x of 2008-09. Both checks run outcome-blind and are recorded in the card before any TEST-OLD return is read. 1d uses 2006-02..2009-12. | **Statistic:** the control-variate net: the family's precision-weighted mean excess plus the mean net of all twins in the carried cells over the window, at 1.0x deciding cost. **p:** one-sided stationary day-block bootstrap (mean block = E1 lag), resampling instances together with their twins. **Gate:** BatchBH (section 3) on that p; AND one-sided p of mean excess ≤ 0.10 (timing, not drift); AND the bootstrap 80 % lower bound of net at 1.5x deciding cost > 0; AND, over 2006-2009 plus 2018-2025: net positive in ≥ 3 calendar years, at least one of 2021 or 2022 (`research/gates.py` CHOP_YEARS), and no 2-year sub-period with net t ≤ -2; AND 2018-25 corroboration as above; AND E9 for holds ≥ 1 day. The weights are fixed from explore (n, sd) in the frozen card. **Cells:** after the family is rejected, cells go forward by Holm over its ≤ 3 carried cells at the family's BatchBH level, on the cell's control-variate net p (closed testing). Other cells are reported, not forwarded. **CONFIRM-SEEN** cells and families (section 3) never enter the 2018-25 hypothesis. They keep the 2018-25 corroboration condition (one-sided p ≤ 0.10 on net) as an AND that gives no evidential credit, and they **also** need the forward holdout of §1b, whatever their holdout status. The family's 2018-25 corroboration p is computed over its CONFIRM-FRESH carried cells only. **Read only if** power ≥ 0.3 on TEST-OLD at the L2 shrunk estimate; otherwise "insufficient (power)" and neither window is read for it | Recomputed before the card freeze on the control-variate statistic, at the BatchPRDS level of the deciding window (TEST-OLD index 1, γ_1 = 0.5; m = families read), from C03 and C02 inputs re-derived from raw explore trades at the frozen harness head. The v1 50 %/98 % figures are void. Quant estimate for C03 30m on TEST-OLD: about 65 % at full and 19 % at half excess. A family below 0.3 is not read. **C03 30m on 2008-09** (n ≈ 109): power is about 36 % full and 11 % half (re-derived). If it is below 0.3 at its shrunk estimate, it reads INSUFFICIENT and routes to L4 learning-class demo plus the forward holdout, never to real money on that route alone. The 0.3 floor is not lowered. On 2018-25 at batch 15 power is about 0 |
-| **L4 forward demo** (conformance, not discovery) | Shadow replay of every signal (taken or not) + demo fills. The L4 e-processes apply to arms registered after the EVAL-2 ADR. An existing arm moves only as a new registry row (K +1) | (i) **Execution e-process:** realised cost ≤ modelled + 0.02 R, paired fill vs replay v2 (section 5), per broker and leg. Kill-only; sd ≈ 0.05-0.1 R, detects in 30-100 fills. (ii) **Exit-mix check:** stop/target/time shares vs the history Dirichlet, ≈ 50 trades. (iii) **Futility e-process:** e ≥ 10 against H1: excess ≥ max(0.05 R, ½ x L3 shrunk estimate), after ≥ 100 signals, gives KILLED. (iv) **Edge e-process** vs H0: excess ≤ 0. Reported. e ≥ 20 = "proven forward" (rare inside a year). ON TRACK = (i)-(iii) green after ≥ 50 fills per family | Forward cannot find 0.1 R in under a year: 300 signals detect a 0.17 R shortfall. Ville bound ≤ 5 % |
+| **L4 forward demo** (conformance, not discovery) | Shadow replay of every signal (taken or not) + demo fills. The L4 e-processes apply to arms registered after the EVAL-2 ADR. An existing arm moves only as a new registry row (K +1) | (i) **Execution e-process:** realised cost ≤ modelled + 0.02 R, paired fill vs replay v2 (section 5), per broker and leg. Kill-only; sd ≈ 0.05-0.1 R; one term per session day (v7, C2), so a 0.05 R overrun needs about 300 fills (about 60 session days). (ii) **Exit-mix check:** stop/target/time shares vs the history Dirichlet, ≈ 50 trades. (iii) **Futility e-process:** e ≥ 10 against H1: excess ≥ max(0.05 R, ½ x L3 shrunk estimate), after ≥ 100 signals, gives KILLED. (iv) **Edge e-process** vs H0: excess ≤ 0. Reported. e ≥ 20 = "proven forward" (rare inside a year). ON TRACK = (i)-(iii) green after ≥ 50 fills per family | Forward cannot find 0.1 R in under a year: 300 signals detect a 0.17 R shortfall. Ville bound ≤ 5 % |
 | **L5 real money** | — | Eligible: L3 + L4 ON TRACK + holdout (section 1b: `--score-holdout` once if HOLDOUT-FRESH, the forward holdout if HOLDOUT-SEEN) + `research/gates.py` as coded. An exemption for rule-only families or a change to DSR's K basis needs an owner ADR. L5 size above the 95th-percentile-drawdown ≤ 8 % ceiling is refused by RiskGate config validation (a tightening; built at L5 time under its own trading-safety review, not in this build). **Owner decides** go-live and size | — |
 
 DSR K = 3,471 (registry n_trials_effective after the sprint-3000 backfill: 2,629 explore incl. 8 ensembles + 328
@@ -443,13 +443,13 @@ within the family; (6) the year-count and 2-year sub-period rule, and L5 under `
 - The S5 numbers are the microstructure lane's (`~/tmp/s5_decomp_1109.md`),
   not re-derived by me.
 
-## (e) v7, 2026-11-09: vantage S5 wording and the Lane 5A reading choices (quant sign-off pending)
+## (e) v7, 2026-11-09: vantage S5 wording and the Lane 5A reading choices (signed with conditions C1-C10)
 
-**Status: quant sign-off pending.** The quant's timing condition: "this text must go into EVAL-2 v7 and be signed before
+**Status: signed with conditions by the quant-reviewer, 2026-11-09 (review of 8b2345c4).** Part 1 (vantage wording) is signed as written and binds now. Parts 2-3 are signed as amended by conditions C1-C10 of that review. C1, C4, C6, C7 and C10 must be in this text and in the code before the first S5 read, and C2, C3, C5, C8 and C9 before the first L4 read. Until then no S5 or L4 read counts. The quant's timing condition: "this text must go into EVAL-2 v7 and be signed before
 any vantage S5 read is run. Written later, it is a post-hoc change to the reading rule." No S5 read has been run on
 replay v2 for any broker; the Lane 5A code only computes it.
 
-**1. Quant ruling 2026-11-09 (`~/tmp/vcal5_ruling_1109.md`), copied exactly.**
+**1. Quant ruling 2026-11-09, copied exactly.**
 - S5 decomposition line (replaces "vantage exit slippage is unmeasured, not zero"): "Vantage exit slip: measured 0 on
   vantage-demo. All 294 of 294 stop and target fills are at the bracket level, recorded from the exit deal VWAP (R110,
   3e72bf9a). This is a demo-server artefact, not evidence about execution. It is never a cost prior for real money.
@@ -476,25 +476,42 @@ replay v2 for any broker; the Lane 5A code only computes it.
   demo exit legs never set a charge. Its entry cells are its own measurement. S5 on vantage reads
   `entry_fill_minus_replay_r` only and reports `exit_leg_read = False`.
 
-**3. Reading choices this lane made where the method was silent, for the same signature.**
-- S5 bands: 1m-5m, 15m-30m, 1h-4h, 1d (the decomposition read 1m/5m, 15m, 1h/4h). S5 passes on >= 50 pairs per
-  broker and band with |mean bias| <= 0.02 R; the day-clustered SE is reported. At n 50 that SE is about 0.04 R, so
-  a pass at the floor is weak evidence; an equivalence form (both one-sided 90 % bounds inside +-0.02 R) is the
-  stricter alternative the quant may prefer.
-- L4(i) kills at e >= 20 (Ville 5 %). The method's (iii) level, e >= 10, is a 10 % Ville bound, not 5 %.
-- The e-processes: predictable plug-in bets, winsorised from above at 3 sigma, Bennett's bound, no bet on the first 5
-  values (module docstring of `forward.py`). Measured crossing rates at the H0 boundary (4,000 paths, Gaussian and
-  Student-t3): execution 0.1-3.4 % for true sd from 0.3x to 10x the 0.1 R prior, edge 1.6-1.8 % at e >= 20,
-  futility 1.8-2.7 % at e >= 10. Power: execution catches a 0.05 R overrun within 100 fills in > 99 % of runs and
-  within 30 fills in about 40 %; futility catches a 0.17 R shortfall within 300 signals in 95 % at sd 0.6 R but only
-  about 34 % at sd 1.3 R (the method's "300 signals detect a 0.17 R shortfall" holds for low-sd cells only).
-- The exit mix: Dirichlet-multinomial chi-square, judged from 50 fills, OK at p >= 0.01. Without a history prior a
-  family is never ON TRACK.
-- The time leg: the ledger records no quote at a time close, so the time leg always charges the $0.15 prior. On icm
-  (604 + 78 time closes of 4,920 ledger rows) that keeps a small positive v2 bias on time-exit rows; recording the
-  close quote is a Lane 5B (engine) item.
-- The exploration fills feed a separate per-leg table read only by the replay. They do not feed the engine's
-  `slippage` cells (the RiskGate's round trip): about $0.01 measured entry slip would lower the RiskGate cost below the
-  $0.15 prior, and demo fills never lower a cost (section 4).
-- r2 is computed nightly for gold candidates decided in the last 30 days (the labeller's window); older candidates
-  keep r1 only unless a one-off backfill is run.
+**3. Reading rules as signed with conditions C1-C10 (quant review of 8b2345c4) and as built.**
+- C1, point in time: each r2 label is costed only from ledger fills before its own session day (17:00 New York the
+  evening before its session date, which is earlier than and so stricter than 00:00 UTC of that date). One cached model
+  per session day (`daily_costs_v2`); the as-of is in the model's version; a model effective on or after the session
+  day's start is refused. Commission and swap come from the broker's r1 model as at labelling (broker terms, not
+  slippage measurements).
+- C2, day clustering: every e-process takes one term per session day (the day's mean), with the prior sd and plug-in
+  bets kept: predictable plug-in bets, winsorised from above at 3 sigma, Bennett's bound, no bet on the first 5 day
+  terms (module docstring of `forward.py`). Simulated at the H0 boundary with day sd equal to the within-day sd (4,000
+  paths, 5 per day): execution crosses e >= 20 in about 1.4 %, futility e >= 10 in about 3.4 %, edge e >= 20 in about
+  0.9 %. Power: a 0.05 R execution overrun is caught by 300 fills (60 days) in 98 % of runs at day sd half the
+  within-day sd, 66 % at equal sd; within 100 fills in about 15 %. The futility read at sd 1.3 R remains weak: the
+  method's "300 signals detect a 0.17 R shortfall" holds for low-sd cells only.
+- C3, execution streams: one per (broker, leg in {entry, exit}); never an exit stream for a broker whose demo fills
+  exits at the level (`DEMO_EXIT_AT_LEVEL`: vantage, vantage247, vantage_obs); KILLED when any stream's running maximum
+  reaches 20 x m (m = streams formed); `e_exec` reports that maximum / m.
+- C4, S5: passes per broker and band on at least 50 pairs over at least 10 session days, with |mean fill - replay v2|
+  <= 0.02 R and a lower one-sided 95 % day-clustered bound >= -0.02 R. Bands 1m-5m (informational only), 15m-30m,
+  1h-4h, 1d.
+- C5: the forward replay uses the r2 cost model whose version and sha256 the card recorded at forward start
+  (`pinned_costs`); a nightly refit never changes forward labels.
+- C6: the stop overshoot is measured against the bar-implied price (a sell close against min(level, the bid open of
+  its exit minute), a buy close against max(level, the ask open)); a stop leg with no bar at its exit minute is left
+  out and counted (`stop_no_bar`).
+- C7: the nightly report gives each broker's share of entries filled within $0.005 of the quote; at 95 % or more on a
+  demo-exit-at-level broker its entry cells take max(ICM entry cell, prior) and its S5 reads NOT AVAILABLE.
+- C8: forward units carry broker, tf and `s5_ok` (`apply_s5`); a fill value where S5 has not passed for that
+  (broker, band) is refused.
+- C9: the exit prior is the family's r2 shadow labels decided before forward start (counts + 1/2), frozen with its
+  sha256 in the card; a family stays WAITING until 100 signals.
+- C10: the prereg carries the quant's section 5 amendment verbatim; the S5 read reports the bias by the fill's exit kind
+  and the paired rows on arms the spec does not name.
+- Kept from the first hand-back: L4(i) per-stream level e >= 20 (Ville 5 %; the method's (iii) e >= 10 is a 10 %
+  bound); the exit mix judged from 50 fills at p >= 0.01; the time leg always charges the $0.15 prior (the ledger
+  records no close quote; recording it is a Lane 5B item); the exploration fills feed only the replay's leg table, never
+  the engine's `slippage` cells, the RiskGate cost, the deciding cost or any real-money hurdle; a replay with no bar at
+  its entry minute is unresolved (r1 and r2).
+- Coverage: r2 is computed nightly for gold candidates decided in the last `EXPLORATION_LABEL_DAYS` (30) days, the
+  labeller's bar window; older candidates keep r1 only unless a one-off backfill is run.

@@ -11,6 +11,8 @@ vantage is read on the entry leg (fill vs replay, spread) only ... Vantage S5 ca
 demo data.\""""
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -110,99 +112,215 @@ def test_an_exit_kind_the_history_never_had_is_refused():
         fw.exit_mix_ok({"stop": 30, "target": 20, "broker_close": 10}, PRIOR_MIX)
 
 
+# ---------------------------------------------------------------------------------------------- day clustering (C2)
+def _clustered(mean: float, within: float, n: int, *, per: int = 5, day_ratio: float = 1.0,
+               seed: int = RNG_SEED) -> np.ndarray:
+    """Paths of n values, `per` per session day, each day sharing a shock of sd day_ratio x within."""
+    rng = np.random.default_rng(seed)
+    days = n // per
+    return rng.normal(0, day_ratio * within, (PATHS, days)).repeat(per, axis=1) + rng.normal(mean, within, (PATHS, n))
+
+
+def _day_means(x: np.ndarray, per: int = 5) -> np.ndarray:
+    return x.reshape(x.shape[0], -1, per).mean(axis=2)
+
+
+def test_the_e_functions_take_one_term_per_session_day():
+    x = _clustered(-0.05, 0.08, 150)[0]
+    day = np.repeat(np.arange(30), 5)
+    terms = -_day_means(x[None, :]) - fw.TOL_EXEC_R
+    assert fw.e_execution(x, day=day) == pytest.approx(max(1.0, fw._wealth(terms, sd0=fw.SD_EXEC_R).max()))
+    assert fw.day_terms(np.array([1.0, 3.0, 5.0]), np.array(["b", "b", "a"]))[0].tolist() == [2.0, 5.0]
+
+
+def test_day_clustered_execution_e_process_crosses_20_at_most_5_percent_under_h0():
+    # day sd = within-day sd (quant C2); 5 fills a day, 300 fills; H0 boundary: fill - replay = -0.02 R
+    x = _clustered(-0.02, 0.1, 300)
+    terms = -_day_means(x) - fw.TOL_EXEC_R
+    assert float(np.mean(fw._wealth(terms, sd0=fw.SD_EXEC_R).max(axis=1) >= fw.E_KILL_EXEC)) <= 0.05
+
+
+def test_day_clustered_futility_e_process_crosses_10_at_most_10_percent_under_h0():
+    x = _clustered(0.10, 1.3, 400, seed=RNG_SEED + 5)              # true excess exactly at H1 = 0.10
+    terms = 0.10 - _day_means(x)
+    start = fw.MIN_SIGNALS_FUTILITY // 5 - 1
+    assert float(np.mean(fw._wealth(terms, sd0=fw.SD_EXCESS_R)[:, start:].max(axis=1) >= fw.E_KILL_FUTILITY)) <= 0.10
+
+
+def test_with_day_terms_a_5_cent_overrun_is_caught_within_about_300_fills():
+    x = _clustered(-0.07, 0.1, 300, day_ratio=0.5, seed=RNG_SEED + 6)    # 0.05 R above the tolerance
+    terms = -_day_means(x) - fw.TOL_EXEC_R
+    assert float(np.mean(fw._wealth(terms, sd0=fw.SD_EXEC_R).max(axis=1) >= fw.E_KILL_EXEC)) >= 0.9
+
+
 # ---------------------------------------------------------------------------------------------- forward state
-def _units(n: int, *, excess: float, fills: int = 0, fill_gap: float = 0.0, kinds: tuple[str, ...] = ("stop",
-           "target", "stop", "time", "target", "stop", "target", "stop", "stop", "target"), seed: int = 0
-           ) -> pd.DataFrame:
+def _units(n: int, *, excess: float, fills: int = 0, fill_gap: float = 0.0, exit_gap: float = 0.0,
+           kinds: tuple[str, ...] = ("stop", "target", "stop", "time", "target", "stop", "target", "stop", "stop",
+                                     "target"), broker: str = "icm", seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     t0 = pd.Timestamp("2026-11-12", tz="UTC")
     u = pd.DataFrame({"cell_id": "C03|XAUUSD|30m|x", "family": "C03", "inst": "XAUUSD", "tf": "30m",
                       "side": 1, "day": [str((t0 + pd.Timedelta(hours=6 * i)).date()) for i in range(n)],
                       "decision_ns": [int((t0 + pd.Timedelta(hours=6 * i)).value) for i in range(n)],
                       "net_r": excess + rng.normal(0, 0.05, n), "twin_mean_net_r": 0.0,
-                      "excess_r": excess + rng.normal(0, 0.05, n), "cost_r": 0.02, "year": 2026})
+                      "excess_r": excess + rng.normal(0, 0.05, n), "cost_r": 0.02, "year": 2026, "broker": broker})
+    u["entry_fill_minus_replay_r"] = np.nan
     u["fill_minus_replay_r"] = np.nan
     u["exit_kind"] = None
     idx = u.index[:fills]
-    u.loc[idx, "fill_minus_replay_r"] = fill_gap + rng.normal(0, 0.01, len(idx))
+    entry = fill_gap + rng.normal(0, 0.01, len(idx))
+    u.loc[idx, "entry_fill_minus_replay_r"] = entry
+    u.loc[idx, "fill_minus_replay_r"] = entry + exit_gap
     u.loc[idx, "exit_kind"] = [kinds[i % len(kinds)] for i in range(len(idx))]
-    return u
+    return fw.apply_s5(u, {(broker, "15m-30m"): True})
 
 
 MIX = {"stop": 50.0, "target": 40.0, "time": 10.0}
+MIX_HASH = fw.prior_hash(MIX)
+
+
+def _state(u: pd.DataFrame, **kw: Any) -> fw.ForwardState:
+    args: dict[str, Any] = dict(family="C03", l3_shrunk_r=0.2, s5_passed=True, exit_prior=MIX,
+                                exit_prior_hash=MIX_HASH)
+    return fw.forward_state(u, **{**args, **kw})
 
 
 def test_forward_reads_wait_until_s5_passes_even_when_futility_has_crossed():
-    s = fw.forward_state(_units(200, excess=-0.5, fills=60), family="C03", l3_shrunk_r=0.2, s5_passed=False,
-                         exit_prior=MIX)
+    s = _state(_units(200, excess=-0.5, fills=60), s5_passed=False)
     assert s.status == "WAITING" and s.e_futility >= fw.E_KILL_FUTILITY
 
 
 def test_a_family_whose_excess_falls_far_short_of_h1_is_killed():
-    s = fw.forward_state(_units(200, excess=-0.5, fills=10), family="C03", l3_shrunk_r=0.2, s5_passed=True,
-                         exit_prior=MIX)
+    s = _state(_units(200, excess=-0.5, fills=10))
     assert s.status == "KILLED" and (s.n_signals, s.n_fills) == (200, 10)
 
 
 def test_a_family_with_fills_costing_more_than_modelled_is_killed_by_the_execution_e_process():
-    s = fw.forward_state(_units(120, excess=0.3, fills=100, fill_gap=-0.10), family="C03", l3_shrunk_r=0.2,
-                         s5_passed=True, exit_prior=MIX)
-    assert s.status == "KILLED" and s.e_exec >= fw.E_KILL_EXEC
+    s = _state(_units(120, excess=0.3, fills=100, fill_gap=-0.10))
+    assert s.status == "KILLED" and s.e_exec >= fw.E_KILL_EXEC and set(s.exec_streams) == {"icm:entry", "icm:exit"}
+
+
+def test_a_vantage_entry_overrun_is_killed_even_when_favourable_exits_offset_it():
+    """Quant C3: one stream per (broker, leg); no exit stream for a demo-exit-at-level broker."""
+    s = _state(_units(160, excess=0.3, fills=160, fill_gap=-0.07, exit_gap=+0.30, broker="vantage"))
+    assert set(s.exec_streams) == {"vantage:entry"}
+    assert s.status == "KILLED" and s.exec_streams["vantage:entry"] >= fw.E_KILL_EXEC * len(s.exec_streams)
+
+
+def test_the_kill_level_rises_with_the_number_of_streams_formed():
+    s = _state(_units(160, excess=0.3, fills=160, fill_gap=0.0))
+    assert len(s.exec_streams) == 2 and s.e_exec == pytest.approx(max(s.exec_streams.values()) / 2)
 
 
 def test_on_track_needs_50_fills_with_execution_futility_and_exit_mix_green():
-    few = fw.forward_state(_units(120, excess=0.3, fills=49), family="C03", l3_shrunk_r=0.2, s5_passed=True,
-                           exit_prior=MIX)
-    ok = fw.forward_state(_units(120, excess=0.3, fills=60), family="C03", l3_shrunk_r=0.2, s5_passed=True,
-                          exit_prior=MIX)
+    few = _state(_units(120, excess=0.3, fills=49))
+    ok = _state(_units(120, excess=0.3, fills=60))
     assert few.status == "WAITING" and ok.status == "ON TRACK" and ok.exit_mix_ok
 
 
+def test_a_family_waits_until_100_signals_however_many_fills_it_has():
+    """Quant C9."""
+    assert _state(_units(99, excess=0.3, fills=99)).status == "WAITING"
+    assert _state(_units(100, excess=0.3, fills=100)).status == "ON TRACK"
+
+
 def test_an_exit_mix_off_the_history_reads_drifting():
-    s = fw.forward_state(_units(120, excess=0.3, fills=60, kinds=("stop",)), family="C03", l3_shrunk_r=0.2,
-                         s5_passed=True, exit_prior=MIX)
+    s = _state(_units(120, excess=0.3, fills=60, kinds=("stop",)))
     assert s.status == "DRIFTING" and not s.exit_mix_ok
 
 
 def test_without_a_history_exit_prior_a_family_is_never_on_track():
-    s = fw.forward_state(_units(120, excess=0.3, fills=60), family="C03", l3_shrunk_r=0.2, s5_passed=True)
+    s = _state(_units(120, excess=0.3, fills=60), exit_prior=None, exit_prior_hash=None)
     assert s.status == "WAITING" and not s.exit_mix_ok
+
+
+def test_the_exit_prior_comes_from_shadow_labels_before_forward_start_and_must_match_the_cards_hash():
+    """Quant C9: frozen from the family's r2 shadow labels decided before forward start, hashed in the card."""
+    start = pd.Timestamp("2026-11-12", tz="UTC")
+    labels = pd.DataFrame({"label_barrier": ["stop"] * 6 + ["target"] * 3 + ["time"] + ["stop"] * 50,
+                           "decision_utc": [start - pd.Timedelta(days=1)] * 10 + [start] * 50})
+    prior, h = fw.exit_prior_from_shadow(labels, forward_start=start)
+    assert prior == {"stop": 6.5, "target": 3.5, "time": 1.5} and h == fw.prior_hash(prior)
+    with pytest.raises(ValueError, match="hash"):
+        _state(_units(120, excess=0.3, fills=60), exit_prior=prior, exit_prior_hash=MIX_HASH)
 
 
 def test_forward_state_reads_only_its_own_family():
     u = pd.concat([_units(50, excess=0.3), _units(70, excess=-0.5).assign(family="S21")], ignore_index=True)
-    assert fw.forward_state(u, family="C03", l3_shrunk_r=0.2, s5_passed=True, exit_prior=MIX).n_signals == 50
+    assert _state(u).n_signals == 50
+
+
+def test_unfiltered_forward_units_raise():
+    """Quant C8: units carry broker and tf, and no fill where S5 has not passed for that (broker, band)."""
+    u = _units(120, excess=0.3, fills=60)
+    with pytest.raises(ValueError, match="s5_ok"):
+        _state(u.drop(columns=["s5_ok"]))
+    with pytest.raises(ValueError, match="broker"):
+        _state(u.drop(columns=["broker"]))
+    with pytest.raises(ValueError, match="apply_s5"):
+        _state(u.assign(s5_ok=False))
+    blanked = fw.apply_s5(u.drop(columns=["s5_ok"]), {("icm", "1h-4h"): True})      # 30m's band never passed
+    assert not blanked["s5_ok"].any() and blanked["fill_minus_replay_r"].isna().all()
+    assert _state(blanked).n_fills == 0
 
 
 # ---------------------------------------------------------------------------------------------- S5
-def _pairs(broker: str, tf: str, n: int, *, gap: float, entry_gap: float = 0.0) -> pd.DataFrame:
+def _pairs(broker: str, tf: str, n: int, *, gap: float, entry_gap: float = 0.0, days: int = 20,
+           sd: float = 0.01) -> pd.DataFrame:
     rng = np.random.default_rng(7)
     return pd.DataFrame({"candidate_id": [f"{broker}{tf}{i}" for i in range(n)], "broker": broker, "tf": tf,
-                         "session_day": [f"2026-11-{1 + i % 20:02d}" for i in range(n)],
-                         "replay_r": 0.0, "fill_r": gap + rng.normal(0, 0.01, n),
-                         "entry_fill_minus_replay_r": entry_gap + rng.normal(0, 0.001, n)})
+                         "session_day": [f"2026-11-{1 + i % days:02d}" for i in range(n)],
+                         "replay_r": 0.0, "fill_r": gap + rng.normal(0, sd, n),
+                         "entry_fill_minus_replay_r": entry_gap + rng.normal(0, 0.001, n),
+                         "exit_kind": ["stop", "target"] * (n // 2) + ["stop"] * (n % 2)})
 
 
 def test_s5_passes_per_broker_and_tf_band_when_the_fill_vs_replay_bias_is_within_2_cents_r():
-    p = pd.concat([_pairs("icm", "1m", 60, gap=0.01), _pairs("icm", "5m", 60, gap=0.01),
-                   _pairs("icm", "15m", 60, gap=0.09)])
-    ok = fw.s5_read(p, broker="icm", tf_band="1m-5m")
-    assert ok.passed and ok.n == 120 and ok.legs == "all" and ok.bias_r == pytest.approx(0.01, abs=0.005)
-    bad = fw.s5_read(p, broker="icm", tf_band="15m-30m")
-    assert not bad.passed and bad.bias_r == pytest.approx(0.09, abs=0.005)
+    p = pd.concat([_pairs("icm", "15m", 60, gap=0.01), _pairs("icm", "30m", 60, gap=0.01),
+                   _pairs("icm", "1h", 60, gap=0.09)])
+    ok = fw.s5_read(p, broker="icm", tf_band="15m-30m")
+    assert ok.passed and ok.status == "PASS" and ok.n == 120 and ok.legs == "all"
+    assert ok.bias_r == pytest.approx(0.01, abs=0.005) and set(ok.bias_by_exit_kind) == {"stop", "target"}
+    bad = fw.s5_read(p, broker="icm", tf_band="1h-4h")
+    assert not bad.passed and bad.status == "FAIL" and bad.bias_r == pytest.approx(0.09, abs=0.005)
 
 
-def test_s5_never_passes_on_fewer_than_min_fills():
-    s = fw.s5_read(_pairs("icm", "1h", 20, gap=0.0), broker="icm", tf_band="1h-4h")
-    assert not s.passed and "insufficient" in s.reason
+def test_s5_needs_50_pairs_over_10_session_days_and_a_lower_bound_inside_the_tolerance():
+    """Quant C4."""
+    assert fw.s5_read(_pairs("icm", "1h", 20, gap=0.0), broker="icm", tf_band="1h-4h").status == "INSUFFICIENT"
+    nine = fw.s5_read(_pairs("icm", "1h", 90, gap=0.0, days=9), broker="icm", tf_band="1h-4h")
+    assert nine.status == "INSUFFICIENT" and "9 session days" in nine.reason
+    spread = _pairs("icm", "1h", 60, gap=0.0)                         # 3 pairs on each of 20 days
+    day_no = spread["session_day"].str[-2:].astype(int)
+    spread["fill_r"] = -0.015 + 0.2 * np.where(day_no % 2 == 0, 1.0, -1.0)   # mean exactly -0.015, days far apart
+    wide = fw.s5_read(spread, broker="icm", tf_band="1h-4h")
+    assert abs(wide.bias_r) <= 0.02 < -wide.lb95_r and wide.status == "FAIL"     # mean inside, bound outside
+
+
+def test_the_1m_5m_band_is_informational_and_never_passes():
+    s = fw.s5_read(_pairs("icm", "5m", 80, gap=0.0), broker="icm", tf_band="1m-5m")
+    assert s.status == "INFORMATIONAL" and not s.passed
 
 
 def test_vantage_s5_reads_the_entry_leg_only_and_is_never_green_on_the_exit_leg():
-    p = _pairs("vantage", "5m", 80, gap=0.30, entry_gap=0.005)        # exits filled at the level: not evidence
-    s = fw.s5_read(p, broker="vantage", tf_band="1m-5m")
+    p = _pairs("vantage", "15m", 80, gap=0.30, entry_gap=0.005)        # exits filled at the level: not evidence
+    s = fw.s5_read(p, broker="vantage", tf_band="15m-30m", entry_at_quote_share=0.4)
     assert s.legs == "entry" and s.passed and s.bias_r == pytest.approx(0.005, abs=0.001)
     assert s.exit_leg_read is False
-    assert fw.s5_read(_pairs("icm", "5m", 80, gap=0.0), broker="icm", tf_band="1m-5m").exit_leg_read is True
+    assert fw.s5_read(_pairs("icm", "15m", 80, gap=0.0), broker="icm", tf_band="15m-30m").exit_leg_read is True
+
+
+def test_vantage_s5_reads_not_available_when_its_entries_fill_at_the_quote():
+    """Quant C7."""
+    s = fw.s5_read(_pairs("vantage", "15m", 80, gap=0.0), broker="vantage", tf_band="15m-30m",
+                   entry_at_quote_share=0.97)
+    assert s.status == "NOT AVAILABLE" and not s.passed
+
+
+def test_s5_reports_the_paired_rows_on_unknown_arms():
+    p = _pairs("icm", "15m", 60, gap=0.0)
+    p.attrs["unknown_arm_labels"] = 4
+    assert fw.s5_read(p, broker="icm", tf_band="15m-30m").unknown_arm_labels == 4
 
 
 def test_tf_bands_cover_every_traded_timeframe_and_an_unknown_band_is_refused():

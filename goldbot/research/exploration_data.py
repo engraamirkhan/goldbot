@@ -56,7 +56,7 @@ import math
 import pickle
 import re
 import sqlite3
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -452,7 +452,7 @@ def replay_label(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp
     deadline = pd.Timestamp(decision_utc) + pd.Timedelta(seconds=int(max_hold_s))
     sent = (pd.Timestamp(decision_utc) + pd.Timedelta(seconds=float(entry_delay_s))).floor("min")
     k = int(t.searchsorted(sent, side="left"))
-    if k >= len(t) or t[k] >= deadline:
+    if k >= len(t) or t[k] != sent or t[k] >= deadline:      # no entry minute: never a later minute's open
         return None
     ent, ex = ("ask", "bid") if side > 0 else ("bid", "ask")
     entry = float(b[f"{ent}_open"].iloc[k])
@@ -533,25 +533,29 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
 
 
 # ---------------------------------------------------------------------------------------------- replay v2 (EVAL-2)
-# EVAL-2 Lane 5A (docs/research/eval2-method-2026-11-09.md section 5; prereg-2026-11-09-eval2.md section 5). The S5
-# decomposition found the +0.084 R fill-vs-replay bias is the r1 replay's 2 x $0.15 slippage PRIOR (+0.078 R), not a
-# path error. r2 replaces it: "Per broker, per leg (entry, stop exit, target exit, time exit), by session: charge
-# max(0, adverse upper 95 % bound of the measured slippage mean) once the cell has >= min_fills, else the $0.15 prior.
-# Favourable slippage is never credited." "Stop exit price = level - side x measured stop overshoot (its own term, not
-# double-charged with the stop leg)." "1m/5m deadline = decision + delay + max_hold." r2 lives in the side table
-# `exploration_replay`; label_sim_r (r1) is never overwritten.
+# EVAL-2 Lane 5A (docs/research/eval2-method-2026-11-09.md section 5; prereg-2026-11-09-eval2.md section 5 and its
+# amendment of 2026-11-09). The S5 decomposition found the +0.084 R fill-vs-replay bias is the r1 replay's 2 x $0.15
+# slippage PRIOR (+0.078 R), not a path error. r2 replaces it: "Per broker, per leg (entry, stop exit, target exit, time
+# exit), by session: charge max(0, adverse upper 95 % bound of the measured slippage mean) once the cell has >=
+# min_fills, else the $0.15 prior. Favourable slippage is never credited." "Stop exit price = level - side x measured
+# stop overshoot (its own term, not double-charged with the stop leg)." "1m/5m deadline = decision + delay +
+# max_hold." Amendment: "Each r2 label is costed only from ledger fills before its own session day." r2 lives in the
+# side table `exploration_replay`; label_sim_r (r1) is never overwritten. It covers the candidates decided within the
+# labeller's window (jobs.EXPLORATION_LABEL_DAYS); older ones keep r1 only.
 class ReplayCostsV2(FrozenRecord):
-    """One broker's r2 cost model, point in time (never effective after the labelling cutoff). `charges`: $/oz per
-    "<session>:<leg>" (`execution.costs.leg_slippage_table` on the broker's own exploration fills; a missing cell pays
-    `prior_usd`); commission and swap as r1."""
+    """One broker's r2 cost model, point in time: `legs_before` is the exclusive as-of of the ledger fills it rests on
+    and `effective_utc` (its newest fill) is always before it. `charges`: $/oz per "<session>:<leg>"
+    (`execution.costs.leg_slippage_table`; a missing cell pays `prior_usd`); commission and swap as r1."""
     broker: str = Field(min_length=1)
     version: str
     effective_utc: UtcTimestamp
+    legs_before: UtcTimestamp | None = None
     charges: dict[str, float] = Field(default_factory=dict)
     fills: dict[str, int] = Field(default_factory=dict)        # the fills each cell rests on (audit)
     prior_usd: float = Field(SLIPPAGE_FLOOR_USD, ge=0)
     commission_rt_per_oz: float = Field(0.0, ge=0)
     swap: SwapSpec | None = None
+    entry_at_quote_share: float | None = None                  # quant C7: entries filled within $0.005 of the quote
 
     @model_validator(mode="after")
     def _no_credit(self) -> ReplayCostsV2:
@@ -561,6 +565,14 @@ class ReplayCostsV2(FrozenRecord):
 
     def charge(self, leg: str, session: str) -> float:
         return float(self.charges.get(f"{session}:{leg}", self.prior_usd))
+
+
+def cost_model_hash(costs: ReplayCostsV2) -> str:
+    """sha256 of the model's canonical JSON: what a card records at forward start (quant C5)."""
+    return hashlib.sha256(json.dumps(costs.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+
+
+CostOfDay = Callable[[pd.Timestamp], ReplayCostsV2]      # session-day start -> the r2 model a label of that day uses
 
 
 class ReplayV2(FrozenRecord):
@@ -574,20 +586,28 @@ class ReplayV2(FrozenRecord):
     exit_charge_usd: float              # 0 on a stop: its charge is the overshoot in `exit_price`, never twice
 
 
+def session_start(day: str) -> pd.Timestamp:
+    """The UTC start of session day `day` (`session_day`): 17:00 New York the evening before."""
+    eve = (pd.Timestamp(day) - pd.Timedelta(days=1)).replace(hour=17, minute=0, second=0)
+    return pd.Timestamp(eve.tz_localize(NEW_YORK).tz_convert("UTC"))
+
+
 def replay_label_v2(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp, stop_dist: float,
                     target_dist: float, max_hold_s: int, tf: str, costs: ReplayCostsV2, entry_delay_s: float = 0.0,
                     sessions: SessionTable = DEFAULT_SESSIONS) -> ReplayV2 | None:
     """r2 label of one candidate on 1m bid/ask bars: r1's path (entry at the open of the minute holding decision +
     `entry_delay_s`, barriers minute by minute, the stop first), with a 1m/5m time limit from decision + delay, the
     measured entry leg of the entry minute's session, the stop's overshoot in its fill price, and the target or time
-    leg of the exit minute's session. The gross `mid_r` is r1's (no cost). None when unresolved."""
+    leg of the exit minute's session. The gross `mid_r` is r1's (no cost). None when unresolved, and when the bars
+    have no entry minute (never a later minute's open)."""
     b = bars_1m.sort_values("ts_utc").reset_index(drop=True)
     t = pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)).as_unit("ns")
     decision = pd.Timestamp(decision_utc)
     delay = pd.Timedelta(seconds=float(entry_delay_s))
     deadline = decision + (delay if tf in SEND_CLOCK_TFS else pd.Timedelta(0)) + pd.Timedelta(seconds=int(max_hold_s))
-    k = int(t.searchsorted((decision + delay).floor("min"), side="left"))
-    if k >= len(t) or t[k] >= deadline:
+    sent = (decision + delay).floor("min")
+    k = int(t.searchsorted(sent, side="left"))
+    if k >= len(t) or t[k] != sent or t[k] >= deadline:
         return None
     ent, ex = ("ask", "bid") if side > 0 else ("bid", "ask")
     entry = float(b[f"{ent}_open"].iloc[k])
@@ -628,10 +648,12 @@ def ledger_legs(db: Database, *, broker_of: Mapping[str, str], as_of: pd.Timesta
     """The exploration ledger's gold fills as slippage legs for `execution.costs.leg_slippage_table`, point in time
     (sent, or for an exit closed, by `as_of`). Entry: the send quote vs the fill, the position's side. Stop/target
     exit: the bracket level (anchored on the send quote: quote -/+ the gate's stop or target distance) vs the exit
-    deal, the closing order's side. A time close has no recorded quote (its leg is always the prior). Left out and
-    counted (quant vantage ruling 2026-11-09 (c): "Rows with `exit_price` None are excluded and counted. They are never
-    imputed at the level"): `no_exit_price`, `censored` (the stop moved or something else closed it: the level is not
-    the bracket's), `pyramid_add` exits, `non_gold`, `unknown_account`, `evidence_void` (void for the cost cells)."""
+    deal, the closing order's side; `level` keeps the bracket level and `requested` starts equal to it (a stop's is
+    moved to the bar-implied price by `bar_implied_stop_legs`). A time close has no recorded quote (its leg is always
+    the prior). Left out and counted (quant vantage ruling 2026-11-09 (c): "Rows with `exit_price` None are excluded
+    and counted. They are never imputed at the level"): `no_exit_price`, `censored` (the stop moved or something else
+    closed it: the level is not the bracket's), `pyramid_add` exits, `non_gold`, `unknown_account`, `evidence_void`
+    (void for the cost cells)."""
     cut = _ns(as_of)
     counts = dict.fromkeys(("no_exit_price", "censored", "pyramid_add", "non_gold", "unknown_account",
                             "evidence_void"), 0)
@@ -659,7 +681,7 @@ def ledger_legs(db: Database, *, broker_of: Mapping[str, str], as_of: pd.Timesta
         side, q, fill = int(r["side"]), r.get("requested_price"), r.get("fill_price")
         if q is None or fill is None:
             continue
-        out.append((cid, acct, broker, "entry", pd.Timestamp(r["sent_utc"]), side, float(q), float(fill)))
+        out.append((cid, acct, broker, "entry", pd.Timestamp(r["sent_utc"]), side, float(q), float(q), float(fill)))
         leg = EXIT_REASON_LEG.get(str(r.get("exit_reason")))
         if r.get("exit_utc") is None or leg is None or leg == "time" or _ns(pd.Timestamp(r["exit_utc"])) > cut:
             continue
@@ -672,39 +694,135 @@ def ledger_legs(db: Database, *, broker_of: Mapping[str, str], as_of: pd.Timesta
         else:
             dist = float(r["stop_usd"] if leg == "stop" else r["target_usd"])
             level = float(q) + (-side if leg == "stop" else side) * dist
-            out.append((cid, acct, broker, leg, pd.Timestamp(r["exit_utc"]), -side, level, float(r["exit_price"])))
-    legs = pd.DataFrame(out, columns=["client_order_id", "account_id", "broker", "leg", "ts_utc", "side", "requested",
-                                      "filled"])
+            out.append((cid, acct, broker, leg, pd.Timestamp(r["exit_utc"]), -side, level, level,
+                        float(r["exit_price"])))
+    legs = pd.DataFrame(out, columns=["client_order_id", "account_id", "broker", "leg", "ts_utc", "side", "level",
+                                      "requested", "filled"])
     legs["ts_utc"] = pd.to_datetime(legs["ts_utc"], utc=True)
     return legs, counts
 
 
-def replay_costs_v2(base: ReplayCosts, legs: pd.DataFrame, *, as_of: pd.Timestamp, min_fills: int,
+def bar_implied_stop_legs(legs: pd.DataFrame, bars_by_account: Mapping[str, pd.DataFrame]
+                          ) -> tuple[pd.DataFrame, int]:
+    """Quant C6 (review of 8b2345c4): the stop overshoot is measured against the bar-implied price, not the level: a
+    sell close against min(level, the bid open of its exit minute), a buy close against max(level, the ask open), so a
+    gap the bars already show (and the replay's path already pays) is not charged again. A stop leg whose account has
+    no bar at its exit minute is left out; returns the legs and how many were left out."""
+    if legs.empty or not (legs["leg"] == "stop").any():
+        return legs, 0
+    out = legs.reset_index(drop=True).copy()
+    keep = np.ones(len(out), dtype=bool)
+    stop = out["leg"].to_numpy() == "stop"
+    for acct in sorted(set(out.loc[stop, "account_id"].astype(str))):
+        rows = np.flatnonzero(stop & (out["account_id"].astype(str).to_numpy() == acct))
+        bars = bars_by_account.get(acct)
+        if bars is None or bars.empty:
+            keep[rows] = False
+            continue
+        t = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True)).as_unit("ns")
+        minute = pd.DatetimeIndex(pd.to_datetime(out["ts_utc"].to_numpy()[rows], utc=True)).floor("min").as_unit("ns")
+        pos = t.get_indexer(minute)
+        found = pos >= 0
+        keep[rows[~found]] = False
+        r, p = rows[found], pos[found]
+        level = out["level"].to_numpy(dtype=float)[r]
+        sell = out["side"].to_numpy(dtype=float)[r] < 0
+        implied = np.where(sell, np.minimum(level, bars["bid_open"].to_numpy(dtype=float)[p]),
+                           np.maximum(level, bars["ask_open"].to_numpy(dtype=float)[p]))
+        out.loc[r, "requested"] = implied
+    return out[keep].reset_index(drop=True), int((~keep).sum())
+
+
+def replay_costs_v2(base: ReplayCosts, legs: pd.DataFrame, *, before: pd.Timestamp, min_fills: int,
                     prior_usd: float = SLIPPAGE_FLOOR_USD) -> ReplayCostsV2:
-    """`base.broker`'s r2 cost model from its own ledger legs by `as_of` (`ledger_legs`), commission and swap from its
-    r1 model. Never another broker's measurements, with one exception the quant ruled (2026-11-09): a broker whose
-    demo server fills stops and targets at the level (`costs.DEMO_EXIT_AT_LEVEL`, vantage) has no measurable exit leg,
-    so each exit cell charges "the larger of the ICM-measured exit slip per leg and session and the stop-slip prior"."""
+    """`base.broker`'s r2 cost model from its own ledger legs strictly before `before` (`ledger_legs`, stops through
+    `bar_implied_stop_legs`), commission and swap from its r1 model. Never another broker's measurements, with the
+    exceptions the quant ruled (2026-11-09 and C7): a broker whose demo server fills stops and targets at the level
+    (`costs.DEMO_EXIT_AT_LEVEL`) has no measurable exit leg, so each exit cell charges "the larger of the ICM-measured
+    exit slip per leg and session and the stop-slip prior"; when 95 % or more of its entries also fill within $0.005 of
+    the quote, its entry cells are treated the same way."""
     from goldbot.execution.costs import (
         DEMO_EXIT_AT_LEVEL,
+        ENTRY_AT_QUOTE_SHARE,
         EXIT_LEGS,
+        entry_at_quote_share,
         leg_slippage_table,
-        real_money_exit_charge,
+        real_money_leg_charge,
     )
-    upto = legs[pd.to_datetime(legs["ts_utc"], utc=True) <= as_of] if not legs.empty else legs
+    upto = legs[pd.to_datetime(legs["ts_utc"], utc=True) < before] if not legs.empty else legs
     own = upto[upto["broker"] == base.broker] if not upto.empty else upto
     table = leg_slippage_table(own, prior_usd=prior_usd, min_fills=min_fills)
     charges = {k: v.charged for k, v in table.items()}
+    share = entry_at_quote_share(own)
     if base.broker in DEMO_EXIT_AT_LEVEL:
         icm = leg_slippage_table(upto[upto["broker"] == "icm"] if not upto.empty else upto, prior_usd=prior_usd,
                                  min_fills=min_fills)
-        charges.update({k: real_money_exit_charge(icm, k, prior_usd=prior_usd) for k in charges
-                        if k.rsplit(":", 1)[1] in EXIT_LEGS})
+        synthetic_entry = share is not None and share >= ENTRY_AT_QUOTE_SHARE
+        charges.update({k: real_money_leg_charge(icm, k, prior_usd=prior_usd) for k in charges
+                        if k.rsplit(":", 1)[1] in EXIT_LEGS or (synthetic_entry and k.endswith(":entry"))})
     last = pd.Timestamp(pd.to_datetime(upto["ts_utc"], utc=True).max()) if not upto.empty else None
-    return ReplayCostsV2(broker=base.broker, version=f"{base.version}+legs-{REPLAY_V2}:{as_of:%Y%m%dT%H%M}",
-                         effective_utc=max(base.effective_utc, last) if last is not None else base.effective_utc,
-                         charges=charges, fills={k: v.n for k, v in table.items()}, prior_usd=prior_usd,
-                         commission_rt_per_oz=base.commission_rt_per_oz, swap=base.swap)
+    return ReplayCostsV2(broker=base.broker, version=f"{base.version}+legs-{REPLAY_V2}:<{before:%Y%m%dT%H%M%S}",
+                         effective_utc=last if last is not None else before - pd.Timedelta(1, "ns"),
+                         legs_before=before, charges=charges, fills={k: v.n for k, v in table.items()},
+                         prior_usd=prior_usd, commission_rt_per_oz=base.commission_rt_per_oz, swap=base.swap,
+                         entry_at_quote_share=share)
+
+
+def daily_costs_v2(base: ReplayCosts, legs: pd.DataFrame, *, min_fills: int,
+                   prior_usd: float = SLIPPAGE_FLOOR_USD) -> CostOfDay:
+    """Quant C1: one cached r2 model per session day, from the ledger fills before that session day's start."""
+    cache: dict[pd.Timestamp, ReplayCostsV2] = {}
+
+    def of_day(start: pd.Timestamp) -> ReplayCostsV2:
+        if start not in cache:
+            cache[start] = replay_costs_v2(base, legs, before=start, min_fills=min_fills, prior_usd=prior_usd)
+        return cache[start]
+    return of_day
+
+
+def pinned_costs(costs: ReplayCostsV2, costs_hash: str) -> CostOfDay:
+    """Quant C5: the forward replay uses the r2 model whose hash the card recorded at forward start, whatever the
+    nightly refit says later. A model that does not match the recorded hash is refused."""
+    if cost_model_hash(costs) != costs_hash:
+        raise ValueError("the r2 cost model does not match the hash recorded in the card")
+    return lambda _start: costs
+
+
+_REPLAY_ROW_COLS = ("candidate_id", "arm_id", "tf", "side", "decision_utc", "session_day", "stop_dist", "target_dist",
+                    "max_hold_s")
+
+
+def replay_frame_v2(bars_1m: pd.DataFrame, rows: pd.DataFrame, cost_of_day: CostOfDay, *,
+                    cutoff: pd.Timestamp) -> pd.DataFrame:
+    """r2 labels of `rows` (read_obs columns) on the bars before `cutoff`, each with the model of its session day
+    (`cost_of_day`), whose fills must all precede that day's start (point in time; ValueError otherwise). A
+    candidate decided before the first bar, or whose label does not resolve by `cutoff`, gets no row."""
+    cols = ["candidate_id", "label_exit_ns", "sim_r", "mid_r", "barrier", "entry_price", "exit_price",
+            "entry_charge_usd", "exit_charge_usd", "cost_model_version", "cost_effective_ns"]
+    bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff] if not bars_1m.empty else bars_1m
+    if bars.empty or rows.empty:
+        return pd.DataFrame(columns=cols)
+    first = pd.Timestamp(pd.to_datetime(bars["ts_utc"], utc=True).min())
+    out = []
+    for r in rows[list(_REPLAY_ROW_COLS)].to_dict("records"):
+        decision = pd.Timestamp(r["decision_utc"])
+        if decision < first:
+            continue                                        # its entry minute is not in these bars
+        start = session_start(str(r["session_day"]))
+        costs = cost_of_day(start)
+        if not costs.effective_utc < start:
+            raise ValueError(f"r2 cost model {costs.version} effective at {costs.effective_utc}, not before the "
+                             f"session day of {r['candidate_id']} ({start}): labels must be point in time")
+        delay = arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), decision)
+        rep = replay_label_v2(bars, side=int(r["side"]), decision_utc=decision, stop_dist=float(r["stop_dist"]),
+                              target_dist=float(r["target_dist"]), max_hold_s=int(r["max_hold_s"]), tf=str(r["tf"]),
+                              costs=costs, entry_delay_s=delay)
+        if rep is None or rep.exit_utc > cutoff:
+            continue                                        # unresolved: no row, never censored
+        out.append((r["candidate_id"], _ns(rep.exit_utc), rep.sim_r, rep.mid_r, rep.barrier, rep.entry_price,
+                    rep.exit_price, rep.entry_charge_usd, rep.exit_charge_usd, costs.version,
+                    _ns(costs.effective_utc)))
+    return pd.DataFrame(out, columns=cols)
 
 
 def void_ids(db: Database, replay_version: ReplayVersion = REPLAY_V1) -> set[str]:
@@ -714,36 +832,26 @@ def void_ids(db: Database, replay_version: ReplayVersion = REPLAY_V1) -> set[str
                                                 "WHERE replay_version = ?", (replay_version,))}
 
 
-def label_candidates_v2(db: Database, bars_1m: pd.DataFrame, costs: ReplayCostsV2, *, cutoff: pd.Timestamp,
-                        account_id: str | None = None, symbol: str = GOLD,
+def label_candidates_v2(db: Database, bars_1m: pd.DataFrame, cost_of_day: CostOfDay, *, broker: str,
+                        cutoff: pd.Timestamp, account_id: str | None = None, symbol: str = GOLD,
                         instruments: Mapping[str, str] | None = None) -> int:
-    """r2 for every unquarantined gold candidate of `costs.broker` (and `account_id`) with no r2 row, whose label
-    resolves by `cutoff` on the bars before it: one `exploration_replay` row each, written once. Gold only, as r1
-    since 2026-11-04 (`label_candidates`); a candidate whose r1 label is void is never replayed (its ledger traded
-    another instrument). Returns the rows written."""
-    if costs.effective_utc > cutoff:
-        raise ValueError("cost model effective after the labelling cutoff: labels must be point in time")
-    key = instrument_key(symbol, costs.broker)
-    if bars_1m.empty or key != GOLD:
+    """r2 for every unquarantined gold candidate of `broker` (and `account_id`) with no r2 row, whose label resolves
+    by `cutoff` on the bars before it (`replay_frame_v2`: each with its session day's model, `daily_costs_v2`): one
+    `exploration_replay` row each, written once. Gold only, as r1 since 2026-11-04 (`label_candidates`); a candidate
+    whose r1 label is void is never replayed (its ledger traded another instrument). Returns the rows written."""
+    if bars_1m.empty or instrument_key(symbol, broker) != GOLD:
         return 0
-    bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff]
-    obs = read_obs(db, broker=costs.broker, instrument=key, instruments=instruments, replay_version=REPLAY_V2)
+    obs = read_obs(db, broker=broker, instrument=GOLD, instruments=instruments, replay_version=REPLAY_V2)
     obs = obs[obs["label_sim_r"].isna() & ~obs["candidate_id"].isin(void_ids(db))]
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
-    rows = []
-    for r in obs.to_dict("records"):
-        delay = arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), pd.Timestamp(r["decision_utc"]))
-        rep = replay_label_v2(bars, side=int(r["side"]), decision_utc=r["decision_utc"], stop_dist=float(r["stop_dist"]),
-                              target_dist=float(r["target_dist"]), max_hold_s=int(r["max_hold_s"]), tf=str(r["tf"]),
-                              costs=costs, entry_delay_s=delay)
-        if rep is None or rep.exit_utc > cutoff:
-            continue                                        # unresolved: no row, never censored
-        rows.append((r["candidate_id"], REPLAY_V2, _ns(rep.exit_utc), rep.sim_r, rep.mid_r, rep.barrier,
-                     rep.entry_price, rep.exit_price, rep.entry_charge_usd, rep.exit_charge_usd, costs.version,
-                     _ns(costs.effective_utc), now_ns()))
-    if not rows:
+    f = replay_frame_v2(bars_1m, obs, cost_of_day, cutoff=cutoff)
+    if f.empty:
         return 0
+    rows = [(r["candidate_id"], REPLAY_V2, int(r["label_exit_ns"]), float(r["sim_r"]), float(r["mid_r"]),
+             str(r["barrier"]), float(r["entry_price"]), float(r["exit_price"]), float(r["entry_charge_usd"]),
+             float(r["exit_charge_usd"]), str(r["cost_model_version"]), int(r["cost_effective_ns"]), now_ns())
+            for r in f.to_dict("records")]
     with db.write() as conn:
         return sum(conn.execute("INSERT OR IGNORE INTO exploration_replay (candidate_id, replay_version, label_exit_ns, "
                                 "sim_r, mid_r, barrier, entry_price, exit_price, entry_charge_usd, exit_charge_usd, "
@@ -800,31 +908,45 @@ def fill_replay_pairs(db: Database, *, broker: str, replay_version: ReplayVersio
     """S5's paired rows (method section 6: "fill vs replay v2 ..., per broker and timeframe band, gold only"): every
     gold candidate of `broker` with both a fill label and a `replay_version` label, not void for the cost cells.
     `fill_r` = label_fill_r, `replay_r` = the version's label; `entry_fill_minus_replay_r` = the entry leg alone, in R,
-    + = the fill better than the replay's charged entry (r2 only: r1 stored no entry price). One row per candidate."""
-    obs = read_obs(db, broker=broker, instrument=GOLD, instruments=instruments, replay_version=replay_version,
+    + = the fill better than the replay's charged entry (r2 only: r1 stored no entry price); `exit_kind` = the fill's
+    own exit (stop/target/time, else other), for the bias by exit kind (quant C10). `attrs["unknown_arm_labels"]`:
+    the broker's paired rows left out because the spec names no instrument for their arm. One row per candidate."""
+    inst = arm_spec.arm_instruments() if instruments is None else instruments
+    every = read_obs(db, broker=broker, replay_version=replay_version, evidence="cost_cells")
+    paired = every["label_fill_r"].notna() & every["label_sim_r"].notna()
+    unknown = int((paired & every["arm_id"].map(lambda a: inst.get(str(a))).isna()).sum())
+    obs = read_obs(db, broker=broker, instrument=GOLD, instruments=inst, replay_version=replay_version,
                    evidence="cost_cells")
     obs = obs[obs["label_fill_r"].notna() & obs["label_sim_r"].notna()].reset_index(drop=True)
     entry = pd.DataFrame({"candidate_id": pd.Series(dtype=object), "entry_price_replay": pd.Series(dtype=float),
                           "entry_charge_usd": pd.Series(dtype=float)})
-    if replay_version == REPLAY_V2 and not obs.empty:
+    reasons: dict[str, str] = {}
+    if not obs.empty:
         with db.connection() as conn:
-            entry = pd.read_sql_query("SELECT candidate_id, entry_price AS entry_price_replay, entry_charge_usd "
-                                      "FROM exploration_replay WHERE replay_version = ?", conn,
-                                      params=(replay_version,))
+            if replay_version == REPLAY_V2:
+                entry = pd.read_sql_query("SELECT candidate_id, entry_price AS entry_price_replay, entry_charge_usd "
+                                          "FROM exploration_replay WHERE replay_version = ?", conn,
+                                          params=(replay_version,))
+            reasons = {str(c): str(x) for c, x in conn.execute(
+                "SELECT client_order_id, json_extract(body, '$.exit_reason') FROM exploration_trades "
+                "WHERE json_valid(body) AND json_extract(body, '$.exit_reason') IS NOT NULL")}
     p = obs.merge(entry, on="candidate_id", how="left")
     leg = (p["side"].astype(float) * (p["entry_price_replay"].astype(float) - p["entry_price"].astype(float))
            + p["entry_charge_usd"].astype(float)) / p["stop_dist"].astype(float)
-    return pd.DataFrame({"candidate_id": p["candidate_id"], "broker": p["broker"], "tf": p["tf"],
-                         "session_day": p["session_day"], "side": p["side"], "stop_dist": p["stop_dist"],
-                         "fill_r": p["label_fill_r"], "replay_r": p["label_sim_r"],
-                         "entry_fill_minus_replay_r": leg})
+    kind = p["candidate_id"].map(lambda c: EXIT_REASON_LEG.get(reasons.get(str(c), ""), "other"))
+    out = pd.DataFrame({"candidate_id": p["candidate_id"], "broker": p["broker"], "tf": p["tf"],
+                        "session_day": p["session_day"], "side": p["side"], "stop_dist": p["stop_dist"],
+                        "fill_r": p["label_fill_r"], "replay_r": p["label_sim_r"],
+                        "entry_fill_minus_replay_r": leg, "exit_kind": kind})
+    out.attrs["unknown_arm_labels"] = unknown
+    return out
 
 
 def synthetic_stop_fills(legs: pd.DataFrame, bars_1m: pd.DataFrame, *, tol_usd: float = 0.005) -> int:
     """Quant vantage ruling 2026-11-09 (b): "List any stop that a bar gapped through and that still filled at the
     level. That is direct proof of a synthetic fill; include the count." A stop leg (`ledger_legs`) whose exit minute
-    opened beyond its level on the closing side (bid for a sell, ask for a buy) and whose deal is within `tol_usd` of
-    the level."""
+    opened beyond its bracket `level` on the closing side (bid for a sell, ask for a buy) and whose deal is within
+    `tol_usd` of the level."""
     stops = legs[legs["leg"] == "stop"] if not legs.empty else legs
     if stops.empty or bars_1m.empty:
         return 0
@@ -833,7 +955,7 @@ def synthetic_stop_fills(legs: pd.DataFrame, bars_1m: pd.DataFrame, *, tol_usd: 
     pos = t.get_indexer(minute)
     seen = pos >= 0
     side = stops["side"].to_numpy(dtype=float)[seen]
-    level = stops["requested"].to_numpy(dtype=float)[seen]
+    level = stops["level"].to_numpy(dtype=float)[seen]
     filled = stops["filled"].to_numpy(dtype=float)[seen]
     sell = side < 0
     o = np.where(sell, bars_1m["bid_open"].to_numpy(dtype=float)[pos[seen]],
@@ -1401,4 +1523,5 @@ __all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LAB
            "training_table", "weights", "write_prior", "write_weights",
            "REPLAY_V1", "REPLAY_V2", "ReplayCostsV2", "ReplayV2", "fill_replay_pairs", "label_candidates_v2",
            "ledger_legs", "replay_costs_v2", "replay_label_v2", "synthetic_stop_fills", "void_ids",
-           "void_non_gold_labels"]
+           "void_non_gold_labels", "CostOfDay", "bar_implied_stop_legs", "cost_model_hash", "daily_costs_v2",
+           "pinned_costs", "replay_frame_v2", "session_start"]

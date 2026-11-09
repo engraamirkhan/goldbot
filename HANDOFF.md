@@ -57,7 +57,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   by name. `goldbot/research/eval2/forward.py`: execution, futility and edge e-processes, the exit-mix check,
   `forward_state` (WAITING until S5) and `s5_read` (vantage: entry leg only). The method doc carries the quant's
   vantage wording as a v7 section, quant sign-off pending; no S5 or forward read has been run. The engine's
-  RiskGate cost cells are unchanged (exploration fills feed only the replay's leg table).
+  RiskGate cost cells are unchanged (exploration fills feed only the replay's leg table). Review round 1 (quant C1-C10, code review): each r2 label is costed from fills before its own session day; the
+  stop overshoot is measured against the bar-implied price; vantage entries at the quote take ICM's cell and S5 reads
+  NOT AVAILABLE; e-processes take one term per session day and execution runs one stream per (broker, leg); S5 needs
+  50 pairs over 10 days with a one-sided 95 % bound inside 0.02 R (1m-5m informational); forward labels use the card's
+  pinned cost model; DEMO_EXIT_AT_LEVEL covers vantage, vantage247 and vantage_obs; the prereg carries the quant's
+  section 5 amendment.
 - 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
   EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
   live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A

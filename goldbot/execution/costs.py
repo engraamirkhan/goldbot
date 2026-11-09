@@ -313,8 +313,13 @@ LEG_Z95 = 1.959963984540054                              # the 95 % interval's u
 # Quant ruling 2026-11-09 (vantage exit price, R110 3e72bf9a): "Vantage exit slip: measured 0 on vantage-demo. All 294
 # of 294 stop and target fills are at the bracket level, recorded from the exit deal VWAP ... This is a demo-server
 # artefact, not evidence about execution. It is never a cost prior for real money." Brokers whose demo exit legs are
-# not evidence: their exit cells take `real_money_exit_charge`, and S5 reads only their entry leg
-DEMO_EXIT_AT_LEVEL: frozenset[str] = frozenset({"vantage"})
+# not evidence: their exit cells take `real_money_exit_charge`, and S5 reads only their entry leg. Every Vantage demo
+# broker key of config/accounts.yaml (code review of 8b2345c4; tests/test_eval2_replay_v2.py checks the file)
+DEMO_EXIT_AT_LEVEL: frozenset[str] = frozenset({"vantage", "vantage247", "vantage_obs"})
+# Quant condition C7 (review of 8b2345c4): "if 95 % or more of vantage entries fill within $0.005 of the quote, its
+# entry leg is treated the same way and vantage S5 reads NOT AVAILABLE"
+ENTRY_AT_QUOTE_TOL_USD = 0.005
+ENTRY_AT_QUOTE_SHARE = 0.95
 
 
 class LegSlippage(FrozenRecord):
@@ -370,6 +375,12 @@ def leg_slippage_table(legs: pd.DataFrame, *, prior_usd: float, min_fills: int =
     return out
 
 
+def real_money_leg_charge(icm: Mapping[str, LegSlippage], key: str, *, prior_usd: float) -> float:
+    """max(the ICM leg table's charge of cell `key` "<session>:<leg>", the prior); a missing cell is the prior."""
+    cell = icm.get(key)
+    return max(prior_usd, cell.charged if cell is not None else prior_usd)
+
+
 def real_money_exit_charge(icm: Mapping[str, LegSlippage], key: str, *, prior_usd: float) -> float:
     """Quant ruling 2026-11-09 (vantage exit price): "Any real-money vantage hurdle uses the larger of the ICM-measured
     exit slip per leg and session and the stop-slip prior, until real-money vantage fills exist." `key` is an exit
@@ -377,8 +388,17 @@ def real_money_exit_charge(icm: Mapping[str, LegSlippage], key: str, *, prior_us
     leg = key.rsplit(":", 1)[-1]
     if leg not in EXIT_LEGS:
         raise ValueError(f"{key!r} is not an exit leg cell ({EXIT_LEGS})")
-    cell = icm.get(key)
-    return max(prior_usd, cell.charged if cell is not None else prior_usd)
+    return real_money_leg_charge(icm, key, prior_usd=prior_usd)
+
+
+def entry_at_quote_share(legs: pd.DataFrame) -> float | None:
+    """Share of entry legs filled within ENTRY_AT_QUOTE_TOL_USD of the quote (None without entries): at
+    ENTRY_AT_QUOTE_SHARE or more a demo server is filling entries synthetically too (quant C7)."""
+    e = legs[legs["leg"] == "entry"] if not legs.empty else legs
+    if e.empty:
+        return None
+    gap = (e["filled"].to_numpy(dtype=float) - e["requested"].to_numpy(dtype=float))
+    return float(np.mean(np.abs(gap) <= ENTRY_AT_QUOTE_TOL_USD + 1e-12))
 
 
 def probe_entry_fills(rows: Iterable["ProbeRecord"]) -> list["ProbeRecord"]:
