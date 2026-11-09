@@ -1,6 +1,10 @@
 <!-- Copied verbatim from the signed v6 method (quant-reviewer, 2026-11-09). Scanned 2026-11-09: no secrets or account ids. Paths under ~/tmp are local working files and are not published. Figures superseded by the quant-verified update of 2026-11-09 (DSR K 21,333, sensitivity 20,151, n_trials_effective 3,471, quarter_trials 3,395, headroom 105, registry 6,961 rows; reads ordered by results.backfill.true_read_ts): see docs/research/prereg-2026-11-09-eval2.md section 2. -->
 
-# EVAL-2: how goldbot judges a strategy (method v6, 2026-11-09)
+# EVAL-2: how goldbot judges a strategy (method v6, 2026-11-09; v7 vantage S5 wording 2026-11-09, quant sign-off pending)
+
+**v7 (2026-11-09, quant sign-off pending):** the quant's vantage exit-price ruling (`~/tmp/vcal5_ruling_1109.md`)
+replaces "vantage S5 blocked until exit deal price recorded" in sections 5 and 6, in the quant's exact words. Change
+record and the Lane 5A choices awaiting the same signature: section (e) at the end.
 
 Chair: research director. **v3** applies the quant's addendum (holdout partly spent, per-window batch numbering,
 C02 15m CONFIRM-SEEN), the PD's K ruling (`~/tmp/pd_k_ruling_1109.md`) and the PD + PO volume ruling
@@ -210,8 +214,11 @@ card's expected edge (and so its power floor) and the sizing ceiling offered to 
   decisions 10-26..11-06). The bias is +0.084 R (t 11). +0.078 R of it is the replay's 2 x $0.15 slippage prior; with
   no prior the bias is noise (icm +0.0075 R, t 0.9; vantage -0.005 R, t -0.6). It is a cost choice, not a path error.
   Decision-to-fill latency is 6.5-13.6 s (icm 1m/5m to 15m; up to 18 s on 1h/4h) and contributes ~0 (entry slip and
-  latency net -0.001 R). The gate stop floor never bound (0 of 3,740). Vantage exits store the level, not the deal
-  price, so vantage exit slippage is **unmeasured**, not zero. So S5 changes from "fix a 0.08 R path bias" to three
+  latency net -0.001 R). The gate stop floor never bound (0 of 3,740). (v7, quant ruling 2026-11-09:) "Vantage exit
+  slip: measured 0 on vantage-demo. All 294 of 294 stop and target fills are at the bracket level, recorded from the
+  exit deal VWAP (R110, 3e72bf9a). This is a demo-server artefact, not evidence about execution. It is never a cost
+  prior for real money. Any real-money vantage hurdle uses the larger of the ICM-measured exit slip per leg and session
+  and the stop-slip prior, until real-money vantage fills exist." So S5 changes from "fix a 0.08 R path bias" to three
   pieces of work, all in Lane 5A:
   1. **Replace the slippage prior** with measured per-broker, per-leg slippage (entry, stop exit, target exit, time
      exit, by session) from the exploration ledger fills: each leg charged at max(0, upper 95 % bound of the measured
@@ -223,7 +230,11 @@ card's expected edge (and so its power floor) and the sizing ceiling offered to 
   3. **Void the non-gold labels** (the 241 paired rows and all other non-gold v1 labels) and filter every reader by
      instrument.
   Pre-registered expectation: icm bias falls from +0.090 R to about +0.02 R (the uncredited target give-back,
-  +0.017 R, remains). Vantage cannot pass S5 until its exit deal price is recorded.
+  +0.017 R, remains). (v7:) "Vantage S5: the exit deal price is recorded (exit deal VWAP, R110). Vantage-demo fills
+  stops and targets at the level, so its exit-slip term cannot be measured on demo. S5 on vantage is read on the entry
+  leg (fill vs replay, spread) only. Its exit term is not read on demo. Any real-money use takes the larger of the
+  ICM-measured exit slip (per leg and session) and the prior. Vantage S5 cannot be green on the exit leg from demo
+  data."
 - **exploration_obs.** Counts at full weight, scored on the same replay path, only where the decision instant and the
   fill-bar close are stored point in time. Excluded only by decision-time fields (risk at decision below the floor,
   instrument price-scale mismatch), applied identically to signals and twins. Label size is never a criterion. Report
@@ -262,7 +273,7 @@ card's expected edge (and so its power floor) and the sizing ceiling offered to 
 | S2 | Positive, label shift: plant +0.05/+0.10/+0.20 R net in 10 of ~300 cells, in 1h/4h only, with a null 15m neighbour | Detection within ±10 pp of the stated power table. Planted cells named and the 15m cell not carried in ≥ 90 % of runs. 90 % intervals cover the plant 85-95 % of the time |
 | S3 | Positive, full path: a synthetic bar pattern pushed through sim + costs (+0.20 R, gold 1h, n 1,000). A cost-separation plant: +0.10 R at 15m. A gate-only plant (a pure cost-in-R effect) | ≥ 80 % detected. The 15m plant reads COST-BOUND at the stress cost and TRADABLE at the deciding cost. The gate-only plant shows as gate value with signal ≈ 0 |
 | S4 | Leakage: regime states shifted +1 bar; a realised-cost filter; the OCO side-0 trap on S21 | Identical results. Lint refuses the filter. Probe \|t\| < 2 on S21 (the naive read shows 8.4) |
-| S5 | Execution: fill vs replay **v2** (measured per-leg slippage, no credit, exit overshoot, non-gold labels void), per broker and timeframe band, gold only | \|bias\| ≤ 0.02 R. Today +0.084 R on replay v1, of which +0.078 R is the slippage prior; expected icm about +0.02 R on v2. Vantage blocked until its exit deal price is recorded. Until S5 passes, L4 forward reads do not count and the positive gap is charged in the deciding cost |
+| S5 | Execution: fill vs replay **v2** (measured per-leg slippage, no credit, exit overshoot, non-gold labels void), per broker and timeframe band, gold only | \|bias\| ≤ 0.02 R. Today +0.084 R on replay v1, of which +0.078 R is the slippage prior; expected icm about +0.02 R on v2. Vantage (v7): read on the entry leg only; "Vantage S5 cannot be green on the exit leg from demo data" (section 5). Until S5 passes, L4 forward reads do not count and the positive gap is charged in the deciding cost |
 | S6 | Truncation, `tests/test_eval2_truncation.py`: for sampled instances, recompute the signal, ATR, regime level, MTF context and twin stop on bars truncated at the decision bar's open + tf | Results identical. Higher-timeframe context is visible only after its close. Regime cut-points (terciles) come from the trailing 250 sessions ending at the prior session close, never the full window |
 
 A fast version of S0, S2, S3 and S6 runs in CI under a new `selftest` pytest marker and its own CI job, co-owned with
@@ -431,3 +442,59 @@ within the family; (6) the year-count and 2-year sub-period rule, and L5 under `
   `goldbot.research.metrics` at that K. Reported, not gated, before L5.
 - The S5 numbers are the microstructure lane's (`~/tmp/s5_decomp_1109.md`),
   not re-derived by me.
+
+## (e) v7, 2026-11-09: vantage S5 wording and the Lane 5A reading choices (quant sign-off pending)
+
+**Status: quant sign-off pending.** The quant's timing condition: "this text must go into EVAL-2 v7 and be signed before
+any vantage S5 read is run. Written later, it is a post-hoc change to the reading rule." No S5 read has been run on
+replay v2 for any broker; the Lane 5A code only computes it.
+
+**1. Quant ruling 2026-11-09 (`~/tmp/vcal5_ruling_1109.md`), copied exactly.**
+- S5 decomposition line (replaces "vantage exit slippage is unmeasured, not zero"): "Vantage exit slip: measured 0 on
+  vantage-demo. All 294 of 294 stop and target fills are at the bracket level, recorded from the exit deal VWAP (R110,
+  3e72bf9a). This is a demo-server artefact, not evidence about execution. It is never a cost prior for real money.
+  Any real-money vantage hurdle uses the larger of the ICM-measured exit slip per leg and session and the stop-slip
+  prior, until real-money vantage fills exist."
+  Conditions: "(a) Report target fills and stop fills separately. Zero slip on targets (limit orders) is normal. Zero
+  slip on stops is the artefact. (b) List any stop that a bar gapped through and that still filled at the level. That
+  is direct proof of a synthetic fill; include the count. (c) Rows with `exit_price` None are excluded and counted.
+  They are never imputed at the level."
+- EVAL-2 wording (replaces "vantage S5 blocked until exit deal price recorded", sections 5 and 6): "Vantage S5: the
+  exit deal price is recorded (exit deal VWAP, R110). Vantage-demo fills stops and targets at the level, so its
+  exit-slip term cannot be measured on demo. S5 on vantage is read on the entry leg (fill vs replay, spread) only. Its
+  exit term is not read on demo. Any real-money use takes the larger of the ICM-measured exit slip (per leg and
+  session) and the prior. Vantage S5 cannot be green on the exit leg from demo data."
+- VCAL5: "DROP. Do not register it, K +0."
+
+**2. How Lane 5A implements it** (`goldbot/execution/costs.py`, `goldbot/research/exploration_data.py`,
+`goldbot/research/eval2/forward.py`).
+- (a) The leg table keeps stop and target cells apart, per broker and session (`leg_slippage_table`).
+- (b) `synthetic_stop_fills` counts, per account and night, the stops whose exit minute opened through the level and
+  that filled within $0.005 of it (`exploration_learn` report `replay_v2.synthetic_stop_fills`).
+- (c) `ledger_legs` excludes and counts exits with no exit price (`legs_excluded.no_exit_price`); never imputed.
+- Vantage's replay v2 exit cells charge `max(ICM charged cell, $0.15 prior)` (`real_money_exit_charge`); its own
+  demo exit legs never set a charge. Its entry cells are its own measurement. S5 on vantage reads
+  `entry_fill_minus_replay_r` only and reports `exit_leg_read = False`.
+
+**3. Reading choices this lane made where the method was silent, for the same signature.**
+- S5 bands: 1m-5m, 15m-30m, 1h-4h, 1d (the decomposition read 1m/5m, 15m, 1h/4h). S5 passes on >= 50 pairs per
+  broker and band with |mean bias| <= 0.02 R; the day-clustered SE is reported. At n 50 that SE is about 0.04 R, so
+  a pass at the floor is weak evidence; an equivalence form (both one-sided 90 % bounds inside +-0.02 R) is the
+  stricter alternative the quant may prefer.
+- L4(i) kills at e >= 20 (Ville 5 %). The method's (iii) level, e >= 10, is a 10 % Ville bound, not 5 %.
+- The e-processes: predictable plug-in bets, winsorised from above at 3 sigma, Bennett's bound, no bet on the first 5
+  values (module docstring of `forward.py`). Measured crossing rates at the H0 boundary (4,000 paths, Gaussian and
+  Student-t3): execution 0.1-3.4 % for true sd from 0.3x to 10x the 0.1 R prior, edge 1.6-1.8 % at e >= 20,
+  futility 1.8-2.7 % at e >= 10. Power: execution catches a 0.05 R overrun within 100 fills in > 99 % of runs and
+  within 30 fills in about 40 %; futility catches a 0.17 R shortfall within 300 signals in 95 % at sd 0.6 R but only
+  about 34 % at sd 1.3 R (the method's "300 signals detect a 0.17 R shortfall" holds for low-sd cells only).
+- The exit mix: Dirichlet-multinomial chi-square, judged from 50 fills, OK at p >= 0.01. Without a history prior a
+  family is never ON TRACK.
+- The time leg: the ledger records no quote at a time close, so the time leg always charges the $0.15 prior. On icm
+  (604 + 78 time closes of 4,920 ledger rows) that keeps a small positive v2 bias on time-exit rows; recording the
+  close quote is a Lane 5B (engine) item.
+- The exploration fills feed a separate per-leg table read only by the replay. They do not feed the engine's
+  `slippage` cells (the RiskGate's round trip): about $0.01 measured entry slip would lower the RiskGate cost below the
+  $0.15 prior, and demo fills never lower a cost (section 4).
+- r2 is computed nightly for gold candidates decided in the last 30 days (the labeller's window); older candidates
+  keep r1 only unless a one-off backfill is run.

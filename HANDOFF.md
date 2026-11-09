@@ -47,6 +47,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
   refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
   and quant sign-off). Not yet wired into sim.py (Lane 1).
+- 2026-11-09 EVAL-2 Lane 5A (branch feat/eval2-lane5a-replay; R111): replay v2 and the L4 forward reads. The nightly
+  learner (`jobs.exploration_learn`) now voids every non-gold r1 label before any read (`exploration_label_void`,
+  aux migration 27; `read_obs` never returns a void label) and writes replay r2 for gold candidates to the side table
+  `exploration_replay` (label_sim_r untouched): each leg charged per broker and session from the exploration ledger's
+  own fills (upper 95 % bound, never a credit; the stop as a price overshoot; the time leg always the $0.15 prior,
+  no close quote is recorded), the 1m/5m time limit from decision + send delay. Vantage exit cells charge
+  max(ICM-measured, prior) (quant ruling 2026-11-09); its demo exit legs never set a cost. The learner still reads r1,
+  by name. `goldbot/research/eval2/forward.py`: execution, futility and edge e-processes, the exit-mix check,
+  `forward_state` (WAITING until S5) and `s5_read` (vantage: entry leg only). The method doc carries the quant's
+  vantage wording as a v7 section, quant sign-off pending; no S5 or forward read has been run. The engine's
+  RiskGate cost cells are unchanged (exploration fills feed only the replay's leg table).
 - 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
   EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
   live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A

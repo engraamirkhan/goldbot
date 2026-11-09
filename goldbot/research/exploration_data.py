@@ -23,7 +23,14 @@ that learns takes the broker as a required argument, so no caller can pool by om
                       slippage max(0.15, measured) USD/oz on each leg and never credited, commission, the paid swap per
                       rollover; and `label_mid_r`, the same path on mid prices with no cost (the gross diagnostic).
                       The cost table is point in time: its effective time must not be after the labelling cutoff.
-                      Written once; an unresolved label stays NULL (excluded, never censored).
+                      Written once; an unresolved label stays NULL (excluded, never censored). This is replay r1.
+* `label_candidates_v2`  replay r2 (EVAL-2, prereg-2026-11-09-eval2.md section 5), in the side table
+                      `exploration_replay` keyed (candidate_id, replay_version), never over label_sim_r: the same path
+                      with each leg charged from the broker's own exploration fills (`ledger_legs` ->
+                      `replay_costs_v2`: max(0, adverse upper 95 % bound) per session and leg at >= min_fills, else the
+                      prior; never a credit), the stop's overshoot in its fill price, and the 1m/5m time limit from
+                      decision + send delay. `void_non_gold_labels` voids every non-gold r1 label (replayed on gold
+                      bars before 2026-11-04); `read_obs` names the version it reads and never returns a void label.
 * `training_table`    a style's admissible rows (label resolved by `as_of`, not quarantined, no holdout row) with the
                       style's frozen v1 columns from the snapshot; rows without a snapshot (history and tests only) are
                       as-of joined (`asof_join`, available_utc <= decision: spec rule B). The row invariant
@@ -55,9 +62,10 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.store import asof_join
 from goldbot.data.timeutil import NEW_YORK, epoch_ns
 from goldbot.db.connection import Database, StateDbError, now_ns
@@ -104,6 +112,29 @@ BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
+
+# versioned replay (EVAL-2 prereg-2026-11-09-eval2.md section 5): r1 is the row's own label_sim_r (the 2 x $0.15
+# prior), r2 the side table `exploration_replay` (measured legs, no credit, stop overshoot). Never overwritten
+ReplayVersion = Literal["r1", "r2"]
+REPLAY_V1: ReplayVersion = "r1"
+REPLAY_V2: ReplayVersion = "r2"
+REPLAY_VERSIONS: tuple[ReplayVersion, ...] = (REPLAY_V1, REPLAY_V2)
+# read_obs's label column -> the column holding it in each version's table
+_LABEL_SQL: dict[str, dict[str, str]] = {
+    REPLAY_V1: {"label_sim_r": "label_sim_r", "label_mid_r": "label_mid_r", "label_exit_ns": "label_exit_ns",
+                "label_barrier": "label_barrier", "cost_model_version": "cost_model_version",
+                "cost_effective_ns": "cost_effective_ns"},
+    REPLAY_V2: {"label_sim_r": "sim_r", "label_mid_r": "mid_r", "label_exit_ns": "label_exit_ns",
+                "label_barrier": "barrier", "cost_model_version": "cost_model_version",
+                "cost_effective_ns": "cost_effective_ns"},
+}
+# replay v2: "1m/5m deadline = decision + delay + max_hold" (the engine holds 1m/5m from the fill on its own clock)
+SEND_CLOCK_TFS: frozenset[str] = frozenset({"1m", "5m"})
+# ledger exit reasons by leg (engine/exploration.py `record_close`); anything else (broker_close, weekend_flat, an
+# orphan) is no leg of the arm's own brackets
+EXIT_REASON_LEG: dict[str, str] = {"stop": "stop", "target": "target", "exploration_hold": "time", "time_exit": "time"}
+VOID_NON_GOLD_REASON = ("non-gold candidate replayed on gold bars with gold costs (before the 2026-11-04 instrument "
+                        "guard; EVAL-2 method section 5, S5 decomposition section 0)")
 
 # H-62 cross-fitting and retrain gate (spec sections 3 and 5)
 N_FOLDS = 5
@@ -287,7 +318,7 @@ def record_fill(db: Database, *, candidate_id: str, entry_utc: pd.Timestamp, exi
 def read_obs(db: Database, *, broker: str | None = None, style: str | None = None, arm_id: str | None = None,
              as_of: pd.Timestamp | None = None, include_quarantined: bool = False,
              evidence: Scope | None = None, held_out: Collection[str] = (), instrument: str | None = None,
-             instruments: Mapping[str, str] | None = None) -> pd.DataFrame:
+             instruments: Mapping[str, str] | None = None, replay_version: ReplayVersion = REPLAY_V1) -> pd.DataFrame:
     """Candidates ordered by decision time; times as UTC datetimes (ns). `as_of`: only labels resolved by then;
     `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`. `evidence`:
     leave out the candidates void for that scope (aux.db `evidence_exclusions`, prereg Amendment 4: "void as evidence
@@ -295,28 +326,48 @@ def read_obs(db: Database, *, broker: str | None = None, style: str | None = Non
     memory only (decisions after a quarantine span whose engine restart is not recorded yet). `instrument`: only the
     rows of arms on that instrument key (`instruments`, default the spec's `arms.arm_instruments`); an arm the spec
     does not name (unknown or removed) matches none. Every learner passes GOLD: quant review of 75824e5c, non-gold
-    rows labelled on gold bars before 2026-11-04 (XAUEUR, DE40, US500, ... at plausible but wrong R) never train."""
+    rows labelled on gold bars before 2026-11-04 (XAUEUR, DE40, US500, ... at plausible but wrong R) never train.
+
+    `replay_version` (EVAL-2 method section 5: "the learner and the evaluator name the version they read"): the label
+    columns (label_sim_r, label_mid_r, label_exit_utc, label_barrier, cost_model_version, cost_effective_ns) are that
+    version's: r1 the row's own, r2 the `exploration_replay` side table's. A label declared void for its version
+    (`exploration_label_void`, e.g. every non-gold r1 label) is NULL for EVERY reader, filtered by instrument or not."""
+    if replay_version not in REPLAY_VERSIONS:
+        raise ValueError(f"replay_version {replay_version!r} not one of {REPLAY_VERSIONS}")
     where: list[str] = ["1 = 1"]
-    params: list[Any] = []
+    params: list[Any] = [replay_version, replay_version]
     if not include_quarantined:
-        where.append("quarantine IS NULL")
+        where.append("o.quarantine IS NULL")
     if broker is not None:
-        where.append("broker = ?")
+        where.append("o.broker = ?")
         params.append(broker)
     if style is not None:
-        where.append("style = ?")
+        where.append("o.style = ?")
         params.append(style)
     if arm_id is not None:
-        where.append("arm_id = ?")
+        where.append("o.arm_id = ?")
         params.append(arm_id)
+    lbl = "o" if replay_version == REPLAY_V1 else "r"
     if as_of is not None:
-        where.append("label_sim_r IS NOT NULL AND label_exit_ns <= ?")
+        where.append(f"void.candidate_id IS NULL AND {lbl}.{_LABEL_SQL[replay_version]['label_sim_r']} IS NOT NULL "
+                     f"AND {lbl}.label_exit_ns <= ?")
         params.append(_ns(as_of))
+    sel = ", ".join(f"r.{src} AS _r2_{dst}" for dst, src in _LABEL_SQL[REPLAY_V2].items())
     with db.connection() as conn:
-        df = pd.read_sql_query(f"SELECT * FROM exploration_obs WHERE {' AND '.join(where)} "
-                               "ORDER BY decision_ns, candidate_id", conn, params=params)
+        df = pd.read_sql_query(
+            f"SELECT o.*, void.candidate_id IS NOT NULL AS _void, {sel} FROM exploration_obs o "
+            "LEFT JOIN exploration_replay r ON r.candidate_id = o.candidate_id AND r.replay_version = ? "
+            "LEFT JOIN exploration_label_void void ON void.candidate_id = o.candidate_id AND void.replay_version = ? "
+            f"WHERE {' AND '.join(where)} ORDER BY o.decision_ns, o.candidate_id", conn, params=params)
         if evidence is not None:
             df = df[~df["candidate_id"].isin(excluded(conn, evidence))].reset_index(drop=True)
+    r2 = [f"_r2_{c}" for c in _LABEL_SQL[REPLAY_V2]]
+    if replay_version == REPLAY_V2:
+        for c in _LABEL_SQL[REPLAY_V2]:
+            df[c] = df[f"_r2_{c}"]
+    void = df.pop("_void").astype(bool)
+    df = df.drop(columns=r2)
+    df.loc[void, list(_LABEL_SQL[REPLAY_V2])] = None
     if held_out:
         df = df[~df["candidate_id"].isin(set(held_out))].reset_index(drop=True)
     if instrument is not None:
@@ -365,11 +416,13 @@ class Replay(FrozenRecord):
 
 
 def _walk(t: pd.DatetimeIndex, k: int, deadline: pd.Timestamp, side: int, entry: float, stop_d: float,
-          target_d: float, ex_open: np.ndarray, ex_high: np.ndarray, ex_low: np.ndarray
-          ) -> tuple[pd.Timestamp, float, str] | None:
+          target_d: float, ex_open: np.ndarray, ex_high: np.ndarray, ex_low: np.ndarray,
+          stop_overshoot: float = 0.0) -> tuple[pd.Timestamp, float, str] | None:
     """Exit time, price and barrier of a position entered at minute k at `entry`; exits read on the exit side (bid for
-    a long, ask for a short). None when the data ends before the time limit with no barrier hit."""
+    a long, ask for a short). None when the data ends before the time limit with no barrier hit. `stop_overshoot`
+    (replay v2, $/oz >= 0): a stop fills at the level less it, or at a gapped open when that is worse."""
     stop, target = entry - side * stop_d, entry + side * target_d
+    fill_stop = stop - side * stop_overshoot
     for j in range(k, len(t)):
         if t[j] >= deadline:
             return t[j], float(ex_open[j]), "time"
@@ -377,12 +430,12 @@ def _walk(t: pd.DatetimeIndex, k: int, deadline: pd.Timestamp, side: int, entry:
         end = t[j] + pd.Timedelta(minutes=1)
         if side > 0:
             if lo <= stop:                                  # the stop first when both fall in one minute
-                return end, min(stop, o), "stop"            # a gap through it fills at the open
+                return end, min(fill_stop, o), "stop"       # a gap through it fills at the open
             if hi >= target:
                 return end, target, "target"                # never better than the target
         else:
             if hi >= stop:
-                return end, max(stop, o), "stop"
+                return end, max(fill_stop, o), "stop"
             if lo <= target:
                 return end, target, "target"
     return None
@@ -479,6 +532,316 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
     return done
 
 
+# ---------------------------------------------------------------------------------------------- replay v2 (EVAL-2)
+# EVAL-2 Lane 5A (docs/research/eval2-method-2026-11-09.md section 5; prereg-2026-11-09-eval2.md section 5). The S5
+# decomposition found the +0.084 R fill-vs-replay bias is the r1 replay's 2 x $0.15 slippage PRIOR (+0.078 R), not a
+# path error. r2 replaces it: "Per broker, per leg (entry, stop exit, target exit, time exit), by session: charge
+# max(0, adverse upper 95 % bound of the measured slippage mean) once the cell has >= min_fills, else the $0.15 prior.
+# Favourable slippage is never credited." "Stop exit price = level - side x measured stop overshoot (its own term, not
+# double-charged with the stop leg)." "1m/5m deadline = decision + delay + max_hold." r2 lives in the side table
+# `exploration_replay`; label_sim_r (r1) is never overwritten.
+class ReplayCostsV2(FrozenRecord):
+    """One broker's r2 cost model, point in time (never effective after the labelling cutoff). `charges`: $/oz per
+    "<session>:<leg>" (`execution.costs.leg_slippage_table` on the broker's own exploration fills; a missing cell pays
+    `prior_usd`); commission and swap as r1."""
+    broker: str = Field(min_length=1)
+    version: str
+    effective_utc: UtcTimestamp
+    charges: dict[str, float] = Field(default_factory=dict)
+    fills: dict[str, int] = Field(default_factory=dict)        # the fills each cell rests on (audit)
+    prior_usd: float = Field(SLIPPAGE_FLOOR_USD, ge=0)
+    commission_rt_per_oz: float = Field(0.0, ge=0)
+    swap: SwapSpec | None = None
+
+    @model_validator(mode="after")
+    def _no_credit(self) -> ReplayCostsV2:
+        if any(not (math.isfinite(v) and v >= 0) for v in self.charges.values()):
+            raise ValueError("a leg charge is a finite cost >= 0: favourable slippage is never credited")
+        return self
+
+    def charge(self, leg: str, session: str) -> float:
+        return float(self.charges.get(f"{session}:{leg}", self.prior_usd))
+
+
+class ReplayV2(FrozenRecord):
+    exit_utc: UtcTimestamp
+    sim_r: float
+    mid_r: float
+    barrier: Literal["stop", "target", "time"]
+    entry_price: float                  # the replay's entry (ask for a long, bid for a short), before any charge
+    exit_price: float                   # a stop's includes the overshoot
+    entry_charge_usd: float
+    exit_charge_usd: float              # 0 on a stop: its charge is the overshoot in `exit_price`, never twice
+
+
+def replay_label_v2(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp, stop_dist: float,
+                    target_dist: float, max_hold_s: int, tf: str, costs: ReplayCostsV2, entry_delay_s: float = 0.0,
+                    sessions: SessionTable = DEFAULT_SESSIONS) -> ReplayV2 | None:
+    """r2 label of one candidate on 1m bid/ask bars: r1's path (entry at the open of the minute holding decision +
+    `entry_delay_s`, barriers minute by minute, the stop first), with a 1m/5m time limit from decision + delay, the
+    measured entry leg of the entry minute's session, the stop's overshoot in its fill price, and the target or time
+    leg of the exit minute's session. The gross `mid_r` is r1's (no cost). None when unresolved."""
+    b = bars_1m.sort_values("ts_utc").reset_index(drop=True)
+    t = pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)).as_unit("ns")
+    decision = pd.Timestamp(decision_utc)
+    delay = pd.Timedelta(seconds=float(entry_delay_s))
+    deadline = decision + (delay if tf in SEND_CLOCK_TFS else pd.Timedelta(0)) + pd.Timedelta(seconds=int(max_hold_s))
+    k = int(t.searchsorted((decision + delay).floor("min"), side="left"))
+    if k >= len(t) or t[k] >= deadline:
+        return None
+    ent, ex = ("ask", "bid") if side > 0 else ("bid", "ask")
+    entry = float(b[f"{ent}_open"].iloc[k])
+    path = (b[f"{ex}_open"].to_numpy(float), b[f"{ex}_high"].to_numpy(float), b[f"{ex}_low"].to_numpy(float))
+    net = _walk(t, k, deadline, side, entry, stop_dist, target_dist, *path)
+    mids = {c: ((b[f"bid_{c}"] + b[f"ask_{c}"]) / 2).to_numpy(float) for c in ("open", "high", "low")}
+    gross = _walk(t, k, deadline, side, float(mids["open"][k]), stop_dist, target_dist, mids["open"], mids["high"],
+                  mids["low"])
+    if net is None or gross is None:
+        return None
+    exit_t, exit_p, barrier = net
+    minute = exit_t - pd.Timedelta(minutes=1) if barrier != "time" else exit_t     # the minute the exit filled in
+    s_entry, s_exit = (str(s) for s in sessions.session_label(pd.DatetimeIndex([t[k], minute])))
+    entry_charge = costs.charge("entry", s_entry)
+    exit_charge = 0.0
+    if barrier == "stop":                       # the overshoot moves the fill, never the exit minute
+        again = _walk(t, k, deadline, side, entry, stop_dist, target_dist, *path,
+                      stop_overshoot=costs.charge("stop", s_exit))
+        if again is None or again[0] != exit_t:
+            raise AssertionError("the stop overshoot moved the exit minute")
+        exit_p = again[1]
+    else:
+        exit_charge = costs.charge(barrier, s_exit)
+    swap_paid = 0.0
+    if costs.swap is not None:
+        nights = int(rollover_nights(pd.DatetimeIndex([t[k]]), pd.DatetimeIndex([exit_t]), costs.swap.server_tz,
+                                     costs.swap.triple_weekday)[0])
+        swap_paid = max(0.0, -float(costs.swap.usd_per_oz(np.array([side]))[0])) * nights
+    sim = (side * (exit_p - entry) - entry_charge - exit_charge - costs.commission_rt_per_oz - swap_paid) / stop_dist
+    mid = side * (gross[1] - float(mids["open"][k])) / stop_dist
+    return ReplayV2(exit_utc=exit_t, sim_r=float(sim), mid_r=float(mid), barrier=barrier,  # type: ignore[arg-type]
+                    entry_price=entry, exit_price=float(exit_p), entry_charge_usd=entry_charge,
+                    exit_charge_usd=exit_charge)
+
+
+def ledger_legs(db: Database, *, broker_of: Mapping[str, str], as_of: pd.Timestamp
+                ) -> tuple[pd.DataFrame, dict[str, int]]:
+    """The exploration ledger's gold fills as slippage legs for `execution.costs.leg_slippage_table`, point in time
+    (sent, or for an exit closed, by `as_of`). Entry: the send quote vs the fill, the position's side. Stop/target
+    exit: the bracket level (anchored on the send quote: quote -/+ the gate's stop or target distance) vs the exit
+    deal, the closing order's side. A time close has no recorded quote (its leg is always the prior). Left out and
+    counted (quant vantage ruling 2026-11-09 (c): "Rows with `exit_price` None are excluded and counted. They are never
+    imputed at the level"): `no_exit_price`, `censored` (the stop moved or something else closed it: the level is not
+    the bracket's), `pyramid_add` exits, `non_gold`, `unknown_account`, `evidence_void` (void for the cost cells)."""
+    cut = _ns(as_of)
+    counts = dict.fromkeys(("no_exit_price", "censored", "pyramid_add", "non_gold", "unknown_account",
+                            "evidence_void"), 0)
+    with db.connection() as conn:
+        rows = conn.execute("SELECT client_order_id, account_id, body FROM exploration_trades WHERE ts_ns <= ? "
+                            "ORDER BY ts_ns, client_order_id", (cut,)).fetchall()
+        void = excluded(conn, "cost_cells")
+    keys: dict[tuple[str, str], str] = {}
+    out: list[tuple[Any, ...]] = []
+    for cid, acct, body in rows:
+        broker = broker_of.get(str(acct))
+        if broker is None:
+            counts["unknown_account"] += 1
+            continue
+        if cid in void:
+            counts["evidence_void"] += 1
+            continue
+        r = json.loads(body)
+        sym = str(r.get("symbol") or GOLD)
+        if (key := keys.get((sym, broker))) is None:
+            key = keys[(sym, broker)] = instrument_key(sym, broker)
+        if key != GOLD:
+            counts["non_gold"] += 1
+            continue
+        side, q, fill = int(r["side"]), r.get("requested_price"), r.get("fill_price")
+        if q is None or fill is None:
+            continue
+        out.append((cid, acct, broker, "entry", pd.Timestamp(r["sent_utc"]), side, float(q), float(fill)))
+        leg = EXIT_REASON_LEG.get(str(r.get("exit_reason")))
+        if r.get("exit_utc") is None or leg is None or leg == "time" or _ns(pd.Timestamp(r["exit_utc"])) > cut:
+            continue
+        if r.get("exit_price") is None:
+            counts["no_exit_price"] += 1
+        elif r.get("censored"):
+            counts["censored"] += 1
+        elif r.get("group_id") not in (None, cid):
+            counts["pyramid_add"] += 1
+        else:
+            dist = float(r["stop_usd"] if leg == "stop" else r["target_usd"])
+            level = float(q) + (-side if leg == "stop" else side) * dist
+            out.append((cid, acct, broker, leg, pd.Timestamp(r["exit_utc"]), -side, level, float(r["exit_price"])))
+    legs = pd.DataFrame(out, columns=["client_order_id", "account_id", "broker", "leg", "ts_utc", "side", "requested",
+                                      "filled"])
+    legs["ts_utc"] = pd.to_datetime(legs["ts_utc"], utc=True)
+    return legs, counts
+
+
+def replay_costs_v2(base: ReplayCosts, legs: pd.DataFrame, *, as_of: pd.Timestamp, min_fills: int,
+                    prior_usd: float = SLIPPAGE_FLOOR_USD) -> ReplayCostsV2:
+    """`base.broker`'s r2 cost model from its own ledger legs by `as_of` (`ledger_legs`), commission and swap from its
+    r1 model. Never another broker's measurements, with one exception the quant ruled (2026-11-09): a broker whose
+    demo server fills stops and targets at the level (`costs.DEMO_EXIT_AT_LEVEL`, vantage) has no measurable exit leg,
+    so each exit cell charges "the larger of the ICM-measured exit slip per leg and session and the stop-slip prior"."""
+    from goldbot.execution.costs import (
+        DEMO_EXIT_AT_LEVEL,
+        EXIT_LEGS,
+        leg_slippage_table,
+        real_money_exit_charge,
+    )
+    upto = legs[pd.to_datetime(legs["ts_utc"], utc=True) <= as_of] if not legs.empty else legs
+    own = upto[upto["broker"] == base.broker] if not upto.empty else upto
+    table = leg_slippage_table(own, prior_usd=prior_usd, min_fills=min_fills)
+    charges = {k: v.charged for k, v in table.items()}
+    if base.broker in DEMO_EXIT_AT_LEVEL:
+        icm = leg_slippage_table(upto[upto["broker"] == "icm"] if not upto.empty else upto, prior_usd=prior_usd,
+                                 min_fills=min_fills)
+        charges.update({k: real_money_exit_charge(icm, k, prior_usd=prior_usd) for k in charges
+                        if k.rsplit(":", 1)[1] in EXIT_LEGS})
+    last = pd.Timestamp(pd.to_datetime(upto["ts_utc"], utc=True).max()) if not upto.empty else None
+    return ReplayCostsV2(broker=base.broker, version=f"{base.version}+legs-{REPLAY_V2}:{as_of:%Y%m%dT%H%M}",
+                         effective_utc=max(base.effective_utc, last) if last is not None else base.effective_utc,
+                         charges=charges, fills={k: v.n for k, v in table.items()}, prior_usd=prior_usd,
+                         commission_rt_per_oz=base.commission_rt_per_oz, swap=base.swap)
+
+
+def void_ids(db: Database, replay_version: ReplayVersion = REPLAY_V1) -> set[str]:
+    """The candidates whose `replay_version` label is void."""
+    with db.connection() as conn:
+        return {str(c) for (c,) in conn.execute("SELECT candidate_id FROM exploration_label_void "
+                                                "WHERE replay_version = ?", (replay_version,))}
+
+
+def label_candidates_v2(db: Database, bars_1m: pd.DataFrame, costs: ReplayCostsV2, *, cutoff: pd.Timestamp,
+                        account_id: str | None = None, symbol: str = GOLD,
+                        instruments: Mapping[str, str] | None = None) -> int:
+    """r2 for every unquarantined gold candidate of `costs.broker` (and `account_id`) with no r2 row, whose label
+    resolves by `cutoff` on the bars before it: one `exploration_replay` row each, written once. Gold only, as r1
+    since 2026-11-04 (`label_candidates`); a candidate whose r1 label is void is never replayed (its ledger traded
+    another instrument). Returns the rows written."""
+    if costs.effective_utc > cutoff:
+        raise ValueError("cost model effective after the labelling cutoff: labels must be point in time")
+    key = instrument_key(symbol, costs.broker)
+    if bars_1m.empty or key != GOLD:
+        return 0
+    bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff]
+    obs = read_obs(db, broker=costs.broker, instrument=key, instruments=instruments, replay_version=REPLAY_V2)
+    obs = obs[obs["label_sim_r"].isna() & ~obs["candidate_id"].isin(void_ids(db))]
+    if account_id is not None:
+        obs = obs[obs["account_id"] == account_id]
+    rows = []
+    for r in obs.to_dict("records"):
+        delay = arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), pd.Timestamp(r["decision_utc"]))
+        rep = replay_label_v2(bars, side=int(r["side"]), decision_utc=r["decision_utc"], stop_dist=float(r["stop_dist"]),
+                              target_dist=float(r["target_dist"]), max_hold_s=int(r["max_hold_s"]), tf=str(r["tf"]),
+                              costs=costs, entry_delay_s=delay)
+        if rep is None or rep.exit_utc > cutoff:
+            continue                                        # unresolved: no row, never censored
+        rows.append((r["candidate_id"], REPLAY_V2, _ns(rep.exit_utc), rep.sim_r, rep.mid_r, rep.barrier,
+                     rep.entry_price, rep.exit_price, rep.entry_charge_usd, rep.exit_charge_usd, costs.version,
+                     _ns(costs.effective_utc), now_ns()))
+    if not rows:
+        return 0
+    with db.write() as conn:
+        return sum(conn.execute("INSERT OR IGNORE INTO exploration_replay (candidate_id, replay_version, label_exit_ns, "
+                                "sim_r, mid_r, barrier, entry_price, exit_price, entry_charge_usd, exit_charge_usd, "
+                                "cost_model_version, cost_effective_ns, labelled_ns) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row).rowcount for row in rows)
+
+
+def void_non_gold_labels(db: Database, *, instruments: Mapping[str, str] | None = None,
+                         now: pd.Timestamp | None = None) -> dict[str, int]:
+    """Prereg-2026-11-09-eval2.md section 6.5: "241 non-gold paired rows in `exploration_obs` carry a `label_sim_r`
+    replayed on gold bars with gold costs (written before the 2026-11-04 instrument guard). They and every other
+    non-gold v1 label are void". Writes one `exploration_label_void` row (r1) per labelled candidate whose arm the spec
+    puts on another instrument, or whose ledger order traded another symbol; append-only and idempotent. The stored
+    label is never rewritten; `read_obs` drops it for every reader. An arm the spec does not name is not voided (no
+    evidence either way; every learner already reads it as not gold) and is counted. Returns the new voids, of them
+    the paired (a fill label too) and those beyond MAX_LABEL_R, and the labels on unknown arms."""
+    inst = arm_spec.arm_instruments() if instruments is None else instruments
+    with db.connection() as conn:
+        rows = conn.execute("SELECT candidate_id, arm_id, broker, label_sim_r, label_fill_r FROM exploration_obs "
+                            "WHERE label_sim_r IS NOT NULL").fetchall()
+        traded = {str(c): str(s) for c, s in conn.execute(
+            "SELECT client_order_id, json_extract(body, '$.symbol') FROM exploration_trades "
+            "WHERE json_valid(body) AND json_extract(body, '$.symbol') IS NOT NULL")}
+    done = void_ids(db)
+    keys: dict[tuple[str, str | None], str] = {}
+    new: list[tuple[str, float, float | None]] = []
+    unknown = 0
+    for cid, arm, broker, sim, fill in rows:
+        on = inst.get(str(arm))
+        if on is None:
+            unknown += 1
+        sym = traded.get(str(cid))
+        if sym is not None and (sym, broker) not in keys:
+            keys[(sym, broker)] = instrument_key(sym, broker)
+        if (on is not None and on != GOLD) or (sym is not None and keys[(sym, broker)] != GOLD):
+            if str(cid) not in done:
+                new.append((str(cid), float(sim), fill))
+    decided = _ns(now) if now is not None else now_ns()
+    written: list[tuple[str, float, float | None]] = []
+    if new:
+        with db.write() as conn:
+            for cid, sim, fill in new:
+                if conn.execute("INSERT OR IGNORE INTO exploration_label_void VALUES (?, ?, ?, ?)",
+                                (cid, REPLAY_V1, VOID_NON_GOLD_REASON, decided)).rowcount:
+                    written.append((cid, sim, fill))
+    if written:
+        log.warning("exploration: %d non-gold r1 labels voided (replayed on gold bars before 2026-11-04)", len(written))
+    return {"voided": len(written), "paired": sum(f is not None for _, _, f in written),
+            "beyond_20r": sum(abs(s) > MAX_LABEL_R for _, s, _ in written), "unknown_arm_labels": unknown}
+
+
+def fill_replay_pairs(db: Database, *, broker: str, replay_version: ReplayVersion = REPLAY_V2,
+                      instruments: Mapping[str, str] | None = None) -> pd.DataFrame:
+    """S5's paired rows (method section 6: "fill vs replay v2 ..., per broker and timeframe band, gold only"): every
+    gold candidate of `broker` with both a fill label and a `replay_version` label, not void for the cost cells.
+    `fill_r` = label_fill_r, `replay_r` = the version's label; `entry_fill_minus_replay_r` = the entry leg alone, in R,
+    + = the fill better than the replay's charged entry (r2 only: r1 stored no entry price). One row per candidate."""
+    obs = read_obs(db, broker=broker, instrument=GOLD, instruments=instruments, replay_version=replay_version,
+                   evidence="cost_cells")
+    obs = obs[obs["label_fill_r"].notna() & obs["label_sim_r"].notna()].reset_index(drop=True)
+    entry = pd.DataFrame({"candidate_id": pd.Series(dtype=object), "entry_price_replay": pd.Series(dtype=float),
+                          "entry_charge_usd": pd.Series(dtype=float)})
+    if replay_version == REPLAY_V2 and not obs.empty:
+        with db.connection() as conn:
+            entry = pd.read_sql_query("SELECT candidate_id, entry_price AS entry_price_replay, entry_charge_usd "
+                                      "FROM exploration_replay WHERE replay_version = ?", conn,
+                                      params=(replay_version,))
+    p = obs.merge(entry, on="candidate_id", how="left")
+    leg = (p["side"].astype(float) * (p["entry_price_replay"].astype(float) - p["entry_price"].astype(float))
+           + p["entry_charge_usd"].astype(float)) / p["stop_dist"].astype(float)
+    return pd.DataFrame({"candidate_id": p["candidate_id"], "broker": p["broker"], "tf": p["tf"],
+                         "session_day": p["session_day"], "side": p["side"], "stop_dist": p["stop_dist"],
+                         "fill_r": p["label_fill_r"], "replay_r": p["label_sim_r"],
+                         "entry_fill_minus_replay_r": leg})
+
+
+def synthetic_stop_fills(legs: pd.DataFrame, bars_1m: pd.DataFrame, *, tol_usd: float = 0.005) -> int:
+    """Quant vantage ruling 2026-11-09 (b): "List any stop that a bar gapped through and that still filled at the
+    level. That is direct proof of a synthetic fill; include the count." A stop leg (`ledger_legs`) whose exit minute
+    opened beyond its level on the closing side (bid for a sell, ask for a buy) and whose deal is within `tol_usd` of
+    the level."""
+    stops = legs[legs["leg"] == "stop"] if not legs.empty else legs
+    if stops.empty or bars_1m.empty:
+        return 0
+    t = pd.DatetimeIndex(pd.to_datetime(bars_1m["ts_utc"], utc=True)).as_unit("ns")
+    minute = pd.DatetimeIndex(pd.to_datetime(stops["ts_utc"], utc=True)).floor("min").as_unit("ns")
+    pos = t.get_indexer(minute)
+    seen = pos >= 0
+    side = stops["side"].to_numpy(dtype=float)[seen]
+    level = stops["requested"].to_numpy(dtype=float)[seen]
+    filled = stops["filled"].to_numpy(dtype=float)[seen]
+    sell = side < 0
+    o = np.where(sell, bars_1m["bid_open"].to_numpy(dtype=float)[pos[seen]],
+                 bars_1m["ask_open"].to_numpy(dtype=float)[pos[seen]])
+    gapped = np.where(sell, o < level, o > level)
+    return int(np.sum(gapped & (np.abs(filled - level) <= tol_usd)))
+
+
 # ---------------------------------------------------------------------------------------------- training table
 _BASE = ["candidate_id", "broker", "arm_id", "family", "style", "tf", "side", "is_control", "decision_utc", "session_day",
          "max_hold_s", "taken", "branch", "mu", "meta_p", "model_version", "label_exit_utc", "label_sim_r",
@@ -500,7 +863,7 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
     cols = list(feature_cols) if feature_cols is not None else list(FEATURE_LISTS[STYLE_FEATURE_LIST[style]])
     check_feature_cap([*cols, "side", "arm_id"])
     obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of, evidence="posterior",
-                   held_out=held_out, instrument=GOLD, instruments=instruments)
+                   held_out=held_out, instrument=GOLD, instruments=instruments, replay_version=REPLAY_V1)
     dec = pd.DatetimeIndex(obs["decision_utc"])
     obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
     if n_sus := int(suspect(obs["label_sim_r"]).sum()):          # kept: logged, never dropped
@@ -626,7 +989,7 @@ def retrain_due(db: Database, style: str, cutoff: pd.Timestamp, *, broker: str,
     """(due, new, total) of one broker's style: >= RETRAIN_MIN_NEW admissible labels resolved since its last fit's
     cutoff and >= RETRAIN_MIN_TOTAL in all (spec section 5); gold arms' rows only (`read_obs` `instrument`)."""
     obs = read_obs(db, broker=broker, style=style, as_of=cutoff, evidence="posterior", held_out=held_out,
-                   instrument=GOLD, instruments=instruments)
+                   instrument=GOLD, instruments=instruments, replay_version=REPLAY_V1)
     last = _last_cutoff(db, style, broker)
     new = int((obs["label_exit_utc"] > last).sum()) if last is not None else len(obs)
     return new >= RETRAIN_MIN_NEW and len(obs) >= RETRAIN_MIN_TOTAL, new, len(obs)
@@ -965,9 +1328,9 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
             learning = ()
     learning = frozenset(learning)
     obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out,    # prereg Amendment 4
-                   instrument=GOLD, instruments=instruments)
+                   instrument=GOLD, instruments=instruments, replay_version=REPLAY_V1)
     if learning:
-        held_out = {*held_out, *(str(c) for c in read_obs(db, broker=broker).loc[
+        held_out = {*held_out, *(str(c) for c in read_obs(db, broker=broker, replay_version=REPLAY_V1).loc[
             lambda f: f["arm_id"].isin(learning), "candidate_id"])}
         obs = obs[~obs["arm_id"].isin(learning)]
     strat = obs[~obs["is_control"]]
@@ -1035,4 +1398,7 @@ __all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LAB
            "bounded_shares", "cross_fit_meta", "entry_exclusions", "equal_shares", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
            "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "suspect", "thompson_shares",
-           "training_table", "weights", "write_prior", "write_weights"]
+           "training_table", "weights", "write_prior", "write_weights",
+           "REPLAY_V1", "REPLAY_V2", "ReplayCostsV2", "ReplayV2", "fill_replay_pairs", "label_candidates_v2",
+           "ledger_legs", "replay_costs_v2", "replay_label_v2", "synthetic_stop_fills", "void_ids",
+           "void_non_gold_labels"]
