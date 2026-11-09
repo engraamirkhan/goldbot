@@ -25,6 +25,7 @@ REPO_TABLE = C.TABLE_PATH
 def dc(tf: str = "15m", *, atr: float, price: float = 4068.7, stop_atr: float = 1.0, side: int = 1,
        t_exit: int = T0 + H, exit_share: float = 0.0, entry_share: float = 0.0, broker: str = "icm",
        costs: C.CostModel | None = None) -> C.DecidingCost:
+    costs = costs or C.default_model()
     return C.deciding_cost("XAUUSD", tf, side=side, price=price, atr_decision=atr, stop_atr=stop_atr,
                            t_fill_ns=T0, t_exit_ns=t_exit, stop_exit_share=exit_share,
                            stop_entry_share=entry_share, window="explore", broker=broker, costs=costs)
@@ -108,12 +109,13 @@ def test_a_paid_swap_over_rollovers_is_added_in_r():
 
 
 def test_a_fill_better_than_replay_earns_no_s5_credit_and_a_worse_one_is_charged_at_decision_atr():
-    """icm's measured gap net of the slippage prior is favourable (-$0.008): charged 0. Vantage's (+$0.031) is
-    charged in $ at the decision ATR until its S5 passes."""
+    """icm's measured gap net of the slippage prior is favourable (-$0.008): charged 0. Vantage's +$0.031 plus icm's
+    adverse stop-exit slip $0.040 (vantage exits store the level) = $0.071 is charged at the decision ATR until S5
+    passes."""
     assert C.load_table()["deciding"]["s5_gap_usd"]["icm"]["15m"] < 0
     assert dc(atr=7.004).s5_gap_r == 0.0
     v = dc(atr=1.52, price=ERA_PRICE, broker="vantage")
-    assert v.s5_gap_r == pytest.approx(0.031 / 1.52)
+    assert v.s5_gap_r == pytest.approx(0.071 / 1.52)
     assert v.r == pytest.approx(v.bp_engine_r + v.s5_gap_r)
 
 
@@ -138,7 +140,8 @@ def test_every_term_of_the_deciding_cost_is_non_negative_whatever_the_inputs():
 def test_the_deciding_cost_fails_closed_on_unpinned_inputs():
     with pytest.raises(C.MissingCost):
         C.deciding_cost("XAGUSD", "15m", side=1, price=30.0, atr_decision=0.1, stop_atr=1.0, t_fill_ns=T0,
-                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="explore")
+                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="explore",
+                        costs=C.default_model())
     with pytest.raises(C.MissingCost):
         dc("1m", atr=2.0)
     with pytest.raises(C.MissingCost):
@@ -147,7 +150,22 @@ def test_the_deciding_cost_fails_closed_on_unpinned_inputs():
         dc(atr=0.0)
     with pytest.raises(ValueError):
         C.deciding_cost("XAUUSD", "15m", side=1, price=4068.7, atr_decision=7.0, stop_atr=1.0, t_fill_ns=T0,
-                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="holdout")  # type: ignore[arg-type]
+                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="holdout",  # type: ignore[arg-type]
+                        costs=C.default_model())
+
+
+def test_the_deciding_cost_refuses_to_run_without_the_windows_cost_model():
+    with pytest.raises(C.MissingCost, match="needs the window's CostModel"):
+        C.deciding_cost("XAUUSD", "15m", side=1, price=4068.7, atr_decision=7.0, stop_atr=1.0, t_fill_ns=T0,
+                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="explore")
+
+
+@pytest.mark.parametrize("tf", ["15m", "1h"])
+def test_the_stress_line_charges_at_the_2010_17_atr_level_even_when_the_decision_atr_is_wider(tf):
+    """A forward (today's ATR) cell is stressed at the era ATR: 15m 0.151 R, 1h 0.071 R at a 1-ATR stop."""
+    s = C.stress_cost("XAUUSD", tf, atr_decision=TODAY_ATR[tf], stop_atr=1.0)
+    assert round(s, 3) == {"15m": 0.151, "1h": 0.071}[tf]
+    assert C.stress_cost("XAUUSD", "15m", atr_decision=1.0, stop_atr=1.0) == pytest.approx(0.230)
 
 
 def test_a_pin_version_mismatch_between_code_and_config_stops_the_run(monkeypatch):
@@ -204,6 +222,10 @@ def test_filtering_on_realised_cost_manufactures_an_edge_from_a_random_null():
     ({"cells": [{"where": {"net_r": {"gt": 0}}}]}, "net_r"),
     ({"filters": [{"type": "slippage_cap", "params": {}}]}, "slippage_cap"),
     ({"filters": [{"type": "x", "params": {"label_fill_r": 0}}]}, "label_fill_r"),
+    ({"filters": [{"type": "x", "params": {"field": "decision_exit_price"}}]}, "decision_exit_price"),
+    ({"entry": {"trigger": {"type": "donchian_break", "confirm": "stopped_prev"}}}, "stopped_prev"),
+    ({"entry": {"trigger": "fwd_ret_5 > 0"}}, "fwd_ret_5"),
+    ({"sizing": {"scale_by": "net_r_prev"}}, "net_r_prev"),
 ])
 def test_the_lint_refuses_any_filter_or_gate_on_a_realised_trade_field(card, field):
     problems = L.lint_card(card)
@@ -231,3 +253,10 @@ def test_realised_fields_outside_filters_and_gates_are_not_flagged():
     card = {"statistic": "excess_r", "report": ["net_r", "cost_r", "overshoot", "exit_price"],
             "exit": {"type": "target_r"}}
     assert L.lint_card(card) == []
+
+
+@pytest.mark.parametrize("name,is_realised", [
+    ("decision_exit_price", True), ("fwd_ret_5", True), ("deciding_net_r", True), ("ex_ante_pnl", True),
+    ("deciding_cost_r", False), ("decision_spread", False), ("atr_pct_rank", False)])
+def test_a_decision_time_prefix_does_not_launder_a_realised_field(name, is_realised):
+    assert L.realised(name) is is_realised

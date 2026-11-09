@@ -50,7 +50,9 @@ EVAL-2 deciding cost (method section 4, prereg 2026-11-09 section 4.2; pin in co
   overshoot  $0.145 per stop leg, in the same branch as the round trip that won the max (x 0.145 / 0.230)
   swap       C2 financing over the hold (strict-interior rollovers, #343), floored at 0: a credit is never taken
   S5 gap     max(0, measured gap $) at the decision ATR per (broker, band) until "broker:band" is in s5_passed
-  stress     the $-constant round trip ($0.230) at the decision ATR: 15m 0.151 R at the 2010-17 median ATR 1.52"""
+  stress     the $-constant round trip ($0.230) at min(decision ATR, the 2010-17 era median ATR): 15m 0.151 R at a
+             1-ATR stop in every window
+  deciding_cost replaces, never adds to, the sim's cost_r."""
 from __future__ import annotations
 
 import hashlib
@@ -267,7 +269,10 @@ def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: 
                   costs: CostModel | None = None) -> DecidingCost:
     """EVAL-2 deciding cost in R at 1.0x (module docstring): max(today, bp engine) + overshoot x (stop-exit share +
     stop-entry share) + swap (never a credit) + the positive S5 gap until S5 passes. Every term is >= 0. `costs`: the
-    window's model for the swap (None = default_model, benchmark rates 0, synthetic tests only)."""
+    window's model for the swap; required (None raises MissingCost). deciding_cost replaces, never adds to, the sim's
+    cost_r."""
+    if costs is None:
+        raise MissingCost("deciding cost needs the window's CostModel")
     if window not in WINDOWS_EVAL2:
         raise ValueError(f"deciding cost: unknown window {window!r}")
     for share in (stop_exit_share, stop_entry_share):
@@ -279,7 +284,7 @@ def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: 
     today_r = rt / (stop_atr * float(pin["atr_today_usd"][tf]))
     bp_engine_r = rt / float(pin["pin_price_usd"]) * price / stop
     overshoot_r = max(today_r, bp_engine_r) * osh / rt * (stop_exit_share + stop_entry_share)
-    swap_r = max(0.0, (costs or default_model()).financing(inst, side, price, t_fill_ns, t_exit_ns)) / stop
+    swap_r = max(0.0, costs.financing(inst, side, price, t_fill_ns, t_exit_ns)) / stop
     gaps = pin["s5_gap_usd"].get(broker)
     if gaps is None:
         raise MissingCost(f"deciding cost: no S5 fill-vs-replay gap for broker {broker!r}")
@@ -291,9 +296,11 @@ def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: 
 
 
 def stress_cost(inst: str, tf: str, *, atr_decision: float, stop_atr: float) -> float:
-    """The stress line in R: today's $-constant round trip at the decision ATR (2010-17 $-constant; 15m 0.151 R at
-    the era median ATR). Reported, never gated, and not the deciding cost."""
-    return float(_pin(inst, tf)["stress_rt_usd"]) / _stop_usd(atr_decision, stop_atr)
+    """The stress line in R: today's $-constant round trip at the 2010-17 level, stress_rt_usd / (stop_atr x
+    min(atr_decision, era ATR)): 15m 0.151 R at a 1-ATR stop. Reported, never gated, and not the deciding cost."""
+    pin = _pin(inst, tf)
+    _stop_usd(atr_decision, stop_atr)
+    return float(pin["stress_rt_usd"]) / (stop_atr * min(atr_decision, float(pin["era_atr_2010_17_usd"][tf])))
 
 
 def cost_sensitive(net_at_stress_r: float) -> bool:
