@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -36,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from goldbot.research.registry import _refuse_mirror, is_trial, mirror_marker
+from goldbot.research.registry import TrialRegistry, _refuse_mirror, is_trial, mirror_marker
 
 REPO = "engraamirkhan/goldbot"
 TAG = "research-v1"
@@ -603,8 +604,13 @@ MIRROR_MODE = 0o444
 
 def ssh_fetch(host: str = BRAIN_HOST, remote: str = BRAIN_REGISTRY, *, ssh_config: Path = SSH_CONFIG,
               user: str = BRAIN_USER) -> bytes:
-    """The brain's registry bytes, read over ssh as the service user (`sudo -u goldbot cat`, nothing written)."""
-    cmd = ["ssh", "-F", str(ssh_config), "-o", "BatchMode=yes", host, "sudo", "-n", "-u", user, "cat", remote]
+    """The brain's registry bytes, read over ssh as the service user (`sudo -u goldbot cat`, nothing written). The
+    remote shell re-parses the command line, so the path is shell-quoted; `--` ends ssh's options and a host that
+    looks like one (`-oProxyCommand=...`) is refused outright."""
+    if not host or host.startswith("-"):
+        raise ValueError(f"ssh host {host!r} looks like an option: refusing")
+    cmd = ["ssh", "-F", str(ssh_config), "-o", "BatchMode=yes", "--", host,
+           "sudo", "-n", "-u", shlex.quote(user), "cat", shlex.quote(remote)]
     try:
         r = subprocess.run(cmd, capture_output=True, check=False, timeout=SSH_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
@@ -633,8 +639,10 @@ def _write_atomic(path: Path, data: bytes, mode: int) -> None:
 def pull_brain(local: Path, *, fetch: Callable[[], bytes] | None = None, source: str | None = None) -> int:
     """Replace `local` with the brain's registry as a read-only mirror. Every row must parse; a copy that is empty or
     lacks any key of the current local copy is refused and `local` is left as it was. Writes the marker
-    `<local>.mirror` (source, sha256, rows, pulled_at), then the copy, byte for byte, atomically and 0444. Returns the
-    row count."""
+    `<local>.mirror` (source, sha256, rows, pulled_at), then the copy, byte for byte, atomically and 0444. A local
+    `failed` row the brain's copy replaced by a repair (`_superseded`, scripts/registry_repair.py) is not a shrink.
+    The read of `local`, the check and both writes run under the registry lock (`TrialRegistry.locked`); the ssh read
+    runs before it. Returns the row count."""
     data = (fetch or ssh_fetch)()
     src = source or f"{BRAIN_HOST}:{BRAIN_REGISTRY}"
     try:
@@ -643,15 +651,16 @@ def pull_brain(local: Path, *, fetch: Callable[[], bytes] | None = None, source:
         raise ValueError(f"the copy from {src} has a row that does not parse: {exc}; mirror left as it was") from exc
     if not rows:
         raise ValueError(f"the copy from {src} has no rows: refusing to mirror an empty registry")
-    missing = _keys(read_rows(local)) - _keys(rows)
-    if missing:
-        raise ValueError(f"the copy from {src} ({len(rows)} rows) lacks {len(missing)} key(s) the local registry "
-                         f"holds (e.g. {sorted(missing)[0]}): refusing to shrink the mirror")
     local.parent.mkdir(parents=True, exist_ok=True)
-    marker = {"source": src, "sha256": hashlib.sha256(data).hexdigest(), "rows": len(rows),
-              "pulled_at": datetime.now(timezone.utc).isoformat()}
-    _write_atomic(mirror_marker(local), (json.dumps(marker, indent=1) + "\n").encode(), 0o644)
-    _write_atomic(local, data, MIRROR_MODE)
+    with TrialRegistry(local).locked():
+        missing = _keys(read_rows(local)) - _keys(rows) - set(_superseded(rows))
+        if missing:
+            raise ValueError(f"the copy from {src} ({len(rows)} rows) lacks {len(missing)} key(s) the local registry "
+                             f"holds (e.g. {sorted(missing)[0]}): refusing to shrink the mirror")
+        marker = {"source": src, "sha256": hashlib.sha256(data).hexdigest(), "rows": len(rows),
+                  "pulled_at": datetime.now(timezone.utc).isoformat()}
+        _write_atomic(mirror_marker(local), (json.dumps(marker, indent=1) + "\n").encode(), 0o644)
+        _write_atomic(local, data, MIRROR_MODE)
     return len(rows)
 
 

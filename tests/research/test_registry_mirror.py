@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import stat
 from pathlib import Path
 from typing import Any
@@ -103,3 +104,60 @@ def test_without_the_marker_every_write_works(tmp_path: Path, write: str) -> Non
     before = {p: p.read_bytes() if p.exists() else None for p in files}
     _writes(reg, local)[write]()
     assert {p: p.read_bytes() if p.exists() else None for p in files} != before
+
+
+def test_a_brain_repair_of_a_local_failed_row_is_not_a_shrink(tmp_path: Path) -> None:
+    failed = {**_row(1), "status": "failed"}
+    repair = {**_row(1), "agent_id": "repair", "config_hash": "h1r", "status": "evaluated",
+              "repair": {"replaces": {k: failed[k] for k in registry_sync.KEY_FIELDS}, "trial": 1}}
+    local = _local(tmp_path, [failed])
+    brain = registry_sync.merge_rows([failed], [repair])
+    assert registry_sync._key(failed) not in {registry_sync._key(r) for r in brain}
+    assert registry_sync.pull_brain(local, fetch=lambda: _encode(brain), source="brain") == 1
+    assert Path(f"{local}.mirror").exists()
+
+
+def test_the_pull_holds_the_registry_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    local = _local(tmp_path, [_row(1)])
+    lock = local.with_suffix(local.suffix + ".lock")
+    seen: list[bool] = []
+    real = registry_sync._write_atomic
+
+    def spy(path: Path, data: bytes, mode: int) -> None:
+        seen.append(lock.exists())
+        real(path, data, mode)
+
+    monkeypatch.setattr(registry_sync, "_write_atomic", spy)
+    registry_sync.pull_brain(local, fetch=lambda: _encode([_row(1), _row(2)]), source="brain")
+    assert seen == [True, True]
+    assert not lock.exists()
+
+
+class _Done:
+    returncode, stdout, stderr = 0, b"", b""
+
+
+@pytest.mark.parametrize("remote", ["/opt/a b/reg.jsonl", "/opt/x.jsonl; rm -rf ~"])
+def test_ssh_quotes_the_remote_path_and_ends_options_before_the_host(
+        monkeypatch: pytest.MonkeyPatch, remote: str) -> None:
+    calls: list[list[str]] = []
+
+    def run(cmd: list[str], **kw: Any) -> _Done:
+        calls.append(cmd)
+        return _Done()
+
+    monkeypatch.setattr(registry_sync.subprocess, "run", run)
+    registry_sync.ssh_fetch("goldbot-brain", remote, ssh_config=Path("cfg"))
+    cmd = calls[0]
+    assert cmd[cmd.index("goldbot-brain") - 1] == "--"
+    assert cmd[-1] == shlex.quote(remote)
+    assert shlex.split(cmd[-1]) == [remote]
+
+
+def test_a_host_that_looks_like_an_ssh_option_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(*a: Any, **kw: Any) -> None:
+        pytest.fail("ssh must not run")
+
+    monkeypatch.setattr(registry_sync.subprocess, "run", run)
+    with pytest.raises(ValueError, match="host"):
+        registry_sync.ssh_fetch("-oProxyCommand=touch x", "/opt/x.jsonl")

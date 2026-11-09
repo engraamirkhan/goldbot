@@ -10,9 +10,9 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOCAL=${1:-$ROOT/state/research_registry.jsonl}
-PY="$ROOT/.venv/bin/python"
-[ -x "$PY" ] || PY="uv run -q python"
+PY=("$ROOT/.venv/bin/python")
+[ -x "${PY[0]}" ] || PY=(uv run -q python)
 args=(--ssh-config "$HOME/.ssh/goldbot.conf" --host "${BRAIN_HOST:-goldbot-brain}")
 [ -n "${BRAIN_REGISTRY:-}" ] && args+=(--remote "$BRAIN_REGISTRY")
 cd "$ROOT"
-$PY -m goldbot.research.registry_sync pull-brain "$LOCAL" "${args[@]}"
+"${PY[@]}" -m goldbot.research.registry_sync pull-brain "$LOCAL" "${args[@]}"
