@@ -56,6 +56,7 @@ from goldbot.engine import (
     key_zones,
     order_send,
     pilot,
+    terminal_account,
     unconfirmed,
     weekend_lane,
 )
@@ -521,6 +522,10 @@ class Engine:
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         # an account_positions() read for the kill switch is failing (logged and journalled once per streak, C6)
         self._kill_book_failing = False
+        # trading-safety R1 (engine/terminal_account.py): the start check, run again on every account read; set by the
+        # engine service (None: no terminal to check, as the paper broker). The reason while the terminal is elsewhere
+        self.verify_account: Callable[[AccountInfo], str | None] | None = None
+        self._terminal_mismatch: str | None = None
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -1413,6 +1418,9 @@ class Engine:
     def _read_positions(self, then: str) -> list[Position] | None:
         """The broker's positions, or None when the read fails (MT5 positions_get returning None raises in the
         adapter): the failure is counted (`positions_unreadable`), and the caller manages nothing from it."""
+        if terminal_account.changed(self):     # R1: another account's book is never read as this one's
+            self._read_failed("positions", then, traceback=False)
+            return None
         try:
             positions = books.positions(self)   # the active book's symbol (gold: the adapter's own, unchanged)
         except Exception:
@@ -1429,7 +1437,7 @@ class Engine:
         clear the flag or drop a due close of another symbol (trading-safety C1, C3); the failure is logged and
         journalled once per streak (C6). Without the flag the scope is this engine's symbol, so `positions()` is
         complete. None when no book could be read (counted by `_read_positions`)."""
-        if self._kill_everything:
+        if self._kill_everything and not terminal_account.changed(self):   # R1: falls to the refused read below
             try:
                 book = self.broker.account_positions()
             except Exception as exc:                      # an older bridge, a terminal fault: fall back, stay pending
@@ -1447,7 +1455,12 @@ class Engine:
         return None if positions is None else (positions, not self._kill_everything)
 
     def _read_deals(self, since: pd.Timestamp) -> pd.DataFrame:
-        """The broker's deal history; a failed read (MT5 history_deals_get returning None) is counted and raised."""
+        """The broker's deal history; a failed read (MT5 history_deals_get returning None) is counted and raised. While
+        the terminal is on another account (R1) it is refused and counted as a positions read (cleared by the first
+        positions read once it is back)."""
+        if terminal_account.changed(self):
+            self._read_failed("positions", "the close is confirmed once the terminal is back", traceback=False)
+            terminal_account.refuse_read(self)
         try:
             deals = self.broker.deals_since(since)
         except Exception:
@@ -1456,15 +1469,19 @@ class Engine:
         self._read_fails["deals"] = 0
         return deals
 
-    def _read_failed(self, kind: str, then: str) -> None:
-        """Count a failed read, at most once per tick (several reads in one tick are one failure in a row)."""
+    def _read_failed(self, kind: str, then: str, *, traceback: bool = True) -> None:
+        """Count a failed read, at most once per tick (several reads in one tick are one failure in a row). A read
+        refused on purpose (`traceback` False: the terminal on another account) is counted without a traceback."""
         at = self._last_tick.ts_utc if self._last_tick is not None else None
         if at is None or self._read_fail_at.get(kind) != at or self._read_fails[kind] == 0:
             self._read_fails[kind] += 1
             self._read_fail_at[kind] = at
             if self._read_fails[kind] == 1:
                 self.decisions.append({"ts": time.time(), "action": "book_unreadable", "read": kind})
-        log.exception("%s read failed (%d in a row); %s", kind, self._read_fails[kind], then)
+        if traceback:
+            log.exception("%s read failed (%d in a row); %s", kind, self._read_fails[kind], then)
+        elif self._read_fails[kind] == 1:      # refused every tick while it lasts: once per streak (terminal_account)
+            log.warning("%s read refused: %s; %s", kind, self._terminal_mismatch, then)
 
     def _book_unreadable(self) -> int:
         """Consecutive failed broker reads (the larger of positions() and deal history)."""
@@ -1791,6 +1808,7 @@ class Engine:
         gap). Unknown magics are listed, never touched. Exploration closes are swept here too (`exploration.sweep`)."""
         if now is not None:
             self._last_reconcile = now
+        terminal_account.verified(self)     # R1: its own account read, so no orphan is adopted between two refreshes
         positions = self._read_positions("reconciliation skipped this pass")
         if positions is None:                             # the next pass retries; the per-tick stop check still guards
             return
@@ -1926,6 +1944,11 @@ class Engine:
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:
         acc = self.broker.account()
+        if not terminal_account.check(self, acc):
+            # R1: another account's figures are never this one's (equity, stages, high-water mark, risk period); its
+            # positions read is refused and counted (positions_unreadable). Entries are refused terminal_account_changed
+            self._read_positions("exposure kept from the last reading, entries refused (terminal_account_changed)")
+            return
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
@@ -3042,6 +3065,8 @@ class Engine:
                                 | ({"contract_unknown"} if self._contract is None and self._contract_tried else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
+            # R1 (engine/terminal_account.py): why the terminal is not on this account, None when it is (health FAILs)
+            "terminal_account_changed": self._terminal_mismatch,
             "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],
             "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,

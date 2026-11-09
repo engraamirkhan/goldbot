@@ -192,6 +192,7 @@ def adopt_sent(eng: Engine, cid: str, rec: SentOrder, pos: Position) -> OpenTrad
     fill found by the look-up still sends the "opened" notice and updates the card")."""
     was = rec.status
     tr = _adopt_row(eng, cid, rec, pos)
+    cost_probe.note_resolution(eng, rec.agent_id, cid, "adopted")     # R2: the ledger row says it was found open
     if was == "sending" and _card_unconfirmed(eng, cid):
         _journal(eng, rec, "opened", position=pos.position_id)
         _tell(eng, rec, "opened", notified="opened", dealt=pos.lots, entry=pos.open_price)
@@ -287,6 +288,7 @@ def adopted(eng: Engine, rec: SentOrder, p: Position) -> bool:
     correction (condition 6)."""
     was = rec.status
     rec.status, rec.position_id = "filled", p.position_id
+    cost_probe.note_resolution(eng, rec.agent_id, rec.client_order_id, "adopted")   # R2
     kind: Literal["opened", "opened_late"] | None = None
     if was == AMBIGUOUS or (was == "sending" and _card_unconfirmed(eng, rec.client_order_id)):
         kind = "opened"
@@ -374,6 +376,7 @@ def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position],
         tr, info = closed
         rec.status, rec.position_id = "filled", pid
         eng._note_closed(pid, tr, "broker_close")
+        cost_probe.note_resolution(eng, rec.agent_id, cid, "opened_closed")    # R2
         _journal(eng, rec, out, position=pid)
         facts = dict(entry=tr.open_price, exit=info["exit_price"], pnl=info["pnl"],
                      currency=eng._account_currency() or None)
@@ -381,6 +384,7 @@ def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position],
         _card(eng, rec, out, **facts)
     elif out == "no_trade":
         rec.status = "unfilled"
+        cost_probe.note_resolution(eng, rec.agent_id, cid, "unfilled")         # R2
         eng._looks.first_clean.pop(cid, None)
         _journal(eng, rec, out)
         _tell(eng, rec, out, notified=out)

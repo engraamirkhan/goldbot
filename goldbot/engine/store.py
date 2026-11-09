@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -76,6 +76,11 @@ class PendingClose(Record):
     at: UtcTimestamp
     tries: int = 0
     next_try: UtcTimestamp | None = None
+
+
+# trading-safety review 2026-11-09 R2: how the look-up (engine/unconfirmed.py) settled an order sent without a fill or a
+# definite reject, as the exploration and cost-probe ledger rows carry it
+Resolution = Literal["adopted", "opened_closed", "unfilled"]
 
 
 class SentOrder(Record):

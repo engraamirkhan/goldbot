@@ -5,6 +5,17 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
+  start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
+  `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every
+  reconciliation. On a mismatch: entries refused `terminal_account_changed` (RiskGate), the account read is not used
+  (equity, stages, high-water mark, risk period keep this account's last reading), every positions and deals read is
+  refused and counted as `positions_unreadable` (no adoption, no inferred close, no unconfirmed-order resolution from
+  the other book), engine state `terminal_account_changed` (health `engine:<account>` FAIL) and one Telegram notice each
+  way. Exits are never gated; positions keep their broker stops. Back on the account, entries resume after
+  `healthy_resume_s`. **R2:** an exploration or cost-probe ledger row settled by the BACKLOG 72 look-up carries
+  `resolution` (`adopted` / `opened_closed` / `unfilled`; JSON body only, no migration); the retcode stays as answered.
+  Golden `tests/data/engine_store_golden` regenerated for the new engine-state key only.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured

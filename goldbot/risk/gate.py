@@ -219,6 +219,9 @@ class AccountState(Record):
     holiday_thin: bool = False        # a thin-liquidity server date of the holiday list (risk.holidays)
     calendar_unavailable: bool = False  # an enabled calendar window has no calendar to judge by (fail closed)
     bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
+    # trading-safety review 2026-11-09 R1: the terminal is no longer on this engine's account
+    # (`accounts.verify_terminal_account` on an account read after start); entries are refused `terminal_account_changed`
+    terminal_account_changed: bool = False
     # BACKLOG 72 (trading-safety condition 1, the refusal path): an order the broker neither filled nor refused is still
     # unresolved, so its exposure is unknown; entries are refused `unconfirmed_order_pending` until it is settled
     unconfirmed_order: bool = False
@@ -837,6 +840,8 @@ class RiskGate:
             reasons.append("tick_error")
         if st.bridge_incompatible:
             reasons.append("bridge_incompatible")
+        if st.terminal_account_changed:
+            reasons.append("terminal_account_changed")
         if st.unconfirmed_order:
             reasons.append("unconfirmed_order_pending")
         if st.exposure_unknown or (st.group_notional is not None and st.other_group_notional is None):
