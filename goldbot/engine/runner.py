@@ -527,6 +527,10 @@ class Engine:
         self.verify_account: Callable[[AccountInfo], str | None] | None = None
         self._terminal_mismatch: str | None = None
         self._terminal_restored_at: pd.Timestamp | None = None    # every book waits healthy_resume_s from it
+        # the trade server this account was last verified on, and whether a flagged read named another one (then no
+        # close goes by ticket: tickets are unique per server only; terminal_account.by_ticket). Never logged
+        self._terminal_server: str | None = None
+        self._terminal_other_server = False
         self._terminal_checked_at: pd.Timestamp | None = None     # no_quote_pass's own check, every reconcile_every_s
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
@@ -1670,7 +1674,10 @@ class Engine:
             return
         if terminal_account.changed(self):
             # R1: exits are never gated. No book can be read, so each due close is sent by its ticket (unique per
-            # server: on another login it is refused, 10013, and stays due) and none is dropped as gone
+            # server: on another login it is refused, 10013, and stays due) and none is dropped as gone. On another
+            # trade server nothing is sent: the broker's stops hold the positions until the terminal is back
+            if not terminal_account.by_ticket(self):
+                return
             for pid in due:
                 action, extra, _ = self._close_due[pid]
                 self._try_close(pid, action, now, **extra)
@@ -1707,7 +1714,9 @@ class Engine:
             return
         if terminal_account.changed(self):
             # R1: the broker's stop cannot be read, so a trade through this engine's stop is closed by its ticket
-            # (another login refuses it; a false positive closes it, as its stop would)
+            # (another login refuses it; a false positive closes it, as its stop would); never on another server
+            if not terminal_account.by_ticket(self):
+                return
             for pid, tr in through:
                 if pid not in self._close_due:
                     self._try_close(pid, "engine_stop_close", now, sl=tr.sl, broker_sl=None)
@@ -2197,7 +2206,7 @@ class Engine:
         try:
             read = self._read_kill_book("the kill switch runs again next tick")
             if read is None:
-                if terminal_account.changed(self):
+                if terminal_account.changed(self) and terminal_account.by_ticket(self):
                     # R1: no book can be read; the tickets this engine knows are closed by ticket (another login
                     # refuses them), never another account's. Not flat: it runs again once the terminal is back
                     for pid, tr in list(self.open.items()):

@@ -26,7 +26,10 @@ alert." Concretely, while the terminal is on another account:
   its ticket (`_stop_check`, without the broker's stop to compare), and the kill switch closes the tickets this engine
   knows (never re-reading the whole account, never seen flat). MT5 tickets are unique per server, so on another login
   such a close is refused (10013) and stays due; on this account it closes. The positions rest with their broker-side
-  stop and target meanwhile;
+  stop and target meanwhile. Residual-risk ruling (safety re-check): tickets are unique per trade SERVER only, so
+  while the read names another server than the one this account was last seen on (`_terminal_other_server`) nothing
+  is sent by ticket (`by_ticket`); the broker's stops protect the positions until the terminal is back. A check that
+  raised, a read with no server, or another login on the same server still send. No server name is ever logged;
 * the engine state carries the reason (`terminal_account_changed`), health FAILs on it (alerted on Telegram), and the
   owner is told once when it starts and once when the terminal is back.
 
@@ -70,11 +73,14 @@ def check(eng: Engine, info: Any) -> bool:
     verify = eng.verify_account
     if verify is None:
         return True
+    raised = False
     try:
         why = verify(info)
     except Exception as exc:  # noqa: BLE001 - a reply the check cannot read is never this account (fail closed)
-        why = f"the terminal's account could not be checked ({type(exc).__name__})"
+        why, raised = f"the terminal's account could not be checked ({type(exc).__name__})", True
+    server = str(getattr(info, "server", "") or "").strip()     # compared only; never logged or told
     if why is None:
+        eng._terminal_server, eng._terminal_other_server = server or eng._terminal_server, False
         if eng._terminal_mismatch is not None:
             eng._terminal_mismatch = None
             eng._terminal_restored_at = _now(eng)
@@ -87,6 +93,9 @@ def check(eng: Engine, info: Any) -> bool:
         return True
     first = eng._terminal_mismatch is None
     eng._terminal_mismatch = why
+    # residual-risk ruling: only a read that names another, known trade server stops the by-ticket closes
+    eng._terminal_other_server = not raised and bool(server) and eng._terminal_server is not None \
+        and server != eng._terminal_server
     eng.state.terminal_account_changed = True
     eng._unhealthy_at = _now(eng)
     if first:
@@ -97,6 +106,15 @@ def check(eng: Engine, info: Any) -> bool:
                    "entries are refused and nothing is read from the other account; open trades keep their stops "
                    "and targets at the broker. Log the terminal back in to this account; trading resumes by itself.")
     return False
+
+
+def by_ticket(eng: Engine) -> bool:
+    """Whether a close may be sent by its ticket while the terminal is flagged (`_retry_closes`, `_stop_check`, the
+    kill switch). MT5 tickets are unique per trade server only, so not while the terminal is on ANOTHER server than the
+    one this account was last seen on: a ticket there could be a stranger's position. The broker's own stop and target
+    protect the positions until the terminal is back. Every other case sends: a check that raised (a false positive
+    must never stop an exit), a read with no server, another login on the same server (refused there, 10013)."""
+    return not eng._terminal_other_server
 
 
 def recovering(eng: Engine, now: pd.Timestamp) -> bool:

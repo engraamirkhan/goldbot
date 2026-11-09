@@ -22,6 +22,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   kill switch checks before a whole-account read; a re-arm waits unconsumed (`rearm_refused` terminal_account_changed;
   re-arm source pin in tests/test_demo_roll.py updated); a closed record takes the engine's equity; `note_resolution`
   opens the ledger inside its try; every book's `data_recovering` waits `healthy_resume_s` from the restore.
+  Residual-risk ruling: while a flagged read names another trade server than the one the account was last verified on
+  (`_terminal_other_server`), nothing is closed by ticket (tickets are unique per server only); the broker's SL/TP hold
+  the positions until the terminal is back. A raised check, an empty server or another login on the same server still
+  send. No server name is logged.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured

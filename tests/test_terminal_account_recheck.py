@@ -50,13 +50,14 @@ class _Terminal:
         self.books[OTHER]._ids = itertools.count(900_001)   # tickets unique per server, as MT5's
         self.login = LOGIN
         self.sends = 0
+        self.servers = {LOGIN: SERVER, OTHER: SERVER}       # another login on the same trade server, by default
 
     def __getattr__(self, name: str) -> Any:      # reads only: anything not defined here is the active login's
         return getattr(self.__dict__["books"][self.__dict__["login"]], name)
 
     def account(self) -> AccountInfo:
         info = self.books[self.login].account()
-        return info.model_copy(update={"login": self.login, "server": SERVER, "trade_mode": "demo",
+        return info.model_copy(update={"login": self.login, "server": self.servers[self.login], "trade_mode": "demo",
                                        "margin_mode": "hedging"})
 
     def on_tick(self, t: Any) -> None:
@@ -320,3 +321,67 @@ def test_every_book_waits_out_the_resume_delay_after_the_restore(tmp_path):
     term.on_tick(_tick(later))
     eng._refresh_account(_tick(later))
     assert eng.gate.account_reasons(eng.state) == []
+
+
+# ---------------------------------------------------------------------------------------------- residual-risk ruling
+OTHER_SERVER = "Elsewhere-Live"     # made up
+
+
+def _closes_sent(eng: Engine) -> list[tuple[str, int]]:
+    return [(d["action"], d["position"]) for d in eng.decisions
+            if d.get("action") in ("time_exit", "engine_stop_close", "kill_switch_close")]
+
+
+def _on_other_server(tmp_path: Path) -> tuple[Engine, _Terminal, int]:
+    eng, term, _ = _running(tmp_path)
+    [own] = list(eng.open)
+    term.servers[OTHER] = OTHER_SERVER
+    term.login = OTHER
+    eng._refresh_account(_tick(WED))
+    assert "terminal_account_changed" in eng.gate.account_reasons(eng.state)
+    return eng, term, own
+
+
+def test_a_switch_to_another_trade_server_sends_no_close_by_ticket(tmp_path, caplog):
+    eng, term, own = _on_other_server(tmp_path)
+    eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
+    eng._retry_closes(WED + pd.Timedelta(seconds=30))
+    eng._stop_check(_tick(WED + pd.Timedelta(seconds=31), bid=SL - 1.0))
+    eng._kill_switch(everything=True)
+    assert _closes_sent(eng) == []                       # tickets are unique per server only: nothing is sent
+    assert own in eng._close_due and own in eng.open and len(_other_book(term)) == 1   # kept, its stops at the broker
+    text = " ".join(_notices(tmp_path)) + caplog.text + json.dumps(eng.decisions, default=str)
+    assert OTHER_SERVER not in text and SERVER not in text       # never a server name
+
+
+def test_back_on_the_account_after_another_server_closes_by_ticket_again(tmp_path):
+    eng, term, own = _on_other_server(tmp_path)
+    term.login = LOGIN
+    eng._refresh_account(_tick(WED))
+    assert eng._terminal_other_server is False
+    eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
+    eng._retry_closes(WED + pd.Timedelta(seconds=30))
+    assert _closes_sent(eng) == [("time_exit", own)]
+
+
+@pytest.mark.parametrize("check_raises", [False, True])
+def test_another_login_on_the_same_server_or_a_check_that_raised_still_sends_every_close(tmp_path, check_raises):
+    eng, term, _, own = _switched(tmp_path, check_raises=check_raises)
+    assert eng._terminal_other_server is False
+    eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
+    eng._retry_closes(WED + pd.Timedelta(seconds=30))
+    eng._kill_switch(everything=True)
+    sent = _closes_sent(eng)
+    assert ("time_exit", own) in sent
+
+
+def test_an_empty_server_in_the_read_still_sends_by_ticket(tmp_path):
+    eng, term, _ = _running(tmp_path)
+    [own] = list(eng.open)
+    term.servers[OTHER] = ""
+    term.login = OTHER
+    eng._refresh_account(_tick(WED))
+    assert eng._terminal_mismatch is not None and eng._terminal_other_server is False
+    eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
+    eng._retry_closes(WED + pd.Timedelta(seconds=30))
+    assert _closes_sent(eng) == [("time_exit", own)]
