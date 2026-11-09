@@ -266,7 +266,7 @@ caller (`l3_read` has no `resamples` argument). Test: `tests/test_eval2_confirm.
 asserts the resamples `l3_read` uses at j = 15, m = 3 are >= 386,889 = ceil(60 / alpha_15) with the exact
 alpha_15 = 0.1 x gamma_15 = 0.000155083 (re-derived; the 387,097 in the condition as relayed is ceil(60 / 0.000155),
 alpha_15 rounded to 3 significant figures, which an exact implementation does not reach, so the test uses the exact
-value and the quant confirms it).
+value; quant confirmed 386,889 on 2026-11-09). The test computes the bound from `gamma(15)` (ceil(20 * 3 / (0.1 * gamma(15)))) and never hard-codes the number.
 
 ### 4.7 Futility (Lane 3, `goldbot/research/screen.py`; settings in `goldbot/config.py`)
 ```python
