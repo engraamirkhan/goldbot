@@ -65,6 +65,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - **Lane 1 follow-ups.** `sim.session_day` now uses `costs.rollover_table()`. The full S0 random-walk test
   (`test_catalogue_harness_sane`) now carries `@pytest.mark.selftest` instead of the `GOLDBOT_SELFTEST` skipif.
   `selftest.yml` paths now also cover the script, the cost table and the self-test files.
+- **Lane 4 review fixes (2026-11-09).** S0 now reads the cell floor under amendment A1 (prereg section 9, signed
+  by the quant and countersigned by the research director). On the same real-bar run: gross K 19, F 2 <= F_crit 5,
+  P(F >= 2) 0.61; excess K 19, F 3 <= 6, P 0.47; no severe cell at t <= -3.01. The literal floor stays in every
+  report. The sign-flipped skeleton route is built and self-checked before it is ever relied on: on a mean-reverting
+  path NULL gross is -0.065 R (t -2.64), and on its skeleton +0.007 R (t 0.27). S0 reads BLOCKED, never PASS, until
+  the L2 half of the sentinels runs on Lane 3. `assert_harness_sane(hash)` is the gate for the L2/L3 runner. The
+  harness hash now covers stats, lint, run, specs, both detector files and `goldbot/research/eval2/*`. S3 reads
+  BLOCKED while its L2 half and the two cost plants are missing. S6 now also cuts the context (aux series by
+  availability) and runs cross-sectional units. It names the detectors that need a next bar to exist: B04 30m,
+  C09 1h, S04 4h, S06 1d, S08 4h. S05-S07 read future scheduled calendar dates by design. S1 is built as three
+  arms against Lane 3's API: NULL geometry, batch-1 signals circularly shifted, and sign-flipped excess. Catalogue bar
+  caches record their window span: a foreign, early or late cache fails closed, and a legacy cache is rebuilt.
 - 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
   EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
   live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
