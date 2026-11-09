@@ -5,6 +5,15 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **EVAL-2 Lane 1, twins (R107, quant approved 2026-11-09).** `goldbot/research/catalogue/sim.py` draws up to 20
+  replay-only twins per signal from decision bars after its exit (intraday 7 days, 1d 20 bars), same side and hour
+  +/-1 h, never on a bar where the family fires or past the window end, without replacement (a smaller pool is used
+  whole; M_eff in `n_twins`, about 7 on 4h); stop, target and entry offset at the twin's ATR14; same replay and cost
+  path as the signal (swap by #343's rule). `run.py`: `unit_twins` (EVAL-2 `units` frame, session-day clustering on
+  the 17:00 New York clock), `read_batch_index` (2018-25 next read = batch 15, TEST-OLD = 1, every
+  `state/*_reads.jsonl`). S0 full run (`GOLDBOT_SELFTEST=1`, n 116,614): gross -0.0028 R, excess -0.0044 R (SE
+  0.0046), cell floor and chi2 dispersion pass on 15m/1h/4h/1d; se_ratio 1.085 and rho 0.027 are diagnostics, never a
+  multiplier. Lane 1's S0 runs on synthetic martingale walks (harness unit check). Method S0 on real explore bars (NULL-RAND, all TFs, 20 twins, same thresholds) is Lane 4's and must be green before any L2 run; S21 stays blocked until it is.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured
