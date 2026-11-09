@@ -44,6 +44,7 @@ from goldbot.research.catalogue.sim import (
     TwinDraw,
     draw_twins,
     excess_r,
+    session_day,
     simulate,
     simulate_twins,
 )
@@ -63,6 +64,7 @@ CODE_PATH = "goldbot/research/catalogue"
 # Prereg 2026-11-09 section 3.2 / 6.1: 2018-01..2025-09 was read in batches 1-14 before EVAL-2 (P1-P9, F1-F5, in
 # true read order, each credited 0 rejections; F6 and F7 read no outcomes and are not batches); TEST-OLD never.
 PRIOR_READ_BATCHES = {"confirm": 14, "test_old": 0}
+PRIOR_CUTOFF = datetime(2026, 11, 9, tzinfo=timezone.utc)   # reads stamped before this are in PRIOR_READ_BATCHES
 
 
 def out_dir() -> Path:
@@ -177,14 +179,26 @@ def prebuild(win: str, all_units: list[dict[str, Any]], *, allow_test_old: bool 
 
 # ------------------------------------------------------------------ EVAL-2 read batches and twins
 def read_batch_index(window: Literal["test_old", "confirm"]) -> int:
-    """The BatchPRDS index the NEXT read of `window` takes (call it before `_claim`): the prereg's earlier batches
-    (PRIOR_READ_BATCHES) + the catalogue ledger's reads of the window + 1. A `resume` row continues a read, it is no
-    batch. Batches are numbered in true read order (`true_read_ts`, prereg section 2); every ledger read follows the
-    prior batches, so the next index is the count. First EVAL-2 read: 2018-25 batch 15, TEST-OLD batch 1."""
-    led = default_registry().with_name(READS_LEDGER)
-    rows = [json.loads(x) for x in led.read_text().splitlines() if x.strip()] if led.exists() else []
-    reads = sum(1 for r in rows if r.get("window") == window and not r.get("resume"))
+    """The BatchPRDS index the NEXT read of `window` takes (call it before `_claim`). Quant round 2:
+    "PRIOR_READ_BATCHES[window] + the reads of `window` in every `state/*_reads.jsonl` (excluding `resume` rows and any
+    row stamped before 2026-11-09, already in the prior count) + 1". The stamp is `true_read_ts` where a row has one
+    (backfilled rows carry ts 2026-11-09, prereg section 2), else `ts`; a row whose stamp does not parse counts (a
+    higher index only lowers the level). First EVAL-2 read: 2018-25 batch 15, TEST-OLD batch 1."""
+    reads = 0
+    for led in sorted(default_registry().parent.glob("*_reads.jsonl")):
+        for line in led.read_text().splitlines():
+            r = json.loads(line) if line.strip() else {}
+            if r.get("window") == window and not r.get("resume") and not _before_prior_cutoff(r):
+                reads += 1
     return PRIOR_READ_BATCHES[window] + reads + 1
+
+
+def _before_prior_cutoff(row: dict[str, Any]) -> bool:
+    try:
+        ts = datetime.fromisoformat(str(row.get("true_read_ts") or row.get("ts")))
+    except ValueError:
+        return False
+    return (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)) < PRIOR_CUTOFF
 
 
 def family_fire(family: str, win: str, ctx: Any, *, allow_test_old: bool = False) -> dict[tuple[str, str], np.ndarray]:
@@ -208,7 +222,7 @@ def unit_twins(u: dict[str, Any], win: str, ctx: Any, *, allow_test_old: bool = 
     """EVAL-2 instances of a unit with M = 20 twins each (method v6 section 2; prereg section 4.3 `units` columns +
     n_twins), and the draws per cell for audit. Signals are `simulate`'s trades; twins `draw_twins` (after the exit,
     off the family's fire bars, seeded by the unit id) and `simulate_twins` on the same bars, 1m fill bars and window
-    cost model. Day = UTC fill day (stats.daily). A unit with a stop/limit cell without 1m bars is excluded whole, as
+    cost model. Day = the fill's session day (`sim.session_day`, 17:00 New York; quant round 2). A unit with a stop/limit cell without 1m bars is excluded whole, as
     in dispatcher.unit_trades (C10): empty frame."""
     import pandas as pd
     costs = ctx.aux["costs"]
@@ -233,7 +247,7 @@ def unit_twins(u: dict[str, Any], win: str, ctx: Any, *, allow_test_old: bool = 
             tw = simulate_twins(b, ev, mine, costs=costs, fine=fine)
             net = tr[:, col["gross"]] - tr[:, col["cost"]]
             ex = excess_r(net, tw)
-            day = tr[:, col["t_fill"]].astype(np.int64) // DAY
+            day = session_day(tr[:, col["t_fill"]].astype(np.int64))      # clustered by session day (17:00 NY)
             n_tw = np.isfinite(tw).sum(axis=1)
             frames.append(pd.DataFrame({
                 "cell_id": f"{u['unit']}|{inst}|{tf}", "family": u["family"], "inst": inst, "tf": tf,

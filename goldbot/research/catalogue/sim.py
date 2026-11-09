@@ -59,7 +59,7 @@ from typing import Final, Sequence
 import numpy as np
 
 from goldbot.research.catalogue.core import Events, atr
-from goldbot.research.catalogue.costs import CostModel, default_model, fallback_rt, hold_nights
+from goldbot.research.catalogue.costs import CostModel, _roll_table, default_model, fallback_rt, hold_nights
 from goldbot.research.catalogue.data import DAY, HOUR, Bars
 
 GOLD_OVERSHOOT_USD = 0.11
@@ -464,13 +464,14 @@ TWIN_M: Final = 20
 TWIN_DAYS_INTRADAY: Final = 7
 TWIN_BARS_1D: Final = 20
 TWIN_HOUR_TOL_H: Final = 1
+TWIN_ATR_N = 14                  # quant round 2: Wilder ATR14 for twin geometry and pool; ATR20 only in the risk floor
 _TWIN_SPAN_BARS = {"1d": TWIN_BARS_1D, "1w": TWIN_SPAN["1w"]}     # 1w is not in the method: the A2 span (8) is kept
 
 
 @dataclass(frozen=True, slots=True)
 class TwinDraw:
     signal_k: int                  # index into Events
-    decision_bars: np.ndarray      # int64[TWIN_M]; -1 = no eligible bar
+    decision_bars: np.ndarray      # int64[TWIN_M]; -1 = no bar (pool smaller than TWIN_M, or empty)
     stratum: tuple[str, str, int, int, int | None]   # (inst, tf, side, hour_utc, regime_level)
     n_eligible: int
 
@@ -481,7 +482,7 @@ def _stratum(b: Bars, ev: Events, k: int, regime: np.ndarray | None) -> tuple[st
 
 
 def _pool(b: Bars, ev: Events, k: int, exit_bar: int, family_fire: np.ndarray, regime: np.ndarray | None,
-          a20: np.ndarray) -> np.ndarray:
+          a_tw: np.ndarray) -> np.ndarray:
     n = len(b)
     if exit_bar < 0 or exit_bar >= n - 1:
         return np.zeros(0, np.int64)
@@ -497,7 +498,7 @@ def _pool(b: Bars, ev: Events, k: int, exit_bar: int, family_fire: np.ndarray, r
     g = g[~np.asarray(family_fire, bool)[g]]
     if regime is not None:
         g = g[regime[g] == regime[i]]
-    return g[np.isfinite(a20[g]) & (a20[g] > 0)]                      # the twin's ATR must exist to scale the stop
+    return g[np.isfinite(a_tw[g]) & (a_tw[g] > 0)]                    # the twin's ATR14 must exist to scale the stop
 
 
 def twin_pool(b: Bars, ev: Events, k: int, *, exit_bar: int, family_fire: np.ndarray,
@@ -505,8 +506,8 @@ def twin_pool(b: Bars, ev: Events, k: int, *, exit_bar: int, family_fire: np.nda
     """Decision bars signal k's twins may be drawn from: after its exit bar (intraday: decided within
     TWIN_DAYS_INTRADAY days of the exit bar's close; 1d: the TWIN_BARS_1D bars after it), before the window's end,
     decision hour within TWIN_HOUR_TOL_H of the signal's, no bar where the family fires (`family_fire`, any instance
-    of any unit of the family in this cell), the signal's regime level when `regime` is given, ATR20 defined."""
-    return _pool(b, ev, k, exit_bar, family_fire, regime, atr(b, RISK_FLOOR_ATR_N))
+    of any unit of the family in this cell), the signal's regime level when `regime` is given, ATR14 defined."""
+    return _pool(b, ev, k, exit_bar, family_fire, regime, atr(b, TWIN_ATR_N))
 
 
 def _rng(seed_key: str, b: Bars, ev: Events, k: int) -> np.random.Generator:
@@ -518,15 +519,18 @@ def _rng(seed_key: str, b: Bars, ev: Events, k: int) -> np.random.Generator:
 def draw_twins(b: Bars, ev: Events, *, exits: np.ndarray, family_fire: np.ndarray, seed_key: str,
                m: int = TWIN_M, regime: np.ndarray | None = None) -> list[TwinDraw]:
     """M twin decision bars per event (`exits[k]`: the exit bar of event k's trade, -1 when it was not traded: no
-    twins). Drawn without replacement when the pool holds at least m bars, with replacement otherwise (4h and the
-    hour band leave about 7 bars); an empty pool gives -1s and NaN twins (left out of the excess, quant item 4)."""
-    a20 = atr(b, RISK_FLOOR_ATR_N)
+    twins). Quant round 2: "When the pool holds fewer than m bars, every pool bar is used once (M_eff = pool size,
+    recorded in `n_twins`); otherwise m drawn without replacement." The unused slots are -1 (NaN twins); an empty pool
+    gives no twin, and the instance is left out of the excess (quant item 4)."""
+    a_tw = atr(b, TWIN_ATR_N)
     out = []
     for k in range(len(ev)):
-        g = _pool(b, ev, k, int(exits[k]), family_fire, regime, a20)
+        g = _pool(b, ev, k, int(exits[k]), family_fire, regime, a_tw)
         bars = np.full(m, -1, np.int64)
-        if len(g):
-            bars[:] = _rng(seed_key, b, ev, k).choice(g, size=m, replace=len(g) < m)
+        if len(g) >= m:
+            bars[:] = _rng(seed_key, b, ev, k).choice(g, size=m, replace=False)
+        else:
+            bars[:len(g)] = g
         out.append(TwinDraw(k, bars, _stratum(b, ev, k, regime), int(len(g))))
     return out
 
@@ -537,16 +541,17 @@ def same_instant_draws(b: Bars, ev: Events, ks: Sequence[int]) -> list[TwinDraw]
     return [TwinDraw(int(k), np.array([int(ev.i[k])], np.int64), _stratum(b, ev, int(k), None), 1) for k in ks]
 
 
-def _twin_events(b: Bars, ev: Events, k: int, d: int, a20: np.ndarray, *, opposite: bool) -> Events | None:
+def _twin_events(b: Bars, ev: Events, k: int, d: int, a_tw: np.ndarray, *, opposite: bool) -> Events | None:
     """Event k (with its OCO sibling, as a pair) re-decided at bar d: entry offset from the decision close, stop and
-    target in the signal's ATR20 multiples scaled to bar d's ATR20; kind, validity, hold and exit masks the signal's.
-    `opposite`: each leg's side flipped and its offsets mirrored. None when either ATR20 is undefined."""
+    target in the signal's ATR14 multiples (`a_tw` = atr(b, TWIN_ATR_N)) scaled to bar d's ATR14; kind, validity, hold
+    and exit masks the signal's. `opposite`: each leg's side flipped and its offsets mirrored. None when either ATR14
+    is undefined."""
     sib = _oco_sibling(ev, k)
     legs = [k] if sib is None else sorted((k, sib))
     rows = []
     for j in legs:
         i = int(ev.i[j])
-        a_i, a_d = float(a20[i]), float(a20[d])
+        a_i, a_d = float(a_tw[i]), float(a_tw[d])
         if not (np.isfinite(a_i) and np.isfinite(a_d) and a_i > 0):
             return None
         sc = a_d / a_i
@@ -630,14 +635,15 @@ def simulate_twins(b: Bars, ev: Events, draws: Sequence[TwinDraw], *, costs: Cos
     costs.inst(b.inst)
     m = max((len(d.decision_bars) for d in draws), default=TWIN_M)
     out = np.full((len(draws), m), np.nan)
-    a20 = atr(b, RISK_FLOOR_ATR_N)
+    a20 = atr(b, RISK_FLOOR_ATR_N)                  # the risk floor only (order_risk)
+    a_tw = atr(b, TWIN_ATR_N)                       # twin geometry
     for r, dr in enumerate(draws):
         seen: dict[int, float] = {}
         for c, d in enumerate(dr.decision_bars.tolist()):
             if d < 0 or d >= len(b) - 1:
                 continue
             if d not in seen:
-                tev = _twin_events(b, ev, dr.signal_k, d, a20, opposite=opposite_side)
+                tev = _twin_events(b, ev, dr.signal_k, d, a_tw, opposite=opposite_side)
                 seen[d] = np.nan if tev is None else _replay_net(b, tev, a20, costs, fine)
             out[r, c] = seen[d]
     return out
@@ -654,8 +660,9 @@ def excess_r(signal_net: np.ndarray, twin_net: np.ndarray) -> np.ndarray:
 def twin_correlation(signal_net: np.ndarray, twin_net: np.ndarray, day: np.ndarray) -> float:
     """S0's rho: the correlation across session days of the day-summed signal net and the day-summed twin mean
     (instances with a signal and at least one twin). The finite-M variance of the day-summed excess is then
-    var(S) + var(T) - 2 rho sd(S) sd(T), which replaces the method's independent-twin 1.025x claim. NaN with fewer
-    than 3 days or a constant series."""
+    var(S) + var(T) - 2 rho sd(S) sd(T), which replaces the method's independent-twin 1.025x claim:
+    "Var(Σ excess) = Var(S) + Var(T) − 2ρ·sd(S)·sd(T); reported in S0, never used as a multiplier." (Lane 3 uses the
+    measured day-clustered SD of the 20-twin excess per cell.) NaN with fewer than 3 days or a constant series."""
     s = np.asarray(signal_net, float)
     t = s - excess_r(s, twin_net)
     ok = np.isfinite(s) & np.isfinite(t)
@@ -666,3 +673,11 @@ def twin_correlation(signal_net: np.ndarray, twin_net: np.ndarray, day: np.ndarr
     if ss.std() == 0 or ts.std() == 0:
         return float("nan")
     return float(np.corrcoef(ss, ts)[0, 1])
+
+
+def session_day(t_ns: np.ndarray) -> np.ndarray:
+    """Session day (epoch day number of the New York date on which the session ends) of instants `t_ns`: a session runs
+    from one 17:00 New York rollover to the next (#343's rollover table, costs.rollovers_between). An instant AT a
+    rollover opens the new session, as a fill at the rollover is held from after it. EVAL-2 clusters by this day."""
+    d0, r = _roll_table()
+    return (np.searchsorted(r, np.asarray(t_ns, np.int64), "right") + d0).astype(np.int64)
