@@ -439,7 +439,9 @@ def test_the_roll_reads_nothing_from_the_broker_on_a_live_account(tmp_path, monk
 # mark-lowering path on a real-money account (ADR 0043 R1, ADR 0049 D3 "the ADR 0043 K2 re-arm path stays as it is").
 # Its source is pinned: changing it needs a trading-safety review, and the pin is updated in that same PR.
 REARM_PATH_SHA256 = {
-    "Engine._poll_rearm": "37a9d935138d30d0fdcc7bd2af7b3db84e7e8f093c75145b152e9991fc9f0df9",
+    # trading-safety R1 finding 4 (fix/account-recheck-1109): the re-arm waits, unconsumed, while the terminal is on
+    # another account (its account read is checked); reviewed in that PR's trading-safety round
+    "Engine._poll_rearm": "3854dfab25196f42c37088b2fa18928b939e38b13af12342222d426da2f3a290",
     "Engine._rearm_conditions": "8460d520bd750f874fbb416f643dc201675b4fb03ce453a49309beccdf22c519",
     "RiskGate.rearm": "0f5656464592607aa3b434fae1aad74e4c6fcf134455ef90fb5f3c6387496d94",
     # trading-safety F6 on PR #290: the stage machine and the owner's reset of the dynamic-limit revert

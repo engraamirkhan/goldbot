@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
 
-from goldbot.engine import demo_roll
+from goldbot.engine import demo_roll, terminal_account
 from goldbot.risk import hwm
 from goldbot.risk.gate import _risk_week, new_day
 
@@ -25,11 +25,16 @@ def roll_risk_period(eng: Engine, now: pd.Timestamp) -> None:
     """Daily and weekly loss caps roll over at the risk-day / risk-week boundary (gate.new_day); the reset time is
     persisted so a restart neither resets twice in one day nor skips a boundary. At a genuine boundary (not the first
     start) a paused demo probe host is then offered the ADR 0049 D3 demo roll (`demo_roll.at_day_roll`; every other
-    account returns there before any read). Moved from `Engine._roll_risk_period` unchanged but for that call."""
+    account returns there before any read). Moved from `Engine._roll_risk_period` unchanged but for that call.
+    Trading-safety R1 (engine/terminal_account.py): the read is checked first; while the terminal is on another account
+    nothing is touched and `_last_reset` stays, so the roll happens on the first read once it is back."""
     last = eng._last_reset
     if last is not None and now.tz_convert("UTC").date() == last.tz_convert("UTC").date():
         return
-    eng.state.equity = eng.broker.account().equity
+    acc = eng.broker.account()
+    if not terminal_account.check(eng, acc):
+        return
+    eng.state.equity = acc.equity
     week = last is None or _risk_week(now) != _risk_week(last)
     if new_day(eng.state, now, last):
         eng._last_reset = now

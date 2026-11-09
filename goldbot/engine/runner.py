@@ -526,6 +526,8 @@ class Engine:
         # engine service (None: no terminal to check, as the paper broker). The reason while the terminal is elsewhere
         self.verify_account: Callable[[AccountInfo], str | None] | None = None
         self._terminal_mismatch: str | None = None
+        self._terminal_restored_at: pd.Timestamp | None = None    # every book waits healthy_resume_s from it
+        self._terminal_checked_at: pd.Timestamp | None = None     # no_quote_pass's own check, every reconcile_every_s
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -761,6 +763,10 @@ class Engine:
         now = self._host_now()
         if self._quote_invalid_since is None:
             self._quote_invalid_since = now
+        last = self._terminal_checked_at     # R1: no refresh runs without a quote, so the account is checked here
+        if last is None or (now - last).total_seconds() >= self.cfg.reconcile_every_s:
+            self._terminal_checked_at = now
+            self._guard(lambda: terminal_account.verified(self))
         self._guard(lambda: self._retry_closes(now))
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._guard(lambda: self._kill_switch(everything=False))
@@ -1437,7 +1443,9 @@ class Engine:
         clear the flag or drop a due close of another symbol (trading-safety C1, C3); the failure is logged and
         journalled once per streak (C6). Without the flag the scope is this engine's symbol, so `positions()` is
         complete. None when no book could be read (counted by `_read_positions`)."""
-        if self._kill_everything and not terminal_account.changed(self):   # R1: falls to the refused read below
+        # R1: a whole-account read is checked first (its own account read); on another account it falls to the refused
+        # read below and `_kill_switch` closes the tickets it knows
+        if self._kill_everything and terminal_account.verified(self) and not terminal_account.changed(self):
             try:
                 book = self.broker.account_positions()
             except Exception as exc:                      # an older bridge, a terminal fault: fall back, stay pending
@@ -1660,6 +1668,14 @@ class Engine:
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
+        if terminal_account.changed(self):
+            # R1: exits are never gated. No book can be read, so each due close is sent by its ticket (unique per
+            # server: on another login it is refused, 10013, and stays due) and none is dropped as gone
+            for pid in due:
+                action, extra, _ = self._close_due[pid]
+                self._try_close(pid, action, now, **extra)
+            self._save_orders()
+            return
         read = self._read_kill_book("closes are retried next tick")
         if read is None:
             return
@@ -1688,6 +1704,14 @@ class Engine:
                    if tr.sl is not None and tr.side * ((t.bid if tr.side > 0 else t.ask) - tr.sl) <= 0
                    and not self._retry_wait(pid, now)]
         if not through:
+            return
+        if terminal_account.changed(self):
+            # R1: the broker's stop cannot be read, so a trade through this engine's stop is closed by its ticket
+            # (another login refuses it; a false positive closes it, as its stop would)
+            for pid, tr in through:
+                if pid not in self._close_due:
+                    self._try_close(pid, "engine_stop_close", now, sl=tr.sl, broker_sl=None)
+            self._save_orders()
             return
         positions = self._read_positions("the engine stop check is retried next tick")
         if positions is None:
@@ -2009,8 +2033,9 @@ class Engine:
             self._unhealthy_at = now
             st.data_recovering = False        # the error itself blocks; recovery starts when it clears
         else:
-            st.data_recovering = self._unhealthy_at is not None and \
-                (now - self._unhealthy_at).total_seconds() < self.cfg.healthy_resume_s
+            st.data_recovering = (self._unhealthy_at is not None and
+                                  (now - self._unhealthy_at).total_seconds() < self.cfg.healthy_resume_s) \
+                or terminal_account.recovering(self, now)      # R1: every book, not only the one that saw it
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             sup = Supervisor.read_state(self.cfg.state_dir)
@@ -2172,6 +2197,12 @@ class Engine:
         try:
             read = self._read_kill_book("the kill switch runs again next tick")
             if read is None:
+                if terminal_account.changed(self):
+                    # R1: no book can be read; the tickets this engine knows are closed by ticket (another login
+                    # refuses them), never another account's. Not flat: it runs again once the terminal is back
+                    for pid, tr in list(self.open.items()):
+                        if pid not in self._close_due:
+                            self._try_close(pid, "kill_switch_close", None, symbol=self.cfg.symbol, lots=tr.lots)
                 return False
             book, complete = read
             scope = [p for p in book if whole or self._own(p.magic)]
@@ -2339,7 +2370,11 @@ class Engine:
         c = self.center.bus.control()
         if c.rearm_id is None or c.rearm_id == self._rearm_seen:
             return
-        self._rearm_seen = c.rearm_id
+        if terminal_account.changed(self):
+            # R1: the re-arm reads the account; while the terminal is on another account it waits, unconsumed
+            self._rearm_refused = terminal_account.REASON
+            return
+        prev, self._rearm_seen = self._rearm_seen, c.rearm_id
         was_normal = self.state.stage == Stage.NORMAL and not self.state.combined_size_down
         if self.state.stage == Stage.HALTED:
             refused = self._rearm_conditions(now)
@@ -2348,7 +2383,11 @@ class Engine:
                 self.decisions.append({"ts": time.time(), "action": "rearm_refused", "by": c.rearm_by,
                                        "rearm_id": c.rearm_id, "reason": refused})
             else:
-                self.state.equity = self.broker.account().equity
+                acc = self.broker.account()
+                if not terminal_account.check(self, acc):     # R1: switched since the last read: wait, unconsumed
+                    self._rearm_seen, self._rearm_refused = prev, terminal_account.REASON
+                    return
+                self.state.equity = acc.equity
                 if self.gate.rearm(self.state, REARM_PHRASE):
                     self._rearm_refused, self._halted_at = None, None
                     self._propose_only_until = now + pd.Timedelta(days=self.cfg.rearm_propose_days)

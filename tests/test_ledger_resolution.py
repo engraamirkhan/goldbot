@@ -114,3 +114,15 @@ def test_an_ordinary_agent_s_settled_order_touches_no_ledger(tmp_path, clock):
     _look(eng)
     assert eng._orders[PID].status == "filled"
     assert not (tmp_path / "aux.db").exists() or _row(tmp_path, ARM) is None
+
+
+def test_a_ledger_that_cannot_be_opened_never_raises_from_the_look_up(tmp_path, clock, monkeypatch):
+    pb = _broker(retcode=-1, fill=0.1)
+    eng = _sent(tmp_path, pb, ARM)
+
+    def unopenable(*a: Any, **k: Any) -> Any:
+        raise OSError("disk gone")
+    monkeypatch.setattr(exploration, "ledger_db", unopenable)
+    monkeypatch.setattr(cost_probe.Database, "open", unopenable)
+    cost_probe.note_resolution(eng, ARM, PID, "adopted")          # logged, never raised
+    cost_probe.note_resolution(eng, PROBE, PID, "adopted")

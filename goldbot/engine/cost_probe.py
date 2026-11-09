@@ -1201,16 +1201,16 @@ def note_resolution(eng: Engine, agent_id: str, cid: str, resolution: Resolution
     (`resolution`). Only an existing row is updated (`_place` writes it at send; none is made here) and its `retcode`
     stays as the broker answered. Any other agent: nothing. Reporting only: a failed write is logged, never raised, so
     the look-up and the trade it adopted are never undone by it."""
-    if exploration.is_exploration(agent_id):
-        ex = eng.exploration
-        db = ex.db if ex is not None else exploration.ledger_db(eng.cfg.state_dir)
-        repo = cast("RecordRepo[Any]", exploration.LEDGER)
-    elif is_probe(agent_id):
-        db = eng.probe.db if eng.probe is not None else Database.open(eng.cfg.state_dir, "aux")
-        repo = cast("RecordRepo[Any]", LEDGER)
-    else:
+    if not (exploration.is_exploration(agent_id) or is_probe(agent_id)):
         return
-    try:
+    try:                        # opening the ledger is inside: a missing or locked aux.db never raises from here
+        if exploration.is_exploration(agent_id):
+            ex = eng.exploration
+            db = ex.db if ex is not None else exploration.ledger_db(eng.cfg.state_dir)
+            repo = cast("RecordRepo[Any]", exploration.LEDGER)
+        else:
+            db = eng.probe.db if eng.probe is not None else Database.open(eng.cfg.state_dir, "aux")
+            repo = cast("RecordRepo[Any]", LEDGER)
         with db.write() as conn:
             rec = repo.get(conn, cid)
             if rec is not None and rec.resolution != resolution:

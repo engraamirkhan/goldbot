@@ -14,25 +14,36 @@ Positions keep their broker-side SL/TP. Exits are never gated, but no state is l
 alert." Concretely, while the terminal is on another account:
 
 * every entry is refused `terminal_account_changed` (`AccountState.terminal_account_changed`, RiskGate);
-* the account read is not used: equity, balance, the high-water mark, the drawdown stages, the risk-period roll and the
-  account view keep this account's last reading (`Engine._refresh_account` returns before them);
+* the account read is not used: equity, balance, the high-water mark, the drawdown stages and the account view keep
+  this account's last reading (`Engine._refresh_account` returns before them). The risk-period roll checks its own read
+  and does not roll (`capital_flows.roll_risk_period`: `_last_reset` stays, so it rolls once the terminal is back); a
+  re-arm waits unconsumed (`rearm_refused` = terminal_account_changed); a closed-trade record takes the engine's last
+  equity, never the terminal's balance;
 * every positions and deal-history read of the engine fails as unreadable (`Engine._read_positions`,
-  `Engine._read_deals`, the kill switch's book), so nothing is adopted, swept closed or resolved from the other book.
-  Closes already decided are still sent every tick (exits are never gated); against another login they fail and are
-  retried. The positions themselves rest with their broker-side stop and target;
+  `Engine._read_deals`, the kill switch's book), so nothing is adopted, swept closed or resolved from the other book;
+* exits are never gated, and a false positive (a check that raised) must not stop one. With no book to read, each due
+  close is sent by its ticket (`_retry_closes`, never dropped as gone), a trade through this engine's stop is closed by
+  its ticket (`_stop_check`, without the broker's stop to compare), and the kill switch closes the tickets this engine
+  knows (never re-reading the whole account, never seen flat). MT5 tickets are unique per server, so on another login
+  such a close is refused (10013) and stays due; on this account it closes. The positions rest with their broker-side
+  stop and target meanwhile;
 * the engine state carries the reason (`terminal_account_changed`), health FAILs on it (alerted on Telegram), and the
   owner is told once when it starts and once when the terminal is back.
 
-The check runs on every account refresh (the state cadence and every bar close) and on every reconciliation, before
-its positions read (so an orphan of the other login is never adopted between two refreshes); `no_quote_pass` looks go
-through the same reads. Without a check wired in (`Engine.verify_account` None: the paper broker, replays, backtests)
-nothing here runs. A check that raises counts as a mismatch (fail closed). Back on the account the next read clears
-it; entries then wait out `healthy_resume_s` like any other data fault (`Engine._unhealthy_at`)."""
+The check runs on every account refresh (the state cadence and every bar close), on every reconciliation before its
+positions read (so an orphan of the other login is never adopted between two refreshes), before the kill switch's
+whole-account read, on the risk-period roll and the re-arm reads, and every `reconcile_every_s` in `no_quote_pass`
+(no refresh runs without a quote). Without a check wired in (`Engine.verify_account` None: the paper broker, replays, backtests)
+nothing here runs. A check that raises counts as a mismatch (fail closed for entries; exits still run, above). Back on
+the account the next read clears it; every book's entries then wait out `healthy_resume_s` from the restore
+(`recovering`, part of `data_recovering`), not only the book that saw the mismatch."""
 from __future__ import annotations
 
 import logging
 import time
 from typing import TYPE_CHECKING, Any
+
+import pandas as pd
 
 from goldbot.telegram.entry_text import account_name
 
@@ -66,6 +77,7 @@ def check(eng: Engine, info: Any) -> bool:
     if why is None:
         if eng._terminal_mismatch is not None:
             eng._terminal_mismatch = None
+            eng._terminal_restored_at = _now(eng)
             eng.state.terminal_account_changed = False
             log.warning("%s: the MT5 terminal is back on this account; reads resume, entries after the data resume "
                         "delay", eng.cfg.account_id)
@@ -76,7 +88,7 @@ def check(eng: Engine, info: Any) -> bool:
     first = eng._terminal_mismatch is None
     eng._terminal_mismatch = why
     eng.state.terminal_account_changed = True
-    eng._unhealthy_at = eng._now(eng._last_tick) if eng._last_tick is not None else eng.clock()
+    eng._unhealthy_at = _now(eng)
     if first:
         log.error("%s: %s. Entries refused (%s); no close or adoption is inferred from its book; positions keep "
                   "their broker stops", eng.cfg.account_id, why, REASON)
@@ -85,6 +97,16 @@ def check(eng: Engine, info: Any) -> bool:
                    "entries are refused and nothing is read from the other account; open trades keep their stops "
                    "and targets at the broker. Log the terminal back in to this account; trading resumes by itself.")
     return False
+
+
+def recovering(eng: Engine, now: pd.Timestamp) -> bool:
+    """Within `healthy_resume_s` of the terminal coming back to this account (every book's `data_recovering`)."""
+    at = eng._terminal_restored_at
+    return at is not None and (now - at).total_seconds() < eng.cfg.healthy_resume_s
+
+
+def _now(eng: Engine) -> pd.Timestamp:
+    return eng._now(eng._last_tick) if eng._last_tick is not None else eng.clock()
 
 
 def verified(eng: Engine) -> bool:

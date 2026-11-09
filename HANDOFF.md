@@ -16,6 +16,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `healthy_resume_s`. **R2:** an exploration or cost-probe ledger row settled by the BACKLOG 72 look-up carries
   `resolution` (`adopted` / `opened_closed` / `unfilled`; JSON body only, no migration); the retcode stays as answered.
   Golden `tests/data/engine_store_golden` regenerated for the new engine-state key only.
+  Review round 1 (trading-safety 2 HIGH, 2 MED, 4 LOW): the risk-period roll checks its own read and rolls only once the
+  terminal is back; exits are never gated while flagged (due closes, the engine stop and the kill switch send by ticket,
+  never dropped as gone, never re-reading the whole account); `no_quote_pass` checks every `reconcile_every_s` and the
+  kill switch checks before a whole-account read; a re-arm waits unconsumed (`rearm_refused` terminal_account_changed;
+  re-arm source pin in tests/test_demo_roll.py updated); a closed record takes the engine's equity; `note_resolution`
+  opens the ledger inside its try; every book's `data_recovering` waits `healthy_resume_s` from the restore.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured

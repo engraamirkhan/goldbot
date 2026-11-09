@@ -10,6 +10,7 @@ account, trading resumes.
 The logins below are made up."""
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import accounts, health
 from goldbot.ops.gates_phase import load_closed_trades
+from goldbot.risk.gate import Stage
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.bus import ApprovalBus
 from tests.test_approved_card_cap import _approve, _card
@@ -45,6 +47,7 @@ class _Terminal:
 
     def __init__(self) -> None:
         self.books: dict[int, PaperBroker] = {LOGIN: PaperBroker(equity=10_000), OTHER: PaperBroker(equity=50_000)}
+        self.books[OTHER]._ids = itertools.count(900_001)   # tickets unique per server, as MT5's
         self.login = LOGIN
         self.sends = 0
 
@@ -139,6 +142,8 @@ def test_switching_back_to_the_account_resumes_trading(tmp_path):
     term.login = OTHER
     eng._refresh_account(_tick(WED))
     term.login = LOGIN
+    eng._refresh_account(_tick(WED))                      # back: entries wait out the resume delay from here
+    assert eng.gate.account_reasons(eng.state) == ["data_recovering"]
     later = WED + pd.Timedelta(seconds=eng.cfg.healthy_resume_s + 1)
     clock[0] = later
     _fresh_bar(eng, later)
@@ -193,3 +198,125 @@ def test_the_service_wires_in_the_start_check_itself():
     assert check(term.account()) is None
     term.login = OTHER
     assert check(term.account()) == "terminal is logged in to another account than icm-demo"
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+def _switched(tmp_path: Path, *, check_raises: bool = False) -> tuple[Engine, _Terminal, list[pd.Timestamp], int]:
+    """`_running`, then the mismatch flagged: a real switch to the other login, or (`check_raises`) a false positive,
+    the terminal still on this account but the check failing. Returns the engine's own open position too."""
+    eng, term, clock = _running(tmp_path)
+    [own] = list(eng.open)
+    if check_raises:
+        def broken(info: Any) -> str | None:
+            raise ValueError("bad reply")
+        eng.verify_account = broken
+    else:
+        term.login = OTHER
+    eng._refresh_account(_tick(WED))
+    assert "terminal_account_changed" in eng.gate.account_reasons(eng.state)
+    return eng, term, clock, own
+
+
+def _other_book(term: _Terminal) -> list[int]:
+    return [p.position_id for p in term.books[OTHER].positions()]
+
+
+def test_a_risk_day_roll_during_a_mismatch_keeps_this_account_s_day_start_and_rolls_after_the_restore(tmp_path):
+    eng, term, _, _ = _switched(tmp_path)
+    day_start, week_start, last = eng.state.day_start_equity, eng.state.week_start_equity, eng._last_reset
+    midnight = (WED + pd.Timedelta(days=1)).normalize() + pd.Timedelta(seconds=30)
+    eng._roll_risk_period(midnight)
+    assert (eng.state.day_start_equity, eng.state.week_start_equity) == (day_start, week_start)
+    assert eng.state.equity < 20_000 and eng._last_reset == last           # not the other login's 50k; not rolled
+    term.login = LOGIN
+    eng._roll_risk_period(midnight)
+    assert eng._last_reset == midnight and eng.state.day_start_equity < 20_000
+
+
+@pytest.mark.parametrize("check_raises", [False, True])
+def test_a_due_close_is_still_sent_by_its_ticket_while_a_mismatch_is_flagged(tmp_path, check_raises):
+    eng, term, _, own = _switched(tmp_path, check_raises=check_raises)
+    eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
+    eng._retry_closes(WED + pd.Timedelta(seconds=30))
+    assert [d["position"] for d in eng.decisions if d.get("action") == "time_exit"] == [own]   # sent, not dropped
+    if check_raises:                                     # a false positive: the exit really happens
+        assert own not in eng.open and own not in [p.position_id for p in term.books[LOGIN].positions()]
+    else:                                                # another login: refused there (no such ticket), still due
+        assert own in eng._close_due and own in eng.open and len(_other_book(term)) == 1
+
+
+@pytest.mark.parametrize("check_raises", [False, True])
+def test_a_trade_through_its_stop_is_closed_while_a_mismatch_is_flagged(tmp_path, check_raises):
+    eng, term, _, own = _switched(tmp_path, check_raises=check_raises)
+    eng._stop_check(_tick(WED + pd.Timedelta(seconds=5), bid=SL - 1.0))
+    assert [d["position"] for d in eng.decisions if d.get("action") == "engine_stop_close"] == [own]
+    if check_raises:
+        assert own not in eng.open
+    assert len(_other_book(term)) == 1
+
+
+def test_the_kill_switch_during_a_mismatch_closes_this_account_s_known_tickets_only(tmp_path):
+    eng, term, _, own = _switched(tmp_path)
+    eng._kill_switch(everything=True)
+    assert [d["position"] for d in eng.decisions if d.get("action") == "kill_switch_close"] == [own]
+    assert len(_other_book(term)) == 1 and eng._kill_pending and eng._kill_everything   # never seen flat
+
+
+def test_a_whole_account_kill_pending_then_a_switch_then_a_no_quote_pass_leaves_the_other_book_alone(tmp_path):
+    eng, term, _ = _running(tmp_path)
+    eng.state.stage = Stage.HALTED
+    eng._kill_everything = eng._kill_pending = True
+    term.login = OTHER                                   # no account refresh in between
+    eng.no_quote_pass()
+    assert len(_other_book(term)) == 1
+    assert "terminal_account_changed" in eng.gate.account_reasons(eng.state)
+
+
+def test_a_re_arm_during_a_mismatch_is_refused_unconsumed_and_works_after_the_restore(tmp_path):
+    eng, term, _ = _running(tmp_path)
+    eng.state.stage = Stage.HALTED
+    eng._rearm_conditions = lambda now: None             # type: ignore[method-assign]
+    eng._save_risk_state_now("test")
+    risk = tmp_path / "risk_icm-demo.json"
+    before, hwm = risk.read_text(), eng.state.balance_closed_hwm
+    term.login = OTHER
+    eng._refresh_account(_tick(WED))
+    assert eng.center.bus is not None
+    eng.center.bus.owner_rearm(by="dashboard:o")
+    eng._poll_rearm(WED)
+    assert eng.state.stage == Stage.HALTED and eng._rearm_refused == "terminal_account_changed"
+    assert eng.state.balance_closed_hwm == hwm and risk.read_text() == before
+    term.login = LOGIN
+    eng._refresh_account(_tick(WED))
+    eng._poll_rearm(WED)                                 # the same re-arm, not used up by the refusal
+    stage: Stage = eng.state.stage                       # (mypy narrowed it to HALTED above)
+    assert stage == Stage.NORMAL and eng._rearm_refused is None
+
+
+def test_a_trade_recorded_during_a_mismatch_takes_this_account_s_equity_before(tmp_path):
+    eng, term, _, own = _switched(tmp_path, check_raises=True)
+    eng.open[own].equity_before = None                   # an adopted trade: no equity stamped at send
+    eng._try_close(own, "time_exit", WED)
+    term.books[LOGIN]._balance = 77_000.0                # the broker's balance read is not used while flagged
+    eng._flush_closed()
+    closed, _ = load_closed_trades(tmp_path)
+    assert [c.equity_before for c in closed] == [pytest.approx(eng.state.equity)]
+
+
+def test_every_book_waits_out_the_resume_delay_after_the_restore(tmp_path):
+    eng, term, clock, _ = _switched(tmp_path)
+    term.login = LOGIN
+    soon = WED + pd.Timedelta(seconds=20)
+    clock[0] = soon
+    _fresh_bar(eng, soon)
+    term.on_tick(_tick(soon))
+    eng._refresh_account(_tick(soon))                    # the restore
+    eng._unhealthy_at = None                             # as a book that never refreshed during the mismatch
+    eng._refresh_account(_tick(soon))
+    assert "data_recovering" in eng.gate.account_reasons(eng.state)
+    later = soon + pd.Timedelta(seconds=eng.cfg.healthy_resume_s + 1)
+    clock[0] = later
+    _fresh_bar(eng, later)
+    term.on_tick(_tick(later))
+    eng._refresh_account(_tick(later))
+    assert eng.gate.account_reasons(eng.state) == []

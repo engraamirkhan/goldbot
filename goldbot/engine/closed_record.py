@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
-from goldbot.engine import cost_probe
+from goldbot.engine import cost_probe, terminal_account
 from goldbot.engine.store import PendingClose
 from goldbot.execution.deals import exit_summary
 from goldbot.labels.excursion import Excursion
@@ -105,7 +105,9 @@ def record_closed(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float |
     if equity is None or equity <= 0:
         # the balance before this trade's P&L was realised (a USD-flagged P&L is not subtracted from a £ balance)
         usd_only = pnl_currency == "USD" and eng._account_currency() != "USD"
-        equity = eng.broker.account().balance - (0.0 if usd_only else pnl)
+        # R1: while the terminal is on another account its balance is never this account's (engine/terminal_account)
+        equity = eng.state.equity if terminal_account.changed(eng) else \
+            eng.broker.account().balance - (0.0 if usd_only else pnl)
         if equity <= 0:
             equity = eng.state.equity
     rec = ClosedTrade(account_id=eng.cfg.account_id, broker=eng.cfg.broker_name,
