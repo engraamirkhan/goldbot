@@ -212,7 +212,8 @@ def _evidence_file_ok(e: Any) -> bool:
 
 def evidence_ok(evidence: Any) -> bool:
     """`evidence` is a non-empty list of run output files, each {"path", "sha256"} (`TrialRegistry.withdraw`) or
-    {"source_file", "source_sha256"} (the applied sprint-3000 backfill), the sha256 64 hex."""
+    {"source_file", "source_sha256"} (the applied sprint-3000 backfill), the sha256 64 hex. Format only: that the files
+    show the spec has no score stays with the withdrawal's writer plus quant verification."""
     return isinstance(evidence, list) and bool(evidence) and all(_evidence_file_ok(e) for e in evidence)
 
 
@@ -231,10 +232,18 @@ def exempting_withdrawal(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> 
     {`unevaluable: <cause>`, `never formed: <cause>`} and `evidence` (the run output files and their sha256 showing the
     spec has no score), and it must be written before any read of that spec. ... Self-declared 'not a trial' text in a
     writer's output exempts nothing." The link is the withdrawal's `withdraws` (`row_ref`: ts and config hash). A read
-    is a trial row of the same family and config hash stamped from the pre-registration's `ts` up to the withdrawal's
-    (a withdrawal with no readable stamp cannot show it came first: any read after the pre-registration voids it); a
-    spec read after its withdrawal needs a new pre-registration."""
+    is a trial row of the same family and config hash stamped from the pre-registration's `ts` up to the withdrawal's;
+    a spec read after its withdrawal needs a new pre-registration.
+
+    Timing (quant ruling 2026-11-09): "The withdrawal's own ts must be earlier than the prereg ts + STALE_PREREG_DAYS.
+    A withdrawal written at or after the stale point exempts nothing, so once a prereg has counted it keeps counting
+    unless a result row links to it." A withdrawal with no readable stamp counts as late. So the budget and K never
+    fall as time passes without a linked result.
+
+    `evidence_ok` checks the evidence's format only (file names and 64-hex sha256); that the files show the spec has
+    no score is the withdrawal writer's responsibility, verified by the quant."""
     start = _row_when(prereg)
+    stale_point = start + timedelta(days=STALE_PREREG_DAYS)
     unreadable = datetime.min.replace(tzinfo=timezone.utc)
     for w in rows:
         if w.get("status") != WITHDRAWN or not refers_to(w.get("withdraws"), prereg):
@@ -242,8 +251,8 @@ def exempting_withdrawal(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> 
         if not EXEMPT_WITHDRAWAL_RE.match(str(w.get("reason") or "")) or not evidence_ok(withdrawal_evidence(w)):
             continue
         end = _row_when(w)
-        if end == unreadable:
-            end = datetime.max.replace(tzinfo=timezone.utc)
+        if end == unreadable or end >= stale_point:
+            continue
         if any(is_trial(t) and t.get("family") == prereg.get("family") and row_hash(t) == prereg.get("config_hash")
                and start <= _row_when(t) <= end for t in rows):
             continue

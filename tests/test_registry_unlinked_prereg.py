@@ -183,13 +183,47 @@ def test_a_backfill_withdrawal_with_a_bad_sha_or_another_reason_does_not_exempt(
         assert quarter_trials([p, w], Q, now=NOW) == 1, w
 
 
-def test_a_withdrawal_without_a_readable_stamp_exempts_only_a_spec_never_read() -> None:
+def test_a_withdrawal_without_a_readable_stamp_counts_as_late_and_exempts_nothing() -> None:
     p = _prereg(OLD)
     w = {k: v for k, v in _backfill_withdrawal(p, "never formed: x", [{"source_file": "a", "source_sha256": SHA}]).items()
          if k != "ts"}
-    assert quarter_trials([p, w], Q, now=NOW) == 0
-    read = _result(NOW - timedelta(days=1), h="abc")             # a read at any time after the pre-registration
-    assert quarter_trials([p, read, w], Q, now=NOW) == 2
+    assert quarter_trials([p, w], Q, now=NOW) == 1
+    assert n_trials_effective([p, w], now=NOW) == 1
+
+
+T0 = datetime(2026, 11, 2, tzinfo=timezone.utc)
+
+
+def test_withdrawal_after_stale_point_does_not_exempt() -> None:
+    p = _prereg(T0)
+    w = _withdrawal(p, "unevaluable: no bars", EVIDENCE, ts=T0 + timedelta(days=8))
+    now = T0 + timedelta(days=10)
+    assert quarter_trials([p, w], Q, now=now) == 1
+    assert n_trials_effective([p, w], now=now) == 1
+    at_the_stale_point = _withdrawal(p, "unevaluable: no bars", EVIDENCE, ts=T0 + timedelta(days=7))
+    assert quarter_trials([p, at_the_stale_point], Q, now=now) == 1
+    in_time = _withdrawal(p, "unevaluable: no bars", EVIDENCE, ts=T0 + timedelta(days=7) - timedelta(seconds=1))
+    assert quarter_trials([p, in_time], Q, now=now) == 0
+
+
+def test_counts_never_fall_as_time_passes_without_a_linked_result() -> None:
+    p = _prereg(T0)
+    late = _withdrawal(p, "never formed: 0 boxes", EVIDENCE, ts=T0 + timedelta(days=8))
+    nows = [T0 + timedelta(days=d) for d in (6, 8, 30)]
+    for rows in ([p], [p, late]):
+        q = [quarter_trials(rows, Q, now=n) for n in nows]
+        k = [n_trials_effective(rows, now=n) for n in nows]
+        assert q == sorted(q) and k == sorted(k), (rows, q, k)
+        assert q[-1] == k[-1] == 1
+    linked = [p, late, _result(T0 + timedelta(days=9), p)]
+    for n in nows[1:]:
+        if n < T0 + timedelta(days=9):
+            continue
+        assert quarter_trials(linked, Q, now=n) == 1          # the result row replaces the prereg: total unchanged
+        assert n_trials_effective(linked, now=n) == 1
+    before = quarter_trials([p, late], Q, now=T0 + timedelta(days=8, hours=12))
+    after = quarter_trials(linked, Q, now=T0 + timedelta(days=9, hours=1))
+    assert before == after == 1
 
 
 def test_a_withdrawal_naming_another_preregistration_does_not_exempt() -> None:

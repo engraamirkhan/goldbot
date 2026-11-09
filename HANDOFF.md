@@ -14,7 +14,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   row naming the pre-registration by (ts, config_hash) with `reason` "unevaluable: <cause>" or "never formed: <cause>"
   and `evidence` (run output files with sha256; top-level `evidence` [{path, sha256}] or the applied sprint-3000
   backfill's `results.evidence` [{source_file, source_sha256}]), written before any read of the spec (`exempting_withdrawal`),
-  exempts it; `TrialRegistry.withdraw(..., evidence=)` records it. Any other withdrawal, or a "not a trial" note,
+  exempts it, and only when written before the prereg's stale point (ts + 7 d; unstamped = late), so the counts never
+  fall as time passes; `evidence_ok` checks format only (content stays with the writer plus quant).
+  `TrialRegistry.withdraw(..., evidence=)` records it. Brain registry copy (sha 73fc51e1) at 2026-11-20:
+  quarter_trials(2026Q4) 3,395, n_trials_effective 3,471, 0 stale, 389 backfill withdrawals exempt. Any other withdrawal, or a "not a trial" note,
   exempts nothing. Tests: `tests/test_registry_unlinked_prereg.py`.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
