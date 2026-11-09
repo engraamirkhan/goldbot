@@ -5,6 +5,20 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only, **awaiting quant signature**): ADR 0076 adopts
+  EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
+  live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
+  (`screen_min_events_daily: null`; daily units use `screen_retire_floor` 300 with the futility rule); ADR 0078 books
+  the 11-09 explore views (17,862; sensitivity 16,680) in an append-only snooping ledger that feeds DSR K
+  (3,471 + 17,862 = 21,333), the EB prior and the haircut, not the registration budget. The prereg
+  `docs/research/prereg-2026-11-09-eval2.md` freezes the v6 thresholds, the function signatures Lanes 1-5 build and
+  test against, the gamma sequences (gamma_1 = 0.5, then 0.5 x 6/pi^2/(j-1)^2; TEST-OLD index 1, 2018-25 batch 15,
+  verified against Zrnic et al. AISTATS 2020 Algorithm 1, with a cross-batch independence caveat for the quant), the
+  replay-v2 spec with its S5 expectation, the mSPRT supersession, and the integrity record (read ledger P1-P9/F1-F7,
+  holdout touches, deleted confirm-cache hashes, registry merge and backfill: 6,961 rows, headroom 105). The signed
+  v6 method is copied to `docs/research/eval2-method-2026-11-09.md`. Build lanes 0-5B: BACKLOG 148. No TRACEABILITY
+  row yet: each code lane adds its row with its tests. Registrations stay frozen until Lane 0's
+  `tests/test_registry_unlinked_prereg.py` is green on CI and merged.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured

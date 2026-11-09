@@ -5,6 +5,19 @@ Rewritten 2026-10-30 (cycle 2, same day) by the research director, base `48768fd
 `660d2db2:docs/research/research-plan.md`. Their answers stand unless a row below changes them. Kill-rule amendments
 cite `prereg-amendment-2026-10-30-kill-rules.md` (A1-A4 signed with conditions 10-30; A5 draft).
 
+## 0. Amendment 2026-11-09: EVAL-2 (ADRs 0076-0078, awaiting quant signature)
+
+Every family registered from now on is judged by EVAL-2 (`docs/research/eval2-method-2026-11-09.md`, thresholds and
+API frozen in `prereg-2026-11-09-eval2.md`). Rule 3's matched control becomes the 20 replay twins. The full rewrite
+of this plan to at most 5 live lines follows the next performance read; until then this section governs the EVAL-2
+line and the tables below stand for the rest.
+
+| Line | Card | Owner | Budget | Kill rule / date | Target £/day |
+|---|---|---|---|---|---|
+| **EVAL-2 batch 1** (C03 flag, C02 double >= 1h, S21 stretch OCO, S20 NR7 OCO, B07 triangle) | method section (d); mechanism, n, excess and sd per family there; expected gross >= 2x deciding cost (3x <= 15m) | research director (evaluator verdicts) | about 5 family rows + carried cells within the 105-row headroom, after the freeze lifts; build 8-11 working days | family NO SIGNAL at L1, cell kill at L2 (P(net > 0.05 R) < 0.05), INSUFFICIENT if TEST-OLD power < 0.3; close or promote at each family's L3 read, first TEST-OLD read by about 2026-11-24 | about £1-3/day on a £10k demo after decay and power (method (c)); not the £50/day route |
+
+Owner line: the catalogue is not where £50/day comes from; EVAL-2 makes a real edge testable and stops kills on noise.
+
 Safety rails are not research variables: RiskGate only path, 1% per-trade cap, daily loss limit, owner confirms
 real-money entries, exits never gated, holdout sealed, every id counted in K.
 
