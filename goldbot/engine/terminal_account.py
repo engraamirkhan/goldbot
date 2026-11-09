@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from goldbot.base import Record, UtcTimestamp
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
@@ -62,15 +63,27 @@ class TerminalAccountChanged(RuntimeError):
     """A broker read refused because the terminal is not on this engine's account (counted as positions_unreadable)."""
 
 
+class Watch(Record):
+    """`Engine.terminal`, what the checks found: `mismatch` the reason while the terminal is elsewhere (None on this
+    account); `restored_at` when it came back (every book waits healthy_resume_s from it); `server` the trade server this
+    account was last verified on and `other_server` whether a flagged read named another one (never logged:
+    `by_ticket`); `checked_at` no_quote_pass's own check, every reconcile_every_s."""
+    mismatch: str | None = None
+    restored_at: UtcTimestamp | None = None
+    server: str | None = None
+    other_server: bool = False
+    checked_at: UtcTimestamp | None = None
+
+
 def changed(eng: Engine) -> bool:
     """Whether the last check found the terminal on another account."""
-    return eng._terminal_mismatch is not None
+    return eng.terminal.mismatch is not None
 
 
 def check(eng: Engine, info: Any) -> bool:
     """Judge one account read (`broker.account()`): True when it is this engine's account (or no check is wired in).
     A change either way is logged, journalled and told to the owner once."""
-    verify = eng.verify_account
+    verify, w = eng.verify_account, eng.terminal
     if verify is None:
         return True
     raised = False
@@ -80,10 +93,9 @@ def check(eng: Engine, info: Any) -> bool:
         why, raised = f"the terminal's account could not be checked ({type(exc).__name__})", True
     server = str(getattr(info, "server", "") or "").strip()     # compared only; never logged or told
     if why is None:
-        eng._terminal_server, eng._terminal_other_server = server or eng._terminal_server, False
-        if eng._terminal_mismatch is not None:
-            eng._terminal_mismatch = None
-            eng._terminal_restored_at = _now(eng)
+        w.server, w.other_server = server or w.server, False
+        if w.mismatch is not None:
+            w.mismatch, w.restored_at = None, _now(eng)
             eng.state.terminal_account_changed = False
             log.warning("%s: the MT5 terminal is back on this account; reads resume, entries after the data resume "
                         "delay", eng.cfg.account_id)
@@ -91,11 +103,10 @@ def check(eng: Engine, info: Any) -> bool:
             _tell(eng, f"{account_name(eng.cfg.account_id)}: the MT5 terminal is back on this account. Positions and "
                        "deals are read again; new entries resume after a minute of healthy data.")
         return True
-    first = eng._terminal_mismatch is None
-    eng._terminal_mismatch = why
+    first = w.mismatch is None
+    w.mismatch = why
     # residual-risk ruling: only a read that names another, known trade server stops the by-ticket closes
-    eng._terminal_other_server = not raised and bool(server) and eng._terminal_server is not None \
-        and server != eng._terminal_server
+    w.other_server = not raised and bool(server) and w.server is not None and server != w.server
     eng.state.terminal_account_changed = True
     eng._unhealthy_at = _now(eng)
     if first:
@@ -108,18 +119,69 @@ def check(eng: Engine, info: Any) -> bool:
     return False
 
 
+def refused_refresh(eng: Engine) -> None:
+    """`_refresh_account` on another account's read: none of its figures are this account's (equity, stages, high-water
+    mark, risk period); the positions read is refused and counted (positions_unreadable)."""
+    eng._read_positions("exposure kept from the last reading, entries refused (terminal_account_changed)")
+
+
 def by_ticket(eng: Engine) -> bool:
     """Whether a close may be sent by its ticket while the terminal is flagged (`_retry_closes`, `_stop_check`, the
     kill switch). MT5 tickets are unique per trade server only, so not while the terminal is on ANOTHER server than the
     one this account was last seen on: a ticket there could be a stranger's position. The broker's own stop and target
     protect the positions until the terminal is back. Every other case sends: a check that raised (a false positive
     must never stop an exit), a read with no server, another login on the same server (refused there, 10013)."""
-    return not eng._terminal_other_server
+    return not eng.terminal.other_server
+
+
+def retry_closes(eng: Engine, due: list[int], now: pd.Timestamp) -> None:
+    """`_retry_closes` while flagged: exits are never gated. No book can be read, so each due close is sent by its
+    ticket (another login on the same server refuses it, 10013, and it stays due) and none is dropped as gone; on
+    another server nothing is sent (`by_ticket`)."""
+    if by_ticket(eng):
+        for pid in due:
+            action, extra, _ = eng._close_due[pid]
+            eng._try_close(pid, action, now, **extra)
+        eng._save_orders()
+
+
+def stop_closes(eng: Engine, through: list[tuple[int, Any]], now: pd.Timestamp) -> None:
+    """`_stop_check` while flagged: the broker's stop cannot be read, so a trade through this engine's stop is closed by
+    its ticket (a false positive closes it, as its stop would); never on another server (`by_ticket`)."""
+    if by_ticket(eng):
+        for pid, tr in through:
+            if pid not in eng._close_due:
+                eng._try_close(pid, "engine_stop_close", now, sl=tr.sl, broker_sl=None)
+        eng._save_orders()
+
+
+def kill_closes(eng: Engine) -> None:
+    """The kill switch while flagged: no book can be read, so the tickets this engine knows are closed by ticket, never
+    another account's, never on another server (`by_ticket`). Not flat: it runs again once the terminal is back."""
+    if changed(eng) and by_ticket(eng):
+        for pid, tr in list(eng.open.items()):
+            if pid not in eng._close_due:
+                eng._try_close(pid, "kill_switch_close", None, symbol=eng.cfg.symbol, lots=tr.lots)
+
+
+def no_quote_check(eng: Engine, now: pd.Timestamp) -> None:
+    """`no_quote_pass`: no refresh runs without a quote, so the account is checked here every reconcile_every_s."""
+    w = eng.terminal
+    if w.checked_at is None or (now - w.checked_at).total_seconds() >= eng.cfg.reconcile_every_s:
+        w.checked_at = now
+        verified(eng)
+
+
+def rearm_waits(eng: Engine) -> bool:
+    """A re-arm while flagged waits, unconsumed (`rearm_refused` = terminal_account_changed): it reads the account."""
+    if changed(eng):
+        eng._rearm_refused = REASON
+    return changed(eng)
 
 
 def recovering(eng: Engine, now: pd.Timestamp) -> bool:
     """Within `healthy_resume_s` of the terminal coming back to this account (every book's `data_recovering`)."""
-    at = eng._terminal_restored_at
+    at = eng.terminal.restored_at
     return at is not None and (now - at).total_seconds() < eng.cfg.healthy_resume_s
 
 
@@ -139,10 +201,17 @@ def verified(eng: Engine) -> bool:
     return check(eng, info)
 
 
-def refuse_read(eng: Engine) -> None:
-    """Raise `TerminalAccountChanged` while the terminal is on another account (before any positions or deals read)."""
-    if eng._terminal_mismatch is not None:
-        raise TerminalAccountChanged(eng._terminal_mismatch)
+def refuse_read(eng: Engine, kind: str, then: str) -> bool:
+    """While the terminal is on another account, count the read as refused (positions_unreadable, logged once per
+    streak) and return True for a positions read, raise `TerminalAccountChanged` for a deals read; False otherwise."""
+    if eng.terminal.mismatch is None:
+        return False
+    eng._read_failed("positions", then, traceback=False)
+    if eng._read_fails["positions"] == 1:
+        log.warning("positions read refused: %s; %s", eng.terminal.mismatch, then)
+    if kind == "deals":
+        raise TerminalAccountChanged(eng.terminal.mismatch)
+    return True
 
 
 def _tell(eng: Engine, text: str) -> None:

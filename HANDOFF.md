@@ -26,6 +26,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`_terminal_other_server`), nothing is closed by ticket (tickets are unique per server only); the broker's SL/TP hold
   the positions until the terminal is back. A raised check, an empty server or another login on the same server still
   send. No server name is logged.
+  runner.py line cap (ADR 0023): the terminal-account blocks live in `engine/terminal_account.py` (`Engine.terminal`, a
+  `Watch` record) and the BACKLOG 59 host-clock state write moved verbatim to `engine/state_heartbeat.py`; LINE_CAP
+  lowered to 3087.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured

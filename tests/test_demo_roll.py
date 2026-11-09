@@ -440,8 +440,9 @@ def test_the_roll_reads_nothing_from_the_broker_on_a_live_account(tmp_path, monk
 # Its source is pinned: changing it needs a trading-safety review, and the pin is updated in that same PR.
 REARM_PATH_SHA256 = {
     # trading-safety R1 finding 4 (fix/account-recheck-1109): the re-arm waits, unconsumed, while the terminal is on
-    # another account (its account read is checked); reviewed in that PR's trading-safety round
-    "Engine._poll_rearm": "3854dfab25196f42c37088b2fa18928b939e38b13af12342222d426da2f3a290",
+    # another account (its account read is checked; the top check moved to terminal_account.rearm_waits for the
+    # runner line cap, same behaviour); reviewed in that PR's trading-safety round
+    "Engine._poll_rearm": "abc85b93425c0c498f8c9c6435bfaf08ef687608fd7e828fef946586f42676cd",
     "Engine._rearm_conditions": "8460d520bd750f874fbb416f643dc201675b4fb03ce453a49309beccdf22c519",
     "RiskGate.rearm": "0f5656464592607aa3b434fae1aad74e4c6fcf134455ef90fb5f3c6387496d94",
     # trading-safety F6 on PR #290: the stage machine and the owner's reset of the dynamic-limit revert

@@ -19,3 +19,6 @@
   (`_terminal_other_server`), nothing is closed by ticket (tickets are unique per server only); the broker's SL/TP hold
   the positions until the terminal is back. A raised check, an empty server or another login on the same server still
   send. No server name is logged.
+  runner.py line cap (ADR 0023): the terminal-account blocks live in `engine/terminal_account.py` (`Engine.terminal`, a
+  `Watch` record) and the BACKLOG 59 host-clock state write moved verbatim to `engine/state_heartbeat.py`; LINE_CAP
+  lowered to 3087.

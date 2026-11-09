@@ -358,7 +358,7 @@ def test_back_on_the_account_after_another_server_closes_by_ticket_again(tmp_pat
     eng, term, own = _on_other_server(tmp_path)
     term.login = LOGIN
     eng._refresh_account(_tick(WED))
-    assert eng._terminal_other_server is False
+    assert eng.terminal.other_server is False
     eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
     eng._retry_closes(WED + pd.Timedelta(seconds=30))
     assert _closes_sent(eng) == [("time_exit", own)]
@@ -367,7 +367,7 @@ def test_back_on_the_account_after_another_server_closes_by_ticket_again(tmp_pat
 @pytest.mark.parametrize("check_raises", [False, True])
 def test_another_login_on_the_same_server_or_a_check_that_raised_still_sends_every_close(tmp_path, check_raises):
     eng, term, _, own = _switched(tmp_path, check_raises=check_raises)
-    assert eng._terminal_other_server is False
+    assert eng.terminal.other_server is False
     eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
     eng._retry_closes(WED + pd.Timedelta(seconds=30))
     eng._kill_switch(everything=True)
@@ -381,7 +381,7 @@ def test_an_empty_server_in_the_read_still_sends_by_ticket(tmp_path):
     term.servers[OTHER] = ""
     term.login = OTHER
     eng._refresh_account(_tick(WED))
-    assert eng._terminal_mismatch is not None and eng._terminal_other_server is False
+    assert eng.terminal.mismatch is not None and eng.terminal.other_server is False
     eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
     eng._retry_closes(WED + pd.Timedelta(seconds=30))
     assert _closes_sent(eng) == [("time_exit", own)]
