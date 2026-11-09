@@ -38,6 +38,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
   refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
   and quant sign-off). Not yet wired into sim.py (Lane 1).
+- 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
+  EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
+  live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
+  (`screen_min_events_daily: null`; daily units use `screen_retire_floor` 300 with the futility rule); ADR 0078 books
+  the 11-09 explore views (17,862; sensitivity 16,680) in an append-only snooping ledger that feeds DSR K
+  (3,471 + 17,862 = 21,333), the EB prior and the haircut, not the registration budget. The prereg
+  `docs/research/prereg-2026-11-09-eval2.md` freezes the v6 thresholds, the function signatures Lanes 1-5 build and
+  test against, the gamma sequences (gamma_1 = 0.5, then 0.5 x 6/pi^2/(j-1)^2; TEST-OLD index 1, 2018-25 batch 15,
+  verified against Zrnic et al. AISTATS 2020 Algorithm 1, pure alpha-spending with no rejection credit, quant ruling), the
+  replay-v2 spec with its S5 expectation, the mSPRT supersession, and the integrity record (read ledger P1-P9/F1-F7,
+  holdout touches, deleted confirm-cache hashes, registry merge and backfill: 6,961 rows, headroom 105). The signed
+  v6 method is copied to `docs/research/eval2-method-2026-11-09.md`. Build lanes 0-5B: BACKLOG 148; Lane 3 condition: `l3_read` calls the frozen `confirm_resamples` itself (prereg 4.6). No TRACEABILITY
+  row yet: each code lane adds its row with its tests. Registrations stay frozen until Lane 0's
+  `tests/test_registry_unlinked_prereg.py` is green on CI and merged.
 - 2026-11-09 (branch fix/registry-unlinked-prereg; quant ruling 2026-11-09, item 3(b)): an ad-hoc (`queue: false`)
   pre-registration that is not withdrawn and has had no linked result row for more than 7 days
   (`registry.STALE_PREREG_DAYS`, `stale_preregistrations`) now counts as one trial of the quarter of its `ts` in both
