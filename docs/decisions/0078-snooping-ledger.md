@@ -1,6 +1,6 @@
 # 0078: Explore views go to an append-only snooping ledger, not the trial budget
 
-Status: proposed, **awaiting quant signature** (PD ruling 2026-11-09, PD + PO with quant input; recorded by the
+Status: accepted, **signed by the quant-reviewer 2026-11-09** (PD ruling 2026-11-09, PD + PO with quant input; recorded by the
 research director). Amends how ADR 0073 is read on views. Part of EVAL-2 (ADR 0076).
 
 ## Context

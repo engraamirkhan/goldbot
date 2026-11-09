@@ -1,6 +1,6 @@
 # 0076: EVAL-2: how goldbot judges a strategy
 
-Status: proposed, **awaiting quant signature** (research director for PD + PO, 2026-11-09). Decided by PD + PO +
+Status: accepted, **signed by the quant-reviewer 2026-11-09** (research director for PD + PO, 2026-11-09). Decided by PD + PO +
 quant-reviewer; the owner is informed. Method text: `docs/research/eval2-method-2026-11-09.md` (v6, signed by the
 quant-reviewer 2026-11-09). Frozen thresholds, function signatures and the gamma sequences:
 `docs/research/prereg-2026-11-09-eval2.md`.
@@ -26,7 +26,8 @@ sign), which fails a power test.
   signal's exit. The 20 twins are Rule 3's "matched control".
 - One BatchPRDS sequence per window (Zrnic, Jiang, Ramdas and Jordan, AISTATS 2020, Algorithm 1), gamma fixed in the
   prereg: TEST-OLD starts at index 1 (gamma_1 = 0.5); on 2018-25 the 14 earlier reads (P1-P9, F1-F5) are batches 1-14
-  with 0 rejections credited, so EVAL-2's first 2018-25 read is batch 15.
+  with 0 rejections credited, so EVAL-2's first 2018-25 read is batch 15. Pure alpha-spending, no rejection credit
+  (prereg §3.1).
 - The deciding cost is max(today's ICM R, bp-engine R) + overshoot x (stop-exit + stop-entry share) + swap
   (strict-interior rollover rule, #343) + the positive S5 fill-vs-replay gap until S5 passes; gates read at 1.5x.
   The 2010-17 $-constant stress line is reported (COST-SENSITIVE tag), never gated.

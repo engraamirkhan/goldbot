@@ -23,7 +23,7 @@ Holdout 2025-10-01..2026-09-30 is not read by anything here.
 | Power floor | n_min = ((z(1 - q/m) + 0.84) x sd_card / delta_card)^2 must fit the window's expected n; m = families actually read, fixed before the read |
 | L1 probe | symmetric first passage at +/-1 ATR (decision-TF ATR), from the fill bar's close, capped at the native horizon; side-0 OCO bar = loss |
 | L1 family retire (NO SIGNAL) | pooled 90 % UB of probe excess < cheapest feasible cell's deciding cost in ATR **and** power >= 0.8 at that cost |
-| L2 model | theta_c = mu_F + a_TF + b_inst + u_c on day-clustered cell means of excess; REML; Student-t; prior fitted leave-family-out on every cell ever viewed (real + NULL-RAND), de-duplicated by config hash; empirical null from the controls (Efron) |
+| L2 model | theta_c = mu_F + a_TF + b_inst + u_c on day-clustered cell means of excess; REML; Student-t; prior fitted leave-family-out on every cell ever viewed (real + NULL-RAND), de-duplicated by config hash; empirical null from the controls (Efron). Student-t (df 5, fixed) on the cell random effects only; Gaussian likelihood on day-clustered cell means; S1 runs with this exact spec. |
 | L2 carry | P(theta_c > 0) >= 0.80 **and** P(net_c > 0 at 1.5x deciding cost) >= 0.80; at most 3 cells per family by posterior mean |
 | L2 cell kill | P(net > 0.05 R) < 0.05 |
 | L2 threshold rule | 0.80 raised, never lowered, until the S1 null carry rate is <= 5 %; thresholds, model and code hash frozen in the card before the L2 run on real cells |
@@ -72,13 +72,7 @@ Zrnic, Jiang, Ramdas and Jordan, "The power of batching in multiple hypothesis t
 - The method's "BatchBH (BatchPRDS variant)" is this Algorithm 1 (`BatchPRDS_BH`); the paper's BatchBH (Algorithm 2,
   uses R+_s) assumes independence and is not used. Here n_t = m_t, the families read in batch t, fixed before the read.
 
-**Assumption gap, for the quant's ruling.** Successive batches on one window re-read the same bars, so Theorem 3's
-cross-batch independence does not hold literally. Batch 1 of TEST-OLD is exactly BH at 0.05 on one PRDS batch and is
-valid on its own. On 2018-25 every earlier batch is credited 0 rejections, so the level is the alpha-spending floor
-q gamma_15 and cannot be inflated by earlier rejections. For later TEST-OLD batches (j >= 2) with credited rejections
-the guarantee is heuristic; the proposed rule is that rejection credit sum R_s is used only when the quant signs that
-batch's card, else alpha_j = q gamma_j (pure alpha-spending, valid under arbitrary cross-batch dependence by a union
-bound with BH under PRDS within the batch).
+**Quant ruling 2026-11-09:** both windows use pure alpha-spending: alpha_j = q·gamma_j, BH at alpha_j within batch j (PRDS within a batch), no rejection credit ever. Valid under arbitrary cross-batch dependence: FDR ≤ Σ_j FDR_j ≤ q. Algorithm 1's rejection reward is not used.
 
 ### 3.2 The sequences (one form, both windows, q = 0.10)
 gamma_1 = 0.5; gamma_j = 0.5 x (6 / pi^2) / (j - 1)^2 for j >= 2 (sums to 1). This is the paper's two choices joined:
@@ -205,7 +199,8 @@ def family_no_signal(probes: Sequence[ProbeResult], *, cheapest_cost_atr: float,
 class HierSpec:
     terms: tuple[str, ...] = ("family", "tf", "inst", "cell")
     method: Literal["REML"] = "REML"
-    t_df: float = 5.0                    # set by the quant in the card; frozen with it
+    t_df: float = 5.0                    # Student-t on the random effects u_c only; fixed, not estimated (quant 2026-11-09)
+    t_on: Literal["random_effects"] = "random_effects"   # the likelihood of day-clustered cell means is Gaussian
     carry_p: float = 0.80
     carry_cost_mult: float = 1.5
     kill_net_r: float = 0.05
@@ -237,20 +232,20 @@ GAMMA_FIRST: Final = 0.5
 
 def gamma(j: int) -> float: ...           # section 3.2; j >= 1
 def stationary_block_bootstrap(units: pd.DataFrame, stat: Callable[[pd.DataFrame], float], *, mean_block: float,
-                               resamples: int = 10_000, seed_key: str) -> np.ndarray: ...
+                               resamples: int, seed_key: str) -> np.ndarray: ...
+    # resamples = max(10_000, ceil(20 * m_j / alpha_j)) for every confirm-batch bootstrap (all three functions)
     # day blocks, instances resampled with their twins; returns the resampled stat
 def boot_p_one_sided(units: pd.DataFrame, stat: Callable[[pd.DataFrame], float], *, mean_block: float,
-                     resamples: int = 10_000, seed_key: str) -> float: ...
+                     resamples: int, seed_key: str) -> float: ...
 def boot_lower_bound(units: pd.DataFrame, stat: Callable[[pd.DataFrame], float], *, level: float, mean_block: float,
-                     resamples: int = 10_000, seed_key: str) -> float: ...
+                     resamples: int, seed_key: str) -> float: ...
 
 @dataclass(frozen=True, slots=True)
 class BatchPRDS:
     window: Literal["test_old", "confirm"]
     q: float = Q_CONFIRM
-    def level(self, j: int, n_j: int, prior_rejections: int) -> float: ...
-        # q * gamma(j) * (n_j + prior_rejections) / n_j
-    def test(self, p: Sequence[float], *, j: int, prior_rejections: int) -> np.ndarray: ...   # bool, BH at level
+    def level(self, j: int, n_j: int) -> float: ...  # q * gamma(j)
+    def test(self, p: Sequence[float], *, j: int) -> np.ndarray: ...
 
 def holm(p: Sequence[float], alpha: float) -> np.ndarray: ...
 
@@ -261,7 +256,7 @@ class L3Result:
     rejected: bool; cells_forwarded: tuple[str, ...]
 
 def l3_read(units: pd.DataFrame, *, family: str, carried: Sequence[str], weights: Mapping[str, float],
-            batch: BatchPRDS, j: int, prior_rejections: int, batch_p: Sequence[float],
+            batch: BatchPRDS, j: int, batch_p: Sequence[float],
             corroboration: pd.DataFrame | None, mean_block: float, seed_key: str) -> L3Result: ...
 ```
 

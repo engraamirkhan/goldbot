@@ -32,8 +32,9 @@ Settings (Lane 3 is the sole writer of `goldbot/config.py` and `config/settings.
 (signature frozen in `docs/research/prereg-2026-11-09-eval2.md` section 4.7).
 
 ## Consequences
-- Tightening of the retire path only: no unit can pass with fewer events than before, and no unit is retired that
-  the old rule would have kept above 300. Daily units with 150-299 events become "insufficient" instead of retired.
+- Daily units: tightening (150-299 become 'insufficient'; retire at ≥ 300 only by the powered futility test).
+  Non-daily units: a new powered retire path at 300-999 (previously 'inconclusive'), with ≤ 5 % chance of retiring
+  a true +0.05 R edge. No pass path changes.
 - SE <= 0.055 needs n about 560 at sd 1.3 R and about 800 at sd 1.56 R, so most 300-559-event reads will be
   "inconclusive (event floor)" and route forward. That is the honest answer, not a defect.
 - Units already retired under Ruling A stay retired (no re-run); reopening one needs new mechanism evidence, a new
