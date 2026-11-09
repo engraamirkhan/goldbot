@@ -100,6 +100,12 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail" if unreadable >= alert_after else "warn")
         parts.append(f"broker positions/deals unreadable {unreadable} time(s) in a row (terminal fault?): entries "
                      f"blocked, exits retried every tick, closes not confirmed until it reads again")
+    # trading-safety R1 (engine/terminal_account.py): the terminal is logged in to another account than this engine's
+    moved = e.get("terminal_account_changed")
+    if moved:
+        statuses.append("fail")
+        parts.append(f"MT5 terminal not on this account ({moved}): entries refused, nothing read from the other "
+                     "account, open trades keep their broker stops; log the terminal back in to this account")
     other_dq = [c for c in e.get("dq_checks") or [] if c != "positions_unreadable"]
     if e.get("dq_error") and (other_dq or not unreadable):
         statuses.append("fail")

@@ -11,7 +11,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from goldbot.ops.services._base import log, resolve
 
@@ -443,6 +443,24 @@ def release_symbol(settings: Settings, acc: Account) -> str:
 LONGEST_CLOSE_S = 9_999_999_999        # the widest ten-digit bar close (2286): the longest id an engine makes
 
 
+def verify_account(acc: Any) -> Callable[[Any], str | None]:
+    """The start check (`accounts.verify_terminal_account` for `acc`) as the engine runs it again on every account read
+    after start (trading-safety review 2026-11-09 R1, engine/terminal_account.py): the same login, server, demo vs real,
+    currency and margin rule, so a terminal switched to another login is refused at once, not at the next restart."""
+    from goldbot.ops import accounts
+    return lambda info: accounts.verify_terminal_account(acc, info)
+
+
+def wire_terminal_check(eng: Any, acc: Any, verify: Callable[[Any], str | None] | None) -> None:
+    """Give the engine the start check (`verify_account`; None on the paper stand-in) and, with it, the account's
+    configured trade server as the one it was last verified on (safety review LOW 2), so a switch to another server in
+    the first seconds after start, before the engine's own first account read, already stops closes by ticket
+    (engine/terminal_account.py `by_ticket`). The server is compared only, never logged."""
+    eng.verify_account = verify
+    if verify is not None:
+        eng.terminal.server = str(getattr(acc, "server", "") or "").strip() or None
+
+
 def approval_ids_problem(account_id: str) -> str | None:
     """Why no approval card could carry this account's proposal ids, or None (trading-safety review LOW-2 of 2c6e805):
     the longest id, from the engine's own `Engine._proposal_id` (it reads only `cfg.account_id`, so it is called on a
@@ -516,6 +534,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         start_refused(acc, f"refusing to start {account_id}: {why}")
     settings = load_settings()
     bridge = accounts.bridge_endpoint(account_id)
+    verify: Callable[[Any], str | None] | None = None      # R1: the start check, run again on every account read
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
         # service manager restarts it, so restart reconciliation settles any order whose result was lost (row X7)
@@ -526,6 +545,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         why = accounts.verify_terminal_account(acc, info)
         if why:
             start_refused(acc, f"refusing to trade {account_id} through the bridge: {why}", info)
+        verify = verify_account(acc)
     elif sys.platform == "win32":
         from goldbot.execution.market_watch import account_symbols
         from goldbot.execution.mt5_adapter import MT5Broker
@@ -540,6 +560,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         why = accounts.verify_terminal_account(acc, info)
         if why:
             start_refused(acc, f"refusing to trade {account_id}: {why}", info)
+        verify = verify_account(acc)
     elif os.environ.get(PAPER_ENGINE_ENV) == "1":
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
@@ -630,6 +651,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                  broker, agents,
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
+    wire_terminal_check(eng, acc, verify)      # R1 (engine/terminal_account.py): None on the paper stand-in
     if shadow_host and eng.store is not None:      # replica agents (box_break_close): carried state, shadow only
         resolve(attach_replica)(eng, settings)
     from goldbot.data.calendar import BrokerSessions, SessionTable
