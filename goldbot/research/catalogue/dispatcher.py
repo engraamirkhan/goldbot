@@ -22,6 +22,8 @@ from goldbot.research.catalogue.costs import window_model
 from goldbot.research.catalogue.data import (
     DAY,
     FINE_INSTRUMENTS,
+    INTRADAY,
+    INTRADAY_WARMUP_NS,
     Bars,
     Win,
     assert_sealed,
@@ -223,31 +225,77 @@ def cache_dir() -> Path:
     return Path(os.environ.get("CATALOGUE_CACHE", str(Path.home() / "tmp" / "catalogue_cache")))
 
 
-def checked_cache(b: Bars, w: Win, f: Path) -> Bars:
-    """A bar cache file is state: re-check it on every load, fail closed. A bar that closes after the window's end (a
-    2018 bar in the explore cache is an unsealed confirm read; a confirm cache bar at or after 2025-10-01 is the
-    holdout) raises; it is never served. The loader cuts the same way (data._cut), so a clean cache always passes."""
+CACHE_META = ("win", "data_from", "dec_from", "end", "lo")
+
+
+def cache_lo(w: Win, tf: str) -> int:
+    """The first bar instant the loader reads for `tf` in window `w` (data._cut / data.load_minutes): the window's
+    warm-up start, or the 120-day intraday warm-up for gold 5m-1h and the 1m fill bars."""
+    if tf == "1m" or (tf in INTRADAY and tf != "4h"):
+        return max(w.data_from, w.dec_from - INTRADAY_WARMUP_NS)
+    return w.data_from
+
+
+def cache_meta(w: Win, lo: int) -> dict[str, np.ndarray]:
+    """The span a cache file is built for, stored in the npz next to the bars."""
+    return {"win": np.array(w.name), "data_from": np.array(w.data_from, np.int64),
+            "dec_from": np.array(w.dec_from, np.int64), "end": np.array(w.end, np.int64), "lo": np.array(lo, np.int64)}
+
+
+def save_cache(f: Path, b: Bars, w: Win, tf: str) -> None:
+    """The one writer of $CATALOGUE_CACHE files (dispatcher and run.prebuild): bars plus the window span they hold."""
+    checked_cache(b, w, f, lo=cache_lo(w, tf))
+    f.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(f, t=b.t, ta=b.ta, o=b.o, h=b.h, l=b.l, c=b.c, spr=b.spr, co=b.co, seg=b.seg, vol=b.vol,
+             **cache_meta(w, cache_lo(w, tf)))  # type: ignore[arg-type]  # numpy stub: **kwds vs allow_pickle
+
+
+def _meta_ok(z: Any, w: Win, lo: int, f: Path) -> bool:
+    """False for a legacy file without a recorded span (rebuilt, never served); raises on a recorded span that is not
+    this window's (a foreign or mis-pathed file is a corruption signal, not a cache miss)."""
+    if any(k not in z.files for k in CACHE_META):
+        return False
+    got = (str(z["win"]), int(z["data_from"]), int(z["dec_from"]), int(z["end"]), int(z["lo"]))
+    want = (w.name, w.data_from, w.dec_from, w.end, lo)
+    if got != want:
+        raise HoldoutSealed(f"{f}: cache built for {got[0]} span {got[1:]} is not the {w.name} window {want[1:]} "
+                            "(foreign or mis-pathed cache file; delete it and rebuild)")
+    return True
+
+
+def checked_cache(b: Bars, w: Win, f: Path, *, lo: int | None = None) -> Bars:
+    """A bar cache file is state: re-check it on every load and write, fail closed. A bar that closes after the
+    window's end (a 2018 bar in the explore cache is an unsealed confirm read; a confirm cache bar at or after
+    2025-10-01 is the holdout), or that opens before the loader's warm-up start `lo` (a 2006 bar in the explore
+    cache), raises; it is never served. The loader cuts the same way (data._cut), so a clean cache always passes."""
     if len(b) and (int(np.max(b.ta)) > w.end or int(np.max(b.t)) >= w.end):
         raise HoldoutSealed(f"{f}: a cached bar closes after the {w.name} window end (stale or foreign cache file; "
                             "delete it and rebuild)")
+    if lo is not None and len(b) and int(np.min(b.t)) < lo:
+        raise HoldoutSealed(f"{f}: a cached bar opens before the {w.name} warm-up start (stale or foreign cache "
+                            "file; delete it and rebuild)")
     assert_sealed(b.ta, b.t)
     return b
+
+
+def _from_npz(z: Any, inst: str, tf: str, w: Win) -> Bars:
+    return Bars(inst, tf, z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"], z["seg"], z["vol"],
+                meta={"window": w.name, "dec_from": w.dec_from, "end": w.end})
 
 
 def get_bars(inst: str, tf: str, win: str, *, allow_test_old: bool = False) -> Bars:
     key = (inst, tf, win)
     if key in _BAR_CACHE:
         return _BAR_CACHE[key]
+    w = window(win, allow_test_old=allow_test_old)
     f = cache_dir() / win / f"{inst}_{tf}.npz"
-    if f.exists():
-        z = np.load(f, allow_pickle=False)
-        w = window(win, allow_test_old=allow_test_old)
-        b = checked_cache(Bars(inst, tf, z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"], z["seg"],
-                               z["vol"], meta={"window": win, "dec_from": w.dec_from, "end": w.end}), w, f)
+    lo = cache_lo(w, tf)
+    z = np.load(f, allow_pickle=False) if f.exists() else None
+    if z is not None and _meta_ok(z, w, lo, f):
+        b = checked_cache(_from_npz(z, inst, tf, w), w, f, lo=lo)
     else:
         b = load(inst, tf, win, allow_test_old=allow_test_old)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(f, t=b.t, ta=b.ta, o=b.o, h=b.h, l=b.l, c=b.c, spr=b.spr, co=b.co, seg=b.seg, vol=b.vol)
+        save_cache(f, b, w, tf)
     if inst == "XAUUSD" and tf in ("5m", "15m"):
         pass
     else:
@@ -264,14 +312,13 @@ def get_minutes(win: str, *, allow_test_old: bool = False) -> Bars:
         return _MINUTES[win]
     w = window(win, allow_test_old=allow_test_old)
     f = cache_dir() / win / "XAUUSD_1m.npz"
-    if f.exists():
-        z = np.load(f, allow_pickle=False)
-        b = checked_cache(Bars("XAUUSD", "1m", z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"],
-                               z["seg"], z["vol"], meta={"window": win, "dec_from": w.dec_from, "end": w.end}), w, f)
+    lo = cache_lo(w, "1m")
+    z = np.load(f, allow_pickle=False) if f.exists() else None
+    if z is not None and _meta_ok(z, w, lo, f):
+        b = checked_cache(_from_npz(z, "XAUUSD", "1m", w), w, f, lo=lo)
     else:
         b = load_minutes(win, allow_test_old=allow_test_old)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(f, t=b.t, ta=b.ta, o=b.o, h=b.h, l=b.l, c=b.c, spr=b.spr, co=b.co, seg=b.seg, vol=b.vol)
+        save_cache(f, b, w, "1m")
     _MINUTES[win] = b
     return b
 

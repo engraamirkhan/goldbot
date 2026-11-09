@@ -13,9 +13,9 @@ Static: every goldbot/research module that opens parquet bars names a holdout gu
 All market data here is synthetic, written under tmp_path; nothing is read from raw/."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
-import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -163,12 +163,20 @@ def test_shared_1m_readers_never_return_a_holdout_row(raw: Path) -> None:
 
 
 # ------------------------------------------------------------------ bar caches fail closed
-def _npz(path: Path, t: np.ndarray, step: int) -> None:
+HOUR_NS = 3_600_000_000_000
+
+
+def _npz(path: Path, t: np.ndarray, step: int, *, win: str | None = None, meta: bool = True) -> None:
+    """A cache file as dispatcher.save_cache writes it (with the window's span), or a legacy file (meta=False)."""
     n = len(t)
     path.parent.mkdir(parents=True, exist_ok=True)
     c = np.full(n, 2000.0)
+    extra = {}
+    if meta:
+        w = DA.window(win or path.parent.name, allow_test_old=True)
+        extra = D.cache_meta(w, D.cache_lo(w, "1m" if path.stem.endswith("_1m") else path.stem.split("_")[-1]))
     np.savez(path, t=t, ta=t + step, o=c, h=c + 1, l=c - 1, c=c, spr=np.full(n, 0.2), co=np.zeros(n, bool),
-             seg=np.zeros(n, np.int32), vol=np.ones(n))
+             seg=np.zeros(n, np.int32), vol=np.ones(n), **extra)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("win, first_bad", [("confirm", "2025-10-01"), ("confirm", "2026-02-02"),
@@ -178,24 +186,64 @@ def test_a_cached_bar_past_the_window_end_fails_closed_instead_of_being_served(
     """A stale or corrupt $CATALOGUE_CACHE/<win>/<inst>_<tf>.npz (another window's build, an older loader, a
     hand-copied file) was served as is: a holdout bar, or a 2018 bar in the explore cache (an unsealed confirm read).
     The explore 23:30 bar closes 2018-01-01 00:30, after the window end."""
-    hour = 3_600_000_000_000
     good = np.arange(int(pd.Timestamp("2017-06-01", tz="UTC").value), int(pd.Timestamp(first_bad, tz="UTC").value),
-                     hour, dtype=np.int64)[-200:]
+                     HOUR_NS, dtype=np.int64)[-200:]
     t = np.append(good, int(pd.Timestamp(first_bad, tz="UTC").value))
-    _npz(tmp_path / "cache" / win / "XAUUSD_1h.npz", t, hour)
+    _npz(tmp_path / "cache" / win / "XAUUSD_1h.npz", t, HOUR_NS)
     with pytest.raises(HoldoutSealed):
         D.get_bars("XAUUSD", "1h", win)
-    _npz(tmp_path / "cache" / win / "XAUUSD_1m.npz", t, hour)     # a corrupt 1m cache: closes stamped an hour on
+    _npz(tmp_path / "cache" / win / "XAUUSD_1m.npz", t, HOUR_NS)     # a corrupt 1m cache: closes stamped an hour on
     with pytest.raises(HoldoutSealed):
         D.get_minutes(win)
 
 
+@pytest.mark.parametrize("tf, first", [("1d", "2006-03-01"), ("4h", "2008-08-29"), ("1h", "2009-06-01")])
+def test_a_cached_bar_before_the_windows_warm_up_start_fails_closed(raw: Path, tmp_path: Path, tf: str,
+                                                                    first: str) -> None:
+    """Explore reads warm-up from 2008-09-01 (daily/4h) and 120 days before 2010 (gold intraday): a 2006 bar (TEST-OLD
+    proper), or one a day before the warm-up start, is not explore data and is never served from the explore cache."""
+    step = {"1d": 24 * HOUR_NS, "4h": 4 * HOUR_NS, "1h": HOUR_NS}[tf]
+    t = np.arange(int(pd.Timestamp(first, tz="UTC").value), int(pd.Timestamp("2010-03-01", tz="UTC").value), step,
+                  dtype=np.int64)
+    _npz(tmp_path / "cache" / "explore" / f"XAUUSD_{tf}.npz", t, step)
+    with pytest.raises(HoldoutSealed, match="before"):
+        D.get_bars("XAUUSD", tf, "explore")
+
+
+def test_an_explore_cache_file_served_as_confirm_fails_closed(raw: Path, tmp_path: Path) -> None:
+    """Code review LOW-1: a file built for explore and copied (or mis-pathed) into the confirm cache carries explore's
+    span; the window it is loaded as must match it."""
+    t = np.arange(int(pd.Timestamp("2017-01-02", tz="UTC").value), int(pd.Timestamp("2017-12-01", tz="UTC").value),
+                  HOUR_NS, dtype=np.int64)
+    _npz(tmp_path / "cache" / "confirm" / "XAUUSD_1h.npz", t, HOUR_NS, win="explore")
+    with pytest.raises(HoldoutSealed, match="explore"):
+        D.get_bars("XAUUSD", "1h", "confirm")
+
+
+def test_a_legacy_cache_file_without_its_span_is_rebuilt_never_served(raw: Path, tmp_path: Path) -> None:
+    """A cache file written before the span was recorded is not trusted: it is rebuilt from raw and rewritten."""
+    f = tmp_path / "cache" / "confirm" / "XAUUSD_1h.npz"
+    junk = np.arange(int(pd.Timestamp("2025-09-01", tz="UTC").value), HOLDOUT_NS, HOUR_NS, dtype=np.int64)
+    _npz(f, junk, HOUR_NS, meta=False)
+    b = D.get_bars("XAUUSD", "1h", "confirm")
+    want = DA.load("XAUUSD", "1h", "confirm")
+    assert np.array_equal(b.t, want.t) and not np.array_equal(b.c[: len(junk)], np.full(len(junk), 2000.0))
+    z = np.load(f, allow_pickle=False)
+    assert str(z["win"]) == "confirm" and int(z["end"]) == HOLDOUT_NS
+
+
 def test_a_clean_cache_file_is_still_served(raw: Path, tmp_path: Path) -> None:
-    hour = 3_600_000_000_000
-    t = np.arange(int(pd.Timestamp("2025-09-01", tz="UTC").value), HOLDOUT_NS, hour, dtype=np.int64)
-    _npz(tmp_path / "cache" / "confirm" / "XAUUSD_1h.npz", t, hour)
+    t = np.arange(int(pd.Timestamp("2025-09-01", tz="UTC").value), HOLDOUT_NS, HOUR_NS, dtype=np.int64)
+    _npz(tmp_path / "cache" / "confirm" / "XAUUSD_1h.npz", t, HOUR_NS)
     b = D.get_bars("XAUUSD", "1h", "confirm")
     assert len(b) == len(t) and int(b.ta.max()) == HOLDOUT_NS
+
+
+def test_every_catalogue_cache_write_goes_through_save_cache() -> None:
+    """run.prebuild and the dispatcher write caches only via dispatcher.save_cache (span recorded)."""
+    for rel in ("goldbot/research/catalogue/run.py", "goldbot/research/catalogue/dispatcher.py"):
+        src = (ROOT / rel).read_text()
+        assert src.count("np.savez(") == (1 if rel.endswith("dispatcher.py") else 0), rel
 
 
 # ------------------------------------------------------------------ EVAL-2 self-test bars: explore 2010-17 only
@@ -217,7 +265,7 @@ def test_selftest_bar_cache_outside_2010_2017_fails_closed(tmp_path: Path, monke
     t = np.append(np.arange(int(pd.Timestamp("2012-01-02", tz="UTC").value),
                             int(pd.Timestamp("2012-01-10", tz="UTC").value), hour, dtype=np.int64),
                   int(pd.Timestamp(bad, tz="UTC").value))
-    _npz(tmp_path / "st" / "bars" / "XAUUSD_1h_2010_2017.npz", np.sort(t), hour)
+    _npz(tmp_path / "st" / "bars" / "XAUUSD_1h_2010_2017.npz", np.sort(t), hour, meta=False)
     with pytest.raises(HoldoutSealed):
         st.explore_bars("XAUUSD", "1h")   # type: ignore[attr-defined]
 
@@ -244,17 +292,93 @@ def test_a_second_catalogue_confirm_read_is_refused(tmp_path: Path, monkeypatch:
         R._claim("confirm")
 
 
-# ------------------------------------------------------------------ static: loaders name a guard
-GUARD = re.compile(r"HOLDOUT|Holdout|holdout|assert_sealed|truncate_to_explore|2025-10-01")
-READS = re.compile(r"read_parquet|read_bar_files|pq\.read_table|np\.load\(")
+# ------------------------------------------------------------------ static: loaders call a guard
+READER_NAMES = {"read_parquet", "read_csv", "read_table", "read_feather", "read_bar_files", "read_ipc", "scan_parquet",
+                "scan_csv", "scan_ipc", "read_database"}
+GUARD_CALLS = {"assert_sealed", "assert_before_holdout", "assert_no_holdout_rows", "cut_at_holdout",
+               "truncate_to_explore", "window", "bounds", "entry_mask", "assert_block_allowed", "checked_cache",
+               "read_window_bars", "get_window", "get_windows", "_check_span", "stage_bars"}
 NO_BARS = {"goldbot/research/ruin.py": "reads a trades file (column r), not bars"}
 
 
-def test_every_research_module_that_opens_bar_files_names_a_holdout_guard() -> None:
-    bad = []
+def _dotted(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_dotted(node.value)}.{node.attr}"
+    if isinstance(node, ast.Call):
+        return _dotted(node.func)
+    return ""
+
+
+def _is_reader(call: ast.Call) -> bool:
+    name = _dotted(call.func)
+    last = name.rsplit(".", 1)[-1]
+    base = name.rsplit(".", 1)[0] if "." in name else ""
+    return (last in READER_NAMES or (last == "load" and base in ("np", "numpy"))
+            or (last == "dataset" and ("ds" == base or "pyarrow" in base))
+            or (base.split(".")[0] == "duckdb") or (last in ("sql", "query", "execute") and "duckdb" in base)
+            or (last.startswith(("read_", "scan_")) and base in ("pl", "polars")))
+
+
+def _mentions_holdout(node: ast.AST) -> bool:
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and "HOLDOUT" in n.id:
+            return True
+        if isinstance(n, ast.Attribute) and "HOLDOUT" in n.attr:
+            return True
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith("2025-10-01"):
+            return True
+    return False
+
+
+def guard_problem(src: str) -> str | None:
+    """None when the module reads nothing or calls a holdout guard (or compares / filters against the holdout start);
+    else what it reads. A docstring or comment naming the holdout is not a guard."""
+    tree = ast.parse(src)
+    readers = [_dotted(c.func) for c in ast.walk(tree) if isinstance(c, ast.Call) and _is_reader(c)]
+    if not readers:
+        return None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and _dotted(n.func).rsplit(".", 1)[-1] in GUARD_CALLS:
+            return None
+        if isinstance(n, ast.Compare) and _mentions_holdout(n):
+            return None
+        if isinstance(n, ast.Call) and any(k.arg == "filters" and _mentions_holdout(k.value) for k in n.keywords):
+            return None
+    return f"reads via {sorted(set(readers))} with no holdout guard call"
+
+
+def test_every_research_module_that_opens_bar_files_calls_a_holdout_guard() -> None:
+    bad = {}
     for p in sorted((ROOT / "goldbot" / "research").rglob("*.py")):
         rel = p.relative_to(ROOT).as_posix()
-        s = p.read_text()
-        if READS.search(s) and not GUARD.search(s) and rel not in NO_BARS:
-            bad.append(rel)
+        why = guard_problem(p.read_text())
+        if why and rel not in NO_BARS:
+            bad[rel] = why
     assert not bad, f"research loaders with no holdout guard: {bad}"
+
+
+@pytest.mark.parametrize("src", [
+    "import pandas as pd\nNOTE = 'HOLDOUT_FROM is sealed'\ndef f(p):\n    return pd.read_parquet(p)\n",
+    "import pandas as pd\ndef f(p):\n    return pd.read_csv(p)  # holdout cut later\n",
+    "import pyarrow.dataset as ds\ndef f(p):\n    return ds.dataset(p).to_table()\n",
+    "import duckdb\ndef f(p):\n    return duckdb.sql(f'select * from {p}')\n",
+    "import polars as pl\ndef f(p):\n    return pl.scan_parquet(p).collect()\n",
+    "import numpy as np\ndef f(p):\n    return np.load(p)\n",
+], ids=["docstring-only", "comment-only", "pyarrow.dataset", "duckdb", "polars", "np.load"])
+def test_the_static_guard_flags_readers_whose_holdout_mention_is_not_a_guard(src: str) -> None:
+    assert guard_problem(src) is not None
+
+
+@pytest.mark.parametrize("src", [
+    "import pandas as pd\nfrom x import HOLDOUT_FROM\ndef f(p):\n    d = pd.read_parquet(p)\n"
+    "    return d[d.ts < HOLDOUT_FROM]\n",
+    "import polars as pl\nfrom x import assert_sealed\ndef f(p):\n    d = pl.read_parquet(p)\n"
+    "    assert_sealed(d['ta'])\n    return d\n",
+    "import pandas as pd\nfrom x import HOLDOUT_FROM\ndef f(p):\n"
+    "    return pd.read_parquet(p, filters=[('ts', '<', HOLDOUT_FROM)])\n",
+    "def f(x):\n    return x + 1\n",
+], ids=["compare", "guard-call", "pushed-down-filter", "no-reader"])
+def test_the_static_guard_accepts_a_real_guard(src: str) -> None:
+    assert guard_problem(src) is None
