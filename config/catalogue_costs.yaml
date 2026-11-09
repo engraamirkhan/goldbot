@@ -646,3 +646,40 @@ instruments:
     brokers:
     - icm
     benchmark_pct: null
+# --- deciding cost (EVAL-2 method section 4, prereg 2026-11-09 section 4.2). Hand-maintained: `costs.main` keeps
+# every line from this marker on when it regenerates the measured table above. Aggregates only, no market data.
+deciding:
+  # ATR14 pin (Wilder, alpha 1/14, Dukascopy XAUUSD 1m mid on the 17:00 New York day clock). .2 = the .1 pin
+  # re-seeded from 2026-10-01 (prereg 6.2: .1's Wilder warm-up loaded 2026-01..09, inside the holdout); the re-seed
+  # reads only rows ts_utc >= 2026-10-01 (pyarrow filter). Today window 2026-10-12..11-06 (20 sessions), median price
+  # 4068.7. 5m-1h equal .1 to 0.01; 4h 27.88 (.1 27.97); 1d 63.59 (.1 78.63): only 7 daily warm-up bars, so the 1d
+  # figure is biased low and its cost in R high (conservative); a refill after 2026-11-06 fixes it as a .3 pin.
+  pin: atr-pin-2026-11-09.2
+  cost_of_record: cor-2026-10-31.2
+  pin_price_usd: 4068.7
+  rt_usd: 0.230          # ICM all-in round trip: spread + commission + slippage (not GOLD_RT_USD's 0.166)
+  overshoot_usd: 0.145   # measured stop overshoot, per stop leg (stop exit, stop-entry fill)
+  atr_today_usd:         # median ATR14 over the today window, by decision timeframe
+    5m: 3.839
+    15m: 7.004
+    30m: 10.084
+    1h: 14.688
+    4h: 27.882
+    1d: 63.588
+  # the stress line: today's $ round trip charged at the 2010-17 era ATR level, min(decision ATR, era median ATR):
+  # 15m 0.151 R at a 1-ATR stop whatever the window. Reported, never gated; net < 0 under it tags the cell
+  # COST-SENSITIVE.
+  stress_rt_usd: 0.230
+  era_atr_2010_17_usd: {5m: 0.82, 15m: 1.52, 30m: 2.24, 1h: 3.26, 4h: 6.62, 1d: 18.13}   # pin .1 stress table
+  # S5 fill-vs-replay gap ($/oz). gap = $0.300 - measured bias, where bias = mean(label_fill - label_sim) with
+  # + = fill better (s5_decomp section 1); gap + = fill worse than a prior-free replay. Source ~/tmp/s5_decomp_1109.md,
+  # 3,740 paired gold fills 2026-10-26..11-06: icm bias +0.308 -> gap -0.008; vantage bias +0.269 -> gap +0.031.
+  # Pooled per broker until a band has >= 200 paired gold fills; then that band's point estimate, never a credit.
+  # Charged as max(0, gap) at the decision ATR until S5 passes for (broker, band).
+  # Vantage exits store the level, not the deal price, so its exit slippage is unmeasured: until vantage's exit deal
+  # price is recorded it is charged $0.031 + icm's measured adverse stop-exit slip $0.040 = $0.071 in every band.
+  s5_gap_usd:
+    icm: {le5m: -0.008, 15m: -0.008, ge1h: -0.008}
+    vantage: {le5m: 0.071, 15m: 0.071, ge1h: 0.071}
+  s5_band: {5m: le5m, 15m: 15m, 30m: 15m, 1h: ge1h, 4h: ge1h, 1d: ge1h}
+  s5_passed: []          # "broker:band" entries whose S5 (|bias| <= 0.02 R on replay v2) is recorded as passed

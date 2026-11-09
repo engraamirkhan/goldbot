@@ -35,7 +35,24 @@ As implemented
                day counts 3, Sat/Sun 0 (BTCUSD: every night 1)
   duplicates   an instrument measured on two brokers takes the larger cost of each field (stricter)
   fail closed  an instrument not in the table raises MissingCost; in a window model a benchmark rate unknown at the fill
-               raises too. `default_model()` (synthetic tests only) sets every benchmark rate to 0."""
+               raises too. `default_model()` (synthetic tests only) sets every benchmark rate to 0.
+
+EVAL-2 deciding cost (method section 4, prereg 2026-11-09 section 4.2; pin in config/catalogue_costs.yaml `deciding`):
+  "Deciding cost = max(today R, bp-engine R on the window read) plus overshoot x (stop-exit share + stop-entry share),
+  scaled in bp with the round trip on the bp engine, plus swap. ... Until S5 passes per broker and timeframe, the
+  deciding cost includes the measured positive fill-vs-replay gap in $, converted at decision-time ATR. 'Positive'
+  means fills worse than replay v2; a fill better than replay earns no credit. Gates are read at 1.5x that."
+  "Stress line: the 2010-17 $-constant cost ... It is reported, never gated. A cell net < 0 under it is tagged
+  COST-SENSITIVE."
+  As implemented (gold only; any other instrument has no ATR pin and raises MissingCost; R = $ / (stop_atr x ATR)):
+  today      the all-in round trip ($0.230, cor-2026-10-31.2) over today's pinned ATR at the decision timeframe
+  bp engine  the same round trip in bp of the pin price (0.565 bp), charged at the decision price and decision ATR
+  overshoot  $0.145 per stop leg, in the same branch as the round trip that won the max (x 0.145 / 0.230)
+  swap       C2 financing over the hold (strict-interior rollovers, #343), floored at 0: a credit is never taken
+  S5 gap     max(0, measured gap $) at the decision ATR per (broker, band) until "broker:band" is in s5_passed
+  stress     the $-constant round trip ($0.230) at min(decision ATR, the 2010-17 era median ATR): 15m 0.151 R at a
+             1-ATR stop in every window
+  deciding_cost replaces, never adds to, the sim's cost_r."""
 from __future__ import annotations
 
 import hashlib
@@ -43,7 +60,7 @@ import json
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Final, Literal
 
 import numpy as np
 import yaml
@@ -77,6 +94,12 @@ FALLBACK_RT = {
 }
 FX_COMMISSION_FRAC = 7.0 / 100_000          # ICM $3.5/lot/side on 100k notional, as a fraction of notional
 NON_FX6 = ("XAGUSD", "XAUEUR", "XAUJPY", "XTIUSD", "BTCUSD", "XBRUSD", "XNGUSD", "XPTUSD", "XAUAUD")
+
+
+GATE_COST_MULT: Final = 1.5      # EVAL-2: gates are read at 1.5x the deciding cost
+ATR_PIN: Final = "atr-pin-2026-11-09.2"   # must equal config/catalogue_costs.yaml deciding.pin (else MissingCost)
+DECIDING_MARKER = "# --- deciding cost"   # costs.main keeps the hand-maintained block from this line on
+WINDOWS_EVAL2 = ("explore", "test_old", "confirm", "forward")
 
 
 class MissingCost(LookupError):
@@ -113,6 +136,13 @@ def _roll_table() -> tuple[int, np.ndarray]:
     roll = (d + pd.Timedelta(hours=ROLL_HOUR)).tz_localize(ROLL_TZ).tz_convert("UTC")
     from goldbot.data.timeutil import epoch_ns
     return int(epoch_ns(d[:1].tz_localize("UTC"))[0] // DAY), np.asarray(epoch_ns(roll), np.int64)
+
+
+def rollover_table() -> tuple[int, np.ndarray]:
+    """Public 17:00 New York rollover clock, the one the swap counts (#343): (first epoch day d0, rollover instant ns
+    per New York date from 1990-01-01 to 2040-12-31; index = epoch day - d0). 21:00 UTC in summer (EDT), 22:00 UTC in
+    winter. Lane 1's session_day uses it, so sessions and swap nights share one clock. Read-only: do not mutate."""
+    return _roll_table()
 
 
 def rollovers_between(t0: int, t1: int) -> np.ndarray:
@@ -207,6 +237,82 @@ class CostModel:
         """Financing over a hold in price units (positive = paid; a credit is negative)."""
         n = self.swap_nights(inst, t0, t1)
         return n * self.debit_pct(inst, side, t0) / 100.0 / DAYS_PER_YEAR * price if n else 0.0
+
+
+# ------------------------------------------------------------------ EVAL-2 deciding cost and stress line
+@dataclass(frozen=True, slots=True)
+class DecidingCost:
+    r: float                # total at 1.0x (gates read GATE_COST_MULT x r)
+    today_r: float
+    bp_engine_r: float
+    overshoot_r: float
+    swap_r: float
+    s5_gap_r: float         # 0.0 once S5 passes for (broker, tf band)
+    pin: str
+
+
+def _pin(inst: str, tf: str) -> dict[str, Any]:
+    """The `deciding` block of the cost table, checked against ATR_PIN, for a pinned (inst, tf); fail closed."""
+    pin: dict[str, Any] | None = load_table().get("deciding")
+    if not pin or pin.get("pin") != ATR_PIN:
+        raise MissingCost(f"deciding cost: config pin {(pin or {}).get('pin')} is not the code's {ATR_PIN}")
+    if inst != "XAUUSD":
+        raise MissingCost(f"deciding cost: {inst} has no ATR pin ({ATR_PIN} is gold only); the run stops")
+    if tf not in pin["atr_today_usd"]:
+        raise MissingCost(f"deciding cost: {tf} is not pinned in {ATR_PIN}")
+    return pin
+
+
+def _stop_usd(atr_decision: float, stop_atr: float) -> float:
+    stop = atr_decision * stop_atr
+    if not (np.isfinite(stop) and atr_decision > 0 and stop_atr > 0):
+        raise ValueError(f"stop distance needs a positive finite ATR and stop_atr, got {atr_decision} x {stop_atr}")
+    return float(stop)
+
+
+def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: float, stop_atr: float,
+                  t_fill_ns: int, t_exit_ns: int, stop_exit_share: float, stop_entry_share: float,
+                  window: Literal["explore", "test_old", "confirm", "forward"], broker: str = "icm",
+                  costs: CostModel | None = None) -> DecidingCost:
+    """EVAL-2 deciding cost in R at 1.0x (module docstring): max(today, bp engine) + overshoot x (stop-exit share +
+    stop-entry share) + swap (never a credit) + the positive S5 gap until S5 passes. Every term is >= 0. `costs`: the
+    window's model for the swap; required (None raises MissingCost). deciding_cost replaces, never adds to, the sim's
+    cost_r."""
+    if costs is None:
+        raise MissingCost("deciding cost needs the window's CostModel")
+    if window not in WINDOWS_EVAL2:
+        raise ValueError(f"deciding cost: unknown window {window!r}")
+    for share in (stop_exit_share, stop_entry_share):
+        if not 0.0 <= share <= 1.0:
+            raise ValueError(f"deciding cost: a stop share must be in [0, 1], got {share}")
+    pin = _pin(inst, tf)
+    stop = _stop_usd(atr_decision, stop_atr)
+    rt, osh = float(pin["rt_usd"]), float(pin["overshoot_usd"])
+    today_r = rt / (stop_atr * float(pin["atr_today_usd"][tf]))
+    bp_engine_r = rt / float(pin["pin_price_usd"]) * price / stop
+    overshoot_r = max(today_r, bp_engine_r) * osh / rt * (stop_exit_share + stop_entry_share)
+    swap_r = max(0.0, costs.financing(inst, side, price, t_fill_ns, t_exit_ns)) / stop
+    gaps = pin["s5_gap_usd"].get(broker)
+    if gaps is None:
+        raise MissingCost(f"deciding cost: no S5 fill-vs-replay gap for broker {broker!r}")
+    band = pin["s5_band"][tf]
+    s5_gap_r = 0.0 if f"{broker}:{band}" in (pin.get("s5_passed") or []) else max(0.0, float(gaps[band])) / stop
+    total = max(today_r, bp_engine_r) + overshoot_r + swap_r + s5_gap_r
+    return DecidingCost(r=total, today_r=today_r, bp_engine_r=bp_engine_r, overshoot_r=overshoot_r, swap_r=swap_r,
+                        s5_gap_r=s5_gap_r, pin=ATR_PIN)
+
+
+def stress_cost(inst: str, tf: str, *, atr_decision: float, stop_atr: float) -> float:
+    """The stress line in R: today's $-constant round trip at the 2010-17 level, stress_rt_usd / (stop_atr x
+    min(atr_decision, era ATR)): 15m 0.151 R at a 1-ATR stop. Reported, never gated, and not the deciding cost."""
+    pin = _pin(inst, tf)
+    _stop_usd(atr_decision, stop_atr)
+    return float(pin["stress_rt_usd"]) / (stop_atr * min(atr_decision, float(pin["era_atr_2010_17_usd"][tf])))
+
+
+def cost_sensitive(net_at_stress_r: float) -> bool:
+    """COST-SENSITIVE: the cell's net under the stress line is below 0 (the tag goes to the owner with any L5 case)."""
+    return net_at_stress_r < 0
 
 
 # ------------------------------------------------------------------ the table
@@ -305,7 +411,9 @@ def main(argv: list[str] | None = None) -> None:
             " <measured_costs.json>`;\n# do not edit by hand. Aggregates only (no account, login or host). rt_bps ="
             " median spread + 2 x commission per side, bps of\n# price; long_pct: the long pays %/yr; short_credit_pct:"
             " the short receives %/yr; markups %/yr floored at 0 (C2).\n")
-    TABLE_PATH.write_text(head + yaml.safe_dump(doc, sort_keys=False, width=120))
+    old = TABLE_PATH.read_text() if TABLE_PATH.exists() else ""
+    keep = old[old.index(DECIDING_MARKER):] if DECIDING_MARKER in old else ""   # the hand-maintained deciding block
+    TABLE_PATH.write_text(head + yaml.safe_dump(doc, sort_keys=False, width=120) + keep)
     print(f"wrote {TABLE_PATH} ({len(doc['instruments'])} instruments, {doc['version']})")
 
 
