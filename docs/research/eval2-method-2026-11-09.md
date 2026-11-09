@@ -497,9 +497,13 @@ replay v2 for any broker; the Lane 5A code only computes it.
   1h-4h, 1d.
 - C5: the forward replay uses the r2 cost model whose version and sha256 the card recorded at forward start
   (`pinned_costs`); a nightly refit never changes forward labels.
+  Every L4 fill-vs-replay takes its replay side from `replay_frame_v2(..., pinned_costs(card, hash))`, never from
+  the nightly `exploration_replay` rows (re-check N5).
 - C6: the stop overshoot is measured against the bar-implied price (a sell close against min(level, the bid open of
   its exit minute), a buy close against max(level, the ask open)); a stop leg with no bar at its exit minute is left
-  out and counted (`stop_no_bar`).
+  out and counted (`stop_no_bar`). The bar window is the labeller's (the last ~30 days), so the stop cells
+  effectively rest on the last ~30 days of stops only; older stop legs fall back towards the prior (the
+  cautious side).
 - C7: the nightly report gives each broker's share of entries filled within $0.005 of the quote; at 95 % or more on a
   demo-exit-at-level broker its entry cells take max(ICM entry cell, prior) and its S5 reads NOT AVAILABLE.
 - C8: forward units carry broker, tf and `s5_ok` (`apply_s5`); a fill value where S5 has not passed for that
@@ -512,6 +516,7 @@ replay v2 for any broker; the Lane 5A code only computes it.
   bound); the exit mix judged from 50 fills at p >= 0.01; the time leg always charges the $0.15 prior (the ledger
   records no close quote; recording it is a Lane 5B item); the exploration fills feed only the replay's leg table, never
   the engine's `slippage` cells, the RiskGate cost, the deciding cost or any real-money hurdle; a replay with no bar at
-  its entry minute is unresolved (r1 and r2).
+  its entry minute is unresolved (r1 and r2), and the nightly report counts those (`no_entry_bar`); a demo-exit-at-level
+  broker with no measured entry-at-quote share reads S5 NOT AVAILABLE (re-check R1).
 - Coverage: r2 is computed nightly for gold candidates decided in the last `EXPLORATION_LABEL_DAYS` (30) days, the
   labeller's bar window; older candidates keep r1 only unless a one-off backfill is run.

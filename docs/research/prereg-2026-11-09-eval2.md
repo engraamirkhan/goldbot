@@ -352,7 +352,8 @@ Pytest marker `selftest` (fast set S0, S2, S3, S6) and CI job `selftest` (SRE co
   uncredited target give-back, +0.017 R, remains). Vantage cannot pass S5 until its exit deal price is recorded.
   S5 passes at |bias| <= 0.02 R per broker and TF band.
 
-**Amendment 2026-11-09 (quant-reviewer; written and signed before any replay-v2 S5 read).** Vantage S5: the exit
+**Amendment 2026-11-09 (quant-reviewer; written and signed before any replay-v2 S5 read).** Supersedes the
+sentence 'Vantage cannot pass S5 until its exit deal price is recorded.' above. Vantage S5: the exit
 deal price is recorded (exit deal VWAP, R110). Vantage-demo fills stops and targets at the level, so its exit-slip term
 cannot be measured on demo. S5 on vantage is read on the entry leg (fill vs replay, spread) only. Its exit term is not
 read on demo. Any real-money use takes the larger of the ICM-measured exit slip (per leg and session) and the prior.

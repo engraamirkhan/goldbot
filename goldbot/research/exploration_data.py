@@ -825,6 +825,24 @@ def replay_frame_v2(bars_1m: pd.DataFrame, rows: pd.DataFrame, cost_of_day: Cost
     return pd.DataFrame(out, columns=cols)
 
 
+def entry_bar_missing(bars_1m: pd.DataFrame, rows: pd.DataFrame) -> int:
+    """How many of `rows` (read_obs columns) decided inside the bars' span have no bar at their entry minute (decision
+    + the arm's send delay, floored): unresolved by r1 and r2 alike, never entered at a later minute's open (quant
+    re-check N4: reported nightly)."""
+    if bars_1m.empty or rows.empty:
+        return 0
+    t = pd.DatetimeIndex(pd.to_datetime(bars_1m["ts_utc"], utc=True)).as_unit("ns")
+    have = set(t)
+    lo, hi = t.min(), t.max()
+    n = 0
+    for r in rows[["arm_id", "tf", "decision_utc"]].to_dict("records"):
+        decision = pd.Timestamp(r["decision_utc"])
+        sent = (decision + pd.Timedelta(seconds=arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), decision))
+                ).floor("min")
+        n += int(lo <= decision and sent <= hi and sent not in have)
+    return n
+
+
 def void_ids(db: Database, replay_version: ReplayVersion = REPLAY_V1) -> set[str]:
     """The candidates whose `replay_version` label is void."""
     with db.connection() as conn:

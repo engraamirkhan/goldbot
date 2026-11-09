@@ -35,6 +35,10 @@ TRACK before 100 signals (C9). Forward units carry broker, tf and `s5_ok` (`appl
 value for a (broker, band) whose S5 has not passed. With per-day terms the execution e-process needs about 300 fills
 (about 60 session days) to catch a 0.05 R overrun (C2).
 
+Where the replay side of an L4 fill-vs-replay comes from (quant re-check N5): always
+`exploration_data.replay_frame_v2(..., pinned_costs(card_model, card_hash))`, the r2 model frozen in the card at
+forward start; never the nightly `exploration_replay` rows, whose per-session-day cost models keep refitting.
+
 S5 (method section 6 and the prereg amendment of 2026-11-09): "S5 passes per broker and TF band on at least 50 pairs
 over at least 10 session days, with |mean fill - replay v2| <= 0.02 R and a lower one-sided 95 % day-clustered bound
 >= -0.02 R." The 1m-5m band is informational only (C4). Vantage: "S5 on vantage is read on the entry leg (fill vs
@@ -316,7 +320,7 @@ def s5_read(pairs: pd.DataFrame, *, broker: str, tf_band: str, min_n: int = S5_M
     """S5 for one broker and band on `exploration_data.fill_replay_pairs` rows (gold, replay v2, not void), by the
     prereg amendment of 2026-11-09 (module docstring). A broker in `costs.DEMO_EXIT_AT_LEVEL` reads the entry leg only,
     never its exit leg, and reads NOT AVAILABLE when `entry_at_quote_share` (`ReplayCostsV2.entry_at_quote_share`) is
-    ENTRY_AT_QUOTE_SHARE or more. The 1m-5m band is INFORMATIONAL (never passes). Reports the bias by the fill's exit
+    ENTRY_AT_QUOTE_SHARE or more, or not given (unmeasured is never a pass). The 1m-5m band is INFORMATIONAL (never passes). Reports the bias by the fill's exit
     kind and the paired rows on arms the spec does not name (`pairs.attrs["unknown_arm_labels"]`)."""
     if tf_band not in TF_BANDS:
         raise ValueError(f"unknown TF band {tf_band!r}: one of {TF_BANDS}")
@@ -336,7 +340,9 @@ def s5_read(pairs: pd.DataFrame, *, broker: str, tf_band: str, min_n: int = S5_M
         kinds = p["exit_kind"].astype(str).to_numpy()[ok]
         by_kind = {str(k): float(x[kinds == k].mean()) for k in sorted(set(kinds))}
     status: S5Status
-    if entry_only and entry_at_quote_share is not None and entry_at_quote_share >= ENTRY_AT_QUOTE_SHARE:
+    if entry_only and entry_at_quote_share is None:
+        status, reason = "NOT AVAILABLE", "entry-at-quote share not measured"     # quant re-check R1: never a pass
+    elif entry_only and entry_at_quote_share is not None and entry_at_quote_share >= ENTRY_AT_QUOTE_SHARE:
         status = "NOT AVAILABLE"
         reason = f"{entry_at_quote_share:.1%} of entries fill within $0.005 of the quote: entry leg not evidence"
     elif n < min_n or n_days < min_days:

@@ -310,6 +310,27 @@ def test_vantage_s5_reads_the_entry_leg_only_and_is_never_green_on_the_exit_leg(
     assert fw.s5_read(_pairs("icm", "15m", 80, gap=0.0), broker="icm", tf_band="15m-30m").exit_leg_read is True
 
 
+def test_vantage_s5_without_an_entry_at_quote_share_reads_not_available():
+    """Quant re-check R1: an unmeasured share is never read as a pass."""
+    s = fw.s5_read(_pairs("vantage", "15m", 80, gap=0.0), broker="vantage", tf_band="15m-30m")
+    assert s.status == "NOT AVAILABLE" and not s.passed and "not measured" in s.reason
+
+
+def test_forward_state_futility_uses_session_day_terms():
+    """Quant re-check N2: forward_state's futility and edge reads are the per-session-day processes."""
+    u = _units(240, excess=-0.02, seed=3)
+    s = _state(u)
+    excess = u["excess_r"].to_numpy(dtype=float)
+    day = u["day"].astype(str).to_numpy()
+    h1 = max(fw.H1_FLOOR_R, 0.5 * 0.2)
+    assert s.e_futility == pytest.approx(fw.e_futility(excess, h1_r=h1, day=day))
+    assert s.e_futility != pytest.approx(fw.e_futility(excess, h1_r=h1))
+    up = _units(240, excess=0.3, seed=4)
+    e = _state(up).e_edge
+    assert e == pytest.approx(fw.e_edge(up["excess_r"].to_numpy(dtype=float), day=up["day"].astype(str).to_numpy()))
+    assert e != pytest.approx(fw.e_edge(up["excess_r"].to_numpy(dtype=float)))
+
+
 def test_vantage_s5_reads_not_available_when_its_entries_fill_at_the_quote():
     """Quant C7."""
     s = fw.s5_read(_pairs("vantage", "15m", 80, gap=0.0), broker="vantage", tf_band="15m-30m",

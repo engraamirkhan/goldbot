@@ -549,3 +549,46 @@ def test_fill_replay_pairs_report_the_fills_exit_kind_and_the_paired_rows_on_unk
     _ledger(db, "a", reason="target", exit_price=2002.1)
     p = ex.fill_replay_pairs(db, broker="icm", instruments=inst)
     assert p["exit_kind"].tolist() == ["target"] and p.attrs["unknown_arm_labels"] == 1
+
+
+# ---------------------------------------------------------------------------------------------- re-check (b122f93a)
+def test_the_nightly_report_counts_candidates_left_unresolved_for_a_missing_entry_minute_bar(tmp_path):
+    """Quant re-check N4: r1 and r2 alike."""
+    from goldbot.ops import jobs
+    from tests.test_exploration_broker import _acc, _ctx
+    _cand(_db(tmp_path), "g")
+    bars = _m1(T0 - pd.Timedelta(minutes=5), [(2000.0, 2000.0, 2000.0)] * 120).drop(index=5)    # no 08:00 bar
+    rep = jobs.exploration_learn(_ctx(tmp_path, [_acc("icm-probe", "icm")], {"icm-probe": bars}),
+                                 T0 + pd.Timedelta(hours=1))
+    assert rep["labelled"] == {"icm-probe": 0}
+    assert rep["no_entry_bar"] == {"r1": {"icm-probe": 1}, "r2": {"icm-probe": 1}}
+
+
+def test_the_nightly_job_moves_stops_to_the_bar_implied_price_before_fitting_the_leg_table(tmp_path, monkeypatch):
+    """Quant re-check (jobs.py): `bar_implied_stop_legs` runs before any r2 cost model is fitted."""
+    from goldbot.ops import jobs
+    from tests.test_exploration_broker import _acc, _ctx
+    calls: list[str] = []
+    real_adjust, real_daily, real_costs = jobs.bar_implied_stop_legs, jobs.daily_costs_v2, jobs.replay_costs_v2
+
+    def adjust(legs: pd.DataFrame, bars_of: Any) -> Any:
+        calls.append("adjust")
+        out, n = real_adjust(legs, bars_of)
+        return out.assign(_adjusted=True), n
+
+    def daily(base: Any, legs: pd.DataFrame, **kw: Any) -> Any:
+        calls.append("daily" if "_adjusted" in legs else "daily-raw")
+        return real_daily(base, legs, **kw)
+
+    def costs(base: Any, legs: pd.DataFrame, **kw: Any) -> Any:
+        calls.append("costs" if "_adjusted" in legs else "costs-raw")
+        return real_costs(base, legs, **kw)
+    monkeypatch.setattr(jobs, "bar_implied_stop_legs", adjust)
+    monkeypatch.setattr(jobs, "daily_costs_v2", daily)
+    monkeypatch.setattr(jobs, "replay_costs_v2", costs)
+    db = _db(tmp_path)
+    _cand(db, "g")
+    _ledger(db, "g")
+    bars = {"icm-probe": _m1(T0, [(2000.0, 2000.0, 2000.0)] * 120)}
+    jobs.exploration_learn(_ctx(tmp_path, [_acc("icm-probe", "icm")], bars), T0 + pd.Timedelta(hours=1))
+    assert calls == ["adjust", "daily", "costs"]

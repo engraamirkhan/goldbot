@@ -179,6 +179,7 @@ from goldbot.research.exploration_data import (
     ReplayCostsV2,
     bar_implied_stop_legs,
     daily_costs_v2,
+    entry_bar_missing,
     label_candidates,
     label_candidates_v2,
     learn,
@@ -432,6 +433,8 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     pending = pending[pending["broker"].notna()]
     labelled: dict[str, int] = {}
     labelled_v2: dict[str, int] = {}
+    no_entry_bar: dict[str, dict[str, int]] = {"r1": {}, "r2": {}}
+    gold_ids = set(read_obs(db, instrument=GOLD)["candidate_id"])     # the only rows r1 replays
     synthetic: dict[str, int] = {}
     costs: dict[str, ReplayCosts] = {}
     of_day: dict[str, CostOfDay] = {}
@@ -487,6 +490,11 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             no_bars.append(account)
             log.warning("no 1m bars for %s (%s) in bars_1m_live / bars_1m_broker / bars_1m: its exploration "
                         "candidates are not labelled tonight", account, broker)
+        # quant re-check N4: candidates left unresolved because their entry minute has no bar (r1 and r2)
+        no_entry_bar["r1"][account] = entry_bar_missing(bars, pending[(pending["account_id"] == account)
+                                                                     & pending["candidate_id"].isin(gold_ids)])
+        if broker in of_day:
+            no_entry_bar["r2"][account] = entry_bar_missing(bars, pending_v2[pending_v2["account_id"] == account])
         n = label_candidates(db, bars, costs[broker], cutoff=slot, account_id=account,
                              symbol=symbol_of.get(account, "XAUUSD")) if not bars.empty else 0
         labelled[account] = labelled.get(account, 0) + n
@@ -522,7 +530,7 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return {"labelled": labelled, "no_bars": no_bars, "cost_model": {b: m.version for b, m in costs.items()},
             "stamped": stamped,
             "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out, "label_void": label_void,
-            "replay_v2": replay_v2}
+            "replay_v2": replay_v2, "no_entry_bar": no_entry_bar}
 
 
 def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> tuple[dict[str, Any], frozenset[str]]:
