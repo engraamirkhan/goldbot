@@ -10,6 +10,11 @@ a repair row's `repair.replaces` (scripts/registry_repair.py) is dropped from th
   python -m goldbot.research.registry_sync merge <a.jsonl> <b.jsonl> [-o out.jsonl]
   python -m goldbot.research.registry_sync fetch OUT [--bootstrap] | save LOCAL [--bootstrap] | recover   (via gh)
   python -m goldbot.research.registry_sync publish-outbox OUTBOX WORK [--extra rows.jsonl]   (Mac, via gh)
+  python -m goldbot.research.registry_sync pull-brain LOCAL   (Mac, via ssh; scripts/registry_mirror_pull.sh)
+
+The brain's state/research_registry.jsonl is the registry of record (PD ruling 2026-11-09); the Mac keeps a read-only
+mirror of it (`pull_brain`): 0444, with a `<registry>.mirror` marker that makes every writer refuse
+(registry.RegistryReadOnlyMirror).
 """
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import random
 import re
 import subprocess
@@ -26,10 +32,11 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
-from goldbot.research.registry import is_trial
+from goldbot.research.registry import _refuse_mirror, is_trial, mirror_marker
 
 REPO = "engraamirkhan/goldbot"
 TAG = "research-v1"
@@ -96,6 +103,7 @@ def merge_rows(*sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    _refuse_mirror(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text("".join(json.dumps(r, default=str) + "\n" for r in rows))
@@ -580,6 +588,73 @@ def recover(t: Transport) -> int:
     return sum(1 for r in rows if is_trial(r))
 
 
+# ------------------------------------------------------------------ read-only mirror of the brain's registry
+# The brain is the registry of record (PD ruling 2026-11-09). The Mac's copy is replaced by the brain's, never merged
+# into: a copy without every local key is refused (the no-shrink rule of save_rows/push_release), so a stale or
+# truncated read never drops a trial from the mirror. The marker is written before the file, so a crash in between
+# leaves a marked (read-only) copy, never an unmarked writable one.
+SSH_CONFIG = Path.home() / ".ssh" / "goldbot.conf"     # host alias and address live there, never in this repo
+BRAIN_HOST = "goldbot-brain"
+BRAIN_USER = "goldbot"
+BRAIN_REGISTRY = "/opt/goldbot/state/research_registry.jsonl"
+SSH_TIMEOUT_S = 300
+MIRROR_MODE = 0o444
+
+
+def ssh_fetch(host: str = BRAIN_HOST, remote: str = BRAIN_REGISTRY, *, ssh_config: Path = SSH_CONFIG,
+              user: str = BRAIN_USER) -> bytes:
+    """The brain's registry bytes, read over ssh as the service user (`sudo -u goldbot cat`, nothing written)."""
+    cmd = ["ssh", "-F", str(ssh_config), "-o", "BatchMode=yes", host, "sudo", "-n", "-u", user, "cat", remote]
+    try:
+        r = subprocess.run(cmd, capture_output=True, check=False, timeout=SSH_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ssh {host} timed out after {SSH_TIMEOUT_S} s reading {remote}") from exc
+    if r.returncode != 0:
+        raise RuntimeError(f"ssh {host} could not read {remote} (exit {r.returncode}): "
+                           f"{r.stderr.decode(errors='replace').strip()}")
+    return r.stdout
+
+
+def _write_atomic(path: Path, data: bytes, mode: int) -> None:
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".part")
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def pull_brain(local: Path, *, fetch: Callable[[], bytes] | None = None, source: str | None = None) -> int:
+    """Replace `local` with the brain's registry as a read-only mirror. Every row must parse; a copy that is empty or
+    lacks any key of the current local copy is refused and `local` is left as it was. Writes the marker
+    `<local>.mirror` (source, sha256, rows, pulled_at), then the copy, byte for byte, atomically and 0444. Returns the
+    row count."""
+    data = (fetch or ssh_fetch)()
+    src = source or f"{BRAIN_HOST}:{BRAIN_REGISTRY}"
+    try:
+        rows = _parse(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"the copy from {src} has a row that does not parse: {exc}; mirror left as it was") from exc
+    if not rows:
+        raise ValueError(f"the copy from {src} has no rows: refusing to mirror an empty registry")
+    missing = _keys(read_rows(local)) - _keys(rows)
+    if missing:
+        raise ValueError(f"the copy from {src} ({len(rows)} rows) lacks {len(missing)} key(s) the local registry "
+                         f"holds (e.g. {sorted(missing)[0]}): refusing to shrink the mirror")
+    local.parent.mkdir(parents=True, exist_ok=True)
+    marker = {"source": src, "sha256": hashlib.sha256(data).hexdigest(), "rows": len(rows),
+              "pulled_at": datetime.now(timezone.utc).isoformat()}
+    _write_atomic(mirror_marker(local), (json.dumps(marker, indent=1) + "\n").encode(), 0o644)
+    _write_atomic(local, data, MIRROR_MODE)
+    return len(rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -599,12 +674,26 @@ def main() -> None:
     o.add_argument("--extra", type=Path, action="append", default=[])
     sub.add_parser("recover", help="(gh) union every registry copy on the release, including pending uploads, "
                                    "and publish it")
+    b = sub.add_parser("pull-brain", help="(ssh) replace LOCAL with the brain's registry as a read-only mirror")
+    b.add_argument("local", type=Path)
+    b.add_argument("--host", default=BRAIN_HOST, help="ssh host alias in --ssh-config")
+    b.add_argument("--ssh-config", type=Path, default=SSH_CONFIG)
+    b.add_argument("--remote", default=BRAIN_REGISTRY, help="the registry's path on the brain")
     args = ap.parse_args()
     if args.cmd == "merge":
         out = args.out or args.inputs[0]
         print(f"{merge_files(out, *args.inputs)} trials -> {out}")
         return
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.cmd == "pull-brain":
+        try:
+            n = pull_brain(args.local, source=f"{args.host}:{args.remote}",
+                           fetch=lambda: ssh_fetch(args.host, args.remote, ssh_config=args.ssh_config))
+        except (RuntimeError, ValueError) as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"mirrored {n} rows -> {args.local} (read-only; marker {mirror_marker(args.local)})")
+        return
     try:
         if args.cmd == "fetch":
             rows, _ = pull_stamped(GhTransport(), bootstrap=args.bootstrap)

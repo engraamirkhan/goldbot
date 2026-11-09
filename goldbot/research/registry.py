@@ -292,6 +292,28 @@ def promotion_pass_counts(row: dict[str, Any], rows: list[dict[str, Any]]) -> bo
     return promotion_refusal(row, rows) is None
 
 
+MIRROR_SUFFIX = ".mirror"      # `<registry>.mirror`: this copy is a read-only mirror (registry_sync.pull_brain)
+
+
+class RegistryReadOnlyMirror(PermissionError):
+    """The registry is a read-only mirror of the registry of record (the brain's; PD ruling 2026-11-09): its
+    `<path>.mirror` marker exists. Record trials on the brain; refresh the mirror with scripts/registry_mirror_pull.sh."""
+
+
+def mirror_marker(path: str | Path) -> Path:
+    return Path(f"{path}{MIRROR_SUFFIX}")
+
+
+def _refuse_mirror(path: str | Path) -> None:
+    """Raise RegistryReadOnlyMirror when `path` is a read-only mirror (its marker exists). Every writer of the
+    registry and its sidecars calls this before touching a byte."""
+    marker = mirror_marker(path)
+    if marker.exists():
+        raise RegistryReadOnlyMirror(
+            f"{path} is a read-only mirror of the registry of record ({marker} exists): write on the brain, then "
+            "refresh it with scripts/registry_mirror_pull.sh")
+
+
 class TrialRegistry:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -325,6 +347,7 @@ class TrialRegistry:
                                ledger_id: str = "", timeframe: str = "") -> dict[str, Any]:
         """Record one discovery batch's `k_contrib` (new distinct spec hashes of the search ledger `ledger_id`, whose
         chain tip was `ledger_head`) in the sidecar: no trial, no budget slot, no change to `n_trials_effective`."""
+        _refuse_mirror(self.path)
         if int(k_contrib) < 0:
             raise ValueError(f"k_contrib must be >= 0, got {k_contrib}")
         row = {"status": DISCOVERY_BATCH, "ts": _utcnow().isoformat(), "k_contrib": int(k_contrib),
@@ -379,6 +402,7 @@ class TrialRegistry:
         return ts
 
     def _append(self, row: dict[str, Any]) -> None:
+        _refuse_mirror(self.path)
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, default=str) + "\n")
 
@@ -621,6 +645,7 @@ class TrialRegistry:
         """Attach a re-evaluation (e.g. kind "cpcv") to an existing trial row; raises KeyError for an unknown trial.
         Written to the evidence sidecar, so the trial count, the budget and the deflated Sharpe are unchanged.
         `now`: the time it is stamped with (the scheduler's slot), default the wall clock."""
+        _refuse_mirror(self.path)
         row = self.row(trial)
         if row is None:
             raise KeyError(f"no trial #{trial} in {self.path}")
