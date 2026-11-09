@@ -1795,9 +1795,10 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         kind = budget.entry_kind(arm)
         if (why := budget.daily_refusal(daily, kind, ps.entries, segment=budget.day_segment(s.bar_ts),
                                         budgets=ps.sessions,
-                                        cell_fills=budget.cell_fills(eng, ex, now).get(arm.instrument, 0))) is not None:
+                                        cell_fills=budget.cell_fills(eng, ex, now).get(arm.instrument, 0),
+                                        fast=arm.tf in budget.FAST_TFS, prior_day=s.bar_ts < ps.since)) is not None:
             refuse(why)
-            return "cap" if why in budget.PASS_WIDE else "refused"
+            return "cap" if budget.pass_wide(why, s.bar_ts, now, ps.since) else "refused"
         if kind != "edge":
             paired = arm.arm_id in ps.pairs
             arms_of = tuple(a for a in ps.pairs.get(arm.arm_id, ()) if a in ps.active)

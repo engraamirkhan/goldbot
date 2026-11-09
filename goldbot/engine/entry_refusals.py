@@ -127,32 +127,39 @@ REFUSALS: tuple[EntryRefusal, ...] = (
 STATIC = frozenset({WINDOW_0207, F1_PIT, refusals_novel.LEARNING_ICM_ONLY})
 
 
-def statically_refused(eng: Engine, arm: Arm, decision_utc: pd.Timestamp) -> bool:
-    """True when a STATIC refusal (REFUSALS, read at call time) would refuse a signal of `arm` decided at
-    `decision_utc`; fail closed like `first_refusal` (a refusal that raises counts as refusing)."""
-    from goldbot.engine.exploration import Pending
-    s = Pending.model_construct(arm_id=arm.arm_id, side=0, bar_ts=decision_utc, stop_usd=0.0, target_usd=0.0,
-                                hold_bars=0, decision_utc=None)
-    return first_refusal(eng, arm, s, tuple(r for r in REFUSALS if r.name in STATIC)) is not None
-
-
 class Refused(FrozenRecord):
     """Why an entry is refused: the refusal's name, or ERROR_PREFIX + its name with the exception's type in `error`."""
     reason: str
     error: str | None = None
 
 
-def first_refusal(eng: Engine, arm: Arm, s: Pending,
-                  refusals: tuple[EntryRefusal, ...] | None = None) -> Refused | None:
-    """The first of `refusals` (REFUSALS by default, read at call time) that refuses the signal `s` of `arm`, or None
-    when every one lets it through. Fail closed: a refusal that raises refuses the entry (`refusal_error:<name>`)."""
-    for r in REFUSALS if refusals is None else refusals:
+def _first(eng: Engine, arm: Arm, s: Pending, refusals: tuple[EntryRefusal, ...]) -> Refused | None:
+    for r in refusals:
         try:
             hit: Any = r.applies(eng, arm, s)
         except Exception as exc:
-            log.warning("entry refusal %s raised on arm %s (%s): entry refused", r.name, arm.arm_id,
-                        type(exc).__name__)
             return Refused(reason=ERROR_PREFIX + r.name, error=type(exc).__name__)
         if hit:
             return Refused(reason=r.name)
     return None
+
+
+def first_refusal(eng: Engine, arm: Arm, s: Pending,
+                  refusals: tuple[EntryRefusal, ...] | None = None) -> Refused | None:
+    """The first of `refusals` (REFUSALS by default, read at call time) that refuses the signal `s` of `arm`, or None
+    when every one lets it through. Fail closed: a refusal that raises refuses the entry (`refusal_error:<name>`)."""
+    got = _first(eng, arm, s, REFUSALS if refusals is None else refusals)
+    if got is not None and got.error is not None:
+        log.warning("entry refusal %s raised on arm %s (%s): entry refused", got.reason.removeprefix(ERROR_PREFIX),
+                    arm.arm_id, got.error)
+    return got
+
+
+def static_refusal(eng: Engine, arm: Arm, decision_utc: pd.Timestamp) -> Refused | None:
+    """The STATIC refusal (REFUSALS, read at call time) that would refuse a signal of `arm` decided at `decision_utc`,
+    or None. Fail closed like `first_refusal` (a refusal that raises refuses, `refusal_error:<name>`), but silent: the
+    caller logs once per read, not once per past candidate."""
+    from goldbot.engine.exploration import Pending
+    s = Pending.model_construct(arm_id=arm.arm_id, side=0, bar_ts=decision_utc, stop_usd=0.0, target_usd=0.0,
+                                hold_bars=0, decision_utc=None)
+    return _first(eng, arm, s, tuple(r for r in REFUSALS if r.name in STATIC))

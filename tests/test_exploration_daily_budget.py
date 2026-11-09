@@ -5,6 +5,8 @@ session per account counted by signal close; paired controls admitted per pair b
 are never counted or gated."""
 from __future__ import annotations
 
+import logging
+import random
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +16,7 @@ import pytest
 import yaml
 
 from goldbot.data.resample import ticks_to_1m
-from goldbot.engine import Engine, exploration
+from goldbot.engine import Engine, entry_refusals, exploration
 from goldbot.engine import exploration_budget as budget
 from goldbot.engine.exploration import LEDGER, Arm, ExplorationRecord, Pot
 from goldbot.engine.exploration_budget import daily_refusal, entry_kind
@@ -39,7 +41,7 @@ from tests.test_exploration_engine import _engine as _base_engine
 ROOT = Path(__file__).parents[1]
 pytestmark = pytest.mark.usefixtures("_rules")
 START = CLOSE - pd.Timedelta(hours=6)                     # Tuesday 14:00 UTC: London and New York both open
-ALL = {"asia": 100, "london": 100, "newyork": 100}         # session budgets that never bind
+ALL = {"asia": 100, "london": 100, "newyork": 100, "late_asia": 100}   # segment budgets that never bind
 
 
 def _engine(tmp_path: Path, arms: list[Arm], daily: DailyEntries | None) -> tuple[Engine, Any]:
@@ -123,7 +125,7 @@ def test_the_day_and_the_hour_budgets_refuse_every_kind_once_spent():
 
 def test_a_saturated_asia_does_not_stop_the_first_new_york_fill():
     d = DailyEntries(max_per_day=30)
-    budgets = {"asia": 10, "london": 10, "newyork": 10}
+    budgets = {"asia": 10, "london": 10, "newyork": 5, "late_asia": 5}
     n = {"day": 10}
     assert daily_refusal(d, "edge", n, segment=0, budgets=budgets) == "session_entries"
     assert daily_refusal(d, "edge", n, segment=2, budgets=budgets) is None
@@ -139,18 +141,19 @@ def test_a_sessions_unspent_budget_rolls_forward_to_the_next_session_of_the_day_
     """Fix 2 of the 2026-11-09 volume diagnosis: an early session that left fills unspent passes them on (cumulative
     budget through the signal's segment); a busy early session still never spends a later one's (Q3)."""
     d = DailyEntries(max_per_day=70)
-    budgets = {"asia": 20, "london": 20, "newyork": 30}
+    budgets = {"asia": 20, "london": 20, "newyork": 20, "late_asia": 10}
     # Asia spent 4 of its 20: London may take its own 20 and Asia's unspent 16
     assert daily_refusal(d, "edge", {"day": 39}, segment=1, budgets=budgets) is None
     assert daily_refusal(d, "edge", {"day": 40}, segment=1, budgets=budgets) == "session_entries"
+    # quant C4: the early Asia never spends the late Asia's own share
     assert daily_refusal(d, "edge", {"day": 20}, segment=0, budgets=budgets) == "session_entries"
     # the Asia after the New York close takes what the day left, and the day's cap binds
     assert daily_refusal(d, "edge", {"day": 69}, segment=3, budgets=budgets) is None
     assert daily_refusal(d, "edge", {"day": 70}, segment=3, budgets=budgets) == "daily_entries"
 
 
-@pytest.mark.parametrize("budgets", [{"asia": 20, "london": 20, "newyork": 30},
-                                     {"asia": 40, "london": 40, "newyork": 40}])
+@pytest.mark.parametrize("budgets", [{"asia": 20, "london": 20, "newyork": 20, "late_asia": 10},
+                                     {"asia": 40, "london": 40, "newyork": 40, "late_asia": 40}])
 @pytest.mark.parametrize("wanted", [(2, 50, 50, 50), (0, 0, 0, 100), (100, 100, 100, 100), (5, 1, 0, 3)])
 def test_rolled_session_budgets_never_admit_more_fills_than_max_per_day(budgets, wanted):
     """Whatever each segment's signals want, the day's admitted fills stay <= max_per_day and <= the budgets' sum, and
@@ -175,19 +178,91 @@ def test_session_budgets_follow_the_trailing_edge_signal_shares_and_split_equall
     day = START.floor("D")
     arms = {"e": _arm("e", style="scalp")}
     assert budget.session_budgets(eng, ex, d, day, arms) == {  # type: ignore[arg-type]
-        "asia": 30, "london": 30, "newyork": 30}
+        "asia": 23, "london": 23, "newyork": 22, "late_asia": 22}
     t_a, t_b = day - pd.Timedelta(hours=23), day - pd.Timedelta(hours=5)       # Monday 01:00 and 19:00 UTC
     assert budget.session_of(t_a) != budget.session_of(t_b)
     for i, at in enumerate([t_a] * 6 + [t_b] * 3):
         ed.record_candidate(db, candidate_id=f"c{i}-{at.value}", account_id="icm-probe", broker="icm", arm_id="e",
                             family="f", style="scalp", tf="1m", side=1, decision_utc=at + pd.Timedelta(minutes=i),
                             stop_dist=3.0, target_dist=3.0, max_hold_s=60, taken=True)
-    ex.budget_cache = {}
+    budget.SHARES.clear()
     got = budget.session_budgets(eng, ex, d, day, arms)  # type: ignore[arg-type]
-    rest = ({"asia", "london", "newyork"} - {budget.session_of(t_a), budget.session_of(t_b)}).pop()
-    # a session with no candidate keeps one fill and the rest is split by largest remainder: the sum is the day's
-    assert (got[budget.session_of(t_a)], got[budget.session_of(t_b)], got[rest]) == (59, 30, 1)
+    # every segment keeps one fill and the rest is split by largest remainder: the sum is the day's
+    assert got == {"asia": 58, "london": 1, "newyork": 30, "late_asia": 1}
     assert sum(got.values()) == d.max_per_day
+
+
+def test_apportion_reserves_one_fill_per_segment_and_never_passes_max_per_day():
+    """Code review LOW / trading-safety L1: 1000:1:1 of 10 gave 12 under the per-session floor."""
+    got = budget.apportion(10, {"asia": 1000, "london": 1, "newyork": 1})
+    assert got == {"asia": 7, "london": 1, "newyork": 1, "late_asia": 1}
+    assert budget.apportion(2, {"asia": 5, "newyork": 9}) == {"asia": 1, "london": 0, "newyork": 1, "late_asia": 0}
+
+
+def test_apportion_sums_to_max_per_day_for_any_candidate_counts():
+    """Trading-safety L1, property: every segment >= 1 and the four sum to max_per_day (max_per_day >= 4)."""
+    rng = random.Random(1109)
+    for _ in range(2000):
+        m = rng.randint(4, 400)
+        by = {s: rng.choice([0, 0, rng.randint(1, 5), rng.randint(1, 10**5)]) for s in budget.SEGMENTS}
+        got = budget.apportion(m, by)
+        assert sum(got.values()) == m and min(got.values()) >= 1, (m, by, got)
+
+
+def test_every_book_of_an_account_reads_one_split_computed_once_a_day(tmp_path, monkeypatch):
+    """Code review MEDIUM, quant C3(b), trading-safety L2: the split is cached per (ledger, account, UTC day, active
+    arm set), not per book, so a second book reads the same shares without re-reading the candidates; another active
+    set is a new split."""
+    eng, ex, day = _icm_demo_history(tmp_path)
+    arms = {"Z1D": _arm("Z1D", style="scalp")}
+    calls: list[str] = []
+    real = entry_refusals.static_refusal
+
+    def counted(*a: Any) -> Any:
+        calls.append("x")
+        return real(*a)
+    monkeypatch.setattr(entry_refusals, "static_refusal", counted)
+    first = budget.session_budgets(eng, ex, DailyEntries(max_per_day=70), day, arms)
+    n = len(calls)
+    other_book = SimpleNamespace(db=ex.db, budget_cache={})
+    assert budget.session_budgets(eng, other_book, DailyEntries(max_per_day=70), day, arms) == first  # type: ignore[arg-type]
+    assert len(calls) == n > 0
+    budget.session_budgets(eng, other_book, DailyEntries(max_per_day=70), day,  # type: ignore[arg-type]
+                           {**arms, "Z2D": _arm("Z2D", style="scalp")})
+    assert len(calls) > n
+
+
+def test_a_static_refusal_that_raises_excludes_the_candidate_and_warns_once_per_read(tmp_path, monkeypatch, caplog):
+    """Quant C3(c), code review LOW: fail closed (the candidate takes no share), one warning per refusal per read."""
+    def boom(*_a: Any) -> bool:
+        raise RuntimeError("unreadable")
+    monkeypatch.setattr(entry_refusals, "REFUSALS", (entry_refusals.EntryRefusal(name=entry_refusals.WINDOW_0207,
+                                                                                   applies=boom),))
+    eng, ex, day = _icm_demo_history(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        got = budget.session_budgets(eng, ex, DailyEntries(max_per_day=70), day,
+                                     {"Z1D": _arm("Z1D", style="scalp")})
+    assert got == {"asia": 18, "london": 18, "newyork": 17, "late_asia": 17}      # no candidate counted: equal
+    warned = [r for r in caplog.records if "refusal_error:window_0207" in r.getMessage()]
+    assert len(warned) == 1
+
+
+def test_a_slow_session_split_read_is_warned(tmp_path, monkeypatch, caplog):
+    """Trading-safety L3: the read's duration is logged, and a warning above 1 s."""
+    eng, ex, day = _icm_demo_history(tmp_path)
+    clock = iter([0.0, 1.5])
+    monkeypatch.setattr(budget, "_clock", lambda: next(clock))
+    with caplog.at_level(logging.INFO, logger="goldbot.engine.exploration_budget"):
+        budget.session_budgets(eng, ex, DailyEntries(max_per_day=70), day,
+                               {"Z1D": _arm("Z1D", style="scalp")})
+    assert [r.levelno for r in caplog.records if "session split" in r.getMessage()] == [logging.WARNING]
+
+
+def test_aux_migration_27_indexes_the_candidates_by_account_kind_and_decision_time(tmp_path):
+    db = exploration.ledger_db(str(tmp_path))
+    with db.connection() as conn:
+        cols = [r[2] for r in conn.execute("PRAGMA index_info(exploration_obs_account_kind)")]
+    assert cols == ["account_id", "is_control", "decision_ns"]
 
 
 def _icm_demo_history(tmp_path: Path, arm: str = "Z1D") -> tuple[Any, Any, pd.Timestamp]:
@@ -208,20 +283,21 @@ def _icm_demo_history(tmp_path: Path, arm: str = "Z1D") -> tuple[Any, Any, pd.Ti
 def test_window_0207_hours_no_longer_count_in_the_session_shares_so_asia_falls_and_london_new_york_rise(tmp_path):
     """Cause 4 of the 2026-11-09 volume diagnosis: Asia's 02:00-07:00 gold candidates are refused at entry
     (`entry_refusals.window_0207`), so they take no share. Counted, the split was Asia 41 / London 12 / New York 17 of
-    70 (14:4:6); from the admissible candidates it is 4:4:6, and the sum stays <= max_per_day."""
+    70 (14:4:6); from the admissible candidates (early Asia 2, London 4, New York 6, late Asia 2) it is 11/20/29/10,
+    and the sum is max_per_day."""
     eng, ex, day = _icm_demo_history(tmp_path)
     d = DailyEntries(max_per_day=70)
     got = budget.session_budgets(eng, ex, d, day, {"Z1D": _arm("Z1D", style="scalp")})
-    assert got == {"asia": 20, "london": 20, "newyork": 30}
-    assert sum(got.values()) <= d.max_per_day
+    assert got == {"asia": 11, "london": 20, "newyork": 29, "late_asia": 10}
+    assert sum(got.values()) == d.max_per_day
 
 
 def test_an_arm_outside_window_0207_keeps_its_asia_hours_in_the_shares(tmp_path):
-    """A non-gold arm is not in the block's scope: its 02:00-07:00 candidates still count (14:4:6 of 70)."""
+    """A non-gold arm is not in the block's scope: its 02:00-07:00 candidates still count (12:4:6:2 of 70)."""
     eng, ex, day = _icm_demo_history(tmp_path, arm="LB-US500")
     lb = Arm(spec=_spec("LB-US500", {"instrument": "US500", "stop_atr": 2.0}), style="scalp")
     got = budget.session_budgets(eng, ex, DailyEntries(max_per_day=70), day, {"LB-US500": lb})
-    assert got == {"asia": 41, "london": 12, "newyork": 17}
+    assert got == {"asia": 34, "london": 12, "newyork": 18, "late_asia": 6}
 
 
 def test_retired_arms_candidates_take_no_session_share(tmp_path):
@@ -239,7 +315,60 @@ def test_retired_arms_candidates_take_no_session_share(tmp_path):
     eng, pb = _engine(tmp_path, [_arm("e", max_open=10), gone], DailyEntries(max_per_day=30))
     assert eng.exploration is not None
     ps = exploration._Pass(eng, eng.exploration, _at(eng, pb, START).ts_utc)
-    assert ps.sessions == {"asia": 1, "london": 7, "newyork": 22}
+    assert ps.sessions == {"asia": 1, "london": 8, "newyork": 20, "late_asia": 1}
+
+
+@pytest.mark.parametrize("why", ["entry_refused", "unqualified"])
+def test_entry_refused_and_unqualified_arms_candidates_take_no_session_share(tmp_path, why):
+    """Quant C3(a): an arm the pass will not let enter (spec `entry_refused`, or a qualification that fails) is no
+    admissible candidate either."""
+    db = exploration.ledger_db(str(tmp_path))
+    mon = START.floor("D") - pd.Timedelta(days=1)
+    for i, (arm, h) in enumerate([("R", 0.5)] * 10 + [("e", 9)] + [("e", 15)] * 3):
+        ed.record_candidate(db, candidate_id=f"q{i}", account_id="icm-probe", broker="icm", arm_id=arm, family="f",
+                            style="intraday", tf="15m", side=1, decision_utc=mon + pd.Timedelta(hours=h, minutes=i),
+                            stop_dist=5.0, target_dist=10.0, max_hold_s=3600, taken=True)
+    out = _arm("R", max_open=10)
+    change = {"entry_refused": "refused in a test"} if why == "entry_refused" else {
+        "qualification": {**QUALIFIED, "verdict": "fail"}}
+    out = out.model_copy(update={"spec": out.spec.model_copy(update=change)})
+    eng, pb = _engine(tmp_path, [_arm("e", max_open=10), out], DailyEntries(max_per_day=30))
+    assert eng.exploration is not None
+    ps = exploration._Pass(eng, eng.exploration, _at(eng, pb, START).ts_utc)
+    assert ps.sessions == {"asia": 1, "london": 8, "newyork": 20, "late_asia": 1}
+
+
+def test_a_session_refusal_stops_the_whole_pass_only_for_signals_of_the_current_segment():
+    """Code review LOW: a 07:59 Asia signal refused for its session must not block the pass's 08:00 London signal."""
+    now = pd.Timestamp("2025-03-04 08:00:05", tz="UTC")
+    since = now.floor("D")
+    asia, london = pd.Timestamp("2025-03-04 07:59", tz="UTC"), pd.Timestamp("2025-03-04 08:00", tz="UTC")
+    assert not budget.pass_wide("session_entries", asia, now, since)
+    assert budget.pass_wide("session_entries", london, now, since)
+    assert budget.pass_wide("daily_entries", asia, now, since) and budget.pass_wide("hourly_entries", asia, now, since)
+    assert not budget.pass_wide("thin_controls", london, now, since)
+
+
+def test_a_signal_of_the_previous_utc_day_is_refused_as_daily_entries_and_never_stops_the_pass():
+    """Trading-safety L4: today's counts start at midnight, so a signal closed before it is refused, alone."""
+    d = DailyEntries(max_per_day=70)
+    now = pd.Timestamp("2025-03-04 00:00:05", tz="UTC")
+    late = pd.Timestamp("2025-03-03 23:59", tz="UTC")
+    assert daily_refusal(d, "edge", {"day": 0}, segment=3, budgets=ALL, prior_day=True) == "daily_entries"
+    assert not budget.pass_wide("daily_entries", late, now, now.floor("D"))
+
+
+def test_1m_and_5m_entries_stop_at_the_scalp_day_cap_and_other_timeframes_go_on():
+    """Quant C2, PD ruling 5(d): at most `scalp_day_cap` (default 30) fills a day per account from 1m/5m arms."""
+    d = DailyEntries(max_per_day=100)
+    assert d.scalp_day_cap == 30
+    kw: dict[str, Any] = {"segment": 1, "budgets": ALL}
+    assert daily_refusal(d, "edge", {"day": 40, "fast": 29}, fast=True, **kw) is None
+    assert daily_refusal(d, "edge", {"day": 40, "fast": 30}, fast=True, **kw) == "scalp_day_cap"
+    assert daily_refusal(d, "control", {"day": 40, "fast": 30}, fast=True, **kw) == "scalp_day_cap"
+    assert daily_refusal(d, "edge", {"day": 40, "fast": 30}, fast=False, **kw) is None
+    assert daily_refusal(d.model_copy(update={"scalp_day_cap": None}), "edge", {"day": 40, "fast": 99}, fast=True,
+                         **kw) is None
 
 
 def test_unpaired_per_instrument_controls_take_their_share_of_the_day_and_stop_at_their_cost_cells_30_fills():
@@ -280,7 +409,7 @@ def test_todays_counts_are_by_signal_close_never_the_hosts_send_time(tmp_path):
     eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
     n = budget.entries_today(eng, SimpleNamespace(db=db), day, START + pd.Timedelta(minutes=5),  # type: ignore[arg-type]
                              {"S0-US500": thin, "e": edge})
-    assert (n["day"], n["hour"], n["thin"], n["edge"]) == (2, 2, 1, 1)
+    assert (n["day"], n["hour"], n["thin"], n["edge"], n.get("fast", 0)) == (2, 2, 1, 1, 2)
 
 
 # ------------------------------------------------------------------------------------------------ in the engine
@@ -292,6 +421,19 @@ def test_the_engine_sends_no_more_exploration_fills_than_the_days_budget_and_rec
     assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:daily_entries"}
     obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
     assert sorted(obs["blocked_reason"].fillna("taken")) == ["daily_entries", "daily_entries", "taken", "taken"], obs
+
+
+@pytest.mark.usefixtures("_sessions_open")
+def test_the_engine_refuses_fast_entries_past_the_scalp_day_cap_and_records_them_blocked(tmp_path, monkeypatch):
+    """The engine path: fills counted from the ledger and this pass, the refusal journalled and recorded blocked (the
+    test's 15m arm stands in for a fast one; FAST_TFS itself is pinned by the rule's test above)."""
+    monkeypatch.setattr(budget, "FAST_TFS", frozenset({"15m"}))
+    eng, pb = _engine(tmp_path, [_arm("a", max_open=10)], DailyEntries(max_per_day=50, scalp_day_cap=2))
+    _passes(eng, pb, 4)
+    assert len(_sent(eng)) == 2
+    assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:scalp_day_cap"}
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert set(obs["blocked_reason"].dropna()) == {"scalp_day_cap"}
 
 
 @pytest.mark.usefixtures("_sessions_open")

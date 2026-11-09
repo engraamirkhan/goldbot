@@ -226,6 +226,9 @@ class DailyEntries(FrozenRecord):
     # per-instrument cost cell, n >= 30): an unpaired per-instrument control sends no entry once its instrument's cost
     # cell (every arm's fills of it on the account, LB/LBC too) has this many (`thin_cell_complete`); None: no stop
     thin_control_fills: int | None = Field(30, ge=1)
+    # PD ruling 5(d) (quant condition C2, 2026-11-09): at most this many fills a day from 1m and 5m arms (by the arm's
+    # timeframe, every kind together; `scalp_day_cap`), so fast scalps never fill the day's budget; None: no bound
+    scalp_day_cap: int | None = Field(30, ge=1)
 
 
 class Exploration(FrozenRecord):
