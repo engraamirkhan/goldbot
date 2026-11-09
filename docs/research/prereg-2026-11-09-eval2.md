@@ -385,6 +385,11 @@ Order is by `true_read_ts`.
   through 2026-01..09, volatility only, no returns, nothing scored. Lane 2 re-seeds it from 2026-10-01 as `.2`.
 - Guard: `tests/test_holdout_seal.py` (Lane 4) makes any research loader asking for bars in the holdout outside
   `--score-holdout` raise.
+- Recorded 2026-11-09 (Lane 4 review): the catalogue explore window (`goldbot/research/catalogue/data.py`
+  `WINDOWS["explore"]`) reads warm-up bars from 2008-09-01 (gold intraday: from 2009-09 by the 120-day intraday
+  warm-up), inside the TEST-OLD span 2006-02..2009-12. Prices for indicator warm-up only: no decision, trade or return
+  before 2010-01-01 is scored, and no TEST-OLD outcome is read. The EVAL-2 self-tests (`scripts/eval2_selftest.py`)
+  read 2010-01-01..2017-12-31 only. Not a holdout touch; listed so the TEST-OLD read ledger is complete.
 
 ### 6.3 Deleted confirm cache (F7)
 `~/tmp/catalogue_cache/confirm/` held 25 `<INST>_1d.npz` price-bar caches (prices only, no returns), written
@@ -419,6 +424,11 @@ abde9951f710dfa162e8c499cb800f370d9ad0910d098ff33479f1f23381358f  XAUUSD_1d.npz
 d503a237f3966288e5929dd89e26ec36f489f38348710b999a8fb5200dfaccc8  XTIUSD_1d.npz
 ```
 
+Since 2026-11-09 (Lane 4) every catalogue bar cache file records its window name, span and warm-up start, and a
+file that does not match its window, or holds a bar outside it (a holdout bar, a 2018 bar in the explore cache, a
+2006 bar before the explore warm-up), fails closed on load (`dispatcher.checked_cache`). The explore caches hold
+2008-09..2009 warm-up bars from the TEST-OLD span (section 6.2).
+
 ### 6.4 Registry merge and backfill
 - Merge (2026-11-09): brain is the registry of record; union by (ts, config_hash); 196 Mac-only rows pushed, 102
   brain-only kept; 3,455 rows, prefix identical to the backup (brain sha 13b64c7d...). The Mac is a pulled read-only
@@ -450,3 +460,90 @@ floor). It was never built (`goldbot/` has no mSPRT, re-derived today). It is **
 |---|---|---|---|
 | Author | research director | 2026-11-09 | signed |
 | Quant-reviewer | quant-reviewer | 2026-11-09 | signed (014d4c93; resamples helper condition for Lane 3) |
+
+## 9. Amendment A1 (2026-11-09): S0 cell floor, recorded after the S0 result was read
+
+Status: signed by the quant-reviewer 2026-11-09 (research-director countersignature required before S0 is read under
+it). Written AFTER the real-bar S0 run of 2026-11-09 21:38 UTC (harness d91558b932b58eb1, report
+`~/tmp/eval2_selftest/report_20261109T213945.json`) was read. This is a post-hoc change. It is disclosed here, it is
+kept apart from the original text, and it changes no L1-L4 threshold, no K, no budget and no window.
+
+### 9.1 What the frozen text said and what the run showed
+- Method v6 section 6, S0 (unchanged, kept for the record): "No control cell with gross < -0.05 R at n >= 300."
+- Result: 52 registered NULL-RAND cells, explore 2010-17, n 53,264. Pooled gross +0.0037 R (t 0.64), excess +0.0025 R
+  (t 0.38), chi2 dispersion p 0.54, both sentinels fail E9. The literal floor fails in 2 of the 19 cells at n >= 300:
+  DE40 4h (gross -0.071 R, t -1.19, n 561) and XAGUSD 4h (gross -0.066 R, t -1.34, n 619). Under the frozen text, S0
+  reads FAIL.
+
+### 9.2 Why the frozen floor is a specification error, not a threshold to be tuned
+- The floor has no sampling term. A cell whose true mean is 0 sits below -0.05 R with probability Phi(-0.05 / SE).
+  The cell SEs depend on n and sd, which are set by the design, not by the cell means.
+- Verified independently by the quant-reviewer from the run's own cell SEs: the cells are independent (null_rand
+  hashes the instrument into side and timing, so there is no shared-side correlation). Poisson-binomial over the 19
+  cells: E[failures] = 1.98. P(>= 1) is about 0.86, P(>= 2) = 0.609, P(>= 3) = 0.316, P(>= 4) = 0.124, P(>= 5) = 0.037.
+  A correct harness fails the literal floor in 61 % of runs. The other S0 criteria (|t| < 2, chi2 p > 0.01) all carry a
+  sampling term. This one does not.
+- The rule below is chosen by its operating characteristics (stated false-fail rate and power), not by this run's
+  outcome. The decision does not depend on which reasonable rule is chosen: no registered cell has t <= -2 on gross or
+  on excess (minimum t -1.34 gross, -1.41 excess). Option (a) "gross < -0.05 R AND t <= -2" would also pass this run.
+  It was rejected because, with 19 cells, it false-fails a correct harness in 30 % of runs.
+- Real-bar gross is not a pure harness statistic. With 1 : 2 stop/target geometry and a random side, the gross on a
+  fixed real path is the path's payoff to that geometry. A path that mean-reverts at the 1-3 ATR scale makes both sides
+  lose, so the gross is negative with no harness bias. The non-registered extension shows exactly this: EURGBP 4h has
+  gross -0.094 R (t -2.64) with excess +0.055 R (t +1.37), and EURJPY 4h has -0.094 R (t -2.57) with excess -0.043 R
+  (t -1.02). Excess (signal minus twins with the same geometry and local path) cancels path structure. EVAL-2 reads
+  excess, so the floor is gated on excess as well, which makes the test stricter. A gross-only failure gets the
+  pre-written skeleton check in 9.3 (iv).
+
+### 9.3 The rule (replaces the cell-floor sentence of S0; everything else in S0 is unchanged)
+Let C be the registered NULL-RAND cells with n >= 300 on the statistic (gross: all instances; excess: instances with
+at least one twin), and K = |C|. For each cell c: mean m_c, day-clustered SE se_c, t_c = m_c / se_c.
+(i)  Count. F = #{c in C : m_c < -0.05 R}. F_crit = the smallest f with P(F <= f) >= 0.975 under the Poisson-binomial
+     with p_c = Phi(-0.05 / se_c), computed from this run's own se_c. Pass if F <= F_crit.
+(ii) Severity. No cell with m_c < -0.05 R and t_c <= Phi^-1(0.025 / K) (Bonferroni; -3.01 at K = 19).
+(iii) (i) and (ii) are applied separately to gross and to excess. All four must pass.
+(iv) Gross-only failure (gross fails (i) or (ii) while excess passes both). S0 still reads FAIL unless, on the failing
+     cells, a sign-flipped skeleton passes (i) and (ii) on gross with pooled |t| < 2. The skeleton keeps the real bar
+     times, gaps, closed-bar flags, segments and ATR path, and flips the sign of each bar's OHLC excursion about its
+     open with an independent fair coin, keyed on seed_key. That makes the path a martingale, so its gross must be 0
+     whatever the market structure. The skeleton result is recorded with the failing cells as "market structure, not
+     harness". No other route turns a failure into a pass. A failure on excess has no exception.
+Operating characteristics, from this run's SEs (simulated, 200,000 draws): the gross false-fail rate for a correct
+harness is 2.9 %, and about 6 % with excess added. A uniform -0.05 R gross bias on every 4h cell is caught by (i)-(ii)
+in 89 % of runs, and also by the pooled |gross| <= 0.01 R gate. A single cell's detectable bias at 80 % power is about
+3.9 SE: 0.23 R at n 561, 0.15 R at n 1,200. This is a stated limit of a 2010-17 null, not a defect.
+
+### 9.4 Reading of the 2026-11-09 run under A1
+| Statistic | K | F | F_crit | P(F >= observed) | Severe cells | Result |
+|---|---|---|---|---|---|---|
+| gross, registered | 19 | 2 | 5 | 0.61 | none (Bonferroni t -3.01) | pass |
+| excess, registered | 19 | 3 (DE40 4h, XAGUSD 4h, XAUUSD 4h) | 6 | 0.47 | none | pass |
+| gross, 79-cell extension (reported, not gated) | 29 | 7 | 7 | 0.034 | none (t -3.13) | pass, at the edge |
+| excess, extension (reported, not gated) | 29 | 4 | 8 | 0.61 | none | pass |
+S0's cell-floor item passes under A1. S0 as a whole still needs the L2 half of the sentinels (Lane 3) before it reads
+PASS. Every S0 report keeps printing the literal-floor failures, F, F_crit and P(F >= observed) for both statistics.
+
+### 9.5 Disclosure and controls
+- Order of events: the method v6 rule was signed before the run; the run was read at 21:39 UTC 2026-11-09; A1 was
+  drafted after that. The literal floor's failure is recorded in HANDOFF (R110) and here, and it is not deleted.
+- S0 uses entry rates above the registered NULL-RAND rates (`S0_RATE`, scripts/eval2_selftest.py). Side and bar are a
+  hash of the bar time, so the null does not change, but more fire bars are excluded from the twin pool. M_eff at 1w
+  (4.1) and 4h (4.3) is therefore lower than at the registered rates.
+- A1 is not a trial, uses no budget, and touches nothing at or after 2018-01-01.
+- A1 binds from harness hash d91558b932b58eb1 onward. A later harness hash re-runs S0 under A1, unchanged. The next
+  change to the S0 floor needs a new signed amendment written BEFORE the run it applies to.
+
+### 9.6 Amendment A2 (record, no rule change): structural twin ceilings
+Under "M = min(20, pool)" (quant round 2) and the frozen +/-1 h hour stratum and 7-day window, the pool caps M below 20
+whatever the rate: 1h <= 15 (3 hours x 5 weekdays), 4h <= 5 (1 same-hour bar x 5 weekdays), and 1w <= 8 (the A2 span,
+which is not in the method: recorded here as the 1w twin rule). Measured M_eff at the S0 rates: 5m 18.4, 15m 20.0,
+30m 19.5, 1h 13.0, 4h 4.3, 1d 13.8, 1w 4.1. The hour tolerance is NOT widened. Inference stays valid at any
+M_eff >= 1, because the day-clustered SE of excess is empirical. The cost is power: Var(excess) is about
+sigma^2 (1 + 1/M), so the SE at 4h is about 8 % wider than at M = 20 (about 17 % more instances for the same power).
+Power tables and n_min use the measured sd(excess) of the cell's own timeframe. The 4h draw window may be revisited
+(window, not hour) only if S2 detection at 4h falls more than 10 pp short of the power table.
+
+| Role | Name | Date | Signature |
+|---|---|---|---|
+| Quant-reviewer | quant-reviewer | 2026-11-09 | signed |
+| Author / countersign | research director | 2026-11-09 | SIGNED, research-director, 2026-11-09: corrects a specification error (frozen floor had no sampling term, 61 % false-fail on a correct harness, re-derived from raw cell SEs); harness self-test only, no promotion gate, L1-L4 threshold, K or window changed, and no reasonable rule (min t -1.34 gross, -1.41 excess) flips this run. |
