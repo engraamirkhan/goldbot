@@ -45,11 +45,11 @@ fi
 
 run() { local name=$1; shift; ( "$@" > "$L/$name.log" 2>&1; echo "exit $?" >> "$L/$name.log" ) & }
 start=$(date +%s)
-run unit pytest -m "not integration" -q -n "$workers"
+run unit pytest -m "not integration and not selftest" -q -n "$workers"
 run ruff ruff check goldbot tests scripts
 run mypy mypy --cache-dir .mypy_cache   # incremental: a warm cache rechecks only what changed
 if [ "$quick" = 0 ]; then
-  run integration pytest -m integration -q -n "$workers"
+  run integration pytest -m "integration and not selftest" -q -n "$workers"
   run dry_run python scripts/dry_run.py 1
   run pre_commit pre-commit run --all-files
 fi
