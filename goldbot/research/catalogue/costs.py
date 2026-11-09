@@ -138,6 +138,13 @@ def _roll_table() -> tuple[int, np.ndarray]:
     return int(epoch_ns(d[:1].tz_localize("UTC"))[0] // DAY), np.asarray(epoch_ns(roll), np.int64)
 
 
+def rollover_table() -> tuple[int, np.ndarray]:
+    """Public 17:00 New York rollover clock, the one the swap counts (#343): (first epoch day d0, rollover instant ns
+    per New York date from 1990-01-01 to 2040-12-31; index = epoch day - d0). 21:00 UTC in summer (EDT), 22:00 UTC in
+    winter. Lane 1's session_day uses it, so sessions and swap nights share one clock. Read-only: do not mutate."""
+    return _roll_table()
+
+
 def rollovers_between(t0: int, t1: int) -> np.ndarray:
     """New York dates whose 17:00 rollover falls strictly inside (t0, t1). A position filled at the rollover instant
     opened after it, and one closed at it closed before it; neither pays that night."""

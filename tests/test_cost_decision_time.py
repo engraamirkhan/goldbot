@@ -260,3 +260,12 @@ def test_realised_fields_outside_filters_and_gates_are_not_flagged():
     ("deciding_cost_r", False), ("decision_spread", False), ("atr_pct_rank", False)])
 def test_a_decision_time_prefix_does_not_launder_a_realised_field(name, is_realised):
     assert L.realised(name) is is_realised
+
+
+def test_rollover_table_is_the_public_17_00_new_york_rollover_clock_shared_with_session_days():
+    """Winter: 17:00 New York = 22:00 UTC; summer (EDT): 21:00 UTC. Same table as the swap's _roll_table."""
+    d0, roll = C.rollover_table()
+    assert d0 == C._roll_table()[0] and np.array_equal(roll, C._roll_table()[1])
+    day = int(pd.Timestamp("2026-11-03", tz="UTC").value) // 86_400_000_000_000
+    assert roll[day - d0] == int(pd.Timestamp("2026-11-03 22:00", tz="UTC").value)
+    assert roll[day - d0 - 7] == int(pd.Timestamp("2026-10-27 21:00", tz="UTC").value)
