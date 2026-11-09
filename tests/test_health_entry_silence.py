@@ -5,6 +5,7 @@ time without a fill while arms may enter; at most once per account per UTC day (
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -269,3 +270,52 @@ def test_the_supply_view_is_read_once_per_ttl_or_config_change(monkeypatch):
     es.cached_supply([], ["15m", "1h"], clock=lambda: t[0])        # another key: read at once
     assert len(calls) == 3
     es._VIEW.clear()
+
+
+# ------------------------------------------------------------------------------------------------ review LOW 2 / LOW 3
+def test_an_unreadable_arm_config_is_read_once_per_run_and_not_judged(tmp_path):
+    """Code review LOW 2: a raising view is memoized for the run (no rebuild per account) and every account is OK
+    "not judged", never a FAIL per account."""
+    calls: list[int] = []
+
+    def broken() -> dict[str, AccountSupply]:
+        calls.append(1)
+        raise ValueError("bad yaml")
+    c = HealthContext(state_dir=tmp_path, now=at("12:00"), get_secret=lambda k: None, entry_supply=broken)
+    got = [health.check_entry_silence(c, a) for a in ("icm-demo", "icm-probe", VANTAGE)]
+    assert len(calls) == 1
+    assert all(x is not None and x.status == "ok" and x.reason.startswith("not judged: arm config unreadable")
+               for x in got)
+
+
+def test_a_torn_aux_read_keeps_the_last_verdict_so_nothing_flaps(tmp_path, monkeypatch):
+    """Code review LOW 3: sqlite3.Error neither clears a WARN (WARN -> OK -> WARN would re-tell the owner) nor raises
+    one: the last verdict of this process is kept; with none, no check."""
+    import sqlite3
+    es._LAST.clear()
+    view = {VANTAGE: supply(_gold_retired())}
+    first = check(tmp_path, at("09:00"), view)
+    assert first is not None and first.status == "warn"
+
+    def torn(*a: object, **k: object) -> es.Silence:
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(es, "evaluate", torn)
+    kept = check(tmp_path, at("09:01"), view)
+    assert kept is not None and kept.status == "warn" and "aux.db unreadable now (OperationalError)" in kept.reason
+    es._LAST.clear()
+    assert check(tmp_path, at("09:02"), view) is None
+
+
+def test_aux_is_opened_read_only_through_a_file_uri(tmp_path, monkeypatch):
+    """Security note: the URI is built from the resolved path (a '?' or '#' in a path cannot change the mode)."""
+    import sqlite3
+    seen: list[str] = []
+    real = sqlite3.connect
+
+    def spy(database: str, *a: Any, **k: Any) -> sqlite3.Connection:
+        seen.append(database)
+        return real(database, *a, **k)
+    exploration.ledger_db(str(tmp_path))
+    monkeypatch.setattr(es.sqlite3, "connect", spy)
+    es.evaluate(supply(_lb()), tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
+    assert seen == [(tmp_path / "aux.db").resolve().as_uri() + "?mode=ro"]

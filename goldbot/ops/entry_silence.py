@@ -31,7 +31,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from pydantic import Field
@@ -121,6 +121,8 @@ def supply_by_account(accounts: list[Account], timeframes_live: Sequence[str]) -
 
 VIEW_TTL_S = 600.0                      # the config is read again after this, or at once when a config file changed
 _VIEW: dict[tuple[object, ...], tuple[float, dict[str, AccountSupply]]] = {}
+# (state dir, account) -> the last verdict this process reported: kept over a torn aux.db read (checks/entries.py)
+_LAST: dict[tuple[str, str], Any] = {}
 
 
 def cached_supply(accounts: list[Account], timeframes_live: Sequence[str],
@@ -154,7 +156,8 @@ def _read(aux: Path, account_id: str, broker: str, day: pd.Timestamp, now: pd.Ti
     if not aux.exists():
         return _Ledger()
     d0, n1 = int(day.value), int(now.value)
-    con = sqlite3.connect(f"file:{aux}?mode=ro", uri=True, timeout=5)
+    # security review: the URI from the resolved path (as_uri escapes "?" and "#"), so nothing in it changes the mode
+    con = sqlite3.connect(aux.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
     try:
         tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         retired: frozenset[str] = frozenset()
