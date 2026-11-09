@@ -120,6 +120,22 @@ REFUSALS: tuple[EntryRefusal, ...] = (
 )
 
 
+# the refusals that read only the arm, the engine's configuration and the decision time (no market data, job row or
+# account state), so they refuse a past candidate exactly as they would refuse it today: the daily budget's session
+# shares count only the candidates these let through (`exploration_budget.session_budgets`; the HAR refusals read a
+# day's job row and are not static)
+STATIC = frozenset({WINDOW_0207, F1_PIT, refusals_novel.LEARNING_ICM_ONLY})
+
+
+def statically_refused(eng: Engine, arm: Arm, decision_utc: pd.Timestamp) -> bool:
+    """True when a STATIC refusal (REFUSALS, read at call time) would refuse a signal of `arm` decided at
+    `decision_utc`; fail closed like `first_refusal` (a refusal that raises counts as refusing)."""
+    from goldbot.engine.exploration import Pending
+    s = Pending.model_construct(arm_id=arm.arm_id, side=0, bar_ts=decision_utc, stop_usd=0.0, target_usd=0.0,
+                                hold_bars=0, decision_utc=None)
+    return first_refusal(eng, arm, s, tuple(r for r in REFUSALS if r.name in STATIC)) is not None
+
+
 class Refused(FrozenRecord):
     """Why an entry is refused: the refusal's name, or ERROR_PREFIX + its name with the exception's type in `error`."""
     reason: str

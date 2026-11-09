@@ -114,7 +114,7 @@ def test_each_control_pairs_the_arms_its_rows_and_the_quant_ruling_name():
 
 def test_the_day_and_the_hour_budgets_refuse_every_kind_once_spent():
     d = DailyEntries(max_per_day=3, max_per_hour=2)
-    kw: dict[str, Any] = {"session": "london", "budgets": ALL}
+    kw: dict[str, Any] = {"segment": 1, "budgets": ALL}
     assert daily_refusal(None, "edge", {"day": 10**6}, **kw) is None                 # no budget configured: no bound
     assert daily_refusal(d, "edge", {"day": 2, "hour": 1}, **kw) is None
     assert daily_refusal(d, "edge", {"day": 3, "hour": 0}, **kw) == "daily_entries"
@@ -124,33 +124,127 @@ def test_the_day_and_the_hour_budgets_refuse_every_kind_once_spent():
 def test_a_saturated_asia_does_not_stop_the_first_new_york_fill():
     d = DailyEntries(max_per_day=30)
     budgets = {"asia": 10, "london": 10, "newyork": 10}
-    n = {"day": 10, "session:asia": 10}
-    assert daily_refusal(d, "edge", n, session="asia", budgets=budgets) == "session_entries"
-    assert daily_refusal(d, "edge", n, session="newyork", budgets=budgets) is None
+    n = {"day": 10}
+    assert daily_refusal(d, "edge", n, segment=0, budgets=budgets) == "session_entries"
+    assert daily_refusal(d, "edge", n, segment=2, budgets=budgets) is None
+
+
+def test_the_utc_days_segments_run_asia_london_new_york_then_the_asia_after_the_new_york_close():
+    day = pd.Timestamp("2025-03-03", tz="UTC")                 # GMT and EST: London 08:00, NY 13:30-22:00 UTC
+    hours = [0.5, 5, 9, 15, 23]
+    assert [budget.day_segment(day + pd.Timedelta(hours=h)) for h in hours] == [0, 0, 1, 2, 3]
+
+
+def test_a_sessions_unspent_budget_rolls_forward_to_the_next_session_of_the_day_and_never_past_the_day():
+    """Fix 2 of the 2026-11-09 volume diagnosis: an early session that left fills unspent passes them on (cumulative
+    budget through the signal's segment); a busy early session still never spends a later one's (Q3)."""
+    d = DailyEntries(max_per_day=70)
+    budgets = {"asia": 20, "london": 20, "newyork": 30}
+    # Asia spent 4 of its 20: London may take its own 20 and Asia's unspent 16
+    assert daily_refusal(d, "edge", {"day": 39}, segment=1, budgets=budgets) is None
+    assert daily_refusal(d, "edge", {"day": 40}, segment=1, budgets=budgets) == "session_entries"
+    assert daily_refusal(d, "edge", {"day": 20}, segment=0, budgets=budgets) == "session_entries"
+    # the Asia after the New York close takes what the day left, and the day's cap binds
+    assert daily_refusal(d, "edge", {"day": 69}, segment=3, budgets=budgets) is None
+    assert daily_refusal(d, "edge", {"day": 70}, segment=3, budgets=budgets) == "daily_entries"
+
+
+@pytest.mark.parametrize("budgets", [{"asia": 20, "london": 20, "newyork": 30},
+                                     {"asia": 40, "london": 40, "newyork": 40}])
+@pytest.mark.parametrize("wanted", [(2, 50, 50, 50), (0, 0, 0, 100), (100, 100, 100, 100), (5, 1, 0, 3)])
+def test_rolled_session_budgets_never_admit_more_fills_than_max_per_day(budgets, wanted):
+    """Whatever each segment's signals want, the day's admitted fills stay <= max_per_day and <= the budgets' sum, and
+    a want the late Asia can still take is never left on the table."""
+    d = DailyEntries(max_per_day=70)
+    n = {"day": 0}
+    for seg, want in enumerate(wanted):
+        for _ in range(want):
+            if daily_refusal(d, "edge", n, segment=seg, budgets=budgets) is None:
+                n["day"] += 1
+    cap = min(d.max_per_day, sum(budgets.values()))
+    assert n["day"] <= cap
+    if wanted[3] >= cap:
+        assert n["day"] == cap
 
 
 def test_session_budgets_follow_the_trailing_edge_signal_shares_and_split_equally_with_none(tmp_path):
     d = DailyEntries(max_per_day=90)
     db = exploration.ledger_db(str(tmp_path))
     ex = SimpleNamespace(db=db, budget_cache={})
-    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe", broker_name="icm", weekend_window=None))
     day = START.floor("D")
-    assert budget.session_budgets(eng, ex, d, day) == {"asia": 30, "london": 30, "newyork": 30}  # type: ignore[arg-type]
-    t_a, t_b = day - pd.Timedelta(hours=20), day - pd.Timedelta(hours=5)       # Monday 04:00 and 19:00 UTC
+    arms = {"e": _arm("e", style="scalp")}
+    assert budget.session_budgets(eng, ex, d, day, arms) == {  # type: ignore[arg-type]
+        "asia": 30, "london": 30, "newyork": 30}
+    t_a, t_b = day - pd.Timedelta(hours=23), day - pd.Timedelta(hours=5)       # Monday 01:00 and 19:00 UTC
     assert budget.session_of(t_a) != budget.session_of(t_b)
     for i, at in enumerate([t_a] * 6 + [t_b] * 3):
         ed.record_candidate(db, candidate_id=f"c{i}-{at.value}", account_id="icm-probe", broker="icm", arm_id="e",
                             family="f", style="scalp", tf="1m", side=1, decision_utc=at + pd.Timedelta(minutes=i),
                             stop_dist=3.0, target_dist=3.0, max_hold_s=60, taken=True)
     ex.budget_cache = {}
-    got = budget.session_budgets(eng, ex, d, day)  # type: ignore[arg-type]
+    got = budget.session_budgets(eng, ex, d, day, arms)  # type: ignore[arg-type]
     rest = ({"asia", "london", "newyork"} - {budget.session_of(t_a), budget.session_of(t_b)}).pop()
-    assert (got[budget.session_of(t_a)], got[budget.session_of(t_b)], got[rest]) == (60, 30, 1)
+    # a session with no candidate keeps one fill and the rest is split by largest remainder: the sum is the day's
+    assert (got[budget.session_of(t_a)], got[budget.session_of(t_b)], got[rest]) == (59, 30, 1)
+    assert sum(got.values()) == d.max_per_day
+
+
+def _icm_demo_history(tmp_path: Path, arm: str = "Z1D") -> tuple[Any, Any, pd.Timestamp]:
+    """icm-demo's Monday (GMT/EST: Asia to 08:00, London to 13:30, New York to 22:00 UTC) edge candidates of `arm`:
+    Asia 2 at 00:30, 10 between 02:00 and 07:00 (the window_0207 gold block), 2 at 23:00; London 4; New York 6."""
+    db = exploration.ledger_db(str(tmp_path))
+    mon = START.floor("D") - pd.Timedelta(days=1)
+    hours = [0.5] * 2 + [2 + k * 0.5 for k in range(10)] + [23] * 2 + [9] * 4 + [15] * 6
+    for i, h in enumerate(hours):
+        ed.record_candidate(db, candidate_id=f"d{arm}{i}", account_id="icm-demo", broker="icm", arm_id=arm, family="f",
+                            style="scalp", tf="1m", side=1, decision_utc=mon + pd.Timedelta(hours=h, minutes=i % 3),
+                            stop_dist=3.0, target_dist=3.0, max_hold_s=60, taken=False,
+                            blocked_reason="window_0207" if 2 <= h < 7 else None)
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-demo", broker_name="icm", weekend_window=None))
+    return eng, SimpleNamespace(db=db, budget_cache={}), START.floor("D")
+
+
+def test_window_0207_hours_no_longer_count_in_the_session_shares_so_asia_falls_and_london_new_york_rise(tmp_path):
+    """Cause 4 of the 2026-11-09 volume diagnosis: Asia's 02:00-07:00 gold candidates are refused at entry
+    (`entry_refusals.window_0207`), so they take no share. Counted, the split was Asia 41 / London 12 / New York 17 of
+    70 (14:4:6); from the admissible candidates it is 4:4:6, and the sum stays <= max_per_day."""
+    eng, ex, day = _icm_demo_history(tmp_path)
+    d = DailyEntries(max_per_day=70)
+    got = budget.session_budgets(eng, ex, d, day, {"Z1D": _arm("Z1D", style="scalp")})
+    assert got == {"asia": 20, "london": 20, "newyork": 30}
+    assert sum(got.values()) <= d.max_per_day
+
+
+def test_an_arm_outside_window_0207_keeps_its_asia_hours_in_the_shares(tmp_path):
+    """A non-gold arm is not in the block's scope: its 02:00-07:00 candidates still count (14:4:6 of 70)."""
+    eng, ex, day = _icm_demo_history(tmp_path, arm="LB-US500")
+    lb = Arm(spec=_spec("LB-US500", {"instrument": "US500", "stop_atr": 2.0}), style="scalp")
+    got = budget.session_budgets(eng, ex, DailyEntries(max_per_day=70), day, {"LB-US500": lb})
+    assert got == {"asia": 41, "london": 12, "newyork": 17}
+
+
+def test_retired_arms_candidates_take_no_session_share(tmp_path):
+    """A retired arm can no longer enter, so its trailing candidates (10 in Asia here) leave Asia its floor of one:
+    the pass reads the shares from its active arms only."""
+    db = exploration.ledger_db(str(tmp_path))
+    mon = START.floor("D") - pd.Timedelta(days=1)
+    for i, (arm, h) in enumerate([("R", 0.5)] * 10 + [("e", 9)] + [("e", 15)] * 3):
+        ed.record_candidate(db, candidate_id=f"r{i}", account_id="icm-probe", broker="icm", arm_id=arm, family="f",
+                            style="intraday", tf="15m", side=1, decision_utc=mon + pd.Timedelta(hours=h, minutes=i),
+                            stop_dist=5.0, target_dist=10.0, max_hold_s=3600, taken=True)
+    gone = _arm("R", max_open=10)
+    gone = gone.model_copy(update={"spec": gone.spec.model_copy(update={"retired_day": "2026-11-06",
+                                                                        "retired_rule": "t"})})
+    eng, pb = _engine(tmp_path, [_arm("e", max_open=10), gone], DailyEntries(max_per_day=30))
+    assert eng.exploration is not None
+    ps = exploration._Pass(eng, eng.exploration, _at(eng, pb, START).ts_utc)
+    assert ps.sessions == {"asia": 1, "london": 7, "newyork": 22}
 
 
 def test_unpaired_per_instrument_controls_take_their_share_of_the_day_and_stop_at_their_cost_cells_30_fills():
     d = DailyEntries(max_per_day=100, thin_control_share=0.25)
-    kw: dict[str, Any] = {"session": "london", "budgets": ALL}
+    kw: dict[str, Any] = {"segment": 1, "budgets": ALL}
     assert daily_refusal(d, "thin", {"day": 10, "thin": 24}, **kw) is None
     assert daily_refusal(d, "thin", {"day": 10, "thin": 25}, **kw) == "thin_controls"
     assert daily_refusal(d, "thin", {"day": 10}, cell_fills=29, **kw) is None
@@ -186,7 +280,7 @@ def test_todays_counts_are_by_signal_close_never_the_hosts_send_time(tmp_path):
     eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
     n = budget.entries_today(eng, SimpleNamespace(db=db), day, START + pd.Timedelta(minutes=5),  # type: ignore[arg-type]
                              {"S0-US500": thin, "e": edge})
-    assert (n["day"], n["hour"], n["thin"], n["edge"], n["session:" + budget.session_of(START)]) == (2, 2, 1, 1, 2)
+    assert (n["day"], n["hour"], n["thin"], n["edge"]) == (2, 2, 1, 1)
 
 
 # ------------------------------------------------------------------------------------------------ in the engine

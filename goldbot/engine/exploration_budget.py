@@ -6,10 +6,15 @@ The rules, as built here (`exploration._send` asks them before any other cap; en
 
 * Count: the account's exploration fills (an order the broker filled), every book together, by their SIGNAL close
   (aux migrations 23-24 `signal_ns`: the engine's clock, so a replay counts its own day), since the UTC day's start.
-* The day (`max_per_day`), the clock hour (`max_per_hour`) and the session: each of asia / london / newyork has
-  max(1, round(max_per_day x its share)) where the share is the account's edge (strategy, learning, cost)
-  candidates in that session over the trailing TRAIL_DAYS trading days (equal thirds with none), so a busy Asia
-  never spends New York's fills (Q3).
+* The day (`max_per_day`), the clock hour (`max_per_hour`) and the session: each of asia / london / newyork has its
+  share of max_per_day (at least one fill, the rest by largest remainder, so the three sum to max_per_day), where the
+  share is the account's ADMISSIBLE edge (strategy, learning, cost) candidates in that session over the trailing
+  TRAIL_DAYS trading days (equal thirds with none): candidates of the pass's active arms (not retired, refused or
+  unqualified) whose decision time passes the static entry refusals (`entry_refusals.STATIC`, e.g. the 02:00-07:00
+  gold block), so a blocked hour or a retired arm strands no budget (2026-11-09 volume diagnosis, cause 4). A
+  session's unspent budget rolls forward to the next session of the same UTC day (asia, london, newyork, then the
+  asia after the New York close): a signal is refused once the day's fills reach the budgets' sum through its
+  segment, so a busy Asia still never spends New York's fills (Q3) and the day never passes max_per_day.
 * Unpaired per-instrument controls (`thin`: S0-<key>, I0-<key>): at most `thin_control_share` x max_per_day a day,
   and none once their instrument's cost cell has `thin_control_fills` fills on the account (every arm's fills of
   that instrument count, LB-<key> and LBC-<key> too, as the cost of record counts them).
@@ -41,6 +46,7 @@ if TYPE_CHECKING:
 
 EntryKind = Literal["edge", "control", "thin"]
 SESSIONS: tuple[str, ...] = ("asia", "london", "newyork")
+LATE_ASIA = len(SESSIONS)           # `day_segment` of an Asia stamp after the New York close (the day's last segment)
 TRAIL_DAYS = 10                     # trading days the session shares and the pair propensities are read over
 # refusals that stop every signal of the pass (all of them share the pass's time): recorded blocked at once
 PASS_WIDE = frozenset({"daily_entries", "hourly_entries", "session_entries"})
@@ -104,12 +110,23 @@ def trailing_start(day_start: pd.Timestamp) -> pd.Timestamp:
     return pd.Timestamp(day_start) - pd.offsets.BDay(TRAIL_DAYS)
 
 
-def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, int], *, session: str,
+def day_segment(ts: pd.Timestamp) -> int:
+    """The stamp's place in its UTC day: 0 asia, 1 london, 2 newyork, LATE_ASIA the asia after the New York close."""
+    sess = session_of(ts)
+    return LATE_ASIA if sess == "asia" and pd.Timestamp(ts).tz_convert("UTC").hour >= 12 else SESSIONS.index(sess)
+
+
+def rolled_budget(budgets: Mapping[str, int], segment: int, max_per_day: int) -> int:
+    """The day's fills allowed through `segment` (roll-forward: every earlier session's unspent budget passes on)."""
+    return sum(budgets.get(s, max_per_day) for s in SESSIONS[:segment + 1])
+
+
+def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, int], *, segment: int,
                   budgets: Mapping[str, int], cell_fills: int = 0) -> str | None:
-    """Why the budget refuses one more fill of `kind` in `session`, or None. `n`: today's fills (`day`), this clock
-    hour's (`hour`), by session (`session:<name>`) and by kind; `budgets`: each session's fills a day; `cell_fills`:
-    the fills, ever, of the instrument's cost cell (a thin control's stop). A paired control's admission is
-    `control_propensity`'s, after this."""
+    """Why the budget refuses one more fill of `kind` signalled in day segment `segment` (`day_segment`), or None.
+    `n`: today's fills (`day`), this clock hour's (`hour`) and by kind; `budgets`: each session's fills a day, rolled
+    forward (`rolled_budget`); `cell_fills`: the fills, ever, of the instrument's cost cell (a thin control's stop). A
+    paired control's admission is `control_propensity`'s, after this."""
     if daily is None:
         return None
     if kind == "thin" and daily.thin_control_fills is not None and cell_fills >= daily.thin_control_fills:
@@ -118,7 +135,7 @@ def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, i
         return "daily_entries"
     if daily.max_per_hour is not None and n.get("hour", 0) >= daily.max_per_hour:
         return "hourly_entries"
-    if n.get("session:" + session, 0) >= budgets.get(session, daily.max_per_day):
+    if n.get("day", 0) >= rolled_budget(budgets, segment, daily.max_per_day):
         return "session_entries"
     if kind == "thin" and n.get("thin", 0) + 1 > daily.thin_control_share * daily.max_per_day + 1e-9:
         return "thin_controls"
@@ -127,8 +144,8 @@ def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, i
 
 def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Timestamp,
                   arms: Mapping[str, Arm]) -> dict[str, int]:
-    """Today's fills of the account by signal close: `day` (since the reset), `hour` (this clock hour),
-    `session:<name>` and by `entry_kind` (an arm no longer configured counts in the day, hour and session only).
+    """Today's fills of the account by signal close: `day` (since the reset), `hour` (this clock hour) and by
+    `entry_kind` (an arm no longer configured counts in the day and the hour only).
     Raises when the ledger cannot be read (the caller refuses: fail closed)."""
     hour = max(since, now.floor("h"))
     with ex.db.connection() as conn:
@@ -136,8 +153,7 @@ def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Tim
         rows = conn.execute(f"SELECT arm_id, {SIGNAL} FROM exploration_trades WHERE account_id = ? AND {SIGNAL} >= ? "
                             "AND position_id IS NOT NULL", (eng.cfg.account_id, _ns(since))).fetchall()
     out = {"day": len(rows), "hour": sum(int(t) >= _ns(hour) for _, t in rows)}
-    for (arm_id, _), (sess, _h) in zip(rows, _cells([int(t) for _, t in rows]), strict=True):
-        out["session:" + sess] = out.get("session:" + sess, 0) + 1
+    for arm_id, _ in rows:
         if (arm := arms.get(str(arm_id))) is not None:
             k = entry_kind(arm)
             out[k] = out.get(k, 0) + 1
@@ -146,27 +162,56 @@ def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Tim
 
 def counted(n: dict[str, int], arm: Arm, signal: pd.Timestamp, now: pd.Timestamp) -> None:
     """A fill this pass sent, into the pass's counts."""
-    for k in ("day", "session:" + session_of(signal), entry_kind(arm), *(("hour",) if signal >= now.floor("h")
-                                                                           else ())):
+    for k in ("day", entry_kind(arm), *(("hour",) if signal >= now.floor("h") else ())):
         n[k] = n.get(k, 0) + 1
 
 
-def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start: pd.Timestamp) -> dict[str, int]:
-    """Each session's fills a day (Q3), from the account's edge candidates over the trailing TRAIL_DAYS trading days;
-    read once a day."""
+def apportion(max_per_day: int, by: Mapping[str, int]) -> dict[str, int]:
+    """max_per_day split over SESSIONS by the candidate counts `by` (equal with none): a session with no candidate
+    keeps one fill, the rest go by largest remainder (ties to the earlier session), so the sum is max_per_day (or
+    len(SESSIONS) when max_per_day is smaller; the day's cap binds first)."""
+    total = sum(by.get(s, 0) for s in SESSIONS)
+    weights = {s: by.get(s, 0) if total else 1 for s in SESSIONS}
+    floor = {s: int(weights[s] == 0) for s in SESSIONS}
+    rest = max(0, max_per_day - sum(floor.values()))
+    w = sum(weights.values())
+    exact = {s: rest * weights[s] / w for s in SESSIONS}
+    out = {s: floor[s] + math.floor(exact[s]) for s in SESSIONS}
+    left = rest - sum(math.floor(v) for v in exact.values())
+    for s in sorted(SESSIONS, key=lambda s: (-(exact[s] - math.floor(exact[s])), SESSIONS.index(s)))[:left]:
+        out[s] += 1
+    return {s: max(1, v) for s, v in out.items()}
+
+
+def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start: pd.Timestamp,
+                    arms: Mapping[str, Arm]) -> dict[str, int]:
+    """Each session's fills a day (Q3; `apportion`), from the account's admissible edge candidates over the trailing
+    TRAIL_DAYS trading days: those of `arms` (the pass's active arms) that no static entry refusal would refuse at
+    their decision time (`entry_refusals.statically_refused`). Read once a day: an arm retired during the day moves
+    the shares from the next day on."""
+    from goldbot.engine.entry_refusals import statically_refused
     key = ("sessions", _ns(day_start))
     if key in ex.budget_cache:
         return dict(ex.budget_cache[key])
     with ex.db.connection() as conn:
-        ns = [int(r[0]) for r in conn.execute(
-            "SELECT decision_ns FROM exploration_obs WHERE account_id = ? AND is_control = 0 AND decision_ns >= ? "
-            "AND decision_ns < ?", (eng.cfg.account_id, _ns(trailing_start(day_start)), _ns(day_start)))]
+        rows = [(str(a), int(t)) for a, t in conn.execute(
+            "SELECT arm_id, decision_ns FROM exploration_obs WHERE account_id = ? AND is_control = 0 "
+            "AND decision_ns >= ? AND decision_ns < ?",
+            (eng.cfg.account_id, _ns(trailing_start(day_start)), _ns(day_start))) if str(a) in arms]
+    # every static refusal's window is whole minutes: one verdict per arm and minute
+    minute = 60_000_000_000
+    verdict: dict[tuple[str, int], bool] = {}
+    ns: list[int] = []
+    for arm_id, t in rows:
+        k = (arm_id, t // minute)
+        if k not in verdict:
+            verdict[k] = statically_refused(eng, arms[arm_id], pd.Timestamp(t, unit="ns", tz="UTC"))
+        if not verdict[k]:
+            ns.append(t)
     by = {s: 0 for s in SESSIONS}
     for sess, _h in _cells(ns):
         by[sess] = by.get(sess, 0) + 1
-    total = sum(by.values())
-    shares = {s: by[s] / total for s in SESSIONS} if total else {s: 1 / len(SESSIONS) for s in SESSIONS}
-    out = {s: max(1, round(daily.max_per_day * shares[s])) for s in SESSIONS}
+    out = apportion(daily.max_per_day, by)
     ex.budget_cache = {k: v for k, v in ex.budget_cache.items() if k[0] != "sessions"}
     ex.budget_cache[key] = out
     return dict(out)
@@ -233,6 +278,6 @@ def control_propensity(eng: Engine, ex: Exploration, control: str, arms_of: tupl
     return p if math.isfinite(p) else 0.0
 
 
-__all__ = ["EXTRA_PAIRS", "PASS_WIDE", "SESSIONS", "TRAIL_DAYS", "EntryKind", "cell_counted", "cell_fills",
-           "control_propensity", "counted", "daily_refusal", "entries_today", "entry_kind", "pairs", "session_budgets",
-           "session_of", "trailing_start"]
+__all__ = ["EXTRA_PAIRS", "LATE_ASIA", "PASS_WIDE", "SESSIONS", "TRAIL_DAYS", "EntryKind", "apportion",
+           "cell_counted", "cell_fills", "control_propensity", "counted", "daily_refusal", "day_segment",
+           "entries_today", "entry_kind", "pairs", "rolled_budget", "session_budgets", "session_of", "trailing_start"]

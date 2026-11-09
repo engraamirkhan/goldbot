@@ -66,6 +66,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `TrialRegistry.withdraw(..., evidence=)` records it. Brain registry copy (sha 73fc51e1) at 2026-11-20:
   quarter_trials(2026Q4) 3,395, n_trials_effective 3,471, 0 stale, 389 backfill withdrawals exempt. Any other withdrawal, or a "not a trial" note,
   exempts nothing. Tests: `tests/test_registry_unlinked_prereg.py`.
+- 2026-11-09 (branch fix/session-budget-admissible; volume diagnosis 2026-11-09 cause 4, fix 2): the exploration
+  daily budget's session split (`exploration_budget.session_budgets`) now counts only admissible edge candidates of the
+  trailing 10 trading days: candidates of the pass's active arms (every book's retired arms out) whose decision time
+  passes the static entry refusals (`entry_refusals.STATIC`: window_0207, f1_pit, learning_icm_only; the HAR refusals
+  read a day's job row and are not applied to history). The split is by largest remainder with one fill floor, so the
+  three sessions sum to max_per_day (before: rounding could pass it). A session's unspent budget rolls forward to the
+  next session of the same UTC day (asia, london, newyork, then the asia after the New York close): `session_entries`
+  refuses once the day's fills reach the budgets' sum through the signal's segment, so an early session never spends
+  a later one's. `daily_refusal` takes `segment=` (`day_segment`) instead of `session=`; the per-session counts
+  (`session:<name>`) are gone from `entries_today`. RiskGate, max_per_day/max_per_hour, loss caps and thin_control_*
+  unchanged. Expected: about +10-15 fills a day on icm-demo/icm-probe inside the same day caps; vantage-demo none (no
+  supply, cause 2). Tests: `tests/test_exploration_daily_budget.py`.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured
