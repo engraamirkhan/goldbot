@@ -1,4 +1,4 @@
-id: R107
+id: R108
 requirement: 'EVAL-2 costs (method section 4, prereg 2026-11-09 section 4.2): the deciding cost is max(today R, bp-engine R) + overshoot x (stop-exit + stop-entry share) + swap (never a credit) + the positive S5 fill-vs-replay gap until S5 passes per broker and band, gated at 1.5x; the 2010-17 $-constant stress line tags COST-SENSITIVE and is never gated; ATR pin version pinned in config; a lint refuses any filter, gate or trigger on a realised trade field'
 status: 'partial (built and quant-approved 2026-11-09; sim.py consumes it in Lane 1)'
 code: 'goldbot/research/catalogue/costs.py (`deciding_cost`, `DecidingCost`, `stress_cost`, `cost_sensitive`, `ATR_PIN`, `GATE_COST_MULT`); config/catalogue_costs.yaml (`deciding`); goldbot/research/catalogue/lint.py (`lint_card`, `assert_decision_time`, `RealisedFieldFilter`, `DECISION_TIME`)'
