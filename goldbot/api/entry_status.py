@@ -158,6 +158,9 @@ REASONS: dict[str, Reason] = {
                             "Review on the Health tab, then clear it with the command shown there.", "act", HEALTH),
     "bridge_incompatible": _r("The MT5 box runs an incompatible bridge version",
                               "Update the MT5 box to the same version as the brain.", "act", UPDATE),
+    "terminal_account_changed": _r("The MT5 terminal is logged in to another account",
+                                   "Log the terminal back in to this account; trading resumes by itself. Open trades "
+                                   "keep their stops at the broker.", "act", HEALTH),
     "server_clock_mismatch": _r("Broker clock differs from the expected time zone",
                                 "See the Runbook: Server clock. Entries resume a minute after the clocks agree.",
                                 "act", CLOCK),
