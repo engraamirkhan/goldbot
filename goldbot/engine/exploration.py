@@ -101,6 +101,7 @@ from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe, entry_refusals, long_bars, weekend_lane
 from goldbot.engine.long_bars import LONG_TFS, LongHistory, is_bar_close
+from goldbot.engine.store import Resolution
 from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.ops.accounts import DailyEntries
@@ -509,6 +510,10 @@ class ExplorationRecord(FrozenRecord):
     # multi-instrument demo (plan 2026-11-02): the instrument the order traded (a config/instruments.yaml key); the
     # cost of record cells by it (research.cost_of_record), never pooled with XAUUSD. JSON body only; older rows XAUUSD
     symbol: str = "XAUUSD"
+    # trading-safety review 2026-11-09 R2: how the look-up settled an order sent without a fill or a definite reject
+    # (retcode -1, a timeout; engine/unconfirmed.py): adopted (found open), opened_closed (found already closed) or
+    # unfilled (no trade). `retcode` stays as the broker answered. JSON body only (no migration); None: settled at send
+    resolution: Resolution | None = None
 
 
 class TwinRecord(FrozenRecord):

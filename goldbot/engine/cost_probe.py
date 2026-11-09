@@ -94,6 +94,7 @@ from goldbot.data.timeutil import epoch_ns, server_wall
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, exploration, order_send
 from goldbot.engine import magic as magics
+from goldbot.engine.store import Resolution
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.ops.accounts import ScheduledProbe
 
@@ -286,6 +287,10 @@ class ProbeRecord(FrozenRecord):
     # multi-instrument demo (plan 2026-11-02, lanes L3/L4): the instrument the probe traded (a config/instruments.yaml
     # key); None on gold's and on every record before it
     symbol: str | None = None
+    # trading-safety review 2026-11-09 R2: how the look-up settled an order sent without a fill or a definite reject
+    # (retcode -1, a timeout; engine/unconfirmed.py): adopted (found open), opened_closed (found already closed) or
+    # unfilled (no trade). `retcode` stays as the broker answered. JSON body only (no migration); None: settled at send
+    resolution: Resolution | None = None
 
     @property
     def slippage_usd(self) -> float | None:
@@ -1188,6 +1193,30 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
             **({"exit_bid": quote[0], "exit_ask": quote[1], "exit_quote_utc": quote[2]} if quote else {})}))
     eng._recorded.add(pid)
     return True
+
+
+def note_resolution(eng: Engine, agent_id: str, cid: str, resolution: Resolution) -> None:
+    """Trading-safety review 2026-11-09 R2: the look-up (engine/unconfirmed.py) settled the order `cid` of a probe or an
+    exploration arm that was sent without a fill or a definite reject (retcode -1): its ledger row says how
+    (`resolution`). Only an existing row is updated (`_place` writes it at send; none is made here) and its `retcode`
+    stays as the broker answered. Any other agent: nothing. Reporting only: a failed write is logged, never raised, so
+    the look-up and the trade it adopted are never undone by it."""
+    if not (exploration.is_exploration(agent_id) or is_probe(agent_id)):
+        return
+    try:                        # opening the ledger is inside: a missing or locked aux.db never raises from here
+        if exploration.is_exploration(agent_id):
+            ex = eng.exploration
+            db = ex.db if ex is not None else exploration.ledger_db(eng.cfg.state_dir)
+            repo = cast("RecordRepo[Any]", exploration.LEDGER)
+        else:
+            db = eng.probe.db if eng.probe is not None else Database.open(eng.cfg.state_dir, "aux")
+            repo = cast("RecordRepo[Any]", LEDGER)
+        with db.write() as conn:
+            rec = repo.get(conn, cid)
+            if rec is not None and rec.resolution != resolution:
+                repo.upsert(conn, rec.model_copy(update={"resolution": resolution}))
+    except Exception as exc:  # noqa: BLE001 - the ledger note never changes the look-up's outcome
+        log.warning("ledger resolution %s for %s not written (%s)", resolution, cid, type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------------------------- readers (costs-v2)

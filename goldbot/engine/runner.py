@@ -56,6 +56,8 @@ from goldbot.engine import (
     key_zones,
     order_send,
     pilot,
+    state_heartbeat,
+    terminal_account,
     unconfirmed,
     weekend_lane,
 )
@@ -521,6 +523,10 @@ class Engine:
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         # an account_positions() read for the kill switch is failing (logged and journalled once per streak, C6)
         self._kill_book_failing = False
+        # trading-safety R1 (engine/terminal_account.py): the start check, run again on every account read (set by the
+        # service; None: no terminal, as the paper broker), and what it found
+        self.verify_account: Callable[[AccountInfo], str | None] | None = None
+        self.terminal = terminal_account.Watch()
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -691,53 +697,14 @@ class Engine:
             self._write_state()
             self._last_state_write = t.ts_utc
         elif self._state_heartbeat_due():
-            self._guard(self._write_heartbeat)
+            self._guard(lambda: state_heartbeat.write(self))
         self.last_bar_close = bar_close if self.broker_m1.held is None else self.last_bar_close   # a held close stays due
         exploration.on_pass(self, t)       # after the exits and the bar close's decisions; never raises
         self._flush_closed()               # after every exit of this tick has been sent
         return out
 
     def _state_heartbeat_due(self) -> bool:
-        """BACKLOG 59: on the live clock, with the market CLOSED per the session table, no state write for
-        state_every_s of HOST time. With the market closed the tick stamp is frozen, so the tick-time cadence above
-        never fires and health would read a live engine's file (bridge_compat `checked_at`, `ts`) as hours old.
-        Never in an open session (review HIGH): a frozen feed in market hours must leave the file to age, so health
-        FAILs it (bridge_compat after 5 min, engine after 45 min) as before. A session table that cannot be read is
-        not due (fail toward the alert). A host clock stepped back is due in any session, so the file never keeps a
-        stamp from the future (BACKLOG 58). Replays and backtests (tick clock only) never take this path."""
-        if not self.cfg.live_clock:
-            return False
-        now = self.clock()
-        elapsed = math.inf if self._state_written_host is None else (now - self._state_written_host).total_seconds()
-        if elapsed < 0:
-            return True
-        if elapsed < self.cfg.state_every_s:
-            return False
-        try:
-            return self.sessions.entry_block(now) is not None
-        except Exception:
-            return False
-
-    def _write_heartbeat(self) -> None:
-        """The host-clock state write (BACKLOG 59): it republishes and decides nothing. No account read, no stage
-        machine, kill switch, weekend rule or other exit step (those stay on the tick-time refresh), and no EngineState
-        field changes. The fields that describe the feed are restated on the host clock so they stay true: the last
-        tick's age and lead, and whether the session table has the market closed now."""
-        self._state_written_host = self.clock()   # a failing write is retried (and a tick error) once per cadence
-        self._write_state(heartbeat=True)
-
-    def _heartbeat_feed(self) -> dict[str, Any]:
-        """`last_tick_age_s`, `tick_ahead_s` and `market_closed` now on the host clock, as `_refresh_account` measures
-        them (signed age; a broken session table reads closed). Empty before the first valid tick."""
-        if self._last_tick is None:
-            return {}
-        now = self.clock()
-        age = (now - self._last_tick.ts_utc).total_seconds()
-        try:
-            closed = self.sessions.entry_block(now) is not None
-        except Exception:
-            closed = True
-        return {"last_tick_age_s": abs(age), "tick_ahead_s": max(0.0, -age), "market_closed": closed}
+        return state_heartbeat.due(self)        # engine/state_heartbeat.py (BACKLOG 59)
 
     def _host_now(self) -> pd.Timestamp:
         """The clock for a pass without a valid quote: the host clock live, else the last valid tick's time (a replay
@@ -756,6 +723,7 @@ class Engine:
         now = self._host_now()
         if self._quote_invalid_since is None:
             self._quote_invalid_since = now
+        self._guard(lambda: terminal_account.no_quote_check(self, now))     # R1
         self._guard(lambda: self._retry_closes(now))
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._guard(lambda: self._kill_switch(everything=False))
@@ -1413,6 +1381,8 @@ class Engine:
     def _read_positions(self, then: str) -> list[Position] | None:
         """The broker's positions, or None when the read fails (MT5 positions_get returning None raises in the
         adapter): the failure is counted (`positions_unreadable`), and the caller manages nothing from it."""
+        if terminal_account.refuse_read(self, "positions", then):     # R1: never another account's book
+            return None
         try:
             positions = books.positions(self)   # the active book's symbol (gold: the adapter's own, unchanged)
         except Exception:
@@ -1429,7 +1399,7 @@ class Engine:
         clear the flag or drop a due close of another symbol (trading-safety C1, C3); the failure is logged and
         journalled once per streak (C6). Without the flag the scope is this engine's symbol, so `positions()` is
         complete. None when no book could be read (counted by `_read_positions`)."""
-        if self._kill_everything:
+        if self._kill_everything and terminal_account.verified(self) and not terminal_account.changed(self):
             try:
                 book = self.broker.account_positions()
             except Exception as exc:                      # an older bridge, a terminal fault: fall back, stay pending
@@ -1448,6 +1418,7 @@ class Engine:
 
     def _read_deals(self, since: pd.Timestamp) -> pd.DataFrame:
         """The broker's deal history; a failed read (MT5 history_deals_get returning None) is counted and raised."""
+        terminal_account.refuse_read(self, "deals", "the close is confirmed once the terminal is back")   # R1
         try:
             deals = self.broker.deals_since(since)
         except Exception:
@@ -1456,7 +1427,7 @@ class Engine:
         self._read_fails["deals"] = 0
         return deals
 
-    def _read_failed(self, kind: str, then: str) -> None:
+    def _read_failed(self, kind: str, then: str, *, traceback: bool = True) -> None:
         """Count a failed read, at most once per tick (several reads in one tick are one failure in a row)."""
         at = self._last_tick.ts_utc if self._last_tick is not None else None
         if at is None or self._read_fail_at.get(kind) != at or self._read_fails[kind] == 0:
@@ -1464,7 +1435,8 @@ class Engine:
             self._read_fail_at[kind] = at
             if self._read_fails[kind] == 1:
                 self.decisions.append({"ts": time.time(), "action": "book_unreadable", "read": kind})
-        log.exception("%s read failed (%d in a row); %s", kind, self._read_fails[kind], then)
+        if traceback:                          # a read refused on purpose (terminal_account) is logged there
+            log.exception("%s read failed (%d in a row); %s", kind, self._read_fails[kind], then)
 
     def _book_unreadable(self) -> int:
         """Consecutive failed broker reads (the larger of positions() and deal history)."""
@@ -1643,6 +1615,8 @@ class Engine:
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
+        if terminal_account.changed(self):     # R1: by ticket, exits never gated
+            return terminal_account.retry_closes(self, due, now)
         read = self._read_kill_book("closes are retried next tick")
         if read is None:
             return
@@ -1672,6 +1646,8 @@ class Engine:
                    and not self._retry_wait(pid, now)]
         if not through:
             return
+        if terminal_account.changed(self):     # R1: by ticket, exits never gated
+            return terminal_account.stop_closes(self, through, now)
         positions = self._read_positions("the engine stop check is retried next tick")
         if positions is None:
             return
@@ -1791,6 +1767,7 @@ class Engine:
         gap). Unknown magics are listed, never touched. Exploration closes are swept here too (`exploration.sweep`)."""
         if now is not None:
             self._last_reconcile = now
+        terminal_account.verified(self)     # R1: its own account read, so no orphan is adopted between two refreshes
         positions = self._read_positions("reconciliation skipped this pass")
         if positions is None:                             # the next pass retries; the per-tick stop check still guards
             return
@@ -1926,6 +1903,8 @@ class Engine:
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:
         acc = self.broker.account()
+        if not terminal_account.check(self, acc):     # R1: another account's figures are never this one's
+            return terminal_account.refused_refresh(self)
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
@@ -1986,8 +1965,9 @@ class Engine:
             self._unhealthy_at = now
             st.data_recovering = False        # the error itself blocks; recovery starts when it clears
         else:
-            st.data_recovering = self._unhealthy_at is not None and \
-                (now - self._unhealthy_at).total_seconds() < self.cfg.healthy_resume_s
+            st.data_recovering = (self._unhealthy_at is not None and
+                                  (now - self._unhealthy_at).total_seconds() < self.cfg.healthy_resume_s) \
+                or terminal_account.recovering(self, now)      # R1: every book, not only the one that saw it
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             sup = Supervisor.read_state(self.cfg.state_dir)
@@ -2149,6 +2129,7 @@ class Engine:
         try:
             read = self._read_kill_book("the kill switch runs again next tick")
             if read is None:
+                terminal_account.kill_closes(self)    # R1: the tickets it knows, by ticket
                 return False
             book, complete = read
             scope = [p for p in book if whole or self._own(p.magic)]
@@ -2316,7 +2297,9 @@ class Engine:
         c = self.center.bus.control()
         if c.rearm_id is None or c.rearm_id == self._rearm_seen:
             return
-        self._rearm_seen = c.rearm_id
+        if terminal_account.rearm_waits(self):     # R1: unconsumed while the terminal is on another account
+            return
+        prev, self._rearm_seen = self._rearm_seen, c.rearm_id
         was_normal = self.state.stage == Stage.NORMAL and not self.state.combined_size_down
         if self.state.stage == Stage.HALTED:
             refused = self._rearm_conditions(now)
@@ -2325,7 +2308,11 @@ class Engine:
                 self.decisions.append({"ts": time.time(), "action": "rearm_refused", "by": c.rearm_by,
                                        "rearm_id": c.rearm_id, "reason": refused})
             else:
-                self.state.equity = self.broker.account().equity
+                acc = self.broker.account()
+                if not terminal_account.check(self, acc):     # R1: switched since the last read: wait, unconsumed
+                    self._rearm_seen, self._rearm_refused = prev, terminal_account.REASON
+                    return
+                self.state.equity = acc.equity
                 if self.gate.rearm(self.state, REARM_PHRASE):
                     self._rearm_refused, self._halted_at = None, None
                     self._propose_only_until = now + pd.Timedelta(days=self.cfg.rearm_propose_days)
@@ -3042,6 +3029,7 @@ class Engine:
                                 | ({"contract_unknown"} if self._contract is None and self._contract_tried else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
+            "terminal_account_changed": self.terminal.mismatch,     # R1: why not on this account (health FAILs)
             "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],
             "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,
@@ -3076,7 +3064,7 @@ class Engine:
         payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
         payload.update(self._limits.published())   # ADR 0032: the current limits, for the supervisor's combined caps
         # BACKLOG 59: a heartbeat publishes the feed as it is now, not as the last account refresh saw it
-        feed = self._heartbeat_feed() if heartbeat else {}
+        feed = state_heartbeat.feed(self) if heartbeat else {}
         payload.update(feed)
         # BACKLOG 43 (ADR 0011): why entries are refused now, as the RiskGate's account-level codes on the facts this
         # file publishes (a heartbeat's feed on a copy: the in-memory state stays the last refresh's), and each agent's

@@ -5,6 +5,76 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
+  start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
+  `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every
+  reconciliation. On a mismatch: entries refused `terminal_account_changed` (RiskGate), the account read is not used
+  (equity, stages, high-water mark, risk period keep this account's last reading), every positions and deals read is
+  refused and counted as `positions_unreadable` (no adoption, no inferred close, no unconfirmed-order resolution from
+  the other book), engine state `terminal_account_changed` (health `engine:<account>` FAIL) and one Telegram notice each
+  way. Exits are never gated; positions keep their broker stops. Back on the account, entries resume after
+  `healthy_resume_s`. **R2:** an exploration or cost-probe ledger row settled by the BACKLOG 72 look-up carries
+  `resolution` (`adopted` / `opened_closed` / `unfilled`; JSON body only, no migration); the retcode stays as answered.
+  Golden `tests/data/engine_store_golden` regenerated for the new engine-state key only.
+  Review round 1 (trading-safety 2 HIGH, 2 MED, 4 LOW): the risk-period roll checks its own read and rolls only once the
+  terminal is back; exits are never gated while flagged (due closes, the engine stop and the kill switch send by ticket,
+  never dropped as gone, never re-reading the whole account); `no_quote_pass` checks every `reconcile_every_s` and the
+  kill switch checks before a whole-account read; a re-arm waits unconsumed (`rearm_refused` terminal_account_changed;
+  re-arm source pin in tests/test_demo_roll.py updated); a closed record takes the engine's equity; `note_resolution`
+  opens the ledger inside its try; every book's `data_recovering` waits `healthy_resume_s` from the restore.
+  Residual-risk ruling: while a flagged read names another trade server than the one the account was last verified on
+  (`_terminal_other_server`), nothing is closed by ticket (tickets are unique per server only); the broker's SL/TP hold
+  the positions until the terminal is back. A raised check, an empty server or another login on the same server still
+  send. No server name is logged.
+  runner.py line cap (ADR 0023): the terminal-account blocks live in `engine/terminal_account.py` (`Engine.terminal`, a
+  `Watch` record) and the BACKLOG 59 host-clock state write moved verbatim to `engine/state_heartbeat.py`; LINE_CAP
+  lowered to 3087.
+- **EVAL-2 Lane 1, twins (R107, quant approved 2026-11-09).** `goldbot/research/catalogue/sim.py` draws up to 20
+  replay-only twins per signal from decision bars after its exit (intraday 7 days, 1d 20 bars), same side and hour
+  +/-1 h, never on a bar where the family fires or past the window end, without replacement (a smaller pool is used
+  whole; M_eff in `n_twins`, about 7 on 4h); stop, target and entry offset at the twin's ATR14; same replay and cost
+  path as the signal (swap by #343's rule). `run.py`: `unit_twins` (EVAL-2 `units` frame, session-day clustering on
+  the 17:00 New York clock), `read_batch_index` (2018-25 next read = batch 15, TEST-OLD = 1, every
+  `state/*_reads.jsonl`). S0 full run (`GOLDBOT_SELFTEST=1`, n 116,614): gross -0.0028 R, excess -0.0044 R (SE
+  0.0046), cell floor and chi2 dispersion pass on 15m/1h/4h/1d; se_ratio 1.085 and rho 0.027 are diagnostics, never a
+  multiplier. Lane 1's S0 runs on synthetic martingale walks (harness unit check). Method S0 on real explore bars (NULL-RAND, all TFs, 20 twins, same thresholds) is Lane 4's and must be green before any L2 run; S21 stays blocked until it is.
+- EVAL-2 Lane 2 (costs + lint, quant-approved 2026-11-09): `goldbot/research/catalogue/costs.py` adds
+  `deciding_cost` (max(today R, bp-engine R) + overshoot x (stop-exit + stop-entry share) + swap floored at 0 + the
+  positive S5 fill-vs-replay gap until S5 passes; every term >= 0; gates at `GATE_COST_MULT` 1.5; requires the window's
+  CostModel; replaces, never adds to, the sim's cost_r), `stress_cost` (the $0.230 round trip at min(decision ATR,
+  2010-17 era ATR): 15m 0.151 R) and `cost_sensitive`. Pin `atr-pin-2026-11-09.2` (re-seeded from 2026-10-01, no
+  holdout row loaded) in `config/catalogue_costs.yaml` `deciding`; S5 gap icm -$0.008 (charged 0), vantage $0.071 until
+  its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
+  refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
+  and quant sign-off). Not yet wired into sim.py (Lane 1).
+- 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
+  EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
+  live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
+  (`screen_min_events_daily: null`; daily units use `screen_retire_floor` 300 with the futility rule); ADR 0078 books
+  the 11-09 explore views (17,862; sensitivity 16,680) in an append-only snooping ledger that feeds DSR K
+  (3,471 + 17,862 = 21,333), the EB prior and the haircut, not the registration budget. The prereg
+  `docs/research/prereg-2026-11-09-eval2.md` freezes the v6 thresholds, the function signatures Lanes 1-5 build and
+  test against, the gamma sequences (gamma_1 = 0.5, then 0.5 x 6/pi^2/(j-1)^2; TEST-OLD index 1, 2018-25 batch 15,
+  verified against Zrnic et al. AISTATS 2020 Algorithm 1, pure alpha-spending with no rejection credit, quant ruling), the
+  replay-v2 spec with its S5 expectation, the mSPRT supersession, and the integrity record (read ledger P1-P9/F1-F7,
+  holdout touches, deleted confirm-cache hashes, registry merge and backfill: 6,961 rows, headroom 105). The signed
+  v6 method is copied to `docs/research/eval2-method-2026-11-09.md`. Build lanes 0-5B: BACKLOG 148; Lane 3 condition: `l3_read` calls the frozen `confirm_resamples` itself (prereg 4.6). No TRACEABILITY
+  row yet: each code lane adds its row with its tests. Registrations stay frozen until Lane 0's
+  `tests/test_registry_unlinked_prereg.py` is green on CI and merged.
+- 2026-11-09 (branch fix/registry-unlinked-prereg; quant ruling 2026-11-09, item 3(b)): an ad-hoc (`queue: false`)
+  pre-registration that is not withdrawn and has had no linked result row for more than 7 days
+  (`registry.STALE_PREREG_DAYS`, `stale_preregistrations`) now counts as one trial of the quarter of its `ts` in both
+  `quarter_trials` (the budget) and `n_trials_effective` (the DSR's K). Once a result row links to it only the result
+  counts; queued rows stay under `director.reserved_trials`; loop rows stay out of the quarter budget (ADR 0029) but in
+  K. Both functions take `now=` (default the registry clock). Exemption (quant ruling 2026-11-09): only a `withdrawn`
+  row naming the pre-registration by (ts, config_hash) with `reason` "unevaluable: <cause>" or "never formed: <cause>"
+  and `evidence` (run output files with sha256; top-level `evidence` [{path, sha256}] or the applied sprint-3000
+  backfill's `results.evidence` [{source_file, source_sha256}]), written before any read of the spec (`exempting_withdrawal`),
+  exempts it, and only when written before the prereg's stale point (ts + 7 d; unstamped = late), so the counts never
+  fall as time passes; `evidence_ok` checks format only (content stays with the writer plus quant).
+  `TrialRegistry.withdraw(..., evidence=)` records it. Brain registry copy (sha 73fc51e1) at 2026-11-20:
+  quarter_trials(2026Q4) 3,395, n_trials_effective 3,471, 0 stale, 389 backfill withdrawals exempt. Any other withdrawal, or a "not a trial" note,
+  exempts nothing. Tests: `tests/test_registry_unlinked_prereg.py`.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured
