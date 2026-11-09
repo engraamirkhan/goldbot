@@ -38,6 +38,7 @@ the registered sizing is linear in R (not compounded)."""
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -553,3 +554,158 @@ def deflated_sharpe(daily_x: np.ndarray, k: int) -> dict[str, float]:
     den = math.sqrt(max(1e-12, 1 - sk * sr + (ku - 1) / 4 * sr * sr))
     dsr = float(norm.cdf((sr - sr0) * math.sqrt(T - 1) / den))
     return {"sr": sr, "sr0": sr0, "dsr": dsr}
+
+
+# ------------------------------------------------------------------ EVAL-2 ladder statistics (prereg 2026-11-09 4.3)
+# `units` (every EVAL-2 function): one row per instance, columns cell_id, family, inst, tf, side, day (the session day
+# of the fill on the 17:00 New York clock: sim.session_day over costs.rollover_table()), decision_ns, net_r (net R at
+# the deciding cost, 1.0x), twin_mean_net_r (mean net of its twins, same cost path), excess_r (net_r -
+# twin_mean_net_r), cost_r (the instance's deciding cost in R, costs.deciding_cost(...).r, already inside net_r once),
+# year. Extra columns (run.unit_twins adds n_twins) are ignored.
+_UNIT_COL = {"excess": "excess_r", "net": "net_r", "twin": "twin_mean_net_r", "cost": "cost_r"}
+
+
+def _col(units: pd.DataFrame, col: str) -> str:
+    """The frozen default `col="excess"` names the `excess_r` column of the units schema (prereg 4.3 lists both)."""
+    if col in units.columns:
+        return col
+    alias = _UNIT_COL.get(col)
+    if alias is None or alias not in units.columns:
+        raise KeyError(f"units have no column {col!r}")
+    return alias
+
+
+def cluster_se(x: np.ndarray, day: np.ndarray) -> float:
+    """Prereg: "standard errors clustered by session day". SE of mean(x) by the CR1 sandwich over session days:
+    sqrt(G / (G - 1) x sum_g (sum_{i in g} (x_i - mean))^2) / n. NaN instances are left out (an instance without a
+    twin has no excess); NaN with fewer than 2 days."""
+    x = np.asarray(x, float)
+    d = np.asarray(day)
+    ok = np.isfinite(x)
+    x, d = x[ok], d[ok]
+    if not len(x):
+        return float("nan")
+    _, inv = np.unique(d, return_inverse=True)
+    g = int(inv.max()) + 1
+    if g < 2:
+        return float("nan")
+    s = np.bincount(inv, weights=x - x.mean())
+    return float(math.sqrt(g / (g - 1) * float(s @ s)) / len(x))
+
+
+def cell_day_means(units: pd.DataFrame, *, col: str = "excess") -> pd.DataFrame:
+    """Per (cell, session day): the mean of `col` and its instance count (NaN instances left out). Columns cell_id,
+    day, mean, n: the day-clustered cell means the L2 model is fitted on."""
+    c = _col(units, col)
+    u = units[np.isfinite(units[c].to_numpy(float))]
+    out = u.groupby(["cell_id", "day"], sort=True)[c].agg(["mean", "size"]).reset_index()
+    return out.rename(columns={"size": "n"})[["cell_id", "day", "mean", "n"]]
+
+
+def _z(p: float) -> float:
+    from scipy.stats import norm
+    return float(norm.ppf(p))
+
+
+def power_floor_n(*, q: float, m: int, sd: float, delta: float, power: float = 0.8) -> int:
+    """L0 card admission: "n_min = ((z(1 - q/m) + 0.84) x sd_card / delta_card)^2 must fit the window's expected n;
+    m = families actually read, fixed before the read" (0.84 = z(power) at the default 0.8). Rounded up."""
+    if m < 1 or sd <= 0 or delta <= 0:
+        raise ValueError(f"power floor needs m >= 1, sd > 0 and delta > 0 (got m={m}, sd={sd}, delta={delta})")
+    return int(math.ceil(((_z(1 - q / m) + _z(power)) * sd / delta) ** 2 - 1e-9))
+
+
+def mde(*, n: int, sd: float, alpha: float, power: float = 0.8) -> float:
+    """Minimum detectable effect of a one-sided level-`alpha` test at `power`: (z(1 - alpha) + z(power)) sd / sqrt(n).
+    Method section 2: alpha 0.20 (L2's 0.80 carry) gives the L2 row's "1.68 sd / sqrt(n)"."""
+    return (_z(1 - alpha) + _z(power)) * sd / math.sqrt(n) if n > 0 else float("inf")
+
+
+def power_at(*, n: int, sd: float, delta: float, alpha: float) -> float:
+    """Power of a one-sided level-`alpha` z-test of mean > 0 at a true mean `delta`: Phi(delta sqrt(n) / sd - z(1 -
+    alpha)). Prereg 3.3: n 218, sd 1.56, delta 0.2655, alpha 0.05 / 3 -> 0.650."""
+    from scipy.stats import norm
+    if n <= 0 or sd <= 0:
+        return float("nan")
+    return float(norm.cdf(delta * math.sqrt(n) / sd - _z(1 - alpha)))
+
+
+def _cell_terms(units: pd.DataFrame, weights: Mapping[str, float]
+                ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Over the instances of the carried cells (weight > 0) that have an excess: (weight, mean excess, mean deciding
+    cost) per carried cell present, and every instance's twin mean net. Factorised, not string-compared: the L3
+    bootstrap calls it hundreds of thousands of times."""
+    codes, uniq = pd.factorize(units["cell_id"], sort=True)
+    w_u = np.array([float(weights.get(str(c), 0.0)) for c in uniq])
+    ex = units["excess_r"].to_numpy(float)
+    keep = (codes >= 0) & np.isfinite(ex)
+    keep[keep] = w_u[codes[keep]] > 0
+    if not keep.any():
+        z = np.zeros(0)
+        return z, z, z, z
+    k = codes[keep]
+    cnt = np.bincount(k, minlength=len(uniq)).astype(float)
+    present = cnt > 0
+    mean_ex = np.bincount(k, weights=ex[keep], minlength=len(uniq))[present] / cnt[present]
+    cost = np.bincount(k, weights=units["cost_r"].to_numpy(float)[keep], minlength=len(uniq))[present] / cnt[present]
+    return w_u[present], mean_ex, cost, units["twin_mean_net_r"].to_numpy(float)[keep]
+
+
+def weighted_mean_excess(units: pd.DataFrame, weights: Mapping[str, float]) -> float:
+    """The family's precision-weighted mean excess over its carried cells, sum_c w_c mean excess_c / sum_c w_c: the
+    control-variate's first term, and the L3 'one-sided p of mean excess' statistic (timing, not drift)."""
+    w, ex, _, _ = _cell_terms(units, weights)
+    return float(w @ ex / w.sum()) if len(w) else float("nan")
+
+
+def control_variate_net_at(units: pd.DataFrame, weights: Mapping[str, float], *, cost_mult: float) -> float:
+    """The control-variate net at `cost_mult` x the deciding cost: sum_c w_c (mean excess_c - (cost_mult - 1) x mean
+    cost_c) / sum_c w_c + the mean twin net of the carried cells' instances. net_r and the twins already pay the
+    deciding cost once (1.0x), so the 1.5x gate charges only the extra 0.5x: the deciding cost is applied once."""
+    w, ex, cost, tw = _cell_terms(units, weights)
+    if not len(w):
+        return float("nan")
+    return float((w @ (ex - (cost_mult - 1.0) * cost)) / w.sum() + tw.mean())
+
+
+def control_variate_net(units: pd.DataFrame, weights: Mapping[str, float]) -> float:
+    """L3 statistic (prereg section 1): "control-variate net: family precision-weighted mean excess + mean net of all
+    twins in the carried cells, at 1.0x deciding cost; weights fixed from explore (n, sd) in the frozen card".
+    `weights`: cell_id -> weight of each carried cell; a carried cell absent from `units` drops out of the weighting."""
+    return control_variate_net_at(units, weights, cost_mult=1.0)
+
+
+def _t_clustered(x: np.ndarray, day: np.ndarray) -> float:
+    """Day-clustered t of mean(x); +/-inf when every day agrees exactly (zero SE, a certain sign)."""
+    x = np.asarray(x, float)
+    ok = np.isfinite(x)
+    if not ok.any():
+        return float("nan")
+    mean = float(x[ok].mean())
+    se = cluster_se(x, day)
+    if np.isfinite(se) and se > 0:
+        return mean / se
+    if se == 0 and mean != 0:
+        return math.copysign(math.inf, mean)
+    return float("nan")
+
+
+def year_rule(units: pd.DataFrame, *, chop_years: tuple[int, ...]) -> dict[str, bool]:
+    """L3 year rule over 2006-09 + 2018-25 (prereg section 1): "net > 0 in >= 3 calendar years, at least one of
+    2021/2022, no 2-year sub-period with net t <= -2". A year is net positive when its summed net_r (1.0x deciding
+    cost) is > 0; a year with no data is not positive. The 2-year sub-periods are every pair of consecutive calendar
+    years (y, y + 1) holding any data, so a year next to an unread year is also tested alone (stricter reading);
+    t is day-clustered."""
+    net = units["net_r"].to_numpy(float)
+    year = units["year"].to_numpy(np.int64)
+    day = units["day"].to_numpy()
+    ok = np.isfinite(net)
+    years = sorted({int(y) for y in year[ok]})
+    pos = {y for y in years if float(net[ok & (year == y)].sum()) > 0}
+    no_bad_pair = True
+    for y in range(years[0] - 1, years[-1] + 1) if years else ():
+        sel = ok & ((year == y) | (year == y + 1))
+        if sel.any() and _t_clustered(net[sel], day[sel]) <= -2.0:
+            no_bad_pair = False
+    return {"years_pos_ge3": len(pos) >= 3, "chop_year_pos": any(y in pos for y in chop_years),
+            "no_2y_t_le_m2": no_bad_pair}

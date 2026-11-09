@@ -263,12 +263,16 @@ research:
   screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; any screen with fewer events
                                      #   (whatever its sign or t) is "inconclusive (event floor)" and cannot retire the
                                      #   hypothesis. Changing it is an owner decision
-  screen_min_events_daily: 150       # rules whose signal is on daily bars (owner ruling A, 2026-10-11: 150,
-                                     #   retire-only: below it "inconclusive"; at or above it a screen can fail and
-                                     #   retire, but a pass still needs screen_min_events (between the two a good edge
-                                     #   reads "inconclusive", never "pass"; screen.screen_floors); promotion still
-                                     #   needs research/gates.py, >= 1,500 candidates;
-                                     #   docs/research/preregistration-2027Q1.md); null = screen_min_events
+  screen_min_events_daily: null      # Ruling A (150, daily, retire on sign) withdrawn by ADR 0077 (2026-11-09: SE
+                                     #   1.3 / sqrt(150) = 0.106 R fails the power test): daily units use
+                                     #   screen_retire_floor with the futility rule like every unit
+  screen_retire_floor: 300           # ADR 0077 futility retire, all units: below it "insufficient"; between it and
+                                     #   screen_min_events a screen retires ONLY if the pre-registered one-sided 90 %
+                                     #   UB of the card-named statistic (gross, or delta vs twins; day-clustered SE)
+                                     #   < screen_retire_ub_r AND the SE <= screen_retire_max_se_r, else
+                                     #   "inconclusive (event floor)"; never on sign or net alone (screen.futility_retire)
+  screen_retire_ub_r: 0.03           # R; the futility bound
+  screen_retire_max_se_r: 0.055      # R; <= 5 % chance of retiring a true +0.05 R edge (n ~560 at sd 1.3 R)
   director_floor: 2                  # research director: every unblocked family gets at least this many of the
                                      # month's trials; the rest of (budget x families) follows evidence of signal
   label_grid_step: 0.25              # +-25% on target/stop/max_bars

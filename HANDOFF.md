@@ -47,6 +47,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
   refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
   and quant sign-off). Not yet wired into sim.py (Lane 1).
+- 2026-11-09 EVAL-2 Lane 3 (branch feat/eval2-lane3-stats; quant review pending): the ladder statistics against the
+  frozen signatures of `docs/research/prereg-2026-11-09-eval2.md` 4.3-4.8. New `goldbot/research/eval2/`: `probe`
+  (L1 +/-1 ATR first passage, partially pooled NO SIGNAL retire), `hier` (L2 REML with Student-t df 5 cell effects,
+  leave-family-out prior on every viewed cell de-duplicated by config hash, Efron null from >= 100 controls, carry /
+  kill / freeze in the card; family-nested Woodbury: 12,000 cells fit in ~8 s), `confirm` (stationary day-block
+  bootstrap, BatchPRDS pure alpha-spending, Holm, `l3_read` calling `confirm_resamples` itself: ~1 ms a resample, so a
+  2018-25 batch-15 read at ~387k resamples takes tens of minutes per family), `verdict` (graded rungs, CONFIRM-SEEN /
+  HOLDOUT-SEEN at excess overlap >= 15 pp, DSR at K 21,333 / 20,151). `catalogue/stats.py` gains the 4.3 hooks;
+  `screen.py` gains the ADR 0077 futility retire (300-999 events: pre-registered 90 % UB < 0.03 R and clustered SE <=
+  0.055 R, else inconclusive; never on sign) and `config/settings.yaml` withdraws Ruling A
+  (`screen_min_events_daily: null`, `screen_retire_floor: 300`). `sim.session_day` now reads the public
+  `costs.rollover_table()`. Readings where the frozen text leaves a choice are listed in each module docstring for the
+  quant-reviewer; three need a signed amendment: E9 inside `l3_read` (no daily closes in its signature: a family with a
+  1d/1w carried cell fails closed), the £/day point estimate and upper bound (no input carries them: NaN), and an
+  input that says INSUFFICIENT (power) to `family_verdict`. TRACEABILITY R110.
 - 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
   EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
   live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
