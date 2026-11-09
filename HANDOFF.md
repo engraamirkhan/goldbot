@@ -29,6 +29,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   runner.py line cap (ADR 0023): the terminal-account blocks live in `engine/terminal_account.py` (`Engine.terminal`, a
   `Watch` record) and the BACKLOG 59 host-clock state write moved verbatim to `engine/state_heartbeat.py`; LINE_CAP
   lowered to 3087.
+- EVAL-2 Lane 2 (costs + lint, quant-approved 2026-11-09): `goldbot/research/catalogue/costs.py` adds
+  `deciding_cost` (max(today R, bp-engine R) + overshoot x (stop-exit + stop-entry share) + swap floored at 0 + the
+  positive S5 fill-vs-replay gap until S5 passes; every term >= 0; gates at `GATE_COST_MULT` 1.5; requires the window's
+  CostModel; replaces, never adds to, the sim's cost_r), `stress_cost` (the $0.230 round trip at min(decision ATR,
+  2010-17 era ATR): 15m 0.151 R) and `cost_sensitive`. Pin `atr-pin-2026-11-09.2` (re-seeded from 2026-10-01, no
+  holdout row loaded) in `config/catalogue_costs.yaml` `deciding`; S5 gap icm -$0.008 (charged 0), vantage $0.071 until
+  its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
+  refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
+  and quant sign-off). Not yet wired into sim.py (Lane 1).
 - 2026-11-09 (branch fix/registry-unlinked-prereg; quant ruling 2026-11-09, item 3(b)): an ad-hoc (`queue: false`)
   pre-registration that is not withdrawn and has had no linked result row for more than 7 days
   (`registry.STALE_PREREG_DAYS`, `stale_preregistrations`) now counts as one trial of the quarter of its `ts` in both
