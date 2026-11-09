@@ -34,4 +34,4 @@ Fills from the deploy date on are admitted under this rule. A read pooled across
 
 Revert the release. `scalp_day_cap: null` in accounts.yaml lifts the 1m/5m cap alone.
 
-Quant sign-off:
+Quant sign-off: PASS, quant-reviewer (principal), 2026-11-09, at d2823fba. Signed as volume-only (K, thresholds, reading rules, windows and matched-control method unchanged) and as written after the 11-09 fills were seen. The signature also covers the one rule shipped with this release that the text above omits: a signal closed before the UTC midnight of the day being counted is refused as `daily_entries` for that signal alone and recorded blocked (it closes a leak past max_per_day). Every refusal here stays shadow-labelled (`label_sim_r`) with propensity 0; no off-policy estimate may use it. Reads of 1m/5m arms by session note that `scalp_day_cap` admits first come, first served, so New York and late-Asia strata fill last.
