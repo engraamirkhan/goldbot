@@ -451,6 +451,16 @@ def verify_account(acc: Any) -> Callable[[Any], str | None]:
     return lambda info: accounts.verify_terminal_account(acc, info)
 
 
+def wire_terminal_check(eng: Any, acc: Any, verify: Callable[[Any], str | None] | None) -> None:
+    """Give the engine the start check (`verify_account`; None on the paper stand-in) and, with it, the account's
+    configured trade server as the one it was last verified on (safety review LOW 2), so a switch to another server in
+    the first seconds after start, before the engine's own first account read, already stops closes by ticket
+    (engine/terminal_account.py `by_ticket`). The server is compared only, never logged."""
+    eng.verify_account = verify
+    if verify is not None:
+        eng.terminal.server = str(getattr(acc, "server", "") or "").strip() or None
+
+
 def approval_ids_problem(account_id: str) -> str | None:
     """Why no approval card could carry this account's proposal ids, or None (trading-safety review LOW-2 of 2c6e805):
     the longest id, from the engine's own `Engine._proposal_id` (it reads only `cfg.account_id`, so it is called on a
@@ -641,7 +651,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                  broker, agents,
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
-    eng.verify_account = verify      # R1 (engine/terminal_account.py): None on the paper stand-in
+    wire_terminal_check(eng, acc, verify)      # R1 (engine/terminal_account.py): None on the paper stand-in
     if shadow_host and eng.store is not None:      # replica agents (box_break_close): carried state, shadow only
         resolve(attach_replica)(eng, settings)
     from goldbot.data.calendar import BrokerSessions, SessionTable

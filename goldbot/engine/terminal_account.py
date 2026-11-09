@@ -27,9 +27,11 @@ alert." Concretely, while the terminal is on another account:
   knows (never re-reading the whole account, never seen flat). MT5 tickets are unique per server, so on another login
   such a close is refused (10013) and stays due; on this account it closes. The positions rest with their broker-side
   stop and target meanwhile. Residual-risk ruling (safety re-check): tickets are unique per trade SERVER only, so
-  while the read names another server than the one this account was last seen on (`_terminal_other_server`) nothing
-  is sent by ticket (`by_ticket`); the broker's stops protect the positions until the terminal is back. A check that
-  raised, a read with no server, or another login on the same server still send. No server name is ever logged;
+  while a read names another server than the one this account was last seen on (`terminal.other_server`) nothing
+  is sent by ticket (`by_ticket`); the broker's stops protect the positions until the terminal is back. The flag is
+  sticky: only a passing check, or a read naming a known server, changes it (a later read that raised or names no
+  server keeps it). With it unset, a check that raised, a read with no server, or another login on the same server
+  still send. The engine service seeds the server from the account registry at start. No server name is ever logged;
 * the engine state carries the reason (`terminal_account_changed`), health FAILs on it (alerted on Telegram), and the
   owner is told once when it starts and once when the terminal is back.
 
@@ -105,8 +107,10 @@ def check(eng: Engine, info: Any) -> bool:
         return True
     first = w.mismatch is None
     w.mismatch = why
-    # residual-risk ruling: only a read that names another, known trade server stops the by-ticket closes
-    w.other_server = not raised and bool(server) and w.server is not None and server != w.server
+    # residual-risk ruling: a read naming another, known trade server stops the by-ticket closes; sticky (security
+    # review LOW 1): a read that raised or names no server leaves the last verdict as it was
+    if not raised and server and w.server is not None:
+        w.other_server = server != w.server
     eng.state.terminal_account_changed = True
     eng._unhealthy_at = _now(eng)
     if first:

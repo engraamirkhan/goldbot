@@ -385,3 +385,40 @@ def test_an_empty_server_in_the_read_still_sends_by_ticket(tmp_path):
     eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
     eng._retry_closes(WED + pd.Timedelta(seconds=30))
     assert _closes_sent(eng) == [("time_exit", own)]
+
+
+@pytest.mark.parametrize("next_read", ["raises", "empty_server"])
+def test_another_server_stays_flagged_through_a_raising_or_server_less_read(tmp_path, next_read):
+    eng, term, own = _on_other_server(tmp_path)
+    if next_read == "raises":
+        def broken(info: Any) -> str | None:
+            raise ValueError("bad reply")
+        eng.verify_account = broken
+    else:
+        term.servers[OTHER] = ""
+    eng._refresh_account(_tick(WED + pd.Timedelta(seconds=10)))
+    assert eng.terminal.other_server is True              # only a pass or a named, known server changes it
+    eng._close_due[own] = ("time_exit", {"symbol": "XAUUSD"}, WED)
+    eng._retry_closes(WED + pd.Timedelta(seconds=30))
+    eng._kill_switch(everything=True)
+    assert _closes_sent(eng) == []
+
+
+def test_the_service_seeds_the_account_s_server_so_a_switch_right_after_start_is_covered(tmp_path):
+    from goldbot.ops.services.engine import verify_account, wire_terminal_check
+    (tmp_path / "classifier_icm-demo.json").write_text(json.dumps({"class": "raw"}))
+    term = _Terminal()
+    term.on_tick(_tick(WED))
+    eng, _, _ = _clock_engine(tmp_path, pb=term)          # type: ignore[arg-type]
+    wire_terminal_check(eng, ACC, verify_account(ACC))
+    assert eng.verify_account is not None and eng.terminal.server == SERVER
+    term.servers[OTHER], term.login = OTHER_SERVER, OTHER  # before any account refresh of the engine
+    eng._refresh_account(_tick(WED))
+    assert eng.terminal.other_server is True
+
+
+def test_the_paper_stand_in_gets_no_check_and_no_server(tmp_path):
+    from goldbot.ops.services.engine import wire_terminal_check
+    eng, _, _ = _clock_engine(tmp_path)
+    wire_terminal_check(eng, ACC, None)
+    assert eng.verify_account is None and eng.terminal.server is None
