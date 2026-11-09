@@ -54,12 +54,13 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import Final, Sequence
 
 import numpy as np
 
 from goldbot.research.catalogue.core import Events, atr
 from goldbot.research.catalogue.costs import CostModel, default_model, fallback_rt, hold_nights
-from goldbot.research.catalogue.data import DAY, Bars
+from goldbot.research.catalogue.data import DAY, HOUR, Bars
 
 GOLD_OVERSHOOT_USD = 0.11
 STRESS = 1.5
@@ -450,3 +451,218 @@ def window_drift_per_ns(b: Bars) -> float:
         return 0.0
     span = float(b.ta[-1] - b.ta[k])
     return float(np.log(b.c[-1] / b.c[k]) / span) if span > 0 and b.c[k] > 0 else 0.0
+
+
+# ------------------------------------------------------------------ EVAL-2 twins (prereg 2026-11-09 section 4.1)
+# Method v6 section 2 (quant finding 7): "Twins are drawn from decision bars after the signal's exit (intraday: the
+# 7 days after exit; 1d: the 20 bars after exit), excluding bars where any instance of the same family fires. Stop,
+# target and hold are the signal's multiples of ATR at the **twin's** decision bar." Each twin: same instrument,
+# timeframe and side, decision hour +/-1 h, the same regime level when the card registers one; the exit logic is the
+# signal's, scored on the same replay and cost path (swap: strict-interior rollovers, #343). The A2 controls above
+# (`simulate(control=...)`) stay as EVAL-1 ran them; these twins are the EVAL-2 label's control.
+TWIN_M: Final = 20
+TWIN_DAYS_INTRADAY: Final = 7
+TWIN_BARS_1D: Final = 20
+TWIN_HOUR_TOL_H: Final = 1
+_TWIN_SPAN_BARS = {"1d": TWIN_BARS_1D, "1w": TWIN_SPAN["1w"]}     # 1w is not in the method: the A2 span (8) is kept
+
+
+@dataclass(frozen=True, slots=True)
+class TwinDraw:
+    signal_k: int                  # index into Events
+    decision_bars: np.ndarray      # int64[TWIN_M]; -1 = no eligible bar
+    stratum: tuple[str, str, int, int, int | None]   # (inst, tf, side, hour_utc, regime_level)
+    n_eligible: int
+
+
+def _stratum(b: Bars, ev: Events, k: int, regime: np.ndarray | None) -> tuple[str, str, int, int, int | None]:
+    i = int(ev.i[k])
+    return (b.inst, b.tf, int(ev.side[k]), int(b.ta[i] // HOUR % 24), None if regime is None else int(regime[i]))
+
+
+def _pool(b: Bars, ev: Events, k: int, exit_bar: int, family_fire: np.ndarray, regime: np.ndarray | None,
+          a20: np.ndarray) -> np.ndarray:
+    n = len(b)
+    if exit_bar < 0 or exit_bar >= n - 1:
+        return np.zeros(0, np.int64)
+    if b.tf in _TWIN_SPAN_BARS:
+        hi = exit_bar + _TWIN_SPAN_BARS[b.tf] + 1
+    else:
+        hi = int(np.searchsorted(b.ta, int(b.ta[exit_bar]) + TWIN_DAYS_INTRADAY * DAY, "right"))
+    g = np.arange(exit_bar + 1, min(hi, n - 1), dtype=np.int64)      # a fill bar must follow the decision bar
+    g = g[b.ta[g] < int(b.meta.get("end", 2**62))]                    # never decided in the next window (or holdout)
+    i = int(ev.i[k])
+    off = (b.ta[g] - int(b.ta[i])) % DAY
+    g = g[np.minimum(off, DAY - off) <= TWIN_HOUR_TOL_H * HOUR]
+    g = g[~np.asarray(family_fire, bool)[g]]
+    if regime is not None:
+        g = g[regime[g] == regime[i]]
+    return g[np.isfinite(a20[g]) & (a20[g] > 0)]                      # the twin's ATR must exist to scale the stop
+
+
+def twin_pool(b: Bars, ev: Events, k: int, *, exit_bar: int, family_fire: np.ndarray,
+              regime: np.ndarray | None = None) -> np.ndarray:
+    """Decision bars signal k's twins may be drawn from: after its exit bar (intraday: decided within
+    TWIN_DAYS_INTRADAY days of the exit bar's close; 1d: the TWIN_BARS_1D bars after it), before the window's end,
+    decision hour within TWIN_HOUR_TOL_H of the signal's, no bar where the family fires (`family_fire`, any instance
+    of any unit of the family in this cell), the signal's regime level when `regime` is given, ATR20 defined."""
+    return _pool(b, ev, k, exit_bar, family_fire, regime, atr(b, RISK_FLOOR_ATR_N))
+
+
+def _rng(seed_key: str, b: Bars, ev: Events, k: int) -> np.random.Generator:
+    """Keyed on the signal itself (bar, side), not its row: the draw does not move when other events change."""
+    d = hashlib.sha256(f"twin|{seed_key}|{b.inst}|{b.tf}|{int(ev.i[k])}|{int(ev.side[k])}".encode()).digest()
+    return np.random.default_rng(int.from_bytes(d[:8], "big"))
+
+
+def draw_twins(b: Bars, ev: Events, *, exits: np.ndarray, family_fire: np.ndarray, seed_key: str,
+               m: int = TWIN_M, regime: np.ndarray | None = None) -> list[TwinDraw]:
+    """M twin decision bars per event (`exits[k]`: the exit bar of event k's trade, -1 when it was not traded: no
+    twins). Drawn without replacement when the pool holds at least m bars, with replacement otherwise (4h and the
+    hour band leave about 7 bars); an empty pool gives -1s and NaN twins (left out of the excess, quant item 4)."""
+    a20 = atr(b, RISK_FLOOR_ATR_N)
+    out = []
+    for k in range(len(ev)):
+        g = _pool(b, ev, k, int(exits[k]), family_fire, regime, a20)
+        bars = np.full(m, -1, np.int64)
+        if len(g):
+            bars[:] = _rng(seed_key, b, ev, k).choice(g, size=m, replace=len(g) < m)
+        out.append(TwinDraw(k, bars, _stratum(b, ev, k, regime), int(len(g))))
+    return out
+
+
+def same_instant_draws(b: Bars, ev: Events, ks: Sequence[int]) -> list[TwinDraw]:
+    """One 'twin' per signal at its own decision bar: with `simulate_twins(..., opposite_side=True)` this is the
+    reported opposite-side twin at the same instant (direction skill apart from timing skill)."""
+    return [TwinDraw(int(k), np.array([int(ev.i[k])], np.int64), _stratum(b, ev, int(k), None), 1) for k in ks]
+
+
+def _twin_events(b: Bars, ev: Events, k: int, d: int, a20: np.ndarray, *, opposite: bool) -> Events | None:
+    """Event k (with its OCO sibling, as a pair) re-decided at bar d: entry offset from the decision close, stop and
+    target in the signal's ATR20 multiples scaled to bar d's ATR20; kind, validity, hold and exit masks the signal's.
+    `opposite`: each leg's side flipped and its offsets mirrored. None when either ATR20 is undefined."""
+    sib = _oco_sibling(ev, k)
+    legs = [k] if sib is None else sorted((k, sib))
+    rows = []
+    for j in legs:
+        i = int(ev.i[j])
+        a_i, a_d = float(a20[i]), float(a20[d])
+        if not (np.isfinite(a_i) and np.isfinite(a_d) and a_i > 0):
+            return None
+        sc = a_d / a_i
+        s = int(ev.side[j])
+        st = -s if opposite else s
+        px_i = float(ev.px[j]) if np.isfinite(ev.px[j]) else float(b.c[i])
+        px = float(b.c[d]) + st * s * (px_i - float(b.c[i])) * sc if np.isfinite(ev.px[j]) else np.nan
+        p_d = px if np.isfinite(px) else float(b.c[d])
+        stop = p_d - st * s * (px_i - float(ev.stop[j])) * sc if np.isfinite(ev.stop[j]) else np.nan
+        tgt = p_d + st * s * (float(ev.tgt[j]) - px_i) * sc if np.isfinite(ev.tgt[j]) else np.nan
+        rows.append((d, st, int(ev.kind[j]), px, int(ev.valid[j]), stop, float(ev.stop_d[j]) * sc, tgt,
+                     float(ev.tgt_d[j]) * sc, int(ev.hold[j])))
+    a = np.array(rows, float)
+    return Events(i=a[:, 0].astype(np.int64), side=a[:, 1].astype(np.int8), kind=a[:, 2].astype(np.int8), px=a[:, 3],
+                  valid=a[:, 4].astype(np.int64), stop=a[:, 5], stop_d=a[:, 6], tgt=a[:, 7], tgt_d=a[:, 8],
+                  hold=a[:, 9].astype(np.int64), exit_long=ev.exit_long, exit_short=ev.exit_short,
+                  oco=np.array([1, 0] if len(rows) == 2 else [0], np.int8))
+
+
+def _replay_net(b: Bars, tev: Events, a20: np.ndarray, cm: CostModel, fine: Bars | None) -> float:
+    """Net R (gross - cost, on the twin's own order risk) of one twin order (or OCO pair), by `simulate`'s rules for a
+    single trade: risk floor at the order price (C7), first-filled OCO leg (both on one bar: a full loss), finer-bar
+    fills (C10), instant exits, `walk` / `walk_fine`, `cost_price`. NaN when the order is not placed (floor) or never
+    fills: the signal's label exists only for filled trades too. tests/test_catalogue_twins20.py checks that a twin at
+    the signal's own bar gives the signal's net R exactly."""
+    n = len(b)
+    if any(order_risk(b, tev, j, a20, cm) is None for j in range(len(tev))):
+        return np.nan
+    fills = [_fill(b, int(tev.i[j]), int(tev.side[j]), int(tev.kind[j]), float(tev.px[j]), int(tev.valid[j]))
+             for j in range(len(tev))]
+    done = [(fr[0], j) for j, fr in enumerate(fills) if fr is not None]
+    if not done:
+        return np.nan
+    f0 = min(f for f, _ in done)
+    first = [j for f, j in done if f == f0]
+    k, both = first[0], len(first) == 2
+    fr = fills[k]
+    risk = order_risk(b, tev, k, a20, cm)
+    if fr is None or risk is None:
+        return np.nan
+    f, fill, at_open = fr
+    if int(b.t[f]) >= int(b.meta.get("end", 2**62)):
+        return np.nan
+    side, kind_k = int(tev.side[k]), int(tev.kind[k])
+    ff: FineFill | None = None
+    if fine is not None and kind_k in INTRABAR and not at_open and not b.co[f]:
+        ff = fine_fill(fine, b, f, side, kind_k, float(tev.px[k]))
+        if ff is not None:
+            fill = ff.fill
+    stop, tgt = _levels(tev, k, fill)
+    dist = side * (fill - stop)
+    start = f + 1 if kind_k == 3 else f
+    if start >= n:
+        return np.nan
+    last = min(n - 1, start + int(tev.hold[k]) - 1)
+    mask = tev.exit_long if side > 0 else tev.exit_short
+    t_fill = int(fine.t[ff.m]) if fine is not None and ff is not None else int(b.t[f])
+    instant = False
+    if both:
+        w = Walk(f, stop, 1, t_fill)
+    elif dist <= 0:
+        w, instant = Walk(f, fill, 1, t_fill), True
+    elif np.isfinite(tgt) and side * (tgt - fill) <= 0:
+        w, instant = Walk(f, fill, 2, t_fill), True
+    elif fine is not None and ff is not None:
+        w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask, kind_k == 2)
+    else:
+        w = walk(b, start, side, fill, stop, tgt, last, mask, at_open)
+    gross = side * (w.exit_px - fill) / risk
+    if instant and w.kind == 1:
+        gross = min(-1.0, gross)
+    return gross - cost_price(b.inst, side, fill, float(b.spr[f]), w.kind, t_fill, w.t_exit, kind_k == 1, cm) / risk
+
+
+def simulate_twins(b: Bars, ev: Events, draws: Sequence[TwinDraw], *, costs: CostModel,
+                   fine: Bars | None = None, opposite_side: bool = False) -> np.ndarray:
+    """float64[len(draws), m]: net R at the deciding cost of every twin (replay-only: twins do not block each other or
+    the signal); NaN where no bar was drawn, the twin order is inside the risk floor or never fills. `fine`: the
+    cell's 1m bars, as for the signal (C10). `opposite_side`: every twin on the other side (with
+    `same_instant_draws`: the opposite-side twin at the signal's instant)."""
+    costs.inst(b.inst)
+    m = max((len(d.decision_bars) for d in draws), default=TWIN_M)
+    out = np.full((len(draws), m), np.nan)
+    a20 = atr(b, RISK_FLOOR_ATR_N)
+    for r, dr in enumerate(draws):
+        seen: dict[int, float] = {}
+        for c, d in enumerate(dr.decision_bars.tolist()):
+            if d < 0 or d >= len(b) - 1:
+                continue
+            if d not in seen:
+                tev = _twin_events(b, ev, dr.signal_k, d, a20, opposite=opposite_side)
+                seen[d] = np.nan if tev is None else _replay_net(b, tev, a20, costs, fine)
+            out[r, c] = seen[d]
+    return out
+
+
+def excess_r(signal_net: np.ndarray, twin_net: np.ndarray) -> np.ndarray:
+    """Excess R per instance: the signal's net minus the mean of its twins' nets (NaN when it has no twin)."""
+    tw = np.asarray(twin_net, float)
+    cnt = np.isfinite(tw).sum(axis=1)
+    mean = np.where(cnt > 0, np.nansum(tw, axis=1) / np.maximum(cnt, 1), np.nan)
+    return np.asarray(signal_net, float) - mean
+
+
+def twin_correlation(signal_net: np.ndarray, twin_net: np.ndarray, day: np.ndarray) -> float:
+    """S0's rho: the correlation across session days of the day-summed signal net and the day-summed twin mean
+    (instances with a signal and at least one twin). The finite-M variance of the day-summed excess is then
+    var(S) + var(T) - 2 rho sd(S) sd(T), which replaces the method's independent-twin 1.025x claim. NaN with fewer
+    than 3 days or a constant series."""
+    s = np.asarray(signal_net, float)
+    t = s - excess_r(s, twin_net)
+    ok = np.isfinite(s) & np.isfinite(t)
+    days, inv = np.unique(np.asarray(day)[ok], return_inverse=True)
+    if len(days) < 3:
+        return float("nan")
+    ss, ts = np.bincount(inv, weights=s[ok]), np.bincount(inv, weights=t[ok])
+    if ss.std() == 0 or ts.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(ss, ts)[0, 1])
