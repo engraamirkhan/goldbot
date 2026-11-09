@@ -141,3 +141,18 @@ def test_year_rule_fails_a_two_year_sub_period_with_net_t_at_or_below_minus_two(
                     _yr(2022, [1.0] * 5, 300), _yr(2023, [1.0] * 5, 400)], ignore_index=True)
     r = S.year_rule(df, chop_years=(2021, 2022))
     assert r["years_pos_ge3"] and r["chop_year_pos"] and r["no_2y_t_le_m2"] is False
+
+
+def test_year_rule_never_tests_a_year_alone():
+    """Quant M4 / amendment 10.1(e): the 2-year sub-periods are consecutive pairs in which both years hold data. 2018
+    alone at t -2.5 next to unread 2017 is not a sub-period; the 2018-19 pair has t above -2."""
+    rng = np.random.default_rng(3)
+    bad18 = list(-0.5 + 0.2 * rng.standard_normal(10))                  # 2018 alone: t far below -2
+    frames = [_yr(2008, [0.3] * 5, 0), _yr(2009, [0.3] * 5, 10), _yr(2018, bad18, 20),
+              _yr(2019, [1.0, 0.9, 1.1, 0.8, 1.2, 1.0, 0.7, 1.3, 0.9, 1.0], 40)]
+    frames += [_yr(y, [0.2] * 3, 60 + 5 * k) for k, y in enumerate(range(2020, 2026))]
+    df = pd.concat(frames, ignore_index=True)
+    t18 = S._t_clustered(df.loc[df["year"] == 2018, "net_r"].to_numpy(), df.loc[df["year"] == 2018, "day"].to_numpy())
+    pair = df["year"].isin([2018, 2019])
+    assert t18 < -2.5 and S._t_clustered(df.loc[pair, "net_r"].to_numpy(), df.loc[pair, "day"].to_numpy()) > -2
+    assert S.year_rule(df, chop_years=(2021, 2022))["no_2y_t_le_m2"] is True

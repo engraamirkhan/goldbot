@@ -108,3 +108,40 @@ def test_disagreeing_cells_widen_the_pooled_bound_so_heterogeneity_cannot_retire
     assert family_no_signal(split, cheapest_cost_atr=0.10) is False
     agree = [_p(0.0, 0.01, "a"), _p(0.0, 0.01, "b")]
     assert family_no_signal(agree, cheapest_cost_atr=0.10) is True
+
+
+# ------------------------------------------------------------------ review round 1 (quant M2, low (iii))
+def test_pooled_ub_covers_at_least_90_percent_with_three_heterogeneous_cells():
+    """Quant M2: DerSimonian-Laird's 90 % bound covered 86.8 % at k = 3, tau = se; HKSJ (variance floored at DL's,
+    t with k - 1 df) keeps at least 90 %."""
+    from goldbot.research.eval2.probe import pooled_bound
+    rng = np.random.default_rng(1109)
+    se = np.array([0.03, 0.03, 0.03])
+    hits = 0
+    n = 20_000
+    for _ in range(n):
+        est = rng.normal(0.0, 0.03, 3) + rng.normal(0.0, se)            # true pooled mean 0, tau = se
+        _, ub = pooled_bound([_p(float(e), float(s), f"c{j}") for j, (e, s) in enumerate(zip(est, se))])
+        hits += ub >= 0.0
+    assert hits / n >= 0.895
+
+
+def test_a_single_cell_family_uses_its_own_normal_bound():
+    from goldbot.research.eval2.probe import pooled_bound
+    mean, ub = pooled_bound([_p(0.02, 0.01)])
+    assert mean == pytest.approx(0.02) and ub == pytest.approx(0.02 + 1.2815515655446004 * 0.01)
+
+
+def test_first_passage_is_unchanged_on_bars_truncated_after_the_horizon():
+    """Quant low (iii): the probe for fill f reads bars f+1 .. f+horizon only, and ATR at f is unchanged when every
+    bar after f is removed."""
+    from goldbot.research.catalogue.core import atr
+    from tests.test_catalogue_random_walk import rw_cell
+    b = rw_cell("XAUUSD", "1h", 3, 600)[0]
+    fills = np.arange(40, 560, 7)
+    full = first_passage(b, fill_bars=fills, sides=np.where(fills % 2 == 0, 1, -1), horizon_bars=12)
+    for k, f in enumerate(fills.tolist()):
+        cut = b.truncate(f + 12 + 1)
+        assert first_passage(cut, fill_bars=np.array([f]), sides=np.array([1 if f % 2 == 0 else -1]),
+                             horizon_bars=12)[0] == full[k]
+        assert atr(b.truncate(f + 1), 14)[f] == atr(b, 14)[f]

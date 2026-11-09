@@ -14,8 +14,11 @@ pre-registered futility test (ADR 0077, prereg 2026-11-09 section 4.7, `futility
 screen_retire_floor (300) and screen_min_events (1,000) a screen retires a unit only if: (a) the one-sided 90 % upper
 bound of the statistic named in the card before the read ..., with day-clustered SE, is < +0.03 R; (b) the clustered
 SE is <= 0.055 R; (c) both were pre-registered before the read, and the read is counted in K. Otherwise the result is
-'inconclusive (event floor)' ... Never retire on sign or net alone." The futility inputs travel in the rule as
-`rule["futility"]` (`futility_terms`); without them nothing between the floors retires.
+'inconclusive (event floor)' ... Never retire on sign or net alone." The futility read travels in the rule as
+`rule["futility"]` (`futility_terms`): the card-named statistic, its clustered SE and the registry row that
+pre-registered it (quant M7: "preregistered" is a registry row id, so "counted in K" is checked in code). The floor
+and the two thresholds come from settings (`research.screen_retire_*`, validated tighten-only), never from the rule.
+Without a futility read nothing between the floors retires.
 
 Three verdicts: **pass** (on at least the pass floor); **inconclusive (event floor)** below the retire floor whatever
 the sign or t, and between the floors unless the futility test retires (a recorded, charged trial, no model, and it
@@ -52,9 +55,6 @@ MIN_EVENTS = 1000
 MIN_T = 2.0
 PASS, FAIL, INCONCLUSIVE = "pass", "fail", "inconclusive (event floor)"
 RETIRE, INSUFFICIENT = "retire", "insufficient"
-FUTILITY_FLOOR = 300                 # ADR 0077 defaults (research.screen_retire_floor / _ub_r / _max_se_r)
-FUTILITY_UB_R = 0.03
-FUTILITY_MAX_SE_R = 0.055
 Z90 = 1.2815515655446004             # z(0.90): the one-sided 90 % upper bound
 FutilityVerdict = Literal["retire", "inconclusive (event floor)", "insufficient"]
 
@@ -87,13 +87,17 @@ def futility_retire(*, n: int, mean_r: float, se_r: float, statistic: Literal["g
     return FutilityResult(verdict, int(n), float(ub), float(se_r), str(statistic))
 
 
-def futility_terms(research: ResearchSettings, *, statistic: Literal["gross", "delta"], mean_r: float, se_r: float,
-                   preregistered: bool) -> dict[str, Any]:
-    """`rule["futility"]` for `screen_verdict`: the card-named statistic's mean and clustered SE with the settings'
-    pre-registered floor and thresholds (research.screen_retire_floor / screen_retire_ub_r / screen_retire_max_se_r)."""
-    return {"statistic": statistic, "mean_r": float(mean_r), "se_r": float(se_r), "preregistered": bool(preregistered),
-            "floor": int(research.screen_retire_floor), "ub_r": float(research.screen_retire_ub_r),
-            "max_se_r": float(research.screen_retire_max_se_r)}
+def futility_terms(*, statistic: Literal["gross", "delta"], mean_r: float, se_r: float,
+                   registry_row: str) -> dict[str, Any]:
+    """`rule["futility"]` for `screen_verdict`: the card-named statistic's mean and session-day-clustered SE, and the
+    id of the registry row that pre-registered the read (empty: not pre-registered, never retires)."""
+    return {"statistic": statistic, "mean_r": float(mean_r), "se_r": float(se_r), "registry_row": str(registry_row)}
+
+
+def _futility_settings() -> ResearchSettings:
+    """The futility floor and thresholds in force (tighten-only validators on ResearchSettings)."""
+    from goldbot.config import load_settings
+    return load_settings().research
 
 
 def rule_text(min_events: int = MIN_EVENTS, pass_min_events: int | None = None) -> str:
@@ -150,11 +154,12 @@ def screen_verdict(rule: dict[str, Any], min_events: int = MIN_EVENTS,
         verdict = INCONCLUSIVE          # too few events to retire, and too few to pass
     elif n < pass_n:                    # between the floors: only the pre-registered futility test retires (ADR 0077)
         f = rule.get("futility") or {}
+        research = _futility_settings()
         futility = futility_retire(n=n, mean_r=float(f.get("mean_r", math.nan)), se_r=float(f.get("se_r", math.nan)),
-                                   statistic=f.get("statistic", "gross"), preregistered=bool(f.get("preregistered")),
-                                   floor=max(min_events, int(f.get("floor", FUTILITY_FLOOR))),
-                                   ub_r=float(f.get("ub_r", FUTILITY_UB_R)),
-                                   max_se_r=float(f.get("max_se_r", FUTILITY_MAX_SE_R)))
+                                   statistic=f.get("statistic", "gross"), preregistered=bool(f.get("registry_row")),
+                                   floor=max(min_events, int(research.screen_retire_floor)),
+                                   ub_r=float(research.screen_retire_ub_r),
+                                   max_se_r=float(research.screen_retire_max_se_r))
         verdict = FAIL if futility.verdict == RETIRE else INCONCLUSIVE
         checks.append({"name": "futility", "passed": futility.verdict != RETIRE,
                        "detail": (f"pre-registered futility ({futility.statistic}): 90 % UB {futility.ub90_r:+.3f} R, "

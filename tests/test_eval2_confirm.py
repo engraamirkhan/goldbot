@@ -67,11 +67,15 @@ def test_confirm_resamples_is_the_frozen_helper():
     assert C.confirm_resamples(1, 0.0001) == 200_000
 
 
+TEST_OLD_DAY0 = 13_910          # 2008-01-31: TEST-OLD intraday 2008-01..2009-12
+CONFIRM_DAY0 = 17_600           # 2018-03-10: 2018-01..2025-09
+
+
 def _units(n_days: int = 300, per_day: int = 2, mu: float = 0.0, seed: int = 0, cells: tuple[str, ...] = ("a",),
-           cost: float = 0.05, year0: int = 2008) -> pd.DataFrame:
+           cost: float = 0.05, year0: int = 2008, day0: int = TEST_OLD_DAY0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     n = n_days * per_day
-    day = np.repeat(np.arange(n_days), per_day) + 14_000
+    day = np.repeat(np.arange(n_days), per_day) + day0
     twin = rng.normal(-0.03, 0.2, n)
     net = twin + mu + rng.normal(0.0, 1.0, n)
     df = pd.DataFrame({"cell_id": np.resize(np.array(cells), n), "family": "C03", "inst": "XAUUSD", "tf": "1h",
@@ -146,17 +150,20 @@ def _years(df: pd.DataFrame, years: tuple[int, ...]) -> pd.DataFrame:
     return df.assign(year=np.array(years)[k])
 
 
+def _corr(**kw) -> pd.DataFrame:
+    """2018-25 corroboration units (decision instants inside 2018-01..2025-09)."""
+    return _units(day0=CONFIRM_DAY0, **kw)
+
+
 def _read(units: pd.DataFrame, corr: pd.DataFrame | None, *, j: int = 1, batch_p=None, window="test_old",
-          cells=("a",), weights=None):
+          cells=("a",), weights=None, confirm_seen=(), holds_multi_day=False, e9=None):
     w = weights or {c: 1.0 for c in cells}
     if batch_p is None:
-        m_j = 1
-        alpha = C.BatchPRDS(window).level(j, m_j)
-        p = C.boot_p_one_sided(units, lambda d: S.control_variate_net(d, w), mean_block=2.0,
-                               resamples=C.confirm_resamples(m_j, alpha), seed_key="seed|cv")
-        batch_p = [p]
+        batch_p = [C.family_cv_p(units, family="C03", carried=list(cells), weights=w, m_j=1,
+                                 alpha_j=C.BatchPRDS(window).level(j, 1), mean_block=2.0, seed_key="seed")]
     return C.l3_read(units, family="C03", carried=list(cells), weights=w, batch=C.BatchPRDS(window), j=j,
-                     batch_p=batch_p, corroboration=corr, mean_block=2.0, seed_key="seed")
+                     batch_p=batch_p, corroboration=corr, mean_block=2.0, seed_key="seed",
+                     confirm_seen=confirm_seen, holds_multi_day=holds_multi_day, e9=e9)
 
 
 def test_l3_read_resamples_follow_alpha(monkeypatch):
@@ -164,15 +171,17 @@ def test_l3_read_resamples_follow_alpha(monkeypatch):
     (386,889 at the exact alpha_15); the number comes from gamma(15), never hard-coded."""
     used: list[int] = []
 
-    def fake_boot(units, stat, *, mean_block, resamples, seed_key):
+    def fake_counts(blocks, *, mean_block, resamples, seed_key):
         used.append(resamples)
-        return np.full(4, stat(units))
-    monkeypatch.setattr(C, "stationary_block_bootstrap", fake_boot)
-    u = _years(_units(mu=0.3), (2008, 2009))
-    corr = _years(_units(mu=0.3, seed=5), (2021, 2022, 2023))
-    own_p = 1 / (C.confirm_resamples(3, 0.1 * C.gamma(15)) + 1)      # a constant resample: no hit, p = 1 / (B + 1)
+        yield np.ones((4, blocks.n))                                     # four copies of the sample itself
+    monkeypatch.setattr(C, "_day_count_chunks", fake_counts)
+    u = _years(_units(mu=0.3, day0=CONFIRM_DAY0), (2021, 2022, 2023))
+    alpha = C.BatchPRDS("confirm").level(15, 3)
+    own_p = C.family_cv_p(u, family="C03", carried=["a"], weights={"a": 1.0}, m_j=3, alpha_j=alpha, mean_block=2.0,
+                          seed_key="s")
     r = C.l3_read(u, family="C03", carried=["a"], weights={"a": 1.0}, batch=C.BatchPRDS("confirm"), j=15,
-                  batch_p=[own_p, 0.6, 0.7], corroboration=corr, mean_block=2.0, seed_key="s")
+                  batch_p=[own_p, 0.6, 0.7], corroboration=None, mean_block=2.0, seed_key="s", confirm_seen=(),
+                  holds_multi_day=False, e9=None)
     bound = math.ceil(20 * 3 / (0.1 * C.gamma(15)))
     assert used and min(used) >= bound
     assert r.batch_j == 15 and r.alpha_j == pytest.approx(0.1 * C.gamma(15)) and r.window == "confirm"
@@ -186,7 +195,7 @@ def test_l3_read_refuses_a_batch_that_does_not_hold_the_familys_own_p(fast):
 
 def test_l3_read_confirms_a_strong_family_on_every_leg(fast):
     u = _years(_units(mu=0.35, n_days=400, seed=11), (2006, 2007, 2008, 2009))
-    corr = _years(_units(mu=0.35, n_days=400, seed=12), (2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025))
+    corr = _years(_corr(mu=0.35, n_days=400, seed=12), (2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025))
     r = _read(u, corr)
     assert r.p_cv_net < 0.05 and r.p_excess <= 0.10 and r.lb80_net_gate > 0
     assert r.years == {"years_pos_ge3": True, "chop_year_pos": True, "no_2y_t_le_m2": True}
@@ -202,7 +211,7 @@ def test_l3_read_does_not_reject_without_the_2018_25_corroboration(fast):
 
 def test_l3_read_does_not_reject_a_null_family(fast):
     u = _years(_units(mu=0.0, n_days=300, seed=21), (2008, 2009))
-    corr = _years(_units(mu=0.0, n_days=300, seed=22), (2018, 2019, 2020, 2021, 2022))
+    corr = _years(_corr(mu=0.0, n_days=300, seed=22), (2018, 2019, 2020, 2021, 2022))
     r = _read(u, corr)
     assert r.rejected is False and r.cells_forwarded == ()
 
@@ -221,7 +230,8 @@ def test_gate_net_uses_deciding_cost_once(fast):
     lb = C.boot_lower_bound(u, lambda d: S.control_variate_net_at(d, {"a": 1.0}, cost_mult=C.GATE_COST_MULT),
                             level=0.80, mean_block=2.0, resamples=200, seed_key="x")
     assert lb == pytest.approx(gross - 1.5 * dc)
-    corr = _years(u.copy(), (2018, 2019, 2020, 2021, 2022))
+    corr = _years(u.assign(day=u["day"] - TEST_OLD_DAY0 + CONFIRM_DAY0,
+                           decision_ns=(u["day"] - TEST_OLD_DAY0 + CONFIRM_DAY0) * DAY), (2018, 2019, 2020, 2021, 2022))
     r = _read(u, corr)
     assert r.lb80_net_gate == pytest.approx(gross - 1.5 * dc) and r.lb80_net_gate > 0
 
@@ -231,16 +241,135 @@ def test_holm_forwards_only_the_cells_that_survive_at_the_familys_level(fast):
     weak = _units(mu=-0.10, n_days=400, seed=42, cells=("b",)).assign(day=lambda d: d["day"] + 0)
     u = _years(pd.concat([strong, weak], ignore_index=True).sort_values("day", kind="stable"),
                (2006, 2007, 2008, 2009))
-    corr = _years(_units(mu=0.45, n_days=400, seed=43, cells=("a", "b")), (2018, 2019, 2020, 2021, 2022))
+    corr = _years(_corr(mu=0.45, n_days=400, seed=43, cells=("a", "b")), (2018, 2019, 2020, 2021, 2022))
     w = {"a": 1.0, "b": 1.0}
     r = _read(u, corr, cells=("a", "b"), weights=w)
     assert r.rejected is True and r.cells_forwarded == ("a",)
 
 
-def test_a_family_with_a_daily_cell_cannot_reject_without_e9(fast):
-    """E9 (drift guard) is required for holds >= 1 day; l3_read has no daily closes to compute it (prereg 4.6 has no
-    market argument), so a family with a 1d/1w carried cell fails closed: e9 None, not rejected."""
-    u = _years(_units(mu=0.35, n_days=400, seed=11), (2006, 2007, 2008, 2009)).assign(tf="1d")
-    corr = _years(_units(mu=0.35, n_days=400, seed=12), (2018, 2019, 2020, 2021, 2022)).assign(tf="1d")
+def _strong(cells=("a",), seed=11) -> tuple[pd.DataFrame, pd.DataFrame]:
+    u = _years(_units(mu=0.35, n_days=400, seed=seed, cells=cells), (2008, 2009))
+    corr = _years(_corr(mu=0.35, n_days=400, seed=seed + 1, cells=cells), (2018, 2019, 2020, 2021, 2022, 2023))
+    return u, corr
+
+
+# ------------------------------------------------------------------ amendment 10.2 (A16): E9 in the L3 read
+def test_multi_day_hold_needs_e9_true(fast):
+    u, corr = _strong()
+    u, corr = u.assign(tf="4h"), corr.assign(tf="4h")
+    assert _read(u, corr, holds_multi_day=True, e9=None).rejected is False
+    assert _read(u, corr, holds_multi_day=True, e9=False).rejected is False
+    r = _read(u, corr, holds_multi_day=True, e9=True)
+    assert r.rejected is True and r.e9 is True
+
+
+def test_daily_cell_with_holds_multi_day_false_raises(fast):
+    u, corr = _strong()
+    with pytest.raises(ValueError, match="holds_multi_day"):
+        _read(u.assign(tf="1d"), corr.assign(tf="1d"), holds_multi_day=False, e9=True)
+
+
+def test_no_time_exit_counts_as_multi_day():
+    """RD countersignature condition 1: a carried cell with no registered time exit holds >= 24 h."""
+    assert C.card_holds_multi_day({"a": ("1h", 12)}) is False                 # 12 h
+    assert C.card_holds_multi_day({"a": ("1h", 24)}) is True                  # 24 h
+    assert C.card_holds_multi_day({"a": ("4h", 6), "b": ("15m", None)}) is True
+    assert C.card_holds_multi_day({"a": ("1d", 1)}) is True and C.card_holds_multi_day({"a": ("1w", 1)}) is True
+    assert C.card_holds_multi_day({"a": ("30m", 47)}) is False and C.card_holds_multi_day({"a": ("30m", 48)}) is True
+
+
+# ------------------------------------------------------------------ amendment 10.1 (A15): CONFIRM-SEEN in the read
+def test_all_seen_family_rejects_on_test_old_with_the_seen_and(fast):
+    u, corr = _strong()
+    r = _read(u, corr, confirm_seen={"a"})
+    assert r.corroboration_p is None and r.corroboration_seen_p is not None and r.corroboration_seen_p <= 0.10
+    assert r.rejected is True and r.cells_forwarded == ("a",)
+
+
+def test_a_seen_cell_failing_2018_25_blocks_the_family(fast):
+    u, corr = _strong(cells=("a", "b"))
+    bad = corr["cell_id"] == "b"
+    corr = corr.assign(net_r=np.where(bad, corr["net_r"] - 1.0, corr["net_r"]),
+                       excess_r=np.where(bad, corr["excess_r"] - 1.0, corr["excess_r"]))
+    r = _read(u, corr, cells=("a", "b"), confirm_seen={"b"})
+    assert r.corroboration_p is not None and r.corroboration_p <= 0.10
+    assert r.corroboration_seen_p is not None and r.corroboration_seen_p > 0.10
+    assert r.rejected is False
+
+
+def test_fresh_corroboration_p_ignores_seen_cells(fast):
+    u, corr = _strong(cells=("a", "b"))
+    base = _read(u, corr, cells=("a", "b"), confirm_seen={"b"})
+    bad = corr["cell_id"] == "b"
+    moved = corr.assign(net_r=np.where(bad, corr["net_r"] - 3.0, corr["net_r"]),
+                        excess_r=np.where(bad, corr["excess_r"] - 3.0, corr["excess_r"]))
+    assert _read(u, moved, cells=("a", "b"), confirm_seen={"b"}).corroboration_p == base.corroboration_p
+
+
+def test_a_carried_cell_with_no_2018_25_units_blocks_the_family(fast):
+    """10.1(f): F non-empty with no F units in the corroboration frame: not rejected."""
+    u, corr = _strong(cells=("a", "b"))
+    r = _read(u, corr[corr["cell_id"] == "b"], cells=("a", "b"), confirm_seen={"b"})
+    assert r.corroboration_p is None and r.rejected is False
+
+
+def test_confirm_window_refuses_seen_cells(fast):
+    u = _years(_units(mu=0.3, day0=CONFIRM_DAY0), (2018, 2019))
+    with pytest.raises(ValueError, match="CONFIRM-SEEN"):
+        _read(u, None, window="confirm", j=15, batch_p=[0.5], confirm_seen={"a"})
+
+
+def test_confirm_seen_has_no_default():
+    u, corr = _strong()
+    with pytest.raises(TypeError):
+        C.l3_read(u, family="C03", carried=["a"], weights={"a": 1.0}, batch=C.BatchPRDS("test_old"),  # type: ignore[call-arg]
+                  j=1, batch_p=[0.5], corroboration=corr, mean_block=2.0, seed_key="s", holds_multi_day=False,
+                  e9=None)
+
+
+# ------------------------------------------------------------------ amendment 10.3 (A17): the L3 point and interval
+def test_l3_result_carries_the_cv_net_at_1x_and_its_80_interval(fast):
+    u, corr = _strong()
     r = _read(u, corr)
-    assert r.e9 is None and r.rejected is False
+    assert r.cv_net == pytest.approx(S.control_variate_net(u, {"a": 1.0}))
+    t = C._fast_stats(u, {"a": 1.0}, mean_block=2.0, resamples=C.confirm_resamples(1, 0.05), seed_key="seed|ci80")
+    q10, q90 = np.quantile(t["cv"], [0.10, 0.90])
+    assert (r.cv_net_lo80, r.cv_net_hi80) == pytest.approx((2 * r.cv_net - q90, 2 * r.cv_net - q10))
+    assert r.cv_net_lo80 < r.cv_net < r.cv_net_hi80
+
+
+# ------------------------------------------------------------------ code review: speed, windows (quant M5)
+def test_fast_bootstrap_equals_the_generic_one_on_a_fixed_seed():
+    """Code review: per-session-day sufficient statistics, one day draw for the three L3 statistics; same numbers as
+    the generic DataFrame bootstrap on the same seed."""
+    u = _units(mu=0.2, n_days=150, per_day=3, seed=8, cells=("a", "b"))
+    u.loc[u.index[::17], "excess_r"] = np.nan                            # instances without a twin drop out alike
+    w = {"a": 2.0, "b": 1.0}
+    fast_ = C._fast_stats(u, w, mean_block=2.5, resamples=300, seed_key="eq")
+    for key, stat in (("cv", lambda d: S.control_variate_net(d, w)),
+                      ("excess", lambda d: S.weighted_mean_excess(d, w)),
+                      ("gate", lambda d: S.control_variate_net_at(d, w, cost_mult=C.GATE_COST_MULT))):
+        slow = C.stationary_block_bootstrap(u, stat, mean_block=2.5, resamples=300, seed_key="eq")
+        np.testing.assert_allclose(fast_[key], slow, rtol=1e-10, atol=1e-12)
+
+
+def test_l3_read_refuses_holdout_and_out_of_window_units(fast):
+    """Quant M5: nothing at or after 2025-10-01; TEST-OLD intraday 2008-01..2009-12, 1d 2006-02..2009-12; the
+    corroboration 2018-01..2025-09."""
+    u, corr = _strong()
+    hold = corr.assign(decision_ns=corr["decision_ns"] + (20_362 - CONFIRM_DAY0) * DAY)      # 2025-10 onwards
+    with pytest.raises(ValueError, match="holdout"):
+        _read(u, hold)
+    early = u.assign(decision_ns=u["decision_ns"] - 400 * DAY)                                 # 2006-12: intraday
+    with pytest.raises(ValueError, match="TEST-OLD"):
+        _read(early, corr)
+    _read(early.assign(tf="1d"), corr.assign(tf="1d"), holds_multi_day=True, e9=True)          # 1d from 2006-02
+    with pytest.raises(ValueError, match="2018"):
+        _read(u, corr.assign(decision_ns=corr["decision_ns"] - 300 * DAY))                     # 2017
+
+
+def test_l3_read_refuses_overlapping_units_and_corroboration(fast):
+    """Code review LOW: the read window and the corroboration window are disjoint."""
+    u = _years(_units(mu=0.3, day0=CONFIRM_DAY0), (2018, 2019))
+    with pytest.raises(ValueError, match="disjoint"):
+        _read(u, _corr(mu=0.3, seed=3), window="confirm", j=15, batch_p=None)

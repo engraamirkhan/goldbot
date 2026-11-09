@@ -693,9 +693,8 @@ def _t_clustered(x: np.ndarray, day: np.ndarray) -> float:
 def year_rule(units: pd.DataFrame, *, chop_years: tuple[int, ...]) -> dict[str, bool]:
     """L3 year rule over 2006-09 + 2018-25 (prereg section 1): "net > 0 in >= 3 calendar years, at least one of
     2021/2022, no 2-year sub-period with net t <= -2". A year is net positive when its summed net_r (1.0x deciding
-    cost) is > 0; a year with no data is not positive. The 2-year sub-periods are every pair of consecutive calendar
-    years (y, y + 1) holding any data, so a year next to an unread year is also tested alone (stricter reading);
-    t is day-clustered."""
+    cost) is > 0; a year with no data is not positive. The 2-year sub-periods are the consecutive pairs (y, y + 1) in
+    which both years hold data (amendment 10.1(e), quant M4): no year is tested alone. t is day-clustered."""
     net = units["net_r"].to_numpy(float)
     year = units["year"].to_numpy(np.int64)
     day = units["day"].to_numpy()
@@ -703,9 +702,11 @@ def year_rule(units: pd.DataFrame, *, chop_years: tuple[int, ...]) -> dict[str, 
     years = sorted({int(y) for y in year[ok]})
     pos = {y for y in years if float(net[ok & (year == y)].sum()) > 0}
     no_bad_pair = True
-    for y in range(years[0] - 1, years[-1] + 1) if years else ():
+    for y in years:
+        if y + 1 not in years:
+            continue
         sel = ok & ((year == y) | (year == y + 1))
-        if sel.any() and _t_clustered(net[sel], day[sel]) <= -2.0:
+        if _t_clustered(net[sel], day[sel]) <= -2.0:
             no_bad_pair = False
     return {"years_pos_ge3": len(pos) >= 3, "chop_year_pos": any(y in pos for y in chop_years),
             "no_2y_t_le_m2": no_bad_pair}

@@ -86,33 +86,75 @@ def test_every_unit_retires_from_three_hundred_events_and_passes_from_the_pass_f
 
 def test_between_the_floors_the_screen_retires_only_on_the_preregistered_futility_test():
     retire, pass_n = 300, 1000
-    terms = futility_terms(ResearchSettings(), statistic="gross", mean_r=-0.05, se_r=0.04, preregistered=True)
+    terms = futility_terms(statistic="gross", mean_r=-0.05, se_r=0.04, registry_row="reg:7001")
     for n in (300, 650, 999):
         assert screen_verdict(_rule(n, -0.05, -1.2, terms), retire, pass_n)["verdict"] == FAIL
         # sign and t alone never retire (Ruling A withdrawn)
         assert screen_verdict(_rule(n, -0.05, -3.0), retire, pass_n)["verdict"] == INCONCLUSIVE
-        unreg = {**terms, "preregistered": False}
+        unreg = {**terms, "registry_row": ""}
         assert screen_verdict(_rule(n, -0.05, -3.0, unreg), retire, pass_n)["verdict"] == INCONCLUSIVE
         # a good edge between the floors never passes
-        good = futility_terms(ResearchSettings(), statistic="gross", mean_r=0.08, se_r=0.04, preregistered=True)
+        good = futility_terms(statistic="gross", mean_r=0.08, se_r=0.04, registry_row="reg:7001")
         assert screen_verdict(_rule(n, 0.08, 3.5, good), retire, pass_n)["verdict"] == INCONCLUSIVE
     v = screen_verdict(_rule(650, -0.05, -1.2, terms), retire, pass_n)
     assert v["futility"]["verdict"] == "retire" and v["futility"]["ub90_r"] == pytest.approx(-0.05 + Z90 * 0.04)
-    noisy = futility_terms(ResearchSettings(), statistic="delta", mean_r=-0.05, se_r=0.07, preregistered=True)
+    noisy = futility_terms(statistic="delta", mean_r=-0.05, se_r=0.07, registry_row="reg:7001")
     assert screen_verdict(_rule(650, -0.05, -1.2, noisy), retire, pass_n)["verdict"] == INCONCLUSIVE
 
 
 def test_below_three_hundred_the_futility_test_cannot_retire_even_with_a_lower_daily_override():
-    terms = futility_terms(ResearchSettings(), statistic="gross", mean_r=-0.5, se_r=0.01, preregistered=True)
+    terms = futility_terms(statistic="gross", mean_r=-0.5, se_r=0.01, registry_row="reg:7001")
     v = screen_verdict(_rule(200, -0.5, -9.0, terms), 150, 1000)
     assert v["verdict"] == INCONCLUSIVE and v["futility"]["verdict"] == "insufficient"
 
 
-def test_futility_terms_come_from_the_settings_keys():
-    r = ResearchSettings(screen_retire_floor=400, screen_retire_ub_r=0.02, screen_retire_max_se_r=0.05)
-    t = futility_terms(r, statistic="delta", mean_r=0.0, se_r=0.01, preregistered=True)
-    assert t == {"statistic": "delta", "mean_r": 0.0, "se_r": 0.01, "preregistered": True, "floor": 400,
-                 "ub_r": 0.02, "max_se_r": 0.05}
+def test_futility_terms_carry_the_read_and_its_registry_row():
+    """Quant M7: "preregistered" comes from a registry row id, so "counted in K" is checked, not asserted."""
+    t = futility_terms(statistic="delta", mean_r=0.0, se_r=0.01, registry_row="reg:7001")
+    assert t == {"statistic": "delta", "mean_r": 0.0, "se_r": 0.01, "registry_row": "reg:7001"}
+
+
+def test_a_futility_read_without_a_registry_row_never_retires():
+    terms = futility_terms(statistic="gross", mean_r=-0.5, se_r=0.01, registry_row="")
+    assert screen_verdict(_rule(650, -0.5, -9.0, terms), 300, 1000)["verdict"] == INCONCLUSIVE
+    asserted = {"statistic": "gross", "mean_r": -0.5, "se_r": 0.01, "preregistered": True}     # a bare claim
+    assert screen_verdict(_rule(650, -0.5, -9.0, asserted), 300, 1000)["verdict"] == INCONCLUSIVE
+
+
+def test_settings_cannot_loosen_the_futility_thresholds():
+    """Quant M7: gate thresholds are owner/amendment-only; settings may only tighten them."""
+    from pydantic import ValidationError
+    for bad in ({"screen_retire_ub_r": 0.031}, {"screen_retire_max_se_r": 0.056}, {"screen_retire_floor": 299}):
+        with pytest.raises(ValidationError):
+            ResearchSettings(**bad)
+    ResearchSettings(screen_retire_ub_r=0.02, screen_retire_max_se_r=0.05, screen_retire_floor=400)
+
+
+def test_screen_ignores_thresholds_in_the_rule_dict(monkeypatch):
+    """The screen reads the thresholds from settings, never from the rule: a rule cannot loosen its own test."""
+    loose = {**futility_terms(statistic="gross", mean_r=0.05, se_r=0.04, registry_row="reg:1"),
+             "ub_r": 1.0, "max_se_r": 1.0, "floor": 1}
+    v = screen_verdict(_rule(600, 0.05, 1.2, loose), 300, 1000)
+    assert v["verdict"] == INCONCLUSIVE and v["futility"]["verdict"] == INCONCLUSIVE
+    assert screen_verdict(_rule(200, 0.05, 1.2, loose), 150, 1000)["futility"]["verdict"] == "insufficient"
+    import goldbot.research.screen as scr
+    tight = ResearchSettings(screen_retire_ub_r=0.01)
+    monkeypatch.setattr(scr, "_futility_settings", lambda: tight)
+    retiring = futility_terms(statistic="gross", mean_r=-0.03, se_r=0.03, registry_row="reg:1")   # UB 0.0084
+    assert screen_verdict(_rule(600, -0.03, -1.0, retiring), 300, 1000)["verdict"] == FAIL
+    edge = futility_terms(statistic="gross", mean_r=-0.02, se_r=0.03, registry_row="reg:1")       # UB 0.0184
+    assert screen_verdict(_rule(600, -0.02, -1.0, edge), 300, 1000)["verdict"] == INCONCLUSIVE
+
+
+def test_the_futility_boundaries_are_pinned():
+    """SE 0.055 with UB < 0.03 retires; SE 0.0551 does not; UB exactly 0.03 does not."""
+    se = 0.055
+    assert futility_retire(n=600, mean_r=0.03 - Z90 * se - 1e-9, se_r=se, statistic="gross",
+                           preregistered=True).verdict == "retire"
+    assert futility_retire(n=600, mean_r=-1.0, se_r=0.0551, statistic="gross",
+                           preregistered=True).verdict == INCONCLUSIVE
+    r = futility_retire(n=600, mean_r=0.03, se_r=1e-300, statistic="gross", preregistered=True)
+    assert r.ub90_r == 0.03 and r.verdict == INCONCLUSIVE
 
 
 def test_at_or_above_the_pass_floor_the_screen_is_unchanged():

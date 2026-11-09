@@ -13,8 +13,10 @@ Readings (listed for the quant-reviewer; none changes a frozen name or threshold
   barrier is that barrier first. A close-only bar (`Bars.co`) is read on its close.
 - Neither barrier by the horizon scores 0 (the truncated first-passage value; E = 0 under a driftless walk). No
   finite ATR at the fill bar, or no bar after it: NaN (left out).
-- Partial pooling: DerSimonian-Laird random effects over the family's cells; heterogeneous cells widen the bound, so
-  disagreement can never retire a family. Power is that of the one-sided level-0.10 test matching the 90 % bound.
+- Partial pooling (quant M2): random effects over the family's cells, Hartung-Knapp-Sidik-Jonkman variance floored
+  at the DerSimonian-Laird variance, with the t quantile on k - 1 df (DL with z covered 86.8 % at k = 3, tau = se);
+  a one-cell family uses its own normal bound. Heterogeneous cells widen the bound, so disagreement can never retire
+  a family. Power: the one-sided level-0.10 test with the same SE and quantile.
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ import numpy as np
 from goldbot.research.catalogue.core import atr
 from goldbot.research.catalogue.data import Bars
 from goldbot.research.catalogue.sim import TWIN_ATR_N
-from goldbot.research.catalogue.stats import cluster_se, power_at
+from goldbot.research.catalogue.stats import cluster_se
 
 UB_LEVEL = 0.90
 Z_UB = 1.2815515655446004            # z(0.90): the one-sided 90 % upper bound
@@ -91,29 +93,52 @@ def probe_cell(signal: np.ndarray, twins: np.ndarray, day: np.ndarray, *, family
     return ProbeResult(family, cell_id, int(ok.sum()), mean, se, mean + Z_UB * se)
 
 
-def _pooled(probes: Sequence[ProbeResult]) -> tuple[float, float]:
-    """DerSimonian-Laird random-effects mean and SE over the cells with a finite estimate and SE."""
+def _pooled(probes: Sequence[ProbeResult]) -> tuple[float, float, float]:
+    """(pooled mean, SE, one-sided 90 % quantile) over the cells with a finite estimate and SE > 0: HKSJ with the DL
+    variance as a floor and t_{k-1}; one cell: its own estimate, SE and z(0.90)."""
+    from scipy.stats import t as student_t
     est = np.array([p.excess_atr for p in probes], float)
     se = np.array([p.se_atr for p in probes], float)
     ok = np.isfinite(est) & np.isfinite(se) & (se > 0)
     est, v = est[ok], se[ok] ** 2
-    if not len(est):
-        return float("nan"), float("nan")
+    k = len(est)
+    if not k:
+        return float("nan"), float("nan"), float("nan")
+    if k == 1:
+        return float(est[0]), float(math.sqrt(v[0])), Z_UB
     w = 1.0 / v
     fixed = float(w @ est / w.sum())
     q = float(w @ (est - fixed) ** 2)
     c = float(w.sum() - (w @ w) / w.sum())
-    tau2 = max(0.0, (q - (len(est) - 1)) / c) if c > 0 else 0.0
+    tau2 = max(0.0, (q - (k - 1)) / c) if c > 0 else 0.0
     w2 = 1.0 / (v + tau2)
-    return float(w2 @ est / w2.sum()), float(math.sqrt(1.0 / w2.sum()))
+    mean = float(w2 @ est / w2.sum())
+    var_dl = 1.0 / float(w2.sum())
+    var_hk = float(w2 @ (est - mean) ** 2) / ((k - 1) * float(w2.sum()))
+    return mean, math.sqrt(max(var_dl, var_hk)), float(student_t.ppf(UB_LEVEL, k - 1))
+
+
+def pooled_bound(probes: Sequence[ProbeResult]) -> tuple[float, float]:
+    """(pooled probe excess, its one-sided 90 % upper bound) by the family pooling of the L1 retire (module
+    docstring). NaN, NaN without a usable cell."""
+    mean, se, q = _pooled(probes)
+    return mean, mean + q * se
+
+
+def pooled_lower_bound(probes: Sequence[ProbeResult]) -> float:
+    """The pooled probe excess's one-sided 90 % lower bound, same pooling as the bound above (A17: no information when
+    it is <= 0)."""
+    mean, se, q = _pooled(probes)
+    return mean - q * se
 
 
 def family_no_signal(probes: Sequence[ProbeResult], *, cheapest_cost_atr: float, power_min: float = 0.8) -> bool:
     """NO SIGNAL (family retire): the partially pooled 90 % upper bound of the probe excess is below the cheapest
     feasible cell's deciding cost in ATR AND the pooled read has power >= `power_min` to see an excess of that cost.
     No cells, or a NaN anywhere in the pooled read: never retired."""
-    mean, se = _pooled(probes)
-    if not (np.isfinite(mean) and np.isfinite(se) and np.isfinite(cheapest_cost_atr)):
+    mean, se, q = _pooled(probes)
+    if not (np.isfinite(mean) and np.isfinite(se) and np.isfinite(cheapest_cost_atr)) or se <= 0:
         return False
-    power = power_at(n=1, sd=se, delta=cheapest_cost_atr, alpha=1.0 - UB_LEVEL)
-    return bool(mean + Z_UB * se < cheapest_cost_atr and power >= power_min)
+    from scipy.stats import norm
+    power = float(norm.cdf(cheapest_cost_atr / se - q))                   # same SE and quantile as the bound
+    return bool(mean + q * se < cheapest_cost_atr and power >= power_min)
