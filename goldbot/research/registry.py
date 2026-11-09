@@ -169,27 +169,122 @@ def discovery_k_eff(disc: dict[str, Any]) -> int:
     return int(disc.get("n_features_screened") or groups)
 
 
-def n_trials_effective(rows: list[dict[str, Any]]) -> int:
+STALE_PREREG_DAYS = 7      # an ad-hoc pre-registration with no linked result row after this long counts as a trial
+
+
+def stale_preregistrations(rows: list[dict[str, Any]], now: datetime | None = None) -> list[dict[str, Any]]:
+    """The ad-hoc (`queue: false`) pre-registrations that have had no linked result row for more
+    than STALE_PREREG_DAYS since their `ts` (`now`: default the registry's clock, `_utcnow`). Quant ruling 2026-11-09,
+    item 3(b): an ad-hoc pre-registration is written just before its run, so one left unlinked past the window is a
+    look at the data whose result was never recorded; it counts as a trial of the quarter of its `ts` in
+    `quarter_trials` and `n_trials_effective`. Once a result row links to it, the result row is the trial and the
+    pre-registration stops counting (counted once). Only a withdrawal meeting `exempting_withdrawal` exempts it; any
+    other withdrawal (or a "not a trial" note) does not. Queued rows are not here: they hold and use the reservation
+    (`director.reserved_trials`) and count through the trial that runs them."""
+    cutoff = (now or _utcnow()) - timedelta(days=STALE_PREREG_DAYS)
+    unreadable = datetime.min.replace(tzinfo=timezone.utc)      # `_row_when` of a row with no readable stamp: skipped
+    cands = [r for r in rows if r.get("status") == PREREGISTERED and r.get("queue") is False
+             and unreadable < _row_when(r) < cutoff]
+    if not cands:
+        return []
+    from goldbot.research.director import _Ledger  # director imports this module
+    led = _Ledger(rows)
+    return [r for r in cands if id(r) not in led.adhoc_run and exempting_withdrawal(rows, r) is None]
+
+
+EXEMPT_WITHDRAWAL_RE = re.compile(r"^(unevaluable|never formed): \S")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+EVIDENCE_KEYS: tuple[tuple[str, str], ...] = (("path", "sha256"), ("source_file", "source_sha256"))
+
+
+def _evidence_file_ok(e: Any) -> bool:
+    """One evidence entry: a non-empty file name and its 64-hex sha256, under either key pair (EVIDENCE_KEYS)."""
+    if not isinstance(e, dict):
+        return False
+    for file_key, sha_key in EVIDENCE_KEYS:
+        f, sha = e.get(file_key), e.get(sha_key)
+        if isinstance(f, str) and f.strip() and isinstance(sha, str) and _SHA256_RE.match(sha.lower()):
+            return True
+    return False
+
+
+def evidence_ok(evidence: Any) -> bool:
+    """`evidence` is a non-empty list of run output files, each {"path", "sha256"} (`TrialRegistry.withdraw`) or
+    {"source_file", "source_sha256"} (the applied sprint-3000 backfill), the sha256 64 hex. Format only: that the files
+    show the spec has no score stays with the withdrawal's writer plus quant verification."""
+    return isinstance(evidence, list) and bool(evidence) and all(_evidence_file_ok(e) for e in evidence)
+
+
+def withdrawal_evidence(row: dict[str, Any]) -> Any:
+    """A withdrawal's evidence: top-level `evidence` (`TrialRegistry.withdraw`), else `results.evidence` (the
+    sprint-3000 backfill's layout; the registry is append-only, so those rows stay as written)."""
+    if row.get("evidence") is not None:
+        return row["evidence"]
+    results = row.get("results")
+    return results.get("evidence") if isinstance(results, dict) else None
+
+
+def exempting_withdrawal(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> dict[str, Any] | None:
+    """The withdrawal that exempts the ad-hoc `prereg` from counting as a stale trial, or None. Quant ruling
+    2026-11-09: "unless a `withdrawn` row linked to it by (ts, config_hash) exists. That row must state `reason` in
+    {`unevaluable: <cause>`, `never formed: <cause>`} and `evidence` (the run output files and their sha256 showing the
+    spec has no score), and it must be written before any read of that spec. ... Self-declared 'not a trial' text in a
+    writer's output exempts nothing." The link is the withdrawal's `withdraws` (`row_ref`: ts and config hash). A read
+    is a trial row of the same family and config hash stamped from the pre-registration's `ts` up to the withdrawal's;
+    a spec read after its withdrawal needs a new pre-registration.
+
+    Timing (quant ruling 2026-11-09): "The withdrawal's own ts must be earlier than the prereg ts + STALE_PREREG_DAYS.
+    A withdrawal written at or after the stale point exempts nothing, so once a prereg has counted it keeps counting
+    unless a result row links to it." A withdrawal with no readable stamp counts as late. So the budget and K never
+    fall as time passes without a linked result.
+
+    `evidence_ok` checks the evidence's format only (file names and 64-hex sha256); that the files show the spec has
+    no score is the withdrawal writer's responsibility, verified by the quant."""
+    start = _row_when(prereg)
+    stale_point = start + timedelta(days=STALE_PREREG_DAYS)
+    unreadable = datetime.min.replace(tzinfo=timezone.utc)
+    for w in rows:
+        if w.get("status") != WITHDRAWN or not refers_to(w.get("withdraws"), prereg):
+            continue
+        if not EXEMPT_WITHDRAWAL_RE.match(str(w.get("reason") or "")) or not evidence_ok(withdrawal_evidence(w)):
+            continue
+        end = _row_when(w)
+        if end == unreadable or end >= stale_point:
+            continue
+        if any(is_trial(t) and t.get("family") == prereg.get("family") and row_hash(t) == prereg.get("config_hash")
+               and start <= _row_when(t) <= end for t in rows):
+            continue
+        return w
+    return None
+
+
+def n_trials_effective(rows: list[dict[str, Any]], *, now: datetime | None = None) -> int:
     """The deflated-Sharpe trial count for a later trial: registry trials plus every discovery trial's K_eff (indicator
     survey 4b: N = registry count + K_eff). A survivor of a discovery was chosen by looking at K_eff units' selection
     frequencies over the whole research window (features, or groups when only whole groups go forward), so its later
-    trial pays for them."""
+    trial pays for them. Every stale ad-hoc pre-registration (`stale_preregistrations` at `now`, loop rows included)
+    counts as one trial (quant ruling 2026-11-09, 3(b))."""
     trials = [r for r in rows if is_trial(r)]
     k_eff = sum(discovery_k_eff((r.get("results") or {}).get("discovery") or {})
                 for r in trials if r.get("status") == DISCOVERY)
-    return len(trials) + k_eff
+    return len(trials) + k_eff + len(stale_preregistrations(rows, now))
 
 
 LOOP_RULE_REF = "loop"      # rule_ref of a trial the continuous research loop ran (ADR 0029): charged per run, not per quarter
 
 
-def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
+def quarter_trials(rows: list[dict[str, Any]], quarter: str, *, now: datetime | None = None) -> int:
     """Trial rows (`is_trial`) stamped (`ts`, UTC) in `quarter`, whatever their status: the one count the budget uses.
     A loop trial (`rule_ref` == LOOP_RULE_REF) is not in it: it is charged against `research.loop_trials_per_run` for
-    its run (ADR 0029), but it is still a row, so `n_trials_effective` (the deflated Sharpe's K) counts it."""
+    its run (ADR 0029), but it is still a row, so `n_trials_effective` (the deflated Sharpe's K) counts it. A stale
+    ad-hoc pre-registration (`stale_preregistrations` at `now`) stamped in `quarter` counts as well (quant ruling
+    2026-11-09, 3(b)); queued rows stay under the reservation, so nothing is counted twice."""
+    stale = {id(r) for r in stale_preregistrations(rows, now)}
     n = 0
     for r in rows:
-        if not is_trial(r) or r.get("rule_ref") == LOOP_RULE_REF:
+        if not (is_trial(r) or id(r) in stale) or r.get("rule_ref") == LOOP_RULE_REF:
             continue
         try:
             ts = datetime.fromisoformat(str(r.get("ts")))
@@ -292,6 +387,28 @@ def promotion_pass_counts(row: dict[str, Any], rows: list[dict[str, Any]]) -> bo
     return promotion_refusal(row, rows) is None
 
 
+MIRROR_SUFFIX = ".mirror"      # `<registry>.mirror`: this copy is a read-only mirror (registry_sync.pull_brain)
+
+
+class RegistryReadOnlyMirror(PermissionError):
+    """The registry is a read-only mirror of the registry of record (the brain's; PD ruling 2026-11-09): its
+    `<path>.mirror` marker exists. Record trials on the brain; refresh the mirror with scripts/registry_mirror_pull.sh."""
+
+
+def mirror_marker(path: str | Path) -> Path:
+    return Path(f"{path}{MIRROR_SUFFIX}")
+
+
+def _refuse_mirror(path: str | Path) -> None:
+    """Raise RegistryReadOnlyMirror when `path` is a read-only mirror (its marker exists). Every writer of the
+    registry and its sidecars calls this before touching a byte."""
+    marker = mirror_marker(path)
+    if marker.exists():
+        raise RegistryReadOnlyMirror(
+            f"{path} is a read-only mirror of the registry of record ({marker} exists): write on the brain, then "
+            "refresh it with scripts/registry_mirror_pull.sh")
+
+
 class TrialRegistry:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -325,6 +442,7 @@ class TrialRegistry:
                                ledger_id: str = "", timeframe: str = "") -> dict[str, Any]:
         """Record one discovery batch's `k_contrib` (new distinct spec hashes of the search ledger `ledger_id`, whose
         chain tip was `ledger_head`) in the sidecar: no trial, no budget slot, no change to `n_trials_effective`."""
+        _refuse_mirror(self.path)
         if int(k_contrib) < 0:
             raise ValueError(f"k_contrib must be >= 0, got {k_contrib}")
         row = {"status": DISCOVERY_BATCH, "ts": _utcnow().isoformat(), "k_contrib": int(k_contrib),
@@ -379,6 +497,7 @@ class TrialRegistry:
         return ts
 
     def _append(self, row: dict[str, Any]) -> None:
+        _refuse_mirror(self.path)
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, default=str) + "\n")
 
@@ -511,15 +630,22 @@ class TrialRegistry:
         self._append(row)
         return row
 
-    def withdraw(self, ref: dict[str, Any], reason: str, *, agent_id: str = "research-director") -> dict:
+    def withdraw(self, ref: dict[str, Any], reason: str, *, agent_id: str = "research-director",
+                 evidence: Sequence[dict[str, str]] | None = None) -> dict:
         """Withdraw a pre-registration (queued, slot or ad hoc) that has not run: writes a "withdrawn" row naming it,
         with the reason. Not a trial (`is_trial`): no budget, no deflated-Sharpe count. The withdrawn row is no longer
         pending: it leaves the queue (`director._prereg_matches`, `later_preregistration`), frees its reserved trial
         (`director.reserved_trials` counts it as withdrawn) and, for a slot's parent, frees the slot. ValueError for an
-        unknown pre-registration, one already withdrawn or already run, or an empty reason."""
+        unknown pre-registration, one already withdrawn or already run, or an empty reason.
+
+        `evidence` (the run output files, [{"path", "sha256"}], showing the spec has no score): with a reason
+        "unevaluable: <cause>" or "never formed: <cause>" it exempts an ad-hoc pre-registration from counting as a
+        stale trial (`exempting_withdrawal`, quant ruling 2026-11-09); ValueError when given malformed."""
         from goldbot.research.director import is_withdrawn, preregistration_run
         if not reason.strip():
             raise ValueError("a withdrawal states its reason")
+        if evidence is not None and not evidence_ok(list(evidence)):
+            raise ValueError("withdrawal evidence is a non-empty list of {path, sha256 (64 hex)}")
         rows = self._rows()
         target = next((r for r in rows if r.get("status") == PREREGISTERED and refers_to(row_ref(ref), r)), None)
         if target is None:
@@ -533,6 +659,8 @@ class TrialRegistry:
             "family": target.get("family"), "config_hash": target.get("config_hash"), "status": WITHDRAWN,
             "withdraws": row_ref(target), "reason": reason, "results": {},
         }
+        if evidence is not None:
+            row["evidence"] = [dict(e) for e in evidence]
         self._append(row)
         return row
 
@@ -621,6 +749,7 @@ class TrialRegistry:
         """Attach a re-evaluation (e.g. kind "cpcv") to an existing trial row; raises KeyError for an unknown trial.
         Written to the evidence sidecar, so the trial count, the budget and the deflated Sharpe are unchanged.
         `now`: the time it is stamped with (the scheduler's slot), default the wall clock."""
+        _refuse_mirror(self.path)
         row = self.row(trial)
         if row is None:
             raise KeyError(f"no trial #{trial} in {self.path}")
