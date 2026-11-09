@@ -1,6 +1,6 @@
 # 0077: Ruling A withdrawn: daily units use the 300-event futility floor
 
-Status: proposed, **awaiting quant signature** (research director for PD + PO, 2026-11-09). Decided by PD + PO +
+Status: accepted, signed by the quant-reviewer 2026-11-09 (research director for PD + PO, 2026-11-09). Decided by PD + PO +
 quant-reviewer; the owner is informed. Part of EVAL-2 (ADR 0076; method item 19 in section 8).
 
 ## Context

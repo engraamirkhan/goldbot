@@ -1,6 +1,6 @@
 # Pre-registration 2026-11-09: EVAL-2 thresholds, frozen signatures, gamma sequences, integrity record
 
-Status: **awaiting quant signature** (research director, 2026-11-09). Written before any EVAL-2 code exists, before S1
+Status: **signed by the quant-reviewer 2026-11-09** (014d4c93; resamples helper condition for Lane 3, section 4.6). Author: research director, 2026-11-09. Written before any EVAL-2 code exists, before S1
 has run, before any L2 fit on real cells and before any TEST-OLD return or EVAL-2 2018-25 return is read.
 Method: `docs/research/eval2-method-2026-11-09.md` (v6, signed by the quant-reviewer 2026-11-09). ADRs: 0076
 (EVAL-2), 0077 (Ruling A withdrawal), 0078 (snooping ledger). Where this file and the method differ on a number, the
@@ -231,6 +231,7 @@ Q_CONFIRM: Final = 0.10
 GAMMA_FIRST: Final = 0.5
 
 def gamma(j: int) -> float: ...           # section 3.2; j >= 1
+def confirm_resamples(m_j: int, alpha_j: float) -> int: ...  # max(10_000, ceil(20 * m_j / alpha_j))
 def stationary_block_bootstrap(units: pd.DataFrame, stat: Callable[[pd.DataFrame], float], *, mean_block: float,
                                resamples: int, seed_key: str) -> np.ndarray: ...
     # resamples = max(10_000, ceil(20 * m_j / alpha_j)) for every confirm-batch bootstrap (all three functions)
@@ -259,6 +260,13 @@ def l3_read(units: pd.DataFrame, *, family: str, carried: Sequence[str], weights
             batch: BatchPRDS, j: int, batch_p: Sequence[float],
             corroboration: pd.DataFrame | None, mean_block: float, seed_key: str) -> L3Result: ...
 ```
+**Lane 3 condition (quant signature 2026-11-09).** The frozen helper `confirm_resamples(m_j, alpha_j)` is called by
+`l3_read` itself, with m_j = len(batch_p) and alpha_j = batch.level(j, m_j); the resamples are never taken from the
+caller (`l3_read` has no `resamples` argument). Test: `tests/test_eval2_confirm.py::test_l3_read_resamples_follow_alpha`
+asserts the resamples `l3_read` uses at j = 15, m = 3 are >= 386,889 = ceil(60 / alpha_15) with the exact
+alpha_15 = 0.1 x gamma_15 = 0.000155083 (re-derived; the 387,097 in the condition as relayed is ceil(60 / 0.000155),
+alpha_15 rounded to 3 significant figures, which an exact implementation does not reach, so the test uses the exact
+value and the quant confirms it).
 
 ### 4.7 Futility (Lane 3, `goldbot/research/screen.py`; settings in `goldbot/config.py`)
 ```python
@@ -441,4 +449,4 @@ floor). It was never built (`goldbot/` has no mSPRT, re-derived today). It is **
 | Role | Name | Date | Signature |
 |---|---|---|---|
 | Author | research director | 2026-11-09 | signed |
-| Quant-reviewer | — | — | **awaiting quant signature** |
+| Quant-reviewer | quant-reviewer | 2026-11-09 | signed (014d4c93; resamples helper condition for Lane 3) |

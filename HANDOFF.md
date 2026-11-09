@@ -5,7 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
-- 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076 and 0078 signed by the quant 2026-11-09, ADR 0077 and the prereg **awaiting quant signature**): ADR 0076 adopts
+- 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
   EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
   live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
   (`screen_min_events_daily: null`; daily units use `screen_retire_floor` 300 with the futility rule); ADR 0078 books
@@ -16,7 +16,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   verified against Zrnic et al. AISTATS 2020 Algorithm 1, pure alpha-spending with no rejection credit, quant ruling), the
   replay-v2 spec with its S5 expectation, the mSPRT supersession, and the integrity record (read ledger P1-P9/F1-F7,
   holdout touches, deleted confirm-cache hashes, registry merge and backfill: 6,961 rows, headroom 105). The signed
-  v6 method is copied to `docs/research/eval2-method-2026-11-09.md`. Build lanes 0-5B: BACKLOG 148. No TRACEABILITY
+  v6 method is copied to `docs/research/eval2-method-2026-11-09.md`. Build lanes 0-5B: BACKLOG 148; Lane 3 condition: `l3_read` calls the frozen `confirm_resamples` itself (prereg 4.6). No TRACEABILITY
   row yet: each code lane adds its row with its tests. Registrations stay frozen until Lane 0's
   `tests/test_registry_unlinked_prereg.py` is green on CI and merged.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09

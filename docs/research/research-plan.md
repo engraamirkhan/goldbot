@@ -5,7 +5,7 @@ Rewritten 2026-10-30 (cycle 2, same day) by the research director, base `48768fd
 `660d2db2:docs/research/research-plan.md`. Their answers stand unless a row below changes them. Kill-rule amendments
 cite `prereg-amendment-2026-10-30-kill-rules.md` (A1-A4 signed with conditions 10-30; A5 draft).
 
-## 0. Amendment 2026-11-09: EVAL-2 (ADRs 0076-0078, awaiting quant signature)
+## 0. Amendment 2026-11-09: EVAL-2 (ADRs 0076-0078, signed by the quant 2026-11-09)
 
 Every family registered from now on is judged by EVAL-2 (`docs/research/eval2-method-2026-11-09.md`, thresholds and
 API frozen in `prereg-2026-11-09-eval2.md`). Rule 3's matched control becomes the 20 replay twins. The full rewrite
