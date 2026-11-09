@@ -19,7 +19,17 @@ import yaml
 from goldbot.research.catalogue import core as K
 from goldbot.research.catalogue.core import EB, Ctx, Events
 from goldbot.research.catalogue.costs import window_model
-from goldbot.research.catalogue.data import DAY, FINE_INSTRUMENTS, Bars, load, load_minutes, raw_dir, window
+from goldbot.research.catalogue.data import (
+    DAY,
+    FINE_INSTRUMENTS,
+    Bars,
+    Win,
+    assert_sealed,
+    load,
+    load_minutes,
+    raw_dir,
+    window,
+)
 from goldbot.research.catalogue.detectors_catalogue import (
     CATALOGUE_DETECTORS,
     CATALOGUE_XS,
@@ -28,6 +38,7 @@ from goldbot.research.catalogue.detectors_catalogue import (
 )
 from goldbot.research.catalogue.detectors_patterns import PATTERN_DETECTORS
 from goldbot.research.catalogue.sim import INTRABAR, TRADE_COLS, simulate, window_drift_per_ns
+from goldbot.research.windows import HoldoutSealed
 
 SPECS_PATH = Path(__file__).with_name("specs.yaml")
 RW_GUARD_PATH = Path(__file__).with_name("rw_guard.json")
@@ -212,6 +223,17 @@ def cache_dir() -> Path:
     return Path(os.environ.get("CATALOGUE_CACHE", str(Path.home() / "tmp" / "catalogue_cache")))
 
 
+def checked_cache(b: Bars, w: Win, f: Path) -> Bars:
+    """A bar cache file is state: re-check it on every load, fail closed. A bar that closes after the window's end (a
+    2018 bar in the explore cache is an unsealed confirm read; a confirm cache bar at or after 2025-10-01 is the
+    holdout) raises; it is never served. The loader cuts the same way (data._cut), so a clean cache always passes."""
+    if len(b) and (int(np.max(b.ta)) > w.end or int(np.max(b.t)) >= w.end):
+        raise HoldoutSealed(f"{f}: a cached bar closes after the {w.name} window end (stale or foreign cache file; "
+                            "delete it and rebuild)")
+    assert_sealed(b.ta, b.t)
+    return b
+
+
 def get_bars(inst: str, tf: str, win: str, *, allow_test_old: bool = False) -> Bars:
     key = (inst, tf, win)
     if key in _BAR_CACHE:
@@ -220,8 +242,8 @@ def get_bars(inst: str, tf: str, win: str, *, allow_test_old: bool = False) -> B
     if f.exists():
         z = np.load(f, allow_pickle=False)
         w = window(win, allow_test_old=allow_test_old)
-        b = Bars(inst, tf, z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"], z["seg"], z["vol"],
-                 meta={"window": win, "dec_from": w.dec_from, "end": w.end})
+        b = checked_cache(Bars(inst, tf, z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"], z["seg"],
+                               z["vol"], meta={"window": win, "dec_from": w.dec_from, "end": w.end}), w, f)
     else:
         b = load(inst, tf, win, allow_test_old=allow_test_old)
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -244,8 +266,8 @@ def get_minutes(win: str, *, allow_test_old: bool = False) -> Bars:
     f = cache_dir() / win / "XAUUSD_1m.npz"
     if f.exists():
         z = np.load(f, allow_pickle=False)
-        b = Bars("XAUUSD", "1m", z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"], z["seg"], z["vol"],
-                 meta={"window": win, "dec_from": w.dec_from, "end": w.end})
+        b = checked_cache(Bars("XAUUSD", "1m", z["t"], z["ta"], z["o"], z["h"], z["l"], z["c"], z["spr"], z["co"],
+                               z["seg"], z["vol"], meta={"window": win, "dec_from": w.dec_from, "end": w.end}), w, f)
     else:
         b = load_minutes(win, allow_test_old=allow_test_old)
         f.parent.mkdir(parents=True, exist_ok=True)
