@@ -29,6 +29,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   runner.py line cap (ADR 0023): the terminal-account blocks live in `engine/terminal_account.py` (`Engine.terminal`, a
   `Watch` record) and the BACKLOG 59 host-clock state write moved verbatim to `engine/state_heartbeat.py`; LINE_CAP
   lowered to 3087.
+- **EVAL-2 Lane 1, twins (R107, quant approved 2026-11-09).** `goldbot/research/catalogue/sim.py` draws up to 20
+  replay-only twins per signal from decision bars after its exit (intraday 7 days, 1d 20 bars), same side and hour
+  +/-1 h, never on a bar where the family fires or past the window end, without replacement (a smaller pool is used
+  whole; M_eff in `n_twins`, about 7 on 4h); stop, target and entry offset at the twin's ATR14; same replay and cost
+  path as the signal (swap by #343's rule). `run.py`: `unit_twins` (EVAL-2 `units` frame, session-day clustering on
+  the 17:00 New York clock), `read_batch_index` (2018-25 next read = batch 15, TEST-OLD = 1, every
+  `state/*_reads.jsonl`). S0 full run (`GOLDBOT_SELFTEST=1`, n 116,614): gross -0.0028 R, excess -0.0044 R (SE
+  0.0046), cell floor and chi2 dispersion pass on 15m/1h/4h/1d; se_ratio 1.085 and rho 0.027 are diagnostics, never a
+  multiplier. Lane 1's S0 runs on synthetic martingale walks (harness unit check). Method S0 on real explore bars (NULL-RAND, all TFs, 20 twins, same thresholds) is Lane 4's and must be green before any L2 run; S21 stays blocked until it is.
 - EVAL-2 Lane 2 (costs + lint, quant-approved 2026-11-09): `goldbot/research/catalogue/costs.py` adds
   `deciding_cost` (max(today R, bp-engine R) + overshoot x (stop-exit + stop-entry share) + swap floored at 0 + the
   positive S5 fill-vs-replay gap until S5 passes; every term >= 0; gates at `GATE_COST_MULT` 1.5; requires the window's
