@@ -48,11 +48,22 @@ def test_shard_denominators_equal_the_matrix_length():
         assert jobs[name]["strategy"]["fail-fast"] is False
 
 
+UNIT_EXPR = "not integration and not selftest"     # the EVAL-2 self-tests run in selftest.yml, never in a shard
+INTEG_EXPR = "integration and not selftest"
+SELFTEST = ROOT / ".github" / "workflows" / "selftest.yml"
+
+
+def _marker_exprs(text: str) -> set[str]:
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    return {next(g for g in m if g) for m in re.findall(r"""pytest -m (?:"([^"]+)"|'([^']+)'|(\S+))""", code)}
+
+
 def test_pytest_markers_match_between_ci_and_ci_local():
     text = CI.read_text()
     local = (ROOT / "scripts" / "ci_local.sh").read_text()
-    for marker in ('-m "not integration"', "-m integration"):
-        assert marker in text and marker in local
+    gates = (ROOT / "scripts" / "gates.sh").read_text()
+    for runner in (text, local, gates):
+        assert _marker_exprs(runner) == {UNIT_EXPR, INTEG_EXPR}
     for read in ("backend-unit", "backend-integration", "e2e"):   # ci_local derives the matrix from ci.yml
         assert read in local
 
@@ -184,3 +195,44 @@ def test_a_failing_reporter_fails_the_job_and_only_a_base_without_the_command_is
     assert run("def run_report(): pass\nraise SystemExit(1)\n") != 0     # a real reporter failure is not swallowed
     assert run("def run_report(): pass\nraise SystemExit(0)\n") == 0
     assert run("raise SystemExit(2)  # an old base: no report command\n") == 0
+
+
+def test_a_selftest_marked_test_is_deselected_by_the_unit_and_integration_expressions(tmp_path):
+    # the real pyproject config (--strict-markers: `selftest` must be registered) and the expressions CI runs
+    import subprocess
+    import sys
+    (tmp_path / "test_probe.py").write_text(
+        "import pytest\n\n"
+        "def test_plain(): pass\n\n"
+        "@pytest.mark.integration\ndef test_integ(): pass\n\n"
+        "@pytest.mark.selftest\ndef test_self(): pass\n\n"
+        "@pytest.mark.selftest\n@pytest.mark.integration\ndef test_self_integ(): pass\n")
+
+    def collected(expr: str) -> set[str]:
+        out = subprocess.run(
+            [sys.executable, "-m", "pytest", "-c", str(ROOT / "pyproject.toml"), "--rootdir", str(tmp_path),
+             "-p", "no:randomly", "-p", "no:xdist", "-p", "no:cacheprovider", "--collect-only", "-q", "-m", expr,
+             str(tmp_path / "test_probe.py")],
+            capture_output=True, text=True, cwd=tmp_path, timeout=60)
+        assert out.returncode in (0, 5), out.stdout + out.stderr
+        return {line.rsplit("::", 1)[1] for line in out.stdout.splitlines() if "::" in line}
+
+    assert collected(UNIT_EXPR) == {"test_plain"}
+    assert collected(INTEG_EXPR) == {"test_integ"}
+    assert collected("selftest") == {"test_self", "test_self_integ"}
+
+
+def test_the_selftest_job_is_advisory_and_runs_on_evaluator_changes_and_nightly():
+    from goldbot.ops.deploy import REQUIRED_CHECKS
+    text = SELFTEST.read_text()
+    wf = yaml.safe_load(text)
+    on = _on(wf)
+    paths = {"goldbot/research/catalogue/**", "goldbot/research/eval2/**", "goldbot/research/screen.py"}
+    assert paths <= set(on["pull_request"]["paths"]) and paths <= set(on["push"]["paths"])
+    assert on["schedule"] and "workflow_dispatch" in on
+    assert "selftest" not in REQUIRED_CHECKS and "selftest" not in _ci()["jobs"]   # advisory: never a required check
+    assert wf["permissions"] == {} and "${{ secrets." not in text
+    writers = {j for j, spec in wf["jobs"].items() if "write" in (spec.get("permissions") or {}).values()}
+    assert writers == {"report-failure"}
+    assert "github.event_name != 'pull_request'" in wf["jobs"]["report-failure"]["if"]   # PR code never gets a write token
+    assert "pytest -m selftest" in text
