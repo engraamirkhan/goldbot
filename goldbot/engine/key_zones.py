@@ -4,8 +4,12 @@ frames"), published in engine_<account>.json for the dashboard's price chart.
 Design rules:
 - Display only. Nothing here sizes, gates, places, moves or closes an order: no RiskGate input reads it. A failure,
   a non-finite price or a non-finite ATR keeps the last published zones and never fails a bar close.
-- Never blocks the bar close. The bar close only hands the worker the engine's own completed 15m bars (cheap: the
-  incremental resampler). The worker builds on its own daemon thread and the next bar close collects the result.
+- Never blocks the bar close. The bar close only parks the build's inputs, the engine's own completed 15m bars
+  (cheap: the incremental resampler), its close, price and calendar (`update`). The build starts after the pass's
+  entries were evaluated (`launch`; SRE diagnosis 2026-11-09, fix 4c: "move gold's key-zones build (1.2-2.6 s, every
+  15m) off the bar-close pass"): on one book at the end of its pass, on a multi-book account once every book ran
+  (`books.account_pass`). It builds what it would have built at the close, on its own daemon thread; a finished
+  build is collected at the next pass.
   Builds over SLOW_BUILD_S are logged as warnings. The first failure of each exception type is logged with its
   traceback, later ones in one line.
 - Full history (owner 2026-11-02). The engine holds about 62 trading days of 1m bars, too few for 1w swings (they
@@ -186,6 +190,8 @@ class KeyZoneWorker:
         self.dead_gaps: dict[pd.Timestamp, pd.Timestamp] = {}
         self._gap: tuple[pd.Timestamp, pd.Timestamp] | None = None
         self.job: _Job | None = None
+        # the inputs a bar close parked (`update`): recent bars, close, price, the account's calendar; `launch` starts it
+        self.parked: tuple[pd.DataFrame, pd.Timestamp, float, SessionTable] | None = None
         self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")   # pacing (wall time)
         self.sleep: Callable[[float], None] = time.sleep
 
@@ -457,26 +463,41 @@ def _publish(eng: Engine, job: _Job | None) -> None:
 
 
 def update(eng: Engine, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
-    """At a bar close: publish a finished build, then hand the worker the next one once a 15m bar has closed.
-    Never raises, never waits."""
+    """At a bar close: publish a finished build, then, once a 15m bar has closed, park the next build's inputs
+    (`KeyZoneWorker.parked`, replacing any not started yet) for `launch`. Never raises, never waits."""
     try:
         worker = eng.key_zone_worker
         _publish(eng, worker.collect())
         key = close_ts.floor(_STEP)
         if eng.key_zones_at == key:
             return
+        eng.key_zones_at = key
         price = _last_price(complete)
         if not np.isfinite(price):
             log.warning("key zones: no finite price at %s: last zones kept", close_ts)
-            eng.key_zones_at = key
             return
-        worker.sessions = eng.sessions                  # the account's own calendar for the broker's M15
         recent = eng._resample(complete, LONG_TF)
         recent = recent[pd.to_datetime(recent["visible_at"], utc=True) <= close_ts].reset_index(drop=True).copy()
-        if worker.submit(recent, close_ts, price):
-            eng.key_zones_at = key
-            _publish(eng, worker.collect())          # a build already finished (run inline) is published now
+        worker.parked = (recent, close_ts, price, eng.sessions)   # the account's own calendar for the broker's M15
     except Exception as exc:          # noqa: BLE001 - display only: a bar close never fails on it
+        _report(eng, exc)
+
+
+def launch(eng: Engine) -> None:
+    """After the pass's entries (`books.exploration_pass`, `books.account_pass`): publish a finished build, then start
+    the one a bar close parked once the worker is free (a build still running keeps it parked). Never raises, never
+    waits."""
+    try:
+        worker = eng.key_zone_worker
+        _publish(eng, worker.collect())
+        if worker.parked is None or worker.busy():
+            return
+        recent, close_ts, price, sessions = worker.parked
+        worker.sessions = sessions
+        if worker.submit(recent, close_ts, price):
+            worker.parked = None
+            _publish(eng, worker.collect())          # a build already finished (run inline) is published now
+    except Exception as exc:          # noqa: BLE001 - display only: a pass never fails on it
         _report(eng, exc)
 
 
@@ -485,4 +506,4 @@ def published(eng: Engine) -> dict[str, Any]:
     return {"key_zones": eng.key_zones}
 
 
-__all__ = ["KeyZoneWorker", "build", "published", "select", "update"]
+__all__ = ["KeyZoneWorker", "build", "launch", "published", "select", "update"]

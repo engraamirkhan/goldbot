@@ -67,6 +67,13 @@ The plan's rules, as built here:
   2026-10-30), counted once a minute in this host's ledger (`refresh_cost_reads`); then it and its paired control are
   refused the same way (journalled `exploration_arm_cost_read_complete`, "cost read complete, qualify first"). An
   unreadable count keeps them running and warns (`exploration_cost_read_unread`, once until a read succeeds).
+* Refused for good (SRE diagnosis 2026-11-09, fixes 3 and 4b; `terminal_refusal`): an arm in `retired` (`arm_retired`)
+  or an unpaired per-instrument control whose cost cell is complete (`thin_cell_complete`) can take no new entry
+  again. A stale signal of such an arm is recorded with that refusal, never `exploration_stale`, so the stale count is
+  the entries staleness really cost. A 1m/5m arm refused for good is `dormant` (`refresh_dormant`, once a minute;
+  journalled `exploration_arm_dormant` once): `_minutes` reads no minute for it and `due` never runs its book early
+  for it. Entries only: its book's exits, reconciliation and position reads run every pass, its open positions keep
+  every exit.
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -676,6 +683,9 @@ class Exploration:
         self.cost_read_at: pd.Timestamp | None = None   # the minute the cost arms' fills were last counted
         self.cost_read_warned = False                   # an unreadable count is journalled once until a read succeeds
         self.retired_read: pd.Timestamp | None = None
+        # the 1m/5m arms refused new entries for good (`refresh_dormant`); their minute work is skipped
+        self.dormant: frozenset[str] = frozenset()
+        self.dormant_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
         # XC15 signals waiting for KA15 to close on a netting host (`shift_due`); in memory: one lost to a restart is
@@ -1024,7 +1034,8 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
-    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0]
+    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant
+            and int(through.timestamp()) % tf_seconds(a.tf) == 0]
     minute = through - pd.Timedelta(minutes=1)
     if arms and broker_bars.awaiting(eng, minute, now):
         ex.waiting = through    # the minute's broker bar is on its way: a later pass decides this close
@@ -1064,7 +1075,8 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
 def due(ex: Exploration | None, now: pd.Timestamp) -> bool:
     """A decision waits on this book's pass (live demo issue 2026-11-03: on 20 books the 1m controls fire together and
     "later books' S0 decisions exceed the 10 s stale limit"): a signal is queued, or a 1m/5m arm's minute is past
-    its GRACE_S and not decided yet (`_minutes`). Read only, no broker call; `books.account_pass` runs due books first."""
+    its GRACE_S and not decided yet (`_minutes`; a `dormant` arm's minute never is). Read only, no broker call;
+    `books.account_pass` runs due books first."""
     if ex is None:
         return False
     if ex.queue:
@@ -1072,7 +1084,8 @@ def due(ex: Exploration | None, now: pd.Timestamp) -> bool:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return False
-    return any(a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0 for a in ex.arms.values())
+    return any(a.tf in SUB_15M and a.arm_id not in ex.dormant and int(through.timestamp()) % tf_seconds(a.tf) == 0
+               for a in ex.arms.values())
 
 
 def on_pass(eng: Engine, tick: Tick) -> None:
@@ -1086,6 +1099,7 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     try:
         refresh_retired(eng, ex, now)
         refresh_cost_reads(eng, ex, now)
+        refresh_dormant(eng, ex, now)
         from goldbot.engine import exploration_learning
         exploration_learning.refresh(eng, ex, now)
         refresh_owner_experiments(eng, ex, now)
@@ -1147,6 +1161,61 @@ def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + arm_id, "action": "exploration_arm_retired",
                               "arm": arm_id})
     _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
+
+
+def terminal_refusal(eng: Engine, ex: Exploration, arm: Arm, now: pd.Timestamp) -> str | None:
+    """Why `arm` can take no new entry again, or None (SRE diagnosis 2026-11-09, fix 3: "run the terminal refusals
+    (`thin_cell_complete`, spec retired, unqualified) before the staleness drop"): `arm_retired` for an arm in
+    `retired` (at its stop, in its spec, unqualified, hash-refused, cost read complete: none is ever undone), and
+    `thin_cell_complete` for an unpaired per-instrument control whose cost cell has its fills (the count only rises,
+    `exploration_budget.cell_complete`). Raises when the ledger cannot be read."""
+    if arm.arm_id in ex.retired:
+        return "arm_retired"
+    daily = ex.cfg.daily
+    if daily is None or daily.thin_control_fills is None:
+        return None
+    from goldbot.engine import exploration_budget as budget
+    kind = budget.entry_kind(arm)
+    if kind == "thin" and budget.cell_complete(daily, kind, budget.cell_fills(eng, ex, now).get(arm.instrument, 0)):
+        return "thin_cell_complete"
+    return None
+
+
+def refresh_dormant(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
+    """Once a minute: the 1m/5m arms refused new entries for good (`terminal_refusal`) are `dormant`, so `_minutes`
+    reads no minute for them and `due` never runs their book early for them (SRE diagnosis 2026-11-09, fix 4b: "a
+    non-gold book whose 1m arms are all terminally refused today should skip its 1m frame and signal work ... which
+    keeps every exit, reconciliation and position read"). A newly dormant arm is journalled
+    (`exploration_arm_dormant`, with its reason) once. A read that fails keeps the set known (neither reason is ever
+    undone); with none yet the arms keep their minute work. Entries only: nothing here reads or touches a position."""
+    minute = now.floor("min")
+    if ex.dormant_read == minute:
+        return
+    ex.dormant_read = minute
+    why: dict[str, str] = {}
+    try:
+        for arm in (a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant):
+            if (r := terminal_refusal(eng, ex, arm, now)) is not None:
+                why[arm.arm_id] = r
+    except Exception as exc:
+        log.warning("exploration: dormant arms not read (%s); the known set stands", type(exc).__name__)
+        return
+    if not why:
+        return
+    ex.dormant = ex.dormant | frozenset(why)
+    for arm_id, reason in sorted(why.items()):
+        log.info("exploration arm %s dormant (%s): no minute work, exits managed", arm_id, reason)
+        eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + arm_id, "action": "exploration_arm_dormant",
+                              "arm": arm_id, "reason": reason})
+
+
+def _stale_refusal(eng: Engine, ex: Exploration, arm: Arm, now: pd.Timestamp) -> str | None:
+    """`terminal_refusal`, or None when it cannot be read (the signal is then recorded stale, as before)."""
+    try:
+        return terminal_refusal(eng, ex, arm, now)
+    except Exception as exc:
+        log.warning("exploration: refusal of stale %s not read (%s); recorded stale", arm.arm_id, type(exc).__name__)
+        return None
 
 
 def admissible_fills(conn: Any, arm_id: str) -> int:
@@ -1600,9 +1669,13 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
     for s in ex.queue:
         age = (now - s.bar_ts).total_seconds()
         if age > stale_s(ex.arms[s.arm_id].tf):
-            eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + s.arm_id, "action": "exploration_stale",
-                                  "age_s": round(age, 3)})
-            candidate(eng, ex, s, now, "stale")
+            # SRE 2026-11-09 fix 3: a signal its arm could never have entered is that refusal, not a stale one, so
+            # `exploration_stale` counts only the entries staleness cost. Dropped either way: no order changes
+            why = _stale_refusal(eng, ex, ex.arms[s.arm_id], now)
+            eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + s.arm_id, "age_s": round(age, 3),
+                                  **({"action": "exploration_stale"} if why is None else
+                                     {"action": "exploration_refused:" + why, "arm": s.arm_id})})
+            candidate(eng, ex, s, now, why or "stale")
         else:
             keep.append(s)
     ex.queue = keep

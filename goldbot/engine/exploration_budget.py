@@ -104,6 +104,13 @@ def trailing_start(day_start: pd.Timestamp) -> pd.Timestamp:
     return pd.Timestamp(day_start) - pd.offsets.BDay(TRAIL_DAYS)
 
 
+def cell_complete(daily: DailyEntries | None, kind: EntryKind, cell_fills: int) -> bool:
+    """An unpaired per-instrument control whose cost cell has its `thin_control_fills` fills: refused for good (the
+    count of the cell's fills, ever, only rises)."""
+    return (daily is not None and kind == "thin" and daily.thin_control_fills is not None
+            and cell_fills >= daily.thin_control_fills)
+
+
 def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, int], *, session: str,
                   budgets: Mapping[str, int], cell_fills: int = 0) -> str | None:
     """Why the budget refuses one more fill of `kind` in `session`, or None. `n`: today's fills (`day`), this clock
@@ -112,7 +119,7 @@ def daily_refusal(daily: DailyEntries | None, kind: EntryKind, n: Mapping[str, i
     `control_propensity`'s, after this."""
     if daily is None:
         return None
-    if kind == "thin" and daily.thin_control_fills is not None and cell_fills >= daily.thin_control_fills:
+    if cell_complete(daily, kind, cell_fills):
         return "thin_cell_complete"
     if n.get("day", 0) >= daily.max_per_day:
         return "daily_entries"
