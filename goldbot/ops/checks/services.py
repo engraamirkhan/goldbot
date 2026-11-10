@@ -1,6 +1,7 @@
 """Services and heartbeats health checks: scheduler and jobs, service heartbeats, schema skew, approvals, the alert loop, the dead man's switch."""
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -195,7 +196,40 @@ def check_deadman(ctx: HealthContext) -> Check:
                  reason=f"set; the Telegram service pings every {every} min while healthy, <url>/fail on a FAIL")
 
 
-DEPLOY_APPROVAL_STUCK_S = 15 * 60   # goldbot-deploy.timer runs every minute; an approval waits only for a pending entry
+DEPLOY_READ_STALE_S = 2 * 3600     # the deploy check reads origin every 10 min: 12 failed passes in a row
+
+
+@register_check("global", block=BLOCK_TAIL, pos=151)
+def check_deploy_read(ctx: HealthContext) -> Check | None:
+    """The Telegram deploy check (goldbot/ops/deploy.py) records each pass that read origin and GitHub in
+    state/deploy/check.json. No successful read for DEPLOY_READ_STALE_S warns and tells the owner (NOTIFY_ON_WARN):
+    no new version can be offered (incident 2026-11-10: `git fetch` under ProtectSystem=strict exited 255 on every
+    pass for at least 12 h and nothing said so). None where deploys are off (no check.json: the MT5 box)."""
+    f = ctx.state_dir / "deploy" / "check.json"
+    if not f.exists():
+        return None
+    try:
+        rec = json.loads(f.read_text())
+        last_ok, since = rec.get("last_ok"), rec.get("failing_since")
+        error = str(rec.get("error") or "")[:300]
+    except (ValueError, OSError, AttributeError) as exc:
+        return Check(name="deploy_read", status="warn", reason=f"deploy/check.json unreadable ({type(exc).__name__})")
+    now = _epoch(ctx.now)
+    fix = "check `journalctl -u goldbot-telegram | grep 'deploy check'` (RUNBOOK 0.5 'No new version offered')"
+    if isinstance(last_ok, (int, float)) and not isinstance(last_ok, bool):
+        if now - last_ok <= DEPLOY_READ_STALE_S:
+            return Check(name="deploy_read", status="ok", reason=f"newest version read {_age(max(now - last_ok, 0.0))} ago")
+        return Check(name="deploy_read", status="warn",
+                     reason=f"no new version can be offered: last read of origin/GitHub {_age(now - last_ok)} ago"
+                            + (f" ({error})" if error else "") + f"; {fix}")
+    if isinstance(since, (int, float)) and not isinstance(since, bool) and now - since <= DEPLOY_READ_STALE_S:
+        return Check(name="deploy_read", status="ok", reason=f"no read yet; failing for {_age(max(now - since, 0.0))}")
+    return Check(name="deploy_read", status="warn",
+                 reason="no new version can be offered: the deploy check has never read origin/GitHub"
+                        + (f" ({error})" if error else "") + f"; {fix}")
+
+
+DEPLOY_APPROVAL_STUCK_S = 15 * 60  # goldbot-deploy.timer runs every minute; an approval waits only for a pending entry
 
 
 @register_check("global", block=BLOCK_TAIL, pos=150)

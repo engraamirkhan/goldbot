@@ -565,6 +565,18 @@ and the rest still arrives. It never contains account numbers or emails.
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
   positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
+* **No new version offered** (health `deploy_read` warns: no read of origin/GitHub for 2 h). The Telegram service
+  checks every 10 min, read-only: `git ls-remote` for main and GitHub's compare and check-runs API. It never writes
+  `/opt/goldbot/.git`, because the unit's ProtectSystem=strict sandbox does not allow it (incident 2026-11-10).
+  1. `journalctl -u goldbot-telegram --since -3h | grep 'deploy check'` names the reason (one line per outage).
+  2. Run the check in the same sandbox as the service:
+     `sudo systemd-run --uid=goldbot -p ProtectSystem=strict -p ReadWritePaths=/opt/goldbot/state --wait --pipe -d /opt/goldbot /opt/goldbot/.venv/bin/python -m goldbot.ops.deploy check`.
+     It prints JSON (an offer) or `null` and logs no warning when the check works. An offer it prints is recorded
+     as pending, so Telegram does not show it again: deploy it with `sudo goldbot-deploy <sha>`, or wait for the next
+     version.
+  3. `exited 128`/`unable to access`: the brain cannot reach github.com (DNS, egress); `timed out`: the same, slower;
+     `HTTPError 403`: GitHub's unauthenticated rate limit (60 an hour), which clears within the hour.
+  4. Until it is fixed, deploy by hand: `sudo goldbot-deploy latest`. Never widen the unit's ReadWritePaths to `.git`.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only, always in its own unit so a dropped SSH
   session or a Ctrl-C cannot stop it half way:
   `sudo systemd-run --wait --unit goldbot-deploy-manual-$(date +%s) /usr/local/sbin/goldbot-deploy <sha>` when a

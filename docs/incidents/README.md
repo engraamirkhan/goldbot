@@ -17,3 +17,4 @@ Blameless: describe what the system and the process allowed, not who did it.
 | 2026-11-01 | [A broker-side "Service is not available" latched vantage-demo's login off for 6 h](2026-11-01-vantage-demo-transient-auth-latched.md) | S2 | closed |
 | 2026-11-02 | [The multi-instrument release left most books closed and the icm-probe bridge starved](2026-11-02-multi-instrument.md) | S2 | open (probe box upgrade with the owner) |
 | 2026-11-09 | [vantage-demo entered nothing for 9.5 h of open market and nothing alerted](2026-11-09-vantage-demo-entry-silence.md) | S2 | open (vantage supply with PD; detection shipped) |
+| 2026-11-10 | [The Telegram deploy check failed on every pass (git fetch under ProtectSystem=strict)](2026-11-10-deploy-check-exit-255.md) | S3 | open (deploy the fix on the brain) |
