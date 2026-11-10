@@ -590,18 +590,20 @@ class _Post:
 def _fake_lane3(carry_z: float = 1.2816) -> tuple[Any, Any, Any]:
     calls: dict[str, int] = {}
 
-    def cell_table(units: pd.DataFrame) -> pd.DataFrame:
+    def cell_table(units: pd.DataFrame, *, window: str) -> pd.DataFrame:
         rows = []
         for cid, g in units.groupby("cell_id", sort=True):
             m, _, se, _ = ST.cluster_t(g["excess_r"].to_numpy(float), g["day"].to_numpy())
             rows.append({"cell_id": str(cid), "family": str(g["family"].iloc[0]), "tf": str(g["tf"].iloc[0]),
                          "inst": str(g["inst"].iloc[0]), "mean": m, "se": se, "n_days": g["day"].nunique(),
-                         "twin_net": float(g["twin_mean_net_r"].mean()), "twin_se": 0.0})
+                         "twin_net": float(g["twin_mean_net_r"].mean()), "twin_se": 0.0, "window": window})
         return pd.DataFrame(rows)
 
     def fit_prior(cells: pd.DataFrame, *, leave_out_family: str, spec: Any) -> dict[str, float]:
         # the population passed includes the family; leaving it out is fit_prior's job (frozen signature)
         assert leave_out_family in set(cells["family"]) and "control" in cells.columns
+        assert (cells["window"] == "explore").all() and cells["config_hash"].notna().all()
+        assert not cells["config_hash"].duplicated().any()    # one hash per (family, cell): de-dup collapses nothing
         calls["fit_prior"] = calls.get("fit_prior", 0) + 1
         return {"mu": 0.0, "tau": 0.05}
 
@@ -618,7 +620,11 @@ def _fake_lane3(carry_z: float = 1.2816) -> tuple[Any, Any, Any]:
     def power_at(*, n: int, sd: float, delta: float, alpha: float) -> float:
         return float(sps.norm.sf(sps.norm.isf(alpha) - delta / (sd / math.sqrt(n))))
 
-    hier = types.SimpleNamespace(HierSpec=lambda: types.SimpleNamespace(carry_p=0.8), cell_table=cell_table,
+    def hier_spec(*, prior_population_hash: str, code_hash: str) -> Any:
+        assert prior_population_hash and code_hash == "fake-code"   # the self-test freezes every spec it uses
+        return types.SimpleNamespace(carry_p=0.8, prior_population_hash=prior_population_hash, code_hash=code_hash)
+
+    hier = types.SimpleNamespace(HierSpec=hier_spec, code_hash=lambda: "fake-code", cell_table=cell_table,
                                  fit_prior=fit_prior, posteriors=posteriors, l2_decide=l2_decide, calls=calls)
 
     @dataclass(frozen=True)

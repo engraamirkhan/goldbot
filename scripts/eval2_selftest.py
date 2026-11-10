@@ -417,10 +417,21 @@ def _jsonable(x: Any) -> Any:
 
 
 # ------------------------------------------------------------------ L2 on Lane 3 (shared by S0 sentinels, S1-S3)
+def cell_config_hash(cell_id: str) -> str:
+    """The synthetic card's config hash of one cell (prereg 4.5: "de-duplicated by config hash"). Every self-test cell
+    id is `<family>|<cell config>` with a family name unique to its replicate or plant, so the hash is distinct per
+    (family, cell) and stable across runs: de-duplication never collapses two replicates, and leave-family-out drops
+    exactly the held-out family's cells (an S1 arm B replicate is one whole family, all its units and cells)."""
+    return hashlib.sha256(f"eval2-selftest|{cell_id}".encode()).hexdigest()[:16]
+
+
 def cell_frame(units: pd.DataFrame, hier: Any, *, control: bool) -> pd.DataFrame:
-    """Lane 3's L2 `cells` frame (`hier.cell_table`) for these units, with the control flag the Efron null reads."""
+    """Lane 3's L2 `cells` frame (`hier.cell_table(units, window="explore")`) for these units, with what the caller
+    adds from the card (hier docstring): config_hash per cell and the control flag the Efron null reads; no overlaps
+    (synthetic families share no instances)."""
     u = units[np.isfinite(units["excess_r"].to_numpy(float))]
-    c = hier.cell_table(u)
+    c = hier.cell_table(u, window="explore")
+    c["config_hash"] = [cell_config_hash(str(x)) for x in c["cell_id"]]
     c["control"] = control
     return c
 
@@ -435,13 +446,21 @@ def deciding_cost_map(units: pd.DataFrame) -> dict[str, float]:
     return {str(k): float(v) for k, v in m.items()}
 
 
-def l2_family(units: pd.DataFrame, pop_cells: pd.DataFrame, *, family: str, hier: Any, spec: Any,
-              control: bool = False) -> Any:
+def l2_spec(hier: Any, population: pd.DataFrame) -> Any:
+    """The frozen L2 spec for one self-test population (hier quant M6: posteriors and l2_decide refuse a spec without
+    this code's hash and a prior population hash): prereg section 1 defaults, code_hash = `hier.code_hash()`, and
+    prior_population_hash = sha256 over the population's sorted cell config hashes (what the card freezes)."""
+    h = hashlib.sha256("|".join(sorted(population["config_hash"].astype(str))).encode()).hexdigest()
+    return hier.HierSpec(prior_population_hash=h, code_hash=hier.code_hash())
+
+
+def l2_family(units: pd.DataFrame, pop_cells: pd.DataFrame, *, family: str, hier: Any, control: bool = False) -> Any:
     """Lane 3's L2 on one family: cell_table -> fit_prior(population incl. the family; Lane 3 leaves it out) ->
-    posteriors at the cells' deciding cost -> l2_decide."""
+    posteriors at the cells' deciding cost -> l2_decide, under the spec frozen on that population."""
     u = units[np.isfinite(units["excess_r"].to_numpy(float))]
     cells = cell_frame(u, hier, control=control)
     pop = pd.concat([pop_cells, cells], ignore_index=True)
+    spec = l2_spec(hier, pop)
     prior = hier.fit_prior(pop, leave_out_family=family, spec=spec)
     posts = hier.posteriors(cells, prior, spec=spec, deciding_cost_r=deciding_cost_map(u))
     return hier.l2_decide(posts, family=family, spec=spec)
@@ -678,13 +697,12 @@ def s0_sentinels_l2(cases: Mapping[str, tuple[Bars, Events, CostModel]], null_fr
                     hier: Any, *, seed_key: str) -> dict[str, bool]:
     """The L2 half of the sentinels: each sentinel family through Lane 3's L2 with the S0 NULL-RAND cells as the
     control population; True = carried (a sentinel must never carry)."""
-    spec = hier.HierSpec()
     pop = pd.concat([cell_frame(f, hier, control=True) for f in null_frames if len(f)], ignore_index=True)
     out = {}
     for name, (b, ev, costs) in cases.items():
         fam = f"SENTINEL-{name}"
         u = cell_units(b, ev, seed_key=f"{seed_key}|{name}", costs=costs, family=fam, deciding=True)
-        out[name] = bool(l2_family(u, pop, family=fam, hier=hier, spec=spec).carried)
+        out[name] = bool(l2_family(u, pop, family=fam, hier=hier).carried)
     return out
 
 
@@ -1130,7 +1148,6 @@ def s1_arm(fams: Sequence[pd.DataFrame], *, arm: str, seed_key: str, hier: Any, 
            ) -> dict[str, float]:
     """L2 + confirm on one arm's null families. Families are grouped into runs of S1_RUN_SIZE (a simulated screen):
     L2 carry rate per family; P(any family passes confirm) per run (all null, so it equals the FDR)."""
-    spec = hier.HierSpec()
     fams = [f[np.isfinite(f["excess_r"].to_numpy(float))].reset_index(drop=True) for f in fams if len(f)]
     fams = [f for f in fams if len(f)]
     cells = {str(f["family"].iloc[0]): cell_frame(f, hier, control=True) for f in fams}
@@ -1138,7 +1155,7 @@ def s1_arm(fams: Sequence[pd.DataFrame], *, arm: str, seed_key: str, hier: Any, 
     carried: dict[str, tuple[str, ...]] = {}
     for f in fams:
         fam = str(f["family"].iloc[0])
-        dec = l2_family(f, allc[allc["family"] != fam], family=fam, hier=hier, spec=spec, control=True)
+        dec = l2_family(f, allc[allc["family"] != fam], family=fam, hier=hier, control=True)
         carried[fam] = tuple(dec.carried)
     n = len(fams)
     k = sum(1 for v in carried.values() if v)
@@ -1238,7 +1255,6 @@ def _synthetic_null_cells(rng: np.random.Generator, n_fam: int, *, sd: float = 1
 
 def s2_run(*, plants_r: Sequence[float], reps: int, seed_key: str, hier: Any, stats: Any, hh: str,
            n_fam: int = 30) -> SelfTestResult:
-    spec = hier.HierSpec()
     m: dict[str, float] = {}
     ok = True
     for d in plants_r:
@@ -1249,6 +1265,7 @@ def s2_run(*, plants_r: Sequence[float], reps: int, seed_key: str, hier: Any, st
             plant = u["family"].isin(planted_fams) & u["tf"].isin(("1h", "4h")) & (u["inst"] == "XAUUSD")
             u.loc[plant, ["excess_r", "net_r"]] += d
             cells = cell_frame(u, hier, control=False)
+            spec = l2_spec(hier, cells)
             planted_ids = set(u.loc[plant, "cell_id"])
             for fam in planted_fams:
                 prior = hier.fit_prior(cells, leave_out_family=fam, spec=spec)
@@ -1345,13 +1362,12 @@ def _s3_rep(args: tuple[float, int, str]) -> dict[str, Any]:
 def s3_l2_half(res: Sequence[Mapping[str, Any]], hier: Any) -> dict[str, float]:
     """The L2 half: every rep's cell through Lane 3's L2 (prior on all other reps' cells, the null reps as controls);
     planted carried >= 80 % (CP 90 % LB >= 0.78), null carried <= 5 % (CP 90 % UB <= 0.07)."""
-    spec = hier.HierSpec()
     frames = {str(r["units"]["family"].iloc[0]): r["units"] for r in res if len(r["units"])}
     pop = pd.concat([cell_frame(u, hier, control=fam.startswith("NULL")) for fam, u in frames.items()],
                     ignore_index=True)
     pl = nu = cpl = cnu = 0
     for fam, u in frames.items():
-        carried = bool(l2_family(u, pop[pop["family"] != fam], family=fam, hier=hier, spec=spec,
+        carried = bool(l2_family(u, pop[pop["family"] != fam], family=fam, hier=hier,
                                  control=fam.startswith("NULL")).carried)
         if fam.startswith("NULL"):
             nu, cnu = nu + 1, cnu + carried
