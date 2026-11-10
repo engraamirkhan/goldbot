@@ -522,6 +522,10 @@ same resamples, seed tag `|ci80`). The rungs read in this order, with KILLED and
 - Otherwise NaN.
 `lb80_net_gate` stays the gate value and is never shown as the £ interval.
 
+Erratum 2026-11-10: with L2 only, the £/day point and interval are NaN until `CellPosterior` carries the cell's twin
+net. The reason labels the rung 'explore, shrunk, in-sample'. Display only; no gate reads it. (Signed: quant-reviewer
+2026-11-10.)
+
 **Tests that pin 10.1-10.3** (Lane 3 follow-up):
 - `test_eval2_confirm.py`: `::test_all_seen_family_rejects_on_test_old_with_the_seen_and`,
   `::test_a_seen_cell_failing_2018_25_blocks_the_family`,
