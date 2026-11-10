@@ -35,8 +35,10 @@ def _engine(tmp_path: Path) -> Engine:
 
 
 def _ex(tf: str = "1m", last_minute: pd.Timestamp | None = None, queued: int = 0) -> Any:
-    """An Exploration's fields `due` reads: its arms' timeframes, the last minute decided and the signals queued."""
-    return SimpleNamespace(arms={"S0": SimpleNamespace(tf=tf)}, last_minute=last_minute, queue=deque(range(queued)))
+    """An Exploration's fields `due` reads: its arms' timeframes, the last minute decided, the signals queued and the
+    dormant arms."""
+    return SimpleNamespace(arms={"S0": SimpleNamespace(tf=tf, arm_id="S0")}, last_minute=last_minute,
+                           queue=deque(range(queued)), dormant=frozenset())
 
 
 def _arm(eng: Engine, symbol: str, ex: Any) -> None:

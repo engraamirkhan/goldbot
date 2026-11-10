@@ -138,7 +138,8 @@ def test_a_cold_books_exploration_candidates_are_blocked_book_warming_and_never_
     _attach(eng, Rates())
     blocked: list[str] = []
     entered: list[int] = []
-    for name in ("refresh_retired", "refresh_cost_reads", "refresh_owner_experiments", "_minutes", "_pyramid"):
+    for name in ("refresh_retired", "refresh_cost_reads", "refresh_dormant", "refresh_owner_experiments", "_minutes",
+                 "_pyramid"):
         monkeypatch.setattr(exploration, name, lambda *a, **k: None)
     monkeypatch.setattr("goldbot.engine.exploration_learning.refresh", lambda *a, **k: None)
     def block(e: Engine, ex: Any, sigs: list, now: pd.Timestamp, why: str) -> None:

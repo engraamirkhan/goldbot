@@ -308,7 +308,7 @@ def _live_eng(arm: A.Arm, mem: pd.DataFrame, *, ticks: list[Tick] | None = None,
     bars on (production through the bridge), the broker's fetched minutes `got`."""
     ex = SimpleNamespace(arms={arm.id: exploration.Arm(spec=arm, style="scalp")}, retired=frozenset(), last_bar={},
                          queue=deque(), last_minute=None, deferred={}, needs_context=frozenset(), held_back={},
-                         netting=None, ahead_seen=None, waiting=None)
+                         netting=None, ahead_seen=None, waiting=None, dormant=frozenset())
     bb = broker_bars.BrokerBars()
     if broker_bars_on:
         bb.fetcher = broker_bars.Fetcher(client=None)
