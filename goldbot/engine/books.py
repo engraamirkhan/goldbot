@@ -801,10 +801,12 @@ def live_key(eng: Engine) -> tuple[str, str]:
 
 
 # ------------------------------------------------------------------ instruments.db terms (non-gold books)
-def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = None) -> None:
+def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = None, tick: Tick | None = None) -> None:
     """A non-gold book's terms: written from symbol_info every broker_terms_every_s (and first thing), read back every
     TERMS_READ_S. Sets the book's `terms_problem` (None, `instruments_db_unreadable`, `instrument_terms_missing`,
-    `swap_unknown`), which refuses its entries; never raises."""
+    `swap_unknown`), which refuses its entries; never raises. The price a swap needs (mode 2/3 in the base currency,
+    modes 5/6 interest) is the bid of `tick`, the book's tick this refresh runs on, else the book's last accepted tick:
+    point in time, never a later price. Without one the write (6 h cadence) would leave the swap unknown that long."""
     book: SymbolBook = eng.__dict__["book"]
     if book.primary:
         return
@@ -814,7 +816,7 @@ def refresh_terms(eng: Engine, now: pd.Timestamp, db: InstrumentsDb | None = Non
         book.terms_written = now
         try:
             info = symbol_info(eng)               # shared with the contract and lot terms reads
-            tick = book.__dict__.get("_last_tick")     # a mode 2/3 swap in the base currency is x price
+            tick = tick if tick is not None else book.__dict__.get("_last_tick")   # x price: modes 2/3 base, 5/6
             inst = book.spec.instrument if book.spec is not None else None   # F5: x price for fx/metal pairs only
             db.save(terms_from_info(cfg.account_id, cfg.symbol, cfg.release_symbol, info, now,
                                     price=None if tick is None else getattr(tick, "bid", None),
@@ -953,7 +955,7 @@ def after_refresh(eng: Engine, tick: Tick, now: pd.Timestamp) -> None:
     st = eng.state
     if not book.primary:
         if book.spec is None or book.spec.blocked is None:   # a blocked book takes no entry: its terms are never read
-            refresh_terms(eng, tick.ts_utc)
+            refresh_terms(eng, tick.ts_utc, tick=tick)
         if problem(book) is not None:
             st.dq_error = True
         spec = book.spec.instrument if book.spec is not None else None

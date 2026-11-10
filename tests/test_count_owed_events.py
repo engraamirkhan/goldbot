@@ -555,10 +555,25 @@ def test_nothing_at_or_after_the_holdout_reaches_any_count():
     text = co.markdown(a)
     assert "| Q1 H-04 | asia_drift entries" in text and "expected_eval_days" in text
     assert "| H-04 entries |" in text and "| Q1 H-06 |" in text and "| H-06 signals |" in text
-    # the markdown states which floor is which: 150 only retires, a pass needs screen_min_events
+    # the markdown states which floor is which: 150 is the frozen withdrawal floor, a pass needs screen_min_events
     assert "retire floor" in text and "daily floor" not in text
-    assert ("150 is the retire floor (research.screen_min_events_daily): below it a daily rule is withdrawn or "
-            "retired, never passed; a pass needs research.screen_min_events (1,000) events") in text
+    assert ("150 is the withdrawal floor frozen in the H-01/H-06 pre-registration (settings at the freeze, "
+            "2026-10-11): below it a daily rule is withdrawn, never passed; a pass needs research.screen_min_events "
+            "(1,000) events") in text
+
+
+def test_withdrawal_floor_is_the_frozen_150_whatever_the_settings():
+    """Quant B3: preregistration-2027Q1.md: "the floor applied is the one committed in settings at the freeze (150
+    today)". ADR 0077 (screen_min_events_daily null, screen_retire_floor 300) governs screen retires from now on, not
+    a withdrawal rule already registered; its floor is reported on a separate informational line."""
+    from goldbot.config import ResearchSettings
+    floors = co.withdrawal_floors(ResearchSettings(screen_min_events_daily=None, screen_retire_floor=300))
+    assert floors == {"retire_floor": 150, "pass_floor": 1000, "adr0077_retire_floor": 300}
+    a = co.run(_bars_1m(end="2023-04-01"), None, None, holdout_from=HOLDOUT, extra_cost_usd=EXTRA, min_rows=MIN_ROWS,
+               **floors)
+    assert a["meta"]["retire_floor"] == 150 and a["meta"]["adr0077_retire_floor"] == 300
+    text = co.markdown(a)
+    assert "ADR 0077" in text and "300" in text and "informational" in text
 
 
 def test_missing_calendar_is_reported_not_counted():

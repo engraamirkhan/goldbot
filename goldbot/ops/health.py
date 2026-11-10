@@ -143,6 +143,7 @@ from goldbot.ops.checks.engine import (
     check_tick_errors,
     check_weekend_247,
 )
+from goldbot.ops.checks.entries import check_entry_silence
 from goldbot.ops.checks.feeds import (
     PNL_BASIS_GROSS_WARN_PCT,
     PNL_BASIS_WINDOW_DAYS,
@@ -337,6 +338,7 @@ __all__ = [
     "check_email_link",
     "check_engine",
     "check_engine_loop",
+    "check_entry_silence",
     "check_entry_status",
     "check_symbols",
     "check_entry_windows",
@@ -421,6 +423,9 @@ class HealthContext(Record):
     weekend_lanes: list[WeekendLaneRef] = Field(default_factory=list)
     # ADR 0063: the observe_only accounts accounts.yaml lists (never in `accounts`); empty skips check_observe
     observe_lanes: list[ObserveLaneRef] = Field(default_factory=list)
+    # incident 2026-11-09: () -> {account: entry_silence.AccountSupply} of the exploring demo accounts; None skips
+    # check_entry_silence
+    entry_supply: Callable[[], dict[str, Any]] | None = None
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -460,7 +465,8 @@ class HealthContext(Record):
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
                    commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes,
-                   observe_lanes=observed)
+                   observe_lanes=observed,
+                   entry_supply=partial(_entry_supply_view, settings) if settings is not None else None)
 
 
 def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:
@@ -468,6 +474,13 @@ def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:
     from goldbot.engine.exploration import qualification_by_account
     from goldbot.ops import accounts
     return qualification_by_account(accounts.enabled_accounts())
+
+
+def _entry_supply_view(settings: Settings) -> dict[str, Any]:
+    """The enabled demo accounts' exploration arms as the engine selects them (goldbot/ops/entry_silence.py)."""
+    from goldbot.ops import accounts
+    from goldbot.ops.entry_silence import cached_supply
+    return cached_supply(accounts.enabled_accounts("demo", logins=False), settings.engine.timeframes_live)
 
 
 def bridge_tick_reader(account_id: str, symbol: str) -> Any:
@@ -615,7 +628,7 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 # deploy_read: no version could be offered for 2 h, incident 2026-11-10)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
-                  "history_gap:", "deploy_read")
+                  "history_gap:", "entry_silence:", "deploy_read")
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the

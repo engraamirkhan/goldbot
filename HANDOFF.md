@@ -18,6 +18,33 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `sudo systemd-run --uid=goldbot -p ProtectSystem=strict -p ReadWritePaths=/opt/goldbot/state --wait --pipe -d /opt/goldbot /opt/goldbot/.venv/bin/python -m goldbot.ops.deploy check`
   must print JSON or `null` with no warning. An offer it prints is recorded as pending, so Telegram does not repeat it.
   The incident closes once this check passes.
+- 2026-11-10 (branch fix/swap-mode-5-6; Vantage refusals 2026-11-10 item 2, fix 1): vantage-demo BTCUSD reports MT5
+  swap mode 5 (interest on the current price, 360-day year), which instruments.db stored NULL, so every BTC entry was
+  refused `invalid:swap_usd_per_oz` (95 in 7 days). `instruments_db.swap_per_lot` now converts modes 5 and 6 to
+  rate / 100 / 360 x price x contract size per lot per night (broker sign kept; an entry's open price is the current
+  one); no finite price > 0 leaves it unknown, modes 7/8 stay unknown. `books.refresh_terms` takes the tick the
+  refresh runs on, so the first terms write after a start has its price instead of waiting 6 h for the next write.
+  The swap is fixed at the refresh price for up to `broker_terms_every_s` (6 h): a projection input, not a fill.
+  RiskGate unchanged. Tests: `tests/test_instruments_db.py`.
+- Quant review (b): mode 5/6 is priced only for a USD profit currency (the engine's SwapSpec reads the amount as USD);
+  any other stays `swap_unknown`, the reason in `swap_note`. Follow-ups: BACKLOG 153 (seven-night crypto rollovers;
+  reconcile Vantage's BTC swap charges after the first weekend hold) and 154 (convert profit-currency swaps to USD).
+- After deploy (vantage-demo): check the live BTCUSD `swap_rollover3days` is in 1..5 (else `refresh_terms` keeps
+  `swap_unknown`), and that BTCUSD decisions no longer carry `invalid:swap_usd_per_oz` or `swap_unknown`.
+- 2026-11-10 (branch fix/telegram-health-cpu; telegram CPU attribution 2026-11-10, R119): the telegram service's
+  health pass no longer holds the pump. `_pump` starts it as its own task (`_start_health_pass`), one at a time (a
+  pass due while the last still runs is skipped and logged), so proposal cards and outcome edits keep flowing every
+  poll; each pass logs `health pass s=<seconds>` and warns over `HEALTH_SLOW_S` (20 s). Review fixes: an exception
+  escaping the task is logged at once (done-callback); run_checks still running after `HEALTH_HANG_S` (240 s) is
+  logged as an error and then awaited, never abandoned (no second worker thread); shutdown cancels and awaits the
+  task (`HEALTH_STOP_S`). The pass's two hot spots are
+  gone: `arms._registry_rows` parses `state/research_registry.jsonl` once per file version (inode, mtime_ns, size;
+  234 reads of a 3,353-row copy 7.3 s -> 0.35 s), and `registry.stale_preregistrations` indexes withdrawals and trial
+  reads once (`_Exemptions`; same answer as the old scan, n_trials_effective warm 1.15 s -> 0.12 s on that copy, more
+  on the brain's 778-withdrawal registry). No health check decides differently. Not done: the strategy catalogue
+  load in pnl_basis (~16 s profiled) and the history_gap duckdb reads (~10 s) are uncached; measure the pass in the
+  journal after deploy before a slower cadence for heavy checks (proposal D). Tests: `tests/test_telegram_health_task.py`,
+  `tests/test_arms_registry_cache.py`, `tests/test_registry_withdrawal_index.py`.
 - 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
   start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
   `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every
@@ -60,6 +87,48 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
   refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
   and quant sign-off). Not yet wired into sim.py (Lane 1).
+- 2026-11-09 EVAL-2 Lane 3 (branch feat/eval2-lane3-stats; quant review pending): the ladder statistics against the
+  frozen signatures of `docs/research/prereg-2026-11-09-eval2.md` 4.3-4.8. New `goldbot/research/eval2/`: `probe`
+  (L1 +/-1 ATR first passage, partially pooled NO SIGNAL retire), `hier` (L2 REML with Student-t df 5 cell effects,
+  leave-family-out prior on every viewed cell de-duplicated by config hash, Efron null from >= 100 controls, carry /
+  kill / freeze in the card; family-nested Woodbury: 12,000 cells fit in ~8 s), `confirm` (stationary day-block
+  bootstrap, BatchPRDS pure alpha-spending, Holm, `l3_read` calling `confirm_resamples` itself: ~1 ms a resample, so a
+  2018-25 batch-15 read at ~387k resamples takes tens of minutes per family), `verdict` (graded rungs, CONFIRM-SEEN /
+  HOLDOUT-SEEN at excess overlap >= 15 pp, DSR at K 21,333 / 20,151). `catalogue/stats.py` gains the 4.3 hooks;
+  `screen.py` gains the ADR 0077 futility retire (300-999 events: pre-registered 90 % UB < 0.03 R and clustered SE <=
+  0.055 R, else inconclusive; never on sign) and `config/settings.yaml` withdraws Ruling A
+  (`screen_min_events_daily: null`, `screen_retire_floor: 300`). `sim.session_day` now reads the public
+  `costs.rollover_table()`. Readings where the frozen text leaves a choice are listed in each module docstring for the
+  quant-reviewer; three need a signed amendment: E9 inside `l3_read` (no daily closes in its signature: a family with a
+  1d/1w carried cell fails closed), the £/day point estimate and upper bound (no input carries them: NaN), and an
+  input that says INSUFFICIENT (power) to `family_verdict`. TRACEABILITY R113.
+  Review round 1 (quant PASS-WITH-CONDITIONS, code review FAIL on one HIGH): REML now fits the variances directly as
+  multiples of var(y) in [1e-6, 10] from three starts and keeps the best -2LL (s2_cell recovered at k 300 and 6,000);
+  the L3 bootstrap runs on per-session-day sums with one day draw for the three statistics (x51; a batch-15 read
+  about 10 s per statistic set); the L2 population keeps hashless controls, drops every row sharing a hash or a
+  >= 15 pp overlap with the held-out family, reads explore cells only and halts on a significantly negative control
+  centre; posteriors refuse a stale code hash (hier + stats + probe); the L1 pool is HKSJ; the year rule tests pairs
+  only; l3_read refuses holdout, out-of-window and overlapping windows; futility thresholds are tighten-only settings
+  and "pre-registered" is a registry row id; `scripts/count_owed_events.py` keeps the H-01/H-06 withdrawal floor at
+  the frozen 150. Prereg section 10 (A15-A17, signed by the quant-reviewer and the research director; numbered 10
+  because Lane 4's A1 is section 9) adds `confirm_seen`, `holds_multi_day` / `e9` (no registered time exit counts as
+  multi-day) and the verdict inputs, with the new closed rung NOT CONFIRMED.
+- 2026-11-09 EVAL-2 Lane 5A (branch feat/eval2-lane5a-replay; R114): replay v2 and the L4 forward reads. The nightly
+  learner (`jobs.exploration_learn`) now voids every non-gold r1 label before any read (`exploration_label_void`,
+  aux migration 28; `read_obs` never returns a void label) and writes replay r2 for gold candidates to the side table
+  `exploration_replay` (label_sim_r untouched): each leg charged per broker and session from the exploration ledger's
+  own fills (upper 95 % bound, never a credit; the stop as a price overshoot; the time leg always the $0.15 prior,
+  no close quote is recorded), the 1m/5m time limit from decision + send delay. Vantage exit cells charge
+  max(ICM-measured, prior) (quant ruling 2026-11-09); its demo exit legs never set a cost. The learner still reads r1,
+  by name. `goldbot/research/eval2/forward.py`: execution, futility and edge e-processes, the exit-mix check,
+  `forward_state` (WAITING until S5) and `s5_read` (vantage: entry leg only). The method doc carries the quant's
+  vantage wording as a v7 section, quant sign-off pending; no S5 or forward read has been run. The engine's
+  RiskGate cost cells are unchanged (exploration fills feed only the replay's leg table). Review round 1 (quant C1-C10, code review): each r2 label is costed from fills before its own session day; the
+  stop overshoot is measured against the bar-implied price; vantage entries at the quote take ICM's cell and S5 reads
+  NOT AVAILABLE; e-processes take one term per session day and execution runs one stream per (broker, leg); S5 needs
+  50 pairs over 10 days with a one-sided 95 % bound inside 0.02 R (1m-5m informational); forward labels use the card's
+  pinned cost model; DEMO_EXIT_AT_LEVEL covers vantage, vantage247 and vantage_obs; the prereg carries the quant's
+  section 5 amendment.
 - 2026-11-09 EVAL-2 Lane 6 (branch docs/eval2-lane6, docs only; ADRs 0076-0078 and the prereg signed by the quant-reviewer 2026-11-09): ADR 0076 adopts
   EVAL-2 (instance excess over 20 matched replay twins, ladder L0-L5, TEST-OLD primary confirm, BatchPRDS per window;
   live trading, sizing and the L5 DSR K basis stay owner-only); ADR 0077 withdraws Ruling A
