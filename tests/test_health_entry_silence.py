@@ -1,0 +1,395 @@
+"""entry_silence:<account> (incident 2026-11-09: vantage-demo entered nothing for 9.5 h of open market, every gold arm
+retired and its thin controls capped by 09:10, and nothing alerted). Warn, through the health alert path, when (a) an
+exploring account has no arm that may enter while its market is open, or (b) it went 4 h of London/New York market
+time without a fill while arms may enter; at most once per account per UTC day (goldbot/ops/entry_silence.py)."""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import pytest
+
+from goldbot.config import load_settings
+from goldbot.engine import exploration
+from goldbot.engine import exploration_budget as budget
+from goldbot.engine.exploration import LEDGER, ExplorationRecord
+from goldbot.ops import entry_silence as es
+from goldbot.ops import health
+from goldbot.ops.accounts import DailyEntries
+from goldbot.ops.entry_silence import AccountSupply, ArmSupply
+from goldbot.ops.health import AlertPolicy, HealthContext, HealthWatch
+from goldbot.research import exploration_data as ed
+from tests.test_exploration_daily_budget import _engine as _daily_engine
+from tests.test_exploration_engine import _arm, _rules  # noqa: F401 - the test rules (autouse) and arm helper
+
+MON = pd.Timestamp("2026-11-09", tz="UTC")              # a Monday: gold open from 00:00 UTC
+SAT = pd.Timestamp("2026-11-14", tz="UTC")
+VANTAGE = "vantage-demo"
+DAILY = DailyEntries(max_per_day=40, max_per_hour=4, thin_control_share=0.25, thin_control_fills=30)
+
+
+def at(hm: str, day: pd.Timestamp = MON) -> pd.Timestamp:
+    return day + pd.Timedelta(hours=int(hm[:2]), minutes=int(hm[3:]))
+
+
+def _gold_retired() -> dict[str, ArmSupply]:
+    """Vantage on 2026-11-09: every gold arm retired in the spec (VI0 VC1H VW0 Z6V Z7V ZCV LCZ6V LCZ7V)."""
+    edge = {a: ArmSupply(kind="edge", blocked="spec retired") for a in ("Z6V", "Z7V")}
+    ctl = {a: ArmSupply(kind="control", blocked="spec retired") for a in ("VI0", "VC1H", "VW0", "ZCV", "LCZ6V", "LCZ7V")}
+    return {**edge, **ctl}
+
+
+def _thin() -> dict[str, ArmSupply]:
+    return {"S0-GBPJPY": ArmSupply(kind="thin", instrument="GBPJPY"), "I0-EURUSD": ArmSupply(kind="thin",
+                                                                                            instrument="EURUSD")}
+
+
+def supply(arms: dict[str, ArmSupply], daily: DailyEntries | None = DAILY,
+           pairs: dict[str, tuple[str, ...]] | None = None) -> AccountSupply:
+    return AccountSupply(broker="vantage", daily=daily, arms=arms, pairs=pairs or {})
+
+
+def ctx(tmp_path: Path, now: pd.Timestamp, view: dict[str, AccountSupply]) -> HealthContext:
+    return HealthContext(state_dir=tmp_path, now=now, get_secret=lambda k: None, entry_supply=lambda: view)
+
+
+_n = [0]
+
+
+def fill(tmp_path: Path, arm: str, sent: pd.Timestamp, *, symbol: str = "XAUUSD", account: str = VANTAGE,
+         signal: pd.Timestamp | None = None) -> None:
+    _n[0] += 1
+    i = _n[0]
+    rec = ExplorationRecord(client_order_id=f"o{i}", account_id=account, arm_id=arm, family="f", tf="5m", side=1,
+                            lots=0.01, signal_utc=signal if signal is not None else sent - pd.Timedelta(seconds=20),
+                            sent_utc=sent, atr_usd=1.0, stop_usd=1.0, target_usd=1.0, hold_s=60, position_id=i,
+                            symbol=symbol)
+    with exploration.ledger_db(str(tmp_path)).write() as conn:
+        LEDGER.upsert(conn, rec)
+
+
+def _morning_thin(tmp_path: Path) -> None:
+    """Ten thin-control fills from 07:00 to 09:10: the 0.25 x 40 thin share spent, as on vantage 2026-11-09."""
+    for k in range(10):
+        fill(tmp_path, "S0-GBPJPY" if k % 2 else "I0-EURUSD", at("07:00") + pd.Timedelta(minutes=14 * k + 4),
+             symbol="GBPJPY" if k % 2 else "EURUSD")
+
+
+def check(tmp_path: Path, now: pd.Timestamp, view: dict[str, AccountSupply]) -> health.Check | None:
+    return health.check_entry_silence(ctx(tmp_path, now, view), VANTAGE)
+
+
+def replay(tmp_path: Path, view: dict[str, AccountSupply], start: pd.Timestamp, end: pd.Timestamp,
+           every_min: int = 5) -> list[tuple[pd.Timestamp, str]]:
+    """Health passes over [start, end) through the Telegram service's alert rule (settings hysteresis): the messages."""
+    w = HealthWatch(tmp_path / "watch", policy=AlertPolicy.from_settings(load_settings().telegram))
+    out = []
+    for now in pd.date_range(start, end, freq=f"{every_min}min", inclusive="left"):
+        c = check(tmp_path, now, view)
+        checks = [c] if c is not None else []
+        rep = health.HealthReport(ts=now, status=health._worst([x.status for x in checks]), checks=checks)
+        if (text := w.poll(rep)) is not None:
+            out.append((now, text))
+    return out
+
+
+def _warns(msgs: list[tuple[pd.Timestamp, str]], day: pd.Timestamp) -> list[pd.Timestamp]:
+    return [t for t, text in msgs if t.floor("D") == day and f"WARN entry_silence:{VANTAGE}" in text]
+
+
+# ------------------------------------------------------------------------------------------------ (a) no supply
+def test_vantage_all_gold_retired_and_thin_controls_capped_warns_no_supply(tmp_path):
+    _morning_thin(tmp_path)
+    view = {VANTAGE: supply({**_gold_retired(), **_thin()})}
+    before = check(tmp_path, at("09:00"), view)
+    assert before is not None and before.status == "ok"          # 9 thin fills: the thin share is not spent yet
+    c = check(tmp_path, at("10:30"), view)
+    assert c is not None and c.name == f"entry_silence:{VANTAGE}" and c.status == "warn"
+    assert "no exploration arm may enter" in c.reason and "8 spec retired" in c.reason
+    assert "2 thin_controls" in c.reason and "10 of 40" in c.reason and "RUNBOOK" in c.reason
+
+
+def test_the_alert_path_tells_entry_silence_warnings():
+    assert health._alerting(f"entry_silence:{VANTAGE}", "warn")
+    assert not health._alerting(f"entry_silence:{VANTAGE}", "ok")
+
+
+def test_all_arms_retired_or_capped_warns_exactly_once_a_day(tmp_path):
+    """The vantage day replayed every 5 minutes through the alert hysteresis: one warning on Monday (none on the
+    daily break or after it), the recovery when Tuesday's thin share resets, nothing more."""
+    _morning_thin(tmp_path)
+    view = {VANTAGE: supply({**_gold_retired(), **_thin()})}
+    msgs = replay(tmp_path, view, MON, MON + pd.Timedelta(hours=25))
+    warns = _warns(msgs, MON)
+    assert len(warns) == 1 and at("09:10") < warns[0] <= at("09:30")
+    assert len([t for t, text in msgs if f"entry_silence:{VANTAGE}" in text]) == 2
+    assert any("recovered: entry_silence:" in text for t, text in msgs if t >= MON + pd.Timedelta(days=1))
+
+
+def test_runtime_retirements_and_cost_cells_count_as_no_supply(tmp_path):
+    """An arm retired at its stop (aux.db exploration_arm_status) and a thin control whose instrument's cost cell is
+    complete (30 fills ever, every arm of it) may not enter."""
+    db = exploration.ledger_db(str(tmp_path))
+    with db.write() as conn:
+        conn.execute("INSERT INTO exploration_arm_status (broker, arm_id, status, day, rule, recorded_ns) "
+                     "VALUES ('vantage', 'LB-GBPJPY', 'retired', '2026-11-06', 'H-61', 0)")
+    for k in range(30):
+        fill(tmp_path, "LB-GBPJPY", at("10:00", MON - pd.Timedelta(days=3)) + pd.Timedelta(minutes=k), symbol="GBPJPY")
+    arms = {"LB-GBPJPY": ArmSupply(kind="edge", instrument="GBPJPY"),
+            "S0-GBPJPY": ArmSupply(kind="thin", instrument="GBPJPY")}
+    c = check(tmp_path, at("09:00"), {VANTAGE: supply(arms)})
+    assert c is not None and c.status == "warn"
+    assert "1 retired at its stop" in c.reason and "1 thin_cell_complete" in c.reason
+
+
+def test_a_paired_control_without_an_active_arm_cannot_enter(tmp_path):
+    arms = {"Z6V": ArmSupply(kind="edge", blocked="spec retired"), "ZCV": ArmSupply(kind="control")}
+    c = check(tmp_path, at("09:00"), {VANTAGE: supply(arms, pairs={"ZCV": ("Z6V", "Z7V")})})
+    assert c is not None and c.status == "warn" and "1 control without an active arm" in c.reason
+    ok = check(tmp_path, at("09:00"), {VANTAGE: supply({**arms, "Z7V": ArmSupply(kind="edge")},
+                                                       pairs={"ZCV": ("Z6V", "Z7V")})})
+    assert ok is not None and ok.status == "ok"
+
+
+def test_no_supply_is_not_judged_on_a_closed_market_day(tmp_path):
+    c = check(tmp_path, at("12:00", SAT), {VANTAGE: supply(_gold_retired())})
+    assert c is not None and c.status == "ok" and "market closed today" in c.reason
+
+
+def test_an_account_that_does_not_explore_has_no_check(tmp_path):
+    assert check(tmp_path, at("12:00"), {}) is None
+    no_view = HealthContext(state_dir=tmp_path, now=at("12:00"), get_secret=lambda k: None)
+    assert [c for c in health.run_checks(no_view).checks if c.name.startswith("entry_silence")] == []
+
+
+# ------------------------------------------------------------------------------------------------ (b) silence
+def _lb() -> dict[str, ArmSupply]:
+    return {**_gold_retired(), **_thin(), "LB-GBPJPY": ArmSupply(kind="edge", instrument="GBPJPY")}
+
+
+def test_four_hours_of_london_new_york_without_a_fill_warns(tmp_path):
+    _morning_thin(tmp_path)
+    fill(tmp_path, "LB-GBPJPY", at("10:30"), symbol="GBPJPY")
+    view = {VANTAGE: supply(_lb())}
+    early = check(tmp_path, at("14:29"), view)
+    assert early is not None and early.status == "ok"
+    c = check(tmp_path, at("14:30"), view)
+    assert c is not None and c.status == "warn"
+    assert "no exploration fill for 4 h" in c.reason and "10:30-14:30 UTC" in c.reason and "1 arm(s)" in c.reason
+
+
+def test_asia_silence_does_not_count(tmp_path):
+    """No fill at all since midnight: at 10:00 only the two London hours count."""
+    c = check(tmp_path, at("10:00"), {VANTAGE: supply(_lb())})
+    assert c is not None and c.status == "ok" and "longest London/NY silence today 2 h 00 min" in c.reason
+
+
+def test_a_spent_session_or_day_budget_is_silence_by_design(tmp_path):
+    """max_per_day 3 splits 1/1/1/0 over the four segments with no history, rolled forward: Asia's fill at 00:10 and
+    London's at 08:05 reach London's rolled 2, so London stays quiet by design until New York opens at 13:30 UTC
+    (08:30 New York, winter); New York's fill at 13:40 spends the day."""
+    daily = DailyEntries(max_per_day=3, thin_control_fills=None)
+    for hm in ("00:10", "08:05"):
+        fill(tmp_path, "LB-GBPJPY", at(hm), symbol="GBPJPY")
+    c = check(tmp_path, at("13:25"), {VANTAGE: supply(_lb(), daily=daily)})
+    assert c is not None and c.status == "ok" and "silence today 0 h 05 min" in c.reason
+    fill(tmp_path, "LB-GBPJPY", at("13:40"), symbol="GBPJPY")
+    spent = check(tmp_path, at("21:00"), {VANTAGE: supply(_lb(), daily=daily)})
+    assert spent is not None and spent.status == "ok" and spent.reason.startswith("day budget spent")
+
+
+def test_unspent_asia_rolls_forward_so_london_silence_counts(tmp_path):
+    """The same budget without the Asia fill: Asia's unspent fill rolls to London (rolled 2), so London is not spent by
+    one fill and four quiet hours after it warn."""
+    daily = DailyEntries(max_per_day=3, thin_control_fills=None)
+    fill(tmp_path, "LB-GBPJPY", at("08:05"), symbol="GBPJPY")
+    c = check(tmp_path, at("12:05"), {VANTAGE: supply(_lb(), daily=daily)})
+    assert c is not None and c.status == "warn" and "08:05-12:05 UTC" in c.reason
+
+
+def test_one_warning_a_day_even_when_fills_resume_after_the_silence(tmp_path):
+    """(b) is the longest silent run so far today: a fill at 16:00 does not clear it, so the owner hears it once."""
+    _morning_thin(tmp_path)
+    for hm in ("10:30", "16:00"):
+        fill(tmp_path, "LB-GBPJPY", at(hm), symbol="GBPJPY")
+    msgs = replay(tmp_path, {VANTAGE: supply(_lb())}, at("06:00"), MON + pd.Timedelta(hours=24))
+    warns = _warns(msgs, MON)
+    assert len(warns) == 1 and at("14:30") <= warns[0] <= at("14:50")
+    assert not any("recovered: entry_silence:" in text for t, text in msgs if t < MON + pd.Timedelta(days=1))
+
+
+# ------------------------------------------------------------------------------------------------ the config side
+def test_supply_from_the_real_config_blocks_every_spec_retired_arm():
+    from goldbot.engine.exploration import config_for, spec_retired
+    from goldbot.ops import accounts
+    listed = accounts.load_accounts(logins=False)
+    every = [a for a in listed.values() if a.mode == "demo" and a.exploration.enabled]
+    demo = [a for a in every if not a.weekend_only]
+    if not demo:
+        pytest.skip("no exploring demo account configured")
+    live = load_settings().engine.timeframes_live
+    view = es.supply_by_account(every, live)
+    assert set(view) == {a.account_id for a in demo}          # a weekend_only lane is weekend_247's, not judged here
+    for acc in demo:
+        cfg = config_for(acc)
+        assert cfg is not None
+        s = view[acc.account_id]
+        assert s.broker == acc.broker and s.daily == cfg.daily
+        assert set(s.arms) == {a.arm_id for a in cfg.arms}
+        for arm_id in spec_retired(cfg):
+            assert s.arms[arm_id].blocked is not None
+
+
+def _engine_arm(arm_id: str, tf: str = "15m", instrument: str | None = None, role: str = "strategy",
+                control_share: float | None = None) -> exploration.Arm:
+    arm = _arm(arm_id, tf, control_share=control_share)
+    params = {**arm.spec.params, **({"instrument": instrument} if instrument else {})}
+    return arm.model_copy(update={"spec": arm.spec.model_copy(update={"params": params, "role": role})})
+
+
+def supply_of(arms: list[exploration.Arm], daily: DailyEntries, broker: str = "icm") -> AccountSupply:
+    """The supply `supply_for` builds, from engine arms."""
+    return AccountSupply(broker=broker, daily=daily, pairs=budget.pairs({a.arm_id: a for a in arms}),
+                         arms={a.arm_id: ArmSupply(kind=budget.entry_kind(a), instrument=a.instrument, tf=a.tf)
+                               for a in arms},
+                         engine_arms={a.arm_id: a for a in arms})
+
+
+def test_history_shapes_the_split_from_admissible_candidates_only(tmp_path):
+    """The engine's own `session_budgets`: only the active arms' candidates that pass the static entry refusals count.
+    LB's London candidates count; a gold strategy arm's 03:00 candidates are refused by window_0207 and a retired
+    arm's are not active, so neither moves the split."""
+    db = exploration.ledger_db(str(tmp_path))
+    lb, gold, old = (_engine_arm("LB-GBPJPY", "5m", "GBPJPY", "learning"), _engine_arm("G9"), _engine_arm("Z6V"))
+    k = 0
+    for d in range(1, 6):
+        for arm, hm in ((lb, "09:00"), (gold, "03:00"), (old, "15:00")):
+            k += 1
+            ed.record_candidate(db, candidate_id=f"c{k}", account_id=VANTAGE, broker="vantage", arm_id=arm.arm_id,
+                                family="f", style="intraday", tf=arm.tf, side=1,
+                                decision_utc=at(hm, MON - pd.Timedelta(days=d)), stop_dist=1.0, target_dist=1.0,
+                                max_hold_s=60, taken=True)
+    daily = DailyEntries(max_per_day=10, thin_control_fills=None)
+    s = supply_of([lb, gold, old], daily, broker="vantage")
+    s = s.model_copy(update={"arms": {**s.arms, "Z6V": s.arms["Z6V"].model_copy(update={"blocked": "spec retired"})}})
+    v = es.evaluate(s, tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
+    assert v.budgets == budget.apportion(10, {"london": 5}) == {"asia": 1, "london": 7, "newyork": 1, "late_asia": 1}
+
+
+AGREE = [
+    # (case, arms (id, tf), daily, fills at, now)
+    ("open", [("G9", "15m")], DailyEntries(max_per_day=10, thin_control_fills=None), ["08:30", "09:30"], "12:00"),
+    ("london rolled spent", [("G9", "15m")], DailyEntries(max_per_day=4, thin_control_fills=None),
+     ["08:30", "09:30"], "11:00"),
+    ("new york rolls on", [("G9", "15m")], DailyEntries(max_per_day=4, thin_control_fills=None),
+     ["08:30", "09:30"], "14:00"),
+    ("day spent", [("G9", "15m")], DailyEntries(max_per_day=4, thin_control_fills=None),
+     ["01:00", "08:30", "09:30", "14:00"], "15:00"),
+    ("scalp cap", [("S9", "1m")], DailyEntries(max_per_day=40, scalp_day_cap=2, thin_control_fills=None),
+     ["08:30", "09:30"], "11:00"),
+    ("scalp cap, a 15m arm left", [("S9", "1m"), ("G9", "15m")],
+     DailyEntries(max_per_day=40, scalp_day_cap=2, thin_control_fills=None), ["08:30", "09:30"], "11:00"),
+]
+
+
+@pytest.mark.parametrize(("case", "spec", "daily", "fills", "now"), AGREE, ids=[c[0] for c in AGREE])
+def test_the_engine_and_the_silence_walk_agree_on_spent(tmp_path, case, spec, daily, fills, now):
+    """One fixture, two readers: the engine's `_send` budget check (entries_today, session_budgets over its active
+    arms, daily_refusal at the signal's segment) and the silence walk at `now`. Spent for the engine means every arm
+    is refused with a SPENT reason; the walk's `spent_now` must say the same."""
+    arms = [_engine_arm(a, tf) for a, tf in spec]
+    eng, _pb = _daily_engine(tmp_path, arms, daily)
+    ex = eng.exploration
+    assert ex is not None and set(ex.arms) == {a.arm_id for a in arms}
+    for k, hm in enumerate(fills):
+        with exploration.ledger_db(str(tmp_path)).write() as conn:
+            LEDGER.upsert(conn, ExplorationRecord(
+                client_order_id=f"a{k}", account_id="icm-probe", arm_id=arms[k % len(arms)].arm_id, family="f",
+                tf=arms[k % len(arms)].tf, side=1, lots=0.01, signal_utc=at(hm) - pd.Timedelta(seconds=20),
+                sent_utc=at(hm), atr_usd=1.0, stop_usd=1.0, target_usd=1.0, hold_s=60, position_id=k + 1))
+    t = at(now)
+    since = t.floor("D")
+    n = budget.entries_today(eng, ex, since, t, ex.arms)
+    budgets = budget.session_budgets(eng, ex, daily, since, dict(ex.arms))
+    engine = [budget.daily_refusal(daily, budget.entry_kind(a), n, segment=budget.day_segment(t), budgets=budgets,
+                                   fast=a.tf in budget.FAST_TFS) for a in arms]
+    engine_spent = all(w is not None and w in es.SPENT for w in engine)
+    v = es.evaluate(supply_of(arms, daily), tmp_path / "aux.db", "icm-probe", t, health.DEFAULT_SESSIONS)
+    assert v.budgets == budgets
+    assert (v.spent_now is not None) == engine_spent, (case, engine, v.spent_now)
+    if engine_spent:
+        assert v.spent_now == engine[0]
+    expected = {"open": False, "london rolled spent": True, "new york rolls on": False, "day spent": True,
+                "scalp cap": True, "scalp cap, a 15m arm left": False}[case]
+    assert engine_spent is expected
+
+
+def test_the_supply_view_is_read_once_per_ttl_or_config_change(monkeypatch):
+    """Reading the arm spec costs about 2 s; the Telegram service runs health every 60 s."""
+    calls: list[int] = []
+
+    def read(accs: object, live: object) -> dict[str, AccountSupply]:
+        calls.append(1)
+        return {}
+    monkeypatch.setattr(es, "supply_by_account", read)
+    es._VIEW.clear()
+    t = [0.0]
+    for step in (0.0, 60.0, es.VIEW_TTL_S - 61.0):
+        t[0] += step
+        es.cached_supply([], ["15m"], clock=lambda: t[0])
+    assert len(calls) == 1
+    t[0] += 2.0                                                    # past the TTL
+    es.cached_supply([], ["15m"], clock=lambda: t[0])
+    es.cached_supply([], ["15m", "1h"], clock=lambda: t[0])        # another key: read at once
+    assert len(calls) == 3
+    es._VIEW.clear()
+
+
+# ------------------------------------------------------------------------------------------------ review LOW 2 / LOW 3
+def test_an_unreadable_arm_config_is_read_once_per_run_and_not_judged(tmp_path):
+    """Code review LOW 2: a raising view is memoized for the run (no rebuild per account) and every account is OK
+    "not judged", never a FAIL per account."""
+    calls: list[int] = []
+
+    def broken() -> dict[str, AccountSupply]:
+        calls.append(1)
+        raise ValueError("bad yaml")
+    c = HealthContext(state_dir=tmp_path, now=at("12:00"), get_secret=lambda k: None, entry_supply=broken)
+    got = [health.check_entry_silence(c, a) for a in ("icm-demo", "icm-probe", VANTAGE)]
+    assert len(calls) == 1
+    assert all(x is not None and x.status == "ok" and x.reason.startswith("not judged: arm config unreadable")
+               for x in got)
+
+
+def test_a_torn_aux_read_keeps_the_last_verdict_so_nothing_flaps(tmp_path, monkeypatch):
+    """Code review LOW 3: sqlite3.Error neither clears a WARN (WARN -> OK -> WARN would re-tell the owner) nor raises
+    one: the last verdict of this process is kept; with none, no check."""
+    import sqlite3
+    es._LAST.clear()
+    view = {VANTAGE: supply(_gold_retired())}
+    first = check(tmp_path, at("09:00"), view)
+    assert first is not None and first.status == "warn"
+
+    def torn(*a: object, **k: object) -> es.Silence:
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(es, "evaluate", torn)
+    kept = check(tmp_path, at("09:01"), view)
+    assert kept is not None and kept.status == "warn" and "aux.db unreadable now (OperationalError)" in kept.reason
+    es._LAST.clear()
+    assert check(tmp_path, at("09:02"), view) is None
+
+
+def test_aux_is_opened_read_only_through_a_file_uri(tmp_path, monkeypatch):
+    """Security note: the URI is built from the resolved path (a '?' or '#' in a path cannot change the mode)."""
+    import sqlite3
+    seen: list[str] = []
+    real = sqlite3.connect
+
+    def spy(database: str, *a: Any, **k: Any) -> sqlite3.Connection:
+        seen.append(database)
+        return real(database, *a, **k)
+    exploration.ledger_db(str(tmp_path))
+    monkeypatch.setattr(es.sqlite3, "connect", spy)
+    es.evaluate(supply(_lb()), tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
+    assert seen and set(seen) == {(tmp_path / "aux.db").resolve().as_uri() + "?mode=ro"}   # the split reads too

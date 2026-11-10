@@ -118,9 +118,9 @@ def test_a_live_account_has_no_fill_target_and_plans_come_from_settings():
     plans = plans_from_config(load_settings())
     assert plans and all((p.fills_target is None) == (k.endswith("-live")) for k, p in plans.items())
     # PD 2026-11-06 (owner decision 2026-10-30, 150-250 a day in total): each account's exploration.daily budget plus
-    # its probe plan
+    # its probe plan (SRE 2026-11-09: the probe plan is the scheduled slots, icm 7, vantage 14)
     assert (plans["icm-probe"].fills_target, plans["icm-demo"].fills_target, plans["vantage-demo"].fills_target) == \
-        (100, 70, 80)
+        (92, 70, 54)
 
 
 def test_the_today_view_carries_the_ledger_fields_per_account(tmp_path, monkeypatch):

@@ -171,7 +171,25 @@ from goldbot.research.director import (
     rule_preregistration,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
-from goldbot.research.exploration_data import ReplayCosts, label_candidates, learn, read_obs, stamp_brokers
+from goldbot.research.exploration_data import (
+    GOLD,
+    REPLAY_V2,
+    CostOfDay,
+    ReplayCosts,
+    ReplayCostsV2,
+    bar_implied_stop_legs,
+    daily_costs_v2,
+    entry_bar_missing,
+    label_candidates,
+    label_candidates_v2,
+    learn,
+    ledger_legs,
+    read_obs,
+    replay_costs_v2,
+    stamp_brokers,
+    synthetic_stop_fills,
+    void_non_gold_labels,
+)
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import (
@@ -383,7 +401,15 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     candidates whose label resolved (bar replay on each account's own 1m bid/ask bars, with its broker's own cost
     model), then each broker's H-61 bandit (within-style shares from its own evidence and its own accounts' arms) ->
     aux.db exploration_broker_weights; on Sundays also each broker's H-62 style models whose retrain is due
-    (state/models/h62/<broker>/)."""
+    (state/models/h62/<broker>/).
+
+    EVAL-2 Lane 5A, before any read: every non-gold r1 label is voided (`void_non_gold_labels`; if that fails the r1
+    labels are still written, but neither r2 nor the learner runs). After the r1 labels, replay r2
+    (`label_candidates_v2`) on the same bars: each label costed from its broker's exploration ledger fills before its
+    own session day (`ledger_legs` -> `bar_implied_stop_legs` -> `daily_costs_v2`, quant C1/C6), and the count of stops
+    a bar gapped through that still filled at the level (quant vantage ruling 2026-11-09 (b)). r2 covers the
+    candidates of the last EXPLORATION_LABEL_DAYS only. The learner still reads r1, by name: an arm's read moves to r2
+    only under its own prereg (method section 5). An r2 failure never stops r1 or the learner."""
     db = Database.open(ctx.state_dir, "aux")
     stamped = stamp_brokers(db, {acc.account_id: acc.broker for acc in ctx.accounts})
     try:        # prereg Amendment 4, before any read (criterion v1)
@@ -391,50 +417,120 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     except Exception as exc:       # noqa: BLE001 - fail closed: no posterior on evidence not screened (weights age out)
         log.exception("evidence exclusions not computed: the exploration learner does not run tonight")
         return {"error": f"evidence_exclusions:{type(exc).__name__}"}
+    voided_ok = True
+    try:        # prereg-2026-11-09-eval2.md section 6.5, before any read
+        label_void: dict[str, Any] = void_non_gold_labels(db, now=slot)
+    except Exception as exc:       # noqa: BLE001 - r1 labels still written; no r2 and no learner on unscreened labels
+        log.exception("non-gold labels not voided: r1 labels only tonight, no replay v2 and no learner")
+        label_void, voided_ok = {"error": f"label_void:{type(exc).__name__}"}, False
     pending = read_obs(db)
     pending = pending[pending["label_sim_r"].isna()]
+    pending_v2 = read_obs(db, replay_version=REPLAY_V2, instrument=GOLD)     # r2 is gold only
+    pending_v2 = pending_v2[pending_v2["label_sim_r"].isna() & pending_v2["broker"].notna()]
     unkeyed = int(pending["broker"].isna().sum())
     if unkeyed:
         log.warning("%d exploration candidates have no broker (account not in accounts.yaml): never learnt", unkeyed)
     pending = pending[pending["broker"].notna()]
     labelled: dict[str, int] = {}
+    labelled_v2: dict[str, int] = {}
+    no_entry_bar: dict[str, dict[str, int]] = {"r1": {}, "r2": {}}
+    gold_ids = set(read_obs(db, instrument=GOLD)["candidate_id"])     # the only rows r1 replays
+    synthetic: dict[str, int] = {}
     costs: dict[str, ReplayCosts] = {}
-    start = max(pending["decision_utc"].min(), slot - pd.Timedelta(days=EXPLORATION_LABEL_DAYS)) \
-        if not pending.empty else None
-    keys = sorted({(str(a), str(b)) for a, b in zip(pending["account_id"], pending["broker"], strict=True)})
+    of_day: dict[str, CostOfDay] = {}
+    tonight: dict[str, ReplayCostsV2] = {}
+    both = pd.concat([pending[["account_id", "broker", "decision_utc"]],
+                      pending_v2[["account_id", "broker", "decision_utc"]]], ignore_index=True)
+    # one bar window for r1, r2 and the bar-implied stop legs (C6): the labeller's whole window
+    start = slot - pd.Timedelta(days=EXPLORATION_LABEL_DAYS)
+    keys = sorted({(str(a), str(b)) for a, b in zip(both["account_id"], both["broker"], strict=True)})
+    broker_of = {acc.account_id: acc.broker for acc in ctx.accounts}
     symbol_of = {acc.account_id: getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts}
+    r2_error: str | None = None if voided_ok else "label_void failed"
+    legs, leg_excluded = pd.DataFrame(), dict[str, int]()
+    if voided_ok:
+        try:    # r2 is research only: its failure never stops the r1 labels or the learner
+            legs, leg_excluded = ledger_legs(db, broker_of=broker_of, as_of=slot)
+        except Exception as exc:   # noqa: BLE001 - logged and reported; r1 carries on
+            log.exception("exploration ledger legs unreadable: no replay v2 tonight")
+            r2_error = f"ledger_legs:{type(exc).__name__}"
+    bars_of: dict[str, pd.DataFrame] = {}
+
+    def bars_for(account: str, broker: str) -> pd.DataFrame:
+        if account not in bars_of:
+            # the account's own broker minutes, point in time (data/account_bars.py; never `bars_1m` alone: on the
+            # brain it holds only the reference feed, and 0 of 349 candidates were labelled until 2026-10-27)
+            bars_of[account] = account_bars_1m(ctx.store, account_id=account, broker=broker,
+                                               symbol=symbol_of.get(account, "XAUUSD"), start=start, end=slot,
+                                               as_of=slot)
+        return bars_of[account]
+    stop_no_bar = 0
+    if r2_error is None and not legs.empty:
+        try:
+            for account in sorted(set(legs.loc[legs["leg"] == "stop", "account_id"].astype(str))):
+                bars_for(account, broker_of[account])
+            legs, stop_no_bar = bar_implied_stop_legs(legs, bars_of)
+        except Exception as exc:   # noqa: BLE001 - no r2 tonight; r1 carries on
+            log.exception("bar-implied stop legs failed: no replay v2 tonight")
+            r2_error = f"stop_legs:{type(exc).__name__}"
     no_bars: list[str] = []
     for account, broker in keys:
         if broker not in costs:
             costs[broker] = exploration_costs(ctx, slot, broker)
-        cm = costs[broker]
-        # the account's own broker minutes, point in time (data/account_bars.py; never `bars_1m` alone: on the brain
-        # it holds only the reference feed, and 0 of 349 candidates were labelled until 2026-10-27)
-        bars = account_bars_1m(ctx.store, account_id=account, broker=broker,
-                               symbol=symbol_of.get(account, "XAUUSD"), start=start, end=slot, as_of=slot)
+            if r2_error is None:
+                try:
+                    min_fills = ctx.settings.research.min_fills_for_slippage
+                    of_day[broker] = daily_costs_v2(costs[broker], legs, min_fills=min_fills)
+                    tonight[broker] = replay_costs_v2(costs[broker], legs, before=slot, min_fills=min_fills)
+                except Exception as exc:   # noqa: BLE001 - no r2 for this broker tonight; r1 carries on
+                    log.exception("replay v2 cost model failed for broker %s", broker)
+                    r2_error = f"{broker}:{type(exc).__name__}"
+        bars = bars_for(account, broker)
         if bars.empty:
             no_bars.append(account)
             log.warning("no 1m bars for %s (%s) in bars_1m_live / bars_1m_broker / bars_1m: its exploration "
                         "candidates are not labelled tonight", account, broker)
-        n = label_candidates(db, bars, cm, cutoff=slot, account_id=account,
+        # quant re-check N4: candidates left unresolved because their entry minute has no bar (r1 and r2)
+        no_entry_bar["r1"][account] = entry_bar_missing(bars, pending[(pending["account_id"] == account)
+                                                                     & pending["candidate_id"].isin(gold_ids)])
+        if broker in of_day:
+            no_entry_bar["r2"][account] = entry_bar_missing(bars, pending_v2[pending_v2["account_id"] == account])
+        n = label_candidates(db, bars, costs[broker], cutoff=slot, account_id=account,
                              symbol=symbol_of.get(account, "XAUUSD")) if not bars.empty else 0
         labelled[account] = labelled.get(account, 0) + n
-    seen = read_obs(db)["broker"].dropna()
-    brokers = sorted({str(b) for b in seen} | {acc.broker for acc in ctx.accounts
-                                               if getattr(getattr(acc, "exploration", None), "arms", None)})
+        if not bars.empty and broker in of_day:
+            try:
+                n2 = label_candidates_v2(db, bars, of_day[broker], broker=broker, cutoff=slot, account_id=account,
+                                         symbol=symbol_of.get(account, "XAUUSD"))
+                labelled_v2[account] = labelled_v2.get(account, 0) + n2
+                mine = legs[legs["account_id"] == account] if not legs.empty else legs
+                synthetic[account] = synthetic_stop_fills(mine, bars)       # within tonight's bar window
+            except Exception as exc:   # noqa: BLE001 - one account's r2 never stops r1 or another account
+                log.exception("replay v2 failed for %s", account)
+                r2_error = f"{account}:{type(exc).__name__}"
+    replay_v2 = {"labelled": labelled_v2, "cost_model": {b: m.version for b, m in tonight.items()},
+                 "legs": {b: dict(m.fills) for b, m in tonight.items()},
+                 "entry_at_quote_share": {b: m.entry_at_quote_share for b, m in tonight.items()},
+                 "legs_excluded": {**leg_excluded, "stop_no_bar": stop_no_bar},
+                 "synthetic_stop_fills": synthetic, "error": r2_error}
     out: dict[str, Any] = {}
-    for broker in brokers:
-        styles, controls, ceilings = exploration_arms(ctx, broker)
-        try:                           # one broker's failure never skips another's run
-            out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls, ceilings=ceilings,
-                                seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
-                                models_dir=ctx.state_dir / "models", held_out=held)
-        except Exception as exc:       # noqa: BLE001 - its weights age into equal shares; the others still learn
-            log.exception("exploration learner failed for broker %s", broker)
-            out[broker] = {"error": type(exc).__name__}
+    if voided_ok:
+        seen = read_obs(db)["broker"].dropna()
+        brokers = sorted({str(b) for b in seen} | {acc.broker for acc in ctx.accounts
+                                                   if getattr(getattr(acc, "exploration", None), "arms", None)})
+        for broker in brokers:
+            styles, controls, ceilings = exploration_arms(ctx, broker)
+            try:                       # one broker's failure never skips another's run
+                out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls,
+                                    ceilings=ceilings, seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
+                                    models_dir=ctx.state_dir / "models", held_out=held)
+            except Exception as exc:   # noqa: BLE001 - its weights age into equal shares; the others still learn
+                log.exception("exploration learner failed for broker %s", broker)
+                out[broker] = {"error": type(exc).__name__}
     return {"labelled": labelled, "no_bars": no_bars, "cost_model": {b: m.version for b, m in costs.items()},
             "stamped": stamped,
-            "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out}
+            "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out, "label_void": label_void,
+            "replay_v2": replay_v2, "no_entry_bar": no_entry_bar}
 
 
 def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> tuple[dict[str, Any], frozenset[str]]:

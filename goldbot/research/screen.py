@@ -7,17 +7,23 @@ at a time, with exactly the labels the walk-forward would use:
 
     pass  <=>  gross mean R > 0,  t-stat of the gross mean R >= MIN_T (2.0),  at least `min_events` events.
 
-The event floor is `research.screen_min_events` (default MIN_EVENTS, 1,000), with an optional override for rules whose
-signal is computed on daily bars, `research.screen_min_events_daily` (null: the default floor). Changing either is an
-owner decision, fixed before the run it applies to (docs/research/preregistration-2027Q1.md, ruling A). The daily
-override is **retire-only** (ruling A: "150 rule-only events, retire-only", read strictly, quant review 2026-10-11): it
-is the events a daily rule needs to FAIL, while a pass still needs `research.screen_min_events` (`screen_floors`).
+The pass floor is `research.screen_min_events` (default MIN_EVENTS, 1,000). The retire floor is
+`research.screen_retire_floor` (300; ADR 0077, which withdrew Ruling A: `screen_min_events_daily` is null, and if it is
+set again it is the daily retire floor). Between the two floors the screen retires a rule **only** by the
+pre-registered futility test (ADR 0077, prereg 2026-11-09 section 4.7, `futility_retire`): "Between
+screen_retire_floor (300) and screen_min_events (1,000) a screen retires a unit only if: (a) the one-sided 90 % upper
+bound of the statistic named in the card before the read ..., with day-clustered SE, is < +0.03 R; (b) the clustered
+SE is <= 0.055 R; (c) both were pre-registered before the read, and the read is counted in K. Otherwise the result is
+'inconclusive (event floor)' ... Never retire on sign or net alone." The futility read travels in the rule as
+`rule["futility"]` (`futility_terms`): the card-named statistic, its clustered SE and the registry row that
+pre-registered it (quant M7: "preregistered" is a registry row id, so "counted in K" is checked in code). The floor
+and the two thresholds come from settings (`research.screen_retire_*`, validated tighten-only), never from the rule.
+Without a futility read nothing between the floors retires.
 
-Three verdicts: **pass** (on at least the pass floor); **inconclusive (event floor)** whenever the rule has fewer events
-than the retire floor, whatever the sign or t of its gross mean R (too few events to retire it, and too few to pass),
-and when it has enough to retire but fewer than the pass floor and meets the sign and the t (a daily rule with 150-999
-events): still a recorded, charged trial and still no model, but it cannot retire the hypothesis; **fail** when it has
-at least the retire floor's events and misses the sign or the t, which retires the rule from model research.
+Three verdicts: **pass** (on at least the pass floor); **inconclusive (event floor)** below the retire floor whatever
+the sign or t, and between the floors unless the futility test retires (a recorded, charged trial, no model, and it
+cannot retire the hypothesis); **fail** at or above the pass floor when the sign or the t is missed, or between the
+floors when the pre-registered futility test retires the rule.
 
 Net expectancy (spread + slippage + commission + swap) is reported next to it but does not decide: a positive gross edge is
 what a meta-model can filter towards a positive net one. Every report also splits the rule-only net R by side
@@ -31,7 +37,9 @@ that fails unless `--skip-screen` is given, and records the screen in the regist
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import math
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
@@ -46,6 +54,50 @@ if TYPE_CHECKING:
 MIN_EVENTS = 1000
 MIN_T = 2.0
 PASS, FAIL, INCONCLUSIVE = "pass", "fail", "inconclusive (event floor)"
+RETIRE, INSUFFICIENT = "retire", "insufficient"
+Z90 = 1.2815515655446004             # z(0.90): the one-sided 90 % upper bound
+FutilityVerdict = Literal["retire", "inconclusive (event floor)", "insufficient"]
+
+
+@dataclass(frozen=True, slots=True)
+class FutilityResult:
+    verdict: FutilityVerdict
+    n: int
+    ub90_r: float
+    se_r: float
+    statistic: str
+
+
+def futility_retire(*, n: int, mean_r: float, se_r: float, statistic: Literal["gross", "delta"],
+                    preregistered: bool, floor: int = 300, ub_r: float = 0.03,
+                    max_se_r: float = 0.055) -> FutilityResult:
+    """ADR 0077 futility retire, all units: below `floor` "insufficient"; otherwise "retire" only when the read was
+    pre-registered AND the one-sided 90 % upper bound mean_r + z(0.90) x se_r of the card-named statistic (gross, or
+    delta against the twins; se_r the session-day-clustered SE) is < `ub_r` AND se_r <= `max_se_r`; else
+    "inconclusive (event floor)". preregistered=False never retires; a NaN or non-positive SE never retires. The
+    caller applies it below the pass floor (at or above it the screen's own pass/fail rule reads)."""
+    ub = mean_r + Z90 * se_r if math.isfinite(mean_r) and math.isfinite(se_r) else math.nan
+    verdict: FutilityVerdict
+    if n < floor:
+        verdict = "insufficient"
+    elif preregistered and math.isfinite(ub) and se_r > 0 and ub < ub_r and se_r <= max_se_r:
+        verdict = "retire"
+    else:
+        verdict = "inconclusive (event floor)"
+    return FutilityResult(verdict, int(n), float(ub), float(se_r), str(statistic))
+
+
+def futility_terms(*, statistic: Literal["gross", "delta"], mean_r: float, se_r: float,
+                   registry_row: str) -> dict[str, Any]:
+    """`rule["futility"]` for `screen_verdict`: the card-named statistic's mean and session-day-clustered SE, and the
+    id of the registry row that pre-registered the read (empty: not pre-registered, never retires)."""
+    return {"statistic": statistic, "mean_r": float(mean_r), "se_r": float(se_r), "registry_row": str(registry_row)}
+
+
+def _futility_settings() -> ResearchSettings:
+    """The futility floor and thresholds in force (tighten-only validators on ResearchSettings)."""
+    from goldbot.config import load_settings
+    return load_settings().research
 
 
 def rule_text(min_events: int = MIN_EVENTS, pass_min_events: int | None = None) -> str:
@@ -53,8 +105,9 @@ def rule_text(min_events: int = MIN_EVENTS, pass_min_events: int | None = None) 
     pass_n = max(min_events, pass_min_events or min_events)
     if pass_n == min_events:
         return f"rule-only gross mean R > 0 with t >= {MIN_T} on >= {min_events:,} events (research window, holdout excluded)"
-    return (f"rule-only gross mean R > 0 with t >= {MIN_T} on >= {pass_n:,} events; >= {min_events:,} events to fail and "
-            f"retire (retire-only floor) (research window, holdout excluded)")
+    return (f"rule-only gross mean R > 0 with t >= {MIN_T} on >= {pass_n:,} events; from {min_events:,} events a rule "
+            f"retires only by the pre-registered futility test (retire-only floor, ADR 0077) (research window, "
+            f"holdout excluded)")
 
 
 RULE = rule_text()
@@ -66,25 +119,27 @@ def signal_timeframe(spec: Specialist) -> str:
 
 
 def min_events_for(signal_tf: str, research: ResearchSettings) -> int:
-    """The screen's retire floor for a rule whose signal is on `signal_tf`: the events it needs for any decisive verdict
-    (module docstring); the daily override applies to daily signals only."""
+    """The screen's retire floor for a rule whose signal is on `signal_tf`: `research.screen_retire_floor` for every
+    unit (ADR 0077), capped at the pass floor; a daily override (`screen_min_events_daily`, null since ADR 0077)
+    applies to daily signals only."""
     if signal_tf == "1d" and research.screen_min_events_daily is not None:
         return int(research.screen_min_events_daily)
-    return int(research.screen_min_events)
+    return min(int(research.screen_retire_floor), int(research.screen_min_events))
 
 
 def screen_floors(signal_tf: str, research: ResearchSettings) -> tuple[int, int]:
-    """(retire floor, pass floor) for a rule whose signal is on `signal_tf`: the daily override is retire-only, so a
-    pass always needs `research.screen_min_events` (owner ruling A, read strictly)."""
+    """(retire floor, pass floor) for a rule whose signal is on `signal_tf`: the retire floor only retires (by the
+    futility test), so a pass always needs `research.screen_min_events`."""
     retire = min_events_for(signal_tf, research)
     return retire, max(retire, int(research.screen_min_events))
 
 
 def screen_verdict(rule: dict[str, Any], min_events: int = MIN_EVENTS,
                    pass_min_events: int | None = None) -> dict[str, Any]:
-    """The screen's decision on a rule-only result ({"gross": expectancy, "net": expectancy}). `min_events`: the retire
-    floor (fewer events: inconclusive, whatever the sign or t); `pass_min_events`: the events a pass needs (None: the
-    same floor). Between the two the verdict is "fail" or "inconclusive", never "pass" (module docstring)."""
+    """The screen's decision on a rule-only result ({"gross": expectancy, "net": expectancy}, optionally "futility":
+    `futility_terms`). `min_events`: the retire floor (fewer events: inconclusive, whatever the sign or t);
+    `pass_min_events`: the events a pass needs (None: the same floor). Between the two the verdict is "fail" only when
+    the pre-registered futility test retires the rule, else "inconclusive"; never "pass" (module docstring)."""
     pass_n = max(min_events, pass_min_events or min_events)
     g, n_ = rule.get("gross") or {}, rule.get("net") or {}
     n, mean_r, t = int(g.get("n", 0)), float(g.get("mean_r", 0.0)), float(g.get("t_stat", 0.0))
@@ -94,15 +149,33 @@ def screen_verdict(rule: dict[str, Any], min_events: int = MIN_EVENTS,
         {"name": "gross_mean_r", "passed": n > 0 and mean_r > 0, "detail": f"gross mean R {mean_r:+.3f} (need > 0)"},
         {"name": "gross_t", "passed": t >= MIN_T, "detail": f"t-stat {t:.2f} (need >= {MIN_T})"},
     ]
+    futility: FutilityResult | None = None
     if n < min_events:
         verdict = INCONCLUSIVE          # too few events to retire, and too few to pass
+    elif n < pass_n:                    # between the floors: only the pre-registered futility test retires (ADR 0077)
+        f = rule.get("futility") or {}
+        research = _futility_settings()
+        futility = futility_retire(n=n, mean_r=float(f.get("mean_r", math.nan)), se_r=float(f.get("se_r", math.nan)),
+                                   statistic=f.get("statistic", "gross"), preregistered=bool(f.get("registry_row")),
+                                   floor=max(min_events, int(research.screen_retire_floor)),
+                                   ub_r=float(research.screen_retire_ub_r),
+                                   max_se_r=float(research.screen_retire_max_se_r))
+        verdict = FAIL if futility.verdict == RETIRE else INCONCLUSIVE
+        checks.append({"name": "futility", "passed": futility.verdict != RETIRE,
+                       "detail": (f"pre-registered futility ({futility.statistic}): 90 % UB {futility.ub90_r:+.3f} R, "
+                                  f"clustered SE {futility.se_r:.3f} R -> {futility.verdict}" if f else
+                                  "no pre-registered futility read: cannot retire between the floors")})
     elif any(not c["passed"] for c in checks[1:]):
-        verdict = FAIL                  # enough events to retire, and the sign or the t is missed
+        verdict = FAIL                  # at or above the pass floor, and the sign or the t is missed
     else:
-        verdict = PASS if n >= pass_n else INCONCLUSIVE     # a retire-only floor never passes
-    return {"passed": verdict == PASS, "verdict": verdict, "rule": rule_text(min_events, pass_n),
-            "min_events": min_events, "pass_min_events": pass_n, "checks": checks, "n": n, "gross_mean_r": mean_r,
-            "gross_t": t, "net_mean_r": n_.get("mean_r"), "net_t": n_.get("t_stat"), "rule_only": rule}
+        verdict = PASS
+    out = {"passed": verdict == PASS, "verdict": verdict, "rule": rule_text(min_events, pass_n),
+           "min_events": min_events, "pass_min_events": pass_n, "checks": checks, "n": n, "gross_mean_r": mean_r,
+           "gross_t": t, "net_mean_r": n_.get("mean_r"), "net_t": n_.get("t_stat"), "rule_only": rule}
+    if futility is not None:
+        out["futility"] = {"verdict": futility.verdict, "n": futility.n, "ub90_r": futility.ub90_r,
+                           "se_r": futility.se_r, "statistic": futility.statistic}
+    return out
 
 
 def cost_gate(scr: dict[str, Any], threshold_r: float) -> dict[str, Any]:
@@ -191,8 +264,9 @@ def screen_lines(s: dict[str, Any] | None, skipped: bool = False) -> list[str]:
         head = "**PASS**"
     elif is_inconclusive(s):
         retire_only = int(s.get("n", 0)) >= int(s.get("min_events", 0))
-        why = (f"enough events to fail but fewer than the {int(s.get('pass_min_events', 0)):,} a pass needs (the "
-               f"{int(s['min_events']):,}-event floor is retire-only)" if retire_only
+        why = (f"fewer events than the {int(s.get('pass_min_events', 0)):,} a pass needs, and the pre-registered "
+               f"futility test did not retire it (the {int(s['min_events']):,}-event floor is retire-only, ADR 0077)"
+               if retire_only
                else "fewer events than the floor (whatever the sign or t)")
         head = ("**INCONCLUSIVE (event floor)** (skipped with --skip-screen)" if skipped else
                 f"**INCONCLUSIVE (event floor)**: {why}; no model fitted, and this result cannot retire the hypothesis")

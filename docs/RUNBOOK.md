@@ -1867,6 +1867,45 @@ store's release fills it (`reload_release` picks it up without a restart); other
 of the window (about 62 trading days). Incident 2026-10-26..11-03: vantage-demo, release hole 10-09 20:57 -> 10-12
 00:00 before its 10-19 cut-over, zero specialist orders for eight days.
 
+### Entry silence on a demo account
+
+`WARN entry_silence:<account>` (told on Telegram, at most once per account per UTC day; goldbot/ops/entry_silence.py).
+It covers the demo exploring accounts, not the weekend lane. The reason says which of two conditions holds:
+
+* **"no exploration arm may enter while the market is open"**: every configured arm is refused. The reason counts the
+  arms by why: spec retired, unqualified, retired at its stop, timeframe dark, no learning slot, control without an
+  active arm, `thin_cell_complete` or `thin_controls`. The engines and the RiskGate are fine. The account has no
+  supply left for today. This is incident 2026-11-09: vantage-demo had every gold arm retired and its thin controls
+  spent by 09:10, then 9.5 h with no entry.
+* **"no exploration fill for N h of London/New York market time"**: arms may enter, but none filled for 4 h of
+  London/NY market time. A minute counts only when the engine's own budget would still admit an enterable arm: a
+  spent segment (rolled forward), day, 1m/5m `scalp_day_cap` or thin share is silence by design. Asia never counts.
+
+Recovery (read-only first, from the brain; the query prints today's candidates by arm and outcome, the blocked reason
+or `taken`):
+
+```
+sudo -u goldbot /opt/goldbot/.venv/bin/python -c "import sqlite3,sys,time; d=int(time.time()//86400*86400*1e9); c=sqlite3.connect('file:/opt/goldbot/state/aux.db?mode=ro',uri=True); [print(*r) for r in c.execute(\"SELECT arm_id, COALESCE(blocked_reason, 'taken'), COUNT(*) FROM exploration_obs WHERE account_id=? AND decision_ns>=? GROUP BY 1,2 ORDER BY 3 DESC\",(sys.argv[1],d))]" <account>
+```
+
+1. **No supply.** No restart helps. Volume comes back only with new enterable arms: research-director and PD
+   (volume-drop diagnosis 2026-11-09, fix 1). Do not reopen retired arms. Do not raise `thin_control_fills` or
+   `thin_control_share` either: both are quant rulings. If the count says `retired at its stop` for an arm you did not
+   expect, read `exploration_arm_status` (the daily review wrote it). If it says `unqualified` for every arm, run
+   `python -m goldbot.ops.run health` and read the `qualification` line: a registry file missing on the brain refuses
+   every learning arm.
+2. **Silence with arms enterable.** The query shows why the signals went nowhere:
+   * `stale`: the pass budget is starved (fix 3/4 of the diagnosis). Check `pass budget 5.0 s spent` in
+     `journalctl -u goldbot-engine@<account>`.
+   * `session_entries` / `hourly_entries` / `scalp_day_cap`: the budget, by design.
+   * `window_0207`, `control_thinned`: by design.
+   * `global_cap`, `probe_slot` or `pot_slots`: open positions hold the slots. Check `open_risk:<account>`.
+   * `not_auto`: auto entry is off. See "Auto mode".
+   * No rows at all: no signal reached the queue. Check `engine:<account>`, `engine_loop:<account>` and
+     `symbols:<account>` (stale feeds or terms), then `journalctl -u goldbot-engine@<account> -n 200`.
+3. It clears by itself when the next UTC day starts with supply, or once a market-closed day passes. A silent run
+   stays the longest of the day, so a fill after it does not clear the warning that day.
+
 ### Settings refuse to load: a day anchor
 
 A deploy is refused with "settings.local.yaml does not validate with the target code (keys: risk_day_anchor)" (or

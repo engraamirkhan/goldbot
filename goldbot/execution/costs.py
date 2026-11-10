@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Literal
+from typing import TYPE_CHECKING, Iterable, Literal, Mapping
 
 import numpy as np
 import pandas as pd
@@ -296,6 +296,109 @@ def slippage_table(fills: pd.DataFrame, *, prior_usd: float, min_fills: int = 50
             else:
                 out[f"{s}:{ot}"] = SlippageStat(mean=prior_usd, n=int(len(v)), from_prior=True)
     return out
+
+
+# ---------------------------------------------------------------------------------------------- exploration legs
+# EVAL-2 Lane 5A (prereg-2026-11-09-eval2.md section 5, replay v2): "Per broker, per leg (entry, stop exit, target exit,
+# time exit), by session: charge max(0, adverse upper 95 % bound of the measured slippage mean) once the cell has
+# >= min_fills, else the $0.15 prior. Favourable slippage is never credited." The exploration ledger's fills feed this
+# table; it is READ BY THE LABEL REPLAY ONLY. The engine's `slippage` cells (RiskGate cost, `slippage_table` above) stay
+# on the main engine's fills: feeding them the exploration entries (about $0.01 measured) would lower the RiskGate's
+# round trip from the $0.15 prior, and demo fills "never lower" a cost (method section 4, cost drift).
+Leg = Literal["entry", "stop", "target", "time"]
+LEGS: tuple[Leg, ...] = ("entry", "stop", "target", "time")
+EXIT_LEGS: tuple[Leg, ...] = ("stop", "target", "time")
+UNMEASURED_LEGS: frozenset[str] = frozenset({"time"})   # the ledger keeps no quote at a time close: always the prior
+LEG_Z95 = 1.959963984540054                              # the 95 % interval's upper bound (as the S5 decomposition)
+# Quant ruling 2026-11-09 (vantage exit price, R110 3e72bf9a): "Vantage exit slip: measured 0 on vantage-demo. All 294
+# of 294 stop and target fills are at the bracket level, recorded from the exit deal VWAP ... This is a demo-server
+# artefact, not evidence about execution. It is never a cost prior for real money." Brokers whose demo exit legs are
+# not evidence: their exit cells take `real_money_exit_charge`, and S5 reads only their entry leg. Every Vantage demo
+# broker key of config/accounts.yaml (code review of 8b2345c4; tests/test_eval2_replay_v2.py checks the file)
+DEMO_EXIT_AT_LEVEL: frozenset[str] = frozenset({"vantage", "vantage247", "vantage_obs"})
+# Quant condition C7 (review of 8b2345c4): "if 95 % or more of vantage entries fill within $0.005 of the quote, its
+# entry leg is treated the same way and vantage S5 reads NOT AVAILABLE"
+ENTRY_AT_QUOTE_TOL_USD = 0.005
+ENTRY_AT_QUOTE_SHARE = 0.95
+
+
+class LegSlippage(FrozenRecord):
+    """One (session, leg) cell of a broker's exploration fills. Adverse slippage in $/oz: + = the fill was worse than
+    the quote (entry) or the bracket level (stop, target exit), signed by the order's side as `slippage_table`."""
+    leg: Leg
+    session: Session
+    n: int = Field(ge=0)
+    mean: float | None = None             # measured adverse mean (reported even when favourable); None without fills
+    ub95: float | None = None             # mean + 1.96 x day-clustered standard error
+    charged: float = Field(ge=0)          # max(0, ub95) at >= min_fills, else the prior: never a credit
+    from_prior: bool
+
+
+def _clustered_se(x: np.ndarray, day: np.ndarray) -> float:
+    """Standard error of the mean, clustered by day (fills bunch on news minutes), with the G/(G-1) correction."""
+    _, inv = np.unique(day, return_inverse=True)
+    g = int(inv.max()) + 1 if len(inv) else 0
+    if g < 2:
+        return 0.0 if len(x) and np.all(x == x[0]) else float("inf")
+    sums = np.bincount(inv, weights=x - x.mean())
+    return float(np.sqrt(g / (g - 1) * np.sum(sums ** 2)) / len(x))
+
+
+def leg_slippage_table(legs: pd.DataFrame, *, prior_usd: float, min_fills: int = 50,
+                       sessions: SessionTable = DEFAULT_SESSIONS) -> dict[str, LegSlippage]:
+    """legs: ts_utc, leg, side (the ORDER's side: +1 buy; an exit closes, so a long's stop is a sell), requested (the
+    quote, or the bracket level of an exit), filled. One cell "<session>:<leg>" for every session and leg. A cell with
+    `min_fills` charges max(0, upper 95 % bound of its adverse mean); a thinner cell, and the time leg always, charges
+    `prior_usd`."""
+    f = legs.dropna(subset=["requested", "filled"]) if not legs.empty else legs
+    if f.empty:
+        labels = np.array([], dtype=object)
+        kind = np.array([], dtype=object)
+        slip = np.array([], dtype=float)
+        days = np.array([], dtype=object)
+    else:
+        idx = pd.DatetimeIndex(pd.to_datetime(f["ts_utc"], utc=True))
+        labels = np.asarray(sessions.session_label(idx))
+        kind = f["leg"].astype(str).to_numpy()
+        slip = f["side"].to_numpy(dtype=float) * (f["filled"].to_numpy(dtype=float) - f["requested"].to_numpy(float))
+        days = np.asarray(idx.strftime("%Y-%m-%d"))
+    out: dict[str, LegSlippage] = {}
+    for s in SESSIONS:
+        for leg in LEGS:
+            m = (labels == s) & (kind == leg)
+            x, n = slip[m], int(m.sum())
+            mean = float(x.mean()) if n else None
+            ub = mean + LEG_Z95 * _clustered_se(x, days[m]) if mean is not None else None
+            measured = n >= min_fills and leg not in UNMEASURED_LEGS and ub is not None and np.isfinite(ub)
+            out[f"{s}:{leg}"] = LegSlippage(leg=leg, session=s, n=n, mean=mean, ub95=ub, from_prior=not measured,
+                                            charged=max(0.0, float(ub)) if measured and ub is not None else prior_usd)
+    return out
+
+
+def real_money_leg_charge(icm: Mapping[str, LegSlippage], key: str, *, prior_usd: float) -> float:
+    """max(the ICM leg table's charge of cell `key` "<session>:<leg>", the prior); a missing cell is the prior."""
+    cell = icm.get(key)
+    return max(prior_usd, cell.charged if cell is not None else prior_usd)
+
+
+def real_money_exit_charge(icm: Mapping[str, LegSlippage], key: str, *, prior_usd: float) -> float:
+    """Quant ruling 2026-11-09 (vantage exit price): "Any real-money vantage hurdle uses the larger of the ICM-measured
+    exit slip per leg and session and the stop-slip prior, until real-money vantage fills exist." `key` is an exit
+    cell "<session>:<leg>"; `icm` the ICM leg table (a missing cell is unmeasured: the prior)."""
+    leg = key.rsplit(":", 1)[-1]
+    if leg not in EXIT_LEGS:
+        raise ValueError(f"{key!r} is not an exit leg cell ({EXIT_LEGS})")
+    return real_money_leg_charge(icm, key, prior_usd=prior_usd)
+
+
+def entry_at_quote_share(legs: pd.DataFrame) -> float | None:
+    """Share of entry legs filled within ENTRY_AT_QUOTE_TOL_USD of the quote (None without entries): at
+    ENTRY_AT_QUOTE_SHARE or more a demo server is filling entries synthetically too (quant C7)."""
+    e = legs[legs["leg"] == "entry"] if not legs.empty else legs
+    if e.empty:
+        return None
+    gap = (e["filled"].to_numpy(dtype=float) - e["requested"].to_numpy(dtype=float))
+    return float(np.mean(np.abs(gap) <= ENTRY_AT_QUOTE_TOL_USD + 1e-12))
 
 
 def probe_entry_fills(rows: Iterable["ProbeRecord"]) -> list["ProbeRecord"]:

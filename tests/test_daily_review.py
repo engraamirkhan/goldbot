@@ -174,16 +174,17 @@ def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_285_
     cfg = S.daily_review
     # the prereg's ~290 a day, less the demo trim (cost of record 2026-10-31 section 6): ICM probes 90 -> 24; the
     # demo-limits ADR 2026-11-02 restatement: arms x1.35 and the learning class (ICM 270 + probes 30); CFO/finance
-    # 2026-11-06: icm-probe's scheduled probes every 120 min, ICM probes 30 -> 15
-    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 285
-    assert cfg.probe_plan == {"icm": 15, "vantage": 40}
+    # 2026-11-06: icm-probe's scheduled probes every 120 min, ICM probes 30 -> 15; SRE 2026-11-09: the 11-07 probe
+    # hours cap them at the slots (ICM 7, Vantage 14)
+    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 277
+    assert cfg.probe_plan == {"icm": 7, "vantage": 14}
     vol = {(v.broker, v.style): v for v in review.volume}
     icm = vol["icm", "scalp"]
     assert (icm.candidates, icm.fills, icm.plan) == (6, 1, 216)
     assert vol["icm", "intraday"].candidates == 1 and vol["vantage", "intraday"].candidates == 1  # never pooled
-    assert vol["icm", "probe"].plan == 15 and vol["icm", "swing"].candidates == 0
-    assert review.volume_total == 8 and review.plan_total == 285 + 134     # ICM 285, Vantage 94 + 40 probes
-    assert review.of_plan == pytest.approx(8 / 419, abs=1e-6)
+    assert vol["icm", "probe"].plan == 7 and vol["icm", "swing"].candidates == 0
+    assert review.volume_total == 8 and review.plan_total == 277 + 108     # ICM 277, Vantage 94 + 14 probes
+    assert review.of_plan == pytest.approx(8 / 385, abs=1e-6)
 
 
 @pytest.mark.parametrize(("arm", "host", "n", "breached"), [
@@ -323,7 +324,7 @@ def test_volume_under_half_the_plan_on_two_trading_days_running_opens_an_issue_w
     second = _run(tmp_path, sink=sink)
     assert second.volume_low_days == 2
     [(_, title, body)] = sink.issues
-    assert "volume" in title.lower() and "global_cap" in body and "of 419 planned" in body
+    assert "volume" in title.lower() and "global_cap" in body and "of 385 planned" in body
     _blinded(body)
 
 
@@ -472,7 +473,7 @@ def test_the_owner_report_carries_the_blinded_review_lines(tmp_path):
     _run(tmp_path)
     text = build_digest(tmp_path, NOW + pd.Timedelta(minutes=30), settings=S)
     line = next(x for x in text.splitlines() if x.startswith("Review:"))
-    assert "ICM $0.37/oz" in line and "3 of 419 planned" in line
+    assert "ICM $0.37/oz" in line and "3 of 385 planned" in line
     _blinded(line)
 
 
@@ -672,3 +673,26 @@ def test_a_host_whose_gold_symbol_has_a_suffix_still_has_its_exit_legs_read(tmp_
     store.append("exit_fills", legs, source="vantage-demo", symbol="XAUUSD+", dedupe=False)
     got = _frame(store, "exit_fills", "vantage-demo", LONDON - pd.Timedelta(hours=1), LONDON + pd.Timedelta(hours=1))
     assert len(got) == 1 and got["filled"].iloc[0] == 2001.95
+
+
+def test_the_probe_plan_is_what_the_scheduled_slots_can_send():
+    """Volume-drop diagnosis 2026-11-09 (fix 6): the plan said ICM 15 and Vantage 40 while the 11-07 probe hours
+    ([07:00, 21:00) UTC) let icm-probe (every 120 min) send 6-8 scheduled probes a day and vantage-demo (every 60 min)
+    14, so the daily review counted fills that cannot happen. Each broker's plan lies within the scheduled slots its
+    enabled accounts can send on a weekday (mirror probes are opportunistic and stay out of the plan)."""
+    from goldbot.engine.cost_probe import scheduled_slot
+    from goldbot.ops import accounts
+    days = pd.date_range("2026-11-02", "2026-11-27", freq="B", tz="UTC")
+    lo: dict[str, int] = {}
+    hi: dict[str, int] = {}
+    for a in accounts.load_accounts(logins=False).values():
+        cp = a.cost_probe
+        if not (a.enabled and a.mode == "demo" and cp.enabled and cp.scheduled.enabled) or a.broker not in S.daily_review.probe_plan:
+            continue
+        start, end = cp.hours_utc or ("00:00", "24:00")
+        n = [sum(1 for t in pd.date_range(d, d + pd.Timedelta(days=1), freq="15min", inclusive="left")
+                 if scheduled_slot(t, cp.scheduled.every_min) and start <= f"{t:%H:%M}" < end) for d in days]
+        lo[a.broker], hi[a.broker] = lo.get(a.broker, 0) + min(n), hi.get(a.broker, 0) + max(n)
+    assert set(lo) == set(S.daily_review.probe_plan)
+    for broker, plan in S.daily_review.probe_plan.items():
+        assert lo[broker] <= plan <= hi[broker], (broker, lo[broker], plan, hi[broker])
