@@ -47,7 +47,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   its exit deal price is recorded. Gold only: a non-gold cell reads NOT TESTED. New `goldbot/research/catalogue/lint.py`
   refuses any realised trade field outside a card's output keys (fails closed; allowlist entries need a comment, a test
   and quant sign-off). Not yet wired into sim.py (Lane 1).
-- 2026-11-09 EVAL-2 Lane 5A (branch feat/eval2-lane5a-replay; R111): replay v2 and the L4 forward reads. The nightly
+- 2026-11-09 EVAL-2 Lane 5A (branch feat/eval2-lane5a-replay; R114): replay v2 and the L4 forward reads. The nightly
   learner (`jobs.exploration_learn`) now voids every non-gold r1 label before any read (`exploration_label_void`,
   aux migration 28; `read_obs` never returns a void label) and writes replay r2 for gold candidates to the side table
   `exploration_replay` (label_sim_r untouched): each leg charged per broker and session from the exploration ledger's
