@@ -3,6 +3,7 @@ headless credential prompter for goldbot.ops.accounts. Requires `pip install -e 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import sqlite3
@@ -21,7 +22,7 @@ from goldbot.ops.account_view import proposal_budget_from_state
 from goldbot.ops.alert_log import log_alert
 from goldbot.ops.deadman import HEALTH_STALE_S, DeadMan, start_liveness
 from goldbot.ops.deploy import DeployWatch
-from goldbot.ops.health import AlertPolicy, HealthContext, HealthWatch, run_checks
+from goldbot.ops.health import AlertPolicy, HealthContext, HealthReport, HealthWatch, run_checks
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal, decision_callbacks, decision_channel, parse_decision_callback
 from goldbot.telegram.bus import ApprovalBus
@@ -51,6 +52,8 @@ LIMITS_EVERY_S = 30              # risk-limit change FYI (goldbot/telegram/limit
 DIGEST_EVERY_S = 60              # morning report due check (telegram.digest_at; once a day, late <= 6 h; Sunday: weekly)
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
 HEALTH_SLOW_S = 20.0              # a health pass longer than this logs a warning (it held the pump ~50 s, 2026-11-10)
+HEALTH_HANG_S = 240.0             # run_checks still running after this is logged as an error (before the dead man fails)
+HEALTH_STOP_S = 5.0               # at shutdown, wait this long at most for a cancelled health pass to end
 AUDIT_DRAIN_S = 10.0              # at shutdown, wait this long at most for audit rows still being written
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
@@ -204,8 +207,11 @@ class TelegramBot:  # pragma: no cover - needs network + token
     async def _on_shutdown(self, app: "Application") -> None:
         """After run_polling stops: let the audit rows still being written land, for at most AUDIT_DRAIN_S (A15)."""
         await self.audit.drain(timeout=AUDIT_DRAIN_S)
-        if self._health_task is not None and not self._health_task.done():
-            self._health_task.cancel()
+        task = self._health_task
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(task, HEALTH_STOP_S)
 
     async def _pump(self) -> None:
         n = 0
@@ -241,6 +247,17 @@ class TelegramBot:  # pragma: no cover - needs network + token
             log.warning("health pass skipped: the previous pass is still running")
             return
         self._health_task = asyncio.get_running_loop().create_task(self._timed_health_pass())
+        self._health_task.add_done_callback(self._health_task_ended)
+
+    @staticmethod
+    def _health_task_ended(task: "asyncio.Task[None]") -> None:
+        """Anything a pass raises outside its own try (the dead man's hand-off) is logged when the task ends, at once,
+        never left as an unretrieved task exception (trading-safety review 2026-11-10)."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("health pass task failed", exc_info=exc)
 
     async def _timed_health_pass(self) -> None:
         """`_health_pass`, with its duration logged (`health pass s=`), as a warning over HEALTH_SLOW_S."""
@@ -258,7 +275,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         nor a hung ping delays the other or a proposal (security review M1)."""
         report, delivered = None, True
         try:
-            report = await asyncio.to_thread(lambda: run_checks(HealthContext.from_runtime(self.state_dir)))
+            report = await self._run_checks()
             step = self.health.step(report)
             if step.text:
                 try:
@@ -276,6 +293,16 @@ class TelegramBot:  # pragma: no cover - needs network + token
         if report is not None:
             confirmed = self.health.failing()
             self.deadman.observe(confirmed, transient=report.failing() - confirmed, delivered=delivered)
+
+    async def _run_checks(self) -> HealthReport:
+        """run_checks in a worker thread. One still running after HEALTH_HANG_S is logged as an error, so a hang shows
+        in the journal before the external dead man's switch fails; it is then awaited, not abandoned: a cancelled
+        wait would leave the thread running and the next pass would start a second one beside it."""
+        fut = asyncio.ensure_future(asyncio.to_thread(lambda: run_checks(HealthContext.from_runtime(self.state_dir))))
+        done, _ = await asyncio.wait({fut}, timeout=HEALTH_HANG_S)
+        if not done:
+            log.error("health checks still running after %.0f s (a hang?): the pass waits for them", HEALTH_HANG_S)
+        return await fut
 
     async def _digest_pass(self) -> None:
         """The owner's morning message, once per slot (state/telegram_digest.json): the daily learning report, and on

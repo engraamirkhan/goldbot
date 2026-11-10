@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from goldbot.research import registry
+from goldbot.research import director, registry
 from goldbot.research.registry import (
     EXEMPT_WITHDRAWAL_RE,
     PREREGISTERED,
@@ -25,6 +25,7 @@ from goldbot.research.registry import (
     withdrawal_evidence,
 )
 
+real_is_trial = registry.is_trial
 NOW = datetime(2026, 11, 20, tzinfo=timezone.utc)
 SHA = "ab" * 32
 
@@ -132,10 +133,13 @@ def test_stale_preregistrations_and_the_counts_are_unchanged_by_the_index(seed: 
 
 
 def test_stale_preregistrations_reads_each_row_a_bounded_number_of_times(monkeypatch: pytest.MonkeyPatch):
-    """Linear, not quadratic: the trial test runs at most twice per row, however many pre-registrations there are."""
+    """Linear, not quadratic: the trial test runs at most twice per row, however many pre-registrations there are.
+    Only registry's own calls are counted: director (imported lazily by `stale_preregistrations`) is imported at the
+    top of this module, so its `is_trial` is bound before the counter is patched in, whatever the test order."""
+    assert director.is_trial is real_is_trial
     rows = _fixture(3, n_prereg=400)
     calls = 0
-    real = registry.is_trial
+    real = real_is_trial
 
     def counted(row: dict[str, Any]) -> bool:
         nonlocal calls

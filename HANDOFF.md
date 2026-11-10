@@ -8,7 +8,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - 2026-11-10 (branch fix/telegram-health-cpu; telegram CPU attribution 2026-11-10, R119): the telegram service's
   health pass no longer holds the pump. `_pump` starts it as its own task (`_start_health_pass`), one at a time (a
   pass due while the last still runs is skipped and logged), so proposal cards and outcome edits keep flowing every
-  poll; each pass logs `health pass s=<seconds>` and warns over `HEALTH_SLOW_S` (20 s). The pass's two hot spots are
+  poll; each pass logs `health pass s=<seconds>` and warns over `HEALTH_SLOW_S` (20 s). Review fixes: an exception
+  escaping the task is logged at once (done-callback); run_checks still running after `HEALTH_HANG_S` (240 s) is
+  logged as an error and then awaited, never abandoned (no second worker thread); shutdown cancels and awaits the
+  task (`HEALTH_STOP_S`). The pass's two hot spots are
   gone: `arms._registry_rows` parses `state/research_registry.jsonl` once per file version (inode, mtime_ns, size;
   234 reads of a 3,353-row copy 7.3 s -> 0.35 s), and `registry.stale_preregistrations` indexes withdrawals and trial
   reads once (`_Exemptions`; same answer as the old scan, n_trials_effective warm 1.15 s -> 0.12 s on that copy, more
