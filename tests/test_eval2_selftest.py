@@ -733,7 +733,11 @@ def test_lane3_dependent_tests_read_blocked_not_pass_while_lane3_is_absent(monke
         assert not r.passed and r.metrics["blocked"] == 1.0 and r.threshold.startswith("BLOCKED")
 
 
-def test_s4_lint_refuses_every_realised_cost_filter() -> None:
+def test_s4_lint_refuses_every_realised_cost_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lint part only: with Lane 3 merged, S4 also runs the S21 probe on local raw bars (never in CI), so the probe
+    is held off here and runs in the real-bar selftest."""
+    real = ST._lane
+    monkeypatch.setattr(ST, "_lane", lambda name: None if name == "goldbot.research.eval2.probe" else real(name))
     r = ST.s4_leakage(seed_key="x")
     assert r.metrics["lint_refused"] == r.metrics["lint_cards"] and r.metrics["lint_clean_ok"] == 1.0
 
@@ -766,3 +770,11 @@ def test_cell_frame_refuses_cells_that_share_a_config_hash(monkeypatch):
     units = pd.DataFrame({"excess_r": [0.1, 0.2]})
     with pytest.raises(ValueError, match="share a config_hash"):
         st.cell_frame(units, _H, control=False)
+
+
+@pytest.mark.selftest
+@pytest.mark.skipif(not _have_raw(), reason="the S21 probe needs local raw/ market data (never in CI or git)")
+def test_s4_runs_the_s21_probe_on_real_bars_with_lane3() -> None:
+    """With Lane 3's probe merged, S4 reads the S21 OCO side-0 probe on real bars, not BLOCKED."""
+    r = ST.s4_leakage(seed_key="ci-s4")
+    assert "s21_probe_t" in r.metrics and r.metrics.get("blocked", 0.0) != 1.0, r
