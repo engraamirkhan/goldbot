@@ -122,8 +122,8 @@ def test_an_execution_control_never_spends_the_thin_control_share(accs):
     daily = accs["vantage-demo"].exploration.daily
     assert daily is not None
     full_thin = {"day": 0, "thin": int(daily.thin_control_share * daily.max_per_day)}
-    assert budget.daily_refusal(daily, "control", full_thin, session="london", budgets={}) is None
-    assert budget.daily_refusal(daily, "thin", full_thin, session="london", budgets={}) == "thin_controls"
+    assert budget.daily_refusal(daily, "control", full_thin, segment=1, budgets={}) is None
+    assert budget.daily_refusal(daily, "thin", full_thin, segment=1, budgets={}) == "thin_controls"
 
 
 # ------------------------------------------------------------------------------------------------ N-1a routing
