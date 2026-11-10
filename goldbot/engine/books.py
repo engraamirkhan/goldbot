@@ -115,6 +115,13 @@ SYMBOL_RETRY_ENABLED_S = 60.0
 ZONES_WAIT_S = 60.0
 # the pass phases the deferral warning names, in this order (`PassTimes`; fix 4a: "logs per-book phase times")
 PHASES: tuple[str, ...] = ("bridge", "bars", "zones", "exploration")
+# vantage-demo refusals 2026-11-10 (fix 4: "add sub-phases (learning, step, minutes, enter/_Pass budget reads) to
+# PassTimes"): the exploration pass's parts, timed as "exploration:<name>" and shown inside its total
+EX_PHASES: tuple[str, ...] = ("reads", "learning", "step", "minutes", "entry", "budget")
+# vantage-demo refusals 2026-11-10 (fix 2): a book's 15m+ exploration part (`exploration.on_pass_slow`) waits behind
+# pending 1m/5m work at most this long (host clock), so a 1m signal stuck in a queue never holds a close's 15m+ entries
+# (60 s stale limit) back; past it, the part runs first
+SLOW_WAIT_S = 20.0
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -478,12 +485,23 @@ class PassTimes:
                 self._inner[-1] += took
 
     def describe(self, book: str) -> str:
-        row = self.by.get(book, {})
-        return ", ".join(f"{p} {row.get(p, 0.0):.2f}" for p in PHASES)
+        return self._text(self.by.get(book, {}))
 
     def totals(self) -> str:
         """Every book's phases added up (the pass's shared steps left out: they are logged on their own)."""
-        return ", ".join(f"{p} {sum(r.get(p, 0.0) for b, r in self.by.items() if b):.2f}" for p in PHASES)
+        names = {k for r in self.by.values() for k in r}
+        return self._text({k: sum(r.get(k, 0.0) for b, r in self.by.items() if b) for k in names})
+
+    @staticmethod
+    def _text(row: dict[str, float]) -> str:
+        """Each phase's time; exploration's with its parts (EX_PHASES) inside it, those that took any time listed."""
+        parts = {p: row.get(f"exploration:{p}", 0.0) for p in EX_PHASES}
+        out = []
+        for p in PHASES:
+            v = row.get(p, 0.0) + (sum(parts.values()) if p == "exploration" else 0.0)
+            inner = ", ".join(f"{k} {t:.2f}" for k, t in parts.items() if t >= 0.005) if p == "exploration" else ""
+            out.append(f"{p} {v:.2f}" + (f" [{inner}]" if inner else ""))
+        return ", ".join(out)
 
 
 def _bridge_timed(times: PassTimes, fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -670,7 +688,13 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
 
     SRE diagnosis 2026-11-09 (fix 4a): the deferral warning names the quotes read and, for the slowest books, their
     bridge, bar close, key zones and exploration time (`PassTimes`), with every book's phases added up. Fix 4c: gold's
-    key-zones build parked at its bar close starts after the books' passes (`_launch_zones`)."""
+    key-zones build parked at its bar close starts after the books' passes (`_launch_zones`).
+
+    Vantage-demo refusals 2026-11-10 (SRE diagnosis, fixes 2 and 3: "on a 1m boundary run a cheap sub-15m entries
+    sweep across all due books before any book's 15m+ step"): each book's pass runs only its exploration's 1m/5m part
+    (`exploration.SPLIT`); the 15m+ parts run after every book's pass (`_slow_parts`), so no 1m signal waits for
+    another book's close step."""
+    from goldbot.engine import exploration
     ok = True
     t0 = time.monotonic()
     cfg = eng.primary.__dict__["cfg"]
@@ -678,10 +702,15 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     times = PassTimes()
     eng.__dict__["_pass_times"] = times
     eng.__dict__["broker"] = _pass_broker(prev, times)
+    eng.__dict__[exploration.SPLIT] = exploration.SplitPass(_bridge_timed(times, lambda s: broker.last_tick(s)),
+                                                             eng._auto_paused)
     deferred = False
     try:
         quiet = quiet_books(eng)
         active = [b for b in eng.books.values() if b.__dict__["cfg"].symbol not in quiet]
+        for b in active:                             # owed by this pass only: never a tick of an earlier one
+            if getattr(b.__dict__.get("exploration"), "slow_owed", None) is not None:
+                b.__dict__["exploration"].slow_owed = None
         t_quotes = time.monotonic()
         if feed is not None:
             feed.refresh([b.__dict__["cfg"].symbol for b in active], pd.Timestamp.now("UTC"))
@@ -712,23 +741,85 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
             finally:
                 times.book = ""                  # a pass that raised never has later time charged to its book
             took[book.__dict__["cfg"].symbol] = time.monotonic() - t_book
+        carried = _slow_parts(eng, [b for b in order if b not in left], active, t0, budget_s, times, took)
         if left:
             eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))
             eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
+        if left or carried:
             if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
                 slow = ", ".join(f"{s} {t:.2f} s ({times.describe(s)})"
                                  for s, t in sorted(took.items(), key=lambda x: -x[1])[:3])
                 log.warning("%s: pass budget %.1f s spent after %d of %d books (%d due first); the rest go first "
-                            "next pass; quotes %.2f s; exits %.2f s; phases: %s; slowest: %s", cfg.account_id,
-                            budget_s, len(order) - len(left), len(order), len(due), t_quotes, t_exits,
-                            times.totals(), slow)
+                            "next pass; 15m+ work carried for %d books; quotes %.2f s; exits %.2f s; phases: %s; "
+                            "slowest: %s", cfg.account_id, budget_s, len(order) - len(left), len(order), len(due),
+                            carried, t_quotes, t_exits, times.totals(), slow)
             deferred = True
         _launch_zones(eng, deferred, active, now)
     finally:
         eng.__dict__["_pass_was_deferred"] = deferred
         eng.__dict__["broker"] = prev
         eng.__dict__.pop("_pass_times", None)
+        eng.__dict__.pop(exploration.SPLIT, None)
     return ok
+
+
+def _slow_parts(eng: Engine, ran: list[SymbolBook], active: list[SymbolBook], t0: float, budget_s: float,
+                times: PassTimes, took: dict[str, float]) -> int:
+    """The 15m+ exploration parts this pass's books owe (`exploration.on_pass_slow`, timed `exploration`), after every
+    book's pass: the books carried from earlier passes first, in the order they were carried, then this pass's order.
+    None starts while 1m/5m work is pending on a book whose 1m/5m part ran this pass (`exploration.fast_pending`: a
+    signal queued, a minute due or inside its grace; vantage-demo refusals 2026-11-10 fix 3; a book whose pass never
+    reached its exploration, no quote, holds nobody) unless it has waited SLOW_WAIT_S, and after the first
+    none starts past the budget. A part not run is carried: the book's next pass owes it again (its close step and
+    learning read are state-driven, so nothing is lost). The number of books carried."""
+    from goldbot.engine import exploration
+    carry: dict[str, float] = eng.__dict__.setdefault("_slow_carry", {})   # symbol -> host clock it was first carried
+    for gone in set(carry) - {str(b.__dict__["cfg"].symbol) for b in active}:
+        del carry[gone]                             # code review LOW 1: a book gone quiet owes nothing
+    rank = {s: i for i, s in enumerate(carry)}
+
+    def sym(b: SymbolBook) -> str:
+        return str(b.__dict__["cfg"].symbol)
+    owed = []
+    for b in ran:
+        if getattr(b.__dict__.get("exploration"), "slow_owed", None) is not None:
+            owed.append(b)
+        else:
+            carry.pop(sym(b), None)                 # nothing owed (no exploration, no quote, a part that raised)
+    owed.sort(key=lambda b: rank.get(sym(b), len(rank)))
+    n = 0
+    for book in owed:
+        at, s = time.monotonic(), sym(book)
+        overdue = s in carry and at - carry[s] >= SLOW_WAIT_S
+        if (n and at - t0 >= budget_s) or (not overdue and _fast_pending(eng, owed)):
+            carry.setdefault(s, at)
+            book.__dict__["exploration"].slow_owed = None
+            continue
+        carry.pop(s, None)
+        n += 1
+        times.book = s
+        try:
+            with using(eng, book):
+                t_book = time.monotonic()
+                timed(eng, "exploration", exploration.on_pass_slow, eng)
+                took[s] = took.get(s, 0.0) + time.monotonic() - t_book
+        finally:
+            times.book = ""
+    return len(carry)
+
+
+def _fast_pending(eng: Engine, owed: list[SymbolBook]) -> bool:
+    """Any book's 1m/5m exploration work is pending (`exploration.fast_pending`) on the host clock now. Ordering hint
+    only: a failure reads as none pending (trading-safety L1, 2026-11-03)."""
+    from goldbot.engine import exploration
+    now = eng.clock()
+    for b in owed:
+        try:
+            if exploration.fast_pending(b.__dict__.get("exploration"), now):
+                return True
+        except Exception:
+            log.exception("exploration.fast_pending failed for %s; read as nothing pending", b.__dict__["cfg"].symbol)
+    return False
 
 
 def positions(eng: Engine) -> list[Any]:
