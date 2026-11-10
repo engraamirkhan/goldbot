@@ -47,7 +47,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: crosses component boundaries (HTTP API, engine loop, data pipeline); CI runs these in their own job", "network: may run gh/ssh/curl or reach beyond loopback (default: blocked by tests/conftest.py)"]
+markers = ["integration: crosses component boundaries (HTTP API, engine loop, data pipeline); CI runs these in their own job", "network: may run gh/ssh/curl or reach beyond loopback (default: blocked by tests/conftest.py)", "selftest: EVAL-2 evaluator self-tests S0-S6 (minutes, many reps); deselected from unit/integration, run by .github/workflows/selftest.yml"]
 addopts = "--strict-markers"
 
 [tool.ruff]
