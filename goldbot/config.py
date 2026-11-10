@@ -656,8 +656,9 @@ class DailyReviewSettings(_Section):
     # cost probes a day per broker (aux.db cost_probes), from the ADR 0043 probe sleeves: ICM P0 60-90 + mirrors ~8,
     # Vantage scheduled M1 probes only (half ICM's scheduled share, no shadow book to mirror); demo trim 2026-11-01
     # (cost of record 2026-10-31 section 6): ICM 90 -> 24, one scheduled probe per open hour; CFO/finance 2026-11-06:
-    # ICM -> 15 (icm-probe scheduled every_min 120), Vantage 40 until its sessions reach PROBE_MIN_FILLS
-    probe_plan: dict[str, int] = Field(default_factory=lambda: {"icm": 15, "vantage": 40})
+    # ICM -> 15 (icm-probe scheduled every_min 120), Vantage 40 until its sessions reach PROBE_MIN_FILLS; SRE 2026-11-09:
+    # the 11-07 probe hours [07:00, 21:00) cap the scheduled probes at ICM 7 (6-8), Vantage 14
+    probe_plan: dict[str, int] = Field(default_factory=lambda: {"icm": 7, "vantage": 14})
     volume_alert_below: float = Field(0.5, gt=0, le=1)     # a trading day under this fraction of the plan is low ...
     volume_alert_days: int = Field(2, ge=1)                #   ... and this many low trading days running open an issue
     refit_min_fills: int = Field(200, ge=50)               # a (broker, session) cost cell is refit after this many fills

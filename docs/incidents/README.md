@@ -16,3 +16,4 @@ Blameless: describe what the system and the process allowed, not who did it.
 | 2026-10-20 | [A failed deploy's rollback left api, scheduler, telegram, news and tv-pull stopped](2026-10-20-deploy-rollback-left-services-stopped.md) | S1 | open (install the fixed goldbot-deploy on the brain) |
 | 2026-11-01 | [A broker-side "Service is not available" latched vantage-demo's login off for 6 h](2026-11-01-vantage-demo-transient-auth-latched.md) | S2 | closed |
 | 2026-11-02 | [The multi-instrument release left most books closed and the icm-probe bridge starved](2026-11-02-multi-instrument.md) | S2 | open (probe box upgrade with the owner) |
+| 2026-11-09 | [vantage-demo entered nothing for 9.5 h of open market and nothing alerted](2026-11-09-vantage-demo-entry-silence.md) | S2 | open (vantage supply with PD; detection shipped) |
