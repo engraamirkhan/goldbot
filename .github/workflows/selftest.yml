@@ -15,6 +15,11 @@ on:
       - goldbot/research/catalogue/**
       - goldbot/research/eval2/**
       - goldbot/research/screen.py
+      - config/catalogue_costs.yaml
+      - scripts/eval2_selftest.py
+      - tests/test_eval2_*.py
+      - tests/test_holdout_seal.py
+      - tests/test_catalogue_harness_sane.py
       - .github/workflows/selftest.yml
   push:
     branches: [main]
@@ -22,6 +27,11 @@ on:
       - goldbot/research/catalogue/**
       - goldbot/research/eval2/**
       - goldbot/research/screen.py
+      - config/catalogue_costs.yaml
+      - scripts/eval2_selftest.py
+      - tests/test_eval2_*.py
+      - tests/test_holdout_seal.py
+      - tests/test_catalogue_harness_sane.py
       - .github/workflows/selftest.yml
   schedule:
     - cron: "17 3 * * *"   # 03:17 UTC nightly (off the hour: GitHub delays top-of-hour schedules)

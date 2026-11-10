@@ -12,7 +12,6 @@ a sound harness would fail ~1 run in 5). The fast CI S0 (one 1h walk, fixed seed
 `se_ratio` and `rho` are reported diagnostics, never a multiplier."""
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 
@@ -116,10 +115,7 @@ def test_s0_smoke_null_controls_with_20_twins_on_a_fixed_seed_walk_runs_under_10
     assert abs(m["t_gross"]) < 3 and abs(m["t_excess"]) < 3, m
 
 
-# TODO(eval2): switch the skipif to @pytest.mark.selftest once branch ci/selftest-marker (SRE lane: marker in
-# pyproject + the CI `selftest` job) is merged; until then the full run is opted into with GOLDBOT_SELFTEST=1.
-@pytest.mark.skipif(os.environ.get("GOLDBOT_SELFTEST") != "1",
-                    reason="S0 full run: selftest set (GOLDBOT_SELFTEST=1 until the selftest marker is merged)")
+@pytest.mark.selftest
 def test_s0_null_controls_per_timeframe_are_within_a_hundredth_of_r_with_20_twins() -> None:
     """Qualifies at SE(mean excess) <= 0.005 R (quant round 2 item 4: n about 117k); prints the full-run log."""
     cells: list[Cell] = []

@@ -166,8 +166,7 @@ def prebuild(win: str, all_units: list[dict[str, Any]], *, allow_test_old: bool 
             df = _cut(_resample_minutes(m, t), w, t)
             b = _frame_to_bars("XAUUSD", t, df)
             assert_sealed(b.ta, b.t)
-            np.savez(cdir / f"XAUUSD_{t}.npz", t=b.t, ta=b.ta, o=b.o, h=b.h, l=b.l, c=b.c, spr=b.spr, co=b.co,
-                     seg=b.seg, vol=b.vol)
+            D.save_cache(cdir / f"XAUUSD_{t}.npz", b, w, t)
     for i, t in sorted(need):
         try:
             D.get_bars(i, t, win, allow_test_old=allow_test_old)
