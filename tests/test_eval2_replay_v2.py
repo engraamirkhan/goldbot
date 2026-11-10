@@ -91,10 +91,10 @@ def _fixed(costs: ex.ReplayCostsV2) -> ex.CostOfDay:
 
 
 # ---------------------------------------------------------------------------------------------- schema
-def test_migration_27_adds_the_versioned_replay_and_void_tables_additively_and_both_refuse_rewrites(tmp_path):
-    m = AUX[26]
-    assert (m.version, m.name, m.additive) == (27, "exploration_replay_v2", True)
-    assert compat_back_to(AUX, 27) == compat_back_to(AUX, 26)
+def test_migration_28_adds_the_versioned_replay_and_void_tables_additively_and_both_refuse_rewrites(tmp_path):
+    m = AUX[27]
+    assert (m.version, m.name, m.additive) == (28, "exploration_replay_v2", True)
+    assert compat_back_to(AUX, 28) == compat_back_to(AUX, 27)
     with sqlite3.connect(tmp_path / "aux.db") as conn:
         migrate(conn, "aux")
         conn.execute("INSERT INTO exploration_replay (candidate_id, replay_version, label_exit_ns, sim_r, mid_r, "

@@ -623,13 +623,20 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS har_days_available ON har_days(available_ns)",
     )),
+    # additive (trading-safety review L3, 2026-11-09; goldbot/engine/exploration_budget.py `session_budgets`): the
+    # daily session split reads an account's edge candidates of the trailing 10 trading days; this index serves that
+    # range read. A release without it reads the same rows by a scan
+    Migration(version=27, name="exploration_obs_account_kind", additive=True, statements=(
+        "CREATE INDEX IF NOT EXISTS exploration_obs_account_kind ON exploration_obs(account_id, is_control, "
+        "decision_ns)",
+    )),
     # additive (EVAL-2 Lane 5A, prereg-2026-11-09-eval2.md section 5: "`replay_version = "r2"` in a side table keyed
     # (candidate_id, replay_version); `label_sim_r` is never overwritten"; goldbot/research/exploration_data.py).
     # `exploration_replay`: one versioned bar replay per candidate (r2: measured per-leg slippage, no credit, stop
     # overshoot), with the prices and leg charges it used. `exploration_label_void`: a candidate's label of one version
     # declared void (r1: the non-gold candidates replayed on gold bars before the 2026-11-04 guard); every reader
     # drops it. Both append-only: a fix is a new version, never a rewrite. A release without them never reads them
-    Migration(version=27, name="exploration_replay_v2", additive=True, statements=(
+    Migration(version=28, name="exploration_replay_v2", additive=True, statements=(
         """CREATE TABLE IF NOT EXISTS exploration_replay (
                candidate_id TEXT NOT NULL,
                replay_version TEXT NOT NULL,
