@@ -623,6 +623,13 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS har_days_available ON har_days(available_ns)",
     )),
+    # additive (trading-safety review L3, 2026-11-09; goldbot/engine/exploration_budget.py `session_budgets`): the
+    # daily session split reads an account's edge candidates of the trailing 10 trading days; this index serves that
+    # range read. A release without it reads the same rows by a scan
+    Migration(version=27, name="exploration_obs_account_kind", additive=True, statements=(
+        "CREATE INDEX IF NOT EXISTS exploration_obs_account_kind ON exploration_obs(account_id, is_control, "
+        "decision_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

@@ -175,11 +175,11 @@ if [ "$(cat "$L/smoke.status")" = 0 ]; then
   for ((i = 0; i < N_INTEG; i++)); do   # the heavier lanes first
     slot
     dry=true; [ "$i" = "$DRY_SHARD" ] && dry='python scripts/dry_run.py 1 | tail -40'
-    job "integration$i" "GOLDBOT_SHARD=$i/$N_INTEG" -- bash -c "set -o pipefail; pytest -m integration -q -n 1 --tb=short -p no:cacheprovider --junitxml='$L/integration$i.xml'; rc=\$?; $dry || rc=1; exit \$rc" &
+    job "integration$i" "GOLDBOT_SHARD=$i/$N_INTEG" -- bash -c "set -o pipefail; pytest -m 'integration and not selftest' -q -n 1 --tb=short -p no:cacheprovider --junitxml='$L/integration$i.xml'; rc=\$?; $dry || rc=1; exit \$rc" &
   done
   for ((i = 0; i < N_UNIT; i++)); do
     slot
-    job "unit$i" "GOLDBOT_SHARD=$i/$N_UNIT" -- pytest -m "not integration" -q -n 1 --tb=short -p no:cacheprovider --junitxml="$L/unit$i.xml" &
+    job "unit$i" "GOLDBOT_SHARD=$i/$N_UNIT" -- pytest -m "not integration and not selftest" -q -n 1 --tb=short -p no:cacheprovider --junitxml="$L/unit$i.xml" &
   done
 else
   for lane in "${unit_lanes[@]}" "${integ_lanes[@]}"; do skip_lane "$lane"; done

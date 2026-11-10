@@ -38,7 +38,7 @@ unchanged.
 VCAL5 (vantage-demo, `random_bracket` 5m, minute 0, 07:00-20:30 UTC, stop $7, 1.5R, 6 bars) was proposed to measure
 vantage's exit leg once the exit deal price was recorded. **Dropped (quant ruling 2026-11-09): no spec row, no stop
 rule, no account row, K +0.**
-- The exit deal price is already recorded (exit deal VWAP, R110, 3e72bf9a), and vantage-demo fills every stop and
+- The exit deal price is already recorded (exit deal VWAP, commit 3e72bf9a), and vantage-demo fills every stop and
   target at the bracket level (294 of 294), so its exit leg measures nothing on demo.
 - Its entry leg duplicates VEX15/VEX1H: spread and entry fill-vs-replay belong to the instrument, broker and session,
   not to the 5m bar; cost per R at a $7 stop follows from the measured spread.

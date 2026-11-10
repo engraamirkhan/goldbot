@@ -1,0 +1,88 @@
+name: selftest
+# EVAL-2 evaluator self-tests S0-S6 (docs: CTO ruling 2026-11-09, build plan (a), Lane 4; SRE co-owns this file and the
+# `selftest` marker in pyproject.toml). Tests marked `selftest` take minutes (hundreds of reps), so ci.yml, ci_local.sh
+# and gates.sh deselect them (`-m "not integration and not selftest"`) and they run here instead:
+#   - on a PR or a main push that touches the evaluator (catalogue, eval2, screen.py, or this file);
+#   - nightly on main, so a drift from a dependency or data change is still caught without a code change;
+#   - by hand (workflow_dispatch).
+# ADVISORY: not a required check (branch protection requires only ci.yml's `backend` and `frontend`), and its own
+# workflow so path filters and the schedule never change when ci.yml's required checks report. A failure on the nightly
+# or a main push opens (or comments on) a `ci` issue like ci.yml's report-failure; a PR failure shows on the PR.
+# A fixed-seed S0 smoke test (< 10 s) stays UNMARKED and runs in ci.yml's backend-unit on every PR.
+on:
+  pull_request:
+    paths:
+      - goldbot/research/catalogue/**
+      - goldbot/research/eval2/**
+      - goldbot/research/screen.py
+      - .github/workflows/selftest.yml
+  push:
+    branches: [main]
+    paths:
+      - goldbot/research/catalogue/**
+      - goldbot/research/eval2/**
+      - goldbot/research/screen.py
+      - .github/workflows/selftest.yml
+  schedule:
+    - cron: "17 3 * * *"   # 03:17 UTC nightly (off the hour: GitHub delays top-of-hour schedules)
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: selftest-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+defaults:
+  run:
+    shell: bash
+env:
+  GOLDBOT_ALLOW_PLAINTEXT: "1"
+  FORCE_COLOR: "0"
+
+jobs:
+  selftest:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    permissions: { contents: read }
+    env:
+      CHECK: selftest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: ./.github/actions/setup-backend
+        with: { check: selftest }
+      - name: selftest
+        id: tests
+        # exit 5 = nothing marked selftest yet (before Lane 4 lands): a warning, not a pass that hides a lost marker
+        run: |
+          set -o pipefail
+          rc=0; pytest -m selftest -q -n auto --tb=short --junitxml="ci-out/junit-$CHECK.xml" 2>&1 | tee "ci-out/$CHECK.txt" || rc=$?
+          if [ "$rc" = 5 ]; then echo "::warning::no tests are marked selftest"; exit 0; fi
+          [ "$rc" = 0 ] || { echo "$CHECK" >> "ci-out/failed-$CHECK.list"; exit "$rc"; }
+      - name: summary
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci_summary.py summary --title "selftest" "ci-out/junit-$CHECK.xml" --append "ci-out/$CHECK.txt" --step-summary "$GITHUB_STEP_SUMMARY" > /dev/null
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with: { name: ci-out-selftest, path: ci-out/, include-hidden-files: true }
+
+  report-failure:
+    # main only (nightly, main push, manual run on main): one `ci` issue per failing test, a repeat is a comment
+    needs: [selftest]
+    if: failure() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci_summary.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { pattern: ci-out-*, path: ci-out, merge-multiple: true }
+        continue-on-error: true
+      - name: one issue per failing test (an open issue for the same test gets a comment)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I scripts/ci_summary.py report ci-out --jobs selftest
