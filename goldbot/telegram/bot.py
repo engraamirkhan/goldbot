@@ -20,7 +20,7 @@ from goldbot.ops import accounts
 from goldbot.ops.account_view import proposal_budget_from_state
 from goldbot.ops.alert_log import log_alert
 from goldbot.ops.deadman import HEALTH_STALE_S, DeadMan, start_liveness
-from goldbot.ops.deploy import DeployWatch
+from goldbot.ops.deploy import DeployWatch, offer_text
 from goldbot.ops.health import AlertPolicy, HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal, decision_callbacks, decision_channel, parse_decision_callback
@@ -309,11 +309,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             if offer:
                 new = await asyncio.to_thread(self.deploy.check)
                 if new:
-                    more = f"\n… and {new['n_commits'] - len(new['subjects'])} more" if new["n_commits"] > len(new["subjects"]) else ""
-                    text = (f"🚀 New version ready ({new['sha'][:8]}, CI passed):\n"
-                            + "\n".join(f"• {s}" for s in new["subjects"]) + more
-                            + "".join(f"\n⚠️ {n}" for n in new.get("mt5", []))
-                            + "\n\nDeploy restarts the services (open positions keep their stops; the engine reconciles).")
+                    text = offer_text(new)                  # within one Telegram message (goldbot/ops/deploy.py)
                     kb = InlineKeyboardMarkup([[InlineKeyboardButton("Deploy", callback_data=f"dep:{new['sha']}"),
                                                 InlineKeyboardButton("Skip", callback_data=f"skp:{new['sha']}")]])
                     for uid in self.owner_ids:

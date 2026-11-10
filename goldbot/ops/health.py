@@ -201,6 +201,7 @@ from goldbot.ops.checks.services import (
     check_approvals,
     check_deadman,
     check_deploy_approval,
+    check_deploy_read,
     check_heartbeat,
     check_scheduler,
     check_schema_skew,
@@ -325,6 +326,7 @@ __all__ = [
     "check_data_quality",
     "check_deadman",
     "check_deploy_approval",
+    "check_deploy_read",
     "check_deploy",
     "check_disk",
     "check_drift",
@@ -609,10 +611,11 @@ def worsened(report: HealthReport, baseline: HealthReport) -> list[str]:
 MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 
 
-# warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
+# warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h;
+# deploy_read: no version could be offered for 2 h, incident 2026-11-10)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
-                  "history_gap:")
+                  "history_gap:", "deploy_read")
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the

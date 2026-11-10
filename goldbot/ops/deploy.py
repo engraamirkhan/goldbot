@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -39,12 +40,33 @@ ACTIONS_APP_ID = 15368                           # GitHub Actions: check-runs fr
 SHA = re.compile(r"^[0-9a-f]{40}$")
 FetchJson = Callable[[str], Any]
 log = logging.getLogger(__name__)
+GIT_TIMEOUT_S = 30              # check() runs in the Telegram pump's thread: a hung git must end (SRE review, R120)
+# GitHub answers are read streamed and bounded. A compare carries the changed files with their patches (up to 300), so
+# the cap leaves room for a large release: 2 MB would refuse the offer for a week of big PRs (SRE/security review).
+MAX_RESPONSE_BYTES = 5_000_000
+RESPONSE_DEADLINE_S = 30.0      # the whole answer, not only the gap between two packets
+MAX_SUBJECT_CHARS = 120         # one commit subject in the offer
+MAX_OFFER_CHARS = 3900          # Telegram's limit is 4096
+OFFER_SUBJECTS = 15
 
 
 def _get_json(url: str) -> Any:
-    r = requests.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=15)
-    r.raise_for_status()
-    return r.json()
+    """GET a GitHub API answer, streamed: refused (ValueError) when larger than MAX_RESPONSE_BYTES or not complete
+    within RESPONSE_DEADLINE_S in total."""
+    start = time.monotonic()
+    r = requests.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=15, stream=True)
+    try:
+        r.raise_for_status()
+        body = bytearray()
+        for chunk in r.iter_content(chunk_size=65536):
+            body += chunk
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise ValueError(f"GitHub answer larger than {MAX_RESPONSE_BYTES} bytes")
+            if time.monotonic() - start > RESPONSE_DEADLINE_S:
+                raise ValueError(f"GitHub answer not complete within the {RESPONSE_DEADLINE_S:.0f} s deadline")
+        return json.loads(bytes(body))
+    finally:
+        r.close()
 
 
 def ci_status(sha: str, fetch: FetchJson = _get_json) -> str:
@@ -57,6 +79,40 @@ def ci_status(sha: str, fetch: FetchJson = _get_json) -> str:
     return "no"
 
 
+def _subjects(cmp: dict[str, Any]) -> tuple[list[str], int]:
+    """The offer's commit subjects, newest first and cut to MAX_SUBJECT_CHARS, and the commit count, from a compare
+    answer (GitHub lists up to 250 commits, oldest first). A malformed answer raises ValueError."""
+    commits, n = cmp.get("commits"), cmp.get("ahead_by")
+    if not isinstance(commits, list) or not all(isinstance(c, dict) for c in commits):
+        raise ValueError("compare: commits is not a list of objects")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise ValueError("compare: ahead_by is not a count")
+    out = []
+    for c in reversed(commits):
+        commit = c.get("commit")
+        msg = commit.get("message") if isinstance(commit, dict) else None
+        if not isinstance(msg, str):
+            raise ValueError("compare: a commit without a message")
+        first = msg.split("\n", 1)[0]
+        out.append(first if len(first) <= MAX_SUBJECT_CHARS else first[:MAX_SUBJECT_CHARS - 1] + "…")
+    return out, n
+
+
+def offer_text(offer: dict[str, Any]) -> str:
+    """The Telegram text of a deploy offer, always within MAX_OFFER_CHARS: the end of the list (MT5 notes, then
+    subjects) is cut first; the head line and the closing line are kept."""
+    subjects = [str(x) for x in offer.get("subjects", [])]
+    n = int(offer.get("n_commits", len(subjects)))
+    head = f"🚀 New version ready ({str(offer['sha'])[:8]}, CI passed):"
+    tail = "\n\nDeploy restarts the services (open positions keep their stops; the engine reconciles)."
+    more = f"\n… and {n - len(subjects)} more" if n > len(subjects) else ""
+    body = "".join(f"\n• {s}" for s in subjects) + more + "".join(f"\n⚠️ {x}" for x in offer.get("mt5", []))
+    room = MAX_OFFER_CHARS - len(head) - len(tail)
+    if len(body) > room:
+        body = body[:room - 2] + "\n…"
+    return head + body + tail
+
+
 def _write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -66,17 +122,19 @@ def _write(path: Path, data: dict[str, Any]) -> None:
 
 class DeployWatch:
     def __init__(self, state_dir: str | Path, repo_dir: str | Path, fetch: FetchJson = _get_json,
-                 git: Callable[..., str] | None = None) -> None:
+                 git: Callable[..., str] | None = None, clock: Callable[[], float] = time.time) -> None:
         self.dir = Path(state_dir) / "deploy"
         self.log = Path(state_dir) / "deploys.jsonl"
         self.repo = Path(repo_dir)
         self.fetch = fetch
         self.git = git or self._git
+        self.clock = clock
         self._warned: str | None = None                  # the reason last warned about (one warning per outage)
 
     def _git(self, *args: str) -> str:
-        return subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True,
-                              text=True).stdout.strip()
+        """Read-only git in the repo: bounded by GIT_TIMEOUT_S, never waiting on a credential prompt."""
+        return subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, text=True,
+                              timeout=GIT_TIMEOUT_S, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}).stdout.strip()
 
     def _read(self, name: str) -> dict[str, Any]:
         p = self.dir / name
@@ -105,18 +163,17 @@ class DeployWatch:
             if cmp.get("status") != "ahead":
                 self._ok()
                 return None                               # not a fast-forward: the server has local commits
+            subjects, n_commits = _subjects(cmp)
             if ci_status(new, self.fetch) != "yes":
                 self._ok()
                 return None
-        except (subprocess.CalledProcessError, OSError, requests.RequestException, ValueError, KeyError,
+        except (subprocess.SubprocessError, OSError, requests.RequestException, ValueError, KeyError,
                 TypeError, AttributeError) as e:
             self._warn(e)
             return None
         self._ok()
-        # GitHub lists the commits oldest first (up to 250); the offer shows the newest 15 and the full count
-        subjects = [str(c["commit"]["message"]).split("\n", 1)[0] for c in reversed(cmp.get("commits", []))]
-        pending = {"sha": new, "from": cur, "subjects": subjects[:15],
-                   "n_commits": int(cmp.get("ahead_by", len(subjects))), "mt5": self.mt5_notes(new)}
+        pending = {"sha": new, "from": cur, "subjects": subjects[:OFFER_SUBJECTS], "n_commits": n_commits,
+                   "mt5": self.mt5_notes(new)}
         _write(self.dir / "pending.json", pending)
         return pending
 
@@ -127,28 +184,47 @@ class DeployWatch:
             raise ValueError("git ls-remote origin refs/heads/main: no main on origin")
         return out[0]
 
-    def _compare(self, base: str, head: str) -> dict[str, Any]:
+    def _compare(self, base: str, head: str, query: str = "") -> dict[str, Any]:
         """GitHub's compare of two commits: status 'ahead' means `base` is an ancestor of `head` (a fast-forward)."""
         if not (SHA.fullmatch(base) and SHA.fullmatch(head)):
             raise ValueError("compare: not a commit id")
-        return dict(self.fetch(f"{REPO_API}/compare/{base}...{head}"))
+        answer = self.fetch(f"{REPO_API}/compare/{base}...{head}{query}")
+        if not isinstance(answer, dict):
+            raise ValueError("compare: not an object")
+        return answer
 
     def _warn(self, e: BaseException) -> None:
-        """One line per outage (the first, or when the reason changes); a recovery re-arms it."""
-        if isinstance(e, subprocess.CalledProcessError):
+        """One line per outage (the first, or when the reason changes); a recovery re-arms it. The outage is kept in
+        state/deploy/check.json (`failing_since`, `error`) for the deploy_read health check."""
+        if isinstance(e, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
             cmd = e.cmd if isinstance(e.cmd, str) else " ".join(str(c) for c in e.cmd)
-            first = (str(e.stderr or "").strip().splitlines() or [""])[0]
-            reason = f"`{cmd}` exited {e.returncode}: {first}".rstrip(": ")
+            if isinstance(e, subprocess.TimeoutExpired):
+                reason = f"`{cmd}` timed out after {e.timeout:.0f} s"
+            else:
+                first = (str(e.stderr or "").strip().splitlines() or [""])[0]
+                reason = f"`{cmd}` exited {e.returncode}: {first}".rstrip(": ")
         else:
             reason = f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}"
+        reason = reason[:300]
         if reason != self._warned:
-            log.warning("deploy check: cannot read the newest version (%s); no offer this pass", reason[:300])
+            log.warning("deploy check: cannot read the newest version (%s); no offer this pass", reason)
             self._warned = reason
+            rec = self._read("check.json")
+            self._record({"last_ok": rec.get("last_ok"), "failing_since": rec.get("failing_since") or self.clock(),
+                          "error": reason})
 
     def _ok(self) -> None:
+        """A pass that read origin and GitHub: its time goes to state/deploy/check.json (`last_ok`)."""
         if self._warned is not None:
             log.info("deploy check: reading the newest version works again")
             self._warned = None
+        self._record({"last_ok": self.clock()})
+
+    def _record(self, rec: dict[str, Any]) -> None:
+        try:
+            _write(self.dir / "check.json", rec)
+        except OSError as e:                              # the check never fails on its own bookkeeping
+            log.debug("deploy check: cannot write check.json: %s", e)
 
     def mt5_notes(self, new: str) -> list[str]:
         """One line per bridged engine whose MT5 box does not run `new` (G6, BACKLOG 42): the one-click deploy updates
@@ -177,7 +253,7 @@ class DeployWatch:
             if commit == new:
                 continue
             try:
-                ancestor = self._compare(commit, new).get("status") == "ahead"
+                ancestor = self._compare(commit, new, "?per_page=1").get("status") == "ahead"
             except (OSError, requests.RequestException, ValueError, TypeError, AttributeError):
                 notes.append(f"MT5 box ({account}) runs {commit[:8]}; GitHub did not say whether it is older than "
                              "this version: check it before deploying")

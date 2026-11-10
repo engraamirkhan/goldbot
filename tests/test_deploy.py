@@ -8,7 +8,18 @@ from typing import Any
 import pytest
 import requests
 
-from goldbot.ops.deploy import ACTIONS_APP_ID, DeployWatch, ci_status
+from goldbot.ops.checks.services import DEPLOY_READ_STALE_S
+from goldbot.ops.deploy import (
+    ACTIONS_APP_ID,
+    GIT_TIMEOUT_S,
+    MAX_RESPONSE_BYTES,
+    MAX_SUBJECT_CHARS,
+    RESPONSE_DEADLINE_S,
+    DeployWatch,
+    _get_json,
+    ci_status,
+    offer_text,
+)
 
 pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
 
@@ -271,3 +282,168 @@ def test_an_ls_remote_failure_logs_one_concise_warning_per_outage_and_offers_not
     with caplog.at_level(logging.WARNING, logger="goldbot.ops.deploy"):
         w.check()
     assert len(caplog.records) == 1                                              # a new outage is said again
+
+
+class _HungGit(_Git):
+    def __call__(self, *args: str) -> str:
+        if args[0] == "ls-remote":
+            raise subprocess.TimeoutExpired(["git", "ls-remote"], GIT_TIMEOUT_S)
+        return super().__call__(*args)
+
+
+def test_a_hung_ls_remote_times_out_with_one_warning_and_no_offer(tmp_path, caplog):
+    """SRE review: check() is awaited in the bot's pump, so a git that hangs must end, not stall approvals."""
+    w = _watch(tmp_path, _HungGit(A, B))
+    with caplog.at_level(logging.WARNING, logger="goldbot.ops.deploy"):
+        assert w.check() is None and w.check() is None
+    assert len(caplog.records) == 1 and caplog.records[0].exc_info is None
+    assert "timed out" in caplog.records[0].getMessage()
+    assert not (tmp_path / "deploy" / "pending.json").exists()
+
+
+def test_the_real_git_runner_has_a_timeout_and_never_prompts(tmp_path, monkeypatch):
+    seen: dict[str, Any] = {}
+
+    def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(kw, argv=argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{B}\trefs/heads/main\n", stderr="")
+    monkeypatch.setattr(subprocess, "run", run)
+    assert DeployWatch(tmp_path, tmp_path)._git("ls-remote", "origin", "refs/heads/main").startswith(B)
+    assert seen["timeout"] == GIT_TIMEOUT_S and seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_a_successful_read_records_its_time_and_a_failure_keeps_it(tmp_path):
+    git = _Git(A, A)
+    w = DeployWatch(tmp_path, tmp_path, fetch=_GitHub(git), git=git, clock=lambda: 1000.0)
+    w.check()
+    rec = json.loads((tmp_path / "deploy" / "check.json").read_text())
+    assert rec["last_ok"] == 1000.0 and rec.get("error") is None
+    git.down = True
+    w.clock = lambda: 5000.0
+    w.check()
+    rec = json.loads((tmp_path / "deploy" / "check.json").read_text())
+    assert rec["last_ok"] == 1000.0 and rec["failing_since"] == 5000.0 and "ls-remote" in rec["error"]
+
+
+def test_the_deploy_read_check_is_ok_while_reads_succeed(tmp_path):
+    from goldbot.ops import health
+    from tests.test_health import NOW, make_ctx, write
+    assert health.check_deploy_read(make_ctx(tmp_path)) is None                 # deploys off on this host
+    write(tmp_path / "deploy" / "check.json", {"last_ok": NOW.timestamp() - 600})
+    c = health.check_deploy_read(make_ctx(tmp_path))
+    assert c is not None and c.status == "ok"
+
+
+def test_the_deploy_read_check_warns_and_tells_the_owner_after_two_hours_without_a_read(tmp_path):
+    from goldbot.ops import health
+    from tests.test_health import NOW, make_ctx, write
+    write(tmp_path / "deploy" / "check.json", {"last_ok": NOW.timestamp() - DEPLOY_READ_STALE_S - 60,
+                                               "failing_since": NOW.timestamp() - 3600,
+                                               "error": "`git ls-remote` exited 255: fatal: x"})
+    c = health.check_deploy_read(make_ctx(tmp_path))
+    assert c is not None and c.status == "warn" and "exited 255" in c.reason and "RUNBOOK" in c.reason
+    assert health._alerting(c.name, c.status)                                   # NOTIFY_ON_WARN
+    assert c in health.run_checks(make_ctx(tmp_path)).checks
+
+
+def test_the_deploy_read_check_warns_when_no_read_ever_succeeded(tmp_path):
+    from goldbot.ops import health
+    from tests.test_health import NOW, make_ctx, write
+    write(tmp_path / "deploy" / "check.json", {"last_ok": None, "failing_since": NOW.timestamp() - 600, "error": "e"})
+    c = health.check_deploy_read(make_ctx(tmp_path))
+    assert c is not None and c.status == "ok"                                   # failing, but not for 2 h yet
+    write(tmp_path / "deploy" / "check.json", {"last_ok": None, "failing_since": NOW.timestamp() - DEPLOY_READ_STALE_S - 1,
+                                               "error": "e"})
+    c = health.check_deploy_read(make_ctx(tmp_path))
+    assert c is not None and c.status == "warn" and "never" in c.reason
+
+
+@pytest.mark.parametrize("cmp", [
+    {"status": "ahead", "ahead_by": 2, "commits": "not a list"},
+    {"status": "ahead", "ahead_by": 2, "commits": ["not a dict"]},
+    {"status": "ahead", "ahead_by": "two", "commits": []},
+    {"status": "ahead", "ahead_by": 2, "commits": [{"commit": {}}]},
+])
+def test_a_malformed_compare_answer_gives_one_warning_and_no_offer(tmp_path, caplog, cmp):
+    git = _Git(A, B)
+    hub = _GitHub(git)
+    w = DeployWatch(tmp_path, tmp_path, fetch=lambda url: cmp if "/compare/" in url else hub(url), git=git)
+    with caplog.at_level(logging.WARNING, logger="goldbot.ops.deploy"):
+        assert w.check() is None
+    assert len(caplog.records) == 1 and caplog.records[0].exc_info is None
+    assert not (tmp_path / "deploy" / "pending.json").exists()
+
+
+class _Resp:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.closed = False
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def iter_content(self, chunk_size: int) -> Any:
+        yield from self.chunks
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_a_github_answer_larger_than_the_cap_is_refused(monkeypatch):
+    resp = _Resp([b"x" * (MAX_RESPONSE_BYTES // 2 + 1)] * 3)
+    monkeypatch.setattr(requests, "get", lambda url, **kw: resp)
+    with pytest.raises(ValueError, match="larger than"):
+        _get_json("https://api.github.com/x")
+    assert resp.closed
+
+
+def test_a_github_answer_past_the_deadline_is_refused(monkeypatch):
+    import goldbot.ops.deploy as deploy
+    ticks = iter([0.0, 1.0, RESPONSE_DEADLINE_S + 1.0, RESPONSE_DEADLINE_S + 2.0])
+    monkeypatch.setattr(deploy.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(requests, "get", lambda url, **kw: _Resp([b"{", b"}"]))
+    with pytest.raises(ValueError, match="deadline"):
+        _get_json("https://api.github.com/x")
+
+
+def test_a_small_github_answer_is_read_streamed_with_a_timeout(monkeypatch):
+    seen: dict[str, Any] = {}
+
+    def get(url: str, **kw: Any) -> _Resp:
+        seen.update(kw)
+        return _Resp([b'{"a": ', b"1}"])
+    monkeypatch.setattr(requests, "get", get)
+    assert _get_json("https://api.github.com/x") == {"a": 1}
+    assert seen["stream"] is True and seen["timeout"]
+
+
+def test_the_mt5_box_compare_asks_github_for_one_commit_only(tmp_path):
+    _engine_state(tmp_path, "icm-demo", {"status": "ok", "bridge_commit": C})
+    git = _Git(A, B)
+    hub = _GitHub(git)
+    urls: list[str] = []
+
+    def fetch(url: str) -> Any:
+        urls.append(url)
+        return hub(url)
+    DeployWatch(tmp_path, tmp_path, fetch=fetch, git=git).check()
+    (mt5,) = [u for u in urls if f"/compare/{C}..." in u]
+    assert mt5.endswith("?per_page=1")
+
+
+def test_a_long_subject_is_cut_and_the_offer_text_fits_one_telegram_message(tmp_path):
+    long = "feat: " + "y" * 500
+    git = _Git(A, B)
+    hub = _GitHub(git)
+
+    def fetch(url: str) -> Any:
+        if "/compare/" in url and f"/compare/{A}" in url:
+            return {"status": "ahead", "ahead_by": 40, "commits": [{"commit": {"message": long}}] * 40}
+        return hub(url)
+    offer = DeployWatch(tmp_path, tmp_path, fetch=fetch, git=git).check()
+    assert offer is not None and all(len(s) <= MAX_SUBJECT_CHARS for s in offer["subjects"])
+    offer["mt5"] = ["MT5 box note " + "z" * 900] * 10                             # many long notes
+    text = offer_text(offer)
+    assert len(text) < 4000 and text.startswith(f"🚀 New version ready ({B[:8]}, CI passed)")
+    assert "Deploy restarts the services" in text                               # the closing line survives the cut
+    assert "… and 25 more" in offer_text({**offer, "mt5": []})
