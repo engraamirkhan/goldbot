@@ -52,7 +52,10 @@ def _close(eng: Engine, n: int, bars: pd.DataFrame = BARS) -> tuple[pd.Timestamp
     tick = Tick(ts_utc=close_ts, bid=float(np.nan_to_num(last["bid_close"], nan=2000.0)),
                 ask=float(np.nan_to_num(last["ask_close"], nan=2000.2)))
     setattr(eng, "_rebuild_bars", lambda until=None: None)      # the bars are set above
-    return close_ts, eng.on_bar_close(close_ts, tick)
+    out = eng.on_bar_close(close_ts, tick)
+    key_zones.launch(eng)                     # the pass's end: the parked build starts after the entries (SRE 11-09)
+    eng._write_state()                        # the next state write publishes what it built
+    return close_ts, out
 
 
 def _n_at_15m_close(back: int = 50) -> int:
@@ -83,8 +86,14 @@ def test_zones_are_handed_to_the_worker_only_when_a_new_15m_bar_has_closed():
     calls: list[pd.Timestamp] = []
 
     class Worker:
+        parked: Any = None
+        sessions: Any = None
+
         def collect(self) -> None:
             return None
+
+        def busy(self) -> bool:
+            return False
 
         def submit(self, recent: pd.DataFrame, t: pd.Timestamp, price: float) -> bool:
             calls.append(t)
@@ -95,6 +104,7 @@ def test_zones_are_handed_to_the_worker_only_when_a_new_15m_bar_has_closed():
     t0 = pd.Timestamp("2025-02-03 10:15", tz="UTC")
     for m in range(0, 31):
         key_zones.update(eng, BARS[BARS["visible_at"] <= t0 + pd.Timedelta(minutes=m)], t0 + pd.Timedelta(minutes=m))
+        key_zones.launch(eng)                                     # every pass's end
     assert calls == [t0, t0 + pd.Timedelta(minutes=15), t0 + pd.Timedelta(minutes=30)]
 
 

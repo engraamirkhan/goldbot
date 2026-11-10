@@ -682,7 +682,7 @@ class Engine:
         if due is not None:
             self._closed_through = due
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
-            out = self.on_bar_close(due, t)
+            out = books.timed(self, "bars", self.on_bar_close, due, t)   # SRE 11-09 fix 4a: phase timed
             history.after_close(self, due)   # a finished background fill joins the bars; never raises
             self._last_state_write = t.ts_utc
             bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
@@ -699,7 +699,7 @@ class Engine:
         elif self._state_heartbeat_due():
             self._guard(lambda: state_heartbeat.write(self))
         self.last_bar_close = bar_close if self.broker_m1.held is None else self.last_bar_close   # a held close stays due
-        exploration.on_pass(self, t)       # after the exits and the bar close's decisions; never raises
+        books.exploration_pass(self, t)    # after the exits and the bar close's decisions (+ key zones); never raises
         self._flush_closed()               # after every exit of this tick has been sent
         return out
 
@@ -936,7 +936,7 @@ class Engine:
             raise err                          # as before: a tick error, entries blocked until a clean close
         cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
         if self.book is self.primary:                    # gold's zones (the account's chart), display only
-            key_zones.update(self, complete, close_ts)   # after every decision of this close; never raises
+            books.timed(self, "zones", key_zones.update, self, complete, close_ts)   # after its decisions; never raises
         if self.shadow is not None:
             self.shadow.save(close_ts)
         self._write_state()

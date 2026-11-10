@@ -32,11 +32,12 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, ParamSpec, TypeVar
 
 import pandas as pd
 
@@ -108,8 +109,15 @@ QUIET_RECHECK_S = 10.0
 SYMBOL_RETRY_S = 1800.0
 # a failed symbol_info read on an enabled non-gold book is tried again after this long: its entries wait on it
 SYMBOL_RETRY_ENABLED_S = 60.0
+# SRE diagnosis 2026-11-09 (fix 4c): gold's key-zones build (display only, 1.2-2.6 s of CPU on its own thread) starts
+# once a multi-book pass ran every book and no book has an exploration decision due, so it never competes with the
+# bar close's entries; it starts anyway once its inputs have waited this long (host clock)
+ZONES_WAIT_S = 60.0
+# the pass phases the deferral warning names, in this order (`PassTimes`; fix 4a: "logs per-book phase times")
+PHASES: tuple[str, ...] = ("bridge", "bars", "zones", "exploration")
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
 class BookSpec(FrozenRecord):
@@ -385,16 +393,19 @@ class PassBroker:
     bridge is not asked 26 times) is served to every book; an order, close or modify sent through it clears them, so
     no book decides on positions read before an order of this pass. Each of PASS_FIGURES is asked once a pass per
     exact arguments (the same answer or exception for the same question). Everything else goes straight to the
-    broker."""
+    broker. With `times` (the pass's PassTimes) every call that reaches the broker is timed as the `bridge` phase."""
 
-    def __init__(self, broker: Any) -> None:
+    def __init__(self, broker: Any, times: PassTimes | None = None) -> None:
         self.__dict__["_inner"] = broker
         self.__dict__["_memo"] = {}
         self.__dict__["_figures"] = {}
+        self.__dict__["_times"] = times
 
     def __getattr__(self, name: str) -> Any:
         inner, memo = self.__dict__["_inner"], self.__dict__["_memo"]
-        attr = getattr(inner, name)
+        raw = getattr(inner, name)
+        times: PassTimes | None = self.__dict__["_times"]
+        attr = raw if times is None or not callable(raw) else _bridge_timed(times, raw)
         if name in PASS_FIGURES:
             figures = self.__dict__["_figures"]
 
@@ -434,14 +445,102 @@ class PassBroker:
         self.__dict__["_memo"].clear()
 
 
-def _pass_broker(broker: Any) -> PassBroker:
+class PassTimes:
+    """Where one multi-book pass went, by book and phase (SRE diagnosis 2026-11-09, fix 4a: "logs per-book phase times
+    (bridge, frame, exploration) in the deferral warning"): `bridge` every broker call through the pass's PassBroker,
+    `bars` the bar close (frames, features, decisions), `zones` gold's key zones at the close, `exploration` the
+    exploration pass. Self time: a phase inside another (a bridge call inside the bar close) counts in the inner one
+    only, so a book's phases never add up to more than its pass. `book` is the book being timed ("" for the pass's
+    shared steps: quotes, exits). Measurement only: nothing reads it to decide anything; a call from another thread
+    (a worker holding the pass's broker) is not timed."""
+
+    def __init__(self) -> None:
+        self.book = ""
+        self.by: dict[str, dict[str, float]] = {}
+        self._inner: list[float] = []            # the open phases' time spent in phases inside them
+        self._thread = threading.get_ident()
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        if threading.get_ident() != self._thread:
+            yield
+            return
+        start = time.monotonic()
+        self._inner.append(0.0)
+        try:
+            yield
+        finally:
+            took = time.monotonic() - start
+            mine = took - self._inner.pop()
+            row = self.by.setdefault(self.book, {})
+            row[name] = row.get(name, 0.0) + mine
+            if self._inner:
+                self._inner[-1] += took
+
+    def describe(self, book: str) -> str:
+        row = self.by.get(book, {})
+        return ", ".join(f"{p} {row.get(p, 0.0):.2f}" for p in PHASES)
+
+    def totals(self) -> str:
+        """Every book's phases added up (the pass's shared steps left out: they are logged on their own)."""
+        return ", ".join(f"{p} {sum(r.get(p, 0.0) for b, r in self.by.items() if b):.2f}" for p in PHASES)
+
+
+def _bridge_timed(times: PassTimes, fn: Callable[..., Any]) -> Callable[..., Any]:
+    def call(*a: Any, **k: Any) -> Any:
+        with times.phase("bridge"):
+            return fn(*a, **k)
+    return call
+
+
+def phase(eng: Engine, name: str) -> Any:
+    """The block timed as `name` in the running account pass's PassTimes; a no-op outside one (gold alone, replays)."""
+    times: PassTimes | None = eng.__dict__.get("_pass_times")
+    return times.phase(name) if times is not None else nullcontext()
+
+
+def timed(eng: Engine, name: str, fn: Callable[P, T], *a: P.args, **k: P.kwargs) -> T:
+    """`fn(*a, **k)` timed as the phase `name` (`phase`); its result or its exception, unchanged."""
+    with phase(eng, name):
+        return fn(*a, **k)
+
+
+def exploration_pass(eng: Engine, tick: Tick) -> None:
+    """The engine pass's last entry step: `exploration.on_pass` (timed `exploration`), then, on an engine with one
+    book, gold's key-zones build parked at this pass's bar close starts (`key_zones.launch`): after the entries were
+    evaluated, never during them (fix 4c; a multi-book account starts it after every book, `account_pass`)."""
+    from goldbot.engine import exploration, key_zones
+    timed(eng, "exploration", exploration.on_pass, eng, tick)
+    if not multi(eng):
+        key_zones.launch(eng)
+
+
+def _launch_zones(eng: Engine, deferred: bool, active: list[SymbolBook], now: pd.Timestamp) -> None:
+    """Fix 4c: start gold's parked key-zones build once this pass ran every book and none has an exploration decision
+    due, or once its inputs have waited ZONES_WAIT_S. Display only; never raises."""
+    from goldbot.engine import key_zones
+    try:
+        parked = eng.key_zone_worker.parked
+        if parked is None:
+            return
+        at = time.monotonic()
+        seen = eng.__dict__.get("_zones_seen")
+        if seen is None or seen[0] != parked[1]:
+            seen = eng.__dict__["_zones_seen"] = (parked[1], at)
+        if (not deferred and not any(_is_due(b, now) for b in active)) or at - seen[1] >= ZONES_WAIT_S:
+            key_zones.launch(eng)
+    except Exception:              # noqa: BLE001 - display only: the pass and every exit go on
+        log.exception("key zones build not started; tried again next pass")
+
+
+def _pass_broker(broker: Any, times: PassTimes | None = None) -> PassBroker:
     """A PassBroker whose class carries the broker's class flags (`balance_exact`, read on the type: capital_flows)."""
     cls = type(broker)
     sub = _PASS_TYPES.get(cls)
     if sub is None:
         sub = _PASS_TYPES[cls] = type(f"Pass{cls.__name__}", (PassBroker,),
                                       {"balance_exact": getattr(cls, "balance_exact", False)})
-    return sub(broker)
+    return sub(broker, times)
 
 
 _PASS_TYPES: dict[type, type[PassBroker]] = {}
@@ -567,18 +666,26 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     right after gold, the rest after them, each group in the fair rotation; the rotation's next book in turn runs
     even past the deadline, so due books never starve the others.
 
-    A quiet book (`quiet_books`: blocked, holding nothing) takes no part at all: no quote, no exits step, no pass."""
+    A quiet book (`quiet_books`: blocked, holding nothing) takes no part at all: no quote, no exits step, no pass.
+
+    SRE diagnosis 2026-11-09 (fix 4a): the deferral warning names the quotes read and, for the slowest books, their
+    bridge, bar close, key zones and exploration time (`PassTimes`), with every book's phases added up. Fix 4c: gold's
+    key-zones build parked at its bar close starts after the books' passes (`_launch_zones`)."""
     ok = True
     t0 = time.monotonic()
     cfg = eng.primary.__dict__["cfg"]
     prev = eng.broker
-    eng.__dict__["broker"] = _pass_broker(prev)
+    times = PassTimes()
+    eng.__dict__["_pass_times"] = times
+    eng.__dict__["broker"] = _pass_broker(prev, times)
     deferred = False
     try:
         quiet = quiet_books(eng)
         active = [b for b in eng.books.values() if b.__dict__["cfg"].symbol not in quiet]
+        t_quotes = time.monotonic()
         if feed is not None:
             feed.refresh([b.__dict__["cfg"].symbol for b in active], pd.Timestamp.now("UTC"))
+        t_quotes = time.monotonic() - t_quotes
         quotes = PassQuotes(feed if feed is not None else broker)
         rest = [b for b in active if b is not eng.primary]
         start = eng.__dict__.get("_pass_cursor", 0) % len(rest) if rest else 0
@@ -598,21 +705,29 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
                 left.append(book)
                 continue
             t_book = time.monotonic()
-            with using(eng, book):
-                ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+            times.book = book.__dict__["cfg"].symbol
+            try:
+                with using(eng, book):
+                    ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+            finally:
+                times.book = ""                  # a pass that raised never has later time charged to its book
             took[book.__dict__["cfg"].symbol] = time.monotonic() - t_book
         if left:
             eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))
             eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
             if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
-                slow = ", ".join(f"{s} {t:.2f} s" for s, t in sorted(took.items(), key=lambda x: -x[1])[:3])
+                slow = ", ".join(f"{s} {t:.2f} s ({times.describe(s)})"
+                                 for s, t in sorted(took.items(), key=lambda x: -x[1])[:3])
                 log.warning("%s: pass budget %.1f s spent after %d of %d books (%d due first); the rest go first "
-                            "next pass; exits %.2f s; slowest: %s", cfg.account_id, budget_s, len(order) - len(left),
-                            len(order), len(due), t_exits, slow)
+                            "next pass; quotes %.2f s; exits %.2f s; phases: %s; slowest: %s", cfg.account_id,
+                            budget_s, len(order) - len(left), len(order), len(due), t_quotes, t_exits,
+                            times.totals(), slow)
             deferred = True
+        _launch_zones(eng, deferred, active, now)
     finally:
         eng.__dict__["_pass_was_deferred"] = deferred
         eng.__dict__["broker"] = prev
+        eng.__dict__.pop("_pass_times", None)
     return ok
 
 
