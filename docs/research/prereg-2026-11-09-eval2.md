@@ -352,6 +352,20 @@ Pytest marker `selftest` (fast set S0, S2, S3, S6) and CI job `selftest` (SRE co
   uncredited target give-back, +0.017 R, remains). Vantage cannot pass S5 until its exit deal price is recorded.
   S5 passes at |bias| <= 0.02 R per broker and TF band.
 
+**Amendment 2026-11-09 (quant-reviewer; written and signed before any replay-v2 S5 read).** Supersedes the
+sentence 'Vantage cannot pass S5 until its exit deal price is recorded.' above. Vantage S5: the exit
+deal price is recorded (exit deal VWAP, R110). Vantage-demo fills stops and targets at the level, so its exit-slip term
+cannot be measured on demo. S5 on vantage is read on the entry leg (fill vs replay, spread) only. Its exit term is not
+read on demo. Any real-money use takes the larger of the ICM-measured exit slip (per leg and session) and the prior.
+Vantage S5 cannot be green on the exit leg from demo data. If 95 % or more of vantage entries fill within $0.005 of the
+quote, its entry leg is treated the same way and vantage S5 reads NOT AVAILABLE. S5 passes per broker and TF band on at
+least 50 pairs over at least 10 session days, with |mean fill − replay v2| ≤ 0.02 R and a lower one-sided 95 %
+day-clustered bound ≥ −0.02 R. Each r2 label is costed only from ledger fills before its own session day. The bullet
+'The exploration ledger fills feed `goldbot/execution/costs.py` `slippage_table` per broker and leg' is replaced by:
+'The exploration ledger fills feed a per-leg table (`leg_slippage_table`) read only by the label replay. They never
+feed the engine's `slippage` cells, the RiskGate cost, the deciding cost or any real-money hurdle (method section 4:
+demo fills never lower a cost).'
+
 ## 6. Integrity record
 
 ### 6.1 Confirm-read ledger (2018-01..2025-09; TEST-OLD 2006-02..2009 never read)
