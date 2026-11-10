@@ -120,6 +120,19 @@ Written after the 2026-10-26..11-09 control fills and their P&L were seen. Accep
 read for edge: they add volume for measurement and carry kill rules only. No threshold, reading rule, window or
 matched-control method of any other arm changes.
 
+## 9. Separate kill: I0-XAUJPY formally retired 2026-11-09
+
+- I0-XAUJPY (vantage-demo) has been refused `thin_cell_complete` since 2026-11-06 under the 11-06 amendment rule 4:
+  its XAUJPY cost cell on vantage-demo has 36 fills of 30. That count is per account, so the arm would enter again if
+  XAUJPY were ever listed on another account.
+- The spec row now carries `retired_day: "2026-11-09"` and a `retired_rule` naming rule 4, as S0-XAUJPY's did on
+  2026-11-07 (kill-only amendment section 4). The engine then refuses it on every account (`spec_retired`). Only
+  unhashed fields changed: hash 4e2532b406cdcf47, id and K row stay. Open positions keep every exit. K unchanged.
+- Evidence (performance-analyst, 2026-11-09): measured cost £0.413 a fill (0.038 R, 1.36 bp; SE ±0.07, n 6), about
+  VI0's per R. The £1.13 a fill seen earlier is the engine's pre-trade estimate on the `cost_atr = 0.10` fallback (no
+  measured XAUJPY cost table on vantage), not a measured cost. Its -£42.8 is direction on 6 fills (noise), not cost.
+  The retirement rests on rule 4 (cell complete), not on that loss.
+
 ## 10. Rollback
 
 Drop the VEX15/VEX1H/IEX15/IEX1H lines from config/accounts.yaml and restart the engines (any open position keeps its
