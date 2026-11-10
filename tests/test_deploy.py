@@ -1,10 +1,12 @@
 """Deployment by the owner's click or by hand (goldbot/ops/deploy.py): only merged commits that passed CI are offered,
 an approval names one exact commit, results are reported once. Nothing deploys by itself."""
 import json
+import logging
 import subprocess
 from typing import Any
 
 import pytest
+import requests
 
 from goldbot.ops.deploy import ACTIONS_APP_ID, DeployWatch, ci_status
 
@@ -36,21 +38,47 @@ def test_ci_status_needs_every_required_job_to_pass():
 
 
 class _Git:
+    """The service user's git under ProtectSystem=strict: it may only read. A writing command fails the test."""
+
     def __init__(self, head: str, main: str, ff: bool = True) -> None:
         self.head, self.main, self.ff = head, main, ff
+        self.down = False                                   # origin unreachable
+        self.calls: list[tuple[str, ...]] = []
 
     def __call__(self, *args: str) -> str:
+        self.calls.append(args)
+        if args[0] in ("fetch", "pull", "remote", "update-ref", "gc", "worktree"):
+            raise AssertionError(f"git {args[0]} writes /opt/goldbot/.git, read-only to the telegram service")
+        if args[0] == "ls-remote":
+            if self.down:
+                raise subprocess.CalledProcessError(128, ["git", "ls-remote"],
+                                                    stderr="fatal: unable to access remote\nmore detail\n")
+            return f"{self.main}\trefs/heads/main"
         if args[0] == "rev-parse":
-            return self.head if args[1] == "HEAD" else self.main
-        if args[0] == "merge-base" and not self.ff:
-            raise subprocess.CalledProcessError(1, "git")
-        if args[0] == "log":
-            return "feat: one\nfix: two"
+            return self.head
         return ""
 
 
-def _watch(tmp_path, git: _Git, ci: str = "success") -> DeployWatch:
-    return DeployWatch(tmp_path, tmp_path, fetch=lambda url: _runs(backend=ci, frontend="success"), git=git)
+class _GitHub:
+    """GitHub's public API, read-only: check-runs and compare (base...head)."""
+
+    def __init__(self, git: _Git, ci: str = "success", not_ancestor: tuple[str, ...] = ()) -> None:
+        self.git, self.ci, self.not_ancestor = git, ci, not_ancestor
+
+    def __call__(self, url: str) -> dict[str, Any]:
+        if "/check-runs" in url:
+            return _runs(backend=self.ci, frontend="success")
+        base, head = url.split("/compare/")[1].split("?")[0].split("...")
+        if base == head:
+            return {"status": "identical", "ahead_by": 0, "commits": []}
+        if not self.git.ff or base in self.not_ancestor:
+            return {"status": "diverged", "ahead_by": 2, "behind_by": 1, "commits": []}
+        return {"status": "ahead", "ahead_by": 2,           # oldest first, as GitHub lists them
+                "commits": [{"commit": {"message": "fix: two\n\nbody"}}, {"commit": {"message": "feat: one"}}]}
+
+
+def _watch(tmp_path, git: _Git, ci: str = "success", not_ancestor: tuple[str, ...] = ()) -> DeployWatch:
+    return DeployWatch(tmp_path, tmp_path, fetch=_GitHub(git, ci, not_ancestor), git=git)
 
 
 def test_a_new_commit_that_passed_ci_is_offered_once(tmp_path):
@@ -135,15 +163,6 @@ def _engine_state(tmp_path, account: str, compat: dict[str, Any] | None) -> None
     (tmp_path / f"engine_{account}.json").write_text(json.dumps({"bridge_compat": compat}))
 
 
-class _GitNotAncestor(_Git):
-    """The brain fast-forwards; the MT5 box's commit is not an ancestor of the offered one."""
-
-    def __call__(self, *args: str) -> str:
-        if args[0] == "merge-base" and args[2] == C:
-            raise subprocess.CalledProcessError(1, "git")
-        return super().__call__(*args)
-
-
 def test_the_offer_says_when_the_mt5_box_runs_an_older_commit(tmp_path):
     """G6 / BACKLOG 42: the one-click offer updates only the brain; it says when the MT5 box is behind."""
     _engine_state(tmp_path, "icm-demo", {"status": "ok", "bridge_commit": A})
@@ -166,7 +185,7 @@ def test_the_offer_is_silent_when_the_mt5_box_runs_the_offered_commit_and_flags_
     diverged = tmp_path / "d"
     diverged.mkdir()
     _engine_state(diverged, "icm-demo", {"status": "ok", "bridge_commit": C})
-    offer = _watch(diverged, _GitNotAncestor(A, B)).check()
+    offer = _watch(diverged, _Git(A, B), not_ancestor=(C,)).check()
     assert offer is not None and len(offer["mt5"]) == 1 and "not an ancestor" in offer["mt5"][0]
     junk = tmp_path / "j"
     junk.mkdir()
@@ -182,3 +201,73 @@ def test_the_offer_is_silent_when_the_mt5_box_runs_the_offered_commit_and_flags_
     assert offer is not None and len(offer["mt5"]) == 1                            # N3: said, not silently dropped
     assert "unrecognised commit" in offer["mt5"][0] and "upload-pack" not in offer["mt5"][0]   # never echoed
     assert not any("--upload-pack=evil" in a for call in seen for a in call)     # never passed to the VCS
+
+
+def test_the_check_reads_the_remote_head_with_ls_remote_and_never_fetches(tmp_path):
+    """goldbot-telegram runs under ProtectSystem=strict with /opt/goldbot/.git read-only: a `git fetch` there exits
+    255 on every pass and no version is ever offered. The check reads origin's main with `git ls-remote`."""
+    git = _Git(A, B)
+    offer = _watch(tmp_path, git).check()
+    assert offer is not None and offer["sha"] == B
+    assert ("ls-remote", "origin", "refs/heads/main") in git.calls
+    assert {c[0] for c in git.calls} <= {"ls-remote", "rev-parse"}               # read-only commands only
+
+
+def test_the_offer_says_so_when_github_cannot_place_the_mt5_box_commit(tmp_path):
+    _engine_state(tmp_path, "icm-demo", {"status": "ok", "bridge_commit": C})
+    git = _Git(A, B)
+    hub = _GitHub(git)
+
+    def fetch(url: str) -> Any:
+        if f"/compare/{C}..." in url:
+            raise requests.HTTPError("403 rate limited")
+        return hub(url)
+    offer = DeployWatch(tmp_path, tmp_path, fetch=fetch, git=git).check()
+    assert offer is not None and len(offer["mt5"]) == 1
+    assert C[:8] in offer["mt5"][0] and "check it before deploying" in offer["mt5"][0]
+
+
+def test_the_offer_lists_commit_subjects_newest_first_from_github(tmp_path):
+    offer = _watch(tmp_path, _Git(A, B)).check()
+    assert offer is not None and offer["subjects"] == ["feat: one", "fix: two"]
+    assert offer["n_commits"] == 2 and offer["from"] == A
+
+
+def test_a_new_remote_commit_is_detected_on_the_next_pass(tmp_path):
+    git = _Git(A, A)
+    w = _watch(tmp_path, git)
+    assert w.check() is None
+    git.main = B
+    offer = w.check()
+    assert offer is not None and offer["sha"] == B
+
+
+def test_without_an_answer_from_github_nothing_is_offered(tmp_path, caplog):
+    """The fast-forward is shown by GitHub's compare (the new commit is not in the read-only local repo): no answer,
+    no offer, one warning without a traceback."""
+    def down(url: str) -> Any:
+        raise requests.ConnectionError("api.github.com unreachable")
+    w = DeployWatch(tmp_path, tmp_path, fetch=down, git=_Git(A, B))
+    with caplog.at_level(logging.WARNING, logger="goldbot.ops.deploy"):
+        assert w.check() is None and w.check() is None
+    assert len(caplog.records) == 1 and caplog.records[0].exc_info is None
+    assert not (tmp_path / "deploy" / "pending.json").exists()
+
+
+def test_an_ls_remote_failure_logs_one_concise_warning_per_outage_and_offers_nothing(tmp_path, caplog):
+    git = _Git(A, B)
+    git.down = True
+    w = _watch(tmp_path, git)
+    with caplog.at_level(logging.WARNING, logger="goldbot.ops.deploy"):
+        assert w.check() is None and w.check() is None and w.check() is None
+    assert len(caplog.records) == 1 and caplog.records[0].exc_info is None
+    msg = caplog.records[0].getMessage()
+    assert "ls-remote" in msg and "unable to access remote" in msg and "more detail" not in msg      # one line
+    assert not (tmp_path / "deploy" / "pending.json").exists()
+    caplog.clear()
+    git.down, git.main = False, A
+    assert w.check() is None                                                     # recovered: nothing new
+    git.down = True
+    with caplog.at_level(logging.WARNING, logger="goldbot.ops.deploy"):
+        w.check()
+    assert len(caplog.records) == 1                                              # a new outage is said again

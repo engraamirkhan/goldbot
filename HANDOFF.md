@@ -5,6 +5,13 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Deploy offer works again under the telegram sandbox (R120): `DeployWatch.check()` no longer runs `git fetch` (it
+  could not write /opt/goldbot/.git under ProtectSystem=strict and exited 255 on every pass, so no version was ever
+  offered). It reads origin main with `git ls-remote` and asks GitHub's compare API for the fast-forward, the commit
+  subjects (newest 15, count from `ahead_by`) and the MT5-box ancestry. If git or GitHub gives no answer, nothing is
+  offered and one warning is logged per outage, with no traceback. Deploys themselves are unchanged
+  (`sudo goldbot-deploy`, root, outside the sandbox). Unauthenticated API use is at most 2 calls a pass and only while
+  a new commit is waiting, well under 60/h.
 - 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
   start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
   `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every
