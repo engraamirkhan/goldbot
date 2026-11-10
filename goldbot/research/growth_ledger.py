@@ -36,9 +36,10 @@ GROWTH_ARMS = ("GS1", "GS1C")
 GROWTH_TF_S = 900            # both decide on 15m closes: a pyramid add's id is its group's close + k seconds
 CONTROL_OF = {"GS1C": "GS1"}
 # a blocked candidate is a shadow fill unless its refusal says the entry was not a valid trade at all
-# (`above_minimum_lot`: an order-core size refusal, a plumbing fault, never a cap the other arm escaped)
+# (`above_minimum_lot`: an order-core size refusal, a plumbing fault, never a cap the other arm escaped;
+# `thin_cell_complete`: an arm refused for good, the reason a stale signal of it now carries, R111)
 NOT_SHADOW = frozenset({"duplicate", "weekend_hold", "arm_retired", "arm_status_unread", "stale", "not_auto",
-                        "above_minimum_lot"})
+                        "above_minimum_lot", "thin_cell_complete"})
 
 
 class LedgerTrade(FrozenRecord):
