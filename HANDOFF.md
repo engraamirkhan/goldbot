@@ -5,6 +5,19 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-10 (branch fix/swap-mode-5-6; Vantage refusals 2026-11-10 item 2, fix 1): vantage-demo BTCUSD reports MT5
+  swap mode 5 (interest on the current price, 360-day year), which instruments.db stored NULL, so every BTC entry was
+  refused `invalid:swap_usd_per_oz` (95 in 7 days). `instruments_db.swap_per_lot` now converts modes 5 and 6 to
+  rate / 100 / 360 x price x contract size per lot per night (broker sign kept; an entry's open price is the current
+  one); no finite price > 0 leaves it unknown, modes 7/8 stay unknown. `books.refresh_terms` takes the tick the
+  refresh runs on, so the first terms write after a start has its price instead of waiting 6 h for the next write.
+  The swap is fixed at the refresh price for up to `broker_terms_every_s` (6 h): a projection input, not a fill.
+  RiskGate unchanged. Tests: `tests/test_instruments_db.py`.
+- Quant review (b): mode 5/6 is priced only for a USD profit currency (the engine's SwapSpec reads the amount as USD);
+  any other stays `swap_unknown`, the reason in `swap_note`. Follow-ups: BACKLOG 153 (seven-night crypto rollovers;
+  reconcile Vantage's BTC swap charges after the first weekend hold) and 154 (convert profit-currency swaps to USD).
+- After deploy (vantage-demo): check the live BTCUSD `swap_rollover3days` is in 1..5 (else `refresh_terms` keeps
+  `swap_unknown`), and that BTCUSD decisions no longer carry `invalid:swap_usd_per_oz` or `swap_unknown`.
 - 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
   start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
   `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every
