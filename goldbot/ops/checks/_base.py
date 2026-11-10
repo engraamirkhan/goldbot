@@ -240,6 +240,6 @@ def _cached_window(cache: WindowCache, key: tuple[str, ...], parts: frozenset[st
     else:
         rows = hit[2]
     if rows.empty or "ts_utc" not in rows.columns:
-        return rows
+        return rows.copy()     # never the cached frame itself: a caller may change what it gets
     ts = rows["ts_utc"]
     return rows[(ts >= since) & (ts < end)].reset_index(drop=True)
