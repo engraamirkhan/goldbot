@@ -463,8 +463,8 @@ floor). It was never built (`goldbot/` has no mSPRT, re-derived today). It is **
 
 ## 9. Amendment A1 (2026-11-09): S0 cell floor, recorded after the S0 result was read
 
-Status: signed by the quant-reviewer 2026-11-09 (research-director countersignature required before S0 is read under
-it). Written AFTER the real-bar S0 run of 2026-11-09 21:38 UTC (harness d91558b932b58eb1, report
+Status: signed by the quant-reviewer and countersigned by the research director, 2026-11-09, under the two
+conditions in the sign table below. Written AFTER the real-bar S0 run of 2026-11-09 21:38 UTC (harness d91558b932b58eb1, report
 `~/tmp/eval2_selftest/report_20261109T213945.json`) was read. This is a post-hoc change. It is disclosed here, it is
 kept apart from the original text, and it changes no L1-L4 threshold, no K, no budget and no window.
 
@@ -546,4 +546,4 @@ Power tables and n_min use the measured sd(excess) of the cell's own timeframe. 
 | Role | Name | Date | Signature |
 |---|---|---|---|
 | Quant-reviewer | quant-reviewer | 2026-11-09 | signed |
-| Author / countersign | research director | 2026-11-09 | SIGNED, research-director, 2026-11-09: corrects a specification error (frozen floor had no sampling term, 61 % false-fail on a correct harness, re-derived from raw cell SEs); harness self-test only, no promotion gate, L1-L4 threshold, K or window changed, and no reasonable rule (min t -1.34 gross, -1.41 excess) flips this run. |
+| Author / countersign | research director | 2026-11-09 | SIGNED, research-director, 2026-11-09: corrects a specification error (frozen floor had no sampling term, 61 % false-fail on a correct harness, re-derived from raw cell SEs); harness self-test only, no promotion gate, L1-L4 threshold, K or window changed, and no reasonable rule (min t -1.34 gross, -1.41 excess) flips this run. Conditions: (1) the sign-flipped skeleton route (9.3 iv) is built and tested before any pass relies on it, and a pass through an untested route reads FAIL; (2) S0 stays non-PASS until the L2 half of the sentinels has run (Lane 3). |
