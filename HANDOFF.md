@@ -15,6 +15,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   budget reads, PER_PASS per book and journal rows unchanged. The deferral warning shows exploration sub-phases
   `[reads, learning, step, minutes, entry, budget]` and the carried count. Not changed: gold's own bar close still
   runs before the other books' 1m parts; per-book step CPU is not reduced (next: optimise the top sub-phase).
+  Review round 1: the learning read also runs before the 1m/5m send when a learning-group signal of any timeframe
+  is queued (quant C1); a delayed 15m+ send re-reads its book's quote (held to a later pass if unreadable or faulty),
+  and an order that raised on any book in the pass holds every later 15m+ send (trading-safety 5, 6); a quiet book
+  leaves the carry. Tested: under a permanent 1m backlog every book's 15m close is still stepped before the next
+  close (SLOW_WAIT_S). Watch items (quant C2, trading-safety 7): blocked-reason and take-rate reviews split by
+  timeframe and by deploy date (pre/post R118); report the 15m split-pair rate against its pre-R118 baseline; after
+  deploy, count 15m `exploration_stale` refusals on vantage-demo (expected ~0; any rise is the 15m+ part waiting too
+  long behind 1m work).
 - 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
   start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
   `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every

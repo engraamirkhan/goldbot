@@ -52,6 +52,8 @@ class _World:
         self.stale: list[str] = []
         self.steps: list[tuple[str, float]] = []      # (book, clock) of each 15m+ step
         self.decided: dict[str, float] = {}           # book -> when its 1m minute was decided
+        self.closes: list[tuple[str, pd.Timestamp]] = []   # (book, close) of each 15m+ step
+        self.ticks: list[tuple[str, float]] = []      # (book, bid) of each send's quote
 
     def now(self) -> pd.Timestamp:
         return CLOSE + pd.Timedelta(seconds=self.t)
@@ -84,6 +86,7 @@ def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start_s: float) -> t
 
     def step(e: Engine, close_ts: pd.Timestamp) -> bool:
         w.steps.append((e.cfg.symbol, w.t))
+        w.closes.append((e.cfg.symbol, close_ts))
         w.t += STEP_S
         return True
 
@@ -96,17 +99,20 @@ def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start_s: float) -> t
         ex.queue.append(Pending(arm_id=f"S0-{e.cfg.symbol}", side=1, bar_ts=through, stop_usd=5.0, target_usd=10.0,
                                 hold_bars=4))
 
-    def enter(e: Engine, ex: Any, now: pd.Timestamp, tick: Tick, *a: Any, **k: Any) -> int:
+    def enter(e: Engine, ex: Any, now: pd.Timestamp, tick: Tick, limit: int = exploration.PER_PASS) -> int:
+        """`_enter` reduced to its timing: a stale signal refused, a waiting one kept, at most `limit` sent."""
         took = 0
         for s in list(ex.queue):
             age = (now - s.bar_ts).total_seconds()
             if age > stale_s(ex.arms[s.arm_id].tf):
                 w.stale.append(s.arm_id)
-            elif exploration._waits(ex, s, now):
+            elif exploration._waits(ex, s, now) or took >= limit:
                 continue
+            else:
+                took += 1
+                w.ticks.append((e.cfg.symbol, tick.bid))
             w.entered[s.arm_id] = age
             ex.queue.remove(s)
-            took += 1
         return took
     monkeypatch.setattr(exploration, "step", step)
     monkeypatch.setattr(exploration, "_minutes", minutes)
@@ -317,3 +323,140 @@ def test_pass_times_describe_lists_only_the_sub_phases_that_took_time():
     assert times.describe("SYM01") == ("bridge 0.12, bars 0.00, zones 0.00, exploration 2.75 [step 2.00, "
                                        "minutes 0.25]")
     assert times.describe("SYM02") == "bridge 0.00, bars 0.00, zones 0.00, exploration 0.00"
+
+
+# ------------------------------------------------------------------------------------------- review round 1
+def _queued_15m(sym: str, arm: str | None = None) -> Pending:
+    return Pending(arm_id=arm or f"B-{sym}", side=1, bar_ts=CLOSE, stop_usd=5.0, target_usd=10.0, hold_bars=4)
+
+
+def _decided(eng: Engine) -> None:
+    """Every book's 07:15 minute decided: no 1m/5m work pending."""
+    for b in eng.books.values():
+        if not b.primary:
+            b.__dict__["exploration"].last_minute = CLOSE
+
+
+def test_a_queued_15m_learning_signal_is_refused_by_a_learning_read_that_retires_its_arm_before_any_send(
+        tmp_path, monkeypatch):
+    """Quant C1 / safety 4: a learning-group signal already queued is never sent on an older learning read than the
+    single step used: the read runs before the 1m/5m part's send whenever such a signal waits."""
+    eng, w = _world(tmp_path, monkeypatch, start_s=8.0)
+    ex = eng.books["SYM01"].__dict__["exploration"]
+    ex.last_minute = CLOSE
+    ex.arms["L-SYM01"] = SimpleNamespace(tf="15m", arm_id="L-SYM01", family="box",
+                                         spec=SimpleNamespace(role="learning"))
+    ex.learning_group = frozenset({"L-SYM01"})
+    ex.queue.append(_queued_15m("SYM01", "L-SYM01"))
+    refused: list[tuple[str, str]] = []
+
+    def learning_read(e: Engine, x: Any, now: pd.Timestamp) -> None:      # the ledger read retires the arm
+        x.retired = x.retired | {"L-SYM01"}
+        for s in [s for s in x.queue if s.arm_id in x.retired]:
+            x.queue.remove(s)
+            refused.append((s.arm_id, "arm_retired"))
+    monkeypatch.setattr(exploration_learning, "refresh", learning_read)
+    with books.using(eng, eng.books["SYM01"]):
+        exploration.on_pass(eng, Tick(ts_utc=w.now(), bid=100.0, ask=100.1))
+    assert refused == [("L-SYM01", "arm_retired")] and "L-SYM01" not in w.entered
+
+
+def test_every_books_15m_close_is_stepped_before_the_next_close_under_a_sustained_1m_backlog(tmp_path, monkeypatch):
+    """Quant C3: 1m work pending on every book on every pass (signals stuck behind an order in flight) never leaves a
+    15m close unevaluated: each carried book's 15m+ part runs (SLOW_WAIT_S) before the next close."""
+    eng, w = _world(tmp_path, monkeypatch, start_s=1.6)
+    monkeypatch.setattr(exploration, "_enter", lambda *a, **k: 0)        # nothing ever leaves a queue
+    one = _one(w)
+    nxt = CLOSE + pd.Timedelta(minutes=15)
+    while w.t < 1000.0:
+        if w.now() >= nxt:
+            for b in eng.books.values():
+                if not b.primary:
+                    with books.using(eng, b):
+                        eng._closed_through = nxt
+        books.account_pass(eng, eng.broker, one)
+        w.t += 1.0
+    for sym in SYMBOLS:
+        assert [c for s, c in w.closes if s == sym] == [CLOSE, nxt], sym
+    assert max(t for (_, t), (_, c) in zip(w.steps, w.closes, strict=True) if c == CLOSE) < 900.0
+    assert all(b.__dict__["exploration"].queue for b in eng.books.values() if not b.primary)   # the backlog held
+
+
+def test_a_carried_book_that_goes_quiet_leaves_the_carry_and_the_deferral_warning_logs_again(
+        tmp_path, monkeypatch, caplog):
+    """Code review LOW 1: a carry key of a book no longer in the pass never keeps every pass `deferred`."""
+    eng, w = _world(tmp_path, monkeypatch, start_s=8.0)
+    _decided(eng)
+    eng.__dict__["_slow_carry"] = {"SYM05": w.t}
+    eng.__dict__["_pass_was_deferred"] = True
+    monkeypatch.setattr(books, "quiet_books", lambda e: {"SYM05"})
+    books.account_pass(eng, eng.broker, _one(w), budget_s=1e9)
+    assert "SYM05" not in eng.__dict__["_slow_carry"] and not eng.__dict__["_pass_was_deferred"]
+    for b in eng.books.values():                                        # a new close: the budget carries again
+        if not b.primary:
+            b.__dict__["exploration"].last_close = CLOSE - pd.Timedelta(minutes=15)
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine"):
+        books.account_pass(eng, eng.broker, _one(w))
+    assert [r for r in caplog.records if "pass budget" in r.getMessage()]
+
+
+def _step_queues(monkeypatch: pytest.MonkeyPatch, sym: str) -> None:
+    """The 15m+ step queues one 15m signal on `sym`: its send is the 15m+ part's own."""
+    real = exploration.step
+
+    def step(e: Engine, close_ts: pd.Timestamp) -> bool:
+        if e.cfg.symbol == sym and e.exploration is not None:
+            e.exploration.queue.append(_queued_15m(sym))
+        return bool(real(e, close_ts))
+    monkeypatch.setattr(exploration, "step", step)
+
+
+class _Quotes:
+    """The pass's shared quote reader: the bid has moved since the pass started."""
+
+    def __init__(self, w: _World) -> None:
+        self.w = w
+
+    def last_tick(self, symbol: str) -> Tick:
+        return Tick(ts_utc=self.w.now(), bid=105.0, ask=105.1)
+
+
+def test_the_15m_send_uses_the_quote_read_when_it_is_sent_not_the_one_read_at_the_pass_start(tmp_path, monkeypatch):
+    """Code review LOW 2 / safety 5: the 15m+ part runs seconds after the book's pass; its send prices on a quote read
+    then."""
+    eng, w = _world(tmp_path, monkeypatch, start_s=8.0)
+    _decided(eng)
+    _step_queues(monkeypatch, "SYM01")
+    books.account_pass(eng, _Quotes(w), _one(w), budget_s=1e9)
+    assert ("SYM01", 105.0) in w.ticks and ("SYM01", 100.0) not in w.ticks
+
+
+def test_a_15m_send_waits_for_the_next_pass_when_the_quote_cannot_be_read_again(tmp_path, monkeypatch):
+    eng, w = _world(tmp_path, monkeypatch, start_s=8.0)
+    _decided(eng)
+    _step_queues(monkeypatch, "SYM01")
+
+    class Dead:
+        def last_tick(self, symbol: str) -> Tick:
+            raise TimeoutError("bridge")
+    books.account_pass(eng, Dead(), _one(w), budget_s=1e9)
+    assert not w.ticks and eng.books["SYM01"].__dict__["exploration"].queue      # kept for the next pass
+
+
+def test_an_order_that_raised_on_one_book_holds_another_books_15m_send_in_that_pass(tmp_path, monkeypatch):
+    """Safety 6: the order-raised hold is the account's for the pass, not the raising book's alone."""
+    eng, w = _world(tmp_path, monkeypatch, start_s=8.0)
+    _decided(eng)
+    for sym in ("SYM01", "SYM02"):
+        eng.books[sym].__dict__["exploration"].queue.append(_queued_15m(sym))
+    calls: list[tuple[str, int]] = []
+
+    def enter(e: Engine, ex: Any, now: pd.Timestamp, tick: Tick, limit: int = exploration.PER_PASS) -> int:
+        calls.append((e.cfg.symbol, limit))
+        if e.cfg.symbol == "SYM02" and len(calls) == 2:
+            e._auto_paused = (now, "order_raised")                      # SYM02's 1m/5m part: its order raised
+        return 0
+    monkeypatch.setattr(exploration, "_enter", enter)
+    books.account_pass(eng, eng.broker, _one(w), budget_s=1e9)
+    assert calls[:2] == [("SYM01", exploration.PER_PASS), ("SYM02", exploration.PER_PASS)]
+    assert [lim for s, lim in calls[2:] if s == "SYM01"] == [0]

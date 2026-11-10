@@ -702,7 +702,8 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     times = PassTimes()
     eng.__dict__["_pass_times"] = times
     eng.__dict__["broker"] = _pass_broker(prev, times)
-    eng.__dict__[exploration.SPLIT] = True
+    eng.__dict__[exploration.SPLIT] = exploration.SplitPass(_bridge_timed(times, lambda s: broker.last_tick(s)),
+                                                             eng._auto_paused)
     deferred = False
     try:
         quiet = quiet_books(eng)
@@ -740,7 +741,7 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
             finally:
                 times.book = ""                  # a pass that raised never has later time charged to its book
             took[book.__dict__["cfg"].symbol] = time.monotonic() - t_book
-        carried = _slow_parts(eng, [b for b in order if b not in left], t0, budget_s, times, took)
+        carried = _slow_parts(eng, [b for b in order if b not in left], active, t0, budget_s, times, took)
         if left:
             eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))
             eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
@@ -762,7 +763,7 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
     return ok
 
 
-def _slow_parts(eng: Engine, ran: list[SymbolBook], t0: float, budget_s: float,
+def _slow_parts(eng: Engine, ran: list[SymbolBook], active: list[SymbolBook], t0: float, budget_s: float,
                 times: PassTimes, took: dict[str, float]) -> int:
     """The 15m+ exploration parts this pass's books owe (`exploration.on_pass_slow`, timed `exploration`), after every
     book's pass: the books carried from earlier passes first, in the order they were carried, then this pass's order.
@@ -773,6 +774,8 @@ def _slow_parts(eng: Engine, ran: list[SymbolBook], t0: float, budget_s: float,
     learning read are state-driven, so nothing is lost). The number of books carried."""
     from goldbot.engine import exploration
     carry: dict[str, float] = eng.__dict__.setdefault("_slow_carry", {})   # symbol -> host clock it was first carried
+    for gone in set(carry) - {str(b.__dict__["cfg"].symbol) for b in active}:
+        del carry[gone]                             # code review LOW 1: a book gone quiet owes nothing
     rank = {s: i for i, s in enumerate(carry)}
 
     def sym(b: SymbolBook) -> str:

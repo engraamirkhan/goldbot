@@ -92,7 +92,7 @@ import logging
 import math
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -1104,7 +1104,19 @@ def fast_pending(ex: Exploration | None, now: pd.Timestamp) -> bool:
         _minute_due(ex, now + pd.Timedelta(seconds=GRACE_S))
 
 
-SPLIT = "_exploration_split"   # set on the engine by `books.account_pass`: the 15m+ parts run after every 1m/5m part
+SPLIT = "_exploration_split"   # set on the engine by `books.account_pass` (a `SplitPass`) while a multi-book pass runs
+
+
+class SplitPass:
+    """What a multi-book pass (`books.account_pass`) gives the 15m+ parts it runs after every book's 1m/5m part: the
+    quote reader a send re-reads its book's quote from (code review LOW 2 / trading-safety 5), and the engine's
+    `_auto_paused` when the pass started, so an order that raised on any book this pass holds every later 15m+ send
+    (trading-safety 6)."""
+
+    __slots__ = ("paused", "quote")
+
+    def __init__(self, quote: Callable[[str], Tick], paused: tuple[pd.Timestamp, str] | None) -> None:
+        self.quote, self.paused = quote, paused
 
 
 def on_pass(eng: Engine, tick: Tick) -> None:
@@ -1152,7 +1164,10 @@ def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | 
             refresh_retired(eng, ex, now)
             refresh_cost_reads(eng, ex, now)
             refresh_dormant(eng, ex, now)
-        if any(ex.arms[a].tf in SUB_15M for a in ex.learning_group - ex.retired):
+        # quant C1 (review of R118): also when a learning-group signal is queued, whatever its timeframe, as this part
+        # may send it
+        if any(ex.arms[a].tf in SUB_15M for a in ex.learning_group - ex.retired) or \
+                any(s.arm_id in ex.learning_group for s in ex.queue):
             books.timed(eng, "exploration:learning", exploration_learning.refresh, eng, ex, now)
         books.timed(eng, "exploration:reads", refresh_owner_experiments, eng, ex, now)
         books.timed(eng, "exploration:minutes", _minutes, eng, ex, now)
@@ -1164,20 +1179,38 @@ def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | 
 
 def _slow(eng: Engine, ex: Exploration, tick: Tick, at: pd.Timestamp, sent: int) -> None:
     """The learning read (once a minute), the 15m+ close step and a send of what is left of PER_PASS. `now` is read
-    again (on the live clock this part may run later in the pass than the 1m/5m part, `at`, and a signal's age is
-    judged on the time it is sent); an order that raised in the 1m/5m part (`_auto_paused` at `at`) holds this part's
-    send as it held the rest of the single step's (trading-safety M1)."""
+    again before the send (on the live clock this part runs later than the 1m/5m part, `at`, and a signal's age is
+    judged on the time it is sent). An order that raised in the 1m/5m part (`_auto_paused` at `at`) or, in a
+    multi-book pass, on any book since the pass started holds this part's send (trading-safety M1 and 6). In a
+    multi-book pass the send prices on the book's quote read again now (`SplitPass.quote`; code review LOW 2,
+    trading-safety 5); a quote that cannot be read or breaks the tick rules (`Engine._quote_fault`) holds the send to
+    a later pass, the signals kept."""
     from goldbot.engine import books, exploration_learning
+    split: SplitPass | None = eng.__dict__.get(SPLIT)
     now = eng._now(tick)
-    if eng._auto_paused is not None and eng._auto_paused[0] == at:
-        sent = PER_PASS
     try:
         books.timed(eng, "exploration:learning", exploration_learning.refresh, eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and \
                 books.timed(eng, "exploration:step", step, eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
-        _entries(eng, ex, now, tick, PER_PASS - sent)
+        paused = eng._auto_paused
+        if paused is not None and (paused[0] == at or (split is not None and paused != split.paused)):
+            sent = PER_PASS
+        if split is not None and ex.queue and sent < PER_PASS:
+            try:
+                fresh: Tick | None = split.quote(eng.cfg.symbol)
+                if fresh is not None and eng._quote_fault(fresh) is not None:
+                    fresh = None
+            except Exception:
+                fresh = None
+            if fresh is None:
+                log.warning("%s: quote unreadable for the 15m+ send; its signals wait for a later pass",
+                            eng.cfg.symbol)
+                sent = PER_PASS
+            else:
+                tick = fresh
+        _entries(eng, ex, eng._now(tick), tick, PER_PASS - sent)
     except Exception as exc:
         _failed(eng, exc)
 
