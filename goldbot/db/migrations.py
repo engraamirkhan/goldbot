@@ -630,6 +630,40 @@ AUX: tuple[Migration, ...] = (
         "CREATE INDEX IF NOT EXISTS exploration_obs_account_kind ON exploration_obs(account_id, is_control, "
         "decision_ns)",
     )),
+    # additive (EVAL-2 Lane 5A, prereg-2026-11-09-eval2.md section 5: "`replay_version = "r2"` in a side table keyed
+    # (candidate_id, replay_version); `label_sim_r` is never overwritten"; goldbot/research/exploration_data.py).
+    # `exploration_replay`: one versioned bar replay per candidate (r2: measured per-leg slippage, no credit, stop
+    # overshoot), with the prices and leg charges it used. `exploration_label_void`: a candidate's label of one version
+    # declared void (r1: the non-gold candidates replayed on gold bars before the 2026-11-04 guard); every reader
+    # drops it. Both append-only: a fix is a new version, never a rewrite. A release without them never reads them
+    Migration(version=28, name="exploration_replay_v2", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_replay (
+               candidate_id TEXT NOT NULL,
+               replay_version TEXT NOT NULL,
+               label_exit_ns INTEGER NOT NULL,
+               sim_r REAL NOT NULL,
+               mid_r REAL NOT NULL,
+               barrier TEXT NOT NULL CHECK (barrier IN ('stop', 'target', 'time')),
+               entry_price REAL NOT NULL,
+               exit_price REAL NOT NULL,
+               entry_charge_usd REAL NOT NULL,
+               exit_charge_usd REAL NOT NULL,
+               cost_model_version TEXT NOT NULL,
+               cost_effective_ns INTEGER NOT NULL,
+               labelled_ns INTEGER NOT NULL,
+               PRIMARY KEY (candidate_id, replay_version)
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_label_void (
+               candidate_id TEXT NOT NULL,
+               replay_version TEXT NOT NULL,
+               reason TEXT NOT NULL,
+               decided_ns INTEGER NOT NULL,
+               PRIMARY KEY (candidate_id, replay_version)
+           ) STRICT""",
+        *(f"""CREATE TRIGGER IF NOT EXISTS {t}_no_{op.lower()} BEFORE {op} ON {t}
+              BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END"""
+          for t in ("exploration_replay", "exploration_label_void") for op in ("UPDATE", "DELETE")),
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
