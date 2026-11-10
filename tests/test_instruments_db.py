@@ -173,6 +173,16 @@ def test_an_interest_swap_without_a_usable_price_is_unknown_never_zero(price):
     assert swap_per_lot(_interest(6), price=price)[:2] == (None, None)
 
 
+@pytest.mark.parametrize("profit", ["JPY", "EUR", None, ""])
+def test_an_interest_swap_in_a_profit_currency_other_than_usd_stays_unknown(profit):
+    """Quant review of fix/swap-mode-5-6 (b): the amount is in the profit currency and the engine's SwapSpec reads it
+    as USD, so until swaps are converted into USD a mode 5/6 swap is priced only when the profit currency is USD."""
+    jp = _interest(5).model_copy(update={"currency_profit": profit})
+    lng, sht, note = swap_per_lot(jp, price=38_000.0)
+    assert (lng, sht) == (None, None) and "swap_unknown" in note
+    assert swap_per_lot(_interest(5), price=100_000.0)[0] == pytest.approx(-55.5556, abs=1e-3)   # USD: priced
+
+
 @pytest.mark.parametrize("mode", [7, 8])
 def test_the_reopen_swap_modes_stay_unknown(mode):
     assert swap_per_lot(_interest(mode), price=100_000.0)[:2] == (None, None)
