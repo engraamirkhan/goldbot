@@ -33,6 +33,8 @@ RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30",
     "Z7V", "LCS5A", "LCS5B", "LCZ4D", "LCZ4P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P", "LCZ7V"}
 # retired 2026-11-07 (prereg-amendment-2026-11-07-kill-only.md section 4): the free-standing XAUJPY control
 RETIRED_1107 = {"S0-XAUJPY"}
+# retired 2026-11-09 (prereg-amendment-2026-11-10-execution-controls.md section 9): its cost cell complete (rule 4)
+RETIRED_1107 |= {"I0-XAUJPY"}
 
 
 @pytest.fixture(scope="module")

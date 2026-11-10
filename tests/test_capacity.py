@@ -212,4 +212,7 @@ def test_a_deferred_pass_logs_its_exits_time_and_its_slowest_books(tmp_path, cap
     line = next(r.getMessage() for r in caplog.records if "pass budget" in r.getMessage())
     import re
     # up to 3 slowest books: how many ran before the budget went depends on the runner's speed (CI flake 2026-11-04)
-    assert re.search(r"exits \d+\.\d\d s; slowest: (\w+ \d+\.\d\d s, ){0,2}\w+ \d+\.\d\d s$", line), line
+    # SRE 2026-11-09 fix 4a: each slow book with its phases, and every book's phases added up
+    book = r"\w+ \d+\.\d\d s \(bridge \d+\.\d\d, bars \d+\.\d\d, zones \d+\.\d\d, exploration \d+\.\d\d\)"
+    assert re.search(r"quotes \d+\.\d\d s; exits \d+\.\d\d s; phases: bridge \d+\.\d\d, bars \d+\.\d\d, zones "
+                     rf"\d+\.\d\d, exploration \d+\.\d\d; slowest: ({book}, ){{0,2}}{book}$", line), line

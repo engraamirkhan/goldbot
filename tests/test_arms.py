@@ -43,6 +43,8 @@ INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUS
 ARM_SPEC_IDS |= INSTRUMENT_CONTROLS
 # multi-instrument learning pairs (docs/research/learning-mi-2026-11-02.md): one per listed instrument
 ARM_SPEC_IDS |= {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("LB", "LBC")}
+# execution/cost calibration controls (docs/research/prereg-amendment-2026-11-10-execution-controls.md)
+ARM_SPEC_IDS |= {"VEX15", "VEX1H", "IEX15", "IEX1H"}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:
