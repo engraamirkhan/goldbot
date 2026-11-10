@@ -1,6 +1,7 @@
 """The health checks, one module per area; `goldbot.ops.health` runs them and re-exports every name it always had.
 
   engine.py      engine and loop: engine state, loop heartbeat, tick errors, failed orders
+  entries.py     demo exploration entry supply and silence (entry_silence)
   bridge.py      MT5 bridge: /health, compatibility, broker server clock
   feeds.py       feeds and data: costs, P&L basis, data quality, drift, model watch, feature versions, news, reconciliation
   risk.py        risk and limits: supervisor, owner halt, risk state, phase and gates, loss caps, throttle, open
@@ -18,6 +19,7 @@ from goldbot.ops.checks import (  # noqa: F401 - registers the checks
     auth,
     bridge,
     engine,
+    entries,
     feeds,
     operations,
     risk,
