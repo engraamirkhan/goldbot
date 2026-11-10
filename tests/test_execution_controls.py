@@ -151,3 +151,35 @@ def test_an_execution_controls_cost_state_reads_the_z4_bands_from_30_fills(tmp_p
     _fills(_db(tmp_path), "VEX15", 30, host="vantage-demo", pnl=0.5, cost=cost, days=5, control=True)
     with _db(tmp_path).connection() as conn:
         assert arm_stops.cost_states(conn, ["VEX15"]) == {"VEX15": want}
+
+
+# ------------------------------------------------------------------------------------------------ quant conditions
+END = pd.Timestamp("2026-12-09", tz="UTC")       # amendment 4 rule 3: the sample stop's end date
+
+
+def test_no_catalogued_arm_is_measured_against_an_execution_control():
+    """Quant C3 (2026-11-10): never paired. A future row naming one as its control would leak edge reads into it."""
+    from goldbot.api.strategy_labels import load_catalog
+    leaks = {k: a.control_arm for k, a in load_catalog().arms.items() if a.control_arm in ALL}
+    assert leaks == {}
+
+
+def test_the_only_controls_carrying_the_cost_stop_are_the_four_execution_controls():
+    """Quant C3: the review retires a cost-suspended control only through `cost_stop.arms`; no other control is in it."""
+    controls = {a.id for a in load_arms(SPEC_PATH, check_hash=False) if a.role == "control"}
+    assert set(arm_stops.load_stop_rules().cost_stop.arms) & controls == set(ALL)
+
+
+def _unretired_after_end(today: pd.Timestamp) -> set[str]:
+    rows = {a.id: a for a in load_arms(SPEC_PATH, check_hash=False)}
+    return {i for i in ALL if not rows[i].retired_day} if today.normalize() > END else set()
+
+
+def test_the_execution_controls_are_retired_by_their_2026_12_09_end():
+    """Quant C3 dated tripwire: from 2026-12-10 CI fails while any of the four rows has no retired_day."""
+    assert _unretired_after_end(pd.Timestamp.now(tz="UTC")) == set(), "retire the execution controls (amendment 4)"
+
+
+def test_the_end_date_tripwire_fires_on_2026_12_10_and_not_on_the_end_day():
+    assert _unretired_after_end(END) == set()
+    assert _unretired_after_end(END + pd.Timedelta(days=1)) == set(ALL)   # the rows as committed: none retired yet

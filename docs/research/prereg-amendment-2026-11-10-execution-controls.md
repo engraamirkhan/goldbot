@@ -70,9 +70,13 @@ Vantage-demo volume therefore stays at about 20-28 fills a day, inside the PD ru
    cost per R (signal-time `cost` / `stop_loss`, SE clustered by UTC day): above 0.10 halves the arm, above 0.20
    suspends it until a dated amendment.
 2. **Execution stop.** |fill - replay| above 0.10 R (mean absolute gap of the arm's fills against their bar replay)
-   at n >= 50 suspends the arm as a defect, to be investigated before any re-start.
+   at n >= 50 suspends the arm as a defect, to be investigated before any re-start. Until replay v2 is merged the
+   reference is the entry leg only: the entry fill against the requested bid/ask at the send (`fill_price` against
+   `requested_price`, in R of the arm's stop), with no slippage prior and no exit term.
 3. **Sample stop.** The arm retires once each session (asia / london / newyork) x leg (entry; stop, target and time
-   exit) cell has >= 100 fills, or on **2026-12-09**, whichever comes first.
+   exit) cell has >= 100 fills, or on **2026-12-09**, whichever comes first. The asia cells cannot reach 100 by then
+   (the 15m arms get about 4 asia decisions a day, 07:00-07:59 UTC; the 1h arms none), so 2026-12-09 is the effective
+   stop, and no asia cost of record is taken from these arms.
 4. **No R stop.** A control is the null; listed under `none:` in config/arm_stops.yaml.
 
 A retirement or suspension only refuses new entries; open positions keep their stop, target, hold and every exit.
@@ -91,15 +95,20 @@ A retirement or suspension only refuses new entries; open positions keep their s
   no credit, exit overshoot; eval2-method section S5). Replay v2 (Lane 5A) is not merged. The v1 label replay
   (`label_sim_r`) carries the slippage prior (about +0.078 R of the +0.084 R gap measured on icm), so an automatic
   0.10 R stop on v1 would fire on the prior, not on execution. Until replay v2 is merged, the performance-analyst
-  reads the gap daily and a hit is switched off the same day by the spec row's `retired_day` / `retired_rule`
+  reads the entry-leg gap of rule 2 (entry fill against the requested bid/ask, no slippage prior) daily and a hit is switched off the same day by the spec row's `retired_day` / `retired_rule`
   (kill-only, unhashed fields). It becomes automatic in the review once v2 lands, by a dated note to this amendment.
 - **Rule 3, sample stop: manual.** The cell counts are read daily, and the 2026-12-09 end is the same `retired_day`
   edit, made on that day at the latest.
 - Kill-only throughout: no enforcement path raises a share, reopens an arm or admits an entry.
+- **Refusals beside the bands (trading-safety LOW, 2026-11-10).** At the top of a stop band (15m $22.6, 1h $39.8) the
+  loss at the stop plus the round trip can exceed the per-trade cap (£17 / £30) after FX; the RiskGate then refuses
+  the entry (`arm_cap`). Those refusals are reported in the daily read beside the band skips, so a thinner sample at
+  the band tops is visible; the geometry and hashes are unchanged.
 
 ## 5. K and budget
 
-- **K +1 per arm id** (the arm-id K, the convention of every past control): **+4** (VEX15, VEX1H, IEX15, IEX1H).
+- **K +1 per arm id** (the arm-id K, as for the random controls before it; some past controls also carry history
+  rows, e.g. VI0 registry trial 93 and I0 in arms_matrix rows 90/91, which these four do not): **+4** (VEX15, VEX1H, IEX15, IEX1H).
   VCAL5 is dropped and adds nothing.
 - **0 registry trial rows**: these arms are never read for edge, so the DSR K is unchanged.
 - If the quant rules otherwise, the 4 rows come from the PD's reserve of 5 inside the 105 headroom.
@@ -145,4 +154,4 @@ Drop the VEX15/VEX1H/IEX15/IEX1H lines from config/accounts.yaml and restart the
 exits only while its arm stays registered: retire by `retired_day` first, drop the lines once flat). The spec rows
 and arm_stops entries stay (ids are never reused).
 
-Quant sign-off:
+Quant sign-off: **PASS-WITH-CONDITIONS**, quant-reviewer 2026-11-10 (review of fbc76971). K: arm-id K +4, 0 registry trial rows, accepted (never read for edge, so no DSR K). Before merge: (C1) section 4 rule 3 states that the asia cells (07:00-07:59 UTC for the 15m arms, none for the 1h arms) cannot reach 100 by 2026-12-09, so the sample stop is the date in practice, and no asia cost of record is taken from these arms; (C2) section 4 rule 2 names the reference the manual read uses until replay v2 (entry fill against the requested bid/ask, no slippage prior), or says rule 2 is inactive until v2; (C3) tests: cost_stop.arms intersected with the control ids equals exactly the four, no catalog arm has an execution control as its control_arm, and a dated tripwire fails CI from 2026-12-10 while any of the four is unretired.
