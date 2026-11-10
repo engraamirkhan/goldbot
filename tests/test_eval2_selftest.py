@@ -751,3 +751,18 @@ def test_s0_fast_on_real_gold_1h_2016_17(tmp_path: Path, monkeypatch: pytest.Mon
     r = ST.s0_harness(harness_hash="h", seed_key="ci-s0", fast=True, workers=1)
     print(r)
     assert r.passed and r.metrics["n"] > 300, r
+
+
+def test_cell_frame_refuses_cells_that_share_a_config_hash(monkeypatch):
+    """Quant condition (b) on aa48a84e: two cells with one hash would be collapsed by L2 dedup and shrink the null."""
+    st = ST
+
+    class _H:
+        @staticmethod
+        def cell_table(units, *, window):
+            return pd.DataFrame({"cell_id": ["F|a", "F|b"], "window": [window] * 2})
+
+    monkeypatch.setattr(st, "cell_config_hash", lambda cell_id: "same")
+    units = pd.DataFrame({"excess_r": [0.1, 0.2]})
+    with pytest.raises(ValueError, match="share a config_hash"):
+        st.cell_frame(units, _H, control=False)

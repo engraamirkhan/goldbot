@@ -432,6 +432,8 @@ def cell_frame(units: pd.DataFrame, hier: Any, *, control: bool) -> pd.DataFrame
     u = units[np.isfinite(units["excess_r"].to_numpy(float))]
     c = hier.cell_table(u, window="explore")
     c["config_hash"] = [cell_config_hash(str(x)) for x in c["cell_id"]]
+    if not c["config_hash"].is_unique:      # dedup (keep="first") would silently drop replicates from the null
+        raise ValueError("self-test cells share a config_hash: a cell_id format change collapsed replicates")
     c["control"] = control
     return c
 
@@ -1208,6 +1210,8 @@ def s1_from_arms(tables: Tables, shifted: Sequence[pd.DataFrame], *, reps: int, 
              "deciding cost: Lane 2 per instance on gold 5m-1d, the sim's cost on non-gold (Lane 2 has no pin there)",
              "forward e-process: Lane 5A", "shuffled regime: no regime code"]
     if shifted:
+        notes.append("arm B replicates sharing a batch-1 source stay in each other's leave-family-out prior (distinct "
+                     "hashes); the bias inflates the null carry/FDR, so S1 is conservative")
         res["shifted"] = s1_arm(shifted, arm="B", seed_key=seed_key, hier=hier, confirm=confirm, stats=stats)
     else:
         notes.append("arm B (shifted batch-1 signals): no batch-1 unit produced events: the arm is missing")
