@@ -218,6 +218,12 @@ accounts:
         # and `unit_lots`, restart (open groups keep every exit)
         GS1: { style: growth, max_loss: 24.0, sizing: growth, adds: 3, unit_lots: 0.01 }
         GS1C: { style: growth, max_loss: 24.0, control_share: 0.30, sizing: growth, adds: 3, unit_lots: 0.01 }
+        # execution/cost calibration controls (prereg-amendment-2026-11-10-execution-controls.md): unpaired gold random
+        # brackets, admitted at propensity 1.0 inside the unchanged daily budget (70); never read for edge. Share 0.04
+        # (amendment 7: the intraday pot is slots only; the controls' shares stay <= 1). Rollback: drop these lines
+        # once their open positions are flat (retire by retired_day first), restart
+        IEX15: { style: intraday, max_loss: 17.0, control_share: 0.04 }
+        IEX1H: { style: intraday, max_loss: 30.0, control_share: 0.04 }
   icm-probe:
     broker: icm
     mode: demo
@@ -568,6 +574,12 @@ accounts:
         VXBO15: { style: intraday, max_loss: 17.0 }
         VXTR1H: { style: intraday, max_loss: 30.0 }
         VC1H: { style: intraday, max_loss: 30.0, control_share: 0.25 }
+        # execution/cost calibration controls (prereg-amendment-2026-11-10-execution-controls.md): unpaired gold random
+        # brackets, admitted at propensity 1.0 inside the unchanged daily budget (40); never read for edge. Share 0.04
+        # (amendment 7: the intraday pot is slots only and its controls' shares are at 0.90). Rollback: drop these
+        # lines once their open positions are flat (retire by retired_day first), restart
+        VEX15: { style: intraday, max_loss: 17.0, control_share: 0.04 }
+        VEX1H: { style: intraday, max_loss: 30.0, control_share: 0.04 }
         # wave 2 (arms-2026-10-25.md 8.2, 8.6): squeeze release and PDC break, 1h
         KSQ1: { style: intraday, max_loss: 30.0 }
         PDC1: { style: intraday, max_loss: 30.0 }

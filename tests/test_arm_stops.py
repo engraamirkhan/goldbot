@@ -24,6 +24,8 @@ from tests.test_daily_review import HOSTS, _run
 
 START = pd.Timestamp("2026-09-01 09:00", tz="UTC")        # well before the review day's end (the `until` cut)
 TF = {"scalp": "1m", "intraday": "15m", "swing": "4h"}
+# prereg-amendment-2026-11-10-execution-controls.md: controls (no R stop) that carry the Z 4 cost stop
+EXECUTION_CONTROLS = {"VEX15", "VEX1H", "IEX15", "IEX1H"}
 
 
 def _db(sd: Path) -> Database:
@@ -234,8 +236,11 @@ def test_every_arm_of_the_spec_and_of_the_accounts_is_classified_exactly_once():
     assert len(lists) == len(set(lists)), "an arm is classified twice"
     assert (spec | registered) - set(lists) == set(), "an arm has no registered stop rule"
     assert set(rules.follows.values()) <= set(in_units)
-    assert set(rules.cost_stop.arms) <= {a for u in rules.units.values() if u.source == "Z" for a in u.arms}
+    # the cost stop: Z 4's H-81 strata and the execution controls (prereg-amendment-2026-11-10-execution-controls.md)
+    assert set(rules.cost_stop.arms) <= {a for u in rules.units.values() if u.source == "Z" for a in u.arms} \
+        | EXECUTION_CONTROLS
     assert labs.control_arm_ids() <= set(rules.none)
+    assert EXECUTION_CONTROLS <= set(rules.none) & set(rules.cost_stop.arms) & spec
 
 
 def test_the_stop_families_and_the_pooled_read_units_have_the_same_members():

@@ -44,6 +44,7 @@ FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0"
 INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
 FORWARD_ONLY |= INSTRUMENT_CONTROLS
 FORWARD_ONLY |= MI_ARMS | MI_CONTROLS          # the multi-instrument learning pairs (retired ones included)
+FORWARD_ONLY |= {"VEX15", "VEX1H", "IEX15", "IEX1H"}   # execution controls (prereg-amendment-2026-11-10)
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),

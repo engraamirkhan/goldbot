@@ -29,6 +29,9 @@ CONTROLS = "S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1C G1C F2C C30C XC15 VS0 WKS0
 # multi-instrument demo (plan 2026-11-02): each listed instrument's own random controls S0-<key> / I0-<key>
 INSTRUMENT_CONTROLS = {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("S0", "I0")}
 CONTROLS += sorted(INSTRUMENT_CONTROLS)
+# execution/cost calibration controls (prereg-amendment-2026-11-10-execution-controls.md): run with no qualification
+EXECUTION = {"icm-demo": {"IEX15", "IEX1H"}, "vantage-demo": {"VEX15", "VEX1H"}}
+CONTROLS += sorted(set().union(*EXECUTION.values()))
 # ADR 0061 amendment 2026-11-01 (owner instruction): GS1 runs unqualified as an owner experiment until 2026-11-27
 OWNER_EXPERIMENTS = {"GS1"}
 OWNER_UNTIL = pd.Timestamp("2026-11-27", tz="UTC")
@@ -42,6 +45,8 @@ RUNNING = {"icm-demo": {"C1H", "G1A", "G1C", "I0", "W0", "ZCD", "GS1C"}
 for _acc in acc_mod.load_accounts(logins=False).values():
     if _acc.account_id in RUNNING:
         RUNNING[_acc.account_id] |= {f"{g}-{k}" for k in _acc.instruments for g in ("S0", "I0")}
+for _aid, _ids in EXECUTION.items():
+    RUNNING[_aid] |= _ids
 NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
                  "icm-probe": {"S1A", "S1B", "S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
                  "vantage-demo": {"Z6V", "Z7V"}, "vantage-247": set()}
