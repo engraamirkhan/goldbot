@@ -207,7 +207,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
     async def _on_shutdown(self, app: "Application") -> None:
         """After run_polling stops: let the audit rows still being written land, for at most AUDIT_DRAIN_S (A15)."""
         await self.audit.drain(timeout=AUDIT_DRAIN_S)
-        task = self._health_task
+        task = getattr(self, "_health_task", None)     # a bot built without __init__ (tests) has none
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
