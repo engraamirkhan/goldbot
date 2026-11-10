@@ -50,6 +50,7 @@ AUTOMODE_EVERY_S = 900           # auto-mode evidence (A10): offered once per mo
 LIMITS_EVERY_S = 30              # risk-limit change FYI (goldbot/telegram/limits_notices.py)
 DIGEST_EVERY_S = 60              # morning report due check (telegram.digest_at; once a day, late <= 6 h; Sunday: weekly)
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
+HEALTH_SLOW_S = 20.0              # a health pass longer than this logs a warning (it held the pump ~50 s, 2026-11-10)
 AUDIT_DRAIN_S = 10.0              # at shutdown, wait this long at most for audit rows still being written
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
@@ -180,6 +181,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.app.add_handler(CommandHandler(c, self._on_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text))
         self._pending_prompt: asyncio.Future | None = None
+        self._health_task: asyncio.Task[None] | None = None     # the running health pass, at most one (_pump)
         accounts.register_prompter(self.prompt_sync)
 
     # ------------------------------------------------------------ outbound: proposals, outcomes, reports
@@ -202,6 +204,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
     async def _on_shutdown(self, app: "Application") -> None:
         """After run_polling stops: let the audit rows still being written land, for at most AUDIT_DRAIN_S (A15)."""
         await self.audit.drain(timeout=AUDIT_DRAIN_S)
+        if self._health_task is not None and not self._health_task.done():
+            self._health_task.cancel()
 
     async def _pump(self) -> None:
         n = 0
@@ -215,7 +219,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             except Exception:
                 log.exception("telegram pump")
             if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:
-                await self._health_pass()
+                self._start_health_pass()
             if n % max(int(AUTOMODE_EVERY_S / self.poll_s), 1) == 0:
                 await self._automode_pass()
             if n % max(int(DIGEST_EVERY_S / self.poll_s), 1) == 0:     # n == 0: a missed slot is sent on start
@@ -227,6 +231,23 @@ class TelegramBot:  # pragma: no cover - needs network + token
                                         report=n % max(int(30 / self.poll_s), 1) == 0)
             n += 1
             await asyncio.sleep(self.poll_s)
+
+    def _start_health_pass(self) -> None:
+        """Start a health pass as its own task, never awaited by the pump: a pass took ~50 s on the brain (telegram
+        CPU attribution 2026-11-10) and the pump waited for it, so a proposal card (the owner's 90 s window) could be
+        held that long. One pass at a time: one still running when the next is due is left to finish, the due pass
+        is skipped (logged), so passes never pile up on a slow host."""
+        if self._health_task is not None and not self._health_task.done():
+            log.warning("health pass skipped: the previous pass is still running")
+            return
+        self._health_task = asyncio.get_running_loop().create_task(self._timed_health_pass())
+
+    async def _timed_health_pass(self) -> None:
+        """`_health_pass`, with its duration logged (`health pass s=`), as a warning over HEALTH_SLOW_S."""
+        t0 = time.monotonic()
+        await self._health_pass()
+        took = time.monotonic() - t0
+        log.log(logging.WARNING if took > HEALTH_SLOW_S else logging.INFO, "health pass s=%.1f", took)
 
     async def _health_pass(self) -> None:
         """Run the health checks and tell the owner about checks whose failure or recovery held for the alert window
