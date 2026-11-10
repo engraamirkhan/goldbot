@@ -324,7 +324,8 @@ def instance_deciding_cost(b: Bars, *, side: int, fill: float, atr_i: float, ris
 
 
 def cell_units(b: Bars, ev: Events, *, seed_key: str, costs: CostModel, family: str,
-               fire: np.ndarray | None = None, fine: Bars | None = None, deciding: bool = False) -> pd.DataFrame:
+               fire: np.ndarray | None = None, fine: Bars | None = None, deciding: bool = False,
+               cell_tag: str | None = None) -> pd.DataFrame:
     """EVAL-2 instances of one cell through the real harness path (run.unit_twins without the registry): `simulate`
     signals, `draw_twins` off the family's fire bars, `simulate_twins` with 20 twins, session-day clustering. Net and
     excess are at the sim's cost for signal and twins alike; `deciding` adds Lane 2's deciding cost per instance
@@ -366,7 +367,7 @@ def cell_units(b: Bars, ev: Events, *, seed_key: str, costs: CostModel, family: 
     dc = np.where(np.isfinite(dc), dc, tr[:, COL["cost"]])
     from goldbot.research.catalogue import stats as S
     return pd.DataFrame({
-        "cell_id": f"{family}|{b.inst}|{b.tf}", "family": family, "inst": b.inst, "tf": b.tf,
+        "cell_id": f"{family}|{cell_tag or f'{b.inst}|{b.tf}'}", "family": family, "inst": b.inst, "tf": b.tf,
         "side": tr[:, COL["side"]].astype(np.int64), "day": day, "decision_ns": tr[:, COL["t_dec"]].astype(np.int64),
         "net_r": net, "twin_mean_net_r": net - ex, "excess_r": ex, "cost_r": tr[:, COL["cost"]],
         "year": S.year_of_day(day), "n_twins": np.isfinite(tw).sum(axis=1), "gross_r": gross, "ambiguous": amb,
@@ -990,7 +991,14 @@ def _concat_events(parts: Sequence[Events], like: Events) -> Events:
                   hold=a[:, 9].astype(np.int64), exit_long=like.exit_long, exit_short=like.exit_short, oco=o)
 
 
-def shift_events(b: Bars, ev: Events, *, seed_key: str) -> tuple[Events, int]:
+def shift_weeks_bound(b: Bars) -> int:
+    """The largest whole-week shift drawn for bars `b`: the cell's decision span inside 2010-17 less 3 weeks."""
+    lo = max(EXPLORE_FROM, int(b.ta[0])) if len(b) else EXPLORE_FROM
+    hi = min(EXPLORE_END, int(b.ta[-1]) + 1) if len(b) else EXPLORE_END
+    return (hi - lo) // WEEK - 3
+
+
+def shift_events(b: Bars, ev: Events, *, seed_key: str, weeks: int | None = None) -> tuple[Events, int]:
     """Arm B: every signal (an OCO pair as one) re-decided `weeks` whole weeks later, circularly inside the cell's own
     bars within 2010-17 (weeks >= 3, so >= 20 days), keyed on `seed_key`; its own geometry re-scaled to the new bar's ATR14
     (`sim._twin_events`, the same re-anchoring the twins use), own kind, validity, hold and exit masks.
@@ -1001,7 +1009,10 @@ def shift_events(b: Bars, ev: Events, *, seed_key: str) -> tuple[Events, int]:
     max_w = span // WEEK - 3
     if max_w <= 3:
         raise ValueError(f"{b.inst} {b.tf}: {span / WEEK:.1f} weeks of bars cannot hold a >= 3-week circular shift")
-    weeks = int(_key_rng("shift", seed_key, b.inst, b.tf).integers(3, max_w))
+    if weeks is None:
+        weeks = int(_key_rng("shift", seed_key, b.inst, b.tf).integers(3, max_w))
+    if not 3 <= weeks < max_w + 3:
+        raise ValueError(f"{b.inst} {b.tf}: a {weeks}-week shift is outside 3..{max_w + 2} weeks")
     shift = weeks * WEEK
     a14 = K.atr(b, SIM.TWIN_ATR_N)
     parts, seen = [], set()
@@ -1024,12 +1035,15 @@ def shift_events(b: Bars, ev: Events, *, seed_key: str) -> tuple[Events, int]:
     return _concat_events(parts, ev), weeks
 
 
-def batch1_cells(ctx: Ctx | None = None) -> list[tuple[str, Bars, Events]]:
-    """(unit id, bars, events) of every registered batch-1 unit (BATCH1_FAMILIES) on its gold cells, explore 2010-17
-    bars, real context."""
+FamilyCells = Sequence[tuple[str, Bars, Events]]
+
+
+def batch1_families(ctx: Ctx | None = None) -> dict[str, list[tuple[str, Bars, Events]]]:
+    """Batch-1 family -> [(unit id, bars, events)] over every registered unit of the family (BATCH1_FAMILIES) and each
+    of its gold cells, explore 2010-17 bars, real context."""
     from goldbot.research.catalogue import dispatcher as D
     ctx = ctx or D.build_ctx("explore")
-    out = []
+    out: dict[str, list[tuple[str, Bars, Events]]] = {}
     for u in D.units():
         if u["family"] not in BATCH1_FAMILIES or u.get("xs"):
             continue
@@ -1039,18 +1053,51 @@ def batch1_cells(ctx: Ctx | None = None) -> list[tuple[str, Bars, Events]]:
             b = explore_bars(inst, tf)
             ev = D.DETECTORS[u["detector"]](b, u["params"], ctx)
             if len(ev):
-                out.append((str(u["unit"]), b, ev))
+                out.setdefault(str(u["family"]), []).append((str(u["unit"]), b, ev))
     return out
 
 
-def _s1_shift_rep(args: tuple[int, str, str, Bars, Events, Bars | None]) -> pd.DataFrame:
-    rep, seed_key, unit, b, ev, fine = args
+def arm_b_family(rep: int, families: Mapping[str, Any]) -> str:
+    """The batch-1 family replicate `rep` shifts: the families in name order, cycled."""
+    names = sorted(families)
+    return names[rep % len(names)]
+
+
+def shifted_family_units(rep: int, seed_key: str, source: str, cells: FamilyCells, fine: Bars | None, *,
+                         costs: CostModel | None = None) -> pd.DataFrame:
+    """Arm B, one replicate (quant round 2, C1): EVERY registered unit and gold cell of ONE batch-1 family, shifted by
+    the replicate's one keyed whole-week shift (>= 3 weeks, within every cell's span), all under one family id
+    S1B<rep>; one cell per (unit, inst, tf), so the family's cells are the source family's cells. Twins avoid the bars
+    where any shifted unit of the family fires in that (inst, tf); real simulate + 20 twins at the window's costs."""
+    cm = costs or explore_costs()
     fam = f"S1B{rep:04d}"
-    sev, _ = shift_events(b, ev, seed_key=f"{seed_key}|{rep}")
-    fire = np.zeros(len(b), bool)
-    fire[sev.i] = True
-    return cell_units(b, sev, seed_key=f"{seed_key}|{rep}", costs=explore_costs(), family=fam, fire=fire, fine=fine,
-                      deciding=True)
+    bound = min(shift_weeks_bound(b) for _, b, _ in cells)
+    if bound <= 3:
+        raise ValueError(f"{source}: the shortest cell holds {bound + 3} weeks, too few for a >= 3-week shift")
+    weeks = int(_key_rng("shift", seed_key, rep, source).integers(3, bound))
+    shifted = [(unit, b, shift_events(b, ev, seed_key=f"{seed_key}|{rep}", weeks=weeks)[0]) for unit, b, ev in cells]
+    fire: dict[tuple[str, str], np.ndarray] = {}
+    for _, b, sev in shifted:
+        m = fire.setdefault((b.inst, b.tf), np.zeros(len(b), bool))
+        m[sev.i[(sev.i >= 0) & (sev.i < len(m))]] = True
+    frames = []
+    for unit, b, sev in shifted:
+        if not len(sev):
+            continue
+        f = cell_units(b, sev, seed_key=f"{seed_key}|{rep}|{unit}", costs=cm, family=fam,
+                       fire=fire[(b.inst, b.tf)], fine=fine if b.inst == "XAUUSD" else None, deciding=True,
+                       cell_tag=f"{unit}|{b.inst}|{b.tf}")
+        frames.append(f)
+    u = pd.concat([f for f in frames if len(f)], ignore_index=True) if any(len(f) for f in frames) else pd.DataFrame(
+        columns=["cell_id", "family", "inst", "tf"])
+    u["source_family"] = source
+    u["shift_weeks"] = weeks
+    return u
+
+
+def _s1_shift_rep(args: tuple[int, str, str, FamilyCells, Bars | None]) -> pd.DataFrame:
+    rep, seed_key, source, cells, fine = args
+    return shifted_family_units(rep, seed_key, source, cells, fine)
 
 
 def _confirm_run(fams: Sequence[pd.DataFrame], carried: Mapping[str, tuple[str, ...]], *, confirm: Any,
@@ -1109,8 +1156,9 @@ def s1_arm(fams: Sequence[pd.DataFrame], *, arm: str, seed_key: str, hier: Any, 
 def s1_null_population(*, reps: int = 500, workers: int = 8, seed_key: str) -> SelfTestResult:
     """S1 (prereg 9 C1 and method section 6): >= 500 null families per arm, run before L2 on any real cell.
       A null_geometry  random entries over the real cell grid with the NULL geometry and exits (per-bar table);
-      B shifted        the batch-1 units' own signals on their gold cells, circularly shifted by whole weeks (>= 20
-                       days), own geometry, exits and costs, real simulate + 20 twins;
+      B shifted        per replicate ONE batch-1 family (cycled), every registered unit and gold cell of it, all
+                       circularly shifted by the replicate's one whole-week shift (>= 20 days), own geometry, exits
+                       and costs, real simulate + 20 twins, under one family id;
       C sign_flip      arm A's excess with a fair coin per (cell, session day).
     Each arm: L2 family carry CP 90 % UB <= 7 %; P(any family passes confirm) per run CP 90 % UB <= 12 %. Deciding
     cost: Lane 2's per instance where pinned (gold 5m-1d), else the sim's (recorded in dc_source); never 0. The forward
@@ -1124,10 +1172,11 @@ def s1_null_population(*, reps: int = 500, workers: int = 8, seed_key: str) -> S
                                "sign_flip_units); run S1 first once Lane 3 merges, before any L2 on real cells",))
     tabs = _pool_map(_s1_table, list(S1_GRID), workers)
     tables = {(i, tf): (b, tab) for i, tf, tab, b in tabs if tab is not None and b is not None}
-    b1 = batch1_cells()
-    fine = explore_bars("XAUUSD", "1m") if any(np.isin(ev.kind, SIM.INTRABAR).any() for _, _, ev in b1) else None
-    shifted = _pool_map(_s1_shift_rep, [(r, seed_key, *b1[r % len(b1)], fine) for r in range(reps)], workers) \
-        if b1 else []
+    b1 = batch1_families()
+    fine = explore_bars("XAUUSD", "1m") if any(np.isin(ev.kind, SIM.INTRABAR).any()
+                                               for cells in b1.values() for _, _, ev in cells) else None
+    jobs = [(r, seed_key, arm_b_family(r, b1), b1[arm_b_family(r, b1)], fine) for r in range(reps)] if b1 else []
+    shifted = _pool_map(_s1_shift_rep, jobs, workers)
     return s1_from_arms(tables, shifted, reps=reps, seed_key=seed_key, hier=hier, confirm=confirm, stats=stats, hh=hh)
 
 

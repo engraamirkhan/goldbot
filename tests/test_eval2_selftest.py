@@ -652,16 +652,41 @@ def _fake_lane3(carry_z: float = 1.2816) -> tuple[Any, Any, Any]:
     return hier, confirm, stats
 
 
-def _shifted_fams(reps: int) -> list[pd.DataFrame]:
-    b = ST.rw_bars("1h", 1500, seed=21)
-    b.meta.update(dec_from=int(b.ta[30]))
-    ev = _oco_events(b, every=29)
+def _source_family() -> list[tuple[str, Any, Any]]:
+    """A synthetic batch-1 family: two registered units, one on two gold cells (1h, 4h), one on the 1h cell too."""
     out = []
-    for r in range(reps):
-        sev, _ = ST.shift_events(b, ev, seed_key=f"s{r}")
-        out.append(ST.cell_units(b, sev, seed_key=f"s{r}", costs=default_model(), family=f"S1B{r:04d}",
-                                 deciding=True))
+    for unit, tf, seed, every in (("FAM-V0", "1h", 21, 29), ("FAM-V0", "4h", 22, 7), ("FAM-V1", "1h", 21, 41)):
+        b = ST.rw_bars(tf, 1500, seed=seed)
+        b.meta.update(dec_from=int(b.ta[30]))
+        out.append((unit, b, _oco_events(b, every=every)))
     return out
+
+
+def _shifted_fams(reps: int) -> list[pd.DataFrame]:
+    src = _source_family()
+    return [ST.shifted_family_units(r, "s", "FAM", src, None, costs=default_model()) for r in range(reps)]
+
+
+def test_each_arm_b_family_shifts_every_cell_of_one_batch1_family_under_one_id() -> None:
+    """Quant round 2 (C1): a replicate shifts every registered unit and gold cell of ONE batch-1 family with that
+    replicate's keyed shift, all under one family id: its cells are the source family's cells, one for one."""
+    src = _source_family()
+    want = {f"{unit}|{b.inst}|{b.tf}" for unit, b, _ in src}
+    for r in range(3):
+        u = ST.shifted_family_units(r, "s", "FAM", src, None, costs=default_model())
+        assert set(u["family"]) == {f"S1B{r:04d}"} and set(u["source_family"]) == {"FAM"}
+        got = {c.split("|", 1)[1] for c in u["cell_id"]}
+        assert got == want, (got, want)
+        assert u["shift_weeks"].nunique() == 1 and int(u["shift_weeks"].iloc[0]) >= 3   # one shift per replicate
+    w = {int(ST.shifted_family_units(r, "s", "FAM", src, None, costs=default_model())["shift_weeks"].iloc[0])
+         for r in range(6)}
+    assert len(w) > 1                                                       # keyed per replicate
+
+
+def test_arm_b_replicates_cycle_through_the_batch1_families() -> None:
+    fams: dict[str, list[Any]] = {"C02": [], "C03": [], "S21": []}
+    picked = [ST.arm_b_family(r, fams) for r in range(6)]
+    assert picked == ["C02", "C03", "S21", "C02", "C03", "S21"]
 
 
 def test_s1_runs_three_arms_through_l2_and_the_control_variate_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
