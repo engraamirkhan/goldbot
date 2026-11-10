@@ -211,6 +211,29 @@ def test_a_suspended_stratum_is_retired_by_the_review_under_the_cost_rule_and_a_
     assert "cost stop" in rule
 
 
+def test_a_cost_suspended_execution_control_is_retired_by_the_review_and_any_other_control_is_not(tmp_path):
+    """prereg-amendment-2026-11-10-execution-controls.md 4 rule 1: a control registered in `cost_stop.arms` is
+    suspended by the review like an H-81 stratum; a control not registered there (ZCD) keeps "never retired"."""
+    db = _db(tmp_path)
+    _fills(db, "VEX15", 30, host="vantage-demo", pnl=0.5, cost=0.25, days=5, control=True)
+    _fills(db, "ZCD", 30, style="scalp", pnl=0.5, cost=0.25, days=5, control=True)
+    review = _run(tmp_path)
+    assert [(r.broker, r.arm_id) for r in review.retired] == [("vantage", "VEX15")]
+    with _db(tmp_path).connection() as conn:
+        rules = dict(conn.execute("SELECT arm_id, rule FROM exploration_arm_status"))
+    assert set(rules) == {"VEX15"}
+    assert "cost stop" in rules["VEX15"] and "execution-controls" in rules["VEX15"]
+
+
+def test_an_execution_control_in_the_halve_band_or_past_any_r_stop_is_not_retired(tmp_path):
+    """Kill-only and nothing more: the halve band never retires (on slots-only pots it changes nothing), and a
+    control's running net R never stops it (it is the null)."""
+    db = _db(tmp_path)
+    _fills(db, "VEX1H", 30, host="vantage-demo", pnl=0.5, cost=0.15, days=5, control=True)
+    _fills(db, "IEX15", 300, pnl=-1.0, cost=0.01, days=20, control=True)
+    assert _run(tmp_path).retired == []
+
+
 def test_the_engine_halves_a_cost_halved_stratums_share_and_zeroes_a_suspended_one(tmp_path):
     from tests.test_exploration_engine import CLOSE, _arm, _engine
     eng, _ = _engine(tmp_path, [_arm("Z1P", style="scalp"), _arm("Z2P", style="scalp"), _arm("S1A", style="scalp")])

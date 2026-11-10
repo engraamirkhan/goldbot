@@ -77,19 +77,25 @@ Vantage-demo volume therefore stays at about 20-28 fills a day, inside the PD ru
 
 A retirement or suspension only refuses new entries; open positions keep their stop, target, hold and every exit.
 
-### Enforcement as built (read this before relying on rule 1)
+### Enforcement as built
 
-- `arm_stops.cost_states` computes rule 1's band for these ids (they are listed in `cost_stop.arms`; tested).
-- The daily review never retires a control on its own (`daily_review` subtracts the controls from the cost
-  suspensions; quant ruling 2026-10-26, "the controls are the null"). The engine's halving scales the arm's pot
-  share, which binds only on a pot with a £ figure; the intraday and scalp pots of both accounts are slots only
-  (`pot_budgets: false`). **So neither band acts automatically on these arms.**
-- Rules 1 to 3 are therefore enforced by the performance-analyst's daily read (cost/R, fill-vs-replay, cell counts):
-  a stop hit is switched off the same day by the spec row's `retired_day` / `retired_rule` (kill-only edit, unhashed
-  fields), and a halve band is recorded and taken as a suspension at the next band read if it persists. The
-  2026-12-09 end is the same edit, made on that day at the latest.
-- Follow-up proposed (needs this signature and a trading-safety review): let the daily review suspend a control that
-  is registered in `cost_stop.arms`, so rule 1's suspend band is automatic.
+- **Rule 1, suspend band: automatic.** `arm_stops.cost_states` reads the band for every id in `cost_stop.arms`, and
+  the daily review (`daily_review.run_daily_review`) retires a control listed there whose state is `suspended`, with
+  the rule "execution control cost stop (Z 4 shape) ..." in `exploration_arm_status`. The engine then refuses its new
+  entries; open positions keep every exit. Every other control keeps "never retired on its own" (quant ruling
+  2026-10-26, "the controls are the null"): ZCD with the same fills is not retired (tested).
+- **Rule 1, halve band: no automatic effect.** The engine's halving scales the arm's pot share, which binds only on a
+  pot with a £ figure; the intraday pots of both accounts are slots only (`pot_budgets: false`). The halve band is
+  reported by the performance-analyst's daily read; it never retires the arm and never raises anything.
+- **Rule 2, execution stop: manual.** EVAL-2 defines fill against replay on replay **v2** (measured per-leg slippage,
+  no credit, exit overshoot; eval2-method section S5). Replay v2 (Lane 5A) is not merged. The v1 label replay
+  (`label_sim_r`) carries the slippage prior (about +0.078 R of the +0.084 R gap measured on icm), so an automatic
+  0.10 R stop on v1 would fire on the prior, not on execution. Until replay v2 is merged, the performance-analyst
+  reads the gap daily and a hit is switched off the same day by the spec row's `retired_day` / `retired_rule`
+  (kill-only, unhashed fields). It becomes automatic in the review once v2 lands, by a dated note to this amendment.
+- **Rule 3, sample stop: manual.** The cell counts are read daily, and the 2026-12-09 end is the same `retired_day`
+  edit, made on that day at the latest.
+- Kill-only throughout: no enforcement path raises a share, reopens an arm or admits an entry.
 
 ## 5. K and budget
 

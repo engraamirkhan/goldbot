@@ -86,6 +86,8 @@ RULES = {"HV": RULE,
          "TS": "H-61 stop or futility (docs/research/prereg-2026-10-26-time-structure.md)"}
 FOLLOW_RULE = "stops with its arm (docs/research/prereg-2026-10-26-time-structure.md 2.2, 3.2)"
 COST_RULE = "H-81 cost stop, suspended until a dated amendment (docs/research/prereg-2026-10-27-scalp-volume.md 4)"
+CONTROL_COST_RULE = ("execution control cost stop (Z 4 shape), suspended until a dated amendment "
+                     "(docs/research/prereg-amendment-2026-11-10-execution-controls.md 4)")
 BROKER_NAMES = {"icm": "ICM", "vantage": "Vantage"}
 # journal actions that are engine incidents (goldbot/engine/exploration.py, runner.py)
 ENGINE_INCIDENTS = ("exploration_error", "exploration_rule_error", "exploration_refused:ledger_unreadable",
@@ -660,7 +662,8 @@ def _family_members(health: Mapping[str, Mapping[str, Health]], why: Mapping[tup
 
 
 def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) -> dict[str, set[str]]:
-    """Per broker: the H-81 strata whose cost stop suspends them (Z 4: "Above 0.20 it is suspended until a dated
+    """Per broker: the H-81 strata and the execution controls (every arm of `cost_stop.arms`) whose cost stop suspends
+    them (Z 4: "Above 0.20 it is suspended until a dated
     amendment"), from their fills sent before `hi`. A halved share is the engine's (`exploration.shares`), not here."""
     out: dict[str, set[str]] = {}
     with db.connection() as conn:
@@ -996,7 +999,10 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
         stops = {a: why[(broker, a)] for a, h in arms.items() if h == "breached" and a not in controls}
         stops |= {a: r for a, r in family.items() if a not in stops}
         stops |= {a: COST_RULE for a in sorted(suspended.get(broker, set()) - set(stops) - controls)}
-        for arm, rule in stops.items():         # a control is never retired (F1C/G1C only with their arm)
+        # prereg-amendment-2026-11-10-execution-controls.md 4 rule 1: a control registered in cost_stop.arms (the
+        # execution controls) is suspended on its cost stop too; the halve band and any R stop never retire it
+        stops |= {a: CONTROL_COST_RULE for a in sorted(suspended.get(broker, set()) & controls - set(stops))}
+        for arm, rule in stops.items():         # else a control is never retired (F1C/G1C only with their arm)
             if arm not in already and (dry_run or retire(db, broker=broker, arm_id=arm, day=day, now=now,
                                                          rule=rule)):
                 retired.append(Retirement(broker=broker, arm_id=arm, day=day))
