@@ -404,7 +404,7 @@ def _trial_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+def best_backtest_trial(rows: list[dict[str, Any]], *, k: int | None = None) -> dict[str, Any] | None:
     """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR recomputed on the
     registry's trial count today (`current_dsr`; a row that cannot be recomputed ranks last), among rows that record
     the research cost treatment (`registry.costs_recorded`: the swap charged and the cost source stated). Quant
@@ -412,8 +412,11 @@ def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR. Only the latest run of each
     configuration on its feature version competes (`registry.latest_evaluated`; quant review 2026-10-16 N1: "only the
     latest evaluated row ... decides"): a superseded run ranked above its own passing rerun was refused by
-    `promotion_refusal` and left gate 1 unmet although the configuration's deciding run passes."""
-    k = n_trials_effective(rows)
+    `promotion_refusal` and left gate 1 unmet although the configuration's deciding run passes. `k`: the registry's
+    `n_trials_effective(rows)` when the caller has it already (`evaluate_gates` counts once per evaluation: the count
+    builds the registry ledger, the costliest step of the health pass; CPU attribution 2026-11-10, round 3)."""
+    if k is None:
+        k = n_trials_effective(rows)
 
     def dsr(r: dict[str, Any]) -> float:
         v = current_dsr(r, k)[0]
@@ -581,7 +584,8 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
         errors.append(err)
     ev = load_evidence(state_dir)
     rows = _trial_rows(trials_path if trials_path is not None else _registry_path(state_dir, settings))
-    best = best_backtest_trial(rows)
+    k_now = n_trials_effective(rows)                 # once per evaluation: best_backtest_trial and gate 1 read the same K
+    best = best_backtest_trial(rows, k=k_now)
     mf = ((best or {}).get("results") or {}).get("model_filtered") or {}
     # the backtest reference for paper expectancy and live drawdown is the best trial only when its research pass
     # counts for a promotion (registry.promotion_refusal: gates passed with costs recorded, the latest rerun of its
@@ -617,7 +621,6 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     gates.append(_status(0, passed, items, when))
 
     # 1 backtest -> paper: from the trial registry and the measured spread table; the DSR recomputed on today's count
-    k_now = n_trials_effective(rows)
     dsr, dsr_why = current_dsr(best, k_now)
     stored = mf.get("dsr")
     gchecks = {c.get("name"): c for c in (((best or {}).get("results") or {}).get("gates") or {}).get("checks", [])}

@@ -385,6 +385,57 @@ def retired_quarter_trials(rows: list[dict[str, Any]], quarter: str, retired: se
 
 
 # ---------------------------------------------------------------------------------------------- the queue's ledger
+def _indexable(v: Any) -> bool:
+    """A stamp a dict lookup finds exactly when `==` does: hashable and equal to itself (not NaN)."""
+    try:
+        hash(v)
+    except TypeError:
+        return False
+    return bool(v == v)
+
+
+class _AdhocIndex:
+    """The ad-hoc pre-registrations by `ts`, for `_Ledger`'s link match: "a pre-registration is used by its first
+    linked trial only", the first unused ad-hoc row in registry order whose `ts` equals the link's and whose
+    `config_hash` the link names (or the link names none). A linear `next()` per trial was O(trials x ad hoc)
+    (CPU attribution 2026-11-10, round 3); this picks the same row: positions are kept in registry order per stamp,
+    and a row whose stamp cannot be looked up (unhashable, NaN) stays in `loose`, compared by `==` as before. A link
+    whose stamp cannot be looked up scans every row, as the linear match did."""
+
+    def __init__(self, adhoc: list[dict[str, Any]]):
+        self.adhoc = adhoc
+        self.by_ts: dict[Any, list[int]] = {}
+        self.loose: list[int] = []
+        for i, a in enumerate(adhoc):
+            ts = a.get("ts")
+            if _indexable(ts):
+                self.by_ts.setdefault(ts, []).append(i)
+            else:
+                self.loose.append(i)
+
+    def _first(self, positions: Sequence[int], ts: Any, config_hash: Any, used: Mapping[int, Any]) -> int | None:
+        for i in positions:
+            a = self.adhoc[i]
+            if id(a) not in used and a.get("ts") == ts and config_hash in (None, a.get("config_hash")):
+                return i
+        return None
+
+    def take(self, ts: Any, config_hash: Any, used: Mapping[int, Any]) -> dict[str, Any] | None:
+        """The row the linear match picked for a link (`ts`, `config_hash`), given the rows already `used` (by id)."""
+        if not _indexable(ts):
+            i = self._first(range(len(self.adhoc)), ts, config_hash, used)
+            return None if i is None else self.adhoc[i]
+        bucket = self.by_ts.get(ts, [])
+        hits = [i for i in (self._first(bucket, ts, config_hash, used),
+                            self._first(self.loose, ts, config_hash, used)) if i is not None]
+        if not hits:
+            return None
+        i = min(hits)
+        if i in bucket:
+            bucket.remove(i)                  # used now: later links of the same stamp do not walk past it again
+        return self.adhoc[i]
+
+
 class _Ledger:
     """Everything the reservation derives from the registry rows, computed once per call and never written back:
 
@@ -406,12 +457,12 @@ class _Ledger:
         adhoc = [r for r in rows if r.get("status") == PREREGISTERED and r.get("queue") is False]
         self.adhoc_run: dict[int, dict[str, Any]] = {}
         order: list[tuple[dict[str, Any], dict[str, Any]]] = []          # (ad-hoc row, its trial) in trial order
+        index = _AdhocIndex(adhoc)
         for t in rows:
             link = t.get("preregistration") if is_trial(t) else None
             if not isinstance(link, dict) or link.get("ts") is None:
                 continue
-            p = next((a for a in adhoc if id(a) not in self.adhoc_run and a.get("ts") == link.get("ts")
-                      and link.get("config_hash") in (None, a.get("config_hash"))), None)
+            p = index.take(link.get("ts"), link.get("config_hash"), self.adhoc_run)
             if p is not None:
                 self.adhoc_run[id(p)] = t
                 order.append((p, t))

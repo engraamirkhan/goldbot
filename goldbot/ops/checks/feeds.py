@@ -17,7 +17,10 @@ from goldbot.ops.checks._base import (
     NEWS_STALE_POLLS,
     Check,
     Status,
+    WindowCache,
     _age,
+    _cached_window,
+    _part_files,
     _read_json,
     _skipped,
 )
@@ -192,6 +195,11 @@ def check_cost_of_record(ctx: HealthContext) -> Check:
                  reason=f"every broker's cost-of-record cells measured within {COST_OF_RECORD_STALE_DAYS:.0f} d")
 
 
+# data root -> (dq_events' part files when read, the window start read from, its rows): the same part-file cache as
+# the decisions journal's (`_cached_window`); a fresh DuckDB read of dq_events cost ~0.4 s a pass (2026-11-10, round 3)
+_DQ: WindowCache = {}
+
+
 @register_check("global", block=BLOCK_TAIL, pos=10)
 def check_data_quality(ctx: HealthContext) -> Check:
     """Design (Data quality): errors quarantine the batch and alert. Error-severity events (duplicate stamps, bid >
@@ -203,8 +211,11 @@ def check_data_quality(ctx: HealthContext) -> Check:
     if not (root / "dq_events").exists():
         return Check(name="data_quality", status="ok", reason="no data-quality events recorded")
     from goldbot.data.store import Store
+    since = ctx.now - pd.Timedelta(hours=DQ_WINDOW_HOURS)
     try:
-        ev = Store(root).read("dq_events", start=ctx.now - pd.Timedelta(hours=DQ_WINDOW_HOURS), end=ctx.now)
+        # every part of the table, any source or symbol: a new one may change the columns a fresh read returns
+        ev = _cached_window(_DQ, (str(root.resolve()),), _part_files(root / "dq_events"), since, since, ctx.now,
+                            lambda frm: Store(root).read("dq_events", start=frm))
     except (ValueError, OSError) as exc:
         return Check(name="data_quality", status="warn", reason=f"dq_events unreadable: {exc}")
     errs = ev[ev["severity"] == "error"] if not ev.empty and "severity" in ev.columns else ev.iloc[0:0]

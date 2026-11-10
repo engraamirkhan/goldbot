@@ -894,6 +894,11 @@ brain and sent to **Oracle Object Storage** (free tier, 20 GB). It never goes to
 * the models, with their checksums;
 * the brain's own Parquet: ticks, fills, trades and the decisions journal.
 
+**Never copy over live state in place.** Restore into an empty folder, stop every goldbot service, then move the files
+into `state/`. Copying over `aux.db` with `cp -p` or `rsync -a --inplace` while the API runs can keep the file's inode,
+size and timestamps, and the trades ledger's cache (`api/trades_ledger.py`) would then serve the old records until the
+API restarts.
+
 Bars from releases and secrets are left out. Every Sunday at 10:00 UTC a restore drill restores the latest backup to
 a temporary folder and checks it. Health shows `backup_age` (warn after 26 h, fail after 72 h; Telegram tells you
 at the first warning; it also warns when a backup took 10 min or more, because restic cancels a backup near 20 min

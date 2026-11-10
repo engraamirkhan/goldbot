@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,10 +23,13 @@ from goldbot.ops.checks._base import (
     AccountRef,
     Check,
     Status,
+    WindowCache,
     _age,
     _ahead_s,
+    _cached_window,
     _epoch,
     _market_open_throughout,
+    _part_files,
     _read_json,
     _worst,
     log,
@@ -343,51 +345,36 @@ HISTORY_GAP_MIN_CLOSES = 4     # refused closes, spread over at least half the w
 
 
 # (data root, account, symbol) -> (the journal's part files when read, the window start read from, its rows)
-_JOURNAL: dict[tuple[str, str, str], tuple[frozenset[str], pd.Timestamp, pd.DataFrame]] = {}
+_JOURNAL: WindowCache = {}
+
+
+def _journal_from(now: pd.Timestamp) -> pd.Timestamp:
+    """Where the shared journal read starts: the earlier of history_gap's and order_failed's windows, so the two
+    checks answer from one read and never evict each other (a 24 h window crosses a month boundary a 6 h one does not)."""
+    return now - pd.Timedelta(hours=max(HISTORY_GAP_WINDOW_H, FAILED_ORDER_WINDOW_H))
 
 
 def _journal_parts(data_root: str | Path, account: AccountRef, since: pd.Timestamp) -> frozenset[str] | None:
     """The part files of the account's decisions journal in the months from `since` on, None when they cannot be
-    listed. Store writes every part under a new random name and never rewrites one (`Store._write_atomic`), so the set
-    changes with every flush."""
+    listed (`_part_files`): the set changes with every flush."""
     base = Path(data_root) / "decisions" / f"source={account.account_id}" / f"symbol={account.symbol}"
-    first = since.year * 12 + since.month
-    out: set[str] = set()
-    try:
-        for ydir in base.glob("year=*"):
-            for mdir in ydir.glob("month=*"):
-                if int(ydir.name[5:]) * 12 + int(mdir.name[6:]) >= first:
-                    out.update(f"{ydir.name}/{mdir.name}/{e.name}" for e in os.scandir(mdir)
-                               if e.name.endswith(".parquet"))
-    except (OSError, ValueError):
-        return None
-    return frozenset(out)
+    return _part_files(base, since.year * 12 + since.month)
 
 
 def _journal_window(data_root: str | Path, account: AccountRef, since: pd.Timestamp,
-                    end: pd.Timestamp) -> pd.DataFrame:
-    """The account's decisions journal rows with since <= ts_utc < end, as `Store.read` returns them. Read again only
-    when the journal changed (a new part file) or the last read does not cover `since`; otherwise the last read,
-    filtered to the window: the same rows a fresh read gives. The engine flushes at most once per bar close and the
+                    end: pd.Timestamp, read_from: pd.Timestamp | None = None) -> pd.DataFrame:
+    """The account's decisions journal rows with since <= ts_utc < end, as `Store.read` returns them, from a read
+    starting at `read_from` (default `since`; the checks pass `_journal_from`). Read again only when the journal
+    changed (a new part file) or the last read does not reach back to `read_from`; otherwise the last read, filtered
+    to the window: the same rows a fresh read gives (`_cached_window`). The engine flushes every 15 min and the
     Telegram service checks every 60 s; the DuckDB read cost ~10 s of one core per pass on the brain (health pass
-    cost, 2026-11-10). The read has no upper bound, so a later window is covered by an earlier read of an unchanged
-    journal."""
+    cost, 2026-11-10), and order_failed's own read of the whole table another ~2 s (round 3)."""
     from goldbot.data.store import Store
+    start = since if read_from is None else min(read_from, since)
     key = (str(Path(data_root).resolve()), account.account_id, account.symbol)
-    parts = _journal_parts(data_root, account, since)
-    hit = _JOURNAL.get(key)
-    if parts is None or hit is None or hit[0] != parts or hit[1] > since:
-        rows = Store(data_root).read("decisions", source=account.account_id, symbol=account.symbol, start=since)
-        if parts is None:
-            _JOURNAL.pop(key, None)
-        else:
-            _JOURNAL[key] = (parts, since, rows)
-    else:
-        rows = hit[2]
-    if rows.empty:
-        return rows
-    ts = rows["ts_utc"]
-    return rows[(ts >= since) & (ts < end)].reset_index(drop=True)
+    return _cached_window(
+        _JOURNAL, key, _journal_parts(data_root, account, start), start, since, end,
+        lambda frm: Store(data_root).read("decisions", source=account.account_id, symbol=account.symbol, start=frm))
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=45, pass_account=True)
@@ -412,7 +399,8 @@ def check_history_gap(ctx: HealthContext, account: AccountRef) -> Check | None:
     raw = e.get("history_gap") if isinstance(e, dict) else None
     gaps = {tf: g for tf, g in raw.items() if isinstance(g, dict)} if isinstance(raw, dict) else {}
     since = ctx.now - pd.Timedelta(hours=HISTORY_GAP_WINDOW_H)
-    d = _journal_window(ctx.settings.data_root, account, since, ctx.now + pd.Timedelta(seconds=1))   # end exclusive
+    d = _journal_window(ctx.settings.data_root, account, since, ctx.now + pd.Timedelta(seconds=1),   # end exclusive
+                        read_from=_journal_from(ctx.now))
     act = d["action"].astype(str) if not d.empty else pd.Series(dtype=str)
     hit = act.str.startswith("history_gap:")
     refused = d[hit] if not d.empty else d
@@ -442,13 +430,14 @@ def check_history_gap(ctx: HealthContext, account: AccountRef) -> Check | None:
 
 def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp,
                            symbol: str | None = None) -> list[tuple[pd.Timestamp, str, Any]]:
-    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal under the account's own gold symbol
-    (vantage: XAUUSD+); [] when it cannot be read."""
+    """(ts, agent, retcode) of failed `order` rows with since <= ts < now in the engine's decisions journal under the
+    account's own gold symbol (vantage: XAUUSD+); [] when it cannot be read. Read through history_gap's journal cache
+    (`_journal_window` from `_journal_from`): the same rows as the bounded Store.read it replaces, one read per flush."""
     if ctx.settings is None:
         return []
-    from goldbot.data.store import Store
     try:
-        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=symbol or ctx.settings.symbol, start=since, end=ctx.now)
+        ref = AccountRef(account_id=account_id, symbol=symbol or ctx.settings.symbol)
+        d = _journal_window(ctx.settings.data_root, ref, since, ctx.now, read_from=_journal_from(ctx.now))
         if d.empty:
             return []
         d = d[d["action"] == "order"]
