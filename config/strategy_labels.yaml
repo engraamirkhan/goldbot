@@ -243,6 +243,12 @@ arms:
   VXTV2: {variant: "TV rule 2"}
   GS1: {variant: "growth test"}
   GS1C: {variant: "growth control"}
+  # execution/cost calibration controls (docs/research/prereg-amendment-2026-11-10-execution-controls.md): beside the
+  # retired I0/C1H (VI0/VC1H) of the same family and timeframe, still registered for their exits
+  VEX15: {variant: "execution calibration"}
+  VEX1H: {variant: "execution calibration"}
+  IEX15: {variant: "execution calibration"}
+  IEX1H: {variant: "execution calibration"}
   # ADR 0061 amendment 2026-11-02: the learning arms' dedicated random controls (docs/research/learning-2026-11-02.md)
   LCZ3D: {variant: "learning ctl, round break"}
   LCZ4D: {variant: "learning ctl, round reject"}

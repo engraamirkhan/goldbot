@@ -38,6 +38,9 @@ SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
 DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD",
               "LCZ3D", "LCZ4D", "LCZ6D", "LCZ7D", "LCZ9D", "LCZ10D"}                # LC*: ADR 0072 learning controls
 GROWTH = {"GS1", "GS1C"}           # growth sprint 2026-11-01: icm-demo only
+# execution/cost calibration controls (prereg-amendment-2026-11-10-execution-controls.md)
+EXECUTION_ICM = {"IEX15", "IEX1H"}
+EXECUTION_VANTAGE = {"VEX15", "VEX1H"}
 VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
 WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
 # multi-instrument demo (lane L3): each listed instrument's random controls, on the account that lists it
@@ -84,7 +87,7 @@ def test_icm_demo_ships_as_the_intraday_swing_and_h81_scalp_learning_host(accs):
     assert acc.enabled and acc.mode == "demo" and acc.probe_only and acc.login is None
     # demo-limits ADR 0072 (2026-11-02): host cap 24 (23 open), pots slots only; the £198 budget is unchanged
     assert not acc.shadow_host and not acc.cost_probe.enabled and acc.max_positions == 24
-    assert ex.enabled and set(ex.arms) == INTRADAY | SWING | DEMO_SCALP | GROWTH \
+    assert ex.enabled and set(ex.arms) == INTRADAY | SWING | DEMO_SCALP | GROWTH | EXECUTION_ICM \
         and set(ex.pots) == {"scalp", "intraday", "swing", "growth"}
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in DEMO_SCALP} == {("scalp", 6.5)}
     assert ex.budget_share * 220 == pytest.approx(198, abs=0.05) and ex.max_open_total == 23
@@ -112,7 +115,7 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         assert not clash, f"{aid} shares arms with another host: {clash}"
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
     assert set(seen) == (SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
-                         | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"])
+                         | EXECUTION_ICM | EXECUTION_VANTAGE | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"])
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):
