@@ -227,7 +227,8 @@ def test_the_selftest_job_is_advisory_and_runs_on_evaluator_changes_and_nightly(
     text = SELFTEST.read_text()
     wf = yaml.safe_load(text)
     on = _on(wf)
-    paths = {"goldbot/research/catalogue/**", "goldbot/research/eval2/**", "goldbot/research/screen.py"}
+    paths = {"goldbot/research/catalogue/**", "goldbot/research/eval2/**", "goldbot/research/screen.py",
+             "config/catalogue_costs.yaml", "scripts/eval2_selftest.py"}   # the harness hash covers these too
     assert paths <= set(on["pull_request"]["paths"]) and paths <= set(on["push"]["paths"])
     assert on["schedule"] and "workflow_dispatch" in on
     assert "selftest" not in REQUIRED_CHECKS and "selftest" not in _ci()["jobs"]   # advisory: never a required check
