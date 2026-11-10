@@ -1,4 +1,4 @@
-- **EVAL-2 Lane 4, self-tests (R110).** `scripts/eval2_selftest.py` runs S0-S6 against the frozen API (prereg
+- **EVAL-2 Lane 4, self-tests (R116).** `scripts/eval2_selftest.py` runs S0-S6 against the frozen API (prereg
   section 4.10), writes a JSON report to `~/tmp/eval2_selftest/` and exits 1 on any FAIL or BLOCKED. Real bars are
   explore 2010-01-01..2017-12-31 only (no 2009 warm-up, nothing from 2018 on; the bar cache is re-checked on load).
   **S0 on real bars, registered NULL-RAND cells (52 cells, n 53,264, 20 twins): pooled gross +0.0037 R (t 0.64), excess

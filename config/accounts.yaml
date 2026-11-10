@@ -128,11 +128,13 @@ accounts:
       # At most `max_per_day` exploration fills a day on this account (every book, by signal close), `max_per_hour`
       # in one clock hour and each session its trailing share of the day; a paired control admitted per pair at its
       # arms' matched-time rate (controls_per_edge, quant ruling 2026-11-06 Q1); the unpaired per-instrument controls
-      # (S0-<key>, I0-<key>) at most 0.25 of the day and none once their instrument's cost cell has 30 fills
-      # (goldbot/engine/exploration_budget.py; docs/research/prereg-amendment-2026-11-06-control-thinning.md). Entries
+      # (S0-<key>, I0-<key>) at most 0.25 of the day and none once their instrument's cost cell has 30 fills; 1m/5m
+      # arms at most scalp_day_cap fills a day (PD ruling 5(d)); a session's unspent share rolls forward that UTC day
+      # (goldbot/engine/exploration_budget.py; docs/research/prereg-amendment-2026-11-06-control-thinning.md and
+      # prereg-amendment-2026-11-09-session-roll-forward.md). Entries
       # only; exits are never gated. The three accounts' budgets + daily_review.probe_plan stay <= 250
       # (tests/test_exploration_daily_budget.py). Rollback: drop the line, restart
-      daily: { max_per_day: 70, max_per_hour: 7, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30 }
+      daily: { max_per_day: 70, max_per_hour: 7, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30, scalp_day_cap: 30 }
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 option B): a scalp pot carved inside the unchanged £198 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 108 / 9 -> 68 / 7, swing 90 / 2 -> 40 / 2.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
@@ -329,11 +331,13 @@ accounts:
       # At most `max_per_day` exploration fills a day on this account (every book, by signal close), `max_per_hour`
       # in one clock hour and each session its trailing share of the day; a paired control admitted per pair at its
       # arms' matched-time rate (controls_per_edge, quant ruling 2026-11-06 Q1); the unpaired per-instrument controls
-      # (S0-<key>, I0-<key>) at most 0.25 of the day and none once their instrument's cost cell has 30 fills
-      # (goldbot/engine/exploration_budget.py; docs/research/prereg-amendment-2026-11-06-control-thinning.md). Entries
+      # (S0-<key>, I0-<key>) at most 0.25 of the day and none once their instrument's cost cell has 30 fills; 1m/5m
+      # arms at most scalp_day_cap fills a day (PD ruling 5(d)); a session's unspent share rolls forward that UTC day
+      # (goldbot/engine/exploration_budget.py; docs/research/prereg-amendment-2026-11-06-control-thinning.md and
+      # prereg-amendment-2026-11-09-session-roll-forward.md). Entries
       # only; exits are never gated. The three accounts' budgets + daily_review.probe_plan stay <= 250
       # (tests/test_exploration_daily_budget.py). Rollback: drop the line, restart
-      daily: { max_per_day: 85, max_per_hour: 8, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30 }
+      daily: { max_per_day: 85, max_per_hour: 8, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30, scalp_day_cap: 30 }
       # learning-mi-2026-11-02.md section 5 (research lead 2026-11-02, all 26 pairs registered): an intraday pot of 12
       # slots for the multi-instrument learning pairs. Slot counts only: max_open_total 23, max_positions 24, every
       # per-trade cap, the margin floor and the notional ceiling are unchanged and still bind (the pots' slots sum past
@@ -535,11 +539,13 @@ accounts:
       # At most `max_per_day` exploration fills a day on this account (every book, by signal close), `max_per_hour`
       # in one clock hour and each session its trailing share of the day; a paired control admitted per pair at its
       # arms' matched-time rate (controls_per_edge, quant ruling 2026-11-06 Q1); the unpaired per-instrument controls
-      # (S0-<key>, I0-<key>) at most 0.25 of the day and none once their instrument's cost cell has 30 fills
-      # (goldbot/engine/exploration_budget.py; docs/research/prereg-amendment-2026-11-06-control-thinning.md). Entries
+      # (S0-<key>, I0-<key>) at most 0.25 of the day and none once their instrument's cost cell has 30 fills; 1m/5m
+      # arms at most scalp_day_cap fills a day (PD ruling 5(d)); a session's unspent share rolls forward that UTC day
+      # (goldbot/engine/exploration_budget.py; docs/research/prereg-amendment-2026-11-06-control-thinning.md and
+      # prereg-amendment-2026-11-09-session-roll-forward.md). Entries
       # only; exits are never gated. The three accounts' budgets + daily_review.probe_plan stay <= 250
       # (tests/test_exploration_daily_budget.py). Rollback: drop the line, restart
-      daily: { max_per_day: 40, max_per_hour: 4, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30 }
+      daily: { max_per_day: 40, max_per_hour: 4, controls_per_edge: 1.0, thin_control_share: 0.25, thin_control_fills: 30, scalp_day_cap: 30 }
       # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 V1): a scalp pot carved inside the unchanged £180 budget for the
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 98 / 9 -> 40 / 4, swing 82 / 2 -> 40 / 1.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.

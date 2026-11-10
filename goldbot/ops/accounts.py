@@ -208,7 +208,9 @@ class DailyEntries(FrozenRecord):
     other cap (goldbot/engine/exploration_budget.py). Demo only by construction: exploration loads on demo probe_only
     accounts only (`Account._exploration_fenced`)."""
     # fills a day at most, every exploration arm of the account together (`daily_entries`); each session (asia, london,
-    # newyork) has its share of it from the trailing 10 trading days' edge signals (`session_entries`, quant Q3)
+    # newyork) has its share of it from the trailing 10 trading days' admissible edge signals (active arms, past the
+    # static entry refusals), and a session's unspent share rolls forward to the next one that day (`session_entries`,
+    # quant Q3; 2026-11-09 volume diagnosis cause 4)
     max_per_day: int = Field(ge=1)
     # fills in one clock hour at most (`hourly_entries`), so the day's budget is not spent in the first busy hour and
     # every session keeps its evidence; None: no hourly bound
@@ -224,6 +226,9 @@ class DailyEntries(FrozenRecord):
     # per-instrument cost cell, n >= 30): an unpaired per-instrument control sends no entry once its instrument's cost
     # cell (every arm's fills of it on the account, LB/LBC too) has this many (`thin_cell_complete`); None: no stop
     thin_control_fills: int | None = Field(30, ge=1)
+    # PD ruling 5(d) (quant condition C2, 2026-11-09): at most this many fills a day from 1m and 5m arms (by the arm's
+    # timeframe, every kind together; `scalp_day_cap`), so fast scalps never fill the day's budget; None: no bound
+    scalp_day_cap: int | None = Field(30, ge=1)
 
 
 class Exploration(FrozenRecord):
