@@ -148,8 +148,8 @@ def test_a_cold_books_exploration_candidates_are_blocked_book_warming_and_never_
     monkeypatch.setattr(exploration, "_block", block)
     monkeypatch.setattr(exploration, "_enter", lambda *a, **k: entered.append(1))
     with using(eng, _book(eng)):
-        eng.exploration = SimpleNamespace(queue=["signal"], retired_ok=True, arms={},  # type: ignore[assignment]
-                                          last_close=None)
+        eng.exploration = SimpleNamespace(queue=[SimpleNamespace(arm_id="a")], retired_ok=True, arms={},  # type: ignore[assignment]
+                                          last_close=None, learning_group=frozenset(), retired=frozenset())
         eng._closed_through = None
         exploration.on_pass(eng, Tick(ts_utc=NOW, bid=30.0, ask=30.02))
     assert blocked == ["book_warming"] and not entered

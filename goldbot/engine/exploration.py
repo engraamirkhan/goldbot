@@ -92,7 +92,7 @@ import logging
 import math
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -637,6 +637,9 @@ class Exploration:
         self.last_close = eng._closed_through
         self.last_minute: pd.Timestamp | None = None
         self.waiting: pd.Timestamp | None = None       # the minute close whose broker bar the minute pass waits for
+        # the 15m+ part a multi-book pass runs after every book's 1m/5m part (`on_pass_slow`): the tick and time its
+        # 1m/5m part read and the orders that part sent
+        self.slow_owed: tuple[Tick, pd.Timestamp, int] | None = None
         self.ahead_seen: pd.Timestamp | None = None   # the last bar skipped as ahead of the host clock (journalled once)
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
@@ -1079,8 +1082,10 @@ def due(ex: Exploration | None, now: pd.Timestamp) -> bool:
     `books.account_pass` runs due books first."""
     if ex is None:
         return False
-    if ex.queue:
-        return True
+    return bool(ex.queue) or _minute_due(ex, now)
+
+
+def _minute_due(ex: Exploration, now: pd.Timestamp) -> bool:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return False
@@ -1088,36 +1093,145 @@ def due(ex: Exploration | None, now: pd.Timestamp) -> bool:
                for a in ex.arms.values())
 
 
+def fast_pending(ex: Exploration | None, now: pd.Timestamp) -> bool:
+    """1m/5m work waits on this book (vantage-demo refusals 2026-11-10, fix 3: "a pass that starts within GRACE_S does
+    not run a non-due book's boundary work first"): a 1m/5m signal is queued (sent once its send delay is over, or
+    refused stale), or a 1m/5m arm's minute has closed and is not decided yet, inside its GRACE_S too. Read only;
+    `books.account_pass` starts no book's 15m+ part (`on_pass_slow`) while it holds."""
+    if ex is None:
+        return False
+    return any(ex.arms[s.arm_id].tf in SUB_15M for s in ex.queue) or \
+        _minute_due(ex, now + pd.Timedelta(seconds=GRACE_S))
+
+
+SPLIT = "_exploration_split"   # set on the engine by `books.account_pass` (a `SplitPass`) while a multi-book pass runs
+
+
+class SplitPass:
+    """What a multi-book pass (`books.account_pass`) gives the 15m+ parts it runs after every book's 1m/5m part: the
+    quote reader a send re-reads its book's quote from (code review LOW 2 / trading-safety 5), and the engine's
+    `_auto_paused` when the pass started, so an order that raised on any book this pass holds every later 15m+ send
+    (trading-safety 6)."""
+
+    __slots__ = ("paused", "quote")
+
+    def __init__(self, quote: Callable[[str], Tick], paused: tuple[pd.Timestamp, str] | None) -> None:
+        self.quote, self.paused = quote, paused
+
+
 def on_pass(eng: Engine, tick: Tick) -> None:
     """Every engine pass with a quote, after its exits and its bar close: queue the arms' new signals and send. Never
-    raises (an error is journalled `exploration_error`; the pass and every exit go on)."""
+    raises (an error is journalled `exploration_error`; the pass and every exit go on).
+
+    Vantage-demo refusals 2026-11-10 (SRE diagnosis, fix 2: "run _minutes/_enter for SUB_15M arms before step() and
+    exploration_learning.refresh"): the 1m/5m part (`_fast`: the cheap reads, the minute's decisions and a send) runs
+    first, the 15m+ part (`_slow`: the learning read, the 15m+ close step and a send) after it, so a 1m signal (10 s
+    stale limit) never waits for the 2-5 s close step. In a multi-book pass (`SPLIT` set) the 15m+ part is left owed
+    (`Exploration.slow_owed`) and `books.account_pass` runs it (`on_pass_slow`) once every book's 1m/5m part ran.
+    Only the order changes: every refusal, gate call and journal row is the one the single step made, and a book's
+    two sends together take at most PER_PASS orders."""
     ex = eng.exploration
     if ex is None:
         return
     now = eng._now(tick)
     _pyramid(eng, ex, now, tick)        # safety S3: the group stops first, in their own try, whatever fails after
+    sent = _fast(eng, ex, now, tick)
+    if sent is None:                    # it raised: no 15m+ work this pass either, as before
+        return
+    if eng.__dict__.get(SPLIT):
+        ex.slow_owed = (tick, now, sent)
+        return
+    _slow(eng, ex, tick, now, sent)
+
+
+def on_pass_slow(eng: Engine) -> None:
+    """The active book's owed 15m+ part (`on_pass`), on the tick its 1m/5m part read this pass; none owed, nothing.
+    Never raises."""
+    ex = eng.exploration
+    if ex is None or ex.slow_owed is None:
+        return
+    tick, at, sent = ex.slow_owed
+    ex.slow_owed = None
+    _slow(eng, ex, tick, at, sent)
+
+
+def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | None:
+    """The cheap reads, the 1m/5m arms' minute and a send: the orders sent, or None when a step raised (journalled).
+    The learning read runs here only when a 1m/5m arm waits on it (its entries read it), else first in `_slow`."""
+    from goldbot.engine import books, exploration_learning
     try:
-        refresh_retired(eng, ex, now)
-        refresh_cost_reads(eng, ex, now)
-        refresh_dormant(eng, ex, now)
-        from goldbot.engine import exploration_learning
-        exploration_learning.refresh(eng, ex, now)
-        refresh_owner_experiments(eng, ex, now)
-        ct = eng._closed_through
-        if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
-            ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
-        _minutes(eng, ex, now)
-        from goldbot.engine import books
-        if ex.queue and books.warming(eng):     # the book's history backfill has not completed: no entry yet
-            _block(eng, ex, list(ex.queue), now, "book_warming")
-        if ex.queue and not ex.retired_ok:      # fail closed: the retired arms are not known yet
-            _block(eng, ex, list(ex.queue), now, "arm_status_unread")
-        elif ex.queue:
-            _enter(eng, ex, now, tick)
+        with books.phase(eng, "exploration:reads"):
+            refresh_retired(eng, ex, now)
+            refresh_cost_reads(eng, ex, now)
+            refresh_dormant(eng, ex, now)
+        # quant C1 (review of R118): also when a learning-group signal is queued, whatever its timeframe, as this part
+        # may send it
+        if any(ex.arms[a].tf in SUB_15M for a in ex.learning_group - ex.retired) or \
+                any(s.arm_id in ex.learning_group for s in ex.queue):
+            books.timed(eng, "exploration:learning", exploration_learning.refresh, eng, ex, now)
+        books.timed(eng, "exploration:reads", refresh_owner_experiments, eng, ex, now)
+        books.timed(eng, "exploration:minutes", _minutes, eng, ex, now)
+        return _entries(eng, ex, now, tick, PER_PASS)
     except Exception as exc:
-        log.exception("exploration pass failed; no exploration entry this pass")
-        eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_error",
-                              "error": type(exc).__name__})
+        _failed(eng, exc)
+        return None
+
+
+def _slow(eng: Engine, ex: Exploration, tick: Tick, at: pd.Timestamp, sent: int) -> None:
+    """The learning read (once a minute), the 15m+ close step and a send of what is left of PER_PASS. `now` is read
+    again before the send (on the live clock this part runs later than the 1m/5m part, `at`, and a signal's age is
+    judged on the time it is sent). An order that raised in the 1m/5m part (`_auto_paused` at `at`) or, in a
+    multi-book pass, on any book since the pass started holds this part's send (trading-safety M1 and 6). In a
+    multi-book pass the send prices on the book's quote read again now (`SplitPass.quote`; code review LOW 2,
+    trading-safety 5); a quote that cannot be read or breaks the tick rules (`Engine._quote_fault`) holds the send to
+    a later pass, the signals kept."""
+    from goldbot.engine import books, exploration_learning
+    split: SplitPass | None = eng.__dict__.get(SPLIT)
+    now = eng._now(tick)
+    try:
+        books.timed(eng, "exploration:learning", exploration_learning.refresh, eng, ex, now)
+        ct = eng._closed_through
+        if ct is not None and (ex.last_close is None or ct > ex.last_close) and \
+                books.timed(eng, "exploration:step", step, eng, ct):
+            ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
+        paused = eng._auto_paused
+        if paused is not None and (paused[0] == at or (split is not None and paused != split.paused)):
+            sent = PER_PASS
+        if split is not None and ex.queue and sent < PER_PASS:
+            try:
+                fresh: Tick | None = split.quote(eng.cfg.symbol)
+                if fresh is not None and eng._quote_fault(fresh) is not None:
+                    fresh = None
+            except Exception:
+                fresh = None
+            if fresh is None:
+                log.warning("%s: quote unreadable for the 15m+ send; its signals wait for a later pass",
+                            eng.cfg.symbol)
+                sent = PER_PASS
+            else:
+                tick = fresh
+        _entries(eng, ex, eng._now(tick), tick, PER_PASS - sent)
+    except Exception as exc:
+        _failed(eng, exc)
+
+
+def _entries(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: int) -> int:
+    """The queue's entries, at most `limit` orders (`_enter`), or every signal refused `book_warming` or
+    `arm_status_unread` as before: the orders sent."""
+    from goldbot.engine import books
+    if ex.queue and books.warming(eng):     # the book's history backfill has not completed: no entry yet
+        _block(eng, ex, list(ex.queue), now, "book_warming")
+    if ex.queue and not ex.retired_ok:      # fail closed: the retired arms are not known yet
+        _block(eng, ex, list(ex.queue), now, "arm_status_unread")
+    elif ex.queue:
+        return books.timed(eng, "exploration:entry", _enter, eng, ex, now, tick, limit)
+    return 0
+
+
+def _failed(eng: Engine, exc: BaseException) -> None:
+    log.error("exploration pass failed; no exploration entry this pass", exc_info=exc)
+    eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_error",
+                          "error": type(exc).__name__})
 
 
 def _pyramid(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
@@ -1669,7 +1783,10 @@ class _Pass:
         self.count["host"] += 1
 
 
-def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
+def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: int = PER_PASS) -> int:
+    """The queue's stale signals refused, then at most `limit` orders sent (PER_PASS a book's pass in all,
+    `on_pass`; the budget reads timed `exploration:budget`): the number sent."""
+    from goldbot.engine import books
     keep: deque[Pending] = deque()
     for s in ex.queue:
         age = (now - s.bar_ts).total_seconds()
@@ -1685,38 +1802,39 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
             keep.append(s)
     ex.queue = keep
     due = [s for s in ex.queue if not _waits(ex, s, now)]
-    if not due or _unsettled(eng, now):
-        return
+    if not due or limit <= 0 or _unsettled(eng, now):
+        return 0
     if paused(eng, now):
         for s in ex.queue:
             eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + s.arm_id,
                                   "action": "exploration_paused_dd", "drawdown": drawdown(eng)})
             candidate(eng, ex, s, now, "paused_dd")
         ex.queue.clear()
-        return
+        return 0
     try:
-        ps = _Pass(eng, ex, now)
+        with books.phase(eng, "exploration:budget"):
+            ps = _Pass(eng, ex, now)
     except StopRulesUnreadable as exc:
         log.warning("exploration stop rules unreadable (%s): no exploration entry", exc)
         eng.decisions.append({"ts": now.isoformat(), "agent": None,
                               "action": "exploration_refused:stop_rules_unreadable"})
-        return
+        return 0
     except Exception as exc:
         log.warning("exploration ledger unreadable (%s): no exploration entry", type(exc).__name__)
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_refused:ledger_unreadable"})
-        return
+        return 0
     sent = 0
     order = [s for s in _order(ex) if s in due]
     if any(ex.arms[s.arm_id].family == "clock_anchor_control" for s in order) and _nets(eng, ex):
         order.sort(key=lambda s: ex.arms[s.arm_id].family == "clock_anchor_control")   # KA15 first: its fill shifts XC15
     for i, s in enumerate(order):
-        if sent >= PER_PASS:
+        if sent >= limit:
             break
         if _unsettled(eng, now):
             # trading-safety M1: an order that raised or came back ambiguous is in no count yet (global cap, net
             # lots, slots), so nothing else goes out until it is settled; the rest are blocked candidates now
             _block(eng, ex, order[i:], now, "order_unsettled")
-            return
+            return sent
         arm = ex.arms[s.arm_id]
         if shift_due(eng, ex, arm):
             defer(eng, ex, s, now)
@@ -1724,7 +1842,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         res = _send(eng, ex, ps, arm, s, now, tick)
         if res == "cap":
             _block(eng, ex, order[i:], now, ps.why or "global_cap")   # quant Q1: recorded now, never left to go stale
-            return
+            return sent
         ex.queue.remove(s)
         if ps.why != "duplicate":
             # a control's admission draw (quant Q1 2026-11-06): its p is the propensity, taken or thinned
@@ -1733,6 +1851,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
+    return sent
 
 
 def _waits(ex: Exploration, s: Pending, now: pd.Timestamp) -> bool:
