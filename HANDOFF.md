@@ -5,6 +5,33 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-10 (branch fix/swap-mode-5-6; Vantage refusals 2026-11-10 item 2, fix 1): vantage-demo BTCUSD reports MT5
+  swap mode 5 (interest on the current price, 360-day year), which instruments.db stored NULL, so every BTC entry was
+  refused `invalid:swap_usd_per_oz` (95 in 7 days). `instruments_db.swap_per_lot` now converts modes 5 and 6 to
+  rate / 100 / 360 x price x contract size per lot per night (broker sign kept; an entry's open price is the current
+  one); no finite price > 0 leaves it unknown, modes 7/8 stay unknown. `books.refresh_terms` takes the tick the
+  refresh runs on, so the first terms write after a start has its price instead of waiting 6 h for the next write.
+  The swap is fixed at the refresh price for up to `broker_terms_every_s` (6 h): a projection input, not a fill.
+  RiskGate unchanged. Tests: `tests/test_instruments_db.py`.
+- Quant review (b): mode 5/6 is priced only for a USD profit currency (the engine's SwapSpec reads the amount as USD);
+  any other stays `swap_unknown`, the reason in `swap_note`. Follow-ups: BACKLOG 153 (seven-night crypto rollovers;
+  reconcile Vantage's BTC swap charges after the first weekend hold) and 154 (convert profit-currency swaps to USD).
+- After deploy (vantage-demo): check the live BTCUSD `swap_rollover3days` is in 1..5 (else `refresh_terms` keeps
+  `swap_unknown`), and that BTCUSD decisions no longer carry `invalid:swap_usd_per_oz` or `swap_unknown`.
+- 2026-11-10 (branch fix/telegram-health-cpu; telegram CPU attribution 2026-11-10, R119): the telegram service's
+  health pass no longer holds the pump. `_pump` starts it as its own task (`_start_health_pass`), one at a time (a
+  pass due while the last still runs is skipped and logged), so proposal cards and outcome edits keep flowing every
+  poll; each pass logs `health pass s=<seconds>` and warns over `HEALTH_SLOW_S` (20 s). Review fixes: an exception
+  escaping the task is logged at once (done-callback); run_checks still running after `HEALTH_HANG_S` (240 s) is
+  logged as an error and then awaited, never abandoned (no second worker thread); shutdown cancels and awaits the
+  task (`HEALTH_STOP_S`). The pass's two hot spots are
+  gone: `arms._registry_rows` parses `state/research_registry.jsonl` once per file version (inode, mtime_ns, size;
+  234 reads of a 3,353-row copy 7.3 s -> 0.35 s), and `registry.stale_preregistrations` indexes withdrawals and trial
+  reads once (`_Exemptions`; same answer as the old scan, n_trials_effective warm 1.15 s -> 0.12 s on that copy, more
+  on the brain's 778-withdrawal registry). No health check decides differently. Not done: the strategy catalogue
+  load in pnl_basis (~16 s profiled) and the history_gap duckdb reads (~10 s) are uncached; measure the pass in the
+  journal after deploy before a slower cadence for heavy checks (proposal D). Tests: `tests/test_telegram_health_task.py`,
+  `tests/test_arms_registry_cache.py`, `tests/test_registry_withdrawal_index.py`.
 - 2026-11-09 trading-safety R1/R2 (branch fix/account-recheck-1109): **the terminal's account is checked again after
   start** (`goldbot/engine/terminal_account.py`). The service wires the start check (`accounts.verify_terminal_account`,
   `services.engine.verify_account`) into `Engine.verify_account`; it runs on every account refresh and every

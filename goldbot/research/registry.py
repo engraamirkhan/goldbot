@@ -189,7 +189,8 @@ def stale_preregistrations(rows: list[dict[str, Any]], now: datetime | None = No
         return []
     from goldbot.research.director import _Ledger  # director imports this module
     led = _Ledger(rows)
-    return [r for r in cands if id(r) not in led.adhoc_run and exempting_withdrawal(rows, r) is None]
+    index = _Exemptions(rows)                 # built once: a scan per row was O(n^2) (CPU attribution 2026-11-10)
+    return [r for r in cands if id(r) not in led.adhoc_run and index.exempting(r) is None]
 
 
 EXEMPT_WITHDRAWAL_RE = re.compile(r"^(unevaluable|never formed): \S")
@@ -242,22 +243,81 @@ def exempting_withdrawal(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> 
 
     `evidence_ok` checks the evidence's format only (file names and 64-hex sha256); that the files show the spec has
     no score is the withdrawal writer's responsibility, verified by the quant."""
-    start = _row_when(prereg)
-    stale_point = start + timedelta(days=STALE_PREREG_DAYS)
-    unreadable = datetime.min.replace(tzinfo=timezone.utc)
-    for w in rows:
-        if w.get("status") != WITHDRAWN or not refers_to(w.get("withdraws"), prereg):
-            continue
-        if not EXEMPT_WITHDRAWAL_RE.match(str(w.get("reason") or "")) or not evidence_ok(withdrawal_evidence(w)):
-            continue
-        end = _row_when(w)
-        if end == unreadable or end >= stale_point:
-            continue
-        if any(is_trial(t) and t.get("family") == prereg.get("family") and row_hash(t) == prereg.get("config_hash")
-               and start <= _row_when(t) <= end for t in rows):
-            continue
-        return w
-    return None
+    return _Exemptions(rows).exempting(prereg)
+
+
+def _key(*parts: Any) -> tuple[Any, ...] | None:
+    """`parts` as a dict key, None when one is unhashable (a malformed row: looked up by scan instead)."""
+    try:
+        hash(parts)
+    except TypeError:
+        return None
+    return parts
+
+
+class _Exemptions:
+    """`exempting_withdrawal` over one list of rows, indexed once: the withdrawals by the (ts, config hash) they name,
+    and the trial rows by family (their hash and stamp read lazily, per family asked for). The answer is the scan's,
+    row for row: a lookup only narrows the rows `refers_to` and the read test are then applied to, in registry order;
+    a row whose key cannot be hashed is kept on a list that every lookup scans."""
+
+    def __init__(self, rows: list[dict[str, Any]]):
+        self.rows = rows
+        self.by_ref: dict[tuple[Any, ...], list[tuple[int, dict[str, Any]]]] = {}
+        self.ref_unkeyed: list[tuple[int, dict[str, Any]]] = []
+        for i, w in enumerate(rows):
+            ref = w.get("withdraws")
+            if w.get("status") != WITHDRAWN or not isinstance(ref, dict) or ref.get("ts") is None:
+                continue                                    # `refers_to` is False for every pre-registration
+            key = _key(ref.get("ts"), ref.get("config_hash"))
+            (self.ref_unkeyed if key is None else self.by_ref.setdefault(key, [])).append((i, w))
+        self._trials: dict[Any, list[dict[str, Any]]] | None = None
+        self._trials_unkeyed: list[dict[str, Any]] = []
+        self._reads: dict[tuple[Any, ...], dict[str, list[datetime]]] = {}
+
+    def _withdrawals(self, prereg: dict[str, Any]) -> list[dict[str, Any]]:
+        key = _key(prereg.get("ts"), prereg.get("config_hash"))
+        hits = (self.by_ref.get(key, []) if key is not None else []) + self.ref_unkeyed
+        if key is None:                                     # an unhashable stamp: every keyed withdrawal too
+            hits += [x for xs in self.by_ref.values() for x in xs]
+        return [w for _, w in sorted(hits, key=lambda x: x[0]) if refers_to(w.get("withdraws"), prereg)]
+
+    def _read_stamps(self, family: Any, h: Any) -> list[datetime]:
+        """The stamps of the trial rows of `family` whose `row_hash` is `h`."""
+        if self._trials is None:
+            self._trials = {}
+            for t in self.rows:
+                if is_trial(t):
+                    fk = _key(t.get("family"))
+                    if fk is None:
+                        self._trials_unkeyed.append(t)
+                    else:
+                        self._trials.setdefault(fk[0], []).append(t)
+        fk = _key(family)
+        if fk is None:
+            return [_row_when(t) for t in self._trials_unkeyed if t.get("family") == family and row_hash(t) == h]
+        if fk not in self._reads:
+            by_hash: dict[str, list[datetime]] = {}
+            for t in self._trials.get(family, []):
+                by_hash.setdefault(row_hash(t), []).append(_row_when(t))
+            self._reads[fk] = by_hash
+        return self._reads[fk].get(h, []) if isinstance(h, str) else []
+
+    def exempting(self, prereg: dict[str, Any]) -> dict[str, Any] | None:
+        """`exempting_withdrawal(self.rows, prereg)`."""
+        start = _row_when(prereg)
+        stale_point = start + timedelta(days=STALE_PREREG_DAYS)
+        unreadable = datetime.min.replace(tzinfo=timezone.utc)
+        for w in self._withdrawals(prereg):
+            if not EXEMPT_WITHDRAWAL_RE.match(str(w.get("reason") or "")) or not evidence_ok(withdrawal_evidence(w)):
+                continue
+            end = _row_when(w)
+            if end == unreadable or end >= stale_point:
+                continue
+            if any(start <= when <= end for when in self._read_stamps(prereg.get("family"), prereg.get("config_hash"))):
+                continue
+            return w
+        return None
 
 
 def n_trials_effective(rows: list[dict[str, Any]], *, now: datetime | None = None) -> int:

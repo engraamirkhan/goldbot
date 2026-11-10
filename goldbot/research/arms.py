@@ -480,15 +480,36 @@ def _window(text: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     return (start, end) if start <= end else None
 
 
+# (resolved path) -> ((st_ino, st_mtime_ns, st_size), parsed rows): one parse per file version
+_REGISTRY_CACHE: dict[str, tuple[tuple[int, int, int], tuple[frozenset[str], frozenset[str]]]] = {}
+
+
 def _registry_rows(path: Path) -> tuple[frozenset[str], frozenset[str]] | None:
     """(the config hashes of the registry's rows, those of its learning K rows), None when the file is not there or
-    cannot be read (a bad line is skipped: one row never hides the others)."""
+    cannot be read (a bad line is skipped: one row never hides the others).
+
+    Parsed once per file version, keyed by (inode, mtime_ns, size): the health pass stamps ~1,100 arms and each read
+    re-parsed the whole JSONL (~45 s of one core per pass, telegram CPU attribution 2026-11-10). An append, rewrite
+    or atomic replace changes the key, so a changed registry is read again before it is answered from."""
     try:
         if not path.is_file():
             return None
+        key = str(path.resolve())
+        st = path.stat()
+        version = (st.st_ino, st.st_mtime_ns, st.st_size)
+        hit = _REGISTRY_CACHE.get(key)
+        if hit is not None and hit[0] == version:
+            return hit[1]
         lines = path.read_text().splitlines()
     except (OSError, ValueError):
         return None
+    got = _parse_registry_lines(lines)
+    _REGISTRY_CACHE[key] = (version, got)
+    return got
+
+
+def _parse_registry_lines(lines: list[str]) -> tuple[frozenset[str], frozenset[str]]:
+    """`_registry_rows` of the file's lines."""
     out: set[str] = set()
     learning: set[str] = set()
     for line in lines:
