@@ -9,9 +9,11 @@ Owed counts (docs/research/preregistration-2027Q1.md, docs/research/preregistrat
   trade held to its 124-bar time barrier.
 * H-06 macro-gated slow TSMOM (Q1): the same, through the preset `slow_macro`'s own `candidates_in_context` with
   ctx["macro"] (DFII10 and broad-dollar 20-day changes as known at the signal bar's close), the H-01 signals the gate
-  removes (no macro value / disagreeing) and whether the lower bound is below the retire floor in force
-  (research.screen_min_events_daily, 150: the withdrawal rule). The retire floor only retires: a pass still needs
-  research.screen_min_events (1,000) events. Compat: owed_counts.json written before 2026-10-11 names the same values
+  removes (no macro value / disagreeing) and whether the lower bound is below the withdrawal floor frozen in the
+  pre-registration (FROZEN_WITHDRAWAL_FLOOR, 150: "the floor applied is the one committed in settings at the freeze
+  (150 today)", preregistration-2027Q1.md). It never moves with settings: ADR 0077's screen retire floor
+  (research.screen_retire_floor, 300) governs screen retires from 2026-11-09 on and is reported on an informational
+  line only (quant B3). The withdrawal floor only withdraws: a pass still needs research.screen_min_events (1,000). Compat: owed_counts.json written before 2026-10-11 names the same values
   `daily_floor` / `below_floor`; they are now `retire_floor` / `below_retire_floor`.
 * H-16 (Q2): the frozen first out-of-sample month (`h16.first_oos_month`) and `expected_eval_days`, the evaluation set
   of `h16.evaluate_h16` (finite target, not GVZ-stale, both forecasts present), counted on PLACEBO prices: the function
@@ -74,6 +76,7 @@ H18_TYPES = ("nfp", "cpi", "pce", "fomc_statement")
 H18_K = 1.0
 H14_FROM_LONDON, H14_TO_NY = 8 * 60, 16 * 60               # candidate bar close in [08:00 London, 16:00 New York]
 FROZEN_EXTRA_COST_USD = 0.37                               # Q1/Q2 pre-registrations: round trip beyond the spread
+FROZEN_WITHDRAWAL_FLOOR = 150                              # H-01/H-06 withdrawal rule: settings at the 10-11 freeze
 EXPECTED = {"H-04 calendar upper bound": 4087, "H-16 first OOS month": "2012-04", "H-16 eval days": 3380,
             "H-17 upper bound": 1690, "H-17 floor": 1000, "H-01 signals": 2154, "H-01 lower bound": 154}
 
@@ -231,8 +234,8 @@ def count_h06(b1: pd.DataFrame, macro: pd.DataFrame | None,
     changes, as known at the signal bar's close, agree with the side) and the one-at-a-time lower bound, through the
     preset's own `candidates_in_context` with ctx["macro"] (macro rows already cut at the holdout). The H-01 signals
     the gate removes are split into no macro value and disagreeing. `below_retire_floor` compares the lower bound with
-    the retire floor in force (research.screen_min_events_daily), the pre-registration's withdrawal rule; the retire
-    floor never makes a pass (owner ruling A, strict: a pass needs research.screen_min_events)."""
+    the withdrawal floor (FROZEN_WITHDRAWAL_FLOOR, 150, frozen in the pre-registration); it never makes a pass (a pass
+    needs research.screen_min_events)."""
     cls = SPECIALISTS["tsmom"]
     source = (f"repo code path: tsmom preset slow_macro ({cls(**cls.presets['slow_macro']).agent_id}) "
               ".candidates_in_context(ctx={'macro': macro-v1})")
@@ -539,9 +542,12 @@ def markdown(result: dict[str, Any]) -> str:
              f"- commit `{meta['git_sha']}`; bars {meta['bars_from']} .. {meta['bars_to']} (cut before holdout "
              f"{meta['holdout_from']}); macro: {meta['macro']}; calendar: {meta['us_calendar']}",
              "- spec-derived rows (H-17, H-18, H-14) must be recounted with the specialist's own code before the freeze",
-             f"- {_n(meta.get('retire_floor'))} is the retire floor (research.screen_min_events_daily): below it a daily "
-             f"rule is withdrawn or retired, never passed; a pass needs research.screen_min_events "
-             f"({_n(meta.get('pass_floor'))}) events",
+             f"- {_n(meta.get('retire_floor'))} is the withdrawal floor frozen in the H-01/H-06 pre-registration "
+             f"(settings at the freeze, 2026-10-11): below it a daily rule is withdrawn, never passed; a pass needs "
+             f"research.screen_min_events ({_n(meta.get('pass_floor'))}) events",
+             f"- informational: ADR 0077's screen retire floor is {_n(meta.get('adr0077_retire_floor'))} "
+             "(futility retire, SE <= 0.055 R needs n of about 560 at sd 1.3 R); it does not move the frozen "
+             "withdrawal floor",
              "", "| Pre-registration | Count owed | Value | Source |", "|---|---|---|---|"]
     lines += [f"| {a} | {b} | {v} | {s} |" for a, b, v, s in rows]
     lines += ["", "### Per year", "", "| Count | " + " | ".join(str(y) for y in range(2010, 2026)) + " |",
@@ -560,10 +566,10 @@ def markdown(result: dict[str, Any]) -> str:
 
 def run(b1: pd.DataFrame, macro: pd.DataFrame | None, cal: pd.DataFrame | None, *, holdout_from: Any,
         extra_cost_usd: float, min_rows: int = dt.MIN_FIT_ROWS, retire_floor: int | None = None,
-        pass_floor: int | None = None) -> dict[str, Any]:
-    """Every owed count on inputs cut at the holdout (module docstring). `retire_floor`: the retire-only event floor
-    in force for daily-signal rules (research.screen_min_events_daily; H-06's withdrawal rule compares its lower bound
-    with it); `pass_floor`: the events a pass needs (research.screen_min_events). Both are stated in the report."""
+        pass_floor: int | None = None, adr0077_retire_floor: int | None = None) -> dict[str, Any]:
+    """Every owed count on inputs cut at the holdout (module docstring). `retire_floor`: the frozen withdrawal floor
+    (H-06's withdrawal rule compares its lower bound with it; `withdrawal_floors`); `pass_floor`: the events a pass
+    needs (research.screen_min_events); `adr0077_retire_floor`: informational. All are stated in the report."""
     b1, macro, cal = cut_inputs(b1, macro, cal, holdout_from)
     if len(b1) == 0:
         raise SystemExit("no bars before the holdout")
@@ -577,12 +583,19 @@ def run(b1: pd.DataFrame, macro: pd.DataFrame | None, cal: pd.DataFrame | None, 
     meta = {"git_sha": _git_sha(), "generated_utc": pd.Timestamp.now("UTC").isoformat(),
             "bars_from": f"{ts[0]:%Y-%m-%d %H:%M}", "bars_to": f"{ts[-1]:%Y-%m-%d %H:%M}", "n_bars_1m": len(b1),
             "holdout_from": str(holdout_from), "min_fit_rows": int(min_rows),
-            "retire_floor": retire_floor, "pass_floor": pass_floor,
+            "retire_floor": retire_floor, "pass_floor": pass_floor, "adr0077_retire_floor": adr0077_retire_floor,
             "macro": "absent" if macro is None or len(macro) == 0 else f"{len(macro):,} rows",
             "us_calendar": "absent" if cal is None or len(cal) == 0 else f"{len(cal):,} rows",
             "expected_from_docs": EXPECTED,
             "outcomes_read": "none: no label, return or price after a decision bar (tests/test_count_owed_events.py)"}
     return {"meta": meta, "counts": counts}
+
+
+def withdrawal_floors(research: Any) -> dict[str, int]:
+    """The floors the report uses: the frozen withdrawal floor (150, whatever the settings say now), the pass floor and,
+    for information only, ADR 0077's screen retire floor (quant B3)."""
+    return {"retire_floor": FROZEN_WITHDRAWAL_FLOOR, "pass_floor": int(research.screen_min_events),
+            "adr0077_retire_floor": int(research.screen_retire_floor)}
 
 
 def main() -> int:
@@ -604,15 +617,11 @@ def main() -> int:
         raise SystemExit(str(exc)) from None
     macro = read_macro_files(Path(args.macro))
     cal = read_us_calendar_files(Path(args.us_calendar))
-    research = settings.research          # the daily-signal retire floor in force (null: the pass floor), as the screen
-    retire_floor = (research.screen_min_events_daily if research.screen_min_events_daily is not None
-                    else research.screen_min_events)
     result = run(b1, macro if len(macro) else None, cal if len(cal) else None, holdout_from=holdout_from,
                  # H-14 counts at its pre-registered extra cost (Q1/Q2: 0.37 $/oz) whatever the settings prior is now
                  # (the ICM commission prior rose 3.5 -> 4.0 on 2026-11-07: settings 0.38): a frozen count stays frozen
-                 extra_cost_usd=FROZEN_EXTRA_COST_USD,
-                 retire_floor=int(retire_floor),
-                 pass_floor=int(research.screen_min_events))
+                 # the H-01/H-06 withdrawal floor is the one frozen at the freeze (150), never the settings now
+                 extra_cost_usd=FROZEN_EXTRA_COST_USD, **withdrawal_floors(settings.research))
     Path(args.out_json).write_text(json.dumps(result, indent=2, default=str))
     text = markdown(result)
     Path(args.out_md).write_text(text)

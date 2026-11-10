@@ -450,3 +450,95 @@ floor). It was never built (`goldbot/` has no mSPRT, re-derived today). It is **
 |---|---|---|---|
 | Author | research director | 2026-11-09 | signed |
 | Quant-reviewer | quant-reviewer | 2026-11-09 | signed (014d4c93; resamples helper condition for Lane 3) |
+
+<!-- Numbered section 10 because Lane 4's amendment A1 (S0 cell floor) takes section 9. Text as signed in the quant-reviewer's Lane 3 review (2026-11-09); only the section numbers 9 -> 10 changed in the body; the signature line is verbatim, so its "9.2" and "9.3" are 10.2 and 10.3 here. -->
+
+## 10. Amendment 2026-11-09 (quant-reviewer, Lane 3 review of e196e663): CONFIRM-SEEN in the L3 read, E9, verdict inputs
+
+Written before any L2 fit on real cells and before any TEST-OLD or EVAL-2 2018-25 return is read. Changes the frozen
+signatures of sections 4.6 and 4.8 as stated; nothing else changes.
+
+**10.1 CONFIRM-SEEN and the 2018-25 corroboration (A15).** `l3_read` gains a required keyword-only argument
+`confirm_seen: Collection[str]` (no default): the card's CONFIRM-SEEN cells for 2018-01..2025-09, fixed before L2.
+`L3Result` gains a last field `corroboration_seen_p: float | None`. With F = carried minus confirm_seen and S = carried
+intersected with confirm_seen:
+(a) The TEST-OLD legs (control-variate p and BatchPRDS, p of mean excess, LB80 at 1.5x, Holm) read all carried cells.
+(b) `corroboration_p` is the one-sided p of the control-variate net over F's 2018-25 units, with the card weights
+renormalised over F. It is the corroboration AND (p <= 0.10) and is None when F is empty.
+(c) When S is non-empty, `corroboration_seen_p` is the same p over S's 2018-25 units (weights renormalised over S). It
+must be <= 0.10: an AND with no evidential credit.
+(d) The family rejects only if (a) passes, (b) passes when F is non-empty, (c) passes when S is non-empty, and the
+year rule and E9 (10.2) pass. A family with F empty is decided by (a), (c), the year rule and E9. Its best verdict is
+CONFIRM-SEEN, which also needs the forward holdout and L4, whatever its holdout status.
+(e) The year rule reads TEST-OLD plus the 2018-25 units of every carried cell (F and S), as a necessary condition with
+no credit. The 2-year sub-periods are the consecutive pairs (y, y+1) in which both years hold data.
+(f) If F is non-empty and `corroboration` holds no F units, or S is non-empty and it holds no S units, the family is
+not rejected.
+(g) With `batch.window == "confirm"` (the 2018-25 BatchPRDS p reported at batch 15), `carried` must not contain a
+CONFIRM-SEEN cell (ValueError). That read is reported and never decides.
+
+**10.2 E9 in the L3 read (A16).** `l3_read` gains required keyword-only arguments `holds_multi_day: bool` and
+`e9: bool | None`.
+- `holds_multi_day` comes from the frozen card. It is true if any carried cell's registered maximum hold (time exit
+  x bar length) is >= 24 h, or its tf is 1d or 1w, or it has no registered time exit (an unbounded hold counts as
+  >= 24 h; RD countersignature condition 1). It is never derived from realised holds. `l3_read` raises if a 1d or 1w
+  carried cell is present and `holds_multi_day` is false.
+- `e9` is the caller's EVAL-1 C1 drift guard (`stats.drift_guard`, `stats._e9_pass`; Newey-West alpha t >= 1.0, alpha
+  >= 50 % of mean daily net, beats the exposure-scaled financed buy-and-hold book in >= 5 of 8 years; against every
+  side traded). It is computed on the 2018-01..2025-09 daily closes over every carried cell (F and S): a necessary
+  condition with no credit, on the 8-year frame where C1 is defined. The TEST-OLD beta rule of `stats.test_old_gates`
+  ("beta > 0.3 must be net >= 0") is applied on TEST-OLD too.
+- If `holds_multi_day` is true and `e9` is not True, the family is not rejected. `L3Result.e9` records the value
+  passed.
+
+**10.3 Verdict inputs (A17).** `family_verdict` gains required keyword-only arguments `l0_power_ok: bool | None`,
+`power_l3: float | None`, `posts: Sequence[CellPosterior] | None`, `probes: Sequence[ProbeResult] | None` and
+`cheapest_cost_atr: float | None`. `L3Result` gains `cv_net: float`, `cv_net_lo80: float` and `cv_net_hi80: float`:
+the control-variate net at 1.0x and its two-sided 80 % basic-bootstrap interval (the 10th and 90th percentiles of the
+same resamples, seed tag `|ci80`). The rungs read in this order, with KILLED and DRIFTING from L4 as before:
+1. NO SIGNAL if the L1 retire holds.
+2. INSUFFICIENT (power) if `l0_power_ok` is False; or if L2 carried a cell, `l3` is None and `power_l3` < 0.3. If `l3`
+   is present while `power_l3` < 0.3, raise ValueError (read condition breached).
+3. When L2 carried nothing:
+   - INSUFFICIENT (power) if no cell has P(theta > 0) >= carry_p and the pooled probe one-sided 90 % lower bound is
+     <= 0 (no information).
+   - Otherwise EXIT-DRAG if the pooled probe excess (point, the same pooling as the L1 retire) is >= `cheapest_cost_atr`
+     (exit-agnostic information above cost that the exits lose).
+   - Otherwise COST-BOUND.
+4. TRADABLE ON HISTORY on L2 carry with no L3, or on an L3 that rejected with no forwarded cell (the reason says
+   "family rejected at alpha_j, no cell survives Holm"). An L3 that did not reject reads **NOT CONFIRMED** (new
+   `Verdict.NOT_CONFIRMED = "NOT CONFIRMED"`; RD countersignature condition 2): closed, never re-read on TEST-OLD or
+   2018-25, never on the live-candidate list. "Never listed" means it is not offered as an action. It stays in the
+   registry, K, the snooping ledger and the weekly rung counts. TEST-OLD is read once per family, so the
+   TRADABLE-after-rejection case above is never re-read either.
+5. CONFIRM-SEEN when the family rejected and every forwarded cell is CONFIRM-SEEN (including a family with F empty).
+   Otherwise CONFIRMED; the reason lists any forwarded CONFIRM-SEEN cells, which each still need the forward holdout.
+6. LIVE-READY is never set here (L5, owner's record).
+
+£/day at demo size = `gbp_per_r` x `signals_per_day` x net R per signal:
+- With L3: `cv_net`, `cv_net_lo80`, `cv_net_hi80` (out-of-sample, TEST-OLD, 1.0x deciding cost).
+- With L2 only: the card-weighted posterior net mean (theta + twin net) of the carried cells, +/- 1.2816 x its net sd,
+  labelled "explore, shrunk, in-sample" in the reason.
+- Otherwise NaN.
+`lb80_net_gate` stays the gate value and is never shown as the £ interval.
+
+Erratum 2026-11-10: with L2 only, the £/day point and interval are NaN until `CellPosterior` carries the cell's twin
+net. The reason labels the rung 'explore, shrunk, in-sample'. Display only; no gate reads it. (Signed: quant-reviewer
+2026-11-10.)
+
+**Tests that pin 10.1-10.3** (Lane 3 follow-up):
+- `test_eval2_confirm.py`: `::test_all_seen_family_rejects_on_test_old_with_the_seen_and`,
+  `::test_a_seen_cell_failing_2018_25_blocks_the_family`,
+  `::test_fresh_corroboration_p_ignores_seen_cells` (perturb S's 2018-25 units; `corroboration_p` unchanged),
+  `::test_confirm_window_refuses_seen_cells`, `::test_confirm_seen_has_no_default` (TypeError),
+  `::test_multi_day_hold_needs_e9_true` (4h cell with `holds_multi_day=True`, `e9=None` -> not rejected;
+  `e9=True` -> rejected), `::test_daily_cell_with_holds_multi_day_false_raises`,
+  `::test_no_time_exit_counts_as_multi_day`.
+- `test_eval2_verdict.py` (added): `::test_l3_not_rejected_reads_not_confirmed` (also asserts
+  `Verdict.NOT_CONFIRMED.value == "NOT CONFIRMED"`), `::test_a_rejected_family_with_no_forwarded_cell_is_tradable_with_reason`.
+- `test_eval2_verdict.py`: `::test_no_information_reads_insufficient_not_cost_bound`,
+  `::test_probe_above_cost_with_no_carry_reads_exit_drag`, `::test_probe_below_cost_with_information_reads_cost_bound`,
+  `::test_low_power_reads_insufficient_and_a_read_under_it_raises`,
+  `::test_gbp_view_uses_the_l3_point_and_80_interval_at_1x`, `::test_l2_only_gbp_view_is_labelled_in_sample`.
+
+Signatures: author quant-reviewer, 2026-11-09; SIGNED, research-director, 2026-11-09: these close signature gaps before any L2/L3 read and change no threshold, K, window or budget; B3's 150 is the registered floor; signed on two tightenings that go into the inserted text: (1) in 9.2 a cell with no registered time exit counts as holding >= 24 h; (2) in 9.3 rung 4 an L3 that did not reject is not TRADABLE ON HISTORY but a closed verdict (new enum NOT CONFIRMED, never re-read, never on the live-candidate list).

@@ -82,29 +82,32 @@ def test_gross_t_of_1_5_on_300_events_with_a_floor_of_1000_is_inconclusive_not_f
     assert [c["name"] for c in v["checks"] if not c["passed"]] == ["events", "gross_t"]     # both still shown
 
 
-def test_the_daily_floor_is_retire_only_so_a_daily_rule_between_it_and_the_general_floor_never_passes():
-    """Owner ruling A (preregistration-2027Q1.md): "150 rule-only events, retire-only" in the strict sense. At or above
-    the daily floor a screen can fail and retire; it passes only on the general floor (screen_min_events)."""
+def test_between_the_retire_floor_and_the_pass_floor_sign_and_t_never_retire_and_nothing_passes():
+    """ADR 0077 (Ruling A withdrawn): "Never retire on sign or net alone." Between the retire floor and the pass floor
+    a screen without a pre-registered futility read is inconclusive whatever its sign or t; it passes only on the pass
+    floor (screen_min_events). The futility branch itself: tests/test_eval2_futility.py."""
     retire, pass_floor = 150, 1000
     for n in (150, 151, 500, 999):
         good = screen_verdict(_rule(n, 0.08, 3.5), retire, pass_floor)
         assert good["verdict"] == INCONCLUSIVE and good["passed"] is False, n            # never "pass"
-        assert screen_verdict(_rule(n, -0.05, 3.0), retire, pass_floor)["verdict"] == "fail", n   # can retire
-        assert screen_verdict(_rule(n, 0.05, 1.0), retire, pass_floor)["verdict"] == "fail", n
+        assert screen_verdict(_rule(n, -0.05, 3.0), retire, pass_floor)["verdict"] == INCONCLUSIVE, n   # no sign retire
+        assert screen_verdict(_rule(n, 0.05, 1.0), retire, pass_floor)["verdict"] == INCONCLUSIVE, n    # no t retire
     assert screen_verdict(_rule(149, -0.05, 3.0), retire, pass_floor)["verdict"] == INCONCLUSIVE   # below: never retires
     top = screen_verdict(_rule(pass_floor, 0.05, MIN_T), retire, pass_floor)
     assert top["verdict"] == "pass" and top["passed"] is True
     v = screen_verdict(_rule(500, 0.08, 3.5), retire, pass_floor)
     assert v["min_events"] == 150 and v["pass_min_events"] == 1000
-    assert "retire" in v["rule"] and "1,000" in v["rule"]
+    assert "retire" in v["rule"] and "1,000" in v["rule"] and "futility" in v["rule"]
     text = "\n".join(screen_lines(v))
     assert "**INCONCLUSIVE (event floor)**" in text and "1,000" in text and "cannot retire" in text
 
 
-def test_the_screens_floors_for_a_daily_rule_are_the_daily_retire_floor_and_the_general_pass_floor():
+def test_the_screens_floors_are_the_futility_retire_floor_and_the_general_pass_floor():
+    """ADR 0077: every unit retires from screen_retire_floor (300), daily included; a daily override, if an owner sets
+    one again, is the daily retire floor."""
+    assert screen_floors("1d", ResearchSettings()) == (300, 1000) == screen_floors("4h", ResearchSettings())
     ruled = ResearchSettings(screen_min_events_daily=150)
-    assert screen_floors("1d", ruled) == (150, 1000) and screen_floors("4h", ruled) == (1000, 1000)
-    assert screen_floors("1d", ResearchSettings()) == (1000, 1000)
+    assert screen_floors("1d", ruled) == (150, 1000) and screen_floors("4h", ruled) == (300, 1000)
 
 
 def test_a_daily_screen_with_500_strong_events_reads_inconclusive_under_h01_never_continue():
@@ -159,10 +162,11 @@ def test_rule_only_net_split_reports_long_only_short_only_and_positive_net_years
 def test_screen_floor_comes_from_settings_with_an_optional_daily_signal_override():
     default = ResearchSettings()
     assert default.screen_min_events == MIN_EVENTS and default.screen_min_events_daily is None
-    assert min_events_for("1d", default) == min_events_for("4h", default) == 1000     # unchanged until the owner sets it
+    assert min_events_for("1d", default) == min_events_for("4h", default) == 300      # screen_retire_floor (ADR 0077)
     ruled = ResearchSettings(screen_min_events_daily=150)
-    assert min_events_for("1d", ruled) == 150 and min_events_for("4h", ruled) == 1000
-    assert min_events_for("15m", ResearchSettings(screen_min_events=800)) == 800
+    assert min_events_for("1d", ruled) == 150 and min_events_for("4h", ruled) == 300
+    assert min_events_for("15m", ResearchSettings(screen_retire_floor=800)) == 800
+    assert min_events_for("15m", ResearchSettings(screen_min_events=200)) == 200     # never above the pass floor
     # the override follows the signal's timeframe: the slow preset (4h decisions, 1d signal) and the daily option
     tsmom = SPECIALISTS["tsmom"]
     assert signal_timeframe(tsmom(**tsmom.presets["slow"])) == "1d" == signal_timeframe(tsmom(timeframe="1d"))
