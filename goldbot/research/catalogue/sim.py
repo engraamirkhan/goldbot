@@ -59,7 +59,13 @@ from typing import Final, Sequence
 import numpy as np
 
 from goldbot.research.catalogue.core import Events, atr
-from goldbot.research.catalogue.costs import CostModel, _roll_table, default_model, fallback_rt, hold_nights
+from goldbot.research.catalogue.costs import (
+    CostModel,
+    default_model,
+    fallback_rt,
+    hold_nights,
+    rollover_table,
+)
 from goldbot.research.catalogue.data import DAY, HOUR, Bars
 
 GOLD_OVERSHOOT_USD = 0.11
@@ -679,6 +685,5 @@ def session_day(t_ns: np.ndarray) -> np.ndarray:
     """Session day (epoch day number of the New York date on which the session ends) of instants `t_ns`: a session runs
     from one 17:00 New York rollover to the next (#343's rollover table, costs.rollovers_between). An instant AT a
     rollover opens the new session, as a fill at the rollover is held from after it. EVAL-2 clusters by this day."""
-    # TODO(eval2): switch the private `_roll_table` import to the public costs.rollover_table() once Lane 2 adds it.
-    d0, r = _roll_table()
+    d0, r = rollover_table()
     return (np.searchsorted(r, np.asarray(t_ns, np.int64), "right") + d0).astype(np.int64)
