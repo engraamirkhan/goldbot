@@ -593,7 +593,7 @@ def test_a_refused_first_unit_is_still_one_shadow_trade(tmp_path) -> None:
 
 
 def test_a_stale_candidate_recorded_thin_cell_complete_is_never_a_shadow_fill() -> None:
-    """Quant hardening 2026-11-09 (R110): a stale signal of an arm refused for good now carries that refusal
+    """Quant hardening 2026-11-09 (R111): a stale signal of an arm refused for good now carries that refusal
     (`exploration._enter`); like `stale` and `arm_retired`, `thin_cell_complete` says no entry was possible, so it is
     never scored as a capped entry, first unit or add."""
     from goldbot.research.growth_ledger import NOT_SHADOW, split_shadow

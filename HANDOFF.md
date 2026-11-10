@@ -29,6 +29,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   runner.py line cap (ADR 0023): the terminal-account blocks live in `engine/terminal_account.py` (`Engine.terminal`, a
   `Watch` record) and the BACKLOG 59 host-clock state write moved verbatim to `engine/state_heartbeat.py`; LINE_CAP
   lowered to 3087.
+- **EVAL-2 Lane 1, twins (R107, quant approved 2026-11-09).** `goldbot/research/catalogue/sim.py` draws up to 20
+  replay-only twins per signal from decision bars after its exit (intraday 7 days, 1d 20 bars), same side and hour
+  +/-1 h, never on a bar where the family fires or past the window end, without replacement (a smaller pool is used
+  whole; M_eff in `n_twins`, about 7 on 4h); stop, target and entry offset at the twin's ATR14; same replay and cost
+  path as the signal (swap by #343's rule). `run.py`: `unit_twins` (EVAL-2 `units` frame, session-day clustering on
+  the 17:00 New York clock), `read_batch_index` (2018-25 next read = batch 15, TEST-OLD = 1, every
+  `state/*_reads.jsonl`). S0 full run (`GOLDBOT_SELFTEST=1`, n 116,614): gross -0.0028 R, excess -0.0044 R (SE
+  0.0046), cell floor and chi2 dispersion pass on 15m/1h/4h/1d; se_ratio 1.085 and rho 0.027 are diagnostics, never a
+  multiplier. Lane 1's S0 runs on synthetic martingale walks (harness unit check). Method S0 on real explore bars (NULL-RAND, all TFs, 20 twins, same thresholds) is Lane 4's and must be green before any L2 run; S21 stays blocked until it is.
 - EVAL-2 Lane 2 (costs + lint, quant-approved 2026-11-09): `goldbot/research/catalogue/costs.py` adds
   `deciding_cost` (max(today R, bp-engine R) + overshoot x (stop-exit + stop-entry share) + swap floored at 0 + the
   positive S5 fill-vs-replay gap until S5 passes; every term >= 0; gates at `GATE_COST_MULT` 1.5; requires the window's
@@ -52,7 +61,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   v6 method is copied to `docs/research/eval2-method-2026-11-09.md`. Build lanes 0-5B: BACKLOG 148; Lane 3 condition: `l3_read` calls the frozen `confirm_resamples` itself (prereg 4.6). No TRACEABILITY
   row yet: each code lane adds its row with its tests. Registrations stay frozen until Lane 0's
   `tests/test_registry_unlinked_prereg.py` is green on CI and merged.
-- 2026-11-09 Pass timing and stale order (branch fix/pass-timing-stale-order, R110; SRE volume-drop diagnosis cause 5,
+- 2026-11-09 Pass timing and stale order (branch fix/pass-timing-stale-order, R111; SRE volume-drop diagnosis cause 5,
   fixes 3 and 4): a stale exploration signal of an arm refused for good (`arm_retired`, `thin_cell_complete`) is now
   journalled `exploration_refused:<reason>` (with `age_s`) and recorded blocked with that reason, so
   `exploration_stale` counts only entries staleness cost (expect icm-probe's ~885 a day to fall to ~30; vantage's to
@@ -77,6 +86,26 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `TrialRegistry.withdraw(..., evidence=)` records it. Brain registry copy (sha 73fc51e1) at 2026-11-20:
   quarter_trials(2026Q4) 3,395, n_trials_effective 3,471, 0 stale, 389 backfill withdrawals exempt. Any other withdrawal, or a "not a trial" note,
   exempts nothing. Tests: `tests/test_registry_unlinked_prereg.py`.
+- 2026-11-09 (branch fix/session-budget-admissible; volume diagnosis 2026-11-09 cause 4, fix 2; review round 1 of
+  2277c121; docs/research/prereg-amendment-2026-11-09-session-roll-forward.md, quant sign-off pending): the
+  exploration daily budget's session split (`exploration_budget.session_budgets`) counts only admissible edge
+  candidates of the trailing 10 trading days: candidates of active arms (retired, entry_refused and unqualified arms
+  of every book out) whose decision time passes the static entry refusals (`entry_refusals.STATIC`: window_0207,
+  f1_pit, learning_icm_only; the HAR refusals read a day's job row and are not applied to history). The UTC day has
+  four segments (asia, london, newyork, late_asia after the New York close), each with a share from its own candidate
+  count: one fill each first, the rest by largest remainder, so the four sum to max_per_day. A segment's unspent
+  budget rolls forward to the next one that day (`session_entries` once the day's fills reach the budgets' sum
+  through the signal's segment). It stops the whole pass only for a signal of the pass's own segment
+  (`pass_wide`). A signal closed before UTC midnight is refused as `daily_entries`, that signal alone.
+- The split is cached once per (ledger, account, UTC day, active arm set) for every book together (`SHARES`), not
+  per book. The duration is logged, with a warning above 1 s. A STATIC refusal that raises excludes its candidates
+  and is warned once per read. Aux migration 27 indexes `exploration_obs(account_id, is_control, decision_ns)`.
+- PD ruling 5(d): at most `scalp_day_cap` (accounts.yaml `exploration.daily`, default 30) fills a day per account from
+  1m/5m arms, refused as `scalp_day_cap` and recorded blocked. `daily_refusal` takes `segment=` (`day_segment`) plus
+  `fast=` and `prior_day=`. RiskGate, max_per_day/max_per_hour, loss caps and thin_control_* are unchanged.
+- Expected: about +10-15 fills a day on icm-demo/icm-probe from the roll-forward, inside the same day caps, less what
+  the 1m/5m cap removes (about 25 5m fills on icm-demo per the vantage-arms note). Tests:
+  `tests/test_exploration_daily_budget.py`.
 - Catalogue line closed 2026-11-07 (quant ruling (c)). The EVAL-1 draft card was not registered. CONFIRM 2018-01..2025-09
   is unread and reserved. WS-3 detectors return only as features under a new K-counted card. The catalogue sim now
   charges EVAL-1 section 1 / C2 costs (`goldbot/research/catalogue/costs.py`, `config/catalogue_costs.yaml`): measured

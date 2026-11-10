@@ -212,7 +212,7 @@ class KeyZoneWorker:
 
     def submit(self, recent: pd.DataFrame, close_ts: pd.Timestamp, price: float) -> bool:
         """Start a build; False (nothing started) while one runs. A thread that cannot start leaves no job behind
-        (trading-safety L1, R110: the worker would read busy for ever); the error goes to the caller."""
+        (trading-safety L1, R111: the worker would read busy for ever); the error goes to the caller."""
         if self.busy():
             return False
         job = self.job = _Job(recent, close_ts, price)

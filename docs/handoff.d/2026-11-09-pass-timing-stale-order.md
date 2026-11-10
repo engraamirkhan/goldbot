@@ -1,4 +1,4 @@
-- 2026-11-09 Pass timing and stale order (branch fix/pass-timing-stale-order, R110; SRE volume-drop diagnosis cause 5,
+- 2026-11-09 Pass timing and stale order (branch fix/pass-timing-stale-order, R111; SRE volume-drop diagnosis cause 5,
   fixes 3 and 4): a stale exploration signal of an arm refused for good (`arm_retired`, `thin_cell_complete`) is now
   journalled `exploration_refused:<reason>` (with `age_s`) and recorded blocked with that reason, so
   `exploration_stale` counts only entries staleness cost (expect icm-probe's ~885 a day to fall to ~30; vantage's to

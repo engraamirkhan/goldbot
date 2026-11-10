@@ -1610,6 +1610,7 @@ class _Pass:
         # trades count, each valued on its own book; gold alone: this engine's, as before
         self.arms: dict[str, Arm] = dict(ex.arms)
         self.count: dict[str, int] = {"host": 0}
+        gone: frozenset[str] = ex.retired                   # every book's retired arms (the session shares)
         from goldbot.engine import books
         from goldbot.engine.exploration_pyramid import counts_as_slot
         for book in eng.books.values():
@@ -1620,6 +1621,7 @@ class _Pass:
                 if bx is None:
                     continue
                 self.arms.update(bx.arms)
+                gone = gone | bx.retired
                 for pid in _open(eng):
                     tr = eng.open[pid]
                     arm = bx.arms.get(tr.agent_id.removeprefix(PREFIX))
@@ -1645,11 +1647,14 @@ class _Pass:
         self.active: frozenset[str] = frozenset()
         if ex.cfg.daily is not None:
             self.entries = budget.entries_today(eng, ex, self.since, now, self.arms)
-            self.sessions = budget.session_budgets(eng, ex, ex.cfg.daily, self.since)
             self.pairs = budget.pairs(self.arms)
             self.active = frozenset(a for a, arm in self.arms.items() if not arm.spec.retired
                                     and a not in ex.retired and not (arm.spec.entry_refused
                                                                      or qualification_refusal(arm.spec)))
+            # the session shares count only arms that can still enter: every book's retirements, not this book's alone,
+            # so each book of the account reads the same split
+            self.sessions = budget.session_budgets(eng, ex, ex.cfg.daily, self.since,
+                                                   {a: self.arms[a] for a in self.active - gone})
 
     def lost_in(self, ex: Exploration, style: str | None = None) -> float:
         return sum(v for a, v in self.lost.items() if style is None or (a in self.arms and self.arms[a].style == style))
@@ -1861,11 +1866,12 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         from goldbot.engine import exploration_budget as budget
         from goldbot.research.arm_rules import hash_u
         kind = budget.entry_kind(arm)
-        if (why := budget.daily_refusal(daily, kind, ps.entries, session=budget.session_of(s.bar_ts),
+        if (why := budget.daily_refusal(daily, kind, ps.entries, segment=budget.day_segment(s.bar_ts),
                                         budgets=ps.sessions,
-                                        cell_fills=budget.cell_fills(eng, ex, now).get(arm.instrument, 0))) is not None:
+                                        cell_fills=budget.cell_fills(eng, ex, now).get(arm.instrument, 0),
+                                        fast=arm.tf in budget.FAST_TFS, prior_day=s.bar_ts < ps.since)) is not None:
             refuse(why)
-            return "cap" if why in budget.PASS_WIDE else "refused"
+            return "cap" if budget.pass_wide(why, s.bar_ts, now, ps.since) else "refused"
         if kind != "edge":
             paired = arm.arm_id in ps.pairs
             arms_of = tuple(a for a in ps.pairs.get(arm.arm_id, ()) if a in ps.active)
