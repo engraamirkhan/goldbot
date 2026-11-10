@@ -417,3 +417,144 @@ def test_a_bridge_call_from_another_thread_is_not_timed_into_the_pass():
     t.start()
     t.join()
     assert times.by == {}
+
+
+def test_a_book_pass_that_raises_leaves_no_later_time_charged_to_that_book(tmp_path, monkeypatch):
+    """Code review LOW-2: the timed book is reset even when its pass raises."""
+    eng = _multi(tmp_path)
+    made: list[books.PassTimes] = []
+
+    class Recording(books.PassTimes):
+        def __init__(self) -> None:
+            super().__init__()
+            made.append(self)
+    monkeypatch.setattr(books, "PassTimes", Recording)
+
+    def boom(e: Engine, q: Any, s: str) -> bool:
+        raise RuntimeError("book pass failed")
+    with pytest.raises(RuntimeError):
+        books.account_pass(eng, eng.broker, boom)
+    [times] = made
+    assert times.book == ""
+    with times.phase("bridge"):                       # what runs after it is the pass's own, never XAUUSD's
+        pass
+    assert "bridge" not in times.by.get("XAUUSD", {}) and "bridge" in times.by[""]
+
+
+# ------------------------------------------------------------------------------------------- trading-safety round
+def test_a_build_whose_thread_cannot_start_leaves_the_worker_free_and_the_next_launch_builds(tmp_path):
+    """Trading-safety L1: a `_spawn` that raises never leaves a job that is never done (busy for ever)."""
+    from tests.test_engine_key_zones import _engine as kz_engine
+    from tests.test_engine_key_zones import _n_at_15m_close
+    eng = kz_engine(tmp_path)
+    calls: list[int] = []
+
+    def spawn(fn: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("can't start new thread")
+        fn()
+    setattr(eng.key_zone_worker, "_spawn", spawn)
+    _bar_close(eng, _n_at_15m_close())
+    key_zones.launch(eng)                                                # the thread did not start
+    assert not eng.key_zone_worker.busy() and eng.key_zone_worker.parked is not None and eng.key_zones is None
+    key_zones.launch(eng)                                                # the next pass builds it
+    assert len(calls) == 2 and eng.key_zones is not None and eng.key_zone_worker.parked is None
+
+
+class _CountingDb:
+    """The ledger db, counting its connections (one per read)."""
+
+    def __init__(self, db: Any) -> None:
+        self.db, self.reads = db, 0
+
+    def connection(self) -> Any:
+        self.reads += 1
+        return self.db.connection()
+
+
+def test_the_cost_cells_are_read_once_a_minute_per_account_not_once_per_book(tmp_path):
+    """Trading-safety L2: every book's dormant check and send read the same account-wide count."""
+    from goldbot.engine.exploration import LEDGER
+    from tests.test_exploration_daily_budget import _rec
+    db = exploration.ledger_db(str(tmp_path))
+    with db.write() as conn:
+        LEDGER.upsert(conn, _rec(1, "S0-US500", CLOSE, symbol="US500"))
+    counting = _CountingDb(db)
+    eng: Any = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe"))
+    books_ex: list[Any] = [SimpleNamespace(db=counting, budget_cache={}) for _ in range(5)]
+    for ex in books_ex:
+        assert budget.cell_fills(eng, ex, CLOSE) == {"US500": 1}
+    assert counting.reads == 1
+    budget.cell_counted(eng, books_ex[2], _thin())                               # a fill on one book ...
+    assert budget.cell_fills(eng, books_ex[4], CLOSE) == {"US500": 2}             # ... every book sees it
+    assert budget.cell_fills(eng, books_ex[0], CLOSE + pd.Timedelta(minutes=1)) == {"US500": 2}   # never falls
+    assert counting.reads == 2
+
+
+class _Bridge:
+    """A broker whose figure and order fail with a typed error, counting every call."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def account_positions(self) -> list[str]:
+        self.calls.append("account_positions")
+        return ["p"]
+
+    def account(self) -> str:
+        self.calls.append("account")
+        return "acc"
+
+    def loss_per_lot(self, *a: Any) -> float:
+        self.calls.append("loss_per_lot")
+        if a and a[0] == "bad":
+            raise KeyError("bad", 7)
+        return 1.5
+
+    def place_order(self, *a: Any, **k: Any) -> str:
+        self.calls.append("place_order")
+        raise TimeoutError("bridge", 15.0)
+
+    def close(self, *a: Any, **k: Any) -> str:
+        self.calls.append("close")
+        return "closed"
+
+    def modify(self, *a: Any, **k: Any) -> str:
+        self.calls.append("modify")
+        return "modified"
+
+
+@pytest.mark.parametrize("write", ["place_order", "close", "modify"])
+def test_a_timed_pass_broker_clears_its_reads_on_every_write_and_raises_the_writes_own_error(write):
+    """Trading-safety I3: the timing changes nothing the PassBroker serves."""
+    inner = _Bridge()
+    pb = books.PassBroker(inner, books.PassTimes())
+    assert pb.account_positions() == ["p"] and pb.account() == "acc"
+    pb.account_positions()
+    pb.account()
+    assert inner.calls.count("account_positions") == inner.calls.count("account") == 1
+    if write == "place_order":
+        with pytest.raises(TimeoutError) as err:
+            pb.place_order("intent")
+        assert err.type is TimeoutError and err.value.args == ("bridge", 15.0)
+    else:
+        assert getattr(pb, write)("ticket") == {"close": "closed", "modify": "modified"}[write]
+    pb.account_positions()
+    pb.account()
+    assert inner.calls.count("account_positions") == inner.calls.count("account") == 2
+    assert set(pb.__dict__["_times"].by[""]) == {"bridge"}
+
+
+def test_a_timed_pass_broker_asks_each_figure_once_and_raises_its_error_unchanged_every_time():
+    inner = _Bridge()
+    pb = books.PassBroker(inner, books.PassTimes())
+    assert pb.loss_per_lot("ok", 1) == pb.loss_per_lot("ok", 1) == 1.5
+    for _ in range(2):
+        with pytest.raises(KeyError) as err:
+            pb.loss_per_lot("bad")
+        assert err.type is KeyError and err.value.args == ("bad", 7)
+    assert inner.calls.count("loss_per_lot") == 2                             # once per exact question
+    pb.close("ticket")                                                          # a write never clears figures
+    pb.loss_per_lot("ok", 1)
+    assert inner.calls.count("loss_per_lot") == 2

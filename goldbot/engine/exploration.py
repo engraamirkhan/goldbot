@@ -2033,7 +2033,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if ex.cfg.daily is not None:
         from goldbot.engine import exploration_budget as budget
         budget.counted(ps.entries, arm, s.bar_ts, now)
-        budget.cell_counted(ex, arm)
+        budget.cell_counted(eng, ex, arm)
     if plan is not None:
         pyr.heal(eng, ex, arm, plan.group, now, force=True)     # again from the add's fill and the stop it got
     open_twins(eng, ex, arm, s, pid, pos)

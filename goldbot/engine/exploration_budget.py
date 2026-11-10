@@ -49,6 +49,7 @@ EXTRA_PAIRS: dict[str, tuple[str, ...]] = {"ZCD": ("Z3D", "Z9D", "Z10D"), "ZCV":
 # quant ruling 2026-11-06 (d): gold's own scalp controls pair the account's gold scalp edge arms
 GOLD_SCALP_CONTROLS = ("S0", "S0R")
 SIGNAL = "COALESCE(signal_ns, ts_ns)"   # a fill's signal close; its send time on a row written without one
+CELLS_KEY = "_exploration_cells"        # the engine's (account's) cost-cell counts and the minute they were read
 
 
 def _ns(ts: pd.Timestamp) -> int:
@@ -181,9 +182,11 @@ def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start
 
 def cell_fills(eng: Engine, ex: Exploration, now: pd.Timestamp) -> dict[str, int]:
     """instrument -> the account's exploration fills of it, ever (the per-instrument cost cell's n, every arm), read at
-    most once a minute and only ever raised (counts never fall; this pass's fills are added by `cell_counted`)."""
+    most once a minute and only ever raised (counts never fall; this pass's fills are added by `cell_counted`). The
+    count is the account's, so it is kept on the engine and read once a minute for every book (trading-safety L2,
+    R110: never one ledger scan per book per minute)."""
     minute = now.floor("min")
-    seen: tuple[pd.Timestamp, dict[str, int]] | None = ex.budget_cache.get(("cells",))
+    seen: tuple[pd.Timestamp, dict[str, int]] | None = eng.__dict__.get(CELLS_KEY)
     if seen is not None and seen[0] == minute:
         return seen[1]
     with ex.db.connection() as conn:
@@ -192,12 +195,13 @@ def cell_fills(eng: Engine, ex: Exploration, now: pd.Timestamp) -> dict[str, int
             "AND position_id IS NOT NULL GROUP BY 1", (eng.cfg.account_id,))}
     old = seen[1] if seen is not None else {}
     merged = {k: max(got.get(k, 0), old.get(k, 0)) for k in {*got, *old}}
-    ex.budget_cache[("cells",)] = (minute, merged)
+    eng.__dict__[CELLS_KEY] = (minute, merged)
     return merged
 
 
-def cell_counted(ex: Exploration, arm: Arm) -> None:
-    seen = ex.budget_cache.get(("cells",))
+def cell_counted(eng: Engine, ex: Exploration, arm: Arm) -> None:
+    """A fill this pass sent, into the account's cell counts (every book reads them)."""
+    seen = eng.__dict__.get(CELLS_KEY)
     if seen is not None:
         seen[1][arm.instrument] = seen[1].get(arm.instrument, 0) + 1
 

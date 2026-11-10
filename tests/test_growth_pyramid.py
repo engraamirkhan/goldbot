@@ -592,6 +592,22 @@ def test_a_refused_first_unit_is_still_one_shadow_trade(tmp_path) -> None:
     assert got.refused == {"GS1C": {"pot": 1}} and got.refused_adds == {}       # a stale add is no cap refusal
 
 
+def test_a_stale_candidate_recorded_thin_cell_complete_is_never_a_shadow_fill() -> None:
+    """Quant hardening 2026-11-09 (R110): a stale signal of an arm refused for good now carries that refusal
+    (`exploration._enter`); like `stale` and `arm_retired`, `thin_cell_complete` says no entry was possible, so it is
+    never scored as a capped entry, first unit or add."""
+    from goldbot.research.growth_ledger import NOT_SHADOW, split_shadow
+    first = X.make_order_id("icm-demo", "GS1C", SIG)
+    end = int((SIG + pd.Timedelta(hours=1)).value)
+    rows = [(first, "GS1C", int(SIG.value), "thin_cell_complete", 2.0, end, 3600),
+            (P.make_add_id("icm-demo", "GS1C", first, 1), "GS1C", int(SIG.value), "thin_cell_complete", 1.0, None,
+             3600)]
+    got = split_shadow(rows, "icm-demo")
+    assert "thin_cell_complete" in NOT_SHADOW
+    assert got.firsts == [] and got.refused_adds == {} and got.add_r == {}
+    assert got.refused == {"GS1C": {"thin_cell_complete": 1}}                  # counted, never a trade
+
+
 def test_the_sprint_read_folds_on_the_first_units_row_and_reports_refused_adds_apart(tmp_path) -> None:
     import importlib.util
     import sqlite3

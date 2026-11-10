@@ -706,9 +706,11 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
                 continue
             t_book = time.monotonic()
             times.book = book.__dict__["cfg"].symbol
-            with using(eng, book):
-                ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
-            times.book = ""
+            try:
+                with using(eng, book):
+                    ok = bool(one_pass(eng, quotes, book.__dict__["cfg"].symbol)) and ok
+            finally:
+                times.book = ""                  # a pass that raised never has later time charged to its book
             took[book.__dict__["cfg"].symbol] = time.monotonic() - t_book
         if left:
             eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))

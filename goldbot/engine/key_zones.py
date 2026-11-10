@@ -211,11 +211,16 @@ class KeyZoneWorker:
         return self.job is not None and not self.job.done.is_set()
 
     def submit(self, recent: pd.DataFrame, close_ts: pd.Timestamp, price: float) -> bool:
-        """Start a build; False (nothing started) while one runs."""
+        """Start a build; False (nothing started) while one runs. A thread that cannot start leaves no job behind
+        (trading-safety L1, R110: the worker would read busy for ever); the error goes to the caller."""
         if self.busy():
             return False
         job = self.job = _Job(recent, close_ts, price)
-        self._spawn(lambda: self._run(job))
+        try:
+            self._spawn(lambda: self._run(job))
+        except BaseException:
+            self.job = None
+            raise
         return True
 
     def collect(self) -> _Job | None:
