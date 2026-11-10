@@ -185,12 +185,13 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text))
         self._pending_prompt: asyncio.Future | None = None
         self._health_task: asyncio.Task[None] | None = None     # the running health pass, at most one (_pump)
+        self._pump_task: asyncio.Task[None] | None = None       # cancelled in post_shutdown, never left pending
         accounts.register_prompter(self.prompt_sync)
 
     # ------------------------------------------------------------ outbound: proposals, outcomes, reports
     async def _start_pump(self, app: "Application") -> None:
         start_liveness(self.deadman)            # its own thread: beats at once, never waits on a health pass
-        app.create_task(self._pump())
+        self._pump_task = app.create_task(self._pump())
 
     def _seed_deadman(self) -> None:
         """A restart keeps a confirmed failure: the last pass's verdict (state/health_last.json) seeds the switch when
@@ -205,9 +206,15 @@ class TelegramBot:  # pragma: no cover - needs network + token
         log_alert(self.state_dir, pd.Timestamp.now("UTC"), channel="deadman", kinds=(kind,), checks=names)
 
     async def _on_shutdown(self, app: "Application") -> None:
-        """After run_polling stops: let the audit rows still being written land, for at most AUDIT_DRAIN_S (A15)."""
+        """After run_polling stops: stop the pump (it would otherwise be destroyed pending at loop close, and it must
+        write nothing after the drain), let the audit rows still being written land for at most AUDIT_DRAIN_S (A15),
+        then stop a running health pass. A bot built without __init__ (tests) has neither task."""
+        await self._stop_task(getattr(self, "_pump_task", None))
         await self.audit.drain(timeout=AUDIT_DRAIN_S)
-        task = getattr(self, "_health_task", None)     # a bot built without __init__ (tests) has none
+        await self._stop_task(getattr(self, "_health_task", None))
+
+    @staticmethod
+    async def _stop_task(task: "asyncio.Task[None] | None") -> None:
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):

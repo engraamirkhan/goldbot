@@ -71,6 +71,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   reconcile Vantage's BTC swap charges after the first weekend hold) and 154 (convert profit-currency swaps to USD).
 - After deploy (vantage-demo): check the live BTCUSD `swap_rollover3days` is in 1..5 (else `refresh_terms` keeps
   `swap_unknown`), and that BTCUSD decisions no longer carry `invalid:swap_usd_per_oz` or `swap_unknown`.
+- 2026-11-10 (branch fix/telegram-clean-shutdown; follow-up to R119): the telegram service stops cleanly. The pump
+  was started with `app.create_task` in post_init and never cancelled, so every stop logged "Task was destroyed but
+  it is pending!" (journal 15:25:34 UTC). `post_shutdown` now cancels and awaits the pump (at most HEALTH_STOP_S)
+  before the audit drain, so nothing is written after the drain, then stops a running health pass as before. No
+  change to proposals, the 90 s confirm window, exits or the outbox. Tests: tests/test_telegram_health_task.py
+  (`test_shutdown_cancels_the_pump_so_no_task_is_left_pending`, `test_shutdown_works_for_a_bot_whose_pump_never_started`).
 - 2026-11-10 (branch fix/telegram-health-cpu; telegram CPU attribution 2026-11-10, R119): the telegram service's
   health pass no longer holds the pump. `_pump` starts it as its own task (`_start_health_pass`), one at a time (a
   pass due while the last still runs is skipped and logged), so proposal cards and outcome edits keep flowing every

@@ -169,3 +169,41 @@ def test_shutdown_cancels_and_awaits_a_running_health_pass(tmp_path, monkeypatch
         release.set()
         return took
     assert asyncio.run(go()) < 2.0
+
+
+def test_shutdown_cancels_the_pump_so_no_task_is_left_pending(tmp_path: Path) -> None:
+    """2026-11-10 journal: every stop logged "Task was destroyed but it is pending!" for the pump started with
+    app.create_task in post_init. post_shutdown now cancels and awaits it (before the audit drain, so the pump
+    writes nothing after the drain)."""
+    b = _bot(tmp_path, poll_s=0.01)
+
+    class _Audit:
+        async def drain(self, timeout: float) -> None:
+            assert b._pump_task is not None and b._pump_task.done(), "the pump must stop before the audit drain"
+
+    b.audit = _Audit()  # type: ignore[assignment]
+    started = asyncio.Event()
+
+    async def forever() -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    async def go() -> asyncio.Task[None]:
+        b._pump_task = asyncio.get_running_loop().create_task(forever())
+        await started.wait()
+        await b._on_shutdown(None)
+        return b._pump_task
+
+    task = asyncio.run(go())
+    assert task.cancelled()
+
+
+def test_shutdown_works_for_a_bot_whose_pump_never_started(tmp_path: Path) -> None:
+    b = _bot(tmp_path, poll_s=0.01)
+
+    class _Audit:
+        async def drain(self, timeout: float) -> None:
+            pass
+
+    b.audit = _Audit()  # type: ignore[assignment]
+    asyncio.run(b._on_shutdown(None))
