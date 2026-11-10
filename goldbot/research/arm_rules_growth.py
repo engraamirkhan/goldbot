@@ -26,6 +26,7 @@ named OWN in the control's seed. GS1 and GS1C carry no `session_local`: their ro
 from __future__ import annotations
 
 import hashlib
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -210,10 +211,12 @@ def _check_session_local(own: object) -> None:
 DST_CHECK_DAYS = pd.date_range("2000-01-01", "2040-12-31", freq="D")   # every rule change the history and plan span
 
 
+@lru_cache(maxsize=512)
 def _in_dst_gap(zone: str, minute_of_day: int) -> bool:
     """Trading-safety review of #310, L4: a `session_local` clock that some day skips (02:30 New York on the spring
     Sunday) would be read as another instant (pandas shifts it by the gap) and give that day's range other bounds;
-    such a clock is refused at load, never localised silently."""
+    such a clock is refused at load, never localised silently. Worked out once per (zone, minute): every arm load
+    validated it again over DST_CHECK_DAYS (~0.8 s of a health pass, 2026-11-10); the answer depends on nothing else."""
     local = DST_CHECK_DAYS + pd.Timedelta(minutes=minute_of_day)
     got = local.tz_localize(zone, ambiguous=np.ones(len(local), dtype=bool), nonexistent="NaT")
     return bool(np.asarray(got.isna()).any())

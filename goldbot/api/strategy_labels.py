@@ -32,10 +32,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import yaml
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.config import safe_load_cached
 
 if TYPE_CHECKING:
     from goldbot.research.arms import Arm
@@ -198,7 +198,7 @@ def _reads_file(path: Path) -> ReadsFile:
     """config/arm_reads.yaml. Fail closed: a broken file, a size below 1, an arm in two units, a unit's arms of
     different sizes or `counted` outside its arms reads NO unit and pools nothing."""
     try:
-        f = ReadsFile.model_validate(yaml.safe_load(path.read_text()) or {})
+        f = ReadsFile.model_validate(safe_load_cached(path) or {})
         seen: set[str] = set()
         for uid, u in f.read_units.items():
             sizes = {f.read_at.get(a) for a in u.arms}
@@ -258,7 +258,7 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
     from goldbot.engine.exploration import SPEC_PATH
     from goldbot.research.arms import load_arms
     try:
-        labels = Labels.model_validate(yaml.safe_load(labels_path.read_text()) or {})
+        labels = Labels.model_validate(safe_load_cached(labels_path) or {})
     except Exception as exc:             # noqa: BLE001 - names fall back to the keys in words
         log.warning("strategy labels unreadable (%s): keys shown in words", type(exc).__name__)
         labels = Labels()

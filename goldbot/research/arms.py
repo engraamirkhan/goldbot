@@ -22,6 +22,7 @@ import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord, load_record
+from goldbot.config import safe_load_cached
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionWindow
 from goldbot.data.timeutil import utc_index
 
@@ -831,7 +832,7 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
     ADR 0061 amendment 2026-11-02, across rows (`learning_cross_refusals`): a learning arm whose control row is missing
     or not matched is refused; a control dedicated to learning arms is refused with them once none may enter; a
     qualification citing a learning arm's K row is refused."""
-    raw = yaml.safe_load(Path(path).read_text()) or {}
+    raw = safe_load_cached(path) or {}          # parsed once per file version (goldbot/config.py)
     out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in raw.get("arms", [])]
     cross = learning_cross_refusals(out)
     out = [a.model_copy(update={"entry_refused": cross[a.id]}) if a.id in cross else a for a in out]
