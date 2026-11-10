@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -185,3 +187,59 @@ class WatchState(Record):
         if isinstance(data, dict) and "announced" not in data:
             data = {**data, "announced": dict(data.get("statuses") or {})}
         return data
+
+
+# ---- part-file caches of Store reads (health pass cost, 2026-11-10): the Telegram service checks every 60 s, the
+# engines flush the decisions journal every 15 min, and a DuckDB read of a table costs seconds of one core
+WindowCache = dict[tuple[str, ...], tuple[frozenset[str], pd.Timestamp, pd.DataFrame]]
+
+
+def _part_files(base: Path, first_month: int | None = None) -> frozenset[str] | None:
+    """The *.parquet part files under `base` (paths relative to it), in its year=/month= partitions from
+    `first_month` (year * 12 + month) on, or every one; None when they cannot be listed. Store writes every part
+    under a new random name and never rewrites one (`Store._write_atomic`; a dedupe writes a new part, then unlinks
+    the old), so the set changes with every write."""
+    if not base.is_dir():
+        return frozenset()
+    out: set[str] = set()
+
+    def unlistable(exc: OSError) -> None:
+        raise exc                             # os.walk skips an unreadable directory silently: a stale set otherwise
+    try:
+        for dirpath, _dirs, files in os.walk(base, onerror=unlistable):
+            names = [f for f in files if f.endswith(".parquet")]
+            if not names:
+                continue
+            rel = os.path.relpath(dirpath, base)
+            if first_month is not None:
+                part = dict(p.split("=", 1) for p in Path(rel).parts if "=" in p)
+                if int(part["year"]) * 12 + int(part["month"]) < first_month:
+                    continue
+            out.update(f"{rel}/{n}" for n in names)
+    except (OSError, ValueError, KeyError):
+        return None
+    return frozenset(out)
+
+
+def _cached_window(cache: WindowCache, key: tuple[str, ...], parts: frozenset[str] | None, read_from: pd.Timestamp,
+                   since: pd.Timestamp, end: pd.Timestamp,
+                   read: Callable[[pd.Timestamp], pd.DataFrame]) -> pd.DataFrame:
+    """The rows with since <= ts_utc < end of `read(read_from)` (a Store.read from `read_from` with no upper bound),
+    the rows a fresh bounded read of the window returns. `read` runs again only when the part files changed (`parts`,
+    listed before the read: a write landing in between costs one more read on the next pass, never a stale answer)
+    or the last read does not reach back to `read_from` (a clock that went back); otherwise the last read is filtered
+    to the window. The read has no upper bound, so a later window is covered by an earlier read of an unchanged
+    table. Nothing is cached while the parts cannot be listed."""
+    hit = cache.get(key)
+    if parts is None or hit is None or hit[0] != parts or hit[1] > read_from:
+        rows = read(read_from)
+        if parts is None:
+            cache.pop(key, None)
+        else:
+            cache[key] = (parts, read_from, rows)
+    else:
+        rows = hit[2]
+    if rows.empty or "ts_utc" not in rows.columns:
+        return rows
+    ts = rows["ts_utc"]
+    return rows[(ts >= since) & (ts < end)].reset_index(drop=True)

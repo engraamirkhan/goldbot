@@ -29,6 +29,7 @@ import json
 import logging
 import math
 import sqlite3
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -39,7 +40,7 @@ import pandas as pd
 from pydantic import PrivateAttr
 
 from goldbot.api.activity import engines_by_account
-from goldbot.api.instruments_view import GOLD, group_of, instrument_key, symbol_quote
+from goldbot.api.instruments_view import GOLD, _registry, group_of, instrument_key, symbol_quote
 from goldbot.api.schema import (
     CostSplit,
     ExitReason,
@@ -58,10 +59,12 @@ from goldbot.api.strategy_labels import Catalog, account_label, catalog
 from goldbot.base import FrozenRecord, load_record
 from goldbot.config import tf_seconds
 from goldbot.data.timeutil import ROLLOVER_UTC_H
+from goldbot.db.connection import db_path
 from goldbot.engine import cost_probe
 from goldbot.engine.exploration import HOLD_EXIT, ExplorationRecord
 from goldbot.engine.shadow import ShadowBook
 from goldbot.engine.store import OpenTrade
+from goldbot.instruments import Instruments
 from goldbot.ops import gates_phase as gp
 from goldbot.ops.account_view import usd_to_account
 from goldbot.ops.report_days import day_bounds, report_day
@@ -94,6 +97,12 @@ EXIT_WORDS: dict[str, ExitReason] = {
     "broker_close": "manual",           # closed at the broker outside the engine (the owner or the terminal)
 }
 _ARM_KINDS: frozenset[TradeKind] = frozenset({"exploration", "control"})
+# the registry a build reads when config/instruments.yaml is missing or unreadable: no key and no broker symbol, so
+# `instrument_key` keeps a symbol as given and a non-gold row gets contract 1.0, exactly as with no registry
+_NO_REGISTRY = Instruments(instruments={})
+# aux.db's change marker (`_aux_marker`) is trusted only once its files are this old: a file clock is coarse (a jiffy
+# on Linux), so a second commit in the same tick as the read could leave mtime and, on a reused WAL, size unchanged
+AUX_RACY_S = 2.0
 
 
 def exit_reason(raw: str | None) -> ExitReason:
@@ -179,6 +188,8 @@ class _Ctx:
     orders: dict[tuple[str, int], OpenTrade] = field(default_factory=dict)
     read_only: bool = False             # a report: never migrate aux.db from a reader (ops/learning_ledger.py)
     engines: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # config/instruments.yaml resolved once per build (`_registry`): one version for every row, not a stat per row
+    reg: Instruments = _NO_REGISTRY
 
     def acct(self, account: str, symbol: str = GOLD) -> _Acct:
         """The account's figures for a row of `symbol`: gold's as before; another instrument's price and lot value
@@ -187,10 +198,8 @@ class _Ctx:
         base = self.accts.get(account, _Acct())
         if symbol == GOLD:
             return base
-        from goldbot.api.instruments_view import _registry
         price, value = symbol_quote(self.engines.get(account, {}), symbol)
-        reg = _registry(None)
-        spec = reg.instruments.get(symbol) if reg is not None else None
+        spec = self.reg.instruments.get(symbol)
         return _Acct(mode=base.mode, currency=base.currency, price=price,
                      contract=spec.contract_size if spec is not None else 1.0, fx=None,
                      stale=base.stale or price is None, lot_value=value)
@@ -248,12 +257,59 @@ def _voids(conn: sqlite3.Connection) -> dict[str, str]:
     return {str(c): str(r) for c, s, r in rows if "n" in json.loads(s)}
 
 
-def _exploration(state: Path, ctx: _Ctx) -> list[TradeRow]:
+AuxMarker = tuple[tuple[int, int, int] | None, ...]
+# resolved aux.db path -> (its change marker when read, the filled exploration records, the evidence voids)
+_AUX_TRADES: dict[str, tuple[AuxMarker, list[ExplorationRecord], dict[str, str]]] = {}
+
+
+def _aux_marker(p: Path) -> AuxMarker | None:
+    """(inode, mtime_ns, size) of aux.db and of its -wal (None for a file that is not there), or None when one cannot
+    be read or was written within AUX_RACY_S (not trusted yet). `PRAGMA data_version` would not do: it only moves for
+    commits seen by one long-lived connection, and every read here opens its own. A commit appends frames to the WAL
+    (its mtime and size move), a checkpoint writes the main file, a restore replaces a file (inode); SQLite never
+    writes either through a memory map by default, so each write moves an mtime."""
+    out: list[tuple[int, int, int] | None] = []
+    racy = time.time_ns() - int(AUX_RACY_S * 1e9)
+    for f in (p, p.with_name(p.name + "-wal")):
+        try:
+            st = f.stat()
+        except FileNotFoundError:
+            out.append(None)
+            continue
+        except OSError:
+            return None
+        if st.st_mtime_ns > racy:
+            return None
+        out.append((st.st_ino, st.st_mtime_ns, st.st_size))
+    return tuple(out)
+
+
+def _aux_trades(state: Path) -> tuple[list[ExplorationRecord], dict[str, str]]:
+    """aux.db's filled exploration records and evidence voids, selected again only when aux.db changed (CPU
+    attribution 2026-11-10, round 3: the select and record load cost ~0.9 s of each 60 s health pass). The marker is
+    taken before and after the read and the read is kept only when both agree, so a commit during the read is never
+    cached; only the records are kept, never the rows built from them (an open row's money follows the engine)."""
+    p = db_path(state, "aux")
+    key = str(p.resolve())
+    before = _aux_marker(p)
+    hit = _AUX_TRADES.get(key)
+    if before is not None and hit is not None and hit[0] == before:
+        return hit[1], hit[2]
     with labs.aux(state) as conn:
         if conn is None:
-            return []
+            _AUX_TRADES.pop(key, None)
+            return [], {}
         recs = [t for t in labs.trades(conn) if t.fill_price is not None]
         voids = _voids(conn)
+    if before is not None and before[0] is not None and _aux_marker(p) == before:
+        _AUX_TRADES[key] = (before, recs, voids)
+    else:
+        _AUX_TRADES.pop(key, None)
+    return recs, voids
+
+
+def _exploration(state: Path, ctx: _Ctx) -> list[TradeRow]:
+    recs, voids = _aux_trades(state)
     return [_arm_row(t, ctx, voids) for t in recs]
 
 
@@ -261,7 +317,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
     info = ctx.cat.arm(t.arm_id)
     family = info.family if info is not None else (t.family or "unknown")
     control = info.is_control if info is not None else False
-    symbol = instrument_key(getattr(t, "symbol", None))
+    symbol = instrument_key(getattr(t, "symbol", None), ctx.reg)
     a = ctx.acct(t.account_id, symbol)
     entry = t.fill_price
     assert entry is not None
@@ -305,7 +361,7 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
     for p in cost_probe.probes(state, migrate=not ctx.read_only):
         if p.fill_price is None:
             continue
-        symbol = instrument_key(getattr(p, "symbol", None))
+        symbol = instrument_key(getattr(p, "symbol", None), ctx.reg)
         a = ctx.acct(p.account_id, symbol)
         scheduled = p.purpose == "cost_measurement"
         family = "cost_probe" if scheduled else family_of(p.agent_id.removeprefix(cost_probe.PREFIX))
@@ -381,13 +437,13 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             risk_amount=_r2(risk), currency=ccy, pnl=_r2(c.pnl) if net else None, r=c.r,
             gross=round(round(c.pnl, 2) + costs.total, 2) if net else _r2(c.pnl), pnl_now=None, r_now=None,
             price_now=None, costs=costs, why=_strategy_why(ctx, family, kind), evidence="not_evidence",
-            excluded_reason=None, stale=False, position_id=c.position_id, symbol=instrument_key(getattr(c, "symbol", None))))
+            excluded_reason=None, stale=False, position_id=c.position_id, symbol=instrument_key(getattr(c, "symbol", None), ctx.reg)))
         if c.position_id is not None:
             seen.add((c.account_id, c.position_id))
     for (account, pid), t in ctx.orders.items():
         if cost_probe.is_learning(t.agent_id) or (account, pid) in seen:
             continue
-        symbol = instrument_key(getattr(t, "symbol", None))
+        symbol = instrument_key(getattr(t, "symbol", None), ctx.reg)
         a = ctx.acct(account, symbol)
         kind = "real" if a.mode == "live" else "strategy"
         family = family_of(t.agent_id)
@@ -481,7 +537,8 @@ def build_ledger(state_dir: str | Path, now: pd.Timestamp, engines: list[dict[st
     unreadable: list[TradeSource] = []
     by_acc = engines_by_account(state, engines)
     ctx = _Ctx(now=now, cat=cat or catalog(), read_only=read_only,
-               accts={k: _acct(e, now) for k, e in by_acc.items()}, engines=by_acc)
+               accts={k: _acct(e, now) for k, e in by_acc.items()}, engines=by_acc,
+               reg=_registry(None) or _NO_REGISTRY)
     orders = _read("orders", lambda: [_orders(state)], unreadable)
     ctx.orders = orders[0] if orders else {}
     rows = [*_read("exploration", lambda: _exploration(state, ctx), unreadable),
