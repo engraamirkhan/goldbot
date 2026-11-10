@@ -19,6 +19,11 @@ updates:
       python:                          # minor/patch together; a major arrives as its own PR to be hand-tested
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # duckdb 2.0 reads Parquet ts_utc as TIMESTAMPTZ_NS and Store.read's ts filters fail (49 tests, 2026-11-10);
+      # migrate store.py first (backlog), then lift this with the bound and uv.lock in one PR
+      - dependency-name: duckdb
+        update-types: ["version-update:semver-major"]
     labels: [dependencies]
 
   - package-ecosystem: npm
@@ -32,5 +37,8 @@ updates:
     ignore:
       # openapi-typescript (web/src/lib/schema.d.ts generation) needs TypeScript 5; revisit when it supports 7
       - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # @types/node follows the Node runtime (22 on CI, brain, VPS, e2e; engines >=22): bump together with NODE_MAJOR
+      - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
     labels: [dependencies]
