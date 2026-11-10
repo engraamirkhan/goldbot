@@ -12,6 +12,7 @@ import pytest
 
 from goldbot.config import load_settings
 from goldbot.engine import exploration
+from goldbot.engine import exploration_budget as budget
 from goldbot.engine.exploration import LEDGER, ExplorationRecord
 from goldbot.ops import entry_silence as es
 from goldbot.ops import health
@@ -19,6 +20,8 @@ from goldbot.ops.accounts import DailyEntries
 from goldbot.ops.entry_silence import AccountSupply, ArmSupply
 from goldbot.ops.health import AlertPolicy, HealthContext, HealthWatch
 from goldbot.research import exploration_data as ed
+from tests.test_exploration_daily_budget import _engine as _daily_engine
+from tests.test_exploration_engine import _arm, _rules  # noqa: F401 - the test rules (autouse) and arm helper
 
 MON = pd.Timestamp("2026-11-09", tz="UTC")              # a Monday: gold open from 00:00 UTC
 SAT = pd.Timestamp("2026-11-14", tz="UTC")
@@ -183,16 +186,26 @@ def test_asia_silence_does_not_count(tmp_path):
 
 
 def test_a_spent_session_or_day_budget_is_silence_by_design(tmp_path):
-    """max_per_day 3 splits 1/1/1 with no history: London's one fill at 08:05 spends London, so London stays quiet by
-    design until New York opens at 13:30 UTC (08:30 New York, winter)."""
+    """max_per_day 3 splits 1/1/1/0 over the four segments with no history, rolled forward: Asia's fill at 00:10 and
+    London's at 08:05 reach London's rolled 2, so London stays quiet by design until New York opens at 13:30 UTC
+    (08:30 New York, winter); New York's fill at 13:40 spends the day."""
     daily = DailyEntries(max_per_day=3, thin_control_fills=None)
-    fill(tmp_path, "LB-GBPJPY", at("08:05"), symbol="GBPJPY")
-    c = check(tmp_path, at("13:25"), {VANTAGE: supply(_lb(), daily=daily)})
-    assert c is not None and c.status == "ok"
-    for hm in ("00:10", "13:40"):                                  # Asia, then New York: the day's 3 are spent
+    for hm in ("00:10", "08:05"):
         fill(tmp_path, "LB-GBPJPY", at(hm), symbol="GBPJPY")
+    c = check(tmp_path, at("13:25"), {VANTAGE: supply(_lb(), daily=daily)})
+    assert c is not None and c.status == "ok" and "silence today 0 h 05 min" in c.reason
+    fill(tmp_path, "LB-GBPJPY", at("13:40"), symbol="GBPJPY")
     spent = check(tmp_path, at("21:00"), {VANTAGE: supply(_lb(), daily=daily)})
     assert spent is not None and spent.status == "ok" and spent.reason.startswith("day budget spent")
+
+
+def test_unspent_asia_rolls_forward_so_london_silence_counts(tmp_path):
+    """The same budget without the Asia fill: Asia's unspent fill rolls to London (rolled 2), so London is not spent by
+    one fill and four quiet hours after it warn."""
+    daily = DailyEntries(max_per_day=3, thin_control_fills=None)
+    fill(tmp_path, "LB-GBPJPY", at("08:05"), symbol="GBPJPY")
+    c = check(tmp_path, at("12:05"), {VANTAGE: supply(_lb(), daily=daily)})
+    assert c is not None and c.status == "warn" and "08:05-12:05 UTC" in c.reason
 
 
 def test_one_warning_a_day_even_when_fills_resume_after_the_silence(tmp_path):
@@ -228,27 +241,88 @@ def test_supply_from_the_real_config_blocks_every_spec_retired_arm():
             assert s.arms[arm_id].blocked is not None
 
 
-def test_session_split_is_the_engines_rule():
-    from goldbot.engine import exploration_budget as budget
-    assert budget.session_split([], 40) == {"asia": 13, "london": 13, "newyork": 13}
-    london = [int(at("09:00").value)] * 3 + [int(at("15:00").value)]
-    assert budget.session_split(london, 40) == {"asia": 1, "london": 30, "newyork": 10}
+def _engine_arm(arm_id: str, tf: str = "15m", instrument: str | None = None, role: str = "strategy",
+                control_share: float | None = None) -> exploration.Arm:
+    arm = _arm(arm_id, tf, control_share=control_share)
+    params = {**arm.spec.params, **({"instrument": instrument} if instrument else {})}
+    return arm.model_copy(update={"spec": arm.spec.model_copy(update={"params": params, "role": role})})
 
 
-def test_history_candidates_shape_the_session_budgets(tmp_path):
-    """Trailing edge candidates all in London: London takes the day's budget, so a London silence counts until its
-    budget is spent, and a New York with a budget of 1 is spent by its first fill."""
+def supply_of(arms: list[exploration.Arm], daily: DailyEntries, broker: str = "icm") -> AccountSupply:
+    """The supply `supply_for` builds, from engine arms."""
+    return AccountSupply(broker=broker, daily=daily, pairs=budget.pairs({a.arm_id: a for a in arms}),
+                         arms={a.arm_id: ArmSupply(kind=budget.entry_kind(a), instrument=a.instrument, tf=a.tf)
+                               for a in arms},
+                         engine_arms={a.arm_id: a for a in arms})
+
+
+def test_history_shapes_the_split_from_admissible_candidates_only(tmp_path):
+    """The engine's own `session_budgets`: only the active arms' candidates that pass the static entry refusals count.
+    LB's London candidates count; a gold strategy arm's 03:00 candidates are refused by window_0207 and a retired
+    arm's are not active, so neither moves the split."""
     db = exploration.ledger_db(str(tmp_path))
+    lb, gold, old = (_engine_arm("LB-GBPJPY", "5m", "GBPJPY", "learning"), _engine_arm("G9"), _engine_arm("Z6V"))
+    k = 0
     for d in range(1, 6):
-        ed.record_candidate(db, candidate_id=f"c{d}", account_id=VANTAGE, broker="vantage", arm_id="LB-GBPJPY",
-                            family="f", style="intraday", tf="5m", side=1,
-                            decision_utc=at("09:00", MON - pd.Timedelta(days=d)), stop_dist=1.0, target_dist=1.0,
-                            max_hold_s=60, taken=True)
+        for arm, hm in ((lb, "09:00"), (gold, "03:00"), (old, "15:00")):
+            k += 1
+            ed.record_candidate(db, candidate_id=f"c{k}", account_id=VANTAGE, broker="vantage", arm_id=arm.arm_id,
+                                family="f", style="intraday", tf=arm.tf, side=1,
+                                decision_utc=at(hm, MON - pd.Timedelta(days=d)), stop_dist=1.0, target_dist=1.0,
+                                max_hold_s=60, taken=True)
     daily = DailyEntries(max_per_day=10, thin_control_fills=None)
-    fill(tmp_path, "LB-GBPJPY", at("14:05"), symbol="GBPJPY")      # New York's one (max(1, round(10 x 0)))
-    v = es.evaluate(supply(_lb(), daily=daily), tmp_path / "aux.db", VANTAGE, at("20:00"), health.DEFAULT_SESSIONS)
-    assert (v.run_min, v.run_from, v.run_to) == (6 * 60 + 5, at("08:00"), at("14:05"))   # 08:00 to the NY fill
-    assert v.silent and not v.no_supply
+    s = supply_of([lb, gold, old], daily, broker="vantage")
+    s = s.model_copy(update={"arms": {**s.arms, "Z6V": s.arms["Z6V"].model_copy(update={"blocked": "spec retired"})}})
+    v = es.evaluate(s, tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
+    assert v.budgets == budget.apportion(10, {"london": 5}) == {"asia": 1, "london": 7, "newyork": 1, "late_asia": 1}
+
+
+AGREE = [
+    # (case, arms (id, tf), daily, fills at, now)
+    ("open", [("G9", "15m")], DailyEntries(max_per_day=10, thin_control_fills=None), ["08:30", "09:30"], "12:00"),
+    ("london rolled spent", [("G9", "15m")], DailyEntries(max_per_day=4, thin_control_fills=None),
+     ["08:30", "09:30"], "11:00"),
+    ("new york rolls on", [("G9", "15m")], DailyEntries(max_per_day=4, thin_control_fills=None),
+     ["08:30", "09:30"], "14:00"),
+    ("day spent", [("G9", "15m")], DailyEntries(max_per_day=4, thin_control_fills=None),
+     ["01:00", "08:30", "09:30", "14:00"], "15:00"),
+    ("scalp cap", [("S9", "1m")], DailyEntries(max_per_day=40, scalp_day_cap=2, thin_control_fills=None),
+     ["08:30", "09:30"], "11:00"),
+    ("scalp cap, a 15m arm left", [("S9", "1m"), ("G9", "15m")],
+     DailyEntries(max_per_day=40, scalp_day_cap=2, thin_control_fills=None), ["08:30", "09:30"], "11:00"),
+]
+
+
+@pytest.mark.parametrize(("case", "spec", "daily", "fills", "now"), AGREE, ids=[c[0] for c in AGREE])
+def test_the_engine_and_the_silence_walk_agree_on_spent(tmp_path, case, spec, daily, fills, now):
+    """One fixture, two readers: the engine's `_send` budget check (entries_today, session_budgets over its active
+    arms, daily_refusal at the signal's segment) and the silence walk at `now`. Spent for the engine means every arm
+    is refused with a SPENT reason; the walk's `spent_now` must say the same."""
+    arms = [_engine_arm(a, tf) for a, tf in spec]
+    eng, _pb = _daily_engine(tmp_path, arms, daily)
+    ex = eng.exploration
+    assert ex is not None and set(ex.arms) == {a.arm_id for a in arms}
+    for k, hm in enumerate(fills):
+        with exploration.ledger_db(str(tmp_path)).write() as conn:
+            LEDGER.upsert(conn, ExplorationRecord(
+                client_order_id=f"a{k}", account_id="icm-probe", arm_id=arms[k % len(arms)].arm_id, family="f",
+                tf=arms[k % len(arms)].tf, side=1, lots=0.01, signal_utc=at(hm) - pd.Timedelta(seconds=20),
+                sent_utc=at(hm), atr_usd=1.0, stop_usd=1.0, target_usd=1.0, hold_s=60, position_id=k + 1))
+    t = at(now)
+    since = t.floor("D")
+    n = budget.entries_today(eng, ex, since, t, ex.arms)
+    budgets = budget.session_budgets(eng, ex, daily, since, dict(ex.arms))
+    engine = [budget.daily_refusal(daily, budget.entry_kind(a), n, segment=budget.day_segment(t), budgets=budgets,
+                                   fast=a.tf in budget.FAST_TFS) for a in arms]
+    engine_spent = all(w is not None and w in es.SPENT for w in engine)
+    v = es.evaluate(supply_of(arms, daily), tmp_path / "aux.db", "icm-probe", t, health.DEFAULT_SESSIONS)
+    assert v.budgets == budgets
+    assert (v.spent_now is not None) == engine_spent, (case, engine, v.spent_now)
+    if engine_spent:
+        assert v.spent_now == engine[0]
+    expected = {"open": False, "london rolled spent": True, "new york rolls on": False, "day spent": True,
+                "scalp cap": True, "scalp cap, a 15m arm left": False}[case]
+    assert engine_spent is expected
 
 
 def test_the_supply_view_is_read_once_per_ttl_or_config_change(monkeypatch):
@@ -318,4 +392,4 @@ def test_aux_is_opened_read_only_through_a_file_uri(tmp_path, monkeypatch):
     exploration.ledger_db(str(tmp_path))
     monkeypatch.setattr(es.sqlite3, "connect", spy)
     es.evaluate(supply(_lb()), tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
-    assert seen == [(tmp_path / "aux.db").resolve().as_uri() + "?mode=ro"]
+    assert seen and set(seen) == {(tmp_path / "aux.db").resolve().as_uri() + "?mode=ro"}   # the split reads too

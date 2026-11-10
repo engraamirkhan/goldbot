@@ -1878,7 +1878,8 @@ It covers the demo exploring accounts, not the weekend lane. The reason says whi
   supply left for today. This is incident 2026-11-09: vantage-demo had every gold arm retired and its thin controls
   spent by 09:10, then 9.5 h with no entry.
 * **"no exploration fill for N h of London/New York market time"**: arms may enter, but none filled for 4 h of
-  London/NY market time. Minutes after the session's or the day's budget was spent do not count, and Asia never counts.
+  London/NY market time. A minute counts only when the engine's own budget would still admit an enterable arm: a
+  spent segment (rolled forward), day, 1m/5m `scalp_day_cap` or thin share is silence by design. Asia never counts.
 
 Recovery (read-only first, from the brain; the query prints today's candidates by arm and outcome, the blocked reason
 or `taken`):
@@ -1896,7 +1897,7 @@ sudo -u goldbot /opt/goldbot/.venv/bin/python -c "import sqlite3,sys,time; d=int
 2. **Silence with arms enterable.** The query shows why the signals went nowhere:
    * `stale`: the pass budget is starved (fix 3/4 of the diagnosis). Check `pass budget 5.0 s spent` in
      `journalctl -u goldbot-engine@<account>`.
-   * `session_entries` / `hourly_entries`: the budget split, by design.
+   * `session_entries` / `hourly_entries` / `scalp_day_cap`: the budget, by design.
    * `window_0207`, `control_thinned`: by design.
    * `global_cap`, `probe_slot` or `pot_slots`: open positions hold the slots. Check `open_risk:<account>`.
    * `not_auto`: auto entry is off. See "Auto mode".

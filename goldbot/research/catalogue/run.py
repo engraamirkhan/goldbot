@@ -22,7 +22,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 import numpy as np
 
@@ -39,6 +39,15 @@ from goldbot.research.catalogue.data import (
     _resample_minutes,
     window,
 )
+from goldbot.research.catalogue.sim import (
+    TRADE_COLS,
+    TwinDraw,
+    draw_twins,
+    excess_r,
+    session_day,
+    simulate,
+    simulate_twins,
+)
 from goldbot.research.registry import PREREGISTERED, TrialRegistry, config_hash, quarter_of
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -52,6 +61,10 @@ AGENT = "strategy-researcher"
 READS_LEDGER = "catalogue_reads.jsonl"
 EX2009_FAMILIES = ("S11", "S15", "S16", "S27", "S30")      # quant T4: TEST-OLD also reported without 2009
 CODE_PATH = "goldbot/research/catalogue"
+# Prereg 2026-11-09 section 3.2 / 6.1: 2018-01..2025-09 was read in batches 1-14 before EVAL-2 (P1-P9, F1-F5, in
+# true read order, each credited 0 rejections; F6 and F7 read no outcomes and are not batches); TEST-OLD never.
+PRIOR_READ_BATCHES = {"confirm": 14, "test_old": 0}
+PRIOR_CUTOFF = datetime(2026, 11, 9, tzinfo=timezone.utc)   # reads stamped before this are in PRIOR_READ_BATCHES
 
 
 def out_dir() -> Path:
@@ -162,6 +175,89 @@ def prebuild(win: str, all_units: list[dict[str, Any]], *, allow_test_old: bool 
             pass
     if any(i in FINE_INSTRUMENTS for i, _ in need):
         D.get_minutes(win, allow_test_old=allow_test_old)       # 1m fill bars (C10), built once before the workers
+
+
+# ------------------------------------------------------------------ EVAL-2 read batches and twins
+def read_batch_index(window: Literal["test_old", "confirm"]) -> int:
+    """The BatchPRDS index the NEXT read of `window` takes (call it before `_claim`). Quant round 2:
+    "PRIOR_READ_BATCHES[window] + the reads of `window` in every `state/*_reads.jsonl` (excluding `resume` rows and any
+    row stamped before 2026-11-09, already in the prior count) + 1". The stamp is `true_read_ts` where a row has one
+    (backfilled rows carry ts 2026-11-09, prereg section 2), else `ts`; a row whose stamp does not parse counts (a
+    higher index only lowers the level). First EVAL-2 read: 2018-25 batch 15, TEST-OLD batch 1."""
+    reads = 0
+    for led in sorted(default_registry().parent.glob("*_reads.jsonl")):
+        for line in led.read_text().splitlines():
+            r = json.loads(line) if line.strip() else {}
+            if r.get("window") == window and not r.get("resume") and not _before_prior_cutoff(r):
+                reads += 1
+    return PRIOR_READ_BATCHES[window] + reads + 1
+
+
+def _before_prior_cutoff(row: dict[str, Any]) -> bool:
+    try:
+        ts = datetime.fromisoformat(str(row.get("true_read_ts") or row.get("ts")))
+    except ValueError:
+        return False
+    return (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)) < PRIOR_CUTOFF
+
+
+def family_fire(family: str, win: str, ctx: Any, *, allow_test_old: bool = False) -> dict[tuple[str, str], np.ndarray]:
+    """Per cell, the bars where any instance of any registered unit of `family` fires (twins never land there)."""
+    out: dict[tuple[str, str], np.ndarray] = {}
+    for v in D.units():
+        if v["family"] != family:
+            continue
+        for cell, (b, ev) in D.unit_events(v, win, ctx, allow_test_old=allow_test_old).items():
+            m = out.setdefault(cell, np.zeros(len(b), bool))
+            m[ev.i[(ev.i >= 0) & (ev.i < len(m))]] = True
+    return out
+
+
+UNIT_COLS = ("cell_id", "family", "inst", "tf", "side", "day", "decision_ns", "net_r", "twin_mean_net_r", "excess_r",
+             "cost_r", "year", "n_twins")
+
+
+def unit_twins(u: dict[str, Any], win: str, ctx: Any, *, allow_test_old: bool = False
+               ) -> tuple[Any, dict[tuple[str, str], list[TwinDraw]]]:
+    """EVAL-2 instances of a unit with M = 20 twins each (method v6 section 2; prereg section 4.3 `units` columns +
+    n_twins), and the draws per cell for audit. Signals are `simulate`'s trades; twins `draw_twins` (after the exit,
+    off the family's fire bars, seeded by the unit id) and `simulate_twins` on the same bars, 1m fill bars and window
+    cost model. Day = the fill's session day (`sim.session_day`, 17:00 New York; quant round 2). A unit with a stop/limit cell without 1m bars is excluded whole, as
+    in dispatcher.unit_trades (C10): empty frame."""
+    import pandas as pd
+    costs = ctx.aux["costs"]
+    evd = D.unit_events(u, win, ctx, allow_test_old=allow_test_old)
+    need = {cell: D.intrabar(b, ev) for cell, (b, ev) in evd.items()}
+    frames, draws_out = [], {}
+    if not any(v and inst not in FINE_INSTRUMENTS for (inst, _), v in need.items()):
+        fires = family_fire(u["family"], win, ctx, allow_test_old=allow_test_old)
+        for (inst, tf), (b, ev) in evd.items():
+            fine = D.get_minutes(win, allow_test_old=allow_test_old) if need[(inst, tf)] else None
+            tr = simulate(b, ev, control="random_side", seed_key=u["unit"], fine=fine, costs=costs)
+            if not len(tr):
+                continue
+            col = {k: j for j, k in enumerate(TRADE_COLS)}
+            row_of = {(int(i), int(s)): k for k, (i, s) in enumerate(zip(ev.i, ev.side))}
+            ks = [row_of[(int(r[col["i"]]), int(r[col["side"]]))] for r in tr]
+            exits = np.full(len(ev), -1, np.int64)
+            exits[ks] = tr[:, col["x"]].astype(np.int64)
+            fire = fires.get((inst, tf), np.zeros(len(b), bool))
+            draws = draw_twins(b, ev, exits=exits, family_fire=fire, seed_key=u["unit"])
+            mine = [draws[k] for k in ks]
+            tw = simulate_twins(b, ev, mine, costs=costs, fine=fine)
+            net = tr[:, col["gross"]] - tr[:, col["cost"]]
+            ex = excess_r(net, tw)
+            day = session_day(tr[:, col["t_fill"]].astype(np.int64))      # clustered by session day (17:00 NY)
+            n_tw = np.isfinite(tw).sum(axis=1)
+            frames.append(pd.DataFrame({
+                "cell_id": f"{u['unit']}|{inst}|{tf}", "family": u["family"], "inst": inst, "tf": tf,
+                "side": tr[:, col["side"]].astype(np.int64), "day": day,
+                "decision_ns": tr[:, col["t_dec"]].astype(np.int64), "net_r": net,
+                "twin_mean_net_r": net - ex, "excess_r": ex,
+                "cost_r": tr[:, col["cost"]], "year": S.year_of_day(day), "n_twins": n_tw}))
+            draws_out[(inst, tf)] = mine
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=list(UNIT_COLS))
+    return df, draws_out
 
 
 # ------------------------------------------------------------------ workers
