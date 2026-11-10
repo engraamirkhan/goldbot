@@ -146,3 +146,68 @@ def test_the_base_currency_times_price_rule_is_for_fx_and_metal_pairs_only():
         assert swap_per_lot(calc_fx, price=1.1)[0] == pytest.approx(-2.2)
     row = terms_from_info("icm-probe", "EURUSD", "EURUSD", fx, T0, price=1.1, group="fx")
     assert row.swap_long_per_lot == pytest.approx(-2.2)
+
+
+def _interest(mode: int, long_pct: float = -20.0, short_pct: float = -10.0) -> SymbolInfo:
+    return PaperBroker().symbol_info("BTCUSD").model_copy(update={
+        "swap_mode": mode, "swap_long": long_pct, "swap_short": short_pct, "contract_size": 1.0, "point": 0.01,
+        "currency_profit": "USD", "currency_base": "BTC", "swap_rollover3days": 5})
+
+
+def test_an_interest_swap_is_the_annual_percent_of_the_price_over_a_360_day_year():
+    """Vantage refusals 2026-11-10: BTCUSD reports swap mode 5 (SYMBOL_SWAP_MODE_INTEREST_CURRENT, annual % of the
+    current price, 360-day bank year), which stored NULL and refused every BTC entry. Per lot per night it is
+    rate / 100 / 360 x price x contract size, the broker's sign kept; mode 6 (INTEREST_OPEN) for an entry is the same,
+    its open price being the current price."""
+    for mode in (5, 6):
+        lng, sht, note = swap_per_lot(_interest(mode), price=100_000.0)
+        assert lng == pytest.approx(-55.5556, abs=1e-3) and sht == pytest.approx(-27.7778, abs=1e-3)
+        assert f"swap mode {mode}" in note
+    lng, sht, _ = swap_per_lot(_interest(5, 3.0, -7.2).model_copy(update={"contract_size": 10.0}), price=50.0)
+    assert lng == pytest.approx(3.0 / 100 / 360 * 50.0 * 10.0) and sht == pytest.approx(-0.1)
+
+
+@pytest.mark.parametrize("price", [None, float("nan"), float("inf"), 0.0, -1.0])
+def test_an_interest_swap_without_a_usable_price_is_unknown_never_zero(price):
+    assert swap_per_lot(_interest(5), price=price)[:2] == (None, None)
+    assert swap_per_lot(_interest(6), price=price)[:2] == (None, None)
+
+
+@pytest.mark.parametrize("mode", [7, 8])
+def test_the_reopen_swap_modes_stay_unknown(mode):
+    assert swap_per_lot(_interest(mode), price=100_000.0)[:2] == (None, None)
+
+
+BTC = BookSpec(key="BTCUSD", symbol="BTCUSD", store_symbol="BTCUSD", magic_block=1, digits=2, point=0.01,
+               contract_size=1.0)
+
+
+class InterestPaper(PaperBroker):
+    """A Vantage-like terminal: BTCUSD with swap mode 5, -20 % / -10 % a year, triple Friday."""
+
+    def on_tick(self, tick: Tick) -> None:
+        return None
+
+    def symbol_info(self, symbol: str) -> SymbolInfo:
+        return _interest(5).model_copy(update={"name": symbol}) if symbol == "BTCUSD" else super().symbol_info(symbol)
+
+
+def test_a_mode_5_book_prices_its_swap_and_the_gate_finds_nothing_invalid(tmp_path):
+    """The engine end of the same incident: once converted, `swap_unknown` clears, `_swap_usd_per_oz` is finite and
+    the RiskGate reports no `invalid:` field (it refused every BTC entry `invalid:swap_usd_per_oz` before)."""
+    from goldbot.risk import AccountState, Intent, RiskGate
+    pb = InterestPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(BTC,)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        assert eng.book.terms_problem is None                     # swap_unknown cleared
+        assert eng.book.terms is not None and eng.book.terms.swap_long_per_lot == pytest.approx(-55.5556, abs=1e-3)
+        swap = eng._swap_usd_per_oz(1, T0)
+    assert swap == swap and swap >= 0.0                           # finite, never NaN
+    st = AccountState(equity=10_000.0, balance_closed_hwm=10_000.0, day_start_equity=10_000.0,
+                      week_start_equity=10_000.0, open_positions=0, margin_used=0.0, last_tick_age_s=1.0,
+                      spread_points=25.0)
+    intent = Intent(agent_id="x", side=1, p=0.7, target_atr=3.0, stop_atr=1.0, atr_usd=500.0, cost_atr=0.04,
+                    multiplier=0.3, price=100_000.0, swap_usd_per_oz=swap)
+    assert not any(r.startswith("invalid:") for r in RiskGate().check(intent, st).reasons)
