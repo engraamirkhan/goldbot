@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -340,6 +342,54 @@ HISTORY_GAP_WINDOW_H = 6       # decisions journal read back this far for histor
 HISTORY_GAP_MIN_CLOSES = 4     # refused closes, spread over at least half the window, before it warns
 
 
+# (data root, account, symbol) -> (the journal's part files when read, the window start read from, its rows)
+_JOURNAL: dict[tuple[str, str, str], tuple[frozenset[str], pd.Timestamp, pd.DataFrame]] = {}
+
+
+def _journal_parts(data_root: str | Path, account: AccountRef, since: pd.Timestamp) -> frozenset[str] | None:
+    """The part files of the account's decisions journal in the months from `since` on, None when they cannot be
+    listed. Store writes every part under a new random name and never rewrites one (`Store._write_atomic`), so the set
+    changes with every flush."""
+    base = Path(data_root) / "decisions" / f"source={account.account_id}" / f"symbol={account.symbol}"
+    first = since.year * 12 + since.month
+    out: set[str] = set()
+    try:
+        for ydir in base.glob("year=*"):
+            for mdir in ydir.glob("month=*"):
+                if int(ydir.name[5:]) * 12 + int(mdir.name[6:]) >= first:
+                    out.update(f"{ydir.name}/{mdir.name}/{e.name}" for e in os.scandir(mdir)
+                               if e.name.endswith(".parquet"))
+    except (OSError, ValueError):
+        return None
+    return frozenset(out)
+
+
+def _journal_window(data_root: str | Path, account: AccountRef, since: pd.Timestamp,
+                    end: pd.Timestamp) -> pd.DataFrame:
+    """The account's decisions journal rows with since <= ts_utc < end, as `Store.read` returns them. Read again only
+    when the journal changed (a new part file) or the last read does not cover `since`; otherwise the last read,
+    filtered to the window: the same rows a fresh read gives. The engine flushes at most once per bar close and the
+    Telegram service checks every 60 s; the DuckDB read cost ~10 s of one core per pass on the brain (health pass
+    cost, 2026-11-10). The read has no upper bound, so a later window is covered by an earlier read of an unchanged
+    journal."""
+    from goldbot.data.store import Store
+    key = (str(Path(data_root).resolve()), account.account_id, account.symbol)
+    parts = _journal_parts(data_root, account, since)
+    hit = _JOURNAL.get(key)
+    if parts is None or hit is None or hit[0] != parts or hit[1] > since:
+        rows = Store(data_root).read("decisions", source=account.account_id, symbol=account.symbol, start=since)
+        if parts is None:
+            _JOURNAL.pop(key, None)
+        else:
+            _JOURNAL[key] = (parts, since, rows)
+    else:
+        rows = hit[2]
+    if rows.empty:
+        return rows
+    ts = rows["ts_utc"]
+    return rows[(ts >= since) & (ts < end)].reset_index(drop=True)
+
+
 @register_check("account", block=BLOCK_ACCOUNT, pos=45, pass_account=True)
 def check_history_gap(ctx: HealthContext, account: AccountRef) -> Check | None:
     """history_gap:<account> (vantage-demo 2026-10-26..11-03: a release hole before the account's cut-over refused
@@ -361,10 +411,8 @@ def check_history_gap(ctx: HealthContext, account: AccountRef) -> Check | None:
     name = f"history_gap:{account.account_id}"
     raw = e.get("history_gap") if isinstance(e, dict) else None
     gaps = {tf: g for tf, g in raw.items() if isinstance(g, dict)} if isinstance(raw, dict) else {}
-    from goldbot.data.store import Store
     since = ctx.now - pd.Timedelta(hours=HISTORY_GAP_WINDOW_H)
-    d = Store(ctx.settings.data_root).read("decisions", source=account.account_id, symbol=account.symbol,
-                                           start=since, end=ctx.now + pd.Timedelta(seconds=1))   # end is exclusive
+    d = _journal_window(ctx.settings.data_root, account, since, ctx.now + pd.Timedelta(seconds=1))   # end exclusive
     act = d["action"].astype(str) if not d.empty else pd.Series(dtype=str)
     hit = act.str.startswith("history_gap:")
     refused = d[hit] if not d.empty else d

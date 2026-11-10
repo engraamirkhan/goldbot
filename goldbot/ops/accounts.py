@@ -42,11 +42,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Iterator, Literal
 
-import yaml
 from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from goldbot.base import FrozenRecord, Record, write_private
-from goldbot.config import ROOT
+from goldbot.config import ROOT, safe_load_cached
 from goldbot.data.calendar import PauseWindow, WeekendWindow
 from goldbot.data.timeutil import server_zone
 from goldbot.risk.limits_profile import RiskOverrides
@@ -820,7 +819,7 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
     """config/accounts.yaml as Account records. `logins` False: a `login: null` stays None (no keyring read), for the
     readers that need only which accounts exist and are enabled (`enabled_account_ids`, polled by the dashboard)."""
     path = _accounts_path(path)
-    raw = yaml.safe_load(path.read_text())
+    raw = safe_load_cached(path)                 # parsed once per file version (goldbot/config.py)
     out = {}
     _refused_observe.clear()
     for aid, a in raw["accounts"].items():

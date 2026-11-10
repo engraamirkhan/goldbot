@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import pickle
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -1066,6 +1067,28 @@ _UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
 def load_yaml(path: str | Path) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         return yaml.load(fh, Loader=_UniqueKeyLoader)   # a SafeLoader subclass: no arbitrary objects
+
+
+# (resolved path) -> ((st_ino, st_mtime_ns, st_size), the parse pickled): one parse per file version
+_YAML_CACHE: dict[str, tuple[tuple[int, int, int], bytes]] = {}
+
+
+def safe_load_cached(path: str | Path) -> Any:
+    """`yaml.safe_load` of the file, parsed once per file version, keyed by (inode, mtime_ns, size) like
+    research/arms.py `_registry_rows`: the Telegram health pass (every 60 s on the 2-vCPU brain) re-parsed the 166 KB
+    arm spec once per exploring account and the 67 KB accounts file about eight times a pass (health pass cost,
+    2026-11-10). An edit, append or atomic replace changes the key, so a changed file is parsed again before it is
+    answered from. Every call returns its own copy (unpickled from the stored parse; our own bytes, never read from
+    disk), so no caller can change what the next one reads. A missing file or a YAML error raises as a plain parse
+    did, and nothing is remembered for it."""
+    p = Path(path)
+    st = p.stat()
+    key, version = str(p.resolve()), (st.st_ino, st.st_mtime_ns, st.st_size)
+    hit = _YAML_CACHE.get(key)
+    if hit is None or hit[0] != version:
+        hit = (version, pickle.dumps(yaml.safe_load(p.read_text()), protocol=pickle.HIGHEST_PROTOCOL))
+        _YAML_CACHE[key] = hit
+    return pickle.loads(hit[1])
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
