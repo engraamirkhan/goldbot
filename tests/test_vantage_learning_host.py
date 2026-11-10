@@ -40,6 +40,8 @@ V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
 pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
 # H-81 stage V1 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pot): the $7.00-bar strata and ZCV, £6.50
 V_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
+# execution/cost calibration controls (prereg-amendment-2026-11-10-execution-controls.md), per-trade cap by timeframe
+V_EXEC = {"VEX15": 17.0, "VEX1H": 30.0}
 # multi-instrument demo (lane L3): the random controls of the instruments vantage-demo lists (owner decision 2026-11-04:
 # the 10 added instruments, the 7 Vantage ones removed)
 V_INSTRUMENTS = {f"{p}-{k}" for k in ['GBPJPY', 'EURGBP', 'EURJPY', 'AUDJPY', 'EURAUD', 'GBPAUD', 'BTCUSD', 'XAUJPY', 'USINDEX', 'US30'] for p in ("S0", "I0")}         # LCZ6V/LCZ7V: learning controls (ADR 0072)
@@ -75,7 +77,7 @@ def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound
 def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of_180(vantage):
     ex = vantage.exploration
     assert ex.enabled and set(ex.arms) == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
-                                           | V_INSTRUMENTS | MI_ON["vantage-demo"])
+                                           | set(V_EXEC) | V_INSTRUMENTS | MI_ON["vantage-demo"])
     # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
     assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
     assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 14),
@@ -86,7 +88,7 @@ def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
     assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V"} | {
-        i for i in MI_ON["vantage-demo"] if i.startswith("LBC-")} | V_INSTRUMENTS
+        i for i in MI_ON["vantage-demo"] if i.startswith("LBC-")} | V_INSTRUMENTS | set(V_EXEC)
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 
@@ -139,11 +141,11 @@ def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_
     cfg = exploration.config_for(vantage)
     assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
     assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
-                                            | V_INSTRUMENTS | MI_ON["vantage-demo"])
-    assert len(cfg.arms) == 28 + 20 + 20               # + the instruments' S0/I0 and LB/LBC pairs (lane L3)
-    gold = exploration.book_config(cfg, "XAUUSD")       # gold's book runs gold's 28 only
+                                            | set(V_EXEC) | V_INSTRUMENTS | MI_ON["vantage-demo"])
+    assert len(cfg.arms) == 30 + 20 + 20               # + the instruments' S0/I0 and LB/LBC pairs (lane L3)
+    gold = exploration.book_config(cfg, "XAUUSD")       # gold's book runs gold's 30 only (28 + VEX15/VEX1H)
     assert gold is not None and {a.arm_id for a in gold.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1)
-                                                                  | set(V_WAVE2) | V_SCALP)
+                                                                  | set(V_WAVE2) | V_SCALP | set(V_EXEC))
     by = {a.arm_id: a for a in cfg.arms}
     assert by["DON4"].style == "swing" and by["KSQ1"].style == by["PDC1"].style == "intraday"
     assert by["VI0"].control_share == 0.30 and by["VW0"].control_share == 0.33
@@ -154,7 +156,7 @@ def test_vantage_riskgate_limits_carry_its_host_cap_probe_only_fence_and_arm_cap
     limits = engine_limits(load_settings(), vantage)
     assert limits.max_positions == 24 and limits.probe_only and limits.daily_loss_limit_abs == 200   # ADR 0072: 24
     assert limits.exploration_arms == {**{a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING},
-                                       **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5),
+                                       **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5), **V_EXEC,
                                        **{a: (6.5 if a.startswith("S0-") else 17.0) for a in V_INSTRUMENTS},
                                        **dict.fromkeys(MI_ON["vantage-demo"], 8.0)}
 
