@@ -257,22 +257,34 @@ def _voids(conn: sqlite3.Connection) -> dict[str, str]:
     return {str(c): str(r) for c, s, r in rows if "n" in json.loads(s)}
 
 
-AuxMarker = tuple[tuple[int, int, int] | None, ...]
+AuxMarker = tuple[tuple[int, int, int, bytes] | None, ...]
 # resolved aux.db path -> (its change marker when read, the filled exploration records, the evidence voids)
 _AUX_TRADES: dict[str, tuple[AuxMarker, list[ExplorationRecord], dict[str, str]]] = {}
+WAL_HEADER = 32                 # SQLite's WAL header: magic, version, page size, checkpoint sequence, salts, checksum
 
 
 def _aux_marker(p: Path) -> AuxMarker | None:
-    """(inode, mtime_ns, size) of aux.db and of its -wal (None for a file that is not there), or None when one cannot
-    be read or was written within AUX_RACY_S (not trusted yet). `PRAGMA data_version` would not do: it only moves for
-    commits seen by one long-lived connection, and every read here opens its own. A commit appends frames to the WAL
-    (its mtime and size move), a checkpoint writes the main file, a restore replaces a file (inode); SQLite never
-    writes either through a memory map by default, so each write moves an mtime."""
-    out: list[tuple[int, int, int] | None] = []
+    """(inode, mtime_ns, size, WAL header) of aux.db and of its -wal, or None when one cannot be read or was written
+    within AUX_RACY_S (not trusted yet). A -wal that is not there or EMPTY is None: an empty WAL holds no frame, so
+    the database is the main file alone, and a reader creates exactly that (CI issue #366: on Linux the last writer's
+    close checkpoints and deletes the -wal, and the next read-only open creates a fresh empty one, which moved the
+    marker on every build). Only a writer changes what the marker reads: a commit appends frames (the WAL's size
+    grows), a WAL restart after a checkpoint rewrites its header (new salts and checkpoint sequence, even at the same
+    size and in the same clock tick), a checkpoint writes the main file, a restore replaces a file (inode). A reader
+    never writes aux.db or a frame (the -shm, where it takes its read lock, is not in the marker). `PRAGMA
+    data_version` would not do: it only moves for commits one long-lived connection sees, and every read opens its own."""
+    out: list[tuple[int, int, int, bytes] | None] = []
     racy = time.time_ns() - int(AUX_RACY_S * 1e9)
     for f in (p, p.with_name(p.name + "-wal")):
         try:
             st = f.stat()
+            if f is not p and st.st_size == 0:
+                out.append(None)
+                continue
+            head = b""
+            if f is not p:
+                with open(f, "rb") as fh:
+                    head = fh.read(WAL_HEADER)
         except FileNotFoundError:
             out.append(None)
             continue
@@ -280,7 +292,7 @@ def _aux_marker(p: Path) -> AuxMarker | None:
             return None
         if st.st_mtime_ns > racy:
             return None
-        out.append((st.st_ino, st.st_mtime_ns, st.st_size))
+        out.append((st.st_ino, st.st_mtime_ns, st.st_size, head))
     return tuple(out)
 
 
