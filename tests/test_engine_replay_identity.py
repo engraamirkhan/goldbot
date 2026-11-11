@@ -3,6 +3,8 @@ for every existing arm". A seven-day replay (a weekend inside it: the Friday cut
 exploration arms on 15m, 1h and 4h (random-bracket controls, the session-range and band-break controls) through
 `Engine.on_tick` on the paper terminal is pinned against tests/data/engine_replay_identity_golden.json, captured from
 cb3e52a4 BEFORE the 1d/1w change: every decision row (wall-clock stamps removed), every paper deal, every open trade.
+Rewritten once for backlog 160 (open trades age below the bar-close floor): the replay starts cold, so its first
+day's RB15 trades now time out after their 4 bars instead of riding to stop/target until the first decision frame.
 
 The same replay with 1d and 1w arms added must give the existing arms the identical rows and deals, whether the 1d/1w
 arms are dark (settings engine.timeframes_live, the default) or live with a long history to warm up from. The golden is
