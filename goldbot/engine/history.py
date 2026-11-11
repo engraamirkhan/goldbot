@@ -63,6 +63,7 @@ LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = brok
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
+REREAD_WARN_S = 2.0                 # a store re-read (`reread`, tick thread) slower than this is a warning
 RATES_MAX = 100_000                 # broker 1m bars per fill (~10 weeks of trading minutes; MT5's chart default)
 WRITER_QUEUE = 256                 # batches of minutes waiting for the store; the oldest is dropped beyond it
 
@@ -479,22 +480,37 @@ def reread(eng: Engine, now: pd.Timestamp) -> bool:
     """While history_read or history_short holds, read the store again, every REFILL_EVERY of engine clock
     (`after_close`). A read that raises keeps history_read; one that succeeds lifts it and merges its minutes into
     the window by the warm start's rule (release before the cut-over, the broker's stored minutes from it on; a minute
-    the engine already holds wins, so nothing a decision used is replaced). True when bars changed."""
+    the engine already holds wins, so nothing a decision used is replaced). history_read is lifted only once the merge
+    succeeded, and the window is then judged for history_short (the warm start whose read raised could not judge it:
+    review of R123, HIGH). Runs on the tick thread: its duration is logged, a warning over REREAD_WARN_S. True when
+    bars changed."""
     h = eng.history
     if eng.store is None or (h.read_error is None and not h.read_short):
         return False
     if h.read_at is not None and now - h.read_at < REFILL_EVERY:
         return False
     h.read_at = now
+    t0 = time.monotonic()
     try:
         rel, own = _read_store(eng, now - pd.Timedelta(days=_window_days(eng)), now)
+        changed = _merge_read(eng, rel, own)
     except Exception as exc:                          # noqa: BLE001 - fail closed: entries stay refused
         read_failed(eng, now, exc)
         return False
+    finally:
+        took = time.monotonic() - t0
+        (log.warning if took > REREAD_WARN_S else log.info)("history: the store re-read took %.2f s", took)
     if h.read_error is not None:
         log.warning("history: the store reads again after %s: history_read lifted", h.read_error)
-    h.read_error = None
-    h.backfill["read_error"] = None
+        h.read_error = None
+        h.backfill["read_error"] = None
+        _judge_short(eng, now)
+    return changed
+
+
+def _merge_read(eng: Engine, rel: pd.DataFrame, own: pd.DataFrame) -> bool:
+    """`reread`'s merge of the stored minutes into the window (the engine's own minutes win). True when bars changed."""
+    h = eng.history
     if h.cutover is None and not own.empty:
         h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
         h.backfill["cutover"] = h.cutover.isoformat()

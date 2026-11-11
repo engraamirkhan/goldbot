@@ -913,8 +913,9 @@ class EngineSettings(_Section):
     long_history_dir: str = "raw/daily"
     # backlog 155 (engine/history.py): a warm start loading fewer 1m bars from the store refuses every entry
     # (history_short) until the window holds them. 28 800 = 120 bars (engine/frames.py MIN_BARS) of 4h, the longest
-    # decision timeframe. Weekday gold only: the other books warm up in book_backfill, a weekend lane has no release
-    warm_start_min_bars: int = Field(120 * 240, ge=0)
+    # decision timeframe. Weekday gold only: the other books warm up in book_backfill, a weekend lane has no release.
+    # At most the 90 000 bars the engine keeps (EngineConfig.max_bars_in_memory): more would refuse entries for ever
+    warm_start_min_bars: int = Field(120 * 240, ge=0, le=90_000)
 
     @field_validator("timeframes_live")
     @classmethod

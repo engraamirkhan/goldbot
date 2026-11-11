@@ -63,9 +63,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that crashed again), and the key zones kept a failed cache read for good (history_days 52.4). Now the engine starts,
   runs its exits, and refuses every entry while the read fails (`history_read`: RiskGate data_quality_error, specialist
   closes journalled `history_read:<tf>`, engine health FAILs naming it); the store is re-read every 30 min of engine
-  clock and a read that succeeds lifts it. A weekday-gold warm start with fewer than `engine.warm_start_min_bars`
-  (28 800) 1m bars refuses the same way (`history_short:<tf>`) until the window holds them. Owner step when it
-  fires: check the data root syncs (the health reason names the cause). Tests: tests/test_engine_history_read.py.
+  clock and lifts it only once its minutes merged, then judges the window for `history_short` (review round 1: a
+  recovered read no longer opens entries on a short window). A weekday-gold warm start with fewer than
+  `engine.warm_start_min_bars` (28 800, capped at the 90 000 bars kept) 1m bars refuses the same way
+  (`history_short:<tf>`) until the window holds them. Below the 400-bar bar-close floor, open trades' time exits now
+  run at their close. Each re-read's duration is logged (warning over 2 s). Follow-ups: backlog 157 (re-read off the
+  tick thread), 158 (quarantine spans read fails closed), 159 (key-zones warning throttle). Owner step when it fires:
+  check the data root syncs (the health reason names the cause). Tests: tests/test_engine_history_read.py.
 - 2026-11-10 (branch fix/swap-mode-5-6; Vantage refusals 2026-11-10 item 2, fix 1): vantage-demo BTCUSD reports MT5
   swap mode 5 (interest on the current price, 360-day year), which instruments.db stored NULL, so every BTC entry was
   refused `invalid:swap_usd_per_oz` (95 in 7 days). `instruments_db.swap_per_lot` now converts modes 5 and 6 to

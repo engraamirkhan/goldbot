@@ -239,3 +239,69 @@ def test_an_unreadable_key_zone_cache_is_read_again_at_the_next_build(tmp_path, 
     broken.on = False
     w.refresh(LIVE_FROM)
     assert w.loaded
+
+
+# ------------------------------------------------------------------------------------------- review round 1 (R123)
+def test_a_read_that_recovers_still_refuses_entries_when_the_window_is_short(tmp_path, monkeypatch):
+    """HIGH (fails open): the warm start skipped the short judgement because its read raised; the re-read that
+    succeeds must judge it, or entries open on ~2 800 minutes with history_min_bars 4 000."""
+    _seed(tmp_path, start=LIVE_FROM - pd.Timedelta(days=2))
+    broken = Broken(monkeypatch)
+    eng = _engine(tmp_path, history_min_bars=4000)
+    eng.warm_start(LIVE_FROM)
+    broken.on = False
+    _feed(eng, LIVE_FROM, LIVE_FROM + pd.Timedelta(hours=1))
+    assert eng.history.read_error is None and len(eng.bars_1m) < 4000
+    assert eng._dq_blocking() == {"history_short"}
+
+
+def test_a_re_read_whose_merge_raises_keeps_entries_refused(tmp_path, monkeypatch):
+    _seed(tmp_path)
+    broken = Broken(monkeypatch)
+    eng = _engine(tmp_path)
+    eng.warm_start(LIVE_FROM)
+    broken.on = False
+
+    def boom(*a: Any, **k: Any) -> bool:
+        raise MemoryError("merge failed")
+    monkeypatch.setattr(history, "_merge_read", boom, raising=False)
+    assert history.reread(eng, LIVE_FROM + pd.Timedelta(hours=1)) is False
+    assert eng.history.read_error == "MemoryError" and "history_read" in eng._dq_blocking()
+
+
+def test_the_warm_start_minimum_can_never_exceed_the_bars_the_engine_keeps():
+    from pydantic import ValidationError
+
+    from goldbot.config import EngineSettings
+    keep = EngineConfig(account_id="icm-demo", broker_name="icm").max_bars_in_memory
+    assert EngineSettings(warm_start_min_bars=keep).warm_start_min_bars == keep
+    with pytest.raises(ValidationError):
+        EngineSettings(warm_start_min_bars=keep + 1)            # entries refused for ever
+
+
+def test_a_time_exit_fires_on_a_window_below_the_bar_close_floor(tmp_path):
+    """Safety item 7: below the 400-bar floor (a failed warm start without a broker fill) an open trade's time exit
+    still runs at its close, not ~400 minutes later."""
+    _seed(tmp_path)
+    eng = _engine(tmp_path)
+    eng.warm_start(LIVE_FROM)
+    opened = LIVE_FROM + pd.Timedelta(hours=33)
+    _feed(eng, LIVE_FROM, opened)
+    (pid, tr), = list(eng.open.items())[:1]
+    eng.bars_1m = eng.bars_1m.tail(100).reset_index(drop=True)  # what the engine holds after a failed read
+    eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None
+    tr.bars_held = tr.max_bars - 1
+    _feed(eng, opened, opened + pd.Timedelta(minutes=20))
+    assert pid not in eng.open and pid not in {p.position_id for p in eng.broker.positions()}
+
+
+def test_a_slow_re_read_is_logged_with_its_duration(tmp_path, monkeypatch, caplog):
+    _seed(tmp_path)
+    broken = Broken(monkeypatch)
+    eng = _engine(tmp_path)
+    eng.warm_start(LIVE_FROM)
+    broken.on = False
+    monkeypatch.setattr(history, "REREAD_WARN_S", 0.0, raising=False)
+    with caplog.at_level("WARNING", logger="goldbot.engine.history"):
+        history.reread(eng, LIVE_FROM + pd.Timedelta(hours=1))
+    assert any("re-read took" in r.getMessage() for r in caplog.records)
