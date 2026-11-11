@@ -19,11 +19,9 @@ updates:
       python:                          # minor/patch together; a major arrives as its own PR to be hand-tested
         patterns: ["*"]
         update-types: [minor, patch]
-    ignore:
-      # duckdb 2.0 reads Parquet ts_utc as TIMESTAMPTZ_NS and Store.read's ts filters fail (49 tests, 2026-11-10);
-      # migrate store.py first (backlog), then lift this with the bound and uv.lock in one PR
-      - dependency-name: duckdb
-        update-types: ["version-update:semver-major"]
+    # duckdb majors are no longer ignored (backlog 156 made the store read the same on 1.x and 2.x). A duckdb major
+    # changes how Parquet timestamps read: run tests/test_store_duckdb_compat.py and the store-touching suites on it
+    # before merging, and move the `<N` bound in pyproject.toml in the same PR.
     labels: [dependencies]
 
   - package-ecosystem: npm
