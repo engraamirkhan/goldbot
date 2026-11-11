@@ -6,7 +6,7 @@
   clock and lifts it only once its minutes merged, then judges the window for `history_short` (review round 1: a
   recovered read no longer opens entries on a short window). A weekday-gold warm start with fewer than
   `engine.warm_start_min_bars` (28 800, capped at the 90 000 bars kept) 1m bars refuses the same way
-  (`history_short:<tf>`) until the window holds them. Below the 400-bar bar-close floor, open trades' time exits now
+  (`history_short:<tf>`) until the window holds them. After a failed or short read, open trades' time exits below the 400-bar floor now
   run at their close. Each re-read's duration is logged (warning over 2 s). Follow-ups: backlog 157 (re-read off the
   tick thread), 158 (quarantine spans read fails closed), 159 (key-zones warning throttle). Owner step when it fires:
   check the data root syncs (the health reason names the cause). Tests: tests/test_engine_history_read.py.

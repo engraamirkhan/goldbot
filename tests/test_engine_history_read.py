@@ -280,8 +280,25 @@ def test_the_warm_start_minimum_can_never_exceed_the_bars_the_engine_keeps():
 
 
 def test_a_time_exit_fires_on_a_window_below_the_bar_close_floor(tmp_path):
-    """Safety item 7: below the 400-bar floor (a failed warm start without a broker fill) an open trade's time exit
+    """Safety item 7: below the 400-bar floor after a failed history read (no broker fill) an open trade's time exit
     still runs at its close, not ~400 minutes later."""
+    eng, pid, opened = _below_the_floor(tmp_path)
+    history.read_failed(eng, opened, RuntimeError("store broken"))
+    _feed(eng, opened, opened + pd.Timedelta(minutes=20))
+    assert pid not in eng.open and pid not in {p.position_id for p in eng.broker.positions()}
+
+
+def test_a_cold_start_below_the_bar_close_floor_keeps_its_bar_count_unchanged(tmp_path):
+    """Without a failed or short read, the floor behaves as before (tests/test_engine_replay_identity.py stays
+    byte-identical): a trade's bars are not counted before the first decision frame."""
+    eng, pid, opened = _below_the_floor(tmp_path)
+    held = eng.open[pid].bars_held
+    _feed(eng, opened, opened + pd.Timedelta(minutes=20))
+    assert pid in eng.open and eng.open[pid].bars_held == held
+
+
+def _below_the_floor(tmp_path: Path) -> tuple[Engine, int, pd.Timestamp]:
+    """A healthy engine with an open trade one bar from its time barrier, its window cut below the 400-bar floor."""
     _seed(tmp_path)
     eng = _engine(tmp_path)
     eng.warm_start(LIVE_FROM)
@@ -291,8 +308,7 @@ def test_a_time_exit_fires_on_a_window_below_the_bar_close_floor(tmp_path):
     eng.bars_1m = eng.bars_1m.tail(100).reset_index(drop=True)  # what the engine holds after a failed read
     eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None
     tr.bars_held = tr.max_bars - 1
-    _feed(eng, opened, opened + pd.Timedelta(minutes=20))
-    assert pid not in eng.open and pid not in {p.position_id for p in eng.broker.positions()}
+    return eng, pid, opened
 
 
 def test_a_slow_re_read_is_logged_with_its_duration(tmp_path, monkeypatch, caplog):

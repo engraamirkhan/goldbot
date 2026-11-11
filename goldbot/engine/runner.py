@@ -881,8 +881,9 @@ class Engine:
                               symbol=books.store_symbol(self), dedupe=False)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         base = self._frame(complete, self.cfg.decision_tf, close_ts) if len(complete) >= 400 else None
-        if base is None:                       # too few bars to decide (R123 review): the time exits still run
-            self._manage_open(complete)
+        if base is None:                       # too few bars to decide; after a failed or short history read (R123
+            if history.hold(self) is not None:  # review) the time exits still run. A cold start: unchanged (replays)
+                self._manage_open(complete)
             return []
         self._last_atr = float(base.atr.iloc[-1]) if np.isfinite(base.atr.iloc[-1]) else self._last_atr
         try:
