@@ -115,6 +115,17 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail")
         checks = ", ".join(other_dq) or "stale feed"
         parts.append(f"data-quality error ({checks}): entries blocked")
+    # backlog 155 (engine/history.py): the engine's history could not be read from the store, or came back short
+    hb = e.get("history_backfill") if isinstance(e.get("history_backfill"), dict) else {}
+    if hb.get("read_error"):
+        statuses.append("fail")
+        parts.append(f"the store read of the engine's history failed ({hb['read_error']}): every entry refused "
+                     "(history_read), exits run; re-read every 30 min, read the engine log")
+    short = hb.get("read_short")
+    if isinstance(short, dict):
+        statuses.append("fail")
+        parts.append(f"the engine's history holds {short.get('bars')} 1m bars of the {short.get('min')} a warm start "
+                     "needs: every entry refused (history_short) until it does; is the store synced?")
     for w in e.get("dq_warnings") or []:
         statuses.append("warn")
         parts.append(f"data-quality warning: {w}")

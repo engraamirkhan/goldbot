@@ -245,8 +245,9 @@ class KeyZoneWorker:
 
     # ---------------------------------------------------------------- the long history
     def refresh(self, now: pd.Timestamp) -> None:
-        """Read the store cache once; pull from the broker when due (daily; hourly after a failure), one pull per
-        bridge at a time."""
+        """Read the store cache once it reads (a failed read is tried again at the next build: backlog 155, one bad
+        read no longer leaves the chart on the engine's short history until a restart); pull from the broker when due
+        (daily; hourly after a failure), one pull per bridge at a time."""
         if not self.loaded:
             self.loaded = True
             if self.store is not None:
@@ -255,8 +256,10 @@ class KeyZoneWorker:
                                           start=now - pd.Timedelta(days=LONG_DAYS))
                     if got is not None and not got.empty:
                         self._absorb(got[BAR_COLUMNS], now)
-                except Exception as exc:      # noqa: BLE001 - the broker pull below refills it
-                    log.warning("key zones: cache unreadable (%s)", type(exc).__name__)
+                except Exception as exc:      # noqa: BLE001 - display only: read again next build; the pull refills
+                    self.loaded = False
+                    log.warning("key zones: cache unreadable (%s: %s): read again at the next build",
+                                type(exc).__name__, exc)
         if self.client is None or (self.next_pull is not None and now < self.next_pull):
             return
         with box_lock(self.lock_dir, self.box) as mine:

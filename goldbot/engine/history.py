@@ -21,6 +21,15 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   so the window stays one feed per span with one cut-over; only when a good bar pull reaches back to the hole (fail
   closed), only within backfill_max_days, and only if the cut-over has not moved while the fill ran. The new cut-over
   is recorded in aux.db (`history_cutover`, only ever moving back) and a restart starts from it (#327 review L2).
+- A store read of the history fails closed (backlog 155; duckdb 2.0 made every ts-filtered `Store.read` raise, and the
+  engine service died at its warm start, open trades unmanaged). A warm-start or release re-read that raises, or a
+  warm start that loads fewer 1m bars than `history_min_bars` (settings engine.warm_start_min_bars; weekday gold
+  only), refuses every entry: `blocking` is a blocking data-quality check (RiskGate's data_quality_error on every
+  entry path; the engine health check FAILs and names it) and every specialist close is journalled
+  `history_read:<tf>` / `history_short:<tf>` (`refuse`). Exits and position management never read it: the engine
+  starts and runs its exits instead of crashing. While either holds the store is read again every REFILL_EVERY of
+  engine clock (`reread`): a read that succeeds merges its minutes (the engine's own win) and lifts history_read;
+  history_short lifts once the window holds the minimum (the broker fill, a re-read or live minutes).
 """
 from __future__ import annotations
 
@@ -54,6 +63,7 @@ LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = brok
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
+REREAD_WARN_S = 2.0                 # a store re-read (`reread`, tick thread) slower than this is a warning
 RATES_MAX = 100_000                 # broker 1m bars per fill (~10 weeks of trading minutes; MT5's chart default)
 WRITER_QUEUE = 256                 # batches of minutes waiting for the store; the oldest is dropped beyond it
 
@@ -343,7 +353,7 @@ class History:
 
     def __init__(self) -> None:
         self.backfill: dict[str, Any] = {"cutover": None, "from": None, "bars": 0, "error": None, "running": False,
-                                         "dropped": 0}
+                                         "dropped": 0, "read_error": None, "read_short": None}
         self.gaps: dict[str, dict[str, Any]] = {}
         self.covered: list[Span] = []
         self.gap_memo = GapMemo()             # window_gaps' holes already judged (GapMemo)
@@ -352,6 +362,9 @@ class History:
         self.fill: HistoryFill | None = None
         self.last_fill: pd.Timestamp | None = None
         self.writer: BarWriter | None = None
+        self.read_error: str | None = None    # the last store read of the history raised (fail closed: `blocking`)
+        self.read_short = False               # the warm start loaded fewer than history_min_bars (`blocking`)
+        self.read_at: pd.Timestamp | None = None    # engine clock of the last store read while either holds
 
 
 def _clean(b: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
@@ -366,17 +379,18 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     live ticks (1h agents and the daily context need weeks): release minutes before the cut-over, the traded broker's
     stored minutes from it on. With `broker` (a client of its own: the bridge serves this thread separately) the tail
     to `now` and the holes are filled in the background (`start_fill`); entries stay refused (`refuse`) until the
-    window is whole. Returns the number of bars loaded (0 without a store)."""
+    window is whole. A store read that raises starts the engine on no stored minutes with every entry refused
+    (`read_failed`), never a crashed start: the exits must run. Returns the number of bars loaded (0 without a store)."""
     cfg, h = eng.cfg, eng.history
     if eng.store is None:
         return 0
     h.broker = broker
-    days = cfg.max_bars_in_memory // (60 * 23) * 7 // 5 + 3     # trading minutes -> calendar days
-    lo = now - pd.Timedelta(days=days)
-    rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.release_symbol, start=lo, end=now), now)
-    from goldbot.engine import books
-    src, sym = books.live_key(eng)       # gold: (broker, its symbol); another book: (account, store symbol)
-    own = _clean(eng.store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
+    lo = now - pd.Timedelta(days=_window_days(eng))
+    try:
+        rel, own = _read_store(eng, lo, now)
+    except Exception as exc:                          # noqa: BLE001 - fail closed: entries refused, exits run
+        read_failed(eng, now, exc)
+        rel = own = pd.DataFrame()
     if not own.empty:
         h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
     saved = saved_cutover(eng)              # a rebased cut-over (#327 review L2): kept even if its minutes were lost
@@ -392,8 +406,129 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     # closed or quiet): rebuilding its minute would duplicate the stored one and block entries with duplicate_ts
     eng._history_through = pd.Timestamp(eng.bars_1m["visible_at"].max()) if not eng.bars_1m.empty else None
     h.backfill["cutover"] = h.cutover.isoformat() if h.cutover is not None else None
+    if h.read_error is None:
+        _judge_short(eng, now)
     start_fill(eng, now)
     return len(eng.bars_1m)
+
+
+def _window_days(eng: Engine) -> int:
+    """Calendar days the engine's memory spans: max_bars_in_memory trading minutes, five trading days a week."""
+    return eng.cfg.max_bars_in_memory // (60 * 23) * 7 // 5 + 3
+
+
+def _read_store(eng: Engine, lo: pd.Timestamp, now: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(release minutes, the traded broker's stored minutes) with lo <= ts_utc < now, visible by `now`. Raises what
+    the store raises: the callers fail closed (`read_failed`)."""
+    from goldbot.engine import books
+    assert eng.store is not None
+    rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=eng.cfg.release_symbol, start=lo, end=now),
+                 now)
+    src, sym = books.live_key(eng)       # gold: (broker, its symbol); another book: (account, store symbol)
+    own = _clean(eng.store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
+    return rel, own
+
+
+def read_failed(eng: Engine, now: pd.Timestamp, exc: BaseException) -> None:
+    """A store read of the history raised: every entry is refused (`blocking`) until a re-read succeeds (`reread`),
+    published as history_backfill.read_error; logged with its traceback the first time."""
+    h = eng.history
+    first = h.read_error is None
+    h.read_error, h.read_at = type(exc).__name__, now
+    h.backfill["read_error"] = h.read_error
+    log.error("history: the store read of the engine's history failed (%s: %s): entries refused until a re-read "
+              "succeeds; exits run", type(exc).__name__, exc, exc_info=exc if first else None)
+
+
+def _judge_short(eng: Engine, now: pd.Timestamp) -> None:
+    """history_short: a warm start that loaded fewer than history_min_bars 1m bars (0 = off: the other books warm up
+    in book_backfill, a weekend lane has no release)."""
+    h, need, n = eng.history, eng.cfg.history_min_bars, len(eng.bars_1m)
+    h.read_short = bool(need) and n < need
+    h.backfill["read_short"] = {"bars": n, "min": need} if h.read_short else None
+    if h.read_short:
+        h.read_at = now
+        log.error("history: the store gave %d 1m bars, fewer than the %d a warm start needs: entries refused until the "
+                  "window holds them", n, need)
+
+
+def blocking(eng: Engine) -> set[str]:
+    """The history read's blocking data-quality checks (`Engine._dq_blocking`): history_read while the last store read
+    raised; history_short while the window holds fewer than history_min_bars 1m bars, lifted for good the first time
+    it holds them."""
+    h = eng.history
+    if h.read_error is not None:
+        return {"history_read"}
+    if h.read_short:
+        n, need = len(eng.bars_1m), eng.cfg.history_min_bars
+        if n < need:
+            h.backfill["read_short"] = {"bars": n, "min": need}
+            return {"history_short"}
+        h.read_short, h.read_at = False, None
+        h.backfill["read_short"] = None
+        log.warning("history: the window holds %d 1m bars (>= %d): history_short lifted", n, need)
+    return set()
+
+
+def hold(eng: Engine) -> str | None:
+    """The refusal a bar close journals for every specialist (`refuse`): history_read or history_short, else None."""
+    got = blocking(eng)
+    return "history_read" if "history_read" in got else "history_short" if got else None
+
+
+def reread(eng: Engine, now: pd.Timestamp) -> bool:
+    """While history_read or history_short holds, read the store again, every REFILL_EVERY of engine clock
+    (`after_close`). A read that raises keeps history_read; one that succeeds lifts it and merges its minutes into
+    the window by the warm start's rule (release before the cut-over, the broker's stored minutes from it on; a minute
+    the engine already holds wins, so nothing a decision used is replaced). history_read is lifted only once the merge
+    succeeded, and the window is then judged for history_short (the warm start whose read raised could not judge it:
+    review of R123, HIGH). Runs on the tick thread: its duration is logged, a warning over REREAD_WARN_S. True when
+    bars changed."""
+    h = eng.history
+    if eng.store is None or (h.read_error is None and not h.read_short):
+        return False
+    if h.read_at is not None and now - h.read_at < REFILL_EVERY:
+        return False
+    h.read_at = now
+    t0 = time.monotonic()
+    try:
+        rel, own = _read_store(eng, now - pd.Timedelta(days=_window_days(eng)), now)
+        changed = _merge_read(eng, rel, own)
+    except Exception as exc:                          # noqa: BLE001 - fail closed: entries stay refused
+        read_failed(eng, now, exc)
+        return False
+    finally:
+        took = time.monotonic() - t0
+        (log.warning if took > REREAD_WARN_S else log.info)("history: the store re-read took %.2f s", took)
+    if h.read_error is not None:
+        log.warning("history: the store reads again after %s: history_read lifted", h.read_error)
+        h.read_error = None
+        h.backfill["read_error"] = None
+        _judge_short(eng, now)
+    return changed
+
+
+def _merge_read(eng: Engine, rel: pd.DataFrame, own: pd.DataFrame) -> bool:
+    """`reread`'s merge of the stored minutes into the window (the engine's own minutes win). True when bars changed."""
+    h = eng.history
+    if h.cutover is None and not own.empty:
+        h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
+        h.backfill["cutover"] = h.cutover.isoformat()
+    if h.cutover is not None:
+        rel = rel[rel["ts_utc"] < h.cutover] if not rel.empty else rel
+        own = own[own["ts_utc"] >= h.cutover] if not own.empty else own
+    new = [x for x in (rel, own) if not x.empty]
+    if not new:
+        return False
+    merged = pd.concat([eng.bars_1m, *new]) if not eng.bars_1m.empty else pd.concat(new)
+    merged = merged.drop_duplicates("ts_utc", keep="first").sort_values("ts_utc", kind="stable")
+    n = len(merged) - len(eng.bars_1m)
+    if n <= 0:
+        return False
+    eng.bars_1m = merged.tail(eng.cfg.max_bars_in_memory).reset_index(drop=True)
+    eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None
+    log.warning("history: %d stored minutes re-read into the window", n)
+    return True
 
 
 def start_fill(eng: Engine, now: pd.Timestamp) -> None:
@@ -600,11 +735,12 @@ def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
     try:
         absorb(eng)
         h = eng.history
+        reread(eng, close_ts)                         # only while a failed or short read refuses entries
         if h.gaps and (h.last_fill is None or close_ts - h.last_fill >= REFILL_EVERY):
             try:
                 reload_release(eng, close_ts)
-            except Exception:                         # noqa: BLE001 - a faulty store never stops the broker fill
-                log.exception("history reload from the store failed; the broker fill still runs")
+            except Exception as exc:                  # noqa: BLE001 - fail closed (`read_failed`); the fill still runs
+                read_failed(eng, close_ts, exc)
             start_fill(eng, close_ts)
         if h.writer is not None:
             h.backfill["dropped"] = h.writer.dropped
@@ -622,8 +758,12 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
            close_ts: pd.Timestamp) -> list[dict] | None:
     """Design rule: no decision on a window with a hole. When one of `gaps` falls inside the window `fr` (the frame of
     tf) computes its features on, every agent of tf is journalled `history_gap:<tf>` and no live or shadow entry is
-    made at this close (the open shadow trades still age); the hole is published as history_gap[tf]. None when the
-    window is unbroken. Exits and position management never look at it."""
+    made at this close (the open shadow trades still age); the hole is published as history_gap[tf]. While the store
+    read failed or was short (`hold`) every agent of tf is journalled `history_read:<tf>` / `history_short:<tf>` the
+    same way. None when the window is unbroken and was read whole. Exits and position management never look at it."""
+    if (held := hold(eng)) is not None:
+        _age_shadow(eng, tf, fr)
+        return [eng._record(a, close_ts, 0.0, 0.0, f"{held}:{tf}") for a in agents]
     first = pd.Timestamp(fr.dec["ts_utc"].iloc[0])
     hit = [g for g in gaps if g.end > first]
     if not hit:
@@ -632,13 +772,19 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
     g = max(hit, key=lambda x: x.open_min)
     eng.history.gaps[tf] = {"from": g.start.isoformat(), "to": g.end.isoformat(), "open_min": g.open_min,
                             "at": close_ts.isoformat()}
+    _age_shadow(eng, tf, fr)
+    return [eng._record(a, close_ts, 0.0, 0.0, f"history_gap:{tf}") for a in agents]
+
+
+def _age_shadow(eng: Engine, tf: str, fr: Any) -> None:
+    """A refused close: the open shadow trades still age on its bar; no shadow entry is made."""
     if eng.shadow is not None:
         bar = fr.dec.iloc[-1]
         eng.shadow.on_bar(bar, tf, minutes_of(eng.bars_1m, bar, tf))
-    return [eng._record(a, close_ts, 0.0, 0.0, f"history_gap:{tf}") for a in agents]
 
 
 def published(eng: Engine) -> dict[str, Any]:
     """engine_<account>.json: history_gap (per decision timeframe, the hole in its window at its last close; {} =
-    every evaluated window unbroken) and history_backfill (cut-over, fill status, minutes the writer dropped)."""
+    every evaluated window unbroken) and history_backfill (cut-over, fill status, minutes the writer dropped, the
+    failed store read `read_error` and the short warm start `read_short` {bars, min}; null when neither holds)."""
     return {"history_gap": dict(eng.history.gaps), "history_backfill": dict(eng.history.backfill)}
