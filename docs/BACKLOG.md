@@ -122,6 +122,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 92 | Settings entry-mode card shows per-account entry mode under ADR 0036 | UI (settings) · PROTECT | S | proposed, severity HIGH · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer, trading-safety-reviewer |
 | 93 | Approval card shows spread now vs normal and what else is open | UI (approvals) · PROTECT | M | proposed, severity MEDIUM · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer, quant-reviewer (spread normal definition) |
 | 94 | Approval card and trade views in plain words, not p, R, pt or indicator codes | UI (approvals, trades) · UX | S | proposed, severity MEDIUM · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer |
+| 160 | Open trades age from the first live bar after any cold start | engine (found while fixing backlog 155, 2026-11-11) | S | proposed · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
 | 95 | Phone: direction badge and number-unit pairs never wrap | UI (layout) · UX | S | proposed, severity MEDIUM · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer |
 | 96 | Loss budget label shown once on the approval card | UI (approvals) · UX | S | proposed, severity LOW · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer |
 | 97 | Research screen summary-first, detail on demand | UI (research) · UX | M | proposed, severity MEDIUM · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer, research-director (what the summary says) |
@@ -149,7 +150,6 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 124 | Second free intraday gold source and Dukascopy siblings | Data · research input | M | proposed · accountable: data-engineer · reviews: quant-reviewer |
 | 112 | Time-structure exploration arms F1A/F1C/G1A/G1C/WFRI | Research · LEARN | M | proposed (research director, time-structure synthesis, 2026-10-26) · accountable: implementer, strategy-researcher (arm text) · reviews: trading-safety-reviewer, quant-reviewer |
 | 125 | Geopolitical risk index and GDELT, point in time | Data · research input | S | proposed · accountable: data-engineer · reviews: macro-researcher |
-| 160 | Open trades age from the first live bar after any cold start | engine (found while fixing backlog 155, 2026-11-11) | S | proposed · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
 | 113 | H-73 time-structure range feature group (<= 12 columns) | Research · FEATURES | M | proposed (research director, time-structure synthesis, 2026-10-26) · accountable: opportunity-researcher (spec), implementer · reviews: quant-reviewer, ml-researcher |
 | 126 | Disaggregated COT before Sept 2009: availability floor | Data · PIT fix | S | proposed · accountable: data-engineer · reviews: quant-reviewer |
 | 117 | A bad exploration arm row must not stop the engine (exits keep running) | build | S | proposed |

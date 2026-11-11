@@ -1,6 +1,6 @@
 ---
 number: 160
-rank: 45
+rank: 30
 title: Open trades age from the first live bar after any cold start
 stage: 'engine (found while fixing backlog 155, 2026-11-11)'
 size: S
