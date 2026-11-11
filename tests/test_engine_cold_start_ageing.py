@@ -6,6 +6,7 @@ start (a restart with no stored history) paused the count until the first decisi
 15m arm. `bars_held` is saved with the orders file, so a restart resumes the count where it stopped, never at 0."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +14,7 @@ import pandas as pd
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter, Proposal
 
@@ -88,3 +90,32 @@ def test_bars_held_counts_once_per_base_close_across_the_floor(tmp_path):
     _closes(eng, pb, t, 0)
     assert len(eng.bars_1m) >= 400
     assert eng.open[pid].bars_held == 30 - 1                          # the 30th bar closes at the next bar's first tick
+
+
+def test_a_hard_flat_fires_below_the_floor_at_the_first_base_close_at_or_after_its_deadline(tmp_path):
+    """Review C1: the hard flat needs only the deadline and the close, never the frame; the trail still waits."""
+    pb, pid, _ = _open_trade(tmp_path)
+    eng = _engine(tmp_path, pb)
+    tr = eng.open[pid]
+    start = T0 + pd.Timedelta(hours=1)
+    tr.policy, tr.timeframe = ExitPolicy(trail_atr=1.0, flat_before_min=30), "1h"
+    tr.flat_at = start + pd.Timedelta(minutes=20)                    # the first base close at or after it: start+30m
+    t = _closes(eng, pb, start, 2)                                    # closes start+15m (before the deadline)
+    assert len(eng.bars_1m) < 400 and t == start + pd.Timedelta(minutes=30)
+    assert pid in eng.open                                            # start+30m closes at the next bar's first tick
+    pb.on_tick(_tick(t))
+    eng.on_tick(_tick(t))
+    assert pid not in eng.open and pid not in {p.position_id for p in pb.positions()}
+    assert [d["action"] for d in eng.decisions if d.get("position") == pid] == ["hard_flat"]
+
+
+def test_a_count_below_the_floor_is_on_disk_at_its_close(tmp_path):
+    """Review C2: the below-floor close saves the orders file, so a crash right after it never loses the bar."""
+    pb, pid, _ = _open_trade(tmp_path, held=5)
+    eng = _engine(tmp_path, pb)
+    eng.cfg = eng.cfg.model_copy(update={"state_every_s": 10_000})   # no periodic write between closes
+    t = _closes(eng, pb, T0 + pd.Timedelta(hours=1), 1)
+    pb.on_tick(_tick(t))
+    eng.on_tick(_tick(t))                                             # this tick closes the first bar
+    saved = json.loads((tmp_path / "orders_icm-demo.json").read_text())
+    assert eng.open[pid].bars_held == 6 and saved["open"][str(pid)]["bars_held"] == 6
