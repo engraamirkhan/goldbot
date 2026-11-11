@@ -288,13 +288,13 @@ def test_a_time_exit_fires_on_a_window_below_the_bar_close_floor(tmp_path):
     assert pid not in eng.open and pid not in {p.position_id for p in eng.broker.positions()}
 
 
-def test_a_cold_start_below_the_bar_close_floor_keeps_its_bar_count_unchanged(tmp_path):
-    """Without a failed or short read, the floor behaves as before (tests/test_engine_replay_identity.py stays
-    byte-identical): a trade's bars are not counted before the first decision frame."""
+def test_a_healthy_window_below_the_bar_close_floor_also_runs_the_time_exit(tmp_path):
+    """Backlog 160 (superseding the R123 carve-out): with no failed or short read the floor no longer pauses the
+    count either; the time exit fires at the same close as after a failed read."""
     eng, pid, opened = _below_the_floor(tmp_path)
-    held = eng.open[pid].bars_held
+    assert history.hold(eng) is None
     _feed(eng, opened, opened + pd.Timedelta(minutes=20))
-    assert pid in eng.open and eng.open[pid].bars_held == held
+    assert pid not in eng.open and pid not in {p.position_id for p in eng.broker.positions()}
 
 
 def _below_the_floor(tmp_path: Path) -> tuple[Engine, int, pd.Timestamp]:

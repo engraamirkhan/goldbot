@@ -43,6 +43,7 @@ from goldbot.data.store import Store
 from goldbot.data.timeutil import feature_day, floor_tf, server_wall
 from goldbot.engine import (
     auto_entry,
+    below_floor,
     books,
     broker_bars,
     capital_flows,
@@ -873,7 +874,7 @@ class Engine:
 
     def on_bar_close(self, close_ts: pd.Timestamp, last_tick: Tick) -> list[dict]:
         """Runs on every base (decision_tf) bar. Each agent decides on its own timeframe, so a 1h agent is
-        evaluated only at closes that complete a 1h bar; position management stays on the base clock."""
+        evaluated only at closes that complete a 1h bar; position management stays on the base clock (engine/below_floor.py)."""
         self._rebuild_bars()
         self._dq_bar_events, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
         if self._dq_bar_events and self.store is not None:
@@ -881,9 +882,8 @@ class Engine:
                               symbol=books.store_symbol(self), dedupe=False)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         base = self._frame(complete, self.cfg.decision_tf, close_ts) if len(complete) >= 400 else None
-        if base is None:                       # too few bars to decide; after a failed or short history read (R123
-            if history.hold(self) is not None:  # review) the time exits still run. A cold start: unchanged (replays)
-                self._manage_open(complete)
+        if base is None:                       # too few bars to decide: exits still run (backlog 160, R124)
+            below_floor.manage(self, complete, close_ts)
             return []
         self._last_atr = float(base.atr.iloc[-1]) if np.isfinite(base.atr.iloc[-1]) else self._last_atr
         try:
