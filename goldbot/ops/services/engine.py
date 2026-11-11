@@ -440,6 +440,15 @@ def release_symbol(settings: Settings, acc: Account) -> str:
     return acc.symbol
 
 
+def warm_start_min_bars(settings: Settings, acc: Account) -> int:
+    """The 1m bars a warm start must load (engine/history.py history_short): settings engine.warm_start_min_bars on
+    a weekday gold account; 0 on a weekend lane or 24/7 account (ADR 0062: its own store symbol, no release behind it,
+    so the rule would refuse it for weeks)."""
+    if acc.weekend_only or acc.sessions == "always_open":
+        return 0
+    return settings.engine.warm_start_min_bars
+
+
 LONGEST_CLOSE_S = 9_999_999_999        # the widest ten-digit bar close (2286): the longest id an engine makes
 
 
@@ -629,6 +638,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               # WS-4: 1d/1w exploration arms ship dark; their warm-up (engine/long_bars.py)
                               timeframes_live=tuple(settings.engine.timeframes_live),
                               long_history_dir=settings.engine.history_root(settings.data_root),
+                              history_min_bars=warm_start_min_bars(settings, acc),   # backlog 155: fail closed
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, wind_down=wind_down, halt_checks=True,
                               # ADR 0062: a 24/7 symbol's own calendar and weekend window (off on every other account)

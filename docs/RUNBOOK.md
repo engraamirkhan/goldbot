@@ -1884,6 +1884,19 @@ store's release fills it (`reload_release` picks it up without a restart); other
 of the window (about 62 trading days). Incident 2026-10-26..11-03: vantage-demo, release hole 10-09 20:57 -> 10-12
 00:00 before its 10-19 cut-over, zero specialist orders for eight days.
 
+### Entries refused history_read or history_short
+
+`FAIL engine:<account>` naming `history_read` or `history_short` (backlog 155, engine/history.py). Every entry is
+refused (RiskGate `data_quality_error`; specialist closes journalled `history_read:<tf>` / `history_short:<tf>`).
+Exits, stops, time exits and the kill switch run as normal. `history_read`: the store read of the engine's 1m history
+raised (`history_backfill.read_error` in `engine_<account>.json` names the exception; the first one is in the journal
+with its traceback: `sudo journalctl -u goldbot-engine@<account> | grep "history:"`). A library upgrade (duckdb 2.0,
+backlog 156), a corrupt part file or an unreadable data root are the usual causes. Fix the store; the engine reads it
+again every 30 min and lifts the refusal by itself, no restart needed. `history_short`: the warm start loaded fewer
+1m bars than `engine.warm_start_min_bars` (28 800; `history_backfill.read_short` shows bars and min). The data root
+is usually not synced (a re-host, a missed release sync). It lifts once the window holds the minimum, from the broker
+fill, a re-read of the store or live minutes.
+
 ### Entry silence on a demo account
 
 `WARN entry_silence:<account>` (told on Telegram, at most once per account per UTC day; goldbot/ops/entry_silence.py).

@@ -911,6 +911,10 @@ class EngineSettings(_Section):
     does not reach the engine's window keeps the arm quiet (`history_gap:<tf>`), never a crash."""
     timeframes_live: list[Timeframe] = Field(default_factory=lambda: list(INTRADAY_LIVE))
     long_history_dir: str = "raw/daily"
+    # backlog 155 (engine/history.py): a warm start loading fewer 1m bars from the store refuses every entry
+    # (history_short) until the window holds them. 28 800 = 120 bars (engine/frames.py MIN_BARS) of 4h, the longest
+    # decision timeframe. Weekday gold only: the other books warm up in book_backfill, a weekend lane has no release
+    warm_start_min_bars: int = Field(120 * 240, ge=0)
 
     @field_validator("timeframes_live")
     @classmethod

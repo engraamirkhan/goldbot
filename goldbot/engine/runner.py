@@ -231,6 +231,7 @@ class EngineConfig(Record):
     backfill_page_ticks: int = Field(2000, ge=100, le=10_000)   # ~120 KB of JSON a page, as tick_record
     backfill_budget_s: float = Field(1800.0, gt=0, le=3600)
     history_gap_max_min: int = Field(60, ge=1)   # more open minutes missing, not a broker closure: no entry
+    history_min_bars: int = Field(0, ge=0)   # fewer at warm start: history_short (engine/history.py); 0 = off
     owner_user_id: int = 0
     # design (Approvals): the owner confirms an entry within this many seconds or it expires unapproved; production
     # passes settings.risk.approval_window_seconds (goldbot/ops/run.py)
@@ -2222,11 +2223,10 @@ class Engine:
         self._late_warned_at, self._late_since_warn = now, 0
 
     def _dq_blocking(self) -> set[str]:
-        """Clock data-quality errors that block entries (exits are never gated): a broker clock more than
-        SKEW_BLOCK_S off the wall clock (`clock_skew`), or late ticks on LATE_BARS_BLOCK consecutive decision bars
-        (`late_ticks`), until a whole decision bar passes without one. Either way bars are being finalised without
-        their last ticks and drift from the bars the models were trained and shadow-scored on."""
-        out: set[str] = set()
+        """Data-quality errors that block entries, never exits: a broker clock SKEW_BLOCK_S off the wall clock
+        (`clock_skew`) or late ticks on LATE_BARS_BLOCK decision bars in a row (`late_ticks`, until one passes without)
+        finalise bars short of their last ticks; a failed or short history read (`history_read`, `history_short`)."""
+        out: set[str] = history.blocking(self)
         skew = self.clock_skew_s()
         if skew is not None and len(self._skew) >= SKEW_MIN_SAMPLES and abs(skew) > SKEW_BLOCK_S:
             out.add("clock_skew")

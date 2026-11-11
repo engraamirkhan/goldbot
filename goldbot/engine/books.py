@@ -250,6 +250,7 @@ def book_cfg(cfg: EngineConfig, spec: BookSpec) -> EngineConfig:
         "point": spec.point, "price_digits": spec.digits, "contract_size": spec.contract_size,
         "exploration_config": spec.exploration_config, "cost_probe": False, "shadow_host": False,
         "broker_bars": False, "always_open": False, "pauses": (), "weekend_window": None, "instruments": (),
+        "history_min_bars": 0,          # gold's warm-start minimum; a book warms up in book_backfill (`warming`)
         **({"weekend_cut": _friday_cut(spec.instrument, cfg.server_tz)} if spec.instrument is not None else {})})
 
 

@@ -58,6 +58,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `AUX_RACY_S` = 2 s; `PRAGMA data_version` is per connection and so no use to a reader that opens its own). Still
   to measure on the brain after deploy: pass < 5 s across a :00/:15/:30/:45 flush, service < 5 % of a core over 1 h.
   Not addressed: Store.read still scans every part of the table after a flush (data-engineer item).
+- 2026-11-10 (branch fix/history-read-fails-closed; backlog 155, R123): a store read of the engine's history fails
+  closed. Before, a raising read at warm start crashed the engine service (open trades unmanaged until a restart
+  that crashed again), and the key zones kept a failed cache read for good (history_days 52.4). Now the engine starts,
+  runs its exits, and refuses every entry while the read fails (`history_read`: RiskGate data_quality_error, specialist
+  closes journalled `history_read:<tf>`, engine health FAILs naming it); the store is re-read every 30 min of engine
+  clock and a read that succeeds lifts it. A weekday-gold warm start with fewer than `engine.warm_start_min_bars`
+  (28 800) 1m bars refuses the same way (`history_short:<tf>`) until the window holds them. Owner step when it
+  fires: check the data root syncs (the health reason names the cause). Tests: tests/test_engine_history_read.py.
 - 2026-11-10 (branch fix/swap-mode-5-6; Vantage refusals 2026-11-10 item 2, fix 1): vantage-demo BTCUSD reports MT5
   swap mode 5 (interest on the current price, 360-day year), which instruments.db stored NULL, so every BTC entry was
   refused `invalid:swap_usd_per_oz` (95 in 7 days). `instruments_db.swap_per_lot` now converts modes 5 and 6 to
