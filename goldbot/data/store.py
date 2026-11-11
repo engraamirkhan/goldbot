@@ -219,51 +219,103 @@ class Store:
         tdir = self.table_dir(table)
         if not tdir.exists() or not any(tdir.rglob("*.parquet")):
             return pd.DataFrame()
-        con = duckdb.connect()
-        cols = ", ".join(columns) if columns else "*"
-        glob = str(tdir / "**" / "*.parquet")
-        scan = _scan(glob, table)
-        where: list[str] = []
-        params: list = []
-        if symbol is not None:
-            where.append("symbol = ?")
-            params.append(symbol)
-        if source:
-            where.append("source = ?")
-            params.append(source)
-        if start is not None:
-            where.append("ts_utc >= ?")
-            params.append(_utc(start).to_pydatetime())
-            # rows sit in the UTC year/month partition of their ts_utc: a filter on the partition values lets DuckDB
-            # skip every other month's files without opening them (same rows; the column types still come from the
-            # whole table, as before)
-            where.append("year * 12 + CAST(month AS BIGINT) >= ?")
-            params.append(_utc(start).year * 12 + _utc(start).month)
-        if end is not None:
-            where.append("ts_utc < ?")
-            params.append(_utc(end).to_pydatetime())
-            where.append("year * 12 + CAST(month AS BIGINT) <= ?")
-            params.append(_utc(end).year * 12 + _utc(end).month)
-        sql = f"SELECT {cols} FROM {scan} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY ts_utc"
-        with self._read_locks(tdir, source, symbol):
-            df = con.execute(sql, params).df()
-        con.close()
+        sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end, columns=columns)
+        con = _connect()
+        try:
+            with self._read_locks(tdir, source, symbol):
+                df = _fetch(con, sql, params)
+        finally:
+            con.close()
         if "ts_utc" in df.columns:
             df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
         return df
 
     def sql(self, query: str) -> pd.DataFrame:
-        """Run DuckDB SQL; tables are exposed as views named after the table."""
-        con = duckdb.connect()
-        for t in TABLES:
-            tdir = self.table_dir(t)
-            if tdir.exists() and any(tdir.rglob("*.parquet")):
-                con.execute(
-                    f"CREATE VIEW {t} AS SELECT * FROM {_scan(str(tdir / '**' / '*.parquet'), t)}"
-                )
-        df = con.execute(query).df()
-        con.close()
-        return df
+        """Run DuckDB SQL; tables are exposed as views named after the table. Zoned timestamps come back tz-aware UTC
+        (`_fetch`), whatever the duckdb major or the host's zone."""
+        con = _connect()
+        try:
+            for t in TABLES:
+                tdir = self.table_dir(t)
+                if tdir.exists() and any(tdir.rglob("*.parquet")):
+                    con.execute(
+                        f"CREATE VIEW {t} AS SELECT * FROM {_scan(str(tdir / '**' / '*.parquet'), t)}"
+                    )
+            return _fetch(con, query, None)
+        finally:
+            con.close()
+
+
+def _read_query(store: Store, table: str, *, source: str | None, symbol: str | None,
+                start: str | pd.Timestamp | None, end: str | pd.Timestamp | None,
+                columns: Iterable[str] | None) -> tuple[str, list]:
+    """The SQL and parameters of `Store.read`.
+
+    The ts bounds are bound as ISO strings, which duckdb casts to the column's own type: duckdb 2 reads a Parquet ns
+    timestamp with a zone as TIMESTAMPTZ_NS, which does not compare with a bound TIMESTAMPTZ (BinderException), and
+    `CAST(? AS TIMESTAMPTZ_NS)` does not exist in 1.x. Casting the column instead (`CAST(ts_utc AS TIMESTAMPTZ)`) binds
+    on both but 2.x ROUNDS ns to us there (1.x truncates), so a tick a few hundred ns before a bound moved windows. A
+    string bound is a constant: it stays a table filter in the Parquet scan on both majors, so row groups outside the
+    window are skipped (tests/test_store_duckdb_compat.py), and the row set is the same on both (us bounds; 1.x compares
+    its truncated values, 2.x the exact ns, which select the same rows)."""
+    cols = ", ".join(columns) if columns else "*"
+    scan = _scan(str(store.table_dir(table) / "**" / "*.parquet"), table)
+    where: list[str] = []
+    params: list = []
+    if symbol is not None:
+        where.append("symbol = ?")
+        params.append(symbol)
+    if source:
+        where.append("source = ?")
+        params.append(source)
+    if start is not None:
+        where.append("ts_utc >= ?")
+        params.append(_bound(start))
+        # rows sit in the UTC year/month partition of their ts_utc: a filter on the partition values lets DuckDB
+        # skip every other month's files without opening them (same rows; the column types still come from the
+        # whole table, as before)
+        where.append("year * 12 + CAST(month AS BIGINT) >= ?")
+        params.append(_utc(start).year * 12 + _utc(start).month)
+    if end is not None:
+        where.append("ts_utc < ?")
+        params.append(_bound(end))
+        where.append("year * 12 + CAST(month AS BIGINT) <= ?")
+        params.append(_utc(end).year * 12 + _utc(end).month)
+    sql = f"SELECT {cols} FROM {scan} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY ts_utc"
+    return sql, params
+
+
+def _bound(x: str | pd.Timestamp) -> str:
+    """A ts bound as an ISO string at microsecond resolution (as the python datetime bound was before backlog 156)."""
+    return _utc(x).to_pydatetime().isoformat(sep=" ")
+
+
+_TZ_TYPES = {"TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ", "TIMESTAMPTZ_NS"}
+
+
+def _connect() -> duckdb.DuckDBPyConnection:
+    """A fresh in-memory connection with the session zone set to UTC: duckdb hands TIMESTAMPTZ back in the session
+    zone, which otherwise is the host's (Europe/London on the Mac, whatever Windows is set to on the VPS)."""
+    con = duckdb.connect()
+    con.execute("SET TimeZone = 'UTC'")
+    return con
+
+
+def _fetch(con: duckdb.DuckDBPyConnection, sql: str, params: list | None) -> pd.DataFrame:
+    """Run `sql`; every zoned timestamp column comes back tz-aware UTC at microsecond resolution on duckdb 1.x and 2.x
+    alike (backlog 156). 1.x reads a Parquet ns timestamp with a zone as TIMESTAMPTZ (us, truncating ns); 2.x keeps
+    TIMESTAMPTZ_NS and `.df()` returns it naive in UTC wall time. Naive TIMESTAMP columns are left as they are.
+    Columns are converted by position, so a join returning two `ts_utc` columns is covered too."""
+    cur = con.execute(sql, params) if params else con.execute(sql)
+    kinds = [str(d[1]).upper() for d in cur.description] if cur.description else []
+    df = cur.df()
+    for i, kind in enumerate(kinds):
+        if kind in _TZ_TYPES and i < df.shape[1]:
+            col = pd.to_datetime(df.iloc[:, i], utc=True)      # naive (2.x) is UTC wall time; aware is converted
+            if col.dt.unit != "us":
+                col = col.dt.floor("us").dt.as_unit("us")        # 1.x's resolution: it truncates ns on read
+            df.isetitem(i, col.array)
+    return df
 
 
 def _scan(glob: str, table: str) -> str:
