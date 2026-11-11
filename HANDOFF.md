@@ -17,6 +17,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   newest 2.x. Release files and the local positioning/dq_events store read identically (rows, dtypes) on 1.5.6 and 2.x.
   Found, not changed: `Store.read` orders by ts_utc only, so rows sharing a ts_utc come back in a different order run to
   run on either major (positioning, dq_events); backlog 162 proposes a deterministic tie order.
+  Provenance (quant): the store library moves from duckdb 1.5.6 to 2.0.0 (uv.lock); windows, labels, costs and K are
+  unchanged; tests/test_store_duckdb_compat.py pins a tick 1 ns outside either bound as excluded on both majors.
+  Deploy checks (trading-safety): `uv pip show duckdb` = 2.0.0 on the brain; first warm start loads >= warm_start_min_bars
+  with no history_read/history_short refusal or BinderException; no data_quality_error for ~15 min; key zones and
+  blackouts load; reconcile coverage passes. Rollback: revert uv.lock to 1.5.6 and `uv sync --frozen` (no data migration).
 - Deploy offer works again under the telegram sandbox (R120, incident docs/incidents/2026-11-10-deploy-check-exit-255.md):
   `DeployWatch.check()` no longer runs `git fetch`. Under ProtectSystem=strict that could not write /opt/goldbot/.git
   and exited 255 on every pass, so no version was ever offered. The check now reads origin main with `git ls-remote`

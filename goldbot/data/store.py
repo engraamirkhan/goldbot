@@ -287,7 +287,7 @@ def _read_query(store: Store, table: str, *, source: str | None, symbol: str | N
 
 def _bound(x: str | pd.Timestamp) -> str:
     """A ts bound as an ISO string at microsecond resolution (as the python datetime bound was before backlog 156)."""
-    return _utc(x).to_pydatetime().isoformat(sep=" ")
+    return _utc(x).floor("us").to_pydatetime().isoformat(sep=" ")    # floor first: no pandas nanosecond warning
 
 
 _TZ_TYPES = {"TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ", "TIMESTAMPTZ_NS"}

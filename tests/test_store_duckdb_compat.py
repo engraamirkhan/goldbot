@@ -79,6 +79,18 @@ def test_sub_microsecond_ticks_truncate_like_1x(tmp_path):
     assert t["ts_utc"].tolist() == [pd.Timestamp("2024-05-01 10:00:00.123456", tz="UTC")]
 
 
+def test_window_bounds_exclude_ticks_one_nanosecond_outside(tmp_path):
+    """Quant condition (backlog 156): the holdout seal and every research window cut on the same rows on 1.x and 2.x.
+    A tick 1 ns before the start and one 1 ns after the end stay out; a tick on the start is in."""
+    s = Store(tmp_path / "data")
+    ts = pd.to_datetime(["2024-05-01 10:00:00.123455999", "2024-05-01 10:00:00.123456",
+                         "2024-05-01 10:00:00.123456500", "2024-05-01 10:00:00.123457001"], utc=True)
+    s.append("ticks", pd.DataFrame({"ts_utc": ts, "bid": [1.0, 2.0, 3.0, 4.0], "ask": [1.1, 2.1, 3.1, 4.1]}),
+             source="t")
+    t = s.read("ticks", source="t", start="2024-05-01 10:00:00.123456", end="2024-05-01 10:00:00.123457")
+    assert t["bid"].tolist() == [2.0, 3.0]
+
+
 def test_ts_filter_is_pushed_into_the_parquet_scan(tmp_path):
     """Row-group pruning: the ts bound sits in the scan's filters, so a narrow window skips the other row groups."""
     tdir = tmp_path / "data" / "bars_1m" / "source=t" / "symbol=XAUUSD" / "year=2024" / "month=01"
