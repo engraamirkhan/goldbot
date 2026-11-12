@@ -945,16 +945,25 @@ def instruments_db(eng: Engine) -> InstrumentsDb:
 
 def swap_spec(eng: Engine) -> SwapSpec | None:
     """The active non-gold book's swap for the RiskGate's daily projection, per unit of its contract; None when
-    unknown (the caller prices NaN, which the gate refuses)."""
+    unknown (the caller prices NaN, which the gate refuses).
+    BACKLOG 154: the amounts stay in the instrument's profit currency (instruments.db), the unit of every price amount
+    of its intents, and the gate converts them with the same point-in-time `acct_per_profit` as the stop
+    (`gate.profit_fx`; unknown refuses `fx_conversion_unavailable`). So the terminal's profit currency must be the
+    registry's the gate converts from: a disagreement is unknown (fail closed), never priced at the wrong rate.
+    BACKLOG 153: the registry's crypto class is charged "every night, weekends included" (`SwapSpec.seven_night`)."""
     from goldbot.labels.triple_barrier import SwapSpec
     book: SymbolBook = eng.__dict__["book"]
     t = book.terms
     if book.terms_problem is not None or t is None or t.swap_long_per_lot is None or t.swap_short_per_lot is None \
             or t.swap_triple_weekday is None:
         return None
+    inst = book.spec.instrument if book.spec is not None else None
+    if inst is not None and t.currency_profit is not None \
+            and t.currency_profit.strip().upper() != inst.currency_profit.upper():
+        return None
     return SwapSpec(long_usd_per_lot=t.swap_long_per_lot, short_usd_per_lot=t.swap_short_per_lot,
                     triple_weekday=t.swap_triple_weekday - 1, server_tz=eng.cfg.server_tz,
-                    contract_oz=t.contract_size)
+                    contract_oz=t.contract_size, seven_night=inst is not None and inst.asset_class == "crypto")
 
 
 # ------------------------------------------------------------------ the serial gate and the instrument's rules

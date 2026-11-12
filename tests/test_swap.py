@@ -32,6 +32,28 @@ def test_rollover_nights_count_server_midnights_with_a_triple_day():
     assert rollover_nights(_utc("2025-07-01 21:30"), _utc("2025-07-01 23:30"), "Europe/Athens", 2).tolist() == [0]
 
 
+def test_a_seven_night_book_is_charged_every_server_midnight_with_no_triple_day():
+    """BACKLOG 153: a crypto CFD trades and is charged swap every night, weekends included, so a seven-night schedule
+    counts every server-midnight rollover once (no triple day); every other book keeps five plus the triple."""
+    entry = _utc("2025-03-07 12:00", "2025-03-04 12:00", "2025-03-07 23:00", "2025-03-08 12:00", "2025-03-04 12:00")
+    exit_ = _utc("2025-03-10 12:00", "2025-03-06 12:00", "2025-03-10 12:00", "2025-03-09 12:00", "2025-03-04 20:00")
+    seven = rollover_nights(entry, exit_, "Europe/Athens", triple_weekday=2, seven_night=True)
+    # Fri->Mon: Fri, Sat, Sun nights; Tue->Thu: Tue, Wed (no triple); Sat 01:00 server -> Mon: Sat, Sun;
+    # Sat->Sun: Sat night; same server day: none
+    assert seven.tolist() == [3, 2, 2, 1, 0]
+    assert rollover_nights(entry, exit_, "Europe/Athens", triple_weekday=2).tolist() == [1, 4, 0, 0, 0]   # unchanged
+
+
+def test_the_labels_and_the_cost_imputer_use_the_seven_night_count():
+    """BACKLOG 153: the CostImputer's paid swap (and so the RiskGate's daily projection) counts the same nights."""
+    from goldbot.ops.cost_imputation import paid_swap_per_oz
+    crypto = SWAP.model_copy(update={"seven_night": True})
+    fri, mon = pd.Timestamp("2025-03-07 23:00", tz="UTC"), pd.Timestamp("2025-03-10 12:00", tz="UTC")
+    assert paid_swap_per_oz(crypto, 1, fri, mon) == pytest.approx(2 * 60.0 / 100)    # Sat and Sun nights
+    assert paid_swap_per_oz(SWAP, 1, fri, mon) == 0.0                               # five-night book: unchanged
+    assert SwapSpec(long_usd_per_lot=-1.0, short_usd_per_lot=-1.0).seven_night is False
+
+
 def test_swap_spec_rejects_a_weekend_triple_day():
     with pytest.raises(ValueError):
         SwapSpec(long_usd_per_lot=-60.0, short_usd_per_lot=0.0, triple_weekday=5)
@@ -168,3 +190,18 @@ def test_research_labels_pay_swap_and_the_gross_screen_does_not():
     m = evaluate(charged, extra_cost_usd=0.3).metrics
     assert m["swap"]["long_usd_per_lot"] == -60.0 and m["swap"]["mean_nights"] > 0
     assert evaluate(plain, extra_cost_usd=0.3).metrics["swap"] is None
+
+
+def test_seven_night_labels_charge_the_weekend_nights(bars):
+    """BACKLOG 153: the triple-barrier labels count a seven-night book's rollovers with the same rule."""
+    b = bars["1h"]
+    a = atr(mid(b), 14)
+    spec = BarrierSpec(target_atr=50.0, stop_atr=50.0, max_bars=60)             # time exits: multi-day holds
+    crypto = SWAP.model_copy(update={"seven_night": True})
+    five = triple_barrier(b, _signals(len(b), 5), spec, a, swap=SWAP)
+    seven = triple_barrier(b, _signals(len(b), 5), spec, a, swap=crypto)
+    close = pd.DatetimeIndex(b["ts_utc"]) + pd.Timedelta(hours=1)
+    want = rollover_nights(close[seven["idx"].to_numpy()], close[seven["t_exit"].to_numpy()], "Europe/Athens", 2,
+                           seven_night=True)
+    assert seven["swap_nights"].tolist() == want.tolist()
+    assert (seven["swap_nights"] != five["swap_nights"]).any()

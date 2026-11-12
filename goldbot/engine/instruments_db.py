@@ -81,9 +81,10 @@ def swap_per_lot(info: Any, price: float | None = None,
     Modes 5/6 (interest, Vantage BTCUSD 2026-11-10): "annual interest from the instrument price (current / position
     open price), standard bank year 360 days" -> rate / 100 / 360 x price x contract size, in the profit currency
     (the price is quoted in it), broker sign kept; an entry opens at the current price, so 6 is priced as 5. The price
-    is the latest tick at the terms refresh (point in time) and must be finite and > 0, else unknown. Only a USD
-    profit currency is priced (quant review of fix/swap-mode-5-6, b): the engine's SwapSpec reads the amount as USD
-    and swaps are not yet converted from the profit currency, so any other currency is unknown (entries refused)."""
+    is the latest tick at the terms refresh (point in time) and must be finite and > 0, else unknown. BACKLOG 154: any
+    reported profit currency is priced, the amount staying in it like every other mode here; the RiskGate converts it
+    with the point-in-time `acct_per_profit` (`books.swap_spec`, `gate.profit_fx`; unknown refuses the entry). An
+    unreported profit currency is unknown (entries refused)."""
     mode = getattr(info, "swap_mode", None)
     lng, sht = getattr(info, "swap_long", None), getattr(info, "swap_short", None)
     if mode is None or lng is None or sht is None:
@@ -95,14 +96,14 @@ def swap_per_lot(info: Any, price: float | None = None,
         return float(lng) * k, float(sht) * k, "swap mode points: x point x contract size"
     if int(mode) in (MT5_SWAP_INTEREST_CURRENT, MT5_SWAP_INTEREST_OPEN):
         profit = _ccy(info, "currency_profit")
-        if profit != "USD":          # quant review (b): SwapSpec reads the amount as USD; no conversion yet
-            return None, None, (f"swap mode {int(mode)} (interest) in profit currency {profit}, not USD: "
+        if profit is None:
+            return None, None, (f"swap mode {int(mode)} (interest) without a profit currency: "
                                 "entries refused (swap_unknown)")
         if price is None or not math.isfinite(price) or price <= 0:
             return None, None, f"swap mode {int(mode)} (interest) without a price: entries refused (swap_unknown)"
         k = float(price) * float(info.contract_size) / 100.0 / INTEREST_DAYS
         return float(lng) * k, float(sht) * k, \
-            f"swap mode {int(mode)}: annual % x price {float(price):g} x contract size / {INTEREST_DAYS}"
+            f"swap mode {int(mode)}: annual % x price {float(price):g} x contract size / {INTEREST_DAYS} in {profit}"
     if int(mode) in (MT5_SWAP_BASE_CCY, MT5_SWAP_MARGIN_CCY):
         unit = _ccy(info, "currency_base" if int(mode) == MT5_SWAP_BASE_CCY else "currency_margin")
         profit, base = _ccy(info, "currency_profit"), _ccy(info, "currency_base")

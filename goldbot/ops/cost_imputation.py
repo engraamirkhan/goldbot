@@ -15,7 +15,8 @@ What is charged, per row, only for the components its return does not already ca
   `commission_per_lot_side_usd`: the terminal's measurement, else the settings value it was built with); without a
   table, the settings commission for the trade's broker (the largest configured one when the broker is not listed);
 * swap: the paid rate for the trade's side times `labels.triple_barrier.rollover_nights` (one per weekday rollover held
-  through, three on the triple day), at the cost table's measured rates, else the settings swap prior
+  through, three on the triple day; every night once for a seven-night book, BACKLOG 153), at the cost table's
+  measured rates, else the settings swap prior
   (`costs.swap_*`). A swap credit is never counted (conservative), on the server clock of the trade's broker; a row
   without a side pays the larger paid rate of long and short.
 
@@ -93,11 +94,11 @@ def account_swap(table: CostTable | None, prior: SwapSpec) -> SwapSpec:
 
 def paid_swap_per_oz(swap: SwapSpec, side: int | None, entry_utc: pd.Timestamp, exit_utc: pd.Timestamp) -> float:
     """Paid swap per oz (USD, >= 0) for a position open from `entry_utc` to `exit_utc`: `rollover_nights` (the triple
-    day counted) times the paid rate for its side. A credit is never counted; an unknown side pays the larger paid rate
+    day counted; a `seven_night` spec every night once, BACKLOG 153) times the paid rate for its side. A credit is never counted; an unknown side pays the larger paid rate
     of long and short. Used for gross closed trades (ADR 0017) and, ex ante up to the end of the risk day, for the
     RiskGate's daily projection (BACKLOG 36)."""
     nights = int(rollover_nights(pd.DatetimeIndex([entry_utc]), pd.DatetimeIndex([exit_utc]),
-                                 swap.server_tz, swap.triple_weekday)[0])
+                                 swap.server_tz, swap.triple_weekday, swap.seven_night)[0])
     rates = {1: [swap.long_usd_per_lot], -1: [swap.short_usd_per_lot]}.get(
         side or 0, [swap.long_usd_per_lot, swap.short_usd_per_lot])
     return nights * max(0.0, *(-x for x in rates)) / swap.contract_oz
