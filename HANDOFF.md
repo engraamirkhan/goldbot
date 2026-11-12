@@ -94,6 +94,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   priced in any reported profit currency (it stays in that currency, like modes 1-3); an unreported one stays
   `swap_unknown`, and `books.swap_spec` refuses (swap unknown, entries refused) when the terminal's profit currency
   is not the registry's the gate converts from. RiskGate unchanged.
+- Review fixes (same branch): closed-trade costing no longer charges a non-gold row gold's rates. The CostImputer
+  prices a non-gold gross row's swap from its own instruments.db row (every night for crypto) when the swap is the only
+  missing component and the profit currency is USD; otherwise the row is unpriced (fail closed: the phase gates and
+  the limits job see it as unpriced / `no_net_r`, where before it was charged gold's ~$0.6/oz). Rows with the broker's
+  commission and swap (net) are unchanged. A crypto book no longer needs a Monday-Friday triple day. The research
+  rollover callers pass `seven_night` from their SwapSpec (all gold today: no golden moves). The shadow evidence in
+  limits_job and the H-80 twins stay on gold's swap (both gold-only books).
 - Follow-up: BACKLOG 175 (finance-auditor reconciles the first weekend BTCUSD hold against the seven-night projection).
 - 2026-11-11 (branch fix/cold-start-trade-ageing; backlog 160, R124): open trades age from every base bar close after
   any cold start. Before, `on_bar_close` returned at its 400-bar floor before `_manage_open`, so after a restart with no

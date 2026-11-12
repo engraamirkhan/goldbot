@@ -308,3 +308,51 @@ def test_a_book_whose_terminal_profit_currency_is_not_the_registry_one_has_no_sw
         eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
         assert swap_spec(eng) is None
         assert eng._swap_usd_per_oz(1, T0) != eng._swap_usd_per_oz(1, T0)          # NaN: the gate refuses
+
+
+def test_a_crypto_book_with_no_weekday_triple_day_still_prices_its_swap(tmp_path):
+    """Safety review of R130 (LOW): a seven-night book has no triple day, so a reported triple day outside Monday to
+    Friday (0 = Sunday here) must not leave it `swap_unknown`; every other book still needs one in 1..5."""
+    class SundayPaper(InterestPaper):
+        def symbol_info(self, symbol: str) -> SymbolInfo:
+            return super().symbol_info(symbol).model_copy(update={"swap_rollover3days": 0})
+
+    pb = SundayPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(_registry_btc(),)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        assert eng.book.terms_problem is None
+        spec = swap_spec(eng)
+    assert spec is not None and spec.seven_night
+    pb = SundayPaper(equity=10_000)                                  # the same terms on a five-night book: unknown
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path / "plain"), instruments=(BTC,)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        assert eng.book.terms_problem == "swap_unknown"
+
+
+def test_a_profit_currency_swap_reaches_the_gate_unconverted_so_it_is_converted_once(tmp_path):
+    """Review of R130 (LOW): `swap_usd_per_oz` of a non-USD book carries the profit currency amount; the engine applies
+    no rate before the gate, which applies `acct_per_profit` exactly once. DE40 (EUR), mode 3, -12.5 EUR per lot,
+    contract 1, triple Wednesday: an entry on Wednesday is charged the triple rollover before the risk day ends,
+    3 x 12.5 = 37.5 EUR per unit."""
+    from goldbot.instruments import registry
+
+    class EurIndexPaper(TermsPaper):
+        def symbol_info(self, symbol: str) -> SymbolInfo:
+            return super().symbol_info(symbol).model_copy(update={
+                "swap_mode": 3, "swap_long": -12.5, "swap_short": 2.0, "currency_profit": "EUR",
+                "currency_margin": "EUR", "currency_base": "EUR", "contract_size": 1.0})
+
+    de40 = BookSpec(key="DE40", symbol="DE40", store_symbol="DE40", magic_block=1, digits=1, point=0.1,
+                    contract_size=1.0, instrument=registry().instruments["DE40"])
+    pb = EurIndexPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="icm-probe", broker_name="icm", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(de40,)), pb, [], {})
+    with using(eng, eng.books["DE40"]):
+        eng._refresh_account(_tick(pb, "DE40", 22_000.0))
+        assert eng.book.terms_problem is None
+        swap = eng._swap_usd_per_oz(1, T0)                          # T0: Wednesday 10:00 UTC
+    assert swap == pytest.approx(37.5)

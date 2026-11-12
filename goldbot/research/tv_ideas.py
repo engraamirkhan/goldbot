@@ -248,7 +248,7 @@ def _pnl(side: int, fill: float, px: float, t_in: pd.Timestamp, t_out: pd.Timest
          costs: ScoreCosts) -> tuple[float, float, int]:
     """(net $/oz, net $/oz under the 1.5x stress, swap nights) of one position: the spread is in the bid/ask fills."""
     nights = int(rollover_nights(pd.DatetimeIndex([t_in]), pd.DatetimeIndex([t_out]), costs.swap.server_tz,
-                                 costs.swap.triple_weekday)[0])
+                                 costs.swap.triple_weekday, costs.swap.seven_night)[0])
     swap = nights * float(costs.swap.usd_per_oz_at(np.array([side]), fill)[0])     # broker sign: negative = paid
     net = side * (px - fill) - costs.extra_usd + swap
     return net, net - (STRESS - 1.0) * (half_in + half_out + costs.extra_usd), nights

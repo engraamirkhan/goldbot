@@ -148,3 +148,52 @@ def test_the_summary_names_the_gross_count_and_the_total_imputed():
     assert s.total_usd == pytest.approx(2 * per * 0.1 * 100)
     assert s.text().startswith("2 gross row(s) charged an imputed cost of")
     assert imp.net_rets([])[1].text() == "all net"
+
+
+# ---- review of R130 (MEDIUM): a non-gold row is never charged gold's rates
+FRI = pd.Timestamp("2025-03-07 23:00", tz="UTC")       # Saturday 01:00 on the Athens server clock
+
+
+def btc_terms(state: Path, **kw: Any) -> None:
+    from goldbot.engine.instruments_db import InstrumentsDb, InstrumentTerms
+    row: dict[str, Any] = dict(account_id="vantage-demo", symbol="BTCUSD", store_symbol="BTCUSD", contract_size=1.0,
+                               digits=2, point=0.01, volume_min=0.01, volume_step=0.01, volume_max=10.0,
+                               currency_profit="USD", swap_long_per_lot=-55.0, swap_short_per_lot=-27.5,
+                               swap_triple_weekday=5, updated_utc=FRI)
+    row.update(kw)
+    InstrumentsDb(state).save(InstrumentTerms(**row))
+
+
+def btc(**kw: Any) -> ClosedTrade:
+    base: dict[str, Any] = dict(account_id="vantage-demo", broker="vantage", symbol="BTCUSD", entry_utc=FRI,
+                                exit_utc=pd.Timestamp("2025-03-10 12:00", tz="UTC"), entry_price=100_000.0,
+                                initial_sl=99_000.0, lots=0.1, commission=1.0, swap=None, pnl_basis="gross")
+    base.update(kw)
+    return ct(**base)
+
+
+def test_a_crypto_row_missing_only_its_swap_pays_its_own_rate_every_night(tmp_path):
+    """A Saturday-01:00 (server) BTCUSD entry held to Monday pays the Saturday and Sunday rollovers at BTCUSD's own
+    rate from instruments.db (2 x $55 per unit), not gold's prior on a five-night count (which charges nothing)."""
+    btc_terms(tmp_path)
+    c = CostImputer.from_state(tmp_path, SETTINGS).charge(btc())
+    assert c.imputed and c.priced
+    assert c.usd_per_oz == pytest.approx(110.0)
+    assert c.ret == pytest.approx(110.0 / 100_000.0) and c.r == pytest.approx(110.0 / 1_000.0)
+    assert c.usd == pytest.approx(110.0 * 0.1 * 1.0)
+
+
+@pytest.mark.parametrize("case", ["no_terms", "needs_commission", "non_usd_profit", "swap_unknown", "unknown_symbol"])
+def test_a_non_gold_row_the_imputer_cannot_price_on_its_own_terms_is_unpriced_never_gold_priced(tmp_path, case):
+    if case != "no_terms":
+        btc_terms(tmp_path, **({"currency_profit": "EUR"} if case == "non_usd_profit" else
+                               {"swap_long_per_lot": None} if case == "swap_unknown" else {}))
+    t = btc(**({"commission": None} if case == "needs_commission" else
+               {"symbol": "NOTREAL"} if case == "unknown_symbol" else {}))
+    c = CostImputer.from_state(tmp_path, SETTINGS).charge(t)
+    assert c.imputed and not c.priced and c.r is None and c.usd is None and c.ret == 0.0
+
+
+def test_a_net_non_gold_row_is_still_charged_nothing(tmp_path):
+    c = CostImputer.from_state(tmp_path, SETTINGS).charge(btc(swap=-11.0, pnl_basis="net", ret_basis="pnl"))
+    assert not c.imputed and c.priced

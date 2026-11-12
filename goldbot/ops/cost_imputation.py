@@ -15,8 +15,7 @@ What is charged, per row, only for the components its return does not already ca
   `commission_per_lot_side_usd`: the terminal's measurement, else the settings value it was built with); without a
   table, the settings commission for the trade's broker (the largest configured one when the broker is not listed);
 * swap: the paid rate for the trade's side times `labels.triple_barrier.rollover_nights` (one per weekday rollover held
-  through, three on the triple day; every night once for a seven-night book, BACKLOG 153), at the cost table's
-  measured rates, else the settings swap prior
+  through, three on the triple day), at the cost table's measured rates, else the settings swap prior
   (`costs.swap_*`). A swap credit is never counted (conservative), on the server clock of the trade's broker; a row
   without a side pays the larger paid rate of long and short.
 
@@ -25,6 +24,13 @@ cost per oz / entry price (the exit price when the entry is not recorded) and in
 stop|; neither needs the lot size or a currency conversion. A row the charge cannot be computed for (no price at all,
 or no entry time while swap is unknown) is "unpriced": it is kept, charged nothing, and counted, so a reader can fail
 closed on it (the phase gates do).
+
+Every rate above is gold's. A row on another instrument (`ClosedTrade.symbol`; review of R130, MEDIUM: a BTCUSD row
+was charged gold's ~$0.6/oz on a five-night count against BTC's ~$55 a night) is never charged them: its swap is its
+own instruments.db row (`InstrumentTerms.swap_spec`, per unit of its contract, every night once for the crypto class,
+BACKLOG 153), and only when it is the one missing component and the instrument's profit currency is USD (the charge is
+USD). Anything else (a missing commission, which has no per-instrument rate here, no terms, a swap the terminal did
+not report, another profit currency, a symbol not in the registry) leaves the row unpriced.
 Reporting only: nothing here changes a record, a setting, a limit or an order. `account_swap` and `paid_swap_per_oz`
 are also what the engine charges the RiskGate's daily projection for a rollover before the risk day ends (BACKLOG 36),
 so the projection and the closed-trade charge share one swap rule.
@@ -112,10 +118,12 @@ class CostImputer:
     """Charges gross rows (see the module docstring). Build it once per evaluation with `from_state`."""
 
     def __init__(self, terms: dict[str, AccountCostTerms], fallback: dict[str, AccountCostTerms],
-                 default: AccountCostTerms):
+                 default: AccountCostTerms, state_dir: Path | None = None):
         self.terms = terms             # by account id (the cost tables)
         self.fallback = fallback       # by broker name (the settings priors)
         self.default = default         # an unknown broker: the largest commission configured, the canonical clock
+        self.state_dir = state_dir     # its instruments.db prices a non-gold row's swap; None: such rows are unpriced
+        self._instrument: dict[tuple[str, str, str], SwapSpec | None] = {}
 
     @classmethod
     def from_settings(cls, settings: Settings) -> CostImputer:
@@ -145,7 +153,7 @@ class CostImputer:
             swap = account_swap(table, base.default.swap)
             terms[account] = AccountCostTerms(commission_per_lot_side_usd=max(table.commission_per_lot_side_usd, 0.0),
                                               swap=swap, source=f"cost table {account}")
-        return cls(terms, base.fallback, base.default)
+        return cls(terms, base.fallback, base.default, Path(state_dir))
 
     def terms_for(self, t: ClosedTrade) -> AccountCostTerms:
         found = self.terms.get(t.account_id)
@@ -154,6 +162,32 @@ class CostImputer:
             return found if broker is None else found.model_copy(
                 update={"swap": found.swap.model_copy(update={"server_tz": broker.swap.server_tz})})
         return broker or self.default
+
+    def instrument_swap(self, t: ClosedTrade) -> SwapSpec | None:
+        """A non-gold row's own swap (USD per unit of its contract, see the module docstring), or None when it cannot
+        be known: never gold's. Read from `<state_dir>/instruments.db` without creating it; cached per row key."""
+        from goldbot.engine.instruments_db import InstrumentsDb, InstrumentsDbError, seven_night
+        from goldbot.instruments import registry
+        key = (t.account_id, t.broker, str(t.symbol))
+        if key in self._instrument:
+            return self._instrument[key]
+        found: SwapSpec | None = None
+        try:
+            spec = registry().instruments.get(str(t.symbol))
+        except (ValueError, OSError):
+            spec = None
+        sym = spec.broker_symbols.get(t.broker) if spec is not None else None
+        if spec is not None and spec.currency_profit == "USD" and sym is not None and self.state_dir is not None \
+                and (self.state_dir / "instruments.db").exists():
+            try:
+                row = InstrumentsDb(self.state_dir).load(t.account_id, sym)
+            except InstrumentsDbError:
+                row = None
+            if row is not None and (row.currency_profit or "USD").strip().upper() == "USD":
+                tz = (self.fallback.get(t.broker) or self.default).swap.server_tz
+                found = row.swap_spec(tz, seven_night=seven_night(spec))
+        self._instrument[key] = found
+        return found
 
     @staticmethod
     def price_return(t: ClosedTrade) -> bool:
@@ -174,8 +208,15 @@ class CostImputer:
         price = t.entry_price if t.entry_price is not None and t.entry_price > 0 else t.exit_price
         if price is None or price <= 0 or (need_swap and t.entry_utc is None):
             return TradeCharge(imputed=True, priced=False, r=None, usd=None)
-        terms = self.terms_for(t)
-        per_oz = 2 * terms.commission_per_lot_side_usd / contract_size(GOLD) if need_comm else 0.0
+        if t.symbol is not None and t.symbol != GOLD:      # never gold's rates (module docstring, review of R130)
+            own = self.instrument_swap(t) if not need_comm else None
+            if own is None or t.entry_utc is None:
+                return TradeCharge(imputed=True, priced=False, r=None, usd=None)
+            terms = AccountCostTerms(commission_per_lot_side_usd=0.0, swap=own, source=f"instruments.db {t.symbol}")
+            lot = own.contract_oz
+        else:
+            terms, lot = self.terms_for(t), contract_size(GOLD)
+        per_oz = 2 * terms.commission_per_lot_side_usd / lot if need_comm else 0.0
         if need_swap and t.entry_utc is not None:
             per_oz += paid_swap_per_oz(terms.swap, t.side, t.entry_utc, t.exit_utc)
         if t.entry_price is not None and t.initial_sl is not None and abs(t.entry_price - t.initial_sl) > 0:
@@ -184,7 +225,7 @@ class CostImputer:
             r = per_oz / price * (t.r / t.ret)        # r / ret = notional / initial risk (same P&L, same currency)
         else:
             r = None
-        usd = per_oz * t.lots * contract_size(GOLD) if t.lots is not None else None
+        usd = per_oz * t.lots * lot if t.lots is not None else None
         return TradeCharge(imputed=True, usd_per_oz=per_oz, ret=per_oz / price, r=r, usd=usd)
 
     def net_ret(self, t: ClosedTrade) -> float:

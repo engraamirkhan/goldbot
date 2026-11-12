@@ -2433,7 +2433,7 @@ def twin_charges(b1: pd.DataFrame, entry_utc: pd.Timestamp, exit_utc: pd.Timesta
     row = b1.loc[np.asarray(pd.DatetimeIndex(b1["ts_utc"]) == exit_utc - pd.Timedelta(minutes=1))] if len(b1) else b1
     spread = float(row["ask_close"].iloc[-1] - row["bid_close"].iloc[-1]) / 2.0 if len(row) else None
     nights = int(rollover_nights(pd.DatetimeIndex([entry_utc]), pd.DatetimeIndex([exit_utc]), swap.server_tz,
-                                 swap.triple_weekday, swap.seven_night)[0])
+                                 swap.triple_weekday)[0])
     return spread, nights * float(swap.usd_per_oz(np.array([side]))[0])
 
 
