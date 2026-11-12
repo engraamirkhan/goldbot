@@ -251,11 +251,15 @@ def test_an_unbound_decision_from_an_older_release_is_never_applied_whatever_its
 
 
 @pytest.mark.integration
-def test_a_restart_inside_the_window_never_raises_the_same_proposal_again_and_the_old_card_expires(tmp_path):
+@pytest.mark.parametrize("old_orders_file", [False, True])
+def test_a_restart_inside_the_window_never_raises_the_same_proposal_again_and_the_old_card_expires(tmp_path,
+                                                                                                  old_orders_file):
     """F60 re-verify finding 1: the engine proposes at a bar close and the Telegram card goes out; the engine restarts
-    inside the 90 s window and re-decides the same close (possibly at another size). The id was archived at the start,
-    so it is journalled `restart_archived` and never proposed again; the old card is edited to expired at once and a
-    tap on it is refused, so it can never approve a re-sized proposal."""
+    inside the 90 s window. The id is archived at the start and journalled `restart_archived` there; the restarted
+    engine never decides that close again (backlog 163, the last processed close restored), and if it did the id would
+    never be proposed again (`_retired_proposal`). The old card is edited to expired at once and a tap on it is
+    refused, so it can never approve a re-sized proposal. `old_orders_file`: an orders file without `closed_through`
+    (written before backlog 163), whose restart re-decides the close: the id is refused there too."""
     ticks = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
     rows = list(zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)))
 
@@ -282,11 +286,19 @@ def test_a_restart_inside_the_window_never_raises_the_same_proposal_again_and_th
     assert [p.proposal_id for p in ob.unsent_proposals()] == [pid]
     ob.mark_sent(pid, [(1, 100)])                                          # the old card, buttons live
 
+    if old_orders_file:
+        orders = tmp_path / "orders_icm-demo.json"
+        saved = json.loads(orders.read_text())
+        del saved["closed_through"]
+        orders.write_text(json.dumps(saved))
     eng2, center2 = engine()                                               # the restart, inside the window
     assert ob.finished() == [(pid, "EXPIRED_UNAPPROVED", [(1, 100)])]    # the old card loses its buttons at once
-    _, again = run_until_proposed(eng2, upto=i + 1)                        # the same closes re-decided
+    assert [d["action"] for d in eng2.decisions if d.get("proposal") == pid] == ["restart_archived"]   # at the start
+    _, again = run_until_proposed(eng2, upto=i + 1)                        # the same ticks again
     assert not [d for d in again if d["action"] == "proposed"] and pid not in center2.pending
-    assert [d["action"] for d in again if d.get("proposal") == pid] == ["restart_archived"]
+    assert not [d for d in eng2.decisions if d["action"] == "proposed"]
+    redecided = ["restart_archived"] if old_orders_file else []            # the re-decision's refusal
+    assert [d["action"] for d in eng2.decisions if d.get("proposal") == pid] == ["restart_archived", *redecided]
     assert not (bus.pending_dir / f"{pid}.json").exists() and ob.unsent_proposals() == []
     with pytest.raises(KeyError):
         submit_shown(bus, pid, True, None, by="telegram")                         # a tap on the old card

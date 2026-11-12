@@ -3,7 +3,8 @@
   that close's decisions run, and restored at start (journalled `restart_closed_through`): a restart whose first
   quote is stamped before it treats the quote as a late tick and never closes or decides that bar again, so an entry
   RiskGate refused at the original close cannot pass at a later price. The exploration step starts at the restored
-  close too; a saved close ahead of the host clock plus one bar is ignored (journalled). A trade without
+  close too. A proposal pending at the restart is archived at start and journalled `restart_archived` there (before,
+  the row came only from re-deciding its close); its card expires at once and its id is never raised again; a saved close ahead of the host clock plus one bar is ignored (journalled). A trade without
   `bars_through` keeps counting its dead-feed barrier from its entry bar until this engine processes a close. Old
   files start as before. (164) The dead-feed time barrier counts a bar when any of its minutes is
   expected open (`downtime.open_bars`, the catch-up's rule): the bar the daily break ends inside counts, a CME holiday

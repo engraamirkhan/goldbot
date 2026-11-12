@@ -567,7 +567,7 @@ class Engine:
             if p.account_id == self.cfg.account_id and p.proposal_id not in self.pending:
                 clicked = (bus.decisions_dir / f.name).exists()
                 bus.archive(p)
-                self._restart_archived.add(p.proposal_id)
+                downtime.archived(self, p)          # never raised again; journalled `restart_archived` here (163)
                 if clicked:
                     bus.notify_owner(f"Your tap on proposal {p.proposal_id} was not applied: the engine restarted "
                                      f"before applying it, so the proposal was withdrawn. No order was placed from it.")

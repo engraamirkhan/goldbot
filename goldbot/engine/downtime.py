@@ -43,6 +43,7 @@ from goldbot.engine import below_floor
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
     from goldbot.engine.store import OpenTrade
+    from goldbot.telegram.approvals import Proposal
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +96,16 @@ def counted_through(eng: Engine, tr: OpenTrade) -> pd.Timestamp | None:
     if tr.bars_through is not None:
         return tr.bars_through
     return eng._closed_through if eng._first_counted is not None else None
+
+
+def archived(eng: Engine, p: Proposal) -> None:
+    """A proposal published before the restart, archived at start (`Engine._archive_stale_proposals`): its id joins
+    `_restart_archived` (`_retired_proposal` never raises it again) and the archive is journalled `restart_archived`
+    now. Before backlog 163 the journal row came only from re-deciding its bar close, which a restart no longer does
+    (`restore`); the archive and the old card's expiry never depended on it."""
+    eng._restart_archived.add(p.proposal_id)
+    eng.decisions.append({"ts": time.time(), "agent": p.agent_id, "action": "restart_archived",
+                          "proposal": p.proposal_id})
 
 
 def restore(eng: Engine, closed_through: pd.Timestamp | None) -> None:
