@@ -290,6 +290,24 @@ def test_a_new_kind_of_cache_failure_is_logged_at_once_with_its_traceback(tmp_pa
     assert len(logs) == 2 and "OSError" in logs[1].getMessage() and logs[1].exc_info is not None
 
 
+def test_the_quiet_count_in_an_hourly_warning_is_its_own_exception_type_s(tmp_path, monkeypatch, caplog):
+    w, state = _unreadable_cache(tmp_path, monkeypatch)
+    t0 = pd.Timestamp("2025-03-13", tz="UTC")
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.key_zones"):
+        w.refresh(t0)                                      # RuntimeError: logged
+        w.refresh(t0 + pd.Timedelta(minutes=15))           # RuntimeError: quiet (1)
+        state["exc"] = OSError("disk")
+        w.refresh(t0 + pd.Timedelta(minutes=30))           # OSError: first of its type, nothing quiet of it
+        w.refresh(t0 + pd.Timedelta(minutes=45))           # OSError: quiet (1)
+        w.refresh(t0 + pd.Timedelta(minutes=50))           # OSError: quiet (2)
+        state["exc"] = RuntimeError("Binder Error")
+        w.refresh(t0 + pd.Timedelta(hours=1))              # RuntimeError: hourly, 1 more
+    logs = _cache_logs(caplog)
+    assert len(logs) == 3
+    assert "OSError" in logs[1].getMessage() and "more" not in logs[1].getMessage()
+    assert "RuntimeError" in logs[2].getMessage() and "(1 more since" in logs[2].getMessage()
+
+
 def test_a_cache_that_reads_again_logs_its_recovery_once(tmp_path, monkeypatch, caplog):
     w, state = _unreadable_cache(tmp_path, monkeypatch)
     t0 = pd.Timestamp("2025-03-13", tz="UTC")

@@ -404,6 +404,12 @@ def _start(h: History, kind: str, fn: Callable[[], Any], at: pd.Timestamp) -> No
     h.reads[kind] = StoreRead(kind, fn, at, h.spawn)
 
 
+def _no_result(r: StoreRead) -> RuntimeError:
+    """A read whose thread ended with neither a result nor an Exception (a BaseException killed it): fail closed
+    (trading-safety review of R127)."""
+    return RuntimeError(f"the store {READS[r.kind][0]} thread ended without a result")
+
+
 def _collect(h: History, kind: str) -> StoreRead | None:
     """The finished `kind` read (its duration logged, a warning over REREAD_WARN_S), or None while none has finished."""
     r = h.reads.get(kind)
@@ -588,14 +594,15 @@ def _absorb_reread(eng: Engine, now: pd.Timestamp) -> bool:
     if r is None:
         return False
     try:
-        if r.error is not None:
-            raise r.error
+        if r.error is not None or r.result is None:
+            raise r.error or _no_result(r)
         rel, own = r.result
         changed = _merge_read(eng, rel, own)
     except Exception as exc:                          # noqa: BLE001 - fail closed: entries stay refused
         read_failed(eng, now, exc)
         return False
-    if h.read_error is not None:
+    # lift only a failure this read can vouch for: one stamped (`read_failed`) after it started stands (review of R127)
+    if h.read_error is not None and (h.read_at is None or r.at >= h.read_at):
         log.warning("history: the store reads again after %s: history_read lifted", h.read_error)
         h.read_error = None
         h.backfill["read_error"] = None
@@ -831,8 +838,8 @@ def absorb_release(eng: Engine, now: pd.Timestamp) -> int:
     r = _collect(h, "release")
     if r is None:
         return 0
-    if r.error is not None:
-        read_failed(eng, now, r.error)
+    if r.error is not None or r.result is None:
+        read_failed(eng, now, r.error or _no_result(r))
         return 0
     got: pd.DataFrame = r.result
     if got.empty or eng.bars_1m.empty:

@@ -33,9 +33,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the tick thread merges a finished read at its next bar close; a hung store delays no tick and no exit. The refusal
   holds until a read has finished, merged and been judged (`history_short` re-judged as before); a read that never
   returns keeps entries refused and logs one error after 120 s ("has not returned"). Release minutes are merged only
-  before the cut-over current at the merge. Behaviour change: a re-read or reload is merged at the first close after it returns, usually one close after it
+  before the cut-over current at the merge; a re-read never lifts a failure stamped after it started, and a read thread that dies without a result fails closed. Behaviour change: a re-read or reload is merged at the first close after it returns, usually one close after it
   starts (it used to merge at the close that started it). Key zones: an unreadable store cache now warns once per exception type
-  with its traceback, then at most hourly with the count, and logs "cache readable again" once on recovery. Owner
+  with its traceback, then at most hourly with the count of that type, and logs "cache readable again" once on recovery. Owner
   step when the hung-read error fires: check the data root's disk and the store lock; the engine keeps trading
   exits. Tests: tests/test_engine_history_read.py (backlog 157 section), tests/test_engine_key_zones.py (backlog 159).
 - 2026-11-11 (branch fix/cold-start-trade-ageing; backlog 160, R124): open trades age from every base bar close after

@@ -526,3 +526,59 @@ def test_release_minutes_are_never_merged_past_a_cut_over_moved_back_while_they_
     n = len(eng.bars_1m)
     history.after_close(eng, LIVE_FROM + pd.Timedelta(hours=1, minutes=15))
     assert len(eng.bars_1m) == n + 30
+
+
+# ----------------------------------------------------------------------------------- review of R127 (LOW findings)
+def test_a_re_read_started_before_a_later_release_failure_never_lifts_that_failure(tmp_path, monkeypatch):
+    """Code review LOW 1: re-read starts at T, the release reload fails at T+15m, the re-read returns fine at T+30m:
+    history_read was set after the re-read began, so the re-read cannot vouch for it."""
+    eng, broken = _failed_start(tmp_path, monkeypatch)
+    broken.on = False
+    hung = Hung(monkeypatch)
+    t = LIVE_FROM + pd.Timedelta(hours=1)
+    history.reread(eng, t)
+    assert hung.entered.wait(30)
+    history.read_failed(eng, t + pd.Timedelta(minutes=15), RuntimeError("release reload failed"))
+    hung.release.set()
+    assert eng.history.reads["reread"].done.wait(30)
+    history.reread(eng, t + pd.Timedelta(minutes=30))
+    assert len(eng.bars_1m) > 10_000                     # its minutes are merged ...
+    assert eng._dq_blocking() == {"history_read"}        # ... but the later failure stands
+
+
+class _Stop(BaseException):
+    """A non-Exception ending a read's thread (no result, no error)."""
+
+
+def _stopping(monkeypatch: pytest.MonkeyPatch, eng: Engine) -> None:
+    def read(store: Store, table: str, **kw: Any) -> pd.DataFrame:
+        raise _Stop()
+    monkeypatch.setattr(Store, "read", read)
+
+    def spawn(fn: Any) -> None:                          # the thread dies on _Stop; `done` is still set
+        try:
+            fn()
+        except _Stop:
+            pass
+    eng.history.spawn = spawn
+
+
+def test_a_release_read_whose_thread_died_without_a_result_fails_closed(tmp_path, monkeypatch):
+    """Trading-safety LOW 2: a read thread ended by a BaseException leaves no result and no error: fail closed."""
+    eng = _holed(tmp_path)
+    _stopping(monkeypatch, eng)
+    started: list[Any] = []
+    run = eng.history.spawn
+    eng.history.spawn = started.append                   # held: collected at a later close
+    history.after_close(eng, LIVE_FROM + pd.Timedelta(hours=1))
+    run(started[0])                                      # the thread dies; `done` is set, no result, no error
+    eng.history.gaps = {}                                # the later close collects it on the no-reload path
+    history.after_close(eng, LIVE_FROM + pd.Timedelta(hours=1, minutes=15))
+    assert "history_read" in eng._dq_blocking() and "release" not in eng.history.reads
+
+
+def test_a_re_read_whose_thread_died_without_a_result_keeps_entries_refused(tmp_path, monkeypatch):
+    eng, _ = _failed_start(tmp_path, monkeypatch)
+    _stopping(monkeypatch, eng)
+    history.reread(eng, LIVE_FROM + pd.Timedelta(hours=1))
+    assert eng._dq_blocking() == {"history_read"} and "reread" not in eng.history.reads
