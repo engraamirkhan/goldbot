@@ -16,6 +16,7 @@ from goldbot.engine import cost_probe, exploration
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, SHORT, _arm, _at, _engine, _rule
+from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "A2 readability, 2026-10-30"
@@ -35,8 +36,6 @@ RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30",
 RETIRED_1107 = {"S0-XAUJPY"}
 # retired 2026-11-09 (prereg-amendment-2026-11-10-execution-controls.md section 9): its cost cell complete (rule 4)
 RETIRED_1107 |= {"I0-XAUJPY"}
-# retired 2026-11-13 (profitability-2026-11-12.md (a)): net-negative controls and cost reads with no live counterpart
-RETIRED_1113 = {"ZCD", "F1A", "F1C", "G1A", "G1C", "IEX15"}
 
 
 @pytest.fixture(scope="module")

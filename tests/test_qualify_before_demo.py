@@ -22,6 +22,7 @@ from goldbot.ops import health
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _at, _engine, _rule
 from tests.test_learning_mi import MI_ARMS, MI_CONTROLS  # the multi-instrument learning pairs
+from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
@@ -70,10 +71,6 @@ RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30",
 RETIRED_1107 = {"S0-XAUJPY"}
 # retired 2026-11-09 (prereg-amendment-2026-11-10-execution-controls.md section 9): its cost cell complete (rule 4)
 RETIRED_1109 = {"I0-XAUJPY"}
-# retired 2026-11-13 (profitability-2026-11-12.md (a)): net-negative controls and cost reads with no live counterpart
-RETIRED_1113 = {"ZCD", "F1A", "F1C", "G1A", "G1C", "IEX15"}
-# with them, a retired family stops all its per-instrument rows (`exploration.family_retirement`): I0 (2026-11-06)
-RETIRED_1113 |= {f"I0-{k}" for a in acc_mod.load_accounts(logins=False).values() for k in a.instruments}
 RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113
 
 

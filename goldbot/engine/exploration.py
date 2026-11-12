@@ -58,8 +58,6 @@ The plan's rules, as built here:
   2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected. An arm whose
   frozen spec row records a retirement (`retired_day`/`retired_rule`, e.g. A2 readability 2026-10-30) is retired the
   same way from the start (`spec_retired`, journalled `exploration_arm_retired` with its rule), on every account.
-  A per-instrument row of a retired family (`<family>-<instrument>`, e.g. I0-DE40 of I0) is retired with it
-  (`family_retirement`, profitability-2026-11-12: "a retired family stops all its per-instrument rows").
 * Qualification before demo (owner rule 2026-10-30, ADR 0061: "every strategy should have been back tested and
   qualified before it is tested and learn from live trades that are taken on demo accounts"): a strategy arm without a
   passing `qualification` on its row (a screen AND a confirm, verdict pass, measured costs) is refused the same way,
@@ -348,23 +346,6 @@ def spec_retired(cfg: ExplorationConfig) -> frozenset[str]:
     return frozenset(a.arm_id for a in cfg.arms if a.spec.retired)
 
 
-def family_retirement(spec: SpecArm, specs: Mapping[str, SpecArm]) -> SpecArm:
-    """`spec` with its family's retirement when it has none of its own (profitability-2026-11-12: "a retired family
-    stops all its per-instrument rows"; I0 retired 2026-11-06 while I0-USTEC, I0-DE40 ... kept entering to 11-12).
-    A row is in a family only when its id is `<family>-<params.instrument>`, the family row trades gold (no
-    `params.instrument`) and both run the same rule (the multi-instrument plan's S0-<key> / I0-<key>, "S0/I0 geometry
-    per instrument"). The copy changes only the unhashed `retired_day`/`retired_rule` (the rule names the family), so
-    the row keeps its id, hash and K, stays configured and keeps every exit, as any spec retirement does."""
-    inst = spec.params.get("instrument")
-    if spec.retired or not inst or not spec.id.endswith(f"-{inst}"):
-        return spec
-    fam = specs.get(spec.id.removesuffix(f"-{inst}"))
-    if fam is None or not fam.retired or fam.rule != spec.rule or fam.params.get("instrument"):
-        return spec
-    return spec.model_copy(update={"retired_day": fam.retired_day,
-                                   "retired_rule": f"family {fam.id} retired: {fam.retired_rule}"})
-
-
 def entry_refused(cfg: ExplorationConfig) -> dict[str, str]:
     """The arms of `cfg` that may send no demo entry under the owner rule 2026-10-30 (ADR 0061), with the reason: the
     loader's stamp (`research.arms.load_arms`), else the row read again (`qualification_refusal`), so an arm that
@@ -428,7 +409,7 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
                         arm_id, acc.account_id)
             dropped.append(arm_id)
             continue
-        spec = family_retirement(specs[arm_id], specs)
+        spec = specs[arm_id]
         if spec.role == "learning" and (reg.sizing == "growth" or reg.adds):
             # ADR 0061 amendment 2026-11-02: a learning arm trades the minimum lot, one unit (refused, kept configured)
             why = "pyramid adds" if reg.adds else "growth sizing"

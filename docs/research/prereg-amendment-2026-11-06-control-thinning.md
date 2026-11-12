@@ -90,3 +90,9 @@ and retirements of point 4), and never a threshold, a reading rule, a window or 
 ## Rollback
 
 Drop `daily:` from an account's `exploration` block and restart its engine.
+
+## Later change (2026-11-13, profitability-2026-11-12.md (a), R133)
+
+ZCD, F1C and G1C retire on 2026-11-13 (net-negative, no live counterpart). ZCD no longer pairs Z3D, Z9D or Z10D on
+icm-demo: they are read against their dedicated LCZ3D, LCZ9D and LCZ10D. I0-USTEC, I0-XAUEUR, I0-DE40, I0-US500 and
+I0-US30 retire the same day before their cost cells complete; the other I0-<key> rows stay under point 4.

@@ -166,3 +166,18 @@ K footnote: 174 demo arms and 27 families in this read. Gaps in the data:
 - 14 trading days.
 - No arm has 300 fills against its matched control.
 - Owner trade log not on the brain.
+
+## Applied (R133, 2026-11-12; quant ruling on the review)
+
+- `retired_day: "2026-11-13"` with the section 4 rule on ZCD, F1A, F1C, G1A, G1C, IEX15 and the five named
+  I0-<instrument> rows still entering: I0-USTEC, I0-XAUEUR, I0-DE40, I0-US500 (icm-probe), I0-US30 (vantage-demo).
+  I0-XAUJPY already had its own retirement (2026-11-09) and is left as it is.
+- Why they kept entering after I0 retired: not a leak. Each I0-<instrument> is its own spec row, and
+  prereg-amendment-2026-11-06-control-thinning.md point 4 stops it only when its instrument's cost cell has 30 fills
+  (`thin_cell_complete`); the I0 retirement never covered them. The unnamed I0-<instrument> rows stay under that rule.
+- The accounts.yaml registrations are kept so open positions keep every exit (a dropped registration is closed at
+  once as an orphan); they and ZCD are dropped once flat (backlog 187).
+- ZCD leaves the H-81 pairing: from 2026-11-13 Z9D and Z10D are read only against their dedicated LCZ9D and LCZ10D
+  (and Z3D against LCZ3D).
+- O-12 (G1A/G1C, H-71) is **abandoned, inconclusive** at 5 of 100 fills: stopped for cost, not failed. O-11 (F1A/F1C,
+  H-70) likewise stops at 26 of 200 fills, inconclusive.
