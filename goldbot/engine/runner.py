@@ -51,6 +51,7 @@ from goldbot.engine import (
     closed_record,
     commission,
     cost_probe,
+    downtime,
     exploration,
     frames,
     history,
@@ -362,7 +363,7 @@ class Engine:
         self._account_view: dict = {"balance": None, "currency": None, "margin": None, "margin_free": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
-        self.shadow = ShadowBook(cfg.state_dir, cfg.shadow_max_open) if cfg.shadow_host else None
+        self.shadow = ShadowBook(cfg.state_dir, cfg.shadow_max_open, host=True) if cfg.shadow_host else None
         self.shadow_models: dict[str, tuple[str, Model]] = {}
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
@@ -463,6 +464,7 @@ class Engine:
         self._orders: dict[str, SentOrder] = {}     # pending_orders: every id ever sent (pruned after a week)
         self.last_bar_close: pd.Timestamp | None = None   # open of the decision bar the last tick fell in
         self._closed_through: pd.Timestamp | None = None  # latest bar close processed (tick or clock path): never twice
+        self._first_counted: pd.Timestamp | None = None   # the first close this engine aged trades at (engine/downtime.py)
         # end (last visible_at) of the minutes warm_start loaded: a tick before it is re-delivered (a restart with the
         # terminal's quote still in a minute the previous engine stored) and never rebuilds that minute
         self._history_through: pd.Timestamp | None = None
@@ -739,8 +741,8 @@ class Engine:
     def _host_clock_exits(self, now: pd.Timestamp) -> None:
         """Without a price, and only once the feed is dead (re-verification NEW-1/2): never on a single bad quote.
 
-        Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last processed close
-        (`_closed_through`, or its entry bar) during open market hours (the session table) reaches `max_bars` is closed
+        Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last close counted in it
+        (`bars_through`, else `_closed_through`, or its entry bar) during open market hours (the session table) reaches `max_bars` is closed
         (`time_exit`), once quotes have been invalid for QUOTE_DEAD_S. A weekend or a daily break never counts.
 
         Friday flatten: past the weekend cut (server time) and before the weekend rule completed, every position of
@@ -756,8 +758,8 @@ class Engine:
             sec = tf_seconds(self.cfg.decision_tf)
             for pid, tr in list(self.open.items()):
                 opened = tr.opened_utc or tr.entry_bar_ts
-                bases = [x for x in (self._closed_through, opened.floor(f"{sec}s") if opened is not None else None)
-                         if x is not None]
+                last = tr.bars_through if tr.bars_through is not None else self._closed_through   # its bars_held's last
+                bases = [x for x in (last, opened.floor(f"{sec}s") if opened is not None else None) if x is not None]
                 if pid in self._close_due or not bases:
                     continue
                 if tr.bars_held + self._open_bars(max(bases), now) >= tr.max_bars:   # bars_held: closes processed
@@ -1449,13 +1451,7 @@ class Engine:
             return
         live = {p.position_id for p in positions}
         self._sweep_closed(live)                          # closed by stop/target at the broker
-        for pid in list(self.open):
-            if pid not in live:
-                continue                                  # waiting for its exit deal (_sweep_closed)
-            tr = self.open[pid]
-            tr.bars_held += 1
-            if tr.bars_held >= tr.max_bars and pid not in self._close_due:
-                self._try_close(pid, "time_exit", None)   # forgotten only once the close succeeds
+        downtime.age(self, live)       # bars_held (+ closes missed while down, backlog 161) and the time exits
         self._reconcile(self.last_bar_close)
 
     def _manage_policies(self, tf: str, dec: pd.DataFrame, close_ts: pd.Timestamp) -> None:

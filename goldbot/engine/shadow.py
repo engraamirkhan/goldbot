@@ -104,6 +104,9 @@ class ShadowTrade(Record):
     limits_profile: str | None = None
     # the barriers are read on the 1m bars inside each decision bar (`triple_barrier_1m`); False: on the decision bar
     barriers_on_1m: bool = False
+    # backlog 161 (quant Q-1): open across an engine restart, so the bars that closed while the engine was down are
+    # missing from its path (bars_held, barriers, excursion): calibration and shadow-vs-live reads exclude it
+    restart_gap: bool = False
 
 
 class CandidateBarriers(Record):
@@ -154,10 +157,11 @@ class VersionBook(Record):
 
 class ShadowBook:
     def __init__(self, state_dir: str | Path, max_open_per_agent: int = 1,
-                 evidence_start: pd.Timestamp | None = EVIDENCE_START_UTC):
+                 evidence_start: pd.Timestamp | None = EVIDENCE_START_UTC, host: bool = False):
         """evidence_start (H-52): the cut `save` writes each version's record (state/shadow_<version>.json, read by the
         promotion gate and the research director's shadow_z) with, so a trade opened before the history-gap fix is
-        "never clustered, scored or counted as promotion evidence"; None (tests on older bars) cuts nothing."""
+        "never clustered, scored or counted as promotion evidence"; None (tests on older bars) cuts nothing. host: the
+        engine opening its own book at start, which tags the open trades `restart_gap`."""
         self.max_open_per_agent = max_open_per_agent
         self.evidence_start = evidence_start
         self.dir = Path(state_dir)
@@ -166,6 +170,10 @@ class ShadowBook:
         raw = json.loads(self.path.read_text()) if self.path.exists() else {}
         self.books: dict[str, VersionBook] = {k: load_record(VersionBook, v, source="shadow_book.json")
                                                   for k, v in raw.items()}
+        if host:      # the engine's own start (never a reader's): every open trade spans the restart (backlog 161, Q-1)
+            for b in self.books.values():
+                for t in b.open:
+                    t.restart_gap = True
 
     # ------------------------------------------------------------------ trading
     def track(self, version: str, now: pd.Timestamp) -> None:

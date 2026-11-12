@@ -117,7 +117,7 @@ def record_closed(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float |
                       client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
                       entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
                       exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
-                      partial_lots=tr.scaled_lots,
+                      partial_lots=tr.scaled_lots, downtime_bars=tr.downtime_bars or None,
                       # finance audit: GAP-03 stops, GAP-05 where the money came from and whether it is net
                       initial_sl=tr.initial_sl if tr.risk_known else None, final_sl=tr.sl, final_tp=tr.tp,
                       money_source="broker" if info is not None else "engine",
