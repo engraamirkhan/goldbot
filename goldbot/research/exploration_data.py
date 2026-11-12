@@ -467,7 +467,7 @@ def replay_label(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp
     swap_paid = 0.0
     if costs.swap is not None:
         nights = int(rollover_nights(pd.DatetimeIndex([t[k]]), pd.DatetimeIndex([exit_t]), costs.swap.server_tz,
-                                     costs.swap.triple_weekday)[0])
+                                     costs.swap.triple_weekday, costs.swap.seven_night)[0])
         swap_paid = max(0.0, -float(costs.swap.usd_per_oz(np.array([side]))[0])) * nights
     sim = (side * (exit_p - entry) - 2 * costs.slip - costs.commission_rt_per_oz - swap_paid) / stop_dist
     mid = side * (gross[1] - float(mids["open"][k])) / stop_dist
@@ -634,7 +634,7 @@ def replay_label_v2(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timest
     swap_paid = 0.0
     if costs.swap is not None:
         nights = int(rollover_nights(pd.DatetimeIndex([t[k]]), pd.DatetimeIndex([exit_t]), costs.swap.server_tz,
-                                     costs.swap.triple_weekday)[0])
+                                     costs.swap.triple_weekday, costs.swap.seven_night)[0])
         swap_paid = max(0.0, -float(costs.swap.usd_per_oz(np.array([side]))[0])) * nights
     sim = (side * (exit_p - entry) - entry_charge - exit_charge - costs.commission_rt_per_oz - swap_paid) / stop_dist
     mid = side * (gross[1] - float(mids["open"][k])) / stop_dist

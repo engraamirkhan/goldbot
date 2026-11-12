@@ -696,3 +696,19 @@ def test_the_stop_rule_charges_gross_rows_and_keeps_them_pooled():
     assert not evaluate_stop_rule(net, PAPER_START, CAP, CFG, NOW).breached
     s = evaluate_stop_rule(gross, PAPER_START, CAP, CFG, NOW)
     assert s.breached and s.pooled_trades == 600 and "600 gross row(s)" in s.detail
+
+
+def test_an_unpriced_pooled_row_breaches_the_stop_rule_fail_closed():
+    """Quant review of R130 (LOW): a gross row the imputer cannot price (a non-gold row without its own terms) would
+    stay pooled at its gross return and make the rule fire less readily, so any unpriced pooled row breaches it
+    (`unpriced`) until it can be priced; priced gross rows alone do not."""
+    ok = [trade(0.001, days_ago=10.0 - i) for i in range(5)]
+    priced = trade(0.001, days_ago=4.5, gross_held_days=0.1)
+    assert not evaluate_stop_rule([*ok, priced], PAPER_START, CAP, CFG, NOW).breached
+    btc = trade(0.001, days_ago=4.0, gross_held_days=0.1).model_copy(update={"symbol": "BTCUSD"})
+    s = evaluate_stop_rule([*ok, btc], PAPER_START, CAP, CFG, NOW)
+    assert s.breached and s.breach == ["unpriced"] and s.imputed.n_unpriced == 1
+    assert "could not be priced" in s.reasons[0]
+    legacy = trade(0.001, days_ago=4.0, gross_held_days=0.1).model_copy(update={"entry_price": None})
+    s = evaluate_stop_rule([*ok, legacy], PAPER_START, CAP, CFG, NOW)    # gold's unpriced rows: reported, as before
+    assert not s.breached and s.imputed.n_unpriced == 1

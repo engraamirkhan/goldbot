@@ -32,7 +32,9 @@ class BarrierSpec(FrozenRecord):
 
 
 class SwapSpec(FrozenRecord):
-    """Overnight financing per side in USD per lot (contract_oz ounces) per night, broker sign (negative = paid)."""
+    """Overnight financing per side in USD per lot (contract_oz ounces) per night, broker sign (negative = paid).
+    BACKLOG 154: for a non-gold book (`engine.books.swap_spec`) the amounts are in that instrument's profit currency
+    per lot, the unit of every price amount of its intents; the RiskGate converts them with `acct_per_profit`."""
     # finite only (trading-safety review of BACKLOG 36, MEDIUM): a NaN rate would read as "pays nothing" in every
     # max(0, -rate), so it is refused at construction and the caller keeps its prior
     long_usd_per_lot: float = Field(allow_inf_nan=False)
@@ -44,6 +46,9 @@ class SwapSpec(FrozenRecord):
     # with a reference price, `usd_per_oz_at` charges the same rate at the trade's own price (a 2013 hold at $1,300 pays
     # a third of what the same hold pays at $3,900). None keeps the fixed-dollar charge (live paths, priced today).
     ref_price_usd: float | None = Field(None, gt=0, allow_inf_nan=False)
+    # BACKLOG 153: charged every server-midnight rollover, weekends included, with no triple day (a crypto CFD:
+    # `engine.books.swap_spec` sets it for the registry's crypto class). False: five weekday nights plus the triple
+    seven_night: bool = False
 
     def usd_per_oz(self, side: np.ndarray) -> np.ndarray:
         """Swap per oz per night for each side (+1 long / -1 short), in dollars at the reference price."""
@@ -82,16 +87,19 @@ def _server_days(ts: pd.DatetimeIndex, server_tz: str) -> np.ndarray:
 
 
 def rollover_nights(entry_utc: pd.DatetimeIndex, exit_utc: pd.DatetimeIndex, server_tz: str,
-                    triple_weekday: int) -> np.ndarray:
+                    triple_weekday: int, seven_night: bool = False) -> np.ndarray:
     """Nights of swap charged to a position open from `entry_utc` to `exit_utc` (strictly across each rollover): one
     for each server midnight in between that ends a weekday, three for the one ending `triple_weekday`, none for the
-    ones ending Saturday or Sunday (the triple pays for the weekend)."""
+    ones ending Saturday or Sunday (the triple pays for the weekend). `seven_night` (BACKLOG 153, a crypto CFD "trades
+    and is charged swap every night, weekends included"): one for every server midnight in between, no triple day."""
     entry_utc, exit_utc = pd.DatetimeIndex(entry_utc), pd.DatetimeIndex(exit_utc)
     if len(entry_utc) == 0:
         return np.zeros(0, dtype=int)
     d0 = _server_days(entry_utc, server_tz)
     d1 = _server_days(exit_utc - pd.Timedelta(1, "ns"), server_tz)
     d1 = np.maximum(d0, d1)
+    if seven_night:
+        return (d1 - d0).astype(int)
     # a rollover at the start of server day d charges the night of day d - 1: count those days in [d0, d1)
     weekdays = np.busday_count(d0, d1, weekmask="1111100")
     mask = ["0"] * 7
@@ -190,7 +198,7 @@ def _finish(out: pd.DataFrame, bars: pd.DataFrame, signals: pd.DataFrame, swap: 
     if swap is not None:
         close = _bar_close_times(bars)
         nights = rollover_nights(close[out["idx"].to_numpy()], close[out["t_exit"].to_numpy()], swap.server_tz,
-                                 swap.triple_weekday)
+                                 swap.triple_weekday, swap.seven_night)
         out["swap_nights"] = nights
         entry = out["entry"].to_numpy(dtype=float)
         out["swap_ret"] = nights * swap.usd_per_oz_at(out["side"].to_numpy(), entry) / entry

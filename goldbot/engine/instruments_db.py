@@ -24,7 +24,7 @@ import json
 import math
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from pydantic import Field
@@ -32,12 +32,22 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.db.connection import Database, StateDbError, db_path
 
+if TYPE_CHECKING:
+    from goldbot.labels.triple_barrier import SwapSpec
+
 MT5_SWAP_DISABLED, MT5_SWAP_POINTS, MT5_SWAP_BASE_CCY, MT5_SWAP_MARGIN_CCY = 0, 1, 2, 3
 MT5_SWAP_INTEREST_CURRENT, MT5_SWAP_INTEREST_OPEN = 5, 6   # annual % of the current / the open price
 INTEREST_DAYS = 360                                         # MT5: "standard bank year is 360 days"
 _COLUMNS = ("account_id", "symbol", "store_symbol", "contract_size", "digits", "point", "volume_min", "volume_step",
             "volume_max", "currency_profit", "swap_long_per_lot", "swap_short_per_lot", "swap_triple_weekday",
             "swap_note", "updated_utc")
+
+
+def seven_night(spec: Any) -> bool:
+    """BACKLOG 153: a registry instrument (goldbot/instruments.py InstrumentSpec, or None) of the crypto class trades
+    and is charged swap "every night, weekends included" (`SwapSpec.seven_night`); every other one five nights plus
+    the triple. The schedule is reconciled against the broker's charges in BACKLOG 175."""
+    return spec is not None and getattr(spec, "asset_class", None) == "crypto"
 
 
 class InstrumentsDbError(RuntimeError):
@@ -61,6 +71,21 @@ class InstrumentTerms(FrozenRecord):
     swap_note: str = ""
     updated_utc: UtcTimestamp
 
+    def swap_spec(self, server_tz: str, *, seven_night: bool = False) -> SwapSpec | None:
+        """The row's swap per unit of its contract, in its profit currency, on `server_tz`; None when unknown (either
+        rate missing, or a five-night book without a triple day Monday to Friday, MT5 1..5). A `seven_night` book
+        (BACKLOG 153) counts no triple day, so its reported one is not needed (safety review of R130). One rule for
+        the engine's projection (`books.swap_spec`, `refresh_terms`) and the closed-trade charge (CostImputer)."""
+        from goldbot.labels.triple_barrier import SwapSpec
+        lng, sht, triple = self.swap_long_per_lot, self.swap_short_per_lot, self.swap_triple_weekday
+        if lng is None or sht is None or not (math.isfinite(lng) and math.isfinite(sht)):
+            return None
+        if not seven_night and (triple is None or not 1 <= triple <= 5):
+            return None
+        return SwapSpec(long_usd_per_lot=lng, short_usd_per_lot=sht,
+                        triple_weekday=triple - 1 if triple is not None and 1 <= triple <= 5 else 2,
+                        server_tz=server_tz, contract_oz=self.contract_size, seven_night=seven_night)
+
 
 def _ccy(info: Any, field: str) -> str | None:
     v = getattr(info, field, None)
@@ -81,9 +106,10 @@ def swap_per_lot(info: Any, price: float | None = None,
     Modes 5/6 (interest, Vantage BTCUSD 2026-11-10): "annual interest from the instrument price (current / position
     open price), standard bank year 360 days" -> rate / 100 / 360 x price x contract size, in the profit currency
     (the price is quoted in it), broker sign kept; an entry opens at the current price, so 6 is priced as 5. The price
-    is the latest tick at the terms refresh (point in time) and must be finite and > 0, else unknown. Only a USD
-    profit currency is priced (quant review of fix/swap-mode-5-6, b): the engine's SwapSpec reads the amount as USD
-    and swaps are not yet converted from the profit currency, so any other currency is unknown (entries refused)."""
+    is the latest tick at the terms refresh (point in time) and must be finite and > 0, else unknown. BACKLOG 154: any
+    reported profit currency is priced, the amount staying in it like every other mode here; the RiskGate converts it
+    with the point-in-time `acct_per_profit` (`books.swap_spec`, `gate.profit_fx`; unknown refuses the entry). An
+    unreported profit currency is unknown (entries refused)."""
     mode = getattr(info, "swap_mode", None)
     lng, sht = getattr(info, "swap_long", None), getattr(info, "swap_short", None)
     if mode is None or lng is None or sht is None:
@@ -95,14 +121,14 @@ def swap_per_lot(info: Any, price: float | None = None,
         return float(lng) * k, float(sht) * k, "swap mode points: x point x contract size"
     if int(mode) in (MT5_SWAP_INTEREST_CURRENT, MT5_SWAP_INTEREST_OPEN):
         profit = _ccy(info, "currency_profit")
-        if profit != "USD":          # quant review (b): SwapSpec reads the amount as USD; no conversion yet
-            return None, None, (f"swap mode {int(mode)} (interest) in profit currency {profit}, not USD: "
+        if profit is None:
+            return None, None, (f"swap mode {int(mode)} (interest) without a profit currency: "
                                 "entries refused (swap_unknown)")
         if price is None or not math.isfinite(price) or price <= 0:
             return None, None, f"swap mode {int(mode)} (interest) without a price: entries refused (swap_unknown)"
         k = float(price) * float(info.contract_size) / 100.0 / INTEREST_DAYS
         return float(lng) * k, float(sht) * k, \
-            f"swap mode {int(mode)}: annual % x price {float(price):g} x contract size / {INTEREST_DAYS}"
+            f"swap mode {int(mode)}: annual % x price {float(price):g} x contract size / {INTEREST_DAYS} in {profit}"
     if int(mode) in (MT5_SWAP_BASE_CCY, MT5_SWAP_MARGIN_CCY):
         unit = _ccy(info, "currency_base" if int(mode) == MT5_SWAP_BASE_CCY else "currency_margin")
         profit, base = _ccy(info, "currency_profit"), _ccy(info, "currency_base")

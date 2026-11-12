@@ -420,7 +420,7 @@ def trade_rows(trades: list[ShadowTrade], *, costs: CostModel, daily_vol: pd.Ser
     regimes = _regimes(entries, daily_vol, now)
     if costs.swap is not None:
         nights = rollover_nights(entries, pd.DatetimeIndex([k[3] for k in keep]), costs.swap.server_tz,
-                                 costs.swap.triple_weekday)
+                                 costs.swap.triple_weekday, costs.swap.seven_night)
     else:
         nights = np.zeros(len(keep), dtype=int)
     rows = []

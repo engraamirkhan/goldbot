@@ -173,14 +173,65 @@ def test_an_interest_swap_without_a_usable_price_is_unknown_never_zero(price):
     assert swap_per_lot(_interest(6), price=price)[:2] == (None, None)
 
 
-@pytest.mark.parametrize("profit", ["JPY", "EUR", None, ""])
-def test_an_interest_swap_in_a_profit_currency_other_than_usd_stays_unknown(profit):
-    """Quant review of fix/swap-mode-5-6 (b): the amount is in the profit currency and the engine's SwapSpec reads it
-    as USD, so until swaps are converted into USD a mode 5/6 swap is priced only when the profit currency is USD."""
+def test_an_interest_swap_is_priced_in_any_reported_profit_currency():
+    """BACKLOG 154: a mode 5/6 amount is rate x price x contract, the price quoted in the profit currency, so it is
+    profit currency per lot, the unit of every other price amount of that book; the RiskGate converts it with the
+    point-in-time `acct_per_profit` (`profit_fx`). Hand-worked: a JPY-profit symbol at 38,000, -3 % / -1.8 % a year,
+    contract 1: -3 / 100 / 360 x 38,000 = -3.16667 JPY and -1.9 JPY per lot per night."""
+    jp = _interest(5, -3.0, -1.8).model_copy(update={"currency_profit": "JPY"})
+    lng, sht, note = swap_per_lot(jp, price=38_000.0)
+    assert lng == pytest.approx(-3.0 / 100 / 360 * 38_000.0) and lng == pytest.approx(-3.16667, abs=1e-5)
+    assert sht == pytest.approx(-1.9)
+    assert "JPY" in note
+    assert swap_per_lot(_interest(5), price=100_000.0)[0] == pytest.approx(-55.5556, abs=1e-3)   # USD: unchanged
+
+
+@pytest.mark.parametrize("profit", [None, ""])
+def test_an_interest_swap_in_an_unreported_profit_currency_stays_unknown(profit):
     jp = _interest(5).model_copy(update={"currency_profit": profit})
     lng, sht, note = swap_per_lot(jp, price=38_000.0)
     assert (lng, sht) == (None, None) and "swap_unknown" in note
-    assert swap_per_lot(_interest(5), price=100_000.0)[0] == pytest.approx(-55.5556, abs=1e-3)   # USD: priced
+
+
+def _gate_intent(**kw):
+    from goldbot.risk import Intent
+    base = dict(agent_id="x", side=1, p=0.7, target_atr=3.0, stop_atr=1.0, cost_atr=0.0, multiplier=1.0,
+                account_currency="USD", acct_per_usd=1.0, correlation_group="equity", leverage_class="gold_index",
+                volume_min=1.0, volume_step=1.0, volume_max=1.0, contract_oz=1.0)
+    return Intent(**{**base, **kw})
+
+
+@pytest.mark.parametrize("profit,price,atr,point,swap,fx,want", [
+    # DE40, mode 3 in EUR: -12.5 EUR per lot per night, contract 1 -> 12.5 EUR per unit; 1 lot at 1.08 USD per EUR
+    ("EUR", 22_000.0, 150.0, 0.1, 12.5, 1.08, 13.5),
+    # JPY-profit mode 5 at 38,000, -3 %/yr: 3.16667 JPY per unit; 1 lot at 0.0065 USD per JPY = 0.0205833 USD
+    ("JPY", 38_000.0, 300.0, 1.0, 3.0 / 100 / 360 * 38_000.0, 0.0065, 3.0 / 100 / 360 * 38_000.0 * 0.0065),
+])
+def test_the_gate_converts_a_profit_currency_swap_into_the_account_currency(profit, price, atr, point, swap, fx, want):
+    """BACKLOG 154: the swap projection is converted with the same point-in-time profit-to-account rate as the stop
+    (`acct_per_profit`): hand-worked USD figures on a USD account, one lot, one rollover before the risk day ends."""
+    from goldbot.risk import AccountState, RiskGate
+    st = AccountState(equity=1_000_000.0, balance_closed_hwm=1_000_000.0, day_start_equity=1_000_000.0,
+                      week_start_equity=1_000_000.0, open_positions=0, margin_used=0.0, last_tick_age_s=1.0,
+                      spread_points=1.0)
+    intent = _gate_intent(symbol="X" + profit, currency_profit=profit, point=point, price=price, atr_usd=atr,
+                          swap_usd_per_oz=swap, acct_per_profit=fx)
+    d = RiskGate().check(intent, st)
+    assert d.lots == 1.0, d.reasons
+    assert d.cost_amount == pytest.approx(want)
+
+
+@pytest.mark.parametrize("fx", [None, float("nan"), float("inf"), 0.0, -1.0])
+def test_an_unknown_profit_currency_rate_refuses_the_entry_never_prices_the_swap_at_zero(fx):
+    from goldbot.risk import AccountState, RiskGate
+    st = AccountState(equity=1_000_000.0, balance_closed_hwm=1_000_000.0, day_start_equity=1_000_000.0,
+                      week_start_equity=1_000_000.0, open_positions=0, margin_used=0.0, last_tick_age_s=1.0,
+                      spread_points=1.0)
+    intent = _gate_intent(symbol="XJPY", currency_profit="JPY", point=1.0, price=38_000.0, atr_usd=300.0,
+                          swap_usd_per_oz=3.16667, acct_per_profit=fx)
+    d = RiskGate().check(intent, st)
+    assert not d.allowed and {"fx_conversion_unavailable", "invalid:acct_per_profit"} & set(d.reasons)
+    assert d.lots == 0.0 and d.cost_amount == 0.0                                  # never sized, never priced
 
 
 @pytest.mark.parametrize("mode", [7, 8])
@@ -221,3 +272,87 @@ def test_a_mode_5_book_prices_its_swap_and_the_gate_finds_nothing_invalid(tmp_pa
     intent = Intent(agent_id="x", side=1, p=0.7, target_atr=3.0, stop_atr=1.0, atr_usd=500.0, cost_atr=0.04,
                     multiplier=0.3, price=100_000.0, swap_usd_per_oz=swap)
     assert not any(r.startswith("invalid:") for r in RiskGate().check(intent, st).reasons)
+
+
+def _registry_btc() -> BookSpec:
+    from goldbot.instruments import registry
+    return BTC.model_copy(update={"instrument": registry().instruments["BTCUSD"]})
+
+
+def test_a_crypto_book_projects_its_swap_on_the_seven_night_schedule(tmp_path):
+    """BACKLOG 153: the registry's crypto class (Vantage BTCUSD) is charged every night, weekends included; every
+    other book keeps five nights plus the triple."""
+    pb = InterestPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(_registry_btc(),)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        spec = swap_spec(eng)
+        sat = pd.Timestamp("2025-03-08 12:00", tz="UTC")              # Saturday: the Saturday-night rollover is charged
+        swap = eng._swap_usd_per_oz(1, sat)
+    assert spec is not None and spec.seven_night
+    assert swap == pytest.approx(55.5556, abs=1e-3)
+
+
+def test_a_book_whose_terminal_profit_currency_is_not_the_registry_one_has_no_swap(tmp_path):
+    """BACKLOG 154, fail closed: the stored swap is in the terminal's profit currency and the RiskGate converts it with
+    the registry's (`intent_terms`), so a disagreement leaves the swap unknown (entries refused), never mispriced."""
+    class EurPaper(InterestPaper):
+        def symbol_info(self, symbol: str) -> SymbolInfo:
+            return super().symbol_info(symbol).model_copy(update={"currency_profit": "EUR"})
+
+    pb = EurPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(_registry_btc(),)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        assert swap_spec(eng) is None
+        assert eng._swap_usd_per_oz(1, T0) != eng._swap_usd_per_oz(1, T0)          # NaN: the gate refuses
+
+
+def test_a_crypto_book_with_no_weekday_triple_day_still_prices_its_swap(tmp_path):
+    """Safety review of R130 (LOW): a seven-night book has no triple day, so a reported triple day outside Monday to
+    Friday (0 = Sunday here) must not leave it `swap_unknown`; every other book still needs one in 1..5."""
+    class SundayPaper(InterestPaper):
+        def symbol_info(self, symbol: str) -> SymbolInfo:
+            return super().symbol_info(symbol).model_copy(update={"swap_rollover3days": 0})
+
+    pb = SundayPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(_registry_btc(),)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        assert eng.book.terms_problem is None
+        spec = swap_spec(eng)
+    assert spec is not None and spec.seven_night
+    pb = SundayPaper(equity=10_000)                                  # the same terms on a five-night book: unknown
+    eng = Engine(EngineConfig(account_id="vantage-demo", broker_name="vantage", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path / "plain"), instruments=(BTC,)), pb, [], {})
+    with using(eng, eng.books["BTCUSD"]):
+        eng._refresh_account(_tick(pb, "BTCUSD", 100_000.0))
+        assert eng.book.terms_problem == "swap_unknown"
+
+
+def test_a_profit_currency_swap_reaches_the_gate_unconverted_so_it_is_converted_once(tmp_path):
+    """Review of R130 (LOW): `swap_usd_per_oz` of a non-USD book carries the profit currency amount; the engine applies
+    no rate before the gate, which applies `acct_per_profit` exactly once. DE40 (EUR), mode 3, -12.5 EUR per lot,
+    contract 1, triple Wednesday: an entry on Wednesday is charged the triple rollover before the risk day ends,
+    3 x 12.5 = 37.5 EUR per unit."""
+    from goldbot.instruments import registry
+
+    class EurIndexPaper(TermsPaper):
+        def symbol_info(self, symbol: str) -> SymbolInfo:
+            return super().symbol_info(symbol).model_copy(update={
+                "swap_mode": 3, "swap_long": -12.5, "swap_short": 2.0, "currency_profit": "EUR",
+                "currency_margin": "EUR", "currency_base": "EUR", "contract_size": 1.0})
+
+    de40 = BookSpec(key="DE40", symbol="DE40", store_symbol="DE40", magic_block=1, digits=1, point=0.1,
+                    contract_size=1.0, instrument=registry().instruments["DE40"])
+    pb = EurIndexPaper(equity=10_000)
+    eng = Engine(EngineConfig(account_id="icm-probe", broker_name="icm", mode="demo", magic_base=260500,
+                              state_dir=str(tmp_path), instruments=(de40,)), pb, [], {})
+    with using(eng, eng.books["DE40"]):
+        eng._refresh_account(_tick(pb, "DE40", 22_000.0))
+        assert eng.book.terms_problem is None
+        swap = eng._swap_usd_per_oz(1, T0)                          # T0: Wednesday 10:00 UTC
+    assert swap == pytest.approx(37.5)
