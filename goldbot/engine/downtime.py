@@ -113,7 +113,9 @@ def restore(eng: Engine, closed_through: pd.Timestamp | None) -> None:
     stamped before it is a late tick and its bar is never closed again (`Engine._due_close`), so a signal RiskGate
     refused at that close is never re-decided at a later price; the exploration step starts after it too. Journalled.
     None (an older orders file, or no close processed yet): as before. One later than the host clock plus a decision
-    bar (a broker clock that ran ahead) is ignored and journalled (safety review S-3): it would stop every close."""
+    bar (a broker clock that ran ahead) is ignored and journalled (safety review S-3): it would stop every close.
+    The exploration minute pass (1m/5m) starts after the last complete minute itself (`exploration.start_minute`,
+    backlog 174), with or without an orders file."""
     if closed_through is None:
         return
     ahead = eng.clock() + pd.Timedelta(seconds=tf_seconds(eng.cfg.decision_tf))

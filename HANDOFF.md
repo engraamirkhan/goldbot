@@ -67,6 +67,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   per run of passes that left books out; the run's first clean pass logs one INFO "pass budget run ended after K
   passes over S s; L with books left out, most 15m+ parts carried C". Metrics (`passes_deferred`), the carry and the
   zones' deferred flag are unchanged. To see carried-only passes on the brain, raise goldbot.engine to DEBUG.
+- 2026-11-12 (branch fix/restart-gap-other-shadow-reads; backlog 174, R132): the last shadow-book readers follow the
+  R129 rule for `restart_gap` trades (statistics leave them out; risk guards keep their losses, drop their wins).
+  Auto-mode evidence (`automode.match_outcomes`) leaves them out, win or loss, and says how many in its reasons; the performance report counts the
+  proposal unmatched with "shadow path incomplete across a restart (restart_gap)", out of its R, money and
+  calibration; the ruin estimate (`ruin.r_from_shadow_book`) keeps a gap loss and drops a gap win, counted and noted in the report. Finding on the
+  exploration 1m/5m minute pass: its last decided minute was memory-only, so a restart inside that minute decided it
+  again and a signal refused there could pass at a later price (reproduced in the test). Fixed: on the host clock an
+  engine start counts every complete minute as decided, with or without an orders file (`exploration.start_minute`,
+  journalled `exploration_start_minute`);
+  at most one minute's signals are lost per restart. Replays on the tick clock are unchanged.
 - 2026-11-12 (branch fix/restart-rerun-barrier-shadow; backlogs 163, 164, 165, R129): three restart follow-ups of
   backlog 161. (163) The last processed base close is saved per book with the orders file (`closed_through`) before
   that close's decisions run, and restored at start (journalled `restart_closed_through`): a restart whose first
