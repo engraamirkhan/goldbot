@@ -309,7 +309,7 @@ def test_a_1m_part_that_raises_runs_no_15m_part_and_is_journalled_as_before(tmp_
 
 def test_the_deferral_warning_names_the_exploration_sub_phases(tmp_path, monkeypatch, caplog):
     eng, w = _world(tmp_path, monkeypatch, start_s=8.0)
-    with caplog.at_level(logging.WARNING, logger="goldbot.engine"):
+    with caplog.at_level(logging.DEBUG, logger="goldbot.engine"):  # lane E: 15m+ carried only
         books.account_pass(eng, eng.broker, _one(w))
     [msg] = [r.getMessage() for r in caplog.records if "pass budget" in r.getMessage()]
     assert "exploration 3.00 [step 3.00]" in msg, msg
@@ -395,7 +395,7 @@ def test_a_carried_book_that_goes_quiet_leaves_the_carry_and_the_deferral_warnin
     for b in eng.books.values():                                        # a new close: the budget carries again
         if not b.primary:
             b.__dict__["exploration"].last_close = CLOSE - pd.Timedelta(minutes=15)
-    with caplog.at_level(logging.WARNING, logger="goldbot.engine"):
+    with caplog.at_level(logging.DEBUG, logger="goldbot.engine"):
         books.account_pass(eng, eng.broker, _one(w))
     assert [r for r in caplog.records if "pass budget" in r.getMessage()]
 
