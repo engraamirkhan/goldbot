@@ -119,6 +119,8 @@ VERSION_INFERRED = "version inferred (nearest p)"
 LEARNING_VERDICT = "learning class: unqualified, demo only; never ranked, never a qualification"
 NO_BAR, NO_SHADOW, NO_VERSION = ("no signal bar in the proposal id", "no shadow trade for this agent, side and signal bar",
                                  "model version not in the shadow book")
+# backlog 174: the matched shadow trade's path has bars missing across a restart (`restart_gap`, backlog 165)
+RESTART_GAP = "shadow path incomplete across a restart (restart_gap)"
 
 
 # ---------------------------------------------------------------------------------------------- records
@@ -525,7 +527,9 @@ def match_shadow(p: Proposal, model_version: str | None,
                  shadow: list[ShadowTrade]) -> tuple[ShadowTrade | None, str | None]:
     """(shadow trade, None) or (None, why). Same agent, side and signal bar, whether the shadow model took it or not
     (quant review, item 4); of `model_version` when known (from the trade's closed record, item 5), else the version
-    whose p is nearest the card's (VERSION_INFERRED)."""
+    whose p is nearest the card's (VERSION_INFERRED). A matched `restart_gap` trade (bars of its path are missing,
+    backlog 165) is unmatched with RESTART_GAP (backlog 174): its R never moves the decisions' sum or the calibration,
+    win or loss (a report of what the signals did, not a risk guard), and the count says why."""
     close = _signal_close(p)
     if close is None:
         return None, NO_BAR
@@ -535,8 +539,12 @@ def match_shadow(p: Proposal, model_version: str | None,
         return None, NO_SHADOW
     if model_version is not None:
         same = [t for t in cands if t.version == model_version]
-        return (same[0], None) if same else (None, NO_VERSION)
-    return min(cands, key=lambda t: abs(t.p - p.p)), None
+        if not same:
+            return None, NO_VERSION
+        t = same[0]
+    else:
+        t = min(cands, key=lambda t: abs(t.p - p.p))
+    return (None, RESTART_GAP) if t.restart_gap else (t, None)
 
 
 def _open_entries(state: Path, account: str) -> list[pd.Timestamp]:

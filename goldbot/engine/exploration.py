@@ -725,6 +725,7 @@ class Exploration:
                               "losses": ARM_ROOM_LOSSES, "share_cap": SHARE_CAP})
         from goldbot.engine import exploration_pyramid
         ex = cls(eng, cfg)
+        start_minute(eng, ex)
         exploration_pyramid.journal_start(eng, ex)
         return ex
 
@@ -1073,6 +1074,21 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
             if bars is not None:
                 for arm in (a for a in group if lookback(a.spec) == n):
                     _signal(eng, ex, arm, bars, frame, through, late=late)
+
+
+def start_minute(eng: Engine, ex: Exploration) -> None:
+    """Backlog 174, at the engine's start on the host clock (`live_clock`, the engine service): every minute complete
+    by now (`_minutes`' own rule) counts as decided. The last decided minute is kept in memory only, so a start inside
+    the minute the previous engine decided last would decide it again, and a signal refused there (spread, heat,
+    budget) could pass at a later price inside its staleness; sent ids stop only a signal that was sent. With or
+    without an orders file (a fresh account restarted before its first saved close too). At most one minute's
+    signals are lost to a restart, never one decided twice. The tick clock (replays, tests) has no wall time to start
+    from: as before. Journalled `exploration_start_minute`."""
+    if not eng.cfg.live_clock:
+        return
+    ex.last_minute = (eng.clock() - pd.Timedelta(seconds=GRACE_S)).floor("min")
+    eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_start_minute",
+                          "minute": ex.last_minute.isoformat()})
 
 
 def due(ex: Exploration | None, now: pd.Timestamp) -> bool:

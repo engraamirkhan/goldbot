@@ -61,8 +61,22 @@ def _same(n: int, seed: int = 1) -> tuple[list[float], list[float]]:
 # --------------------------------------------------------------------------------------- the evidence check
 def test_outcomes_are_read_in_r_from_the_matching_shadow_trade_rejected_ones_included():
     props, trades = _evidence(4, [1.0, -1.0], [2.0, 0.5])
-    a, r = match_outcomes(props, trades)
+    a, r, _ = match_outcomes(props, trades)
     assert np.allclose(a, [1.0, -1.0]) and np.allclose(r, [2.0, 0.5])
+
+
+def test_a_restart_gap_shadow_trade_is_left_out_of_the_approved_and_rejected_outcomes_win_or_loss():
+    """Backlog 174: a `restart_gap` trade's path has bars missing (backlog 165). The auto-mode evidence is a comparison
+    of approved against rejected outcomes (a promotion-style statistic, R129), so the trade is left out on BOTH sides
+    whatever its sign: keeping only its losses would bias whichever side it fell on."""
+    props, trades = _evidence(4, [1.0, -1.0], [2.0, -0.5])
+    trades[1].restart_gap = True                             # the rejected +2R
+    trades[2].restart_gap = True                             # the approved -1R
+    a, r, gap_only = match_outcomes(props, trades)
+    assert np.allclose(a, [1.0]) and np.allclose(r, [-0.5]) and gap_only == 2
+    e = auto_mode_eligibility(props, trades)                 # quant review: "too few outcomes" says why
+    assert e.restart_gap_excluded == 2 and not e.eligible
+    assert any("2 shadow outcome(s) left out: path incomplete across a restart (restart_gap)" in x for x in e.reasons)
 
 
 def test_not_eligible_below_100_decided_proposals_and_eligible_at_100():

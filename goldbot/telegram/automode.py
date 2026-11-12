@@ -69,6 +69,7 @@ class Eligibility(Record):
     rejected: int
     breaches: list[str]
     test: VetoTest
+    restart_gap_excluded: int = 0   # backlog 174: decided proposals whose only shadow outcome is a `restart_gap` one
 
     def numbers(self) -> dict[str, Any]:
         return {"decided": self.decided, "approved": self.approved, "rejected": self.rejected,
@@ -122,29 +123,42 @@ def _bar_close(p: Proposal) -> float:
         return p.created
 
 
-def match_outcomes(proposals: Iterable[Proposal], trades: Iterable[ShadowTrade]) -> tuple[list[float], list[float]]:
+def match_outcomes(proposals: Iterable[Proposal],
+                   trades: Iterable[ShadowTrade]) -> tuple[list[float], list[float], int]:
     """R of each approved and rejected proposal, from the closed shadow trade of the same agent, side and signal bar
     (entry_ts is the bar's open, the proposal's bar close is entry_ts + timeframe). The barrier outcome depends on the
     signal and the agent's label spec, not on which version scored it, so the first match serves. Proposals with no
-    closed shadow trade (still open, or the shadow agent already held a position) are left out."""
+    closed shadow trade (still open, or the shadow agent already held a position) are left out. So is a `restart_gap`
+    trade, win or loss (backlog 174: bars of its path are missing, backlog 165): the check compares approved with
+    rejected outcomes, a promotion-style statistic (R129), and keeping only its losses would bias the side it fell on.
+    Returns (approved R, rejected R, proposals left out for a `restart_gap` trade alone)."""
     by_key: dict[tuple[str, int], list[ShadowTrade]] = {}
+    gaps: dict[tuple[str, int], list[ShadowTrade]] = {}
     for t in trades:
         if t.exit_ts is not None and t.ret is not None:
-            by_key.setdefault((t.agent_id, t.side), []).append(t)
+            (gaps if t.restart_gap else by_key).setdefault((t.agent_id, t.side), []).append(t)
     approved: list[float] = []
     rejected: list[float] = []
+    gap_only = 0
     for p in proposals:
         if p.outcome not in (Outcome.APPROVED, Outcome.REJECTED):
             continue
         close = _bar_close(p)
-        for t in by_key.get((p.agent_id, p.side), []):
-            start = pd.Timestamp(t.entry_ts).timestamp()
-            if start < close <= start + tf_seconds(t.timeframe) + 60:
-                r = r_multiple(t)
-                if r is not None:
-                    (approved if p.outcome == Outcome.APPROVED else rejected).append(r)
-                break
-    return approved, rejected
+        m = _signal_trade(by_key.get((p.agent_id, p.side), []), close)
+        if m is None:
+            gap_only += _signal_trade(gaps.get((p.agent_id, p.side), []), close) is not None
+        elif (r := r_multiple(m)) is not None:
+            (approved if p.outcome == Outcome.APPROVED else rejected).append(r)
+    return approved, rejected, gap_only
+
+
+def _signal_trade(trades: list[ShadowTrade], close: float) -> ShadowTrade | None:
+    """The first shadow trade whose signal bar closes at `close` (a minute's slack)."""
+    for t in trades:
+        start = pd.Timestamp(t.entry_ts).timestamp()
+        if start < close <= start + tf_seconds(t.timeframe) + 60:
+            return t
+    return None
 
 
 def auto_mode_eligibility(proposals: Iterable[Proposal], trades: Iterable[ShadowTrade], *, since: float = 0.0,
@@ -156,7 +170,7 @@ def auto_mode_eligibility(proposals: Iterable[Proposal], trades: Iterable[Shadow
     s = settings or TelegramSettings()
     decided = [p for p in proposals if p.created >= since and p.outcome in (Outcome.APPROVED, Outcome.REJECTED)]
     n_app = sum(p.outcome == Outcome.APPROVED for p in decided)
-    approved_r, rejected_r = match_outcomes(decided, trades)
+    approved_r, rejected_r, gap_only = match_outcomes(decided, trades)
     test = welch_test(approved_r, rejected_r, s.auto_alpha)
     reasons: list[str] = []
     if len(decided) < s.auto_min_proposals:
@@ -166,12 +180,15 @@ def auto_mode_eligibility(proposals: Iterable[Proposal], trades: Iterable[Shadow
     reasons.extend(blockers)
     if min(test.n_approved, test.n_rejected) < s.auto_min_outcomes_per_side:
         reasons.append(f"too few outcomes to compare: {test.n_approved} approved, {test.n_rejected} rejected; "
-                       f"{s.auto_min_outcomes_per_side} needed on each side")
+                       f"{s.auto_min_outcomes_per_side} needed on each side"
+                       + (f" ({gap_only} shadow outcome(s) left out: path incomplete across a restart (restart_gap))"
+                          if gap_only else ""))
     elif not test.indistinguishable:
         reasons.append(f"approved and rejected outcomes differ (Welch p={test.p_value:.3f}, difference "
                        f"{test.diff:+.2f}R, interval [{test.ci_low:+.2f}, {test.ci_high:+.2f}]): the veto adds value")
     return Eligibility(eligible=not reasons, reasons=reasons, since=since, decided=len(decided), approved=n_app,
-                       rejected=len(decided) - n_app, breaches=list(breaches), test=test)
+                       rejected=len(decided) - n_app, breaches=list(breaches), test=test,
+                       restart_gap_excluded=gap_only)
 
 
 # ----------------------------------------------------------------------------- reading the state directory

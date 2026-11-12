@@ -16,7 +16,14 @@ from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
 from goldbot.execution.not_confirmed import Confirmation
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
-from goldbot.ops.perf_report import MIN_TRADES, build_performance_report, default_range, format_markdown, main
+from goldbot.ops.perf_report import (
+    MIN_TRADES,
+    RESTART_GAP,
+    build_performance_report,
+    default_range,
+    format_markdown,
+    main,
+)
 from goldbot.telegram.approvals import Outcome, Proposal
 
 ACC = "icm-demo"
@@ -587,6 +594,27 @@ def test_legacy_proposals_fall_back_to_the_nearest_p_and_unmatched_ones_say_why(
     assert cf.unmatched_reasons == {"no shadow trade for this agent, side and signal bar": 1,
                                     "no signal bar in the proposal id": 1}
     assert "no shadow trade for this agent, side and signal bar" in format_markdown(rep)
+
+
+def test_a_restart_gap_shadow_trade_is_reported_unmatched_with_its_reason_and_kept_out_of_r_and_calibration(tmp_path):
+    """Backlog 174: a shadow trade whose path has bars missing across a restart (`restart_gap`, backlog 165) never
+    moves the owner-decision R or the calibration row; the proposal is counted unmatched and says why."""
+    _engine(tmp_path)
+    p = _proposal(tmp_path, "2026-10-05 09:00", Outcome.APPROVED)
+    _proposal(tmp_path, "2026-10-06 09:00", Outcome.REJECTED, reason="news")
+    gap = _shadow("2026-10-05 09:00", exit_price=2020.0)
+    gap.restart_gap = True
+    _book(tmp_path, [gap, _shadow("2026-10-06 09:00", exit_price=1990.0)])
+    t = _ct(1, "2026-10-05 11:00", 12.0, 1.5, entry_utc="2026-10-05 09:00")
+    _rec(tmp_path, t.model_copy(update={"client_order_id": p.proposal_id}), pnl_basis="net")
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    cf = {c.outcome: c for c in rep.accounts[0].approvals.counterfactual}
+    assert (cf["approved"].matched, cf["approved"].sum_r) == (0, None)
+    assert cf["approved"].unmatched_reasons == {RESTART_GAP: 1}
+    assert cf["rejected"].matched == 1 and cf["rejected"].sum_r == pytest.approx(-1.0)
+    c = rep.accounts[0].approvals.calibration
+    assert c is not None and c.pairs == 0
+    assert RESTART_GAP in format_markdown(rep)
 
 
 def test_calibration_compares_approved_signals_shadow_r_with_their_live_net_r(tmp_path):
