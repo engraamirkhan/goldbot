@@ -11,7 +11,7 @@
   down once the history covers them: no fill running or unabsorbed and not one expected-open minute missing
   (`engine/shadow_replay.py`, point in time, identical to never restarting); not covered within 6 h, or no resume
   point (`last_bar_ts`, new on each shadow trade): `restart_gap`, now left out of promotion stats, shadow_z,
-  recalibration, the throttle's shadow win and the CUSUM model watch (a gap never rolls a champion back); the 12% re-arm
-  read keeps gap losses, drops gap wins. Not changed: the exploration 1m/5m minute pass (its own per-minute state) and
+  recalibration and the throttle's shadow win; the 12% re-arm read and the CUSUM model watch keep gap losses and drop
+  only gap wins (trading-safety: an alarm must never lose a loss). Not changed: the exploration 1m/5m minute pass (its own per-minute state) and
   the perf/automode/ruin shadow reads still count `restart_gap` trades (backlog 174). Replay and store goldens unchanged. runner.py LINE_CAP 3083 -> 3073.
   Tests: tests/test_engine_restart_rerun.py, tests/test_engine_no_quote_barrier.py, tests/test_shadow_restart_replay.py.

@@ -828,7 +828,8 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         closed = book.books[ch.version].closed if ch.version in book.books else []
         # (exit time, return) of the taken trades exited since promotion, oldest exit first
         trades = sorted((pd.Timestamp(t.exit_ts), float(t.ret)) for t in closed
-                        if t.taken and t.ret is not None and t.exit_ts is not None and not t.restart_gap
+                        if t.taken and t.ret is not None and t.exit_ts is not None
+                        and (not t.restart_gap or float(t.ret) < 0)    # a gap loss still counts (S-1 rule)
                         and start <= t.exit_ts <= min(slot, start + cap_age))
         two_weeks = start + pd.Timedelta(weeks=WATCH_WEEKS)
         window = trades[:max(sum(1 for ts, _ in trades if ts <= two_weeks), WATCH_MIN_TRADES)]

@@ -237,21 +237,33 @@ def test_a_restart_gap_loss_still_blocks_the_rearm_and_only_its_wins_are_dropped
     assert sum(book.returns_since("v1", t0)) < 0                   # the re-arm stays refused
 
 
-def test_the_model_watch_cusum_never_rolls_a_champion_back_on_restart_gap_trades(tmp_path):
-    """Quant review C2: the new-champion CUSUM restores the previous model on an alarm; trades whose path missed bars
-    over a restart are left out of it, so twelve losing gap trades leave the champion in place."""
+def _gap_watch(tmp_path, rets):
     ctx = _watch_ctx(tmp_path)
     t = pd.Timestamp("2026-09-01", tz="UTC")
     _, b = _promote_pair(ctx, t)
     promoted = t + pd.Timedelta(days=30)
-    _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
+    _shadow_rets(tmp_path, b, promoted, rets)
     book = ShadowBook(tmp_path)
     for tr in book.books[b].closed:
         tr.restart_gap = True
     book.save(promoted + pd.Timedelta(days=5))
-    out = model_watch(ctx, promoted + pd.Timedelta(days=6))
-    assert out["agent-x"]["action"] != "restored_previous" and out["agent-x"]["trades"] == 0
-    assert ctx.models.champion("agent-x").version == b               # type: ignore[union-attr]
+    return ctx, b, model_watch(ctx, promoted + pd.Timedelta(days=6))
+
+
+def test_the_model_watch_cusum_still_counts_restart_gap_losses(tmp_path):
+    """Trading-safety re-check of quant C2 (same rule as S-1): the new-champion CUSUM restores the previous model on
+    an alarm; a restart_gap trade's loss still counts, so twelve losing gap trades roll the champion back."""
+    ctx, b, out = _gap_watch(tmp_path, [-0.006] * 12)
+    assert out["agent-x"]["trades"] == 12
+    assert out["agent-x"]["action"] == "restored_previous"
+    assert ctx.models.champion("agent-x").version != b
+
+
+def test_the_model_watch_cusum_drops_only_the_wins_of_restart_gap_trades(tmp_path):
+    """Quant C2: a gap trade's path missed bars over a restart, so its win is not evidence for the champion."""
+    ctx, b, out = _gap_watch(tmp_path, [0.006] * 12)
+    assert out["agent-x"]["trades"] == 0 and out["agent-x"]["action"] != "restored_previous"
+    assert ctx.models.champion("agent-x").version == b
 
 
 def test_the_engines_first_bar_close_after_a_restart_replays_the_held_trades(tmp_path):
