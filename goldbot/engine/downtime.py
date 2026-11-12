@@ -113,7 +113,13 @@ def restore(eng: Engine, closed_through: pd.Timestamp | None) -> None:
     stamped before it is a late tick and its bar is never closed again (`Engine._due_close`), so a signal RiskGate
     refused at that close is never re-decided at a later price; the exploration step starts after it too. Journalled.
     None (an older orders file, or no close processed yet): as before. One later than the host clock plus a decision
-    bar (a broker clock that ran ahead) is ignored and journalled (safety review S-3): it would stop every close."""
+    bar (a broker clock that ran ahead) is ignored and journalled (safety review S-3): it would stop every close.
+    Backlog 174: the exploration minute pass (1m/5m arms) keeps its last decided minute in memory only, so a start
+    inside the minute it last decided would decide that minute again, and a signal refused there (spread, heat, budget)
+    could pass at a later price inside its staleness. On the host clock (`live_clock`, the engine service) every minute
+    closed by the start counts as decided (`_minute_through`): at most one minute's signals are lost to a restart,
+    never one decided twice. The tick clock (replays, tests) has no wall time to start from and is left as before."""
+    _minute_through(eng)
     if closed_through is None:
         return
     ahead = eng.clock() + pd.Timedelta(seconds=tf_seconds(eng.cfg.decision_tf))
@@ -128,6 +134,20 @@ def restore(eng: Engine, closed_through: pd.Timestamp | None) -> None:
     log.info("restart: bar closes up to %s were processed before; none is decided again", closed_through)
     eng.decisions.append({"ts": time.time(), "agent": None, "action": "restart_closed_through",
                           "close": closed_through.isoformat()})
+
+
+def _minute_through(eng: Engine) -> None:
+    """Backlog 174, at start on the host clock: the exploration minute pass's last decided minute is the last one
+    complete by now (its own rule, `exploration._minutes`), unless it already knows a later one. Journalled."""
+    from goldbot.engine.exploration import GRACE_S
+    ex = eng.exploration
+    if ex is None or not eng.cfg.live_clock:
+        return
+    through = (eng.clock() - pd.Timedelta(seconds=GRACE_S)).floor("min")
+    if ex.last_minute is None or through > ex.last_minute:
+        ex.last_minute = through
+        eng.decisions.append({"ts": time.time(), "agent": None, "action": "restart_minute_through",
+                              "minute": through.isoformat()})
 
 
 def age(eng: Engine, live: set[int]) -> None:

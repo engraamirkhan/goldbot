@@ -17,7 +17,7 @@ import pytest
 from goldbot.config import tf_seconds
 from goldbot.data.resample import ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
-from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe, exploration, magic
+from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe, downtime, exploration, magic
 from goldbot.engine.exploration import Arm, ExplorationConfig, Pot
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
@@ -565,6 +565,41 @@ def test_a_1m_hold_exits_on_the_host_clock_while_halted_and_without_a_quote(tmp_
     [rec] = exploration.trades(str(tmp_path))
     assert rec.exit_reason == exploration.HOLD_EXIT and rec.censored is False
     assert load_closed_trades(tmp_path)[0] == []                        # never in closed_trades.jsonl
+
+
+def _restarted_1m(tmp_path: Path, minute: pd.Timestamp, clock: pd.Timestamp) -> tuple[Engine, Tick]:
+    """A 1m book started again on `tmp_path`, on the host clock (`live_clock`, as the engine service runs) at `clock`:
+    its 1m bars before `minute`, then the start's restore of the saved close (`Engine._load_orders`)."""
+    eng, pb = _engine(tmp_path, [_arm("s", tf="1m", style="scalp", hold_bars=5)])
+    tick = _at(eng, pb, CLOSE)
+    eng.bars_1m = ticks_to_1m(TICKS[TICKS["ts_utc"] < minute])
+    eng.cfg.live_clock, eng.clock = True, lambda: clock
+    downtime.restore(eng, CLOSE)
+    return eng, tick
+
+
+def test_a_restart_inside_the_minute_the_1m_pass_last_decided_never_decides_it_again_on_a_stale_quote(tmp_path):
+    """Backlog 174: the minute pass keeps its last decided minute in memory (`last_minute`), outside the restored
+    `closed_through` (backlog 163). An engine restarted inside that minute decided it again: a signal refused at the
+    minute (here its per-trade cap; live a spread, heat or budget refusal) could then pass at a later price, inside
+    its 10 s staleness (sent ids stop only a signal that was sent). A start on the host clock now counts every minute
+    closed by then as decided: the first (stale) quote after the restart decides nothing; a later minute decides."""
+    minute = CLOSE + pd.Timedelta(minutes=1)
+    first, pb = _engine(tmp_path, [_arm("s", tf="1m", style="scalp", hold_bars=5)], caps={"s": 0.5})
+    tick = _at(first, pb, CLOSE)
+    first.bars_1m = ticks_to_1m(TICKS[TICKS["ts_utc"] < minute])
+    exploration.on_pass(first, Tick(ts_utc=minute + pd.Timedelta(seconds=2), bid=tick.bid, ask=tick.ask))
+    assert not first.open and [r[1] for r in _obs(tmp_path)] == [0]     # decided, and refused at the minute
+    first._save_orders()
+    again, tick = _restarted_1m(tmp_path, minute, minute + pd.Timedelta(seconds=5))
+    assert again.exploration is not None and again.exploration.last_minute == minute
+    exploration.on_pass(again, Tick(ts_utc=minute + pd.Timedelta(seconds=2), bid=tick.bid, ask=tick.ask))   # stale
+    assert not again.open and not _sent(again)
+    nxt = minute + pd.Timedelta(minutes=1)
+    again.bars_1m = ticks_to_1m(TICKS[TICKS["ts_utc"] < nxt])
+    again.clock = lambda: nxt + pd.Timedelta(seconds=2)
+    exploration.on_pass(again, Tick(ts_utc=nxt + pd.Timedelta(seconds=2), bid=tick.bid, ask=tick.ask))
+    assert len(_sent(again)) == 1                            # a minute closed after the start decides as before
 
 
 # ------------------------------------------------------------------------------------------------ decisions, restart, failures

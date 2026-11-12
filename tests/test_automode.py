@@ -65,6 +65,17 @@ def test_outcomes_are_read_in_r_from_the_matching_shadow_trade_rejected_ones_inc
     assert np.allclose(a, [1.0, -1.0]) and np.allclose(r, [2.0, 0.5])
 
 
+def test_a_restart_gap_shadow_trade_is_left_out_of_the_approved_and_rejected_outcomes_win_or_loss():
+    """Backlog 174: a `restart_gap` trade's path has bars missing (backlog 165). The auto-mode evidence is a comparison
+    of approved against rejected outcomes (a promotion-style statistic, R129), so the trade is left out on BOTH sides
+    whatever its sign: keeping only its losses would bias whichever side it fell on."""
+    props, trades = _evidence(4, [1.0, -1.0], [2.0, -0.5])
+    trades[1].restart_gap = True                             # the rejected +2R
+    trades[2].restart_gap = True                             # the approved -1R
+    a, r = match_outcomes(props, trades)
+    assert np.allclose(a, [1.0]) and np.allclose(r, [-0.5])
+
+
 def test_not_eligible_below_100_decided_proposals_and_eligible_at_100():
     a, r = _same(100)
     props, trades = _evidence(100, a, r)

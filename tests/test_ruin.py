@@ -287,6 +287,19 @@ def test_shadow_r_is_one_version_from_its_return_so_scale_outs_count(tmp_path: P
     assert s.r.tolist() == [-1.0, 2.0, 1.0] and s.versions == ["v1"] and s.cost_basis == "spread_only"
 
 
+def test_a_restart_gap_shadow_trade_keeps_its_loss_and_drops_its_win_in_the_ruin_sample(tmp_path: Path):
+    """Backlog 174: the ruin estimate guards risk, so it reads `restart_gap` trades as the re-arm and the model watch do
+    (R129): a loss on a path with bars missing still counts, a win on it never does."""
+    book = {"v1": _shadow("v1", [
+        {"day": "2026-10-01", "exit": 104.0, "ret": 0.04},                     # +2R, whole path
+        {"day": "2026-10-02", "exit": 104.0, "ret": 0.04},                     # +2R across a restart: dropped
+        {"day": "2026-10-03", "exit": 98.0, "ret": -0.02}])}                   # -1R across a restart: kept
+    for t, c in zip(book["v1"]["closed"], [False, True, True]):
+        t["restart_gap"] = c
+    (tmp_path / "shadow_book.json").write_text(json.dumps(book))
+    assert r_from_shadow_book(tmp_path, version="v1").r.tolist() == [2.0, -1.0]
+
+
 def test_shadow_versions_are_pooled_only_when_asked(tmp_path: Path):
     _book(tmp_path)
     with pytest.raises(ValueError, match="pool"):

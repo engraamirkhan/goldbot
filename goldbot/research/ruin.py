@@ -515,7 +515,10 @@ def r_from_shadow_book(state_dir: Path, *, version: str | None = None, agent_id:
                        pool: bool = False, models_dir: Path | None = None) -> RSample:
     """R of ONE shadow-book version's taken, closed trades in exit order: ret x entry / |entry - stop| (the trade's
     return in units of its initial risk, so a scale-out's blended return counts). Version: `version`, else the
-    agent's champion in the registry, else the book's only version; several versions are pooled only with `pool`."""
+    agent's champion in the registry, else the book's only version; several versions are pooled only with `pool`.
+    A `restart_gap` trade (backlog 165: bars of its path are missing) counts only when it lost (backlog 174): the ruin
+    estimate guards risk, so it reads them as the re-arm and the model watch do (R129: "keeps their LOSSES and drops
+    only their wins"); a win on a path with bars missing never makes the estimate look safer."""
     from goldbot.engine.shadow import VersionBook
     path = Path(state_dir) / "shadow_book.json"
     if not path.exists():
@@ -539,7 +542,7 @@ def r_from_shadow_book(state_dir: Path, *, version: str | None = None, agent_id:
                              "to pool champion and challengers")
     rows = [t for v in chosen for t in books[v].closed
             if t.taken and t.ret is not None and t.exit_ts is not None and t.entry != t.stop
-            and (agent_id is None or t.agent_id == agent_id)]
+            and (not t.restart_gap or t.ret < 0) and (agent_id is None or t.agent_id == agent_id)]
     if not rows:
         return RSample(r=np.empty(0), cost_basis="spread_only", versions=chosen)
     ts = pd.DatetimeIndex([t.exit_ts for t in rows])

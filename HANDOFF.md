@@ -38,6 +38,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   with its traceback, then at most hourly with the count of that type, and logs "cache readable again" once on recovery. Owner
   step when the hung-read error fires: check the data root's disk and the store lock; the engine keeps trading
   exits. Tests: tests/test_engine_history_read.py (backlog 157 section), tests/test_engine_key_zones.py (backlog 159).
+- 2026-11-12 (branch fix/restart-gap-other-shadow-reads; backlog 174, R132): the last shadow-book readers follow the
+  R129 rule for `restart_gap` trades (statistics leave them out; risk guards keep their losses, drop their wins).
+  Auto-mode evidence (`automode.match_outcomes`) leaves them out, win or loss; the performance report counts the
+  proposal unmatched with "shadow path incomplete across a restart (restart_gap)", out of its R, money and
+  calibration; the ruin estimate (`ruin.r_from_shadow_book`) keeps a gap loss and drops a gap win. Finding on the
+  exploration 1m/5m minute pass: its last decided minute was memory-only, so a restart inside that minute decided it
+  again and a signal refused there could pass at a later price (reproduced in the test). Fixed: on the host clock a
+  start counts every complete minute as decided (`downtime._minute_through`, journalled `restart_minute_through`);
+  at most one minute's signals are lost per restart. Replays on the tick clock are unchanged.
 - 2026-11-12 (branch fix/restart-rerun-barrier-shadow; backlogs 163, 164, 165, R129): three restart follow-ups of
   backlog 161. (163) The last processed base close is saved per book with the orders file (`closed_through`) before
   that close's decisions run, and restored at start (journalled `restart_closed_through`): a restart whose first

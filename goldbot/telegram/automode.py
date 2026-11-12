@@ -126,10 +126,12 @@ def match_outcomes(proposals: Iterable[Proposal], trades: Iterable[ShadowTrade])
     """R of each approved and rejected proposal, from the closed shadow trade of the same agent, side and signal bar
     (entry_ts is the bar's open, the proposal's bar close is entry_ts + timeframe). The barrier outcome depends on the
     signal and the agent's label spec, not on which version scored it, so the first match serves. Proposals with no
-    closed shadow trade (still open, or the shadow agent already held a position) are left out."""
+    closed shadow trade (still open, or the shadow agent already held a position) are left out. So is a `restart_gap`
+    trade, win or loss (backlog 174: bars of its path are missing, backlog 165): the check compares approved with
+    rejected outcomes, a promotion-style statistic (R129), and keeping only its losses would bias the side it fell on."""
     by_key: dict[tuple[str, int], list[ShadowTrade]] = {}
     for t in trades:
-        if t.exit_ts is not None and t.ret is not None:
+        if t.exit_ts is not None and t.ret is not None and not t.restart_gap:
             by_key.setdefault((t.agent_id, t.side), []).append(t)
     approved: list[float] = []
     rejected: list[float] = []
