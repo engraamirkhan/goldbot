@@ -87,6 +87,7 @@ START_JITTER_S = 600.0              # the first pull after a restart waits a ran
 OVERLAP = pd.Timedelta(days=2)      # a refresh re-reads its last two days (a bar the broker corrected)
 HEAD_GAP = pd.Timedelta(days=5)     # a cache starting later than this after its target head is re-pulled from the head
 HEAD_RECHECK = pd.Timedelta(days=7)   # ... at most this often (a broker whose history starts later is not re-read daily)
+CACHE_WARN_EVERY = pd.Timedelta(hours=1)   # an unreadable cache: one warning per exception type at most this often
 LONG_TABLE = "bars_15m_broker"
 SLOW_BUILD_S = 1.0
 DISPLAY_MIN_PCT = 50.0
@@ -182,6 +183,10 @@ class KeyZoneWorker:
         self.lock_dir: Path | None = None         # state/locks: the cross-process pull lock
         self.long = pd.DataFrame(columns=BAR_COLUMNS)
         self.loaded = False                       # the store cache was read
+        # backlog 159: an unreadable cache, exception type -> engine clock of its last warning (`_cache_failed`)
+        self.cache_warned: dict[str, pd.Timestamp] = {}
+        self.cache_failures = 0                   # failed reads in a row (the recovery reports them)
+        self.cache_quiet: dict[str, int] = {}     # per exception type: failed reads not logged since its last warning
         self.next_pull: pd.Timestamp | None = None
         self.broker_start: pd.Timestamp | None = None   # the first bar a pull from the head returned
         self.head_checked: pd.Timestamp | None = None   # when a pull from the head last completed
@@ -258,8 +263,9 @@ class KeyZoneWorker:
                         self._absorb(got[BAR_COLUMNS], now)
                 except Exception as exc:      # noqa: BLE001 - display only: read again next build; the pull refills
                     self.loaded = False
-                    log.warning("key zones: cache unreadable (%s: %s): read again at the next build",
-                                type(exc).__name__, exc)
+                    self._cache_failed(exc, now)
+                else:
+                    self._cache_back()
         if self.client is None or (self.next_pull is not None and now < self.next_pull):
             return
         with box_lock(self.lock_dir, self.box) as mine:
@@ -272,6 +278,27 @@ class KeyZoneWorker:
             except Exception:
                 self.next_pull = now + RETRY
                 raise
+
+    def _cache_failed(self, exc: Exception, now: pd.Timestamp) -> None:
+        """Backlog 159 (one warning per 15m build while the cache stayed unreadable, ~96 a day): the first failure of
+        each exception type is logged with its traceback, the same type again at most once per CACHE_WARN_EVERY of
+        engine clock, naming the failures of that type it stood for (review of R127: counted per type)."""
+        kind = type(exc).__name__
+        self.cache_failures += 1
+        last = self.cache_warned.get(kind)
+        if last is not None and now - last < CACHE_WARN_EVERY:
+            self.cache_quiet[kind] = self.cache_quiet.get(kind, 0) + 1
+            return
+        quiet = self.cache_quiet.pop(kind, 0)
+        self.cache_warned[kind] = now
+        log.warning("key zones: cache unreadable (%s: %s): read again at the next build%s", kind, exc,
+                    f" ({quiet} more since the last warning)" if quiet else "", exc_info=exc if last is None else None)
+
+    def _cache_back(self) -> None:
+        """A cache read that works after failed ones is logged once (backlog 159: the recovery is never hidden)."""
+        if self.cache_failures:
+            log.warning("key zones: cache readable again after %d failed reads", self.cache_failures)
+        self.cache_warned, self.cache_failures, self.cache_quiet = {}, 0, {}
 
     def _start(self, now: pd.Timestamp) -> pd.Timestamp:
         """Where the next pull starts, so every pull resumes at the oldest hole:
