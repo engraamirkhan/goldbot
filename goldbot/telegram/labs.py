@@ -399,7 +399,9 @@ def _fill(t: ExplorationRecord, counted: bool) -> Fill | None:
 def _held_out(conn: sqlite3.Connection, accounts: Sequence[str], store: Any, now: pd.Timestamp | None) -> set[str]:
     """The candidates of `accounts` held out of n while a quarantine span has no recorded engine restart. Spans that
     cannot be read are unknown (backlog 158), never "none": every candidate of those accounts is held out of n until
-    they read again (n understated, never overstated; the H-61 stop still counts every trade)."""
+    they read again (n understated, never overstated; the H-61 stop still counts every trade). Deliberately broad
+    (quant Q-C3): ANY failure of the span read (QuarantineReadError, settings or a store that cannot be opened, an
+    aux.db error inside held_out_in) holds the accounts out, since each leaves the spans unknown."""
     from goldbot.research.evidence_exclusions import all_candidates, held_out_in
     marks = ",".join("?" * len(accounts))
     hosts = {str(a): str(b) for a, b in conn.execute(

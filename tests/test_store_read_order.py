@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from goldbot.data import positioning as pos
-from goldbot.data.macro import first_release
+from goldbot.data.macro import first_release, merge_vintages
 from goldbot.data.store import Store
 
 DAY = pd.Timestamp("2024-03-01", tz="UTC")
@@ -127,3 +127,27 @@ def test_merge_releases_compares_with_the_last_row_in_input_order_on_tied_availa
     out = pos.merge_releases(prev[list(pos.COLUMNS)], last[list(pos.COLUMNS)],   # the same value: no revision
                              retrieved_utc=base + pd.Timedelta(days=1))
     assert len(out) == n
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_macro_merge_vintages_compares_with_the_last_row_in_input_order_on_tied_availability(seed):
+    """Quant Q-C1, the macro twin of the merge_releases test: the last value per (series, value_date) among rows
+    available at the same instant is the last in the store's order, so an unchanged download adds no revision."""
+    rng = np.random.default_rng(seed)
+    base = pd.Timestamp("2024-01-05 23:00", tz="UTC")
+    n = 300
+    avail = [base + pd.Timedelta(hours=int(h)) for h in rng.integers(0, 3, n)]
+    prev = pd.DataFrame({"series": "dgs10", "value_date": [pd.Timestamp("2024-01-02")] * n,
+                         "value": np.arange(n, dtype=float), "vintage": pd.Timestamp("2024-01-05"),
+                         "available_utc": avail, "ts_utc": avail})
+    last = prev.sort_values("available_utc", kind="stable").iloc[[-1]].reset_index(drop=True)
+    assert len(merge_vintages(prev, last)) == n
+
+
+def test_a_store_root_with_a_quote_in_its_path_reads(tmp_path):
+    """Code review LOW: the scan's paths are SQL string literals, a quote in them is escaped."""
+    store = Store(tmp_path / "o'brien" / "data")
+    store.append("dq_events", pd.DataFrame({"ts_utc": [DAY], "check": ["c"], "severity": ["warning"],
+                                            "detail": ["x"]}), source="s", dedupe=False)
+    assert len(store.read("dq_events", source="s")) == 1
+    assert len(store.read("dq_events", source="s", columns={"check": "VARCHAR"}, folder_only=True)) == 1

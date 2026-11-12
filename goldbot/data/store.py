@@ -333,7 +333,11 @@ def _order_by(table: str) -> str:
     so two stores holding the same rows read them alike. A total order, so
     rows sharing a ts_utc come back in one order on every read; DuckDB's parallel scan otherwise returns ties in the
     order its threads finish. The key columns are matched by a regex that always matches ts_utc, so a key column
-    absent from every file (tv_indicators' `origin` before chart exports) is skipped instead of failing to bind."""
+    absent from every file (tv_indicators' `origin` before chart exports) is skipped instead of failing to bind.
+    Known effect (quant Q-C2): ticks sharing a ts_utc read sorted by bid then ask, not in arrival order, so a minute
+    built from them (the D12 engine minute, crossfeed.reconcile_account) opens at the lowest and closes at the
+    highest of the tied bids: at most one tick, data-quality grading only (the engine's live bars are built in
+    memory from arrival order, never from this read)."""
     keys = [k for k in KEY_COLUMNS.get(table, []) if k != "ts_utc"]
     tie = f"COLUMNS('^({'|'.join(['ts_utc', *(re.escape(k) for k in keys)])})$'), " if keys else ""
     return f"ORDER BY ts_utc, {tie}COLUMNS(* EXCLUDE (year, month))"     # both follow from ts_utc
@@ -393,7 +397,9 @@ def _scan(glob: str | list[str], table: str) -> str:
     from the first file: an early part with an all-null column (typed NULL) made later string parts fail to cast, and
     `tv_indicators` mixes live-alert and chart-export files with extra columns (origin, repaint_validated, ...) where
     an older file must read as NULL. A list of globs scans only those (`Store.read(folder_only=True)`)."""
-    src = f"'{glob}'" if isinstance(glob, str) else "[" + ", ".join(f"'{g}'" for g in glob) + "]"
+    def lit(g: str) -> str:
+        return "'" + g.replace("'", "''") + "'"     # a path with a quote stays one SQL string literal
+    src = lit(glob) if isinstance(glob, str) else "[" + ", ".join(lit(g) for g in glob) + "]"
     return f"read_parquet({src}, hive_partitioning=true, union_by_name=true)"
 
 

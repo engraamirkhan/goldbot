@@ -119,7 +119,10 @@ def test_evidence_exclusions_raise_and_the_nightly_learner_does_not_run(tmp_path
     assert jobs.exploration_learn(ctx, NOW) == {"error": "evidence_exclusions:QuarantineReadError"}
 
 
-def test_the_nightly_cost_table_keeps_the_slippage_prior_when_the_spans_cannot_be_read(tmp_path, monkeypatch):
+def test_unreadable_spans_never_lower_a_probe_raised_slippage_cell(tmp_path, monkeypatch):
+    """Trading-safety S-1: unknown spans must not drop a probe-measured slippage raise back to the prior (a lower
+    cost means more entries and bigger size, runner `_cost_atr`). The probes are counted with nothing held out:
+    apply_probe_slippage only ever raises a cell, so a possibly-void probe can only overstate the cost."""
     from goldbot.execution.costs import CostTable
     from goldbot.ops.jobs import nightly_costs
     from tests.test_probe_slippage import PRIOR, _ctx, _rows, _write
@@ -127,9 +130,22 @@ def test_the_nightly_cost_table_keeps_the_slippage_prior_when_the_spans_cannot_b
     _break(monkeypatch)
     out = nightly_costs(_ctx(tmp_path), NOW)["icm-demo"]
     table = CostTable.load(tmp_path / "costs_icm-demo.json")
-    assert table is not None and table.probe_slippage == {} and out["probe_fills"] == 0
-    assert all(c.from_prior and c.mean == PRIOR for c in table.slippage.values())
-    assert "scheduled-probe fills unreadable: slippage keeps the prior" in table.notes
+    assert table is not None and out["probe_fills"] == 60
+    cell = table.slippage["london:market"]
+    assert not cell.from_prior and cell.mean > PRIOR and table.probe_slippage["london"].raised
+    assert any("quarantine spans unreadable" in n for n in table.notes)
+
+
+def test_unreadable_spans_with_probes_at_the_prior_keep_the_prior(tmp_path, monkeypatch):
+    from goldbot.execution.costs import CostTable
+    from goldbot.ops.jobs import nightly_costs
+    from tests.test_probe_slippage import PRIOR, _ctx, _rows, _write
+    _write(tmp_path, _rows(60, -0.07))                     # favourable fills: never credited
+    _break(monkeypatch)
+    nightly_costs(_ctx(tmp_path), NOW)
+    table = CostTable.load(tmp_path / "costs_icm-demo.json")
+    assert table is not None
+    assert all(c.mean >= PRIOR for c in table.slippage.values())
 
 
 def _raising_store() -> Any:
