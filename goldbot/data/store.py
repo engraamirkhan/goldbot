@@ -7,6 +7,8 @@ bars uses `available_utc`, never the nominal time. `asof_join` enforces this.
 """
 from __future__ import annotations
 
+import glob
+import json
 import os
 import re
 import sys
@@ -182,24 +184,14 @@ class Store:
 
     @staticmethod
     def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
-        name = f"part-{uuid.uuid4().hex[:8]}.parquet"
-        tmp = pdir / f".{name}.tmp"           # not *.parquet: invisible to readers until renamed
-        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), tmp, compression="zstd")
-        fd = os.open(tmp, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        tmp, name = _stage_part(pdir, pa.Table.from_pandas(df, preserve_index=False))
         os.replace(tmp, pdir / name)
-        dfd = os.open(pdir, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        _fsync_dir(pdir)
 
     @staticmethod
     def _read_partition(pdir: Path) -> pd.DataFrame | None:
-        files = sorted(pdir.glob("*.parquet"))
+        gone = compacted_away(pdir.glob(_MANIFEST_GLOB))
+        files = [f for f in sorted(pdir.glob("*.parquet")) if f not in gone]
         if not files:
             return None
         return pd.concat([pq.read_table(f).to_pandas() for f in files], ignore_index=True)
@@ -237,13 +229,16 @@ class Store:
         con = _connect()
         try:
             with self._read_locks(tdir, source, symbol):
+                # backlog 170: the parts a compaction already replaced (crash before its unlinks), never read twice;
+                # listed under the shared locks, so empty unless a compaction died mid-way
+                gone = compacted_away(tdir.glob(f"source=*/symbol=*/year=*/month=*/{_MANIFEST_GLOB}"))
                 files: list[str] | None = None
                 if folder_only:     # listed under the partitions' shared locks, as DuckDB's own glob is
                     files = _folder_files(tdir / f"source={source}" / f"symbol={symbol}", start, end)
                     if not files:
                         return pd.DataFrame()
                 sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
-                                          columns=columns, files=files)
+                                          columns=columns, files=_live(files, tdir, gone))
                 try:
                     df = _fetch(con, sql, params)
                 except duckdb.BinderException:
@@ -251,7 +246,7 @@ class Store:
                         raise
                     # a cast column no file of the folder has: the whole-table read, as before folder_only
                     sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
-                                              columns=columns)
+                                              columns=columns, files=_live(None, tdir, gone))
                     df = _fetch(con, sql, params)
         finally:
             con.close()
@@ -267,13 +262,66 @@ class Store:
             for t in TABLES:
                 tdir = self.table_dir(t)
                 if tdir.exists() and any(tdir.rglob("*.parquet")):
+                    gone = compacted_away(tdir.glob(f"source=*/symbol=*/year=*/month=*/{_MANIFEST_GLOB}"))
+                    target = _live(None, tdir, gone)
                     con.execute(
-                        f"CREATE VIEW {t} AS SELECT * FROM {_scan(str(tdir / '**' / '*.parquet'), t)}"
+                        f"CREATE VIEW {t} AS SELECT * FROM {_scan(target if target is not None else str(tdir / '**' / '*.parquet'), t)}"
                     )
             return _fetch(con, query, None)
         finally:
             con.close()
 
+
+
+# ------------------------------------------------------------------ compaction support (backlog 170, data/compact.py)
+_MANIFEST_GLOB = ".compact-*.json"      # in the partition folder; not *.parquet, so no reader scans it
+
+
+def compacted_away(manifests: Iterable[Path]) -> set[Path]:
+    """The part files a compaction replaced but has not unlinked yet (a crash between its rename and its unlinks):
+    every part a complete manifest names, when the manifest's new part is on disk. A manifest whose new part is not
+    there (a crash before the rename) replaced nothing: the old parts are the partition. Empty in the normal case."""
+    out: set[Path] = set()
+    for m in manifests:
+        try:
+            doc = json.loads(m.read_text())
+            new, replaces = str(doc["new"]), [str(r) for r in doc["replaces"]]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue                          # written by rename: a torn manifest cannot exist; an odd one is ignored
+        if (m.parent / new).exists():
+            out.update(m.parent / r for r in replaces if r != new)
+    return out
+
+
+def _live(files: list[str] | None, tdir: Path, gone: set[Path]) -> list[str] | None:
+    """`files` (globs; None: the whole table) unchanged when nothing is `gone`, else expanded to the part files
+    minus the replaced ones."""
+    if not gone:
+        return files
+    globs = files if files is not None else [str(tdir / "**" / "*.parquet")]
+    return [f for g in globs for f in sorted(glob.glob(g, recursive=True)) if Path(f) not in gone]
+
+
+def _fsync_dir(pdir: Path) -> None:
+    dfd = os.open(pdir, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def _stage_part(pdir: Path, table: pa.Table) -> tuple[Path, str]:
+    """Write `table` to a temp name in `pdir` (not *.parquet: invisible to readers) and fsync it; returns the temp path
+    and the part name it is to be renamed to."""
+    name = f"part-{uuid.uuid4().hex[:8]}.parquet"
+    tmp = pdir / f".{name}.tmp"
+    pq.write_table(table, tmp, compression="zstd")
+    fd = os.open(tmp, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return tmp, name
 
 def _read_query(store: Store, table: str, *, source: str | None, symbol: str | None,
                 start: str | pd.Timestamp | None, end: str | pd.Timestamp | None,
