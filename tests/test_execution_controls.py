@@ -36,6 +36,8 @@ GEOMETRY = {
 # the planned hashes (research plan 2026-11-09 section 4), frozen in the rows
 HASHES = {"VEX15": "c05155207165e963", "VEX1H": "c0514a7202094915", "IEX15": "0d096cf24fbe20dd",
           "IEX1H": "05c6633e6297a37d"}
+# retired 2026-11-13, its cost cell complete at 38 fills (profitability-2026-11-12.md (a)); the other three run on
+RETIRED = {"IEX15": "2026-11-13"}
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +58,7 @@ def test_each_execution_control_is_a_frozen_gold_random_bracket_control_whose_ha
         row = rows[arm_id]
         assert (row.rule, row.role, row.status, row.forward_only) == ("random_bracket", "control", "run", True)
         assert row.config_hash == arm_hash(row) == HASHES[arm_id]
-        assert not row.retired and row.learning is None and "control" not in row.params   # never paired
+        assert row.retired_day == RETIRED.get(arm_id) and row.learning is None and "control" not in row.params
 
 
 @pytest.mark.parametrize("arm_id", ALL)
@@ -94,12 +96,12 @@ def test_vex_runs_on_vantage_demo_and_iex_on_icm_demo_only(accs):
 
 
 @pytest.mark.parametrize(("host", "ids"), [("vantage-demo", VANTAGE), ("icm-demo", ICM)])
-def test_the_engine_runs_each_execution_control_and_refuses_none_of_them(accs, host, ids):
+def test_the_engine_runs_each_execution_control_and_refuses_only_the_retired_iex15(accs, host, ids):
     cfg = exploration.config_for(accs[host])
     assert cfg is not None
     running = {a.arm_id for a in cfg.arms}
     assert set(ids) <= running and not set(ids) & set(cfg.dropped)
-    assert not set(ids) & set(cfg.hash_refused) and not set(ids) & exploration.spec_retired(cfg)
+    assert not set(ids) & set(cfg.hash_refused) and exploration.spec_retired(cfg) & set(ids) == set(ids) & set(RETIRED)
     assert not set(ids) & set(exploration.entry_refused(cfg))    # a control needs no qualification
 
 
@@ -182,4 +184,4 @@ def test_the_execution_controls_are_retired_by_their_2026_12_09_end():
 
 def test_the_end_date_tripwire_fires_on_2026_12_10_and_not_on_the_end_day():
     assert _unretired_after_end(END) == set()
-    assert _unretired_after_end(END + pd.Timedelta(days=1)) == set(ALL)   # the rows as committed: none retired yet
+    assert _unretired_after_end(END + pd.Timedelta(days=1)) == set(ALL) - set(RETIRED)   # the rows as committed

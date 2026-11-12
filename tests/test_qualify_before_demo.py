@@ -70,7 +70,11 @@ RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30",
 RETIRED_1107 = {"S0-XAUJPY"}
 # retired 2026-11-09 (prereg-amendment-2026-11-10-execution-controls.md section 9): its cost cell complete (rule 4)
 RETIRED_1109 = {"I0-XAUJPY"}
-RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109
+# retired 2026-11-13 (profitability-2026-11-12.md (a)): net-negative controls and cost reads with no live counterpart
+RETIRED_1113 = {"ZCD", "F1A", "F1C", "G1A", "G1C", "IEX15"}
+# with them, a retired family stops all its per-instrument rows (`exploration.family_retirement`): I0 (2026-11-06)
+RETIRED_1113 |= {f"I0-{k}" for a in acc_mod.load_accounts(logins=False).values() for k in a.instruments}
+RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:
