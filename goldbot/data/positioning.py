@@ -438,7 +438,7 @@ def merge_releases(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
     else:
         prev = prev.copy()
         prev["available_utc"] = pd.DatetimeIndex(pd.to_datetime(prev["available_utc"], utc=True)).as_unit("ns")
-        last = (prev.sort_values("available_utc").drop_duplicates(["series", "value_date"], keep="last")
+        last = (prev.sort_values("available_utc", kind="stable").drop_duplicates(["series", "value_date"], keep="last")
                 [["series", "value_date", "value"]].rename(columns={"value": "prev_value"}))
         m = fresh.merge(last, on=["series", "value_date"], how="left")
         new = m["prev_value"].isna().to_numpy()

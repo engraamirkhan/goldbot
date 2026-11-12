@@ -343,9 +343,10 @@ def test_store_reads_only_partitions_in_range_with_the_same_rows(tmp_path):
         df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
         return df
 
-    for kw in ({"source": "a", "start": "2024-01-15", "end": "2024-03-01"}, {"start": "2023-12-31 23:00", "end": "2024-01-01 01:00"},
+    kws: tuple[dict[str, Any], ...] = ({"source": "a", "start": "2024-01-15", "end": "2024-03-01"}, {"start": "2023-12-31 23:00", "end": "2024-01-01 01:00"},
                {"start": "2024-04-01"}, {"end": "2023-11-02"}, {"source": "b", "start": "2024-02-29"}, {"start": "2030-01-01"},
-               {"source": "zzz", "start": "2024-01-01"}):
+               {"source": "zzz", "start": "2024-01-01"})
+    for kw in kws:
         got, exp = st.read("bars_1m", **kw), ref(**kw)            # timestamps are unique: ORDER BY fixes the row order
         pd.testing.assert_frame_equal(got, exp, check_exact=True)
 

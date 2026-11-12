@@ -296,7 +296,7 @@ def check_positioning(df: pd.DataFrame) -> list[DQEvent]:
             for prev_day, n in zip(days[:-1], bd):
                 if n > GLD_GAP_BDAYS:
                     events.append(_ev("cadence_gap", "warning", prev_day, f"{s}|{prev_day.date()}|gap {n} bdays"))
-    first = d.sort_values("available_utc").drop_duplicates(["series", "value_date"], keep="first")
+    first = d.sort_values("available_utc", kind="stable").drop_duplicates(["series", "value_date"], keep="first")
     t = first[first["series"] == "gld_tonnes"].set_index("value_date")["value"].sort_index()
     oz = first[first["series"] == "gld_ounces"].set_index("value_date")["value"].sort_index()
     if len(t) and len(oz):
