@@ -292,7 +292,11 @@ def _stage_partition(pdir: Path, dest: Path, data_root: Path, *, attempts: int =
     for attempt in range(attempts):
         if attempt:
             time.sleep(wait_s)
-        before = sorted(pdir.glob("*.parquet"))
+        # backlog 170: parts an interrupted compaction already replaced (its new part is on disk) are not staged, so a
+        # restore, by any version of the code, reads every row once
+        from goldbot.data.store import MANIFEST, compacted_away
+        replaced = compacted_away([pdir / MANIFEST])
+        before = [f for f in sorted(pdir.glob("*.parquet")) if f not in replaced]
         complete = [f for f in before if _parquet_complete(f)]
         incomplete = [(Path("data") / f.relative_to(data_root)).as_posix() for f in before if f not in complete]
         if not complete:
