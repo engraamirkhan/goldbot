@@ -125,8 +125,9 @@ at once with what exists.
 - Side matching takes the gold drift out of the comparison. GS1 earned less than its own twin GS1C (`profitability`
   section 2), so this matters.
 - **E_L** = mean of x_i over London fills. **E_N** = the same over non-London fills. **DiD** = E_L - E_N.
-- All t statistics are clustered by opportunity day (22:00 UTC boundary), one-sided, with a day-block bootstrap
-  (10,000 resamples, seed 20261112) as a check.
+- All t statistics are clustered by opportunity day (22:00 UTC boundary) and one-sided. The decision t uses a
+  two-sample, day-clustered SE (var_s/n_s + var_c/n_c). The day-block bootstrap (10,000 resamples, seed 20261112)
+  resamples signal and control days together and recomputes the control means in every resample.
 - Leg H uses the same x_i. Its control per signal entry is a same-side entry at a uniformly drawn bar within ±60 min,
   inside the same session, with the same bracket. It is seeded by hash(arm id, decision time), as in the H-82 method.
 
@@ -138,6 +139,8 @@ at once with what exists.
 | **H-seen** | the same on 2018-01..2025-09 | corroboration only (CONFIRM-SEEN since 2026-11-02). Reported with and without 2025. | as above | 0 |
 | **F** (decides) | demo fills sent from 2026-11-13 00:00 UTC (or the day after the quant sign-off and the registry row both exist, if later; never earlier) to the read | confirmatory | read at **400 London signal fills** or on **2026-12-17**, whichever comes first | 0 extra. The arms are already running inside their learning caps and loss caps. |
 
+- Any change to `exploration.daily` segments or caps for these 7 arms or their controls before the read is an
+  amendment.
 - **Not used:**
   - TEST-OLD (2006-02..2009; intraday 2008-09 only). It is reserved for arms that pass confirm.
   - The holdout 2025-10-01..2026-09-30. It is sealed: no history leg reads a bar on or after 2025-10-01.
@@ -194,8 +197,8 @@ Evaluated in this order. The evaluator applies it, and the research director sig
   **177**. The registry K rises by the same 3.
 - The research director writes the three registry rows (family `session:2026-11`, units H-90-HL, H-90-HS, H-90-F) at
   quant sign-off, before leg H runs and before the first F fill counts.
-- Q4 budget: `trial_budget_overrides["2026Q4"]` is 3500. Its headroom is on the brain's registry and is not readable
-  here. The director checks for at least 3 free rows before writing.
+- Q4 budget: `trial_budget_overrides["2026Q4"]` is 3500. The local snapshot shows 176 of 3,500 used in 2026Q4. The
+  research director runs `check_budget(3)` on the brain's registry before writing the K rows.
 - **If there is no headroom, raising the budget is an owner decision.** Flag it; do not assume it.
 
 ## 9. What a PASS changes (a proposal only; routed PD + PO -> implementer -> trading-safety + quant)
@@ -221,6 +224,7 @@ Evaluated in this order. The evaluator applies it, and the research director sig
 
 ## 11. Sign-off
 
-- quant-reviewer: **pending**. The frozen text is the commit that adds this file.
+- quant-reviewer: changes required on 5338cfd6 (two-sample SE, joint bootstrap, budget check, segment freeze), all
+  addressed in the amending commit; sign-off pending on it. The frozen text is that commit.
 - evaluator: applies section 7 at the read.
 - research director: writes the K rows (section 8). Reads leg H before the 150-fill interim.
