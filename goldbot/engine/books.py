@@ -748,14 +748,20 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
             eng.__dict__["_pass_cursor"] = rest.index(next(b for b in turn if b in left))
             eng.__dict__["_passes_deferred"] = eng.__dict__.get("_passes_deferred", 0) + 1
         if left or carried:
-            if not eng.__dict__.get("_pass_was_deferred"):      # logged once per run of deferred passes
+            deferred = True
+            # Lane E (brain 2026-11-12): WARNING once per run of passes that left books out; a pass that ran every
+            # book and only carried 15m+ parts is DEBUG (it was logged every minute per account at no trade cost)
+            level = logging.WARNING if left and not eng.__dict__.get("_budget_run") else logging.DEBUG
+            if log.isEnabledFor(level):
                 slow = ", ".join(f"{s} {t:.2f} s ({times.describe(s)})"
                                  for s, t in sorted(took.items(), key=lambda x: -x[1])[:3])
-                log.warning("%s: pass budget %.1f s spent after %d of %d books (%d due first); the rest go first "
-                            "next pass; 15m+ work carried for %d books; quotes %.2f s; exits %.2f s; phases: %s; "
-                            "slowest: %s", cfg.account_id, budget_s, len(order) - len(left), len(order), len(due),
-                            carried, t_quotes, t_exits, times.totals(), slow)
-            deferred = True
+                log.log(level, "%s: pass budget %.1f s spent after %d of %d books (%d due first); the rest go first "
+                        "next pass; 15m+ work carried for %d books; quotes %.2f s; exits %.2f s; phases: %s; "
+                        "slowest: %s", cfg.account_id, budget_s, len(order) - len(left), len(order), len(due),
+                        carried, t_quotes, t_exits, times.totals(), slow)
+            if left and not eng.__dict__.get("_budget_run"):
+                eng.__dict__["_budget_run"] = {"passes": 0, "left": 0, "carried": 0, "t0": t0}
+        _budget_run_note(eng, deferred, len(left), carried)
         _launch_zones(eng, deferred, active, now)
     finally:
         eng.__dict__["_pass_was_deferred"] = deferred
@@ -763,6 +769,24 @@ def account_pass(eng: Engine, broker: Any, one_pass: Any, feed: QuoteFeed | None
         eng.__dict__.pop("_pass_times", None)
         eng.__dict__.pop(exploration.SPLIT, None)
     return ok
+
+
+def _budget_run_note(eng: Engine, deferred: bool, left: int, carried: int) -> None:
+    """Lane E (brain 2026-11-12: "pass budget ... spent after N of N books" every minute per account, every book run,
+    only 15m+ work carried): a run of deferred passes that left books out (warned once, at its start) ends with one
+    INFO summary on its first pass that defers nothing; a run of passes that only carried 15m+ parts has none."""
+    run = eng.__dict__.get("_budget_run")
+    if not deferred:
+        if run:
+            log.info("%s: pass budget run ended after %d passes over %.1f s; %d with books left out, most 15m+ parts "
+                     "carried %d", eng.primary.__dict__["cfg"].account_id, run["passes"],
+                     time.monotonic() - run["t0"], run["left"], run["carried"])
+            eng.__dict__.pop("_budget_run", None)
+        return
+    if run:
+        run["passes"] += 1
+        run["left"] += 1 if left else 0
+        run["carried"] = max(run["carried"], carried)
 
 
 def _slow_parts(eng: Engine, ran: list[SymbolBook], active: list[SymbolBook], t0: float, budget_s: float,
