@@ -107,10 +107,12 @@ def test_each_new_instrument_runs_the_same_controls_and_learning_pair_as_the_exi
         for arm_id in arms:
             row = spec[arm_id]
             # S0-XAUJPY: retired 2026-11-07 (prereg-amendment-2026-11-07-kill-only.md section 4), I0-XAUJPY 2026-11-09
-            # (prereg-amendment-2026-11-10-execution-controls.md section 9); rows and ids kept
+            # (prereg-amendment-2026-11-10-execution-controls.md section 9); I0-USTEC/XAUEUR/DE40/US500/US30
+            # 2026-11-13 (docs/research/profitability-2026-11-12.md); rows and ids kept
             assert row.params["instrument"] == key and row.status == "run", arm_id
-            assert not row.retired_day or (arm_id, row.retired_day) in {("S0-XAUJPY", "2026-11-07"),
-                                                                        ("I0-XAUJPY", "2026-11-09")}, arm_id
+            retired_ok = {("S0-XAUJPY", "2026-11-07"), ("I0-XAUJPY", "2026-11-09")} | {
+                (f"I0-{k}", "2026-11-13") for k in ("USTEC", "XAUEUR", "DE40", "US500", "US30")}
+            assert not row.retired_day or (arm_id, row.retired_day) in retired_ok, arm_id
         assert spec[f"LB-{key}"].role == "learning" and spec[f"LBC-{key}"].role == "control"
 
 
