@@ -27,6 +27,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Replay golden unchanged; store golden: restart.json only (`bars_through: null`, `downtime_bars: 0` on each in-memory
   open trade).
   Tests: tests/test_engine_downtime_catch_up.py.
+- 2026-11-12 (branch fix/restart-rerun-barrier-shadow; backlogs 163, 164, 165, R129): three restart follow-ups of
+  backlog 161. (163) The last processed base close is saved per book with the orders file (`closed_through`) before
+  that close's decisions run, and restored at start (journalled `restart_closed_through`): a restart whose first
+  quote is stamped before it treats the quote as a late tick and never closes or decides that bar again, so an entry
+  RiskGate refused at the original close cannot pass at a later price. The exploration step starts at the restored
+  close too. Old files start as before. (164) The dead-feed time barrier counts a bar when any of its minutes is
+  expected open (`downtime.open_bars`, the catch-up's rule): the bar the daily break ends inside counts, a CME holiday
+  does not. (165) Shadow trades open across a restart are held at start and replayed through the bars missed while
+  down once the history covers them (`engine/shadow_replay.py`, point in time, identical to never restarting); not
+  covered within 6 h, or no resume point (`last_bar_ts`, new on each shadow trade): `restart_gap`, now left out of
+  promotion stats, shadow_z, recalibration, the re-arm read and the throttle's shadow win. Not changed: the
+  exploration 1m/5m minute pass (its own per-minute state), the CUSUM model watch and the perf/automode shadow reads
+  still count `restart_gap` trades (backlog 174). Replay and store goldens unchanged. runner.py LINE_CAP 3083 -> 3073.
+  Tests: tests/test_engine_restart_rerun.py, tests/test_engine_no_quote_barrier.py, tests/test_shadow_restart_replay.py.
 - 2026-11-11 (branch fix/cold-start-trade-ageing; backlog 160, R124): open trades age from every base bar close after
   any cold start. Before, `on_bar_close` returned at its 400-bar floor before `_manage_open`, so after a restart with no
   stored history an open trade's `bars_held` paused until the first decision frame (~30 h for 15m arms) and its time
