@@ -7,12 +7,14 @@ bars uses `available_utc`, never the nominal time. `asof_join` enforces this.
 """
 from __future__ import annotations
 
+import glob
+import json
 import os
 import re
 import sys
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import IO, Iterable, Iterator, Mapping
 
@@ -25,16 +27,30 @@ import pyarrow.parquet as pq
 # runs goldbot natively; there is no fcntl): msvcrt.locking on byte 0 of the lock file, exclusive only, so readers of
 # one partition take turns. LK_LOCK gives up after ten one-second tries, so a non-blocking lock is retried here until
 # it is free, and every handle is unlocked before it is closed (Windows does not promise to release it on close).
+# `deadline` (time.monotonic): give up then with StoreLockTimeout naming the partition (readers and the compaction job:
+# a stuck holder fails them loudly instead of freezing health, the trade chart or a report); None waits for ever.
+
+
+class StoreLockTimeout(TimeoutError):
+    """A partition lock was not free within the store's lock timeout (a stuck writer or compaction holds it)."""
+
+
+def _timed_out(fh: IO[bytes]) -> StoreLockTimeout:
+    return StoreLockTimeout(f"partition lock {fh.name} still held by a writer (append or compaction) at the deadline")
+
+
 if sys.platform == "win32":
     import msvcrt
 
-    def _lock(fh: IO[bytes], *, shared: bool) -> None:
+    def _lock(fh: IO[bytes], *, shared: bool, deadline: float | None = None) -> None:
         fh.seek(0)
         while True:
             try:
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
                 return
             except OSError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise _timed_out(fh) from None
                 time.sleep(0.01)
 
     def _unlock(fh: IO[bytes]) -> None:
@@ -43,8 +59,19 @@ if sys.platform == "win32":
 else:
     import fcntl
 
-    def _lock(fh: IO[bytes], *, shared: bool) -> None:
-        fcntl.flock(fh, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+    def _lock(fh: IO[bytes], *, shared: bool, deadline: float | None = None) -> None:
+        mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        if deadline is None:
+            fcntl.flock(fh, mode)
+            return
+        while True:
+            try:
+                fcntl.flock(fh, mode | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise _timed_out(fh) from None
+                time.sleep(0.01)
 
     def _unlock(fh: IO[bytes]) -> None:
         fcntl.flock(fh, fcntl.LOCK_UN)
@@ -94,8 +121,9 @@ def _utc(x: str | pd.Timestamp) -> pd.Timestamp:
 
 
 class Store:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, lock_timeout_s: float = 30.0):
         self.root = Path(root)
+        self.lock_timeout_s = lock_timeout_s     # a reader's wait for its shared partition locks (StoreLockTimeout)
         self.root.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ paths
@@ -146,10 +174,11 @@ class Store:
 
     @staticmethod
     @contextmanager
-    def _partition_lock(pdir: Path) -> Iterator[None]:
-        """Exclusive lock held for the whole read-modify-write of one partition (across processes)."""
+    def _partition_lock(pdir: Path, timeout_s: float | None = None) -> Iterator[None]:
+        """Exclusive lock held for the whole read-modify-write of one partition (across processes); `timeout_s` (the
+        compaction job) bounds the wait, None (an engine append) waits."""
         with open(pdir / ".lock", "ab") as fh:
-            _lock(fh, shared=False)
+            _lock(fh, shared=False, deadline=None if timeout_s is None else time.monotonic() + timeout_s)
             try:
                 yield
             finally:
@@ -157,20 +186,38 @@ class Store:
 
     @staticmethod
     @contextmanager
-    def _read_locks(tdir: Path, source: str | None, symbol: str | None) -> Iterator[None]:
-        """Shared lock on every matching partition while listing+reading: a writer holds its exclusive lock across
-        rename+unlink, so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one
-        lock: no deadlock."""
+    def _read_locks(tdir: Path, source: str | None, symbol: str | None, start: str | pd.Timestamp | None = None,
+                    end: str | pd.Timestamp | None = None, timeout_s: float | None = None) -> Iterator[set[Path]]:
+        """Shared lock on every partition the read can return rows from (the source/symbol folders, the months of
+        [start, end]) while listing+reading: a writer holds its exclusive lock across rename+unlink (an append, or a
+        compaction's swap), so a reader sees exactly the old or the new rows of a locked partition, never both.
+        Partitions outside the window are pruned by their year/month before DuckDB opens a file. Fixed order; writers
+        hold one lock: no deadlock. Yields the parts an interrupted compaction already replaced in those partitions
+        (`compacted_away`; empty unless one died between its rename and its unlinks). The whole wait is bounded by
+        `timeout_s` (StoreLockTimeout)."""
         pat = f"source={source or '*'}/symbol={symbol or '*'}/year=*/month=*/.lock"
+        lo = _utc(start).year * 12 + _utc(start).month if start is not None else None
+        hi = _utc(end).year * 12 + _utc(end).month if end is not None else None
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
         locked: list[IO[bytes]] = []
         opened: list[IO[bytes]] = []
+        manifests: list[Path] = []
         try:
             for lk in sorted(tdir.glob(pat)):
+                if lo is not None or hi is not None:
+                    try:
+                        ym = int(lk.parent.parent.name.split("=", 1)[1]) * 12 + int(lk.parent.name.split("=", 1)[1])
+                    except ValueError:
+                        ym = None
+                    if ym is not None and ((lo is not None and ym < lo) or (hi is not None and ym > hi)):
+                        continue
                 fh: IO[bytes] = open(lk, "ab")
                 opened.append(fh)
-                _lock(fh, shared=True)
+                _lock(fh, shared=True, deadline=deadline)
                 locked.append(fh)
-            yield
+                if (lk.parent / MANIFEST).exists():
+                    manifests.append(lk.parent / MANIFEST)
+            yield compacted_away(manifests)
         finally:
             for held in locked:
                 try:
@@ -182,24 +229,14 @@ class Store:
 
     @staticmethod
     def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
-        name = f"part-{uuid.uuid4().hex[:8]}.parquet"
-        tmp = pdir / f".{name}.tmp"           # not *.parquet: invisible to readers until renamed
-        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), tmp, compression="zstd")
-        fd = os.open(tmp, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        tmp, name = _stage_part(pdir, pa.Table.from_pandas(df, preserve_index=False))
         os.replace(tmp, pdir / name)
-        dfd = os.open(pdir, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        _fsync_dir(pdir)
 
     @staticmethod
     def _read_partition(pdir: Path) -> pd.DataFrame | None:
-        files = sorted(pdir.glob("*.parquet"))
+        gone = compacted_away([pdir / MANIFEST])
+        files = [f for f in sorted(pdir.glob("*.parquet")) if f not in gone]
         if not files:
             return None
         return pd.concat([pq.read_table(f).to_pandas() for f in files], ignore_index=True)
@@ -236,23 +273,25 @@ class Store:
             raise ValueError("folder_only needs source, symbol and a columns mapping (name -> type)")
         con = _connect()
         try:
-            with self._read_locks(tdir, source, symbol):
+            # backlog 170: `gone` holds the parts a compaction already replaced (a crash before its unlinks), never read
+            # twice; found under the shared locks, so empty unless a compaction died mid-way
+            with self._read_locks(tdir, source, symbol, start, end, self.lock_timeout_s) as gone:
                 files: list[str] | None = None
                 if folder_only:     # listed under the partitions' shared locks, as DuckDB's own glob is
                     files = _folder_files(tdir / f"source={source}" / f"symbol={symbol}", start, end)
                     if not files:
                         return pd.DataFrame()
                 sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
-                                          columns=columns, files=files)
+                                          columns=columns, files=_live(files, tdir, gone))
                 try:
-                    df = _fetch(con, sql, params)
+                    df = _fetch_listed(con, sql, params)
                 except duckdb.BinderException:
                     if files is None:
                         raise
                     # a cast column no file of the folder has: the whole-table read, as before folder_only
                     sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
-                                              columns=columns)
-                    df = _fetch(con, sql, params)
+                                              columns=columns, files=_live(None, tdir, gone))
+                    df = _fetch_listed(con, sql, params)
         finally:
             con.close()
         if "ts_utc" in df.columns:
@@ -261,19 +300,76 @@ class Store:
 
     def sql(self, query: str) -> pd.DataFrame:
         """Run DuckDB SQL; tables are exposed as views named after the table. Zoned timestamps come back tz-aware UTC
-        (`_fetch`), whatever the duckdb major or the host's zone."""
+        (`_fetch`), whatever the duckdb major or the host's zone. Views exist for the tables the query names, read
+        under the same shared partition locks as `read` (every partition of those tables, bounded wait), so an append
+        or a compaction swap is seen whole or not at all."""
         con = _connect()
         try:
-            for t in TABLES:
-                tdir = self.table_dir(t)
-                if tdir.exists() and any(tdir.rglob("*.parquet")):
-                    con.execute(
-                        f"CREATE VIEW {t} AS SELECT * FROM {_scan(str(tdir / '**' / '*.parquet'), t)}"
-                    )
-            return _fetch(con, query, None)
+            with ExitStack() as locks:
+                for t in sorted(TABLES):
+                    tdir = self.table_dir(t)
+                    if not re.search(rf"\b{t}\b", query) or not tdir.exists() or not any(tdir.rglob("*.parquet")):
+                        continue      # a view only for the tables the query names: only their partitions are locked
+                    # shared locks as `read` takes them (bounded wait): a swap is never seen half done
+                    gone = locks.enter_context(self._read_locks(tdir, None, None, timeout_s=self.lock_timeout_s))
+                    target = _live(None, tdir, gone)
+                    scan = _scan(target if target is not None else str(tdir / "**" / "*.parquet"), t)
+                    con.execute(f"CREATE VIEW {t} AS SELECT * FROM {scan}")
+                return _fetch(con, query, None)
         finally:
             con.close()
 
+
+
+# ------------------------------------------------------------------ compaction support (backlog 170, data/compact.py)
+MANIFEST = ".compact.json"      # one per partition folder (compactions run under its lock); not *.parquet
+
+
+def compacted_away(manifests: Iterable[Path]) -> set[Path]:
+    """The part files a compaction replaced but has not unlinked yet (a crash between its rename and its unlinks):
+    every part a complete manifest names, when the manifest's new part is on disk. A manifest whose new part is not
+    there (a crash before the rename) replaced nothing: the old parts are the partition. Empty in the normal case."""
+    out: set[Path] = set()
+    for m in manifests:
+        try:
+            doc = json.loads(m.read_text())
+            new, replaces = str(doc["new"]), [str(r) for r in doc["replaces"]]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue                          # written by rename: a torn manifest cannot exist; an odd one is ignored
+        if (m.parent / new).exists():
+            out.update(m.parent / r for r in replaces if r != new)
+    return out
+
+
+def _live(files: list[str] | None, tdir: Path, gone: set[Path]) -> list[str] | None:
+    """`files` (globs; None: the whole table) unchanged when nothing is `gone`, else expanded to the part files
+    minus the replaced ones."""
+    if not gone:
+        return files
+    globs = files if files is not None else [str(tdir / "**" / "*.parquet")]
+    return [f for g in globs for f in sorted(glob.glob(g, recursive=True)) if Path(f) not in gone]
+
+
+def _fsync_dir(pdir: Path) -> None:
+    dfd = os.open(pdir, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def _stage_part(pdir: Path, table: pa.Table) -> tuple[Path, str]:
+    """Write `table` to a temp name in `pdir` (not *.parquet: invisible to readers) and fsync it; returns the temp path
+    and the part name it is to be renamed to."""
+    name = f"part-{uuid.uuid4().hex[:8]}.parquet"
+    tmp = pdir / f".{name}.tmp"
+    pq.write_table(table, tmp, compression="zstd")
+    fd = os.open(tmp, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return tmp, name
 
 def _read_query(store: Store, table: str, *, source: str | None, symbol: str | None,
                 start: str | pd.Timestamp | None, end: str | pd.Timestamp | None,
@@ -373,6 +469,26 @@ def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
     return con
+
+
+_VANISHED_RETRIES = 3
+
+
+def _fetch_listed(con: duckdb.DuckDBPyConnection, sql: str, params: list | None) -> pd.DataFrame:
+    """`_fetch` of a `Store.read` scan, run again when a listed part vanished before DuckDB opened it (IOException).
+    A read locks only the months of its window, but its scan lists the whole table (the schema union, so the frame is
+    the same as before backlog 170): a compaction swap or a dedupe rewrite of another, unlocked month can unlink a
+    part between DuckDB's listing and its open. Parts appear only by atomic rename and are never rewritten in place, so
+    a vanished file is the only race; a re-run lists again (a swap holds its lock for milliseconds). Other errors (a
+    corrupt part: InvalidInputException) and the last attempt's IOException are raised."""
+    for attempt in range(_VANISHED_RETRIES):
+        try:
+            return _fetch(con, sql, params)
+        except duckdb.IOException:
+            if attempt == _VANISHED_RETRIES - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    raise AssertionError("unreachable")
 
 
 def _fetch(con: duckdb.DuckDBPyConnection, sql: str, params: list | None) -> pd.DataFrame:

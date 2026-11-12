@@ -597,3 +597,12 @@ carry the LM- prefix so parallel lanes cannot collide on numbers (renumber the s
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | LM-1 | Per instrument, an opening-range breakout in the instrument's own session (60-minute range, first 15m close beyond it within 2-3 h, 2 x ATR15 stop, 1.5 R, 4 h; grains 2 h) beats its seeded same-session control net of measured costs | **pre-registered**, all 26 registered (19 on icm-probe, 7 on vantage-demo; research lead 2026-11-02, slot counts raised only), blocked until lane L3 | K +52 at registration (26 arms + 26 controls, `record_learning_k_rows.py`) | per instrument at 2026-12-17 or an engine stop: COST-FAIL (cost/R > 0.20 at n >= 30), LEAD (excess >= +0.15 R, paired t >= 2, >= 15 days: one history prereg may follow), else NO-LEAD (underpowered, not a failure); slot refusals reported per arm, a verdict above 10% is marked selection-affected. MDE about 0.9 R: edge reads are expected inconclusive; the deliverable is per-instrument cost cells |
+
+## A30. Session-conditional signal arms (strategy researcher, 2026-11-12)
+
+Prereg `prereg-2026-11-12-london-signal-arms.md`. Post-hoc origin disclosed (`profitability-2026-11-12.md` section 1,
+one of >= 9 cuts); the discovery fills never count.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-90 | Gold signal arms Z1P, Z2P, Z5P, Z3D, Z9D, Z10D, GS1 entering in [07:00, 12:00) Europe/London beat their own side- and session-matched random control (E_L > 0), and by more than outside London (DiD > 0), net of broker-measured costs. Discovery (post hoc, 2026-10-26..11-12): London signal arms +0.132 R, day-clustered t 2.9, n 674; controls -0.078 R. Prior low (H-82 gross +/-0.011 R on 2010-17; H-83 0/24 cells) | **pre-registered** 2026-11-12; quant sign-off pending; K rows not yet written | K +3 (H-learn, H-seen, F): demo-arm K 174 -> 177 | H-learn (2010-17) kill-only: E_L <= 0 or DiD <= 0 or < 5/8 years -> retired. F (demo from 11-13, read at 400 London fills or 2026-12-17, futility at 150): PASS = E_L t >= 2.0, London net > 0, DiD t >= 1.645, leave-one-arm-out and both sides > 0 -> London-first demo admission proposal (volume only, no cap change, never live evidence); LEAD = t in [1, 2); else retired |
