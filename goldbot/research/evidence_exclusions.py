@@ -144,6 +144,12 @@ def held_out_in(conn: sqlite3.Connection, store: Any, hosts: Mapping[str, str], 
     return held_out(_candidates(conn, sorted(spans)), spans, rel)
 
 
+def all_candidates(conn: sqlite3.Connection, accts: Sequence[str]) -> set[str]:
+    """Every exploration candidate and trade id of `accts`: what a reader holds out when the spans cannot be read
+    (quarantine.QuarantineReadError, backlog 158)."""
+    return {str(c) for c in _candidates(conn, accts)["candidate_id"]} if accts else set()
+
+
 def unresolved(spans_by_account: Mapping[str, Sequence[Span]], reloads: Reloads) -> list[str]:
     """The accounts with a recorded span and no recorded R for it."""
     return sorted(a for a, ss in spans_by_account.items() if any((a, s[2]) not in reloads for s in ss))
@@ -303,5 +309,6 @@ def counts(conn: sqlite3.Connection, accounts: Sequence[str], lo: pd.Timestamp, 
 
 
 __all__ = ["CRITERION_VERSION", "EXPLORATION_SCOPE", "PROBE_SCOPE", "SCOPES", "Exclusion", "Screen", "counts",
-           "decide", "excluded", "excluded_ids", "held_out", "held_out_in", "record", "record_reload", "recorded_spans", "reloads",
+           "all_candidates", "decide", "excluded", "excluded_ids", "held_out", "held_out_in", "record", "record_reload",
+           "recorded_spans", "reloads",
            "screen", "span_ref", "spans_of", "unresolved"]

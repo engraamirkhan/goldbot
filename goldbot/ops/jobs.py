@@ -119,6 +119,7 @@ from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, load_record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.account_bars import account_bars_1m
+from goldbot.data.quarantine import QuarantineReadError
 from goldbot.data.release import store_macro
 from goldbot.data.store import Store
 from goldbot.db.connection import Database
@@ -263,8 +264,17 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         n_probe = 0
         try:     # scheduled-probe fills raise a session's slippage when proven above the prior; never in `fills` (K7)
             window_start = slot - pd.Timedelta(days=r.fills_window_days)
-            prows = probe_entry_fills(cost_probe_rows(ctx.state_dir, acc.account_id, window_start, slot,
-                                                      held=_held_spans(ctx, acc, slot)))
+            try:
+                held = _held_spans(ctx, acc, slot)
+            except QuarantineReadError as exc:
+                # backlog 158 / safety S-1: spans unknown. Hold nothing out: apply_probe_slippage only ever raises a
+                # cell, so a possibly-void probe can only overstate the cost; dropping to the prior would lower it
+                log.warning("quarantine spans of %s unreadable (%s): probes counted with none held out",
+                            acc.account_id, type(exc.__cause__ or exc).__name__)
+                held = []
+                table = table.model_copy(update={"notes": [
+                    *table.notes, "quarantine spans unreadable: scheduled probes counted with none held out"]})
+            prows = probe_entry_fills(cost_probe_rows(ctx.state_dir, acc.account_id, window_start, slot, held=held))
             n_probe = len(prows)
             table = apply_probe_slippage(table, probe_slippage(prows, ctx.settings.costs.slippage_prior_usd), n_probe)
         except (sqlite3.Error, OSError, ValueError) as exc:     # unreadable aux.db: the prior stands

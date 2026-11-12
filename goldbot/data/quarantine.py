@@ -40,6 +40,17 @@ QUARANTINE_TABLE = {"ticks": "ticks_quarantine", "bars_1m": "bars_quarantine", "
 Select = Callable[[Path, pd.DataFrame], "pd.Series[bool]"]
 
 
+class QuarantineReadError(RuntimeError):
+    """The quarantine spans of a source could not be read (a failed store read of dq_events or a quarantine table): the
+    spans are unknown, never "none" (backlog 158). Before, the read error was swallowed and no span was returned, so
+    D12 graded quarantined minutes as feed faults, `record_span` could write a span twice, and research kept minutes
+    it should leave out. Every caller treats it as unsafe: `record_span` and `spans` raise it; the D12 reconcile
+    fails (the scheduler reports the job); the nightly learner does not run; the cost job keeps the slippage prior;
+    the daily review records an `unreadable` incident; the labs read holds every candidate of its accounts out of
+    n; scripts/evidence_exclusions.py exits with the error. A missing table or a schema without the span columns is
+    still no spans."""
+
+
 def move_rows(store: Store, table: str, *, source: str, symbol: str, select: Select, reason: str,
               now: pd.Timestamp, apply: bool = False) -> int:
     """Move the rows `select(part_file, rows)` marks out of `table` (source, symbol) into its quarantine table.
@@ -96,10 +107,11 @@ def record_span(store: Store, *, source: str, symbol: str, start: pd.Timestamp, 
 def _recorded(store: Store, source: str, symbol: str, start: pd.Timestamp, end: pd.Timestamp,
               lookback: pd.Timedelta = pd.Timedelta(days=31)) -> list[tuple[pd.Timestamp, pd.Timestamp, str]]:
     """Every recorded span (start, end, reason) of `source` overlapping [start, end); a span is stamped at its start."""
-    try:
+    try:      # no events table reads empty (Store.read), a schema without the span columns is checked below
         ev = store.read("dq_events", source=source, symbol=symbol, start=pd.Timestamp(start) - lookback, end=end)
-    except Exception:            # noqa: BLE001 - no events table or a schema without the span columns: no spans
-        return []
+    except Exception as exc:     # noqa: BLE001 - backlog 158: unknown, never "no spans"
+        raise QuarantineReadError(f"dq_events of {source}/{symbol} unreadable ({type(exc).__name__}: {exc})"[:400]) \
+            from exc
     if ev.empty or "check" not in ev.columns or "span_to" not in ev.columns:
         return []
     ev = ev[ev["check"] == SPAN_CHECK]
@@ -115,10 +127,11 @@ def _recorded(store: Store, source: str, symbol: str, start: pd.Timestamp, end: 
 def _backed(store: Store, source: str, symbol: str, a: pd.Timestamp, b: pd.Timestamp, reason: str) -> bool:
     """Rows quarantined for `reason` sit inside [a, b) in a quarantine table of `source`."""
     for qtable in sorted(set(QUARANTINE_TABLE.values())):
-        try:
+        try:     # an absent table reads empty (Store.read) and backs nothing
             q = store.read(qtable, source=source, symbol=symbol, start=a, end=b)
-        except Exception:        # noqa: BLE001 - an absent table backs nothing
-            continue
+        except Exception as exc:  # noqa: BLE001 - backlog 158: unknown, never "not backed"
+            raise QuarantineReadError(f"{qtable} of {source}/{symbol} unreadable ({type(exc).__name__}: {exc})"[:400]) \
+                from exc
         if not q.empty and "quarantine_reason" in q.columns and (q["quarantine_reason"] == reason).any():
             return True
     return False
@@ -133,4 +146,4 @@ def spans(store: Store, *, source: str, symbol: str, start: pd.Timestamp, end: p
 
 
 __all__ = ["BACKDATED_CORRECTION", "MOVE_REASONS", "QUARANTINE_TABLE", "SPAN_CHECK", "SPAN_REASONS", "TZ_MISLABEL",
-           "move_rows", "record_span", "spans"]
+           "QuarantineReadError", "move_rows", "record_span", "spans"]

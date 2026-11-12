@@ -88,7 +88,7 @@ def test_the_window_holds_exactly_the_rows_the_bounded_store_read_returns(tmp_pa
     assert ctx.settings is not None
     since, end = NOW - pd.Timedelta(hours=health.HISTORY_GAP_WINDOW_H), NOW + pd.Timedelta(seconds=1)
     want = Store(ctx.settings.data_root).read("decisions", source=ACC.account_id, symbol=ACC.symbol,
-                                              start=since, end=end)
-    for _ in range(2):                                       # the read, then the cached rows
+                                              start=since, end=end)[list(engine_checks.JOURNAL_COLUMNS)]
+    for _ in range(2):                                     # the read, then the cached rows
         got = engine_checks._journal_window(ctx.settings.data_root, ACC, since, end)
         pd.testing.assert_frame_equal(got, want)

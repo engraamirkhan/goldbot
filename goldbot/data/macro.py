@@ -147,7 +147,7 @@ def merge_vintages(prev: pd.DataFrame | None, fresh: pd.DataFrame) -> pd.DataFra
     first download carries that download's vintage (for these series, market rates and an index, revisions are rare)."""
     if prev is None or prev.empty:
         return fresh.sort_values(["series", "value_date"]).reset_index(drop=True)
-    last = (prev.sort_values("available_utc").drop_duplicates(["series", "value_date"], keep="last")
+    last = (prev.sort_values("available_utc", kind="stable").drop_duplicates(["series", "value_date"], keep="last")
             [["series", "value_date", "value"]].rename(columns={"value": "prev_value"}))
     m = fresh.merge(last, on=["series", "value_date"], how="left")
     new = m["prev_value"].isna().to_numpy()
@@ -184,7 +184,7 @@ def first_release(macro: pd.DataFrame, series: str) -> pd.DataFrame:
         return pd.DataFrame({"value_date": pd.Series(dtype="datetime64[ns]"), "value": pd.Series(dtype=float),
                              "available_utc": pd.Series(dtype="datetime64[ns, UTC]")})
     s = s.assign(available_utc=pd.DatetimeIndex(pd.to_datetime(s["available_utc"], utc=True)).as_unit("ns"))
-    s = s.sort_values("available_utc").drop_duplicates("value_date", keep="first").sort_values("value_date")
+    s = s.sort_values("available_utc", kind="stable").drop_duplicates("value_date", keep="first").sort_values("value_date")
     out = s[["value_date", "value", "available_utc"]].reset_index(drop=True)
     out["available_utc"] = out["available_utc"].cummax()
     return out

@@ -1015,6 +1015,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     carried = prev.volume_low_days if prev is not None else 0
     low_days = (carried + 1 if low else 0) if trading else carried
     learning = _learning_fills(d, _learning_ids(incidents))
+    unresolved = _unresolved(db, store, hosts, settings, now, incidents)
     review = DailyReview(day=day, generated_utc=now, dry_run=dry_run, trading_day=trading, costs=costs,
                          refusals=_refusals(d), volume=volume, volume_total=total, plan_total=plan_total,
                          of_plan=of_plan, fills_total=sum(v.fills for v in volume), fills_probes=probe_fills,
@@ -1022,7 +1023,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          arms_retired={b: len(retired_arms(db, b)) for b in sorted(set(hosts.values()))},
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
                          evidence_void=_void(db, hosts, lo, hi),
-                         spans_unresolved=_unresolved(db, store, hosts, settings, now),
+                         spans_unresolved=unresolved,
                          learning=learning)
     if dry_run:
         return review
@@ -1055,9 +1056,18 @@ def _learning_ids(incidents: list[Incident]) -> frozenset[str]:
 
 
 def _unresolved(db: Database, store: Any, hosts: Mapping[str, str], settings: Settings,
-                now: pd.Timestamp) -> list[str]:
+                now: pd.Timestamp, incidents: list[Incident]) -> list[str]:
+    """The accounts with a quarantine span and no recorded engine restart. Spans that cannot be read are unknown
+    (backlog 158): an `unreadable` incident, never "no span" in silence (the nightly learner refuses to run on them)."""
+    from goldbot.data.quarantine import QuarantineReadError
     from goldbot.research import evidence_exclusions as ev
-    spans = ev.spans_of(store, hosts, symbol=getattr(settings, "symbol", "XAUUSD"), now=now)
+    try:
+        spans = ev.spans_of(store, hosts, symbol=getattr(settings, "symbol", "XAUUSD"), now=now)
+    except QuarantineReadError as exc:
+        incidents.append(Incident(kind="unreadable", host=None, count=1,
+                                  detail=f"quarantine spans unreadable ({type(exc.__cause__ or exc).__name__}): "
+                                         "evidence held out or voided cannot be checked"))
+        return []
     return ev.unresolved(spans, ev.reloads(db)) if spans else []
 
 
