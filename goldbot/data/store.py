@@ -284,14 +284,14 @@ class Store:
                 sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
                                           columns=columns, files=_live(files, tdir, gone))
                 try:
-                    df = _fetch(con, sql, params)
+                    df = _fetch_listed(con, sql, params)
                 except duckdb.BinderException:
                     if files is None:
                         raise
                     # a cast column no file of the folder has: the whole-table read, as before folder_only
                     sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
                                               columns=columns, files=_live(None, tdir, gone))
-                    df = _fetch(con, sql, params)
+                    df = _fetch_listed(con, sql, params)
         finally:
             con.close()
         if "ts_utc" in df.columns:
@@ -469,6 +469,26 @@ def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
     return con
+
+
+_VANISHED_RETRIES = 3
+
+
+def _fetch_listed(con: duckdb.DuckDBPyConnection, sql: str, params: list | None) -> pd.DataFrame:
+    """`_fetch` of a `Store.read` scan, run again when a listed part vanished before DuckDB opened it (IOException).
+    A read locks only the months of its window, but its scan lists the whole table (the schema union, so the frame is
+    the same as before backlog 170): a compaction swap or a dedupe rewrite of another, unlocked month can unlink a
+    part between DuckDB's listing and its open. Parts appear only by atomic rename and are never rewritten in place, so
+    a vanished file is the only race; a re-run lists again (a swap holds its lock for milliseconds). Other errors (a
+    corrupt part: InvalidInputException) and the last attempt's IOException are raised."""
+    for attempt in range(_VANISHED_RETRIES):
+        try:
+            return _fetch(con, sql, params)
+        except duckdb.IOException:
+            if attempt == _VANISHED_RETRIES - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    raise AssertionError("unreachable")
 
 
 def _fetch(con: duckdb.DuckDBPyConnection, sql: str, params: list | None) -> pd.DataFrame:

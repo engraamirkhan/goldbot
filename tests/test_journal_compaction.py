@@ -314,3 +314,31 @@ def test_backup_never_stages_parts_a_manifest_replaced(tmp_path: Path, monkeypat
     assert why is None
     staged = list((dest / "data" / pdir.relative_to(tmp_path / "data")).glob("*.parquet"))
     assert len(staged) == 1 and pq.read_metadata(staged[0]).num_rows == 24
+
+
+def test_a_part_swapped_away_in_an_unlocked_month_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review of c767e94a (LOW): a windowed read still scans the whole table's glob (its schema union, so the frame is
+    the same as before: tests/test_health_journal_folder_read.py), but locks only the window's months. A compaction
+    swap of an older month can unlink a part DuckDB listed before it opens it: DuckDB raises IOException, and the read
+    re-lists and runs again (a swap is milliseconds) instead of failing. A corrupt part is still a loud error."""
+    import duckdb
+
+    import goldbot.data.store as store_mod
+    store = Store(tmp_path)
+    _seed(store)
+    want = store.read("decisions", source=ACC, symbol="XAUUSD", start="2026-10-15")
+    real = store_mod._fetch
+    calls: list[int] = []
+
+    def vanished_once(con: Any, sql: str, params: Any) -> pd.DataFrame:
+        calls.append(1)
+        if len(calls) == 1:
+            raise duckdb.IOException("IO Error: No files found that match the pattern / cannot open file part-x")
+        return real(con, sql, params)
+    monkeypatch.setattr(store_mod, "_fetch", vanished_once)
+    pd.testing.assert_frame_equal(store.read("decisions", source=ACC, symbol="XAUUSD", start="2026-10-15"), want)
+    assert len(calls) == 2
+    monkeypatch.undo()
+    (_parts(store, ACC, 2026, 9)[0].parent / "part-garbage0.parquet").write_bytes(b"not parquet")
+    with pytest.raises(duckdb.Error):
+        store.read("decisions", source=ACC, symbol="XAUUSD", start="2026-10-15")
