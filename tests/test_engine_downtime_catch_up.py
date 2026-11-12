@@ -266,15 +266,17 @@ def test_the_no_quote_time_barrier_after_a_restart_counts_from_the_last_counted_
     assert pid not in eng.open
 
 
-def test_shadow_trades_open_across_an_engine_restart_are_tagged_restart_gap(tmp_path):
-    """Quant review Q-1: the shadow book never sees the bars that closed while the engine was down, so a trade open
-    across a restart is tagged (persisted) for calibration and shadow-vs-live reads to exclude; a reader that only
-    opens the book (API, jobs) tags nothing."""
+def test_shadow_trades_open_across_an_engine_restart_without_a_resume_point_are_tagged_restart_gap(tmp_path):
+    """Quant review Q-1: a trade open across a restart whose missed bars cannot be replayed (backlog 165: saved before
+    `last_bar_ts`, after it advanced) is tagged (persisted) for calibration and shadow-vs-live reads to exclude; a
+    reader that only opens the book (API, jobs) tags nothing. tests/test_shadow_restart_replay.py: the replay."""
     book = ShadowBook(tmp_path)
     t0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
     book.track("v1", t0)
-    book.open_trade(version="v1", agent_id="a", side=1, bar_ts=t0, entry=2400.0, atr_usd=2.0, target_atr=1.5,
-                    stop_atr=1.0, max_bars=4, p=0.6)
+    t = book.open_trade(version="v1", agent_id="a", side=1, bar_ts=t0, entry=2400.0, atr_usd=2.0, target_atr=1.5,
+                        stop_atr=1.0, max_bars=4, p=0.6)
+    assert t is not None
+    t.bars_held = 2                                                        # advanced, no last bar known
     book.save(t0)
     assert not ShadowBook(tmp_path).books["v1"].open[0].restart_gap        # a reader
     host = ShadowBook(tmp_path, host=True)                                 # the engine's own start

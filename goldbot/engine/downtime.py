@@ -18,6 +18,10 @@ of the market, so a close the engine never saw (a restart, a deploy, a crash) st
 * the credit is logged per trade and summed in `downtime_bars` (orders file, then the closed-trade record): such a
   trade's time exit or hard flat comes at the restart close, not at its label's deadline (quant review Q-2).
 
+The same any-minute rule counts the dead-feed time barrier's bars (`open_bars`, backlog 164), so the no-quote barrier
+and the catch-up agree on a hold. The last processed base close is saved with the orders file before its decisions run
+(`processed`) and restored at start (`restore`, backlog 163): a restart never decides a close twice.
+
 Exits only get earlier than before, never later. A trade with no `bars_through` (saved before it existed: the first
 deploy; adopted at the broker) counts from its next close, as before. A session table that cannot answer credits
 nothing (logged); a downtime longer than CATCH_UP_DAYS is credited its first CATCH_UP_DAYS. Closes this engine skipped
@@ -26,6 +30,7 @@ gated."""
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -38,6 +43,7 @@ from goldbot.engine import below_floor
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
     from goldbot.engine.store import OpenTrade
+    from goldbot.telegram.approvals import Proposal
 
 log = logging.getLogger(__name__)
 
@@ -48,16 +54,80 @@ def missed_closes(sessions: SessionTable, sec: int, after: pd.Timestamp, before:
     """Base closes strictly between the closes `after` and `before` whose `sec`-second bar has a minute the market
     was open for (`SessionTable.expected_open`); 0 when the table cannot answer."""
     n = min(int((before - after).total_seconds() // sec) - 1, CATCH_UP_DAYS * 86400 // sec)
+    return _open_count(sessions, sec, after, n, "the downtime catch-up (%s): credited nothing")
+
+
+def open_bars(sessions: SessionTable, sec: int, base: pd.Timestamp, now: pd.Timestamp) -> int:
+    """The dead-feed time barrier (`Engine._host_clock_exits`; backlog 164, moved out of runner.py): whole `sec`-second
+    bars from `base` to `now` that `missed_closes`' rule counts (a minute in `SessionTable.expected_open`), so the
+    no-quote barrier and the downtime catch-up agree on a hold; at most 7 days of bars. 0 when the table cannot answer
+    (the time exit then waits for a bar close; the broker's stop stays in place)."""
+    n = min(int((now - base).total_seconds() // sec), 7 * 86400 // sec)
+    return _open_count(sessions, sec, base, n, "the priceless time barrier (%s)")
+
+
+def _open_count(sessions: SessionTable, sec: int, start: pd.Timestamp, n: int, unusable: str) -> int:
+    """Of the `n` consecutive `sec`-second bars from `start`, those with a minute in `SessionTable.expected_open`."""
     if n <= 0:
         return 0
     per = max(sec // 60, 1)
     try:
-        minutes = pd.date_range(after, periods=n * per, freq="60s")
+        minutes = pd.date_range(start, periods=n * per, freq="60s")
         open_ = np.asarray(sessions.expected_open(minutes), dtype=bool).reshape(n, per)
     except Exception as exc:                          # noqa: BLE001 - a broken table never closes a trade
-        log.warning("session table unusable for the downtime catch-up (%s): credited nothing", type(exc).__name__)
+        log.warning("session table unusable for " + unusable, type(exc).__name__)
         return 0
     return int(open_.any(axis=1).sum())
+
+
+def processed(eng: Engine, close: pd.Timestamp) -> None:
+    """Backlog 163: `close` is being processed. It is saved with the orders file before its decisions run, so a restart
+    (`restore`) never decides it again, even after a crash inside it (its exits are then the downtime catch-up's). A
+    failed save is a tick error (entries blocked until a clean close); the close still runs its exits."""
+    eng._closed_through = close
+    eng._guard(eng._save_orders)
+
+
+def counted_through(eng: Engine, tr: OpenTrade) -> pd.Timestamp | None:
+    """The last close counted in `tr.bars_held`, for the dead-feed time barrier: its `bars_through`; without one (an
+    orphan adopted at start, a trade saved before the field) the last close this engine processed itself, never one
+    restored from the orders file (safety review S-2: the barrier then counts from the entry bar, as before 163, so
+    its exit is never later); None when neither is known."""
+    if tr.bars_through is not None:
+        return tr.bars_through
+    return eng._closed_through if eng._first_counted is not None else None
+
+
+def archived(eng: Engine, p: Proposal) -> None:
+    """A proposal published before the restart, archived at start (`Engine._archive_stale_proposals`): its id joins
+    `_restart_archived` (`_retired_proposal` never raises it again) and the archive is journalled `restart_archived`
+    now. Before backlog 163 the journal row came only from re-deciding its bar close, which a restart no longer does
+    (`restore`); the archive and the old card's expiry never depended on it."""
+    eng._restart_archived.add(p.proposal_id)
+    eng.decisions.append({"ts": time.time(), "agent": p.agent_id, "action": "restart_archived",
+                          "proposal": p.proposal_id})
+
+
+def restore(eng: Engine, closed_through: pd.Timestamp | None) -> None:
+    """Backlog 163, at start (`Engine._load_orders`): the last base close the previous engine processed. A quote
+    stamped before it is a late tick and its bar is never closed again (`Engine._due_close`), so a signal RiskGate
+    refused at that close is never re-decided at a later price; the exploration step starts after it too. Journalled.
+    None (an older orders file, or no close processed yet): as before. One later than the host clock plus a decision
+    bar (a broker clock that ran ahead) is ignored and journalled (safety review S-3): it would stop every close."""
+    if closed_through is None:
+        return
+    ahead = eng.clock() + pd.Timedelta(seconds=tf_seconds(eng.cfg.decision_tf))
+    if closed_through > ahead:                        # safety review S-3: a broker clock that ran ahead
+        log.warning("restart: the saved last close %s is ahead of the host clock: ignored", closed_through)
+        eng.decisions.append({"ts": time.time(), "agent": None, "action": "restart_closed_through_ignored",
+                              "close": closed_through.isoformat()})
+        return
+    eng._closed_through = closed_through
+    if eng.exploration is not None and eng.exploration.last_close is None:
+        eng.exploration.last_close = closed_through
+    log.info("restart: bar closes up to %s were processed before; none is decided again", closed_through)
+    eng.decisions.append({"ts": time.time(), "agent": None, "action": "restart_closed_through",
+                          "close": closed_through.isoformat()})
 
 
 def age(eng: Engine, live: set[int]) -> None:

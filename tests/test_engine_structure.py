@@ -12,7 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 RUNNER = Path(__file__).parents[1] / "goldbot" / "engine" / "runner.py"
-LINE_CAP = 3083             # measured after step 1 (3471), lowered by moves out (the time-exit count -> engine/downtime.py 2026-11-11, engine/state_heartbeat.py and the terminal-account blocks -> engine/terminal_account.py 2026-11-09, engine/capital_flows.py, engine/magic.py 2026-10-25, bridge_refused -> execution/not_placed.py, exit_summary -> execution/deals.py 2026-10-26, _rebuild_bars/_append_bars -> engine/broker_bars.py, the fills row -> engine/order_send.py, _implied_atr -> engine/unconfirmed.py 2026-10-27, _record_closed/_closed_excursion -> engine/closed_record.py 2026-11-02); <= 1,500 after step 7 (ADR 0023)
+LINE_CAP = 3073             # measured after step 1 (3471), lowered by moves out (the no-quote bar count -> engine/downtime.py 2026-11-12, the time-exit count -> engine/downtime.py 2026-11-11, engine/state_heartbeat.py and the terminal-account blocks -> engine/terminal_account.py 2026-11-09, engine/capital_flows.py, engine/magic.py 2026-10-25, bridge_refused -> execution/not_placed.py, exit_summary -> execution/deals.py 2026-10-26, _rebuild_bars/_append_bars -> engine/broker_bars.py, the fills row -> engine/order_send.py, _implied_atr -> engine/unconfirmed.py 2026-10-27, _record_closed/_closed_excursion -> engine/closed_record.py 2026-11-02); <= 1,500 after step 7 (ADR 0023)
 
 # A1 (ADR 0023 addendum): after step 1 runner.py writes no state file. The reads left are of files other jobs write, each
 # allowed only in its named function, at today's count, until that function moves: a second read inside an allowed

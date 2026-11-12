@@ -821,7 +821,9 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     cusum.WATCH_MAX_WEEKS (CUSUM re-verify: two weeks of a 2-2.5 trades/week agent are 4-5 trades, where no 5%-rate
     alarm can fire). h is calibrated for `cusum.watch_trades` trades. When the statistic cannot exceed h in the
     watch's trades (`cusum.can_alarm`), the agent is reported `cannot_alarm` instead of a silent "ok"; such agents
-    rely on drift_watch and the drawdown halt. Writes state/model_watch.json for the health check."""
+    rely on drift_watch and the drawdown halt. Shadow trades whose path missed bars over an engine restart
+    (`restart_gap`, backlog 165) are left out: a missing barrier touch must never trigger a model rollback. Writes
+    state/model_watch.json for the health check."""
     book = ShadowBook(ctx.state_dir)   # read-only view of the engine's shadow book
     d = ctx.settings.drift
     cap_age = pd.Timedelta(weeks=WATCH_MAX_WEEKS)
@@ -837,6 +839,7 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         # (exit time, return) of the taken trades exited since promotion, oldest exit first
         trades = sorted((pd.Timestamp(t.exit_ts), float(t.ret)) for t in closed
                         if t.taken and t.ret is not None and t.exit_ts is not None
+                        and (not t.restart_gap or float(t.ret) < 0)    # a gap loss still counts (S-1 rule)
                         and start <= t.exit_ts <= min(slot, start + cap_age))
         two_weeks = start + pd.Timedelta(weeks=WATCH_WEEKS)
         window = trades[:max(sum(1 for ts, _ in trades if ts <= two_weeks), WATCH_MIN_TRADES)]

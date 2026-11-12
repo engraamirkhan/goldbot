@@ -122,6 +122,9 @@ class OrdersSnapshot(FrozenRecord):
     # closed-trade records not written yet (a failed write) survive a restart; lost ones stay listed
     closing: list[PendingClose]
     records_lost: list[int]
+    # backlog 163: the last base close this book processed (`Engine._closed_through`), so a restart never decides it
+    # again (engine/downtime.py `restore`). Written only once set; absent (an older file) = none known, as before
+    closed_through: UtcTimestamp | None = None
 
 
 class RiskSnapshot(FrozenRecord):
@@ -196,6 +199,8 @@ class JsonEngineStore:
                    # closed-trade records not written yet (a failed write) survive a restart; lost ones stay listed
                    "closing": [c.model_dump(mode="json") for c in s.closing],
                    "records_lost": s.records_lost}
+        if s.closed_through is not None:
+            payload["closed_through"] = s.closed_through.isoformat()
         # durable: restart reconciliation reads it
         write_atomic(orders_file(self.state_dir, self.account_id), json.dumps(payload))
 
@@ -206,13 +211,15 @@ class JsonEngineStore:
         d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget what was sent
         # ADR 0010 (rollback = restart): fields a newer release added are dropped, a wrong type still fails loudly
         src = "orders_<account>.json"
-        if extra := sorted(set(d) - {"sent", "open", "closing", "records_lost"}):
+        if extra := sorted(set(d) - {"sent", "open", "closing", "records_lost", "closed_through"}):
             note_schema_skew(src, "orders file", extra)      # a newer release's table: not read here (S12)
         sent = {k: load_record(SentOrder, v, source=src) for k, v in d.get("sent", {}).items()}
         open_ = {int(k): load_record(OpenTrade, v, source=src) for k, v in d.get("open", {}).items()}
         closing = [load_record(PendingClose, v, source=src) for v in d.get("closing", [])]
         records_lost = [int(x) for x in d.get("records_lost", [])]
-        return OrdersSnapshot(sent=sent, open=open_, closing=closing, records_lost=records_lost)
+        closed_through = pd.Timestamp(d["closed_through"]) if d.get("closed_through") else None
+        return OrdersSnapshot(sent=sent, open=open_, closing=closing, records_lost=records_lost,
+                              closed_through=closed_through)
 
     def save_risk(self, s: RiskSnapshot) -> None:
         payload = {"last_reset": s.last_reset.isoformat() if s.last_reset is not None else None,

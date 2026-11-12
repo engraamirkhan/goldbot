@@ -94,12 +94,13 @@ def shadow_r(t: ShadowTrade) -> float | None:
 def latest_shadow_win(book: ShadowBook, agent_id: str, version: str | None) -> ShadowTrade | None:
     """The qualifying shadow win of `agent_id` that entered last: a closed, taken trade of the agent's current live model
     `version` (a challenger's or an old champion's paper record says nothing about the model now trading) that hit its
-    target or made at least SHADOW_WIN_R. None without a live version. It clears the losses that exited before its
+    target or made at least SHADOW_WIN_R, and whose path is whole (never `restart_gap`, backlog 165: a win on a path
+    with missing bars may have been a stop). None without a live version. It clears the losses that exited before its
     signal bar opened (`agent_throttle`)."""
     if version is None or version not in book.books:
         return None
     wins = [t for t in book.books[version].closed
-            if t.agent_id == agent_id and t.taken and t.exit_ts is not None
+            if t.agent_id == agent_id and t.taken and t.exit_ts is not None and not t.restart_gap
             and (t.barrier == "target" or (shadow_r(t) or 0.0) >= SHADOW_WIN_R)]
     return max(wins, key=lambda t: pd.Timestamp(t.entry_ts)) if wins else None
 

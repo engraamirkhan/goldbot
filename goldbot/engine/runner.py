@@ -58,6 +58,7 @@ from goldbot.engine import (
     key_zones,
     order_send,
     pilot,
+    shadow_replay,
     state_heartbeat,
     terminal_account,
     unconfirmed,
@@ -566,7 +567,7 @@ class Engine:
             if p.account_id == self.cfg.account_id and p.proposal_id not in self.pending:
                 clicked = (bus.decisions_dir / f.name).exists()
                 bus.archive(p)
-                self._restart_archived.add(p.proposal_id)
+                downtime.archived(self, p)          # never raised again; journalled `restart_archived` here (163)
                 if clicked:
                     bus.notify_owner(f"Your tap on proposal {p.proposal_id} was not applied: the engine restarted "
                                      f"before applying it, so the proposal was withdrawn. No order was placed from it.")
@@ -684,7 +685,7 @@ class Engine:
         out: list[dict] = []
         due = broker_bars.hold(self, self._due_close(t, bar_close), t)   # waits at most 3 s for its last broker bar
         if due is not None:
-            self._closed_through = due
+            downtime.processed(self, due)   # saved before its decisions: a restart never decides it again (163)
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = books.timed(self, "bars", self.on_bar_close, due, t)   # SRE 11-09 fix 4a: phase timed
             history.after_close(self, due)   # a finished background fill joins the bars; never raises
@@ -742,8 +743,9 @@ class Engine:
         """Without a price, and only once the feed is dead (re-verification NEW-1/2): never on a single bad quote.
 
         Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last close counted in it
-        (`bars_through`, else `_closed_through`, or its entry bar) during open market hours (the session table) reaches `max_bars` is closed
-        (`time_exit`), once quotes have been invalid for QUOTE_DEAD_S. A weekend or a daily break never counts.
+        (`bars_through`, else a close this engine processed, or its entry bar) with a minute expected open (`downtime.open_bars`,
+        the downtime catch-up's rule) reaches `max_bars` is closed (`time_exit`), once quotes have been invalid for
+        QUOTE_DEAD_S. A weekend, a whole daily break or an exchange holiday never counts.
 
         Friday flatten: past the weekend cut (server time) and before the weekend rule completed, every position of
         this engine is closed (`weekend_close_no_quote`: no valid quote tells losers from winners, and a flat book
@@ -758,11 +760,11 @@ class Engine:
             sec = tf_seconds(self.cfg.decision_tf)
             for pid, tr in list(self.open.items()):
                 opened = tr.opened_utc or tr.entry_bar_ts
-                last = tr.bars_through if tr.bars_through is not None else self._closed_through   # its bars_held's last
+                last = downtime.counted_through(self, tr)        # its bars_held's last close, when known
                 bases = [x for x in (last, opened.floor(f"{sec}s") if opened is not None else None) if x is not None]
                 if pid in self._close_due or not bases:
                     continue
-                if tr.bars_held + self._open_bars(max(bases), now) >= tr.max_bars:   # bars_held: closes processed
+                if tr.bars_held + downtime.open_bars(self.sessions, sec, max(bases), now) >= tr.max_bars:
                     self._try_close(pid, "time_exit", now, clock="host")
         if (ln := weekend_lane.lane(self.cfg, now)) is not None:
             weekend_lane.step(self, now, ln)       # ADR 0062: no Friday cut; the lane's flatten needs no price
@@ -787,20 +789,6 @@ class Engine:
         if done:
             self._weekend_done = srv.date().isoformat()
             self._save_risk_state()
-
-    def _open_bars(self, base: pd.Timestamp, now: pd.Timestamp) -> int:
-        """Whole decision bars from `base` to `now` whose start the session table calls open; 0 when the table cannot
-        answer (the time exit then waits for a bar close; the broker's stop stays in place)."""
-        sec = tf_seconds(self.cfg.decision_tf)
-        n = min(int((now - base).total_seconds() // sec), 7 * 86400 // sec)
-        if n <= 0:
-            return 0
-        try:
-            starts = pd.date_range(base, periods=n, freq=f"{sec}s")
-            return int(np.asarray(self.sessions.is_open(starts)).sum())
-        except Exception as exc:                          # noqa: BLE001 - a broken table never closes a trade
-            log.warning("session table unusable for the priceless time barrier (%s)", type(exc).__name__)
-            return 0
 
     def _due_close(self, t: Tick, bar_open: pd.Timestamp) -> pd.Timestamp | None:
         """Design (D10): "Bar close is detected by clock (close time plus 1.5 s grace), not by tick arrival." The bar
@@ -915,6 +903,7 @@ class Engine:
         if self.shadow is not None:            # open shadow trades keep ageing after their agent leaves the set
             tfs |= {t.timeframe for b in self.shadow.books.values() for t in b.open}
         gaps = history.window_gaps(self, complete)
+        shadow_replay.catch_up(self, complete, close_ts)   # backlog 165: before the trades advance; never raises
         for tf in sorted(tfs, key=tf_seconds):
             if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
                 continue                       # cheap pre-check: this close does not complete an intraday bar of tf
@@ -2355,7 +2344,7 @@ class Engine:
                         if o.ts_utc >= keep_after or o.status in ("sending", unconfirmed.AMBIGUOUS)}
         self.state.unconfirmed_order = books.unconfirmed(self)   # BACKLOG 72, any book: entries wait until settled
         self.state_store.save_orders(OrdersSnapshot(sent=self._orders, open=self.open, closing=self._closes,
-                                                    records_lost=self._records_lost))
+                                                    records_lost=self._records_lost, closed_through=self._closed_through))
 
     def _load_orders(self) -> None:
         """On start: reload the pending_orders table and the open trades, then reconcile them with the broker: an id
@@ -2372,6 +2361,7 @@ class Engine:
             tr.excursion_approx = True            # ticks while the engine was down were not seen (BACKLOG 23)
         self._closes = list(snap.closing)
         self._records_lost = list(snap.records_lost)
+        downtime.restore(self, snap.closed_through)     # backlog 163: a processed close is never decided again
         try:
             positions = {p.position_id: p for p in books.positions(self)}
         except Exception as exc:

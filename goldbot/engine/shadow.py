@@ -40,11 +40,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.config import tf_seconds
@@ -104,9 +104,17 @@ class ShadowTrade(Record):
     limits_profile: str | None = None
     # the barriers are read on the 1m bars inside each decision bar (`triple_barrier_1m`); False: on the decision bar
     barriers_on_1m: bool = False
-    # backlog 161 (quant Q-1): open across an engine restart, so the bars that closed while the engine was down are
-    # missing from its path (bars_held, barriers, excursion): calibration and shadow-vs-live reads exclude it
+    # backlog 161 (quant Q-1): open across an engine restart whose missed bars were not replayed (backlog 165: no resume
+    # point, or the history never covered them), so they are missing from its path (bars_held, barriers, excursion):
+    # calibration and shadow-vs-live reads (`stats`, `outcomes`, the throttle's shadow win, the CUSUM model watch)
+    # exclude it; the re-arm read (`returns_since`) keeps its losses
     restart_gap: bool = False
+    # backlog 165: the open time of the last bar of `timeframe` the trade advanced on, saved with it, so a restart
+    # replays the bars closed while the engine was down from the next one (engine/shadow_replay.py). None: not advanced
+    # yet (it resumes after `entry_ts`), or saved before it existed (bars_held > 0: no resume point, `restart_gap`)
+    last_bar_ts: UtcTimestamp | None = None
+    # backlog 165: held at the engine's start until its missed bars are replayed (or given up on); `on_bar` skips it
+    _held: bool = PrivateAttr(default=False)
 
 
 class CandidateBarriers(Record):
@@ -161,7 +169,9 @@ class ShadowBook:
         """evidence_start (H-52): the cut `save` writes each version's record (state/shadow_<version>.json, read by the
         promotion gate and the research director's shadow_z) with, so a trade opened before the history-gap fix is
         "never clustered, scored or counted as promotion evidence"; None (tests on older bars) cuts nothing. host: the
-        engine opening its own book at start, which tags the open trades `restart_gap`."""
+        engine opening its own book at start (backlog 165): an open trade with a resume point (`last_bar_ts`, or no bar
+        advanced yet) is held until the engine replays the bars it missed (`replay`, engine/shadow_replay.py); one
+        without, or already `restart_gap`, is tagged `restart_gap` and advances from the next bar, as before."""
         self.max_open_per_agent = max_open_per_agent
         self.evidence_start = evidence_start
         self.dir = Path(state_dir)
@@ -170,10 +180,12 @@ class ShadowBook:
         raw = json.loads(self.path.read_text()) if self.path.exists() else {}
         self.books: dict[str, VersionBook] = {k: load_record(VersionBook, v, source="shadow_book.json")
                                                   for k, v in raw.items()}
+        self.held_since: pd.Timestamp | None = None   # the first close the engine tried to replay the held trades at
         if host:      # the engine's own start (never a reader's): every open trade spans the restart (backlog 161, Q-1)
             for b in self.books.values():
                 for t in b.open:
-                    t.restart_gap = True
+                    t._held = not t.restart_gap and (t.last_bar_ts is not None or t.bars_held == 0)
+                    t.restart_gap = not t._held
 
     # ------------------------------------------------------------------ trading
     def track(self, version: str, now: pd.Timestamp) -> None:
@@ -221,17 +233,10 @@ class ShadowBook:
         for book in self.books.values():
             still = []
             for t in book.open:
-                if t.timeframe != timeframe or ts <= t.entry_ts:
-                    still.append(t)            # the entry bar itself never exits the trade
+                if t.timeframe != timeframe or ts <= t.entry_ts or t._held:
+                    still.append(t)            # the entry bar itself never exits the trade; a held one waits (165)
                     continue
-                t.bars_held += 1
-                if t.state is not None:
-                    self._policy_bar(t, bar, ts, timeframe)
-                elif t.barriers_on_1m and minutes is not None and len(minutes):
-                    self._minute_barriers(t, bar, ts, minutes)
-                else:
-                    self._barrier_bar(t, bar, ts)
-                self._excursion_bar(t, bar, ts)
+                self._advance(t, bar, ts, timeframe, minutes)
                 if t.exit is None:
                     still.append(t)
                 else:
@@ -239,6 +244,41 @@ class ShadowBook:
                     closed.append(t)
             book.open = still
         return closed
+
+    def _advance(self, t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp, timeframe: str,
+                 minutes: pd.DataFrame | None) -> None:
+        t.bars_held += 1
+        if t.state is not None:
+            self._policy_bar(t, bar, ts, timeframe)
+        elif t.barriers_on_1m and minutes is not None and len(minutes):
+            self._minute_barriers(t, bar, ts, minutes)
+        else:
+            self._barrier_bar(t, bar, ts)
+        self._excursion_bar(t, bar, ts)
+        t.last_bar_ts = ts
+
+    def held(self) -> list[ShadowTrade]:
+        """The open trades held at the engine's start for their missed bars (backlog 165)."""
+        return [t for b in self.books.values() for t in b.open if t._held]
+
+    def replay(self, t: ShadowTrade, bars: pd.DataFrame, minutes: Callable[[pd.Series], pd.DataFrame]) -> None:
+        """Backlog 165: advance the held trade `t` through `bars` (the completed bars of its timeframe after its last
+        one, oldest first; `minutes(bar)`: the 1m bars inside one) exactly as `on_bar` would have, then release it. It
+        stops at the exit (the trade moves to the closed list)."""
+        book = self.books[t.version]
+        for _, bar in bars.iterrows():
+            self._advance(t, bar, pd.Timestamp(bar["ts_utc"]), t.timeframe, minutes(bar))
+            if t.exit is not None:
+                book.open = [x for x in book.open if x is not t]
+                book.closed.append(t)
+                break
+        t._held = False
+
+    @staticmethod
+    def release(t: ShadowTrade) -> None:
+        """Backlog 165: a held trade whose missed bars the history never covered: tagged `restart_gap` and advanced
+        from the next bar, as before the replay existed."""
+        t._held, t.restart_gap = False, True
 
     def _barrier_bar(self, t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp) -> None:
         if t.side > 0:
@@ -317,10 +357,11 @@ class ShadowBook:
     # ------------------------------------------------------------------ results
     def stats(self, version: str, now: pd.Timestamp, evidence_start: pd.Timestamp | None = None) -> PerfStats:
         """Clustered record of `version`'s taken trades. evidence_start (H-52, promotion.EVIDENCE_START_UTC): trades
-        opened before it are quarantined (`promotion.quarantine_reason`) and left out of the trades and clusters."""
+        opened before it are quarantined (`promotion.quarantine_reason`) and left out of the trades and clusters, as are
+        `restart_gap` trades (backlog 165: bars of their path are missing)."""
         book = self.books[version]
         weeks = max((now - book.started_utc).total_seconds() / (7 * 86400), 0.0)
-        taken = [t for t in book.closed if t.taken and t.ret is not None
+        taken = [t for t in book.closed if t.taken and t.ret is not None and not t.restart_gap
                  and quarantine_reason(t.entry_ts, evidence_start) is None]
         rets = pd.DataFrame({"ret": [t.ret for t in taken]})
         if rets.empty:
@@ -339,20 +380,23 @@ class ShadowBook:
                          n_clusters=len(sums), t_stat=cluster_t_stat(rets["ret"].tolist(), keys))
 
     def returns_since(self, version: str, since: pd.Timestamp) -> list[float]:
+        """Returns of `version`'s taken trades exited at or after `since` (the 12% halt's re-arm read). A `restart_gap`
+        trade counts only as a loss (trading-safety review S-1): dropping its losses would loosen the re-arm."""
         book = self.books.get(version)
         if book is None:
             return []
         return [t.ret for t in book.closed
-                if t.taken and t.ret is not None and t.exit_ts is not None and t.exit_ts >= since]
+                if t.taken and t.ret is not None and (not t.restart_gap or t.ret < 0) and t.exit_ts is not None
+                and t.exit_ts >= since]
 
     def outcomes(self, version: str, since: pd.Timestamp | None = None) -> list[ShadowTrade]:
         """Closed candidates of `version` recorded with their threshold (every candidate, taken or not), exited at or
         after `since`: the unbiased sample a recalibration may use. Trades of an older book (selected ones only, no
-        threshold) are left out."""
+        threshold) are left out, as are `restart_gap` trades (backlog 165)."""
         book = self.books.get(version)
         if book is None:
             return []
-        return [t for t in book.closed if t.threshold is not None and t.exit_ts is not None
+        return [t for t in book.closed if t.threshold is not None and t.exit_ts is not None and not t.restart_gap
                 and (since is None or t.exit_ts >= since)]
 
     def save(self, now: pd.Timestamp) -> None:
