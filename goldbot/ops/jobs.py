@@ -1595,8 +1595,12 @@ def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly, off the engine tick: every closed month partition (before `slot`'s UTC month) of every account's
     `decisions` journal folder is rewritten into one part (goldbot/data/compact.py: under the partition's writer lock,
     atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is never touched."""
+    import time
+
     from goldbot.data.compact import compact_table
+    t0 = time.monotonic()
     out = compact_table(ctx.store, "decisions", before=slot).summary()
+    out["duration_s"] = round(time.monotonic() - t0, 3)
     if out["errors"]:                         # the scheduler records the failure (health: job:journal_compact)
         raise RuntimeError(f"journal_compact failed for {out['errors']} (done: {out['partitions']} partitions)")
     return out

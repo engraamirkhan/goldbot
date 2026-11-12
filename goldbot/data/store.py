@@ -14,7 +14,7 @@ import re
 import sys
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import IO, Iterable, Iterator, Mapping
 
@@ -27,16 +27,30 @@ import pyarrow.parquet as pq
 # runs goldbot natively; there is no fcntl): msvcrt.locking on byte 0 of the lock file, exclusive only, so readers of
 # one partition take turns. LK_LOCK gives up after ten one-second tries, so a non-blocking lock is retried here until
 # it is free, and every handle is unlocked before it is closed (Windows does not promise to release it on close).
+# `deadline` (time.monotonic): give up then with StoreLockTimeout naming the partition (readers and the compaction job:
+# a stuck holder fails them loudly instead of freezing health, the trade chart or a report); None waits for ever.
+
+
+class StoreLockTimeout(TimeoutError):
+    """A partition lock was not free within the store's lock timeout (a stuck writer or compaction holds it)."""
+
+
+def _timed_out(fh: IO[bytes]) -> StoreLockTimeout:
+    return StoreLockTimeout(f"partition lock {fh.name} still held by a writer (append or compaction) at the deadline")
+
+
 if sys.platform == "win32":
     import msvcrt
 
-    def _lock(fh: IO[bytes], *, shared: bool) -> None:
+    def _lock(fh: IO[bytes], *, shared: bool, deadline: float | None = None) -> None:
         fh.seek(0)
         while True:
             try:
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
                 return
             except OSError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise _timed_out(fh) from None
                 time.sleep(0.01)
 
     def _unlock(fh: IO[bytes]) -> None:
@@ -45,8 +59,19 @@ if sys.platform == "win32":
 else:
     import fcntl
 
-    def _lock(fh: IO[bytes], *, shared: bool) -> None:
-        fcntl.flock(fh, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+    def _lock(fh: IO[bytes], *, shared: bool, deadline: float | None = None) -> None:
+        mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        if deadline is None:
+            fcntl.flock(fh, mode)
+            return
+        while True:
+            try:
+                fcntl.flock(fh, mode | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise _timed_out(fh) from None
+                time.sleep(0.01)
 
     def _unlock(fh: IO[bytes]) -> None:
         fcntl.flock(fh, fcntl.LOCK_UN)
@@ -96,8 +121,9 @@ def _utc(x: str | pd.Timestamp) -> pd.Timestamp:
 
 
 class Store:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, lock_timeout_s: float = 30.0):
         self.root = Path(root)
+        self.lock_timeout_s = lock_timeout_s     # a reader's wait for its shared partition locks (StoreLockTimeout)
         self.root.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ paths
@@ -148,10 +174,11 @@ class Store:
 
     @staticmethod
     @contextmanager
-    def _partition_lock(pdir: Path) -> Iterator[None]:
-        """Exclusive lock held for the whole read-modify-write of one partition (across processes)."""
+    def _partition_lock(pdir: Path, timeout_s: float | None = None) -> Iterator[None]:
+        """Exclusive lock held for the whole read-modify-write of one partition (across processes); `timeout_s` (the
+        compaction job) bounds the wait, None (an engine append) waits."""
         with open(pdir / ".lock", "ab") as fh:
-            _lock(fh, shared=False)
+            _lock(fh, shared=False, deadline=None if timeout_s is None else time.monotonic() + timeout_s)
             try:
                 yield
             finally:
@@ -159,20 +186,38 @@ class Store:
 
     @staticmethod
     @contextmanager
-    def _read_locks(tdir: Path, source: str | None, symbol: str | None) -> Iterator[None]:
-        """Shared lock on every matching partition while listing+reading: a writer holds its exclusive lock across
-        rename+unlink, so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one
-        lock: no deadlock."""
+    def _read_locks(tdir: Path, source: str | None, symbol: str | None, start: str | pd.Timestamp | None = None,
+                    end: str | pd.Timestamp | None = None, timeout_s: float | None = None) -> Iterator[set[Path]]:
+        """Shared lock on every partition the read can return rows from (the source/symbol folders, the months of
+        [start, end]) while listing+reading: a writer holds its exclusive lock across rename+unlink (an append, or a
+        compaction's swap), so a reader sees exactly the old or the new rows of a locked partition, never both.
+        Partitions outside the window are pruned by their year/month before DuckDB opens a file. Fixed order; writers
+        hold one lock: no deadlock. Yields the parts an interrupted compaction already replaced in those partitions
+        (`compacted_away`; empty unless one died between its rename and its unlinks). The whole wait is bounded by
+        `timeout_s` (StoreLockTimeout)."""
         pat = f"source={source or '*'}/symbol={symbol or '*'}/year=*/month=*/.lock"
+        lo = _utc(start).year * 12 + _utc(start).month if start is not None else None
+        hi = _utc(end).year * 12 + _utc(end).month if end is not None else None
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
         locked: list[IO[bytes]] = []
         opened: list[IO[bytes]] = []
+        manifests: list[Path] = []
         try:
             for lk in sorted(tdir.glob(pat)):
+                if lo is not None or hi is not None:
+                    try:
+                        ym = int(lk.parent.parent.name.split("=", 1)[1]) * 12 + int(lk.parent.name.split("=", 1)[1])
+                    except ValueError:
+                        ym = None
+                    if ym is not None and ((lo is not None and ym < lo) or (hi is not None and ym > hi)):
+                        continue
                 fh: IO[bytes] = open(lk, "ab")
                 opened.append(fh)
-                _lock(fh, shared=True)
+                _lock(fh, shared=True, deadline=deadline)
                 locked.append(fh)
-            yield
+                if (lk.parent / MANIFEST).exists():
+                    manifests.append(lk.parent / MANIFEST)
+            yield compacted_away(manifests)
         finally:
             for held in locked:
                 try:
@@ -190,7 +235,7 @@ class Store:
 
     @staticmethod
     def _read_partition(pdir: Path) -> pd.DataFrame | None:
-        gone = compacted_away(pdir.glob(_MANIFEST_GLOB))
+        gone = compacted_away([pdir / MANIFEST])
         files = [f for f in sorted(pdir.glob("*.parquet")) if f not in gone]
         if not files:
             return None
@@ -228,10 +273,9 @@ class Store:
             raise ValueError("folder_only needs source, symbol and a columns mapping (name -> type)")
         con = _connect()
         try:
-            with self._read_locks(tdir, source, symbol):
-                # backlog 170: the parts a compaction already replaced (crash before its unlinks), never read twice;
-                # listed under the shared locks, so empty unless a compaction died mid-way
-                gone = compacted_away(tdir.glob(f"source=*/symbol=*/year=*/month=*/{_MANIFEST_GLOB}"))
+            # backlog 170: `gone` holds the parts a compaction already replaced (a crash before its unlinks), never read
+            # twice; found under the shared locks, so empty unless a compaction died mid-way
+            with self._read_locks(tdir, source, symbol, start, end, self.lock_timeout_s) as gone:
                 files: list[str] | None = None
                 if folder_only:     # listed under the partitions' shared locks, as DuckDB's own glob is
                     files = _folder_files(tdir / f"source={source}" / f"symbol={symbol}", start, end)
@@ -256,25 +300,29 @@ class Store:
 
     def sql(self, query: str) -> pd.DataFrame:
         """Run DuckDB SQL; tables are exposed as views named after the table. Zoned timestamps come back tz-aware UTC
-        (`_fetch`), whatever the duckdb major or the host's zone."""
+        (`_fetch`), whatever the duckdb major or the host's zone. Views exist for the tables the query names, read
+        under the same shared partition locks as `read` (every partition of those tables, bounded wait), so an append
+        or a compaction swap is seen whole or not at all."""
         con = _connect()
         try:
-            for t in TABLES:
-                tdir = self.table_dir(t)
-                if tdir.exists() and any(tdir.rglob("*.parquet")):
-                    gone = compacted_away(tdir.glob(f"source=*/symbol=*/year=*/month=*/{_MANIFEST_GLOB}"))
+            with ExitStack() as locks:
+                for t in sorted(TABLES):
+                    tdir = self.table_dir(t)
+                    if not re.search(rf"\b{t}\b", query) or not tdir.exists() or not any(tdir.rglob("*.parquet")):
+                        continue      # a view only for the tables the query names: only their partitions are locked
+                    # shared locks as `read` takes them (bounded wait): a swap is never seen half done
+                    gone = locks.enter_context(self._read_locks(tdir, None, None, timeout_s=self.lock_timeout_s))
                     target = _live(None, tdir, gone)
-                    con.execute(
-                        f"CREATE VIEW {t} AS SELECT * FROM {_scan(target if target is not None else str(tdir / '**' / '*.parquet'), t)}"
-                    )
-            return _fetch(con, query, None)
+                    scan = _scan(target if target is not None else str(tdir / "**" / "*.parquet"), t)
+                    con.execute(f"CREATE VIEW {t} AS SELECT * FROM {scan}")
+                return _fetch(con, query, None)
         finally:
             con.close()
 
 
 
 # ------------------------------------------------------------------ compaction support (backlog 170, data/compact.py)
-_MANIFEST_GLOB = ".compact-*.json"      # in the partition folder; not *.parquet, so no reader scans it
+MANIFEST = ".compact.json"      # one per partition folder (compactions run under its lock); not *.parquet
 
 
 def compacted_away(manifests: Iterable[Path]) -> set[Path]:
