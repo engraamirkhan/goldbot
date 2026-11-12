@@ -16,6 +16,7 @@ from goldbot.engine import cost_probe, exploration
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, SHORT, _arm, _at, _engine, _rule
+from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "A2 readability, 2026-10-30"
@@ -65,8 +66,9 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
     owner = {i for i, a in spec.items() if a.params.get("instrument") in REMOVED}
     assert all(spec[i].retired_day == "2026-11-04" for i in owner)
     assert all(str(spec[i].retired_day) == "2026-11-06" for i in RETIRED_1106)
-    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner | RETIRED_1106 | RETIRED_1107
-    for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106:   # S1A/S1B: evaluator R3, read at their own read
+    assert all(str(spec[i].retired_day) == "2026-11-13" for i in RETIRED_1113)
+    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113
+    for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106 - RETIRED_1113:   # S1A/S1B: evaluator R3, read at their own read
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 
 
@@ -94,7 +96,7 @@ def test_every_retired_arm_on_every_account_is_refused_by_the_engines_arm_select
         for arm_id in registered & set(A2):
             # blocked rows were never selected; every other retired arm is selected only to keep managing its exits
             assert arm_id in refused or arm_id in cfg.dropped, (acc.account_id, arm_id)
-        assert not refused & (set(EXEMPT) - RETIRED_1106)
+        assert not refused & (set(EXEMPT) - RETIRED_1106 - RETIRED_1113)
         assert refused <= running
 
 

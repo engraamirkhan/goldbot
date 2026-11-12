@@ -22,6 +22,7 @@ from goldbot.ops import health
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _at, _engine, _rule
 from tests.test_learning_mi import MI_ARMS, MI_CONTROLS  # the multi-instrument learning pairs
+from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
@@ -70,7 +71,7 @@ RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30",
 RETIRED_1107 = {"S0-XAUJPY"}
 # retired 2026-11-09 (prereg-amendment-2026-11-10-execution-controls.md section 9): its cost cell complete (rule 4)
 RETIRED_1109 = {"I0-XAUJPY"}
-RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109
+RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:
