@@ -397,9 +397,10 @@ def _fill(t: ExplorationRecord, counted: bool) -> Fill | None:
 
 
 def _held_out(conn: sqlite3.Connection, accounts: Sequence[str], store: Any, now: pd.Timestamp | None) -> set[str]:
-    """The candidates of `accounts` held out of n while a quarantine span has no recorded engine restart. Reporting
-    only: a store that cannot be opened holds nothing out (the count is the ledger's, as before)."""
-    from goldbot.research.evidence_exclusions import held_out_in
+    """The candidates of `accounts` held out of n while a quarantine span has no recorded engine restart. Spans that
+    cannot be read are unknown (backlog 158), never "none": every candidate of those accounts is held out of n until
+    they read again (n understated, never overstated; the H-61 stop still counts every trade)."""
+    from goldbot.research.evidence_exclusions import all_candidates, held_out_in
     marks = ",".join("?" * len(accounts))
     hosts = {str(a): str(b) for a, b in conn.execute(
         f"SELECT DISTINCT account_id, broker FROM exploration_obs WHERE account_id IN ({marks}) AND broker IS NOT NULL",
@@ -413,9 +414,10 @@ def _held_out(conn: sqlite3.Connection, accounts: Sequence[str], store: Any, now
             store = Store(load_settings().data_root)
         return held_out_in(conn, store, hosts, symbol="XAUUSD",
                            now=now if now is not None else pd.Timestamp.now("UTC"))
-    except Exception as exc:                # noqa: BLE001 - a report never fails on the store
-        log.warning("quarantine spans unreadable for the arms' n (%s)", type(exc).__name__)
-        return set()
+    except Exception as exc:                # noqa: BLE001 - a report never fails on the store; it fails closed
+        log.warning("quarantine spans unreadable for the arms' n (%s): every candidate of %s held out of n",
+                    type(exc).__name__, ", ".join(sorted(hosts)))
+        return all_candidates(conn, sorted(hosts))
 
 
 def arms_lines(arms: Sequence[ArmStatus], width: int, lo: pd.Timestamp, hi: pd.Timestamp) -> list[str]:

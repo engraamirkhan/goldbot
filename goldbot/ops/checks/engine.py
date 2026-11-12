@@ -357,6 +357,10 @@ HISTORY_GAP_MIN_CLOSES = 4     # refused closes, spread over at least half the w
 
 # (data root, account, symbol) -> (the journal's part files when read, the window start read from, its rows)
 _JOURNAL: WindowCache = {}
+# the journal columns the checks read, each cast to the type the whole table gives it: the read scans the account's own
+# folder only (Store.read folder_only), where an all-null part would otherwise type agent_id as NULL/INTEGER
+JOURNAL_COLUMNS: dict[str, str | None] = {"ts_utc": None, "agent_id": "VARCHAR", "action": "VARCHAR",
+                                          "detail": "VARCHAR"}
 
 
 def _journal_from(now: pd.Timestamp) -> pd.Timestamp:
@@ -374,18 +378,21 @@ def _journal_parts(data_root: str | Path, account: AccountRef, since: pd.Timesta
 
 def _journal_window(data_root: str | Path, account: AccountRef, since: pd.Timestamp,
                     end: pd.Timestamp, read_from: pd.Timestamp | None = None) -> pd.DataFrame:
-    """The account's decisions journal rows with since <= ts_utc < end, as `Store.read` returns them, from a read
-    starting at `read_from` (default `since`; the checks pass `_journal_from`). Read again only when the journal
-    changed (a new part file) or the last read does not reach back to `read_from`; otherwise the last read, filtered
-    to the window: the same rows a fresh read gives (`_cached_window`). The engine flushes every 15 min and the
-    Telegram service checks every 60 s; the DuckDB read cost ~10 s of one core per pass on the brain (health pass
-    cost, 2026-11-10), and order_failed's own read of the whole table another ~2 s (round 3)."""
+    """The account's decisions journal rows with since <= ts_utc < end, JOURNAL_COLUMNS as `Store.read` of the whole
+    table returns them, from a read starting at `read_from` (default `since`; the checks pass `_journal_from`). Read
+    again only when the journal changed (a new part file) or the last read does not reach back to `read_from`;
+    otherwise the last read, filtered to the window: the same rows a fresh read gives (`_cached_window`). The engine
+    flushes every 15 min and the Telegram service checks every 60 s; the DuckDB read cost ~10 s of one core per pass
+    on the brain (health pass cost, 2026-11-10), and order_failed's own read of the whole table another ~2 s (round
+    3). The read scans the account's own folder, from `read_from`'s month (`folder_only`), not every account's parts
+    (tests/test_health_journal_folder_read.py: the same frame for these columns)."""
     from goldbot.data.store import Store
     start = since if read_from is None else min(read_from, since)
     key = (str(Path(data_root).resolve()), account.account_id, account.symbol)
     return _cached_window(
         _JOURNAL, key, _journal_parts(data_root, account, start), start, since, end,
-        lambda frm: Store(data_root).read("decisions", source=account.account_id, symbol=account.symbol, start=frm))
+        lambda frm: Store(data_root).read("decisions", source=account.account_id, symbol=account.symbol, start=frm,
+                                          columns=JOURNAL_COLUMNS, folder_only=True))
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=45, pass_account=True)

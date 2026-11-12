@@ -184,7 +184,7 @@ def first_release(macro: pd.DataFrame, series: str) -> pd.DataFrame:
         return pd.DataFrame({"value_date": pd.Series(dtype="datetime64[ns]"), "value": pd.Series(dtype=float),
                              "available_utc": pd.Series(dtype="datetime64[ns, UTC]")})
     s = s.assign(available_utc=pd.DatetimeIndex(pd.to_datetime(s["available_utc"], utc=True)).as_unit("ns"))
-    s = s.sort_values("available_utc").drop_duplicates("value_date", keep="first").sort_values("value_date")
+    s = s.sort_values("available_utc", kind="stable").drop_duplicates("value_date", keep="first").sort_values("value_date")
     out = s[["value_date", "value", "available_utc"]].reset_index(drop=True)
     out["available_utc"] = out["available_utc"].cummax()
     return out

@@ -8,12 +8,13 @@ bars uses `available_utc`, never the nominal time. `asof_join` enforces this.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Iterable, Iterator
+from typing import IO, Iterable, Iterator, Mapping
 
 import duckdb
 import pandas as pd
@@ -212,18 +213,46 @@ class Store:
         symbol: str | None = "XAUUSD",
         start: str | pd.Timestamp | None = None,
         end: str | pd.Timestamp | None = None,
-        columns: Iterable[str] | None = None,
+        columns: Iterable[str] | Mapping[str, str | None] | None = None,
+        folder_only: bool = False,
     ) -> pd.DataFrame:
         """Rows of `table`, one `symbol` (default XAUUSD) or, with `symbol=None`, every symbol of the `source`: a broker
-        whose gold carries a suffix (Vantage writes XAUUSD+) is read by its source alone (backlog 141)."""
+        whose gold carries a suffix (Vantage writes XAUUSD+) is read by its source alone (backlog 141).
+
+        Rows come back ordered by ts_utc, then the table's key columns (KEY_COLUMNS), then every column (`_order_by`,
+        backlog 162): rows sharing a ts_utc read in one order, run after run, on either duckdb major.
+
+        `columns` as a mapping (name -> DuckDB type, None to keep the column's own) casts each column explicitly.
+        `folder_only=True` scans only the source=/symbol= folder's month partitions from `start` to `end` (source,
+        symbol and a `columns` mapping required): the read no longer lists and opens every part file of the table
+        (the health pass's decisions-journal read, 2026-11-10 round 3: 9,447 parts of every account). union_by_name
+        then sees that folder's files only, so a column all-null there would read as DuckDB's NULL/INTEGER rather
+        than the type another source gives it: the explicit casts give the same values and dtypes as the whole-table
+        read. A cast column no file of the folder has falls back to the whole-table read (the result as before)."""
         tdir = self.table_dir(table)
         if not tdir.exists() or not any(tdir.rglob("*.parquet")):
             return pd.DataFrame()
-        sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end, columns=columns)
+        if folder_only and (source is None or symbol is None or not isinstance(columns, Mapping)):
+            raise ValueError("folder_only needs source, symbol and a columns mapping (name -> type)")
         con = _connect()
         try:
             with self._read_locks(tdir, source, symbol):
-                df = _fetch(con, sql, params)
+                files: list[str] | None = None
+                if folder_only:     # listed under the partitions' shared locks, as DuckDB's own glob is
+                    files = _folder_files(tdir / f"source={source}" / f"symbol={symbol}", start, end)
+                    if not files:
+                        return pd.DataFrame()
+                sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
+                                          columns=columns, files=files)
+                try:
+                    df = _fetch(con, sql, params)
+                except duckdb.BinderException:
+                    if files is None:
+                        raise
+                    # a cast column no file of the folder has: the whole-table read, as before folder_only
+                    sql, params = _read_query(self, table, source=source, symbol=symbol, start=start, end=end,
+                                              columns=columns)
+                    df = _fetch(con, sql, params)
         finally:
             con.close()
         if "ts_utc" in df.columns:
@@ -248,8 +277,9 @@ class Store:
 
 def _read_query(store: Store, table: str, *, source: str | None, symbol: str | None,
                 start: str | pd.Timestamp | None, end: str | pd.Timestamp | None,
-                columns: Iterable[str] | None) -> tuple[str, list]:
-    """The SQL and parameters of `Store.read`.
+                columns: Iterable[str] | Mapping[str, str | None] | None,
+                files: list[str] | None = None) -> tuple[str, list]:
+    """The SQL and parameters of `Store.read` (`files`: the part-file globs to scan instead of the whole table).
 
     The ts bounds are bound as ISO strings, which duckdb casts to the column's own type: duckdb 2 reads a Parquet ns
     timestamp with a zone as TIMESTAMPTZ_NS, which does not compare with a bound TIMESTAMPTZ (BinderException), and
@@ -258,8 +288,14 @@ def _read_query(store: Store, table: str, *, source: str | None, symbol: str | N
     string bound is a constant: it stays a table filter in the Parquet scan on both majors, so row groups outside the
     window are skipped (tests/test_store_duckdb_compat.py), and the row set is the same on both (us bounds; 1.x compares
     its truncated values, 2.x the exact ns, which select the same rows)."""
-    cols = ", ".join(columns) if columns else "*"
-    scan = _scan(str(store.table_dir(table) / "**" / "*.parquet"), table)
+    if not columns:
+        cols = "*"
+    elif isinstance(columns, Mapping):
+        cols = ", ".join(_quote(c) if t is None else f"CAST({_quote(c)} AS {t}) AS {_quote(c)}"
+                         for c, t in columns.items())
+    else:
+        cols = ", ".join(_quote(c) for c in columns)
+    scan = _scan(files if files is not None else str(store.table_dir(table) / "**" / "*.parquet"), table)
     where: list[str] = []
     params: list = []
     if symbol is not None:
@@ -281,8 +317,42 @@ def _read_query(store: Store, table: str, *, source: str | None, symbol: str | N
         params.append(_bound(end))
         where.append("year * 12 + CAST(month AS BIGINT) <= ?")
         params.append(_utc(end).year * 12 + _utc(end).month)
-    sql = f"SELECT {cols} FROM {scan} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY ts_utc"
+    sql = f"SELECT {cols} FROM {scan} {'WHERE ' + ' AND '.join(where) if where else ''} {_order_by(table)}"
     return sql, params
+
+
+def _quote(name: str) -> str:
+    """A column name as a DuckDB identifier (`check` is a keyword)."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _order_by(table: str) -> str:
+    """Backlog 162: ts_utc, then the table's key columns, then every column of the scan, left to right (`COLUMNS(*)`
+    expands over the scanned columns, hive partition columns included, whatever the select list; year and month are
+    left out, they follow from ts_utc and cost sort width). A content order, not a file order (part names are random),
+    so two stores holding the same rows read them alike. A total order, so
+    rows sharing a ts_utc come back in one order on every read; DuckDB's parallel scan otherwise returns ties in the
+    order its threads finish. The key columns are matched by a regex that always matches ts_utc, so a key column
+    absent from every file (tv_indicators' `origin` before chart exports) is skipped instead of failing to bind."""
+    keys = [k for k in KEY_COLUMNS.get(table, []) if k != "ts_utc"]
+    tie = f"COLUMNS('^({'|'.join(['ts_utc', *(re.escape(k) for k in keys)])})$'), " if keys else ""
+    return f"ORDER BY ts_utc, {tie}COLUMNS(* EXCLUDE (year, month))"     # both follow from ts_utc
+
+
+def _folder_files(folder: Path, start: str | pd.Timestamp | None, end: str | pd.Timestamp | None) -> list[str]:
+    """The part-file globs of `folder`'s year=/month= partitions that can hold rows in [start, end), in order."""
+    lo = _utc(start).year * 12 + _utc(start).month if start is not None else None
+    hi = _utc(end).year * 12 + _utc(end).month if end is not None else None
+    out = []
+    for mdir in sorted(folder.glob("year=*/month=*")):
+        try:
+            ym = int(mdir.parent.name.split("=", 1)[1]) * 12 + int(mdir.name.split("=", 1)[1])
+        except ValueError:
+            continue
+        if (lo is not None and ym < lo) or (hi is not None and ym > hi) or not any(mdir.glob("*.parquet")):
+            continue
+        out.append(str(mdir / "*.parquet"))
+    return out
 
 
 def _bound(x: str | pd.Timestamp) -> str:
@@ -318,12 +388,13 @@ def _fetch(con: duckdb.DuckDBPyConnection, sql: str, params: list | None) -> pd.
     return df
 
 
-def _scan(glob: str, table: str) -> str:
+def _scan(glob: str | list[str], table: str) -> str:
     """The DuckDB scan of a table's files, always by column name (union_by_name). Without it DuckDB takes the schema
     from the first file: an early part with an all-null column (typed NULL) made later string parts fail to cast, and
     `tv_indicators` mixes live-alert and chart-export files with extra columns (origin, repaint_validated, ...) where
-    an older file must read as NULL."""
-    return f"read_parquet('{glob}', hive_partitioning=true, union_by_name=true)"
+    an older file must read as NULL. A list of globs scans only those (`Store.read(folder_only=True)`)."""
+    src = f"'{glob}'" if isinstance(glob, str) else "[" + ", ".join(f"'{g}'" for g in glob) + "]"
+    return f"read_parquet({src}, hive_partitioning=true, union_by_name=true)"
 
 
 def asof_join(bars: pd.DataFrame, other: pd.DataFrame, *, on: str = "ts_utc", available_col: str = "available_utc",
