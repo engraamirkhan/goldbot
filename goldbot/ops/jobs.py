@@ -1590,6 +1590,22 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- journal compaction (BACKLOG 170)
+def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Nightly, off the engine tick: every closed month partition (before `slot`'s UTC month) of every account's
+    `decisions` journal folder is rewritten into one part (goldbot/data/compact.py: under the partition's writer lock,
+    atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is never touched."""
+    import time
+
+    from goldbot.data.compact import compact_table
+    t0 = time.monotonic()
+    out = compact_table(ctx.store, "decisions", before=slot).summary()
+    out["duration_s"] = round(time.monotonic() - t0, 3)
+    if out["errors"]:                         # the scheduler records the failure (health: job:journal_compact)
+        raise RuntimeError(f"journal_compact failed for {out['errors']} (done: {out['partitions']} partitions)")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- backups (state store step 2)
 def _backup_args(ctx: JobContext) -> tuple[Any, Callable[[str], str | None]]:
     from goldbot.ops import backup as backup_mod
@@ -1694,6 +1710,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
+    "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
 }
 
 

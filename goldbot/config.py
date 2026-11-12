@@ -293,6 +293,10 @@ class SchedulerSettings(_Section):
     # the same job 30 min later: writes the row when 22:05 failed (a late bar, a busy store); INSERT OR IGNORE keeps a
     # row 22:05 already wrote
     har_days_retry: ScheduleSettings = ScheduleSettings(kind="daily", at="22:35", max_late_hours=20)
+    # BACKLOG 170: the decisions journal's closed months, one part each (goldbot/data/compact.py), in the quiet Asian
+    # hours after the nightly jobs (01:30 autodisc), clear of the 22:00-00:00 UTC cluster; first sight runs it once
+    journal_compact: ScheduleSettings = ScheduleSettings(kind="daily", at="03:40", max_late_hours=20,
+                                                         run_if_never_run=True)
 
 
 class BackupSettings(_Section):
