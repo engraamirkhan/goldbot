@@ -249,6 +249,86 @@ def test_a_failed_pull_is_reported_retried_within_the_hour_and_the_engines_bars_
     assert eng.key_zone_worker.sessions is eng.sessions                        # the account's own calendar
 
 
+# ------------------------------------------------------------------------- backlog 159: the cache-read warning throttled
+def _unreadable_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[key_zones.KeyZoneWorker, dict]:
+    """A worker whose store cache read raises `state["exc"]` while it is set."""
+    state: dict[str, Any] = {"exc": RuntimeError("Binder Error")}
+    real = Store.read
+
+    def read(store: Store, table: str, **kw: Any) -> pd.DataFrame:
+        if state["exc"] is not None:
+            raise state["exc"]
+        return real(store, table, **kw)
+    monkeypatch.setattr(Store, "read", read)
+    return key_zones.KeyZoneWorker("icm-demo", "XAUUSD", Store(tmp_path / "data")), state
+
+
+def _cache_logs(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if "key zones: cache" in r.getMessage()]
+
+
+def test_an_unreadable_cache_warns_first_with_its_traceback_then_at_most_once_an_hour(tmp_path, monkeypatch, caplog):
+    w, _ = _unreadable_cache(tmp_path, monkeypatch)
+    t0 = pd.Timestamp("2025-03-13", tz="UTC")
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.key_zones"):
+        for k in range(8):                                 # a build every 15m close for two hours
+            w.refresh(t0 + k * pd.Timedelta(minutes=15))
+    logs = _cache_logs(caplog)
+    assert len(logs) == 2 and not w.loaded                 # at t0 and t0 + 1h; the read is still retried each build
+    assert logs[0].exc_info is not None and logs[1].exc_info is None
+    assert "3 more" in logs[1].getMessage()                 # the failures it stood for since the last warning
+
+
+def test_a_new_kind_of_cache_failure_is_logged_at_once_with_its_traceback(tmp_path, monkeypatch, caplog):
+    w, state = _unreadable_cache(tmp_path, monkeypatch)
+    t0 = pd.Timestamp("2025-03-13", tz="UTC")
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.key_zones"):
+        w.refresh(t0)
+        state["exc"] = OSError("disk")
+        w.refresh(t0 + pd.Timedelta(minutes=15))
+    logs = _cache_logs(caplog)
+    assert len(logs) == 2 and "OSError" in logs[1].getMessage() and logs[1].exc_info is not None
+
+
+def test_the_quiet_count_in_an_hourly_warning_is_its_own_exception_type_s(tmp_path, monkeypatch, caplog):
+    w, state = _unreadable_cache(tmp_path, monkeypatch)
+    t0 = pd.Timestamp("2025-03-13", tz="UTC")
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.key_zones"):
+        w.refresh(t0)                                      # RuntimeError: logged
+        w.refresh(t0 + pd.Timedelta(minutes=15))           # RuntimeError: quiet (1)
+        state["exc"] = OSError("disk")
+        w.refresh(t0 + pd.Timedelta(minutes=30))           # OSError: first of its type, nothing quiet of it
+        w.refresh(t0 + pd.Timedelta(minutes=45))           # OSError: quiet (1)
+        w.refresh(t0 + pd.Timedelta(minutes=50))           # OSError: quiet (2)
+        state["exc"] = RuntimeError("Binder Error")
+        w.refresh(t0 + pd.Timedelta(hours=1))              # RuntimeError: hourly, 1 more
+    logs = _cache_logs(caplog)
+    assert len(logs) == 3
+    assert "OSError" in logs[1].getMessage() and "more" not in logs[1].getMessage()
+    assert "RuntimeError" in logs[2].getMessage() and "(1 more since" in logs[2].getMessage()
+
+
+def test_a_cache_that_reads_again_logs_its_recovery_once(tmp_path, monkeypatch, caplog):
+    w, state = _unreadable_cache(tmp_path, monkeypatch)
+    t0 = pd.Timestamp("2025-03-13", tz="UTC")
+    with caplog.at_level(logging.INFO, logger="goldbot.engine.key_zones"):
+        w.refresh(t0)
+        w.refresh(t0 + pd.Timedelta(minutes=15))
+        state["exc"] = None
+        for k in range(2, 5):
+            w.refresh(t0 + k * pd.Timedelta(minutes=15))
+    back = [r for r in _cache_logs(caplog) if "readable again" in r.getMessage()]
+    assert len(back) == 1 and back[0].levelno == logging.WARNING and "2 failed" in back[0].getMessage()
+    assert w.loaded
+
+
+def test_a_cache_that_reads_first_time_logs_nothing(tmp_path, caplog):
+    w = key_zones.KeyZoneWorker("icm-demo", "XAUUSD", Store(tmp_path / "data"))
+    with caplog.at_level(logging.INFO, logger="goldbot.engine.key_zones"):
+        w.refresh(pd.Timestamp("2025-03-13", tz="UTC"))
+    assert w.loaded and not _cache_logs(caplog)
+
+
 # ------------------------------------------------------------------------------------------- pacing (safety M1, M2, L1, L2)
 NOW = pd.Timestamp("2025-02-10 12:00", tz="UTC")
 
