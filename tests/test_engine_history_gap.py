@@ -455,6 +455,7 @@ def _holed_engine(tmp_path: Path):
     """An engine whose memory lacks 2h of release minutes that the store holds (the release was re-published)."""
     _seed_store(tmp_path)
     eng = _engine(tmp_path)
+    eng.history.spawn = lambda fn: fn()     # the release read (own thread in service, backlog 157) runs inline here
     eng.warm_start(pd.Timestamp("2025-03-05 23:00", tz="UTC"))
     hole = pd.Timestamp("2025-03-05 13:00", tz="UTC")
     full = eng.bars_1m
