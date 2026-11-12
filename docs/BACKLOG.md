@@ -173,7 +173,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 157 | History re-read off the tick thread | engine (trading-safety review of R123, item 4, 2026-11-10) | S | proposed · accountable: implementer · reviews: trading-safety-reviewer |
 | 158 | Quarantine spans read fails closed | data (found while doing backlog 155, 2026-11-10) | S | proposed · accountable: data-engineer · reviews: quant-reviewer, code-reviewer |
 | 159 | Throttle the key zones cache-read warning | engine, display (code review of R123, 2026-11-10) | XS | proposed · accountable: implementer · reviews: code-reviewer |
-| 161 | Missed base closes during engine downtime count toward open trades' holds | engine (found in the review of backlog 160, 2026-11-11) | S | proposed · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
+| 161 | Missed base closes during engine downtime count toward open trades' holds | engine (found in the review of backlog 160, 2026-11-11) | S | implemented, in review (branch fix/downtime-bars-catch-up, R126) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
 | 162 | Deterministic row order for rows sharing a ts_utc in Store.read | data (found while doing backlog 156, 2026-11-11) | S | proposed · accountable: data-engineer · reviews: code-reviewer, quant-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle

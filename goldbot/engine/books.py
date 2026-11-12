@@ -62,7 +62,8 @@ log = logging.getLogger("goldbot.engine")
 BOOK_ATTRS: tuple[str, ...] = (
     "cfg", "sessions", "agents", "models", "live_shares", "live_versions", "shadow", "shadow_models",
     "probe", "exploration", "state_store",
-    "ticks", "bars_1m", "history", "broker_m1", "last_bar_close", "_closed_through", "_history_through",
+    "ticks", "bars_1m", "history", "broker_m1", "last_bar_close", "_closed_through", "_first_counted",
+    "_history_through",
     "_ctx_cache", "_resamplers", "_bars_clean", "_last_tick", "_skew", "_unhealthy_at",
     "_dq_pending", "_dq_bar_events", "_dq_repeats", "_late_ticks", "_late_since_warn", "_late_warned_at", "_late_bar",
     "_late_streak", "_quote_invalid_since", "_invalid_state_written",

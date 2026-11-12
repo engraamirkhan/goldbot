@@ -51,6 +51,7 @@ from goldbot.engine import (
     closed_record,
     commission,
     cost_probe,
+    downtime,
     exploration,
     frames,
     history,
@@ -463,6 +464,7 @@ class Engine:
         self._orders: dict[str, SentOrder] = {}     # pending_orders: every id ever sent (pruned after a week)
         self.last_bar_close: pd.Timestamp | None = None   # open of the decision bar the last tick fell in
         self._closed_through: pd.Timestamp | None = None  # latest bar close processed (tick or clock path): never twice
+        self._first_counted: pd.Timestamp | None = None   # the first close this engine aged trades at (engine/downtime.py)
         # end (last visible_at) of the minutes warm_start loaded: a tick before it is re-delivered (a restart with the
         # terminal's quote still in a minute the previous engine stored) and never rebuilds that minute
         self._history_through: pd.Timestamp | None = None
@@ -1449,13 +1451,7 @@ class Engine:
             return
         live = {p.position_id for p in positions}
         self._sweep_closed(live)                          # closed by stop/target at the broker
-        for pid in list(self.open):
-            if pid not in live:
-                continue                                  # waiting for its exit deal (_sweep_closed)
-            tr = self.open[pid]
-            tr.bars_held += 1
-            if tr.bars_held >= tr.max_bars and pid not in self._close_due:
-                self._try_close(pid, "time_exit", None)   # forgotten only once the close succeeds
+        downtime.age(self, live)       # bars_held (+ closes missed while down, backlog 161) and the time exits
         self._reconcile(self.last_bar_close)
 
     def _manage_policies(self, tf: str, dec: pd.DataFrame, close_ts: pd.Timestamp) -> None:
