@@ -179,8 +179,9 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 164 | No-quote time barrier counts bars with any expected-open minute | engine (quant review of backlog 161, 2026-11-12) | S | implemented, in review (R129, branch fix/restart-rerun-barrier-shadow) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
 | 165 | Replay the bars missed while down for open shadow trades at warm start | engine / research (quant review of backlog 161, Q-1, 2026-11-12) | M | implemented, in review (R129, branch fix/restart-rerun-barrier-shadow) · accountable: implementer · reviews: quant-reviewer |
 | 174 | Shadow reports leave restart_gap shadow trades out | engine / research (follow-up of backlog 165, R129, 2026-11-12) | S | proposed · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
-| 170 | Compact the decisions journal's small part files off the hot path | data (found while doing the health-pass journal read, R128, 2026-11-12) | S | proposed · accountable: data-engineer · reviews: code-reviewer, sre |
+| 170 | Compact the decisions journal's small part files off the hot path | data (found while doing the health-pass journal read, R128, 2026-11-12) | S | done (implemented 2026-11-12, branch feat/decisions-journal-compaction, R131; in review) · accountable: data-engineer · reviews: code-reviewer, sre |
 | 175 | Reconcile Vantage BTCUSD weekend swap charges against the seven-night projection | ops + finance (follow-up of BACKLOG 153, R130) | S | proposed · accountable: finance-auditor · reviews: quant-reviewer, trading-safety-reviewer |
+| 179 | Compact the other append-only store tables (ticks, observe_ticks, fills, dq_events) | data (follow-up of backlog 170, R131, 2026-11-12) | S | proposed · accountable: data-engineer · reviews: code-reviewer, sre |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1571,6 +1572,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   `paid_swap_per_oz` x lots x contract at the refresh price; the result is recorded in docs/finance/; the
   seven-night schedule is kept, or corrected (a triple day added, or nights dropped) with a test pinning the measured
   schedule.
+- **179. Compact the other append-only store tables (ticks, observe_ticks, fills, dq_events).** Value: backlog 170 compacts only the `decisions` journal; the engine also appends `ticks` (runner tick flush), `fills` (order_send), `observe_ticks` (ADR 0063) and `dq_events` (crossfeed, quarantine, limits_job, positioning_local) with dedupe=False, one part per flush, so the same many-small-parts read cost grows there (ticks the largest by bytes). Acceptance, tests first: measure part counts and read times per table on the brain first; `journal_compact` (or a sibling job) runs `goldbot/data/compact.py::compact_table` for each table whose closed months hold more than N parts, with the same guarantees (lock, manifest, verified row count + hash, open month untouched); for `ticks` the job is time-boxed and paced (month partitions of 10^7 rows: a streaming rewrite by row group, memory bounded, measured on the 4-core brain before enabling); a test per table proves Store.read gives the same frame before and after.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
