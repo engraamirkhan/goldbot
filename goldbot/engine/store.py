@@ -38,6 +38,9 @@ class OpenTrade(Record):
     # while the engine was down and never counts one twice (engine/downtime.py); None: not counted yet, or saved
     # before it existed (counts from the next close, as before). Written only once set, so older files read the same
     bars_through: UtcTimestamp | None = None
+    # backlog 161 (quant Q-2): base bars credited for closes missed while the engine was down, summed over restarts;
+    # > 0 marks a hold whose time exit or hard flat came at a restart close, not the label's deadline. Written when > 0
+    downtime_bars: int = 0
     sl: float | None = None           # the protection this engine expects at the broker (reinstated if lost)
     tp: float | None = None
     # the specialist's exit policy (labels.exit_policy), run on bars of the agent's timeframe as its labels were built
@@ -166,8 +169,9 @@ class EngineStore(Protocol):
 
 def _unwritten(t: OpenTrade) -> set[str]:
     """Fields left out of a saved open trade while at their default, so the file reads exactly as before them: a gold
-    trade's `symbol` (absent = XAUUSD) and a `bars_through` not set yet (backlog 161)."""
-    return ({"symbol"} if t.symbol == "XAUUSD" else set()) | ({"bars_through"} if t.bars_through is None else set())
+    trade's `symbol` (absent = XAUUSD), a `bars_through` not set yet and no `downtime_bars` (backlog 161)."""
+    return ({"symbol"} if t.symbol == "XAUUSD" else set()) | ({"bars_through"} if t.bars_through is None else set()) \
+        | ({"downtime_bars"} if not t.downtime_bars else set())
 
 
 def orders_file(state_dir: str | Path, account_id: str) -> Path:

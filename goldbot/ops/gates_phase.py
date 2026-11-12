@@ -138,6 +138,10 @@ class ClosedTrade(FrozenRecord):
     # also when ticks after the exit reached the track, when the exit time or price is not the broker's (a close
     # confirmed without deals), or when the position outlived a freeze at its broker stop or target
     excursion_approx: bool | None = None
+    # backlog 161 (quant Q-2): base bars credited for closes missed while the engine was down (> 0: the time exit or
+    # hard flat came at a restart close, not the label's deadline: kept out of label-vs-live exit reconciliation).
+    # None: none credited, or a record from before it
+    downtime_bars: int | None = None
     # finance audit (docs/finance/audit-framework.md). Every field below is None on records from before it existed,
     # so "unknown" is never read as a value. GAP-02: the decision price (the quote at the signal, Proposal.entry) and
     # spread, apart from the quote the order was priced from (in propose mode the quote at the owner's approval): side x

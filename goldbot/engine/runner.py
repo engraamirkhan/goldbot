@@ -363,7 +363,7 @@ class Engine:
         self._account_view: dict = {"balance": None, "currency": None, "margin": None, "margin_free": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
-        self.shadow = ShadowBook(cfg.state_dir, cfg.shadow_max_open) if cfg.shadow_host else None
+        self.shadow = ShadowBook(cfg.state_dir, cfg.shadow_max_open, host=True) if cfg.shadow_host else None
         self.shadow_models: dict[str, tuple[str, Model]] = {}
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
@@ -741,8 +741,8 @@ class Engine:
     def _host_clock_exits(self, now: pd.Timestamp) -> None:
         """Without a price, and only once the feed is dead (re-verification NEW-1/2): never on a single bad quote.
 
-        Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last processed close
-        (`_closed_through`, or its entry bar) during open market hours (the session table) reaches `max_bars` is closed
+        Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last close counted in it
+        (`bars_through`, else `_closed_through`, or its entry bar) during open market hours (the session table) reaches `max_bars` is closed
         (`time_exit`), once quotes have been invalid for QUOTE_DEAD_S. A weekend or a daily break never counts.
 
         Friday flatten: past the weekend cut (server time) and before the weekend rule completed, every position of
@@ -758,8 +758,8 @@ class Engine:
             sec = tf_seconds(self.cfg.decision_tf)
             for pid, tr in list(self.open.items()):
                 opened = tr.opened_utc or tr.entry_bar_ts
-                bases = [x for x in (self._closed_through, opened.floor(f"{sec}s") if opened is not None else None)
-                         if x is not None]
+                last = tr.bars_through if tr.bars_through is not None else self._closed_through   # its bars_held's last
+                bases = [x for x in (last, opened.floor(f"{sec}s") if opened is not None else None) if x is not None]
                 if pid in self._close_due or not bases:
                     continue
                 if tr.bars_held + self._open_bars(max(bases), now) >= tr.max_bars:   # bars_held: closes processed
