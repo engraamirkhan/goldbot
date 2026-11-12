@@ -101,6 +101,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   commission and swap (net) are unchanged. A crypto book no longer needs a Monday-Friday triple day. The research
   rollover callers pass `seven_night` from their SwapSpec (all gold today: no golden moves). The shadow evidence in
   limits_job and the H-80 twins stay on gold's swap (both gold-only books).
+- The stop rule (P6) breaches `unpriced` on any pooled non-gold gross row it cannot price (fail closed); gold's unpriced
+  legacy rows stay reported only (breaching on them would raise a project stop on old records without a price).
 - Follow-up: BACKLOG 175 (finance-auditor reconciles the first weekend BTCUSD hold against the seven-night projection).
 - 2026-11-11 (branch fix/cold-start-trade-ageing; backlog 160, R124): open trades age from every base bar close after
   any cold start. Before, `on_bar_close` returned at its 400-bar floor before `_manage_open`, so after a restart with no

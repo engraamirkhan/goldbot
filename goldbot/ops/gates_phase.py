@@ -63,6 +63,7 @@ from scipy import stats
 
 from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json, write_atomic
 from goldbot.config import GateSettings, Settings
+from goldbot.instruments import GOLD
 from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
 from goldbot.research.gates import current_dsr
@@ -252,7 +253,7 @@ class StopRuleStatus(FrozenRecord):
     # structured, so a screen can word and localise them (the reasons above carry UTC times and the account)
     clock_start_utc: UtcTimestamp | None = None   # where the pooled trades and the months start
     clock_source: Literal["paper_gate", "first_trade"] | None = None
-    breach: list[Literal["long_run", "single_loss"]] = Field(default_factory=list)
+    breach: list[Literal["long_run", "single_loss", "unpriced"]] = Field(default_factory=list)
     incidents: list[StopIncident] = Field(default_factory=list)   # worst first, at most MAX_INCIDENTS
     incident_count: int = 0
     imputed: ImputationSummary = Field(default_factory=ImputationSummary)   # the pooled gross rows and their charge
@@ -498,14 +499,22 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
     pooled and the bound is on their return less the imputed cost (quant review: "Keep gross rows in, but apply the
     same cost charge"). The incident check adds a gross row's imputed cost to its loss: the charge is in USD and is
     subtracted from `pnl` as if it were account currency (more than its value on a GBP or EUR deposit: conservative
-    for the stop rule)."""
+    for the stop rule). Fail closed (quant review of R130): a pooled non-gold gross row the imputer cannot price (no
+    own instrument terms; it is never charged gold's) would count at its gross return, so any such row breaches
+    (`unpriced`) until it is priced. Gold's unpriced rows (no price or entry time) are reported as before: breaching
+    on them would turn every legacy record without a price into a project stop."""
     start = paper_start if paper_start is not None else (min(t.exit_utc for t in trades) if trades else None)
     pooled = [t for t in trades if start is None or t.exit_utc >= start]
     months = _months(start, now) if start is not None else 0.0
     rets, note = imputer.net_rets(pooled)
     lb = lower_bound(rets, cfg.stop_confidence)
     reasons: list[str] = []
-    breach: list[Literal["long_run", "single_loss"]] = []
+    breach: list[Literal["long_run", "single_loss", "unpriced"]] = []
+    unpriced = sum(1 for t in pooled if t.symbol not in (None, GOLD) and not imputer.charge(t).priced)
+    if unpriced:
+        breach.append("unpriced")
+        reasons.append(f"{unpriced} pooled non-gold gross row(s) could not be priced (no own instrument terms): their "
+                       "cost is unknown, so the rule fails closed")
     if months >= cfg.stop_after_months and len(pooled) > cfg.stop_min_pooled_trades and lb is not None and lb < 0:
         breach.append("long_run")
         reasons.append(f"after {months:.1f} months and {len(pooled)} pooled trades the lower {cfg.stop_confidence:.0%} "
