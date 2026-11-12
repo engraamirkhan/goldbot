@@ -30,6 +30,12 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   starts and runs its exits instead of crashing. While either holds the store is read again every REFILL_EVERY of
   engine clock (`reread`): a read that succeeds merges its minutes (the engine's own win) and lifts history_read;
   history_short lifts once the window holds the minimum (the broker fill, a re-read or live minutes).
+- Store reads after the warm start never run on the tick thread (backlog 157: a hung disk stalled every tick of the
+  re-read; only the broker's SL/TP protected open trades until the watchdog restarted the service). The re-read and
+  the release reload each run on a thread of their own (`StoreRead`), one of each in flight at a time; the tick
+  thread merges a finished read at its next bar close (`after_close`), as `absorb` does a fill. A read that has not
+  finished delays nothing and changes nothing: the refusal it would lift stays in force, and a read still running
+  after READ_HUNG_S is logged once as an error. Exits never wait on it.
 """
 from __future__ import annotations
 
@@ -63,7 +69,8 @@ LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = brok
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
-REREAD_WARN_S = 2.0                 # a store re-read (`reread`, tick thread) slower than this is a warning
+REREAD_WARN_S = 2.0                 # a store read (`StoreRead`, own thread) slower than this is a warning
+READ_HUNG_S = 120.0                 # a store read still running after this is logged once as an error
 RATES_MAX = 100_000                 # broker 1m bars per fill (~10 weeks of trading minutes; MT5's chart default)
 WRITER_QUEUE = 256                 # batches of minutes waiting for the store; the oldest is dropped beyond it
 
@@ -345,6 +352,69 @@ class BarWriter:
                     self.q.task_done()
 
 
+def _thread(fn: Callable[[], None]) -> None:
+    threading.Thread(target=fn, name="history-read", daemon=True).start()
+
+
+# the background store reads: kind -> (its name in the log, the refusal that stays in force while it has not merged)
+READS = {"reread": ("re-read", "history_read / history_short"), "release": ("release reload", "history_gap")}
+
+
+class StoreRead:
+    """One store read on a thread of its own (backlog 157): `fn` runs off the tick thread; `done` is set when it has
+    returned or raised (`result` / `error`). `fn` only reads the store: everything it needs is captured on the tick
+    thread before it starts, and the tick thread alone merges its result (`after_close`)."""
+
+    def __init__(self, kind: str, fn: Callable[[], Any], at: pd.Timestamp,
+                 spawn: Callable[[Callable[[], None]], None]):
+        self.kind, self.fn, self.at = kind, fn, at        # at: engine clock of the start, the read's point in time
+        self.result: Any = None
+        self.error: Exception | None = None
+        self.elapsed_s = 0.0
+        self.t0 = time.monotonic()
+        self.hung_logged = False
+        self.done = threading.Event()
+        spawn(self._run)
+
+    def _run(self) -> None:
+        try:
+            self.result = self.fn()
+        except Exception as exc:                      # noqa: BLE001 - judged on the tick thread (fail closed)
+            self.error = exc
+        finally:
+            self.elapsed_s = time.monotonic() - self.t0
+            self.done.set()
+
+
+def _running(h: History, kind: str) -> bool:
+    """True while a `kind` read is in flight (nothing new is started); one running past READ_HUNG_S is logged once."""
+    r = h.reads.get(kind)
+    if r is None or r.done.is_set():
+        return False
+    took = time.monotonic() - r.t0
+    if took > READ_HUNG_S and not r.hung_logged:
+        r.hung_logged = True
+        name, held = READS[kind]
+        log.error("history: the store %s started at %s has not returned after %.0f s: entries stay refused while %s "
+                  "holds, no other %s starts; exits run", name, r.at, took, held, name)
+    return True
+
+
+def _start(h: History, kind: str, fn: Callable[[], Any], at: pd.Timestamp) -> None:
+    h.reads[kind] = StoreRead(kind, fn, at, h.spawn)
+
+
+def _collect(h: History, kind: str) -> StoreRead | None:
+    """The finished `kind` read (its duration logged, a warning over REREAD_WARN_S), or None while none has finished."""
+    r = h.reads.get(kind)
+    if r is None or not r.done.is_set():
+        return None
+    del h.reads[kind]
+    (log.warning if r.elapsed_s > REREAD_WARN_S else log.info)("history: the store %s took %.2f s", READS[kind][0],
+                                                               r.elapsed_s)
+    return r
+
+
 # ------------------------------------------------------------------------------------------- the engine's side
 class History:
     """The engine's continuity state (runtime; only a rebased cut-over is persisted, `save_cutover`): the cut-over and
@@ -365,6 +435,8 @@ class History:
         self.read_error: str | None = None    # the last store read of the history raised (fail closed: `blocking`)
         self.read_short = False               # the warm start loaded fewer than history_min_bars (`blocking`)
         self.read_at: pd.Timestamp | None = None    # engine clock of the last store read while either holds
+        self.reads: dict[str, StoreRead] = {}      # "reread" / "release": the store read in flight, one of each
+        self.spawn: Callable[[Callable[[], None]], None] = _thread   # tests run the reads inline
 
 
 def _clean(b: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
@@ -420,13 +492,23 @@ def _window_days(eng: Engine) -> int:
 def _read_store(eng: Engine, lo: pd.Timestamp, now: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(release minutes, the traded broker's stored minutes) with lo <= ts_utc < now, visible by `now`. Raises what
     the store raises: the callers fail closed (`read_failed`)."""
+    return _store_reader(eng, lo, now)()
+
+
+def _store_reader(eng: Engine, lo: pd.Timestamp, now: pd.Timestamp
+                  ) -> Callable[[], tuple[pd.DataFrame, pd.DataFrame]]:
+    """`_read_store` as a call that touches no engine state: the store, symbols and keys are taken here, on the tick
+    thread, so the call can run on a thread of its own (`StoreRead`)."""
     from goldbot.engine import books
-    assert eng.store is not None
-    rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=eng.cfg.release_symbol, start=lo, end=now),
-                 now)
+    store, rel_sym = eng.store, eng.cfg.release_symbol
+    assert store is not None
     src, sym = books.live_key(eng)       # gold: (broker, its symbol); another book: (account, store symbol)
-    own = _clean(eng.store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
-    return rel, own
+
+    def read() -> tuple[pd.DataFrame, pd.DataFrame]:
+        rel = _clean(store.read("bars_1m", source=RELEASE_SOURCE, symbol=rel_sym, start=lo, end=now), now)
+        own = _clean(store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
+        return rel, own
+    return read
 
 
 def read_failed(eng: Engine, now: pd.Timestamp, exc: BaseException) -> None:
@@ -482,24 +564,37 @@ def reread(eng: Engine, now: pd.Timestamp) -> bool:
     the window by the warm start's rule (release before the cut-over, the broker's stored minutes from it on; a minute
     the engine already holds wins, so nothing a decision used is replaced). history_read is lifted only once the merge
     succeeded, and the window is then judged for history_short (the warm start whose read raised could not judge it:
-    review of R123, HIGH). Runs on the tick thread: its duration is logged, a warning over REREAD_WARN_S. True when
-    bars changed."""
+    review of R123, HIGH). The read runs on a thread of its own (`StoreRead`, backlog 157), one at a time; this call,
+    on the tick thread, merges a finished read and starts the next when due, so a read is merged at the first close
+    after it returns and a read that never returns keeps the refusal (logged once past READ_HUNG_S). True when bars
+    changed."""
     h = eng.history
-    if eng.store is None or (h.read_error is None and not h.read_short):
+    if eng.store is None:
         return False
+    changed = _absorb_reread(eng, now)
+    if (h.read_error is None and not h.read_short) or _running(h, "reread"):
+        return changed
     if h.read_at is not None and now - h.read_at < REFILL_EVERY:
-        return False
+        return changed
     h.read_at = now
-    t0 = time.monotonic()
+    _start(h, "reread", _store_reader(eng, now - pd.Timedelta(days=_window_days(eng)), now), now)
+    return _absorb_reread(eng, now) or changed       # a read already finished (run inline) is merged now
+
+
+def _absorb_reread(eng: Engine, now: pd.Timestamp) -> bool:
+    """On the tick thread: merge a finished re-read (`reread`); a read or merge that raised keeps history_read."""
+    h = eng.history
+    r = _collect(h, "reread")
+    if r is None:
+        return False
     try:
-        rel, own = _read_store(eng, now - pd.Timedelta(days=_window_days(eng)), now)
+        if r.error is not None:
+            raise r.error
+        rel, own = r.result
         changed = _merge_read(eng, rel, own)
     except Exception as exc:                          # noqa: BLE001 - fail closed: entries stay refused
         read_failed(eng, now, exc)
         return False
-    finally:
-        took = time.monotonic() - t0
-        (log.warning if took > REREAD_WARN_S else log.info)("history: the store re-read took %.2f s", took)
     if h.read_error is not None:
         log.warning("history: the store reads again after %s: history_read lifted", h.read_error)
         h.read_error = None
@@ -703,35 +798,61 @@ def reload_release(eng: Engine, now: pd.Timestamp) -> int:
     the running engine kept refusing every bar on the stale hole until its next restart (brain 2026-10-23: 4h refused
     since 08-28..31 although the store was whole from 10-24). Only the minutes the window lacks, before the cut-over,
     of the open gaps are read: `visible_at <= now` (point in time), release source, never over a minute the engine
-    already holds (first copy wins), so a revised value never replaces what a decision already used. Returns bars added."""
+    already holds (first copy wins), so a revised value never replaces what a decision already used. The read runs on
+    a thread of its own (`StoreRead`, backlog 157), one at a time, and is merged on the tick thread by the first call
+    after it returns (`absorb_release`), keeping only minutes before the cut-over found then (a rebase may have moved
+    it back meanwhile). Returns bars added by this call."""
     h, cfg = eng.history, eng.cfg
-    if eng.store is None or eng.bars_1m.empty or h.cutover is None:
+    added = absorb_release(eng, now)
+    if eng.store is None or eng.bars_1m.empty or h.cutover is None or _running(h, "release"):
+        return added
+    spans = [(g.start, min(g.end, h.cutover)) for g in window_gaps(eng, eng.bars_1m)
+             if g.start < h.cutover]                        # at or after it: the broker's feed, the broker fill's
+    if not spans:
+        return added
+    store, sym = eng.store, cfg.release_symbol
+
+    def read() -> pd.DataFrame:
+        got = []
+        for lo, hi in spans:
+            rel = _clean(store.read("bars_1m", source=RELEASE_SOURCE, symbol=sym, start=lo, end=hi), now)
+            if not rel.empty:
+                got.append(rel[(rel["ts_utc"] >= lo) & (rel["ts_utc"] < hi)])
+        return pd.concat([g for g in got if not g.empty]) if any(not g.empty for g in got) else pd.DataFrame()
+    _start(h, "release", read, now)
+    return added + absorb_release(eng, now)          # a read already finished (run inline) is merged now
+
+
+def absorb_release(eng: Engine, now: pd.Timestamp) -> int:
+    """On the tick thread: merge a finished release reload (`reload_release`) into the window, release minutes before
+    the current cut-over only, never over a minute the engine holds. A read that raised fails closed (`read_failed`).
+    Returns bars added."""
+    h = eng.history
+    r = _collect(h, "release")
+    if r is None:
         return 0
-    gaps = window_gaps(eng, eng.bars_1m)
-    added = []
-    for g in gaps:
-        if g.start >= h.cutover:
-            continue                                        # the broker's own feed: only the broker fill may fill it
-        rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.release_symbol, start=g.start,
-                                    end=min(g.end, h.cutover)), now)
-        if not rel.empty:
-            added.append(rel[(rel["ts_utc"] >= g.start) & (rel["ts_utc"] < min(g.end, h.cutover))])
-    got = pd.concat([a for a in added if not a.empty]) if any(not a.empty for a in added) else pd.DataFrame()
-    if got.empty:
+    if r.error is not None:
+        read_failed(eng, now, r.error)
         return 0
+    got: pd.DataFrame = r.result
+    if got.empty or eng.bars_1m.empty:
+        return 0
+    if h.cutover is not None:
+        got = got[got["ts_utc"] < h.cutover]
     merged = pd.concat([eng.bars_1m, got]).drop_duplicates("ts_utc", keep="first").sort_values("ts_utc", kind="stable")
     n = len(merged) - len(eng.bars_1m)
     if n <= 0:
         return 0
-    eng.bars_1m = merged.tail(cfg.max_bars_in_memory).reset_index(drop=True)
+    eng.bars_1m = merged.tail(eng.cfg.max_bars_in_memory).reset_index(drop=True)
     eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None
-    log.info("history: %d release minutes re-read from the store into %d hole(s)", n, len(gaps))
+    log.info("history: %d release minutes re-read from the store into the window's holes", n)
     return n
 
 
 def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
-    """After a bar close's exits and decisions: absorb a finished fill; while a window has a hole, re-fill it from the
-    broker every REFILL_EVERY. Never raises."""
+    """After a bar close's exits and decisions: absorb a finished fill and finished store reads (on this, the tick
+    thread: nothing a background read returns is merged anywhere else); while a window has a hole, re-fill it from the
+    broker every REFILL_EVERY. Never raises, never waits on a store read."""
     try:
         absorb(eng)
         h = eng.history
@@ -742,6 +863,8 @@ def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
             except Exception as exc:                  # noqa: BLE001 - fail closed (`read_failed`); the fill still runs
                 read_failed(eng, close_ts, exc)
             start_fill(eng, close_ts)
+        else:
+            absorb_release(eng, close_ts)             # a reload started at an earlier close
         if h.writer is not None:
             h.backfill["dropped"] = h.writer.dropped
     except Exception:                                 # noqa: BLE001 - history upkeep never stops trading
