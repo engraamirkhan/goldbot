@@ -743,7 +743,7 @@ class Engine:
         """Without a price, and only once the feed is dead (re-verification NEW-1/2): never on a single bad quote.
 
         Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last close counted in it
-        (`bars_through`, else `_closed_through`, or its entry bar) with a minute expected open (`downtime.open_bars`,
+        (`bars_through`, else a close this engine processed, or its entry bar) with a minute expected open (`downtime.open_bars`,
         the downtime catch-up's rule) reaches `max_bars` is closed (`time_exit`), once quotes have been invalid for
         QUOTE_DEAD_S. A weekend, a whole daily break or an exchange holiday never counts.
 
@@ -760,7 +760,7 @@ class Engine:
             sec = tf_seconds(self.cfg.decision_tf)
             for pid, tr in list(self.open.items()):
                 opened = tr.opened_utc or tr.entry_bar_ts
-                last = tr.bars_through if tr.bars_through is not None else self._closed_through   # its bars_held's last
+                last = downtime.counted_through(self, tr)        # its bars_held's last close, when known
                 bases = [x for x in (last, opened.floor(f"{sec}s") if opened is not None else None) if x is not None]
                 if pid in self._close_due or not bases:
                     continue
@@ -903,7 +903,7 @@ class Engine:
         if self.shadow is not None:            # open shadow trades keep ageing after their agent leaves the set
             tfs |= {t.timeframe for b in self.shadow.books.values() for t in b.open}
         gaps = history.window_gaps(self, complete)
-        shadow_replay.catch_up(self, complete, close_ts, gaps)   # backlog 165: before the trades advance; never raises
+        shadow_replay.catch_up(self, complete, close_ts)   # backlog 165: before the trades advance; never raises
         for tf in sorted(tfs, key=tf_seconds):
             if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
                 continue                       # cheap pre-check: this close does not complete an intraday bar of tf

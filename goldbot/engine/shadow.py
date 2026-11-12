@@ -106,7 +106,8 @@ class ShadowTrade(Record):
     barriers_on_1m: bool = False
     # backlog 161 (quant Q-1): open across an engine restart whose missed bars were not replayed (backlog 165: no resume
     # point, or the history never covered them), so they are missing from its path (bars_held, barriers, excursion):
-    # calibration and shadow-vs-live reads (`stats`, `outcomes`, `returns_since`, the throttle's shadow win) exclude it
+    # calibration and shadow-vs-live reads (`stats`, `outcomes`, the throttle's shadow win, the CUSUM model watch)
+    # exclude it; the re-arm read (`returns_since`) keeps its losses
     restart_gap: bool = False
     # backlog 165: the open time of the last bar of `timeframe` the trade advanced on, saved with it, so a restart
     # replays the bars closed while the engine was down from the next one (engine/shadow_replay.py). None: not advanced
@@ -379,11 +380,14 @@ class ShadowBook:
                          n_clusters=len(sums), t_stat=cluster_t_stat(rets["ret"].tolist(), keys))
 
     def returns_since(self, version: str, since: pd.Timestamp) -> list[float]:
+        """Returns of `version`'s taken trades exited at or after `since` (the 12% halt's re-arm read). A `restart_gap`
+        trade counts only as a loss (trading-safety review S-1): dropping its losses would loosen the re-arm."""
         book = self.books.get(version)
         if book is None:
             return []
         return [t.ret for t in book.closed
-                if t.taken and t.ret is not None and not t.restart_gap and t.exit_ts is not None and t.exit_ts >= since]
+                if t.taken and t.ret is not None and (not t.restart_gap or t.ret < 0) and t.exit_ts is not None
+                and t.exit_ts >= since]
 
     def outcomes(self, version: str, since: pd.Timestamp | None = None) -> list[ShadowTrade]:
         """Closed candidates of `version` recorded with their threshold (every candidate, taken or not), exited at or

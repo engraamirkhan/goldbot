@@ -14,6 +14,8 @@ from pathlib import Path
 import pandas as pd
 
 from goldbot.engine import Engine
+from goldbot.engine.runner import QUOTE_DEAD_S
+from goldbot.engine.store import OrdersSnapshot
 from goldbot.execution.broker import Tick
 from tests.test_engine_downtime_catch_up import M15, _counted_trade, _engine, _feed
 from tests.test_exploration_engine import CLOSE, _arm
@@ -104,3 +106,69 @@ def test_a_restart_never_runs_the_exploration_step_again_for_the_restored_close(
     eng._save_orders()
     again, _ = _exploration_engine(tmp_path, [_arm("x1")])
     assert again.exploration is not None and again.exploration.last_close == CLOSE
+
+
+def test_the_dead_feed_barrier_of_a_trade_without_bars_through_counts_from_its_entry_not_the_restored_close(tmp_path):
+    """Trading-safety review S-2: a trade with no `bars_through` (an orphan adopted at start, or saved before the
+    field) counts its dead-feed time barrier from its entry bar, as before backlog 163, never from a close restored from
+    the orders file (a later exit). 3 held, entry 10:00, dead at 12:16: 3 + 9 bars >= 10, closed."""
+    pb, pid, last = _counted_trade(tmp_path)
+    saved = _orders(tmp_path)
+    del saved["open"][str(pid)]["bars_through"]
+    (tmp_path / "orders_icm-demo.json").write_text(json.dumps(saved))
+    eng = _engine(tmp_path, pb)
+    assert eng._closed_through == last                       # restored, but not counted by this engine
+    eng.open[pid].max_bars = 10
+    now = last + 2 * M15 + pd.Timedelta(minutes=1)
+    eng._quote_invalid_since = now - pd.Timedelta(seconds=QUOTE_DEAD_S)
+    eng._host_clock_exits(now)
+    assert pid not in eng.open
+
+
+def test_a_saved_close_ahead_of_the_host_clock_is_ignored_and_journalled(tmp_path):
+    """Trading-safety review S-3: a close later than the host clock plus one decision bar (a broker clock that ran
+    ahead) would stop every close until the clock caught up; it is ignored and journalled."""
+    pb, _, _ = _counted_trade(tmp_path)
+    saved = _orders(tmp_path)
+    ahead = (pd.Timestamp.now("UTC") + pd.Timedelta(days=1)).floor("15min")
+    saved["closed_through"] = ahead.isoformat()
+    (tmp_path / "orders_icm-demo.json").write_text(json.dumps(saved))
+    eng = _engine(tmp_path, pb)
+    assert eng._closed_through is None
+    [row] = [d for d in eng.decisions if d.get("action") == "restart_closed_through_ignored"]
+    assert row["close"] == ahead.isoformat()
+    assert not [d for d in eng.decisions if d.get("action") == "restart_closed_through"]
+
+
+def test_a_failed_save_at_a_close_blocks_entries_while_the_exits_still_run(tmp_path):
+    """Backlog 163: the close is saved before its decisions (`downtime.processed`). A save that raises is a tick error:
+    entries are refused at that close (`tick_error`), while the stop check, the close retries and the close's own
+    position management still run."""
+    pb, pid, last = _counted_trade(tmp_path)
+    eng = _engine(tmp_path, pb)
+    _feed(eng, pb, last + pd.Timedelta(minutes=1), 14)       # up to 1h59: the 2h00 bar is not closed yet
+    calls: list[str] = []
+    save, stop, retry = eng.state_store.save_orders, eng._stop_check, eng._retry_closes
+    fails = [True]
+
+    def failing_save(s: OrdersSnapshot) -> None:
+        if fails.pop() if fails else False:
+            raise OSError("disk full")
+        save(s)
+
+    def stop_check(t: Tick) -> None:
+        calls.append("stop")
+        stop(t)
+
+    def retry_closes(now: pd.Timestamp) -> None:
+        calls.append("retry")
+        retry(now)
+    eng.state_store.save_orders = failing_save  # type: ignore[method-assign]
+    eng._stop_check = stop_check  # type: ignore[method-assign]
+    eng._retry_closes = retry_closes  # type: ignore[method-assign]
+    assert not eng.state.tick_error
+    _feed(eng, pb, last + M15, 1)                            # closes 2h00; its save raises
+    assert eng._closed_through == last + M15
+    assert eng.state.tick_error and "tick_error" in eng.gate.account_reasons(eng.state)
+    assert calls[:2] == ["stop", "retry"]
+    assert eng.open[pid].bars_held == 4                      # the close's position management ran

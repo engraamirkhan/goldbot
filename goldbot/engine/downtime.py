@@ -87,12 +87,29 @@ def processed(eng: Engine, close: pd.Timestamp) -> None:
     eng._guard(eng._save_orders)
 
 
+def counted_through(eng: Engine, tr: OpenTrade) -> pd.Timestamp | None:
+    """The last close counted in `tr.bars_held`, for the dead-feed time barrier: its `bars_through`; without one (an
+    orphan adopted at start, a trade saved before the field) the last close this engine processed itself, never one
+    restored from the orders file (safety review S-2: the barrier then counts from the entry bar, as before 163, so
+    its exit is never later); None when neither is known."""
+    if tr.bars_through is not None:
+        return tr.bars_through
+    return eng._closed_through if eng._first_counted is not None else None
+
+
 def restore(eng: Engine, closed_through: pd.Timestamp | None) -> None:
     """Backlog 163, at start (`Engine._load_orders`): the last base close the previous engine processed. A quote
     stamped before it is a late tick and its bar is never closed again (`Engine._due_close`), so a signal RiskGate
     refused at that close is never re-decided at a later price; the exploration step starts after it too. Journalled.
-    None (an older orders file, or no close processed yet): as before."""
+    None (an older orders file, or no close processed yet): as before. One later than the host clock plus a decision
+    bar (a broker clock that ran ahead) is ignored and journalled (safety review S-3): it would stop every close."""
     if closed_through is None:
+        return
+    ahead = eng.clock() + pd.Timedelta(seconds=tf_seconds(eng.cfg.decision_tf))
+    if closed_through > ahead:                        # safety review S-3: a broker clock that ran ahead
+        log.warning("restart: the saved last close %s is ahead of the host clock: ignored", closed_through)
+        eng.decisions.append({"ts": time.time(), "agent": None, "action": "restart_closed_through_ignored",
+                              "close": closed_through.isoformat()})
         return
     eng._closed_through = closed_through
     if eng.exploration is not None and eng.exploration.last_close is None:

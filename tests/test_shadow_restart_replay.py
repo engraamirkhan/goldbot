@@ -16,12 +16,13 @@ import pytest
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.engine import Engine, EngineConfig, shadow_replay
-from goldbot.engine.history import HistoryGap
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of
 from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.ops.jobs import model_watch
 from goldbot.risk.throttle import latest_shadow_win
 from goldbot.telegram.approvals import ApprovalCenter
+from tests.test_shadow import _promote_pair, _shadow_rets, _watch_ctx
 
 OWNER = 111
 B1 = ticks_to_1m(synthetic_ticks("2025-03-04", "2025-03-06", ticks_per_minute=2, seed=11))
@@ -86,7 +87,7 @@ def test_a_shadow_trade_replayed_across_a_restart_ends_identical_to_one_that_nev
     [held] = eng.shadow.held()
     assert not held.restart_gap
     complete, close = _at_close(eng, RESTART)
-    shadow_replay.catch_up(eng, complete, close, [])
+    shadow_replay.catch_up(eng, complete, close)
     assert not eng.shadow.held()
     _advance(eng.shadow, range(RESTART, len(B15)))          # the normal path from the restart's first close on
     assert _trade(eng.shadow).model_dump() == _trade(ref).model_dump()
@@ -101,16 +102,55 @@ def test_a_held_trade_is_not_advanced_by_the_bars_closing_before_its_replay(tmp_
     assert _trade(eng.shadow).bars_held == DOWN - ENTRY
 
 
+def _holed(complete: pd.DataFrame, row: int = DOWN + 3, minutes: int = 5) -> pd.DataFrame:
+    """`complete` without `minutes` open minutes inside the B15 bar `row` (a tail the fill has not brought yet): fewer
+    than history_gap_max_min, so the entry refusal's tolerance would not see them."""
+    lo = pd.Timestamp(B15["ts_utc"].iloc[row]) + pd.Timedelta(minutes=4)
+    ts = complete["ts_utc"]
+    return complete[(ts < lo) | (ts >= lo + pd.Timedelta(minutes=minutes))].reset_index(drop=True)
+
+
+def test_a_few_open_minutes_missing_inside_a_missed_bar_hold_the_trade_until_the_history_has_them(tmp_path):
+    """Quant review C1: five minutes missing inside a downtime bar (under the 60-minute entry tolerance) keep the
+    trade held; once the minutes are in, the replay ends identical to the trade that never restarted."""
+    ref = ShadowBook(tmp_path / "ref", evidence_start=None)
+    _open(ref, 20.0, 30.0, False)
+    _advance(ref, range(ENTRY + 1, len(B15)))
+    _died_at(tmp_path / "host", 20.0, 30.0)
+    eng = _engine(tmp_path / "host")
+    assert eng.shadow is not None
+    complete, close = _at_close(eng, RESTART)
+    shadow_replay.catch_up(eng, _holed(complete), close)
+    assert eng.shadow.held() and _trade(eng.shadow).bars_held == DOWN - ENTRY
+    complete, close = _at_close(eng, RESTART + 1)                 # the fill brought the minutes
+    _advance(eng.shadow, range(RESTART, RESTART + 1))             # the held trade skips the bar in between
+    shadow_replay.catch_up(eng, complete, close)
+    assert not eng.shadow.held()
+    _advance(eng.shadow, range(RESTART + 1, len(B15)))
+    assert _trade(eng.shadow).model_dump() == _trade(ref).model_dump()
+
+
+def test_a_trade_is_not_replayed_while_a_history_fill_is_running_or_unabsorbed(tmp_path):
+    _died_at(tmp_path)
+    eng = _engine(tmp_path)
+    assert eng.shadow is not None
+    complete, close = _at_close(eng, RESTART)
+    eng.history.fill = object()                                   # type: ignore[assignment]  # running or done
+    shadow_replay.catch_up(eng, complete, close)
+    assert eng.shadow.held()
+    eng.history.fill = None                                       # absorbed
+    shadow_replay.catch_up(eng, complete, close)
+    assert not eng.shadow.held()
+
+
 def test_a_trade_whose_missed_bars_the_history_has_not_covered_stays_held_then_is_tagged_restart_gap(tmp_path):
     _died_at(tmp_path)
     eng = _engine(tmp_path)
     assert eng.shadow is not None
     complete, close = _at_close(eng, RESTART)
-    hole = HistoryGap(start=pd.Timestamp(B15["ts_utc"].iloc[DOWN + 2]), end=pd.Timestamp(B15["ts_utc"].iloc[DOWN + 5]),
-                      open_min=45)
-    shadow_replay.catch_up(eng, complete, close, [hole])
+    shadow_replay.catch_up(eng, _holed(complete), close)
     assert eng.shadow.held() and _trade(eng.shadow).bars_held == DOWN - ENTRY     # waits for the fill
-    shadow_replay.catch_up(eng, complete, close + shadow_replay.REPLAY_WAIT, [hole])
+    shadow_replay.catch_up(eng, _holed(complete), close + shadow_replay.REPLAY_WAIT)
     t = _trade(eng.shadow)
     assert not eng.shadow.held() and t.restart_gap and t.bars_held == DOWN - ENTRY
     _advance(eng.shadow, range(RESTART + 1, RESTART + 2))  # advances from the next bar, as before
@@ -123,7 +163,7 @@ def test_a_trade_whose_window_starts_after_its_last_bar_is_not_replayed(tmp_path
     assert eng.shadow is not None
     complete, close = _at_close(eng, RESTART)
     late = complete[complete["ts_utc"] > pd.Timestamp(B15["ts_utc"].iloc[DOWN + 1])]
-    shadow_replay.catch_up(eng, late, close, [])
+    shadow_replay.catch_up(eng, late, close)
     assert eng.shadow.held()
 
 
@@ -159,7 +199,7 @@ def test_a_trade_held_when_the_engine_dies_again_is_held_and_replayed_at_the_nex
     second = _engine(tmp_path / "host")
     assert second.shadow is not None and second.shadow.held()
     complete, close = _at_close(second, RESTART + 4)
-    shadow_replay.catch_up(second, complete, close, [])
+    shadow_replay.catch_up(second, complete, close)
     _advance(second.shadow, range(RESTART + 4, len(B15)))
     assert _trade(second.shadow).model_dump() == _trade(ref).model_dump()
 
@@ -176,14 +216,42 @@ def _gap_book(tmp_path: Path) -> ShadowBook:
     return book
 
 
-def test_restart_gap_trades_are_left_out_of_promotion_calibration_rearm_and_throttle_reads(tmp_path):
+def test_restart_gap_trades_are_left_out_of_promotion_calibration_and_throttle_reads(tmp_path):
     book = _gap_book(tmp_path)
     t0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
     assert book.stats("v1", t0 + pd.Timedelta(days=7)).n_trades == 1
     assert [t.restart_gap for t in book.outcomes("v1")] == [False]
-    assert len(book.returns_since("v1", t0)) == 1
     win = latest_shadow_win(book, "a", "v1")
     assert win is not None and not win.restart_gap        # the later win has a gap: the earlier one is the latest
+
+
+def test_a_restart_gap_loss_still_blocks_the_rearm_and_only_its_wins_are_dropped(tmp_path):
+    """Trading-safety review S-1: the 12% halt's re-arm needs a positive paper shadow record (`returns_since`); a
+    restart-gap win is dropped, a restart-gap loss is kept, so the gap never loosens the re-arm."""
+    book = _gap_book(tmp_path)
+    t0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
+    assert book.returns_since("v1", t0) == [3.0 / 2400.0]          # the gap win is dropped
+    gap = book.books["v1"].closed[1]
+    gap.exit, gap.ret = 2390.0, -10.0 / 2400.0
+    assert sorted(book.returns_since("v1", t0)) == [-10.0 / 2400.0, 3.0 / 2400.0]
+    assert sum(book.returns_since("v1", t0)) < 0                   # the re-arm stays refused
+
+
+def test_the_model_watch_cusum_never_rolls_a_champion_back_on_restart_gap_trades(tmp_path):
+    """Quant review C2: the new-champion CUSUM restores the previous model on an alarm; trades whose path missed bars
+    over a restart are left out of it, so twelve losing gap trades leave the champion in place."""
+    ctx = _watch_ctx(tmp_path)
+    t = pd.Timestamp("2026-09-01", tz="UTC")
+    _, b = _promote_pair(ctx, t)
+    promoted = t + pd.Timedelta(days=30)
+    _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
+    book = ShadowBook(tmp_path)
+    for tr in book.books[b].closed:
+        tr.restart_gap = True
+    book.save(promoted + pd.Timedelta(days=5))
+    out = model_watch(ctx, promoted + pd.Timedelta(days=6))
+    assert out["agent-x"]["action"] != "restored_previous" and out["agent-x"]["trades"] == 0
+    assert ctx.models.champion("agent-x").version == b               # type: ignore[union-attr]
 
 
 def test_the_engines_first_bar_close_after_a_restart_replays_the_held_trades(tmp_path):
