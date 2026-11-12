@@ -297,7 +297,11 @@ def test_a_restart_gap_shadow_trade_keeps_its_loss_and_drops_its_win_in_the_ruin
     for t, c in zip(book["v1"]["closed"], [False, True, True]):
         t["restart_gap"] = c
     (tmp_path / "shadow_book.json").write_text(json.dumps(book))
-    assert r_from_shadow_book(tmp_path, version="v1").r.tolist() == [2.0, -1.0]
+    s = r_from_shadow_book(tmp_path, version="v1")
+    assert s.r.tolist() == [2.0, -1.0] and s.n_restart_gap_dropped == 1
+    rep = simulate(RuinConfig(limits=_live(), trades_per_week=5, weeks=4, n_paths=10, horizons_weeks=(4,)),
+                   r=s.r, cost_basis=s.cost_basis, n_restart_gap_dropped=s.n_restart_gap_dropped)
+    assert rep.n_restart_gap_dropped == 1 and "1 winning shadow trade(s) across a restart" in format_report(rep)
 
 
 def test_shadow_versions_are_pooled_only_when_asked(tmp_path: Path):

@@ -129,6 +129,7 @@ class RSample(FrozenRecord):
     versions: list[str] = Field(default_factory=list)
     n_imputed: int = 0                 # rows charged an imputed cost (cost basis "net+imputed")
     n_excluded: int = 0                # closed trades without R that could not be priced from their stop (basis unknown)
+    n_restart_gap_dropped: int = 0     # backlog 174: winning `restart_gap` shadow trades left out (their losses count)
 
 
 class RuinConfig(FrozenRecord):
@@ -186,6 +187,7 @@ class RuinReport(FrozenRecord):
     versions: list[str]                             # shadow-book versions the R came from (empty: other sources)
     n_imputed: int = 0                              # closed trades charged an imputed cost ("net+imputed (N)")
     n_excluded: int = 0                             # closed trades left out: no R and no stop to price it from
+    n_restart_gap_dropped: int = 0                  # winning `restart_gap` shadow trades left out (backlog 174)
     n_source_trades: int | None
     source_mean_r: float
     source_sd_r: float
@@ -358,7 +360,8 @@ def _levels(lim: RuinLimits) -> dict[str, float]:
 # ------------------------------------------------------------------------------------------------ simulation
 def simulate(cfg: RuinConfig, *, r: np.ndarray | None = None, parametric: ParametricR | None = None,
              cost_basis: CostBasis | None = None, versions: Sequence[str] = (),
-             exit_utc: pd.DatetimeIndex | None = None, n_imputed: int = 0, n_excluded: int = 0) -> RuinReport:
+             exit_utc: pd.DatetimeIndex | None = None, n_imputed: int = 0, n_excluded: int = 0,
+             n_restart_gap_dropped: int = 0) -> RuinReport:
     """Run the Monte Carlo on an ordered R sample (block bootstrap) or a parametric distribution."""
     if (r is None) == (parametric is None):
         raise ValueError("give exactly one of r and parametric")
@@ -394,6 +397,9 @@ def simulate(cfg: RuinConfig, *, r: np.ndarray | None = None, parametric: Parame
         notes.append(f"{n_excluded} closed trade(s) without R and without the side, entry, exit and initial stop to "
                      "price it from are left out of the sample (their outcome may be linked to why R is missing): "
                      "cost basis unknown")
+    if n_restart_gap_dropped:
+        notes.append(f"{n_restart_gap_dropped} winning shadow trade(s) across a restart (restart_gap: bars of the path "
+                     "missing) left out; their losses are kept, so the sample leans pessimistic")
     if cfg.demean or cfg.r_haircut:
         notes.append(f"stress run: R shifted by {-shift:+.3f} (demean {'on' if cfg.demean else 'off'}, haircut "
                      f"{cfg.r_haircut:g}); simulated mean R {sim_mean:+.3f}")
@@ -445,7 +451,7 @@ def simulate(cfg: RuinConfig, *, r: np.ndarray | None = None, parametric: Parame
             p_by_weeks={h: round(float(np.mean(fk <= h + _EPS)), 6) for h in horizons},
             median_weeks_to_first=round(float(np.median(tripped)), 4) if len(tripped) else None))
     return RuinReport(source="bootstrap" if r is not None else "parametric", cost_basis=basis, versions=list(versions),
-                      n_imputed=n_imputed, n_excluded=n_excluded,
+                      n_imputed=n_imputed, n_excluded=n_excluded, n_restart_gap_dropped=n_restart_gap_dropped,
                       n_source_trades=len(sample) if r is not None else None,
                       source_mean_r=round(mean_r, 6), source_sd_r=round(sd_r, 6), simulated_mean_r=round(sim_mean, 6),
                       observed_trades_per_week=round(observed, 6) if observed is not None else None,
@@ -540,15 +546,18 @@ def r_from_shadow_book(state_dir: Path, *, version: str | None = None, agent_id:
             raise ValueError(f"the shadow book has {len(books)} versions ({', '.join(sorted(books))}) and no single "
                              "champion was found: pass --version V (or --agent with the registry), or --pool-versions "
                              "to pool champion and challengers")
-    rows = [t for v in chosen for t in books[v].closed
+    seen = [t for v in chosen for t in books[v].closed
             if t.taken and t.ret is not None and t.exit_ts is not None and t.entry != t.stop
-            and (not t.restart_gap or t.ret < 0) and (agent_id is None or t.agent_id == agent_id)]
+            and (agent_id is None or t.agent_id == agent_id)]
+    rows = [t for t in seen if not t.restart_gap or (t.ret or 0.0) < 0]
+    gap_wins = len(seen) - len(rows)
     if not rows:
-        return RSample(r=np.empty(0), cost_basis="spread_only", versions=chosen)
+        return RSample(r=np.empty(0), cost_basis="spread_only", versions=chosen, n_restart_gap_dropped=gap_wins)
     ts = pd.DatetimeIndex([t.exit_ts for t in rows])
     order = np.argsort(epoch_ns(ts), kind="stable")
     r = [float(rows[i].ret or 0.0) * rows[i].entry / abs(rows[i].entry - rows[i].stop) for i in order]
-    return RSample(r=np.array(r, dtype=float), exit_utc=ts[order], cost_basis="spread_only", versions=chosen)
+    return RSample(r=np.array(r, dtype=float), exit_utc=ts[order], cost_basis="spread_only", versions=chosen,
+                   n_restart_gap_dropped=gap_wins)
 
 
 def r_from_file(path: Path) -> RSample:
@@ -665,7 +674,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if sample is not None:
         rep = simulate(cfg, r=sample.r, cost_basis=sample.cost_basis, versions=sample.versions,
-                       exit_utc=sample.exit_utc, n_imputed=sample.n_imputed, n_excluded=sample.n_excluded)
+                       exit_utc=sample.exit_utc, n_imputed=sample.n_imputed, n_excluded=sample.n_excluded,
+                       n_restart_gap_dropped=sample.n_restart_gap_dropped)
     else:
         rep = simulate(cfg, parametric=par)
     print(format_report(rep))

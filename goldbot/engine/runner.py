@@ -369,11 +369,11 @@ class Engine:
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.state_store: EngineStore = JsonEngineStore(Path(cfg.state_dir), cfg.account_id)   # ADR 0023 step 1
+        # host UTC clock for the live clock (tests replace it); ticks are compared with it, never the reverse
+        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")
         self.probe = cost_probe.CostProbe.start(self)      # ADR 0037: demo accounts only (refused at start otherwise)
         self.exploration = exploration.Exploration.start(self)   # plan 2026-10-25: demo probe_only only (else refused)
         self.center.on_decision = self._on_decision
-        # host UTC clock for the live clock (tests replace it); ticks are compared with it, never the reverse
-        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
         self.bridge_compat: BridgeCompat | None = None   # BACKLOG 42: run.py's bridge verdict; None: no bridge / unchecked
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)

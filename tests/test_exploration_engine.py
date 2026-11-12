@@ -17,7 +17,7 @@ import pytest
 from goldbot.config import tf_seconds
 from goldbot.data.resample import ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
-from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe, downtime, exploration, magic
+from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe, exploration, magic
 from goldbot.engine.exploration import Arm, ExplorationConfig, Pot
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
@@ -88,7 +88,7 @@ def qualified(arm: Arm) -> Arm:
 def _engine(tmp_path: Path, arms: list[Arm], *, pots: dict[str, Pot] | None = None, max_open_total: int = 18,
             budget_share: float = 0.9, caps: dict[str, float] | None = None, agents: list[Any] | None = None,
             pb: PaperBroker | None = None, enabled: bool = True, max_positions: int = 50,
-            scheduled: bool = False, qualify: bool = True) -> tuple[Engine, PaperBroker]:
+            scheduled: bool = False, qualify: bool = True, live_clock: bool = False) -> tuple[Engine, PaperBroker]:
     arms = [qualified(a) for a in arms] if qualify else arms
     pots = pots if pots is not None else {"scalp": Pot(gbp=50, max_open=8), "intraday": Pot(gbp=48, max_open=5),
                                           "swing": Pot(gbp=40, max_open=1)}
@@ -102,7 +102,7 @@ def _engine(tmp_path: Path, arms: list[Arm], *, pots: dict[str, Pot] | None = No
     eng = Engine(EngineConfig(account_id="icm-probe", broker_name="icm", mode="demo", approval_mode="auto",
                               declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, probe_only=True,
                               exploration_config=cfg, cost_probe=scheduled,
-                              cost_probe_scheduled=acc_mod.ScheduledProbe(enabled=scheduled)),
+                              cost_probe_scheduled=acc_mod.ScheduledProbe(enabled=scheduled), live_clock=live_clock),
                  pb, agents, {a.family: ConstantModel(p=0.9) for a in agents}, ApprovalCenter({111}), limits=limits,
                  live_shares={a.agent_id: 1.0 for a in agents})
     return eng, pb
@@ -567,32 +567,40 @@ def test_a_1m_hold_exits_on_the_host_clock_while_halted_and_without_a_quote(tmp_
     assert load_closed_trades(tmp_path)[0] == []                        # never in closed_trades.jsonl
 
 
-def _restarted_1m(tmp_path: Path, minute: pd.Timestamp, clock: pd.Timestamp) -> tuple[Engine, Tick]:
-    """A 1m book started again on `tmp_path`, on the host clock (`live_clock`, as the engine service runs) at `clock`:
-    its 1m bars before `minute`, then the start's restore of the saved close (`Engine._load_orders`)."""
-    eng, pb = _engine(tmp_path, [_arm("s", tf="1m", style="scalp", hold_bars=5)])
+def _restarted_1m(tmp_path: Path, minute: pd.Timestamp) -> tuple[Engine, Tick]:
+    """A 1m book started again on `tmp_path` through `Engine.__init__`, on the host clock (`live_clock`, as the engine
+    service runs; the test's pinned clock), then given its 1m bars before `minute`."""
+    eng, pb = _engine(tmp_path, [_arm("s", tf="1m", style="scalp", hold_bars=5)], live_clock=True)
+    eng.clock = lambda: CLOSE + pd.Timedelta(seconds=2)      # the account read on `_at`'s fresh quote
     tick = _at(eng, pb, CLOSE)
     eng.bars_1m = ticks_to_1m(TICKS[TICKS["ts_utc"] < minute])
-    eng.cfg.live_clock, eng.clock = True, lambda: clock
-    downtime.restore(eng, CLOSE)
     return eng, tick
 
 
-def test_a_restart_inside_the_minute_the_1m_pass_last_decided_never_decides_it_again_on_a_stale_quote(tmp_path):
+@pytest.mark.clock_at("2025-03-04T20:01:05Z")            # CLOSE + 1 min + 5 s: inside the minute decided last
+@pytest.mark.parametrize("saved", [True, False], ids=["orders-file", "no-orders-file-yet"])
+def test_a_restart_inside_the_minute_the_1m_pass_last_decided_never_decides_it_again_on_a_stale_quote(tmp_path,
+                                                                                                      saved):
     """Backlog 174: the minute pass keeps its last decided minute in memory (`last_minute`), outside the restored
     `closed_through` (backlog 163). An engine restarted inside that minute decided it again: a signal refused at the
     minute (here its per-trade cap; live a spread, heat or budget refusal) could then pass at a later price, inside
     its 10 s staleness (sent ids stop only a signal that was sent). A start on the host clock now counts every minute
-    closed by then as decided: the first (stale) quote after the restart decides nothing; a later minute decides."""
+    closed by then as decided, whether or not an orders file was saved yet (a fresh account before its first base
+    close; review LOW): the first (stale) quote after the restart decides nothing; a later minute decides."""
     minute = CLOSE + pd.Timedelta(minutes=1)
     first, pb = _engine(tmp_path, [_arm("s", tf="1m", style="scalp", hold_bars=5)], caps={"s": 0.5})
     tick = _at(first, pb, CLOSE)
     first.bars_1m = ticks_to_1m(TICKS[TICKS["ts_utc"] < minute])
     exploration.on_pass(first, Tick(ts_utc=minute + pd.Timedelta(seconds=2), bid=tick.bid, ask=tick.ask))
     assert not first.open and [r[1] for r in _obs(tmp_path)] == [0]     # decided, and refused at the minute
-    first._save_orders()
-    again, tick = _restarted_1m(tmp_path, minute, minute + pd.Timedelta(seconds=5))
+    if saved:
+        first._save_orders()
+    assert (tmp_path / "orders_icm-probe.json").exists() is saved
+    again, tick = _restarted_1m(tmp_path, minute)
     assert again.exploration is not None and again.exploration.last_minute == minute
+    [row] = _actions(again, "exploration_start_minute")
+    assert row["minute"] == minute.isoformat()
+    again.clock = lambda: minute + pd.Timedelta(seconds=5)
     exploration.on_pass(again, Tick(ts_utc=minute + pd.Timedelta(seconds=2), bid=tick.bid, ask=tick.ask))   # stale
     assert not again.open and not _sent(again)
     nxt = minute + pd.Timedelta(minutes=1)
