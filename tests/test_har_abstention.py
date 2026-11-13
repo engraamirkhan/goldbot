@@ -297,3 +297,66 @@ def test_the_void_band_is_0_or_9_plus_low_days_of_20_as_the_prereg_states():
     assert H.LOW_DAYS_VOID == (0, 9)
     text = Path(__file__).resolve().parents[1].joinpath("docs/research/prereg-2026-11-07-n3-har.md").read_text()
     assert "0 low days or 9 or more" in text and "12-28%" not in text
+
+
+# ------------------------------------------------------------------------------------------------ backlog 145
+# Before the first `ok` row (prereg §2): the Duka/ICM overlap measurement (median ln(ICM/Duka) of daily TR, W, w;
+# |median ln w| <= 0.02) and a dry run of the job that never writes a row (an `ok` row would register N-3).
+OVERLAP_CUT = pd.Timestamp("2025-11-07 22:00", tz="UTC")
+
+
+def _overlap_store(live_from: str = "2025-09-01 05:00", widen: float = 0.0) -> _Store:
+    """The release's bars to the end, the broker's minutes from `live_from` on (an overlap of release and live), the
+    live high/low pushed out by `widen` dollars (a broker whose ranges are wider)."""
+    co = pd.Timestamp(live_from, tz="UTC")
+    live = _minutes(BARS[BARS["ts_utc"] >= co].reset_index(drop=True))
+    for side in ("bid", "ask"):
+        live[f"{side}_high"] += widen
+        live[f"{side}_low"] -= widen
+    return _Store(BARS.reset_index(drop=True), live)
+
+
+def test_the_overlap_of_identical_feeds_is_zero_and_passes():
+    got = har.measure_overlap(_overlap_store(), broker="icm", account_id="icm-demo", symbol="XAUUSD", cut=OVERLAP_CUT)
+    assert got.status == "pass" and got.n_w >= har.OVERLAP_MIN_DAYS
+    assert abs(got.ln_tr or 1) < 1e-9 and abs(got.ln_window or 1) < 1e-9 and abs(got.ln_w or 1) < 1e-9
+
+
+def test_a_broker_with_wider_ranges_fails_the_overlap():
+    got = har.measure_overlap(_overlap_store(widen=1.0), broker="icm", account_id="icm-demo", symbol="XAUUSD",
+                              cut=OVERLAP_CUT)
+    assert got.status == "fail" and got.ln_w is not None and got.ln_w > har.OVERLAP_MAX_LN_W
+
+
+def test_a_short_overlap_is_insufficient_never_a_pass():
+    got = har.measure_overlap(_overlap_store(live_from="2025-10-27 05:00"), broker="icm", account_id="icm-demo",
+                              symbol="XAUUSD", cut=OVERLAP_CUT)
+    assert got.status == "insufficient" and got.n_w < har.OVERLAP_MIN_DAYS
+
+
+def test_the_overlap_reads_only_days_closed_by_the_cut_and_drops_each_feeds_partial_edge_days():
+    got = har.measure_overlap(_overlap_store(), broker="icm", account_id="icm-demo", symbol="XAUUSD", cut=OVERLAP_CUT)
+    assert got.last_day is not None and got.last_day < OVERLAP_CUT.date()          # the cut day's edge is dropped
+    assert got.first_day is not None and got.first_day > date(2025, 9, 1)          # the live feed's first (partial) day
+
+
+def test_the_overlap_threshold_is_the_prereg_value():
+    from pathlib import Path
+    assert har.OVERLAP_MAX_LN_W == 0.02
+    text = Path(__file__).resolve().parents[1].joinpath("docs/research/prereg-2026-11-07-n3-har.md").read_text()
+    assert "|median ln ratio of w| > 0.02" in text
+
+
+def test_a_dry_run_forecasts_while_disabled_and_writes_nothing(tmp_path):
+    """A dry-run `ok` row in har_days would register N-3 (refusals_novel reads the latest row): it must never write."""
+    row = har.dry_run(_ctx(tmp_path, _split(), enabled=False), FRI_SLOT, now=FRI_SLOT)
+    assert row.status == "ok" and row.for_day == date(2025, 11, 10) and row.n_trailing == CFG.trailing_days
+    assert har.latest_row(Database.open(str(tmp_path), "aux"), FRI_SLOT + pd.Timedelta(days=3)) is None
+
+
+def test_a_dry_run_on_a_holed_feed_raises_like_the_job(tmp_path):
+    holed = BARS[(BARS["ts_utc"] < pd.Timestamp("2025-06-02", tz="UTC"))
+                 | (BARS["ts_utc"] >= pd.Timestamp("2025-06-16", tz="UTC"))].reset_index(drop=True)
+    with pytest.raises(har.HarUnavailable, match="gap"):
+        har.dry_run(_ctx(tmp_path, _Store(holed, pd.DataFrame())), FRI_SLOT, now=FRI_SLOT)
+    assert har.latest_row(Database.open(str(tmp_path), "aux"), FRI_SLOT + pd.Timedelta(days=3)) is None
