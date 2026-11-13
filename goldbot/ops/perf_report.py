@@ -50,8 +50,10 @@ Sunday reopen belongs to Monday; default the month so far); trades are in the ra
   MIN_TRADES net R, and the groups count in the multiple-groups note.
 * their excursions (BACKLOG 195, R135 `mfe_r` / `mae_r` / `mfe_usd` / `mae_usd` / `excursion_approx` on the closed
   exploration body), per family and per arm: median MFE and MAE in R with n, the losers' median MFE (the move the
-  bracket gave back), the winners' median MAE (how near the stop came), and the stop exits' share of the stop and
-  target exits against the bracket's driftless random-walk null target / (stop + target). Rows closed before R135 are
+  bracket gave back), the winners' median MAE (how near the stop came), the time exits' share, and the stop exits'
+  share of the initial-stop and target exits against the bracket's driftless random-walk null target / (stop +
+  target), given only when half the trades or more ended at a barrier (the null has no hold cap; quant review of
+  a97be490); a stop exit away from the initial stop (trailed, break-even) is "moved" and left out. Rows closed before R135 are
   "not recorded" and never read as 0 R; approximate rows have their own medians. Descriptive: no interval, no reading.
 
 Design rule (the brief to the performance-analyst): "sample sizes everywhere, with no conclusion drawn from fewer than
@@ -310,14 +312,18 @@ class ExcursionStats(FrozenRecord):
     loser_mfe_usd_median: float | None = None
     winners: int = 0                       # exact rows with pnl > 0: their MAE says how near the stop came
     winner_mae_r_median: float | None = None
-    # stop share among the barrier (stop or target) exits against the bracket's null: a driftless, cost-free walk
-    # reaches the stop before the target target / (stop + target) of the time (mean over the trades). The hold cap is
-    # not in the null: it favours the nearer barrier (the null understates the stop share when the stop is nearer,
-    # overstates it when farther). The spread pushes the real stop share up.
+    # stop share among the barrier exits (the INITIAL stop or the target) against the bracket's null: a driftless,
+    # cost-free walk reaches the stop before the target target / (stop + target) of the time (mean over the trades).
+    # A stop exit away from the initial stop (trailed, break-even: `moved_stop_exits`) is not a hit of that bracket
+    # (quant review of a97be490, item 2). The hold cap is not in the null: inside a short hold the nearer barrier is
+    # hit almost always, so the null is given only when at least BARRIER_NULL_MIN of the trades ended at a barrier
+    # (item 1); the time exits' share is shown beside it. The spread pushes the real stop share up.
     barrier_exits: int = 0
     stop_exits: int = 0
+    moved_stop_exits: int = 0
+    time_exits: int = 0
     stop_share: float | None = None
-    stop_null: float | None = None
+    stop_null: float | None = None         # None: no barrier exit, or under BARRIER_NULL_MIN of the trades at one
 
 
 class LearningReport(FrozenRecord):
@@ -962,6 +968,9 @@ def _lrow(c: LearningClose, ccy: str | None) -> _LRow:
                  gross_pnl=c.gross if c.net and same_ccy else None, gross_r=gross_r)
 
 
+# quant review of a97be490 item 1: the unbounded-hold null is printed only when this share of an arm's trades ended at
+# its initial stop or its target (with mostly time exits a barrier hit is almost always the nearer barrier)
+BARRIER_NULL_MIN = 0.5
 UNCOVERED_MAX = 0.10      # quant ruling 2026-11-06 Q1: a matched read with more of its fills uncovered is not readable
 
 
@@ -1079,10 +1088,14 @@ def _excursions(key: str, rows: list[LearningClose]) -> ExcursionStats:
     approx = [c for c in have if c.excursion_approx]
     losers = [c for c in exact if c.pnl is not None and c.pnl < 0]
     winners = [c for c in exact if c.pnl is not None and c.pnl > 0]
-    brackets = [(c.exit_reason == "stop", c.stop_usd, c.target_usd) for c in rows
-                if c.exit_reason in ("stop", "target") and c.stop_usd is not None and c.target_usd is not None
-                and c.stop_usd > 0 and c.target_usd > 0]
+    sized = [c for c in rows if c.exit_reason in ("stop", "target") and c.stop_usd is not None
+             and c.target_usd is not None and c.stop_usd > 0 and c.target_usd > 0]
+    moved = [c for c in sized if c.exit_reason == "stop" and not _at_initial_stop(c)]
+    brackets = [(c.exit_reason == "stop", float(c.stop_usd or 0.0), float(c.target_usd or 0.0))
+                for c in sized if c not in moved]
     stops = sum(s for s, _, _ in brackets)
+    time_exits = sum(c.exit_reason == "time_limit" for c in rows)
+    null_ok = bool(brackets) and len(brackets) >= BARRIER_NULL_MIN * len(rows)
     return ExcursionStats(
         key=key, trades=len(rows), recorded=len(exact), approx=len(approx), not_recorded=len(rows) - len(have),
         mfe_r_median=_median([c.mfe_r for c in exact if c.mfe_r is not None]),
@@ -1092,8 +1105,19 @@ def _excursions(key: str, rows: list[LearningClose]) -> ExcursionStats:
         losers=len(losers), loser_mfe_r_median=_median([c.mfe_r for c in losers if c.mfe_r is not None]),
         loser_mfe_usd_median=_median([c.mfe_usd for c in losers if c.mfe_usd is not None]),
         winners=len(winners), winner_mae_r_median=_median([c.mae_r for c in winners if c.mae_r is not None]),
-        barrier_exits=len(brackets), stop_exits=stops, stop_share=stops / len(brackets) if brackets else None,
-        stop_null=float(np.mean([t / (s + t) for _, s, t in brackets])) if brackets else None)
+        barrier_exits=len(brackets), stop_exits=stops, moved_stop_exits=len(moved), time_exits=time_exits,
+        stop_share=stops / len(brackets) if brackets else None,
+        stop_null=float(np.mean([t / (s + t) for _, s, t in brackets])) if null_ok else None)
+
+
+def _at_initial_stop(c: LearningClose) -> bool:
+    """A stop exit at the bracket's initial stop: the adverse move is at least half the stop distance (a stop trailed
+    to break-even or beyond closes near or above the fill; a gap only deepens a real stop hit). Unreadable prices: not
+    a bracket exit (counted as moved, never guessed)."""
+    if c.fill_price is None or c.exit_price is None or not c.stop_usd:
+        return False
+    sign = 1.0 if c.side == "long" else -1.0
+    return sign * (c.exit_price - c.fill_price) <= -0.5 * c.stop_usd
 
 
 def _excursion_rows(rows: list[_LRow], order: dict[str, int],
@@ -1326,7 +1350,8 @@ def _exc_cell(x: float | None, n: int) -> str:
 def _excursion_table(dim: str, rows: list[ExcursionStats]) -> list[str]:
     """BACKLOG 195: every figure with its count; older rows are "not recorded (N)", never 0 R."""
     lines = [f"| {dim} | trades | recorded | median MFE | median MAE | approx (restart) MFE / MAE | losers' median MFE "
-             "| winners' median MAE | stop exits / barrier exits | random-walk null |", "|" + " --- |" * 10]
+             "| winners' median MAE | time exits | stop exits / barrier exits | random-walk null |",
+             "|" + " --- |" * 11]
     for e in rows:
         rec = f"{e.recorded}" + (f"; not recorded ({e.not_recorded})" if e.not_recorded else "")
         apx = f"{_r(e.approx_mfe_r_median)} / {_r(e.approx_mae_r_median)} (n {e.approx})" if e.approx else "-"
@@ -1334,10 +1359,13 @@ def _excursion_table(dim: str, rows: list[ExcursionStats]) -> list[str]:
             f", ${e.loser_mfe_usd_median:.2f}/oz" if e.loser_mfe_usd_median is not None else "")
         share = (f"{e.stop_exits} / {e.barrier_exits} ({e.stop_share:.0%})" if e.stop_share is not None
                  else "no stop or target exit")
-        null = f"{e.stop_null:.0%}" if e.stop_null is not None else "-"
+        share += f"; moved stop {e.moved_stop_exits}" if e.moved_stop_exits else ""
+        null = (f"{e.stop_null:.0%}" if e.stop_null is not None
+                else f"- (barrier exits < {BARRIER_NULL_MIN:.0%})" if e.barrier_exits else "-")
+        times = f"{e.time_exits} / {e.trades} ({e.time_exits / e.trades:.0%})" if e.trades else "-"
         lines.append(f"| {e.key} | {e.trades} | {rec} | {_exc_cell(e.mfe_r_median, e.recorded)} | "
                      f"{_exc_cell(e.mae_r_median, e.recorded)} | {apx} | {los} | "
-                     f"{_exc_cell(e.winner_mae_r_median, e.winners)} | {share} | {null} |")
+                     f"{_exc_cell(e.winner_mae_r_median, e.winners)} | {times} | {share} | {null} |")
     return lines
 
 
@@ -1349,10 +1377,13 @@ def _excursion_sections(lr: LearningReport) -> list[str]:
             "Trades closed before they were recorded are counted \"not recorded\", never read as 0 R; approximate "
             "excursions (part of the path from 1m bars after a restart or an adoption) have their own column and "
             "never enter the exact medians. A loser's MFE is the favourable move the bracket gave back; a winner's "
-            "MAE is how near the stop came. The stop share is over the stop and target exits; the random-walk null "
-            "is the share a driftless, cost-free walk would give the same brackets (target / (stop + target)): it "
-            "ignores the hold cap (which favours the nearer barrier) and the spread (which pushes the stop share "
-            "up), so read a gap from the null as a lead, not a finding. Descriptive only: "
+            "MAE is how near the stop came. The stop share is over the exits at the initial stop or the target (a "
+            "stop exit away from the initial stop, trailed or at break-even, is counted \"moved stop\" and left "
+            "out); the random-walk null is the share a driftless, cost-free walk would give the same brackets "
+            "(target / (stop + target)). It ignores the hold cap, which favours the nearer barrier, so it is given "
+            f"only when at least {BARRIER_NULL_MIN:.0%} of the trades ended at a barrier, with the time exits "
+            "beside it; the spread pushes the real stop share up. Read a gap from the null as a lead, not a "
+            "finding. Descriptive only: "
             "censored and voided trades are left out, and no interval is given.", ""] + (
         _excursion_table("kind / family", lr.excursion_families) + [""] if lr.excursion_families else []) + (
         _excursion_table("kind / family / arm", lr.excursion_arms) + [""])

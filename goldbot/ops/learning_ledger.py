@@ -67,6 +67,8 @@ class LearningClose(FrozenRecord):
     # ledger row (which does not carry them). None on a probe and on rows closed before R135 (never read as 0 R)
     stop_usd: float | None = None
     target_usd: float | None = None
+    fill_price: float | None = None     # with exit_price: tells an initial-stop exit from a moved (trailed) stop's
+    exit_price: float | None = None
     mfe_r: float | None = None
     mae_r: float | None = None
     mfe_usd: float | None = None
@@ -88,7 +90,8 @@ def _excursion(body: ExplorationRecord | None) -> dict[str, Any]:
     """The bracket and R135 excursion fields of an exploration body (none for a probe or a row without a body)."""
     if body is None:
         return {}
-    return {"stop_usd": body.stop_usd, "target_usd": body.target_usd, "mfe_r": body.mfe_r, "mae_r": body.mae_r,
+    return {"stop_usd": body.stop_usd, "target_usd": body.target_usd, "fill_price": body.fill_price,
+            "exit_price": body.exit_price, "mfe_r": body.mfe_r, "mae_r": body.mae_r,
             "mfe_usd": body.mfe_usd, "mae_usd": body.mae_usd, "excursion_approx": body.excursion_approx}
 
 

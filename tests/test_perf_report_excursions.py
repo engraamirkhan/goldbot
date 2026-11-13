@@ -36,14 +36,18 @@ def _engine(state: Path) -> None:
 
 
 def _arm(state: Path, cid: str, arm: str = STRAT, *, minute: int = 0, pnl: float = 1.2, exit_reason: str = "target",
-         stop_usd: float = 3.0, target_usd: float = 6.0, censored: bool = False, **excursion: Any) -> None:
-    """One closed exploration row in the real body shape; `excursion` the R135 fields (absent: an older row)."""
+         stop_usd: float = 3.0, target_usd: float = 6.0, censored: bool = False, exit_price: float | None = None,
+         **excursion: Any) -> None:
+    """One closed exploration row in the real body shape; `excursion` the R135 fields (absent: an older row). A long
+    filled at 2400.1; the exit at its own stop or target unless `exit_price` says otherwise (a moved stop)."""
+    if exit_price is None:
+        exit_price = {"stop": 2400.1 - stop_usd, "target": 2400.1 + target_usd}.get(exit_reason, 2400.3)
     sent = pd.Timestamp("2026-11-18 10:00", tz="UTC") + pd.Timedelta(minutes=minute)
     rec = ExplorationRecord(
         client_order_id=cid, account_id=ACC, arm_id=arm, family="x", tf="5m", side=1, lots=0.01, signal_utc=sent,
         sent_utc=sent, atr_usd=3.0, stop_usd=stop_usd, target_usd=target_usd, hold_s=3600, requested_price=2400.0,
         spread_usd=0.2, fill_price=2400.1, stop_loss=2.4, cost=0.4, exit_utc=sent + pd.Timedelta(minutes=10),
-        exit_price=2406.1, exit_reason=exit_reason, swap=-0.03, commission=0.07, pnl=pnl, censored=censored,
+        exit_price=exit_price, exit_reason=exit_reason, swap=-0.03, commission=0.07, pnl=pnl, censored=censored,
         fx_acct_per_usd=0.8, **excursion)
     with Database.open(state, "aux").write() as conn:
         exploration.LEDGER.upsert(conn, rec)
@@ -142,3 +146,28 @@ def test_an_arm_with_no_recorded_excursion_says_not_recorded_with_the_count(tmp_
     e = _arm_row(lr)
     assert (e.recorded, e.not_recorded, e.mfe_r_median) == (0, 1, None)
     assert "not recorded (1)" in format_markdown(rep)
+
+
+def test_a_stop_exit_at_a_moved_stop_is_not_a_bracket_exit(tmp_path):
+    _engine(tmp_path)
+    # quant review of a97be490 item 2: a stop trailed to break-even (BXR, `trail`) closes as "stop" at the fill price;
+    # only an exit at the initial stop is a barrier hit of the bracket the null is computed for
+    _arm(tmp_path, "s1", pnl=-2.4, exit_reason="stop")
+    _arm(tmp_path, "be", minute=5, pnl=-0.1, exit_reason="stop", exit_price=2400.1)
+    _arm(tmp_path, "t1", minute=10, exit_reason="target")
+    e = _arm_row(_learning(tmp_path)[1])
+    assert (e.barrier_exits, e.stop_exits, e.moved_stop_exits) == (2, 1, 1)
+
+
+def test_the_null_is_not_printed_when_most_trades_end_at_the_hold(tmp_path):
+    _engine(tmp_path)
+    # quant review of a97be490 item 1: inside a short hold the nearer barrier is hit almost always, so the unbounded
+    # null misstates the conditional stop share; under half the trades at a barrier: no null, the time-exit share shown
+    _arm(tmp_path, "s1", pnl=-2.4, exit_reason="stop")
+    for i in range(2):
+        _arm(tmp_path, f"h{i}", minute=5 + i, pnl=0.1, exit_reason=exploration.HOLD_EXIT)
+    rep, lr = _learning(tmp_path)
+    e = _arm_row(lr)
+    assert (e.barrier_exits, e.time_exits, e.stop_share, e.stop_null) == (1, 2, pytest.approx(1.0), None)
+    md = format_markdown(rep)
+    assert "time exits" in md and "2 / 3 (67%)" in md and "- (barrier exits < 50%)" in md
