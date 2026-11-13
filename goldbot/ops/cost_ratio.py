@@ -4,27 +4,36 @@ cost/model > 1.25 -> floors, 1.10-1.25 -> one step down". The rule's thresholds 
 
 Definition (pre-registered before any replay; fixed here, every amount USD per oz, adverse positive):
 
-* Population: the account's closed demo fills on gold (`ClosedTrade.symbol` None or XAUUSD) that closed in the last
-  WINDOW_RISK_DAYS risk days before the decision day: the UTC weekdays (a weekend is no risk day, ADR 0031 reading e),
+* Population: the account's closed fills on gold (`ClosedTrade.symbol` None or XAUUSD), demo and live (the ratio only
+  tightens, so a live account is measured too), that closed in the last WINDOW_RISK_DAYS risk days before the decision day: the UTC weekdays (a weekend is no risk day, ADR 0031 reading e),
   cut off strictly before the decision day's 00:00 UTC.
 * Measured, per fill: spread at the fill (`decision_spread_points` x the point: the quote the order was priced from)
   + entry slippage side x (entry_price - requested_price) + exit slippage, the lots-weighted side x (requested -
   filled) of the position's store `exit_fills` legs (a broker stop or target leg is asked at its level, so a stop's
-  overshoot is in it) + commission both sides and the paid swap at the account's own measured terms (its nightly cost
-  table, else its broker's settings prior: `CostImputer.terms_for`, currency-free, the same rule as the closed-trade
-  charge).
+  overshoot is in it) + the record's own commission (`ClosedTrade.commission`) and paid swap (`ClosedTrade.swap`,
+  a credit counted as 0), account currency over the engine's USD factor (`account_view.usd_to_account`) and the
+  position's ounces; a record without one, or an account without a known factor, takes that part at the account's
+  measured terms (its nightly cost table, else its broker's settings prior: `CostImputer.terms_for`).
 * Model, per fill: what the research labels charge for the same trade (labels/triple_barrier.py: in at the ask, out at
   the bid, plus the extra cost and the swap): the ask - bid close of the last 15m bar closed at the entry (an as-of
-  join on the bar's close time, at most BAR_TOLERANCE old) + the canonical cost table's extra cost
-  (`CostTable.extra_cost_usd`, what retraining charges) + the paid swap at the model's swap (`live_swap`). A swap
-  credit counts on neither side.
+  join on the bar's close time, at most BAR_TOLERANCE old, on the labels' own bars: store `bars_15m` source
+  dukascopy) + the extra cost and paid swap the strategies were QUALIFIED under, MODEL_SOURCE = the settings priors
+  (`settings_extra_cost_usd`: costs.slippage_prior_usd both sides + the canonical broker's commission;
+  `settings_swap`: costs.swap_*). Never the live cost table: it already holds the measured slippage and commission, so
+  it would put the measure on both sides and pull the ratio toward 1 (quant review of 9903fb2d). A swap credit counts
+  on neither side.
 * Ratio: pooled, sum(spread) + max(0, sum(slippage)) + sum(commission) + sum(swap) over sum(model). Slippage is pooled
   signed and floored after (as the cost of record does), so a price improvement offsets an adverse fill but the total
   never reads as a rebate.
-* None below MIN_FILLS measured fills, or when the model total is not positive: the rule then triggers nothing
-  (ADR 0031 reading 9: "No measured cost in the window (None) triggers nothing").
-* A fill missing any part of its measure (no side, requested price, decision spread, exit leg, a leg without its
-  requested price, no model bar) is counted `unmeasured` and reported in the job's row, never guessed: a guessed part
+* None below MIN_FILLS measured fills, when the model total is not positive, or when more than MAX_UNMEASURED_SHARE
+  of the window's fills are unmeasured (the missing ones are most likely stop exits without their leg, the costly
+  ones, so the rest would read low; the job raises a dq alert): the rule then triggers nothing (ADR 0031 reading 9:
+  "No measured cost in the window (None) triggers nothing"). `CostRatio.reason` says which.
+* A fill entered after the last label bar's close (the dukascopy bars are refreshed weekly, so up to about 8 days
+  lag) is `pending`, out of the window's population until the refresh models it: a time cut, not an outcome one, so it
+  biases nothing and does not count as unmeasured.
+* A fill missing any part of its measure, or with a non-finite one (no side, requested price, decision spread, exit
+  leg, a leg without its requested price, no model bar, a NaN or infinite price) is counted `unmeasured` and reported in the job's row, never guessed: a guessed part
   could only understate or overstate the cost.
 
 Reporting and the controller's input only: nothing here changes a record, a setting, a limit or an order.
@@ -50,6 +59,8 @@ if TYPE_CHECKING:
 
 WINDOW_RISK_DAYS = 20             # "20-day measured cost/model": risk days (UTC weekdays) before the decision day
 MIN_FILLS = 20                    # pre-registered: fewer measured fills in the window give None (the rule is inert)
+MAX_UNMEASURED_SHARE = 0.20       # pre-registered: a larger share of unmeasured fills gives None and a dq alert
+MODEL_SOURCE = "settings priors"  # the cost the strategies were qualified under (module docstring)
 BAR_MINUTES = 15                  # the model's spread: the 15m bar's ask - bid close
 BAR_TOLERANCE = pd.Timedelta(hours=1)   # a model bar closed longer ago than this before the entry: unmeasured
 
@@ -77,8 +88,11 @@ class CostRatio(FrozenRecord):
     since: date                   # the first risk day of the window
     fills: int = 0                # measured fills in the window
     unmeasured: int = 0           # fills in the window missing a part of their measure (module docstring)
+    pending: int = 0              # fills entered after the last label bar: modelled after the weekly bar refresh
     measured_usd_per_oz: float | None = None    # the pooled measured cost per fill
     model_usd_per_oz: float | None = None       # the pooled model charge per fill
+    model: str = MODEL_SOURCE
+    reason: str | None = None     # why None: too_few_fills, unmeasured_share, model_cost_zero
 
 
 def window_start(decision_day: date) -> date:
@@ -129,14 +143,27 @@ def _gold(t: ClosedTrade) -> bool:
     return t.symbol is None or t.symbol == GOLD
 
 
+def _finite(*xs: float | None) -> bool:
+    return all(x is not None and math.isfinite(x) for x in xs)
+
+
+def _record_usd_per_oz(amount: float | None, lots: float | None, acct_per_usd: float | None) -> float | None:
+    """An account-currency amount of the record in USD per oz of the position; None when it cannot be converted."""
+    if not _finite(amount, lots, acct_per_usd) or not (lots and lots > 0 and acct_per_usd and acct_per_usd > 0):
+        return None
+    assert amount is not None
+    return amount / acct_per_usd / (lots * contract_size(GOLD))
+
+
 def fill_costs(trades: Iterable[ClosedTrade], account_id: str, *, imputer: CostImputer, legs: pd.DataFrame,
                bars: pd.DataFrame, model_extra_usd: float, model_swap: SwapSpec, start_ns: int, before_ns: int,
-               ) -> tuple[list[FillCost], list[str]]:
-    """Each of the account's demo gold fills closed in [start_ns, before_ns), measured and modelled (module
-    docstring); the ids of the fills that could not be measured."""
+               acct_per_usd: float | None) -> tuple[list[FillCost], list[str]]:
+    """Each of the account's gold fills (demo and live) closed in [start_ns, before_ns), measured and modelled
+    (module docstring); the ids of the fills that could not be measured. `acct_per_usd`: the account currency per USD
+    (`account_view.usd_to_account`), None when unknown."""
     from goldbot.ops.cost_imputation import paid_swap_per_oz
     from goldbot.ops.limits_job import demo_trade_id
-    pop = [t for t in trades if t.account_id == account_id and t.mode == "demo" and _gold(t)
+    pop = [t for t in trades if t.account_id == account_id and _gold(t)
            and start_ns <= _ns(t.exit_utc) < before_ns]
     slips = _exit_slippage(legs)
     entries = [t.entry_utc for t in pop if t.entry_utc is not None]
@@ -148,43 +175,67 @@ def fill_costs(trades: Iterable[ClosedTrade], account_id: str, *, imputer: CostI
         bar = next(spreads) if t.entry_utc is not None else None
         xslip = slips.get(t.position_id) if t.position_id is not None else None
         if (t.side not in (1, -1) or t.entry_utc is None or t.entry_price is None or t.requested_price is None
-                or t.decision_spread_points is None or xslip is None or bar is None):
+                or not _finite(t.decision_spread_points, t.entry_price, t.requested_price, xslip, bar)):
             unmeasured.append(demo_trade_id(t))
             continue
+        assert t.side is not None and t.entry_price is not None and t.requested_price is not None
+        assert t.decision_spread_points is not None and xslip is not None and bar is not None
         side = int(t.side)
         terms = imputer.terms_for(t)
+        comm = _record_usd_per_oz(abs(t.commission) if t.commission is not None else None, t.lots, acct_per_usd)
+        paid = _record_usd_per_oz(max(0.0, -t.swap) if t.swap is not None else None, t.lots, acct_per_usd)
         out.append(FillCost(
             id=demo_trade_id(t), exit_ns=_ns(t.exit_utc), spread=float(t.decision_spread_points) * point,
             slippage=side * (t.entry_price - t.requested_price) + xslip,
-            commission=2 * max(terms.commission_per_lot_side_usd, 0.0) / lot,
-            swap=paid_swap_per_oz(terms.swap, side, t.entry_utc, t.exit_utc),
+            commission=comm if comm is not None else 2 * max(terms.commission_per_lot_side_usd, 0.0) / lot,
+            swap=paid if paid is not None else paid_swap_per_oz(terms.swap, side, t.entry_utc, t.exit_utc),
             model=bar + max(model_extra_usd, 0.0) + paid_swap_per_oz(model_swap, side, t.entry_utc, t.exit_utc)))
     return out, unmeasured
 
 
-def pooled_ratio(fills: list[FillCost]) -> tuple[float | None, float, float]:
-    """(measured / model or None, measured total, model total): slippage pooled signed and floored after."""
+def _modelled_yet(trades: Iterable[ClosedTrade], bars: pd.DataFrame, account_id: str, start_ns: int,
+                  before_ns: int) -> tuple[list[ClosedTrade], int]:
+    """(the trades entered before the last label bar closed, how many of the rest entered after it). Without bars
+    nothing is pending: every fill then lacks its model bar and is unmeasured (a data failure, alerted)."""
+    rows = list(trades)
+    if bars.empty or "ts_utc" not in bars.columns:
+        return rows, 0
+    last = pd.to_datetime(bars["ts_utc"], utc=True).max() + pd.Timedelta(minutes=BAR_MINUTES)
+    keep = [t for t in rows if t.entry_utc is None or pd.Timestamp(t.entry_utc) <= last]
+    later = [t for t in rows if t.entry_utc is not None and pd.Timestamp(t.entry_utc) > last]
+    return keep, sum(t.account_id == account_id and _gold(t) and start_ns <= _ns(t.exit_utc) < before_ns for t in later)
+
+
+def pooled_ratio(fills: list[FillCost], unmeasured: int = 0) -> tuple[float | None, float, float, str | None]:
+    """(measured / model or None, measured total, model total, why None): slippage pooled signed, floored after."""
     measured = (sum(f.spread for f in fills) + max(0.0, sum(f.slippage for f in fills))
                 + sum(f.commission for f in fills) + sum(f.swap for f in fills))
     model = sum(f.model for f in fills)
-    if len(fills) < MIN_FILLS or not model > 0:
-        return None, measured, model
-    return measured / model, measured, model
+    total = len(fills) + unmeasured
+    why = ("too_few_fills" if len(fills) < MIN_FILLS
+           else "unmeasured_share" if unmeasured > MAX_UNMEASURED_SHARE * total
+           else "model_cost_zero" if not (math.isfinite(model) and model > 0) else None)
+    if why is not None or not math.isfinite(measured):
+        return None, measured, model, why or "not_finite"
+    return measured / model, measured, model, None
 
 
 def cost_ratio_20d(trades: Iterable[ClosedTrade], account_id: str, decision_day: date, *, imputer: CostImputer,
-                   legs: pd.DataFrame, bars: pd.DataFrame, model_extra_usd: float, model_swap: SwapSpec) -> CostRatio:
+                   legs: pd.DataFrame, bars: pd.DataFrame, model_extra_usd: float, model_swap: SwapSpec,
+                   acct_per_usd: float | None) -> CostRatio:
     """The account's measured cost over the model's for the WINDOW_RISK_DAYS risk days before `decision_day`."""
     since = window_start(decision_day)
+    lo, hi = _ns(pd.Timestamp(since, tz="UTC")), _ns(pd.Timestamp(decision_day, tz="UTC"))
+    trades, pending = _modelled_yet(trades, bars, account_id, lo, hi)
     fills, unmeasured = fill_costs(trades, account_id, imputer=imputer, legs=legs, bars=bars,
-                                   model_extra_usd=model_extra_usd, model_swap=model_swap,
-                                   start_ns=_ns(pd.Timestamp(since, tz="UTC")),
-                                   before_ns=_ns(pd.Timestamp(decision_day, tz="UTC")))
-    ratio, measured, model = pooled_ratio(fills)
+                                   model_extra_usd=model_extra_usd, model_swap=model_swap, start_ns=lo, before_ns=hi,
+                                   acct_per_usd=acct_per_usd)
+    ratio, measured, model, why = pooled_ratio(fills, len(unmeasured))
     n = len(fills)
-    return CostRatio(ratio=ratio, since=since, fills=n, unmeasured=len(unmeasured),
-                     measured_usd_per_oz=measured / n if n else None, model_usd_per_oz=model / n if n else None)
+    return CostRatio(ratio=ratio, since=since, fills=n, unmeasured=len(unmeasured), pending=pending,
+                     measured_usd_per_oz=measured / n if n else None, model_usd_per_oz=model / n if n else None,
+                     reason=why)
 
 
-__all__ = ["BAR_TOLERANCE", "MIN_FILLS", "WINDOW_RISK_DAYS", "CostRatio", "FillCost", "cost_ratio_20d", "fill_costs",
+__all__ = ["BAR_TOLERANCE", "MAX_UNMEASURED_SHARE", "MIN_FILLS", "MODEL_SOURCE", "WINDOW_RISK_DAYS", "CostRatio", "FillCost", "cost_ratio_20d", "fill_costs",
            "pooled_ratio", "window_start"]

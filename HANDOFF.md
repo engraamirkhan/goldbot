@@ -7,11 +7,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 ## Where things are (as of 2026-10-05)
 - 2026-11-13 (branch feat/cost-model-series; R150; BACKLOG 90, 255): the nightly `limits_job` now passes ADR 0031's
   20-day measured cost/model ratio (`goldbot/ops/cost_ratio.py`) instead of None, so the frozen cost rule can tighten
-  (above 1.25 the floors, 1.10-1.25 one step down). Measured per demo fill: decision spread, entry slippage, exit-leg
-  slippage from store `exit_fills`, commission and swap at the account's measured terms; model: the 15m bar spread at
-  entry plus the canonical extra cost and model swap. None below 20 measured fills; the result row carries
-  `cost_ratio_20d`, `cost_fills`, `cost_unmeasured`. Inert today (no account has adaptive limits on). Tighten only;
-  no limit, cap, sizing or order path loosened. Needs quant-reviewer sign-off on the definition before merge.
+  (above 1.25 the floors, 1.10-1.25 one step down). Measured per fill (demo and live): decision spread, entry slippage,
+  exit-leg slippage from store `exit_fills`, the record's own commission and paid swap; model: the dukascopy 15m bar
+  spread at entry plus the extra cost and swap the strategies were qualified under (settings priors, never the live
+  table). None below 20 measured fills or with more than 20% unmeasured (dq `cost_ratio_unmeasured`); the result row
+  carries `cost_ratio_20d`, `cost_fills`, `cost_unmeasured`, `cost_model`. Inert today (no account has adaptive limits on). Tighten only;
+  no limit, cap, sizing or order path loosened. Quant review round 1 fixed; needs quant re-review before merge.
 - 2026-11-13 (branch fix/engine-survives-bad-arm-row; BACKLOG 117; R136): a bad exploration arm row no longer stops
   the engine, and a config defect never closes a healthy position (trading-safety rework of f838b7d3). The engine
   remembers every cleanly loaded arm row (a hash mismatch aside) in aux.db `arm_spec_last_good` (migration 29,
