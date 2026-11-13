@@ -17,8 +17,8 @@ swap;
 equity and a mark gives no evidence (floors + dq_event);
 (c) the ATR inputs need a year of 15m bars whose last bar is at most 9 days old (the weekly data refresh); else the
 minimum-lot cap is off;
-(d) no 20-day measured cost/model series exists yet, so `cost_ratio_20d` is None and the cost rule cannot fire
-(BACKLOG 90);
+(d) `cost_ratio_20d` is the 20-day measured cost/model series of `goldbot/ops/cost_ratio.py` (BACKLOG 90, R150; its
+definition is fixed there before any replay): None below 20 measured demo fills, when the cost rule triggers nothing;
 (e) no decision is made for a UTC Saturday or Sunday (market closed): a weekend neither floors the limits nor resets
 the 3-day count, which counts trading days; the engine trades the floors on those days. Holidays are not skipped;
 (f) a decision written before the roll for tomorrow applies from tomorrow's roll; until then today's is kept.
