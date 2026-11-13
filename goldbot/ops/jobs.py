@@ -1673,12 +1673,28 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly, off the engine tick: every closed month partition (before `slot`'s UTC month) of every account's
     `decisions` journal folder is rewritten into one part (goldbot/data/compact.py: under the partition's writer lock,
-    atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is never touched."""
+    atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is never touched.
+    BACKLOG 179: the same for every table in settings `compact.tables` (fills, dq_events, observe_ticks; ticks once
+    measured), in that order, sharing one time box (`compact.time_box_s`; what is left is `deferred` to the next
+    night, not an error) and paced (`compact.pause_s`). Totals at the top level, each table under `tables`."""
     import time
 
+    from goldbot.config import CompactSettings
     from goldbot.data.compact import compact_table
+    settings = getattr(ctx, "settings", None)
+    cfg = getattr(settings, "compact", None) or CompactSettings()
     t0 = time.monotonic()
-    out = compact_table(ctx.store, "decisions", before=slot).summary()
+    tables: dict[str, dict[str, Any]] = {}
+    for table in cfg.tables:
+        left = max(cfg.time_box_s - (time.monotonic() - t0), 0.0)
+        tables[table] = compact_table(ctx.store, table, before=slot, min_parts=cfg.min_parts, time_box_s=left,
+                                      pause_s=cfg.pause_s, memory_limit=cfg.memory_limit, threads=cfg.threads,
+                                      row_group_rows=cfg.row_group_rows).summary()
+    out: dict[str, Any] = {k: sum(int(t[k]) for t in tables.values())
+                           for k in ("partitions", "parts_before", "parts_after", "rows", "recovered", "skipped",
+                                     "deferred")}
+    out["errors"] = [f"{name}: {e}" for name, t in tables.items() for e in t["errors"]]
+    out["tables"] = tables
     out["duration_s"] = round(time.monotonic() - t0, 3)
     if out["errors"]:                         # the scheduler records the failure (health: job:journal_compact)
         raise RuntimeError(f"journal_compact failed for {out['errors']} (done: {out['partitions']} partitions)")

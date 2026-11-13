@@ -1,0 +1,9 @@
+---
+number: 241
+rank: 81
+title: Ticks and observe_ticks carry their own written_utc column
+stage: 'data (follow-up of backlog 179, R146, 2026-11-13)'
+size: S
+status: 'open · accountable: data-engineer · reviews: code-reviewer, quant-reviewer'
+---
+- **241. Ticks and observe_ticks carry their own written_utc column.** Value: a tick row holds only ts_utc, bid and ask; when it became knowable lives only in its part file (mtime, and since R146 the `goldbot.lineage` metadata), which a copy without mtimes, an external tool or a dedupe rewrite can lose. The R131 compaction of `decisions` before R146 sorted rows and kept no lineage; `written_utc` reads those rows as unknown (NaT). They are recoverable: the backup stages parts as hard links (goldbot/ops/backup.py `_link_or_copy`), so restic kept the original part mtimes; the last good snapshot before the 2026-11-13 05:56 UTC compaction is restic snapshot d7c7a6d120bd6ebbf6bdc3fcd85a92cf705145cf50147c955b111ef6216b6eb3 (2026-11-12 22:26 UTC; the brain has never pruned). Restore only if an audit needs per-row write times; nothing reads them today. Acceptance, tests first: `Engine.flush_ticks` and the observe collector add `written_utc` (the flush's wall clock, UTC) to every row from a set date; `Store.read` of older rows gives it as null (union_by_name), never backfilled; the tz quarantine selector prefers the column when present; `asof`-style consumers that need knowability read it. Volume: +8 bytes a row before compression (about +80 MB a month a broker, a few MB after zstd on a monotone clock).
