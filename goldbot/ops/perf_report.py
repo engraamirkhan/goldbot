@@ -1310,8 +1310,8 @@ def format_markdown(rep: PerformanceReport) -> str:
                   "(the 90% interval is on that difference, only from "
                   f"{rep.min_trades} trades on each side; \"unmatched\" trades had no control trade in their cell). "
                   "Censored trades (closed by anything but the arm's own stop, target or hold) are counted beside the "
-                  "row, never in R or money; voided trades are left out. The bandit chooses which arms trade and when, so "
-                  "a family's pooled arms carry selection bias; no row here is evidence: claims go through a registry "
+                  "row, never in R or money; voided trades are left out. The arm shares, caps and kill rules choose which "
+                  "arms trade and when, so a family's pooled arms carry selection bias; no row here is evidence: claims go through a registry "
                   "trial.", ""]
             if a.learning.unqualified:
                 L += ["### Learning (unqualified, demo only)", "",

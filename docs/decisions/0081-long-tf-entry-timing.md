@@ -25,8 +25,12 @@ entered the gate with one night's swap at most.
 2. **Lateness and catch-up.** A decision may still be sent up to 2 h (1d) or 24 h (1w) after its entry close, so a
    restart across the weekly open catches the week up once. Later, or with no reopen within 4 days (a 24/7 table, a
    long closure), it is given up and journalled `exploration_missed:<tf>`. The last decision close per account and arm
-   is written to aux.db `long_tf_decisions` (migration 32) before its signal is queued: a restart never sends a day or
+   is written to aux.db `long_tf_decisions` (migration 33) before its signal is queued: a restart never sends a day or
    week twice. Unreadable or unwritable: nothing is decided (journalled `history_gap:<tf>`).
+   The mark comes before the send, deliberately: a crash just after the mark, or a refusal of the signal at the send
+   (caps, `weekend_hold`, stale or missing data, the gate), loses that day's or week's decision for good; it is never
+   retried. Safe by design (trading-safety review of 6c90577c): a missed entry is the failure mode, never a second
+   order.
 3. **The common filter (blocker 5, quant).** `common_filter_ok` stays byte-unchanged. The rules judge it at
    `RuleContext.filter_ts`: a bar's close for every intraday timeframe (unchanged), and for 1d/1w the bar's nominal
    entry (`long_bars.entry_after`: 22:30 UTC the same day for 1d, Sunday 23:15 UTC for 1w). It depends on timestamps

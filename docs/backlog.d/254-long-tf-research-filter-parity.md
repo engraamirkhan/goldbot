@@ -15,3 +15,7 @@ status: 'ready (2026-11-13) · accountable: implementer · reviews: quant-review
   (fail closed, `tests/test_exploration_engine.py`). Acceptance: every research caller passes `filter_close` for
   1d/1w bars; the time exit of a 1d/1w position counts from its decision close (order id, `_week_due`, the barrier and
   `crosses_friday` alike) with trading-safety review; a live == history test on a 1d and a 1w arm.
+  Trading-safety notes (review of 6c90577c): when the hold origin or `weekend_hold` changes, re-check the calendar-time
+  hold counting (`hold_bars` x the timeframe on the calendar, weekends included, in `crosses_friday`, the record and the
+  swap projection). As built, a 1w arm is always refused `weekend_hold` (its hold reaches the Friday cut) unless the
+  account has `demo_weekend_flat`.

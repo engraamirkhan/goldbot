@@ -4,7 +4,7 @@
   UTC EEST, 00:15 UTC EET); both on the bars through their decision close, the signal stamped at the send close
   (bracket from the send price), `decision_utc` the decision close. A decision up to 2 h (1d) / 24 h (1w) late is
   caught up once (a restart across the weekly open); later, or with no reopen, it is journalled
-  `exploration_missed:<tf>`. aux.db migration 32 `long_tf_decisions` persists the last decision per arm before
+  `exploration_missed:<tf>`. aux.db migration 33 `long_tf_decisions` persists the last decision per arm before
   queueing. The rules' common filter is judged at a 1d/1w bar's entry (`RuleContext.filter_ts`; `common_filter_ok`
   byte-unchanged). `_trail_runners`/`score_twins` use `is_bar_close`. A 1d/1w Intent carries the swap of its whole
   hold (`Engine._swap_usd_per_oz(..., until)`); an unknown swap is refused by the gate. The guard still lists

@@ -86,7 +86,7 @@ def test_nightly_costs_from_logged_ticks_and_fills(tmp_path):
 
 
 def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path)
+    ctx = _ctx(bars_store, tmp_path, specialist_retrain=True)   # the retired retrain, switched on
     sat = pd.Timestamp("2025-09-27 06:00", tz="UTC")
     founder = AgentIdentity(family="session_open", config=dict(SPECIALISTS["session_open"].default_config)).agent_id
     first = saturday_retrain(ctx, sat)[founder]
@@ -122,7 +122,7 @@ def long_bars_store(tmp_path_factory) -> Path:
 def test_a_4h_agent_retrains_into_a_challenger(long_bars_store, tmp_path):
     # settings.walkforward["4h"] (48/6/6, proposal P4): the Saturday retrain trains a 4h shadow agent into a challenger
     # on 4h bars with daily context, instead of skipping it as it did when only 15m and 1h had windows
-    ctx = _ctx(long_bars_store, tmp_path)
+    ctx = _ctx(long_bars_store, tmp_path, specialist_retrain=True)
     sat = pd.Timestamp("2025-09-27 06:00", tz="UTC")
     ctx.population.ensure_founders(sat - pd.Timedelta(days=30))
     for founder in ctx.population.members.values():

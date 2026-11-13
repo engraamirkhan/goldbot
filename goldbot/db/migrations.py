@@ -713,10 +713,59 @@ AUX: tuple[Migration, ...] = (
                {_BODY}
            ) STRICT""",
     )),
+    # additive (ML review 2026-11-13 improvement B, BACKLOG 230; goldbot/research/feature_snapshots.py): the default
+    # feature vector of every gold exploration candidate at its decision, point in time. `exploration_feature_vectors`:
+    # each distinct vector once, content-addressed (SHA-256 of its feature version and values), so the arms deciding on
+    # one bar share a row. `exploration_feature_snapshots`: one row per candidate (its vector, or none with the status
+    # saying why, and `pit`: `written` when every minute it read carries its write time, else `nominal`). Both
+    # append-only. `exploration_snapshot_attempts` (a candidate's bounded retries while its history is too short) and
+    # `exploration_snapshot_accounts` (an account with no bars or not in accounts.yaml, and when to try it again) are
+    # the job's own bookkeeping, updated in place. Written by the nightly job, read by research only; the engine never
+    # reads any of them. A release without them never reads them. After the weekly review's 30 and the monthly
+    # review's 31 (numbers run 1..n without gaps, `_check_sequence`)
+    Migration(version=32, name="exploration_feature_snapshots", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_feature_vectors (
+               sha256 TEXT PRIMARY KEY,
+               feature_version TEXT NOT NULL,
+               n_columns INTEGER NOT NULL,
+               features TEXT NOT NULL CHECK (json_valid(features)),
+               recorded_ns INTEGER NOT NULL
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_feature_snapshots (
+               candidate_id TEXT PRIMARY KEY,
+               status TEXT NOT NULL CHECK (status IN ('ok', 'insufficient_bars', 'error')),
+               vector_sha256 TEXT REFERENCES exploration_feature_vectors(sha256),
+               decision_ns INTEGER NOT NULL,
+               available_utc_max_ns INTEGER,
+               bars_as_of_ns INTEGER NOT NULL,
+               pit TEXT CHECK (pit IS NULL OR pit IN ('written', 'nominal')),
+               nominal_minutes INTEGER,
+               detail TEXT,
+               recorded_ns INTEGER NOT NULL,
+               CHECK ((status = 'ok') = (vector_sha256 IS NOT NULL)),
+               CHECK ((status = 'ok') = (pit IS NOT NULL)),
+               CHECK (available_utc_max_ns IS NULL OR available_utc_max_ns <= decision_ns)
+           ) STRICT""",
+        *(f"""CREATE TRIGGER IF NOT EXISTS {t}_no_{op.lower()} BEFORE {op} ON {t}
+              BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END"""
+          for t in ("exploration_feature_vectors", "exploration_feature_snapshots") for op in ("UPDATE", "DELETE")),
+        """CREATE TABLE IF NOT EXISTS exploration_snapshot_attempts (
+               candidate_id TEXT PRIMARY KEY,
+               attempts INTEGER NOT NULL CHECK (attempts >= 1),
+               last_ns INTEGER NOT NULL
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_snapshot_accounts (
+               account_id TEXT PRIMARY KEY,
+               reason TEXT NOT NULL CHECK (reason IN ('no_bars', 'unknown_account')),
+               retry_after_ns INTEGER NOT NULL,
+               recorded_ns INTEGER NOT NULL
+           ) STRICT""",
+    )),
     # additive (BACKLOG 144, goldbot/engine/long_bars.py `Decided`): per account and 1d/1w arm, the last decision close
     # it was decided (or given up) for, written before its signal is queued, so a restart neither sends a day or week
-    # twice nor misses the week it was down over (the catch-up). A release without it never reads the table
-    Migration(version=32, name="long_tf_decisions", additive=True, statements=(
+    # twice nor misses the week it was down over (the catch-up). A release without it never reads the table. After the
+    # feature snapshots' 32
+    Migration(version=33, name="long_tf_decisions", additive=True, statements=(
         """CREATE TABLE IF NOT EXISTS long_tf_decisions (
                account_id TEXT NOT NULL,
                arm_id TEXT NOT NULL,
