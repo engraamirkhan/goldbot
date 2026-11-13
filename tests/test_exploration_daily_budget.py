@@ -565,7 +565,9 @@ def test_the_kill_list_and_a5_retire_their_rows_and_the_paired_controls_stay():
     # ZCV paired only Z6V/Z7V (A5 sign-off section 7); ZCD and F1C retire on 2026-11-13 (profitability-2026-11-12.md
     # (a): Z9D and Z10D keep their dedicated LCZ9D and LCZ10D)
     assert all(str(rows[a].retired_day) == "2026-11-13" for a in ("ZCD", "F1C"))
-    keep = ["S0", "S0R", "Z3D", "Z9D", "Z10D", "LCZ3D", "LCZ9D", "LCZ10D", "GS1C",
+    # Z3D and LCZ3D stop on 2026-11-13 (prereg-amendment-2026-11-13-h90-cost-budget.md: cost > gross/3)
+    assert all(str(rows[a].retired_day) == "2026-11-13" for a in ("Z3D", "LCZ3D"))
+    keep = ["S0", "S0R", "Z9D", "Z10D", "LCZ9D", "LCZ10D", "GS1C",
             *(a for a in rows if a.startswith("LBC-") and not rows["LB-" + a[4:]].retired)]
     assert all(a in rows and not rows[a].retired for a in keep)
 

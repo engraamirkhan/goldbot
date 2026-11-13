@@ -30,6 +30,9 @@ DAY = "2026-11-14"
 GOLD = {"XAUUSD", "XAUUSD+"}
 # the rows this ruling retired (the 89 non-gold rows), for the tests of earlier states that must leave them out
 RETIRED_1114 = frozenset(a.id for a in arms.load_arms(SPEC) if a.retired_rule == arms.GOLD_ONLY_RULE)
+# H-90 amendment 2026-11-13 (prereg-amendment-2026-11-13-h90-cost-budget.md): Z1P, Z2P, Z3D stopped on the cost
+# budget (cost > gross/3) before F started, with their dedicated controls
+COST_BUDGET_1113 = frozenset({"Z1P", "Z2P", "Z3D", "LCZ1P", "LCZ2P", "LCZ3D"})
 
 
 @pytest.fixture(scope="module")
@@ -75,9 +78,9 @@ def test_iex1h_a_gold_cost_control_keeps_running_and_iex15_keeps_its_own_retirem
 
 def test_the_gold_arms_and_their_matched_controls_keep_running(spec) -> None:
     running = {i for i, a in spec.items() if not a.retired and a.status == "run"}
-    assert running == {"S0", "S0R", "S1A", "S1B", "Z1P", "Z2P", "Z5P", "Z3D", "Z9D", "Z10D", "Z3V", "Z5V", "WKS0",
-                       "WKI0", "GS1", "GS1C", "LCZ3D", "LCZ9D", "LCZ10D", "LCZ1P", "LCZ2P", "LCZ5P", "VEX15", "VEX1H",
-                       "IEX1H"}
+    assert running == {"S0", "S0R", "S1A", "S1B", "Z5P", "Z9D", "Z10D", "Z3V", "Z5V", "WKS0", "WKI0", "GS1", "GS1C",
+                       "LCZ9D", "LCZ10D", "LCZ5P", "VEX15", "VEX1H", "IEX1H"}
+    assert all(spec[i].retired and str(spec[i].retired_day) == "2026-11-13" for i in COST_BUDGET_1113)
 
 
 def test_the_retired_non_gold_rows_stay_registered_so_open_positions_keep_every_exit(spec, instruments,
@@ -120,7 +123,7 @@ def test_a_new_arm_on_5m_or_slower_still_loads(tmp_path, spec) -> None:
 def test_every_1m_arm_already_in_the_spec_keeps_loading_and_the_running_ones_keep_running(spec) -> None:
     one = {i for i, a in spec.items() if a.timeframe == "1m"}
     assert one <= arms.ONE_MINUTE_ALLOWED
-    assert {i for i in one if not spec[i].retired} == {"S0", "S0R", "Z1P", "Z2P", "WKS0", "LCZ1P", "LCZ2P"}
+    assert {i for i in one if not spec[i].retired} == {"S0", "S0R", "WKS0"}      # Z1P/Z2P/LCZ1P/LCZ2P: COST_BUDGET_1113
 
 
 def test_an_allowed_1m_id_loads_from_any_spec_file(tmp_path, spec) -> None:
