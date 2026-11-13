@@ -1,8 +1,9 @@
-# Pre-registration 2026-11-13: H-93, range-to-cost gate on the 11 pooled trend rules
+# Pre-registration 2026-11-13: H-94, range-to-cost gate on the 11 pooled trend rules
 
 Status: **registered before any outcome under this gate is computed** (research director, 2026-11-13). No data was
 read to write this card. No runner exists yet (section 8), so nothing runs in this change; nothing in the engine,
-RiskGate, caps, sizing or `config/` changes. Family `range-cost-gate:2026-11`, unit H-93. Source: improvement A of
+RiskGate, caps, sizing or `config/` changes. Family `range-cost-gate:2026-11`, unit H-94 (pre-registered as H-93 on its branch; renumbered at integration 2026-11-13 because the survivor-reads row
+holds H-93 in `hypotheses.md`; no rule, window or threshold changed). Source: improvement A of
 `ml-review-2026-11-13.md` (branch `research/ml-review-2026-11-13`). Owner: ml-researcher. Kill date: **2026-11-27**.
 
 ## 0. Disclosure: what is already seen, and the prior
@@ -21,7 +22,7 @@ higher on forecast-wide days, which R-17 argues against. The value is a decisive
 
 ## 1. Hypothesis and mechanism
 
-**H-93:** trades of the 11 pooled trend rules taken only when the day's forecast range divided by the round-trip
+**H-94:** trades of the 11 pooled trend rules taken only when the day's forecast range divided by the round-trip
 cost of the decision's session is in the top half of its trailing year earn at least +0.05 R a trade more, net of
 cost, than the same rules ungated.
 
@@ -90,7 +91,7 @@ of (gate-open mean - gate-closed mean). **Continue to TEST-OLD only if all hold:
 5. gated excess over the leak-free random twins (4 per trade, same session instance, same side, same exits) >= 0;
 6. short-side U >= 0.
 
-Any leg fails: **H-93 retired.** Reported, not gating: U per rule, per session, per side, per year; the cost-floor
+Any leg fails: **H-94 retired.** Reported, not gating: U per rule, per session, per side, per year; the cost-floor
 and tier-1 bind rates; stress net; gate-open share (expected about 0.5).
 
 ## 6. One look at TEST-OLD 2008-01-01..2009-12-31 (only if section 5 passes)
@@ -113,7 +114,7 @@ going live stay owner decisions.
 
 | item | value |
 |---|---|
-| expected gross edge, gated | +0.08 to +0.15 R a trade if H-93 holds (pool gross about +0.05-0.10 R plus U) |
+| expected gross edge, gated | +0.08 to +0.15 R a trade if H-94 holds (pool gross about +0.05-0.10 R plus U) |
 | measured cost a trade | 0.02-0.05 R: round trip $0.20-0.29/oz on a ~$32 stop (2 ATRh today) = 0.006-0.009 R, overshoot ~0.004 R, long swap ~0.019 R a night |
 | gross / cost | >= 2x on the expected gross: meets rule 2 |
 | trades a day | pool about 4.3 (6,563 / 6 explore years); gated about 2.2 |
@@ -128,7 +129,7 @@ going live stay owner decisions.
 Stop: new entry rules on 1m-4h price bars, generators, sprints and learned selectors over them. Five weeks of
 honest screens put gross edge within about 0.03 R of zero, with cost as the whole result; more volume repeats it.
 Stop the bandit and the dormant retrains. Keep: the per-broker session cost of record, matched controls, kill rules,
-the sealed holdout, the demo as cost truth. H-93 is a cheap, low-prior close, not the bet.
+the sealed holdout, the demo as cost truth. H-94 is a cheap, low-prior close, not the bet.
 
 The single bet: **the owner's own trades**, the only record here of money made on gold. Get his fills (entry, exit,
 size, timeframe) and score them net of his costs against a random control matched by day, session and side. If
