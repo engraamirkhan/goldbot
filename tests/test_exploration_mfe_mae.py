@@ -52,3 +52,29 @@ def test_a_ledger_row_written_before_the_fields_existed_still_loads_with_them_em
            "atr_usd": 3.0, "stop_usd": 3.0, "target_usd": 3.0, "hold_s": 1800, "exit_utc": "2026-11-01T10:20:00Z"}
     r = ExplorationRecord.model_validate(old)
     assert (r.mfe_r, r.mae_r, r.mfe_usd, r.mae_usd) == (None, None, None, None)
+
+
+def test_a_failing_excursion_never_blocks_the_closed_row(tmp_path, monkeypatch) -> None:
+    """Trading-safety review of R135: the row is the trade's record; an MFE/MAE failure leaves only its fields empty."""
+    from goldbot.engine import closed_record
+
+    def boom(*a: object, **k: object) -> dict[str, object]:
+        raise RuntimeError("excursion broke")
+
+    monkeypatch.setattr(closed_record, "closed_excursion", boom)
+    row, _, _ = _closed_row(tmp_path, (1.5, -0.5))
+    assert row.exit_utc is not None and row.exit_price is not None and row.exit_reason
+    assert (row.mfe_r, row.mae_r, row.mfe_usd, row.mae_usd, row.excursion_approx) == (None, None, None, None, None)
+
+
+def test_a_restarted_engine_with_no_tick_track_and_no_bar_inside_the_trade_records_no_excursion(tmp_path) -> None:
+    """After a restart the position has no tick track; with no stored 1m bar inside the trade nothing of its path was
+    seen, so the fields stay empty rather than reading 0 R (closed_record.closed_excursion), and the row is written."""
+    eng, pb = _fresh_arm(tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [(pid, tr)] = list(eng.open.items())
+    tr.excursion = None                                         # as a restarted engine adopts it
+    _stopped_at_the_broker(eng, pb)
+    eng._flush_closed()
+    [row] = [r for r in exploration.trades(str(tmp_path)) if r.position_id == pid]
+    assert row.exit_utc is not None and row.mfe_r is None and row.mae_usd is None

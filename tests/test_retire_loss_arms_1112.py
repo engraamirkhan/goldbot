@@ -57,7 +57,7 @@ def test_the_unnamed_i0_instrument_controls_were_left_to_the_cost_cell_rule_unti
 
 
 def test_the_learning_arms_that_take_the_freed_slots_stay_active_with_their_controls(spec) -> None:
-    for arm_id in ("Z10D", "Z9D", "Z5P", "LCZ9D", "LCZ10D"):     # IEX1H: retired 2026-11-14 (gold-only ruling)
+    for arm_id in ("Z10D", "Z9D", "Z5P", "LCZ9D", "LCZ10D", "IEX1H"):
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 
 

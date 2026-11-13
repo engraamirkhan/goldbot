@@ -37,9 +37,9 @@ An arm or read unit that cannot reach its read in time has no demo read and only
   until the R2 verdict, then retired if R2 does not adopt the runner.
 - A retired unit keeps its K, its registry row and its arm id (never reused). Its mechanism may return only as a
   history screen under a new pre-registration.
-- **Amended 2026-11-13 (research-director ruling, R135):** A2 does not apply to arms with timeframe 1h or slower.
+- **Amended 2026-11-13 (research-director ruling, R135, ruling-2026-11-13-gold-only.md):** A2 does not apply to arms with timeframe 1h or slower.
   They are read on history and the 2018-25 confirm window, not on a demo fill rate. From 2026-11-13 the spec loader
-  refuses an A2 retirement of a 1h+ arm (`goldbot.research.arms.ruling_1113_refusals`). The A2 retirements recorded on
+  refuses an A2 retirement of a 1h+ arm (`goldbot.research.arms.ruling_1113_refusal`). The A2 retirements recorded on
   2026-10-30 stand.
 
 ## A3. Two-window protocol for H-16 and H-17 (amends `preregistration-2027Q1.md` O-1, O-2/O-3)

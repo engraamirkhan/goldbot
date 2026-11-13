@@ -18,7 +18,7 @@ from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, SHORT, _arm, _at, _engine, _rule
 from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
-# research-director ruling 2026-11-13 (gold-only demo): every non-gold row and IEX1H, retired 2026-11-14
+# research-director ruling 2026-11-13 (gold-only demo): every non-gold row, retired 2026-11-14
 GOLD_ONLY = arms.GOLD_ONLY_RULE
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"

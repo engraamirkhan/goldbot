@@ -21,7 +21,7 @@ from goldbot.ops import accounts as acc_mod
 from goldbot.ops import health
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _at, _engine, _rule
-from tests.test_gold_only_demo_1113 import RETIRED_1114  # every non-gold row and IEX1H (gold-only ruling)
+from tests.test_gold_only_demo_1113 import RETIRED_1114  # every non-gold row (gold-only ruling)
 from tests.test_learning_mi import MI_ARMS, MI_CONTROLS  # the multi-instrument learning pairs
 from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
