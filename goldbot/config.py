@@ -297,6 +297,9 @@ class SchedulerSettings(_Section):
     # hours after the nightly jobs (01:30 autodisc), clear of the 22:00-00:00 UTC cluster; first sight runs it once
     journal_compact: ScheduleSettings = ScheduleSettings(kind="daily", at="03:40", max_late_hours=20,
                                                          run_if_never_run=True)
+    # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
+    # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
+    weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
 
 
 class BackupSettings(_Section):
@@ -676,6 +679,19 @@ class DailyReviewSettings(_Section):
 
 
 
+class WeeklyReviewSettings(_Section):
+    """The weekly review (goldbot/research/weekly_review.py; architect plan 2026-11-13 item 2). "The only automatic
+    actions are stops already registered in config/arm_stops.yaml (tighten only)": nothing here changes a stop, a
+    threshold, a budget or a gate; these settings shape the advice only."""
+    max_actions: int = Field(20, ge=1, le=100)              # advisory actions kept a week (every registered stop is kept)
+    issue_label: str = "review"                             # backlog suggestions: the open issue with this label
+    attribution_max_age_days: float = Field(14.0, gt=0)     # an older attribution report gives no loss driver
+    min_cost_fills: int = Field(30, ge=1)                   # a (broker, session) week under this: no cost drift read
+    exit_mfe_r: float = Field(1.0, gt=0)                    # a stop exit that had reached this MFE (R) first ...
+    exit_share: float = Field(0.3, gt=0, le=1)              #   ... on this share of a family's stop exits: exit action
+    exit_min_trades: int = Field(30, ge=1)                  # closed trades carrying MFE/MAE before a family is read
+
+
 class TradesViewSettings(_Section):
     """The trades screens' plan figures (docs/design/trades-ux-2026-10-27.md §2.4, item 131; goldbot/api/today_ledger.py).
     Reporting only: nothing here sizes, gates or limits a trade."""
@@ -994,6 +1010,7 @@ class Settings(_Section):
     engine: EngineSettings = Field(default_factory=EngineSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
+    weekly_review: WeeklyReviewSettings = Field(default_factory=WeeklyReviewSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")

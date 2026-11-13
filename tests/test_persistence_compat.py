@@ -49,6 +49,7 @@ from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
+from goldbot.research.review_actions import ReviewAction
 from goldbot.risk import adaptive, hwm, limits_profile
 from goldbot.risk.pilot import PilotState
 from goldbot.telegram import automode
@@ -558,7 +559,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                ObserveStatus,
                # aux.db arm_spec_last_good (BACKLOG 117, goldbot/engine/arm_snapshot.py):
                # tests/test_engine_survives_bad_arm_row.py::test_a_snapshot_row_a_newer_release_wrote_still_reads
-               arms.Arm}
+               arms.Arm,
+               # aux.db review_actions (weekly review, goldbot/research/review_actions.py):
+               # tests/test_weekly_review.py::test_an_action_row_a_newer_release_wrote_still_reads
+               ReviewAction}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

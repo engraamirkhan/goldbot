@@ -676,6 +676,32 @@ AUX: tuple[Migration, ...] = (
                {_BODY}
            ) STRICT""",
     )),
+    # additive (weekly review, architect plan 2026-11-13 item 2; goldbot/research/weekly_review.py and
+    # review_actions.py): `review_weeks` marks a week's review as written (the first run stands, so a restart keeps one
+    # action set); `review_actions` is its ranked action list, keyed by a stable id so a Monday roll-up proposal joins
+    # once. `consumed_by` is the research director slot that took the action as queue input (set once). A stop
+    # action only mirrors exploration_arm_status, which stays the engine's only source. A release without it never
+    # reads either table
+    Migration(version=30, name="review_actions", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS review_weeks (
+               week TEXT PRIMARY KEY,
+               recorded_ns INTEGER NOT NULL,
+               n_actions INTEGER NOT NULL
+           ) STRICT""",
+        f"""CREATE TABLE IF NOT EXISTS review_actions (
+               action_id TEXT PRIMARY KEY,
+               week TEXT NOT NULL,
+               rank INTEGER NOT NULL,
+               kind TEXT NOT NULL,
+               automatic INTEGER NOT NULL CHECK (automatic IN (0, 1)),
+               recorded_ns INTEGER NOT NULL,
+               consumed_by TEXT,
+               consumed_ns INTEGER,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS review_actions_week ON review_actions(week, rank)",
+        "CREATE INDEX IF NOT EXISTS review_actions_consumed ON review_actions(consumed_by, week, rank)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

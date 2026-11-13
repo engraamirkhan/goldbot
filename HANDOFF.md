@@ -93,6 +93,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Limits: the Mac holds no `news` table, so the history length must be read on the brain (`news_features.coverage`,
   BACKLOG 212). Dukascopy's ask-side volume is dropped at ingest (BACKLOG 213); MFE/MAE wait for lane F's fields
   (BACKLOG 214). Order flow costs ~2.3 s per million 1m bars per frame build. Follow-ups: BACKLOG 211-214.
+- 2026-11-13 (branch feat/weekly-review; R141; BACKLOG 219-222): new Saturday job `weekly_review` (13:00 UTC, after
+  research_director) writes one ranked action list a week to aux.db `review_actions` (migration 30). It covers each
+  family against its matched control (from the ranking's figures; no control reads "unpaired"), loss drivers from
+  attribution.json, cost drift against the cost of record, reads due at their registered size, MFE/MAE stop-exit
+  diagnostics and the Monday roll-up's proposals. Each roll-up is marked read with `mark_weekly_consumed`, R140's
+  helper copied with the same text. The next research_director run consumes the actions once into
+  `research_plan.json` `review_queue`; budgets are unchanged. Unpaired families and cost drift open one `review`
+  issue a week (outbox without the token). The Sunday digest gains "Changed this week" (counts only). The only
+  automatic action is a registered stop the daily review found breached but not yet recorded (tighten only). Nothing
+  on the order path changed.
 - 2026-11-12 (branch feat/decisions-journal-compaction; backlog 170, R131): the decisions journal's part files are
   compacted nightly. New scheduler job `journal_compact` (daily 03:40 UTC, max 20 h late, runs on first sight)
   calls `goldbot/data/compact.py::compact_table(store, "decisions", before=slot)`: every closed month partition

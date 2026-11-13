@@ -296,6 +296,31 @@ def load_weekly(state_dir: str | Path, day: str) -> WeeklyRollup | None:
     return load_record_json(WeeklyRollup, p.read_text(encoding="utf-8"), source=p.name) if p.exists() else None
 
 
+def _consumed_path(state_dir: str | Path) -> Path:
+    return review_root(state_dir) / "consumed.json"
+
+
+def weekly_consumed(state_dir: str | Path) -> dict[str, dict[str, str]]:
+    """{weekly file name: {"by", "utc"}}: the roll-ups whose proposals a consumer (the research director) has read.
+    Raises ValueError or OSError when the file is unreadable: the loop health check then reports "can't check"."""
+    p = _consumed_path(state_dir)
+    if not p.exists():
+        return {}
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict):
+        raise ValueError("consumed.json is not an object")
+    return {str(k): {str(a): str(b) for a, b in v.items()} for k, v in doc.items() if isinstance(v, dict)}
+
+
+def mark_weekly_consumed(state_dir: str | Path, name: str, *, by: str, now: pd.Timestamp) -> None:
+    """Record that `by` read the proposals of roll-up `name` (weekly-<day>.json); the first record stands. The loop
+    health check (goldbot/ops/checks/loop.py) fails while a roll-up with proposals stays unread past its window."""
+    seen = weekly_consumed(state_dir)
+    if name not in seen:
+        seen[name] = {"by": by, "utc": pd.Timestamp(now).tz_convert("UTC").isoformat()}
+        write_atomic(_consumed_path(state_dir), json.dumps(dict(sorted(seen.items())), indent=1))
+
+
 # ---------------------------------------------------------------------------------------------- arm status
 def retired_arms(db: Database, broker: str) -> set[str]:
     """The arms retired at their stop on `broker` (aux.db exploration_arm_status)."""
@@ -1159,6 +1184,6 @@ def main(argv: list[str]) -> int:
 
 
 __all__ = ["DailyReview", "WeeklyRollup", "cost_cells", "load_review", "load_weekly",
-           "main", "outbox_dir", "refit_cells", "refits_on", "replay_cells", "report_lines", "retire",
+           "main", "mark_weekly_consumed", "weekly_consumed", "outbox_dir", "refit_cells", "refits_on", "replay_cells", "report_lines", "retire",
            "retired_arms", "retired_on", "review_path", "run_daily_review", "scrub", "stale_outbox", "summary",
            "trials_left", "write_cell"]
