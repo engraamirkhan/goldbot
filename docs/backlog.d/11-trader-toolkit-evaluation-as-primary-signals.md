@@ -3,7 +3,7 @@ number: 11
 title: Trader-toolkit evaluation as primary signals
 stage: Idea generation, confluence · FIND
 size: S–M
-status: 'parked: runs as H-02 inside the Q1 queue (5); no separate work'
+status: 'retired (triage 2026-11-13): trader-toolkit signals were screened in the 2026-11 catalogue sprint (PRs #274, #286, #309)'
 ---
 
 ### 11. Trader-toolkit evaluation as primary signals

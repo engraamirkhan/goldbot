@@ -1,10 +1,9 @@
 ---
 number: 83
-rank: 16
 title: Digest and approval report count not-confirmed and broker refusals as refused by the risk check
 stage: Reporting (daily digest, performance report) · RUN
 size: S
-status: 'proposed (BACKLOG 72 trading-safety review, round 1) · accountable: implementer · due 2026-10-24'
+status: 'done (triage 2026-11-13): PR #90 (0b56a590)'
 ---
 - **83. Digest and approval report count not-confirmed and broker refusals as refused by the risk check.** Value
   (RUN, owner's picture). `goldbot/telegram/digest.py:183` counts every approved card with a `gate_refusal` as "(N

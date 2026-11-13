@@ -520,7 +520,14 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     import pandas as pd
 
     from goldbot.config import load_settings
-    from goldbot.engine import Engine, EngineConfig, book_backfill, broker_bars, exploration, order_send
+    from goldbot.engine import (
+        Engine,
+        EngineConfig,
+        book_backfill,
+        broker_bars,
+        exploration,
+        order_send,
+    )
     from goldbot.execution.costs import settings_swap
     from goldbot.instruments import GOLD
     from goldbot.ops import accounts
@@ -585,7 +592,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         start_refused(acc, f"refusing to trade {account_id}: {why}")
     wind_down = not acc.enabled and disabled_wind_down(acc, broker)   # refuses when nothing of its own is open
     # multi-instrument demo (lane L3): the account's other instruments, one SymbolBook each (engine/books.py)
-    instruments = resolve(instrument_books)(acc, broker, exploration.config_for(acc))
+    # BACKLOG 117: the last good arm rows (aux.db) keep a bad row's arm configured (entries refused, exits run)
+    explore_cfg = exploration.config_for(acc, state_dir="state")
+    instruments = resolve(instrument_books)(acc, broker, explore_cfg)
     paper =resolve(paper_stand_in)(broker)
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
                                            accounts=list(configured.values()))
@@ -633,7 +642,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               cost_probe_scheduled=acc.cost_probe.scheduled,
                               cost_probe_hours_utc=acc.cost_probe.hours_utc,
                               # None unless enabled (plan 2026-10-25); gold's book runs gold's arms only
-                              exploration_config=exploration.book_config(exploration.config_for(acc), GOLD),
+                              exploration_config=exploration.book_config(explore_cfg, GOLD),
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               # WS-4: 1d/1w exploration arms ship dark; their warm-up (engine/long_bars.py)
                               timeframes_live=tuple(settings.engine.timeframes_live),

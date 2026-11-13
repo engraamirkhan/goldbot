@@ -1,10 +1,9 @@
 ---
 number: 59
-rank: 2
 title: 'Engine state keeps moving on the host clock while the market is closed'
 stage: Operational resilience · RUN
 size: S
-status: 'in review (6287d10 + review-HIGH fix 412fd0d, merged at a13c8a3, shipped in PR #79; follow-up 700c116) · SRE re-verify APPROVE 2026-10-16 recorded (handoff 2026-10-16-sre-backlog-59-reverify, d68dfee) · trading-safety APPROVE named in merge 57c2f14 for the SRE lane; a written trading-safety verdict on 412fd0d itself is not on record (E1) · accountable: implementer · due Sun 2026-10-18 20:00 UTC: reviewed and deployed before the engine start at 22:02 UTC (fallback in ROADMAP section 2)'
+status: 'done (triage 2026-11-13): PR #79 (6287d10, 412fd0d); moved to engine/state_heartbeat in PR #349'
 ---
 - **59. Engine state keeps moving on the host clock while the market is closed.** Value: with the market closed
   (weekend, weekday daily break 20:59-22:02 UTC) the terminal repeats its last quote, so the tick stamp is frozen and

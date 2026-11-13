@@ -5,6 +5,38 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-13 (branch fix/engine-survives-bad-arm-row; BACKLOG 117; R136): a bad exploration arm row no longer stops
+  the engine, and a config defect never closes a healthy position (trading-safety rework of f838b7d3). The engine
+  remembers every cleanly loaded arm row (a hash mismatch aside) in aux.db `arm_spec_last_good` (migration 29,
+  goldbot/engine/arm_snapshot.py: upserted by arm id in one transaction, never deleted, shared by every account's
+  engine). A row that fails validation, a duplicate id, a bad twin or a row gone missing
+  keeps its arm from that snapshot with entries refused (`arm row invalid`, journalled `exploration_arm_invalid`);
+  its open positions keep stop, target, hold and every exit. An unreadable ARM-SPEC keeps every remembered arm with
+  all entries refused. A registered arm whose row is bad (or the file unreadable) with no last good row refuses
+  the start (fail loud): a config defect never orphan-closes a position. Behaviour change: on the engine, an arm deliberately
+  deleted from the spec while still registered on the account is now kept with entries refused (its positions run
+  to their own exits) instead of being orphan-closed; unregister it in config/accounts.yaml to close it. The first
+  start after deploy saves the rows (a bad registered row before that refuses the start). The research loader
+  still raises, so CI refuses a bad file. Not covered: the account-level `ExplorationConfig` validators and the
+  live-class `spec_rule` refusal still raise by design. Reviews: trading-safety-reviewer, code-reviewer.
+- 2026-11-13 (branch fix/eval2-runner-integrity; BACKLOG 149, 150; R138): EVAL-2 reads of real cells now go through
+  `goldbot/research/eval2/runner.py`. Every L2, L3 and forward read calls `assert_harness_sane` on the current
+  `harness_hash()` first (S5 too for forward) and refuses with `ReadRefused` before touching a unit when the self-tests
+  have not all passed for this tree; nothing is computed or written. The L3 batch runner writes every family's
+  `family_cv_p` for batch j once to `state/catalogue_reads.jsonl` (`kind: l3_batch_p`, no `window` key, so batch
+  indexing is unchanged) and `run_l3_read` takes `batch_p` only from there; units and corroboration are cut at
+  decision + registered maximum hold before the holdout; a futility read's registry row must be a prior
+  pre-registration of the same family and config. `confirm.l3_read` is unchanged; no trial ran, K unchanged.
+  runner.py sits in the harness glob, so the harness hash changed: the self-tests must be re-run before any read.
+- Quant review of f18881ab (same branch): the holdout cut now reads a per-unit `bound_end_ns`, the open of bar
+  i + valid + hold + 1 on the sim's own bars (`eval2.runner.unit_bound_end_ns`, so weekends, decision -> fill and
+  the kind-3 extra bar count; past the last bar counts as reaching the holdout). It is computed in eval2, not emitted
+  by catalogue/sim.py: any edit under goldbot/research/catalogue fails `catalogue.run.code_matches` and voids the
+  frozen catalogue screen. Batch membership and m_j come from a frozen batch card checked by sha256
+  (`freeze_batch_card`); the batch-p row records the card and per-family units hashes and an L3 read on other
+  units is refused. Withdrawn or expired (ad hoc, > 7 days) futility pre-registrations are refused. The self-test
+  module runs from the file's current bytes, and a test fails if anything else calls l3_read, family_cv_p or
+  forward_state. BACKLOG 207 carries the quant ruling: every carried cell registers its sim ev.hold before L2.
 - 2026-11-13 (branch feat/gold-cost-session-split; BACKLOG 146; R137; prereg-2026-11-07-catalogue-screen section
   14a): the catalogue sim prices a gold trade at the cost-of-record cell of its fill instant's session, the dearer of
   the two brokers (`costs.gold_session_rt`, `costs.gold_session`; the calendar's city-clock sessions). A cell on fewer
@@ -39,6 +71,28 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `mfe_usd`/`mae_usd` (USD per oz) and `excursion_approx`, taken from the closed-trade record's tick track. Any failure
   leaves those fields empty and the row is still written; older rows read None. Reading them in reports is backlog 195.
   No exit, cap, RiskGate rule or size changed.
+- 2026-11-13 (branch feat/news-orderflow-features; R139; plan item 8): two opt-in feature families for the
+  feature-discovery screen, registered but in no default or live set (pipeline.OPT_IN_FEATURES; no trial run, K
+  unchanged). `news_llm` (17 columns, goldbot/data/news_features.py + goldbot/features/news_llm.py): the collector's
+  scored headlines as gold-signed sentiment, surprise, event types (fed/usd/geo/etf/cb) and counts over 1h/4h/24h with
+  30-day z-scores, on a 15-minute availability grid; no new LLM call or spend. It is collect-only: no trial reads it
+  until 12 months of forward data exist (quant review). `orderflow` (7 columns, goldbot/data/orderflow.py +
+  goldbot/features/orderflow.py): quote-update-weighted return scores (`of_vw_retz_15m/60m`, `of_vw_run`: Dukascopy's
+  tick_count is bid quote updates, not trades), spread dynamics and tick rate from 1m bars; a survivor must beat the
+  plain return/momentum features. Research passes them with `research_pass.feature_ctx(news=..., orderflow_bars=...)`,
+  which stamps `available_utc` so the pipeline's `lookahead_check` cuts them at the same point the features do.
+- Point in time: the collector now stamps `written_utc` (its clock just before the append, after scoring) on every
+  news row, and that is a headline's availability; older rows take the next poll's received_utc (the loop is
+  sequential, so that poll started after the write), the last poll waits. Never the publication time; items first seen
+  > 2 h after publication (backfills) and non-`rss` rows never count; a window with > 20 % of prefiltered headlines
+  unscored by the budget, or 12 h with nothing available, reads NaN, and both masks apply before the z-scores.
+  Order-flow values are stamped at each 1m bar's visible_at; a data gap > 5 min reads NaN. Tests seed future headlines
+  and later minutes and require every earlier bar bit-identical, plus the pipeline's own lookahead_check.
+- Quant review fixes (same branch): fill slippage dropped (pooled every account and symbol, endogenous, NaN before
+  October 2026 = a date marker); of_imb/of_run renamed; write-time availability replaced the fixed 5-minute lag.
+- Limits: the Mac holds no `news` table, so the history length must be read on the brain (`news_features.coverage`,
+  BACKLOG 212). Dukascopy's ask-side volume is dropped at ingest (BACKLOG 213); MFE/MAE wait for lane F's fields
+  (BACKLOG 214). Order flow costs ~2.3 s per million 1m bars per frame build. Follow-ups: BACKLOG 211-214.
 - 2026-11-12 (branch feat/decisions-journal-compaction; backlog 170, R131): the decisions journal's part files are
   compacted nightly. New scheduler job `journal_compact` (daily 03:40 UTC, max 20 h late, runs on first sight)
   calls `goldbot/data/compact.py::compact_table(store, "decisions", before=slot)`: every closed month partition

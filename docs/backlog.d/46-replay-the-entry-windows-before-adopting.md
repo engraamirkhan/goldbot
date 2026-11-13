@@ -1,6 +1,6 @@
 ---
 number: 46
-status: 'parked: the replay needs a shadow book, which needs 1; schedule after 45'
+status: 'retired (triage 2026-11-13): the windows it would replay stay off and have no consumer'
 ---
 - **46. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
   Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is

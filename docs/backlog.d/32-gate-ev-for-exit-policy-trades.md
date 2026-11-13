@@ -3,7 +3,7 @@ number: 32
 title: Gate EV for exit-policy trades uses the measured mean winner (G-12)
 stage: Capital management · RUN
 size: S
-status: 'parked: needs 31'
+status: 'retired (triage 2026-11-13): depended on 31'
 ---
 - **32. Gate EV for exit-policy trades (G-12; trading-safety review).** Value: the gate's EV
   `p × target_atr − (1 − p) × stop_atr − cost` (`gate.py:242`) assumes every win reaches the target, but under a

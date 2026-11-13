@@ -318,6 +318,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Retail setups screen (strategy researcher, 2026-11-01; `prereg-2026-11-01-retail-setups.md` `9fc69477`, code `3779c53b`; `retail-setups-screen-2026-11.md`; A26) | 0 registry trials, 0 budget slots | **K +3** (RS-1..RS-3, one look each); 7 requested setups already closed were not re-run (+0) | Program K 3,020 (A25) -> **3,023**. All three FAIL; no confirm |
 | Meta-label screens (ML researcher, 2026-11-01; `prereg-ml-meta-label-2026-11-01.md` `1eac5cb6`, `prereg-ml-meta-label-m1c-2026-11-01.md` `fba52087`; `meta-label-screen-2026-11.md`; A27) | 0 registry trials, 0 budget slots | **K +3** (ML-M1, ML-M2, ML-M1c, one look each) | Program K 3,023 (A26) -> **3,026**. All three FAIL (R-20); no confirm |
 | TradingView author ideas, descriptive read (principal quant strategist, 2026-11-06; `tv-ideas-score-2026-11-06.md`; prereg `prereg-2026-10-28-tv-author-ideas.md`, line parked by T-1) | 0 registry trials, 0 budget slots; holdout ideas (2026-09) not scored | **K +6** (3 authors x 2 reads: direction (T-1 type D) and owner-view levels; hand labels hashed before outcomes) | Program K +6. All three authors INSUFFICIENT (forward read needs >= 100 ideas / 60 clusters each; has 2-6). Week 11-01..11-06 +$176 at 0.01 lot, 8/10 targets vs 5.6 by chance (z 1.6); post-holdout 10-01..11-06 -$65, 22/39 vs 21.7 (z 0.1). G long-only = drift. Not retired: forward read continues |
+| HD-1 pooled trend holds (principal quant strategist, 2026-11-13; `prereg-2026-11-13-hd1-pooled-trend-holds.md`; A32) | 5 registry rows at quant sign-off (H-92-L/C/T/F + HD1C), research director `check_budget(5)`; owner decision if 2027Q1 has no headroom | **K +0**: declined by the research director 2026-11-13 before any row was written (see H-92) | No K change. Cost-budget audit (same day) adds 0: it reads existing fills |
 
 ## Next generation (after Q1 verdicts)
 
@@ -605,4 +606,39 @@ one of >= 9 cuts); the discovery fills never count.
 
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
-| H-90 | Gold signal arms Z1P, Z2P, Z5P, Z3D, Z9D, Z10D, GS1 entering in [07:00, 12:00) Europe/London beat their own side- and session-matched random control (E_L > 0), and by more than outside London (DiD > 0), net of broker-measured costs. Discovery (post hoc, 2026-10-26..11-12): London signal arms +0.132 R, day-clustered t 2.9, n 674; controls -0.078 R. Prior low (H-82 gross +/-0.011 R on 2010-17; H-83 0/24 cells) | **pre-registered** 2026-11-12; quant sign-off pending; K rows not yet written | K +3 (H-learn, H-seen, F): demo-arm K 174 -> 177 | H-learn (2010-17) kill-only: E_L <= 0 or DiD <= 0 or < 5/8 years -> retired. F (demo from 11-13, read at 400 London fills or 2026-12-17, futility at 150): PASS = E_L t >= 2.0, London net > 0, DiD t >= 1.645, leave-one-arm-out and both sides > 0 -> London-first demo admission proposal (volume only, no cap change, never live evidence); LEAD = t in [1, 2); else retired |
+| H-90 | Gold signal arms Z1P, Z2P, Z5P, Z3D, Z9D, Z10D, GS1 entering in [07:00, 12:00) Europe/London beat their own side- and session-matched random control (E_L > 0), and by more than outside London (DiD > 0), net of broker-measured costs. Discovery (post hoc, 2026-10-26..11-12): London signal arms +0.132 R, day-clustered t 2.9, n 674; controls -0.078 R. Prior low (H-82 gross +/-0.011 R on 2010-17; H-83 0/24 cells) | **pre-registered** 2026-11-12; quant sign-off pending; K rows not yet written. **Amended 2026-11-13** (`prereg-amendment-2026-11-13-h90-cost-budget.md`): Z1P, Z2P, Z3D stopped on the cost budget before F started; F population Z5P/Z9D/Z10D/GS1, read once on 12-17; leg H unchanged | K +3 (H-learn, H-seen, F): demo-arm K 174 -> 177 | H-learn (2010-17) kill-only: E_L <= 0 or DiD <= 0 or < 5/8 years -> retired. F (demo from 11-13, read at 400 London fills or 2026-12-17, futility at 150): PASS = E_L t >= 2.0, London net > 0, DiD t >= 1.645, leave-one-arm-out and both sides > 0 -> London-first demo admission proposal (volume only, no cap change, never live evidence); LEAD = t in [1, 2); else retired |
+
+## A32. Pooled gold trend, hours-to-days holds (principal quant strategist, 2026-11-13)
+
+Card `prereg-2026-11-13-hd1-pooled-trend-holds.md` (line HD-1). Numbering: A31 is taken twice already on open
+branches (`research/l1-daily-trend-voltarget` and `research/l3-london-history`, H-91), so this is A32 / H-92 (those two
+were renumbered A33 and A34 at integration, 2026-11-13).
+Evidence in `cost-budget-audit-2026-11-13.md`. The 1m/5m arms fail the speed limit on the history prior. Z2P, Z3D and
+Z1P fail it on forward point estimates too: stopping them is proposed as an H-90 amendment, for the research
+director to decide.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-92 | One pooled trend forecast on XAUUSD: the `tsmom` specialist at #16 defaults, 1h decisions every 4 h, 1.5 ATR(1h) stop = 1 R, 2 R target, 48-bar time exit, one position, long and short, fixed risk. Flat through tier-1 news: no entry T-60..T+30 min, close at T-5 min. Claim: gross >= 3x full cost (`cor-2026-10-31.2` in bps, plus point-in-time W3.3 swap), random-side excess >= 0, net > 0 in 2019-21 and on shorts (short credit capped at 0), and net > 0 on TEST-OLD 2008-09. Re-opens R-06/R-10 on named new evidence (bps cost basis, W2/eval2 replaced the DSR bar, the cost-budget gate); signal seen on 2010-25. Prior low (2018-25 premium about +0.02 R net) | **declined by the research director 2026-11-13, K +0**: no registry rows, no code, not run. Its own seen numbers already fail the speed limit in 2018-25 (net about +0.02 R + cost about 0.026 R = gross about 0.046 R; cost/gross 0.57 > 1/3); R-06/R-10 stay closed | K +4 (L, C, T, F); 5 registry rows with HD1C | L (2010-17) and C (2018-25.09) **kill-only**: any of net <= 0, cost > gross/3, excess < 0, too few positive years, 2019-21 net <= 0 (C), short net <= 0 -> retired. T (2008-09, once): n >= 100, net > 0, day-t >= 1.28, speed limit. F (HD1 vs HD1C): 100 fills cost check + futility, 300 CONTINUE (excess t >= 1), 1,000 PASS (t >= 2), demo volume only. FAIL retires gold-only 1h-2d trend as a stand-alone line |
+
+## A33. Daily trend with volatility targeting (principal quant strategist, 2026-11-13)
+
+Card `prereg-2026-11-13-l1-daily-trend.md`. Ledger fix in the same change: POS-1 A1 (2026-11-06) had no row here.
+Owed: its R-table row needs `research.retired_families` in `config/settings.yaml` too (`tests/test_director.py`);
+research director, by 2026-11-20.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| POS1-A1 | TREND-XASSET: TSMOM 1/3/12 and 12M, Turtle, SMA, Faber, ensembles on XAU, metals and a 13-market CFD book, 10 %/yr vol target, daily position engine, EXPLORE 2003-05 + 2010-17 | **failed** 2026-11-06 (`pos1/results-a1.md`): 0/16 t >= 2; book 026A gross +0.535 (t 1.70), financing -0.369, net SR 0.09; gold 001/015 net SR 0.40/0.48 on 18/10 round trips. Line closed: no re-run, widening, re-parameterisation or rename | 16 EXPLORE reads (registry family `pos1:trend-xasset`); K 19 for deflation | Kill rule A1.4 |
+| L1 | Gold + cross-asset daily TSMOM (1-12 month sign) with vol targeting (research-director plan 2026-11-13) | **declined** 2026-11-13 at 0 reads: duplicate of POS1-A1; the variants it adds (wider `raw/daily/long` universe, other vol targets or lookbacks) are what the A1 closure forbids. Reopen only on the new evidence in card section 2 | 0; K +0 | none (no run) |
+
+## A34. London session on history, L3 (opportunity researcher, 2026-11-13)
+
+Prereg `prereg-2026-11-13-l3-london-history.md`, frozen before any outcome is computed. The directional leg (London
+open drift, London-NY overlap, Asia range break at London) is **declined at K +0**. Every form of it is already
+retired or seen on 2010-17, and part of it on 2020-26 including the holdout (card section 1). The signal-arm London
+claim stays with H-90.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-91 | The London morning range ratio at 12:00 London (`day_type.noise_ratio`, 08:00-12:00 London over its 14-session same-minute mean) forecasts ln(NY 08:30-16:00 range / 22-session mean). It adds to the NY session's own 1- and 5-day ranges, the day HAR forecast, a tier-1 flag and the weekday. Non-directional: a stand-aside and size input for arms that already have an edge (the H-21 London refresh, never built) | **pre-registered** 2026-11-13; **runner not built** (new driver and self-test needed, card section 4); close date 2026-12-04 | explore 2010-17 K +1 (registry 174 -> 175, or 177 -> 178 with H-90); +1 confirm and +1 test_old only if reached; 0 budget slots | PASS = S1 Newey-West t >= 3.6, S2 OOS rho gain >= 0.03 with bootstrap LB > 0, S3 beats all 1,000 same-month date-shuffled placebos, S4 >= 7/8 years positive, S5 best-NY-session capture +3 pts over the base. PASS permits one confirm on 2018-01..2025-09 (the quant rules CONFIRM-SEEN first). FAIL retires H-21 as a London-to-NY predictor; no re-test on another window or cut |

@@ -3,7 +3,7 @@ number: 12
 title: Deterministic attribution that feeds back into research
 stage: Performance attribution, learning · FIND
 size: M
-status: 'done in part (PR #63 490ebe4, PR #68 c2cd051); dashboard view parked'
+status: 'done in part (PR #63, #68); rest retired (triage 2026-11-13): the attribution screen went with the Research section (ADR 0066, PR #294)'
 ---
 
 ### 12. Deterministic attribution that feeds back
