@@ -319,7 +319,8 @@ def _overlap_store(live_from: str = "2025-09-01 05:00", widen: float = 0.0) -> _
 def test_the_overlap_of_identical_feeds_is_zero_and_passes():
     got = har.measure_overlap(_overlap_store(), broker="icm", account_id="icm-demo", symbol="XAUUSD", cut=OVERLAP_CUT)
     assert got.status == "pass" and got.n_w >= har.OVERLAP_MIN_DAYS
-    assert abs(got.ln_tr or 1) < 1e-9 and abs(got.ln_window or 1) < 1e-9 and abs(got.ln_w or 1) < 1e-9
+    for v in (got.ln_tr, got.ln_window, got.ln_w):
+        assert v is not None and abs(v) < 1e-9
 
 
 def test_a_broker_with_wider_ranges_fails_the_overlap():
@@ -359,4 +360,28 @@ def test_a_dry_run_on_a_holed_feed_raises_like_the_job(tmp_path):
                  | (BARS["ts_utc"] >= pd.Timestamp("2025-06-16", tz="UTC"))].reset_index(drop=True)
     with pytest.raises(har.HarUnavailable, match="gap"):
         har.dry_run(_ctx(tmp_path, _Store(holed, pd.DataFrame())), FRI_SLOT, now=FRI_SLOT)
+    assert har.latest_row(Database.open(str(tmp_path), "aux"), FRI_SLOT + pd.Timedelta(days=3)) is None
+
+
+def _har_check() -> Any:
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "scripts" / "har_check.py"
+    spec = importlib.util.spec_from_file_location("har_check", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_brain_check_script_reports_overlap_and_dry_run_and_writes_nothing(tmp_path):
+    hc = _har_check()
+    code, rep = hc.run(_ctx(tmp_path, _overlap_store()), "overlap", OVERLAP_CUT + pd.Timedelta(minutes=5))
+    assert code == 0 and rep["status"] == "pass" and rep["account"] == "icm-demo"
+    code, rep = hc.run(_ctx(tmp_path, _overlap_store(widen=1.0)), "overlap", OVERLAP_CUT + pd.Timedelta(minutes=5))
+    assert code == 1 and rep["status"] == "fail"
+    code, rep = hc.run(_ctx(tmp_path, _split(), enabled=False), "dry-run", FRI_SLOT)
+    assert code == 0 and rep["status"] == "ok" and rep["for_day"] == "2025-11-10"
+    code, rep = hc.run(_ctx(tmp_path, _Store(pd.DataFrame(), pd.DataFrame())), "dry-run", FRI_SLOT)
+    assert code == 1 and rep["status"] == "unavailable"
     assert har.latest_row(Database.open(str(tmp_path), "aux"), FRI_SLOT + pd.Timedelta(days=3)) is None
