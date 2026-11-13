@@ -106,7 +106,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry, cost_probe, entry_refusals, long_bars, weekend_lane
+from goldbot.engine import arm_snapshot, auto_entry, cost_probe, entry_refusals, long_bars, weekend_lane
 from goldbot.engine.long_bars import LONG_TFS, LongHistory, is_bar_close
 from goldbot.engine.store import Resolution
 from goldbot.instruments import GOLD, arm_instrument, contract_size
@@ -280,8 +280,9 @@ class ExplorationConfig(FrozenRecord):
     # ARM-SPEC rows whose `config_hash` does not match the row (`config_for`): kept configured with their entries
     # refused, journalled at the engine's start (`exploration_arm_hash_mismatch`); never an abort
     hash_refused: tuple[str, ...] = ()
-    # backlog 117: the rows left out as invalid (an ARM-SPEC or discovered row that fails validation, a duplicate id,
-    # a bad twin, an unreadable file) -> why; each is in `dropped` too and journalled with its reason at the start
+    # BACKLOG 117: the arms whose row is bad (validation, a duplicate id, a bad twin, missing, an unreadable file) ->
+    # why. One in `arms` is kept from its last good row with its entries refused (journalled
+    # `exploration_arm_invalid`); one in `dropped` was never in a good spec (journalled dropped with why)
     invalid: dict[str, str] = Field(default_factory=dict)
     # demo-limits ADR (owner 2026-11-02): False = the pots' £ sleeves and each arm's day (its share of its pot) do not
     # bind (`_send` drops the `pot` and `arm_budget` rooms); the per-trade cap, the exploration budget, every slot and
@@ -379,33 +380,43 @@ def qualification_by_account(accounts: list[Account]) -> dict[str, tuple[list[st
     return out
 
 
-def config_for(acc: Account, spec_path: Path = SPEC_PATH,
-               spec_arms_path: Path = SPEC_ARMS_PATH) -> ExplorationConfig | None:
+def config_for(acc: Account, spec_path: Path = SPEC_PATH, spec_arms_path: Path = SPEC_ARMS_PATH,
+               snapshot: Path | None = None) -> ExplorationConfig | None:
     """The engine's exploration block for `acc` (integration ruling 2026-10-25): None unless its `exploration` is
     enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`) and the discovered arms
     (`spec_arms_path`, ADR 0058: "Demo arms are data rows run by one reviewed interpreter (`spec_rule`), loaded only on
     demo accounts": on any other account they are refused, loudly; a bad row is dropped and journalled, never fatal:
-    `_load_spec_arm_rows`). Backlog 117, "a bad exploration arm row must not stop the engine (exits keep running)": an
-    ARM-SPEC row that fails validation, a duplicate id or a bad twin is left out with its reason (`invalid`), and an
-    unreadable ARM-SPEC drops every arm; the engine starts, the other arms run, a dropped arm's open position is
-    closed as an orphan (`exits`); the account registers the
+    `_load_spec_arm_rows`); the account registers the
     arms it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm
     the spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`).
     An ARM-SPEC row whose frozen hash does not match ("an arm edited after it was frozen is refused") never aborts the
     start (plan 2026-11-07 WS-1, CTO): it is logged, kept configured with its entries refused (`HASH_RULE`) and
     journalled at the start (`hash_refused`). Kept, not dropped: a dropped arm's open positions would be closed at once
-    as orphans; kept, they keep their stop, target, hold and every exit, as a retired arm's do."""
+    as orphans; kept, they keep their stop, target, hold and every exit, as a retired arm's do.
+
+    BACKLOG 117, "a bad exploration arm row must not stop the engine (exits keep running)", and a config defect never
+    closes a healthy position (trading-safety review 2026-11-13). An ARM-SPEC row that fails validation, shares its
+    id or names a bad twin is left out of the load (`load_arms(rejected=)`), as is a bad discovered row. With
+    `snapshot` (the engine: `arm_snapshot`, every cleanly loaded row remembered under its state dir) a registered arm
+    whose row is bad or missing is kept from its last good row with its entries refused (`INVALID_RULE`), and an
+    unreadable ARM-SPEC keeps every remembered arm with all entries refused; each is journalled at the start
+    (`invalid`). Only an arm never in a good spec is dropped (its position closed as an orphan). An unreadable
+    ARM-SPEC with no snapshot raises: the engine refuses to start (fail loud), never closes everything."""
     ex = acc.exploration
     if not ex.enabled:
         return None
     invalid: dict[str, str] = {}
+    last = arm_snapshot.recall(snapshot) if snapshot is not None else None
+    readable = True
     try:
         specs, hash_refused = _hash_checked(load_arms(spec_path, check_hash=False, rejected=invalid))
     except (yaml.YAMLError, OSError, AttributeError, TypeError) as exc:
-        # backlog 117: an unreadable ARM-SPEC never stops the engine; no arm runs, every registered arm is dropped
-        log.error("ARM-SPEC %s is unreadable (%s): no exploration arm runs on %s", spec_path, exc, acc.account_id)
-        specs, hash_refused = {}, []
-        invalid = {arm_id: f"ARM-SPEC unreadable: {type(exc).__name__}" for arm_id in ex.arms}
+        if last is None:
+            raise ValueError(f"ARM-SPEC {spec_path} is unreadable ({type(exc).__name__}) and there is no last good "
+                             f"snapshot: refusing to start {acc.account_id}") from exc
+        log.error("ARM-SPEC %s is unreadable (%s): every arm kept from the last good snapshot, all entries refused",
+                  spec_path, exc)
+        specs, hash_refused, readable = {}, [], False
     rejected: list[str] = []
     if spec_arms_path.exists():
         found, rejected = _load_spec_arm_rows(spec_arms_path, live_class=acc.mode != "demo")
@@ -414,6 +425,16 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
                 log.warning("discovered arm id %s is already an ARM-SPEC arm id: the row is dropped", a.id)
             else:
                 specs[a.id] = a
+    invalid.update({i: "discovered-arm row invalid (see the engine log)" for i in rejected if i not in invalid})
+    if snapshot is not None:
+        if readable:
+            arm_snapshot.remember(snapshot, (a for a in specs.values() if a.id not in invalid))
+        for arm_id in ex.arms:
+            if arm_id not in specs and last is not None and arm_id in last:
+                why = invalid.get(arm_id) or ("ARM-SPEC unreadable" if not readable else "row missing from the spec")
+                specs[arm_id] = arm_snapshot.refused(last[arm_id], why)
+                invalid[arm_id] = specs[arm_id].entry_refused
+                log.error("exploration arm %s on %s: %s", arm_id, acc.account_id, invalid[arm_id])
     arms, dropped = [], []
     for arm_id in sorted(ex.arms):
         reg = ex.arms[arm_id]
@@ -431,14 +452,13 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
         arms.append(Arm(spec=spec, style=reg.style, control_share=reg.control_share, adds=reg.adds,
                         unit_lots=reg.unit_lots))
     running = {a.arm_id for a in arms}
-    dropped += [i for i in [*rejected, *invalid] if i not in running and i not in dropped]
-    invalid.update({i: "discovered-arm row invalid (see the engine log)" for i in rejected if i not in invalid})
+    dropped += [i for i in invalid if i not in running and i not in dropped]
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
                              arms=tuple(arms), dropped=tuple(dropped), pot_budgets=ex.pot_budgets,
                              learning_max_open=ex.learning_max_open, daily=ex.daily,
                              hash_refused=tuple(i for i in hash_refused if i in running),
-                             invalid={k: v for k, v in invalid.items() if k not in running})
+                             invalid=invalid)
 
 
 HASH_RULE = "arm hash mismatch"         # an ARM-SPEC row edited after it was frozen: entries refused (`_hash_checked`)
@@ -640,7 +660,7 @@ class Exploration:
               and (a.spec.rule != SPEC_RULE or eng.cfg.mode == "demo")]
         for name in [*cfg.dropped, *(a.arm_id for a in cfg.arms if a not in ok)]:
             # trading-safety L2: one bad arm never stops the engine; it is named and the others run
-            # backlog 117: an invalid row is named with its reason (`invalid`); an engine incident of the daily review
+            # BACKLOG 117: a bad row never in a good spec is named with its reason; an engine incident of the review
             why = cfg.invalid.get(name, "not in the frozen spec, blocked there or no rule")
             log.warning("exploration arm %s dropped (%s)", name, why)
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + name, "action": "exploration_arm_dropped",
@@ -677,7 +697,11 @@ class Exploration:
             # plan 2026-11-07 WS-1: a row edited after it was frozen never stops the start; its entries are refused
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_hash_mismatch",
                                   "arm": a, "rule": self.unqualified.get(a, HASH_RULE)})
-        for a in sorted(set(self.unqualified) - self.retired - set(cfg.hash_refused)):
+        for a in sorted(set(cfg.invalid) & set(self.arms)):
+            # BACKLOG 117: kept from its last good row, entries refused, every exit managed (`arm_snapshot`)
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_invalid",
+                                  "arm": a, "rule": self.unqualified.get(a, cfg.invalid[a])})
+        for a in sorted(set(self.unqualified) - self.retired - set(cfg.hash_refused) - set(cfg.invalid)):
             log.warning("exploration arm %s refused: %s", a, self.unqualified[a])
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
                                   "arm": a, "rule": self.unqualified[a]})

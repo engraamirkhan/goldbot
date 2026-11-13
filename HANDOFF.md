@@ -5,14 +5,18 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
-- 2026-11-13 (branch fix/engine-survives-bad-arm-row; BACKLOG 117; R136): a bad ARM-SPEC row
-  (config/exploration_arms.yaml) no longer stops the engine. `exploration.config_for` loads it with
-  `load_arms(..., rejected=)`: a row that fails validation, a duplicate id (both rows) or a bad twin is left out and
-  journalled at start as `exploration_arm_dropped` with a `why` (already an engine incident in the daily review), the
-  other arms run, and an unreadable file drops every arm instead of raising. A dropped arm's open position is closed
-  as an orphan by `exploration.exits` (the arm's rule is unknown, so flat is the safe state); reconciliation, the
-  Friday cut and every exit keep running. The research loader without `rejected` still raises, so CI still refuses a
-  bad file. Not covered: the account-level `ExplorationConfig` validators (pots, 5-character key collisions) and the
+- 2026-11-13 (branch fix/engine-survives-bad-arm-row; BACKLOG 117; R136): a bad exploration arm row no longer stops
+  the engine, and a config defect never closes a healthy position (trading-safety rework of f838b7d3). The engine
+  remembers every cleanly loaded arm row in `state/arm_spec_last_good.yaml` (goldbot/engine/arm_snapshot.py: merged
+  by id, never removed, atomic write). A row that fails validation, a duplicate id, a bad twin or a row gone missing
+  keeps its arm from that snapshot with entries refused (`arm row invalid`, journalled `exploration_arm_invalid`);
+  its open positions keep stop, target, hold and every exit. An unreadable ARM-SPEC keeps every remembered arm with
+  all entries refused; with no snapshot the engine refuses to start. Only an arm never in a good spec is dropped
+  (`exploration_arm_dropped` with `why`, closed as an orphan). Behaviour change: on the engine, an arm deliberately
+  deleted from the spec while still registered on the account is now kept with entries refused (its positions run
+  to their own exits) instead of being orphan-closed; unregister it in config/accounts.yaml to close it. The first
+  start after deploy writes the snapshot (no snapshot yet: a bad row then is dropped as before). The research loader
+  still raises, so CI refuses a bad file. Not covered: the account-level `ExplorationConfig` validators and the
   live-class `spec_rule` refusal still raise by design. Reviews: trading-safety-reviewer, code-reviewer.
 - 2026-11-12 (branch feat/decisions-journal-compaction; backlog 170, R131): the decisions journal's part files are
   compacted nightly. New scheduler job `journal_compact` (daily 03:40 UTC, max 20 h late, runs on first sight)
