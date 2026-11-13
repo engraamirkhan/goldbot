@@ -702,6 +702,17 @@ AUX: tuple[Migration, ...] = (
         "CREATE INDEX IF NOT EXISTS review_actions_week ON review_actions(week, rank)",
         "CREATE INDEX IF NOT EXISTS review_actions_consumed ON review_actions(consumed_by, week, rank)",
     )),
+    # additive (R142, goldbot/ops/monthly_review.py): one row per reviewed calendar month (UTC), the whole review in
+    # the body; a catch-up re-run replaces it and keeps what was already posted. Amounts stay here (the public issue
+    # carries none). A release without it never reads the table. After the weekly review's 30 (review_actions)
+    Migration(version=31, name="monthly_reviews", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS monthly_reviews (
+               month TEXT PRIMARY KEY,
+               created_ns INTEGER NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('ok', 'flagged')),
+               {_BODY}
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

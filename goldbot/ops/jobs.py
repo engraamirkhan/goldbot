@@ -105,6 +105,12 @@
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
+* monthly_review    day 1 of each month, UTC, caught up for 10 days (R142, ops/monthly_review.py): the calendar month
+                    before the slot per account (monthly report, net P&L tied out against the broker balances in aux.db:
+                    an unreconciled difference above a small tolerance FLAGS, never passes), agent and hosting spend,
+                    the quarter's trial budget used (K), and a reliability scorecard (scheduler_jobs, health_alerts) ->
+                    aux.db monthly_reviews, one Telegram message, one GitHub issue labelled review-monthly (no login,
+                    host or balance). Reads only: never a broker, an order, a halt or a setting.
 """
 from __future__ import annotations
 
@@ -149,7 +155,7 @@ from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
-from goldbot.ops.scheduler import Schedule, Scheduler
+from goldbot.ops.scheduler import Scheduler, schedule_of
 from goldbot.research.cusum import (
     WATCH_MAX_WEEKS,
     WATCH_MIN_TRADES,
@@ -1726,6 +1732,16 @@ def har_days(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_job(ctx, slot)
 
 
+def monthly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """R142: the review of the calendar month (UTC) before `slot` (ops/monthly_review.py) over the configured accounts;
+    the issue goes to GitHub with the keyring's github-token, else to state. Reads only: never a broker or an order."""
+    from goldbot.ops.monthly_review import issue_sink, run_monthly_review, summary
+    review = run_monthly_review(settings=ctx.settings, state_dir=ctx.state_dir, slot=slot,
+                                account_ids=[a.account_id for a in ctx.accounts], trials=ctx.trials,
+                                sink=issue_sink(ctx.settings, ctx.get_secret))
+    return summary(review)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1754,6 +1770,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
     "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
     "weekly_review": weekly_review,               # ranked weekly action list the next director run consumes
+    "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
 }
 
 
@@ -1761,9 +1778,6 @@ def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = 
     sch = Scheduler(ctx.state_dir / "scheduler.json", clock=clock)
     cfg = ctx.settings.scheduler
     for name, fn in JOBS.items():
-        s = getattr(cfg, name)
-        sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
-                               months=tuple(s.months), max_late_hours=s.max_late_hours,
-                               run_if_never_run=s.run_if_never_run), functools.partial(fn, ctx))
+        sch.add(name, schedule_of(getattr(cfg, name)), functools.partial(fn, ctx))
     sch.prune()                                   # a retired job (ADR 0066) leaves no job:<name> row in health
     return sch

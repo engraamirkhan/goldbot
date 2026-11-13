@@ -30,6 +30,7 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record, load_record_json
+from goldbot.config import ScheduleSettings
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database
 from goldbot.db.bookkeeping import (
@@ -107,6 +108,12 @@ class Schedule(FrozenRecord):
             if s is not None and s > now:
                 return s
         raise ValueError(f"no slot within {LOOK_DAYS} days")  # unreachable for valid schedules
+
+
+def schedule_of(s: ScheduleSettings) -> Schedule:
+    """The Schedule of one `scheduler.<job>` setting (goldbot.config.ScheduleSettings)."""
+    return Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
+                    months=tuple(s.months), max_late_hours=s.max_late_hours, run_if_never_run=s.run_if_never_run)
 
 
 class JobState(Record):

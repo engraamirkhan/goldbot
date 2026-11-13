@@ -300,6 +300,10 @@ class SchedulerSettings(_Section):
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
+    # R142: the monthly review of the calendar month (UTC) before the slot (goldbot/ops/monthly_review.py), on the 1st
+    # after the last day's 23:25 broker_ledger snapshot and the 06:15 daily review; caught up for 10 days after downtime
+    # (one review, one issue and one Telegram message a month, whatever slot it runs for)
+    monthly_review: ScheduleSettings = ScheduleSettings(kind="monthly", at="06:30", day=1, max_late_hours=240)
 
 
 class BackupSettings(_Section):
@@ -692,6 +696,22 @@ class WeeklyReviewSettings(_Section):
     exit_min_trades: int = Field(30, ge=1)                  # closed trades carrying MFE/MAE before a family is read
 
 
+class MonthlyReviewSettings(_Section):
+    """The monthly review (goldbot/ops/monthly_review.py, R142), with the finance audit's RC-9 "Opening balance + net
+    closed P&L + deposits - withdrawals = closing balance" over the calendar month. Reporting only: it reads aux.db, the
+    closed-trade record and the trial registry, and never touches an order, a halt, a limit or a setting. An unreconciled
+    difference above the tolerance FLAGS the review; it never passes."""
+    # account currency over the month: rounding, not money (the daily ledger allows 0.05 a day + 0.01 a deal)
+    balance_tolerance: float = Field(0.50, ge=0)
+    balance_tolerance_per_trade: float = Field(0.01, ge=0)   # plus this per closed trade in the window (RC-9)
+    gbp_per_usd: float = Field(0.75, gt=0)                   # agent spend (USD) into the month's GBP total
+    # known hosting, GBP a month (docs/finance/budget-2026-10.md; docs/deploy/icm-depth-host.md: the vantage E5.Flex box
+    # costs £4.52 against the approved £3.57). Labels only, never a host name or address
+    hosting_gbp_month: dict[str, float] = Field(default_factory=lambda: {
+        "oracle_always_free_brain_and_bridge": 0.0, "oracle_e5flex_vantage_mt5": 4.52})
+    issue_label: str = Field("review-monthly", pattern=r"^[\w.-]+$")   # the program-director clears these each session
+
+
 class TradesViewSettings(_Section):
     """The trades screens' plan figures (docs/design/trades-ux-2026-10-27.md §2.4, item 131; goldbot/api/today_ledger.py).
     Reporting only: nothing here sizes, gates or limits a trade."""
@@ -1011,6 +1031,7 @@ class Settings(_Section):
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
     weekly_review: WeeklyReviewSettings = Field(default_factory=WeeklyReviewSettings)
+    monthly_review: MonthlyReviewSettings = Field(default_factory=MonthlyReviewSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
