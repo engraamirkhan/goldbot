@@ -1533,7 +1533,8 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **213. Keep Dukascopy's ask-side tick volume in the 1m bars.** Value: `scripts/dukascopy_year.py` stores only the bid side's volume as `tick_count` and drops the ask side's, so R139's imbalance is a bulk-volume classification from price changes; the quoted-volume imbalance (bid vs ask volume) is a second, independent proxy. Acceptance, tests first: a nullable `tick_count_ask` column in the bar schema (absent = NaN, never 0; resample sums it like `tick_count`); `orderflow` gains `of_quote_imb_15m/60m` only where both sides exist; the re-pull's size and Actions minutes are estimated before any run, and the data stays local (no release).
 - **214. Per-account MFE/MAE columns from our own closes once lane F's fields exist.** Value: plan item 8 asks for our own fills' MFE/MAE as order-flow proxies; on main the `fills` table carries no excursion fields (lane F records MFE/MAE on exploration closes only), and R139's fill-slippage column was dropped in quant review (pooled across accounts and symbols, endogenous, NaN before October 2026 = a date marker). Acceptance, tests first: once excursion fields are stored per closed position, a column is proposed only if it is per account and symbol, stamped at each position's close time (never its entry), joined with `asof_join` on available_utc, with a truncation-invariance test that seeds a later close, and the quant reviewer accepts that it is not endogenous to the arms it would screen; otherwise this item closes as not worth a column.
 - **227. Equal demo arm shares instead of the Thompson bandit.** Evidence (`docs/research/ml-review-2026-11-13.md` section 2 row 3): over 24 broker-days, bandit-weighted next-day R was +0.085 and equal-weighted +0.086, with a rank correlation of 0.003. Since 11-09 a -0.247 R arm had sat at the 30 % cap. Acceptance:
-  - The nightly learner writes equal shares among each style's enterable arms, cold arms included.
+  - The nightly learner writes equal shares among each style's enterable arms that have a labelled fill.
+  - An arm with no fill yet keeps the cold-start floor (quant Q2), so a style never spends more than the bandit would.
   - Shares stay inside the same 5 % floor, 30 % cap and each arm's own ceiling.
   - Retired, blocked and not-configured arms stay at 0.
   - The allocator is a settings switch, `research.exploration.allocator`. The default is `equal`; `thompson` stays selectable.
@@ -1571,6 +1572,19 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     - Recomputing from bars cut at each decision gives 0 mismatches.
     - Shuffled-label AUC is 0.50 +- 0.02, and an informative label reads above 0.9.
     - No engine module names the tables.
+
+  - Quant review of a8c3a6d7 (fixed in the follow-up commit, tests in `tests/test_feature_snapshots_pit.py`):
+    - Batches are shared fairly between accounts. A stuck account (no bars, or not configured) gets a retry date and
+      never starves a healthy one.
+    - Point in time is by write time: the engine's minute writer and the broker-M1 reconcile stamp `available_utc`.
+      A minute written more than 2 minutes after its close counts from its write time.
+    - Feeds are resolved per decision. Late, revised and quarantined minutes are tested.
+    - A snapshot matches `engine.frames.frame` exactly, at 15m and 1h.
+    - Rows with no write time are marked `pit = nominal`.
+    - A too-short history is retried for 3 nights, with the release minutes the engine warm-starts on as the
+      last-resort feed.
+    - Equal shares never spend more of a style than the bandit would. Cold arms keep the cold-start floor.
+    - Coverage counts gold candidates only.
 
   Follow-ups (not done):
   - Add the coverage line to the daily review / morning report.

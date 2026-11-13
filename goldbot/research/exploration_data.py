@@ -1358,16 +1358,22 @@ def allocate(r_by_arm: Mapping[str, Sequence[float]], style_of: Mapping[str, str
              seed: int = 0, cold: Collection[str] = ()) -> dict[str, float]:
     """Each style's shares of its enterable arms (`r_by_arm`: excluded arms already left out). `equal` (default since
     the ML review of 2026-11-13: "Replace it with equal shares within the existing floor and cap", Thompson's
-    weighted next-day R +0.085 against equal +0.086, rank correlation 0.003): every arm alike, cold or not, inside
-    [FLOOR_SHARE, min(CAP_SHARE, its ceiling)]; the pre-registered kill rules and the cost-budget gate do the
-    selecting. `thompson`: H-61's `thompson_shares`, kept selectable."""
+    weighted next-day R +0.085 against equal +0.086, rank correlation 0.003): every arm with a
+    labelled fill alike inside [FLOOR_SHARE, min(CAP_SHARE, its ceiling)], a `cold` arm at the cold-start floor as
+    under the bandit (quant ruling 2026-11-06 Q2), so a style never spends more of its pot than the bandit would; the
+    pre-registered kill rules and the cost-budget gate do the selecting. `thompson`: H-61's `thompson_shares`, kept
+    selectable."""
     if allocator == ALLOCATOR_THOMPSON:
         return thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed, cold=cold)
     if allocator != ALLOCATOR_EQUAL:
         raise ValueError(f"unknown allocator {allocator!r}: equal or thompson")
     out: dict[str, float] = {}
+    cold = set(cold)
     for style in sorted({style_of[a] for a in r_by_arm}):
-        out.update(equal_shares(sorted(a for a in r_by_arm if style_of[a] == style), ceilings))
+        arms = sorted(a for a in r_by_arm if style_of[a] == style)
+        floor = min(FLOOR_SHARE, 1.0 / len(arms))
+        shares = bounded_shares({a: 0.0 if a in cold else 1.0 for a in arms}, ceilings=ceilings)
+        out.update({a: min(floor, v) if a in cold else v for a, v in shares.items()})
     return out
 
 

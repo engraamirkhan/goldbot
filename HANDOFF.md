@@ -73,8 +73,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   No exit, cap, RiskGate rule or size changed.
 - 2026-11-13, ML review cleanup (branch feat/ml-cleanup-snapshots; R143; BACKLOG 227-230; ADR 0080;
   `docs/research/ml-review-2026-11-13.md`). Four changes, none on the order path.
-  - **Arm shares.** The nightly exploration learner now writes equal shares among each style's enterable arms. The
-    5 % floor, the 30 % cap and each arm's own ceiling are unchanged, and retired or not-configured arms stay at 0.
+  - **Arm shares.** The nightly exploration learner now writes equal shares among each style's enterable arms; an arm
+    with no fill yet keeps the cold-start floor. The 5 % floor, the 30 % cap and each arm's own ceiling are
+    unchanged, and retired or not-configured arms stay at 0.
     The settings switch is `research.exploration.allocator: equal`; the Thompson bandit stays selectable as
     `thompson`. The evidence: bandit +0.085 R against equal +0.086 R, rank correlation 0.003.
   - **H-62 meta-labeller.** Its Sunday retrain is retired (`research.exploration.meta_labeller: false`; 0 model rows,
@@ -90,6 +91,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - The engine never reads them.
     - The job reports `coverage_1d`.
     - Migration 30 may need renumbering if the weekly/monthly review lanes (30/31) merge first.
+  - Quant review follow-up:
+    - Snapshots are point in time by write time. The engine's minute writer and the broker-M1 reconcile now store
+      `available_utc`; rows read from minutes without one are marked `pit = nominal`.
+    - Batches are shared fairly across accounts, with retry dates for stuck accounts and 3 retries for a short history.
+    - Each snapshot equals `engine.frames.frame` on the same minutes.
+    - Cold arms keep the cold-start floor under equal shares.
 - 2026-11-13 (branch feat/news-orderflow-features; R139; plan item 8): two opt-in feature families for the
   feature-discovery screen, registered but in no default or live set (pipeline.OPT_IN_FEATURES; no trial run, K
   unchanged). `news_llm` (17 columns, goldbot/data/news_features.py + goldbot/features/news_llm.py): the collector's

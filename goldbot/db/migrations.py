@@ -680,9 +680,12 @@ AUX: tuple[Migration, ...] = (
     # feature vector of every gold exploration candidate at its decision, point in time. `exploration_feature_vectors`:
     # each distinct vector once, content-addressed (SHA-256 of its feature version and values), so the arms deciding on
     # one bar share a row. `exploration_feature_snapshots`: one row per candidate (its vector, or none with the status
-    # saying why). Append-only. Written by the nightly job, read by research only; the engine never reads either. A
-    # release without them never reads them. NOTE: 30 was the next free number on main on 2026-11-13; renumber at merge
-    # if the weekly/monthly review lanes (30/31) land first
+    # saying why, and `pit`: `written` when every minute it read carries its write time, else `nominal`). Both
+    # append-only. `exploration_snapshot_attempts` (a candidate's bounded retries while its history is too short) and
+    # `exploration_snapshot_accounts` (an account with no bars or not in accounts.yaml, and when to try it again) are
+    # the job's own bookkeeping, updated in place. Written by the nightly job, read by research only; the engine never
+    # reads any of them. A release without them never reads them. NOTE: numbers must be 1..n without gaps
+    # (`_check_sequence`), so this stays 30 until the weekly/monthly review lanes' 30/31 are on main; then it becomes 32
     Migration(version=30, name="exploration_feature_snapshots", additive=True, statements=(
         """CREATE TABLE IF NOT EXISTS exploration_feature_vectors (
                sha256 TEXT PRIMARY KEY,
@@ -698,14 +701,28 @@ AUX: tuple[Migration, ...] = (
                decision_ns INTEGER NOT NULL,
                available_utc_max_ns INTEGER,
                bars_as_of_ns INTEGER NOT NULL,
+               pit TEXT CHECK (pit IS NULL OR pit IN ('written', 'nominal')),
+               nominal_minutes INTEGER,
                detail TEXT,
                recorded_ns INTEGER NOT NULL,
                CHECK ((status = 'ok') = (vector_sha256 IS NOT NULL)),
+               CHECK ((status = 'ok') = (pit IS NOT NULL)),
                CHECK (available_utc_max_ns IS NULL OR available_utc_max_ns <= decision_ns)
            ) STRICT""",
         *(f"""CREATE TRIGGER IF NOT EXISTS {t}_no_{op.lower()} BEFORE {op} ON {t}
               BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END"""
           for t in ("exploration_feature_vectors", "exploration_feature_snapshots") for op in ("UPDATE", "DELETE")),
+        """CREATE TABLE IF NOT EXISTS exploration_snapshot_attempts (
+               candidate_id TEXT PRIMARY KEY,
+               attempts INTEGER NOT NULL CHECK (attempts >= 1),
+               last_ns INTEGER NOT NULL
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_snapshot_accounts (
+               account_id TEXT PRIMARY KEY,
+               reason TEXT NOT NULL CHECK (reason IN ('no_bars', 'unknown_account')),
+               retry_after_ns INTEGER NOT NULL,
+               recorded_ns INTEGER NOT NULL
+           ) STRICT""",
     )),
 )
 

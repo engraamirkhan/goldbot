@@ -46,8 +46,8 @@ def _detail(db: Database, arm: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------------- item 1: allocator
 def test_the_learner_gives_every_enterable_arm_an_equal_share_whatever_its_results_by_default(tmp_path):
     """Review section 2 row 3: weighted next-day R +0.085 against equal +0.086, rank correlation 0.003 over 24
-    broker-days. A winner, a loser, a flat arm and a cold arm (no fill yet) share alike; an arm not on the broker
-    still gets 0."""
+    broker-days. A winner, a loser and a flat arm share alike; a cold arm (no fill yet) holds the cold-start floor
+    (quant ruling 2026-11-06 Q2, unchanged); an arm not on the broker still gets 0."""
     db = _db(tmp_path)
     for arm, r in (("W", 0.6), ("L", -0.6), ("F", 0.0), ("GONE", 0.4)):
         _evidence(db, arm, r)
@@ -55,10 +55,11 @@ def test_the_learner_gives_every_enterable_arm_an_equal_share_whatever_its_resul
     out = ex.learn(db, broker="icm", as_of=T0 + pd.Timedelta(days=3), arms=arms, learning=(), spec_paths=())
     w = out["weights"]
     assert w["GONE"] == 0.0
-    assert w["W"] == w["L"] == w["F"] == w["COLD"] == pytest.approx(0.25)
+    assert w["W"] == w["L"] == w["F"] == pytest.approx(ex.CAP_SHARE)
+    assert w["COLD"] == pytest.approx(ex.FLOOR_SHARE)          # no fill yet: the cold-start floor, as under the bandit
     assert _detail(db, "W")["method"] == ex.ALLOCATOR_EQUAL == "equal"
     assert ex.weights(db, ["W", "L", "F", "COLD"], broker="icm", now=T0 + pd.Timedelta(days=3)) == pytest.approx(
-        {a: 0.25 for a in ("W", "L", "F", "COLD")})
+        {k: v for k, v in w.items() if k != "GONE"})
 
 
 def test_equal_shares_stay_inside_the_thirty_percent_cap_and_an_arms_own_ceiling():
@@ -68,8 +69,29 @@ def test_equal_shares_stay_inside_the_thirty_percent_cap_and_an_arms_own_ceiling
     assert shares == pytest.approx({"A": ex.CAP_SHARE, "B": ex.CAP_SHARE})
     capped = ex.allocate({"A": [0.1], "B": [0.1], "C": [], "D": [0.2]}, dict.fromkeys("ABCD", "scalp"),
                          allocator="equal", ceilings={"A": 0.1}, cold={"C"})
-    assert capped["A"] == pytest.approx(0.1) and all(capped[a] == pytest.approx(ex.CAP_SHARE) for a in "BCD")
+    assert capped["A"] == pytest.approx(0.1) and all(capped[a] == pytest.approx(ex.CAP_SHARE) for a in "BD")
+    assert capped["C"] == pytest.approx(ex.FLOOR_SHARE)            # cold: the cold-start floor
     assert sum(capped.values()) <= 1 + 1e-9
+
+
+@pytest.mark.parametrize("seed", range(25))
+def test_equal_shares_never_spend_more_of_a_style_than_the_bandit_or_the_weights_reader_allow(seed):
+    """Quant LOW: equal shares change who gets the pot, never how much of it is spent."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n = int(rng.integers(1, 12))
+    arms = [f"a{i}" for i in range(n)]
+    r = {a: list(rng.normal(0, 1, int(rng.integers(0, 6)))) for a in arms}
+    style = {a: str(rng.choice(["scalp", "intraday"])) for a in arms}
+    ceilings = {a: float(rng.uniform(0.02, 0.4)) for a in arms if rng.random() < 0.3}
+    cold = {a for a, v in r.items() if not v}
+    eq = ex.allocate(r, style, allocator="equal", ceilings=ceilings, cold=cold)
+    th = ex.allocate(r, style, allocator="thompson", ceilings=ceilings, cold=cold, seed=seed)
+    for s in set(style.values()):
+        mine = [a for a in arms if style[a] == s]
+        assert sum(eq[a] for a in mine) <= sum(th[a] for a in mine) + 1e-9
+        assert sum(eq[a] for a in mine) <= sum(ex.equal_shares(mine, ceilings).values()) + 1e-9 <= 1 + 2e-9
+        assert all(eq[a] <= min(ex.CAP_SHARE, ceilings.get(a, 1.0)) + 1e-9 for a in mine)
 
 
 def test_the_thompson_bandit_stays_selectable_and_still_favours_the_winner(tmp_path):

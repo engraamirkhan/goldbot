@@ -58,7 +58,7 @@ def _cand(db: Database, cid: str, at: pd.Timestamp, *, account: str = "icm-probe
 
 
 # ---------------------------------------------------------------------------------------------- migration
-def test_migration_30_adds_the_snapshot_tables_additively_so_a_rollback_still_opens_aux_db(tmp_path):
+def test_the_snapshot_migration_adds_the_snapshot_tables_additively_so_a_rollback_still_opens_aux_db(tmp_path):
     m = next(m for m in AUX if m.name == "exploration_feature_snapshots")
     assert m.additive and m.version == AUX[-1].version
     assert compat_back_to(AUX, m.version) == compat_back_to(AUX, m.version - 1)
@@ -127,16 +127,17 @@ def test_the_job_is_bounded_newest_first_and_never_redoes_a_candidate(tmp_path, 
     db = Database.open(tmp_path, "aux")
     for i, at in enumerate(DECISIONS[:4]):
         _cand(db, f"c{i}", at)
-    _cand(db, "early", START + pd.Timedelta(days=1))          # too little history: recorded, never retried
+    _cand(db, "early", START + pd.Timedelta(days=1))          # too little history: retried (test_feature_snapshots_pit)
     kw: dict[str, Any] = {"broker_of": {"icm-probe": "icm"}, "symbol_of": {"icm-probe": "XAUUSD"},
                           "as_of": START + pd.Timedelta(days=DAYS)}
     first = fs.snapshot_pending(db, store, max_decisions=2, **kw)
     assert first["decisions"] == 2 and set(fs.read_snapshots(db).index) == {"c2", "c3"}
     second = fs.snapshot_pending(db, store, max_decisions=10, **kw)
-    assert second["written"] == 3 and second["status"] == {"ok": 2, "insufficient_bars": 1}
+    assert second["written"] == 2 and second["status"] == {"ok": 2, "insufficient_bars": 1}
     assert fs.snapshot_pending(db, store, max_decisions=10, **kw)["written"] == 0
     cov = fs.coverage(db, since=START)
-    assert cov == {"candidates": 5, "snapshots": 5, "with_features": 4, "ratio": pytest.approx(0.8)}
+    assert cov == {"candidates": 5, "snapshots": 4, "with_features": 4, "written_pit": 0,    # no write times stored
+                   "ratio": pytest.approx(0.8)}
 
 
 def test_an_account_with_no_bars_is_skipped_and_retried_another_night(tmp_path):

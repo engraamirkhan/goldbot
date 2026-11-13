@@ -343,8 +343,11 @@ class BarWriter:
                 except queue.Empty:
                     break
             try:
-                self.store.append(LIVE_TABLE, pd.concat(batch, ignore_index=True)[BAR_COLUMNS], source=self.source,
-                                  symbol=self.symbol)
+                # available_utc = when the minutes reached the store (quant review of the feature snapshots: a
+                # back-filled minute's visible_at is its close, so only the write time says when it was known);
+                # the engine's own reads keep BAR_COLUMNS (`_clean`)
+                rows = pd.concat(batch, ignore_index=True)[BAR_COLUMNS].assign(available_utc=pd.Timestamp.now("UTC"))
+                self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol)
             except Exception as exc:                  # noqa: BLE001 - storing history never stops trading
                 log.warning("engine minutes not stored (%s): a restart's fill re-pulls them", type(exc).__name__)
             finally:

@@ -18,6 +18,19 @@ status: 'done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143; ADR 0080) · a
     - Shuffled-label AUC is 0.50 +- 0.02, and an informative label reads above 0.9.
     - No engine module names the tables.
 
+  - Quant review of a8c3a6d7 (fixed in the follow-up commit, tests in `tests/test_feature_snapshots_pit.py`):
+    - Batches are shared fairly between accounts. A stuck account (no bars, or not configured) gets a retry date and
+      never starves a healthy one.
+    - Point in time is by write time: the engine's minute writer and the broker-M1 reconcile stamp `available_utc`.
+      A minute written more than 2 minutes after its close counts from its write time.
+    - Feeds are resolved per decision. Late, revised and quarantined minutes are tested.
+    - A snapshot matches `engine.frames.frame` exactly, at 15m and 1h.
+    - Rows with no write time are marked `pit = nominal`.
+    - A too-short history is retried for 3 nights, with the release minutes the engine warm-starts on as the
+      last-resort feed.
+    - Equal shares never spend more of a style than the bandit would. Cold arms keep the cold-start floor.
+    - Coverage counts gold candidates only.
+
   Follow-ups (not done):
   - Add the coverage line to the daily review / morning report.
   - Snapshots for non-gold candidates.
