@@ -114,6 +114,10 @@ rows.
 | 212 | News collector coverage readout and outage check on the brain | data (follow-up of R139, 2026-11-13) | S | proposed · accountable: data-engineer · reviews: sre |
 | 213 | Keep Dukascopy's ask-side tick volume in the 1m bars | data (follow-up of R139, 2026-11-13) | M | proposed · accountable: data-engineer · reviews: quant-reviewer |
 | 214 | Per-account MFE/MAE columns from our own closes once lane F's fields exist | data / research (follow-up of R139, 2026-11-13) | S | proposed · blocked on lane F · accountable: data-engineer · reviews: quant-reviewer |
+| 227 | Equal demo arm shares instead of the Thompson bandit (H-61 allocator retired) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, code-reviewer |
+| 228 | Retire the H-62 online meta-labeller's retrain (code and data kept) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer |
+| 229 | Stop the specialists' Saturday LightGBM retrain (watchers kept) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer (no order path change) |
+| 230 | Point-in-time feature snapshots on every gold exploration candidate | research data (ML review 2026-11-13 improvement B, lane ML1) | M | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143; ADR 0080) · accountable: implementer · reviews: quant-reviewer, data-engineer, code-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1528,6 +1532,50 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **212. News collector coverage readout and outage check on the brain.** Value: the news columns are forward-only, so their usable history is exactly what the brain's collector has stored; the Mac holds no `news` table, so R139 could not measure it. Acceptance, tests first: a daily job (or health check) runs `news_features.coverage` on the brain store and records first/last received, days, kept rows, backfilled rows dropped and scored share; any gap of more than `news_features.OUTAGE` between received stamps raises a dq_event (warning) so a research window can exclude it; a local-only export of the table (sha256-verified, never a release) reaches the Mac research store for item 211.
 - **213. Keep Dukascopy's ask-side tick volume in the 1m bars.** Value: `scripts/dukascopy_year.py` stores only the bid side's volume as `tick_count` and drops the ask side's, so R139's imbalance is a bulk-volume classification from price changes; the quoted-volume imbalance (bid vs ask volume) is a second, independent proxy. Acceptance, tests first: a nullable `tick_count_ask` column in the bar schema (absent = NaN, never 0; resample sums it like `tick_count`); `orderflow` gains `of_quote_imb_15m/60m` only where both sides exist; the re-pull's size and Actions minutes are estimated before any run, and the data stays local (no release).
 - **214. Per-account MFE/MAE columns from our own closes once lane F's fields exist.** Value: plan item 8 asks for our own fills' MFE/MAE as order-flow proxies; on main the `fills` table carries no excursion fields (lane F records MFE/MAE on exploration closes only), and R139's fill-slippage column was dropped in quant review (pooled across accounts and symbols, endogenous, NaN before October 2026 = a date marker). Acceptance, tests first: once excursion fields are stored per closed position, a column is proposed only if it is per account and symbol, stamped at each position's close time (never its entry), joined with `asof_join` on available_utc, with a truncation-invariance test that seeds a later close, and the quant reviewer accepts that it is not endogenous to the arms it would screen; otherwise this item closes as not worth a column.
+- **227. Equal demo arm shares instead of the Thompson bandit.** Evidence (`docs/research/ml-review-2026-11-13.md` section 2 row 3): over 24 broker-days, bandit-weighted next-day R was +0.085 and equal-weighted +0.086, with a rank correlation of 0.003. Since 11-09 a -0.247 R arm had sat at the 30 % cap. Acceptance:
+  - The nightly learner writes equal shares among each style's enterable arms, cold arms included.
+  - Shares stay inside the same 5 % floor, 30 % cap and each arm's own ceiling.
+  - Retired, blocked and not-configured arms stay at 0.
+  - The allocator is a settings switch, `research.exploration.allocator`. The default is `equal`; `thompson` stays selectable.
+  - No cap, pot, budget or RiskGate rule changes.
+  - Tests: `tests/test_ml_review_cleanup.py`.
+- **228. Retire the H-62 online meta-labeller's retrain.** Evidence (ML review section 2 row 4):
+  - `exploration_models` and `exploration_priors` held 0 rows.
+  - 0 of 19,990 candidates carried a feature snapshot, so the meta-labeller could never train.
+  - Its feature family is the one R-20 retired.
+
+  Acceptance:
+  - The Sunday retrain runs only while `research.exploration.meta_labeller` is true (default false).
+  - The code, the tables and the candidate log with its propensities are kept.
+  - The retirement is recorded in `docs/research/hypotheses.md` (H-62 row).
+  - Tests: `tests/test_ml_review_cleanup.py`.
+- **229. Stop the specialists' Saturday LightGBM retrain.** Evidence (ML review section 2 row 1):
+  - 145 out-of-sample shadow trades gave AUC 0.44 and Brier 0.206, against 0.197 for the base rate.
+  - There are 0 live agents.
+  - The retrain had been skipped for 25 days.
+
+  Acceptance:
+  - `saturday_retrain` fits no new challenger while `research.specialist_retrain` is false (the default).
+  - It still syncs bars, ensures founders, judges the challengers already in shadow and saves the population.
+  - `recalibrate`, `drift_watch` and `model_watch` are unchanged.
+  - The retirement is recorded in `docs/research/hypotheses.md` (R-07 row).
+  - Tests: `tests/test_ml_review_cleanup.py`.
+- **230. Point-in-time feature snapshots on every gold exploration candidate.** Value: this turns the demo log into a dataset that matches our broker, our costs and the policy that chose the trades, so later models can learn from our own fills.
+
+  Acceptance:
+  - Each candidate gets the engine's default feature row (DEFAULT_FEATURE_NAMES plus h1/h4/d1 context) at its decision.
+  - The row is built from the account's stored broker minutes visible by the decision.
+  - Storage is aux.db migration 30: content-addressed vectors plus one row per candidate, append-only.
+  - The job runs nightly after the learner and is bounded (600 decision bars, newest first). It is never in the engine tick.
+  - Tests (`tests/test_feature_snapshots.py`):
+    - Recomputing from bars cut at each decision gives 0 mismatches.
+    - Shuffled-label AUC is 0.50 +- 0.02, and an informative label reads above 0.9.
+    - No engine module names the tables.
+
+  Follow-ups (not done):
+  - Add the coverage line to the daily review / morning report.
+  - Snapshots for non-gold candidates.
+  - Renumber the migration if the review lanes' 30/31 merge first.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

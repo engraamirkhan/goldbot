@@ -43,6 +43,13 @@ that learns takes the broker as a required argument, so no caller can pool by om
                       its style), then held in [FLOOR_SHARE, CAP_SHARE] (and an arm's own ceiling below the cap) without
                       raising any ceiling. Missing, stale, corrupt or incomplete weights read as equal shares in the
                       same bounds.
+* `allocate`          the nightly shares: equal among the enterable arms by default (ML review 2026-11-13: the bandit's
+                      weighted next-day R +0.085 against equal +0.086, rank correlation 0.003 over 24 broker-days), the
+                      bandit above only when settings research.exploration.allocator is `thompson`.
+
+Retired 2026-11-13 (ML review; code and tables kept): the H-62 meta-labeller's Sunday retrain (`cross_fit_meta`,
+`save_model`) runs only while research.exploration.meta_labeller is on: `exploration_models` holds 0 rows and no
+candidate carried a snapshot it could train on.
 
 Isolation (research/population.py `agent_trades`): nothing here reads or writes the shadow book, closed trades, the
 fills table, the probe ledger or the phase gate; the test suite checks the module never names them.
@@ -1340,6 +1347,30 @@ def thompson_shares(r_by_arm: Mapping[str, Sequence[float]], style_of: Mapping[s
     return out
 
 
+Allocator = Literal["equal", "thompson"]
+ALLOCATOR_EQUAL: Allocator = "equal"
+ALLOCATOR_THOMPSON: Allocator = "thompson"
+METHOD = {ALLOCATOR_EQUAL: ALLOCATOR_EQUAL, ALLOCATOR_THOMPSON: "thompson_nig_net_r_within_style"}
+
+
+def allocate(r_by_arm: Mapping[str, Sequence[float]], style_of: Mapping[str, str], *, allocator: Allocator,
+             priors: Mapping[str, ArmPrior] | None = None, ceilings: Mapping[str, float] | None = None,
+             seed: int = 0, cold: Collection[str] = ()) -> dict[str, float]:
+    """Each style's shares of its enterable arms (`r_by_arm`: excluded arms already left out). `equal` (default since
+    the ML review of 2026-11-13: "Replace it with equal shares within the existing floor and cap", Thompson's
+    weighted next-day R +0.085 against equal +0.086, rank correlation 0.003): every arm alike, cold or not, inside
+    [FLOOR_SHARE, min(CAP_SHARE, its ceiling)]; the pre-registered kill rules and the cost-budget gate do the
+    selecting. `thompson`: H-61's `thompson_shares`, kept selectable."""
+    if allocator == ALLOCATOR_THOMPSON:
+        return thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed, cold=cold)
+    if allocator != ALLOCATOR_EQUAL:
+        raise ValueError(f"unknown allocator {allocator!r}: equal or thompson")
+    out: dict[str, float] = {}
+    for style in sorted({style_of[a] for a in r_by_arm}):
+        out.update(equal_shares(sorted(a for a in r_by_arm if style_of[a] == style), ceilings))
+    return out
+
+
 def write_weights(db: Database, run_ns: int, shares: Mapping[str, float], style_of: Mapping[str, str],
                   detail: Mapping[str, Mapping[str, Any]] | None = None, *, broker: str) -> None:
     """One broker's run (aux.db exploration_broker_weights, keyed by run, broker and arm)."""
@@ -1444,9 +1475,10 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
           retrain: bool = False, models_dir: Path | None = None, held_out: Collection[str] = (),
           learning: Collection[str] | None = None,
           instruments: Mapping[str, str] | None = None,
-          spec_paths: Sequence[Path] = SPEC_PATHS) -> dict[str, Any]:
-    """One broker's bandit (nightly) and, when `retrain` (Sundays), its H-62 style models whose retrain is due, on
-    that broker's evidence only. `arms`: the strategy arm id -> style configured on the broker's accounts (joined
+          spec_paths: Sequence[Path] = SPEC_PATHS, allocator: Allocator = ALLOCATOR_EQUAL) -> dict[str, Any]:
+    """One broker's arm shares (nightly; `allocate`: equal by default, the H-61 bandit when `allocator` is
+    thompson) and, when `retrain` (Sundays, and only while settings research.exploration.meta_labeller is on: H-62
+    retired 2026-11-13), its H-62 style models whose retrain is due, on that broker's evidence only. `arms`: the strategy arm id -> style configured on the broker's accounts (joined
     with the arms seen in its candidates); control arms (random brackets) are never allocated by results. Shares use
     each arm's net R labels (label_sim_r) resolved by `as_of`. `learning` (default: the spec's `role: learning` rows,
     ADR 0061 amendment 2026-11-02): unqualified demo arms, never allocated by results and never in a style model's
@@ -1522,11 +1554,11 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     # quant ruling 2026-11-06 Q2: an enterable arm without a labelled fill (new, a swing arm, a non-gold arm the gold
     # labeller never reads) holds the cold-start floor, never 0
     cold = {a for a, r in live.items() if not any(math.isfinite(v) for v in r)}
-    shares = {**thompson_shares(live, style_of, priors=priors, ceilings=ceilings, seed=seed, cold=cold),
+    shares = {**allocate(live, style_of, allocator=allocator, priors=priors, ceilings=ceilings, seed=seed, cold=cold),
               **dict.fromkeys(excluded, 0.0)}
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,
                   "prior": priors[a].prior_version if a in priors else None, "ceiling": (ceilings or {}).get(a),
-                  "method": "thompson_nig_net_r_within_style", "suspect": int(sus.get(a, 0)),
+                  "method": METHOD[allocator], "suspect": int(sus.get(a, 0)),
                   **({"excluded": excluded[a]} if a in excluded else {}),
                   **({"cold_start": True} if a in cold else {})} for a in style_of}
     write_weights(db, _ns(as_of), shares, style_of, detail, broker=broker)
@@ -1534,7 +1566,7 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     return out
 
 
-__all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LABEL_R", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
+__all__ = ["ALLOCATOR_EQUAL", "ALLOCATOR_THOMPSON", "Allocator", "allocate", "CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_LABEL_R", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
            "bounded_shares", "cross_fit_meta", "entry_exclusions", "equal_shares", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
            "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "stamp_brokers", "suspect", "thompson_shares",

@@ -29,6 +29,7 @@ from goldbot.data.timeutil import epoch_ns
 MINUTE = pd.Timedelta(minutes=1)
 QUARANTINE = "bars_quarantine"           # data/quarantine.py QUARANTINE_TABLE of bars_1m and bars_1m_live
 PRICE_COLUMNS = [f"{s}_{c}" for s in ("bid", "ask") for c in ("open", "high", "low", "close")]
+META_COLUMNS = ["tick_count", "spread_mean", "spread_max"]
 FEEDS: tuple[tuple[str, str], ...] = (("bars_1m_live", "broker"), ("bars_1m_broker", "account"),
                                       ("bars_1m", "account"))
 
@@ -47,9 +48,11 @@ def _visible_ns(df: pd.DataFrame) -> np.ndarray:
 
 
 def account_bars_1m(store: Any, *, account_id: str, broker: str, symbol: str, start: pd.Timestamp | None,
-                    end: pd.Timestamp | None, as_of: pd.Timestamp) -> pd.DataFrame:
+                    end: pd.Timestamp | None, as_of: pd.Timestamp, meta: bool = False) -> pd.DataFrame:
     """ts_utc + bid/ask OHLC of `account_id`'s broker in [start, end), visible by `as_of` (module docstring), one row
-    per minute, sorted, with the `feed` it came from. Empty when no feed has a minute."""
+    per minute, sorted, with the `feed` it came from. Empty when no feed has a minute. `meta` (the feature snapshots,
+    research/feature_snapshots.py): also `visible_at` (when the row became knowable) and the bar columns the
+    features read (tick_count, spread_mean, spread_max; NaN from a feed that does not store them)."""
     cut = int(pd.Timestamp(as_of).tz_convert("UTC").value)
     parts: list[pd.DataFrame] = []
     # a minute quarantined from the broker's live feed or the account's bars is left out of EVERY feed (quant
@@ -75,9 +78,14 @@ def account_bars_1m(store: Any, *, account_id: str, broker: str, symbol: str, st
         if not new.any():
             continue
         taken.update(ts_ns[new].tolist())
-        parts.append(df.loc[new, ["ts_utc", *PRICE_COLUMNS]].assign(feed=table))
+        part = df.loc[new, ["ts_utc", *PRICE_COLUMNS]].assign(feed=table)
+        if meta:
+            for col in META_COLUMNS:
+                part[col] = pd.to_numeric(df.loc[new, col], errors="coerce") if col in df.columns else np.nan
+            part["visible_at"] = pd.to_datetime(df.loc[new, "_vis"].to_numpy(), utc=True)
+        parts.append(part)
     if not parts:
-        return pd.DataFrame(columns=["ts_utc", *PRICE_COLUMNS, "feed"])
+        return pd.DataFrame(columns=["ts_utc", *PRICE_COLUMNS, "feed", *((*META_COLUMNS, "visible_at") if meta else ())])
     out = pd.concat(parts, ignore_index=True)
     out["ts_utc"] = pd.to_datetime(out["ts_utc"], utc=True)
     return out.sort_values("ts_utc", kind="stable").reset_index(drop=True)

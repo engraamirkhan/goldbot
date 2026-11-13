@@ -676,6 +676,37 @@ AUX: tuple[Migration, ...] = (
                {_BODY}
            ) STRICT""",
     )),
+    # additive (ML review 2026-11-13 improvement B, BACKLOG 230; goldbot/research/feature_snapshots.py): the default
+    # feature vector of every gold exploration candidate at its decision, point in time. `exploration_feature_vectors`:
+    # each distinct vector once, content-addressed (SHA-256 of its feature version and values), so the arms deciding on
+    # one bar share a row. `exploration_feature_snapshots`: one row per candidate (its vector, or none with the status
+    # saying why). Append-only. Written by the nightly job, read by research only; the engine never reads either. A
+    # release without them never reads them. NOTE: 30 was the next free number on main on 2026-11-13; renumber at merge
+    # if the weekly/monthly review lanes (30/31) land first
+    Migration(version=30, name="exploration_feature_snapshots", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_feature_vectors (
+               sha256 TEXT PRIMARY KEY,
+               feature_version TEXT NOT NULL,
+               n_columns INTEGER NOT NULL,
+               features TEXT NOT NULL CHECK (json_valid(features)),
+               recorded_ns INTEGER NOT NULL
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_feature_snapshots (
+               candidate_id TEXT PRIMARY KEY,
+               status TEXT NOT NULL CHECK (status IN ('ok', 'insufficient_bars', 'error')),
+               vector_sha256 TEXT REFERENCES exploration_feature_vectors(sha256),
+               decision_ns INTEGER NOT NULL,
+               available_utc_max_ns INTEGER,
+               bars_as_of_ns INTEGER NOT NULL,
+               detail TEXT,
+               recorded_ns INTEGER NOT NULL,
+               CHECK ((status = 'ok') = (vector_sha256 IS NOT NULL)),
+               CHECK (available_utc_max_ns IS NULL OR available_utc_max_ns <= decision_ns)
+           ) STRICT""",
+        *(f"""CREATE TRIGGER IF NOT EXISTS {t}_no_{op.lower()} BEFORE {op} ON {t}
+              BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END"""
+          for t in ("exploration_feature_vectors", "exploration_feature_snapshots") for op in ("UPDATE", "DELETE")),
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
