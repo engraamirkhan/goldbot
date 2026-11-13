@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -40,6 +41,20 @@ def test_rules_flag_shocks_on_the_labelled_set_with_high_precision_and_recall():
     assert tp / max(tp + len(fp), 1) >= 0.9, fp           # a false shock costs entries; keep it rare
     assert tp / max(tp + len(fn), 1) >= 0.8, fn
     assert all(s.relevance >= 0.7 for r, s in pairs if s.shock)   # a rule shock clears the blackout's relevance bar
+
+
+REAL = yaml.safe_load((Path(__file__).parent / "fixtures" / "news_rules" / "real_labelled.yaml").read_text())
+
+
+@pytest.mark.parametrize("half, min_agree", [("tune", 0.85), ("held", 0.85)])
+def test_rules_agree_with_hand_labels_on_real_collected_headlines(half, min_agree):
+    """BACKLOG 234: 150 real headlines from the brain's collector, labelled blind; tuned on `tune`, reported on `held`
+    (2026-11-13 held relevance agreement 0.933 with summaries, 0.88 on titles alone). Few real shocks in the window: at most one false shock flagged."""
+    rows = [r for r in REAL if r["half"] == half]
+    scores = [score_text(str(i), r["title"], 0.9) for i, r in enumerate(rows)]
+    agree = np.mean([(s.relevance >= 0.5) == r["relevant"] for r, s in zip(rows, scores)])
+    assert agree >= min_agree
+    assert sum(s.shock and not r["shock"] for r, s in zip(rows, scores)) <= 1
 
 
 def test_rules_read_rates_and_dollar_direction_on_the_labelled_set():

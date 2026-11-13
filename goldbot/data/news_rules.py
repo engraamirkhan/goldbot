@@ -8,8 +8,13 @@ confidence. The collector computes it for every prefiltered headline, stores it 
 as the row's score (`scorer` = SCORER) whenever the LLM did not score that row; an LLM score takes precedence and
 both are kept (goldbot/data/news_collector.py).
 
+Shock, direction and surprise read the title only. Tuned once on the tune half of 150 hand-labelled real headlines
+(tests/fixtures/news_rules/real_labelled.yaml, BACKLOG 234); the held-out half is reported, never tuned on.
+
 Rules, in the order they apply:
-* relevance: the sum of the distinct gold drivers named (gold itself, Fed and rates, US data, the dollar,
+* relevance: from the title (summaries add at most SUMMARY_CAP: on the real feeds they are multi-headline wraps;
+  another economy's data or central bank counts FOREIGN_WEIGHT, a US release US_DATA_WEIGHT): the sum of the
+  distinct gold drivers named (gold itself, Fed and rates, US data, the dollar,
   geopolitics, central-bank gold buying, ETF flows, tariffs, other central banks), capped at 1; a shock sets it to
   at least SHOCK_RELEVANCE. Times the source weight.
 * direction (rates, dollar, risk) and surprise: votes of the phrases found; a tie is neutral. A negation within
@@ -56,8 +61,8 @@ _CLAUSE_END = re.compile(r"[,;:.!?—–|]| - ")
 _DRIVERS: tuple[tuple[re.Pattern[str], float], ...] = (
     (re.compile(r"\b(?:gold|xau(?:usd)?|bullion|precious metals?)\b", re.I), 0.45),
     (re.compile(r"\b(?:fed|fomc|powell|federal reserve|rate (?:cut|hike)s?|interest rates?|treasury yields?|"
-                r"yields?|dot plot)\b", re.I), 0.4),
-    (re.compile(r"\b(?:cpi|pce|inflation|payrolls?|nfp|jobs report|unemployment|jobless|gdp|retail sales|ism)\b",
+                r"yields?|dot plot)\b", re.I), 0.6),          # 0.4 -> 0.6, BACKLOG 234 tune half ("Fed holds rates")
+    (re.compile(r"\b(?:cpi|ppi|pce|inflation|payrolls?|nfp|jobs report|unemployment|jobless|gdp|retail sales|ism)\b",
                 re.I), 0.35),
     (re.compile(r"\b(?:dollar|dxy|greenback|usd)\b", re.I), 0.3),
     (re.compile(r"\b(?:war|missiles?|rockets?|attacks?|air ?strikes?|invasion|invades?|invaded|sanctions?|"
@@ -69,6 +74,17 @@ _DRIVERS: tuple[tuple[re.Pattern[str], float], ...] = (
     (re.compile(r"\b(?:tariffs?|trade war)\b", re.I), 0.3),
     (re.compile(r"\b(?:ecb|boj|boe|pboc|snb|bank of (?:england|japan))\b", re.I), 0.2),
 )
+
+# BACKLOG 234 tune half (real headlines, 2026-11-13): titles about another economy, US markers, summary weighting
+_FOREIGN = re.compile(r"\b(?:uk|britain|british|boe|bank of england|eurozone|euro area|ecb|germany|german|france|french|"
+                      r"spain|spanish|italy|italian|china|chinese|pboc|japan|japanese|boj|australia\w*|rba|new zealand|"
+                      r"nz|rbnz|canada|canadian|boc|bank of canada|swiss|snb|norway|sweden|india|korea\w*)\b", re.I)
+_US = re.compile(r"\b(?:us|u\.s\.|united states|american|fed|fomc|federal reserve|powell|treasury|treasuries|nfp|"
+                 r"non-farm|payrolls|ism|pce|wall street)\b", re.I)
+US_DATA_WEIGHT = 0.6
+FOREIGN_WEIGHT = 0.1
+SUMMARY_WEIGHT = 0.25
+SUMMARY_CAP = 0.2
 
 # --------------------------------------------------------------------------- shock: unscheduled events only
 _SHOCK: tuple[tuple[re.Pattern[str], float, str], ...] = (   # (phrase, strength, event group)
@@ -232,12 +248,34 @@ def mark_repeats(items: pd.DataFrame, scores: Sequence[RuleScore], earlier: pd.D
     return out
 
 
-def score_text(item: str, text: str, source_weight: float = 1.0, min_confidence: float = 0.8) -> RuleScore:
-    """One headline (title and summary joined) -> its rules-v1 score (see the module docstring)."""
+def _relevance(title: str, summary: str) -> float:
+    """Relevance before the source weight, from the title (BACKLOG 234 tune half, 2026-11-13: the feeds' summaries
+    are market wraps listing a dozen unrelated headlines, which put every wrap at 0.9). A driver named only in the
+    summary adds SUMMARY_WEIGHT of its weight (at most SUMMARY_CAP in all). A title about another economy (a foreign
+    country or central bank and no US marker) gets FOREIGN_WEIGHT for rates and data; a US data release gets
+    US_DATA_WEIGHT, enough to clear 0.5 alone."""
+    foreign = bool(_FOREIGN.search(title)) and not _US.search(title)
+    raw, extra = 0.0, 0.0
+    for k, (pat, weight) in enumerate(_DRIVERS):
+        if k in (1, 2) and foreign:
+            weight = FOREIGN_WEIGHT
+        elif k == 2 and _US.search(title):
+            weight = US_DATA_WEIGHT
+        if pat.search(title):
+            raw += weight
+        elif summary and pat.search(summary):
+            extra += SUMMARY_WEIGHT * weight
+    return min(raw + min(extra, SUMMARY_CAP), 1.0)
+
+
+def score_text(item: str, text: str, source_weight: float = 1.0, min_confidence: float = 0.8,
+               summary: str = "") -> RuleScore:
+    """One headline -> its rules-v1 score (see the module docstring). `text` is the title: shock, direction and
+    surprise read it alone; `summary` only adds a little relevance (BACKLOG 234: summaries are multi-headline wraps)."""
     w = min(max(source_weight, 0.0), 1.0)
     conf = shock_confidence(text, w)
     shock = conf >= min_confidence
-    raw = min(sum(weight for pat, weight in _DRIVERS if pat.search(text)), 1.0)
+    raw = _relevance(text, summary)
     if shock:
         raw = max(raw, SHOCK_RELEVANCE)
     rates_v, usd_v = _votes(text, _HAWKISH, _DOVISH), _votes(text, _USD_UP, _USD_DOWN)
@@ -270,6 +308,7 @@ def score_rules(items: pd.DataFrame, source_weights: Mapping[str, float] | None 
     weights = dict(source_weights or {})
     out = []
     for iid, src, title, summ in zip(items["item_id"], items["source"], items["title"], items["summary"]):
-        text = f"{title or ''}. {summ or ''}".strip()
-        out.append(score_text(str(iid), text, weights.get(str(src), DEFAULT_SOURCE_WEIGHT), min_confidence))
+        summary = "" if summ is None or summ != summ else str(summ)
+        out.append(score_text(str(iid), str(title or ""), weights.get(str(src), DEFAULT_SOURCE_WEIGHT),
+                              min_confidence, summary=summary))
     return out

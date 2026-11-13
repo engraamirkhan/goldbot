@@ -106,8 +106,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   reports across feeds within 6 h unflagged, `rule_repeat_of`); rule-shock blackout capped at 120 min per UTC day
   (`news.rule_shock_cap_min_per_day`, LLM shocks uncapped) with a `news_blackout_cap` warning and a per-day log in
   `state/news_scoring.json`; `news` fails at once on a rules error; budget-fallback rule rows count as unscored in
-  the features' budget mask. BACKLOG 234 (real-headline precision) is still open: reading the brain's 392 headlines
-  was refused in the agent sandbox.
+  the features' budget mask.
+- BACKLOG 234 (real headlines): Measured 2026-11-13 on the 392 headlines the brain stored 2026-10-16..11-13 (export, received order, poll by poll with repeats): pre-tune rules flagged 4 shocks (10-21 2 = 60 min, 10-28 30 min, 11-02 30 min; 3 were multi-headline wraps flagged from their summaries); after the tune 1 shock (10-21, 30 min); the 120-min cap never bound. Hand-labelled sample of 150 (tests/fixtures/news_rules/real_labelled.yaml, blind labels, tuned on the tune half only: title-only shocks, title-weighted relevance, foreign-economy gate, PPI, Fed weight 0.6): held-out relevance agreement 0.933 (precision 0.857, recall 0.9); held-out shocks 0 flagged, 1 labelled (missed: 'Romanian F-16s shoot down two drones'), tune half 1 false shock ('US intel says ... drone attack'). Shock precision/recall cannot be measured: the window held about one real shock. The held half is not perfectly blind (its pre-tune misses were seen once through an output-filter slip). BACKLOG 234 stays open.
 - 2026-11-12 (branch feat/decisions-journal-compaction; backlog 170, R131): the decisions journal's part files are
   compacted nightly. New scheduler job `journal_compact` (daily 03:40 UTC, max 20 h late, runs on first sight)
   calls `goldbot/data/compact.py::compact_table(store, "decisions", before=slot)`: every closed month partition

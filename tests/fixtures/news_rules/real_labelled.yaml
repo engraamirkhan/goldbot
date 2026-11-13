@@ -1,0 +1,158 @@
+# BACKLOG 234: 150 real headlines the brain's collector stored 2026-10-16..2026-11-13 (public news titles only; no
+# summaries, no account data), hand-labelled blind to the rules-v1 output on 2026-11-13: relevant = matters for spot gold
+# (>= 0.5 on the LLM schema), shock = a NEW unscheduled event. Sample: every headline the pre-tune rules flagged as a
+# shock, 116 other prefiltered and 30 non-prefiltered, seeded. `half`: alternate rows by item order; rules-v1 was tuned
+# on `tune` only and is reported on `held`. Caveat: the held-out misses of the pre-tune rules were seen once before
+# tuning (an output-filter slip), so `held` is not perfectly blind.
+- {title: 'Federal Reserve Board issues enforcement actions with former employee of Northstar Bank, former employee of American Express Travel Related Services Company, Inc., and former employee of Regions
+    Bank', half: tune, relevant: false, shock: false}
+- {title: Federal Reserve Board issues enforcement action with former employee of Sandy Spring Bank, half: held, relevant: false, shock: false}
+- {title: Agencies publish resolution plan feedback letters for 15 banking organizations, half: tune, relevant: false, shock: false}
+- {title: Australia’s factory PMI stuck at 49.6 as new orders drop at fastest pace since 2024, half: held, relevant: false, shock: false}
+- {title: 'Japan factory PMI slips to 53.3, a seven-month low, as cost pressures pick up', half: tune, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Oil eases on Doha talks', half: held, relevant: false, shock: false}
+- {title: 'investingLive European session wrap: Oil sinks, stocks steady as US midterm elections loom', half: tune, relevant: false, shock: false}
+- {title: Oil prices sink as Iran's President says Supreme Leader granted certain authorities regarding negotiations, half: held, relevant: false, shock: false}
+- {title: Canada S&P global manufacturing PMI 49.6 versus 51.5 last month, half: tune, relevant: false, shock: false}
+- {title: US ISM manufacturing PMI for October 55.5 versus 54.5 estimate, half: held, relevant: true, shock: false}
+- {title: US construction spending for the month of September -1.9% versus 0.3% estimate, half: tune, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: RBA hikes to 18-year high', half: held, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: Tough to buy into the Iran headlines in the context of the election, half: held, relevant: false, shock: false}
+- {title: US September factory orders +1.8% vs +1.2% expected, half: tune, relevant: false, shock: false}
+- {title: 'If you squint, the odds are improving slightly for Republican Senate control', half: held, relevant: false, shock: false}
+- {title: Two reasons why the US could attack Iran as soon as tomorrow, half: tune, relevant: true, shock: false}
+- {title: 'NZ Q3 Unemployment rate 5.7% (expected 5.5%, prior 5.6%)', half: held, relevant: false, shock: false}
+- {title: The very early results in Kentucky show a massive swing towards Democrats, half: tune, relevant: false, shock: false}
+- {title: China services PMI slows to 50.8 in October as price cuts meet rising costs, half: held, relevant: false, shock: false}
+- {title: Trump allies are pointing to the Iran war as the reason for the election disaster, half: tune, relevant: false, shock: false}
+- {title: 'US midterms 2026: Who would''ve thought that a war would be a bad idea?', half: held, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: Italy October services PMI 52.0 vs 51.5 expected, half: held, relevant: false, shock: false}
+- {title: 'Eurozone inflation hits 4% for first time since 2023, piling pressure on ECB', half: tune, relevant: false, shock: false}
+- {title: 'investingLive European session wrap: Stocks rebound, gold soars as dollar tumbles after blue sweep in US midterms', half: held, relevant: true, shock: false}
+- {title: US September international trade balance -105.0B vs -108.0B expected, half: tune, relevant: false, shock: false}
+- {title: Germany industrial orders rebound in September but manufacturing recovery remains fragile, half: held, relevant: false, shock: false}
+- {title: 'investingLive European news wrap: BoE raises bank rate to 4.00% as expected', half: tune, relevant: false, shock: false}
+- {title: US initial jobless claims 189K vs 196K estimate, half: held, relevant: true, shock: false}
+- {title: Marco Rubio ‘on resignation watch’ - report, half: tune, relevant: false, shock: false}
+- {title: The market is telling the hyperscalers it's happy about a slower data center buildout, half: held, relevant: false, shock: false}
+- {title: 'investingLive Americas FX news wrap 5 Nov: Nasdaq 100 plunges 6.36% as AI selloff spreads', half: tune, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: held, relevant: false, shock: false}
+- {title: 'investingLive Asia-pacific news wrap: Global tech stocks rout raises growth concerns', half: tune, relevant: false, shock: false}
+- {title: 'investingLive European news wrap: Markets consolidate ahead of the US NFP report', half: held, relevant: true, shock: false}
+- {title: 'China October inflation preview: CPI seen near 0.8%, PPI above 5%', half: tune, relevant: false, shock: false}
+- {title: 'China October 2026 CPI +0.7% y/y (expected +0.8%, prior +0.9%)', half: held, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Asia shrugs off Nvidia scandal, oil steadies', half: tune, relevant: false, shock: false}
+- {title: 'investingLive European news wrap: Markets await fresh US-Iran developments, US CPI data', half: held, relevant: true, shock: false}
+- {title: 'NY Fed October survey shows 1, 3 and 5 year inflation expectations unchanged', half: tune, relevant: true, shock: false}
+- {title: U.S. Treasury sells $58 billion of 3 year notes at a high yield of 4.627%, half: held, relevant: false, shock: false}
+- {title: 'investingLive Americas market news wrap: Iran optimism and tech rebound leads to risk surge', half: tune, relevant: true, shock: false}
+- {title: 'US CPI preview: 43-day shutdown leaves no official annual rate as monthly pace seen easing', half: held, relevant: true, shock: false}
+- {title: 'Australia business conditions hit six-year low as forward orders slide: NAB', half: tune, relevant: false, shock: false}
+- {title: 'China October exports beat forecasts, imports surge 41.6% as trade surplus narrows', half: held, relevant: false, shock: false}
+- {title: US CPI takes centre stage as markets look to steady the ship after the midterm selloff, half: tune, relevant: true, shock: false}
+- {title: 'Heads up: Any US CPI fireworks may fizzle out as Veterans Day holiday looms', half: held, relevant: true, shock: false}
+- {title: 'investingLive European news wrap: Fed''s Waller floats case for 50 bps hike in December', half: tune, relevant: true, shock: false}
+- {title: U.S. Treasury sells $42 billion of 10 year notes at a high yield of 5.02%, half: held, relevant: false, shock: false}
+- {title: 'investingLive Americas FX news wrap 10 Nov: It’s a Wrap. Hot US CPI puts a bigger Fed hike in play', half: tune, relevant: true, shock: false}
+- {title: Australian investor home lending plunges 32% in Q3 as tax curbs and RBA hikes bite harder, half: held, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: Nvidia stock plunges after hours as New York Times reports new Jensen Huang relationship allegation, half: held, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Nvidia slides on Huang ouster reports', half: tune, relevant: false, shock: false}
+- {title: 'Heads up: UK September GDP in focus but will weak growth really stop the BOE from hiking again?', half: held, relevant: false, shock: false}
+- {title: UK Q3 GDP meets estimates as resilient growth gives BOE more room to tackle inflation, half: tune, relevant: false, shock: false}
+- {title: UK September GDP beats expectations as resilient growth keeps BOE December rate hike on track, half: held, relevant: false, shock: false}
+- {title: UK September monthly GDP +0.2% vs 0.0% m/m expected, half: tune, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: held, relevant: false, shock: false}
+- {title: 'Trump: We don’t need a deal with Iran', half: tune, relevant: false, shock: false}
+- {title: US October federal budget deficit sets a record, half: held, relevant: false, shock: false}
+- {title: 'investingLive Americas market news wrap: Jensen Huang ousted from Nvidia', half: tune, relevant: true, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Fed hike bets ripple through Asia', half: held, relevant: true, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: 'Spain inflation remains stubborn in October, keeping ECB rate hike expectations firmly alive', half: held, relevant: false, shock: false}
+- {title: Eurozone Q3 GDP second estimate +0.4% vs +0.4% q/q prelim, half: tune, relevant: false, shock: false}
+- {title: Federal Reserve Board announces approval of application by Fleur Capital Corporation, half: held, relevant: false, shock: false}
+- {title: 'Minutes of the Federal Open Market Committee, September 15-16, 2026', half: tune, relevant: true, shock: false}
+- {title: 'Federal Reserve Board announces enforcement action against American Express Company to address, among other things, the firm’s failure to sufficiently detect and report certain suspicious activity
+    related to money laundering', half: held, relevant: false, shock: false}
+- {title: 'Minutes of the Board''s discount rate meetings on August 17, September 9, and September 16, 2026', half: tune, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Treasury rally sinks dollar, lifts gold', half: held, relevant: true, shock: false}
+- {title: France inflation rises sharply in September as price pressures add to ECB rate hike dilemma, half: tune, relevant: false, shock: false}
+- {title: US inflation worries aren't over yet as PPI and retail sales pose fresh risks for markets, half: held, relevant: true, shock: false}
+- {title: US September PPI 6.3% vs 5.3% expected, half: tune, relevant: true, shock: false}
+- {title: US October Empire Manufacturing index +25.50 vs +10.25 expected, half: held, relevant: false, shock: false}
+- {title: US August business inventories +0.4% vs +0.4% expected, half: tune, relevant: false, shock: false}
+- {title: 'investingLive Americas market news wrap: Yields continue to fall even after hot PPI data', half: held, relevant: true, shock: false}
+- {title: 'New Zealand manufacturing PMI jumps to 56.5, 15th straight month of expansion', half: tune, relevant: false, shock: false}
+- {title: 'Market playbook: Is the bond market starting to worry more about US growth than inflation?', half: held, relevant: true, shock: false}
+- {title: 'investingLive European session wrap: Dollar slips as stocks steady and yields edge a little higher', half: tune, relevant: true, shock: false}
+- {title: US September import price index +1.1% vs +0.8% expected, half: held, relevant: false, shock: false}
+- {title: US September industrial production +0.7% vs +0.4% expected, half: tune, relevant: false, shock: false}
+- {title: 'Federal Reserve Board announces termination of enforcement actions with Gardner Bancshares, Inc. and Small Business Bank', half: held, relevant: false, shock: false}
+- {title: 'investingLive Americas market news wrap: Nasdaq sinks and oil jumps', half: tune, relevant: false, shock: false}
+- {title: 'Romanian F-16s shoot down two drones over Black Sea, NATO council to meet Tuesday', half: held, relevant: true, shock: true}
+- {title: US threatens EU with devastating retaliation if Brussels curbs Starlink spectrum access, half: tune, relevant: false, shock: false}
+- {title: 'China home price declines ease in September, ahead of Q3 GDP seen at 4.4%', half: held, relevant: false, shock: false}
+- {title: 'China Q3 GDP beats estimates, as does September retail sales', half: tune, relevant: false, shock: false}
+- {title: 'China Q3 GDP beats forecasts at 4.5%, retail sales grow at fastest pace since March', half: held, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: 'Economic data spotlight: UK inflation set to climb as BOE rate hike and autumn budget collide', half: held, relevant: false, shock: false}
+- {title: Canada September CPI 3.1% y/y vs 3.2% expected, half: tune, relevant: false, shock: false}
+- {title: Bank of Canada Q3 business outlook survey -0.33 vs -0.38 prior, half: held, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: China holds rates', half: tune, relevant: false, shock: false}
+- {title: 'German producer prices hit highest since March 2023 as energy costs soar, fueling inflation worries', half: held, relevant: false, shock: false}
+- {title: Germany September PPI +1.9% vs +1.5% m/m expected, half: tune, relevant: false, shock: false}
+- {title: 'UK unemployment rate falls to 4.7% as jobs rebound, keeping BOE rate hike bets intact', half: held, relevant: false, shock: false}
+- {title: US September housing starts 1.221M vs 1.305M, half: tune, relevant: false, shock: false}
+- {title: US September pending home sales -7.3% vs -0.5% expected, half: held, relevant: false, shock: false}
+- {title: 'US intel says Putin ordered NATO sabotage drive, Leipzig drone attack an opening shot', half: tune, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: RBA’s Hauser puts November hike in play', half: held, relevant: false, shock: false}
+- {title: 'Heads up: UK September CPI inflation report due today, BOE rate hike for November almost fully priced in', half: tune, relevant: false, shock: false}
+- {title: 'UK September CPI inflation rises to 3.5%, reinforces BOE November rate hike expectations', half: held, relevant: false, shock: false}
+- {title: UK September CPI +3.5% vs +3.4% y/y expected, half: tune, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: held, relevant: false, shock: false}
+- {title: 'investingLive European news wrap: Markets remain cautiously optimistic', half: tune, relevant: false, shock: false}
+- {title: US-Iran tensions refuse to fade as fresh Strait of Hormuz attacks keep oil markets on edge, half: held, relevant: true, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: US initial jobless claims 194K vs 200K estimate. Better than expected., half: held, relevant: true, shock: false}
+- {title: US treasury excels $26 billion of five-year tips at a high yield of 2.367%, half: tune, relevant: false, shock: false}
+- {title: 'Japan CPI preview: core seen at 2.1%, topping BoJ target for first time since December', half: held, relevant: false, shock: false}
+- {title: 'Australia flash PMI: private sector shrinks for first time in five months as prices rise', half: tune, relevant: false, shock: false}
+- {title: Japan September 2026 Headline CPI 2.1% y/y (expected 2.1%), half: held, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Asian stocks slide as chip rout spreads', half: tune, relevant: false, shock: false}
+- {title: France October PMI slumps back into contraction as political uncertainty weighs on demand, half: held, relevant: false, shock: false}
+- {title: 'Eurozone October PMI misses estimates as growth slows, keeping ECB rate hike dilemma alive', half: tune, relevant: false, shock: false}
+- {title: US expected to remove 50% tariffs on some Canadian products as soon as today - report, half: held, relevant: false, shock: false}
+- {title: Germany Ifo business confidence improves in October as expectations surprise higher, half: tune, relevant: false, shock: false}
+- {title: 'UK autumn budget preview: Can Healey calm markets and change BOE rate hike bets?', half: held, relevant: false, shock: false}
+- {title: 'Saudi, Pakistani, Iranian and Turkish security chiefs sit down in Tehran, agree to continue talks', half: tune, relevant: false, shock: false}
+- {title: US Treasury sells $69 billion of 2-year notes at a high yield of 4.708%, half: held, relevant: false, shock: false}
+- {title: The cost of intelligence is collapsing, half: tune, relevant: false, shock: false}
+- {title: Saudi Arabia offers cash to Houthis to stop attacks - report, half: held, relevant: false, shock: false}
+- {title: 'Goldman Sachs: AI buildout to add up to 50bp to US core PCE, but the boost is temporary', half: tune, relevant: false, shock: false}
+- {title: 'Australia CPI preview: banks see 1.0% core rise, above the RBA’s 0.8% forecast', half: held, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Regional stocks mostly rose', half: tune, relevant: false, shock: false}
+- {title: European markets face a quiet calendar today as central banks and big tech earnings loom, half: held, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: 'investingLive European news wrap: Markets remain rangebound ahead of the FOMC decision', half: held, relevant: true, shock: false}
+- {title: US October Richmond Fed -2 vs -2 expected, half: tune, relevant: false, shock: false}
+- {title: 'investingLive Asia-Pacific market news: Hawkish RBA, surprise RBNZ hold lift AUD/NZD', half: held, relevant: false, shock: false}
+- {title: Germany November GfK consumer sentiment -30.8 vs -30.9 expected, half: tune, relevant: false, shock: false}
+- {title: Germany consumer sentiment remains weak ahead of November as inflation fears cloud recovery outlook, half: held, relevant: false, shock: false}
+- {title: 'What are the main events for today?', half: tune, relevant: false, shock: false}
+- {title: US September advance goods trade balance -134.9 billion vs -130.2 billion expected, half: held, relevant: false, shock: false}
+- {title: US Wholesale inventories 0.6% vs 0.5% estimate, half: tune, relevant: false, shock: false}
+- {title: 'UK budget: Growth forecasts cut as Healey unveils £15 billion fiscal buffer', half: held, relevant: false, shock: false}
+- {title: 'Iran''s Araghchi: Iran continues to give diplomacy a chance to succeed', half: tune, relevant: false, shock: false}
+- {title: Federal Reserve issues FOMC statement, half: held, relevant: true, shock: false}
+- {title: 'investingLive Americas FX news wrap 28 Oct: Fed holds rates, yield curve steepens as Big Tech earnings diverge', half: tune, relevant: true, shock: false}
+- {title: 'Economic data spotlight: Fed rate hike bets survived Warsh, but can they survive US PCE inflation?', half: held, relevant: true, shock: false}
+- {title: Trump administration in ongoing talks for a temporary peace deal with Iran - Semafor, half: tune, relevant: false, shock: false}
+- {title: US September PCE core inflation +0.5% m/m vs +0.3% expected, half: held, relevant: true, shock: false}
+- {title: Federal Reserve Board announces approval of application by The Bank of Nova Scotia, half: tune, relevant: false, shock: false}
+- {title: 'Japan September factory output beats forecasts, but retail sales disappoint ahead of BoJ', half: held, relevant: false, shock: false}
+- {title: Spain inflation remains stubbornly high near 5% as the ECB headache gets worse, half: tune, relevant: false, shock: false}
+- {title: Italy October preliminary CPI +5.4% vs +4.6% y/y expected, half: held, relevant: false, shock: false}
+- {title: 'investingLive European session wrap: AI spending fears spook tech stocks; dollar falls alongside yields, gold', half: tune, relevant: true, shock: false}
+- {title: 'investingLive Americas FX news wrap 30 Oct: It’s a wrap: Nasdaq tumbles as AI costs worry investors; Fed speakers keep hikes in play', half: held, relevant: true, shock: false}
