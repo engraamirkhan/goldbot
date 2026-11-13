@@ -655,7 +655,7 @@ deciding:
   # 4068.7. 5m-1h equal .1 to 0.01; 4h 27.88 (.1 27.97); 1d 63.59 (.1 78.63): only 7 daily warm-up bars, so the 1d
   # figure is biased low and its cost in R high (conservative); a refill after 2026-11-06 fixes it as a .3 pin.
   pin: atr-pin-2026-11-09.2
-  cost_of_record: cor-2026-10-31.2
+  cost_of_record: cor-2026-10-31.2   # also pins the sim's gold round trip by session (costs.gold_session_rt, #146)
   pin_price_usd: 4068.7
   rt_usd: 0.230          # ICM all-in round trip: spread + commission + slippage (not GOLD_RT_USD's 0.166)
   overshoot_usd: 0.145   # measured stop overshoot, per stop leg (stop exit, stop-entry fill)

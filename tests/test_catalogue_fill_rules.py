@@ -6,7 +6,8 @@ C7  "The floor is decided once, at the signal bar, on the nominal order price (m
     Item (4): "When no twin bar exists, keep the real trade, set its control to NaN, and leave it out of the excess
     statistic only."
 
-Flat 1d gold bars: ATR20 1.5, round trip $0.166, risk floor max(0.375, 0.498) = 0.498."""
+Flat 1d gold bars (opening 21:00 UTC in January: New York's session on EST): ATR20 1.5, round trip the newyork
+cost of record cell $0.263 (backlog 146), risk floor max(0.375, 0.789) = 0.789."""
 from __future__ import annotations
 
 import numpy as np
@@ -21,12 +22,17 @@ from goldbot.research.catalogue.data import Bars
 from tests.test_catalogue_random_walk import flat_bars
 
 COL = {k: j for j, k in enumerate(SIM.TRADE_COLS)}
-RT = C.GOLD_RT_USD
+NY_RT = 0.263                    # cor-2026-10-31.2 newyork, the worse broker (Vantage): the flat bars' session
 OVER = SIM.GOLD_OVERSHOOT_USD
 
 
 def _bar(b: Bars, j: int, o: float, h: float, lo: float, c: float) -> None:
     b.o[j], b.h[j], b.l[j], b.c[j] = o, h, lo, c
+
+
+def rt(r: np.ndarray) -> float:
+    """Gold's round trip at the trade's fill instant (costs.CostModel.round_trip, backlog 146)."""
+    return C.default_model().round_trip("XAUUSD", float(r[COL["fill"]]), float("nan"), int(r[COL["t_fill"]]))
 
 
 def _one(b: Bars, eb: EB, *, control: str = "random_side", counts: dict[str, int] | None = None) -> np.ndarray:
@@ -60,22 +66,23 @@ def test_a_limit_fill_through_its_stop_exits_at_once_as_a_full_loss() -> None:
     assert r[COL["fill"]] == pytest.approx(98.5)
     assert r[COL["gross"]] == pytest.approx(-1.0)
     assert r[COL["kind"]] == 1 and r[COL["x"]] == 41
-    assert r[COL["cost"]] == pytest.approx((RT + OVER) / 1.0)
+    assert r[COL["cost"]] == pytest.approx((rt(r) + OVER) / 1.0)
 
 
 def test_a_market_order_whose_open_gaps_through_an_absolute_stop_is_a_full_loss_not_dropped() -> None:
-    """Nominal risk on the decision close: 100.0 - 99.4 = 0.6 (clears the floor); the open at 99.3 is through it."""
+    """Nominal risk on the decision close: 100.0 - 99.1 = 0.9 (clears the floor); the open at 99.0 is through it."""
     b = flat_bars()
-    _bar(b, 41, 99.3, 100.5, 99.0, 100.0)
+    _bar(b, 41, 99.0, 100.5, 98.9, 100.0)
     eb = EB()
-    eb.add(40, 1, stop=99.4, hold=2)
+    eb.add(40, 1, stop=99.1, hold=2)
     r = _one(b, eb)
-    assert r[COL["risk"]] == pytest.approx(0.6)
+    assert rt(r) == pytest.approx(NY_RT)
+    assert r[COL["risk"]] == pytest.approx(0.9)
     assert r[COL["gross"]] == pytest.approx(-1.0)
 
 
 def test_the_risk_floor_is_judged_on_the_order_price_not_on_the_fill() -> None:
-    """Order risk 0.45 (< 0.498) is not placed even though a gap would have filled it with a risk of 1.0."""
+    """Order risk 0.45 (< 0.789) is not placed even though a gap would have filled it with a risk of 1.0."""
     b = flat_bars()
     _bar(b, 41, 99.0, 100.5, 98.9, 100.0)
     eb = EB()

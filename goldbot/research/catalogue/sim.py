@@ -76,9 +76,10 @@ RISK_FLOOR_ATR_N = 20
 TWIN_DAYS = 7                    # intraday random-time twin: same time of day on one of the next 7 calendar days
 TWIN_SPAN = {"1d": 20, "1w": 8}  # daily/weekly random-time twin: one of the next N bars
 
-def round_trip(inst: str, price: float, spr: float, costs: CostModel | None = None) -> float:
-    """Round trip in price units from the cost model (EVAL-1 section 1; costs.CostModel.round_trip)."""
-    return (costs or default_model()).round_trip(inst, price, spr)
+def round_trip(inst: str, price: float, spr: float, costs: CostModel | None = None, t_ns: int | None = None) -> float:
+    """Round trip in price units from the cost model (EVAL-1 section 1; costs.CostModel.round_trip): gold's is the
+    cost of record cell of the session holding `t_ns` (backlog 146; the dearest session without one)."""
+    return (costs or default_model()).round_trip(inst, price, spr, t_ns)
 
 
 def overshoot(inst: str, rt_fallback: float) -> float:
@@ -268,7 +269,7 @@ def order_risk(b: Bars, ev: Events, k: int, a20: np.ndarray, costs: CostModel | 
     risk = side * (px - stop)
     if not np.isfinite(risk) or risk <= 0 or (np.isfinite(tgt) and side * (tgt - px) <= 0):
         return None
-    return risk if risk >= risk_floor(b.inst, px, float(b.spr[i]), float(a20[i]), costs) else None
+    return risk if risk >= risk_floor(b.inst, px, float(b.spr[i]), float(a20[i]), costs, int(b.ta[i])) else None
 
 
 def _opposite(b: Bars, start: int, side: int, fill: float, dist: float, risk: float, tgt: float, last: int,
@@ -295,19 +296,22 @@ TRADE_COLS = ("i", "f", "x", "side", "t_dec", "t_fill", "t_exit", "fill", "risk"
 def cost_price(inst: str, side: int, fill: float, spr: float, kind: int, t_fill: int, t_exit: int,
                stop_entry: bool = False, costs: CostModel | None = None) -> float:
     """Round trip + the stop overshoot on a stop exit (kind 1) and on a stop-entry fill (C10) + the C2 financing over
-    the hold (positive = paid, a credit lowers the cost; costs.CostModel.financing)."""
+    the hold (positive = paid, a credit lowers the cost; costs.CostModel.financing). Gold's round trip is the fill
+    session's (backlog 146)."""
     cm = costs or default_model()
-    rt = cm.round_trip(inst, fill, spr)
+    rt = cm.round_trip(inst, fill, spr, t_fill)
     osh = overshoot(inst, fallback_rt(inst, fill))
     c = rt + (osh if kind == 1 else 0.0) + (osh if stop_entry else 0.0)
     return c + cm.financing(inst, side, fill, t_fill, t_exit)
 
 
-def risk_floor(inst: str, fill: float, spr: float, atr20: float, costs: CostModel | None = None) -> float:
-    """Smallest tradable stop distance (price units): max(0.25 x ATR20, 3 x round trip); nan when ATR20 is unknown."""
+def risk_floor(inst: str, fill: float, spr: float, atr20: float, costs: CostModel | None = None,
+               t_ns: int | None = None) -> float:
+    """Smallest tradable stop distance (price units): max(0.25 x ATR20, 3 x round trip); nan when ATR20 is unknown.
+    `t_ns`: the decision instant, whose session prices gold's round trip (backlog 146)."""
     if not np.isfinite(atr20):
         return float("nan")
-    return max(RISK_FLOOR_ATR * atr20, RISK_FLOOR_RT * round_trip(inst, fill, spr, costs))
+    return max(RISK_FLOOR_ATR * atr20, RISK_FLOOR_RT * round_trip(inst, fill, spr, costs, t_ns))
 
 
 def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: float = 0.0,

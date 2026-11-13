@@ -98,7 +98,8 @@ def test_the_bps_round_trip_matches_the_measured_file() -> None:
             continue
         assert pinned().round_trip(inst, 100.0, float("nan")) == pytest.approx(r["rt_bps"] * 1e-2)
     assert tab["EURUSD"]["rt_bps"] == pytest.approx(0.09 + 2 * 0.362, abs=2e-3)
-    assert C.default_model().round_trip("XAUUSD", 2000.0, float("nan")) == C.GOLD_RT_USD
+    gold = C.default_model()           # backlog 146: no instant, the dearest session; never below the flat cost
+    assert gold.round_trip("XAUUSD", 2000.0, float("nan")) == max(gold.gold_session_rt.values()) >= C.GOLD_RT_USD
     if MEASURED.exists():                               # the committed table is the measured file, field by field
         doc = json.loads(MEASURED.read_text())
         assert C.build_table(doc)["instruments"] == tab

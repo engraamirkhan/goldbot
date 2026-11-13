@@ -291,16 +291,17 @@ def flat_bars(n: int = 80, *, tf: str = "1d", o: float = 100.0, h: float = 100.5
 
 def test_a_stop_inside_the_risk_floor_is_not_traded_but_counted() -> None:
     """D1: stop distance >= max(0.25 x ATR20, 3 x round trip), else the event is not a trade. Flat bars: ATR20 1.5,
-    gold round trip $0.166, floor max(0.375, 0.498) = 0.498."""
+    gold round trip at the decision instant (21:00 UTC in January: the newyork cell $0.263, backlog 146), floor
+    max(0.375, 0.789) = 0.789."""
     b = flat_bars()
     eb = EB()
-    eb.add(40, 1, stop_d=0.45, hold=1)          # inside the floor
-    eb.add(50, 1, stop_d=0.55, hold=1)          # outside it
+    eb.add(40, 1, stop_d=0.75, hold=1)          # inside the floor
+    eb.add(50, 1, stop_d=0.85, hold=1)          # outside it
     counts: dict[str, int] = {}
     tr = SIM.simulate(b, eb.build(), control="random_side", seed_key="x", counts=counts)
     assert tr[:, SIM.TRADE_COLS.index("i")].tolist() == [50]
     assert counts == {"risk_floor": 1}
-    assert SIM.risk_floor("XAUUSD", 100.0, np.nan, 1.5) == pytest.approx(3 * 0.166)
+    assert SIM.risk_floor("XAUUSD", 100.0, np.nan, 1.5, None, int(b.ta[40])) == pytest.approx(3 * 0.263)
     assert SIM.risk_floor("XAUUSD", 100.0, np.nan, 4.0) == pytest.approx(1.0)
 
 

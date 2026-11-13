@@ -285,7 +285,7 @@ def buy_hold_daily(m: Market, insts: list[str], side: int, rfrac: dict[str, floa
         if not ok.any():
             continue
         k0 = int(np.argmax(ok))
-        out[k0] -= cm.round_trip(inst, float(px[k0]), float("nan")) / (r * float(px[k0]))
+        out[k0] -= cm.round_trip(inst, float(px[k0]), float("nan"), int(tg[k0])) / (r * float(px[k0]))
         both = ok[1:] & ok[:-1]
         ret = np.where(both, px[1:] / np.where(both, px[:-1], 1.0) - 1.0, 0.0)
         fin = np.array([cm.swap_nights(inst, int(a), int(b)) * cm.debit_pct(inst, side, int(a)) / 100.0 / 365.0
