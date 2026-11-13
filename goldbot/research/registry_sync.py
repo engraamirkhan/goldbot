@@ -485,6 +485,10 @@ def save_rows(t: Transport, local: Path, *, attempts: int = ATTEMPTS, bootstrap:
 
 
 OUTBOX = "registry_outbox"      # next to the local registry (state/registry_outbox/): what the brain could not upload
+# in the outbox: when its oldest unpublished rows first waited (ISO UTC). The loop health check
+# (goldbot/ops/checks/loop.py) FAILs once that is older than its window: the Mac publish (scripts/registry_publish.sh)
+# is a manual step, and from 2026-11-07 to 11-13 rows waited six days with nothing but an INFO log line
+OUTBOX_SINCE = "pending_since"
 
 
 def _keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
@@ -498,6 +502,7 @@ def _outbox_files(outbox: Path) -> list[Path]:
 def _outbox_clear(outbox: Path) -> None:
     for p in _outbox_files(outbox):
         p.unlink(missing_ok=True)
+    (outbox / OUTBOX_SINCE).unlink(missing_ok=True)
 
 
 def _outbox_write(outbox: Path, rows: list[dict[str, Any]]) -> Path:
@@ -507,6 +512,9 @@ def _outbox_write(outbox: Path, rows: list[dict[str, Any]]) -> Path:
     data = _encode(rows)
     target = outbox / f"{hashlib.sha256(data).hexdigest()[:16]}.jsonl"
     outbox.mkdir(parents=True, exist_ok=True)
+    since = outbox / OUTBOX_SINCE    # when rows first waited: a newer payload replaces the file, not this stamp
+    if not since.exists():
+        since.write_text(datetime.now(timezone.utc).isoformat() + "\n")
     if not target.exists():
         tmp = outbox / f".{target.name}.part"
         tmp.write_bytes(data)
@@ -539,7 +547,8 @@ def _to_outbox(t: Transport, local: Path, why: Exception) -> int:
 
 def sync(local: Path, token: str, repo: str = REPO, *, attempts: int = ATTEMPTS) -> int:
     """The VPS monthly loop's sync (scheduler `sync_trials`). A token that cannot write the release leaves the pending
-    registry in the outbox (INFO, not an alert) instead of failing the sync; the Mac publishes it."""
+    registry in the outbox (INFO here) instead of failing the sync; the Mac publishes it. Health's `feedback_loop`
+    check alerts when the rows wait longer than its window (incident 2026-11-13)."""
     t = HttpTransport(token, repo)
     try:
         n = save_rows(t, local, attempts=attempts)

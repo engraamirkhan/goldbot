@@ -199,6 +199,7 @@ scheduler:
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
   limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
   daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
+  loop_check:       { kind: daily,   at: "07:05", max_late_hours: 12, run_if_never_run: true }   # R140 feedback-loop check -> `ci-loop` GitHub issue when a writer is stale or failing
   autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
   tva_scores:       { kind: daily,   at: "23:35", max_late_hours: 20 }                  # TradingView author ideas shadow score (prereg-2026-10-28 section 6), after feed_reconcile and nightly_costs
   har_days:         { kind: daily,   at: "22:05", max_late_hours: 20, run_if_never_run: true }   # N-3 HAR forecast for the next trading day from bars visible at 22:00 UTC (prereg-2026-11-07-n3-har.md); a missed night refuses learning entries (har_unavailable)

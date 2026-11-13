@@ -82,6 +82,9 @@
                     (broker, session) slippage cell after 200 fills (never cheaper within a day), a learning-ops issue on
                     an incident or two low-volume days and one comment on #34 (github-token from the keyring, else
                     state/aux/daily_review/outbox/). Changes no arm, threshold, prior, cap or the bandit.
+* loop_check        daily at 07:05 (R140, goldbot/ops/checks/loop.py): the feedback-loop check (learner weights,
+                    review files, weekly proposals read, trial-registry sync, errored jobs); when not ok, one comment a
+                    day on the `ci-loop` issue (else state/aux/daily_review/outbox/). Reads only.
 * autodisc_nightly  daily (ADR 0058 phase 2, research/autodisc/nightly.py): a bounded G2 search on the 2010-2017
                     explore window, every spec ledgered first (state/discovery_real.db), its G0 null, RC/SPA, PBO,
                     DSR, circular-shift and plateau checks -> state/autodisc/survivors-<day>.md and a health line.
@@ -1662,6 +1665,15 @@ def daily_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary(review)
 
 
+def loop_check(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """R140: the daily feedback-loop check (goldbot/ops/checks/loop.py); when it is not ok, a comment on the open
+    GitHub issue labelled `ci-loop` (or a new one) with the keyring's github-token, else the text stays in state.
+    Reads only; the health alert path carries the same check every pass."""
+    from goldbot.ops.checks.loop import run_loop_check
+    from goldbot.research.daily_review import sink_for
+    return run_loop_check(ctx.state_dir, slot, ctx.settings, sink_for(ctx.settings, ctx.get_secret))
+
+
 def autodisc_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """ADR 0058 phase 2: one bounded discovery search on the explore window (research/autodisc/nightly.py). Off unless
     research.autodisc.nightly_enabled: "the brain runs only the interpreter and the forward read"."""
@@ -1706,6 +1718,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
+    "loop_check": loop_check,                     # R140 feedback-loop check -> `ci-loop` issue (ops/checks/loop.py)
     "autodisc_nightly": autodisc_nightly,         # ADR 0058 phase 2 discovery search (off unless enabled; Mac only)
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read

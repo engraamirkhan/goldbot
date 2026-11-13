@@ -2806,3 +2806,23 @@ Confirm and holdout (design 3.3 / 3.5; each read happens once and is charged one
 5. Save the registry (`python -m goldbot.research.registry_sync save state/research_registry.jsonl`).
 A confirm or holdout passer may then become a demo arm with `python -m goldbot.ops.run autodisc-register` (default: passers only;
 `--stage explore` registers an explore survivor as a demo-learning arm, journalled as such). Nothing here touches live.
+
+### Feedback loop (`feedback_loop`, `ci-loop` issue; R140)
+
+Health check `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when a writer the learning loop depends on is stale or
+failing; the daily `loop_check` job (07:05 UTC) also comments on the open GitHub issue labelled `ci-loop` (one a day; no
+token or a failed post: `state/aux/daily_review/outbox/<day>-ci-loop.md`). "can't check <writer>" is a WARN that is also
+alerted: the state it reads is unreadable, which is never a pass. Per writer:
+- `weights`: bandit weights older than 36 weekday hours, or none for a broker whose exploration trades closed. Read
+  `job:nightly_costs` and `journalctl -u goldbot-scheduler | grep -i exploration`; the learner runs inside nightly_costs
+  (Mon-Fri 23:10). After the fix the next slot runs it.
+- `reviews`: `state/aux/daily_review/<day>.json` or Monday's `weekly-<sunday>.json` missing for its slot. Read
+  `job:daily_review`; rerun one day with `python -m goldbot.ops.run daily-review --date <day>` as the goldbot user.
+- `proposals`: a weekly roll-up with proposals nobody marked read within 8 days. The consumer (research director) calls
+  `goldbot.research.daily_review.mark_weekly_consumed`; until one is wired (BACKLOG 216) this FAILs by design.
+- `registry`: the latest job's `registry_sync` failed, or rows waited more than 36 h in `state/registry_outbox/`. The
+  brain token is read-only on purpose (decision 2026-11-01): publish from the Mac with `scripts/registry_publish.sh`
+  (reads the outbox over ssh, uploads with the Mac's gh); the brain clears the outbox on its next sync. A 403 on a GET
+  means the token lost `Contents: Read-only` too: sre re-issues it and stores it on the brain with
+  `python -m goldbot.ops.accounts set github-token`.
+- `jobs`: a job's last run errored; the same text is in `job:<name>`.
