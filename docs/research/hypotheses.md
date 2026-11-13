@@ -631,3 +631,14 @@ research director, by 2026-11-20.
 |---|---|---|---|---|
 | POS1-A1 | TREND-XASSET: TSMOM 1/3/12 and 12M, Turtle, SMA, Faber, ensembles on XAU, metals and a 13-market CFD book, 10 %/yr vol target, daily position engine, EXPLORE 2003-05 + 2010-17 | **failed** 2026-11-06 (`pos1/results-a1.md`): 0/16 t >= 2; book 026A gross +0.535 (t 1.70), financing -0.369, net SR 0.09; gold 001/015 net SR 0.40/0.48 on 18/10 round trips. Line closed: no re-run, widening, re-parameterisation or rename | 16 EXPLORE reads (registry family `pos1:trend-xasset`); K 19 for deflation | Kill rule A1.4 |
 | L1 | Gold + cross-asset daily TSMOM (1-12 month sign) with vol targeting (research-director plan 2026-11-13) | **declined** 2026-11-13 at 0 reads: duplicate of POS1-A1; the variants it adds (wider `raw/daily/long` universe, other vol targets or lookbacks) are what the A1 closure forbids. Reopen only on the new evidence in card section 2 | 0; K +0 | none (no run) |
+
+## A34. London session on history, L3 (opportunity researcher, 2026-11-13)
+
+Prereg `prereg-2026-11-13-l3-london-history.md`, frozen before any outcome is computed. The directional leg (London
+open drift, London-NY overlap, Asia range break at London) is **declined at K +0**. Every form of it is already
+retired or seen on 2010-17, and part of it on 2020-26 including the holdout (card section 1). The signal-arm London
+claim stays with H-90.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-91 | The London morning range ratio at 12:00 London (`day_type.noise_ratio`, 08:00-12:00 London over its 14-session same-minute mean) forecasts ln(NY 08:30-16:00 range / 22-session mean). It adds to the NY session's own 1- and 5-day ranges, the day HAR forecast, a tier-1 flag and the weekday. Non-directional: a stand-aside and size input for arms that already have an edge (the H-21 London refresh, never built) | **pre-registered** 2026-11-13; **runner not built** (new driver and self-test needed, card section 4); close date 2026-12-04 | explore 2010-17 K +1 (registry 174 -> 175, or 177 -> 178 with H-90); +1 confirm and +1 test_old only if reached; 0 budget slots | PASS = S1 Newey-West t >= 3.6, S2 OOS rho gain >= 0.03 with bootstrap LB > 0, S3 beats all 1,000 same-month date-shuffled placebos, S4 >= 7/8 years positive, S5 best-NY-session capture +3 pts over the base. PASS permits one confirm on 2018-01..2025-09 (the quant rules CONFIRM-SEEN first). FAIL retires H-21 as a London-to-NY predictor; no re-test on another window or cut |
