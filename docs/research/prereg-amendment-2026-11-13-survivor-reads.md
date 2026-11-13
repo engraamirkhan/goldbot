@@ -178,3 +178,28 @@ keep every exit).
 - Research director: this amendment; runs section 2 and records the verdict before any twin K row is written.
 - Evaluator: applies sections 1.2 and 3 at each look (independent, read-only).
 - Quant-reviewer: reviews the pooling unit, the spending bounds and the section 2 rule.
+
+## 8. Result of section 2 (run 2026-11-13, after commit 81529730 froze sections 0-7)
+
+`run_arm_backtest.py` at origin/main f589c94b, block 2010-01-01:2017-12-31, ICM cost of record `cor-2026-10-31.2`,
+tier-1 blackout on (859 windows). E and its 90 % interval by the section 2.3 day-block bootstrap (4,000, seed
+20261113), computed by the research director from the per-trade output (local, not published; sha256 prefixes
+Z10D a3aeb410f73f30aa, Z9D c3d1c4cf19afeebb, Z5P 287617e840aad00e, LCZ10D 2aa61fd8a6a8d658, LCZ9D 68eaa5af6bb01efe,
+LCZ5P aa5d6957585339c8).
+
+| rule | entries (control) | gross R | net R at cost of record | control net R | E | E 90 % | years E > 0 | verdict |
+|---|---|---|---|---|---|---|---|---|
+| Z10 | 14,988 (34,116) | -0.009 | -0.066 | -0.056 | -0.009 | [-0.016, -0.002] | 2 of 8 | **KILL** |
+| Z9 | 15,384 (31,266) | +0.003 | -0.055 | -0.048 | -0.006 | [-0.015, +0.003] | 2 of 8 | **KILL** |
+| Z5 | 13,964 (33,892) | +0.006 | -0.051 | -0.055 | +0.004 | [-0.004, +0.011] | 4 of 8 | **KILL** |
+
+- Descriptive: net R is -0.046..-0.067 in every session (Asia, London, New York) and on both sides for all three.
+  No session rescues them, which also answers H-90's question for these rules without reading it as H-90.
+- Reading: the three rules' gross on 2010-17 sits within +/-0.01 R of zero, the same bound H-82 found for the other
+  H-81 families. The forward +0.2-0.4 R excess over 40-58 fills was noise plus the November drift.
+- **Applied the same day, as section 2.3 requires:** Z10D, Z9D, Z5P, LCZ10D, LCZ9D and LCZ5P retire on 2026-11-13
+  (`retired_day`, `retired_rule` in `config/exploration_arms.yaml`); open positions keep every exit. The twins Z10P,
+  Z9P, Z5D and their controls are **not added to the spec**: they never enter, so no K row is written for them
+  (a row in the spec would make `record_learning_k_rows.py` write six unused K rows). Their ids stay reserved here.
+- **Section 3 is moot:** no rule is left to look at. The 5m learning class on gold now has no active arm.
+- **K:** +3 (the three reads). The six learning K rows: +0. H-90: +0.

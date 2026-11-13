@@ -43,6 +43,8 @@ RETIRED_1107 |= {"I0-XAUJPY"}
 # H-90 amendment 2026-11-13 (prereg-amendment-2026-11-13-h90-cost-budget.md): Z1P, Z2P, Z3D stopped on the cost
 # budget (cost > gross/3) before F started, with their dedicated controls
 COST_BUDGET_1113 = frozenset({"Z1P", "Z2P", "Z3D", "LCZ1P", "LCZ2P", "LCZ3D"})
+# prereg-amendment-2026-11-13-survivor-reads.md section 2: KILL on the 2010-17 replay, with their controls
+SURVIVOR_KILL_1113 = frozenset({"Z10D", "Z9D", "Z5P", "LCZ10D", "LCZ9D", "LCZ5P"})
 
 
 @pytest.fixture(scope="module")
@@ -78,9 +80,11 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
     assert all(spec[i].retired_day == "2026-11-14" for i in gold_only)
     assert all(str(spec[i].retired_day) == "2026-11-13" and "H-90 amendment 2026-11-13 cost budget" in spec[i].retired_rule
                for i in COST_BUDGET_1113)
+    assert all(str(spec[i].retired_day) == "2026-11-13" and "survivor-reads section 2 KILL" in spec[i].retired_rule
+               for i in SURVIVOR_KILL_1113)
     assert {i for i, a in spec.items() if a.retired} == \
-        set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113 | gold_only | COST_BUDGET_1113
-    for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106 - RETIRED_1113 - COST_BUDGET_1113:   # S1A/S1B: evaluator R3, read at their own read
+        set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113 | gold_only | COST_BUDGET_1113 | SURVIVOR_KILL_1113
+    for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106 - RETIRED_1113 - COST_BUDGET_1113 - SURVIVOR_KILL_1113:   # S1A/S1B: evaluator R3, read at their own read
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 
 

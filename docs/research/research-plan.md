@@ -88,7 +88,7 @@ family qualifies for scale.** icm-probe fills and balances 10-19..10-25 are excl
 | session_vwap_fade (S1A, S1B) | probe +0.21 (54, -0.09..+0.51) | ~8 an arm | H-61 per arm + A1/A2 (evaluator R3: not void) | **no A2 exemption**: retired 11-13 if < 100 an arm; else read at 300 an arm with A1. VWAP fades grossed <= 0 on 2010-2017 |
 | box family H-80 R1 (BXR*, virtual BXT*/BXF*) | no admissible fills | <1 | A2 exemption ended with the R2 FAIL | **kill now** (A2: "retired if R2 does not adopt the runner") |
 | hurst_band_break (F1A/F1C), level_break (G1A/G1C) | small n | <4 | cost arms for O-11/O-12 | **keep as cost arms** (A2 exempt) |
-| run_fade Z2P, three_horizon Z10D, extreme_break Z5P/Z5V, tick_surge Z1P, htf_reclaim Z9D | n 12-27 | <8 | H-81 + A2 | **kill at < 100, 2026-11-13** (A2) |
+| run_fade Z2P, three_horizon Z10D, extreme_break Z5P/Z5V, tick_surge Z1P, htf_reclaim Z9D | n 12-27 | <8 | H-81 + A2 | **killed 2026-11-13**: Z1P/Z2P on the cost budget (`prereg-amendment-2026-11-13-h90-cost-budget.md`); Z10D/Z9D/Z5P on the pre-registered 2010-17 replay (`prereg-amendment-2026-11-13-survivor-reads.md` section 8: excess over control -0.009 / -0.006 / +0.004 R on 14-15k entries, net -0.05..-0.07 R). H-90 closed before any leg read |
 | A2 "kill now" list (evaluator R4: S2*, S3*, MSA15, VMS15, S4, I2*, VI2*, W1*, VW1*, W2, VW2, MB*, VMB*, WFRI, specialists X*/VX*, Z8P, KA15, OBR15, KSQ1/4, DON4/DOND, C30A, PDC1/4, F2A/F2C, C30C, S6, I1, I3, W3, VS*) | < 2 a day | — | A2 | **killed** (A2 effective; the demo-reset PR retires the 68 ids; rates recorded with each retirement) |
 
 **Volume after these decisions:** ~245 admissible fills a session day (controls ~90, cost probes ~120, Z3 ~15, S1
