@@ -63,8 +63,8 @@ def test_sim_reproduces_sprint3000_fixture() -> None:
     a long gapping through its stop (filled at the open), a short hitting its target, a long held Friday -> Monday.
     Gross R must match exactly. Costs follow different conventions, so they are checked against hand values:
     sprint3000 scales the round trip by entry / reference price (bps model) and charges its measured swap with a
-    Wednesday triple; the catalogue charges the cost of record in USD (the fill session's: 22:00 UTC is Asia's $0.204, backlog 146;
-    + $0.11 overshoot on stop exits) and
+    Wednesday triple; the catalogue charges the cost of record in USD (the fill session's: 22:00 UTC is the thin hours
+    after the New York close, $0.293, backlog 146; + $0.11 overshoot on stop exits) and
     the C2 financing per 17:00 New York rollover held (see the comment below).
     This test found that an exit exactly AT 21:00 was charged that night's rollover; fixed before the run."""
     from goldbot.research.sprint3000.engine import walk as s3walk
@@ -105,10 +105,10 @@ def test_sim_reproduces_sprint3000_fixture() -> None:
     assert tr["swap_nights"].tolist() == [0, 0, 1]
     tab = load_table()["instruments"]["XAUUSD"]
     lng, sht = tab["markup_long"] / 100 / 365 * 1300.0, tab["markup_short"] / 100 / 365 * 1300.0
-    asia = 0.204                    # every fill is a 22:00 UTC daily open: after the New York close, Asia's cell
-    assert tr["cost"][0] == pytest.approx((asia + 0.11) / 5.0, abs=1e-9)              # gapped stop: overshoot
-    assert tr["cost"][1] == pytest.approx(asia / 5.0, abs=1e-9)
-    assert tr["cost"][2] == pytest.approx((asia + lng) / 10.0, abs=1e-9)
+    thin = 0.293                    # every fill is a 22:00 UTC daily open: the thin hours (dearest session, quant)
+    assert tr["cost"][0] == pytest.approx((thin + 0.11) / 5.0, abs=1e-9)              # gapped stop: overshoot
+    assert tr["cost"][1] == pytest.approx(thin / 5.0, abs=1e-9)
+    assert tr["cost"][2] == pytest.approx((thin + lng) / 10.0, abs=1e-9)
     assert sht > 0
 
 

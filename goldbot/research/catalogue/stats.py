@@ -45,7 +45,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from goldbot.research.catalogue.costs import CostModel, default_model
+from goldbot.research.catalogue.costs import CostModel, MissingCost, default_model, gold_basis_gap
 from goldbot.research.catalogue.data import DAY
 from goldbot.research.catalogue.sim import STRESS
 
@@ -378,6 +378,24 @@ def book_summary(tr: pd.DataFrame, m: Market) -> dict[str, Any]:
             "tail": _tail(tr, b), "e9": drift_guard(tr, m, b, L)}
 
 
+def net_icm_basis(tr: pd.DataFrame, net: pd.Series) -> float:
+    """Mean net R with gold priced on ICM's own cost-of-record cells: a sensitivity reported beside `net`, never gated
+    (quant review of 4571b28d: the screen charges the dearer broker; H-90 and deployment use per-broker costs). Rows
+    without an instrument column are taken as they are; NaN (not reported) when a gold fill is outside the session
+    clock (synthetic books), since the sensitivity is never gated."""
+    if "inst" not in tr.columns:
+        return float(net.mean())
+    gold = (tr["inst"] == "XAUUSD").to_numpy()
+    credit = np.zeros(len(tr))
+    if gold.any():
+        t = tr["t_fill"].to_numpy(np.int64)[gold]
+        try:
+            credit[gold] = gold_basis_gap(t, "icm") / tr["risk"].to_numpy(float)[gold]
+        except MissingCost:
+            return float("nan")
+    return float((net.to_numpy(float) + credit).mean())
+
+
 def summarize(tr: pd.DataFrame, market: Market | None = None) -> dict[str, Any]:
     """Per-trade means, the twin's excess and its t (reported; a kill only), and with `market` the EVAL-1 book
     (`book_summary`) every gate reads. Without a market the book gates cannot pass."""
@@ -391,6 +409,7 @@ def summarize(tr: pd.DataFrame, market: Market | None = None) -> dict[str, Any]:
         "n": int(n), "n_days": int(len(d)),
         "gross": float(tr["gross"].mean()), "cost": float(tr["cost"].mean()), "net": float(net.mean()),
         "net_stress": float((tr["gross"] - STRESS * tr["cost"]).mean()),
+        "net_icm_basis": net_icm_basis(tr, net),
         "excess": float(tr["excess"].mean()), "ctrl_gross": float(tr["ctrl_gross"].mean()),
         "lag_L": overlap_lag(tr),
         "t_excess_plain": _t(d.to_numpy()),

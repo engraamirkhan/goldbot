@@ -425,3 +425,21 @@ window. Harness re-frozen at `b3f14388ff0ffb10a0596d0b09465a47bd823f08`; specs.y
   `harness_commit` = 87771d81) carry over.
 - Also recorded: passing this screen does NOT meet the DESIGN gates for real money (3 positive years including
   2021-22, DSR >= 0.95 on 200+ trades); WS-5 cards are demo learning arms only.
+
+### 14a. Amendment 2026-11-13: gold cost by session (BACKLOG 146, quant review of 4571b28d)
+
+Dated after the run; it applies **only to catalogue runs at or after the commit that lands it** (branch
+feat/gold-cost-session-split). Every earlier catalogue read keeps the basis of section 5 ($0.166/oz, ICM all
+sessions; harness `b3f14388`) and is not re-labelled; a later run cites this amendment and its harness commit, and is
+not compared with an earlier one without saying so. No K, registry row, unit, config hash, threshold or window changes.
+
+- **Basis.** Gold pays the cost-of-record cell (cor-2026-10-31.2) of its fill instant's session, the dearer of the two
+  brokers, floored at $0.166: asia $0.204 (ICM, 309 fills; Vantage Asia is $0.158), london $0.293 (Vantage, 44 fills,
+  90% CI 0.158-0.45; ICM $0.164), newyork $0.263 (Vantage, 69 fills; ICM $0.166). A cell on fewer than 30 fills reads
+  no lower than its broker's pooled cell.
+- **Thin hours** (New York 17:00 to the Tokyo open: rollover, widest spreads) are in no cost-of-record cell; they pay
+  the higher of the dearest session and every broker's pooled figure ($0.293).
+- **Sensitivity.** Summaries also report `net_icm_basis`: net with gold on ICM's own cells (asia 0.204, london and
+  newyork 0.166, thin 0.204). Reported, never gated.
+- **Scope.** The dearer-broker max is a screen basis only. H-90 and deployment price each broker on its own cells,
+  never the max. The EVAL-2 deciding cost ($0.230) is unchanged.

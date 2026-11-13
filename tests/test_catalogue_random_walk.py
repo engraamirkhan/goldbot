@@ -291,12 +291,12 @@ def flat_bars(n: int = 80, *, tf: str = "1d", o: float = 100.0, h: float = 100.5
 
 def test_a_stop_inside_the_risk_floor_is_not_traded_but_counted() -> None:
     """D1: stop distance >= max(0.25 x ATR20, 3 x round trip), else the event is not a trade. Flat bars: ATR20 1.5,
-    gold round trip at the decision instant (21:00 UTC in January: the newyork cell $0.263, backlog 146), floor
-    max(0.375, 0.789) = 0.789."""
+    gold round trip at the decision instant (backlog 146): 21:00 UTC is New York's session on EST ($0.263, floor
+    max(0.375, 0.789) = 0.789) and the thin hours once the US is on EDT ($0.293, floor 0.879)."""
     b = flat_bars()
     eb = EB()
     eb.add(40, 1, stop_d=0.75, hold=1)          # inside the floor
-    eb.add(50, 1, stop_d=0.85, hold=1)          # outside it
+    eb.add(50, 1, stop_d=0.95, hold=1)          # outside it
     counts: dict[str, int] = {}
     tr = SIM.simulate(b, eb.build(), control="random_side", seed_key="x", counts=counts)
     assert tr[:, SIM.TRADE_COLS.index("i")].tolist() == [50]

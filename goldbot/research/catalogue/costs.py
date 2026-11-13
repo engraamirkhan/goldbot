@@ -14,13 +14,17 @@ As implemented
   round trip   gold (backlog 146): the cost of record cell of the fill instant's session, the worse of the brokers
                (config/cost_of_record.yaml at the version `deciding.cost_of_record` pins, else MissingCost). Sessions
                are the calendar's city clocks (goldbot.data.calendar DEFAULT_SESSIONS): asia Tokyo 08:00 (23:00 UTC) to
-               London 08:00, london London 08:00 to New York 08:30, newyork New York 08:30 to 17:00; the thin hours
-               from the New York close to the Tokyo open are asia (session_label). A broker's cell on fewer than
-               MIN_COST_CELL_FILLS (30) fills reads no lower than its pooled `all` cell, a missing cell reads the pooled
-               cell, and no session is charged less than the flat GOLD_RT_USD ($0.166, the charge before 146): no cost
-               is lowered without a measurement. cor-2026-10-31.2: asia 0.204, london 0.293, newyork 0.263 (Vantage
-               London and New York are dearer than ICM's 0.164 and 0.166). A fill without an instant pays the dearest
-               session. Others, only when the spread sample covers at least
+               London 08:00, london London 08:00 to New York 08:30, newyork New York 08:30 to 17:00. The thin hours
+               from the New York close to the Tokyo open (rollover, widest spreads) are in no cost-of-record cell
+               (cost_of_record._labels): they pay the higher of the dearest session and every broker's pooled `all`
+               figure (quant review of 4571b28d). A broker's cell on fewer than MIN_COST_CELL_FILLS (30) fills reads
+               no lower than its pooled `all` cell, a missing cell reads the pooled cell, and no session is charged
+               less than the flat GOLD_RT_USD ($0.166, the charge before 146): no cost is lowered without a
+               measurement. cor-2026-10-31.2: asia 0.204 (ICM, 309 fills; Vantage 0.158), london 0.293 (Vantage, 44
+               fills, ci90 0.158-0.45; ICM 0.164), newyork 0.263 (Vantage, 69 fills; ICM 0.166), thin 0.293. The
+               dearer-broker max is the screen's basis only: summaries report `net_icm_basis` beside it
+               (gold_basis_gap), and H-90 and deployment price each broker on its own cells. A fill without an instant
+               pays the dearest cell. Others, only when the spread sample covers at least
                MIN_MEASURED_DAYS (20) trading days on every broker it came from (quant ruling 2026-11-07: "a 3-5-day
                spread sample is NOT a pinned measurement; the fallback cost stays ... until 20 trading days have been
                measured, with the version and dates recorded"): max(measured rt_bps x price, the fill bar's Dukascopy
@@ -84,7 +88,7 @@ ROLL_HOUR = 17
 GOLD_RT_USD = 0.166              # cost_of_record cor-2026-10-31.2, ICM all sessions, round trip incl. $4.0/lot/side:
                                  # the flat charge before backlog 146, now the floor of every session's cell
 GOLD_SESSIONS = tuple(DEFAULT_SESSIONS.sessions_local)       # asia, london, newyork
-GOLD_THIN_SESSION = "asia"       # calendar session_label: the hours outside every window share Asia's liquidity
+GOLD_THIN = "thin"               # New York 17:00 to the Tokyo open (rollover, widest spreads): in no cost-of-record cell
 SESSION_CLOCK_YEARS = (1960, 2060)   # the session clock's span; an instant outside it raises MissingCost
 DAYS_PER_YEAR = 365.0            # measured file: "per night x 365 / (contract x mid)"
 SWAP_FALLBACK = 2.5              # %/yr per side, the frozen fallback where no swap is measured
@@ -404,22 +408,26 @@ def model_from_table(doc: dict[str, Any], rates: dict[str, tuple[np.ndarray, np.
                      gold_session_rt=gold_session_rt(load_cost_of_record(), str(pin)))
 
 
-def gold_session_rt(cor: dict[str, Any], pin: str) -> dict[str, float]:
+def gold_session_rt(cor: dict[str, Any], pin: str, brokers: tuple[str, ...] | None = None) -> dict[str, float]:
     """Gold's round trip per session from the cost of record (backlog 146): the worse of the brokers' cells; a cell on
     fewer than MIN_COST_CELL_FILLS fills reads no lower than its broker's pooled cell, a missing cell reads the pooled
-    cell, and every session is floored at the flat GOLD_RT_USD. Only XAUUSD cells (`cost_of_record.cell_key`: a bare
-    broker) are read. A table other than the pinned version raises MissingCost (cost versions are pinned before the
-    run)."""
+    cell, and every session is floored at the flat GOLD_RT_USD. GOLD_THIN (no cost-of-record cell holds those fills)
+    pays the higher of the dearest session and every broker's pooled figure. Only XAUUSD cells
+    (`cost_of_record.cell_key`: a bare broker) are read; `brokers` limits them (the ICM sensitivity basis). A table
+    other than the pinned version raises MissingCost (cost versions are pinned before the run)."""
     from goldbot.base import load_record
     from goldbot.research.arms import ALL_SESSIONS, MIN_COST_CELL_FILLS, CostOfRecord
     rec = load_record(CostOfRecord, cor, source="cost_of_record")
     if rec.version != pin:
         raise MissingCost(f"cost of record {rec.version} is not the pinned {pin}; the run stops")
-    out = dict.fromkeys(GOLD_SESSIONS, GOLD_RT_USD)
-    for broker, cells in rec.cells.items():
-        if ":" in broker:                              # another instrument's cells (`broker:<instrument>`)
-            continue
+    out = dict.fromkeys((*GOLD_SESSIONS, GOLD_THIN), GOLD_RT_USD)
+    read = [(b, c) for b, c in rec.cells.items()
+            if ":" not in b and (brokers is None or b in brokers)]    # `broker:<instrument>`: another instrument
+    if not read:
+        raise MissingCost(f"cost of record {rec.version}: no gold cells for brokers {brokers}")
+    for _broker, cells in read:
         pooled = cells[ALL_SESSIONS].round_trip_usd
+        out[GOLD_THIN] = max(out[GOLD_THIN], pooled)
         for s in GOLD_SESSIONS:
             c = cells.get(s)
             if c is None:
@@ -429,7 +437,23 @@ def gold_session_rt(cor: dict[str, Any], pin: str) -> dict[str, float]:
             else:
                 rt = c.round_trip_usd
             out[s] = max(out[s], rt)
+    out[GOLD_THIN] = max(out[GOLD_THIN], *(out[s] for s in GOLD_SESSIONS))
     return out
+
+
+@lru_cache(maxsize=4)
+def _basis_rt(basis: str | None) -> dict[str, float]:
+    pin = str(load_table()["deciding"]["cost_of_record"])
+    return gold_session_rt(load_cost_of_record(), pin, None if basis is None else (basis,))
+
+
+def gold_basis_gap(t_ns: np.ndarray, basis: str = "icm") -> np.ndarray:
+    """Per fill instant, what the screen's dearer-broker gold round trip adds over `basis`'s own cells ($/oz, >= 0):
+    the sensitivity a report shows beside the screen's net (quant review of 4571b28d; H-90 and deployment price each
+    broker on its own cells, never the max)."""
+    labels = gold_sessions(np.asarray(t_ns, np.int64))
+    screen, own = _basis_rt(None), _basis_rt(basis)
+    return np.array([screen[s] - own[s] for s in labels], dtype=float)
 
 
 @lru_cache(maxsize=1)
@@ -451,13 +475,26 @@ def _session_clock() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def gold_session(t_ns: int) -> str:
-    """The session holding instant `t_ns` (epoch ns UTC), as `DEFAULT_SESSIONS.session_label` names it: the window's
-    name inside [open, close), "asia" outside every window. An instant outside SESSION_CLOCK_YEARS raises MissingCost."""
+    """The session holding instant `t_ns` (epoch ns UTC): the calendar window's name inside [open, close), GOLD_THIN
+    outside every window (New York 17:00 to the Tokyo open). An instant outside SESSION_CLOCK_YEARS raises
+    MissingCost."""
     opens, closes, codes = _session_clock()
     if not opens[0] <= t_ns < closes[-1]:
         raise MissingCost(f"instant {t_ns} is outside the session clock {SESSION_CLOCK_YEARS}")
     j = int(np.searchsorted(opens, t_ns, "right")) - 1
-    return GOLD_SESSIONS[int(codes[j])] if j >= 0 and t_ns < closes[j] else GOLD_THIN_SESSION
+    return GOLD_SESSIONS[int(codes[j])] if j >= 0 and t_ns < closes[j] else GOLD_THIN
+
+
+def gold_sessions(t_ns: np.ndarray) -> np.ndarray:
+    """`gold_session` for an array of instants."""
+    opens, closes, codes = _session_clock()
+    t = np.asarray(t_ns, np.int64)
+    if len(t) and not ((t >= opens[0]) & (t < closes[-1])).all():
+        raise MissingCost(f"an instant is outside the session clock {SESSION_CLOCK_YEARS}")
+    j = np.searchsorted(opens, t, "right") - 1
+    inside = (j >= 0) & (t < closes[np.maximum(j, 0)])
+    names = np.array(GOLD_SESSIONS, dtype=object)[codes[np.maximum(j, 0)]]
+    return np.where(inside, names, GOLD_THIN)
 
 
 @lru_cache(maxsize=1)

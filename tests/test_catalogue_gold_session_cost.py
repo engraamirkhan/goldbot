@@ -2,7 +2,9 @@
 
 Design rule (costs module docstring): "gold: the cost of record cell of the fill instant's session, the worse of the
 brokers; a cell on fewer than MIN_COST_CELL_FILLS fills reads no lower than its broker's pooled cell, a missing one
-reads the pooled cell, and no session is cheaper than the flat GOLD_RT_USD"."""
+reads the pooled cell, and no session is cheaper than the flat GOLD_RT_USD". Quant review of 4571b28d: the thin hours
+(New York 17:00 to the Tokyo open: rollover, widest spreads) are in no cost-of-record cell, so they pay the higher of
+the dearest session and every broker's pooled `all` figure; an ICM-basis net is reported beside the screen's."""
 from __future__ import annotations
 
 import copy
@@ -47,7 +49,44 @@ def table(**brokers: dict[str, dict]) -> dict:
 
 # ------------------------------------------------------------------ the committed table (cor-2026-10-31.2)
 def test_an_asia_gold_fill_is_charged_the_asia_cost_of_record_of_0_204() -> None:
+    """ICM Asia 0.204 on 309 fills; Vantage Asia is cheaper (0.158)."""
     assert C.default_model().round_trip("XAUUSD", 4000.0, 0.05, ASIA) == pytest.approx(0.204)
+
+
+def test_a_thin_hours_gold_fill_pays_at_least_the_dearest_session_and_every_pooled_figure() -> None:
+    m = C.default_model()
+    thin = m.round_trip("XAUUSD", 4000.0, 0.05, ns("2026-11-10 22:30"))     # NY 17:30 EST, before the Tokyo open
+    doc = C.load_cost_of_record()
+    pooled = max(c["all"]["round_trip_usd"] for b, c in doc["cells"].items() if ":" not in b)
+    assert thin == pytest.approx(max(m.gold_session_rt[s] for s in C.GOLD_SESSIONS)) == pytest.approx(0.293)
+    assert thin >= pooled
+
+
+def test_thin_hours_are_priced_at_the_pooled_figure_when_it_is_dearer_than_every_session() -> None:
+    doc = table(icm={"asia": cell(0.18), "london": cell(0.17), "newyork": cell(0.19), "all": cell(0.25)})
+    rt = C.gold_session_rt(doc, doc["version"])
+    assert rt[C.GOLD_THIN] == pytest.approx(0.25)
+
+
+def test_the_icm_basis_reads_only_icms_cells() -> None:
+    """The sensitivity basis: ICM's own cells (Asia 0.204, London 0.164 and New York 0.166 floored at 0.166)."""
+    rt = C.gold_session_rt(C.load_cost_of_record(), C.load_table()["deciding"]["cost_of_record"], brokers=("icm",))
+    assert rt == pytest.approx({"asia": 0.204, "london": 0.166, "newyork": 0.166, C.GOLD_THIN: 0.204})
+
+
+def test_the_icm_basis_gap_is_what_the_dearer_broker_adds_per_fill_instant() -> None:
+    gap = C.gold_basis_gap(np.array([ASIA, LONDON, NEW_YORK], np.int64), "icm")
+    assert gap == pytest.approx([0.0, 0.293 - 0.166, 0.263 - 0.166])
+
+
+def test_the_trade_summary_reports_an_icm_basis_net_beside_the_screen_net() -> None:
+    from goldbot.research.catalogue import stats as S
+    tr = pd.DataFrame({c: np.zeros(2) for c in SIM.TRADE_COLS})
+    tr["t_fill"], tr["t_dec"] = np.array([LONDON, ASIA]), np.array([LONDON, ASIA])
+    tr["risk"], tr["gross"], tr["cost"] = 2.0, 0.5, 0.2
+    tr["inst"], tr["tf"] = "XAUUSD", "1h"
+    s = S.summarize(tr)
+    assert s["net_icm_basis"] == pytest.approx(s["net"] + (0.293 - 0.166) / 2.0 / 2)
 
 
 def test_london_and_new_york_gold_fills_take_the_worse_of_the_two_brokers() -> None:
@@ -75,12 +114,13 @@ def test_the_instant_never_changes_another_instruments_round_trip() -> None:
 # ------------------------------------------------------------------ the reading rule on synthetic tables
 def test_measured_session_cells_cheaper_than_the_flat_cost_are_floored_at_it() -> None:
     doc = table(icm={s: cell(0.10) for s in ("asia", "london", "newyork", "all")})
-    assert C.gold_session_rt(doc, doc["version"]) == {s: C.GOLD_RT_USD for s in C.GOLD_SESSIONS}
+    assert C.gold_session_rt(doc, doc["version"]) == {s: C.GOLD_RT_USD for s in (*C.GOLD_SESSIONS, C.GOLD_THIN)}
 
 
 def test_a_dearer_measured_session_cell_raises_the_charge_above_the_flat_cost() -> None:
     doc = table(icm={"asia": cell(0.31), "london": cell(0.17), "newyork": cell(0.18), "all": cell(0.2)})
-    assert C.gold_session_rt(doc, doc["version"]) == pytest.approx({"asia": 0.31, "london": 0.17, "newyork": 0.18})
+    assert C.gold_session_rt(doc, doc["version"]) == pytest.approx({"asia": 0.31, "london": 0.17, "newyork": 0.18,
+                                                                    C.GOLD_THIN: 0.31})
 
 
 def test_a_thin_session_cell_reads_no_lower_than_its_brokers_pooled_cell() -> None:
@@ -123,10 +163,10 @@ def test_a_gold_model_without_session_cells_fails_closed() -> None:
 @pytest.mark.parametrize(("stamp", "session"), [
     ("2026-07-15 06:59", "asia"), ("2026-07-15 07:00", "london"),           # London 08:00 BST
     ("2026-07-15 12:29", "london"), ("2026-07-15 12:30", "newyork"),        # New York 08:30 EDT
-    ("2026-07-15 20:59", "newyork"), ("2026-07-15 21:00", "asia"),          # New York 17:00 EDT, then thin hours
+    ("2026-07-15 20:59", "newyork"), ("2026-07-15 21:00", "thin"),          # New York 17:00 EDT, then thin hours
     ("2026-01-15 07:59", "asia"), ("2026-01-15 08:00", "london"),           # London 08:00 GMT
     ("2026-01-15 13:29", "london"), ("2026-01-15 13:30", "newyork"),        # New York 08:30 EST
-    ("2026-01-15 21:59", "newyork"), ("2026-01-15 22:00", "asia"),          # New York 17:00 EST
+    ("2026-01-15 21:59", "newyork"), ("2026-01-15 22:00", "thin"),          # New York 17:00 EST
     ("2026-03-10 12:30", "newyork"),                                        # US on EDT, UK still on GMT
     ("2026-01-15 23:00", "asia"),                                           # Tokyo 08:00
 ])
@@ -134,12 +174,16 @@ def test_the_session_boundaries_follow_each_citys_own_clock(stamp: str, session:
     assert C.gold_session(ns(stamp)) == session
 
 
-def test_the_session_lookup_agrees_with_the_calendars_session_label() -> None:
+def test_the_session_lookup_agrees_with_the_calendars_windows() -> None:
+    """Inside a window: the calendar's session; outside every window (the calendar labels it asia): thin."""
     rng = np.random.default_rng(146)
     lo, hi = ns("2000-01-01"), ns("2030-12-31")
     stamps = rng.integers(lo, hi, size=5000, dtype=np.int64) // 60_000_000_000 * 60_000_000_000
-    want = DEFAULT_SESSIONS.session_label(pd.DatetimeIndex(pd.to_datetime(stamps, utc=True)))
+    idx = pd.DatetimeIndex(pd.to_datetime(stamps, utc=True))
+    code, _ = DEFAULT_SESSIONS.session_windows(idx)
+    want = np.where(code >= 0, DEFAULT_SESSIONS.session_label(idx), C.GOLD_THIN)
     assert [C.gold_session(int(t)) for t in stamps] == list(want)
+    assert list(C.gold_sessions(stamps)) == list(want)
 
 
 def test_an_instant_outside_the_session_clock_stops_the_run() -> None:
@@ -164,3 +208,14 @@ def test_the_risk_floor_uses_the_decision_instants_session() -> None:
 def test_the_committed_cost_of_record_is_the_one_the_reading_rule_reads() -> None:
     raw = yaml.safe_load(C.COR_PATH.read_text())
     assert raw == C.load_cost_of_record()
+
+
+def test_the_icm_basis_net_is_unreported_not_a_crash_for_a_fill_outside_the_session_clock() -> None:
+    """Synthetic books shift fills past 2060 (random-walk walks); the sensitivity is NaN there, the screen net stands."""
+    from goldbot.research.catalogue import stats as S
+    tr = pd.DataFrame({c: np.zeros(1) for c in SIM.TRADE_COLS})
+    tr["t_fill"] = tr["t_dec"] = ns("2070-01-02 10:00")
+    tr["risk"], tr["gross"], tr["cost"] = 2.0, 0.5, 0.2
+    tr["inst"], tr["tf"] = "XAUUSD", "1h"
+    s = S.summarize(tr)
+    assert np.isnan(s["net_icm_basis"]) and s["net"] == pytest.approx(0.3)
