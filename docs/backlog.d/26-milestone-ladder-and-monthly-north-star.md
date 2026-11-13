@@ -3,7 +3,7 @@ number: 26
 title: Milestone ladder and monthly north-star / % / R report (ADR 0004)
 stage: Performance review, capital growth · RUN
 size: S–M
-status: 'backend done (PR #71, main 423d2b1; d893f60); card, Telegram line and capture KPI parked: no trades until 1'
+status: 'backend done (PR #71); card, Telegram line and capture KPI retired: reporting polish, no P&L effect (triage 2026-11-13)'
 ---
 - **26. Milestone ladder and monthly north-star report.** Value: reports progress the way ADR 0004 decided:
   monthly averages and distributions, never a daily quota (Performance review · RUN). Acceptance:

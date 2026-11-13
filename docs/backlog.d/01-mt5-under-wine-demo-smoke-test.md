@@ -1,10 +1,9 @@
 ---
 number: 1
-rank: 1
 title: MT5-under-Wine demo smoke test on Oracle
 stage: Operational resilience, execution · RUN
 size: S
-status: 'in progress (`lane/claude-run-deploy`, plan ccef822) · W1-1 bridge smoke accepted with follow-up 2026-10-17 by the product owner (a9e3274: trading-safety APPROVE c399976, security PUSH-OK, SRE APPROVE; gates green at ab671be; tests/test_smoke.py re-run pass); open: the smoke has never run against the demo terminal (ROADMAP W1-1 run Mon 2026-10-26) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE'
+status: 'done (triage 2026-11-13): demo trading through the Wine MT5 bridge on Oracle since 2026-10-26 (PR #169, #189, #195; bridge v7 PR #213)'
 ---
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later

@@ -1,10 +1,9 @@
 ---
 number: 27
-rank: 7
 title: Broker contract terms recorded from the demo terminal (ADR 0004)
 stage: Execution, position sizing · RUN
 size: S
-status: 'in progress (leverage, margin, stop-out, contract and volume read from the terminal 2026-10-16; swap, commission or Raw Spread, negative-balance protection and the collector file still open) · accountable: sre · due 2026-10-20'
+status: 'done (triage 2026-11-13): terminal terms read 2026-10-16 (measure_broker_terms); swap and commission measured by the cost of record (PR #238, #240) and swap modes (PR #359)'
 ---
 - **27. Broker contract terms recorded.** Value: replaces the ADR's unverified leverage, minimum lot, step, contract
   size and stop-out level with the terminal's own values (Execution · RUN). Acceptance:

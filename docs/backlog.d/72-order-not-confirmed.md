@@ -1,10 +1,9 @@
 ---
 number: 72
-rank: 6
 title: 'NOT CONFIRMED: an ambiguous order result is resolved against the broker and the owner told'
 stage: Execution and reconciliation (sent orders, entry outcome truth) · PROTECT · RUN
 size: M
-status: 'planned (architect plan d8de4ad, trading-safety conditions 1-7 taken in aaf0fd0, owner copy bbd96c7, decisions cc790d5) · next: build after 71 is accepted (same files), tests/test_order_not_confirmed.py first · accountable: implementer · due 2026-10-27'
+status: 'done (triage 2026-11-13): PR #88 (94f0a5a9, 8a2102b4); resolution field in PR #349'
 ---
 - **72. NOT CONFIRMED: an ambiguous order result is resolved against the broker and the owner told
   (docs/ux/order-not-placed.md open point 1).** Decided 2026-10-17 by program director + product owner (owner

@@ -3,7 +3,7 @@ number: 53
 title: The phase gates compare paper and live with the deployed model's own trial
 stage: Roadmap gates (P7) · VERIFY
 size: M
-status: 'parked: matters only once a model is deployed and promoted; no champion exists'
+status: 'retired (triage 2026-11-13): no promoted model exists and the population loop retires (142 (a))'
 ---
 - **53. The phase gates compare paper and live with the deployed model's own trial (review of 978c667,
   2026-10-12).** Value: `gates_phase.evaluate_gates` takes its backtest reference for `paper_expectancy`

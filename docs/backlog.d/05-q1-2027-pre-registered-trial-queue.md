@@ -1,10 +1,9 @@
 ---
 number: 5
-rank: 11
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: 'in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14'
+status: 'retired (triage 2026-11-13): the Q1 2027 queue was superseded by the 2026-11 sprint screens and the EVAL-2 pipeline (ADR 0076, PRs #344-#358)'
 ---
 
 ### 5. Q1 2027 pre-registered trial queue

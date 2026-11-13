@@ -3,7 +3,7 @@ number: 52
 title: Approvals keep only the decision channel on disk and in the API
 stage: Execution and risk (approvals) · SECURE
 size: S
-status: 'done (04f6266, 3817db7, c7ea0e3, eba16e3 shipped in PR #79; d2ecb8f on the integration branch, next PR) · security re-verify PASSED 2026-10-16 (d2ecb8f fixes both LOWs, 4 passed, branch scan 0 secrets, PUSH-OK) · trading-safety-reviewer APPROVE 2026-10-16 at 626b56b (money path unchanged, 127 passed at -n 2) · follow-up: dashboard audit after submit (app.py:617) in the F60 lane · accountable: security-reviewer'
+status: 'done (PR #79; d2ecb8f in PR #83)'
 ---
 - **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
   record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:

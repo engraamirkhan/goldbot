@@ -3,7 +3,7 @@ number: 13
 title: Bounded spawning (`gap_watch`) and the 4h founder path
 stage: Learning and adaptation · FIND
 size: M–L
-status: 'done in part (PR #63, main 5f7da74; aad8f99, e17f047); 1d parked'
+status: 'done in part (PR #63); rest retired (triage 2026-11-13): gap_watch retires in 142 (a); 1d runs through WS-4 (144)'
 ---
 
 ### 13. Bounded spawning and the 4h founder path

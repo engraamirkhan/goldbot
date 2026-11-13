@@ -3,7 +3,7 @@ number: 31
 title: 'Runner exits: let winners run on opportunity days (ADR 0004 north star)'
 stage: Trade management, exit · FIND
 size: S–M
-status: 'parked: hypothesis for Q2 2027 trial budget; needs 30'
+status: 'retired (triage 2026-11-13): runner exits re-enter only as a pre-registered catalogue spec under EVAL-2; the 30b classifier it needed is retired'
 ---
 - **31. Runner exits (hypothesis; quant and trading-safety review).** Value: a £50 day at £1,000 is a ~6 R winner;
   only trailing or scale-out exits catch those (FIND). Acceptance:

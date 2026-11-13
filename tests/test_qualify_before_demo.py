@@ -72,7 +72,9 @@ RETIRED_1106 = {f"{f}{tf}" for f in ("BXR", "BXT", "BXF") for tf in ("15", "30",
 RETIRED_1107 = {"S0-XAUJPY"}
 # retired 2026-11-09 (prereg-amendment-2026-11-10-execution-controls.md section 9): its cost cell complete (rule 4)
 RETIRED_1109 = {"I0-XAUJPY"}
-RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114
+# retired 2026-11-13 (prereg-amendment-2026-11-13-h90-cost-budget.md): cost budget, with their controls
+RETIRED_1113_COST = {"Z1P", "Z2P", "Z3D", "LCZ1P", "LCZ2P", "LCZ3D"}
+RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114 | RETIRED_1113_COST
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:
