@@ -611,7 +611,8 @@ one of >= 9 cuts); the discovery fills never count.
 ## A32. Pooled gold trend, hours-to-days holds (principal quant strategist, 2026-11-13)
 
 Card `prereg-2026-11-13-hd1-pooled-trend-holds.md` (line HD-1). Numbering: A31 is taken twice already on open
-branches (`research/l1-daily-trend-voltarget` and `research/l3-london-history`, H-91), so this is A32 / H-92.
+branches (`research/l1-daily-trend-voltarget` and `research/l3-london-history`, H-91), so this is A32 / H-92 (those two
+were renumbered A33 and A34 at integration, 2026-11-13).
 Evidence in `cost-budget-audit-2026-11-13.md`. The 1m/5m arms fail the speed limit on the history prior. Z2P, Z3D and
 Z1P fail it on forward point estimates too: stopping them is proposed as an H-90 amendment, for the research
 director to decide.
@@ -619,3 +620,14 @@ director to decide.
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-92 | One pooled trend forecast on XAUUSD: the `tsmom` specialist at #16 defaults, 1h decisions every 4 h, 1.5 ATR(1h) stop = 1 R, 2 R target, 48-bar time exit, one position, long and short, fixed risk. Flat through tier-1 news: no entry T-60..T+30 min, close at T-5 min. Claim: gross >= 3x full cost (`cor-2026-10-31.2` in bps, plus point-in-time W3.3 swap), random-side excess >= 0, net > 0 in 2019-21 and on shorts (short credit capped at 0), and net > 0 on TEST-OLD 2008-09. Re-opens R-06/R-10 on named new evidence (bps cost basis, W2/eval2 replaced the DSR bar, the cost-budget gate); signal seen on 2010-25. Prior low (2018-25 premium about +0.02 R net) | **declined by the research director 2026-11-13, K +0**: no registry rows, no code, not run. Its own seen numbers already fail the speed limit in 2018-25 (net about +0.02 R + cost about 0.026 R = gross about 0.046 R; cost/gross 0.57 > 1/3); R-06/R-10 stay closed | K +4 (L, C, T, F); 5 registry rows with HD1C | L (2010-17) and C (2018-25.09) **kill-only**: any of net <= 0, cost > gross/3, excess < 0, too few positive years, 2019-21 net <= 0 (C), short net <= 0 -> retired. T (2008-09, once): n >= 100, net > 0, day-t >= 1.28, speed limit. F (HD1 vs HD1C): 100 fills cost check + futility, 300 CONTINUE (excess t >= 1), 1,000 PASS (t >= 2), demo volume only. FAIL retires gold-only 1h-2d trend as a stand-alone line |
+
+## A33. Daily trend with volatility targeting (principal quant strategist, 2026-11-13)
+
+Card `prereg-2026-11-13-l1-daily-trend.md`. Ledger fix in the same change: POS-1 A1 (2026-11-06) had no row here.
+Owed: its R-table row needs `research.retired_families` in `config/settings.yaml` too (`tests/test_director.py`);
+research director, by 2026-11-20.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| POS1-A1 | TREND-XASSET: TSMOM 1/3/12 and 12M, Turtle, SMA, Faber, ensembles on XAU, metals and a 13-market CFD book, 10 %/yr vol target, daily position engine, EXPLORE 2003-05 + 2010-17 | **failed** 2026-11-06 (`pos1/results-a1.md`): 0/16 t >= 2; book 026A gross +0.535 (t 1.70), financing -0.369, net SR 0.09; gold 001/015 net SR 0.40/0.48 on 18/10 round trips. Line closed: no re-run, widening, re-parameterisation or rename | 16 EXPLORE reads (registry family `pos1:trend-xasset`); K 19 for deflation | Kill rule A1.4 |
+| L1 | Gold + cross-asset daily TSMOM (1-12 month sign) with vol targeting (research-director plan 2026-11-13) | **declined** 2026-11-13 at 0 reads: duplicate of POS1-A1; the variants it adds (wider `raw/daily/long` universe, other vol targets or lookbacks) are what the A1 closure forbids. Reopen only on the new evidence in card section 2 | 0; K +0 | none (no run) |
