@@ -299,6 +299,16 @@ research:
   recal_prior_trades: 200            #   the validated calibration counts as this many trades (prior weight)
   recal_max_shift: 0.05              #   a probability is at most this far from the validated calibrator
   recal_window_days: 182             #   outcomes (every candidate, taken or not) exited within this window
+  specialist_retrain: false          # Saturday LightGBM retrain of the specialists: retired 2026-11-13 (ML review: shadow
+                                     #   AUC 0.44 on 145 trades, Brier 0.206 vs 0.197 base rate, 0 live agents, stalled
+                                     #   25 days). Challengers in shadow are still judged; recalibrate/drift/decay still run
+  exploration:                       # nightly exploration learner (docs/research/ml-review-2026-11-13.md)
+    allocator: equal                 # demo arm shares: equal among enterable arms inside the 5 % floor / 30 % cap and each
+                                     #   arm's ceiling. `thompson` (H-61) stays selectable: it scored +0.085 R next day
+                                     #   against equal's +0.086, rank correlation 0.003 over 24 broker-days
+    meta_labeller: false             # H-62 Sunday retrain: retired 2026-11-13 (0 model rows, no candidate trainable)
+    feature_snapshots: true          # default-feature vector of every gold candidate, point in time, from stored bars
+    snapshot_max_decisions: 600      #   decision bars a night (newest first; the backlog fills over later nights)
   lot_fit_equity: 1000               # H-27 lot-fit overlay (research/lot_fit.py, opt-in, reporting only): the account the
   lot_fit_acct_per_usd: 0.75         #   research sizes trades for, in its currency; GBP per USD (GBPUSD ~1.33), a research
                                      #   assumption (the engine reads the broker's figure). Trades the gate would refuse

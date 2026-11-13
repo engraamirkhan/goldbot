@@ -30,6 +30,9 @@ def _evidence(db: Database, arms: dict[str, float]) -> None:
 
 
 def _learn(db: Database, configured: dict[str, str], **kw: object) -> dict[str, float]:
+    """The exclusions apply before either allocator; these cases pin them on the (selectable) Thompson bandit, whose
+    shares depend on the evidence, so a retired arm's good results visibly earn it nothing."""
+    kw = {"allocator": "thompson", **kw}
     rep = ex.learn(db, broker="icm", as_of=AS_OF, arms=configured, seed=1, **kw)  # type: ignore[arg-type]
     return rep["weights"]
 

@@ -392,7 +392,8 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
         note = "the broker returned no M1 bars in the window (market closed or terminal disconnected)"
     note = "; ".join(x for x in (note, fetch_note) if x)
     if not bb.empty:
-        store.append(BROKER_TABLE, bb, source=account_id, symbol=symbol)
+        # available_utc = the write time (wall clock, not `now`): point in time for every reader of these minutes
+        store.append(BROKER_TABLE, bb.assign(available_utc=pd.Timestamp.now("UTC")), source=account_id, symbol=symbol)
     if events:
         store.append("dq_events", events_frame(events), source=account_id, symbol=symbol, dedupe=False)
     rep = ReconcileReport(account_id=account_id, ts_utc=pd.Timestamp(now), window_from=start, window_to=end,

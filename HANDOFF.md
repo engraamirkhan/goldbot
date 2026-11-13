@@ -72,6 +72,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   leaves those fields empty and the row is still written; older rows read None. Reading them in reports is backlog 195.
   No exit, cap, RiskGate rule or size changed.
 - **Feedback-loop health check (R140, 2026-11-13, branch feat/loop-health-check).** Health `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when the learner's bandit weights are older than 36 weekday hours, a daily or weekly review file is missing for its slot, weekly proposals stay unread 8 days, the latest trial-registry sync failed or registry rows wait more than 36 h in `state/registry_outbox/`, or a job's last run errored; unreadable state is an alerted "can't check" WARN. The daily `loop_check` job (07:05 UTC) comments on the `ci-loop` issue. Root cause of the registry 403: the brain token is read-only by decision (2026-11-01) and the Mac publish is manual; nothing alerted (incident docs/incidents/2026-11-13-registry-sync-silent.md). Expect `feedback_loop` to FAIL on the brain at deploy (outbox since 11-07, unread weekly proposals) until BACKLOG 215-217 land. RUNBOOK "Feedback loop".
+- 2026-11-13, ML review cleanup (branch feat/ml-cleanup-snapshots; R143; BACKLOG 227-230; ADR 0080;
+  `docs/research/ml-review-2026-11-13.md`). Four changes, none on the order path.
+  - **Arm shares.** The nightly exploration learner now writes equal shares among each style's enterable arms; an arm
+    with no fill yet keeps the cold-start floor. The 5 % floor, the 30 % cap and each arm's own ceiling are
+    unchanged, and retired or not-configured arms stay at 0.
+    The settings switch is `research.exploration.allocator: equal`; the Thompson bandit stays selectable as
+    `thompson`. The evidence: bandit +0.085 R against equal +0.086 R, rank correlation 0.003.
+  - **H-62 meta-labeller.** Its Sunday retrain is retired (`research.exploration.meta_labeller: false`; 0 model rows,
+    nothing trainable).
+  - **Specialist retrain.** The Saturday LightGBM retrain of the specialists is off (`research.specialist_retrain:
+    false`; shadow AUC 0.44 on 145 trades, Brier worse than the base rate, 0 live agents). Challengers already in shadow
+    are still judged. The recalibrate, drift and model-watch jobs are unchanged.
+  - **Feature snapshots.** `nightly_costs` now ends with point-in-time default-feature snapshots of the gold
+    exploration candidates (`goldbot/research/feature_snapshots.py`).
+    - The bars are the account's stored minutes visible by each decision.
+    - It runs up to 600 decision bars a night, newest first.
+    - The rows go to aux.db migration 32 (`exploration_feature_vectors` / `exploration_feature_snapshots`).
+    - The engine never reads them.
+    - The job reports `coverage_1d`.
+  - Quant review follow-up:
+    - Snapshots are point in time by write time. The engine's minute writer and the broker-M1 reconcile now store
+      `available_utc`; rows read from minutes without one are marked `pit = nominal`.
+    - Batches are shared fairly across accounts, with retry dates for stuck accounts and 3 retries for a short history.
+    - Each snapshot equals `engine.frames.frame` on the same minutes.
+    - Cold arms keep the cold-start floor under equal shares.
 - 2026-11-13 (branch feat/monthly-review, on top of feat/weekly-review; R142; BACKLOG 223-226; review loop item 3):
   a daily `monthly_review` scheduler job (06:30 UTC, goldbot/ops/monthly_review.py) reviews the UTC calendar month
   before its slot: built on the 1st, or on a later tick within `monthly_review.catch_up_days` (10) when the 1st was
