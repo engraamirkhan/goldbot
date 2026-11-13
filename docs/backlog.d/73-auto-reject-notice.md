@@ -3,7 +3,7 @@ number: 73
 title: Auto-mode broker refusals reach the owner, at most once per cause per hour
 stage: Execution and approvals (auto mode) · PROTECT · RUN
 size: S
-status: 'parked 2026-10-17 (product owner): auto mode is off (default propose) and is only offered after 100 decided proposals (A10), so no auto reject can happen yet; re-enters the table, ranked above any other notice work, when the decided-proposal count reaches 80 or before anyone switches /mode auto, whichever comes first · accountable: implementer · due: set on re-entry'
+status: 'retired (triage 2026-11-13): demo enters automatically (ADR 0036) and silent entry paths raise the entry-silence alert (PR #357); real money keeps confirmation'
 ---
 - **73. Auto-mode broker refusals reach the owner, at most once per cause per hour (docs/ux/order-not-placed.md open
   point 2).** Decided 2026-10-17 by program director + product owner (owner delegated): accepted, parked. Value (RUN,

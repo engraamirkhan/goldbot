@@ -1,10 +1,9 @@
 ---
 number: 74
-rank: 10
 title: The risk file notes schema skew on unknown keys (ADR 0010 gap)
 stage: Execution and reconciliation (persisted risk state) · PROTECT
 size: S
-status: 'ready after the ADR 0023 step-1 move (architect addendum A1, 2026-10-17) · own PR in engine/store.py before step 2 · reviews: trading-safety, code-reviewer · accountable: implementer · due 2026-11-06'
+status: 'done (triage 2026-11-13): PR #88 (f91d175a, 04e32de8)'
 ---
 - **74. The risk file notes schema skew on unknown keys (ADR 0010 gap).** Value: `_load_risk_state` ignores keys it
   does not know without calling `note_schema_skew`, while the orders loader already notes them (runner.py ~2500); a

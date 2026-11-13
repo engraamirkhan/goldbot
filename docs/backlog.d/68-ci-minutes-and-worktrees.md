@@ -1,10 +1,9 @@
 ---
 number: 68
-rank: 9
 title: 'Release hygiene: explain the CI-minutes record; clean up and retire worktrees'
 stage: Engineering operations (CI cost, disk) · RUN
 size: S
-status: 'ready (decided 2026-10-16 from the CFO budget and the CTO tech-debt list) · accountable: release-manager · due 2026-10-19 (worktrees), 2026-10-23 (CI minutes)'
+status: 'retired (triage 2026-11-13): the CI-minutes question is moot (public repo); worktree clean-up is scripts/prune_worktrees.sh'
 ---
 - **68. Release hygiene: CI minutes and worktrees.** Decided 2026-10-16 by program director + product owner.
   Value (RUN): (d) decides whether PR #81's saving of about 900 minutes a month is cash or only headroom, which the

@@ -3,7 +3,7 @@ number: 33
 title: Opportunity-day evaluation for research trials (£/day distribution, days captured)
 stage: Performance review · FIND
 size: S–M
-status: 'parked: needs 20 and 26 results, which need trades'
+status: 'retired (triage 2026-11-13): the EVAL-2 verdict (ADR 0076) and the profitability reads report the per-day distribution'
 ---
 - **33. Opportunity-day evaluation for research trials (quant review; read-only).** Value: the north-star KPIs of
   item 26 applied to research trials and the shadow book, so a hypothesis is judged the way the owner states the

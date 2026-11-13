@@ -3,7 +3,7 @@ number: 30
 title: 'Opportunity-day detection: day-type / regime classifier (ADR 0004 north star)'
 stage: Market preparation, selectivity · FIND
 size: M
-status: '30a done (PR #73, main d28a482; 71e9092); 30b and the trials parked: Q2 2027 budget, enable only after H-16'
+status: '30a done (PR #73); 30b and its trials retired: opportunity-day signals screened in PR #263; N-3 HAR (145) is the range filter (triage 2026-11-13)'
 ---
 - **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
   days the market offers moves and standing aside otherwise (FIND). Acceptance:

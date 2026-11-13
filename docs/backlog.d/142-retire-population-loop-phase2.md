@@ -1,10 +1,10 @@
 ---
 number: 142
-rank: 8.9
+rank: 13
 title: Retire the population loop, decide the news shock blackout, prune offline research code (cleanup phase 2)
 stage: 'Operations and research hygiene (ADR 0066 phase 2) · PROTECT · RUN'
 size: M
-status: 'ready 2026-11-02 (phase 1 = ADR 0066 cleanup release) · accountable: architect (plan), then implementer · reviews: trading-safety-reviewer, quant-reviewer, code-reviewer · due 2026-11-09'
+status: 'ready (phase 1 done, PR #294, #298); (b) is decided by PD+PO after trading-safety review (keyword rule or retire the shock rail); only funding a key stays owner-only · accountable: architect (plan), then implementer · reviews: trading-safety-reviewer, quant-reviewer, code-reviewer · due 2026-11-27 (triage 2026-11-13)'
 ---
 - **142. Retire the population loop, decide the news shock blackout, prune offline research code (cleanup phase 2).** Value: RUN. ADR 0066 phase 1 removed the feeds and screens that nothing reads. Phase 2 removes the scheduled research machinery that no live strategy depends on. It also settles one safety rail that only looks active: the news shock blackout (D16) has never fired, because 4,764 polls in 30 days were all stored `scored: 0` (no Anthropic key is set). The scheduler, health and the deploy health window then watch only jobs that serve the main goal (ADR 0004; owner directive 2026-11-02, double capital weekly with net-profitable strategies). It helps neither FIND nor RUN an edge directly. It lowers the cost of running one: fewer jobs that can fail, wake the host or hide a real WARN. Expected profit impact is indirect and uncertain.
 

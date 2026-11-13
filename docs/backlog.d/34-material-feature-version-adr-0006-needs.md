@@ -1,6 +1,6 @@
 ---
 number: 34
-status: 'parked: waits on the owner''s ADR 0006 ruling (Needs the owner)'
+status: 'retired (triage 2026-11-13): the tournament it protected retires in 142 (a) and EVAL-2 hashes its harness; no owner ruling needed'
 ---
 - **34. Material feature version (ADR 0006; needs the owner's sign-off).** Value: a feature correction voids research
   evidence and forces legacy rebuilds only for the models that read the corrected columns. Acceptance:

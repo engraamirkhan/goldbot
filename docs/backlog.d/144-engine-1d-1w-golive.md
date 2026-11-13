@@ -1,10 +1,10 @@
 ---
 number: 144
-rank: 52
+rank: 8
 title: 1d/1w engine go-live blockers (WS-4)
 stage: Engine · BUILD
 size: M
-status: 'proposed 2026-11-07 (WS-4 shipped dark; trading-safety APPROVE to ship dark) · accountable: implementer'
+status: 'ready (WS-4 shipped dark, PR #341) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-27 (triage 2026-11-13)'
 ---
 - **144. 1d/1w engine go-live blockers (WS-4).** Value: WS-4 lets the engine run 1d and 1w exploration arms
   (`goldbot/engine/long_bars.py`), but it ships dark and the settings validator (`EngineSettings.timeframes_live`,
