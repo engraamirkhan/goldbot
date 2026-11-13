@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import sqlite3
 import sys
@@ -46,6 +45,7 @@ from typing import Any
 import pandas as pd
 
 from goldbot.data import quarantine as qr
+from goldbot.data.compact import written_utc
 from goldbot.data.crossfeed import broker_m1_bars
 from goldbot.data.store import Store
 
@@ -59,9 +59,10 @@ BRIDGE_ACCOUNT = "icm-demo"
 
 
 def ahead(path: Path, rows: pd.DataFrame) -> pd.Series:
-    """Rows in [LO, HI) stamped more than AHEAD after their part file was written."""
+    """Rows in [LO, HI) stamped more than AHEAD after their part file was written (per row: a compacted part keeps
+    each row's original part mtime, backlog 179 `written_utc`)."""
     ts = pd.to_datetime(rows["ts_utc"], utc=True)
-    written = pd.Timestamp(os.path.getmtime(path), unit="s", tz="UTC")
+    written = pd.Series(written_utc(path).to_numpy(), index=rows.index)
     return (ts >= LO) & (ts < HI) & (ts > written + AHEAD)
 
 

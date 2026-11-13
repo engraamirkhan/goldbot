@@ -256,3 +256,48 @@ def test_job_defaults_without_settings_still_compact_decisions(tmp_path: Path) -
     _seed(store)
     out = journal_compact(SimpleNamespace(store=store), NOW)  # type: ignore[arg-type]
     assert out["tables"]["fills"]["partitions"] == 1 and "ticks" not in out["tables"]
+
+
+def test_the_parts_report_measures_every_folder_read_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import importlib.util
+    import json
+    path = Path(__file__).resolve().parents[1] / "scripts" / "store_parts_report.py"
+    spec = importlib.util.spec_from_file_location("store_parts_report_179", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    store = Store(tmp_path)
+    _seed(store)
+    files = sorted(tmp_path.rglob("*.parquet"))
+    assert mod.main(["--data-root", str(tmp_path), "--tables", "ticks", "fills"]) == 0
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    tick = next(x for x in lines if x["table"] == "ticks")
+    assert tick["closed_parts"] + tick["open_parts"] == 9 and tick["rows"] == tick["read_rows"] == 240
+    assert tick["biggest_closed_month"]["rows"] == 200 and "read_s" in tick
+    assert sorted(tmp_path.rglob("*.parquet")) == files
+
+
+def test_the_tz_quarantine_selector_still_finds_ahead_rows_after_compaction(tmp_path: Path) -> None:
+    """The 2026-10-26 selector (rows stamped > 30 min after their part was written) reads each row's original write
+    time, so a compacted month selects the same rows as its parts did."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "quarantine_tz_ticks_2026_10_26.py"
+    spec = importlib.util.spec_from_file_location("quarantine_tz_script_179", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    store = Store(tmp_path)
+    for t0, seed in (("2026-10-26 01:00", 0), ("2026-10-26 02:00", 1), ("2026-10-26 03:00", 2)):
+        store.append("ticks", _ticks(t0, 10, seed=seed), source=ACC, dedupe=False)
+    parts = sorted(_parts(store, "ticks", ACC, "XAUUSD", 2026, 10),
+                   key=lambda p: pq.read_table(p).column("ts_utc")[0].as_py())
+    for p, wrote in zip(parts, ["2026-10-26 00:00", "2026-10-26 02:05", "2026-10-26 03:05"]):
+        ns = pd.Timestamp(wrote, tz="UTC").value      # the first part was written an hour before its stamps
+        os.utime(p, ns=(ns, ns))
+    picked = sum(int(mod.ahead(p, pq.read_table(p).to_pandas()).sum()) for p in parts)
+    compact_table(store, "ticks", before=NOW)
+    (new,) = _parts(store, "ticks", ACC, "XAUUSD", 2026, 10)
+    rows = pq.read_table(new).to_pandas()
+    sel = mod.ahead(new, rows)
+    assert picked == 10 and int(sel.sum()) == 10
+    assert rows.loc[sel.to_numpy(), "ts_utc"].min() == pd.Timestamp("2026-10-26 01:00", tz="UTC")
