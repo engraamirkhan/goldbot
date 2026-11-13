@@ -48,6 +48,11 @@ Sunday reopen belongs to Monday; default the month so far); trades are in the ra
   sections above are exactly what they were; a trade in both sources (same account and broker position) is counted
   once, in the record. Same honesty rules: net only where commission and swap are both recorded, no interval under
   MIN_TRADES net R, and the groups count in the multiple-groups note.
+* their excursions (BACKLOG 195, R135 `mfe_r` / `mae_r` / `mfe_usd` / `mae_usd` / `excursion_approx` on the closed
+  exploration body), per family and per arm: median MFE and MAE in R with n, the losers' median MFE (the move the
+  bracket gave back), the winners' median MAE (how near the stop came), and the stop exits' share of the stop and
+  target exits against the bracket's driftless random-walk null target / (stop + target). Rows closed before R135 are
+  "not recorded" and never read as 0 R; approximate rows have their own medians. Descriptive: no interval, no reading.
 
 Design rule (the brief to the performance-analyst): "sample sizes everywhere, with no conclusion drawn from fewer than
 ~30 trades". Every figure carries its count; an interval and a reading ("mean R above zero") are given only from
@@ -285,6 +290,36 @@ class JournalReport(FrozenRecord):
     orders_failed: int
 
 
+class ExcursionStats(FrozenRecord):
+    """BACKLOG 195: one arm's or family's MFE / MAE (R135, the closed exploration body), over its countable closes.
+
+    Rows closed before R135 carry no fields and are counted `not_recorded`, never read as 0 R; `excursion_approx`
+    rows (part of the path from the 1m bars: a restart, an adoption) have their own medians and count and never enter
+    the exact ones. Descriptive only: no interval, no reading, not counted in the groups note."""
+    key: str
+    trades: int                            # countable closes (censored and voided left out, as in the tables)
+    recorded: int                          # exact MFE and MAE in R
+    approx: int                            # excursion_approx, apart
+    not_recorded: int                      # older rows, or no R pair (the initial stop was not the trade's)
+    mfe_r_median: float | None = None
+    mae_r_median: float | None = None
+    approx_mfe_r_median: float | None = None
+    approx_mae_r_median: float | None = None
+    losers: int = 0                        # exact rows with pnl < 0: their MFE is the move the bracket gave back
+    loser_mfe_r_median: float | None = None
+    loser_mfe_usd_median: float | None = None
+    winners: int = 0                       # exact rows with pnl > 0: their MAE says how near the stop came
+    winner_mae_r_median: float | None = None
+    # stop share among the barrier (stop or target) exits against the bracket's null: a driftless, cost-free walk
+    # reaches the stop before the target target / (stop + target) of the time (mean over the trades). The hold cap is
+    # not in the null: it favours the nearer barrier (the null understates the stop share when the stop is nearer,
+    # overstates it when farther). The spread pushes the real stop share up.
+    barrier_exits: int = 0
+    stop_exits: int = 0
+    stop_share: float | None = None
+    stop_null: float | None = None
+
+
 class LearningReport(FrozenRecord):
     """Exploration, control and cost-probe closes (not in the phase-gate record), by kind and by kind and family."""
     currency: str | None = None            # the learning trades' own (the record sections keep theirs)
@@ -298,6 +333,10 @@ class LearningReport(FrozenRecord):
     # ADR 0061 amendment 2026-11-02: the learning arms (`role: learning`, unqualified, demo only), one row each in their
     # own section: never in `kinds` or `families` (the family rankings); their money stays in the book's days and costs
     unqualified: list[GroupStats] = []
+    # BACKLOG 195: MFE / MAE per family (as `families`) and per arm (every arm, the learning ones too: descriptive,
+    # never a ranking); exploration and control only (a probe has no bracket)
+    excursion_families: list[ExcursionStats] = []
+    excursion_arms: list[ExcursionStats] = []
 
 
 class AccountReport(FrozenRecord):
@@ -1028,6 +1067,48 @@ def _learning_costs(rows: list[_LRow]) -> CostReport:
         commission_note="the learning book has no modelled-commission comparison")
 
 
+def _median(xs: list[float]) -> float | None:
+    return float(np.median(xs)) if xs else None
+
+
+def _excursions(key: str, rows: list[LearningClose]) -> ExcursionStats:
+    """BACKLOG 195 acceptance: "median MFE R and MAE R with n, leaving out rows without the fields (older rows) and
+    counting `excursion_approx` rows separately"; winners and losers by the sign of the net P&L."""
+    have = [c for c in rows if c.mfe_r is not None and c.mae_r is not None]
+    exact = [c for c in have if not c.excursion_approx]
+    approx = [c for c in have if c.excursion_approx]
+    losers = [c for c in exact if c.pnl is not None and c.pnl < 0]
+    winners = [c for c in exact if c.pnl is not None and c.pnl > 0]
+    brackets = [(c.exit_reason == "stop", c.stop_usd, c.target_usd) for c in rows
+                if c.exit_reason in ("stop", "target") and c.stop_usd is not None and c.target_usd is not None
+                and c.stop_usd > 0 and c.target_usd > 0]
+    stops = sum(s for s, _, _ in brackets)
+    return ExcursionStats(
+        key=key, trades=len(rows), recorded=len(exact), approx=len(approx), not_recorded=len(rows) - len(have),
+        mfe_r_median=_median([c.mfe_r for c in exact if c.mfe_r is not None]),
+        mae_r_median=_median([c.mae_r for c in exact if c.mae_r is not None]),
+        approx_mfe_r_median=_median([c.mfe_r for c in approx if c.mfe_r is not None]),
+        approx_mae_r_median=_median([c.mae_r for c in approx if c.mae_r is not None]),
+        losers=len(losers), loser_mfe_r_median=_median([c.mfe_r for c in losers if c.mfe_r is not None]),
+        loser_mfe_usd_median=_median([c.mfe_usd for c in losers if c.mfe_usd is not None]),
+        winners=len(winners), winner_mae_r_median=_median([c.mae_r for c in winners if c.mae_r is not None]),
+        barrier_exits=len(brackets), stop_exits=stops, stop_share=stops / len(brackets) if brackets else None,
+        stop_null=float(np.mean([t / (s + t) for _, s, t in brackets])) if brackets else None)
+
+
+def _excursion_rows(rows: list[_LRow], order: dict[str, int],
+                    learning_ids: frozenset[str]) -> tuple[list[ExcursionStats], list[ExcursionStats]]:
+    """Per family (the learning arms' rows left out, as in `families`) and per arm (every arm), exploration and
+    control only."""
+    book = [r.trade for r in rows if r.trade.kind in ("exploration", "control")]
+    plain = [c for c in book if c.arm_id is None or c.arm_id not in learning_ids]
+    fams = sorted({(c.kind, c.family) for c in plain}, key=lambda kf: (order[kf[0]], kf[1]))
+    arms = sorted({(c.kind, c.family, str(c.arm_id)) for c in book}, key=lambda k: (order[k[0]], k[1], k[2]))
+    return ([_excursions(f"{k} / {f}", [c for c in plain if (c.kind, c.family) == (k, f)]) for k, f in fams],
+            [_excursions(f"{k} / {f} / {a}", [c for c in book if (c.kind, c.family, str(c.arm_id)) == (k, f, a)])
+             for k, f, a in arms])
+
+
 def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str | None,
               *, classified: int = 0, opp: set[str] | None = None, have_bars: bool = False,
               source: str = BARS_SOURCE, learning_ids: frozenset[str] = frozenset()) -> LearningReport | None:
@@ -1056,11 +1137,12 @@ def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str 
                                 True) for k, f in keys]
     north = _north_star_of([_Entry(r.trade.opened_utc, report_day(r.trade.opened_utc), r.net_pnl, r.net_r)
                             for r in book], ccy, classified, opp or set(), have_bars, [], source)
+    exc_families, exc_arms = _excursion_rows(book, order, learning_ids)
     return LearningReport(
         currency=ccy, kinds=kinds, families=families,
         days=_days_of([(r.trade.exit_utc, r.net_pnl) for r in book], weekdays, ccy),
         north_star=north.model_copy(update={"pending_open": None}), costs=_learning_costs(book),
-        unqualified=unqualified)
+        unqualified=unqualified, excursion_families=exc_families, excursion_arms=exc_arms)
 
 
 # ---------------------------------------------------------------------------------------------- build
@@ -1237,6 +1319,45 @@ def _heading(dim: str) -> str:
     return f"By {dim.replace('_', ' ')}"
 
 
+def _exc_cell(x: float | None, n: int) -> str:
+    return f"{_r(x)} (n {n})" if x is not None else f"{NOT_RECORDED} (n 0)"
+
+
+def _excursion_table(dim: str, rows: list[ExcursionStats]) -> list[str]:
+    """BACKLOG 195: every figure with its count; older rows are "not recorded (N)", never 0 R."""
+    lines = [f"| {dim} | trades | recorded | median MFE | median MAE | approx (restart) MFE / MAE | losers' median MFE "
+             "| winners' median MAE | stop exits / barrier exits | random-walk null |", "|" + " --- |" * 10]
+    for e in rows:
+        rec = f"{e.recorded}" + (f"; not recorded ({e.not_recorded})" if e.not_recorded else "")
+        apx = f"{_r(e.approx_mfe_r_median)} / {_r(e.approx_mae_r_median)} (n {e.approx})" if e.approx else "-"
+        los = _exc_cell(e.loser_mfe_r_median, e.losers) + (
+            f", ${e.loser_mfe_usd_median:.2f}/oz" if e.loser_mfe_usd_median is not None else "")
+        share = (f"{e.stop_exits} / {e.barrier_exits} ({e.stop_share:.0%})" if e.stop_share is not None
+                 else "no stop or target exit")
+        null = f"{e.stop_null:.0%}" if e.stop_null is not None else "-"
+        lines.append(f"| {e.key} | {e.trades} | {rec} | {_exc_cell(e.mfe_r_median, e.recorded)} | "
+                     f"{_exc_cell(e.mae_r_median, e.recorded)} | {apx} | {los} | "
+                     f"{_exc_cell(e.winner_mae_r_median, e.winners)} | {share} | {null} |")
+    return lines
+
+
+def _excursion_sections(lr: LearningReport) -> list[str]:
+    if not lr.excursion_arms:
+        return []
+    return ["### Excursions (MFE / MAE, exploration and control closes)", "",
+            "MFE and MAE in R of the initial stop, from fill to exit on the engine's tick path (R135; MAE <= 0 <= MFE). "
+            "Trades closed before they were recorded are counted \"not recorded\", never read as 0 R; approximate "
+            "excursions (part of the path from 1m bars after a restart or an adoption) have their own column and "
+            "never enter the exact medians. A loser's MFE is the favourable move the bracket gave back; a winner's "
+            "MAE is how near the stop came. The stop share is over the stop and target exits; the random-walk null "
+            "is the share a driftless, cost-free walk would give the same brackets (target / (stop + target)): it "
+            "ignores the hold cap (which favours the nearer barrier) and the spread (which pushes the stop share "
+            "up), so read a gap from the null as a lead, not a finding. Descriptive only: "
+            "censored and voided trades are left out, and no interval is given.", ""] + (
+        _excursion_table("kind / family", lr.excursion_families) + [""] if lr.excursion_families else []) + (
+        _excursion_table("kind / family / arm", lr.excursion_arms) + [""])
+
+
 def _learning_book_sections(lr: LearningReport) -> list[str]:
     """Days, North star and Costs of the demo learning book, beside (never merged into) the closed-trade record's own
     sections below them: the same countable rows as the learning tables (voided left out, censored not in money)."""
@@ -1320,6 +1441,7 @@ def format_markdown(rep: PerformanceReport) -> str:
                       "are never in the family tables above or in any ranking; their money is in the book below. A "
                       "learning read is a lead for a pre-registered history qualification, never one.", ""]
                 L += _table("learning arm", a.learning.unqualified, lc, True) + [""]
+            L += _excursion_sections(a.learning)
             L += _learning_book_sections(a.learning)
         d = a.days
         L += ["### Days", "",

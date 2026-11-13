@@ -25,13 +25,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.ops.gates_phase import ClosedTrade
 from goldbot.telegram.entry_text import account_name
+
+if TYPE_CHECKING:
+    from goldbot.engine.exploration import ExplorationRecord
 
 KINDS = ("exploration", "control", "cost_probe")
 KIND_LABEL: dict[str, str] = {"exploration": "exploration", "control": "control", "cost_probe": "cost probe"}
@@ -59,6 +62,16 @@ class LearningClose(FrozenRecord):
     swap: float | None = None           # the record's convention: the broker's sign (negative = paid)
     net: bool                           # commission and swap both recorded (gates_phase.pnl_basis "net")
     censored: bool = False              # closed by anything but the arm's own stop, target or hold
+    exit_reason: str | None = None      # the ledger's closed vocabulary (`trades_ledger.exit_reason`)
+    # BACKLOG 195: the exploration body's bracket (USD per oz) and its R135 excursions, read from aux.db beside the
+    # ledger row (which does not carry them). None on a probe and on rows closed before R135 (never read as 0 R)
+    stop_usd: float | None = None
+    target_usd: float | None = None
+    mfe_r: float | None = None
+    mae_r: float | None = None
+    mfe_usd: float | None = None
+    mae_usd: float | None = None
+    excursion_approx: bool | None = None  # part of the path came from 1m bars, not ticks (a restart, an adoption)
 
 
 class LearningCloses(FrozenRecord):
@@ -71,11 +84,25 @@ def recorded_keys(trades: Iterable[ClosedTrade]) -> frozenset[tuple[str, int]]:
     return frozenset((account_name(t.account_id), t.position_id) for t in trades if t.position_id is not None)
 
 
+def _excursion(body: ExplorationRecord | None) -> dict[str, Any]:
+    """The bracket and R135 excursion fields of an exploration body (none for a probe or a row without a body)."""
+    if body is None:
+        return {}
+    return {"stop_usd": body.stop_usd, "target_usd": body.target_usd, "mfe_r": body.mfe_r, "mae_r": body.mae_r,
+            "mfe_usd": body.mfe_usd, "mae_usd": body.mae_usd, "excursion_approx": body.excursion_approx}
+
+
 def read_learning_closes(state_dir: str | Path, now: pd.Timestamp) -> LearningCloses:
     """Every closed, not voided exploration, control and cost-probe trade of the ledger (read-only: the cost-probe
     source is not migrated). Not yet de-duplicated against the closed-trade record: `without_recorded`."""
-    from goldbot.api.trades_ledger import build_ledger
+    from goldbot.api.trades_ledger import build_ledger, exploration_records
     ledger = build_ledger(state_dir, now, read_only=True)
+    bodies: dict[str, ExplorationRecord] = {}
+    if "exploration" not in ledger.unreadable:
+        try:                # the cached read the ledger just made; torn now: the excursions stay None, never 0 R
+            bodies = exploration_records(state_dir)
+        except Exception:   # noqa: BLE001 - reporting only: the rows stand without their excursions
+            bodies = {}
     rows = []
     for r in ledger.rows:
         if r.kind not in KINDS or r.status != "closed" or r.exit_utc is None or r.account is None:
@@ -91,7 +118,7 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp) -> LearningCl
             position_id=r.position_id, opened_utc=pd.Timestamp(r.opened_utc), exit_utc=pd.Timestamp(r.exit_utc),
             side=r.side, currency=r.currency, pnl=r.pnl, r=r.r, gross=gross, risk=r.risk_amount, net=gross is not None,
             commission=c.commission if c is not None else None, swap=-c.swap if c is not None and c.swap is not None else None,
-            censored=r.censored))
+            censored=r.censored, exit_reason=r.exit_reason, **_excursion(bodies.get(r.trade_id))))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])
 
 

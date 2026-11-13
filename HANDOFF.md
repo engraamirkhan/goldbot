@@ -72,6 +72,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   leaves those fields empty and the row is still written; older rows read None. Reading them in reports is backlog 195.
   No exit, cap, RiskGate rule or size changed.
 - **Feedback-loop health check (R140, 2026-11-13, branch feat/loop-health-check).** Health `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when the learner's bandit weights are older than 36 weekday hours, a daily or weekly review file is missing for its slot, weekly proposals stay unread 8 days, the latest trial-registry sync failed or registry rows wait more than 36 h in `state/registry_outbox/`, or a job's last run errored; unreadable state is an alerted "can't check" WARN. The daily `loop_check` job (07:05 UTC) comments on the `ci-loop` issue. Root cause of the registry 403: the brain token is read-only by decision (2026-11-01) and the Mac publish is manual; nothing alerted (incident docs/incidents/2026-11-13-registry-sync-silent.md). Expect `feedback_loop` to FAIL on the brain at deploy (outbox since 11-07, unread weekly proposals) until BACKLOG 215-217 land. RUNBOOK "Feedback loop".
+- 2026-11-13 (branch feat/mfe-mae-reports; R147, backlog 195): `perf-report` now reads the R135 excursions of closed
+  exploration and control trades in a new "Excursions (MFE / MAE)" section, per family and per arm: median MFE and MAE
+  in R with n, the losers' median MFE (R and USD/oz: the move the bracket gave back), the winners' median MAE (how near
+  the stop came), and the stop exits' share of the stop and target exits beside the bracket's driftless random-walk
+  null target / (stop + target) (it ignores the hold cap and the spread, so a gap is a lead). Rows closed before
+  2026-11-14 carry no fields and are counted "not recorded", never 0 R; `excursion_approx` rows have their own column.
+  Descriptive only: no interval, not in the groups note. The attribution exits report already reads MAE/MFE of the
+  closed-trade record (backlog 23) and exploration trades never enter that record by design, so it is unchanged; the
+  weekly review's exit read (stops after +N R) is unchanged. No API field carries MFE/MAE yet, so the dashboard trade
+  detail is backlog 243.
 - 2026-11-13 (branch feat/monthly-review, on top of feat/weekly-review; R142; BACKLOG 223-226; review loop item 3):
   a daily `monthly_review` scheduler job (06:30 UTC, goldbot/ops/monthly_review.py) reviews the UTC calendar month
   before its slot: built on the 1st, or on a later tick within `monthly_review.catch_up_days` (10) when the 1st was
