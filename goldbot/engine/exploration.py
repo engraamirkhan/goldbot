@@ -521,6 +521,16 @@ class ExplorationRecord(FrozenRecord):
     # (retcode -1, a timeout; engine/unconfirmed.py): adopted (found open), opened_closed (found already closed) or
     # unfilled (no trade). `retcode` stays as the broker answered. JSON body only (no migration); None: settled at send
     resolution: Resolution | None = None
+    # research-director ruling 2026-11-13, item 4: "Record MFE and MAE (in R and USD, from fill to exit, on the engine's
+    # bar/tick path that already manages exits) in each closed exploration_trades body" (`record_close`). R of the
+    # initial stop distance, USD per oz like `stop_usd`; MAE <= 0 <= MFE. `excursion_approx`: part of the path came
+    # from the stored 1m bars, not ticks (a restart, an adopted position). JSON body only; None on older rows, and
+    # the R pair is None when the initial stop is not the trade's (`OpenTrade.risk_known`)
+    mfe_r: float | None = None
+    mae_r: float | None = None
+    mfe_usd: float | None = None
+    mae_usd: float | None = None
+    excursion_approx: bool | None = None
 
 
 class TwinRecord(FrozenRecord):
@@ -2546,6 +2556,7 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
             "position_id": pid, "exit_utc": known.get("exit_utc", at), "exit_price": known.get("exit_price", px),
             "exit_reason": why, "swap": known.get("swap"), "commission": known.get("commission"),
             "pnl": known.get("pnl"), "censored": censored})
+        rec = rec.model_copy(update=_excursion(eng, pid, tr, rec, start, exit_known=info is not None or px is not None))
         LEDGER.upsert(conn, rec)
     level = {"stop": tr.sl, "target": tr.tp}.get(known["reason"]) if known.get("reason") else None
     if level is not None:       # GAP-04, backlog 141: the broker's stop or target deal against its level (logging only)
@@ -2556,6 +2567,23 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
         ex.open_loss.pop(pid, None)
     eng._recorded.add(pid)
     return True
+
+
+def _excursion(eng: Engine, pid: int, tr: OpenTrade, rec: ExplorationRecord, start: pd.Timestamp | None, *,
+               exit_known: bool) -> dict[str, Any]:
+    """The closed row's MFE / MAE (ruling 2026-11-13 item 4): the closed-trade record's own path
+    (`closed_record.closed_excursion`: the position's tick track from the fill, the exit fill folded, the stored 1m
+    bars where ticks did not see it), in R of the initial stop and in USD per oz. Reporting only, read after the exit
+    is decided: it never moves one. Empty when the path or the entry is unknown (the row is recorded without it)."""
+    from goldbot.engine.closed_record import closed_excursion
+    entry = tr.open_price if tr.open_price is not None else rec.fill_price
+    if entry is None or start is None or rec.exit_utc is None:
+        return {}
+    ex = closed_excursion(eng, pid, tr, float(entry), start, rec.exit_utc, rec.exit_price, exit_known=exit_known)
+    if not ex:
+        return {}
+    return {"mfe_r": ex["mfe_r"], "mae_r": ex["mae_r"], "mfe_usd": tr.side * (ex["mfe_price"] - float(entry)),
+            "mae_usd": tr.side * (ex["mae_price"] - float(entry)), "excursion_approx": bool(ex["excursion_approx"])}
 
 
 def _censored(arm: Arm | None, why: str, tr: OpenTrade) -> bool:

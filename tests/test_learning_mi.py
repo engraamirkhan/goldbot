@@ -209,7 +209,11 @@ def test_with_their_k_rows_the_pairs_pass_now_lane_l3_runs_them(tmp_path, monkey
     monkeypatch.setattr(arms, "REGISTRY_PATH", reg)
     got = {a.id: a for a in arms.load_arms(SPEC, root=ROOT, registry=reg)}
     for arm_id in LIVE_PAIRS:
-        assert got[arm_id].entry_refused == "" and got[arm_id].status == "run", (arm_id, got[arm_id].entry_refused)
+        # the K rows resolve; the gold-only ruling of 2026-11-13 then retired every pair on 2026-11-14 (a learning arm
+        # whose control no longer runs is refused with it, `learning_cross_refusals`)
+        a = got[arm_id]
+        assert a.status == "run" and a.retired_rule == arms.GOLD_ONLY_RULE, arm_id
+        assert "registry" not in a.entry_refused, (arm_id, a.entry_refused)
     for arm_id in (MI_ARMS | MI_CONTROLS) - LIVE_PAIRS:
         assert got[arm_id].retired_day == "2026-11-04", arm_id
 

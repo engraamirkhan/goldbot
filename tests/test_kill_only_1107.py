@@ -14,7 +14,7 @@ from goldbot.data.resample import ticks_to_1m
 from goldbot.engine import cost_probe, exploration
 from goldbot.execution.broker import Tick
 from goldbot.ops import accounts as acc_mod
-from goldbot.research.arms import arm_hash, load_arms
+from goldbot.research.arms import GOLD_ONLY_RULE, arm_hash, load_arms
 from tests.test_exploration_engine import (
     CLOSE,
     TICKS,
@@ -128,7 +128,9 @@ def test_s0_xaujpy_is_retired_in_the_spec_with_its_id_hash_and_k_unchanged():
     s0 = rows["S0-XAUJPY"]
     assert s0.retired and s0.retired_day == "2026-11-07" and "prereg-amendment-2026-11-07" in s0.retired_rule
     assert s0.config_hash == arm_hash(s0) == "a54aae448d55ac3d"
-    assert not rows["LB-XAUJPY"].retired and not rows["LBC-XAUJPY"].retired
+    # its learning pair was kept by the 2026-11-07 amendment and retired 2026-11-14 by the gold-only ruling (2026-11-13)
+    assert all(rows[i].retired_day == "2026-11-14" and rows[i].retired_rule == GOLD_ONLY_RULE
+               for i in ("LB-XAUJPY", "LBC-XAUJPY"))
 
 
 def test_s0_xaujpy_stays_configured_on_vantage_demo_so_its_open_positions_keep_their_exits():

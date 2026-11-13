@@ -18,6 +18,9 @@ from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, SHORT, _arm, _at, _engine, _rule
 from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
+# research-director ruling 2026-11-13 (gold-only demo): every non-gold row and IEX1H, retired 2026-11-14
+GOLD_ONLY = arms.GOLD_ONLY_RULE
+
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "A2 readability, 2026-10-30"
 # R4's list, as the evaluator wrote it (the 51 the plan names, then the ids the plan left implicit); XBB15 is retired
@@ -67,7 +70,10 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
     assert all(spec[i].retired_day == "2026-11-04" for i in owner)
     assert all(str(spec[i].retired_day) == "2026-11-06" for i in RETIRED_1106)
     assert all(str(spec[i].retired_day) == "2026-11-13" for i in RETIRED_1113)
-    assert {i for i, a in spec.items() if a.retired} == set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113
+    gold_only = {i for i, a in spec.items() if a.retired_rule == GOLD_ONLY}
+    assert all(spec[i].retired_day == "2026-11-14" for i in gold_only)
+    assert {i for i, a in spec.items() if a.retired} == \
+        set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113 | gold_only
     for arm_id in {*EXEMPT, "S1A", "S1B"} - RETIRED_1106 - RETIRED_1113:   # S1A/S1B: evaluator R3, read at their own read
         assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
 
@@ -125,6 +131,8 @@ def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active
             waits = bool(mine) and all(spec[i].status == "blocked" and "L3" in spec[i].note for i in mine)
             # a pot whose last arms the 2026-11-06 decisions retired (icm-demo swing: W0) is empty on purpose
             emptied = any(i in RETIRED_1106 for i in mine)
+            # a pot whose last arms the gold-only ruling of 2026-11-13 retired (icm-probe intraday) is empty on purpose
+            emptied = emptied or any(spec[i].retired_rule == GOLD_ONLY for i in mine)
             assert waits or emptied or any(not spec[i].retired and spec[i].status == "run" for i in mine), \
                 (acc.account_id, style)
 

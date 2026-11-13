@@ -57,6 +57,28 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          # growth sprint 2026-11-01 (goldbot.research.arm_rules_growth): GS1 and its random-entry control GS1C
          "session_range_break", "session_range_control")
 
+# Research-director ruling 2026-11-13 (live fills n 5,333: non-gold n 1,131 at -GBP 262, -0.21 R a trade; gold n 4,202
+# at +GBP 5, 93% of them on 1m/5m). Item 1, the `retired_rule` of every non-gold arm and control and of IEX1H: "stop
+# NEW entries on every non-gold demo arm and non-gold control"
+GOLD_ONLY_RULE = ("research-director ruling 2026-11-13 (gold-only demo): non-gold fills n 1,131 at -GBP 262, "
+                  "-0.21 R a trade; gold n 4,202 at +GBP 5")
+# Item 2: "No NEW 1m gold arms ... existing running 1m arms keep running to their reads." The 1m rows of the spec on
+# 2026-11-13 (retired rows included: a row is never removed, so it must keep loading). A new 1m arm loads only once a
+# dated ruling adds its id here (`load_arms` refuses it otherwise), so a generator or a hand edit cannot add one
+ONE_MINUTE_ALLOWED = frozenset((
+    "S0 S0R S5A S5B Z1P Z2P Z8P Z4P Z4D VS0 VS5A VS5B WKS0 LCZ4D LCS5A LCS5B LCZ1P LCZ2P LCZ4P "
+    "S0-XAGUSD S0-XPTUSD S0-XAUEUR S0-XAUAUD S0-US500 S0-USTEC S0-DE40 S0-UK100 S0-JP225 S0-EURUSD S0-USDJPY "
+    "S0-GBPUSD S0-AUDUSD S0-USDCAD S0-USDCHF S0-NZDUSD S0-XTIUSD S0-XBRUSD S0-XNGUSD S0-UST10Y S0-BUND10Y S0-COPPER "
+    "S0-WHEAT S0-SOYBEAN S0-SUGAR S0-COFFEE S0-GBPJPY S0-EURGBP S0-EURJPY S0-AUDJPY S0-EURAUD S0-GBPAUD S0-BTCUSD "
+    "S0-XAUJPY S0-USINDEX S0-US30").split())
+# Item 3: "The A2 'fewer than 1 fill a session day' readability retirement must not apply to arms with timeframe >= 1h
+# (they are read on history + the 2018-25 confirm window)". A2 (prereg-amendment-2026-10-30-kill-rules.md) is applied
+# by hand as a `retired_rule` starting with A2_RULE; from the ruling's day `load_arms` refuses such a row on 1h+. The
+# A2 retirements recorded before it stand ("a retired unit keeps its K, its registry row and its arm id")
+A2_RULE = "A2 readability"
+A2_SLOW_EXEMPT_FROM = "2026-11-13"
+A2_SLOW_TIMEFRAMES = frozenset(("1h", "4h", "1d", "1w"))
+
 
 # ---------------------------------------------------------------- holdout guard
 def assert_block_allowed(start: pd.Timestamp, end: pd.Timestamp) -> None:
@@ -831,7 +853,10 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
 
     ADR 0061 amendment 2026-11-02, across rows (`learning_cross_refusals`): a learning arm whose control row is missing
     or not matched is refused; a control dedicated to learning arms is refused with them once none may enter; a
-    qualification citing a learning arm's K row is refused."""
+    qualification citing a learning arm's K row is refused.
+
+    Research-director ruling 2026-11-13 (`ruling_1113_refusals`): a new 1m arm, or an A2 readability retirement of a
+    1h+ arm dated from the ruling, fails the load."""
     raw = safe_load_cached(path) or {}          # parsed once per file version (goldbot/config.py)
     out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in raw.get("arms", [])]
     cross = learning_cross_refusals(out)
@@ -851,6 +876,8 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
             raise ValueError(f"{a.id}: twin_of {a.twin_of!r} names no arm of this spec (a twin copies an original)")
         if (a.rule, a.timeframe, a.params, a.max_open) != (twin.rule, twin.timeframe, twin.params, twin.max_open):
             raise ValueError(f"{a.id}: a broker twin keeps {twin.id}'s rule body (rule, timeframe, params, max_open)")
+    if refused := ruling_1113_refusals(out):
+        raise ValueError("; ".join(refused))
     if check_hash:
         for a in out:
             if a.config_hash != arm_hash(a):
@@ -862,6 +889,26 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
             _REFUSAL_LOGGED.add((a.id, a.entry_refused))
             log.log(logging.INFO if first else logging.DEBUG, "arm %s refuses new demo entries: %s", a.id,
                     a.entry_refused)
+    return out
+
+
+def a2_readability_applies(arm: Arm) -> bool:
+    """Whether A2 readability may retire `arm`: research-director ruling 2026-11-13, "must not apply to arms with
+    timeframe >= 1h (they are read on history + the 2018-25 confirm window)"."""
+    return arm.timeframe not in A2_SLOW_TIMEFRAMES
+
+
+def ruling_1113_refusals(rows: list[Arm]) -> list[str]:
+    """The spec rows the research-director ruling 2026-11-13 refuses at load: a 1m arm not on ONE_MINUTE_ALLOWED ("No
+    NEW 1m gold arms"), and an A2 readability retirement dated on or after the ruling on a 1h+ arm
+    (`a2_readability_applies`). A refused row fails the whole spec, as an edited hash does: never a silent skip."""
+    out = [f"{a.id}: no new 1m arm (research-director ruling 2026-11-13); a 1m arm loads only once a dated ruling "
+           "adds its id to research.arms.ONE_MINUTE_ALLOWED" for a in rows
+           if a.timeframe == "1m" and a.id not in ONE_MINUTE_ALLOWED]
+    out += [f"{a.id}: {A2_RULE} does not retire a {a.timeframe} arm from {A2_SLOW_EXEMPT_FROM} (research-director "
+            "ruling 2026-11-13: 1h+ arms are read on history and the 2018-25 confirm window)" for a in rows
+            if a.retired_rule.startswith(A2_RULE) and str(a.retired_day) >= A2_SLOW_EXEMPT_FROM
+            and not a2_readability_applies(a)]
     return out
 
 
