@@ -300,6 +300,14 @@ class SchedulerSettings(_Section):
     # hours after the nightly jobs (01:30 autodisc), clear of the 22:00-00:00 UTC cluster; first sight runs it once
     journal_compact: ScheduleSettings = ScheduleSettings(kind="daily", at="03:40", max_late_hours=20,
                                                          run_if_never_run=True)
+    # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
+    # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
+    weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
+    # R142: the monthly review (goldbot/ops/monthly_review.py), daily after the 06:15 daily review: the 1st builds the
+    # calendar month (UTC) before it, after its last day's 23:25 broker_ledger snapshot; a later tick builds it when the
+    # 1st was missed (within monthly_review.catch_up_days) or failed, and retries every post that has not gone out. A
+    # done month is a no-op (one review, one issue and one Telegram message a month)
+    monthly_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:30", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -679,6 +687,38 @@ class DailyReviewSettings(_Section):
 
 
 
+class WeeklyReviewSettings(_Section):
+    """The weekly review (goldbot/research/weekly_review.py; architect plan 2026-11-13 item 2). "The only automatic
+    actions are stops already registered in config/arm_stops.yaml (tighten only)": nothing here changes a stop, a
+    threshold, a budget or a gate; these settings shape the advice only."""
+    max_actions: int = Field(20, ge=1, le=100)              # advisory actions kept a week (every registered stop is kept)
+    issue_label: str = "review"                             # backlog suggestions: the open issue with this label
+    attribution_max_age_days: float = Field(14.0, gt=0)     # an older attribution report gives no loss driver
+    min_cost_fills: int = Field(30, ge=1)                   # a (broker, session) week under this: no cost drift read
+    exit_mfe_r: float = Field(1.0, gt=0)                    # a stop exit that had reached this MFE (R) first ...
+    exit_share: float = Field(0.3, gt=0, le=1)              #   ... on this share of a family's stop exits: exit action
+    exit_min_trades: int = Field(30, ge=1)                  # closed trades carrying MFE/MAE before a family is read
+
+
+class MonthlyReviewSettings(_Section):
+    """The monthly review (goldbot/ops/monthly_review.py, R142), with the finance audit's RC-9 "Opening balance + net
+    closed P&L + deposits - withdrawals = closing balance" over the calendar month. Reporting only: it reads aux.db, the
+    closed-trade record and the trial registry, and never touches an order, a halt, a limit or a setting. An unreconciled
+    difference above the tolerance FLAGS the review; it never passes."""
+    # a month never built is built on any daily tick up to this many days after it ends (downtime on the 1st); a month
+    # whose build failed is rebuilt on every tick until it succeeds, however late
+    catch_up_days: int = Field(10, ge=1, le=28)
+    # account currency over the month: rounding, not money (the daily ledger allows 0.05 a day + 0.01 a deal)
+    balance_tolerance: float = Field(0.50, ge=0)
+    balance_tolerance_per_trade: float = Field(0.01, ge=0)   # plus this per closed trade in the window (RC-9)
+    gbp_per_usd: float = Field(0.75, gt=0)                   # agent spend (USD) into the month's GBP total
+    # known hosting, GBP a month (docs/finance/budget-2026-10.md; docs/deploy/icm-depth-host.md: the vantage E5.Flex box
+    # costs £4.52 against the approved £3.57). Labels only, never a host name or address
+    hosting_gbp_month: dict[str, float] = Field(default_factory=lambda: {
+        "oracle_always_free_brain_and_bridge": 0.0, "oracle_e5flex_vantage_mt5": 4.52})
+    issue_label: str = Field("review-monthly", pattern=r"^[\w.-]+$")   # the program-director clears these each session
+
+
 class TradesViewSettings(_Section):
     """The trades screens' plan figures (docs/design/trades-ux-2026-10-27.md §2.4, item 131; goldbot/api/today_ledger.py).
     Reporting only: nothing here sizes, gates or limits a trade."""
@@ -997,6 +1037,8 @@ class Settings(_Section):
     engine: EngineSettings = Field(default_factory=EngineSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
+    weekly_review: WeeklyReviewSettings = Field(default_factory=WeeklyReviewSettings)
+    monthly_review: MonthlyReviewSettings = Field(default_factory=MonthlyReviewSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")

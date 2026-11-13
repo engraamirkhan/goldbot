@@ -194,7 +194,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "loop_check": "2026-10-03T07:05:00+00:00",
                    "autodisc_nightly": "2026-10-03T01:30:00+00:00", "tva_scores": "2026-10-02T23:35:00+00:00",
                    "har_days": "2026-10-02T22:05:00+00:00", "har_days_retry": "2026-10-02T22:35:00+00:00",
-                   "journal_compact": "2026-10-03T03:40:00+00:00"}
+                   "journal_compact": "2026-10-03T03:40:00+00:00", "weekly_review": "2026-10-03T13:00:00+00:00",
+                   "monthly_review": "2026-10-03T06:30:00+00:00"}
     # quarterly: after October's run the next is the first Sunday of January
     later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
     assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"

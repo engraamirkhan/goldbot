@@ -72,6 +72,26 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   leaves those fields empty and the row is still written; older rows read None. Reading them in reports is backlog 195.
   No exit, cap, RiskGate rule or size changed.
 - **Feedback-loop health check (R140, 2026-11-13, branch feat/loop-health-check).** Health `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when the learner's bandit weights are older than 36 weekday hours, a daily or weekly review file is missing for its slot, weekly proposals stay unread 8 days, the latest trial-registry sync failed or registry rows wait more than 36 h in `state/registry_outbox/`, or a job's last run errored; unreadable state is an alerted "can't check" WARN. The daily `loop_check` job (07:05 UTC) comments on the `ci-loop` issue. Root cause of the registry 403: the brain token is read-only by decision (2026-11-01) and the Mac publish is manual; nothing alerted (incident docs/incidents/2026-11-13-registry-sync-silent.md). Expect `feedback_loop` to FAIL on the brain at deploy (outbox since 11-07, unread weekly proposals) until BACKLOG 215-217 land. RUNBOOK "Feedback loop".
+- 2026-11-13 (branch feat/monthly-review, on top of feat/weekly-review; R142; BACKLOG 223-226; review loop item 3):
+  a daily `monthly_review` scheduler job (06:30 UTC, goldbot/ops/monthly_review.py) reviews the UTC calendar month
+  before its slot: built on the 1st, or on a later tick within `monthly_review.catch_up_days` (10) when the 1st was
+  missed; a done month is a no-op. Per account the monthly report (reused) and the tie-out of goldbot's net P&L
+  against the broker balance snapshots in aux.db (RC-9; a difference beyond `monthly_review.balance_tolerance` + 0.01
+  per trade, no snapshots, a failed daily ledger, a login or currency change all FLAG, never pass), agent spend (aux.db
+  agent_spend) + known hosting (£4.52 E5.Flex), the quarter's trial budget used (K, read only) and a reliability
+  scorecard (scheduler_jobs failing/overdue, health_alerts, market minutes down). Stored in aux.db `monthly_reviews`
+  (aux migration 31, after the weekly review's 30); one Telegram message (amounts) and one GitHub issue labelled
+  `review-monthly` (no login, host or balance), each once a month. Reads only: no broker, no order.
+- Retries (code review 2026-11-13, two MEDIUMs): every daily tick resends whatever has not gone out for any stored
+  month (a GitHub outage or no token on the 1st is posted later; the text waits in
+  state/aux/monthly_review/outbox/<month>.md meanwhile). A build that raises stores a `flagged` row with the error,
+  sends nothing and is rebuilt on every tick until it succeeds (the scheduler marks a slot done before the job runs,
+  so the retry lives in the job). Health check `monthly_review` warns on a failed build and on a review not fully sent
+  a day after it was built; it is absent until a review is stored.
+- docs/process/review-cadence.md: the program-director clears open `review` and `review-monthly` issues first each
+  session; no Claude crons, nothing pending on the owner. Limits: scheduler_jobs keeps current state only, so job
+  failures are cumulative and failing/overdue are as of the review; the performance figures use opportunity days
+  (monthly_report's convention) while the tie-out uses the UTC month.
 - 2026-11-13 (branch feat/news-orderflow-features; R139; plan item 8): two opt-in feature families for the
   feature-discovery screen, registered but in no default or live set (pipeline.OPT_IN_FEATURES; no trial run, K
   unchanged). `news_llm` (17 columns, goldbot/data/news_features.py + goldbot/features/news_llm.py): the collector's
@@ -94,6 +114,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Limits: the Mac holds no `news` table, so the history length must be read on the brain (`news_features.coverage`,
   BACKLOG 212). Dukascopy's ask-side volume is dropped at ingest (BACKLOG 213); MFE/MAE wait for lane F's fields
   (BACKLOG 214). Order flow costs ~2.3 s per million 1m bars per frame build. Follow-ups: BACKLOG 211-214.
+- 2026-11-13 (branch feat/weekly-review; R141; BACKLOG 219-222): new Saturday job `weekly_review` (13:00 UTC, after
+  research_director) writes one ranked action list a week to aux.db `review_actions` (migration 30). It covers each
+  family against its matched control (from the ranking's figures; no control reads "unpaired"), loss drivers from
+  attribution.json, cost drift against the cost of record, reads due at their registered size, MFE/MAE stop-exit
+  diagnostics and the Monday roll-up's proposals. Each roll-up is marked read with `mark_weekly_consumed`, R140's
+  helper copied with the same text. The next research_director run consumes the actions once into
+  `research_plan.json` `review_queue`; budgets are unchanged. Unpaired families and cost drift open one `review`
+  issue a week (outbox without the token). The Sunday digest gains "Changed this week" (counts only). The only
+  automatic action is a registered stop the daily review found breached but not yet recorded (tighten only). Nothing
+  on the order path changed.
 - 2026-11-12 (branch feat/decisions-journal-compaction; backlog 170, R131): the decisions journal's part files are
   compacted nightly. New scheduler job `journal_compact` (daily 03:40 UTC, max 20 h late, runs on first sight)
   calls `goldbot/data/compact.py::compact_table(store, "decisions", before=slot)`: every closed month partition

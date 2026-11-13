@@ -85,6 +85,12 @@
 * loop_check        daily at 07:05 (R140, goldbot/ops/checks/loop.py): the feedback-loop check (learner weights,
                     review files, weekly proposals read, trial-registry sync, errored jobs); when not ok, one comment a
                     day on the `ci-loop` issue (else state/aux/daily_review/outbox/). Reads only.
+* weekly_review     Saturday after research_director (goldbot/research/weekly_review.py): per family net result
+                    against its matched control (the strategy ranking's figures; no control reads "unpaired"), loss
+                    attribution, cost drift against the cost of record, reads due at their registered size, MFE/MAE
+                    exit diagnostics and the Monday roll-up's proposals -> a ranked list in aux.db review_actions (one
+                    set a week) that the next research_director run consumes once; backlog suggestions to a GitHub
+                    issue labelled `review`. Automatic: only a stop already registered (tighten only).
 * autodisc_nightly  daily (ADR 0058 phase 2, research/autodisc/nightly.py): a bounded G2 search on the 2010-2017
                     explore window, every spec ledgered first (state/discovery_real.db), its G0 null, RC/SPA, PBO,
                     DSR, circular-shift and plateau checks -> state/autodisc/survivors-<day>.md and a health line.
@@ -102,6 +108,13 @@
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
+* monthly_review    daily, UTC (R142, ops/monthly_review.py): builds the calendar month before the slot on the 1st (or a
+                    later tick within monthly_review.catch_up_days; a failed build is rebuilt every tick) and resends
+                    any review whose message or issue has not gone out; a done month is a no-op. Per account (monthly report, net P&L tied out against the broker balances in aux.db:
+                    an unreconciled difference above a small tolerance FLAGS, never passes), agent and hosting spend,
+                    the quarter's trial budget used (K), and a reliability scorecard (scheduler_jobs, health_alerts) ->
+                    aux.db monthly_reviews, one Telegram message, one GitHub issue labelled review-monthly (no login,
+                    host or balance). Reads only: never a broker, an order, a halt or a setting.
 """
 from __future__ import annotations
 
@@ -146,7 +159,7 @@ from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
-from goldbot.ops.scheduler import Schedule, Scheduler
+from goldbot.ops.scheduler import Scheduler, schedule_of
 from goldbot.research.cusum import (
     WATCH_MAX_WEEKS,
     WATCH_MIN_TRADES,
@@ -207,6 +220,8 @@ from goldbot.research.population import Population
 from goldbot.research.promotion import EVIDENCE_START_UTC, PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, config_hash, quarter_of
 from goldbot.research.registry_sync import read_rows
+from goldbot.research.review_actions import ReviewAction
+from goldbot.research.review_actions import consume as consume_review_actions
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import Specialist
 
@@ -1098,6 +1113,7 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     research; promotes nothing."""
     synced = _sync_trials(ctx)            # count the research workflow's trials (and their lookahead checks) too
     budget, cap = research_budget(ctx)
+    queue = review_queue(ctx, slot)
     shadow, agents = director_evidence(ctx)
     r = ctx.settings.research
     plan = build_plan(slot, research_families(), read_rows(ctx.trials.path), shadow, agents,
@@ -1107,14 +1123,26 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                       retired=r.retired_families, promoted={e.version: e.promoted_utc for e in ctx.models.entries},
                       reserved_setting=r.reserved_for(quarter_of(slot.tz_convert("UTC").to_pydatetime())),
                       grid_paused=r.label_grid_paused,
-                      evidence_start=EVIDENCE_START_UTC)   # H-52: attribution rows opened before the fix are quarantined
+                      evidence_start=EVIDENCE_START_UTC,   # H-52: attribution rows opened before the fix are quarantined
+                      review_queue=queue)
     plan.save(ctx.state_dir / PLAN_FILE)
     return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "quarter_reserved": plan.quarter_reserved,
             "budget": plan.budget, "grid_budget": plan.grid_budget, "unallocated": plan.unallocated,
             "focus": [f.family for f in plan.focus], "blocked": [s.family for s in plan.evidence if s.blocked],
             "retired": [s.family for s in plan.evidence if s.retired], "retired_explore": plan.retired_explore,
-            "hypotheses_drift": plan.hypotheses_drift,
+            "hypotheses_drift": plan.hypotheses_drift, "review_queue": len(plan.review_queue),
             "registry_sync": synced}
+
+
+def review_queue(ctx: JobContext, slot: pd.Timestamp) -> list[ReviewAction]:
+    """The weekly review's unconsumed actions, consumed by this director slot (a rerun of the slot gets the same set).
+    An unreadable aux.db gives an empty queue: the plan never waits on advice."""
+    try:
+        return consume_review_actions(Database.open(ctx.state_dir, "aux"), f"research_director:{slot.isoformat()}",
+                                      now=slot)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        log.warning("research director: review actions unreadable, empty queue: %s", exc)
+        return []
 
 
 def current_plan(ctx: JobContext, slot: pd.Timestamp) -> ResearchPlan | None:
@@ -1674,6 +1702,27 @@ def loop_check(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_loop_check(ctx.state_dir, slot, ctx.settings, sink_for(ctx.settings, ctx.get_secret))
 
 
+def weekly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """The weekly review (research/weekly_review.py) of the seven days before `slot`: the ranked action list in aux.db
+    review_actions, the backlog issue (github-token from the keyring, else state), registered stops only. The ranking
+    is built here, as the API and the reports build it, and handed in as figures (ADR 0053 6f: research never imports
+    it); an unreadable ranking is reported and the rest of the review still runs."""
+    from goldbot.api.schema import RankingView
+    from goldbot.research.daily_review import sink_for
+    from goldbot.research.weekly_review import run_weekly_review, summary
+    from goldbot.telegram.ranking_text import load_ranker
+    week_view: RankingView | None = None
+    life_view: RankingView | None = None
+    try:
+        ranker = load_ranker(ctx.state_dir, slot)
+        week_view, life_view = ranker("7d"), ranker("all")
+    except Exception as exc:              # noqa: BLE001 - a broken ledger source must not stop the stops and proposals
+        log.warning("weekly review: ranking unreadable (%s)", type(exc).__name__)
+    review = run_weekly_review(settings=ctx.settings, state_dir=ctx.state_dir, week_view=week_view,
+                               life_view=life_view, now=slot, sink=sink_for(ctx.settings, ctx.get_secret))
+    return summary(review)
+
+
 def autodisc_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """ADR 0058 phase 2: one bounded discovery search on the explore window (research/autodisc/nightly.py). Off unless
     research.autodisc.nightly_enabled: "the brain runs only the interpreter and the forward read"."""
@@ -1694,6 +1743,16 @@ def har_days(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """N-3: the next trading day's HAR forecast row (research/har_abstention.py); fails when it cannot write one."""
     from goldbot.research.har_abstention import run_job
     return run_job(ctx, slot)
+
+
+def monthly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """R142: the review of the calendar month (UTC) before `slot` (ops/monthly_review.py) over the configured accounts;
+    the issue goes to GitHub with the keyring's github-token, else to state. Reads only: never a broker or an order."""
+    from goldbot.ops.monthly_review import issue_sink, run_monthly_review, summary
+    review = run_monthly_review(settings=ctx.settings, state_dir=ctx.state_dir, slot=slot,
+                                account_ids=[a.account_id for a in ctx.accounts], trials=ctx.trials,
+                                sink=issue_sink(ctx.settings, ctx.get_secret))
+    return summary(review)
 
 
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
@@ -1724,6 +1783,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
     "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
+    "weekly_review": weekly_review,               # ranked weekly action list the next director run consumes
+    "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
 }
 
 
@@ -1731,9 +1792,6 @@ def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = 
     sch = Scheduler(ctx.state_dir / "scheduler.json", clock=clock)
     cfg = ctx.settings.scheduler
     for name, fn in JOBS.items():
-        s = getattr(cfg, name)
-        sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
-                               months=tuple(s.months), max_late_hours=s.max_late_hours,
-                               run_if_never_run=s.run_if_never_run), functools.partial(fn, ctx))
+        sch.add(name, schedule_of(getattr(cfg, name)), functools.partial(fn, ctx))
     sch.prune()                                   # a retired job (ADR 0066) leaves no job:<name> row in health
     return sch

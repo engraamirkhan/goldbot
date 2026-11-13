@@ -11,6 +11,9 @@ Lines whose source is not recorded yet are left out, never estimated: the week's
 is kept), the worst drawdown of the week (needs-field 5: a drawdown history written at the 22:00 roll), the broker
 cost comparison, the H-62 model outcome and next week's news event. "Learning paid/cost" is the labs' net P&L of the
 week and the usable labels written in it (ADR 0043 ROI reading: demo money per admissible label).
+
+"Changed this week" counts the Saturday weekly review's action list (aux.db review_actions): arms stopped at their
+registered rule, actions queued for the research director, backlog suggestions sent as an issue. Counts only.
 """
 from __future__ import annotations
 
@@ -53,6 +56,7 @@ VERDICT_WORDS = {"continue": "passed this step, continues", "stop": "closed, did
 # spec 3.2's unsourced lines (week's health failures, worst drawdown, broker costs, model outcome, next news) are
 # left out, never estimated; this one line says where they are
 MORE_LINE = "More detail on the dashboard"
+CHANGED = "Changed this week"       # the weekly review's section (goldbot/research/weekly_review.py)
 
 
 def week_days(slot: pd.Timestamp) -> list[str]:
@@ -140,6 +144,31 @@ def research_lines(registry_path: Path | None, settings: Settings | None, lo: pd
     return out
 
 
+def changed_lines(state_dir: Path, slot: pd.Timestamp) -> list[str]:
+    """"Changed this week": the latest weekly review written in the 7 days before `slot` (Saturday, aux.db
+    review_actions), counted by what it did or queued. Counts only: never an arm id, a unit or a figure. No review
+    recorded in the week: no line (a line without a recorded source is left out; the job's health check says why)."""
+    from goldbot.research.review_actions import BACKLOG_KINDS, recent
+    slot = _utc(slot)
+    with labs.aux(state_dir) as conn:
+        acts = recent(conn, slot - pd.Timedelta(days=7), slot) if conn is not None else None
+    if acts is None:
+        return []
+    if not acts:
+        return [f"{CHANGED}: nothing (the weekly review found no action)"]
+    stops = sum(a.kind == "stop" for a in acts)
+    backlog = sum(a.kind in BACKLOG_KINDS for a in acts)
+    queued = len(acts) - stops - backlog
+    out = [f"{CHANGED}:"]
+    if stops:
+        out.append(f"  • {labs.plural(stops, 'arm')} stopped at {'its' if stops == 1 else 'their'} registered rule")
+    if queued:
+        out.append(f"  • {queued} queued for research (the director reads them next week)")
+    if backlog:
+        out.append(f"  • {labs.plural(backlog, 'backlog suggestion')} sent as a GitHub issue")
+    return out
+
+
 def not_running_line() -> list[str]:
     """Spec 2.4: "Account not enabled: omitted from the daily; listed once in the weekly"."""
     from goldbot.ops.accounts import account_ids
@@ -178,6 +207,7 @@ def build_weekly(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
         out += arms_section(sd, engines, ARMS_WIDTH, lo, hi)
         out.append(Line(_text(lambda: learner_week(sd, lo, hi), "Learner"), 2))
     out += [Line(x, 2) for x in _section(lambda: research_lines(registry_path, settings, lo, hi), "Research")]
+    out += [Line(x, 2) for x in _section(lambda: changed_lines(sd, slot), CHANGED)]
     out += [Line(x, 2) for x in _section(not_running_line, "Accounts")]
     out.append(Line(MORE_LINE, 2))
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
