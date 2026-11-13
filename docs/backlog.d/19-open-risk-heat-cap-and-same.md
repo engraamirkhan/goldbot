@@ -3,7 +3,7 @@ number: 19
 title: Open-risk (heat) cap and same-direction stacking (G-4)
 stage: Capital and drawdown management · RUN
 size: S
-status: 'built, off by default (PR #75, main a52b389; fefb759); parked: owner sets the values; cross-account sum later'
+status: 'later (triage 2026-11-13): built, off by default (PR #75); account-wide heat added for multi-instrument (PR #310); trading-safety-reviewer recommends, PD+PO decide'
 ---
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.

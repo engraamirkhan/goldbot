@@ -1,10 +1,10 @@
 ---
 number: 117
-rank: 47
+rank: 5
 title: A bad exploration arm row must not stop the engine (exits keep running)
 stage: 'build'
 size: 'S'
-status: proposed
+status: 'ready (a hash mismatch no longer aborts the start, PR #341 WS-1; a row the Arm validator refuses still raises in load_arms) · accountable: implementer · reviews: trading-safety-reviewer · due 2026-11-17 (triage 2026-11-13)'
 ---
 - **117. A bad exploration arm row must not stop the engine (exits keep running).** Value: on 2026-10-26 the
   trading-safety review blocked a branch whose G1A/G1C rows used a `window_local` form the `Arm` validator refuses.

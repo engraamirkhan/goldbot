@@ -1,10 +1,10 @@
 ---
 number: 175
-rank: 73
+rank: 12
 title: Reconcile Vantage BTCUSD weekend swap charges against the seven-night projection
 stage: 'ops + finance (follow-up of BACKLOG 153, R130)'
 size: S
-status: 'proposed · accountable: finance-auditor · reviews: quant-reviewer, trading-safety-reviewer'
+status: 'ready after the first weekend BTCUSD hold · accountable: finance-auditor · reviews: quant-reviewer, trading-safety-reviewer · due 2026-11-23 (triage 2026-11-13)'
 ---
 - **175. Reconcile Vantage BTCUSD weekend swap charges against the seven-night projection.** Value: BACKLOG 153
   counts a crypto book's swap every server-midnight rollover with no triple day, from the item's reading of the

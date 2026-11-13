@@ -1,14 +1,18 @@
 # goldbot product backlog
 
-2026-10-10 · product owner · base `874262b`. Inputs: `docs/TRADER_LIFECYCLE.md` (roadmap), `docs/TRACEABILITY.md`
-("Larger gaps" and every partial or missing row), `docs/research/state-of-the-art.md` (section C), `HANDOFF.md`
-"Next steps", open issues (#34 progress, research reports #37–#53, data coverage) and PR #60.
+2026-11-13 · product owner · base `da616da0` (triage; first written 2026-10-10 at `874262b`). Inputs:
+`docs/research/profitability-2026-11-12.md` (live demo record), `docs/TRADER_LIFECYCLE.md`, `docs/TRACEABILITY.md`,
+`HANDOFF.md`, the EVAL-2 pre-registration (ADR 0076/0077) and merged PRs to #383.
 
-**Where we stand.** No strategy is net positive after costs. tsmom has the only gross edge (+0.06 R, t 2.4–2.6),
-and it is negative net (−0.014 R at 4h before swap). Meta-models add nothing (AUC ≈ 0.50). The Q4 trial budget is
-spent (20/20); trials resume 2027-01-01. So the ranking favours two things: work that can still flip tsmom or find a
-new edge cheaply (**FIND**), and work that must exist before the system runs unattended on demo (**RUN**). Every
-expected-impact figure below is uncertain. None of these items is expected to create profit on its own.
+**Where we stand (2026-11-13).** No strategy is net positive after costs and none is a live candidate. Over 30 days
+the signal arms are about break-even net (+0.03 to +0.06 R per trade on the two ICM accounts, -0.03 R on Vantage);
+their random controls lose about the cost (-0.06 to -0.19 R); nothing clears the deflated bar at K 174 (Bonferroni
+t about 3.6). The best account made 1.0 % in its best week against the owner's 20-30 % goal. Z10D, Z9D and Z5P are
+the only arms ahead of their matched controls; H-90 (London only) is the one pre-registered session hypothesis.
+So the ranking favours, in order: honest reads that can produce a live candidate (**PROVE**), an evaluation that
+judges arms fairly against matched twins net of measured costs (**PROVE**), rails that keep exits running and stop
+paying for noise (**RUN**), and cost and calendar fixes that change which arms pass (**FIND**). Every
+expected-impact figure is uncertain; none of these items creates profit on its own.
 
 Rank = expected impact on net profit and safety ÷ effort. Size: S < 1 day, M 1–3 days, L > 3 days.
 Status: ready / in progress / in review / done / rejected. Item numbers are stable ids; the order of the table is
@@ -72,6 +76,18 @@ of 3492 (71 merged after the cap was set), so `test_runner_py_stays_under_its_li
 PR #85 head 22a9055; PR #85's backend job will go red. The CTO rules today (re-baseline once with a reason, or
 trim), and 62 must hold the cap too. 11 ranked rows.
 
+**Triage 2026-11-13 (product owner; base da616da0; owner focus: profitability only).** Every fragment was checked
+against `git log` on `da616da0` and the merged PRs (#60-#383). 68 items shipped and are
+marked done with their PR or commit (among them 153-165, 170 and 174 from PRs #371-#381, the trades UI 128-139 from
+#206/#211, the order-outcome work 71-87 from #85-#93, and 104 from #349); 27 are retired (21 whole, 6 remainders) with a one-line reason
+(focus clean-up ADR 0066, the TradingView pull retired 2026-11-02, the Q1 2027 queue and the time-structure learning
+loop superseded by EVAL-2, the holiday-list line superseded by 152); 23 are parked under "Later" with one
+accountable role, UI and cosmetic items among them. One new item (188, survivor reads) leads the table. No ranked
+item waits on the owner: 142 (b) is now a PD+PO decision after trading-safety review, 34's ADR 0006 ruling is
+retired, 127's private-repository step was overtaken by deleting data-v1, and adopting the off-by-default rails
+(17, 18, 19, 21, 35) only tightens, so the PD+PO decide on the trading-safety reviewer's recommendation. 15 ranked
+rows.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -94,128 +110,64 @@ hypotheses that go through the trial registry in a future quarter's budget.
 <!-- backlog.d:items from=25 -->
 
 ## Needs the owner
-These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
-matters stay here: money or paid plans; going live, `unlock_live` or phase-gate thresholds; loosening any risk limit;
-the owner's own credentials; legal. Routine product, ops and deploy decisions are made by the program director with
-the product owner and reported on #34 (ROADMAP section 6, "Decided by PD+PO").
-Every owner step below has `chaser: program-director`, who asks on #34 with a recommendation and a chase date.
-- **Capital and leverage (CFO capital plan section 7, queued 2026-10-16; ROADMAP section 6, OD-16 to OD-20).**
-  C1 no real money before the paper -> tiny-live gate (recommend: confirm). C2 tiny-live cannot trade at £1,000;
-  it needs about £6,850: (a) fund, (b) keep £1,000 and never go live, (c) amend the min-lot rule (a loosening; not
-  recommended); decide before the backtest -> paper gate, earliest about April 2027. C3 no demo deposits; live
-  deposits sized by what the next gate needs. C4 confirm the existing limits as the risk appetite by Mon 2026-11-30.
-  C5 set the broker leverage to the lowest IC Markets offers at or above 1:20 (tightens; your action in the client
-  area). OD-12: the agent budget (recommend about $10 a month) by Fri 2026-10-23, and whether the Claude
-  subscription counts as a running cost.
-- **Moved to PD+PO 2026-10-16 (they only tighten; the conservative option):** adopting the rails below. The PD+PO decide
-  each on the evidence of 45 and 46; any value looser than the built default goes back to the owner.
-  **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
-  heat cap (19), the loss-streak throttle (21) and the open-risk projection (35) are merged and off. For each:
-  adopt, set the values, or leave off. Recommendation: wait for 45 (holiday evidence, due 2026-10-30) before the
-  holiday window, and for 46 (replay) before the others, except 35, which only makes the £50 limit stricter.
-- **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
-  automatically (on merge or tag, with health check and rollback) waits for your approval. Until then, deploys stay
-  manual via `vps_update` / the Linux equivalents.
-- ~~**Event floor for daily-bar families.**~~ **Decided 2026-10-11** (owner approved the research director's
-  recommendations): 150 rule-only events, retire-only (`research.screen_min_events_daily: 150`;
-  `docs/research/preregistration-2027Q1.md` "Owner rulings").
-- ~~**Large-tick instruments.**~~ **Decided 2026-10-11:** out of scope (gold only).
-- ~~**Trial budget.**~~ **Decided 2026-10-11:** 20 a quarter, unchanged. Also decided that day: no consensus feed
-  (H-11 blocked); the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo
-  terminal runs, otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed
-  locally, summary only.
-- **Paper-vs-backtest gate: require the paper mean's lower 95% bound above 0** (phase-gate threshold, ROADMAP
-  OD-15). The quant reviewer recommends yes; the program director and product owner concur. Yours to rule.
-- **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
-  and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
-- **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass
-  from another feature version, so the DST correction does not void every trial. Sign off the material feature
-  version as the principled fix, or rule that evidence must be re-run after any feature bump.
-- **Trader-playbook risk policy** (items 17–22; playbook section 7): the weekend rule (recommend flat for intraday
-  families), tier-2 and holiday windows, throttle and heat-cap values, edge-linked sizing (G-10). The account size
-  and tiny-live risk for H-01 were decided under your delegation in ADR 0004 (minimum-lot exception at ≤ 1%; H-01
-  stays in shadow until equity reaches ~£7,900).
-- **Account and goal (ADR 0004, amended).** The demo is £1,000 GBP (answered); £50 is your absolute daily loss
-  limit (item 29); £50+/day is the north star, realistic as a monthly average at ~£21k–£53k. Yours: an optional
-  deposit plan (deposits climb the ladder faster than returns: 1h at ~£1,650), and confirm the demo is a Raw Spread
-  account (on Standard nothing trades at £1,000).
-- **Opportunity days (`docs/research/opportunity-days.md` section 6).**
-  - An event-count floor for H-18 (~690 events vs 1,000).
-  - Whether to project the percentage daily caps (item 29). At £1,000 that means at most one full loss a day.
-- **News scoring key (item 142 (b), added 2026-11-02).** The news shock blackout has never fired, because headline
-  scoring needs a paid Anthropic API key and none is set (4,764 polls in 30 days, all `scored: 0`). Options: (1)
-  fund a key with a monthly cap (CFO to price it); (2) no spend: PD + PO choose between a deterministic keyword rule
-  and retiring the shock blackout, after trading-safety review. Recommendation: (2). No strategy has shown that it
-  needs the shock rail, and the scheduled calendar blackouts cover the known events. Revisit if an incident shows
-  an unscheduled-news loss the calendar did not cover.
-- Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
-  item 2 lands; VM provisioning and every credential (item 1).
+Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program
+director with the product owner, the CTO on technical and the CFO on financial matters, and reported on #34.
+- **Going live.** Demo until the paper -> tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
+  and the typed phrase. The pilot is deferred (owner, 2026-10-30) until a candidate passes 188's reads and the
+  confirm window. Recommendation: no live step before one arm PASSES against its matched control at its
+  pre-registered read; then the CFO prices the pilot.
+- **Phase-gate thresholds** (item 8 values; ROADMAP OD-15: the paper mean's lower 95 % bound above 0).
+  Recommendation: yes, as the quant reviewer advised.
+- **Sizing and risk limits.** Live sizing, the daily loss limit and any loosening of RiskGate. Recommendation:
+  unchanged until a live candidate exists.
+- **Spending.** A paid news-scoring key for the shock blackout (142 (b) option 1). Recommendation: do not fund; the
+  PD+PO take option 2 or 3 after trading-safety review. Any paid data feed (119, 123) goes through the CFO first;
+  free routes only until then.
+- **Automatic deployment to the trading servers (CD).** Deploys stay run by Claude end to end on request; automatic
+  deploy on merge waits for the owner.
 
 ## Next parallel wave
-Only items that are not done (acceptance pass 2026-10-17, base bdd89f7). One runner.py lane at a time; every other
-lane touches different files.
+Only items not yet done. The top three ready items have lanes; each lane touches different files.
 
-1. **Release blocker, PR #85** (release-manager with the CTO's ruling, today): the runner.py line-cap ratchet
-   (`tests/test_engine_structure.py`, cap 3492, file 3504). Only that test file, or a trim in runner.py, changes.
-2. **Item 71 gaps** (implementer, due 2026-10-18): the TRACEABILITY A row (`docs/traceability.d/`) and the
-   trading-safety, code and ui-ux verdicts on d067a19 written into `docs/handoff.d/2026-10-17-not-placed-copy.md`
-   (reviewers read-only).
-3. **Item 1, demo deploy and the bridge smoke run** (`lane/claude-run-deploy`, sre runs it, release-manager
-   accountable): `docs/deploy/`, `goldbot/ops/linux/`, the server. Engine start Sun 2026-10-18 22:02 UTC; smoke run
-   by Mon 2026-10-26.
-4. **Item 62, kill switch on every symbol** (trading-safety reviewer, read-only, due 2026-10-22): verdict on
-   f211e0a/90b2603/e35f566; it merges only after lane 1 settles the cap (runner.py).
-5. **Item 72, NOT CONFIRMED build** (implementer): starts when 71 is accepted and 62 has merged (runner.py,
-   `not_placed.py`, `bot.py`, `ProposalCard.tsx`); tests/test_order_not_confirmed.py first.
-6. **W2-3 Progress screens re-check** (ui-ux-designer, read-only, due 2026-10-19): b90cdef against
-   docs/ux/progress-screens.md; records the verdict in `docs/handoff.d/2026-10-17-progress-screens.md`.
-7. **Verdict records owed** (read-only, due 2026-10-19): ui-ux-designer for 43 and 64, code-reviewer for 64 and for
-   the e2e fix (a2c66b0, ae5fbf1), code and trading-safety for 65 (a)(b). Each writes into that item's HANDOFF fragment.
-8. **Item 59 and 44 re-verifies** (trading-safety, read-only): 59 before the engine start; 44 by 2026-10-19.
-9. **Item 67, Object Storage alert** (sre, due 2026-10-23): `goldbot/ops/health.py` and settings, after lane 3.
-10. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23.
-11. **Item 27 and 5** (running): terminal terms after the engine start; research-director in `docs/research/`.
-12. **TD-10, e2e in local gates** (test-engineer, `scripts/gates.sh` only, due 2026-10-30).
-74 waits for the ADR 0023 step-1 move; 65 (N3 ADR, research-director, 2026-10-30) and 73 are parked.
+1. **188 survivor reads** (evaluator, read-only on the brain; `docs/research/`): fill counts on 2026-11-20, verdicts
+   at each pre-registered trigger.
+2. **150 + 149 EVAL-2 runner checks** (implementer, one lane: `goldbot/research/eval2/` runners and
+   `goldbot/research/catalogue/screen.py`, their tests).
+3. **117 bad arm row keeps the engine up** (implementer: `goldbot/engine/exploration.py`,
+   `goldbot/research/arms.py`, a new test file).
+4. **145 N-3 enable** (data-engineer: `scripts/local_bars.sh` refresh and the overlap note; the research director's
+   K row and `config/settings.yaml` `har_abstention` only after both).
+5. **146 session-split cost** (implementer: `goldbot/research/catalogue/costs.py` and its test). Not in the same
+   lane as 150/149 if those touch `costs.py`.
+6. **152 exchange holidays** (data-engineer: `goldbot/research/catalogue/dispatcher.py` calendar input).
 
-Top three ready items (2026-10-17): the PR #85 ratchet (lane 1), 71's gaps (lane 2) and item 1 (lane 3); all three
-have lanes. 62 is in review, not ready for a builder.
+Starts after these: 148 Lane 5B (engine consumers; after 150/149 and S5 green), 144 (engine 1d/1w; runner files,
+not in parallel with 148 5B), 90, 187 (once flat), 175 (after the first weekend BTCUSD hold), 142, 179, 105.
 
 ## Later (parked)
-Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
-- 11, trader-toolkit evaluation: runs as H-02 inside the Q1 queue (5).
-- 12 (rest), attribution dashboard view: the backend and the director input are done; the screen is ROADMAP W2-3.
-- 13 (rest), 1d founders: needs the engine to hold daily history, which is an engine change for later.
-- 16, swap in the live EV: at £1,000 only 15m trades fit, so overnight swap barely moves the EV. Revisit at the 1h
-  milestone.
-- 17, 18, 19, 21, 35: built and off by default. Adopting them is the owner's call ("Needs the owner").
-- 24 (rest), D-2 deterministic calendars: H-04 was frozen without them, and no queued trial needs them.
-- 26 (rest), north-star card, Telegram line and capture KPI: the backend is done; there are no trades until 1.
-- 30b and 30's trials, 31, 32, 33: Q2 2027 hypotheses, or reports that need trades first.
-- 34, material feature version: waits on the owner's ADR 0006 ruling.
-- 46, replay of the entry windows: needs a shadow book (after 1); schedule after 45.
-- 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
-- 65, review hygiene: (a), (b), (c) and (d N1, N2) accepted with follow-up 2026-10-17; only the N3 ADR
-  (research-director, 2026-10-30) and the verdict records remain.
-- 45 and 70, holiday list (parked 2026-10-17 for the cap): the window is off until adopted after 46; the 45 final
-  and the v3 list keep their 2026-10-30 dates.
-- 69, audit of leverage and the largest order (parked 2026-10-17 for the cap): re-enters 2026-11-01 for the
-  2026-11-04 audit.
-- 73, auto-mode reject notices (parked 2026-10-17): auto mode is off and offered only after 100 decided proposals;
-  re-enters at 80 decided proposals or before any /mode auto, whichever is first.
-- 36, 51 (off the table 2026-10-16, not parked): shipped to `main` in PR #83/#84; the product owner's
-  criterion-by-criterion check is owed with the 10-23 safety re-run.
-- M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
-- R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
-- D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11
-  `flags` dedup, D13 session state from `session_deals`, D7 4h bars across the daily break.
-- M25 CUSUM calibrated to 5% quarterly false alarms; M15 walk-forward reads settings; U4 lockout timing.
-- M16 CPCV quarterly; M10 learned allocator (after three months of data); F12 TradingView feature family.
-- Economic calendar with consensus and surprises (needed for hypothesis 4); other C2 sources (COT, ETF holdings, GPR,
-  GC basis).
-- Entry order type study (limit vs market); portfolio volatility target (risk use only, not alpha, per C3).
+Each item's status names its accountable role and the trigger that brings it back.
+- Rails built and off by default: 17, 18, 19, 21, 35. They only tighten; the trading-safety-reviewer recommends and
+  the PD+PO decide, no owner input.
+- 69, leverage and largest-order audit: folded into the finance-auditor's monthly audit (next 2026-12-04).
+- 91, retired-family guard: before the next registry budget opens.
+- 111 allocator against controls and 116 higher-timeframe features: return with a live candidate or a model lane.
+- Data with no queued consumer: 119 COMEX volume, 121 broker history depth, 123 central-bank and ETF flows, 124
+  second intraday source, 125 GPR/GDELT, 126 COT availability floor (before any positioning read), 147 ALFRED
+  vintages.
+- 143 `accounts delete` (security hygiene, LOW); 151 (only if Lane 3 adds a probe builder).
+- UI and Telegram, at the bottom by the owner's profit focus: 93, 94, 96 (approval card, real money only), 98
+  (Limits screen), 134 (Telegram push policy, matters once real money is live).
+- Older parked lines: M28 TreeSHAP per decision, R8 `order_calc_margin`, D10/A2/M9/D11/D13/D7 engine refinements,
+  M25 CUSUM calibration, M10 learned allocator, entry order type study (limit vs market).
 
 ## Done
+**Triage 2026-11-13 (product owner, base da616da0).** Marked done from git, each with its PR or commit in the
+item's status: 1, 16, 27, 36, 44, 51, 52, 59, 62, 67, 71, 72, 74-89, 92, 95, 99-101, 103, 104, 107, 112, 115, 118,
+127-133, 135-141, 153-165, 170, 174. Retired with a reason in the status: 5, 11, 31-34, 45, 46, 53, 68, 70, 73, 97,
+106, 108-110, 113, 114, 120, 122, and the remainders of 12, 13, 24, 26, 30 and 65. Acceptance for these was taken
+from the merge (green CI and the reviews named in each PR); the criterion-by-criterion re-run was not repeated in
+this sweep. Open sign-offs carried: quant for 23 (V6) and 50 (M45).
+
 **Acceptance pass 2026-10-17 (product owner, base bdd89f7).** Suites re-run at bdd89f7: test_not_placed,
 test_engine_safety, test_approval_window_clock, test_card_bound_approvals, test_bridge, test_engine_store_golden,
 test_engine_structure, test_e2e_server_tree, test_api_progress, test_smoke, test_account_view,
