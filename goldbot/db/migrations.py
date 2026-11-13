@@ -664,6 +664,18 @@ AUX: tuple[Migration, ...] = (
               BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END"""
           for t in ("exploration_replay", "exploration_label_void") for op in ("UPDATE", "DELETE")),
     )),
+    # additive (BACKLOG 117, trading-safety review 2026-11-13; goldbot/engine/arm_snapshot.py): the last good row of
+    # every exploration arm the engine loaded cleanly (ARM-SPEC and discovered arms), upserted by arm id, never
+    # deleted. A bad or missing row later keeps its arm from here with entries refused, so its open positions keep
+    # every exit. Shared by every account's engine on the host (one transaction per save). A release without it never
+    # reads it (a bad row then stops its start, as before)
+    Migration(version=29, name="arm_spec_last_good", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS arm_spec_last_good (
+               arm_id TEXT PRIMARY KEY,
+               updated_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

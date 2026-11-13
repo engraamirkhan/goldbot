@@ -555,7 +555,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                PauseWindow,
                # state/observe_<account>.json (ADR 0063): tests/test_observe_collector.py::
                # test_health_reads_a_status_a_newer_collector_wrote_with_an_extra_field
-               ObserveStatus}
+               ObserveStatus,
+               # aux.db arm_spec_last_good (BACKLOG 117, goldbot/engine/arm_snapshot.py):
+               # tests/test_engine_survives_bad_arm_row.py::test_a_snapshot_row_a_newer_release_wrote_still_reads
+               arms.Arm}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 
