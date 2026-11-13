@@ -15,6 +15,7 @@ line and the tables below stand for the rest.
 | Line | Card | Owner | Budget | Kill rule / date | Target £/day |
 |---|---|---|---|---|---|
 | **EVAL-2 batch 1** (C03 flag, C02 double >= 1h, S21 stretch OCO, S20 NR7 OCO, B07 triangle) | method section (d); mechanism, n, excess and sd per family there; expected gross >= 2x deciding cost (3x <= 15m) | research director (evaluator verdicts) | about 5 family rows + carried cells within the 105-row headroom, after the freeze lifts; build 8-11 working days | family NO SIGNAL at L1, cell kill at L2 (P(net > 0.05 R) < 0.05), INSUFFICIENT if TEST-OLD power < 0.3; close or promote at each family's L3 read, first TEST-OLD read by about 2026-11-24 | about £1-3/day on a £10k demo after decay and power (method (c)); not the £50/day route |
+| **H-94 range-to-cost gate** (11 pooled trend rules, HAR range / session cost, top half of trailing 250 days) | `prereg-2026-11-13-h94-range-cost-gate.md` (A36) | ml-researcher | 0 registry slots; explore K +1; runner + self-test about 1 agent-day; one explore read; TEST-OLD 2008-09 once only if explore passes, after review | card section 5 (all six legs) on 2010-17, read once; closed if no read by 2026-11-27 | about £3/day at min lot if it holds; a cheap low-prior close, not the £50/day route |
 
 Owner line: the catalogue is not where £50/day comes from; EVAL-2 makes a real edge testable and stops kills on noise.
 
