@@ -222,6 +222,13 @@ news:                                # headline collector (VPS service goldbot-n
   daily_cap_usd: 0.50                # scoring spend per UTC day, counted in agents.monthly_cap_usd
   shock_blackout_min: 30             # entries blocked after a high-relevance unscheduled shock (design)
   shock_min_relevance: 0.7
+  rule_shock_min_confidence: 0.8     # rules-v1 fallback scorer (no API key): flag a shock only at this confidence (R144)
+  rule_shock_dedupe_hours: 6         # a later report of the same event within this window (any feed) is not a new shock
+  rule_shock_cap_min_per_day: 120    # rule-shock blackout minutes per UTC day at most (LLM shocks uncapped); health warns
+  source_weights:                    # rules-v1 trust per feed (relevance and shock confidence x weight; unlisted 0.9)
+    forexlive: 0.9
+    fed_press: 1.0
+    bls: 1.0
 
 research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)

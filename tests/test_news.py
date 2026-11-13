@@ -150,7 +150,8 @@ def test_every_stored_row_carries_its_write_time_after_scoring(tmp_path):
 
 def test_items_whose_scoring_failed_are_scored_on_the_next_round(tmp_path):
     """An API error during scoring must not store the relevant items as unscored-and-seen: the collector promises to
-    try again next round, otherwise a shock headline arriving during an API blip never blocks entries."""
+    try again next round, otherwise a shock headline arriving during an API blip never blocks entries. A rule shock
+    (R144) is the exception: it is stored at once on its rules-v1 score, so the blackout never waits for the API."""
     client = FakeClient(cost_tokens=1000, shock_ids=())
     ok_create = client._create
     calls = {"n": 0}
@@ -163,11 +164,12 @@ def test_items_whose_scoring_failed_are_scored_on_the_next_round(tmp_path):
     client.beta = NS(messages=NS(create=flaky))
     c = _collector(tmp_path, client)
     first = c.poll(NOW)
-    assert "overloaded" in first["error"] and first["scored"] == 0
+    assert "overloaded" in first["error"] and first["scored"] == first["rule_scored"] == 1    # the Iran rule shock
     again = c.poll(NOW + pd.Timedelta(minutes=5))
-    assert again["scored"] == 3
+    assert again["scored"] == again["llm_scored"] == 2
     stored = Store(tmp_path / "data").read("news")
     assert len(stored) == 5 and stored["item_id"].is_unique and int(stored["scored"].sum()) == 3
+    assert sorted(stored.loc[stored["scored"].astype(bool), "scorer"]) == ["llm", "llm", "rules-v1"]
 
 
 def test_old_items_still_in_a_feed_are_not_rescored_every_poll(tmp_path):
@@ -182,12 +184,14 @@ def test_old_items_still_in_a_feed_are_not_rescored_every_poll(tmp_path):
     assert again["new"] == 0 and len(client.requests) == 1
 
 
-def test_budget_exhausted_items_are_stored_unscored(tmp_path):
-    c = _collector(tmp_path, FakeClient(), cap=0.0)
+def test_budget_exhausted_or_clientless_items_are_scored_by_the_rules_not_the_llm(tmp_path):
+    client = FakeClient()
+    c = _collector(tmp_path, client, cap=0.0)
     out = c.poll(NOW)
-    assert out["scored"] == 0 and out["unscored_reason"] == "news budget used" and out["new"] == 5
+    assert out["llm_scored"] == 0 and out["llm_skipped"] == "news budget used" and out["new"] == 5
+    assert out["rule_scored"] == 3 and not client.requests
     c2 = _collector(tmp_path / "b", None)
-    assert c2.poll(NOW)["unscored_reason"] == "no client"
+    assert c2.poll(NOW)["llm_skipped"] == "no client"
 
 
 def test_shock_blocks_entries_for_30_minutes(tmp_path):

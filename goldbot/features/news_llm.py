@@ -3,7 +3,8 @@
 Input: ctx["news"], the store's `news` table (the brain's; the Mac holds none). goldbot/data/news_features.py builds
 the per-headline fields and the 15-minute availability grid; each bar reads the grid through `store.asof_join` on
 `available_utc` at the bar's close (`visible_at`, the bar's start when absent), with a tolerance of one grid step, so a
-bar past the grid reads NaN rather than an old value. Columns: news_features.COLUMNS (17).
+bar past the grid reads NaN rather than an old value. Columns: news_features.COLUMNS (18; `news_rules_share_24h` flags how much of the window the free
+rules-v1 scorer scored rather than the LLM, R144).
 
 This family is collect-only (quant review 2026-11-13): forward-only data, since the collector started in October
 2026 and every research bar before it reads NaN. With ~4 usable weeks the screen cannot meet its gates (1,500
@@ -23,7 +24,8 @@ from goldbot.features.registry import FEATURES, FeatureCtx, feature
 
 NAME = "news_llm"
 FAMILY = "news"
-VERSION = "2"                    # 2: write-time availability, budget and outage masks before the z-scores
+VERSION = "3"                    # 3: rules-v1 rows read and flagged (news_rules_share_24h, R144); 2: write-time
+                                 # availability, budget and outage masks before the z-scores
 COLLECT_ONLY_MONTHS = 12
 SCREEN_NOTE = ("collect-only: no discovery trial reads news_llm until 12 months of the collector's forward history "
                "exist (gates: 1,500 candidates, 3 positive years); never a live model input before a trial passes it")
