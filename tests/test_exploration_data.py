@@ -568,6 +568,7 @@ def test_learn_allocates_strategy_arms_per_style_never_controls_and_retrains_whe
     as_of = pd.Timestamp("2026-10-11 23:00", tz="UTC")                  # a Sunday: retrain day
     configured = {a: "scalp" for a in ("S1a", "S1b", "S5a", "S5b", "S9")}
     rep = ex.learn(db, broker="icm", as_of=as_of, arms=configured, controls=["S0"], seed=1, retrain=True,
+                   allocator="thompson",
                    models_dir=tmp_path / "models")
     w = rep["weights"]
     assert set(w) == {"S1a", "S1b", "S5a", "S5b", "S9"} and "S0" not in w

@@ -13,12 +13,16 @@
                     With `costs.publish_release` and a github-token it then publishes the canonical broker's table
                     (costs only) to release costs-v1 for research.yml (`publish_costs`).
                     Last, exploration arms (`exploration_learn`, research/exploration_data.py; H-61/H-62): the bar-
-                    replayed net-R labels of resolved candidates, the arms' Thompson shares within each style (floor
-                    5%, cap 30%) -> aux.db exploration_weights, and on Sundays the H-62 style models whose retrain is
-                    due (a failure is reported and never stops the cost table; stale weights read as equal shares).
+                    replayed net-R labels of resolved candidates, the arms' shares within each style (equal among
+                    the enterable arms by default, Thompson only when research.exploration.allocator says so; floor
+                    5%, cap 30%) -> aux.db exploration_broker_weights, and on Sundays, only while
+                    research.exploration.meta_labeller is on (retired 2026-11-13), the H-62 style models whose retrain
+                    is due (a failure is reported and never stops the cost table; stale weights read as equal shares).
+                    Then the candidates' point-in-time feature snapshots (research/feature_snapshots.py), bounded.
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
                     that has a shadow record against the promotion gates (promote automatically when all pass),
-                    and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
+                    and, only while research.specialist_retrain is on (retired 2026-11-13, ML review), retrain on the
+                    rolling window. A family keeps at most one challenger in shadow; a new one
                     replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
 * tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
                     cloning, capital shares) -> state/agents.json for the dashboard's league table.
@@ -320,7 +324,29 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     except Exception as exc:       # noqa: BLE001 - weights fall back to equal shares when stale
         log.exception("exploration learner failed")
         out["exploration"] = {"error": type(exc).__name__}
+    try:          # research only, after the learner: never in the way of the cost table or the weights
+        out["feature_snapshots"] = feature_snapshots(ctx, slot)
+    except Exception as exc:       # noqa: BLE001 - the candidates are snapshotted another night
+        log.exception("exploration feature snapshots failed")
+        out["feature_snapshots"] = {"error": type(exc).__name__}
     return out
+
+
+def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """The gold exploration candidates' point-in-time default-feature rows (research/feature_snapshots.py, ML review
+    2026-11-13 improvement B), at most research.exploration.snapshot_max_decisions decision bars a night, newest first,
+    and the last day's coverage (candidates, snapshots, with features). Off when research.exploration.feature_snapshots
+    is false."""
+    from goldbot.research import feature_snapshots as fs
+    e = ctx.settings.research.exploration
+    if not e.feature_snapshots:
+        return {"enabled": False}
+    db = Database.open(ctx.state_dir, "aux")
+    rep = fs.snapshot_pending(db, ctx.store, broker_of={acc.account_id: acc.broker for acc in ctx.accounts},
+                              symbol_of={acc.account_id: getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts},
+                              as_of=slot, max_decisions=e.snapshot_max_decisions)
+    rep["coverage_1d"] = fs.coverage(db, since=slot - pd.Timedelta(days=1))
+    return rep
 
 
 def cost_probe_rows(state_dir: Path, account_id: str, lo: pd.Timestamp, hi: pd.Timestamp,
@@ -427,9 +453,10 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly (inside nightly_costs; research/exploration_data.py), per BROKER (ADR 0043 amendment: evidence and
     costs are never pooled across brokers): key any unkeyed rows by their account's broker, replay-label the
     candidates whose label resolved (bar replay on each account's own 1m bid/ask bars, with its broker's own cost
-    model), then each broker's H-61 bandit (within-style shares from its own evidence and its own accounts' arms) ->
-    aux.db exploration_broker_weights; on Sundays also each broker's H-62 style models whose retrain is due
-    (state/models/h62/<broker>/).
+    model), then each broker's arm shares (`learner_options`: equal among its own accounts' enterable arms within
+    each style, or the H-61 bandit on its own evidence when research.exploration.allocator is thompson) -> aux.db
+    exploration_broker_weights; on Sundays, only while research.exploration.meta_labeller is on (retired 2026-11-13),
+    each broker's H-62 style models whose retrain is due (state/models/h62/<broker>/).
 
     EVAL-2 Lane 5A, before any read: every non-gold r1 label is voided (`void_non_gold_labels`; if that fails the r1
     labels are still written, but neither r2 nor the learner runs). After the r1 labels, replay r2
@@ -550,8 +577,9 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             styles, controls, ceilings = exploration_arms(ctx, broker)
             try:                       # one broker's failure never skips another's run
                 out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls,
-                                    ceilings=ceilings, seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
-                                    models_dir=ctx.state_dir / "models", held_out=held)
+                                    ceilings=ceilings, seed=int(slot.value % (2**32)),
+                                    models_dir=ctx.state_dir / "models", held_out=held,
+                                    **learner_options(ctx.settings, slot))
             except Exception as exc:   # noqa: BLE001 - its weights age into equal shares; the others still learn
                 log.exception("exploration learner failed for broker %s", broker)
                 out[broker] = {"error": type(exc).__name__}
@@ -559,6 +587,14 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             "stamped": stamped,
             "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out, "label_void": label_void,
             "replay_v2": replay_v2, "no_entry_bar": no_entry_bar}
+
+
+def learner_options(settings: Settings, slot: pd.Timestamp) -> dict[str, Any]:
+    """The learner's switches from settings research.exploration (ML review 2026-11-13): the allocator (`equal` by
+    default, the H-61 bandit only when `thompson`), and the H-62 Sunday retrain only while `meta_labeller` is on
+    ("Retire the meta-labeller. Keep the candidate log and propensities")."""
+    e = settings.research.exploration
+    return {"allocator": e.allocator, "retrain": bool(e.meta_labeller and slot.dayofweek == 6)}
 
 
 def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> tuple[dict[str, Any], frozenset[str]]:
@@ -790,7 +826,15 @@ def _decide_challengers(ctx: JobContext, agent_id: str, slot: pd.Timestamp) -> l
     return out
 
 
+RETRAIN_RETIRED = ("skipped: specialist retrain retired (ML review 2026-11-13: shadow AUC 0.44 on 145 trades, Brier "
+                   "worse than the base rate, 0 live agents; settings research.specialist_retrain)")
+
+
 def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Bar sync, founders, the challengers in shadow judged (`_decide_challengers`), then a new walk-forward
+    challenger per agent only while settings research.specialist_retrain is on (retired 2026-11-13: "Retire the
+    models and their weekly retrain. R-07 already applies; keep the code"). Recalibration, drift and decay watchers
+    are separate jobs and keep running."""
     out: dict[str, Any] = {}
     if ctx.sync_bars is not None:
         try:
@@ -801,6 +845,10 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     ctx.population.ensure_founders(slot)
     for m in sorted(ctx.population.active("live", "shadow"), key=lambda m: m.agent_id):
         agent: dict[str, Any] = {"challengers": _decide_challengers(ctx, m.agent_id, slot)}
+        if not ctx.settings.research.specialist_retrain:
+            agent["retrain"] = RETRAIN_RETIRED
+            out[m.agent_id] = agent
+            continue
         if ctx.models.by_agent(m.agent_id, "challenger"):
             agent["retrain"] = "skipped: a challenger is still in shadow"
             out[m.agent_id] = agent

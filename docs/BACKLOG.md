@@ -119,11 +119,15 @@ rows.
 | 225 | Monthly spend, trial budget used and reliability scorecard | finance / ops (R142) | S | implemented (2026-11-13, branch feat/monthly-review) · accountable: implementer · reviews: cfo, cto, sre |
 | 226 | Monthly Telegram message, review-monthly issue and the review cadence | process / review loop (R142) | S | implemented (2026-11-13, branch feat/monthly-review) · accountable: program-director · reviews: security-reviewer |
 | 215 | Publish the brain's registry outbox from the Mac on a schedule | ops (follow-up of R140, 2026-11-13) | S | proposed · accountable: sre · reviews: security-reviewer, code-reviewer |
+| 227 | Equal demo arm shares instead of the Thompson bandit (H-61 allocator retired) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, code-reviewer |
 | 231 | Free rules-v1 headline scorer when no LLM client is configured | build (ML review 2026-11-13, lane ML2) | M | done 2026-11-13 (branch feat/news-rule-scorer, R144, ADR 0079) · accountable: implementer · reviews: quant-reviewer, code-reviewer |
 | 216 | Research director reads and marks the weekly review proposals | research ops (follow-up of R140, 2026-11-13) | S | proposed · accountable: research-director · reviews: quant-reviewer, code-reviewer |
+| 228 | Retire the H-62 online meta-labeller's retrain (code and data kept) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer |
 | 232 | Rule shocks fire the news-shock entry blackout, never an exit | build (ML review 2026-11-13, lane ML2) | S | done 2026-11-13 (branch feat/news-rule-scorer, R144, ADR 0079) · accountable: implementer · reviews: trading-safety-reviewer |
 | 217 | Deploy R140, publish the waiting registry outbox, verify feedback_loop clears | ops (follow-up of R140, 2026-11-13) | XS | proposed · accountable: sre (Claude-run) · reviews: none |
+| 229 | Stop the specialists' Saturday LightGBM retrain (watchers kept) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer (no order path change) |
 | 233 | Health alert when headlines arrive but none is scored in 24 h | build (ML review 2026-11-13, lane ML2) | S | done 2026-11-13 (branch feat/news-rule-scorer, R144) · accountable: implementer · reviews: sre |
+| 230 | Point-in-time feature snapshots on every gold exploration candidate | research data (ML review 2026-11-13 improvement B, lane ML1) | M | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143; ADR 0080) · accountable: implementer · reviews: quant-reviewer, data-engineer, code-reviewer |
 | 234 | Measure rules-v1 shock precision on the brain's real headlines | research (follow-up of R144) | S | open: relevance measured, shock precision not measurable yet (one real shock in the window); re-measure after a geopolitical shock period or 3 months · accountable: ml-researcher · reviews: quant-reviewer, trading-safety-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
@@ -1550,6 +1554,63 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **224. Monthly tie-out of net P&L against the broker balances flags, never passes.** Value: the daily ledger ties each day out, but nothing checked the month end to end against goldbot's own records. Acceptance, tests first: opening = last balance snapshot before 00:00 UTC on the 1st, closing = last one before the next 1st; closing - opening - (closed records' P&L + deposits + withdrawals + adjustments) beyond `monthly_review.balance_tolerance` + per-trade tolerance is UNRECONCILED and flags the review; so do no snapshots (`no_data`), a failed daily ledger in the month, a login or currency change, a baseline deal in the window and a record in another currency (tests/test_monthly_review.py::test_unreconciled_balance_flags_not_passes, ::test_a_failed_daily_ledger_in_the_month_flags_even_when_the_month_nets_out).
 - **225. Monthly spend, trial budget used and reliability scorecard.** Value: the CFO and CTO had no monthly figure for what the system cost and how often it broke. Acceptance, tests first: agent spend from aux.db `agent_spend` (USD, converted at `monthly_review.gbp_per_usd`) plus the known hosting costs in `monthly_review.hosting_gbp_month` (docs/finance); the registry's trials for the month's quarter against its budget (read only, a flag when unreadable or exceeded); from `scheduler_jobs` the jobs failing and overdue (a due slot past its max_late_hours) as of the review and the failures recorded; from `health_alerts` the health messages, dead man's switch changes and the market minutes down (fail to ok, weekend close left out) (tests/test_monthly_review.py::test_reliability_counts_failing_and_stale_jobs_and_market_minutes_down). Limit: scheduler_jobs keeps current state only, so failures are cumulative, not per month.
 - **226. Monthly Telegram message, review-monthly issue and the review cadence.** Value: a review nobody reads changes nothing; the loop needs a place the program-director clears every session, with no Claude cron and nothing pending on the owner. Acceptance, tests first: one Telegram message a month to the owner (a notice row relayed by the outbox; amounts in the account currency) and one GitHub issue labelled `review-monthly` (outbox file without a token, posted by the next run), each sent once a month; no MT5 login, host or balance in the public issue, accounts named as `account_name` (tests/test_monthly_review.py::test_message_has_no_account_identifiers, ::test_without_a_token_the_issue_text_waits_in_the_outbox). docs/process/review-cadence.md: the program-director's first step each session clears open `review` (performance-analyst + research-director, weekly) and `review-monthly` (finance-auditor, CFO, CTO) issues.
+- **227. Equal demo arm shares instead of the Thompson bandit.** Evidence (`docs/research/ml-review-2026-11-13.md` section 2 row 3): over 24 broker-days, bandit-weighted next-day R was +0.085 and equal-weighted +0.086, with a rank correlation of 0.003. Since 11-09 a -0.247 R arm had sat at the 30 % cap. Acceptance:
+  - The nightly learner writes equal shares among each style's enterable arms that have a labelled fill.
+  - An arm with no fill yet keeps the cold-start floor (quant Q2), so a style never spends more than the bandit would.
+  - Shares stay inside the same 5 % floor, 30 % cap and each arm's own ceiling.
+  - Retired, blocked and not-configured arms stay at 0.
+  - The allocator is a settings switch, `research.exploration.allocator`. The default is `equal`; `thompson` stays selectable.
+  - No cap, pot, budget or RiskGate rule changes.
+  - Tests: `tests/test_ml_review_cleanup.py`.
+- **228. Retire the H-62 online meta-labeller's retrain.** Evidence (ML review section 2 row 4):
+  - `exploration_models` and `exploration_priors` held 0 rows.
+  - 0 of 19,990 candidates carried a feature snapshot, so the meta-labeller could never train.
+  - Its feature family is the one R-20 retired.
+
+  Acceptance:
+  - The Sunday retrain runs only while `research.exploration.meta_labeller` is true (default false).
+  - The code, the tables and the candidate log with its propensities are kept.
+  - The retirement is recorded in `docs/research/hypotheses.md` (H-62 row).
+  - Tests: `tests/test_ml_review_cleanup.py`.
+- **229. Stop the specialists' Saturday LightGBM retrain.** Evidence (ML review section 2 row 1):
+  - 145 out-of-sample shadow trades gave AUC 0.44 and Brier 0.206, against 0.197 for the base rate.
+  - There are 0 live agents.
+  - The retrain had been skipped for 25 days.
+
+  Acceptance:
+  - `saturday_retrain` fits no new challenger while `research.specialist_retrain` is false (the default).
+  - It still syncs bars, ensures founders, judges the challengers already in shadow and saves the population.
+  - `recalibrate`, `drift_watch` and `model_watch` are unchanged.
+  - The retirement is recorded in `docs/research/hypotheses.md` (R-07 row).
+  - Tests: `tests/test_ml_review_cleanup.py`.
+- **230. Point-in-time feature snapshots on every gold exploration candidate.** Value: this turns the demo log into a dataset that matches our broker, our costs and the policy that chose the trades, so later models can learn from our own fills.
+
+  Acceptance:
+  - Each candidate gets the engine's default feature row (DEFAULT_FEATURE_NAMES plus h1/h4/d1 context) at its decision.
+  - The row is built from the account's stored broker minutes visible by the decision.
+  - Storage is aux.db migration 32: content-addressed vectors plus one row per candidate, append-only.
+  - The job runs nightly after the learner and is bounded (600 decision bars, newest first). It is never in the engine tick.
+  - Tests (`tests/test_feature_snapshots.py`):
+    - Recomputing from bars cut at each decision gives 0 mismatches.
+    - Shuffled-label AUC is 0.50 +- 0.02, and an informative label reads above 0.9.
+    - No engine module names the tables.
+
+  - Quant review of a8c3a6d7 (fixed in the follow-up commit, tests in `tests/test_feature_snapshots_pit.py`):
+    - Batches are shared fairly between accounts. A stuck account (no bars, or not configured) gets a retry date and
+      never starves a healthy one.
+    - Point in time is by write time: the engine's minute writer and the broker-M1 reconcile stamp `available_utc`.
+      A minute written more than 2 minutes after its close counts from its write time.
+    - Feeds are resolved per decision. Late, revised and quarantined minutes are tested.
+    - A snapshot matches `engine.frames.frame` exactly, at 15m and 1h.
+    - Rows with no write time are marked `pit = nominal`.
+    - A too-short history is retried for 3 nights, with the release minutes the engine warm-starts on as the
+      last-resort feed.
+    - Equal shares never spend more of a style than the bandit would. Cold arms keep the cold-start floor.
+    - Coverage counts gold candidates only.
+
+  Follow-ups (not done):
+  - Add the coverage line to the daily review / morning report.
+  - Snapshots for non-gold candidates.
 - **231. Free rules-v1 headline scorer when no LLM client is configured.** Value: the brain has no API key, so 0 of 392 headlines were scored. Acceptance, tests first: every prefiltered headline gets a deterministic rules-v1 score (gold driver lexicon, negation, hedges, source weights) marked `scorer` = rules-v1; an LLM score takes precedence and the rule score is kept in `rule_*` columns; rows carry written_utc; on the labelled fixture shock precision >= 0.9.
 - **232. Rule shocks fire the news-shock entry blackout, never an exit.** Value: the design's shock blackout could not fire without the LLM. Acceptance, tests first: a rules-v1 shock at or above `news.rule_shock_min_confidence` puts the engine in a `news_shock` blackout that RiskGate refuses entries on; no force-close and the time exit still runs; during an LLM API error a rule-shock item is stored at once.
 - **233. Health alert when headlines arrive but none is scored in 24 h.** Value: the 0-of-392 gap went unnoticed. Acceptance, tests first: the collector records last arrival and last score in `state/news_scoring.json`; the `news` check fails when prefiltered headlines arrived in the last 24 h, none was scored in it and the record spans 24 h; no record = not judged.

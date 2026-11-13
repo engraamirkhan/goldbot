@@ -471,6 +471,20 @@ class PositionSettings(_Section):
     cme_fee_usd_per_side: float = Field(2.0, ge=0)   # venue C (CME 1OZ): per oz a side, at the reference price
 
 
+class ExplorationLearnSettings(_Section):
+    """The nightly exploration learner (research/exploration_data.py `learn`) and the candidates' feature snapshots
+    (research/feature_snapshots.py). ML review 2026-11-13 (docs/research/ml-review-2026-11-13.md): "Replace it [the
+    Thompson bandit] with equal shares within the existing floor and cap" and "Retire the meta-labeller"."""
+    # demo arm shares within a style: `equal` (every enterable arm alike, floor 5 % / cap 30 % / its own ceiling), or
+    # `thompson` (H-61, kept selectable: weighted next-day R +0.085 against equal +0.086, rank correlation 0.003)
+    allocator: Literal["equal", "thompson"] = "equal"
+    # H-62 online meta-labeller's Sunday retrain (retired 2026-11-13: 0 model rows, 0 of 19,990 candidates trainable)
+    meta_labeller: bool = False
+    # point-in-time default-feature vector of every gold exploration candidate (improvement B), after the learner
+    feature_snapshots: bool = True
+    snapshot_max_decisions: int = Field(600, ge=1, le=20_000)   # decision bars snapshotted a night, newest first
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -520,6 +534,11 @@ class ResearchSettings(_Section):
     recal_prior_trades: float = Field(200.0, gt=0)    # the current calibration counts as this many trades
     recal_max_shift: float = Field(0.05, gt=0, le=0.2)   # most a probability may move in one run
     recal_window_days: int = Field(182, ge=7)         # outcomes exited within this many days
+    # the specialists' Saturday LightGBM retrain (new challengers). Retired 2026-11-13 (ML review: shadow AUC 0.44 on
+    # 145 trades, Brier worse than the base rate, 0 live agents); challengers in shadow are still judged, and the
+    # recalibration, drift and decay watchers still run
+    specialist_retrain: bool = False
+    exploration: ExplorationLearnSettings = Field(default_factory=ExplorationLearnSettings)
     # H-27 lot-fit overlay (research/lot_fit.py, opt-in): the account the research sizes trades for
     lot_fit_equity: float = Field(1000.0, gt=0)          # account currency
     lot_fit_acct_per_usd: float = Field(0.75, gt=0)      # account currency per USD (GBP at GBPUSD ~1.33)

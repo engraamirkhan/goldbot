@@ -175,9 +175,9 @@ def test_vantage_evidence_never_changes_icm_weights_and_icm_evidence_never_chang
     _evidence(icm_only, "icm", icm_outcome)
     _evidence(both, "icm", icm_outcome)
     _evidence(both, "vantage", vantage_outcome)
-    alone = ex.learn(icm_only, broker="icm", as_of=as_of, seed=1)["weights"]
-    w_icm = ex.learn(both, broker="icm", as_of=as_of, seed=1)["weights"]
-    w_van = ex.learn(both, broker="vantage", as_of=as_of, seed=1)["weights"]
+    alone = ex.learn(icm_only, broker="icm", as_of=as_of, seed=1, allocator="thompson")["weights"]
+    w_icm = ex.learn(both, broker="icm", as_of=as_of, seed=1, allocator="thompson")["weights"]
+    w_van = ex.learn(both, broker="vantage", as_of=as_of, seed=1, allocator="thompson")["weights"]
     assert w_icm == alone                                                     # vantage rows changed nothing
     assert w_icm["S1a"] == pytest.approx(0.30) and w_van["S1b"] == pytest.approx(0.30)
     assert w_van["S1a"] < w_icm["S1a"]
