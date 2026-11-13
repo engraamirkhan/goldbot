@@ -606,3 +606,14 @@ one of >= 9 cuts); the discovery fills never count.
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-90 | Gold signal arms Z1P, Z2P, Z5P, Z3D, Z9D, Z10D, GS1 entering in [07:00, 12:00) Europe/London beat their own side- and session-matched random control (E_L > 0), and by more than outside London (DiD > 0), net of broker-measured costs. Discovery (post hoc, 2026-10-26..11-12): London signal arms +0.132 R, day-clustered t 2.9, n 674; controls -0.078 R. Prior low (H-82 gross +/-0.011 R on 2010-17; H-83 0/24 cells) | **pre-registered** 2026-11-12; quant sign-off pending; K rows not yet written | K +3 (H-learn, H-seen, F): demo-arm K 174 -> 177 | H-learn (2010-17) kill-only: E_L <= 0 or DiD <= 0 or < 5/8 years -> retired. F (demo from 11-13, read at 400 London fills or 2026-12-17, futility at 150): PASS = E_L t >= 2.0, London net > 0, DiD t >= 1.645, leave-one-arm-out and both sides > 0 -> London-first demo admission proposal (volume only, no cap change, never live evidence); LEAD = t in [1, 2); else retired |
+
+## A31. London session on history, L3 (opportunity researcher, 2026-11-13)
+
+Prereg `prereg-2026-11-13-l3-london-history.md`, frozen before any outcome is computed. The directional leg (London
+open drift, London-NY overlap, Asia range break at London) is **declined at K +0**. Every form of it is already
+retired or seen on 2010-17, and part of it on 2020-26 including the holdout (card section 1). The signal-arm London
+claim stays with H-90.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-91 | The London morning range ratio at 12:00 London (`day_type.noise_ratio`, 08:00-12:00 London over its 14-session same-minute mean) forecasts ln(NY 08:30-16:00 range / 22-session mean). It adds to the NY session's own 1- and 5-day ranges, the day HAR forecast, a tier-1 flag and the weekday. Non-directional: a stand-aside and size input for arms that already have an edge (the H-21 London refresh, never built) | **pre-registered** 2026-11-13; **runner not built** (new driver and self-test needed, card section 4); close date 2026-12-04 | explore 2010-17 K +1 (registry 174 -> 175, or 177 -> 178 with H-90); +1 confirm and +1 test_old only if reached; 0 budget slots | PASS = S1 Newey-West t >= 3.6, S2 OOS rho gain >= 0.03 with bootstrap LB > 0, S3 beats all 1,000 same-month date-shuffled placebos, S4 >= 7/8 years positive, S5 best-NY-session capture +3 pts over the base. PASS permits one confirm on 2018-01..2025-09 (the quant rules CONFIRM-SEEN first). FAIL retires H-21 as a London-to-NY predictor; no re-test on another window or cut |
