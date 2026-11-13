@@ -368,3 +368,12 @@ def fetch(url: str, timeout: float = 15.0) -> str:   # pragma: no cover - networ
     req = urllib.request.Request(url, headers={"User-Agent": "goldbot-news/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", errors="replace")
+
+
+def engine_shock(cache: tuple[Any, Any], store: Any, now: pd.Timestamp, cfg: Any) -> tuple[tuple[Any, Any], Any]:
+    """The engine's news-shock read (moved out of runner.py, ADR 0023): re-read the last day of news at most once a
+    minute (shocks need a fast re-read), then the shock window with the engine's minutes, relevance and rule cap."""
+    if cache[0] is None or now - cache[0] > pd.Timedelta(minutes=1):
+        cache = (now, store.read("news", start=now - pd.Timedelta(days=1), end=now))
+    return cache, shock_window(cache[1], now, cfg.shock_blackout_min, cfg.shock_min_relevance,
+                               rule_cap_min=cfg.shock_rule_cap_min)
