@@ -818,7 +818,7 @@ def arm_hash(arm: Arm) -> str:
 
 
 def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, root: Path | None = None,
-              registry: Path | None = None) -> list[Arm]:
+              registry: Path | None = None, rejected: dict[str, str] | None = None) -> list[Arm]:
     """The arms of `path`. With `check_hash` every arm must carry a `config_hash` equal to its own: an arm edited after
     it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id). With `live_class` (the
     arms are loaded for an account that is not demo) a `spec_rule` arm is refused: ADR 0058 "Demo arms are data rows
@@ -831,9 +831,32 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
 
     ADR 0061 amendment 2026-11-02, across rows (`learning_cross_refusals`): a learning arm whose control row is missing
     or not matched is refused; a control dedicated to learning arms is refused with them once none may enter; a
-    qualification citing a learning arm's K row is refused."""
+    qualification citing a learning arm's K row is refused.
+
+    With `rejected` (the engine, backlog 117: "a bad exploration arm row must not stop the engine"), a row that fails
+    validation, shares its id with another row (neither runs) or names no original as its twin is left out, logged
+    and named in `rejected` with the reason, instead of raising; every other row loads. Without it (research, CI) the
+    first bad row raises as before. The live-class `spec_rule` refusal and the hash check stay errors either way."""
     raw = safe_load_cached(path) or {}          # parsed once per file version (goldbot/config.py)
-    out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in raw.get("arms", [])]
+    rows = list(raw.get("arms") or [])
+    if rejected is None:
+        out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in rows]
+    else:
+        out = []
+        for i, row in enumerate(rows):
+            try:
+                out.append(stamp_qualification(Arm.model_validate(row), root, registry))
+            except ValueError as exc:                    # pydantic's ValidationError is a ValueError
+                _reject(rejected, _row_name(row, i), path, exc)
+        ids = [a.id for a in out]
+        for dup_id in sorted({x for x in ids if ids.count(x) > 1}):
+            _reject(rejected, dup_id, path, "another row has the same id (ambiguous: neither runs)")
+        out = [a for a in out if a.id not in rejected]
+        by_row = {a.id: a for a in out}
+        for a in out:
+            if why := _twin_problem(a, by_row):
+                _reject(rejected, a.id, path, why)
+        out = [a for a in out if a.id not in rejected]
     cross = learning_cross_refusals(out)
     out = [a.model_copy(update={"entry_refused": cross[a.id]}) if a.id in cross else a for a in out]
     if live_class and (spec := sorted(a.id for a in out if a.rule == SPEC_RULE)):
@@ -844,13 +867,8 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
         raise ValueError(f"duplicate arm ids: {dup}")
     by_id = {a.id: a for a in out}
     for a in out:
-        if a.twin_of is None:
-            continue
-        twin = by_id.get(a.twin_of)
-        if twin is None or twin.twin_of is not None:
-            raise ValueError(f"{a.id}: twin_of {a.twin_of!r} names no arm of this spec (a twin copies an original)")
-        if (a.rule, a.timeframe, a.params, a.max_open) != (twin.rule, twin.timeframe, twin.params, twin.max_open):
-            raise ValueError(f"{a.id}: a broker twin keeps {twin.id}'s rule body (rule, timeframe, params, max_open)")
+        if why := _twin_problem(a, by_id):
+            raise ValueError(f"{a.id}: {why}")
     if check_hash:
         for a in out:
             if a.config_hash != arm_hash(a):
@@ -863,6 +881,30 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
             log.log(logging.INFO if first else logging.DEBUG, "arm %s refuses new demo entries: %s", a.id,
                     a.entry_refused)
     return out
+
+
+def _twin_problem(a: Arm, by_id: dict[str, Arm]) -> str | None:
+    """Why `a`'s `twin_of` is refused, None when it has none or it holds: a twin copies an original of the same spec
+    (itself no twin) and keeps its rule body."""
+    if a.twin_of is None:
+        return None
+    twin = by_id.get(a.twin_of)
+    if twin is None or twin.twin_of is not None:
+        return f"twin_of {a.twin_of!r} names no arm of this spec (a twin copies an original)"
+    if (a.rule, a.timeframe, a.params, a.max_open) != (twin.rule, twin.timeframe, twin.params, twin.max_open):
+        return f"a broker twin keeps {twin.id}'s rule body (rule, timeframe, params, max_open)"
+    return None
+
+
+def _row_name(row: Any, i: int) -> str:
+    """A spec row's id for a log line: its `id`, else its position (`row<i>`)."""
+    return str(row["id"]) if isinstance(row, dict) and row.get("id") else f"row{i}"
+
+
+def _reject(rejected: dict[str, str], name: str, path: Path, why: object) -> None:
+    """Records a bad row of `path` as left out (`load_arms` with `rejected`), logged as an error."""
+    log.error("arm row %s of %s left out: %s", name, path, why)
+    rejected[name] = str(why)
 
 
 def learning_cross_refusals(rows: list[Arm]) -> dict[str, str]:
