@@ -133,6 +133,21 @@ def test_headlines_sharing_a_timestamp_are_all_kept_across_polls(tmp_path):
     assert sorted(stored["link"]) == ["https://x/a", "https://x/b", "https://x/c"]
 
 
+def test_every_stored_row_carries_its_write_time_after_scoring(tmp_path):
+    """R139 review: the news features' availability is the moment the row was written (after the poll's scoring), read
+    from the collector's clock just before the append, never the poll start plus an assumed lag."""
+    client = FakeClient(cost_tokens=1000)
+    ticks = iter([NOW + pd.Timedelta(seconds=97)])
+    c = _collector(tmp_path, client)
+    c.clock = lambda: next(ticks)
+    c.poll(NOW)
+    stored = Store(tmp_path / "data").read("news")
+    assert len(stored) == 5
+    w = pd.to_datetime(stored["written_utc"], utc=True)
+    assert (w == NOW + pd.Timedelta(seconds=97)).all()
+    assert (w >= pd.to_datetime(stored["received_utc"], utc=True)).all()
+
+
 def test_items_whose_scoring_failed_are_scored_on_the_next_round(tmp_path):
     """An API error during scoring must not store the relevant items as unscored-and-seen: the collector promises to
     try again next round, otherwise a shock headline arriving during an API blip never blocks entries."""

@@ -101,6 +101,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from goldbot.config import load_settings  # noqa: E402
+from goldbot.data.news_features import ctx_frame as news_ctx_frame  # noqa: E402
+from goldbot.data.orderflow import ctx_frame as orderflow_ctx_frame  # noqa: E402
 from goldbot.data.release import (  # noqa: E402
     bar_digest_refusal,
     read_bar_files,
@@ -111,6 +113,8 @@ from goldbot.data.release import (  # noqa: E402
 from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
 from goldbot.features import day_type as day_type_features  # noqa: E402
+from goldbot.features import news_llm as news_llm_features  # noqa: E402
+from goldbot.features import orderflow as orderflow_features  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
 from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
@@ -336,20 +340,28 @@ def queued_digest_refusal(rows: list[dict[str, Any]], quarter: str, targets: lis
 
 def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None,
                 us_calendar: pd.DataFrame | None = None, *, calendar_features: bool = False,
-                day_type: bool = False) -> tuple[dict | None, list[str] | None]:
+                day_type: bool = False, news: pd.DataFrame | None = None,
+                orderflow_bars: pd.DataFrame | None = None) -> tuple[dict | None, list[str] | None]:
     """ctx for the features and the explicit feature list: None (the pipeline's default, with macro when passed)
     unless an opt-in family is on, which registers and appends it. A calendar always goes into ctx["us_calendar"]
-    (day_type reads it); the calendar's own families join only with `calendar_features`."""
-    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning), ("us_calendar", us_calendar))
+    (day_type reads it); the calendar's own families join only with `calendar_features`. `news` (the collector's
+    `news` table) adds the `news_llm` family, `orderflow_bars` (1m bars) the `orderflow` family (R139)."""
+    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning), ("us_calendar", us_calendar),
+                             ("news", None if news is None else news_ctx_frame(news)),
+                             ("bars_1m", None if orderflow_bars is None else orderflow_ctx_frame(orderflow_bars)))
            if v is not None}
     cal_on = calendar_features and us_calendar is not None
-    if positioning is None and not cal_on and not day_type:
+    if positioning is None and not cal_on and not day_type and news is None and orderflow_bars is None:
         return ctx or None, None
     extra = [positioning_features.enable()] if positioning is not None else []
     if cal_on:
         extra += us_calendar_features.enable()
     if day_type:
         extra.append(day_type_features.enable())
+    if news is not None:
+        extra.append(news_llm_features.enable())
+    if orderflow_bars is not None:
+        extra.append(orderflow_features.enable())
     return ctx, [*research_feature_names(ctx), *extra]
 
 

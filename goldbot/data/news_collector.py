@@ -2,7 +2,9 @@
 
 Fetch every configured feed (a failing feed is recorded in state/news_feeds.json and skipped, never fatal), keep the
 items not stored yet, score the prefiltered ones in batches while today's news budget and the agents' monthly budget
-allow, and append everything to the store's `news` table (unscored items keep relevance NaN).
+allow, and append everything to the store's `news` table (unscored items keep relevance NaN). Every row carries
+`written_utc`, the collector's clock just before the append (after scoring): the moment the row and its scores became
+readable, which the point-in-time news features use as availability (goldbot/data/news_features.py, R139).
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ class NewsCollector:
         self.feeds, self.fetcher, self.client, self.ledger = feeds, fetcher, client, ledger
         self.model, self.daily_cap = model, daily_cap_usd
         self.spend_path = self.state / "news_spend.json"
+        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now(tz="UTC")
 
     def _spent_today(self, now: pd.Timestamp) -> float:
         try:
@@ -79,5 +82,6 @@ class NewsCollector:
             scored += s
         items = apply_scores(items, scored)
         out["new"], out["scored"] = len(items), int(items["scored"].sum())
+        items["written_utc"] = max(pd.Timestamp(self.clock()), now)     # after scoring; never before the receipt
         self.store.append("news", items, source="rss")
         return out
