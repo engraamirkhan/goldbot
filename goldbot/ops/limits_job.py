@@ -445,6 +445,11 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
             log.warning("limits_job: 15m bars unreadable (%s): ATR unknown", type(exc).__name__)
     cost = _cost_ratio(settings, acc.account_id, decision_day, trades, imputer, state_dir=state_dir, end=end,
                        exit_legs=exit_legs, cost_bars_15m=cost_bars_15m)
+    if cost.bars_stale:
+        dq("cost_bars_stale", f"{acc.account_id}: no dukascopy 15m bar within {ATR_MAX_LAG_DAYS} days of "
+                              f"{decision_day.isoformat()}: fills after it unmeasured")
+    if cost.reason is not None and cost.reason.startswith("error:"):
+        dq("cost_ratio_error", f"{acc.account_id}: cost ratio not measured ({cost.reason[6:]}): cost rule inert")
     if cost.reason == "unmeasured_share":
         dq("cost_ratio_unmeasured", f"{acc.account_id}: {cost.unmeasured} of {cost.unmeasured + cost.fills} fills "
                                     f"since {cost.since.isoformat()} without a full cost measure: cost rule inert")

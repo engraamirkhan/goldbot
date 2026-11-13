@@ -374,3 +374,44 @@ def test_fills_after_the_last_label_bar_wait_for_the_weekly_refresh_and_are_not_
     got = _ratio(fills, bars=BARS[pd.DatetimeIndex(BARS["ts_utc"]) < cut])
     assert got.pending > 0 and got.unmeasured == 0 and got.fills + got.pending == 2 * MIN_FILLS
     assert got.ratio is not None
+
+
+def _two_a_day() -> list[tuple[ClosedTrade, dict]]:
+    return [_fill(e) for e in [*_weekday_entries(MIN_FILLS),
+                               *(e + pd.Timedelta(hours=4) for e in _weekday_entries(MIN_FILLS))]]
+
+
+def test_label_bars_older_than_9_days_count_later_fills_unmeasured_and_say_so():
+    from goldbot.ops.cost_ratio import MAX_BAR_LAG_DAYS
+    from goldbot.ops.limits_job import ATR_MAX_LAG_DAYS
+    assert MAX_BAR_LAG_DAYS == ATR_MAX_LAG_DAYS == 9
+    stale = BARS[pd.DatetimeIndex(BARS["ts_utc"]) < pd.Timestamp("2026-11-15", tz="UTC")]   # 10 days before DAY
+    got = _ratio(_two_a_day(), bars=stale)
+    assert got.bars_stale and got.pending == 0 and got.unmeasured > 0 and got.ratio is None
+    assert not _ratio(_two_a_day()).bars_stale
+
+
+def test_the_job_alerts_on_stale_label_bars_and_on_a_failing_series(tmp_path, phase_file, monkeypatch):
+    import goldbot.ops.cost_ratio as cr
+    from goldbot.ops.limits_job import decide_account
+    fills = _good_history(1.3)
+    for t, _ in fills:
+        append_closed_trade(tmp_path, t)
+    _engine_file(tmp_path)
+    a = _acc()
+    events: list[tuple[str, str]] = []
+    legs = pd.DataFrame([leg for _, leg in fills])
+    models = SimpleNamespace(entries=[SimpleNamespace(version="v1", promoted_utc=FREEZE)])
+    kw: dict[str, Any] = {"state_dir": tmp_path, "models": models, "decision_day": DAY, "now_ns": time.time_ns(),
+                          "dq": lambda c, d: events.append((c, d)), "exit_legs": lambda s, e: legs}
+    stale = BARS[pd.DatetimeIndex(BARS["ts_utc"]) < pd.Timestamp("2026-11-12", tz="UTC")]
+    out = decide_account(S, a, [a], cost_bars_15m=lambda s, e: stale, **kw)
+    assert out["cost_ratio_20d"] is None and "cost_bars_stale" in {c for c, _ in events}
+
+    def boom(*x: Any, **k: Any) -> Any:
+        raise ValueError("bad frame")
+
+    monkeypatch.setattr(cr, "cost_ratio_20d", boom)
+    events.clear()
+    out = decide_account(S, a, [a], cost_bars_15m=lambda s, e: BARS, **kw)
+    assert out["cost_ratio_20d"] is None and "cost_ratio_error" in {c for c, _ in events}

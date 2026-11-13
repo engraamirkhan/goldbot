@@ -1554,7 +1554,8 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   research labels charged at qualification (`cost_model`: settings priors), on its fills of the last 20 risk days
   (`cost_fills` measured, `cost_unmeasured` missing a part, `cost_pending` entered after the last weekly bar refresh). Above 1.25 the limits go to the floors, 1.10-1.25 one
   step down. `null` with fewer than 20 measured fills or more than 20% unmeasured (dq_event `cost_ratio_unmeasured`):
-  the rule is then inert. Then check that the engine writes `exit_fills` and the dukascopy 15m bars are fresh.
+  the rule is then inert. Then check that the engine writes `exit_fills` and the dukascopy 15m bars are fresh
+  (`cost_bars_stale`: no bar within 9 days; `cost_ratio_error`: the series failed, see the job log).
 
 
 ### icm-demo learning host (ADR 0043 amendment 2026-10-26, ADR 0037 amendment 6)

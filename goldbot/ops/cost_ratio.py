@@ -31,7 +31,9 @@ Definition (pre-registered before any replay; fixed here, every amount USD per o
   "No measured cost in the window (None) triggers nothing"). `CostRatio.reason` says which.
 * A fill entered after the last label bar's close (the dukascopy bars are refreshed weekly, so up to about 8 days
   lag) is `pending`, out of the window's population until the refresh models it: a time cut, not an outcome one, so it
-  biases nothing and does not count as unmeasured.
+  biases nothing and does not count as unmeasured. Bounded: when the last label bar closed more than MAX_BAR_LAG_DAYS
+  before the decision day (a stalled refresh), nothing is pending, those fills count as unmeasured and `bars_stale`
+  makes the job raise a `cost_bars_stale` alert (quant re-check of 76066de6).
 * A fill missing any part of its measure, or with a non-finite one (no side, requested price, decision spread, exit
   leg, a leg without its requested price, no model bar, a NaN or infinite price) is counted `unmeasured` and reported in the job's row, never guessed: a guessed part
   could only understate or overstate the cost.
@@ -62,6 +64,7 @@ MIN_FILLS = 20                    # pre-registered: fewer measured fills in the 
 MAX_UNMEASURED_SHARE = 0.20       # pre-registered: a larger share of unmeasured fills gives None and a dq alert
 MODEL_SOURCE = "settings priors"  # the cost the strategies were qualified under (module docstring)
 BAR_MINUTES = 15                  # the model's spread: the 15m bar's ask - bid close
+MAX_BAR_LAG_DAYS = 9              # = limits_job.ATR_MAX_LAG_DAYS: the weekly refresh plus slack; older bars are stale
 BAR_TOLERANCE = pd.Timedelta(hours=1)   # a model bar closed longer ago than this before the entry: unmeasured
 
 
@@ -89,6 +92,7 @@ class CostRatio(FrozenRecord):
     fills: int = 0                # measured fills in the window
     unmeasured: int = 0           # fills in the window missing a part of their measure (module docstring)
     pending: int = 0              # fills entered after the last label bar: modelled after the weekly bar refresh
+    bars_stale: bool = False      # no label bar, or the last older than MAX_BAR_LAG_DAYS: nothing pending, alerted
     measured_usd_per_oz: float | None = None    # the pooled measured cost per fill
     model_usd_per_oz: float | None = None       # the pooled model charge per fill
     model: str = MODEL_SOURCE
@@ -194,16 +198,20 @@ def fill_costs(trades: Iterable[ClosedTrade], account_id: str, *, imputer: CostI
 
 
 def _modelled_yet(trades: Iterable[ClosedTrade], bars: pd.DataFrame, account_id: str, start_ns: int,
-                  before_ns: int) -> tuple[list[ClosedTrade], int]:
-    """(the trades entered before the last label bar closed, how many of the rest entered after it). Without bars
-    nothing is pending: every fill then lacks its model bar and is unmeasured (a data failure, alerted)."""
+                  before_ns: int) -> tuple[list[ClosedTrade], int, bool]:
+    """(the trades entered before the last label bar closed, how many of the rest entered after it, stale). Without
+    bars, or with the last one closed more than MAX_BAR_LAG_DAYS before `before_ns`, nothing is pending: every later
+    fill lacks its model bar and is unmeasured (a data failure, alerted)."""
     rows = list(trades)
     if bars.empty or "ts_utc" not in bars.columns:
-        return rows, 0
+        return rows, 0, True
     last = pd.to_datetime(bars["ts_utc"], utc=True).max() + pd.Timedelta(minutes=BAR_MINUTES)
+    if _ns(last) < before_ns - MAX_BAR_LAG_DAYS * 86_400 * 10**9:
+        return rows, 0, True
     keep = [t for t in rows if t.entry_utc is None or pd.Timestamp(t.entry_utc) <= last]
     later = [t for t in rows if t.entry_utc is not None and pd.Timestamp(t.entry_utc) > last]
-    return keep, sum(t.account_id == account_id and _gold(t) and start_ns <= _ns(t.exit_utc) < before_ns for t in later)
+    n = sum(t.account_id == account_id and _gold(t) and start_ns <= _ns(t.exit_utc) < before_ns for t in later)
+    return keep, n, False
 
 
 def pooled_ratio(fills: list[FillCost], unmeasured: int = 0) -> tuple[float | None, float, float, str | None]:
@@ -226,16 +234,17 @@ def cost_ratio_20d(trades: Iterable[ClosedTrade], account_id: str, decision_day:
     """The account's measured cost over the model's for the WINDOW_RISK_DAYS risk days before `decision_day`."""
     since = window_start(decision_day)
     lo, hi = _ns(pd.Timestamp(since, tz="UTC")), _ns(pd.Timestamp(decision_day, tz="UTC"))
-    trades, pending = _modelled_yet(trades, bars, account_id, lo, hi)
+    trades, pending, stale = _modelled_yet(trades, bars, account_id, lo, hi)
     fills, unmeasured = fill_costs(trades, account_id, imputer=imputer, legs=legs, bars=bars,
                                    model_extra_usd=model_extra_usd, model_swap=model_swap, start_ns=lo, before_ns=hi,
                                    acct_per_usd=acct_per_usd)
     ratio, measured, model, why = pooled_ratio(fills, len(unmeasured))
     n = len(fills)
     return CostRatio(ratio=ratio, since=since, fills=n, unmeasured=len(unmeasured), pending=pending,
+                     bars_stale=stale,
                      measured_usd_per_oz=measured / n if n else None, model_usd_per_oz=model / n if n else None,
                      reason=why)
 
 
-__all__ = ["BAR_TOLERANCE", "MAX_UNMEASURED_SHARE", "MIN_FILLS", "MODEL_SOURCE", "WINDOW_RISK_DAYS", "CostRatio", "FillCost", "cost_ratio_20d", "fill_costs",
+__all__ = ["BAR_TOLERANCE", "MAX_BAR_LAG_DAYS", "MAX_UNMEASURED_SHARE", "MIN_FILLS", "MODEL_SOURCE", "WINDOW_RISK_DAYS", "CostRatio", "FillCost", "cost_ratio_20d", "fill_costs",
            "pooled_ratio", "window_start"]
