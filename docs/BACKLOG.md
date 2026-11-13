@@ -97,7 +97,7 @@ rows.
 | 148 | EVAL-2 build lanes 0-5B | research build (ADR 0076, prereg-2026-11-09-eval2.md) | L | lanes 0-4 and 5A done (PR #344, #347, #348, #355, #356, #358; docs #345); open: Lane 5B engine consumers, one account at a time · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-24 (triage 2026-11-13) |
 | 145 | Enable N-3 HAR abstention: refill 2026 Duka holes, overlap check, K row | research ops (N-3, prereg-2026-11-07-n3-har.md) | S | ready (N-3 shipped off, PR #342) · accountable: data-engineer (holes, overlap); research-director writes the K row and enables · reviews: quant-reviewer · due 2026-11-18 (triage 2026-11-13) |
 | 146 | Session-split gold cost of record in the catalogue sim | Research (costs) | S | done (2026-11-13, R137, branch feat/gold-cost-session-split; quant-reviewed with conditions applied) · accountable: implementer · reviews: quant-reviewer |
-| 144 | 1d/1w engine go-live blockers (WS-4) | Engine · BUILD | M | ready (WS-4 shipped dark, PR #341) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-27 (triage 2026-11-13) |
+| 144 | 1d/1w engine go-live blockers (WS-4) | Engine · BUILD | M | in review (2026-11-13: blockers 1-3, 5 and 6 built dark, R149, ADR 0081; 4, 5 ratification and 7 split to 251-253) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-27 |
 | 152 | Exchange holidays from a published calendar, not missing data days | Research data · catalogue context | M | ready · accountable: data-engineer · reviews: quant-reviewer, code-reviewer · due 2026-11-24 (triage 2026-11-13) |
 | 90 | 20-day measured cost/model series for the adaptive limits | Risk (limits) · PROTECT | S | ready · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer · due 2026-11-24 (triage 2026-11-13) |
 | 187 | Drop the retired I0-<instrument> and ZCD registrations once flat | ops / config (follow-up of R133, profitability-2026-11-12, 2026-11-12) | S | ready once each account is flat in the retired arms · accountable: implementer · reviews: trading-safety-reviewer · due 2026-11-20 (triage 2026-11-13) |
@@ -125,6 +125,10 @@ rows.
 | 217 | Deploy R140, publish the waiting registry outbox, verify feedback_loop clears | ops (follow-up of R140, 2026-11-13) | XS | proposed · accountable: sre (Claude-run) · reviews: none |
 | 233 | Health alert when headlines arrive but none is scored in 24 h | build (ML review 2026-11-13, lane ML2) | S | done 2026-11-13 (branch feat/news-rule-scorer, R144) · accountable: implementer · reviews: sre |
 | 234 | Measure rules-v1 shock precision on the brain's real headlines | research (follow-up of R144) | S | open: relevance measured, shock precision not measurable yet (one real shock in the window); re-measure after a geopolitical shock period or 3 months · accountable: ml-researcher · reviews: quant-reviewer, trading-safety-reviewer |
+| 251 | 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4) | Engine · BUILD | S | ready (split from 144, 2026-11-13) · accountable: implementer · reviews: sre, data-engineer · due 2026-11-27 |
+| 252 | Quant ratification of ADR 0081: the common filter at a 1d/1w entry close (BACKLOG 144 blocker 5) | Research · REVIEW | XS | ready (2026-11-13) · accountable: quant-reviewer · due 2026-11-20 |
+| 253 | Lift the 1d/1w settings guard: CONFIRM pass and trading-safety sign-off (BACKLOG 144 blocker 7) | Engine · GATE | XS | blocked on 251, 252 and a CONFIRM passer · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
+| 254 | 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081) | Research · BUILD | S | ready (2026-11-13) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1554,6 +1558,34 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **232. Rule shocks fire the news-shock entry blackout, never an exit.** Value: the design's shock blackout could not fire without the LLM. Acceptance, tests first: a rules-v1 shock at or above `news.rule_shock_min_confidence` puts the engine in a `news_shock` blackout that RiskGate refuses entries on; no force-close and the time exit still runs; during an LLM API error a rule-shock item is stored at once.
 - **233. Health alert when headlines arrive but none is scored in 24 h.** Value: the 0-of-392 gap went unnoticed. Acceptance, tests first: the collector records last arrival and last score in `state/news_scoring.json`; the `news` check fails when prefiltered headlines arrived in the last 24 h, none was scored in it and the record spans 24 h; no record = not judged.
 - **234. Measure rules-v1 shock precision on the brain's real headlines.** Measured 2026-11-13 on the 392 headlines the brain stored 2026-10-16..11-13 (export, received order, poll by poll with repeats): pre-tune rules flagged 4 shocks (10-21 2 = 60 min, 10-28 30 min, 11-02 30 min; 3 were multi-headline wraps flagged from their summaries); after the tune 1 shock (10-21, 30 min); the 120-min cap never bound. Hand-labelled sample of 150 (tests/fixtures/news_rules/real_labelled.yaml, blind labels, tuned on the tune half only: title-only shocks, title-weighted relevance, foreign-economy gate, PPI, Fed weight 0.6): held-out relevance agreement 0.933 (precision 0.857, recall 0.9); held-out shocks 0 flagged, 1 labelled (missed: 'Romanian F-16s shoot down two drones'), tune half 1 false shock ('US intel says ... drone attack'). Shock precision/recall cannot be measured: the window held about one real shock. The held half is not perfectly blind (its pre-tune misses were seen once through an output-filter slip). Value: the fixture is 48 hand-written headlines; it bounds gross errors, not live precision. Acceptance (safety+quant review 2026-11-13): run rules-v1 over the stored headlines and report shocks and blackout minutes per day; hand-label at least 150 collected headlines (every rule shock included) blind to the rule output, store them as a fixture (public headline text only), tune on one half and report precision/recall on the held-out half. Earlier scope: hand-label at least 300 collected headlines (shock, rates, dollar) on the brain (never published), report rule-shock precision/recall and blackout minutes per week; if precision < 0.8, raise `news.rule_shock_min_confidence` or narrow the lexicon as rules-v2 (a new `scorer` value, never a silent rewrite of rules-v1 rows).
+- **251. 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4).** Value: a live
+  1d/1w arm warms up from `<data_root>/<engine.long_history_dir>/bars/<symbol>_1d.parquet`; nothing on the brain keeps
+  that file current, so a day after the last manual copy the history no longer reaches the engine's window and the arm
+  is held back (`history_gap:<tf>`) for good. Acceptance: (1) a scheduled daily job appends the engine store's complete
+  days to the file on the 21:00 UTC roll (`long_bars.daily_from_1m`, point in time, atomic write), with a test that a
+  stale file is extended and an up-to-date one left untouched; (2) a preflight item that fails when a live 1d/1w
+  timeframe's history does not reach the engine window (`long_bars.joined` is not GAP), skipped while 1d/1w are dark;
+  (3) a health check that warns (NOTIFY_ON_WARN) when an arm's `history_gap:<tf>` has lasted more than a day; each with
+  a test that fails without it; then the blocker leaves `GO_LIVE_BLOCKERS_1D_1W`.
+- **252. Quant ratification of ADR 0081 (BACKLOG 144 blocker 5).** Value: the rules' standing common filter dropped
+  every 1d/1w candidate at its 21:00 UTC close; ADR 0081 judges it at the candidate's entry close
+  (`RuleContext.filter_ts`, `long_bars.entry_after`). It changes research semantics, so it needs the quant's ruling
+  before the guard can lift. Acceptance: the quant-reviewer accepts or amends ADR 0081 in writing (its status line),
+  and any 1d/1w CONFIRM run used for go-live judges the filter the same way (BACKLOG 254); then the blocker leaves
+  `GO_LIVE_BLOCKERS_1D_1W`.
+- **253. Lift the 1d/1w settings guard (BACKLOG 144 blocker 7).** Value: the last step before a qualified 1d/1w arm
+  may run on demo. Acceptance: a 1d/1w arm with a CONFIRM pass and a passing lot fit; the settings diff that lists
+  1d/1w in `engine.timeframes_live` and empties `GO_LIVE_BLOCKERS_1D_1W` signed off by the trading-safety-reviewer in
+  the same change; `tests/test_engine_replay_identity.py` still byte-identical for the existing arms.
+- **254. 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081).**
+  Value: two gaps between the engine and a history run of a 1d/1w arm remain. (a) The engine judges the common filter
+  at the entry (`RuleContext.filter_close = long_bars.entry_after(...)`); any research path that replays 1d/1w arms
+  through `arm_rules` (shadow replay, run_arm_backtest, CONFIRM) must pass the same. (b) The live hold runs from the
+  send close (up to 2.5 h after the 1d decision close, up to a day for a 1w catch-up), history's from the decision
+  close; a cut-following rule whose hold is capped at the week's end (DOND) is therefore refused `weekend_hold` live
+  (fail closed, `tests/test_exploration_engine.py`). Acceptance: every research caller passes `filter_close` for
+  1d/1w bars; the time exit of a 1d/1w position counts from its decision close (order id, `_week_due`, the barrier and
+  `crosses_friday` alike) with trading-safety review; a live == history test on a 1d and a 1w arm.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

@@ -10,7 +10,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -1144,7 +1143,7 @@ def test_the_cuts_tightened_stop_is_wfris_own_exit_and_any_other_moved_stop_or_c
 
 # ------------------------------------------------------------------------------------------------ PDC4 / DOND (8.15)
 TUE_4H = pd.Timestamp("2025-03-04 08:00", tz="UTC")          # a Tuesday 4h close
-TUE_1D = pd.Timestamp("2025-03-04 21:00", tz="UTC")          # a Tuesday 1d close (the 21:00 UTC roll, WS-4)
+TUE_1D = pd.Timestamp("2025-03-04 23:30", tz="UTC")          # a Tuesday 1d close (21:00 UTC) sent after the 23:02 reopen
 
 
 def _capped_rule(side: int) -> Any:
@@ -1173,8 +1172,8 @@ def _week_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: str, tf:
 
 def _live_1d(eng: Engine, hist: Path) -> None:
     """WS-4: 1d ships dark (settings engine.timeframes_live); live here, with a long daily history to warm up from
-    (engine/long_bars.py), and the rules' standing common filter lifted (it drops every 21:00 UTC candidate: pinned in
-    tests/test_engine_long_tf.py)."""
+    (engine/long_bars.py). The rules' standing common filter judges the candidate at its entry close (BACKLOG 144,
+    ADR 0081), so it is not lifted."""
     from goldbot.config import INTRADAY_LIVE
     from tests.test_engine_long_tf import _history_frame
     (hist / "bars").mkdir(parents=True)
@@ -1185,14 +1184,23 @@ def _live_1d(eng: Engine, hist: Path) -> None:
     eng.exploration.retired = frozenset()
 
 
-@pytest.mark.parametrize(("rule", "tf", "hold", "close"), [("pdc_break", "4h", 32, TUE_4H),
-                                                           ("donchian_break", "1d", 10, TUE_1D)])
+def test_a_dond_1d_hold_capped_at_the_week_end_is_refused_when_sent_after_the_reopen(tmp_path, monkeypatch):
+    """BACKLOG 144 (ADR 0081): a 1d decision (Tuesday 21:00 UTC) is sent at its entry close (23:30 UTC in EET), and its
+    hold runs from the send. A rule whose frozen hold is capped at the week's end from its decision close then reaches
+    the server's Saturday from the send, so it is refused `weekend_hold` like the rule without the cut: never held
+    into the weekend, never shortened silently. Holding from the decision close instead is BACKLOG 254."""
+    eng, pb = _week_engine(tmp_path, monkeypatch, "donchian_break", "1d", 10)
+    _live_1d(eng, tmp_path / "hist")
+    exploration.on_pass(eng, _at(eng, pb, TUE_1D))
+    assert _sent(eng) == [] and not pb.positions()
+    assert sorted((d["agent"], d["action"]) for d in _actions(eng, "exploration_refused:")) == [
+        ("explore:NOCUT", "exploration_refused:weekend_hold"), ("explore:WEEK", "exploration_refused:weekend_hold")]
+
+
+@pytest.mark.parametrize(("rule", "tf", "hold", "close"), [("pdc_break", "4h", 32, TUE_4H)])
 def test_pdc4_and_dond_enter_on_a_weekday_and_the_same_frozen_hold_without_the_cut_is_refused(
         tmp_path, monkeypatch, rule, tf, hold, close):
     eng, pb = _week_engine(tmp_path, monkeypatch, rule, tf, hold)
-    if tf == "1d":
-        _live_1d(eng, tmp_path / "hist")
-        monkeypatch.setattr(arm_rules, "common_filter_ok", lambda c, lo, hi: np.ones(len(c), dtype=bool))
     exploration.on_pass(eng, _at(eng, pb, close))
     assert [d["agent"] for d in _sent(eng)] == ["explore:WEEK"], eng.decisions
     assert [(d["agent"], d["action"]) for d in _actions(eng, "exploration_refused:")] == [
