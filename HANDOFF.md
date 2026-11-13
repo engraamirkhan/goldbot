@@ -93,6 +93,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Limits: the Mac holds no `news` table, so the history length must be read on the brain (`news_features.coverage`,
   BACKLOG 212). Dukascopy's ask-side volume is dropped at ingest (BACKLOG 213); MFE/MAE wait for lane F's fields
   (BACKLOG 214). Order flow costs ~2.3 s per million 1m bars per frame build. Follow-ups: BACKLOG 211-214.
+- 2026-11-13 (branch feat/news-rule-scorer; R144; BACKLOG 231-234; ADR 0079): the news collector no longer leaves
+  headlines unscored without an API key. A free deterministic scorer, `rules-v1` (goldbot/data/news_rules.py: gold
+  driver lexicon, negation, hedges, source weights), scores every prefiltered headline into the LLM's schema; it fills
+  the score (`scorer` = rules-v1) whenever the LLM did not score the row, and its own `rule_*` columns always. LLM
+  scores take precedence, both kept. A rule shock (confidence >= `news.rule_shock_min_confidence`, 0.8) fires the
+  existing shock blackout: entries refused 30 min, exits untouched; during an LLM API error a rule shock is stored at
+  once. The `news` health check fails when headlines arrive but none is scored in 24 h (`state/news_scoring.json`).
+  News features read rule rows flagged (`rule_scored`, `news_rules_share_24h`; news_llm v3). Not done: the 392 stored
+  rows stay unscored (no rewrite after written_utc); live precision unmeasured until BACKLOG 234.
 - 2026-11-12 (branch feat/decisions-journal-compaction; backlog 170, R131): the decisions journal's part files are
   compacted nightly. New scheduler job `journal_compact` (daily 03:40 UTC, max 20 h late, runs on first sight)
   calls `goldbot/data/compact.py::compact_table(store, "decisions", before=slot)`: every closed month partition

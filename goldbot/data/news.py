@@ -8,7 +8,12 @@ schema: relevance to gold (0-1), rates direction (hawkish/dovish), risk (risk-on
 
 Cost control: a keyword prefilter decides which items are worth scoring, items are scored in batches, the model
 runs at low effort, and spend goes into the staff agents' monthly ledger under a daily news cap; items beyond the
-cap are stored unscored (relevance NaN) rather than dropped.
+cap are stored unscored by the LLM rather than dropped.
+
+Free fallback (ML review 2026-11-13, R144): every prefiltered item also gets the deterministic `rules-v1` score
+(goldbot/data/news_rules.py) in its `rule_*` columns, and that score fills the main fields (`scorer` = rules-v1)
+whenever the LLM did not score the item (no client, budget used), so the shock blackout works without an API key.
+An LLM score takes precedence; both are kept.
 
 Instrument blackouts (multi-instrument plan 2026-11-02): `instrument_blackout` extends gold's tier-1 USD blackout to
 an instrument's own currencies and its group's scheduled commodity reports (EIA crude and gas, WASDE). The headline
@@ -21,6 +26,7 @@ import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from datetime import date, time, timedelta
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
@@ -32,8 +38,13 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 
-COLUMNS = ["item_id", "ts_utc", "received_utc", "source", "title", "summary", "link", "scored", "relevance",
-           "rates", "risk", "dollar", "surprise", "shock"]
+SCORE_FIELDS = ["relevance", "rates", "risk", "dollar", "surprise", "shock"]
+# `scorer`: who wrote the score fields ("llm", "rules-v1", "" unscored; rows from before 2026-11-13 have no column and
+# were all LLM-scored). `rule_*`: the rules-v1 score of every prefiltered row, kept beside an LLM score
+# (goldbot/data/news_rules.py)
+RULE_COLUMNS = [f"rule_{c}" for c in SCORE_FIELDS] + ["rule_shock_confidence"]
+COLUMNS = ["item_id", "ts_utc", "received_utc", "source", "title", "summary", "link", "scored", *SCORE_FIELDS,
+           "scorer", *RULE_COLUMNS]
 PREFILTER = re.compile(
     r"\b(?:gold|xau|bullion|silver|fed|fomc|powell|rate[s]?|yield[s]?|treasur|dollar|usd|dxy|inflation|cpi|pce|"
     r"payroll|nfp|jobs|employment|gdp|recession|tariff|war|missile|attack|sanction|geopolit|central bank|ecb|boj|"
@@ -119,7 +130,9 @@ def parse_feed(xml: str, source: str, received_utc: pd.Timestamp) -> pd.DataFram
             ts = received_utc
         rows.append({"item_id": item_id(source, link, title), "ts_utc": min(ts, received_utc), "received_utc": received_utc,
                      "source": source, "title": title[:300], "summary": summary[:600], "link": link, "scored": False,
-                     "relevance": np.nan, "rates": "", "risk": "", "dollar": "", "surprise": "", "shock": False})
+                     "relevance": np.nan, "rates": "", "risk": "", "dollar": "", "surprise": "", "shock": False,
+                     "scorer": "", "rule_relevance": np.nan, "rule_rates": "", "rule_risk": "", "rule_dollar": "",
+                     "rule_surprise": "", "rule_shock": False, "rule_shock_confidence": np.nan})
     df = pd.DataFrame(rows, columns=COLUMNS)
     if not df.empty:
         df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
@@ -159,15 +172,31 @@ def score_batch(client: Client, model: str, items: pd.DataFrame) -> tuple[list[H
     return out, resp.usage
 
 
-def apply_scores(df: pd.DataFrame, scores: list[HeadlineScore]) -> pd.DataFrame:
+def apply_scores(df: pd.DataFrame, scores: Sequence[HeadlineScore], scorer: str = "llm") -> pd.DataFrame:
+    """The score fields of the rows `scores` names, stamped `scorer`; a later call overwrites an earlier one, so the
+    collector applies the rules first and the LLM after (LLM precedence)."""
+    df = df.copy()
+    if "scorer" not in df.columns:
+        df["scorer"] = ""
+    by_id = {s.id: s for s in scores}
+    for i, iid in zip(df.index, df["item_id"]):
+        s = by_id.get(iid)
+        if s is None:
+            continue
+        df.loc[i, ["scored", *SCORE_FIELDS, "scorer"]] = \
+            [True, s.relevance, s.rates, s.risk, s.dollar, s.surprise, s.shock, scorer]
+    return df
+
+
+def apply_rule_columns(df: pd.DataFrame, scores: Sequence[Any]) -> pd.DataFrame:
+    """The `rule_*` columns from rules-v1 scores (news_rules.RuleScore), whoever wrote the score fields."""
     df = df.copy()
     by_id = {s.id: s for s in scores}
     for i, iid in zip(df.index, df["item_id"]):
         s = by_id.get(iid)
         if s is None:
             continue
-        df.loc[i, ["scored", "relevance", "rates", "risk", "dollar", "surprise", "shock"]] = \
-            [True, s.relevance, s.rates, s.risk, s.dollar, s.surprise, s.shock]
+        df.loc[i, RULE_COLUMNS] = [s.relevance, s.rates, s.risk, s.dollar, s.surprise, s.shock, s.confidence]
     return df
 
 

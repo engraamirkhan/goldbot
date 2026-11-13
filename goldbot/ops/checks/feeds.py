@@ -310,6 +310,34 @@ def check_feature_versions(ctx: HealthContext) -> Check:
                  reason="active models by feature version: " + ("; ".join(parts) or "none"))
 
 
+NEWS_SCORING_WINDOW = pd.Timedelta(hours=24)   # R144: arrivals with no score in this long = a blind shock blackout
+
+
+def _news_scoring_blind(ctx: HealthContext) -> str | None:
+    """R144: prefiltered headlines arrived in the last NEWS_SCORING_WINDOW but none was scored (by any scorer) in it,
+    with at least that long on record: the shock blackout is blind. None when fine or not judged (no record yet)."""
+    f = ctx.state_dir / "news_scoring.json"
+    if not f.exists():
+        return None
+    try:
+        rec: dict[str, Any] = _read_json(f)
+    except (ValueError, OSError) as exc:
+        return f"news_scoring.json unreadable: {exc}"
+
+    def at(key: str) -> pd.Timestamp | None:
+        return pd.Timestamp(rec[key]) if rec.get(key) else None
+    since, arrived, scored = at("since_utc"), at("last_prefiltered_utc"), at("last_scored_utc")
+    if since is None or ctx.now - since < NEWS_SCORING_WINDOW:
+        return None
+    if arrived is None or ctx.now - arrived > NEWS_SCORING_WINDOW:
+        return None
+    if scored is not None and ctx.now - scored <= NEWS_SCORING_WINDOW:
+        return None
+    last = f"last scored {_age((ctx.now - scored).total_seconds())} ago" if scored is not None else "none ever scored"
+    return (f"0 headlines scored in 24 h while headlines arrive ({last}): the news-shock blackout is blind; "
+            f"last poll {rec.get('last_poll')}")
+
+
 @register_check("global", block=BLOCK_TAIL, pos=90)
 def check_news(ctx: HealthContext) -> Check:
     if ctx.settings is not None and not ctx.settings.news.feeds:
@@ -331,6 +359,8 @@ def check_news(ctx: HealthContext) -> Check:
         return Check(name="news", status="fail", reason=f"last poll {_age(age)} ago (> {NEWS_STALE_POLLS} polls): news service down")
     if len(bad) == len(feeds):
         return Check(name="news", status="fail", reason=f"all {len(feeds)} feeds failing: no shock blackout possible")
+    if (blind := _news_scoring_blind(ctx)) is not None:
+        return Check(name="news", status="fail", reason=blind)
     if bad:
         errs = "; ".join(f"{n}: {str(feeds[n].get('error', '?'))[:80]}" for n in bad)
         return Check(name="news", status="warn", reason=f"{len(bad)}/{len(feeds)} feeds failing ({errs})")

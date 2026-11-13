@@ -26,10 +26,12 @@ def run_news() -> None:
         import anthropic
         client = anthropic.Anthropic(api_key=key)
     else:
-        log.warning("no anthropic-api-key in the keyring: headlines are collected but not scored (no shock blackout)")
+        log.warning("no anthropic-api-key in the keyring: headlines are scored by the free rules-v1 scorer only")
     collector = NewsCollector(Store(settings.data_root), "state", settings.news.feeds, fetch, client,
                               SpendLedger(Path("state") / "agent_spend.json", settings.agents.monthly_cap_usd),
-                              settings.news.model, settings.news.daily_cap_usd)
+                              settings.news.model, settings.news.daily_cap_usd,
+                              rule_min_confidence=settings.news.rule_shock_min_confidence,
+                              source_weights=settings.news.source_weights)
     while True:
         try:
             log.info("news: %s", collector.poll(pd.Timestamp.now("UTC")))
