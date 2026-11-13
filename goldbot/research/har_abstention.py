@@ -295,8 +295,8 @@ def dry_run(ctx: Any, slot: pd.Timestamp, now: pd.Timestamp | None = None) -> Ha
 
 # ------------------------------------------------------------------------------------------------ the overlap check
 class Overlap(FrozenRecord):
-    """Prereg §2, before the first `ok` row: median ln(ICM/Duka) of daily TR, W (window range) and w (W / ATR) on the
-    opportunity days both feeds cover, each feed's inputs computed on its own bars (its own ATR). `pass` needs
+    """Prereg §2, before the first `ok` row: median ln(ICM/Duka) of daily TR, W (window range) and w (W / ATR) on
+    every stub-free day (22:00 UTC roll) both feeds cover, no day filter beyond each feed's first and last, each feed's inputs computed on its own bars (its own ATR). `pass` needs
     |ln_w| <= OVERLAP_MAX_LN_W on at least OVERLAP_MIN_DAYS days; fewer days is `insufficient` (no start)."""
     cut_utc: UtcTimestamp
     status: Literal["pass", "fail", "insufficient"]
