@@ -13,5 +13,8 @@
   Cost: no Actions minutes, no new data; one nightly rewrite per closed account-month; the first night rewrites
   every closed month of fills/dq_events/observe_ticks once. Rollback: as R131 (run the job once so no
   `.compact.json` is left, then revert); compacted parts are plain parts. Not done: brain measurement and enabling
-  ticks (239), quarantine rewrite keeping lineage (240), a written_utc column on ticks (241; the decisions months
-  compacted under R131 have lost their per-row write time), a health signal for repeated deferral (242).
+  ticks (239), quarantine rewrite keeping lineage (240), a written_utc column on ticks (241; decisions months
+  compacted under R131 read written_utc NaT, recoverable from restic snapshot d7c7a6d1, see 241), a health signal for repeated deferral (242).
+  Review of 80339ff7 (LOWs, same branch): pre-lineage compacted parts (no pandas metadata) record written_ns null;
+  `quarantine.move_rows` finishes an interrupted compaction swap (`_recover`) before its rewrite; a column Arrow
+  cannot unify across parts (int vs text) takes DuckDB's union_by_name type and is cast by DuckDB.

@@ -64,6 +64,10 @@ def move_rows(store: Store, table: str, *, source: str, symbol: str, select: Sel
     moved = 0
     for pdir in sorted(p for p in root.glob("year=*/month=*") if p.is_dir()):
         with store._partition_lock(pdir):
+            # a compaction that died between its rename and its unlinks left the old parts beside the new one:
+            # finish (or drop) its swap first, so the rewrite below never carries the replaced rows twice (R146 review)
+            from goldbot.data.compact import _recover
+            _recover(pdir)
             files = sorted(pdir.glob("*.parquet"))
             keep, out = [], []
             for f in files:

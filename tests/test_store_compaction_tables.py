@@ -159,9 +159,9 @@ def test_the_build_is_streamed_in_bounded_row_groups(tmp_path: Path, monkeypatch
     seen: list[int] = []
     real = compact_mod._conform
 
-    def spy(batch: Any, schema: Any) -> Any:
+    def spy(batch: Any, schema: Any, *rest: Any) -> Any:
         seen.append(batch.num_rows)
-        return real(batch, schema)
+        return real(batch, schema, *rest)
     monkeypatch.setattr(compact_mod, "_conform", spy)
     rep = compact_table(store, "ticks", before=NOW, row_group_rows=32)
     assert rep.partitions[0].error is None and seen and max(seen) <= 32

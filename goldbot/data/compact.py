@@ -243,38 +243,105 @@ def _recover(pdir: Path) -> bool:
     return changed
 
 
-def _lineage(f: Path) -> list[dict[str, int | str]]:
-    """The write time of `f`'s rows as segments in file row order: a compacted part's own record, else the part's
-    mtime for all of its rows."""
+Segment = dict[str, "int | str | None"]
+
+
+def _lineage(f: Path) -> list[Segment]:
+    """The write time of `f`'s rows as segments in file row order: a compacted part's own record; a plain engine part
+    (written from pandas: `pandas` metadata) its mtime for all of its rows; a part with neither (the R131 compaction
+    of decisions before lineage: many flushes re-sorted, its mtime the compaction time) `written_ns` None, unknown."""
     md = pq.read_metadata(f)
     kv = md.metadata or {}
     if LINEAGE in kv:
         try:
             segs = json.loads(kv[LINEAGE])
-            out: list[dict[str, int | str]] = [{"part": str(g["part"]), "written_ns": int(g["written_ns"]),
-                                                "rows": int(g["rows"])} for g in segs]
-            if sum(int(g["rows"]) for g in out) == md.num_rows:
+            out: list[Segment] = [{"part": str(g["part"]),
+                                   "written_ns": None if g["written_ns"] is None else int(g["written_ns"]),
+                                   "rows": int(g["rows"])} for g in segs]
+            if sum(int(str(g["rows"])) for g in out) == md.num_rows:
                 return out
         except (ValueError, KeyError, TypeError):
-            pass                              # an odd record: the part's own mtime, as for a plain part
-    return [{"part": f.name, "written_ns": f.stat().st_mtime_ns, "rows": md.num_rows}]
+            pass                              # an odd record: unknown, as below
+        return [{"part": f.name, "written_ns": None, "rows": md.num_rows}]
+    known = b"pandas" in kv
+    return [{"part": f.name, "written_ns": f.stat().st_mtime_ns if known else None, "rows": md.num_rows}]
 
 
 def written_utc(path: str | Path) -> pd.Series:
     """When each row of the part file `path` was written (UTC, in file row order): the mtime of the part it was first
-    appended in, kept through compaction (`goldbot.lineage`). A part never compacted: its own mtime for every row."""
+    appended in, kept through compaction (`goldbot.lineage`). A part never compacted: its own mtime for every row.
+    NaT where it is unknown (rows the R131 compaction rewrote before lineage existed)."""
     segs = _lineage(Path(path))
-    ns = np.repeat(np.array([int(g["written_ns"]) for g in segs], dtype="int64"),
-                   [int(g["rows"]) for g in segs])
+    nat = np.iinfo("int64").min                # pandas' NaT
+    ns = np.repeat(np.array([nat if g["written_ns"] is None else int(str(g["written_ns"])) for g in segs],
+                            dtype="int64"), [int(str(g["rows"])) for g in segs])
     return pd.Series(pd.to_datetime(ns, unit="ns", utc=True), name="written_utc")
 
 
-def _conform(batch: pa.RecordBatch, schema: pa.Schema) -> pa.RecordBatch:
+def _unified_schema(files: list[Path]) -> tuple[pa.Schema, dict[str, str]]:
+    """The columns of `files` unified by name, in first-seen order. Arrow's permissive promotion where it can; a column
+    it cannot unify (an int in one part, text in another: dq_events has five writers) takes the type DuckDB's
+    union_by_name reads it as, and is cast by DuckDB (`casts`: name -> DuckDB type), so the new part reads exactly as
+    the old parts did."""
+    schemas = [pq.read_schema(f).remove_metadata() for f in files]
+    try:
+        return pa.unify_schemas(schemas, promote_options="permissive"), {}
+    except (pa.ArrowTypeError, pa.ArrowInvalid):
+        pass
+    con = _connect()
+    try:
+        duck = {str(r[0]): str(r[1]) for r in con.execute(
+            "DESCRIBE SELECT * FROM read_parquet(" + "[" + ", ".join("'" + str(f).replace("'", "''") + "'"
+                                                                    for f in files)
+            + "], hive_partitioning=false, union_by_name=true)").fetchall()}
+        fields: list[pa.Field] = []
+        casts: dict[str, str] = {}
+        for name in dict.fromkeys(n for sch in schemas for n in sch.names):
+            types = [sch.field(name).type for sch in schemas if name in sch.names]
+            try:
+                fields.append(pa.unify_schemas([pa.schema([pa.field(name, t)]) for t in types],
+                                               promote_options="permissive").field(0))
+            except (pa.ArrowTypeError, pa.ArrowInvalid):
+                casts[name] = duck[name]
+                t = _arrow_table(con.sql(f"SELECT CAST(NULL AS {duck[name]}) AS c")).schema.field(0).type
+                fields.append(pa.field(name, t))
+    finally:
+        con.close()
+    return pa.schema(fields), casts
+
+
+def _duck_cast(arr: pa.Array, duck_type: str) -> pa.Array:
+    """`arr` cast by DuckDB to `duck_type` (DuckDB's own text for a number), row order kept (one thread)."""
+    con = _connect()
+    try:
+        con.execute("SET threads = 1")
+        src = pa.table({"c": arr})
+        con.register("src", src)
+        out = _arrow_table(con.sql(f"SELECT CAST(c AS {duck_type}) AS c FROM src")).column(0).combine_chunks()
+    finally:
+        con.close()
+    return out
+
+
+def _arrow_table(rel: object) -> pa.Table:
+    """A DuckDB relation as an Arrow table: `to_arrow_table` on duckdb 2.x, `arrow` on 1.x."""
+    fn = getattr(rel, "to_arrow_table", None) or getattr(rel, "arrow")
+    table: pa.Table = fn()
+    return table
+
+
+def _conform(batch: pa.RecordBatch, schema: pa.Schema, casts: dict[str, str] | None = None) -> pa.RecordBatch:
     """`batch` with `schema`'s columns, in its order and types (a column the part lacks reads as null, as
-    union_by_name gives it)."""
+    union_by_name gives it; a column in `casts` is cast by DuckDB)."""
     names = batch.schema.names
-    cols = [batch.column(names.index(f.name)).cast(f.type) if f.name in names else pa.nulls(batch.num_rows, f.type)
-            for f in schema]
+    cols = []
+    for f in schema:
+        if f.name not in names:
+            cols.append(pa.nulls(batch.num_rows, f.type))
+        elif casts and f.name in casts:
+            cols.append(_duck_cast(batch.column(names.index(f.name)), casts[f.name]).cast(f.type))
+        else:
+            cols.append(batch.column(names.index(f.name)).cast(f.type))
     return pa.RecordBatch.from_arrays(cols, schema=schema)
 
 
@@ -283,8 +350,8 @@ def _build(pdir: Path, files: list[Path], row_group_rows: int) -> tuple[Path, st
     `pdir` (not *.parquet: invisible to readers) in row groups of at most `row_group_rows`, fsynced. Memory: one
     buffer of `row_group_rows` rows. Returns the temp path and the part name it is to be renamed to."""
     lin = {f: _lineage(f) for f in files}
-    order = sorted(files, key=lambda f: (int(lin[f][0]["written_ns"]), f.name))
-    schema = pa.unify_schemas([pq.read_schema(f).remove_metadata() for f in order], promote_options="permissive")
+    order = sorted(files, key=lambda f: (_order_ns(lin[f], f), f.name))
+    schema, casts = _unified_schema(order)
     schema = schema.with_metadata({LINEAGE: json.dumps([g for f in order for g in lin[f]]).encode()})
     name = f"part-{uuid.uuid4().hex[:8]}.parquet"
     tmp = pdir / f".{name}.tmp"
@@ -294,7 +361,7 @@ def _build(pdir: Path, files: list[Path], row_group_rows: int) -> tuple[Path, st
         with pq.ParquetWriter(tmp, schema, compression="zstd") as w:
             for f in order:
                 for raw in pq.ParquetFile(f).iter_batches(batch_size=row_group_rows):
-                    batch = _conform(raw, schema)
+                    batch = _conform(raw, schema, casts)
                     if buf and held + batch.num_rows > row_group_rows:
                         w.write_table(pa.Table.from_batches(buf, schema=schema), row_group_size=row_group_rows)
                         buf, held = [], 0
@@ -311,6 +378,13 @@ def _build(pdir: Path, files: list[Path], row_group_rows: int) -> tuple[Path, st
         tmp.unlink(missing_ok=True)
         raise
     return tmp, name
+
+
+def _order_ns(segs: list[Segment], f: Path) -> int:
+    """Where a part goes in write order: its first known write time, else its mtime (a pre-lineage compacted part
+    was written before every part appended after it)."""
+    known = [int(str(g["written_ns"])) for g in segs if g["written_ns"] is not None]
+    return known[0] if known else f.stat().st_mtime_ns
 
 
 _FIXED = (pa.types.is_integer, pa.types.is_floating, pa.types.is_boolean)
