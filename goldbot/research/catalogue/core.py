@@ -34,6 +34,9 @@ class Ctx:
     window: str
     events: dict[str, np.ndarray] = field(default_factory=dict)     # name -> release instants (ns)
     aux: dict[str, Any] = field(default_factory=dict)              # fred series etc. (available_ns, values)
+    # name -> when each events[name] entry was published (epoch ns, aligned); absent = legacy ctx, read as known
+    # throughout. Detectors read a scheduled date only once published; S6 cuts events on it (BACKLOG 152).
+    avail: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 @dataclass

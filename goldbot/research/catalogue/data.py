@@ -273,16 +273,28 @@ def fred(series: str, win: str, *, allow_test_old: bool = False) -> tuple[np.nda
 
 def us_events(win: str, types: tuple[str, ...], *, allow_test_old: bool = False) -> np.ndarray:
     """Scheduled release instants (ns) of calendar-v1 event types, each known (available_utc) before it happens."""
+    return us_events_avail(win, types, allow_test_old=allow_test_old)[0]
+
+
+def us_events_avail(win: str, types: tuple[str, ...], *, allow_test_old: bool = False
+                    ) -> tuple[np.ndarray, np.ndarray]:
+    """(release instants, first publication instant of each) in ns: the instants of `us_events` with the earliest
+    available_utc any calendar row gives that instant (BACKLOG 152: ctx carries it so detectors read a date only once
+    published, and S6 cuts on it)."""
     w = window(win, allow_test_old=allow_test_old)
     f = raw_dir() / "calendar" / "us_calendar.parquet"
     if not f.exists():
-        return np.zeros(0, np.int64)
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
     d = pd.read_parquet(f)
     d = d[d["event_type"].isin(types)]
     ev = epoch_ns(pd.to_datetime(d["event_utc"], utc=True))
     av = epoch_ns(pd.to_datetime(d["available_utc"], utc=True))
     ok = (ev < w.end) & (av <= ev)
-    return np.unique(ev[ok])
+    ev, av = ev[ok], av[ok]
+    u, inv = np.unique(ev, return_inverse=True)
+    first = np.full(len(u), np.iinfo(np.int64).max, dtype=np.int64)
+    np.minimum.at(first, inv, av)
+    return u, first
 
 
 def asof_ns(t_query: np.ndarray, t_avail: np.ndarray, values: np.ndarray) -> np.ndarray:

@@ -82,7 +82,7 @@ HARNESS_FILES = (
     "goldbot/research/catalogue/stats.py", "goldbot/research/catalogue/lint.py", "goldbot/research/catalogue/run.py",
     "goldbot/research/catalogue/specs.yaml", "goldbot/research/catalogue/detectors_catalogue.py",
     "goldbot/research/catalogue/detectors_patterns.py", "config/catalogue_costs.yaml", "config/cost_of_record.yaml",
-    "scripts/eval2_selftest.py")
+    "scripts/eval2_selftest.py", "goldbot/data/exchange_holidays.py", "config/research/exchange_holidays.yaml")
 HARNESS_GLOBS = ("goldbot/research/eval2/*.py",)
 
 # S0 thresholds (method section 6; the cell floor as amended by A1, prereg section 9.3)
@@ -1551,12 +1551,17 @@ Detector = Callable[[Bars, "int | None"], Events]
 def truncate_ctx(ctx: Ctx, cut: int, *, scheduled_events: bool = True) -> Ctx:
     """The context known at instant `cut`: every (available_ns, values, ...) aux series (FRED rates, long histories)
     cut at availability <= `cut`; other aux entries (the cost model) as they are. `ctx.events` holds SCHEDULED instants
-    (release calendars, FOMC dates, exchange holidays) that a desk knows ahead: with `scheduled_events` they are kept
-    whole (ctx carries no publication time to cut them on: data.us_events only enforces available <= event); without
-    it they are cut at the instant itself (the strict reading; S05-S07 read future scheduled dates by design)."""
+    (release calendars, FOMC dates, exchange holidays) that a desk knows ahead. A set with publication times in
+    `ctx.avail` (BACKLOG 152: build_ctx gives every set one) is cut at publication <= `cut` in both modes. A set
+    without them (a legacy or synthetic ctx): with `scheduled_events` kept whole; without it cut at the instant itself
+    (the strict reading, which flags S05-S07: they read future scheduled dates by design)."""
     out = Ctx(window=ctx.window)
     for k, v in ctx.events.items():
         a = np.asarray(v)
+        if k in ctx.avail:
+            keep = np.asarray(ctx.avail[k]) <= cut
+            out.events[k], out.avail[k] = a[keep], np.asarray(ctx.avail[k])[keep]
+            continue
         if scheduled_events:
             out.events[k] = a
             continue

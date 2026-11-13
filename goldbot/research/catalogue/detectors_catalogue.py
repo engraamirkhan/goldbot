@@ -172,22 +172,39 @@ def _bar_dates(b: Bars) -> np.ndarray:
     return _date(b.ta)
 
 
+_EVER = np.iinfo(np.int64).min
+
+
+def _published_days(ctx: Ctx, name: str, days: np.ndarray) -> dict[int, int]:
+    """{day: first publication instant (ns)} of a scheduled set, `days` aligned with ctx.events[name]. A ctx without
+    `avail` for the set (a legacy or synthetic ctx) reads every date as known throughout (BACKLOG 152)."""
+    av = ctx.avail.get(name)
+    av = np.full(len(days), _EVER, np.int64) if av is None else np.asarray(av, np.int64)
+    out: dict[int, int] = {}
+    for d, t in zip(days.tolist(), av.tolist()):
+        out[int(d)] = min(int(t), out.get(int(d), int(t)))
+    return out
+
+
 def s05_preholiday(b: Bars, p: dict, ctx: Ctx) -> Events:
-    hol = ctx.events.get(f"holiday_{_exchange(b.inst)}")
+    """A holiday counts at bar j only once published (available_utc <= the bar's close, BACKLOG 152)."""
+    name = f"holiday_{_exchange(b.inst)}"
+    hol = ctx.events.get(name)
     if hol is None or not len(hol):
         return K.empty()
     d = _bar_dates(b)
-    hs = set(int(x) for x in hol)
+    hs = _published_days(ctx, name, np.asarray(hol))
     a = K.atr(b, 20)
     s200 = K.sma(b.c, 200)
     eb = EB()
     for j in range(len(b)):
         # day j is T-2 when the next weekday is T-1 (a trading day) and the weekday after that is a holiday
+        now = int(b.ta[j])
         t1 = _next_weekday(int(d[j]))
-        if t1 in hs:
+        if hs.get(t1, now + 1) <= now:
             continue
         h = _next_weekday(t1)
-        if h not in hs or not np.isfinite(a[j]):
+        if hs.get(h, now + 1) > now or not np.isfinite(a[j]):
             continue
         if p.get("trend") and not (b.c[j] > s200[j]):
             continue
@@ -210,12 +227,13 @@ def s06_macro_day(b: Bars, p: dict, ctx: Ctx) -> Events:
     ev = ctx.events.get(p["events"])
     if ev is None or not len(ev):
         return K.empty()
-    ev_days = set(int(x) for x in ((ev - 5 * HOUR) // DAY))          # US date of the release (ET ~ UTC-5)
+    ev_days = _published_days(ctx, p["events"], (np.asarray(ev) - 5 * HOUR) // DAY)  # US date (ET ~ UTC-5)
     d = _bar_dates(b)
     a = K.atr(b, 20)
     eb = EB()
     for j in range(len(b) - 1):
-        if _next_weekday(int(d[j])) in ev_days and np.isfinite(a[j]):
+        now = int(b.ta[j])
+        if ev_days.get(_next_weekday(int(d[j])), now + 1) <= now and np.isfinite(a[j]):
             eb.add(j, 1, stop_d=2.0 * a[j], hold=1)
     return eb.build()
 
@@ -228,24 +246,27 @@ def s07_fomc_cycle(b: Bars, p: dict, ctx: Ctx) -> Events:
     if ev is None or not len(ev):
         return K.empty()
     d = _bar_dates(b)
-    days = np.unique((ev - 5 * HOUR) // DAY)
-    dset = set(int(x) for x in days)
+    pub = _published_days(ctx, "fomc_statement", (np.asarray(ev) - 5 * HOUR) // DAY)
+    days = np.array(sorted(pub), dtype=np.int64)
+    days_av = np.array([pub[int(x)] for x in days], dtype=np.int64)
     a = K.atr(b, 20)
     eb = EB()
     weeks = p["weeks"]
     last_z = -1
     for j in range(len(b)):
-        if int(d[j]) in dset:
+        now = int(b.ta[j])                     # a meeting date counts only once published (BACKLOG 152)
+        if pub.get(int(d[j]), now + 1) <= now:
             last_z = j
         if not np.isfinite(a[j]):
             continue
-        if 0 in weeks and _next_weekday(_next_weekday(int(d[j]))) in dset:
+        if 0 in weeks and pub.get(_next_weekday(_next_weekday(int(d[j]))), now + 1) <= now:
             eb.add(j, 1, stop_d=2.5 * a[j], hold=5)
             continue
         if last_z < 0:
             continue
-        k = int(np.searchsorted(days, d[j], side="right"))
-        nxt = int(days[k]) if k < len(days) else 10**9
+        known = days[days_av <= now]
+        k = int(np.searchsorted(known, d[j], side="right"))
+        nxt = int(known[k]) if k < len(known) else 10**9
         for wk in weeks:
             if wk and j - last_z == 10 * (wk // 2) - 2 and nxt - int(d[j]) >= 10:
                 eb.add(j, 1, stop_d=2.5 * a[j], hold=5)
