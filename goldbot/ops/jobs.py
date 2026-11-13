@@ -105,8 +105,9 @@
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
-* monthly_review    day 1 of each month, UTC, caught up for 10 days (R142, ops/monthly_review.py): the calendar month
-                    before the slot per account (monthly report, net P&L tied out against the broker balances in aux.db:
+* monthly_review    daily, UTC (R142, ops/monthly_review.py): builds the calendar month before the slot on the 1st (or a
+                    later tick within monthly_review.catch_up_days; a failed build is rebuilt every tick) and resends
+                    any review whose message or issue has not gone out; a done month is a no-op. Per account (monthly report, net P&L tied out against the broker balances in aux.db:
                     an unreconciled difference above a small tolerance FLAGS, never passes), agent and hosting spend,
                     the quarter's trial budget used (K), and a reliability scorecard (scheduler_jobs, health_alerts) ->
                     aux.db monthly_reviews, one Telegram message, one GitHub issue labelled review-monthly (no login,

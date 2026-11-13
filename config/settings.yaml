@@ -205,7 +205,7 @@ scheduler:
   har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
   journal_compact:  { kind: daily,   at: "03:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 170: closed months of the decisions journal -> one part each (goldbot/data/compact.py); never the open month
   weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
-  monthly_review:   { kind: monthly, at: "06:30", day: 1, max_late_hours: 240 }   # R142: the calendar month (UTC) before the slot (goldbot/ops/monthly_review.py), after the last day's 23:25 broker_ledger snapshot; caught up for 10 days after downtime, once a month
+  monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -575,6 +575,7 @@ weekly_review:                       # weekly review (goldbot/research/weekly_re
   exit_share: 0.3                    #   ... on 30% or more of a family's stop exits queues an exit diagnostic (break-even / trail variant)
   exit_min_trades: 30                # closed trades carrying MFE/MAE (exploration_trades mfe_r) before a family's exits are read
 monthly_review:                      # monthly review (goldbot/ops/monthly_review.py, R142); reporting only, never an order
+  catch_up_days: 10                  # a month never built is built on any daily tick up to this many days after it ends
   balance_tolerance: 0.50            # account currency over the month: a balance change that goldbot's net P&L and the
                                      #   balance deals do not explain beyond this FLAGS the review (RC-9); never a pass
   balance_tolerance_per_trade: 0.01  #   ... plus this per closed trade in the window

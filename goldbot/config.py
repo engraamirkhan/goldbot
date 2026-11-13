@@ -300,10 +300,11 @@ class SchedulerSettings(_Section):
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
-    # R142: the monthly review of the calendar month (UTC) before the slot (goldbot/ops/monthly_review.py), on the 1st
-    # after the last day's 23:25 broker_ledger snapshot and the 06:15 daily review; caught up for 10 days after downtime
-    # (one review, one issue and one Telegram message a month, whatever slot it runs for)
-    monthly_review: ScheduleSettings = ScheduleSettings(kind="monthly", at="06:30", day=1, max_late_hours=240)
+    # R142: the monthly review (goldbot/ops/monthly_review.py), daily after the 06:15 daily review: the 1st builds the
+    # calendar month (UTC) before it, after its last day's 23:25 broker_ledger snapshot; a later tick builds it when the
+    # 1st was missed (within monthly_review.catch_up_days) or failed, and retries every post that has not gone out. A
+    # done month is a no-op (one review, one issue and one Telegram message a month)
+    monthly_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:30", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -701,6 +702,9 @@ class MonthlyReviewSettings(_Section):
     closed P&L + deposits - withdrawals = closing balance" over the calendar month. Reporting only: it reads aux.db, the
     closed-trade record and the trial registry, and never touches an order, a halt, a limit or a setting. An unreconciled
     difference above the tolerance FLAGS the review; it never passes."""
+    # a month never built is built on any daily tick up to this many days after it ends (downtime on the 1st); a month
+    # whose build failed is rebuilt on every tick until it succeeds, however late
+    catch_up_days: int = Field(10, ge=1, le=28)
     # account currency over the month: rounding, not money (the daily ledger allows 0.05 a day + 0.01 a deal)
     balance_tolerance: float = Field(0.50, ge=0)
     balance_tolerance_per_trade: float = Field(0.01, ge=0)   # plus this per closed trade in the window (RC-9)

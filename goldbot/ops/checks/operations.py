@@ -236,6 +236,19 @@ def check_restore_drill(ctx: HealthContext) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
+@register_check("global", block=BLOCK_TAIL, pos=101)
+def check_monthly_review(ctx: HealthContext) -> Check | None:
+    """R142 (goldbot/ops/monthly_review.py): a review whose build failed, or one whose Telegram message or GitHub issue
+    has not gone out a day after it was built, WARNs (the daily job retries both). Absent until a review is stored."""
+    from goldbot.ops.monthly_review import review_problems
+    problems = review_problems(ctx.state_dir, ctx.now)
+    if problems is None:
+        return None
+    if problems:
+        return Check(name="monthly_review", status="warn", reason="; ".join(problems)[:500])
+    return Check(name="monthly_review", status="ok", reason="every stored monthly review built and sent")
+
+
 @register_check("global", block=BLOCK_TAIL, pos=100)
 def check_agent_spend(ctx: HealthContext) -> Check:
     cap = ctx.settings.agents.monthly_cap_usd if ctx.settings is not None else None

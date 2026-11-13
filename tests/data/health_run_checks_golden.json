@@ -191,6 +191,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:monthly_review",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:nightly_costs",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -656,6 +661,11 @@
   ],
   [
    "job:monthly_research",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:monthly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],

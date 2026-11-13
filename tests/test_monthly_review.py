@@ -143,10 +143,11 @@ def test_month_boundary_uses_utc_and_catches_up(tmp_path):
     tie = _review(tmp_path).accounts[0].tie_out
     assert tie.closing == 1100.0 and tie.status == "reconciled"
 
-    # registered as a scheduler job: day 1 of each month, UTC, caught up after downtime
+    # registered as a daily scheduler job (UTC): the 1st reviews the month before, a later tick inside the catch-up
+    # window reviews it when the 1st was missed, and every tick retries what has not gone out
     assert JOBS["monthly_review"].__name__ == "monthly_review"
     cfg = SETTINGS.scheduler.monthly_review
-    assert cfg.kind == "monthly" and cfg.day == 1 and cfg.max_late_hours >= 72
+    assert cfg.kind == "daily" and SETTINGS.monthly_review.catch_up_days >= 3
     now = [pd.Timestamp("2026-11-15 12:00", tz=UTC)]
     slots: list[pd.Timestamp] = []
 
@@ -160,11 +161,104 @@ def test_month_boundary_uses_utc_and_catches_up(tmp_path):
     now[0] = pd.Timestamp("2026-12-04 09:00", tz=UTC)    # the brain was down from 1 to 4 December
     assert sch.run_pending() == ["monthly_review"]
     assert slots[-1].tz is not None and str(slots[-1].tz) == "UTC"
-    assert slots[-1].normalize() == pd.Timestamp("2026-12-01", tz=UTC)
+    assert slots[-1].normalize() == pd.Timestamp("2026-12-04", tz=UTC)
     assert mr.review_month(slots[-1]) == "2026-11"
     assert sch.run_pending() == []                       # once per slot
     now[0] = pd.Timestamp("2027-01-01 23:00", tz=UTC)
     assert sch.run_pending() == ["monthly_review"] and mr.review_month(slots[-1]) == "2026-12"
+
+    # the job itself: 4 December is inside the catch-up window, so November is built then
+    rev = mr.run_monthly_review(settings=SETTINGS, state_dir=tmp_path, slot=pd.Timestamp("2026-12-04 06:30", tz=UTC),
+                                account_ids=[ACC], trials=FakeTrials(0), sink=RecordingSink())
+    assert rev is not None and rev.month == "2026-11" and rev.accounts[0].tie_out.closing == 1100.0
+
+
+def _ok_month(state: Path) -> None:
+    _snap(state, ACC, "2026-10-31 23:25", 1000.0)
+    _snap(state, ACC, "2026-11-30 23:25", 1100.0)
+    _trade(state, ACC, "2026-11-10 14:00", 100.0, 1)
+
+
+def _run(state: Path, slot: str, sink: Any) -> mr.MonthlyReview | None:
+    return mr.run_monthly_review(settings=SETTINGS, state_dir=state, slot=pd.Timestamp(slot, tz=UTC),
+                                 account_ids=[ACC], trials=FakeTrials(0), sink=sink,
+                                 now=pd.Timestamp(slot, tz=UTC) + pd.Timedelta("1min"))
+
+
+def test_daily_ticks_keep_a_done_month_and_skip_a_month_past_the_catch_up_window(tmp_path, monkeypatch):
+    _ok_month(tmp_path)
+    builds: list[str] = []
+    real = mr.build_monthly_review
+
+    def counting(**kw: Any) -> mr.MonthlyReview:
+        builds.append(kw["month"])
+        return real(**kw)
+
+    monkeypatch.setattr(mr, "build_monthly_review", counting)
+    sink = RecordingSink()
+    assert _run(tmp_path, "2026-12-01 06:30", sink) is not None
+    assert _run(tmp_path, "2026-12-02 06:30", sink) is not None        # a later tick: the stored review stands
+    assert builds == ["2026-11"] and len(sink.opened) == 1
+    late = tmp_path / "late"
+    late.mkdir()
+    _ok_month(late)
+    assert _run(late, "2026-12-20 06:30", sink) is None                # deployed or down past the window: no build
+    assert builds == ["2026-11"]
+
+
+def test_a_failed_issue_post_on_the_1st_is_posted_on_a_later_run(tmp_path):
+    from goldbot.ops.github_issues import GitHubError
+
+    class DownSink:
+        def open_issue(self, label: str, title: str, body: str) -> str:
+            raise GitHubError("GitHub POST /issues: HTTP 503")
+
+    _ok_month(tmp_path)
+    rev = _run(tmp_path, "2026-12-01 06:30", DownSink())
+    assert rev is not None and rev.posted == {"telegram": "queued", "issue": "outbox"}
+    assert mr.outbox_path(tmp_path, "2026-11").exists()
+    problems = mr.review_problems(tmp_path, pd.Timestamp("2026-12-02 07:00", tz=UTC))
+    assert problems and "2026-11" in problems[0] and "not posted" in problems[0]
+    from types import SimpleNamespace
+
+    from goldbot.ops.health import check_monthly_review
+    health_ctx: Any = SimpleNamespace(state_dir=tmp_path, now=pd.Timestamp("2026-12-02 07:00", tz=UTC))
+    check = check_monthly_review(health_ctx)
+    assert check is not None and check.status == "warn" and "not posted" in check.reason
+    sink = RecordingSink()
+    _run(tmp_path, "2026-12-02 06:30", sink)                           # GitHub is back
+    stored = mr.load_review(tmp_path, "2026-11")
+    assert stored is not None and stored.posted == {"telegram": "queued", "issue": "posted"}
+    assert [t for _, t, _ in sink.opened] == ["Monthly review 2026-11: ok"]
+    assert not mr.outbox_path(tmp_path, "2026-11").exists()
+    assert len((tmp_path / "agent_runs.jsonl").read_text().splitlines()) == 1   # Telegram went once
+    assert mr.review_problems(tmp_path, pd.Timestamp("2026-12-03 07:00", tz=UTC)) == []
+
+
+def test_a_month_whose_build_fails_is_stored_flagged_and_rebuilt_on_a_later_run(tmp_path, monkeypatch):
+    import sqlite3
+    _ok_month(tmp_path)
+    real = mr.build_monthly_review
+    calls = [0]
+
+    def busy_once(**kw: Any) -> mr.MonthlyReview:
+        calls[0] += 1
+        if calls[0] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real(**kw)
+
+    monkeypatch.setattr(mr, "build_monthly_review", busy_once)
+    sink = RecordingSink()
+    rev = _run(tmp_path, "2026-12-01 06:30", sink)
+    assert rev is not None and rev.status == "flagged" and rev.error and "database is locked" in rev.error
+    assert sink.opened == [] and not (tmp_path / "agent_runs.jsonl").exists()   # nothing half-built goes out
+    stored = mr.load_review(tmp_path, "2026-11")
+    assert stored is not None and stored.error is not None
+    problems = mr.review_problems(tmp_path, pd.Timestamp("2026-12-01 07:00", tz=UTC))
+    assert problems and "failed" in problems[0]
+    rev = _run(tmp_path, "2026-12-02 06:30", sink)                     # the next daily tick rebuilds the month
+    assert rev is not None and rev.error is None and rev.status == "ok"
+    assert len(sink.opened) == 1 and mr.review_problems(tmp_path, pd.Timestamp("2026-12-03", tz=UTC)) == []
 
 
 # ------------------------------------------------------------------------------------------------ outputs
@@ -188,6 +282,7 @@ def test_message_has_no_account_identifiers(tmp_path):
     sink = RecordingSink()
     rev = mr.run_monthly_review(settings=SETTINGS, state_dir=tmp_path, slot=pd.Timestamp("2026-12-01 06:30", tz=UTC),
                                 account_ids=[f"icm-demo-{login}"], trials=FakeTrials(40), sink=sink)
+    assert rev is not None
     tg = mr.format_message(rev)
     [(label, title, body)] = sink.opened
     assert label == SETTINGS.monthly_review.issue_label == "review-monthly"
@@ -211,6 +306,7 @@ def test_review_is_stored_in_aux_db_and_posted_once_per_month(tmp_path):
     kw: dict[str, Any] = dict(settings=SETTINGS, state_dir=tmp_path, slot=pd.Timestamp("2026-12-01 06:30", tz=UTC),
                               account_ids=[ACC], trials=trials, sink=sink)
     rev = mr.run_monthly_review(**kw)
+    assert rev is not None and rev.spend is not None and rev.trials is not None
     assert rev.status == "ok" and rev.posted == {"issue": "posted", "telegram": "queued"}
     assert rev.spend.agent_usd == 8.0
     assert rev.spend.total_gbp == round(8.0 * SETTINGS.monthly_review.gbp_per_usd
@@ -227,7 +323,7 @@ def test_without_a_token_the_issue_text_waits_in_the_outbox(tmp_path):
     _snap(tmp_path, ACC, "2026-10-31 23:25", 1000.0)
     rev = mr.run_monthly_review(settings=SETTINGS, state_dir=tmp_path, slot=pd.Timestamp("2026-12-01 06:30", tz=UTC),
                                 account_ids=[ACC], trials=FakeTrials(0), sink=None)
-    assert rev.posted["issue"] == "outbox"
+    assert rev is not None and rev.posted["issue"] == "outbox"
     assert (tmp_path / "aux" / "monthly_review" / "outbox" / "2026-11.md").exists()
 
 
@@ -247,6 +343,19 @@ def test_reliability_counts_failing_and_stale_jobs_and_market_minutes_down(tmp_p
         log.append(pd.Timestamp(ts, tz=UTC), channel="deadman", kinds=[kind], checks=["heartbeat"])
     log.append(pd.Timestamp("2026-11-11 10:05", tz=UTC), channel="telegram", kinds=["new"], checks=["engine:x"])
     rel = _review(tmp_path).reliability
+    assert rel is not None
     assert rel.failing == ["backup"] and "broker_ledger" in rel.stale and "attribution" not in rel.stale
     assert rel.failures_total == 3 and rel.telegram_alerts == 1 and rel.deadman_changes == 4
     assert rel.market_minutes_down == 90
+
+
+def test_a_review_row_a_newer_release_wrote_still_reads(tmp_path):
+    _ok_month(tmp_path)
+    rev = _run(tmp_path, "2026-12-01 06:30", RecordingSink())
+    assert rev is not None
+    with Database.open(tmp_path, "aux").write() as conn:
+        body = json.loads(conn.execute("SELECT body FROM monthly_reviews WHERE month = '2026-11'").fetchone()[0])
+        body["from_a_newer_release"] = 1
+        body["accounts"][0]["tie_out"]["new_field"] = "x"
+        conn.execute("UPDATE monthly_reviews SET body = ? WHERE month = '2026-11'", (json.dumps(body),))
+    assert mr.load_review(tmp_path, "2026-11") == rev

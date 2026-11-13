@@ -37,5 +37,6 @@ An issue is closed only when every flag has an owner and a date; a flag is never
 
 - The public issue never carries an MT5 login, a host or a balance (the job scrubs it); comments follow the same rule.
 - No issue was opened (no `github-token` on the brain, or the post failed): the text waits in
-  `state/aux/monthly_review/outbox/<month>.md` and the next run posts it; the owner's Telegram message went out anyway.
+  `state/aux/monthly_review/outbox/<month>.md` and the next daily run posts it (health `monthly_review` warns after a
+  day); the owner's Telegram message is retried the same way.
 - Reviewers are read-only; fixes go through the normal lane flow (docs/AGENT_STANDARDS.md).

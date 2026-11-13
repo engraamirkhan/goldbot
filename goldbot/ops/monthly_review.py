@@ -3,9 +3,12 @@ the money ties out, what it cost and how reliable the system was, for the financ
 
     python -m goldbot.ops.monthly_review [--state DIR] [--month YYYY-MM]      (prints the stored review)
 
-The scheduler's `monthly_review` job (goldbot/ops/jobs.py) runs on day 1 of each month at 06:30 UTC, caught up for ten
-days after downtime, and reviews the calendar month before its slot in UTC (`review_month`): a slot that arrives in
-another zone is converted first, so the month never depends on the host's clock. Per review:
+The scheduler's `monthly_review` job (goldbot/ops/jobs.py) ticks daily at 06:30 UTC and reviews the calendar month
+before its slot in UTC (`review_month`): a slot that arrives in another zone is converted first, so the month never
+depends on the host's clock. The 1st builds it; a later tick builds it when the 1st was missed (up to
+`monthly_review.catch_up_days` after the month ends) or when the stored row is a failed build (every tick until it
+succeeds: the scheduler marks a slot done before its job runs, so the retry lives here, not in the scheduler). A done
+month is a no-op. Per review:
 
 * Per account, the month's report (goldbot/ops/monthly_report.py, reused as is: its days are opportunity days, D-1
   22:00 to D 22:00 UTC, net rows only; `MonthlyReport.day_boundary` says so).
@@ -33,11 +36,14 @@ another zone is converted first, so the month never depends on the host's clock.
   weekend close, Friday 22:00 to Sunday 23:00 UTC, left out; the daily break is not). scheduler_jobs keeps each job's
   current state, not a history, so failures are cumulative and failing/stale are as of the review.
 
-Outputs: one row in aux.db `monthly_reviews` (migration 30; a catch-up re-run replaces it and keeps what was posted),
-one Telegram message to the owner (a notice row in state/agent_runs.jsonl, relayed by the outbox, as the limits job
-does), and one GitHub issue labelled `review-monthly` (the keyring's github-token; without one, or when the post fails,
-the text waits in state/aux/monthly_review/outbox/<month>.md and is posted by the next run). Each goes out once per
-month. The program-director clears open `review-monthly` issues first each session (docs/process/review-cadence.md).
+Outputs: one row in aux.db `monthly_reviews` (migration 31), one Telegram message to the owner (a notice row in
+state/agent_runs.jsonl, relayed by the outbox, as the limits job does), and one GitHub issue labelled `review-monthly`
+(the keyring's github-token). Each goes out once per month, and the row records which did (`posted`): every daily tick
+sends again whatever has not gone out for ANY stored month, so a GitHub outage or a missing token on the 1st is posted
+by a later tick (meanwhile the text is in state/aux/monthly_review/outbox/<month>.md). A build that raises (a busy
+aux.db, a bug) stores a `flagged` row with the error, sends nothing and is rebuilt next tick. The health check
+`monthly_review` (`review_problems`) warns on a failed build and on a review not fully sent a day after it was built.
+The program-director clears open `review-monthly` issues first each session (docs/process/review-cadence.md).
 
 What it NEVER does: name an MT5 login or a host (the account's config name with any long digit run cut, as
 telegram.entry_text.account_name, and every text scrubbed as research/daily_review.scrub), or put a balance or an
@@ -140,14 +146,20 @@ class MonthlyReview(FrozenRecord):
     month: str                                     # YYYY-MM, a UTC calendar month
     as_of_utc: UtcTimestamp
     day_boundary: str = DAY_BOUNDARY               # the report section's days (the tie-out runs on the UTC month)
-    accounts: list[AccountReview]
-    spend: Spend
-    trials: TrialBudget
-    reliability: Reliability
+    accounts: list[AccountReview] = []
+    # None only on a failed build's row (`error`), which is never sent and is rebuilt on the next daily tick
+    spend: Spend | None = None
+    trials: TrialBudget | None = None
+    reliability: Reliability | None = None
     flags: list[str] = []                          # each one keeps the review from passing
     status: Literal["ok", "flagged"]
     errors: list[str] = []
+    error: str | None = None                       # the build raised: flagged, nothing sent, rebuilt later
     posted: dict[str, str] = {}                    # issue: posted | outbox; telegram: queued | failed
+
+    def sent(self) -> bool:
+        """Both outputs went out (a failed build has nothing to send and is rebuilt instead)."""
+        return self.posted.get("issue") == "posted" and self.posted.get("telegram") == "queued"
 
 
 REVIEWS: RecordRepo[MonthlyReview] = RecordRepo(
@@ -339,6 +351,8 @@ def _name(month: str) -> str:
 
 def _common(r: MonthlyReview) -> list[str]:
     s, t, rel = r.spend, r.trials, r.reliability
+    if s is None or t is None or rel is None:
+        return [f"Build failed: {r.error or 'unknown error'}"]
     host = " + ".join(f"{k} £{v:,.2f}" for k, v in s.hosting_gbp.items() if v) or "hosting £0.00"
     k = (f"{t.used} of {t.budget} used in {t.quarter} (quarter to date)" if t.error is None
          else f"{t.quarter}: {t.error}")
@@ -432,32 +446,87 @@ def _post_issue(state_dir: Path, r: MonthlyReview, sink: IssueOpener | None, lab
     return "outbox"
 
 
-def run_monthly_review(*, settings: Settings, state_dir: str | Path, slot: pd.Timestamp, account_ids: list[str],
-                       trials: Any, sink: IssueOpener | None, now: pd.Timestamp | None = None) -> MonthlyReview:
-    """Build, store, send and post the review of the month before `slot` (UTC). Each output goes out once a month: a
-    catch-up re-run rebuilds and stores the review but keeps what was already posted or queued."""
-    sd = Path(state_dir)
-    month = review_month(slot)
-    db = Database.open(sd, "aux")
-    prev = load_review(sd, month)
-    review = build_monthly_review(settings=settings, state_dir=sd, month=month,
-                                  now=pd.Timestamp.now("UTC") if now is None else now, account_ids=account_ids,
-                                  trials=trials)
-    posted = dict(prev.posted) if prev is not None else {}
-    review = review.model_copy(update={"posted": posted})
-    _store(db, review)                                    # stored before anything goes out
+def _send(db: Database, sd: Path, r: MonthlyReview, sink: IssueOpener | None, label: str) -> MonthlyReview:
+    """Queue the Telegram message and open the issue, each only if it has not gone out yet; the row records both."""
+    posted = dict(r.posted)
     if posted.get("telegram") != "queued":
-        posted["telegram"] = "queued" if queue_notice(sd, format_message(review), role=NOTICE_ROLE) else "failed"
+        posted["telegram"] = "queued" if queue_notice(sd, format_message(r), role=NOTICE_ROLE) else "failed"
     if posted.get("issue") != "posted":
-        posted["issue"] = _post_issue(sd, review, sink, settings.monthly_review.issue_label)
-    review = review.model_copy(update={"posted": posted})
-    _store(db, review)
+        posted["issue"] = _post_issue(sd, r, sink, label)
+    r = r.model_copy(update={"posted": posted})
+    _store(db, r)
+    return r
+
+
+def run_monthly_review(*, settings: Settings, state_dir: str | Path, slot: pd.Timestamp, account_ids: list[str],
+                       trials: Any, sink: IssueOpener | None, now: pd.Timestamp | None = None) -> MonthlyReview | None:
+    """One daily tick (UTC). The month before `slot` is built when it has no row and `slot` is within
+    `monthly_review.catch_up_days` of its end, or when its stored row is a failed build (rebuilt on every tick until it
+    succeeds). A build that raises stores a `flagged` row carrying the error and sends nothing. Then every stored review
+    whose Telegram message or issue has not gone out (a GitHub outage, no token) is sent again: each output goes out
+    once. Returns the month's row, or None when it was neither stored nor due (past the window, never built)."""
+    sd = Path(state_dir)
+    cfg = settings.monthly_review
+    month = review_month(slot)
+    now = pd.Timestamp.now("UTC") if now is None else _utc(now)
+    db = Database.open(sd, "aux")
+    review = load_review(sd, month)
+    due = review is None and _utc(slot) < month_window(month)[1] + pd.Timedelta(days=cfg.catch_up_days)
+    if due or (review is not None and review.error is not None):
+        try:
+            review = build_monthly_review(settings=settings, state_dir=sd, month=month, now=now,
+                                          account_ids=account_ids, trials=trials)
+        except Exception as exc:          # noqa: BLE001 - the month is kept as a flagged row and rebuilt next tick
+            log.exception("monthly review: building %s failed", month)
+            review = MonthlyReview(month=month, as_of_utc=now, status="flagged",
+                                   error=scrub(f"{type(exc).__name__}: {exc}")[:500] or type(exc).__name__,
+                                   flags=["the review could not be built; the next daily run rebuilds it"])
+        _store(db, review)                                # stored before anything goes out
+    with db.read() as conn:
+        pending = [r for r in REVIEWS.select(conn) if r.error is None and not r.sent()]
+    for r in pending:
+        sent = _send(db, sd, r, sink, cfg.issue_label)
+        if sent.month == month:
+            review = sent
     return review
 
 
-def summary(r: MonthlyReview) -> dict[str, Any]:
+def review_problems(state_dir: str | Path, now: pd.Timestamp, *, grace_h: float = 24.0) -> list[str] | None:
+    """For health: every stored review whose build failed, and every one not fully sent `grace_h` after it was built.
+    Read-only; None when aux.db holds no review yet (or no table: a schema before the migration)."""
+    import sqlite3
+
+    from goldbot.db.connection import db_path
+    if not db_path(state_dir, "aux").exists():
+        return None
+    conn = sqlite3.connect(f"file:{db_path(state_dir, 'aux')}?mode=ro", uri=True, timeout=5)
+    try:
+        rows = [load_record_json(MonthlyReview, b, source="db:monthly_reviews")
+                for (b,) in conn.execute("SELECT body FROM monthly_reviews ORDER BY month")]
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return None
+        raise
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    out = []
+    for r in rows:
+        age_h = (_utc(now) - r.as_of_utc).total_seconds() / 3600
+        if r.error is not None:
+            out.append(f"monthly review {r.month} failed to build ({r.error[:120]}); the next daily run rebuilds it")
+        elif not r.sent() and age_h > grace_h:
+            out.append(f"monthly review {r.month} not posted after {age_h:.0f} h (issue: "
+                       f"{r.posted.get('issue', 'not tried')}, telegram: {r.posted.get('telegram', 'not tried')})")
+    return out
+
+
+def summary(r: MonthlyReview | None) -> dict[str, Any]:
     """The scheduler's job result: verdicts and counts only."""
-    return {"month": r.month, "status": r.status, "flags": len(r.flags),
+    if r is None:
+        return {"skipped": "no review due (the month is past monthly_review.catch_up_days and was never built)"}
+    return {"month": r.month, "status": r.status, "flags": len(r.flags), "error": r.error,
             "accounts": {account_name(a.account_id): a.tie_out.status for a in r.accounts}, "posted": dict(r.posted)}
 
 
