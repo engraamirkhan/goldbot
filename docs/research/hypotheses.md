@@ -606,3 +606,14 @@ one of >= 9 cuts); the discovery fills never count.
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-90 | Gold signal arms Z1P, Z2P, Z5P, Z3D, Z9D, Z10D, GS1 entering in [07:00, 12:00) Europe/London beat their own side- and session-matched random control (E_L > 0), and by more than outside London (DiD > 0), net of broker-measured costs. Discovery (post hoc, 2026-10-26..11-12): London signal arms +0.132 R, day-clustered t 2.9, n 674; controls -0.078 R. Prior low (H-82 gross +/-0.011 R on 2010-17; H-83 0/24 cells) | **pre-registered** 2026-11-12; quant sign-off pending; K rows not yet written | K +3 (H-learn, H-seen, F): demo-arm K 174 -> 177 | H-learn (2010-17) kill-only: E_L <= 0 or DiD <= 0 or < 5/8 years -> retired. F (demo from 11-13, read at 400 London fills or 2026-12-17, futility at 150): PASS = E_L t >= 2.0, London net > 0, DiD t >= 1.645, leave-one-arm-out and both sides > 0 -> London-first demo admission proposal (volume only, no cap change, never live evidence); LEAD = t in [1, 2); else retired |
+
+## A31. Daily trend with volatility targeting (principal quant strategist, 2026-11-13)
+
+Card `prereg-2026-11-13-l1-daily-trend.md`. Ledger fix in the same change: POS-1 A1 (2026-11-06) had no row here.
+Owed: its R-table row needs `research.retired_families` in `config/settings.yaml` too (`tests/test_director.py`);
+research director, by 2026-11-20.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| POS1-A1 | TREND-XASSET: TSMOM 1/3/12 and 12M, Turtle, SMA, Faber, ensembles on XAU, metals and a 13-market CFD book, 10 %/yr vol target, daily position engine, EXPLORE 2003-05 + 2010-17 | **failed** 2026-11-06 (`pos1/results-a1.md`): 0/16 t >= 2; book 026A gross +0.535 (t 1.70), financing -0.369, net SR 0.09; gold 001/015 net SR 0.40/0.48 on 18/10 round trips. Line closed: no re-run, widening, re-parameterisation or rename | 16 EXPLORE reads (registry family `pos1:trend-xasset`); K 19 for deflation | Kill rule A1.4 |
+| L1 | Gold + cross-asset daily TSMOM (1-12 month sign) with vol targeting (research-director plan 2026-11-13) | **declined** 2026-11-13 at 0 reads: duplicate of POS1-A1; the variants it adds (wider `raw/daily/long` universe, other vol targets or lookbacks) are what the A1 closure forbids. Reopen only on the new evidence in card section 2 | 0; K +0 | none (no run) |
