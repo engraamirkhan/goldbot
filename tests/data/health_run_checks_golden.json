@@ -331,6 +331,11 @@
    "1 feeds ok, last poll 0 s ago"
   ],
   [
+   "news_blackout_cap",
+   "ok",
+   "rule-shock blackout 0 of 120 min today"
+  ],
+  [
    "exploration_learning",
    "ok",
    "no exploration trade closed more than 26 h ago"
@@ -838,6 +843,11 @@
    "news",
    "ok",
    "1 feeds ok, last poll 0 s ago"
+  ],
+  [
+   "news_blackout_cap",
+   "ok",
+   "rule-shock blackout 0 of 120 min today"
   ],
   [
    "exploration_learning",
