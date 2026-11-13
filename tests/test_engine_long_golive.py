@@ -129,6 +129,46 @@ def test_a_1d_decision_in_eest_is_sent_at_the_first_close_after_2215_utc(eest, h
     assert p.bar_ts == pd.Timestamp("2025-06-10 22:30", tz="UTC") and p.decision_utc == EEST_TUE
 
 
+@pytest.mark.parametrize(("b1", "d", "send"), [
+    ("eet", EET_TUE, pd.Timestamp("2025-02-11 23:30", tz="UTC")),
+    ("eest", EEST_TUE, pd.Timestamp("2025-06-10 22:30", tz="UTC")),
+])
+def test_bars_after_the_decision_close_never_change_the_decision_sent_later(b1, d, send, request, hist,
+                                                                           hist_summer, tmp_path,
+                                                                           monkeypatch) -> None:
+    """Quant review of ADR 0081 (1), truncation: the decision sent at the entry close reads only what was known at
+    its 21:00 UTC decision close; minutes between the two, however different, change neither its inputs nor its
+    signal."""
+    seen: list[tuple[pd.DataFrame, pd.DataFrame]] = []
+
+    def gen(arm: SpecArm, ctx: arm_rules.RuleContext) -> pd.DataFrame:
+        seen.append((ctx.bars.copy(), ctx.b1.copy()))
+        m = ctx.mid
+        side = 1 if m["close"].iloc[-1] >= m["close"].iloc[-5] else -1
+        return pd.DataFrame({"idx": [len(ctx.bars) - 1], "side": [side],
+                             "risk_usd": [float(m["high"].iloc[-1] - m["low"].iloc[-1])], "target_r": [2.0],
+                             "max_bars": [1]})
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, "random_bracket", gen)
+    monkeypatch.setattr(exploration, "shares", lambda ex, now: {})
+    monkeypatch.setattr(exploration, "candidate", lambda *a, **k: None)
+    frame = request.getfixturevalue(b1)
+    root = hist if b1 == "eet" else hist_summer
+    after = (frame["ts_utc"] >= d) & (frame["ts_utc"] < send)
+    assert after.any()
+    moved = frame.copy()
+    for c in [c for c in frame.columns if c.startswith(("bid_", "ask_"))]:
+        moved.loc[after, c] = moved.loc[after, c] * 1.05                    # a 5% move after the decision close
+    got = []
+    for i, f in enumerate((frame, moved)):
+        eng = _engine(f, [_arm("D1", "1d")], root, exploration.ledger_db(str(tmp_path / f"s{i}")))
+        [p] = _run(eng, d, send)
+        got.append(p)
+    assert got[0] == got[1] and got[0].bar_ts == send
+    (bars0, b10), (bars1, b11) = seen
+    pd.testing.assert_frame_equal(bars0, bars1)
+    pd.testing.assert_frame_equal(b10, b11)
+
+
 def test_the_1d_send_close_is_never_inside_the_rollover_or_the_daily_break() -> None:
     for d, reopen in ((EET_TUE, pd.Timestamp("2025-02-11 23:02", tz="UTC")),
                       (EEST_TUE, pd.Timestamp("2025-06-10 22:02", tz="UTC"))):
@@ -292,21 +332,41 @@ def test_a_1w_runner_is_trailed_at_the_weekly_close_not_at_an_epoch_week_boundar
 
 
 # ------------------------------------------------------------------------------------------------ swap of the hold
-def test_a_1d_intent_projects_the_swap_of_every_rollover_of_its_hold(tmp_path) -> None:
+def test_a_1d_intent_projects_the_swap_of_every_rollover_to_its_last_weekday_close(tmp_path) -> None:
     from goldbot.ops.cost_imputation import account_swap, paid_swap_per_oz
     from tests.test_exploration_engine import CLOSE, _at, qualified
     from tests.test_exploration_engine import _engine as real_engine
     arm = qualified(exploration.Arm(spec=_arm("D1", "1d"), style="swing", control_share=0.1))
     eng, pb = real_engine(tmp_path, [arm])
-    tick = _at(eng, pb, CLOSE)
+    tick = _at(eng, pb, CLOSE)                                              # Tuesday 20:00 UTC
     s = Pending(arm_id="D1", side=1, bar_ts=CLOSE, stop_usd=10.0, target_usd=20.0, hold_bars=3)
     terms = eng._sizing_terms(1, tick.ask, 10.0, cycle=CLOSE)
     intent = exploration._intent(eng, arm, 1, tick.ask, s, tick.ts_utc, terms, 40.0)
     assert intent is not None
+    end = pd.Timestamp("2025-03-06 21:00", tz="UTC")                        # Tue, Wed, Thu 21:00: the third close
+    assert long_bars.hold_end("1d", tick.ts_utc, 3) == end
     spec = account_swap(eng._cost_table(), eng.cfg.swap_prior.model_copy(update={"server_tz": eng.cfg.server_tz}))
-    whole = paid_swap_per_oz(spec, 1, tick.ts_utc, tick.ts_utc + pd.Timedelta(days=3))
+    whole = paid_swap_per_oz(spec, 1, tick.ts_utc, end)
     assert intent.swap_usd_per_oz == pytest.approx(whole)
     assert whole > eng._swap_usd_per_oz(1, tick.ts_utc) > 0                # more than the risk day's own rollover
+
+
+def test_a_1d_hold_across_the_weekend_projects_the_weekend_and_triple_nights() -> None:
+    """Quant review of ADR 0081 (3): 1d bars are weekday closes, so a hold of n bars ends at the n-th weekday 21:00
+    UTC close, not n calendar days on: a Thursday entry held 5 bars ends the next Thursday, its weekend and
+    Wednesday's triple night inside the projection."""
+    from goldbot.labels.triple_barrier import SwapSpec
+    from goldbot.ops.cost_imputation import paid_swap_per_oz
+    thu = pd.Timestamp("2025-02-13 23:30", tz="UTC")
+    assert long_bars.hold_end("1d", thu, 3) == pd.Timestamp("2025-02-18 21:00", tz="UTC")        # Fri, Mon, Tue
+    assert long_bars.hold_end("1d", thu, 5) == pd.Timestamp("2025-02-20 21:00", tz="UTC")        # ... Wed, Thu
+    assert long_bars.hold_end("1w", thu, 2) == pd.Timestamp("2025-02-21 21:00", tz="UTC")        # Fridays
+    end = long_bars.hold_end("1d", thu, 5)
+    assert end is not None
+    spec = SwapSpec.shipped().model_copy(update={"server_tz": "Europe/Athens"})
+    weekdays = paid_swap_per_oz(spec, 1, thu, end)
+    calendar = paid_swap_per_oz(spec, 1, thu, thu + pd.Timedelta(days=5))
+    assert weekdays > calendar > 0
 
 
 def test_an_intraday_intent_keeps_the_risk_days_swap(tmp_path) -> None:

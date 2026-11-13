@@ -1,8 +1,8 @@
 # 0081: 1d/1w entry timing: the send after the reopen, the common filter at the entry close, the whole hold's swap
 
-Status: proposed (implementer, 2026-11-13). Blocker 5 needs the quant-reviewer's ratification; the engine timing and
-the swap projection need the trading-safety-reviewer's. 1d/1w stay dark (`engine.timeframes_live`) until BACKLOG 144
-blocker 7 lifts the settings guard.
+Status: accepted with amendments (quant-reviewer, 2026-11-13: truncation test, swap to the last weekday close, the
+CONFIRM of record below); engine timing and swap approved by the trading-safety-reviewer on 6c90577c with fixes. 1d/1w
+stay dark (`engine.timeframes_live`) until BACKLOG 144 blocker 7 lifts the settings guard.
 
 ## Context
 WS-4 (PR #341) shipped 1d and 1w exploration arms dark. BACKLOG 144 lists why a live one would trade nothing or trade
@@ -20,6 +20,7 @@ entered the gate with one night's swap at most.
    60 min for 1w) and, for 1d, after 22:15 UTC. So 22:30 UTC in EEST, 23:30 UTC in EET; the 1w decision at 23:15 UTC
    (EEST) or 00:15 UTC Monday (EET). The rule reads only the bars through its decision close; the signal is stamped
    with the entry close, so its stop and target go out from the send-time price through the RiskGate as every arm's.
+   Minutes between the decision close and the send change nothing in the decision (truncation test, quant review).
    "Reopened" needs evidence: a minute after the reopen in the engine's bars, the whole last base bar open on the
    table, the common filter passing at the entry close; otherwise it waits.
 2. **Lateness and catch-up.** A decision may still be sent up to 2 h (1d) or 24 h (1w) after its entry close, so a
@@ -37,8 +38,9 @@ entered the gate with one night's swap at most.
    only, so a research replay can apply the same rule. A Friday 1d bar's nominal entry is inside the Friday filter:
    a 1d decision never enters into the weekend (the engine also still records it blocked `weekend`).
 4. **Swap of the hold.** A 1d/1w Intent carries the paid swap of every broker rollover from the send to the end of its
-   hold on the calendar (`hold_bars` x the timeframe; `Engine._swap_usd_per_oz(..., until)`, ADR 0017's rule, the
-   triple night counted, a credit never). An unknown swap is NaN and the gate refuses it (`invalid:swap_usd_per_oz`).
+   hold: its `hold_bars`-th close after the send, weekday 21:00 UTC closes for 1d (so a hold across a weekend pays the
+   weekend and the triple night), Friday 21:00 UTC for 1w (`long_bars.hold_end`; `Engine._swap_usd_per_oz(..., until)`,
+   ADR 0017's rule, the triple night counted, a credit never). An unknown swap is NaN and the gate refuses it (`invalid:swap_usd_per_oz`).
    Intraday arms keep the risk day's projection.
 
 Options weighed for 3: (a) lift the filter for 1d/1w entirely: rejected, it also stops Friday-evening entries and
@@ -46,6 +48,14 @@ tier-1 blackouts; (b) shift the decision bar's timestamps: rejected, it corrupts
 point-in-time join; (c) judge the filter at the entry (chosen): the filter's intent ("no new entry at the rollover or
 into the weekend") applied where the entry happens. What would change it: a quant ruling that 1d/1w research must
 judge entries at the close (then the 1d family is untradeable as specified and should be re-registered).
+
+5. **The CONFIRM of record (quant amendment).** Research fills a 1d/1w signal at the next bar's open
+   (`research/catalogue/sim.py`, `data/daily.py`): a 1d fill near 21:00 UTC in winter (the reopen in summer) where the
+   engine sends at 23:30 (22:30) UTC; a 1w fill on Friday 21-22 UTC that holds the weekend gap where the engine enters
+   Sunday/Monday an hour after the open; and Friday 1d trades exist in research but are never sent live. So the CONFIRM
+   of record for any 1d/1w arm re-fills each trade at the first 1m open at or after its live entry close
+   (`long_bars.entry_close`), with Friday 1d signals dropped. Until such a CONFIRM exists, no 1d/1w arm may qualify
+   (BACKLOG 254, 253).
 
 ## Consequences
 - Blockers 1, 2, 3, 5 (pending ratification) and 6 of BACKLOG 144 are closed in code; the settings guard

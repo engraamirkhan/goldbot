@@ -127,9 +127,15 @@ def entry_after(close: pd.DatetimeIndex, tf: str) -> pd.DatetimeIndex:
 
 
 def hold_end(tf: str, now: pd.Timestamp, hold_bars: int) -> pd.Timestamp | None:
-    """Where a 1d/1w entry at `now` is projected to hold to, for its swap through the RiskGate (`hold_bars` of its
-    timeframe on the calendar: at least every rollover it can pay); None for every other timeframe (the risk day's)."""
-    return now + pd.Timedelta(seconds=hold_bars * tf_seconds(tf)) if tf in LONG_TFS else None
+    """Where a 1d/1w entry at `now` is projected to hold to, for its swap through the RiskGate: the `hold_bars`-th close
+    of its timeframe after `now` (1d: weekday 21:00 UTC closes, so a hold across a weekend reaches past it and its
+    weekend and triple nights are paid; 1w: Friday 21:00 UTC; quant review of ADR 0081). None for every other timeframe
+    (the risk day's projection)."""
+    if tf not in LONG_TFS:
+        return None
+    days = pd.date_range(now.normalize(), periods=7 * max(1, hold_bars) + 8, freq="D") + DAY_CLOSE
+    closes = days[(days > now) & ((days.dayofweek < 5) if tf == "1d" else (days.dayofweek == 4))]
+    return closes[max(1, hold_bars) - 1]
 
 
 def _store_frame(ts_utc: pd.DatetimeIndex, visible: pd.DatetimeIndex, mid: dict[str, np.ndarray],

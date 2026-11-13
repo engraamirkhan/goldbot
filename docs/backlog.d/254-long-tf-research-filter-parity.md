@@ -19,3 +19,8 @@ status: 'ready (2026-11-13) · accountable: implementer · reviews: quant-review
   hold counting (`hold_bars` x the timeframe on the calendar, weekends included, in `crosses_friday`, the record and the
   swap projection). As built, a 1w arm is always refused `weekend_hold` (its hold reaches the Friday cut) unless the
   account has `demo_weekend_flat`.
+  Quant amendment (ADR 0081 point 5): research fills at the next bar's open (`research/catalogue/sim.py`,
+  `data/daily.py`): 1d ~21:00 UTC in winter (the reopen in summer) vs live 23:30 (22:30); 1w Friday 21-22 UTC holding
+  the weekend gap vs live Monday 00:15 (Sunday 23:15); Friday 1d trades exist in research, never live. Acceptance adds:
+  the CONFIRM of record re-fills at the first 1m open at or after the live entry close, Friday 1d dropped; no 1d/1w arm
+  may qualify until that CONFIRM exists.
