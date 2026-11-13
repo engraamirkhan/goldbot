@@ -301,3 +301,68 @@ def test_the_tz_quarantine_selector_still_finds_ahead_rows_after_compaction(tmp_
     sel = mod.ahead(new, rows)
     assert picked == 10 and int(sel.sum()) == 10
     assert rows.loc[sel.to_numpy(), "ts_utc"].min() == pd.Timestamp("2026-10-26 01:00", tz="UTC")
+
+
+# ---- code review of 80339ff7 (LOWs)
+def test_a_part_compacted_before_lineage_has_unknown_write_times(tmp_path: Path) -> None:
+    """Review 2: a part the R131 compaction wrote (no pandas metadata, no lineage) holds many flushes re-sorted; its
+    own mtime is the compaction time, not a write time: its rows read as unknown (NaT), also after a later compaction."""
+    import pyarrow as pa
+    store = Store(tmp_path)
+    pdir = store.partition_dir("decisions", ACC, "XAUUSD", pd.Timestamp("2026-10-01", tz="UTC"))
+    pdir.mkdir(parents=True)
+    old = pd.DataFrame({"ts_utc": pd.date_range("2026-10-01", periods=4, freq="h", tz="UTC"), "action": "score"})
+    pq.write_table(pa.Table.from_pandas(old, preserve_index=False).replace_schema_metadata(None),
+                   pdir / "part-r131aaaa.parquet")
+    assert written_utc(pdir / "part-r131aaaa.parquet").isna().all()
+    store.append("decisions", old.assign(ts_utc=old["ts_utc"] + pd.Timedelta(days=5)), source=ACC, dedupe=False)
+    late = next(p for p in pdir.glob("*.parquet") if p.name != "part-r131aaaa.parquet")
+    late_at = pd.Timestamp(late.stat().st_mtime_ns, unit="ns", tz="UTC")
+    before = store.read("decisions", source=ACC)
+    compact_table(store, "decisions", before=NOW)
+    (new,) = sorted(pdir.glob("*.parquet"))
+    w = written_utc(new)
+    assert w.iloc[:4].isna().all() and list(w.iloc[4:]) == [late_at] * 4
+    pd.testing.assert_frame_equal(store.read("decisions", source=ACC), before)
+
+
+def test_quarantine_move_after_a_crashed_compaction_does_not_duplicate(tmp_path: Path,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review 3: a compaction died between its rename and its unlinks (old parts + new part on disk, manifest names
+    the old ones). move_rows finishes that swap first, so its rewrite never carries the replaced rows twice."""
+    from goldbot.data import quarantine as qr
+    store = Store(tmp_path)
+    _seed(store)
+    before = store.read("ticks", source=ACC)
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise SystemExit("killed between the rename and the unlinks")
+    monkeypatch.setattr(compact_mod, "_unlink_replaced", boom)
+    with pytest.raises(SystemExit):
+        compact_table(store, "ticks", before=NOW)
+    monkeypatch.undo()
+    lo = pd.Timestamp("2026-09-01 08:00", tz="UTC")
+
+    def first_secs(_p: Path, rows: pd.DataFrame) -> pd.Series:
+        ts = pd.to_datetime(rows["ts_utc"], utc=True)
+        return (ts >= lo) & (ts < lo + pd.Timedelta(seconds=2))
+    n = qr.move_rows(store, "ticks", source=ACC, symbol="XAUUSD", select=first_secs, reason=qr.TZ_MISLABEL,
+                     now=NOW, apply=True)
+    after = store.read("ticks", source=ACC)
+    moved = store.read("ticks_quarantine", source=ACC)
+    assert n == 8 and len(moved) == 8 and len(after) == len(before) - 8
+    assert not list(store.table_dir("ticks").rglob(".compact.json"))
+
+
+def test_a_column_typed_differently_across_parts_is_unified_as_duckdb_reads_it(tmp_path: Path) -> None:
+    """Review 4: one writer stored `detail` as an integer, another as text. Arrow cannot unify them; DuckDB's
+    union_by_name reads VARCHAR. The compacted part holds the column as DuckDB reads it, so the frame is the same."""
+    store = Store(tmp_path)
+    store.append("dq_events", _dq("2026-09-01 00:00", "gap").assign(detail=[5, 6], score=[1, 2]), source=ACC,
+                 dedupe=False)
+    store.append("dq_events", _dq("2026-09-02 00:00", "spike").assign(score=[1.5, 2.5]), source=ACC, dedupe=False)
+    before = store.read("dq_events", source=ACC)
+    rep = compact_table(store, "dq_events", before=NOW)
+    assert [p.error for p in rep.partitions] == [None]
+    assert len(_parts(store, "dq_events", ACC, "XAUUSD", 2026, 9)) == 1
+    pd.testing.assert_frame_equal(store.read("dq_events", source=ACC), before)
