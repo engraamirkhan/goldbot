@@ -49,9 +49,11 @@ def test_i0_xaujpy_keeps_its_own_2026_11_09_retirement(spec) -> None:
     assert spec["I0-XAUJPY"].retired_day == "2026-11-09"
 
 
-def test_the_unnamed_i0_instrument_controls_stay_under_the_cost_cell_rule(spec) -> None:
+def test_the_unnamed_i0_instrument_controls_were_left_to_the_cost_cell_rule_until_the_gold_only_ruling(spec) -> None:
+    """Ruling (a) did not retire them; the research-director ruling of 2026-11-13 (gold-only demo) did, on 11-14."""
     for arm_id in I0_KEPT:
-        assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
+        a = spec[arm_id]
+        assert a.status == "run" and a.retired_day == "2026-11-14" and a.retired_rule == arms.GOLD_ONLY_RULE, arm_id
 
 
 def test_the_learning_arms_that_take_the_freed_slots_stay_active_with_their_controls(spec) -> None:
@@ -69,10 +71,11 @@ def test_the_named_i0_rows_are_refused_and_kept_configured_on_their_accounts(acc
             assert arm_id in refused, (account_id, arm_id)    # no new entry
 
 
-def test_a_retired_gold_family_does_not_retire_its_per_instrument_rows_in_the_engine(accounts) -> None:
-    """I0 is retired; I0-AUDUSD on icm-probe is not: its stop is its own cost cell (control-thinning point 4)."""
+def test_a_retired_gold_family_does_not_retire_its_per_instrument_rows_in_the_engine(accounts, spec) -> None:
+    """I0 is retired; I0-AUDUSD on icm-probe was not by it: its stop was its own cost cell (control-thinning point
+    4), and it is retired only by its own row (the gold-only ruling of 2026-11-13), never through its family."""
     cfg = exploration.config_for(accounts["icm-probe"])
     assert cfg is not None
     assert "I0-AUDUSD" in {a.arm_id for a in cfg.arms}
-    assert "I0-AUDUSD" not in exploration.spec_retired(cfg)
+    assert spec["I0-AUDUSD"].retired_rule == arms.GOLD_ONLY_RULE
     assert not hasattr(exploration, "family_retirement")
