@@ -72,6 +72,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   leaves those fields empty and the row is still written; older rows read None. Reading them in reports is backlog 195.
   No exit, cap, RiskGate rule or size changed.
 - **Feedback-loop health check (R140, 2026-11-13, branch feat/loop-health-check).** Health `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when the learner's bandit weights are older than 36 weekday hours, a daily or weekly review file is missing for its slot, weekly proposals stay unread 8 days, the latest trial-registry sync failed or registry rows wait more than 36 h in `state/registry_outbox/`, or a job's last run errored; unreadable state is an alerted "can't check" WARN. The daily `loop_check` job (07:05 UTC) comments on the `ci-loop` issue. Root cause of the registry 403: the brain token is read-only by decision (2026-11-01) and the Mac publish is manual; nothing alerted (incident docs/incidents/2026-11-13-registry-sync-silent.md). Expect `feedback_loop` to FAIL on the brain at deploy (outbox since 11-07, unread weekly proposals) until BACKLOG 215-217 land. RUNBOOK "Feedback loop".
+- 2026-11-13 (branch feat/mfe-mae-reports; R147, backlog 195): `perf-report` now reads the R135 excursions of closed
+  exploration and control trades in a new "Excursions (MFE / MAE)" section, per family and per arm: median MFE and MAE
+  in R with n, the losers' median MFE (R and USD/oz: the move the bracket gave back), the winners' median MAE (how near
+  the stop came), the time exits' share, and the stop exits' share of the initial-stop and target exits beside the
+  bracket's driftless random-walk null target / (stop + target). Quant review of a97be490: the null has no hold cap, so
+  it is printed only when half the trades or more ended at a barrier; a stop exit away from the initial stop (trailed,
+  break-even) is counted "moved stop" and left out of the bracket math. Rows closed before
+  2026-11-14 carry no fields and are counted "not recorded", never 0 R; `excursion_approx` rows have their own column.
+  Descriptive only: no interval, not in the groups note. The attribution exits report already reads MAE/MFE of the
+  closed-trade record (backlog 23) and exploration trades never enter that record by design, so it is unchanged; the
+  weekly review's exit read (stops after +N R) is unchanged. No API field carries MFE/MAE yet, so the dashboard trade
+  detail is backlog 243.
 - 2026-11-13, ML review cleanup (branch feat/ml-cleanup-snapshots; R143; BACKLOG 227-230; ADR 0080;
   `docs/research/ml-review-2026-11-13.md`). Four changes, none on the order path.
   - **Arm shares.** The nightly exploration learner now writes equal shares among each style's enterable arms; an arm

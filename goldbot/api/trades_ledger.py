@@ -325,6 +325,18 @@ def _exploration(state: Path, ctx: _Ctx) -> list[TradeRow]:
     return [_arm_row(t, ctx, voids) for t in recs]
 
 
+def arm_trade_id(t: ExplorationRecord) -> str:
+    """The ledger `trade_id` of an exploration record's row."""
+    return f"exploration:{account_name(t.account_id)}:{t.client_order_id}"
+
+
+def exploration_records(state_dir: str | Path) -> dict[str, ExplorationRecord]:
+    """aux.db's filled exploration records by their row's `trade_id`, for a report that reads body fields the row does
+    not carry (BACKLOG 195: the MFE / MAE of R135). The same cached read as the ledger's, so no second select."""
+    recs, _ = _aux_trades(Path(state_dir))
+    return {arm_trade_id(t): t for t in recs}
+
+
 def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow:
     info = ctx.cat.arm(t.arm_id)
     family = info.family if info is not None else (t.family or "unknown")
@@ -351,7 +363,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
     held_by = ctx.orders.get((t.account_id, t.position_id or -1))
     why = ctx.cat.why(family) if not control else f"Control: {ctx.cat.why(family)[:1].lower()}{ctx.cat.why(family)[1:]}"
     return TradeRow(
-        trade_id=f"exploration:{account_name(t.account_id)}:{t.client_order_id}", kind="control" if control else "exploration",
+        trade_id=arm_trade_id(t), kind="control" if control else "exploration",
         status="closed" if closed else "open", account=account_name(t.account_id),
         account_label=account_label(t.account_id), mode=a.mode or "demo", family=family,
         family_label=ctx.cat.family_label(family), variant=info.variant if info is not None else t.tf,
