@@ -567,7 +567,11 @@ def test_the_kill_list_and_a5_retire_their_rows_and_the_paired_controls_stay():
     assert all(str(rows[a].retired_day) == "2026-11-13" for a in ("ZCD", "F1C"))
     # Z3D and LCZ3D stop on 2026-11-13 (prereg-amendment-2026-11-13-h90-cost-budget.md: cost > gross/3)
     assert all(str(rows[a].retired_day) == "2026-11-13" for a in ("Z3D", "LCZ3D"))
-    keep = ["S0", "S0R", "Z9D", "Z10D", "LCZ9D", "LCZ10D", "GS1C",
+    # Z9D, Z10D, Z5P and their dedicated controls retire on 2026-11-13 (prereg-amendment-2026-11-13-survivor-reads.md
+    # section 2: KILL on the 2010-17 replay)
+    survivors = ("Z9D", "Z10D", "Z5P", "LCZ9D", "LCZ10D", "LCZ5P")
+    assert all(str(rows[a].retired_day) == "2026-11-13" and "survivor-reads" in rows[a].retired_rule for a in survivors)
+    keep = ["S0", "S0R", "GS1C",
             *(a for a in rows if a.startswith("LBC-") and not rows["LB-" + a[4:]].retired)]
     assert all(a in rows and not rows[a].retired for a in keep)
 
