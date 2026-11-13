@@ -138,7 +138,7 @@ def test_collector_outage_reads_nan_not_quiet():
     rows = [r for r in _background(days=3) if not (T0 + pd.Timedelta(hours=20) < r["received_utc"]
                                                    <= T0 + pd.Timedelta(hours=40))]
     g = nf.news_grid(_news(rows)).set_index("available_utc")
-    assert np.isnan(g.loc[T0 + pd.Timedelta(hours=36), "news_count_1h"])
+    assert pd.isna(g.loc[T0 + pd.Timedelta(hours=36), "news_count_1h"])
     assert g.loc[T0 + pd.Timedelta(hours=10), "news_count_1h"] == 0
 
 
@@ -150,7 +150,7 @@ def test_unscored_share_counts_prefiltered_items_the_budget_left_unscored():
     assert g.loc[at, "news_unscored_share_24h"] == pytest.approx(0.5)
     # half the prefiltered headlines unscored (> MAX_UNSCORED): the budget cut-off would bias the counts, so NaN
     for c in ("news_count_1h", "news_count_4h", "news_count_24h", "news_sent_24h", "news_evt_fed_4h"):
-        assert np.isnan(g.loc[at, c]), c
+        assert pd.isna(g.loc[at, c]), c
     assert g.loc[T0 + pd.Timedelta(hours=2), "news_count_4h"] == 0      # before the unscored item: a known quiet
 
 
