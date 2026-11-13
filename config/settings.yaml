@@ -199,11 +199,14 @@ scheduler:
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
   limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
   daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
+  loop_check:       { kind: daily,   at: "07:05", max_late_hours: 12, run_if_never_run: true }   # R140 feedback-loop check -> `ci-loop` GitHub issue when a writer is stale or failing
   autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
   tva_scores:       { kind: daily,   at: "23:35", max_late_hours: 20 }                  # TradingView author ideas shadow score (prereg-2026-10-28 section 6), after feed_reconcile and nightly_costs
   har_days:         { kind: daily,   at: "22:05", max_late_hours: 20, run_if_never_run: true }   # N-3 HAR forecast for the next trading day from bars visible at 22:00 UTC (prereg-2026-11-07-n3-har.md); a missed night refuses learning entries (har_unavailable)
   har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
   journal_compact:  { kind: daily,   at: "03:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 170: closed months of the decisions journal -> one part each (goldbot/data/compact.py); never the open month
+  weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
+  monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -219,6 +222,13 @@ news:                                # headline collector (VPS service goldbot-n
   daily_cap_usd: 0.50                # scoring spend per UTC day, counted in agents.monthly_cap_usd
   shock_blackout_min: 30             # entries blocked after a high-relevance unscheduled shock (design)
   shock_min_relevance: 0.7
+  rule_shock_min_confidence: 0.8     # rules-v1 fallback scorer (no API key): flag a shock only at this confidence (R144)
+  rule_shock_dedupe_hours: 6         # a later report of the same event within this window (any feed) is not a new shock
+  rule_shock_cap_min_per_day: 120    # rule-shock blackout minutes per UTC day at most (LLM shocks uncapped); health warns
+  source_weights:                    # rules-v1 trust per feed (relevance and shock confidence x weight; unlisted 0.9)
+    forexlive: 0.9
+    fed_press: 1.0
+    bls: 1.0
 
 research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
@@ -564,6 +574,24 @@ daily_review:                        # daily learning-ops review (goldbot/resear
   status_issue: 34                   # one blinded status comment a day on the program issue
   repo: engraamirkhan/goldbot
   weekly_proposals: 4                # Monday roll-up: at most 4 variant proposals for the research director (never run)
+weekly_review:                       # weekly review (goldbot/research/weekly_review.py; architect plan 2026-11-13 item 2); advice only, but registered stops (tighten only)
+  max_actions: 20                    # advisory actions kept a week, ranked; every registered stop is kept on top
+  issue_label: review                # backlog suggestions (unpaired families, cost drift): open or comment on the open issue with this label
+  attribution_max_age_days: 14       # an older state/attribution.json gives no loss driver (the director's own limit)
+  min_cost_fills: 30                 # a (broker, session) week under 30 fills is not read for cost drift against the cost of record
+  exit_mfe_r: 1.0                    # a stop exit that had reached +1 R first ...
+  exit_share: 0.3                    #   ... on 30% or more of a family's stop exits queues an exit diagnostic (break-even / trail variant)
+  exit_min_trades: 30                # closed trades carrying MFE/MAE (exploration_trades mfe_r) before a family's exits are read
+monthly_review:                      # monthly review (goldbot/ops/monthly_review.py, R142); reporting only, never an order
+  catch_up_days: 10                  # a month never built is built on any daily tick up to this many days after it ends
+  balance_tolerance: 0.50            # account currency over the month: a balance change that goldbot's net P&L and the
+                                     #   balance deals do not explain beyond this FLAGS the review (RC-9); never a pass
+  balance_tolerance_per_trade: 0.01  #   ... plus this per closed trade in the window
+  gbp_per_usd: 0.75                  # agent spend (USD, aux.db agent_spend) into the month's GBP total
+  hosting_gbp_month:                 # known hosting, GBP a month (docs/finance/budget-2026-10.md, docs/deploy/icm-depth-host.md)
+    oracle_always_free_brain_and_bridge: 0.0
+    oracle_e5flex_vantage_mt5: 4.52  # 0.125 OCPU E5.Flex + boot volume: measured £4.52 against the approved £3.57
+  issue_label: review-monthly        # label of the monthly GitHub issue; the program-director clears these each session
 trades_view:                         # trades screens' plan figures (goldbot/api/today_ledger.py, item 131); reporting only
   fills_target: 200                  # fills a day for a demo account not listed below; live accounts have none
   # ADR 0049 D1/D1a step-1 targets (fills a day): icm-probe scalp 269 + probes 24 (54 before the 2026-11-01 demo

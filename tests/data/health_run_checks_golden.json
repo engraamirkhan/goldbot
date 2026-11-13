@@ -181,12 +181,22 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:loop_check",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:model_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
    "job:monthly_research",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:monthly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -232,6 +242,11 @@
   ],
   [
    "job:tva_scores",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:weekly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -316,6 +331,11 @@
    "1 feeds ok, last poll 0 s ago"
   ],
   [
+   "news_blackout_cap",
+   "ok",
+   "rule-shock blackout 0 of 120 min today"
+  ],
+  [
    "exploration_learning",
    "ok",
    "no exploration trade closed more than 26 h ago"
@@ -344,6 +364,11 @@
    "deadman",
    "ok",
    "set; the Telegram service pings every 2 min while healthy, <url>/fail on a FAIL"
+  ],
+  [
+   "feedback_loop",
+   "ok",
+   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (monthly_research, cpcv_quarterly, tournament, research_director); jobs: no job's last run errored"
   ]
  ],
  "healthy_static": [
@@ -645,12 +670,22 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:loop_check",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:model_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
    "job:monthly_research",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:monthly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -696,6 +731,11 @@
   ],
   [
    "job:tva_scores",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:weekly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -805,6 +845,11 @@
    "1 feeds ok, last poll 0 s ago"
   ],
   [
+   "news_blackout_cap",
+   "ok",
+   "rule-shock blackout 0 of 120 min today"
+  ],
+  [
    "exploration_learning",
    "ok",
    "no exploration trade closed more than 26 h ago"
@@ -833,6 +878,11 @@
    "deadman",
    "ok",
    "set; the Telegram service pings every 2 min while healthy, <url>/fail on a FAIL"
+  ],
+  [
+   "feedback_loop",
+   "ok",
+   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (monthly_research, cpcv_quarterly, tournament, research_director); jobs: no job's last run errored"
   ]
  ],
  "busy_static": [

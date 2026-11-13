@@ -8,7 +8,12 @@ schema: relevance to gold (0-1), rates direction (hawkish/dovish), risk (risk-on
 
 Cost control: a keyword prefilter decides which items are worth scoring, items are scored in batches, the model
 runs at low effort, and spend goes into the staff agents' monthly ledger under a daily news cap; items beyond the
-cap are stored unscored (relevance NaN) rather than dropped.
+cap are stored unscored by the LLM rather than dropped.
+
+Free fallback (ML review 2026-11-13, R144): every prefiltered item also gets the deterministic `rules-v1` score
+(goldbot/data/news_rules.py) in its `rule_*` columns, and that score fills the main fields (`scorer` = rules-v1)
+whenever the LLM did not score the item (no client, budget used), so the shock blackout works without an API key.
+An LLM score takes precedence; both are kept.
 
 Instrument blackouts (multi-instrument plan 2026-11-02): `instrument_blackout` extends gold's tier-1 USD blackout to
 an instrument's own currencies and its group's scheduled commodity reports (EIA crude and gas, WASDE). The headline
@@ -21,6 +26,7 @@ import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from datetime import date, time, timedelta
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
@@ -32,8 +38,16 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 
-COLUMNS = ["item_id", "ts_utc", "received_utc", "source", "title", "summary", "link", "scored", "relevance",
-           "rates", "risk", "dollar", "surprise", "shock"]
+SCORE_FIELDS = ["relevance", "rates", "risk", "dollar", "surprise", "shock"]
+# `scorer`: who wrote the score fields ("llm", "rules-v1", "" unscored; rows from before 2026-11-13 have no column and
+# were all LLM-scored). `rule_*`: the rules-v1 score of every prefiltered row, kept beside an LLM score
+# (goldbot/data/news_rules.py)
+RULE_COLUMNS = [f"rule_{c}" for c in SCORE_FIELDS] + ["rule_shock_confidence"]
+# `rule_repeat_of`: the first report's item_id when rules-v1 saw this row's shock as a repeat (unflagged);
+# `llm_active`: the collector had an LLM client at this poll (a rule score then means the budget ran out)
+COLUMNS = ["item_id", "ts_utc", "received_utc", "source", "title", "summary", "link", "scored", *SCORE_FIELDS,
+           "scorer", *RULE_COLUMNS, "rule_repeat_of", "llm_active"]
+RULES_SCORER = "rules-v1"                        # goldbot.data.news_rules.SCORER
 PREFILTER = re.compile(
     r"\b(?:gold|xau|bullion|silver|fed|fomc|powell|rate[s]?|yield[s]?|treasur|dollar|usd|dxy|inflation|cpi|pce|"
     r"payroll|nfp|jobs|employment|gdp|recession|tariff|war|missile|attack|sanction|geopolit|central bank|ecb|boj|"
@@ -119,7 +133,10 @@ def parse_feed(xml: str, source: str, received_utc: pd.Timestamp) -> pd.DataFram
             ts = received_utc
         rows.append({"item_id": item_id(source, link, title), "ts_utc": min(ts, received_utc), "received_utc": received_utc,
                      "source": source, "title": title[:300], "summary": summary[:600], "link": link, "scored": False,
-                     "relevance": np.nan, "rates": "", "risk": "", "dollar": "", "surprise": "", "shock": False})
+                     "relevance": np.nan, "rates": "", "risk": "", "dollar": "", "surprise": "", "shock": False,
+                     "scorer": "", "rule_relevance": np.nan, "rule_rates": "", "rule_risk": "", "rule_dollar": "",
+                     "rule_surprise": "", "rule_shock": False, "rule_shock_confidence": np.nan,
+                     "rule_repeat_of": "", "llm_active": False})
     df = pd.DataFrame(rows, columns=COLUMNS)
     if not df.empty:
         df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
@@ -159,28 +176,95 @@ def score_batch(client: Client, model: str, items: pd.DataFrame) -> tuple[list[H
     return out, resp.usage
 
 
-def apply_scores(df: pd.DataFrame, scores: list[HeadlineScore]) -> pd.DataFrame:
+def apply_scores(df: pd.DataFrame, scores: Sequence[HeadlineScore], scorer: str = "llm") -> pd.DataFrame:
+    """The score fields of the rows `scores` names, stamped `scorer`; a later call overwrites an earlier one, so the
+    collector applies the rules first and the LLM after (LLM precedence)."""
+    df = df.copy()
+    if "scorer" not in df.columns:
+        df["scorer"] = ""
+    by_id = {s.id: s for s in scores}
+    for i, iid in zip(df.index, df["item_id"]):
+        s = by_id.get(iid)
+        if s is None:
+            continue
+        df.loc[i, ["scored", *SCORE_FIELDS, "scorer"]] = \
+            [True, s.relevance, s.rates, s.risk, s.dollar, s.surprise, s.shock, scorer]
+    return df
+
+
+def apply_rule_columns(df: pd.DataFrame, scores: Sequence[Any]) -> pd.DataFrame:
+    """The `rule_*` columns from rules-v1 scores (news_rules.RuleScore), whoever wrote the score fields."""
     df = df.copy()
     by_id = {s.id: s for s in scores}
     for i, iid in zip(df.index, df["item_id"]):
         s = by_id.get(iid)
         if s is None:
             continue
-        df.loc[i, ["scored", "relevance", "rates", "risk", "dollar", "surprise", "shock"]] = \
-            [True, s.relevance, s.rates, s.risk, s.dollar, s.surprise, s.shock]
+        df.loc[i, RULE_COLUMNS] = [s.relevance, s.rates, s.risk, s.dollar, s.surprise, s.shock, s.confidence]
     return df
 
 
-def shock_window(news: pd.DataFrame, now: pd.Timestamp, minutes: int, min_relevance: float) -> dict[str, Any] | None:
-    """The latest high-relevance unscheduled shock received within `minutes` before `now`, or None."""
+def _shocks(news: pd.DataFrame, min_relevance: float) -> pd.DataFrame:
     if news.empty or "shock" not in news:
+        return news.iloc[0:0]
+    out = news[news["shock"].fillna(False).astype(bool) & (news["relevance"].astype(float) >= min_relevance)].copy()
+    out["received_utc"] = pd.to_datetime(out["received_utc"], utc=True)
+    out["_rule"] = out["scorer"].fillna("").astype(str).eq(RULES_SCORER) if "scorer" in out else False
+    return out.sort_values("received_utc", kind="mergesort")
+
+
+def _rule_windows(starts: list[pd.Timestamp], minutes: int,
+                  cap_min: float | None) -> list[tuple[pd.Timestamp, pd.Timestamp, float]]:
+    """The blackout windows of rule shocks starting on one UTC day, granted in time order until their union reaches
+    `cap_min` minutes (None: uncapped); the window that crosses the cap is cut at it. (start, end, new minutes)."""
+    out: list[tuple[pd.Timestamp, pd.Timestamp, float]] = []
+    used, reach = 0.0, None
+    for s in starts:
+        end = s + pd.Timedelta(minutes=minutes)
+        new_from = s if reach is None or reach < s else reach
+        new = max((end - new_from) / pd.Timedelta(minutes=1), 0.0)
+        if cap_min is not None:
+            if used >= cap_min:
+                break
+            new = min(new, cap_min - used)
+        eff_end = new_from + pd.Timedelta(minutes=new)
+        out.append((s, max(eff_end, s), new))
+        used += new
+        reach = eff_end if reach is None else max(reach, eff_end)
+    return out
+
+
+def rule_blackout_minutes(news: pd.DataFrame, day: pd.Timestamp, minutes: int, min_relevance: float) -> float:
+    """Uncapped blackout minutes (window union) of the rules-v1 shocks received on UTC day `day`: the collector's log."""
+    sh = _shocks(news, min_relevance)
+    d = pd.Timestamp(day).tz_convert("UTC").normalize() if pd.Timestamp(day).tzinfo else pd.Timestamp(day, tz="UTC").normalize()
+    starts = list(sh.loc[sh["_rule"].astype(bool) & sh["received_utc"].dt.normalize().eq(d), "received_utc"])
+    return float(sum(new for _, _, new in _rule_windows(starts, minutes, None)))
+
+
+def shock_window(news: pd.DataFrame, now: pd.Timestamp, minutes: int, min_relevance: float,
+                 rule_cap_min: float | None = None) -> dict[str, Any] | None:
+    """The latest high-relevance unscheduled shock received within `minutes` before `now`, or None. Rule shocks
+    (`scorer` = rules-v1) black out at most `rule_cap_min` minutes per UTC day (safety review 2026-11-13: a feed that
+    keeps reporting a war must not block entries all day); LLM shocks are uncapped, as the design states."""
+    sh = _shocks(news, min_relevance)
+    if sh.empty:
         return None
-    rec = pd.to_datetime(news["received_utc"], utc=True)
-    hit = news[news["shock"].astype(bool) & (news["relevance"].astype(float) >= min_relevance)
-               & (rec <= now) & (rec >= now - pd.Timedelta(minutes=minutes))]
+    rec = sh["received_utc"]
+    hit = sh[(rec <= now) & (rec >= now - pd.Timedelta(minutes=minutes))]
     if hit.empty:
         return None
-    row = hit.sort_values("received_utc").iloc[-1]
+    if rule_cap_min is not None and hit["_rule"].astype(bool).any():
+        keep = ~hit["_rule"].astype(bool)
+        for day in {t.normalize() for t in hit.loc[hit["_rule"].astype(bool), "received_utc"]}:
+            starts = list(sh.loc[sh["_rule"].astype(bool) & rec.dt.normalize().eq(day) & (rec <= now), "received_utc"])
+            granted = _rule_windows(starts, minutes, rule_cap_min)
+            ok = {a for a, b, _ in granted if a <= now <= b}
+            keep |= hit["_rule"].astype(bool) & hit["received_utc"].isin(ok)
+        hit = hit[keep]
+        if hit.empty:
+            return None
+    row = hit.iloc[-1]
     return {"title": str(row["title"]), "received_utc": pd.Timestamp(row["received_utc"]).isoformat(), "kind": "news_shock"}
 
 
@@ -284,3 +368,12 @@ def fetch(url: str, timeout: float = 15.0) -> str:   # pragma: no cover - networ
     req = urllib.request.Request(url, headers={"User-Agent": "goldbot-news/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", errors="replace")
+
+
+def engine_shock(cache: tuple[Any, Any], store: Any, now: pd.Timestamp, cfg: Any) -> tuple[tuple[Any, Any], Any]:
+    """The engine's news-shock read (moved out of runner.py, ADR 0023): re-read the last day of news at most once a
+    minute (shocks need a fast re-read), then the shock window with the engine's minutes, relevance and rule cap."""
+    if cache[0] is None or now - cache[0] > pd.Timedelta(minutes=1):
+        cache = (now, store.read("news", start=now - pd.Timedelta(days=1), end=now))
+    return cache, shock_window(cache[1], now, cfg.shock_blackout_min, cfg.shock_min_relevance,
+                               rule_cap_min=cfg.shock_rule_cap_min)

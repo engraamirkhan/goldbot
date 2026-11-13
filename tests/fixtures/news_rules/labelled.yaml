@@ -1,0 +1,53 @@
+# Labelled headlines for the rules-v1 scorer (goldbot/data/news_rules.py, BACKLOG 232). Hand-labelled against the
+# LLM scorer's schema (goldbot/data/news.py SYSTEM): shock = an unscheduled event (never a scheduled release);
+# rates / dollar = the direction the headline itself states, `null` = not labelled. Written in the style of the
+# configured feeds (forexlive, Fed press, BLS); hard negatives (negations, hedges, scheduled releases, anniversaries,
+# analysis pieces) are deliberate. A small hand set: it bounds gross mistakes, it does not measure live precision.
+- {source: forexlive, title: "Iran fires ballistic missiles at Israel", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Russia launches massive drone attack on Kyiv", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Israel carries out airstrikes on Iranian nuclear sites", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "North Korea declares war on South Korea", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "China invades Taiwan's outlying islands, reports say", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Fed announces emergency rate cut of 50 basis points", shock: true, rates: dovish, dollar: null}
+- {source: fed_press, title: "Federal Reserve announces emergency liquidity facility for banks", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "ECB holds unscheduled meeting as bond yields spike", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Silicon Valley-sized bank collapses, regulators step in", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Military coup under way in Turkey, gold jumps", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Houthi missile strikes hit Red Sea tanker", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Drone attack on Saudi oil refinery halts output", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Terrorist attack in central London, several dead", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Argentina defaults on its sovereign debt", shock: true, rates: null, dollar: null}
+- {source: forexlive, title: "Fed's Waller: more cuts likely this year", shock: false, rates: dovish, dollar: null}
+- {source: forexlive, title: "Powell: rates to stay higher for longer", shock: false, rates: hawkish, dollar: null}
+- {source: forexlive, title: "Fed raises rates by 25 bp as expected", shock: false, rates: hawkish, dollar: null}
+- {source: forexlive, title: "Fed's Logan rules out a rate cut in December", shock: false, rates: hawkish, dollar: null}
+- {source: forexlive, title: "BOE cuts interest rates to 4%", shock: false, rates: dovish, dollar: null}
+- {source: forexlive, title: "Fed minutes: officials see case for further tightening", shock: false, rates: hawkish, dollar: null}
+- {source: fed_press, title: "Federal Reserve issues FOMC statement", shock: false, rates: neutral, dollar: null}
+- {source: forexlive, title: "US CPI hotter than expected at 3.4% y/y", shock: false, rates: hawkish, dollar: positive}
+- {source: forexlive, title: "US non-farm payrolls 120K vs 180K expected, weaker than expected", shock: false, rates: dovish, dollar: negative}
+- {source: forexlive, title: "US jobless claims higher than expected at 260K", shock: false, rates: dovish, dollar: negative}
+- {source: bls, title: "Consumer Price Index rises 0.2 percent in October, in line with expectations", shock: false, rates: neutral, dollar: null}
+- {source: forexlive, title: "US GDP beats estimates at 3.1% annualised", shock: false, rates: hawkish, dollar: positive}
+- {source: forexlive, title: "US dollar rises broadly after hawkish Fed", shock: false, rates: hawkish, dollar: positive}
+- {source: forexlive, title: "Dollar slips as Treasury yields fall", shock: false, rates: null, dollar: negative}
+- {source: forexlive, title: "Greenback weakens as risk appetite returns", shock: false, rates: null, dollar: negative}
+- {source: forexlive, title: "DXY hits two-year high", shock: false, rates: null, dollar: positive}
+- {source: forexlive, title: "Iran threatens missile strikes if sanctions continue", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Analysts warn of war risk in the Middle East", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Israel denies airstrike reports", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "No emergency Fed meeting planned, officials say", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Could Russia invade again? What it means for gold", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Ukraine marks the anniversary of the invasion of Crimea", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Ceasefire agreed between Israel and Hamas", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Gold climbs to record as central banks keep buying", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "PBOC adds gold to reserves for 18th month", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Gold ETF outflows continue for third week", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Trump imposes 25% tariffs on Canadian and Mexican imports", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "US and China reach trade deal, tariffs cut", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "EU adopts 15th sanctions package against Russia", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Gold steady ahead of US payrolls", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Troops mass near border as tensions rise", shock: false, rates: null, dollar: null}
+- {source: forexlive, title: "Bank of Japan keeps policy unchanged", shock: false, rates: neutral, dollar: null}
+- {source: forexlive, title: "Fed's Goolsbee: not seeing a reason to hike rates", shock: false, rates: dovish, dollar: null}
+- {source: forexlive, title: "Weaker dollar lifts gold above $4,000", shock: false, rates: null, dollar: negative}

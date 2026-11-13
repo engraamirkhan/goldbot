@@ -8,6 +8,7 @@
                  risk, entry windows
   services.py    services and heartbeats: scheduler and jobs, heartbeats, schema skew, approvals, alerts, dead man
   auth.py        auth and mail: keyring secrets (presence only), the email sign-in link
+  loop.py        the feedback loop (R140): learner weights, daily/weekly reviews, proposals read, registry sync, jobs
   operations.py  ops and backups: settings, accounts, disk, deploys, backups, retention, restore drill, agent spend
 
 Adding a check: write it in its area module with `@register_check(scope, block=..., pos=...)` (registry.py explains
@@ -21,6 +22,7 @@ from goldbot.ops.checks import (  # noqa: F401 - registers the checks
     engine,
     entries,
     feeds,
+    loop,
     operations,
     risk,
     services,

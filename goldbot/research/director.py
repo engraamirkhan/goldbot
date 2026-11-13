@@ -78,6 +78,11 @@ one-sided tail divided by m = retired families tested x REINSTATE_SOURCES (Bonfe
 books are not a reinstatement source: they carry no per-trade dates, so they cannot be cut at the retirement date.
 A lookahead-dirty family gets 0 whatever its evidence.
 
+Weekly review actions (goldbot/research/weekly_review.py, aux.db `review_actions`) are queue input: the job consumes
+the unconsumed ones once (`review_actions.consume`, keyed by its slot so a rerun gets the same set) and the plan lists
+them in `review_queue` for the research director agent. They never move a budget, a share or the focus order: the
+allocation stays a function of the recorded evidence above.
+
 Allocation (`allocate`) is described in its docstring; every number in a ResearchPlan can be recomputed from the
 evidence table stored with it, and `ResearchPlan.moves` records which input (retirement, attribution) moved which
 family's budget and share, and by how much, against the evidence-only plan.
@@ -120,6 +125,7 @@ from goldbot.research.registry import (
     refers_to,
     row_ref,
 )
+from goldbot.research.review_actions import ReviewAction
 
 Z_FULL = 3.0                     # three standard errors above chance counts as full evidence
 DSR_BAR = DSR_PROMOTE            # 0.95: the deflated-Sharpe bar the gates use
@@ -291,6 +297,9 @@ class ResearchPlan(FrozenRecord):
     reinstate_t: float | None = None                                # corrected bar on the shrunk attribution t
     hypotheses_sha256: str | None = None                            # the doc as read at plan time
     hypotheses_drift: list[str] = Field(default_factory=list)       # where it disagrees with research.retired_families
+    # the weekly review's actions this plan consumed (aux.db review_actions, each once): queue input for the research
+    # director agent, listed in rank order; they never move a budget, a share or the focus order
+    review_queue: list[ReviewAction] = Field(default_factory=list)
 
     def save(self, path: str | Path) -> None:
         p = Path(path)
@@ -1548,13 +1557,16 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
                attribution: dict[str, Any] | None = None, hypotheses: str | None = None,
                retired: Sequence[RetiredFamily] = (), promoted: Mapping[str, pd.Timestamp | None] | None = None,
                reserved_setting: int = 0, grid_paused: bool = False,
-               evidence_start: pd.Timestamp | None = None) -> ResearchPlan:
+               evidence_start: pd.Timestamp | None = None,
+               review_queue: Sequence[ReviewAction] = ()) -> ResearchPlan:
     """Plan for the rest of the quarter: total = min(quarter budget - used - reserved, monthly_total); evidence never
     includes trials recorded with status "holdout". `attribution` is the parsed state/attribution.json (None: no
     term), `promoted` each model version's promotion time (model registry), `retired` research.retired_families,
     `reserved_setting` research.reserved_trials_quarter, `evidence_start` H-52's promotion.EVIDENCE_START_UTC (attribution
     rows opened before it are quarantined). `hypotheses` (the text of docs/research/hypotheses.md) is
-    only hashed and checked against `retired`: it never moves a trial. A pure function of its inputs."""
+    only hashed and checked against `retired`: it never moves a trial. `review_queue`: the weekly review's actions the
+    job consumed (review_actions.consume), carried in the plan as queue input; they never move a trial either. A pure
+    function of its inputs."""
     quarter, used, _ = quarter_usage(trials, now, quarter_budget)
     reservation = reserved_trials(trials, quarter, reserved_setting)
     total = min(max(quarter_budget - used - reservation.reserved, 0), monthly_total)
@@ -1615,4 +1627,4 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
                         reservation=reservation, retired_floor=retired_floor, retired_explore=explore,
                         reinstate_t=round(reinstate_t, 6),
                         hypotheses_sha256=hashlib.sha256(hypotheses.encode()).hexdigest() if hypotheses else None,
-                        hypotheses_drift=drift)
+                        hypotheses_drift=drift, review_queue=list(review_queue))

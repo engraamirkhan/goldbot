@@ -58,6 +58,11 @@ class GitHubIssues:
         got = self._call("POST", f"/issues/{int(number)}/comments", {"body": body[:MAX_BODY]})
         return str(got.get("html_url", "")) if isinstance(got, dict) else ""
 
+    def open_issue(self, label: str, title: str, body: str) -> str:
+        """A new issue labelled `label` (the monthly review: one issue a month, closed once it is cleared)."""
+        got = self._call("POST", "/issues", {"title": title[:250], "body": body[:MAX_BODY], "labels": [label]})
+        return str(got.get("html_url", "")) if isinstance(got, dict) else ""
+
     def open_or_comment(self, label: str, title: str, body: str) -> str:
         """Comment on the newest open issue labelled `label` (pull requests excluded), else open one with it."""
         q = urllib.parse.urlencode({"labels": label, "state": "open", "sort": "created", "direction": "desc",
@@ -66,5 +71,4 @@ class GitHubIssues:
         issues = [i for i in found if isinstance(i, dict) and "pull_request" not in i] if isinstance(found, list) else []
         if issues:
             return self.comment(int(issues[0]["number"]), f"**{title}**\n\n{body}")
-        got = self._call("POST", "/issues", {"title": title[:250], "body": body[:MAX_BODY], "labels": [label]})
-        return str(got.get("html_url", "")) if isinstance(got, dict) else ""
+        return self.open_issue(label, title, body)

@@ -36,7 +36,7 @@ from goldbot.data.calendar import (
     session_table_cache,
 )
 from goldbot.data.econ_calendar import blackout_window
-from goldbot.data.news import shock_window
+from goldbot.data.news import engine_shock
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import IncrementalResampler, mid, resample_bars
 from goldbot.data.store import Store
@@ -256,6 +256,7 @@ class EngineConfig(Record):
     blackout_after_min: int = 30
     shock_blackout_min: int = 30             # after a high-relevance unscheduled news shock (store table news)
     shock_min_relevance: float = 0.7
+    shock_rule_cap_min: int = 120            # rules-v1 shocks black out at most this many minutes per UTC day (R144)
     # production: tick age and feed staleness are measured against the wall clock (replays and tests use tick time)
     live_clock: bool = False
     # production: completed 1m bars are the broker's own M1 bars, the sampled quotes only the current minute and the
@@ -2570,9 +2571,8 @@ class Engine:
         self._calendar_events(now)
         hit = blackout_window(self._calendar[1], now, self.cfg.blackout_before_min, self.cfg.blackout_after_min)
         if (hit is None or not self.gate.limits.blackout_entries) and self.cfg.shock_blackout_min > 0:   # ADR 0072 M2
-            if self._news[0] is None or now - self._news[0] > pd.Timedelta(minutes=1):   # shocks need a fast re-read
-                self._news = (now, self.store.read("news", start=now - pd.Timedelta(days=1), end=now))
-            hit = shock_window(self._news[1], now, self.cfg.shock_blackout_min, self.cfg.shock_min_relevance) or hit
+            self._news, shock = engine_shock(self._news, self.store, now, self.cfg)   # 1-minute re-read (news.py)
+            hit = shock or hit
         self._blackout_event = hit
         return hit
 

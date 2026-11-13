@@ -374,17 +374,20 @@ def change_notice(account_id: str, changes: Sequence[AdaptiveChange], *, equity:
             f"Why: {why}. {local}{f' ({utc})' if utc else ''}")
 
 
-def queue_notice(state_dir: Path, text: str) -> None:
+def queue_notice(state_dir: Path, text: str, *, role: str = NOTICE_ROLE) -> bool:
     """One "notice" row in state/agent_runs.jsonl, which the Telegram service relays (as `ApprovalBus.notify_owner`
-    and the TradingView pull do). Best effort: a failed write is logged; the decision stands either way."""
+    and the TradingView pull do). Best effort: a failed write is logged and returns False; the decision stands either
+    way. `role` names the sender (the monthly review queues its message here too)."""
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    row = {"role": NOTICE_ROLE, "started_utc": now, "finished_utc": now, "status": "notice", "turns": 0,
+    row = {"role": role, "started_utc": now, "finished_utc": now, "status": "notice", "turns": 0,
            "cost_usd": 0.0, "report_path": None, "detail": text}
     try:
         with open(Path(state_dir) / "agent_runs.jsonl", "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row) + "\n")
     except OSError as exc:
-        log.warning("could not queue the limits notice: %s", exc)
+        log.warning("could not queue the %s notice: %s", role, exc)
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------------------------- the decision

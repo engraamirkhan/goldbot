@@ -168,6 +168,7 @@ class SmokeConfig(Record):
     blackout_after_min: int = 30
     shock_blackout_min: int = 30      # settings news.shock_blackout_min
     shock_min_relevance: float = 0.7
+    shock_rule_cap_min: int = 120     # settings news.rule_shock_cap_min_per_day
     decision_tf: str = "15m"          # the engine's stale-bars period (EngineConfig.decision_tf)
     rollover_min: int = 5             # EngineConfig.rollover_min
     weekend_cut: str = "21:30"        # EngineConfig.weekend_cut
@@ -469,7 +470,8 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
     shock = None
     if cfg.shock_blackout_min > 0:
         try:
-            shock = shock_window(io.news(now), now, cfg.shock_blackout_min, cfg.shock_min_relevance)
+            shock = shock_window(io.news(now), now, cfg.shock_blackout_min, cfg.shock_min_relevance,
+                                 rule_cap_min=cfg.shock_rule_cap_min)
         except Exception as exc:
             raise SourceError(f"news unreadable ({type(exc).__name__}): a news shock cannot be judged") from exc
     sup_halt, other, size_down = _supervisor(state_dir, acc.account_id)
@@ -901,6 +903,7 @@ def main(argv: list[str]) -> int:
                       blackout_after_min=settings.risk.blackout.after_min,
                       shock_blackout_min=settings.news.shock_blackout_min,
                       shock_min_relevance=settings.news.shock_min_relevance,
+                      shock_rule_cap_min=settings.news.rule_shock_cap_min_per_day,
                       decision_tf=defaults["decision_tf"].default, rollover_min=defaults["rollover_min"].default,
                       weekend_cut=defaults["weekend_cut"].default)
     store = Store(settings.data_root)

@@ -74,7 +74,9 @@ RETIRED_1107 = {"S0-XAUJPY"}
 RETIRED_1109 = {"I0-XAUJPY"}
 # retired 2026-11-13 (prereg-amendment-2026-11-13-h90-cost-budget.md): cost budget, with their controls
 RETIRED_1113_COST = {"Z1P", "Z2P", "Z3D", "LCZ1P", "LCZ2P", "LCZ3D"}
-RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114 | RETIRED_1113_COST
+# retired 2026-11-13 (prereg-amendment-2026-11-13-survivor-reads.md section 2): KILL on the 2010-17 replay
+RETIRED_1113_SURVIVORS = {"Z10D", "Z9D", "Z5P", "LCZ10D", "LCZ9D", "LCZ5P"}
+RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114 | RETIRED_1113_COST | RETIRED_1113_SURVIVORS
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:

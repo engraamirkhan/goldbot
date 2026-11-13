@@ -56,9 +56,12 @@ def test_the_unnamed_i0_instrument_controls_were_left_to_the_cost_cell_rule_unti
         assert a.status == "run" and a.retired_day == "2026-11-14" and a.retired_rule == arms.GOLD_ONLY_RULE, arm_id
 
 
-def test_the_learning_arms_that_take_the_freed_slots_stay_active_with_their_controls(spec) -> None:
-    for arm_id in ("Z10D", "Z9D", "Z5P", "LCZ9D", "LCZ10D", "IEX1H"):
-        assert not spec[arm_id].retired and spec[arm_id].status == "run", arm_id
+def test_the_learning_arms_that_took_the_freed_slots_retire_on_their_history_kill(spec) -> None:
+    # prereg-amendment-2026-11-13-survivor-reads.md section 2: Z10D, Z9D, Z5P and their controls KILLED on the 2010-17
+    # replay (2026-11-13); IEX1H keeps running
+    for arm_id in ("Z10D", "Z9D", "Z5P", "LCZ9D", "LCZ10D", "LCZ5P"):
+        assert spec[arm_id].retired and str(spec[arm_id].retired_day) == "2026-11-13", arm_id
+    assert not spec["IEX1H"].retired and spec["IEX1H"].status == "run"
 
 
 def test_the_named_i0_rows_are_refused_and_kept_configured_on_their_accounts(accounts) -> None:

@@ -78,8 +78,9 @@ def test_iex1h_a_gold_cost_control_keeps_running_and_iex15_keeps_its_own_retirem
 
 def test_the_gold_arms_and_their_matched_controls_keep_running(spec) -> None:
     running = {i for i, a in spec.items() if not a.retired and a.status == "run"}
-    assert running == {"S0", "S0R", "S1A", "S1B", "Z5P", "Z9D", "Z10D", "Z3V", "Z5V", "WKS0", "WKI0", "GS1", "GS1C",
-                       "LCZ9D", "LCZ10D", "LCZ5P", "VEX15", "VEX1H", "IEX1H"}
+    # Z5P, Z9D, Z10D and their controls retired 2026-11-13 (prereg-amendment-2026-11-13-survivor-reads.md section 2)
+    assert running == {"S0", "S0R", "S1A", "S1B", "Z3V", "Z5V", "WKS0", "WKI0", "GS1", "GS1C",
+                       "VEX15", "VEX1H", "IEX1H"}
     assert all(spec[i].retired and str(spec[i].retired_day) == "2026-11-13" for i in COST_BUDGET_1113)
 
 

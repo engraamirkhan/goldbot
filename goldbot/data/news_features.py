@@ -17,6 +17,9 @@ Per headline (`headline_features`):
 * `sentiment` in [-1, 1], gold-signed (positive = supportive for gold): relevance x the mean of rates (dovish +1,
   hawkish -1), risk (risk_off +1, risk_on -1) and dollar (negative +1, positive -1);
 * `surprise`, gold-signed: a data beat is -1 (USD-supportive), a miss +1, inline/none 0;
+* `rule_scored`: the score came from the free rules-v1 scorer (`scorer` = rules-v1, goldbot/data/news_rules.py; R144)
+  rather than the LLM. Rule rows are read like LLM rows (same schema) and flagged, so research can separate them;
+  a row without a `scorer` is from before the rules existed and was LLM-scored;
 * event types (relevant headlines only, relevance >= RELEVANT): `evt_fed`, `evt_usd`, `evt_geo` (or the LLM's shock
   flag), `evt_etf`, `evt_cb` (central-bank gold buying), from the LLM fields plus a fixed keyword taxonomy on the
   headline text. Keywords instead of a new LLM field keep one definition over the whole collected history: a schema
@@ -25,9 +28,11 @@ Per headline (`headline_features`):
 Aggregates (`news_grid`) on a GRID (15 min) of availability stamps g, each over the headlines with available_utc in
 (g - w, g]: relevant-headline counts and summed sentiment over 1h/4h/24h, the sentiment sums' z-score against the
 trailing Z_LOOKBACK of grid values (at least Z_MIN), gold-signed surprise, shock and event counts over 4h, and the share
-of prefiltered headlines the daily budget left unscored over 24h (a coverage column). Two masks, both applied before
+of prefiltered headlines the daily budget left unscored over 24h (a coverage column), and the share of scored
+headlines over 24h whose score came from the rules (`news_rules_share_24h`, the scorer flag). Two masks, both applied before
 the z-scores so a masked stamp never enters a trailing mean or std:
-* budget cut-off: the daily news cap leaves late-UTC items unscored, which would make counts and sums fall by time of
+* budget cut-off: the daily news cap leaves late-UTC items unscored (or, since R144, rule-scored while an LLM client
+  was active, `llm_active`: those count as unscored here), which would make counts and sums fall by time of
   day; a window in which more than MAX_UNSCORED of the prefiltered headlines are unscored reads NaN (the 1h/4h/24h
   columns by their own window; the 4h surprise, shock and event counts by the 4h one);
 * outage: a grid stamp with nothing available in the trailing OUTAGE reads NaN in every column, never "no news".
@@ -60,7 +65,8 @@ EVENTS = ("fed", "usd", "geo", "etf", "cb")
 COLUMNS: tuple[str, ...] = (
     *(f"news_count_{w}" for w in WINDOWS), *(f"news_sent_{w}" for w in WINDOWS),
     *(f"news_sent_z_{w}" for w in WINDOWS), "news_surprise_4h", "news_shock_4h",
-    *(f"news_evt_{e}_4h" for e in EVENTS), "news_unscored_share_24h")
+    *(f"news_evt_{e}_4h" for e in EVENTS), "news_unscored_share_24h", "news_rules_share_24h")
+RULES_SCORER = "rules-v1"                        # goldbot.data.news_rules.SCORER (not imported: keeps this module light)
 
 _FED = re.compile(r"\b(?:fed|fomc|powell|federal reserve|rate (?:cut|hike)s?|interest rates?|dot plot)\b", re.I)
 _USD = re.compile(r"\b(?:dollar|dxy|greenback|treasur(?:y|ies)|yields?|cpi|pce|inflation|payrolls?|nfp|jobs report|"
@@ -104,8 +110,8 @@ def _fresh(df: pd.DataFrame) -> pd.Series:
 def headline_features(news: pd.DataFrame) -> pd.DataFrame:
     """One row per admissible headline: item_id, available_utc, scored, relevance, relevant, sentiment, surprise,
     shock, prefiltered and evt_* (see the module docstring). Sorted by available_utc."""
-    cols = ["item_id", "available_utc", "scored", "relevance", "relevant", "sentiment", "surprise", "shock",
-            "prefiltered", *(f"evt_{e}" for e in EVENTS)]
+    cols = ["item_id", "available_utc", "scored", "rule_scored", "llm_active", "relevance", "relevant", "sentiment", "surprise",
+            "shock", "prefiltered", *(f"evt_{e}" for e in EVENTS)]
     if news is None or news.empty:
         return pd.DataFrame(columns=cols)
     df = _admissible(news)
@@ -129,7 +135,9 @@ def headline_features(news: pd.DataFrame) -> pd.DataFrame:
     title = df["title"].fillna("").astype(str)
     out = pd.DataFrame({
         "item_id": df["item_id"].to_numpy(), "available_utc": df["available_utc"],
-        "scored": scored, "relevance": rel, "relevant": relevant, "sentiment": sentiment, "surprise": surprise,
+        "scored": scored, "rule_scored": scored & df.get("scorer", pd.Series("", index=df.index)).fillna("")
+        .astype(str).eq(RULES_SCORER), "relevance": rel,
+        "llm_active": df.get("llm_active", pd.Series(False, index=df.index)).fillna(False).astype(bool), "relevant": relevant, "sentiment": sentiment, "surprise": surprise,
         "shock": shock, "prefiltered": text.str.contains(PREFILTER),
         "evt_fed": relevant & (title.str.contains(_FED) | (rates.isin(["hawkish", "dovish"]) & text.str.contains(_FED))),
         "evt_usd": relevant & (title.str.contains(_USD) | dollar.isin(["positive", "negative"])),
@@ -184,11 +192,18 @@ def news_grid(news: pd.DataFrame, end: pd.Timestamp | None = None) -> pd.DataFra
     for e in EVENTS:
         out[f"news_evt_{e}_4h"] = relsum(f"evt_{e}")
     pre = h["prefiltered"].to_numpy(dtype=bool) if len(h) else np.array([], dtype=bool)
-    uns = pre & ~h["scored"].to_numpy(dtype=bool) if len(h) else np.array([], dtype=bool)
+    # review LOW: a rule score written while an LLM client was active means the budget ran out; it counts as unscored
+    # here, so the budget mask (not a time-of-day switch of scorer) decides those windows
+    fallback = (h["rule_scored"] & h["llm_active"]).to_numpy(dtype=bool) if len(h) else np.array([], dtype=bool)
+    uns = pre & (~h["scored"].to_numpy(dtype=bool) | fallback) if len(h) else np.array([], dtype=bool)
     w24 = int(WINDOWS["24h"].value)
     n_pre = _window_sum(at, g, w24, pre.astype(float))
     with np.errstate(invalid="ignore", divide="ignore"):
         out["news_unscored_share_24h"] = np.where(n_pre > 0, _window_sum(at, g, w24, uns.astype(float)) / n_pre, np.nan)
+    n_sc = _window_sum(at, g, w24, h["scored"].to_numpy(dtype=float)) if len(h) else np.zeros(len(g))
+    n_rule = _window_sum(at, g, w24, h["rule_scored"].to_numpy(dtype=float)) if len(h) else np.zeros(len(g))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["news_rules_share_24h"] = np.where(n_sc > 0, n_rule / n_sc, np.nan)
     frame = pd.DataFrame(out)
     # budget cut-off: a window with too many prefiltered items left unscored is unknown, not quiet
     for name, w in WINDOWS.items():
