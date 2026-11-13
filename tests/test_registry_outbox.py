@@ -53,7 +53,7 @@ def test_a_grown_registry_replaces_the_older_outbox_entry_and_no_partial_file_is
     TrialRegistry(local).record(agent_id="b", family="session_open", config={"x": 2}, feature_version="f1",
                                 rationale="t", results={})
     rs.sync(local, "tok")
-    names = [p.name for p in (local.parent / rs.OUTBOX).iterdir()]
+    names = [p.name for p in (local.parent / rs.OUTBOX).iterdir() if p.name != rs.OUTBOX_SINCE]
     assert len(names) == 1 and names[0].endswith(".jsonl")
     assert len(rs.read_rows(local.parent / rs.OUTBOX / names[0])) == 2
 

@@ -281,6 +281,9 @@ class SchedulerSettings(_Section):
     # the daily learning-ops review (goldbot/research/daily_review.py): after the nightly learner (inside
     # nightly_costs) and before the 06:45 owner report, which carries its section; a late run still retires and refits
     daily_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:15", max_late_hours=12)
+    # R140: the feedback-loop check (goldbot/ops/checks/loop.py) after the daily review; a failing loop opens or
+    # comments on the `ci-loop` GitHub issue once a day (health alerts on the same check every pass)
+    loop_check: ScheduleSettings = ScheduleSettings(kind="daily", at="07:05", max_late_hours=12, run_if_never_run=True)
     # ADR 0058 phase 2: the bounded discovery search; skips unless research.autodisc.nightly_enabled (the Mac only)
     autodisc_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:30", max_late_hours=6)
     # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
