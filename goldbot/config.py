@@ -329,6 +329,29 @@ class BackupSettings(_Section):
     storage_max_age_h: float = Field(48.0, gt=0)      # an older reading counts as unknown (warn)
 
 
+COMPACTABLE_TABLES = ("decisions", "fills", "dq_events", "observe_ticks", "ticks")   # append-only, dedupe=False
+
+
+class CompactSettings(_Section):
+    """The nightly `journal_compact` job (goldbot/data/compact.py; BACKLOG 170 decisions, BACKLOG 179 the others).
+    `ticks` (~10^7 rows a month a broker) joins the list only after the brain measurement (backlog follow-up)."""
+    tables: list[str] = Field(default_factory=lambda: ["decisions", "fills", "dq_events", "observe_ticks"])
+    min_parts: int = Field(2, ge=2)                  # a closed month is rewritten from this many parts
+    time_box_s: float = Field(1800.0, gt=0)          # no partition is started later; the rest wait for the next night
+    pause_s: float = Field(1.0, ge=0)                # after each compacted partition: the engines keep the disk
+    memory_limit: str = Field("1GB", pattern=r"^\d+(\.\d+)?\s*(KB|MB|GB|KiB|MiB|GiB)$")   # DuckDB's verifying read
+    threads: int = Field(2, ge=1, le=4)              # of the brain's 4 cores
+    row_group_rows: int = Field(262_144, ge=1024)    # rows held at once by the streamed build
+
+    @field_validator("tables")
+    @classmethod
+    def _append_only(cls, v: list[str]) -> list[str]:
+        bad = sorted(set(v) - set(COMPACTABLE_TABLES))
+        if bad:
+            raise ValueError(f"compact.tables: {bad} are not append-only store tables {list(COMPACTABLE_TABLES)}")
+        return v
+
+
 class GapSettings(_Section):
     """Bounded spawning (goldbot/ops/gap_watch.py, docs/TRADER_LIFECYCLE.md section 3)."""
     founders_per_month: int = Field(2, ge=0, le=4)        # zero-capital shadow founders per calendar month
@@ -964,14 +987,11 @@ class ShadowSettings(_Section):
 
 
 INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
+# BACKLOG 144: blockers 1-3, 5 (built, ADR 0081) and 6 are closed (engine/long_bars.py); these stay open
 GO_LIVE_BLOCKERS_1D_1W = (
-    "1d entries sent after 22:15 UTC once the broker has reopened, bracket from the send price (EET and EEST tests)",
-    "the 1w decision moved out of the first 15-60 minutes after the Sunday open",
-    "the 1w missed-week catch-up, persisted",
     "a daily long-history refresh, a preflight check that it reaches the engine window, an alert on a history_gap "
     "older than a day",
-    "the rules' common filter at the 21:00 UTC close (quant decision)",
-    "_trail_runners and score_twins on is_bar_close",
+    "the quant ratification of ADR 0081 (the rules' common filter judged at a 1d/1w entry close)",
     "a CONFIRM pass and trading-safety sign-off on the settings diff",
 )
 
@@ -1054,6 +1074,7 @@ class Settings(_Section):
     gates: GateSettings = Field(default_factory=GateSettings)
     gaps: GapSettings = Field(default_factory=GapSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
+    compact: CompactSettings = Field(default_factory=CompactSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)

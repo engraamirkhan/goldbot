@@ -268,7 +268,7 @@ def test_revision_only_equals_its_committed_evidence():
 @pytest.mark.parametrize(("t", "year", "expected"), [
     ("cpi", 2016, (12, 12)), ("nfp", 2024, (12, 12)), ("retail_sales", 2015, (12, 12)), ("jolts", 2010, (5, 5)),
     ("jolts", 2011, (12, 12)), ("pce", 2019, (11, 11)), ("ppi", 2025, (10, 10)), ("nfp", 2025, (11, 11)),
-    ("pce", 2026, (13, 13)), ("nfp", 2013, (12, 12)), ("gdp_advance", 2025, (4, 4)), ("fomc_statement", 2020, (7, 7)),
+    ("pce", 2026, (13, 13)), ("nfp", 2013, (12, 12)), ("gdp_advance", 2025, (4, 4)), ("fomc_statement", 2020, (9, 9)),
     ("fomc_statement", 2021, (8, 8)), ("ism_services", 2022, (12, 12)),
 ])
 def test_expected_counts_are_exact_with_listed_exceptions(t: str, year: int, expected: tuple[int, int]):

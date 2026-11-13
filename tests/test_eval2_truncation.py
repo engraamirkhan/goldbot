@@ -152,6 +152,46 @@ def test_scheduled_calendar_detectors_read_future_dates_by_design(det: str) -> N
     assert strict["signal"] > 0
 
 
+def _published(ctx: K.Ctx) -> K.Ctx:
+    """ctx with every scheduled event's publication instant (BACKLOG 152): alternately 400 days ahead and 3 hours ahead
+    (after a T-2 or day-before decision), so some events are known at their decision and some are not."""
+    for k, v in ctx.events.items():
+        at = np.asarray(v) * DAY if k.startswith("holiday_") else np.asarray(v)
+        lead = np.where(np.arange(len(at)) % 2 == 0, 400 * DAY, 3 * HOUR)
+        ctx.avail[k] = (at - lead).astype(np.int64)
+    return ctx
+
+
+@pytest.mark.parametrize("det", ["S05", "S06", "S07"])
+def test_scheduled_calendar_detectors_pass_the_strict_cut_when_ctx_carries_availability(det: str) -> None:
+    """With publication times in ctx the strict cut (events cut at availability) changes no signal: S05-S07 read a
+    scheduled date only once it is published (BACKLOG 152 acceptance)."""
+    tf = TF_FOR.get(det, "1d")
+    b = synth(INST_FOR.get(det, "XAUUSD"), tf, n=1200)
+    ctx = _published(ctx_for(b))
+    fn = D.DETECTORS[det]
+    p = _params(det)
+    ev = fn(b, p, ctx)
+    ev = ev.subset(ev.i < len(b) - 20)
+    assert len(ev)
+    assert len(fn(b, p, ctx)) < len(fn(b, p, ctx_for(b)))       # late-published dates are not traded ahead
+    strict = ST.truncation_mismatches(b, ev, _sample(len(ev)), detector=lambda bb, cut: fn(
+        bb, p, ctx if cut is None else ST.truncate_ctx(ctx, cut, scheduled_events=False)))
+    assert strict["signal"] == 0, strict
+
+
+def test_truncate_ctx_cuts_published_events_at_their_availability_in_both_modes() -> None:
+    b = synth("XAUUSD", "1d", n=400)
+    ctx = _published(ctx_for(b))
+    cut = int(b.ta[200])
+    for mode in (True, False):
+        c = ST.truncate_ctx(ctx, cut, scheduled_events=mode)
+        for k in ctx.events:
+            keep = ctx.avail[k] <= cut
+            assert np.array_equal(c.events[k], np.asarray(ctx.events[k])[keep]), k
+            assert np.array_equal(c.avail[k], ctx.avail[k][keep]), k
+
+
 def test_truncate_ctx_cuts_aux_series_at_availability_and_keeps_scheduled_events() -> None:
     b = synth("XAUUSD", "1d", n=400)
     ctx = ctx_for(b)

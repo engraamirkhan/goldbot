@@ -60,7 +60,7 @@ def _cand(db: Database, cid: str, at: pd.Timestamp, *, account: str = "icm-probe
 # ---------------------------------------------------------------------------------------------- migration
 def test_the_snapshot_migration_adds_the_snapshot_tables_additively_so_a_rollback_still_opens_aux_db(tmp_path):
     m = next(m for m in AUX if m.name == "exploration_feature_snapshots")
-    assert m.additive and m.version == AUX[-1].version
+    assert m.additive and m.version == 32  # later additive aux migrations (33 long_tf_decisions) follow it
     assert compat_back_to(AUX, m.version) == compat_back_to(AUX, m.version - 1)
     db = Database.open(tmp_path, "aux")
     with db.connection() as conn:

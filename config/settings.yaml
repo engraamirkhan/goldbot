@@ -18,6 +18,9 @@ timeframes:
 # not listed here is held as retired from the start (no entry, exits managed). 1d/1w go live only when the 7-day replay
 # keeps every existing arm's decisions identical AND a CONFIRM passer passes lot-fit. A 1d bar closes at 21:00 UTC
 # (the long history's roll); a 1w bar at Friday 21:00 UTC and is decided fresh at the weekly open, never on Friday.
+# BACKLOG 144 (ADR 0081): a 1d decision is sent at the first 15m close after 22:15 UTC and 15 min after the broker's
+# reopen, a 1w one an hour after the Sunday open; persisted in aux.db (a restart catches a missed week up, never sends
+# twice); a multi-day hold's swap is projected through the RiskGate (unknown swap: refused).
 # Warm-up: <long_history_dir>/bars/<symbol>_1d.parquet, else long/<symbol>_daily_long.parquet, read point in time;
 # a missing file, a gap to (or inside) the engine's window keeps the arm quiet (journal history_gap:<tf>).
 # long_history_dir is resolved under data_root unless absolute. Listing 1d or 1w in timeframes_live is refused by the
@@ -506,6 +509,15 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
   page_limit_s: 5.0                  # a slower page stops the run (cold history page 2-5 s; orders > 10 s refused)
   run_budget_s: 600                  # per account per run (3 accounts fit the 45-min break); unfinished day pulled next run
+
+compact:                             # nightly journal_compact (goldbot/data/compact.py; BACKLOG 170, 179): closed months -> one part
+  tables: [decisions, fills, dq_events, observe_ticks]   # + ticks only after the brain measurement (scripts/store_parts_report.py)
+  min_parts: 2                       # a closed month is rewritten from this many parts
+  time_box_s: 1800                   # no partition started after 30 min; the rest are deferred to the next night
+  pause_s: 1.0                       # sleep after each compacted partition: the engines' flushes and reads keep the disk
+  memory_limit: 1GB                  # DuckDB's verifying sorted read (spills to <data_root>/.compact_tmp, removed after)
+  threads: 2                         # of the brain's 4 cores
+  row_group_rows: 262144             # rows held at once by the streamed build (and the part's row-group size)
 
 tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)
   enabled: true                      # public listing, no cookie; text stays in state/tv_ideas.db and raw/ (never the repo)

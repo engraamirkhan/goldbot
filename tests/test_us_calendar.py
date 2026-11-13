@@ -729,7 +729,10 @@ def test_a_cancelled_meeting_shows_until_its_cancellation_and_never_as_a_past_ev
     assert (X.loc[after, "min_to_next_tier1_pit"] == fc.HORIZON_MIN).all()
     on_day = ((ts >= _utc("2020-03-18 04:00")) & (ts < _utc("2020-03-19 04:00"))).to_numpy()
     assert (X.loc[on_day, "tier1_count_today"] == 0).all()
-    assert (X.loc[on_day & (ts > ev).to_numpy(), "min_since_last_tier1_pit"] == fc.HORIZON_MIN).all()
+    # the last tier-1 event after the cancelled meeting's time is the unscheduled 15 March statement, never 18 March
+    later = on_day & (ts > ev).to_numpy()
+    since_unscheduled = (ts - cancel).dt.total_seconds().to_numpy() / 60
+    assert later.any() and np.allclose(X.loc[later, "min_since_last_tier1_pit"], since_unscheduled[later])
 
 
 def test_shutdown_floors_are_per_agency():

@@ -29,6 +29,7 @@ Sources and licence (docs/decisions/0008-us-calendar-source.md):
   RULE_OVERRIDES moves or drops a hand-checked date, and research can leave rule rows out.
 * Scheduled-then-cancelled events (MANUAL_EVENTS, source `manual`): the downloads list what happened, so an event
   that was on the schedule and then cancelled or moved (shutdowns, the March 2020 FOMC) is hand-checked here.
+  Unscheduled FOMC statements (UNSCHEDULED_EVENTS, source `manual`, 3 and 15 March 2020) are available when issued.
 
 Times are New York wall times (per type; FOMC per era: statement 14:15 until April 2011, 12:30 on 2011-2012 press
 conference days and 14:15 otherwise, 14:00 from 2013; press conference 14:15 in 2011-2012, 14:30 from 2013),
@@ -180,6 +181,22 @@ MANUAL_EVENTS: tuple[ManualEvent, ...] = (
     ManualEvent("jolts", "2026-02-03", "2026-02-03 09:59", "bls.gov 2026 lapse table (moved to 2026-02-05)"),
     ManualEvent("nfp", "2026-02-06", "2026-02-06 08:29", "bls.gov 2026 lapse table (moved to 2026-02-11)"),
     ManualEvent("cpi", "2026-02-11", "2026-02-11 08:29", "bls.gov 2026 lapse table (moved to 2026-02-13)"),
+)
+
+
+class UnscheduledEvent(NamedTuple):
+    event_type: str
+    at_et: str               # when it was issued (ET wall time); known only from then (available_utc = event_utc)
+    source_note: str
+
+
+# Hand-checked unscheduled FOMC statements (the Fed's pages mark them "unscheduled"; parse_fomc_* skip them because
+# they were never on a schedule). Known only when issued: available_utc = event_utc, source manual.
+UNSCHEDULED_EVENTS: tuple[UnscheduledEvent, ...] = (
+    UnscheduledEvent("fomc_statement", "2020-03-03 10:00",
+                     "federalreserve.gov fomchistorical2020: March 3 (unscheduled), statement 10:00 ET (-50 bp)"),
+    UnscheduledEvent("fomc_statement", "2020-03-15 17:00",
+                     "federalreserve.gov fomchistorical2020: March 15 (unscheduled), statement 17:00 ET (-100 bp)"),
 )
 # Monthly releases closer than MIN_MONTHLY_SPACING that are real (hand-checked).
 SPACING_EXEMPT: frozenset[str] = frozenset({
@@ -433,6 +450,20 @@ def manual_rows(vintage: pd.Timestamp) -> pd.DataFrame:
     return out[list(COLUMNS)]
 
 
+def unscheduled_rows(vintage: pd.Timestamp) -> pd.DataFrame:
+    """UNSCHEDULED_EVENTS -> one scheduled row each, available when issued (never known ahead)."""
+    rows = []
+    for e in UNSCHEDULED_EVENTS:
+        ev = pd.Timestamp(e.at_et, tz=ET).tz_convert("UTC").as_unit("ns")
+        rows.append({"event_id": f"{e.event_type}:{ev.tz_convert(ET):%Y-%m-%d}", "event_type": e.event_type,
+                     "tier": TIERS[e.event_type], "release_id": -1, "event_utc": ev, "status": SCHEDULED,
+                     "available_utc": ev, "vintage": _naive_day(vintage), "source": "manual"})
+    out = pd.DataFrame(rows)
+    out["event_utc"], out["available_utc"] = _utc_ns(out["event_utc"]), _utc_ns(out["available_utc"])
+    out["ts_utc"] = out["available_utc"]
+    return out[list(COLUMNS)]
+
+
 def calendar_frame(fred_dates: dict[str, pd.DatetimeIndex], now: pd.Timestamp,
                    fomc: pd.DataFrame | None = None) -> pd.DataFrame:
     """Fresh rows for one run: each fetched FRED release in `fred_dates` (event_type -> ET dates; `gdp` is split into
@@ -452,7 +483,7 @@ def calendar_frame(fred_dates: dict[str, pd.DatetimeIndex], now: pd.Timestamp,
             frames.append(event_rows(t, rel.release_id, d, rel.at_et, now, "fred"))
     if fomc is not None:
         frames.append(fomc_rows(fomc, now))
-    frames += [rule_rows(now, now), manual_rows(now)]
+    frames += [rule_rows(now, now), manual_rows(now), unscheduled_rows(now)]
     return pd.concat([f for f in frames if len(f)], ignore_index=True)
 
 
@@ -535,7 +566,7 @@ def expected_count(event_type: str, year: int) -> tuple[int, int]:
     if event_type == "gdp":
         return 6, 10
     if event_type == "fomc_statement":
-        return (7, 7) if year == 2020 else (8, 8)          # 2020: the March 17-18 meeting was cancelled
+        return (9, 9) if year == 2020 else (8, 8)    # 2020: March 17-18 cancelled, 3 and 15 March unscheduled
     if event_type == "fomc_minutes":
         return 7, 9                  # by release year: a December meeting's minutes can come out in the same year
     if event_type == "fomc_press_conference":

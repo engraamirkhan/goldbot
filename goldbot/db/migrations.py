@@ -761,6 +761,19 @@ AUX: tuple[Migration, ...] = (
                recorded_ns INTEGER NOT NULL
            ) STRICT""",
     )),
+    # additive (BACKLOG 144, goldbot/engine/long_bars.py `Decided`): per account and 1d/1w arm, the last decision close
+    # it was decided (or given up) for, written before its signal is queued, so a restart neither sends a day or week
+    # twice nor misses the week it was down over (the catch-up). A release without it never reads the table. After the
+    # feature snapshots' 32
+    Migration(version=33, name="long_tf_decisions", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS long_tf_decisions (
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               decision_ns INTEGER NOT NULL,
+               updated_ns INTEGER NOT NULL,
+               PRIMARY KEY (account_id, arm_id)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

@@ -5,6 +5,26 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
+  settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
+  measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the
+  build outside the lock, row count + sha256 of the Store.read-ordered read, no dedupe (fills keep every row).
+  Changed for all tables, decisions included: the new part holds the old parts in write order (mtime), streamed in
+  row groups of `row_group_rows` (memory bounded), with per-row write times in Parquet metadata `goldbot.lineage`
+  (`compact.written_utc(path)`); rows are no longer sorted on disk (reads still are). Why: a tick's part mtime is
+  its only knowability evidence (the 2026-10-26 tz quarantine selector used it; it now reads `written_utc`). The
+  verifying read streams from DuckDB under `memory_limit`/`threads` with spill in `<data_root>/.compact_tmp`
+  (removed after the run). The job shares one time box (`time_box_s` 1800; the rest is `deferred`, not an error),
+  sleeps `pause_s` after each partition, and reports totals plus `tables`. New read-only
+  `scripts/store_parts_report.py` (part counts, rows, MB, read s, peak RSS per folder) for the brain measurement.
+  Cost: no Actions minutes, no new data; one nightly rewrite per closed account-month; the first night rewrites
+  every closed month of fills/dq_events/observe_ticks once. Rollback: as R131 (run the job once so no
+  `.compact.json` is left, then revert); compacted parts are plain parts. Not done: brain measurement and enabling
+  ticks (239), quarantine rewrite keeping lineage (240), a written_utc column on ticks (241; decisions months
+  compacted under R131 read written_utc NaT, recoverable from restic snapshot d7c7a6d1, see 241), a health signal for repeated deferral (242).
+  Review of 80339ff7 (LOWs, same branch): pre-lineage compacted parts (no pandas metadata) record written_ns null;
+  `quarantine.move_rows` finishes an interrupted compaction swap (`_recover`) before its rewrite; a column Arrow
+  cannot unify across parts (int vs text) takes DuckDB's union_by_name type and is cast by DuckDB.
 - 2026-11-13 (branch feat/cost-model-series; R150; BACKLOG 90, 255): the nightly `limits_job` now passes ADR 0031's
   20-day measured cost/model ratio (`goldbot/ops/cost_ratio.py`) instead of None, so the frozen cost rule can tighten
   (above 1.25 the floors, 1.10-1.25 one step down). Measured per fill (demo and live): decision spread, entry slippage,
@@ -13,6 +33,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   table). None below 20 measured fills or with more than 20% unmeasured (dq `cost_ratio_unmeasured`); the result row
   carries `cost_ratio_20d`, `cost_fills`, `cost_unmeasured`, `cost_model`. Inert today (no account has adaptive limits on). Tighten only;
   no limit, cap, sizing or order path loosened. Quant review round 1 fixed; needs quant re-review before merge.
+- **1d/1w go-live blockers closed in code, still dark (BACKLOG 144, R149, ADR 0081; implementer).**
+  `goldbot/engine/long_bars.py`: a Monday-Thursday 1d decision is sent at the first 15m close after 22:15 UTC and 15
+  min after the broker's reopen (22:30 UTC EEST, 23:30 UTC EET); a 1w decision an hour after the Sunday open (23:15
+  UTC EEST, 00:15 UTC EET); both on the bars through their decision close, the signal stamped at the send close
+  (bracket from the send price), `decision_utc` the decision close. A decision up to 2 h (1d) / 24 h (1w) late is
+  caught up once (a restart across the weekly open); later, or with no reopen, it is journalled
+  `exploration_missed:<tf>`. aux.db migration 33 `long_tf_decisions` persists the last decision per arm before
+  queueing. The rules' common filter is judged at a 1d/1w bar's entry (`RuleContext.filter_ts`; `common_filter_ok`
+  byte-unchanged). `_trail_runners`/`score_twins` use `is_bar_close`. A 1d/1w Intent carries the swap of its whole
+  hold (`Engine._swap_usd_per_oz(..., until)`); an unknown swap is refused by the gate. The guard still lists
+  blockers 4 (BACKLOG 251), 5 ratification (252) and 7 (253); research parity of the filter is BACKLOG 254. Reviews
+  owed: trading-safety-reviewer (send timing, catch-up, swap projection), quant-reviewer (ADR 0081), code-reviewer.
 - 2026-11-13 (branch fix/engine-survives-bad-arm-row; BACKLOG 117; R136): a bad exploration arm row no longer stops
   the engine, and a config defect never closes a healthy position (trading-safety rework of f838b7d3). The engine
   remembers every cleanly loaded arm row (a hash mismatch aside) in aux.db `arm_spec_last_good` (migration 29,
@@ -45,6 +77,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   units is refused. Withdrawn or expired (ad hoc, > 7 days) futility pre-registrations are refused. The self-test
   module runs from the file's current bytes, and a test fails if anything else calls l3_read, family_cv_p or
   forward_state. BACKLOG 207 carries the quant ruling: every carried cell registers its sim ev.hold before L2.
+- 2026-11-13 (branch feat/exchange-holiday-calendar; R145; BACKLOG 152, follow-ups 235-238; ADR 0082): exchange
+  holidays (NYSE, LSE, Xetra) now come from a published, versioned calendar,
+  `config/research/exchange_holidays.yaml` (generated by `scripts/build_exchange_holidays.py` from exchange_calendars
+  4.13.2, 1990-2027), loaded and validated by `goldbot/data/exchange_holidays.py`. Each date has an `available_utc`.
+  `Ctx.avail` carries publication instants for holidays and calendar-v1 events. S05-S07 read a date only once it is
+  published, and S6's `truncate_ctx` cuts on it, so the strict cut passes on S05-S07. The old inference read two
+  multi-month holes in the US500/UK100 long files as about 150 holidays each and missed every US/UK holiday from mid-2013.
+  Explore S05-V0 events went from 103 to 199. The S05-S07 event sets changed, so they need new registry rows (BACKLOG 236). The
+  EVAL-2 harness hash changes, so S0-S6 must be re-run.
+- Quant round 1 (same branch): events leave the schedule once their cancellation is published (2013 NFPs, the FOMC of
+  2020-03-18). The unscheduled FOMC statements of 3 and 15 March 2020 were added (calendar-v1 manual rows; the 2020
+  count check is now 9). Fed-calendar meetings are known from 1 Dec of the prior year (BACKLOG 235, catalogue side),
+  so S07 is back at 625/604. A window past 2027-12-31 raises. Prereg amendment 14b: S06/S07 rows add to K, and S05
+  stays unregistered.
 - 2026-11-13 (branch feat/gold-cost-session-split; BACKLOG 146; R137; prereg-2026-11-07-catalogue-screen section
   14a): the catalogue sim prices a gold trade at the cost-of-record cell of its fill instant's session, the dearer of
   the two brokers (`costs.gold_session_rt`, `costs.gold_session`; the calendar's city-clock sessions). A cell on fewer

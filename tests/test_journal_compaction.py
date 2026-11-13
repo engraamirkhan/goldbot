@@ -56,7 +56,7 @@ def _read(store: Store, source: str | None = ACC) -> pd.DataFrame:
     return store.read("decisions", source=source, symbol="XAUUSD")
 
 
-def test_closed_months_become_one_part_with_every_row_in_store_order(tmp_path: Path) -> None:
+def test_closed_months_become_one_part_with_every_row_in_write_order(tmp_path: Path) -> None:
     store = Store(tmp_path)
     _seed(store)
     before, before_all = _read(store), _read(store, None)
@@ -73,9 +73,9 @@ def test_closed_months_become_one_part_with_every_row_in_store_order(tmp_path: P
     assert (sep.parts_before, sep.rows, sep.error) == (6, 24, None)
     assert sep.hash_before == sep.hash_after
     assert (ACC, 2026, 11) not in done
-    # the part on disk is in store order: ts_utc, then every column (decisions has no key columns)
+    # backlog 179: the part on disk holds the parts in write order (lineage); reads still come in store order
     raw = pq.read_table(_parts(store, ACC, 2026, 9)[0]).to_pandas()
-    assert raw["ts_utc"].is_monotonic_increasing
+    assert len(raw) == 24
     assert str(raw["ts_utc"].dt.tz) == "UTC"
     assert not list((store.table_dir("decisions")).rglob(".compact*"))
 
@@ -157,12 +157,14 @@ def test_a_mismatch_keeps_the_old_parts(tmp_path: Path, monkeypatch: pytest.Monk
     store = Store(tmp_path)
     _seed(store)
     before = _read(store)
-    real = compact_mod._merged
+    real = compact_mod._build
 
-    def drop_one(files: list[Path], table: str) -> Any:
-        t = real(files, table)
-        return t.slice(0, t.num_rows - 1)
-    monkeypatch.setattr(compact_mod, "_merged", drop_one)
+    def drop_one(pdir: Path, files: list[Path], row_group_rows: int) -> Any:
+        tmp, name = real(pdir, files, row_group_rows)
+        t = pq.read_table(tmp)
+        pq.write_table(t.slice(0, t.num_rows - 1), tmp)
+        return tmp, name
+    monkeypatch.setattr(compact_mod, "_build", drop_one)
     rep = compact_table(store, "decisions", before=NOW)
     assert all(p.error for p in rep.partitions)
     assert len(_parts(store, ACC, 2026, 9)) == 6 and not list(store.table_dir("decisions").rglob(".*.tmp"))
@@ -247,7 +249,7 @@ def test_the_part_is_built_outside_the_writer_lock(tmp_path: Path, monkeypatch: 
     real = compact_mod._store_hash
     free: list[bool] = []
 
-    def during_build(files: list[Path], table: str) -> tuple[str, int]:
+    def during_build(files: list[Path], table: str, **kw: Any) -> tuple[str, int]:
         with open(files[0].parent / ".lock", "ab") as fh:
             try:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -255,7 +257,7 @@ def test_the_part_is_built_outside_the_writer_lock(tmp_path: Path, monkeypatch: 
                 fcntl.flock(fh, fcntl.LOCK_UN)
             except BlockingIOError:
                 free.append(False)
-        return real(files, table)
+        return real(files, table, **kw)
     monkeypatch.setattr(compact_mod, "_store_hash", during_build)
     compact_table(store, "decisions", before=NOW)
     assert free and all(free)
@@ -267,16 +269,16 @@ def test_a_partition_changed_during_the_build_is_left_for_the_next_night(tmp_pat
     meanwhile is never in the replaced set either."""
     store = Store(tmp_path)
     _seed(store)
-    real = compact_mod._merged
+    real = compact_mod._build
 
-    def rewritten(files: list[Path], table: str) -> Any:
-        t = real(files, table)
+    def rewritten(pdir: Path, files: list[Path], row_group_rows: int) -> Any:
+        t = real(pdir, files, row_group_rows)
         if files[0].parent.name == "month=09" and f"source={ACC}" in str(files[0]):
             gone = pq.read_table(files[0]).to_pandas()
             files[0].unlink()                                        # the rows move to a new part meanwhile
             store.append("decisions", gone, source=ACC, dedupe=False)
         return t
-    monkeypatch.setattr(compact_mod, "_merged", rewritten)
+    monkeypatch.setattr(compact_mod, "_build", rewritten)
     before = _read(store)
     rep = compact_table(store, "decisions", before=NOW)
     sep = next(p for p in rep.partitions if (p.source, p.month) == (ACC, 9))
