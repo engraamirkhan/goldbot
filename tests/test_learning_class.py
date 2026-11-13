@@ -128,7 +128,7 @@ def test_a_learning_row_whose_prereg_doc_does_not_exist_is_refused(tmp_path) -> 
 
 
 @pytest.mark.parametrize("control, why", [
-    ({"tf": "1m"}, "timeframe"),
+    ({"tf": "15m"}, "timeframe"),              # a 1m row would not load at all (ruling 2026-11-13: no new 1m arm)
     ({"stop": 3.0}, "stop"),
     ({"target": 2.0}, "target"),
     ({"hold": 12}, "hold"),
