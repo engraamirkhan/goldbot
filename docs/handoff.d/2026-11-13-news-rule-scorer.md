@@ -7,3 +7,9 @@
   once. The `news` health check fails when headlines arrive but none is scored in 24 h (`state/news_scoring.json`).
   News features read rule rows flagged (`rule_scored`, `news_rules_share_24h`; news_llm v3). Not done: the 392 stored
   rows stay unscored (no rewrite after written_utc); live precision unmeasured until BACKLOG 234.
+- Review round 1 (same branch): rule shocks only for new events (ongoing/market-reaction framing penalised; repeat
+  reports across feeds within 6 h unflagged, `rule_repeat_of`); rule-shock blackout capped at 120 min per UTC day
+  (`news.rule_shock_cap_min_per_day`, LLM shocks uncapped) with a `news_blackout_cap` warning and a per-day log in
+  `state/news_scoring.json`; `news` fails at once on a rules error; budget-fallback rule rows count as unscored in
+  the features' budget mask. BACKLOG 234 (real-headline precision) is still open: reading the brain's 392 headlines
+  was refused in the agent sandbox.

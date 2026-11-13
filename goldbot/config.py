@@ -626,6 +626,10 @@ class NewsSettings(_Section):
     # R144 free fallback scorer (goldbot/data/news_rules.py): a rules-v1 shock is flagged (and can black out entries)
     # only at this shock confidence; a feed's weight scales its rule relevance and shock confidence (1 = official)
     rule_shock_min_confidence: float = Field(0.8, ge=0.5, le=1)
+    # safety review 2026-11-13: a later report of an event already reported this many hours before (any feed) is not
+    # a new shock; rule shocks black out at most this many minutes per UTC day (LLM shocks uncapped); health warns at it
+    rule_shock_dedupe_hours: float = Field(6, ge=0, le=48)
+    rule_shock_cap_min_per_day: int = Field(120, ge=0, le=1440)
     source_weights: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(default_factory=dict)
 
 

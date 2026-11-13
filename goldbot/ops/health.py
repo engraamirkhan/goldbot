@@ -157,6 +157,7 @@ from goldbot.ops.checks.feeds import (
     check_growth_test,
     check_model_watch,
     check_news,
+    check_news_blackout_cap,
     check_pnl_basis,
     check_qualification,
 )
@@ -352,6 +353,7 @@ __all__ = [
     "check_loss_caps",
     "check_model_watch",
     "check_news",
+    "check_news_blackout_cap",
     "check_open_risk",
     "check_phase",
     "check_phase_gates",
@@ -628,7 +630,7 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 # deploy_read: no version could be offered for 2 h, incident 2026-11-10)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
-                  "history_gap:", "entry_silence:", "deploy_read")
+                  "history_gap:", "entry_silence:", "deploy_read", "news_blackout_cap")
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the

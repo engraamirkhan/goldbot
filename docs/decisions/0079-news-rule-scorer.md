@@ -19,7 +19,17 @@ scores. The owner wants nothing pending on him and no paid service.
 - Rule scores are kept in `rule_*` columns for every prefiltered row; they fill the main score fields (`scorer` =
   rules-v1) only when the LLM did not score the row. An LLM score takes precedence; both are kept. During an LLM API
   error a rule-shock item is stored at once on its rule score (the others retry next round as before).
-- Health: the `news` check fails when prefiltered headlines arrived in the last 24 h but none was scored.
+- Only new events are shocks (safety review 2026-11-13, HIGH): ongoing-conflict and market-reaction framing
+  ("kill 12", "amid", "continue", "shrug off", "steady") takes 0.35 off the confidence, and a later report of an
+  event already reported within `news.rule_shock_dedupe_hours` (6) by any feed is stored unflagged with
+  `rule_repeat_of`. Rule-shock blackout minutes are capped at `news.rule_shock_cap_min_per_day` (120) per UTC day,
+  computed from the store in `shock_window` (stateless, the same in the engine and the smoke test); LLM shocks stay
+  uncapped. The collector logs uncapped rule blackout minutes per day; `news_blackout_cap` warns (told at once) at
+  the cap.
+- Health: the `news` check fails when prefiltered headlines arrived in the last 24 h but none was scored, and at
+  once on a rules-v1 error.
+- Features: a rule score written while an LLM client was active (`llm_active`) counts as unscored for the budget
+  mask, so a time-of-day switch of scorer never enters a series.
 
 ## Consequences
 - The blackout can now fire without spend. It only tightens: it refuses entries for 30 minutes; exits never read it

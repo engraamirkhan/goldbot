@@ -15,7 +15,10 @@ Rules, in the order they apply:
 * direction (rates, dollar, risk) and surprise: votes of the phrases found; a tie is neutral. A negation within
   NEG_WINDOW words before a phrase ("rules out a rate cut", "denies missile attack") flips a direction and cancels a
   shock or a risk-off vote.
-* shock: only phrases that name an unscheduled event (missiles fired, invasion, declared war, emergency central-bank
+* shock: only NEW events (safety review 2026-11-13): ongoing-conflict and market-reaction framing ("continue",
+  "amid", "kill 12", "shrug off", "steady") takes ONGOING_PENALTY off, and `mark_repeats` unflags a later report of
+  an event already reported in the lookback by any feed. The engine caps rule-shock blackout minutes per UTC day
+  (`news.shock_window`, `rule_cap_min`). Only phrases that name an unscheduled event (missiles fired, invasion, declared war, emergency central-bank
   action, bank collapse, sovereign default, coup). Confidence = the phrase's strength, less HEDGE_PENALTY when hedged
   ("could", "threatens", "fears of", "anniversary", a question) and times the source weight; the flag is set only at
   `min_confidence` and above, so a guessed shock never blocks entries. A scheduled release is never a shock: none of
@@ -27,7 +30,8 @@ exits never read it (engine `_blackout_close` skips `news_shock`; RiskGate is en
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -67,21 +71,38 @@ _DRIVERS: tuple[tuple[re.Pattern[str], float], ...] = (
 )
 
 # --------------------------------------------------------------------------- shock: unscheduled events only
-_SHOCK: tuple[tuple[re.Pattern[str], float], ...] = (
-    (re.compile(r"\b(?:fires?|fired|launch(?:es|ed)?)\s+(?:\w+\s+){0,3}(?:missiles?|rockets?|drones?)\b", re.I), 0.95),
-    (re.compile(r"\b(?:missile|rocket|drone)s?\s+(?:strikes?|attacks?|hits?|barrage)\b", re.I), 0.95),
-    (re.compile(r"\bair ?strikes?\b", re.I), 0.95),
-    (re.compile(r"\bdeclar(?:es|ed|ing)\s+war\b|\bwar\s+(?:breaks out|erupts|erupted)\b", re.I), 0.95),
-    (re.compile(r"\binvad(?:es|ed|ing)\b|\binvasion\s+of\b", re.I), 0.95),
-    (re.compile(r"\bnuclear\s+(?:strike|attack|test|detonation|explosion)\b", re.I), 0.95),
+_SHOCK: tuple[tuple[re.Pattern[str], float, str], ...] = (   # (phrase, strength, event group)
+    (re.compile(r"\b(?:fires?|fired|launch(?:es|ed)?)\s+(?:\w+\s+){0,3}(?:missiles?|rockets?|drones?)\b", re.I), 0.95, "conflict"),
+    (re.compile(r"\b(?:missile|rocket|drone)s?\s+(?:strikes?|attacks?|hits?|barrage)\b", re.I), 0.95, "conflict"),
+    (re.compile(r"\bair ?strikes?\b", re.I), 0.95, "conflict"),
+    (re.compile(r"\bdeclar(?:es|ed|ing)\s+war\b|\bwar\s+(?:breaks out|erupts|erupted)\b", re.I), 0.95, "conflict"),
+    (re.compile(r"\binvad(?:es|ed|ing)\b|\binvasion\s+of\b", re.I), 0.95, "conflict"),
+    (re.compile(r"\bnuclear\s+(?:strike|attack|test|detonation|explosion)\b", re.I), 0.95, "conflict"),
     (re.compile(r"\bemergency\s+(?:rate\s+(?:cut|hike)|meeting|(?:fed|fomc|ecb|boe|boj)\b|liquidity|action)|"
-                r"\bintermeeting\b|\bunscheduled\s+(?:meeting|rate)\b", re.I), 0.95),
-    (re.compile(r"\bterror(?:ist)?\s+attacks?\b|\bcoup\b|\bmartial law\b|\bassassinat\w+", re.I), 0.9),
-    (re.compile(r"\bbanks?\s+(?:collapses?|collapsed|fails?|failed|failure)\b|\bbank run\b", re.I), 0.9),
-    (re.compile(r"\bdefaults?\s+on\s+(?:its\s+)?(?:\w+\s+)?(?:debt|bonds?)\b|\bsovereign default\b", re.I), 0.9),
+                r"\bintermeeting\b|\bunscheduled\s+(?:meeting|rate)\b", re.I), 0.95, "financial"),
+    (re.compile(r"\bterror(?:ist)?\s+attacks?\b|\bcoup\b|\bmartial law\b|\bassassinat\w+", re.I), 0.9, "conflict"),
+    (re.compile(r"\bbanks?\s+(?:collapses?|collapsed|fails?|failed|failure)\b|\bbank run\b", re.I), 0.9, "financial"),
+    (re.compile(r"\bdefaults?\s+on\s+(?:its\s+)?(?:\w+\s+)?(?:debt|bonds?)\b|\bsovereign default\b", re.I), 0.9, "financial"),
     (re.compile(r"\b(?:attacks?|attacked|strikes?|struck)\s+(?:on\s+)?(?:\w+\s+){0,2}"
-                r"(?:oil|refiner\w*|tankers?|nuclear|embassy|bases?|shipping)\b", re.I), 0.85),
+                r"(?:oil|refiner\w*|tankers?|nuclear|embassy|bases?|shipping)\b", re.I), 0.85, "conflict"),
 )
+
+# safety review 2026-11-13 (HIGH): a running conflict's updates and market-reaction lines are not new events. Any of
+# these anywhere in the headline takes ONGOING_PENALTY off the shock confidence ("Israeli airstrikes kill 12 in Gaza",
+# "Markets shrug off airstrikes", "Gold steady as missile strikes continue")
+_ONGOING = re.compile(r"\b(?:continu\w*|ongoing|steady|steadies|steadied|shrugs?\s+off|shrugged\s+off|kill(?:s|ed)?\s+"
+                      r"(?:at least\s+)?\d+|death toll|casualt\w*|amid|rages?|raging|latest|resum\w*|renewed|"
+                      r"(?:second|third|fourth|fifth|\d+(?:st|nd|rd|th))\s+(?:day|week|night)|day\s+\d+)\b", re.I)
+ONGOING_PENALTY = 0.35
+# words that name the kind of event, not the event itself: left out when two reports are compared (mark_repeats)
+_EVENT_WORDS = frozenset(
+    "a an the at in on of to for as and or by from with into over after before more new says say said report reports "
+    "reported sources breaking update gold jumps jump rises rise falls fall spikes spike surges surge bid haven "
+    "fires fire fired launches launch launched missile missiles rocket rockets drone drones ballistic strike strikes "
+    "struck airstrike airstrikes air attack attacks attacked war declares declared invades invaded invasion nuclear "
+    "emergency meeting rate cut hike bank banks collapse collapses default defaults debt bonds coup terror terrorist "
+    "toward towards against near".split())
+REPEAT_OVERLAP = 0.5        # share of the shorter report's event words both share: the same event
 
 # --------------------------------------------------------------------------- direction phrases
 _HAWKISH = re.compile(r"\b(?:rate hikes?|hikes?\s+(?:interest\s+)?rates?|rais(?:es|ed|ing)\s+(?:interest\s+)?rates?|"
@@ -148,12 +169,67 @@ def _votes(text: str, pos: re.Pattern[str], neg: re.Pattern[str]) -> int:
 def shock_confidence(text: str, source_weight: float = 1.0) -> float:
     """0-1: the strongest un-negated shock phrase's strength, less HEDGE_PENALTY when hedged, times the source weight."""
     best = 0.0
-    for pat, strength in _SHOCK:
+    for pat, strength, _ in _SHOCK:
         for m in pat.finditer(text):
             if _negated(text, m):
                 continue
             best = max(best, strength - (HEDGE_PENALTY if _hedged(text, m) else 0.0))
+    if best and _ONGOING.search(text):
+        best -= ONGOING_PENALTY
     return round(min(max(best * source_weight, 0.0), 1.0), 4)
+
+
+def shock_group(text: str) -> str:
+    """The event group of the first un-negated shock phrase ("conflict" or "financial"), "" without one."""
+    for pat, _, group in _SHOCK:
+        if any(not _negated(text, m) for m in pat.finditer(text)):
+            return group
+    return ""
+
+
+def _event_words(text: str) -> frozenset[str]:
+    return frozenset(w for w in re.findall(r"[a-z][a-z']+", text.lower()) if len(w) > 2 and w not in _EVENT_WORDS)
+
+
+def _same_event(a: str, b: str) -> bool:
+    if shock_group(a) != shock_group(b):
+        return False
+    wa, wb = _event_words(a), _event_words(b)
+    if not wa or not wb:
+        return True                     # nothing but event words: indistinguishable reports, the same event
+    return len(wa & wb) / min(len(wa), len(wb)) >= REPEAT_OVERLAP
+
+
+def mark_repeats(items: pd.DataFrame, scores: Sequence[RuleScore], earlier: pd.DataFrame | None,
+                 lookback: pd.Timedelta) -> list[tuple[RuleScore, str]]:
+    """Safety review 2026-11-13: only the FIRST report of an event is a shock. Each rule shock in `items` (one score per
+    row, same order) whose event (same group, REPEAT_OVERLAP of its event words) was already reported in the
+    `lookback` before it, by any feed, is unflagged and names the first report's item_id. `earlier` = stored rows
+    (rule_shock or rule_repeat_of set count as reports); reports in `items` count in received (then published) order.
+    Returns (score, repeat_of) per row, "" = not a repeat."""
+    def text(row: Any) -> str:
+        return f"{row.get('title') or ''}. {row.get('summary') or ''}"
+    reports: list[tuple[pd.Timestamp, str, str]] = []          # (received, text, first report id)
+    if earlier is not None and not earlier.empty and "rule_shock" in earlier.columns:
+        rep = earlier.get("rule_repeat_of", pd.Series("", index=earlier.index)).fillna("").astype(str)
+        prior = earlier[earlier["rule_shock"].fillna(False).astype(bool) | rep.ne("")]
+        for _, row in prior.iterrows():
+            first = str(row.get("rule_repeat_of") or "") or str(row["item_id"])
+            reports.append((pd.Timestamp(row["received_utc"]), text(row), first))
+    rows = [r for _, r in items.iterrows()]
+    order = sorted(range(len(rows)), key=lambda i: (pd.Timestamp(rows[i]["received_utc"]),
+                                                    pd.Timestamp(rows[i].get("ts_utc", rows[i]["received_utc"]))))
+    out: list[tuple[RuleScore, str]] = [(s, "") for s in scores]
+    for i in order:
+        s = scores[i]
+        if not s.shock:
+            continue
+        at, t = pd.Timestamp(rows[i]["received_utc"]), text(rows[i])
+        first = next((f for when, txt, f in reports if at - lookback <= when <= at and _same_event(t, txt)), "")
+        if first:
+            out[i] = (s.model_copy(update={"shock": False}), first)
+        reports.append((at, t, first or str(rows[i]["item_id"])))
+    return out
 
 
 def score_text(item: str, text: str, source_weight: float = 1.0, min_confidence: float = 0.8) -> RuleScore:

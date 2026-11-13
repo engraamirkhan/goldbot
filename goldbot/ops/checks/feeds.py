@@ -326,6 +326,8 @@ def _news_scoring_blind(ctx: HealthContext) -> str | None:
 
     def at(key: str) -> pd.Timestamp | None:
         return pd.Timestamp(rec[key]) if rec.get(key) else None
+    if err := (rec.get("last_poll") or {}).get("rules_error"):     # review MEDIUM: the first error, not after 24 h
+        return f"rules-v1 scorer error on the last poll ({err}): rule shocks cannot black out entries"
     since, arrived, scored = at("since_utc"), at("last_prefiltered_utc"), at("last_scored_utc")
     if since is None or ctx.now - since < NEWS_SCORING_WINDOW:
         return None
@@ -336,6 +338,25 @@ def _news_scoring_blind(ctx: HealthContext) -> str | None:
     last = f"last scored {_age((ctx.now - scored).total_seconds())} ago" if scored is not None else "none ever scored"
     return (f"0 headlines scored in 24 h while headlines arrive ({last}): the news-shock blackout is blind; "
             f"last poll {rec.get('last_poll')}")
+
+
+@register_check("global", block=BLOCK_TAIL, pos=91)
+def check_news_blackout_cap(ctx: HealthContext) -> Check:
+    """Safety review 2026-11-13: WARN (told at once, health.NOTIFY_ON_WARN) when today's rules-v1 shock blackout
+    minutes (the collector's uncapped log in news_scoring.json) reach `news.rule_shock_cap_min_per_day`: later rule
+    shocks today no longer block entries, so the owner should know the feed is reporting shock after shock."""
+    cap = ctx.settings.news.rule_shock_cap_min_per_day if ctx.settings is not None else 120
+    f = ctx.state_dir / "news_scoring.json"
+    try:
+        days = (_read_json(f).get("rule_blackout_min") or {}) if f.exists() else {}
+    except (ValueError, OSError):
+        days = {}                                         # unreadable: check_news reports it
+    today = float(days.get(f"{ctx.now:%Y-%m-%d}", 0.0))
+    if cap > 0 and today >= cap:
+        return Check(name="news_blackout_cap", status="warn",
+                     reason=f"rule-shock blackout reached its daily cap ({today:.0f} >= {cap} min today): later rule "
+                            f"shocks today do not block entries; LLM shocks and the calendar still do")
+    return Check(name="news_blackout_cap", status="ok", reason=f"rule-shock blackout {today:.0f} of {cap} min today")
 
 
 @register_check("global", block=BLOCK_TAIL, pos=90)

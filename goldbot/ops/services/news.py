@@ -31,7 +31,10 @@ def run_news() -> None:
                               SpendLedger(Path("state") / "agent_spend.json", settings.agents.monthly_cap_usd),
                               settings.news.model, settings.news.daily_cap_usd,
                               rule_min_confidence=settings.news.rule_shock_min_confidence,
-                              source_weights=settings.news.source_weights)
+                              source_weights=settings.news.source_weights,
+                              rule_dedupe_hours=settings.news.rule_shock_dedupe_hours,
+                              blackout_min=settings.news.shock_blackout_min,
+                              shock_min_relevance=settings.news.shock_min_relevance)
     while True:
         try:
             log.info("news: %s", collector.poll(pd.Timestamp.now("UTC")))

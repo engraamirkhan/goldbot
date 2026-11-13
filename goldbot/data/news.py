@@ -43,8 +43,11 @@ SCORE_FIELDS = ["relevance", "rates", "risk", "dollar", "surprise", "shock"]
 # were all LLM-scored). `rule_*`: the rules-v1 score of every prefiltered row, kept beside an LLM score
 # (goldbot/data/news_rules.py)
 RULE_COLUMNS = [f"rule_{c}" for c in SCORE_FIELDS] + ["rule_shock_confidence"]
+# `rule_repeat_of`: the first report's item_id when rules-v1 saw this row's shock as a repeat (unflagged);
+# `llm_active`: the collector had an LLM client at this poll (a rule score then means the budget ran out)
 COLUMNS = ["item_id", "ts_utc", "received_utc", "source", "title", "summary", "link", "scored", *SCORE_FIELDS,
-           "scorer", *RULE_COLUMNS]
+           "scorer", *RULE_COLUMNS, "rule_repeat_of", "llm_active"]
+RULES_SCORER = "rules-v1"                        # goldbot.data.news_rules.SCORER
 PREFILTER = re.compile(
     r"\b(?:gold|xau|bullion|silver|fed|fomc|powell|rate[s]?|yield[s]?|treasur|dollar|usd|dxy|inflation|cpi|pce|"
     r"payroll|nfp|jobs|employment|gdp|recession|tariff|war|missile|attack|sanction|geopolit|central bank|ecb|boj|"
@@ -132,7 +135,8 @@ def parse_feed(xml: str, source: str, received_utc: pd.Timestamp) -> pd.DataFram
                      "source": source, "title": title[:300], "summary": summary[:600], "link": link, "scored": False,
                      "relevance": np.nan, "rates": "", "risk": "", "dollar": "", "surprise": "", "shock": False,
                      "scorer": "", "rule_relevance": np.nan, "rule_rates": "", "rule_risk": "", "rule_dollar": "",
-                     "rule_surprise": "", "rule_shock": False, "rule_shock_confidence": np.nan})
+                     "rule_surprise": "", "rule_shock": False, "rule_shock_confidence": np.nan,
+                     "rule_repeat_of": "", "llm_active": False})
     df = pd.DataFrame(rows, columns=COLUMNS)
     if not df.empty:
         df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
@@ -200,16 +204,67 @@ def apply_rule_columns(df: pd.DataFrame, scores: Sequence[Any]) -> pd.DataFrame:
     return df
 
 
-def shock_window(news: pd.DataFrame, now: pd.Timestamp, minutes: int, min_relevance: float) -> dict[str, Any] | None:
-    """The latest high-relevance unscheduled shock received within `minutes` before `now`, or None."""
+def _shocks(news: pd.DataFrame, min_relevance: float) -> pd.DataFrame:
     if news.empty or "shock" not in news:
+        return news.iloc[0:0]
+    out = news[news["shock"].fillna(False).astype(bool) & (news["relevance"].astype(float) >= min_relevance)].copy()
+    out["received_utc"] = pd.to_datetime(out["received_utc"], utc=True)
+    out["_rule"] = out["scorer"].fillna("").astype(str).eq(RULES_SCORER) if "scorer" in out else False
+    return out.sort_values("received_utc", kind="mergesort")
+
+
+def _rule_windows(starts: list[pd.Timestamp], minutes: int,
+                  cap_min: float | None) -> list[tuple[pd.Timestamp, pd.Timestamp, float]]:
+    """The blackout windows of rule shocks starting on one UTC day, granted in time order until their union reaches
+    `cap_min` minutes (None: uncapped); the window that crosses the cap is cut at it. (start, end, new minutes)."""
+    out: list[tuple[pd.Timestamp, pd.Timestamp, float]] = []
+    used, reach = 0.0, None
+    for s in starts:
+        end = s + pd.Timedelta(minutes=minutes)
+        new_from = s if reach is None or reach < s else reach
+        new = max((end - new_from) / pd.Timedelta(minutes=1), 0.0)
+        if cap_min is not None:
+            if used >= cap_min:
+                break
+            new = min(new, cap_min - used)
+        eff_end = new_from + pd.Timedelta(minutes=new)
+        out.append((s, max(eff_end, s), new))
+        used += new
+        reach = eff_end if reach is None else max(reach, eff_end)
+    return out
+
+
+def rule_blackout_minutes(news: pd.DataFrame, day: pd.Timestamp, minutes: int, min_relevance: float) -> float:
+    """Uncapped blackout minutes (window union) of the rules-v1 shocks received on UTC day `day`: the collector's log."""
+    sh = _shocks(news, min_relevance)
+    d = pd.Timestamp(day).tz_convert("UTC").normalize() if pd.Timestamp(day).tzinfo else pd.Timestamp(day, tz="UTC").normalize()
+    starts = list(sh.loc[sh["_rule"].astype(bool) & sh["received_utc"].dt.normalize().eq(d), "received_utc"])
+    return float(sum(new for _, _, new in _rule_windows(starts, minutes, None)))
+
+
+def shock_window(news: pd.DataFrame, now: pd.Timestamp, minutes: int, min_relevance: float,
+                 rule_cap_min: float | None = None) -> dict[str, Any] | None:
+    """The latest high-relevance unscheduled shock received within `minutes` before `now`, or None. Rule shocks
+    (`scorer` = rules-v1) black out at most `rule_cap_min` minutes per UTC day (safety review 2026-11-13: a feed that
+    keeps reporting a war must not block entries all day); LLM shocks are uncapped, as the design states."""
+    sh = _shocks(news, min_relevance)
+    if sh.empty:
         return None
-    rec = pd.to_datetime(news["received_utc"], utc=True)
-    hit = news[news["shock"].astype(bool) & (news["relevance"].astype(float) >= min_relevance)
-               & (rec <= now) & (rec >= now - pd.Timedelta(minutes=minutes))]
+    rec = sh["received_utc"]
+    hit = sh[(rec <= now) & (rec >= now - pd.Timedelta(minutes=minutes))]
     if hit.empty:
         return None
-    row = hit.sort_values("received_utc").iloc[-1]
+    if rule_cap_min is not None and hit["_rule"].astype(bool).any():
+        keep = ~hit["_rule"].astype(bool)
+        for day in {t.normalize() for t in hit.loc[hit["_rule"].astype(bool), "received_utc"]}:
+            starts = list(sh.loc[sh["_rule"].astype(bool) & rec.dt.normalize().eq(day) & (rec <= now), "received_utc"])
+            granted = _rule_windows(starts, minutes, rule_cap_min)
+            ok = {a for a, b, _ in granted if a <= now <= b}
+            keep |= hit["_rule"].astype(bool) & hit["received_utc"].isin(ok)
+        hit = hit[keep]
+        if hit.empty:
+            return None
+    row = hit.iloc[-1]
     return {"title": str(row["title"]), "received_utc": pd.Timestamp(row["received_utc"]).isoformat(), "kind": "news_shock"}
 
 

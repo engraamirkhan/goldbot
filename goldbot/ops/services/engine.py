@@ -660,7 +660,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
-                              shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
+                              shock_min_relevance=settings.news.shock_min_relevance,
+                              shock_rule_cap_min=settings.news.rule_shock_cap_min_per_day, live_clock=True,
                               broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
                               swap_prior=settings_swap(settings), instruments=instruments,
