@@ -20,6 +20,8 @@ Design rules, as built here:
   it was written, and the engine reads only rows available at the signal's decision time.
 * `enabled: false` writes an `off` row for the next trading day: from its availability the engine refuses nothing
   (the kill path; the prereg's kill rule).
+* Enable checks (backlog 145, scripts/har_check.py, read-only): `dry_run` computes the row the enabled job would
+  write and writes nothing; `measure_overlap` is the prereg's Duka/ICM overlap (`OVERLAP_MAX_LN_W`).
 
 Bars: the release's 1h bars (`bars_1h`, source dukascopy) before the hour of the canonical broker's first live minute,
 that broker's own minutes (`account_bars_1m`: bars_1m_live, then its terminal M1, quarantine respected) from it on,
@@ -45,6 +47,8 @@ log = logging.getLogger(__name__)
 RELEASE_SOURCE = "dukascopy"            # engine/history.py RELEASE_SOURCE: the release bars research trained on
 TABLE = "har_days"                      # aux migration 26
 LOW_DAYS_VOID = (0, 9)                  # prereg §2: a 20-day read with 0 or >= 9 low days is void (outside 1-8 of 20)
+OVERLAP_MAX_LN_W = 0.02                 # prereg §2: |median ln(ICM/Duka) of w| above this -> no start until amended
+OVERLAP_MIN_DAYS = 20                   # fewer overlap days with w on both feeds: `insufficient`, never a pass
 HOUR = pd.Timedelta(hours=1)
 
 
@@ -245,23 +249,110 @@ def signal_day(ts: pd.Timestamp) -> date:
 def run_job(ctx: Any, slot: pd.Timestamp, now: pd.Timestamp | None = None) -> dict[str, Any]:
     """Scheduler job `har_days`: the row for the next trading day after the slot's cut-off (module docstring)."""
     cfg: HarAbstentionSettings = ctx.settings.research.har_abstention
-    # available from the write, never from the slot: a late catch-up run is not back-dated
-    clock = getattr(ctx, "clock", None)
-    at = pd.Timestamp(now) if now is not None else (clock() if clock is not None else pd.Timestamp.now(tz="UTC"))
-    at = at.tz_localize("UTC") if at.tzinfo is None else at.tz_convert("UTC")
+    at = _now(ctx, now)
     cut = cut_off(pd.Timestamp(slot))
     db = Database.open(str(ctx.state_dir), "aux")
     if not cfg.enabled:
         row = HarRow(for_day=next_trading_day(cut), status="off", available_utc=at, inputs_close_utc=cut)
         written = write_row(db, row)
         return {"status": "off", "for_day": row.for_day.isoformat(), "written": written}
-    acc = next((a for a in ctx.accounts if a.broker == cfg.broker and a.enabled), None)
-    if acc is None:
-        raise HarUnavailable(f"no enabled {cfg.broker} account for the live gold feed")
-    start = pd.Timestamp(cfg.fit_from, tz="UTC") - pd.Timedelta(days=60)      # ATR(20) and HAR(22) warm-up
-    bars = read_bars(ctx.store, broker=acc.broker, account_id=acc.account_id, symbol=acc.symbol, cut=cut, start=start)
-    row = forecast(bars, cut, cfg, now=at)
+    row = _forecast_of(ctx, cfg, cut, at)
     written = write_row(db, row)
     log.info("har_days %s: hat %.4f q20 %.4f low %s (written %s)", row.for_day, row.hat, row.q20, row.low, written)
     return {"status": "ok", "for_day": row.for_day.isoformat(), "low": row.low, "hat": row.hat, "q20": row.q20,
             "n_trailing": row.n_trailing, "fit_rows": row.fit_rows, "written": written}
+
+
+def _now(ctx: Any, now: pd.Timestamp | None) -> pd.Timestamp:
+    """Available from the write, never from the slot: a late catch-up run is not back-dated."""
+    clock = getattr(ctx, "clock", None)
+    at = pd.Timestamp(now) if now is not None else (clock() if clock is not None else pd.Timestamp.now(tz="UTC"))
+    return at.tz_localize("UTC") if at.tzinfo is None else at.tz_convert("UTC")
+
+
+def _account(ctx: Any, cfg: HarAbstentionSettings) -> Any:
+    acc = next((a for a in ctx.accounts if a.broker == cfg.broker and a.enabled), None)
+    if acc is None:
+        raise HarUnavailable(f"no enabled {cfg.broker} account for the live gold feed")
+    return acc
+
+
+def _forecast_of(ctx: Any, cfg: HarAbstentionSettings, cut: pd.Timestamp, at: pd.Timestamp) -> HarRow:
+    """The `ok` row the enabled job would write for the next trading day after `cut` (HarUnavailable otherwise)."""
+    acc = _account(ctx, cfg)
+    start = pd.Timestamp(cfg.fit_from, tz="UTC") - pd.Timedelta(days=60)      # ATR(20) and HAR(22) warm-up
+    bars = read_bars(ctx.store, broker=acc.broker, account_id=acc.account_id, symbol=acc.symbol, cut=cut, start=start)
+    return forecast(bars, cut, cfg, now=at)
+
+
+def dry_run(ctx: Any, slot: pd.Timestamp, now: pd.Timestamp | None = None) -> HarRow:
+    """Backlog 145: the row the job would write at `slot` if enabled, whatever `enabled` says, and NOTHING is written.
+    A dry-run `ok` row in har_days would register N-3 (refusals_novel reads the latest row available) and, first row
+    kept, could never be replaced: the enable check runs here, never through `run_job`."""
+    cfg: HarAbstentionSettings = ctx.settings.research.har_abstention
+    return _forecast_of(ctx, cfg, cut_off(pd.Timestamp(slot)), _now(ctx, now))
+
+
+# ------------------------------------------------------------------------------------------------ the overlap check
+class Overlap(FrozenRecord):
+    """Prereg §2, before the first `ok` row: median ln(ICM/Duka) of daily TR, W (window range) and w (W / ATR) on
+    every stub-free day (22:00 UTC roll) both feeds cover, no day filter beyond each feed's first and last, each feed's inputs computed on its own bars (its own ATR). `pass` needs
+    |ln_w| <= OVERLAP_MAX_LN_W on at least OVERLAP_MIN_DAYS days; fewer days is `insufficient` (no start)."""
+    cut_utc: UtcTimestamp
+    status: Literal["pass", "fail", "insufficient"]
+    n_tr: int
+    n_window: int
+    n_w: int
+    ln_tr: float | None = None
+    ln_window: float | None = None
+    ln_w: float | None = None
+    first_day: date | None = None
+    last_day: date | None = None
+    release_last_utc: UtcTimestamp | None = None
+    live_first_utc: UtcTimestamp | None = None
+
+
+def _median_ln(m: pd.DataFrame, col: str) -> tuple[int, float | None]:
+    a, b = m[f"{col}_live"].to_numpy(dtype=float), m[f"{col}_rel"].to_numpy(dtype=float)
+    ok = np.isfinite(a) & np.isfinite(b) & (a > 0) & (b > 0)
+    if not ok.any():
+        return 0, None
+    return int(ok.sum()), float(np.median(np.log(a[ok] / b[ok])))
+
+
+def overlap(release: pd.DataFrame, live: pd.DataFrame, cut: pd.Timestamp) -> Overlap:
+    """The overlap measurement of two mid 1h feeds (`mid_1h`) as of `cut`. Each feed's first and last input day are
+    dropped: a feed that starts or stops inside a day gives that day a partial range."""
+    rel, liv = inputs_of(release, cut), inputs_of(live, cut)
+    cols = ["day", "tr", "window_range", "w"]
+    m = (rel.iloc[1:-1][cols].merge(liv.iloc[1:-1][cols], on="day", suffixes=("_rel", "_live"))
+         if len(rel) > 2 and len(liv) > 2 else pd.DataFrame(columns=["day"]))
+    n_tr, ln_tr = _median_ln(m, "tr") if len(m) else (0, None)
+    n_win, ln_win = _median_ln(m, "window_range") if len(m) else (0, None)
+    n_w, ln_w = _median_ln(m, "w") if len(m) else (0, None)
+    status: Literal["pass", "fail", "insufficient"]
+    if n_w < OVERLAP_MIN_DAYS or ln_w is None:
+        status = "insufficient"
+    else:
+        status = "pass" if abs(ln_w) <= OVERLAP_MAX_LN_W else "fail"
+    days = pd.DatetimeIndex(m["day"]) if len(m) else pd.DatetimeIndex([])
+    rel_ts, live_ts = utc_index(release["ts_utc"]), utc_index(live["ts_utc"])
+    return Overlap(cut_utc=cut, status=status, n_tr=n_tr, n_window=n_win, n_w=n_w, ln_tr=ln_tr, ln_window=ln_win,
+                   ln_w=ln_w, first_day=days.min().date() if len(days) else None,
+                   last_day=days.max().date() if len(days) else None,
+                   release_last_utc=rel_ts.max() if len(rel_ts) else None,
+                   live_first_utc=live_ts.min() if len(live_ts) else None)
+
+
+def measure_overlap(store: Any, *, broker: str, account_id: str, symbol: str, cut: pd.Timestamp) -> Overlap:
+    """The release (bars_1h, dukascopy) and the broker's own minutes (`account_bars_1m`), each read whole and alone,
+    visible by `cut`, from 60 days before the broker's first minute (the ATR(20) warm-up of the release side)."""
+    from goldbot.data.account_bars import account_bars_1m
+    live = account_bars_1m(store, account_id=account_id, broker=broker, symbol=symbol, start=None, end=cut, as_of=cut)
+    lv = mid_1h(live.reset_index(drop=True)) if len(live) else mid_1h(pd.DataFrame())
+    start = utc_index(lv["ts_utc"]).min() - pd.Timedelta(days=60) if len(lv) else None
+    release = store.read("bars_1h", source=RELEASE_SOURCE, symbol="XAUUSD", start=start, end=cut)
+    rel = mid_1h(release.reset_index(drop=True)) if release is not None and len(release) else mid_1h(pd.DataFrame())
+    rel = rel[rel["visible_at"] <= cut].reset_index(drop=True)
+    lv = lv[lv["visible_at"] <= cut].reset_index(drop=True)
+    return overlap(rel, lv, cut)
