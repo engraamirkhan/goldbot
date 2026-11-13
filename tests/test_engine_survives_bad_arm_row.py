@@ -8,6 +8,7 @@ other arms run and every position is still managed. The research loader stays st
 `rejected`), so CI still refuses the bad file."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ import pytest
 import yaml
 
 from goldbot.data.resample import ticks_to_1m
+from goldbot.db import Database
 from goldbot.engine import arm_snapshot, exploration
 from goldbot.execution.broker import Tick
 from goldbot.ops import accounts as acc_mod
@@ -83,8 +85,8 @@ def test_the_rejected_list_names_each_bad_row_and_keeps_every_good_row(tmp_path)
 
 
 def _clean_load(tmp_path: Path) -> Path:
-    snap = arm_snapshot.path_for(tmp_path / "state")
-    assert exploration.config_for(_account(), spec_path=SPEC, spec_arms_path=tmp_path / "none.yaml", snapshot=snap)
+    snap = tmp_path / "state"
+    assert exploration.config_for(_account(), spec_path=SPEC, spec_arms_path=tmp_path / "none.yaml", state_dir=snap)
     return snap
 
 
@@ -92,7 +94,7 @@ def test_a_clean_load_remembers_every_row_and_a_later_load_never_forgets_one(tmp
     snap = _clean_load(tmp_path)
     assert set(arm_snapshot.recall(snap) or {}) == {a.id for a in load_arms(SPEC)}
     exploration.config_for(_account(), spec_path=_broken(tmp_path, "not_a_mapping"),
-                           spec_arms_path=tmp_path / "none.yaml", snapshot=snap)
+                           spec_arms_path=tmp_path / "none.yaml", state_dir=snap)
     assert "S0R" in (arm_snapshot.recall(snap) or {})                   # merged by id, never removed
 
 
@@ -100,7 +102,7 @@ def test_a_clean_load_remembers_every_row_and_a_later_load_never_forgets_one(tmp
 def test_with_a_snapshot_a_bad_row_keeps_its_arm_from_the_last_good_spec_with_entries_refused(tmp_path, how):
     snap = _clean_load(tmp_path)
     cfg = exploration.config_for(_account(), spec_path=_broken(tmp_path, how), spec_arms_path=tmp_path / "none.yaml",
-                                 snapshot=snap)
+                                 state_dir=snap)
     assert cfg is not None and [a.arm_id for a in cfg.arms] == ["S0", "S0R"] and "S0R" not in cfg.dropped
     refused = exploration.entry_refused(cfg)
     assert refused["S0R"].startswith(arm_snapshot.INVALID_RULE) and "S0" not in refused
@@ -111,7 +113,7 @@ def test_an_unreadable_arm_spec_with_a_snapshot_keeps_every_arm_with_all_entries
     snap = _clean_load(tmp_path)
     path = tmp_path / "arms.yaml"
     path.write_text("arms: [ {id: \n")
-    cfg = exploration.config_for(_account(), spec_path=path, spec_arms_path=tmp_path / "none.yaml", snapshot=snap)
+    cfg = exploration.config_for(_account(), spec_path=path, spec_arms_path=tmp_path / "none.yaml", state_dir=snap)
     assert cfg is not None and [a.arm_id for a in cfg.arms] == ["S0", "S0R"] and cfg.dropped == ()
     assert set(exploration.entry_refused(cfg)) == {"S0", "S0R"} and "unreadable" in cfg.invalid["S0"]
 
@@ -120,16 +122,55 @@ def test_an_unreadable_arm_spec_with_a_snapshot_keeps_every_arm_with_all_entries
 def test_an_unreadable_arm_spec_without_a_snapshot_refuses_the_start_and_never_closes_everything(tmp_path, snapshot):
     path = tmp_path / "arms.yaml"
     path.write_text("arms: [ {id: \n")
-    snap = arm_snapshot.path_for(tmp_path / "state") if snapshot else None    # a snapshot path with no file yet
+    snap = tmp_path / "state" if snapshot else None                     # a state dir with no row remembered yet
     with pytest.raises(ValueError, match="refusing to start"):
-        exploration.config_for(_account(), spec_path=path, spec_arms_path=tmp_path / "none.yaml", snapshot=snap)
+        exploration.config_for(_account(), spec_path=path, spec_arms_path=tmp_path / "none.yaml", state_dir=snap)
+
+
+@pytest.mark.parametrize("how", ["window_local", "not_a_mapping", "duplicate", "twin"])
+def test_on_the_engine_a_bad_row_of_a_registered_arm_with_no_last_good_row_refuses_the_start(tmp_path, how):
+    """Its arm cannot be kept (no last good row) and dropping it would orphan-close its positions: fail loud."""
+    with pytest.raises(ValueError, match="refusing to start"):
+        exploration.config_for(_account(), spec_path=_broken(tmp_path, how), spec_arms_path=tmp_path / "none.yaml",
+                               state_dir=tmp_path / "state")
+
+
+def test_a_row_whose_hash_does_not_match_is_never_remembered_as_good(tmp_path):
+    raw = yaml.safe_load(SPEC.read_text())
+    row = next(r for r in raw["arms"] if r["id"] == "S0R")
+    row["params"] = {**row["params"], "hold_bars": int(row["params"]["hold_bars"]) + 1}   # edited after its freeze
+    path = tmp_path / "arms.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    cfg = exploration.config_for(_account(), spec_path=path, spec_arms_path=tmp_path / "none.yaml",
+                                 state_dir=tmp_path / "state")
+    assert cfg is not None and cfg.hash_refused == ("S0R",)
+    remembered = arm_snapshot.recall(tmp_path / "state") or {}
+    assert "S0" in remembered and "S0R" not in remembered
+
+
+def test_two_engines_saving_at_once_lose_no_row(tmp_path):
+    arms = load_arms(SPEC)
+    halves = [arms[0::2], arms[1::2]]
+    start = threading.Barrier(len(halves))
+
+    def save(part: list[Any]) -> None:
+        start.wait()
+        for a in part:                                                   # one upsert each: the most interleaving
+            arm_snapshot.remember(tmp_path, [a])
+
+    threads = [threading.Thread(target=save, args=(h,)) for h in halves]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert set(arm_snapshot.recall(tmp_path) or {}) == {a.id for a in arms}
 
 
 def test_a_snapshot_row_a_newer_release_wrote_still_reads(tmp_path):
     snap = _clean_load(tmp_path)
-    raw = yaml.safe_load(snap.read_text())
-    raw["arms"] = [{**r, "field_from_the_future": 1} for r in raw["arms"]]
-    snap.write_text(yaml.safe_dump(raw, sort_keys=False))
+    db = Database.open(snap, "aux")
+    with db.write() as conn:
+        conn.execute("UPDATE arm_spec_last_good SET body = json_set(body, '$.field_from_the_future', 1)")
     assert set(arm_snapshot.recall(snap) or {}) == {a.id for a in load_arms(SPEC)}
 
 
@@ -149,8 +190,8 @@ def test_after_a_bad_spec_restart_the_arms_open_position_is_adopted_kept_and_clo
     arm = _arm("s", tf="1m", style="scalp", hold_bars=5)
     acc = _probe_account(exploration=_explore(arms={"s": acc_mod.ExplorationArm(max_loss=6.5, style="scalp")},
                                               pots={"scalp": acc_mod.ExplorationPot(gbp=10, max_open=8)}))
-    snap, spec, none = arm_snapshot.path_for(tmp_path / "state"), tmp_path / "arms.yaml", tmp_path / "none.yaml"
-    assert exploration.config_for(acc, spec_path=_write(spec, [_row(arm)]), spec_arms_path=none, snapshot=snap)
+    snap, spec, none = tmp_path / "state", tmp_path / "arms.yaml", tmp_path / "none.yaml"
+    assert exploration.config_for(acc, spec_path=_write(spec, [_row(arm)]), spec_arms_path=none, state_dir=snap)
     eng, pb = _engine(tmp_path, [arm])
     minute = CLOSE + pd.Timedelta(minutes=1)
     tick = _at(eng, pb, CLOSE)
@@ -165,7 +206,7 @@ def test_after_a_bad_spec_restart_the_arms_open_position_is_adopted_kept_and_clo
         _write(spec, [_row(arm), _row(arm)])
     else:
         spec.write_text("arms: [ {id: \n")
-    cfg = exploration.config_for(acc, spec_path=spec, spec_arms_path=none, snapshot=snap)
+    cfg = exploration.config_for(acc, spec_path=spec, spec_arms_path=none, state_dir=snap)
     assert cfg is not None and [a.arm_id for a in cfg.arms] == ["s"] and cfg.dropped == ()
     eng2, _ = _engine(tmp_path, list(cfg.arms), pb=pb, qualify=False)
     assert eng2.exploration is not None
@@ -187,3 +228,12 @@ def test_after_a_bad_spec_restart_the_arms_open_position_is_adopted_kept_and_clo
     assert opened is not None
     eng2._retry_closes(opened + pd.Timedelta(seconds=300))                # its own hold still closes it
     assert pid not in eng2.open and not pb.positions()
+
+
+def test_an_unreadable_arm_spec_refuses_the_start_when_a_registered_arm_has_no_last_good_row(tmp_path):
+    arm_snapshot.remember(tmp_path / "state", [a for a in load_arms(SPEC) if a.id == "S0"])     # S0R never saved
+    path = tmp_path / "arms.yaml"
+    path.write_text("arms: [ {id: \n")
+    with pytest.raises(ValueError, match=r"\['S0R'\].*refusing to start"):
+        exploration.config_for(_account(), spec_path=path, spec_arms_path=tmp_path / "none.yaml",
+                               state_dir=tmp_path / "state")

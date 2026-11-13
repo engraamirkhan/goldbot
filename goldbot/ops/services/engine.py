@@ -523,7 +523,6 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.engine import (
         Engine,
         EngineConfig,
-        arm_snapshot,
         book_backfill,
         broker_bars,
         exploration,
@@ -593,8 +592,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         start_refused(acc, f"refusing to trade {account_id}: {why}")
     wind_down = not acc.enabled and disabled_wind_down(acc, broker)   # refuses when nothing of its own is open
     # multi-instrument demo (lane L3): the account's other instruments, one SymbolBook each (engine/books.py)
-    # BACKLOG 117: the last good arm rows under state/ keep a bad row's arm configured (entries refused, exits run)
-    explore_cfg = exploration.config_for(acc, snapshot=arm_snapshot.path_for("state"))
+    # BACKLOG 117: the last good arm rows (aux.db) keep a bad row's arm configured (entries refused, exits run)
+    explore_cfg = exploration.config_for(acc, state_dir="state")
     instruments = resolve(instrument_books)(acc, broker, explore_cfg)
     paper =resolve(paper_stand_in)(broker)
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",

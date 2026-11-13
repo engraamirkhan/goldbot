@@ -90,6 +90,7 @@ import datetime as dt
 import hashlib
 import logging
 import math
+import re
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
@@ -381,7 +382,7 @@ def qualification_by_account(accounts: list[Account]) -> dict[str, tuple[list[st
 
 
 def config_for(acc: Account, spec_path: Path = SPEC_PATH, spec_arms_path: Path = SPEC_ARMS_PATH,
-               snapshot: Path | None = None) -> ExplorationConfig | None:
+               state_dir: str | Path | None = None) -> ExplorationConfig | None:
     """The engine's exploration block for `acc` (integration ruling 2026-10-25): None unless its `exploration` is
     enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`) and the discovered arms
     (`spec_arms_path`, ADR 0058: "Demo arms are data rows run by one reviewed interpreter (`spec_rule`), loaded only on
@@ -397,16 +398,17 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH, spec_arms_path: Path =
     BACKLOG 117, "a bad exploration arm row must not stop the engine (exits keep running)", and a config defect never
     closes a healthy position (trading-safety review 2026-11-13). An ARM-SPEC row that fails validation, shares its
     id or names a bad twin is left out of the load (`load_arms(rejected=)`), as is a bad discovered row. With
-    `snapshot` (the engine: `arm_snapshot`, every cleanly loaded row remembered under its state dir) a registered arm
-    whose row is bad or missing is kept from its last good row with its entries refused (`INVALID_RULE`), and an
-    unreadable ARM-SPEC keeps every remembered arm with all entries refused; each is journalled at the start
-    (`invalid`). Only an arm never in a good spec is dropped (its position closed as an orphan). An unreadable
-    ARM-SPEC with no snapshot raises: the engine refuses to start (fail loud), never closes everything."""
+    `state_dir` (the engine: `arm_snapshot`, every cleanly loaded row remembered in its aux.db, a hash mismatch aside)
+    a registered arm whose row is bad or missing is kept from its last good row with its entries refused
+    (`INVALID_RULE`), and an unreadable ARM-SPEC keeps every remembered arm with all entries refused; each is
+    journalled at the start (`invalid`). A registered arm whose row is bad with no last good row, or an unreadable
+    ARM-SPEC with a registered arm not remembered, raises: the engine refuses to start (fail loud), never closing a
+    position for a config defect. Without `state_dir` (health and the tools, which place no order) a bad row's arm is dropped."""
     ex = acc.exploration
     if not ex.enabled:
         return None
     invalid: dict[str, str] = {}
-    last = arm_snapshot.recall(snapshot) if snapshot is not None else None
+    last = arm_snapshot.recall(state_dir) if state_dir is not None else None
     readable = True
     try:
         specs, hash_refused = _hash_checked(load_arms(spec_path, check_hash=False, rejected=invalid))
@@ -426,15 +428,21 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH, spec_arms_path: Path =
             else:
                 specs[a.id] = a
     invalid.update({i: "discovered-arm row invalid (see the engine log)" for i in rejected if i not in invalid})
-    if snapshot is not None:
+    if state_dir is not None:
         if readable:
-            arm_snapshot.remember(snapshot, (a for a in specs.values() if a.id not in invalid))
+            arm_snapshot.remember(state_dir, (a for a in specs.values() if a.id not in invalid and
+                                              a.id not in hash_refused))
         for arm_id in ex.arms:
             if arm_id not in specs and last is not None and arm_id in last:
                 why = invalid.get(arm_id) or ("ARM-SPEC unreadable" if not readable else "row missing from the spec")
                 specs[arm_id] = arm_snapshot.refused(last[arm_id], why)
                 invalid[arm_id] = specs[arm_id].entry_refused
                 log.error("exploration arm %s on %s: %s", arm_id, acc.account_id, invalid[arm_id])
+        lost = sorted(i for i in ex.arms if i not in specs)
+        unnamed = any(re.fullmatch(r"row\d+", k) for k in invalid)        # a bad row with no id: any arm's
+        if bad := [i for i in lost if i in invalid or unnamed or not readable]:
+            raise ValueError(f"exploration arms {bad} on {acc.account_id} have a bad row and no last good row: "
+                             f"refusing to start (dropping them would close their positions as orphans)")
     arms, dropped = [], []
     for arm_id in sorted(ex.arms):
         reg = ex.arms[arm_id]
