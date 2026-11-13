@@ -18,6 +18,9 @@ timeframes:
 # not listed here is held as retired from the start (no entry, exits managed). 1d/1w go live only when the 7-day replay
 # keeps every existing arm's decisions identical AND a CONFIRM passer passes lot-fit. A 1d bar closes at 21:00 UTC
 # (the long history's roll); a 1w bar at Friday 21:00 UTC and is decided fresh at the weekly open, never on Friday.
+# BACKLOG 144 (ADR 0081): a 1d decision is sent at the first 15m close after 22:15 UTC and 15 min after the broker's
+# reopen, a 1w one an hour after the Sunday open; persisted in aux.db (a restart catches a missed week up, never sends
+# twice); a multi-day hold's swap is projected through the RiskGate (unknown swap: refused).
 # Warm-up: <long_history_dir>/bars/<symbol>_1d.parquet, else long/<symbol>_daily_long.parquet, read point in time;
 # a missing file, a gap to (or inside) the engine's window keeps the arm quiet (journal history_gap:<tf>).
 # long_history_dir is resolved under data_root unless absolute. Listing 1d or 1w in timeframes_live is refused by the

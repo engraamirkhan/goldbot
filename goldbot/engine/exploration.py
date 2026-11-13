@@ -903,20 +903,23 @@ def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tup
 
 
 def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
-            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None, late: bool = False) -> None:
+            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None, late: bool = False,
+            filter_close: pd.DatetimeIndex | None = None) -> None:
     """The arm's frozen rule (`arm_rules.screened`: its window, the common filters, its stop band) on the bars up to
     `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. One its stop band
     skips is journalled and recorded blocked with its propensity (`_skipped`). A rule that raises is journalled
     (`exploration_rule_error`) and the other arms go on. `late` (the minute pass decided without the last minute's
     broker bar): a rule reading tick volume (`arm_rules.reads_volume`) has its candidate on that bar blocked
-    BROKER_BAR_LATE the same way (prereg-2026-10-27-scalp-volume.md amendment (d))."""
+    BROKER_BAR_LATE the same way (prereg-2026-10-27-scalp-volume.md amendment (d)). `filter_close`: where the common
+    filters judge each bar (a 1d/1w arm's entry closes, `long_bars.step`; ADR 0081)."""
     from goldbot.research import arm_rules
     if arm.arm_id in ex.retired or ex.last_bar.get(arm.arm_id) == through:
         return
     ex.last_bar[arm.arm_id] = through
     try:
         ctx = arm_rules.RuleContext(bars=bars, b1=b1, blackout_lo=np.zeros(0, dtype=np.int64),
-                                    blackout_hi=np.zeros(0, dtype=np.int64), spec_ctx=spec_ctx)
+                                    blackout_hi=np.zeros(0, dtype=np.int64), spec_ctx=spec_ctx,
+                                    filter_close=filter_close)
         c, skipped = arm_rules.screened(arm.spec, ctx)
     except Exception as exc:
         log.warning("exploration arm %s rule failed (%s)", arm.arm_id, type(exc).__name__)
@@ -2272,14 +2275,16 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
             terms: dict[str, Any], headroom: float, volume_max: float | None = None) -> Intent | None:
     """The minimum-lot Intent of purpose `exploration` (lane L1's fence), in the rule's R: the stop is 1 "ATR" of
     `stop_usd`, the target its R multiple. No p is invented: 0.5, the gate skips only the edge rules for this purpose.
-    A growth arm's `volume_max` (`growth_lots`) lets the gate size it above the minimum lot. None when the gate's
-    Intent does not take it (fail closed)."""
+    A growth arm's `volume_max` (`growth_lots`) lets the gate size it above the minimum lot. A 1d/1w arm's swap is
+    every rollover of its whole hold (`long_bars.hold_end`; BACKLOG 144), unknown = NaN, which the gate refuses. None
+    when the gate's Intent does not take it (fail closed)."""
     from goldbot.engine import books
     from goldbot.risk import Intent
     try:
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
                       atr_usd=s.stop_usd, cost_atr=eng._cost_atr(s.stop_usd, now), multiplier=1.0, price=price,
-                      timeframe=arm.tf, family=arm.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, now),
+                      timeframe=arm.tf, family=arm.family,
+                      swap_usd_per_oz=eng._swap_usd_per_oz(side, now, long_bars.hold_end(arm.tf, now, s.hold_bars)),
                       commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
@@ -2393,7 +2398,7 @@ def trail(eng: Engine, close_ts: pd.Timestamp) -> None:
     +1 R (stop to entry + side x $0.23), chandelier 2.5 ATR_tf behind the best exit-side price armed at +1 R, effective
     from the next bar close"):
 
-    * each open BXR position whose arm's bar closes now: its stop is `arm_rules_clock_box.runner_stop_at` on the 1m
+    * each open BXR position whose arm's bar closes now (`long_bars.is_bar_close`): its stop is `arm_rules_clock_box.runner_stop_at` on the 1m
       bars through this close from its signal close, at its fill price and R: the history walk on the same bars
       (live == history). It goes out through the engine's own stop move (`Engine._tighten_stop`, the exit policies'
       path: `modify`, a close at market when the price is already through it) only once armed and only when tighter
@@ -2422,8 +2427,7 @@ def _trail_runners(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_t
     mine = []
     for pid, tr in eng.open.items():
         arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if is_exploration(tr.agent_id) else None
-        if arm is not None and _is_runner(arm) and pid not in eng._close_due \
-                and not int(close_ts.timestamp()) % tf_seconds(arm.tf):
+        if arm is not None and _is_runner(arm) and pid not in eng._close_due and is_bar_close(arm.tf, close_ts):
             mine.append((pid, tr, arm))
     if not mine or complete.empty:
         return
@@ -2483,7 +2487,7 @@ def score_twins(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_ts: 
         open_ = TWINS.select(conn, "account_id = ? AND closed = 0", (eng.cfg.account_id,))
     done = []
     for tw in open_:
-        if int(close_ts.timestamp()) % tf_seconds(tw.tf):
+        if not is_bar_close(tw.tf, close_ts):          # BACKLOG 144: a 1d/1w twin at its own close, never the epoch's
             continue
         w = K.twin_outcome(K.mid_path(complete, tw.signal_utc),
                            K.decision_closes(complete, tw.tf, tw.signal_utc, tw.hold_bars), tw.hold_bars,

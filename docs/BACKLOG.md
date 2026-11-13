@@ -97,7 +97,7 @@ rows.
 | 148 | EVAL-2 build lanes 0-5B | research build (ADR 0076, prereg-2026-11-09-eval2.md) | L | lanes 0-4 and 5A done (PR #344, #347, #348, #355, #356, #358; docs #345); open: Lane 5B engine consumers, one account at a time · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-24 (triage 2026-11-13) |
 | 145 | Enable N-3 HAR abstention: refill 2026 Duka holes, overlap check, K row | research ops (N-3, prereg-2026-11-07-n3-har.md) | S | checks built, N-3 stays off (R148, 2026-11-13): (1) Mac 2026 year has 0 gap days, local replay writes `ok` from 2026-07-02 (older 2024-25 holes -> 247); brain push + `har_check.py dry-run` owed; (2) `har_check.py overlap` owed on the brain (ICM minutes are brain-only); (3) K row NOT recommended: 6 low days in 92 replayed nights (6.5 %), 24/73 windows void, scope mostly retired; research director decides fix-or-drop · reviews: quant-reviewer, trading-safety-reviewer · due 2026-11-18 |
 | 146 | Session-split gold cost of record in the catalogue sim | Research (costs) | S | done (2026-11-13, R137, branch feat/gold-cost-session-split; quant-reviewed with conditions applied) · accountable: implementer · reviews: quant-reviewer |
-| 144 | 1d/1w engine go-live blockers (WS-4) | Engine · BUILD | M | ready (WS-4 shipped dark, PR #341) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-27 (triage 2026-11-13) |
+| 144 | 1d/1w engine go-live blockers (WS-4) | Engine · BUILD | M | in review (2026-11-13: blockers 1-3, 5 and 6 built dark, R149, ADR 0081; 4, 5 ratification and 7 split to 251-253) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-27 |
 | 152 | Exchange holidays from a published calendar, not missing data days | Research data · catalogue context | M | ready · accountable: data-engineer · reviews: quant-reviewer, code-reviewer · due 2026-11-24 (triage 2026-11-13) |
 | 90 | 20-day measured cost/model series for the adaptive limits | Risk (limits) · PROTECT | S | implemented 2026-11-13 (branch feat/cost-model-series, R150); awaits quant-reviewer sign-off of the definition and trading-safety-reviewer · replay follow-up BACKLOG 255 |
 | 187 | Drop the retired I0-<instrument> and ZCD registrations once flat | ops / config (follow-up of R133, profitability-2026-11-12, 2026-11-12) | S | ready once each account is flat in the retired arms · accountable: implementer · reviews: trading-safety-reviewer · due 2026-11-20 (triage 2026-11-13) |
@@ -132,10 +132,14 @@ rows.
 | 239 | Measure tick part counts and compaction cost on the brain, then enable ticks | data (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: data-engineer · reviews: sre · due 2026-11-20 |
 | 243 | Trade detail shows MFE and MAE | dashboard (follow-up of backlog 195 / R147) | S | proposed · accountable: performance-analyst · design: ui-ux-designer · reviews: code-reviewer |
 | 247 | Refill the 2024-2025 Dukascopy gold holes (15 weekdays) | data (raw/ on the Mac, then the brain inbox) | S | ready · accountable: data-engineer · needs network to Dukascopy (Mac outside the Claude sandbox) · due 2026-11-20 (found 2026-11-13, backlog 145) |
+| 251 | 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4) | Engine · BUILD | S | ready (split from 144, 2026-11-13) · accountable: implementer · reviews: sre, data-engineer · due 2026-11-27 |
 | 255 | Cost/model ratio in the adaptive-limits replay | Risk (limits) · PROTECT | S | open: after quant-reviewer signs off the R150 definition · accountable: implementer · reviews: quant-reviewer |
 | 240 | Quarantine move keeps each row's write time | data (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: data-engineer · reviews: code-reviewer |
+| 252 | Quant ratification of ADR 0081: the common filter at a 1d/1w entry close (BACKLOG 144 blocker 5) | Research · REVIEW | XS | ready (2026-11-13) · accountable: quant-reviewer · due 2026-11-20 |
 | 241 | Ticks and observe_ticks carry their own written_utc column | data (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: data-engineer · reviews: code-reviewer, quant-reviewer |
+| 253 | Lift the 1d/1w settings guard: CONFIRM pass and trading-safety sign-off (BACKLOG 144 blocker 7) | Engine · GATE | XS | blocked on 251, 252 and a CONFIRM passer · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
 | 242 | Health warns when compaction keeps deferring or leaves a spill directory | ops (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: sre · reviews: data-engineer |
+| 254 | 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081) | Research · BUILD | S | ready (2026-11-13) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1629,6 +1633,43 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **242. Health warns when compaction keeps deferring or leaves a spill directory.** Value: R146 time-boxes `journal_compact`: partitions it cannot reach are `deferred` to the next night, which is not a job failure, so a store whose backlog grows faster than one night drains would stay silent. A killed run can also leave `<data_root>/.compact_tmp` (DuckDB spill files) until the next run. Acceptance, tests first: health WARNs when `journal_compact` reported `deferred > 0` on 3 consecutive runs, or when `.compact_tmp` exists outside a running job and is older than 6 h; the check names the table and the deferred count.
 - **243. Trade detail shows MFE and MAE.** Value: backlog 195 reads the R135 excursions in the perf report, but the trades API (`TradeRow`) carries no MFE/MAE field, so the dashboard's trade detail cannot show how far a closed exploration trade went for and against it. Acceptance, tests first: `TradeRow` gains optional `mfe_r`, `mae_r` and `excursion_approx` (None on rows closed before R135 and on every non-exploration row), the API contract is regenerated (`scripts/export_openapi.py`, `npm --prefix web run gen:api`), and the trade detail's "Details" disclosure shows them, "not recorded" when None (never 0 R) and labelled approximate when `excursion_approx`.
 - **247. Refill the 2024-2025 Dukascopy gold holes (15 weekdays).** Value: `scripts/check_coverage.py` on the Mac copy finds 15 weekdays with 0 bars that every coverage report since data-v1 called complete (the month-level count hides them): 2024-01-10..12, 2024-06-07, 2024-07-01, 2024-07-16, 2025-02-26..28, 2025-03-26..28, 2025-05-12..14. They sit inside N-3's frozen HAR fit (2015-01..2025-10) and every research window that reads 2024-2025 (confirm 2018-25, ex-2025 reports), and they failed `har_days`' gap check on every 2026 night before 2026-07-02 (128 of 220 replayed weekdays). Acceptance: (1) on the Mac, outside the sandbox: `uv run python scripts/dukascopy_year.py 2025 --existing raw/xauusd_1m_dukascopy_2025.parquet --months 2025-02,2025-03,2025-05 --out raw/xauusd_1m_dukascopy_2025.parquet.new` (and 2024 with `--months 2024-01,2024-06,2024-07`), then the rename `local_bars.sh refresh` does; (2) `scripts/check_coverage.py` on both years reports 0 gap days, or the remaining days are listed as Dukascopy-side gaps (the archive itself is empty) in `raw/daycov-<year>.md`; (3) `scripts/local_bars.sh push` lands both files in the brain inbox (sha256 match); (4) the day-level check runs in `local_bars.sh refresh` for every year it rebuilds (it already does: `daycov-<year>.md`), and a month whose day check fails is never `kept`.
+- **251. 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4).** Value: a live
+  1d/1w arm warms up from `<data_root>/<engine.long_history_dir>/bars/<symbol>_1d.parquet`; nothing on the brain keeps
+  that file current, so a day after the last manual copy the history no longer reaches the engine's window and the arm
+  is held back (`history_gap:<tf>`) for good. Acceptance: (1) a scheduled daily job appends the engine store's complete
+  days to the file on the 21:00 UTC roll (`long_bars.daily_from_1m`, point in time, atomic write), with a test that a
+  stale file is extended and an up-to-date one left untouched; (2) a preflight item that fails when a live 1d/1w
+  timeframe's history does not reach the engine window (`long_bars.joined` is not GAP), skipped while 1d/1w are dark;
+  (3) a health check that warns (NOTIFY_ON_WARN) when an arm's `history_gap:<tf>` has lasted more than a day; each with
+  a test that fails without it; then the blocker leaves `GO_LIVE_BLOCKERS_1D_1W`.
+- **252. Quant ratification of ADR 0081 (BACKLOG 144 blocker 5).** Value: the rules' standing common filter dropped
+  every 1d/1w candidate at its 21:00 UTC close; ADR 0081 judges it at the candidate's entry close
+  (`RuleContext.filter_ts`, `long_bars.entry_after`). It changes research semantics, so it needs the quant's ruling
+  before the guard can lift. Acceptance: the quant-reviewer accepts or amends ADR 0081 in writing (its status line),
+  and any 1d/1w CONFIRM run used for go-live judges the filter the same way (BACKLOG 254); then the blocker leaves
+  `GO_LIVE_BLOCKERS_1D_1W`.
+- **253. Lift the 1d/1w settings guard (BACKLOG 144 blocker 7).** Value: the last step before a qualified 1d/1w arm
+  may run on demo. Acceptance: a 1d/1w arm with a CONFIRM pass and a passing lot fit; the settings diff that lists
+  1d/1w in `engine.timeframes_live` and empties `GO_LIVE_BLOCKERS_1D_1W` signed off by the trading-safety-reviewer in
+  the same change; `tests/test_engine_replay_identity.py` still byte-identical for the existing arms.
+- **254. 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081).**
+  Value: two gaps between the engine and a history run of a 1d/1w arm remain. (a) The engine judges the common filter
+  at the entry (`RuleContext.filter_close = long_bars.entry_after(...)`); any research path that replays 1d/1w arms
+  through `arm_rules` (shadow replay, run_arm_backtest, CONFIRM) must pass the same. (b) The live hold runs from the
+  send close (up to 2.5 h after the 1d decision close, up to a day for a 1w catch-up), history's from the decision
+  close; a cut-following rule whose hold is capped at the week's end (DOND) is therefore refused `weekend_hold` live
+  (fail closed, `tests/test_exploration_engine.py`). Acceptance: every research caller passes `filter_close` for
+  1d/1w bars; the time exit of a 1d/1w position counts from its decision close (order id, `_week_due`, the barrier and
+  `crosses_friday` alike) with trading-safety review; a live == history test on a 1d and a 1w arm.
+  Trading-safety notes (review of 6c90577c): when the hold origin or `weekend_hold` changes, re-check the calendar-time
+  hold counting (`hold_bars` x the timeframe on the calendar, weekends included, in `crosses_friday`, the record and the
+  swap projection). As built, a 1w arm is always refused `weekend_hold` (its hold reaches the Friday cut) unless the
+  account has `demo_weekend_flat`.
+  Quant amendment (ADR 0081 point 5): research fills at the next bar's open (`research/catalogue/sim.py`,
+  `data/daily.py`): 1d ~21:00 UTC in winter (the reopen in summer) vs live 23:30 (22:30); 1w Friday 21-22 UTC holding
+  the weekend gap vs live Monday 00:15 (Sunday 23:15); Friday 1d trades exist in research, never live. Acceptance adds:
+  the CONFIRM of record re-fills at the first 1m open at or after the live entry close, Friday 1d dropped; no 1d/1w arm
+  may qualify until that CONFIRM exists.
 - **255. Cost/model ratio in the adaptive-limits replay.** Value: `scripts/replay_limits.py` (goldbot/ops/limits_replay.py) still passes `cost_ratio_20d = None`, so a replay validates every ADR 0031 rule except the cost rule the nightly job now feeds (R150). Acceptance: with `--data-root`, the replay reads each day's store `exit_fills` and 15m bars and calls `goldbot.ops.cost_ratio.cost_ratio_20d` exactly as the job does (no parameter of the definition passed in); the header says when it cannot (no data root: None); a test shows a replay day with a 1.3 ratio gives the floors. Only after quant-reviewer has signed off the definition, since ADR 0031 fixes inputs before any replay.
 
 ## Needs the owner

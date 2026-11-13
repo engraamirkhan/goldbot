@@ -174,9 +174,11 @@ def required_bars(spec: StrategySpec) -> int:
     return need
 
 
-def spec_masks(spec: StrategySpec, prov: PrimitiveProvider) -> tuple[BoolArr, SideArr]:
+def spec_masks(spec: StrategySpec, prov: PrimitiveProvider,
+               filter_close: pd.DatetimeIndex | None = None) -> tuple[BoolArr, SideArr]:
     """(entry mask, side per bar +1 / -1) of `spec` on the provider's bars of its timeframe: entry predicate, filter and
-    session window through the provider's leaves, the side rule, and the common filters every arm carries. Point in time."""
+    session window through the provider's leaves, the side rule, and the common filters every arm carries, judged at
+    `filter_close` when given (a 1d/1w bar's entry close, ADR 0081), else at each bar's close. Point in time."""
     tf = spec.timeframe
     mask = prov.predicate_mask(spec.entry, tf) & prov.session_mask(spec.session_window, tf)
     if spec.filter is not None:
@@ -189,7 +191,7 @@ def spec_masks(spec: StrategySpec, prov: PrimitiveProvider) -> tuple[BoolArr, Si
         side = prov.side_of(spec.side_primitive, tf)
         if spec.side_rule == "against":
             side = (-side).astype(np.int8)
-    close = utc_index(prov.bars(tf)["visible_at"])
+    close = utc_index(prov.bars(tf)["visible_at"]) if filter_close is None else filter_close
     mask = mask & (side != 0) & R.common_filter_ok(close, NO, NO)
     return mask, side
 
@@ -201,7 +203,7 @@ def spec_candidates(arm: Arm, ctx: R.RuleContext) -> pd.DataFrame:
     spec = spec_of(arm)
     tf = spec.timeframe
     prov = LiveProvider(ctx.bars, ctx.b1, tf)
-    mask, side = spec_masks(spec, prov)
+    mask, side = spec_masks(spec, prov, ctx.filter_close)
     ex = barrier_exit(spec.exit, MAX_BARS[tf])
     assert ex.target_atr is not None
     a = atr(prov.mid_bars(tf), ATR_BARS).to_numpy(dtype=float)

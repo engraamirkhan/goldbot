@@ -34,6 +34,9 @@ class RuleContext:
     # point-in-time tables a `specialist` arm's family reads, as research.pipeline.prepare's `ctx` (e.g. the engine's
     # carried smc replica state, ctx["smc_replica_state"]); None: none (research builds from the series start)
     spec_ctx: dict[str, Any] | None = None
+    # the instants the common filters judge each bar's candidate at (ADR 0081: a 1d/1w candidate at its entry close,
+    # `long_bars.entry_after`, as the engine sends it after the reopen); None: at the bar's close, every other timeframe
+    filter_close: pd.DatetimeIndex | None = None
 
     @property
     def mid(self) -> pd.DataFrame:
@@ -42,6 +45,11 @@ class RuleContext:
     @property
     def close_ts(self) -> pd.DatetimeIndex:
         return utc_index(self.bars["visible_at"])
+
+    @property
+    def filter_ts(self) -> pd.DatetimeIndex:
+        """Where `common_filter_ok` judges each bar: `filter_close`, else the bar's close."""
+        return self.close_ts if self.filter_close is None else self.filter_close
 
 
 def empty() -> pd.DataFrame:
@@ -137,7 +145,7 @@ def random_bracket(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     mins = close.minute.to_numpy()
     days = p.get("weekdays", [0, 1, 2, 3, 4])
     ok = np.isin(mins, p.get("minutes", [0])) & arm_window(close, p) & np.isin(close.dayofweek.to_numpy(), days)
-    ok &= common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
+    ok &= common_filter_ok(ctx.filter_ts, ctx.blackout_lo, ctx.blackout_hi)
     idx = np.flatnonzero(ok)
     if len(idx) == 0:
         return empty()
@@ -166,8 +174,8 @@ def _screen(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[np.ndarray
     """Per candidate: inside the arm's decision window and the common filters, and the stop band's verdict (None
     inside it, else STOP_LT_FLOOR / STOP_GT_CAP)."""
     p = arm.params
-    close = ctx.close_ts[cands["idx"].to_numpy()]
-    ok = arm_window(close, p) & common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
+    at = cands["idx"].to_numpy()
+    ok = arm_window(ctx.close_ts[at], p) & common_filter_ok(ctx.filter_ts[at], ctx.blackout_lo, ctx.blackout_hi)
     risk = cands["risk_usd"].to_numpy(dtype=float)
     band = np.full(len(cands), None, dtype=object)
     if "max_stop_usd" in p:

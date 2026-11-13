@@ -2841,17 +2841,17 @@ class Engine:
                 self._cost_cache = (mtime, None)   # a bad file must not stop trading decisions; fall back
         return self._cost_cache[1]
 
-    def _swap_usd_per_oz(self, side: int, now: pd.Timestamp) -> float:
-        """BACKLOG 36: the paid swap per oz (USD) an entry at `now` would be charged at a broker rollover before the risk
-        day ends (00:00 UTC), for the RiskGate's daily projection: ADR 0017's rule (`paid_swap_per_oz`, the triple day
-        counted, a credit never) at the cost table's measured rates, else `swap_prior`, on this engine's server clock.
-        A rollover after the risk day ends lands on the next day's loss so far. Entries only."""
+    def _swap_usd_per_oz(self, side: int, now: pd.Timestamp, until: pd.Timestamp | None = None) -> float:
+        """BACKLOG 36: the paid swap per oz (USD) of every broker rollover from `now` to the risk day's end (00:00 UTC),
+        or to `until` when later (a 1d/1w arm's whole hold, long_bars.hold_swap), for the RiskGate: ADR 0017's rule
+        (`paid_swap_per_oz`, triple day counted, a credit never) at measured rates, else `swap_prior`; NaN unknown."""
         swap = account_swap(self._cost_table(), self.cfg.swap_prior.model_copy(update={"server_tz": self.cfg.server_tz})) \
             if self.book is self.primary else books.swap_spec(self)   # another book: instruments.db, None = unknown
         if swap is None or not (math.isfinite(swap.long_usd_per_lot) and math.isfinite(swap.short_usd_per_lot)):
             return math.nan        # defence in depth (SwapSpec is finite-only): the gate refuses invalid:swap_usd_per_oz
         now = pd.Timestamp(now).tz_convert("UTC")
-        return paid_swap_per_oz(swap, side, now, now.normalize() + pd.Timedelta(days=1))
+        end = now.normalize() + pd.Timedelta(days=1)
+        return paid_swap_per_oz(swap, side, now, end if until is None else max(end, until))
 
     def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
         """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.

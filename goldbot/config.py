@@ -987,14 +987,11 @@ class ShadowSettings(_Section):
 
 
 INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
+# BACKLOG 144: blockers 1-3, 5 (built, ADR 0081) and 6 are closed (engine/long_bars.py); these stay open
 GO_LIVE_BLOCKERS_1D_1W = (
-    "1d entries sent after 22:15 UTC once the broker has reopened, bracket from the send price (EET and EEST tests)",
-    "the 1w decision moved out of the first 15-60 minutes after the Sunday open",
-    "the 1w missed-week catch-up, persisted",
     "a daily long-history refresh, a preflight check that it reaches the engine window, an alert on a history_gap "
     "older than a day",
-    "the rules' common filter at the 21:00 UTC close (quant decision)",
-    "_trail_runners and score_twins on is_bar_close",
+    "the quant ratification of ADR 0081 (the rules' common filter judged at a 1d/1w entry close)",
     "a CONFIRM pass and trading-safety sign-off on the settings diff",
 )
 

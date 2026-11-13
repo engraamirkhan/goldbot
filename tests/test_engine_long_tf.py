@@ -30,14 +30,18 @@ from goldbot.research.arms import Arm as SpecArm
 TUE_21 = pd.Timestamp("2025-02-11 21:00", tz="UTC")
 FRI_21 = pd.Timestamp("2025-02-14 21:00", tz="UTC")
 SUN_OPEN_CLOSE = pd.Timestamp("2025-02-16 23:15", tz="UTC")     # the first 15m close after the synthetic 23:02 open
+# BACKLOG 144 (ADR 0081): the entry closes in EET: 1d at the first close 15 min after the 23:02 UTC reopen, 1w an hour
+# after the Sunday open (tests/test_engine_long_golive.py pins them, EET and EEST)
+TUE_SEND = pd.Timestamp("2025-02-11 23:30", tz="UTC")
+WEEK_SEND = pd.Timestamp("2025-02-17 00:15", tz="UTC")
 HOLD = {"stop_usd": 10.0, "target_r": 2.0, "hold_bars": 2}
 
 
 # ------------------------------------------------------------------------------------------------ fixtures
 @pytest.fixture(scope="module")
 def b1() -> pd.DataFrame:
-    """Six weeks of synthetic minutes (the engine's window), through Sunday 2025-02-16's open."""
-    return ticks_to_1m(synthetic_ticks("2025-01-06", "2025-02-17", ticks_per_minute=1, seed=3)).reset_index(drop=True)
+    """Six weeks of synthetic minutes (the engine's window), through Monday 2025-02-17."""
+    return ticks_to_1m(synthetic_ticks("2025-01-06", "2025-02-18", ticks_per_minute=1, seed=3)).reset_index(drop=True)
 
 
 def _history_frame(first: str, last_close: pd.Timestamp, seed: int = 1) -> pd.DataFrame:
@@ -72,14 +76,17 @@ def _arm(arm_id: str, tf: str) -> SpecArm:
 
 def _engine(b1: pd.DataFrame, arms: list[SpecArm], close: pd.Timestamp, hist: Path,
             live: tuple[str, ...] = ("1d", "1w")) -> SimpleNamespace:
-    """What `exploration.step` reads at a close (as tests/test_exploration_live_parity.py), with the 1d/1w settings."""
+    """What `exploration.step` reads at a close (as tests/test_exploration_live_parity.py), with the 1d/1w settings, the
+    engine's session table and the aux ledger next to the history (the decisions persist across engines of a test)."""
+    from goldbot.data.calendar import DEFAULT_SESSIONS
     xa = {a.id: exploration.Arm(spec=a, style="swing", control_share=0.1) for a in arms}
     ex = SimpleNamespace(arms=xa, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
-                         needs_context=frozenset(), held_back={}, netting=None, long=None)
+                         needs_context=frozenset(), held_back={}, netting=None, long=None,
+                         db=exploration.ledger_db(str(hist.parent / f"{hist.name}-state")))
     cfg = SimpleNamespace(live_clock=False, account_id="t", release_symbol="XAUUSD", decision_tf="15m",
                           timeframes_live=(*INTRADAY_LIVE, *live), long_history_dir=str(hist))
     return SimpleNamespace(exploration=ex, cfg=cfg, bars_1m=b1[b1["visible_at"] <= close].reset_index(drop=True),
-                           decisions=[])
+                           decisions=[], sessions=DEFAULT_SESSIONS)
 
 
 @pytest.fixture()
@@ -163,8 +170,10 @@ def test_settings_refuse_1d_or_1w_live_naming_the_open_go_live_blockers(tf: str)
         EngineSettings(timeframes_live=[*INTRADAY_LIVE, tf])  # type: ignore[list-item]
     msg = str(err.value)
     assert "go-live blockers" in msg and "engine-1d-1w-golive" in msg
-    for blocker in ("22:15 UTC", "Sunday open", "catch-up", "preflight", "common filter", "is_bar_close", "CONFIRM"):
+    for blocker in ("preflight", "ADR 0081", "CONFIRM"):                # BACKLOG 144: the blockers still open
         assert blocker in msg, blocker
+    for closed in ("22:15 UTC", "Sunday open", "catch-up", "is_bar_close"):
+        assert closed not in msg, closed
 
 
 def test_every_spec_1d_arm_is_retired_or_blocked_so_the_21_utc_roll_moves_no_running_arm() -> None:
@@ -192,10 +201,11 @@ def test_a_dark_arm_is_held_retired_from_the_start_and_journalled(tmp_path, monk
 
 
 # ------------------------------------------------------------------------------------------------ 1d decisions
-def test_1d_decides_at_the_21_utc_close_on_the_warm_up_and_the_engines_bars(b1, hist_dir, seen) -> None:
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, hist_dir)
-    [p] = _step(eng, TUE_21)
-    assert p.arm_id == "D1" and p.bar_ts == TUE_21 and p.stop_usd == 10.0
+def test_1d_decides_on_the_21_utc_close_at_its_entry_close_on_the_warm_up_and_the_engines_bars(b1, hist_dir,
+                                                                                             seen) -> None:
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, hist_dir)
+    [p] = _step(eng, TUE_SEND)
+    assert p.arm_id == "D1" and p.bar_ts == TUE_SEND and p.decision_utc == TUE_21 and p.stop_usd == 10.0
     [r] = seen
     assert r["n"] >= long_bars.MIN_ROWS["1d"] and r["last"] == TUE_21
     vis = pd.DatetimeIndex(r["bars"]["visible_at"])
@@ -217,8 +227,8 @@ def test_a_friday_21_decision_is_refused_weekend_and_never_queued(b1, hist_dir, 
 
 
 def test_the_engines_window_bars_win_over_the_history_where_both_have_a_day(b1, hist_dir, seen) -> None:
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, hist_dir)
-    _step(eng, TUE_21)
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, hist_dir)
+    _step(eng, TUE_SEND)
     bars = seen[0]["bars"].set_index("visible_at")
     day = pd.Timestamp("2025-01-14 21:00", tz="UTC")                   # inside the window: built from its minutes
     m = b1[(b1["ts_utc"] >= day - pd.Timedelta(days=1)) & (b1["ts_utc"] < day)]
@@ -226,15 +236,17 @@ def test_the_engines_window_bars_win_over_the_history_where_both_have_a_day(b1, 
 
 
 # ------------------------------------------------------------------------------------------------ 1w decisions
-def test_1w_is_not_decided_on_friday_but_fresh_at_the_first_close_after_the_weekly_open(b1, hist_dir, seen) -> None:
+def test_1w_is_not_decided_on_friday_but_fresh_an_hour_after_the_weekly_open(b1, hist_dir, seen) -> None:
     eng = _engine(b1, [_arm("W1", "1w")], FRI_21, hist_dir)
     assert _step(eng, FRI_21) == [] and seen == []
     eng = _engine(b1, [_arm("W1", "1w")], SUN_OPEN_CLOSE, hist_dir)
-    [p] = _step(eng, SUN_OPEN_CLOSE)
-    assert p.arm_id == "W1" and p.bar_ts == SUN_OPEN_CLOSE          # the send-time decision, not Friday's close
+    assert _step(eng, SUN_OPEN_CLOSE) == [] and seen == []          # BACKLOG 144: not inside the opening hour
+    eng = _engine(b1, [_arm("W1", "1w")], WEEK_SEND, hist_dir)
+    [p] = _step(eng, WEEK_SEND)
+    assert p.arm_id == "W1" and p.bar_ts == WEEK_SEND and p.decision_utc == FRI_21   # the send-time decision
     [r] = seen
     assert r["n"] >= long_bars.MIN_ROWS["1w"] and r["last"] == FRI_21
-    later = SUN_OPEN_CLOSE + pd.Timedelta(minutes=15)
+    later = WEEK_SEND + pd.Timedelta(minutes=15)
     eng = _engine(b1, [_arm("W1", "1w")], later, hist_dir)
     assert _step(eng, later) == []                                   # once a week: only the first close after the open
 
@@ -267,9 +279,9 @@ def test_the_warm_up_is_point_in_time_on_available_utc(tmp_path) -> None:
 
 
 def test_a_missing_history_file_keeps_the_book_quiet_and_journals_history_gap_once(b1, tmp_path, seen) -> None:
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, tmp_path / "nowhere")
-    assert _step(eng, TUE_21) == [] and seen == []
-    nxt = TUE_21 + pd.Timedelta(days=1)
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, tmp_path / "nowhere")
+    assert _step(eng, TUE_SEND) == [] and seen == []
+    nxt = TUE_SEND + pd.Timedelta(minutes=15)                         # held, retried at the next close
     eng.bars_1m = b1[b1["visible_at"] <= nxt].reset_index(drop=True)
     assert _step(eng, nxt) == []
     [row] = _actions(eng, "history_gap")
@@ -280,8 +292,8 @@ def test_a_history_that_does_not_reach_the_engines_window_is_a_gap(b1, tmp_path,
     (tmp_path / "bars").mkdir()
     _history_frame("2023-01-02", pd.Timestamp("2024-11-29 21:00", tz="UTC")).to_parquet(
         tmp_path / "bars" / "xauusd_1d.parquet")
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, tmp_path)
-    assert _step(eng, TUE_21) == [] and seen == []
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, tmp_path)
+    assert _step(eng, TUE_SEND) == [] and seen == []
     [row] = _actions(eng, "history_gap")
     assert row["reason"] == long_bars.GAP
 
@@ -290,8 +302,8 @@ def test_a_history_too_short_for_the_warm_up_is_a_gap(b1, tmp_path, seen) -> Non
     (tmp_path / "bars").mkdir()
     _history_frame("2024-11-04", pd.Timestamp("2025-01-10 21:00", tz="UTC")).to_parquet(
         tmp_path / "bars" / "xauusd_1d.parquet")
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, tmp_path)
-    assert _step(eng, TUE_21) == [] and seen == []
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, tmp_path)
+    assert _step(eng, TUE_SEND) == [] and seen == []
     [row] = _actions(eng, "history_gap")
     assert row["reason"] == long_bars.SHORT
 
@@ -299,8 +311,8 @@ def test_a_history_too_short_for_the_warm_up_is_a_gap(b1, tmp_path, seen) -> Non
 def test_an_unreadable_history_file_is_a_gap_never_a_crash(b1, tmp_path, seen) -> None:
     (tmp_path / "bars").mkdir()
     (tmp_path / "bars" / "xauusd_1d.parquet").write_bytes(b"not parquet")
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, tmp_path)
-    assert _step(eng, TUE_21) == []
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, tmp_path)
+    assert _step(eng, TUE_SEND) == []
     [row] = _actions(eng, "history_gap")
     assert row["reason"].startswith("error:")
 
@@ -310,8 +322,8 @@ def test_a_window_missing_a_weekday_inside_it_is_a_gap(b1, hist_dir, seen) -> No
     day = pd.Timestamp("2025-02-05 21:00", tz="UTC")                   # Wednesday's bar: its minutes removed
     holed = b1[(b1["ts_utc"] < day - pd.Timedelta(days=1)) | (b1["ts_utc"] >= day)].reset_index(drop=True)
     assert long_bars.joined(long_bars.read_history(hist_dir, "XAUUSD"), holed, TUE_21) == long_bars.GAP  # type: ignore[arg-type]
-    eng = _engine(holed, [_arm("D1", "1d")], TUE_21, hist_dir)
-    assert _step(eng, TUE_21) == [] and seen == []
+    eng = _engine(holed, [_arm("D1", "1d")], TUE_SEND, hist_dir)
+    assert _step(eng, TUE_SEND) == [] and seen == []
     [row] = _actions(eng, "history_gap")
     assert row["reason"] == long_bars.GAP
 
@@ -322,9 +334,9 @@ def test_a_long_timeframe_arm_that_needs_a_replica_state_is_held_back_never_run_
     (`exploration_context.replica_bars` > 0) is held back and journalled, never decided without it."""
     from goldbot.engine import exploration_context
     monkeypatch.setattr(exploration_context, "replica_bars", lambda arm: 40 if arm.id == "D1" else 0)
-    eng = _engine(b1, [_arm("D1", "1d"), _arm("D2", "1d")], TUE_21, hist_dir)
+    eng = _engine(b1, [_arm("D1", "1d"), _arm("D2", "1d")], TUE_SEND, hist_dir)
     eng.exploration.needs_context = frozenset({"D1"})
-    [p] = _step(eng, TUE_21)
+    [p] = _step(eng, TUE_SEND)
     assert p.arm_id == "D2" and [r["arm"] for r in seen] == ["D2"]
     [row] = _actions(eng, "history_gap")
     assert (row["arm"], row["reason"]) == ("D1", long_bars.NEEDS_REPLICA)
@@ -407,15 +419,17 @@ def test_the_weekend_rollover_and_stale_code_is_byte_unchanged() -> None:
     assert got == WEEKEND_CODE
 
 
-def test_the_standing_common_filter_drops_a_1d_candidate_at_the_21_utc_close(b1, hist_dir, monkeypatch) -> None:
-    """Pinned for the go-live decision (WS-4 report): the rules' standing common filter (rollover 20:45-22:15 UTC,
-    Friday from 19:00 UTC; byte-unchanged) judges a candidate at its bar's close, so every ARM-SPEC rule's 1d candidate
-    at 21:00 UTC and 1w candidate (Friday 21:00 close) is dropped before the engine sees it."""
+def test_the_standing_common_filter_no_longer_drops_a_1d_candidate_at_its_entry_close(b1, hist_dir,
+                                                                                     monkeypatch) -> None:
+    """Pinned before go-live (WS-4 report): the rules' standing common filter (byte-unchanged) judged a 1d/1w
+    candidate at its bar's close (21:00 UTC), so every one was dropped. BACKLOG 144 blocker 5 (ADR 0081): it judges
+    it at its entry close, after the rollover and the reopen (tests/test_engine_long_golive.py)."""
     def gen(arm: SpecArm, ctx: arm_rules.RuleContext) -> pd.DataFrame:
         return pd.DataFrame({"idx": [len(ctx.bars) - 1], "side": [1], "risk_usd": [10.0], "target_r": [2.0],
                              "max_bars": [1]})
     monkeypatch.setitem(arm_rules.RULE_FUNCS, "random_bracket", gen)
-    eng = _engine(b1, [_arm("D1", "1d")], TUE_21, hist_dir)
-    assert _step(eng, TUE_21) == []
-    eng = _engine(b1, [_arm("W1", "1w")], SUN_OPEN_CLOSE, hist_dir)
-    assert _step(eng, SUN_OPEN_CLOSE) == []
+    monkeypatch.setattr(exploration, "candidate", lambda *a, **k: None)
+    eng = _engine(b1, [_arm("D1", "1d")], TUE_SEND, hist_dir)
+    assert [p.arm_id for p in _step(eng, TUE_SEND)] == ["D1"]
+    eng = _engine(b1, [_arm("W1", "1w")], WEEK_SEND, hist_dir)
+    assert [p.arm_id for p in _step(eng, WEEK_SEND)] == ["W1"]
