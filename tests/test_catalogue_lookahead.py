@@ -168,10 +168,10 @@ def test_oco_both_legs_on_one_bar_is_a_full_loss() -> None:
     assert len(tr) == 1 and tr[0, SIM.TRADE_COLS.index("gross")] == pytest.approx(-1.0)
 
 
-def test_gold_cost_is_the_cost_of_record() -> None:
-    rt = SIM.round_trip("XAUUSD", 4000.0, 0.05)
-    assert rt == pytest.approx(0.166)
-    assert rt / 4000 * 1e4 == pytest.approx(0.415, abs=0.01)          # ~0.4 bp at $4,000
+def test_gold_cost_is_the_cost_of_record_of_the_fill_session() -> None:
+    rt = SIM.round_trip("XAUUSD", 4000.0, 0.05, t_ns=int(pd.Timestamp("2026-11-10 02:00", tz="UTC").value))
+    assert rt == pytest.approx(0.204)                                  # Asia (backlog 146)
+    assert rt / 4000 * 1e4 == pytest.approx(0.51, abs=0.01)           # ~0.5 bp at $4,000
     assert SIM.overshoot("XAUUSD", rt) == pytest.approx(0.11)
 
 

@@ -116,7 +116,8 @@ REQUIRED_HARNESS = {"goldbot/research/catalogue/stats.py", "goldbot/research/cat
                     "goldbot/research/catalogue/run.py", "goldbot/research/catalogue/specs.yaml",
                     "goldbot/research/catalogue/detectors_catalogue.py",
                     "goldbot/research/catalogue/detectors_patterns.py", "goldbot/research/catalogue/sim.py",
-                    "goldbot/research/catalogue/costs.py", "config/catalogue_costs.yaml", "scripts/eval2_selftest.py"}
+                    "goldbot/research/catalogue/costs.py", "config/catalogue_costs.yaml", "scripts/eval2_selftest.py",
+                    "config/cost_of_record.yaml"}    # backlog 146: gold round trip by session
 
 
 def test_the_harness_hash_covers_every_file_that_can_change_a_result() -> None:

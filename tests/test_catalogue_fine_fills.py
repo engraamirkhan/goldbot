@@ -4,7 +4,8 @@ bar is resolved from 1m bars wherever they exist; otherwise the unit is excluded
 measured stop overshoot of the cost of record, the same as stop exits." D5: a stop/limit entry filled inside a bar
 had its stop checked against the whole bar, including the part before the fill (B04: -0.49 R/trade on zero-edge data).
 
-Flat 1d gold bars: ATR20 1.5, round trip $0.166, risk floor max(0.375, 0.498) = 0.498."""
+Flat 1d gold bars (opening 21:00 UTC in January: New York's session on EST): ATR20 1.5, round trip the newyork
+cost of record cell $0.263 (backlog 146), risk floor max(0.375, 0.789) = 0.789."""
 from __future__ import annotations
 
 import numpy as np
@@ -15,7 +16,7 @@ from goldbot.research.catalogue import sim as SIM
 from goldbot.research.catalogue.core import EB, Ctx
 from goldbot.research.catalogue.costs import default_model, load_table
 from goldbot.research.catalogue.data import MIN, Bars
-from tests.test_catalogue_fill_rules import COL, OVER, RT, _bar
+from tests.test_catalogue_fill_rules import COL, OVER, _bar, rt
 from tests.test_catalogue_random_walk import flat_bars
 
 
@@ -68,7 +69,7 @@ def test_stop_entry_fills_pay_the_stop_overshoot() -> None:
     b, fine = _stop_entry_bars()
     r = _one(b, _stop_entry(), fine=fine)
     assert r[COL["swap_nights"]] == 1                                        # the bar spans one 17:00 NY rollover
-    assert r[COL["cost"]] == pytest.approx((RT + OVER + _swap(r)) / 1.5)
+    assert r[COL["cost"]] == pytest.approx((rt(r) + OVER + _swap(r)) / 1.5)
 
 
 def test_a_stop_entry_fills_at_the_minute_open_when_that_minute_gaps_past_the_price() -> None:
@@ -103,7 +104,7 @@ def test_a_limit_entry_random_side_twin_is_walked_from_the_fill_minute() -> None
     r = _one(b, eb, fine=fine)
     assert r[COL["gross"]] == pytest.approx(gross)
     assert r[COL["ctrl_gross"]] == pytest.approx(0.0)
-    assert r[COL["cost"]] == pytest.approx((RT + _swap(r)) / 1.5)          # a limit fill pays no overshoot
+    assert r[COL["cost"]] == pytest.approx((rt(r) + _swap(r)) / 1.5)          # a limit fill pays no overshoot
 
 
 # ------------------------------------------------------------------ C10: which cells get finer bars

@@ -474,7 +474,7 @@ def _slim(r: dict[str, Any]) -> dict[str, Any]:
     s = r["explore"]
     return {"n": s.get("n"), "n_trades": r.get("n_trades"), "n_events": r.get("n_events"),
             "n_risk_floor": r.get("n_risk_floor"), "excluded_no_1m": r.get("excluded_no_1m"), "gross": s.get("gross"),
-            "cost": s.get("cost"), "net": s.get("net"),
+            "cost": s.get("cost"), "net": s.get("net"), "net_icm_basis": s.get("net_icm_basis"),
             "excess": s.get("excess"), "t_excess": s.get("t_excess"), "t_book": s.get("book", {}).get("t"),
             "pass": r["pass"], "gates": r["gates"],
             "control": r["control"]}

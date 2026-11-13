@@ -81,7 +81,8 @@ HARNESS_FILES = (
     "goldbot/research/catalogue/data.py", "goldbot/research/catalogue/dispatcher.py",
     "goldbot/research/catalogue/stats.py", "goldbot/research/catalogue/lint.py", "goldbot/research/catalogue/run.py",
     "goldbot/research/catalogue/specs.yaml", "goldbot/research/catalogue/detectors_catalogue.py",
-    "goldbot/research/catalogue/detectors_patterns.py", "config/catalogue_costs.yaml", "scripts/eval2_selftest.py")
+    "goldbot/research/catalogue/detectors_patterns.py", "config/catalogue_costs.yaml", "config/cost_of_record.yaml",
+    "scripts/eval2_selftest.py")
 HARNESS_GLOBS = ("goldbot/research/eval2/*.py",)
 
 # S0 thresholds (method section 6; the cell floor as amended by A1, prereg section 9.3)
