@@ -5,6 +5,14 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-13 (branch feat/cost-model-series; R150; BACKLOG 90, 255): the nightly `limits_job` now passes ADR 0031's
+  20-day measured cost/model ratio (`goldbot/ops/cost_ratio.py`) instead of None, so the frozen cost rule can tighten
+  (above 1.25 the floors, 1.10-1.25 one step down). Measured per fill (demo and live): decision spread, entry slippage,
+  exit-leg slippage from store `exit_fills`, the record's own commission and paid swap; model: the dukascopy 15m bar
+  spread at entry plus the extra cost and swap the strategies were qualified under (settings priors, never the live
+  table). None below 20 measured fills or with more than 20% unmeasured (dq `cost_ratio_unmeasured`); the result row
+  carries `cost_ratio_20d`, `cost_fills`, `cost_unmeasured`, `cost_model`. Inert today (no account has adaptive limits on). Tighten only;
+  no limit, cap, sizing or order path loosened. Quant review round 1 fixed; needs quant re-review before merge.
 - 2026-11-13 (branch fix/engine-survives-bad-arm-row; BACKLOG 117; R136): a bad exploration arm row no longer stops
   the engine, and a config defect never closes a healthy position (trading-safety rework of f838b7d3). The engine
   remembers every cleanly loaded arm row (a hash mismatch aside) in aux.db `arm_spec_last_good` (migration 29,
@@ -72,6 +80,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   leaves those fields empty and the row is still written; older rows read None. Reading them in reports is backlog 195.
   No exit, cap, RiskGate rule or size changed.
 - **Feedback-loop health check (R140, 2026-11-13, branch feat/loop-health-check).** Health `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when the learner's bandit weights are older than 36 weekday hours, a daily or weekly review file is missing for its slot, weekly proposals stay unread 8 days, the latest trial-registry sync failed or registry rows wait more than 36 h in `state/registry_outbox/`, or a job's last run errored; unreadable state is an alerted "can't check" WARN. The daily `loop_check` job (07:05 UTC) comments on the `ci-loop` issue. Root cause of the registry 403: the brain token is read-only by decision (2026-11-01) and the Mac publish is manual; nothing alerted (incident docs/incidents/2026-11-13-registry-sync-silent.md). Expect `feedback_loop` to FAIL on the brain at deploy (outbox since 11-07, unread weekly proposals) until BACKLOG 215-217 land. RUNBOOK "Feedback loop".
+- 2026-11-13 (branch feat/mfe-mae-reports; R147, backlog 195): `perf-report` now reads the R135 excursions of closed
+  exploration and control trades in a new "Excursions (MFE / MAE)" section, per family and per arm: median MFE and MAE
+  in R with n, the losers' median MFE (R and USD/oz: the move the bracket gave back), the winners' median MAE (how near
+  the stop came), the time exits' share, and the stop exits' share of the initial-stop and target exits beside the
+  bracket's driftless random-walk null target / (stop + target). Quant review of a97be490: the null has no hold cap, so
+  it is printed only when half the trades or more ended at a barrier; a stop exit away from the initial stop (trailed,
+  break-even) is counted "moved stop" and left out of the bracket math. Rows closed before
+  2026-11-14 carry no fields and are counted "not recorded", never 0 R; `excursion_approx` rows have their own column.
+  Descriptive only: no interval, not in the groups note. The attribution exits report already reads MAE/MFE of the
+  closed-trade record (backlog 23) and exploration trades never enter that record by design, so it is unchanged; the
+  weekly review's exit read (stops after +N R) is unchanged. No API field carries MFE/MAE yet, so the dashboard trade
+  detail is backlog 243.
 - 2026-11-13, ML review cleanup (branch feat/ml-cleanup-snapshots; R143; BACKLOG 227-230; ADR 0080;
   `docs/research/ml-review-2026-11-13.md`). Four changes, none on the order path.
   - **Arm shares.** The nightly exploration learner now writes equal shares among each style's enterable arms; an arm
@@ -117,6 +137,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   session; no Claude crons, nothing pending on the owner. Limits: scheduler_jobs keeps current state only, so job
   failures are cumulative and failing/overdue are as of the review; the performance figures use opportunity days
   (monthly_report's convention) while the tie-out uses the UTC month.
+- 2026-11-13 (branch feat/n3-har-abstention; R148; BACKLOG 145, 247): N-3 enable checks, and N-3 stays off. New
+  `har_abstention.dry_run` (the row `har_days` would write, never written: a dry-run `ok` row would register N-3) and
+  `measure_overlap` (prereg §2: median ln(ICM/Duka) of daily TR, W, w; pass |ln w| <= 0.02 on >= 20 days), both
+  behind the read-only `scripts/har_check.py overlap|dry-run` for the brain. Data: the Mac's 2026 Duka year has 0 gap
+  days (refreshed 11-07); replaying the job on it over every 2026 weekday gives 92 `ok` nights from 2026-07-02 on and
+  fails the 128 before on 2025 holes (2025-02-26..28, 03-26..28, 05-12..14; with three 2024 holes, BACKLOG 247). On
+  those 92 nights the forecast marked 6 low days (6.5 %, not 20 %; none since 2026-09-29); 24 of 73 20-day windows
+  hold 0 low days and are void under the prereg. A calibration failure; those nights lie in the sealed holdout, so no fix
+  may be tuned on them (BACKLOG 145 note). With the in-scope learning arms mostly retired (A5) the read cannot
+  reach the GBP 10/week kill line: the data-engineer recommends not writing the K row and leaving `enabled: false`;
+  fix-or-drop (re-point at ML review improvement A) is the research director's call. Owed on the brain:
+  `scripts/local_bars.sh push`, then `scripts/har_check.py dry-run` and `overlap`.
 - 2026-11-13 (branch feat/news-orderflow-features; R139; plan item 8): two opt-in feature families for the
   feature-discovery screen, registered but in no default or live set (pipeline.OPT_IN_FEATURES; no trial run, K
   unchanged). `news_llm` (17 columns, goldbot/data/news_features.py + goldbot/features/news_llm.py): the collector's

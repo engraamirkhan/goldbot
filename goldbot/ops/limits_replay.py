@@ -9,7 +9,7 @@ log.
 
 What the record cannot give is taken on the strict side and said in the header: the drawdown and stage come from the
 closed trades' realised equity path (a lower bound: floating losses are not seen), the 20-day cost/model ratio is not
-measured (None, as in the nightly job), and the ATR15 inputs come from `--data-root` 15m bars when given (else None:
+measured here yet (None; the nightly job measures it, BACKLOG 255), and the ATR15 inputs come from `--data-root` 15m bars when given (else None:
 the minimum-lot cap stays off).
 
     python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 [--state state]

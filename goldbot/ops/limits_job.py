@@ -30,8 +30,10 @@ decision also sets each strategy's risk per trade (`Limits.strategy_risk`, its w
 steps the daily allowance down once when the 20-day median ATR15 reaches its 1-year p90 (the ATR regime is already in
 the evidence, `atr15_stats`). Bounds: demo [0.25%, the 1% per-trade hard limit], live the default (tighten only).
 
-Known gap (reported, not guessed): no 20-day measured cost/model series exists yet, so `cost_ratio_20d` is None and the
-cost rule cannot fire. The engine's own drawdown, stage and revert rules still tighten.
+BACKLOG 90: `cost_ratio_20d` is the account's 20-day measured cost over what the research labels charge for the same
+fills at the cost the strategies were qualified under (goldbot/ops/cost_ratio.py, its definition pre-registered there);
+None below its minimum of fills, with too many unmeasured fills (a dq alert), without the store's exit legs or when the
+series fails, when the cost rule triggers nothing. It only ever tightens (floors above 1.25, one step at 1.10-1.25).
 """
 from __future__ import annotations
 
@@ -70,6 +72,7 @@ if TYPE_CHECKING:
     from goldbot.labels.triple_barrier import SwapSpec
     from goldbot.ops.accounts import Account
     from goldbot.ops.cost_imputation import CostImputer
+    from goldbot.ops.cost_ratio import CostRatio
     from goldbot.ops.gates_phase import ClosedTrade
     from goldbot.ops.health import Check, HealthContext
     from goldbot.ops.jobs import JobContext
@@ -89,6 +92,7 @@ ATR_MIN_SPAN_DAYS = 358           # a year of 15m bars, a week's slack; less: no
 ATR_MAX_LAG_DAYS = 9
 NOTICE_ROLE = "limits"
 DQ_SOURCE = "adaptive_limits"
+LABEL_BARS_SOURCE = "dukascopy"   # the 15m bars the research labels are built on: the cost model's bar spread
 
 
 # ---------------------------------------------------------------------------------------------- bounds
@@ -397,14 +401,20 @@ DqSink = Callable[[str, str], None]
 def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account], *, state_dir: Path,
                    models: ModelRegistry, decision_day: date, now_ns: int, dq: DqSink,
                    bars_15m: Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame] | None = None,
-                   extra_cost_usd: float | None = None, swap: SwapSpec | None = None) -> dict[str, Any]:
+                   extra_cost_usd: float | None = None, swap: SwapSpec | None = None,
+                   exit_legs: Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame] | None = None,
+                   cost_bars_15m: Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame] | None = None) -> dict[str, Any]:
     """One account's evaluation for `decision_day`: evidence, `AdaptiveController.current`, the change rows, the FYI.
-    Returns the job's result row (the limits, the reasons in force, the problems that floored it)."""
+    Returns the job's result row (the limits, the reasons in force, the problems that floored it, the cost ratio).
+    `exit_legs(start, end)`: the account's store `exit_fills`; `cost_bars_15m(start, end)`: the labels' 15m bars
+    (dukascopy); without either the cost ratio is unknown (None)."""
     from goldbot.engine.shadow import ShadowBook
     from goldbot.execution.costs import settings_extra_cost_usd, settings_swap
     from goldbot.ops.cost_imputation import CostImputer
     from goldbot.ops.gates_phase import load_closed_trades
     state_dir = Path(state_dir)
+    extra = extra_cost_usd if extra_cost_usd is not None else settings_extra_cost_usd(settings)
+    swap = swap or settings_swap(settings)
     as_of = day_start_ns(decision_day)
     bounds = bounds_for(settings, acc, accounts)
     problems: list[str] = []
@@ -412,12 +422,11 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
     trades, err = load_closed_trades(state_dir)
     if err:
         problems.append("closed_trades_unreadable")
-    demo, bad = demo_evidence(trades, acc.account_id, CostImputer.from_state(state_dir, settings), freezes, as_of)
+    imputer = CostImputer.from_state(state_dir, settings)
+    demo, bad = demo_evidence(trades, acc.account_id, imputer, freezes, as_of)
     problems += bad
     try:
-        shadow = shadow_evidence(ShadowBook(state_dir), freezes, before_ns=as_of,
-                                 extra_cost_usd=extra_cost_usd if extra_cost_usd is not None
-                                 else settings_extra_cost_usd(settings), swap=swap or settings_swap(settings))
+        shadow = shadow_evidence(ShadowBook(state_dir), freezes, before_ns=as_of, extra_cost_usd=extra, swap=swap)
     except (OSError, ValueError) as exc:
         shadow = []
         problems.append(f"shadow_book_unreadable:{type(exc).__name__}")
@@ -426,17 +435,29 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
         problems.append(facts)
     atr15: tuple[float | None, float | None] = (None, None)
     vol: tuple[float | None, float | None] = (None, None)
+    end = pd.Timestamp(as_of, unit="ns", tz="UTC")
+    bars = pd.DataFrame()
     if bars_15m is not None:
-        end = pd.Timestamp(as_of, unit="ns", tz="UTC")
         try:
             bars = bars_15m(end - pd.Timedelta(days=ATR_P90_DAYS + 2), end)
             atr15, vol = atr15_stats(bars, as_of), atr15_daily_stats(bars, as_of)
         except Exception as exc:             # the store unreadable: the minimum-lot cap is off (fail closed)
             log.warning("limits_job: 15m bars unreadable (%s): ATR unknown", type(exc).__name__)
+    cost = _cost_ratio(settings, acc.account_id, decision_day, trades, imputer, state_dir=state_dir, end=end,
+                       exit_legs=exit_legs, cost_bars_15m=cost_bars_15m)
+    if cost.bars_stale:
+        dq("cost_bars_stale", f"{acc.account_id}: no dukascopy 15m bar within {ATR_MAX_LAG_DAYS} days of "
+                              f"{decision_day.isoformat()}: fills after it unmeasured")
+    if cost.reason is not None and cost.reason.startswith("error:"):
+        dq("cost_ratio_error", f"{acc.account_id}: cost ratio not measured ({cost.reason[6:]}): cost rule inert")
+    if cost.reason == "unmeasured_share":
+        dq("cost_ratio_unmeasured", f"{acc.account_id}: {cost.unmeasured} of {cost.unmeasured + cost.fills} fills "
+                                    f"since {cost.since.isoformat()} without a full cost measure: cost rule inert")
     ev: Evidence | None = None
     if not problems and not isinstance(facts, str):
         ev = build_evidence(acc.account_id, as_of, demo=demo, shadow=shadow, freezes=freezes,
-                            drawdown=facts.drawdown, stage=facts.stage, cost_ratio_20d=None, atr15=atr15, vol=vol)
+                            drawdown=facts.drawdown, stage=facts.stage, cost_ratio_20d=cost.ratio, atr15=atr15,
+                            vol=vol)
     if problems:
         dq("adaptive_limits_evidence_missing", f"{acc.account_id}: {', '.join(problems[:10])}")
     ctl = AdaptiveController(state_dir, bounds, dq=dq, clock=lambda: now_ns)
@@ -451,12 +472,45 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
                                               at=pd.Timestamp(now_ns, unit="ns", tz="UTC"),
                                               tz=settings.telegram.owner_tz))
     out: dict[str, Any] = {"day": decision_day.isoformat(), "limits": limits.model_dump(), "changes": len(new),
-                           "demo_trades": len(demo), "shadow_trades": len(shadow), "problems": problems[:10]}
+                           "demo_trades": len(demo), "shadow_trades": len(shadow), "problems": problems[:10],
+                           "cost_ratio_20d": cost.ratio, "cost_fills": cost.fills, "cost_unmeasured": cost.unmeasured,
+                           "cost_pending": cost.pending, "cost_model": cost.model}
     if bounds.dynamic:                       # ADR 0039: the why per strategy and the ATR regime
         st = _state(ctl, acc.account_id)
         out["risk_terms"] = {k: t.model_dump() for k, t in st.risk_terms.items()} if st is not None else {}
         out["vol_high"] = st.vol_high if st is not None else None
     return out
+
+
+def _usd_factor(state_dir: Path, account_id: str) -> float | None:
+    """Account currency per USD from the engine file (`account_view.usd_to_account`); None when unknown."""
+    from goldbot.ops.account_view import usd_to_account
+    try:
+        e = json.loads((Path(state_dir) / f"engine_{account_id}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return usd_to_account(e) if isinstance(e, dict) else None
+
+
+def _cost_ratio(settings: Settings, account_id: str, decision_day: date, trades: Sequence[ClosedTrade],
+                imputer: CostImputer, *, state_dir: Path, end: pd.Timestamp,
+                exit_legs: Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame] | None,
+                cost_bars_15m: Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame] | None) -> CostRatio:
+    """BACKLOG 90's series against the qualified cost (the settings priors, `cost_ratio.MODEL_SOURCE`), never the live
+    table. Any failure (unreadable legs or bars, a bad frame) gives None with a log: the cost rule is then inert."""
+    from goldbot.execution.costs import settings_extra_cost_usd, settings_swap
+    from goldbot.ops import cost_ratio as cr
+    since = cr.window_start(decision_day)
+    try:
+        start = pd.Timestamp(since, tz="UTC") - pd.Timedelta(days=1)
+        legs = exit_legs(start, end) if exit_legs is not None else pd.DataFrame()
+        bars = cost_bars_15m(start, end) if cost_bars_15m is not None else pd.DataFrame()
+        return cr.cost_ratio_20d(trades, account_id, decision_day, imputer=imputer, legs=legs, bars=bars,
+                                 model_extra_usd=settings_extra_cost_usd(settings), model_swap=settings_swap(settings),
+                                 acct_per_usd=_usd_factor(state_dir, account_id))
+    except Exception as exc:
+        log.warning("limits_job: cost ratio for %s not measured (%s): cost rule inert", account_id, type(exc).__name__)
+        return cr.CostRatio(ratio=None, since=since, reason=f"error:{type(exc).__name__}")
 
 
 def _state(ctl: AdaptiveController, account_id: str) -> AdaptiveState | None:
@@ -503,6 +557,12 @@ def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     day = decision_day_of(slot)
     if market_closed_day(day):
         return {"skipped": f"{day.isoformat()} is a weekend day: no decision (the 3-day counts and cooldown keep)"}
+    def legs_of(account_id: str) -> Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame]:
+        return lambda s, e: ctx.store.read("exit_fills", source=account_id, symbol=None, start=s, end=e)
+
+    def label_bars(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:     # the labels' own source (BACKLOG 90)
+        return ctx.store.read("bars_15m", source=LABEL_BARS_SOURCE, start=s, end=e)
+
     for acc in ctx.accounts:
         if not adaptive_enabled(ctx.settings, acc):
             continue
@@ -510,7 +570,8 @@ def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[acc.account_id] = decide_account(
                 ctx.settings, acc, ctx.accounts, state_dir=ctx.state_dir, models=ctx.models, decision_day=day,
                 now_ns=_ns(now), dq=dq, bars_15m=lambda s, e: _bars(ctx, "15m", s, e),
-                extra_cost_usd=live_extra_cost_usd(ctx), swap=live_swap(ctx))
+                extra_cost_usd=live_extra_cost_usd(ctx), swap=live_swap(ctx),
+                exit_legs=legs_of(acc.account_id), cost_bars_15m=label_bars)
         except Exception as exc:             # this account keeps yesterday's decision, which the engine floors
             log.exception("limits_job failed for %s", acc.account_id)
             out[acc.account_id] = {"error": type(exc).__name__}
