@@ -317,7 +317,7 @@ def test_m2_a_news_shock_inside_a_lifted_tier1_window_is_the_event(tmp_path, mon
     eng.store = SimpleNamespace(  # type: ignore[assignment]
         read=lambda *a, **k: pd.DataFrame({"ts_utc": [CLOSE], "tier": [1], "title": ["NFP"]}))
     monkeypatch.setattr(runner, "blackout_window", lambda *a, **k: {"title": "NFP", "ts_utc": CLOSE.isoformat()})
-    monkeypatch.setattr(runner, "shock_window", lambda *a, **k: {"title": "x", "received_utc": "y", "kind": "news_shock"})
+    monkeypatch.setattr(runner, "engine_shock", lambda cache, *a, **k: (cache, {"title": "x", "received_utc": "y", "kind": "news_shock"}))
     assert eng._blackout(CLOSE) == {"title": "x", "received_utc": "y", "kind": "news_shock"}
     eng.gate.limits = eng.gate.limits.model_copy(update={"blackout_entries": True})     # every other account
     eng._news = (None, pd.DataFrame())
