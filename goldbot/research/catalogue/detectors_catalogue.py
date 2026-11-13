@@ -173,17 +173,27 @@ def _bar_dates(b: Bars) -> np.ndarray:
 
 
 _EVER = np.iinfo(np.int64).min
+_NEVER = np.iinfo(np.int64).max
+Sched = dict[int, list[tuple[int, int]]]
 
 
-def _published_days(ctx: Ctx, name: str, days: np.ndarray) -> dict[int, int]:
-    """{day: first publication instant (ns)} of a scheduled set, `days` aligned with ctx.events[name]. A ctx without
-    `avail` for the set (a legacy or synthetic ctx) reads every date as known throughout (BACKLOG 152)."""
+def _published_days(ctx: Ctx, name: str, days: np.ndarray) -> Sched:
+    """{day: [(published, withdrawn) ns intervals]} of a scheduled set, `days` aligned with ctx.events[name]. A ctx
+    without `avail` / `until` for the set (a legacy or synthetic ctx) reads every date as known throughout and never
+    withdrawn (BACKLOG 152)."""
     av = ctx.avail.get(name)
     av = np.full(len(days), _EVER, np.int64) if av is None else np.asarray(av, np.int64)
-    out: dict[int, int] = {}
-    for d, t in zip(days.tolist(), av.tolist()):
-        out[int(d)] = min(int(t), out.get(int(d), int(t)))
+    un = ctx.until.get(name)
+    un = np.full(len(days), _NEVER, np.int64) if un is None else np.asarray(un, np.int64)
+    out: Sched = {}
+    for d, a, u in zip(days.tolist(), av.tolist(), un.tolist()):
+        out.setdefault(int(d), []).append((int(a), int(u)))
     return out
+
+
+def _on(s: Sched, day: int, t: int) -> bool:
+    """True when `day` is on the published schedule at instant t (published <= t < withdrawn)."""
+    return any(a <= t < u for a, u in s.get(day, ()))
 
 
 def s05_preholiday(b: Bars, p: dict, ctx: Ctx) -> Events:
@@ -201,10 +211,10 @@ def s05_preholiday(b: Bars, p: dict, ctx: Ctx) -> Events:
         # day j is T-2 when the next weekday is T-1 (a trading day) and the weekday after that is a holiday
         now = int(b.ta[j])
         t1 = _next_weekday(int(d[j]))
-        if hs.get(t1, now + 1) <= now:
+        if _on(hs, t1, now):
             continue
         h = _next_weekday(t1)
-        if hs.get(h, now + 1) > now or not np.isfinite(a[j]):
+        if not _on(hs, h, now) or not np.isfinite(a[j]):
             continue
         if p.get("trend") and not (b.c[j] > s200[j]):
             continue
@@ -233,7 +243,7 @@ def s06_macro_day(b: Bars, p: dict, ctx: Ctx) -> Events:
     eb = EB()
     for j in range(len(b) - 1):
         now = int(b.ta[j])
-        if ev_days.get(_next_weekday(int(d[j])), now + 1) <= now and np.isfinite(a[j]):
+        if _on(ev_days, _next_weekday(int(d[j])), now) and np.isfinite(a[j]):
             eb.add(j, 1, stop_d=2.0 * a[j], hold=1)
     return eb.build()
 
@@ -247,24 +257,26 @@ def s07_fomc_cycle(b: Bars, p: dict, ctx: Ctx) -> Events:
         return K.empty()
     d = _bar_dates(b)
     pub = _published_days(ctx, "fomc_statement", (np.asarray(ev) - 5 * HOUR) // DAY)
-    days = np.array(sorted(pub), dtype=np.int64)
-    days_av = np.array([pub[int(x)] for x in days], dtype=np.int64)
+    iv = [(day, a, u) for day, spans in pub.items() for a, u in spans]
+    days = np.array([x[0] for x in iv], dtype=np.int64)
+    days_av = np.array([x[1] for x in iv], dtype=np.int64)
+    days_un = np.array([x[2] for x in iv], dtype=np.int64)
     a = K.atr(b, 20)
     eb = EB()
     weeks = p["weeks"]
     last_z = -1
     for j in range(len(b)):
         now = int(b.ta[j])                     # a meeting date counts only once published (BACKLOG 152)
-        if pub.get(int(d[j]), now + 1) <= now:
+        if _on(pub, int(d[j]), now):
             last_z = j
         if not np.isfinite(a[j]):
             continue
-        if 0 in weeks and pub.get(_next_weekday(_next_weekday(int(d[j]))), now + 1) <= now:
+        if 0 in weeks and _on(pub, _next_weekday(_next_weekday(int(d[j]))), now):
             eb.add(j, 1, stop_d=2.5 * a[j], hold=5)
             continue
         if last_z < 0:
             continue
-        known = days[days_av <= now]
+        known = np.unique(days[(days_av <= now) & (now < days_un)])
         k = int(np.searchsorted(known, d[j], side="right"))
         nxt = int(known[k]) if k < len(known) else 10**9
         for wk in weeks:

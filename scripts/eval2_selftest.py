@@ -1552,7 +1552,8 @@ def truncate_ctx(ctx: Ctx, cut: int, *, scheduled_events: bool = True) -> Ctx:
     """The context known at instant `cut`: every (available_ns, values, ...) aux series (FRED rates, long histories)
     cut at availability <= `cut`; other aux entries (the cost model) as they are. `ctx.events` holds SCHEDULED instants
     (release calendars, FOMC dates, exchange holidays) that a desk knows ahead. A set with publication times in
-    `ctx.avail` (BACKLOG 152: build_ctx gives every set one) is cut at publication <= `cut` in both modes. A set
+    `ctx.avail` (BACKLOG 152: build_ctx gives every set one) is cut at publication <= `cut` in both modes, and its
+    `ctx.until` (cancellations) keeps only those published by `cut`. A set
     without them (a legacy or synthetic ctx): with `scheduled_events` kept whole; without it cut at the instant itself
     (the strict reading, which flags S05-S07: they read future scheduled dates by design)."""
     out = Ctx(window=ctx.window)
@@ -1561,6 +1562,9 @@ def truncate_ctx(ctx: Ctx, cut: int, *, scheduled_events: bool = True) -> Ctx:
         if k in ctx.avail:
             keep = np.asarray(ctx.avail[k]) <= cut
             out.events[k], out.avail[k] = a[keep], np.asarray(ctx.avail[k])[keep]
+            if k in ctx.until:             # a cancellation published after the cut is not known at it
+                u = np.asarray(ctx.until[k])[keep]
+                out.until[k] = np.where(u <= cut, u, np.iinfo(np.int64).max)
             continue
         if scheduled_events:
             out.events[k] = a

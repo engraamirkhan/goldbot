@@ -157,8 +157,12 @@ def add_holidays(ctx: Ctx, *, end_ns: int, data_from_ns: int | None = None) -> N
     window end. Never inferred from missing bars (a data gap is not a holiday)."""
     cal = load_calendar()
     lo = int(pd.Timestamp(cal.valid_from, tz="UTC").value)
+    hi = int(pd.Timestamp(cal.valid_through, tz="UTC").value) + 86_400 * 10**9      # end of valid_through
     if data_from_ns is not None and data_from_ns < lo:
         raise ValueError(f"exchange holiday calendar {cal.version} starts {cal.valid_from}: window reads earlier")
+    if end_ns > hi:
+        raise ValueError(f"exchange holiday calendar {cal.version} ends {cal.valid_through}: window reads later "
+                         "(extend it, BACKLOG 237)")
     for ex in HOLIDAY_EXCHANGES:
         days, av = exchange_holidays(ex, known_by_ns=end_ns - 1)
         ctx.events[f"holiday_{ex}"], ctx.avail[f"holiday_{ex}"] = days, av
@@ -169,7 +173,8 @@ def build_ctx(win: str, *, allow_test_old: bool = False) -> Ctx:
     w = window(win, allow_test_old=allow_test_old)
     ctx = Ctx(window=win)
     for name, types in EVENT_SETS.items():
-        ctx.events[name], ctx.avail[name] = us_events_avail(win, types, allow_test_old=allow_test_old)
+        ctx.events[name], ctx.avail[name], ctx.until[name] = us_events_avail(win, types,
+                                                                             allow_test_old=allow_test_old)
     add_holidays(ctx, end_ns=w.end, data_from_ns=w.data_from)
     for ccy, series in RATES.items():
         ctx.aux[f"rate_{ccy}"] = fred(series, win, allow_test_old=allow_test_old)

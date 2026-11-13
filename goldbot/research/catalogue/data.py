@@ -272,29 +272,47 @@ def fred(series: str, win: str, *, allow_test_old: bool = False) -> tuple[np.nda
 
 
 def us_events(win: str, types: tuple[str, ...], *, allow_test_old: bool = False) -> np.ndarray:
-    """Scheduled release instants (ns) of calendar-v1 event types, each known (available_utc) before it happens."""
-    return us_events_avail(win, types, allow_test_old=allow_test_old)[0]
+    """Release instants (ns) of calendar-v1 event types that were on the schedule at some time before they happened
+    (unique; point-in-time readers use `us_events_avail`)."""
+    return np.unique(us_events_avail(win, types, allow_test_old=allow_test_old)[0])
 
 
 def us_events_avail(win: str, types: tuple[str, ...], *, allow_test_old: bool = False
-                    ) -> tuple[np.ndarray, np.ndarray]:
-    """(release instants, first publication instant of each) in ns: the instants of `us_events` with the earliest
-    available_utc any calendar row gives that instant (BACKLOG 152: ctx carries it so detectors read a date only once
-    published, and S6 cuts on it)."""
+                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(release instants, publication instants, end instants) in ns, one entry per interval an instant was on the
+    schedule (BACKLOG 152, quant review): a scheduled row is valid from its available_utc until the event's next row
+    (a cancellation's available_utc; int64 max when none), so a cancelled release drops out once its cancellation is
+    published and a restored one comes back as a new interval. Rows are the calendar-v1 file plus the hand-checked
+    MANUAL_EVENTS / UNSCHEDULED_EVENTS of goldbot/data/us_calendar.py (a file built before a row was added still gets
+    it; the file's own row wins on (event_id, status, available_utc)). FOMC meetings from the Fed's calendar (source
+    `fed`) are known from 1 Dec of the prior year (FOMC_SCHEDULE_FLOOR, BACKLOG 235) instead of the 7-day rule."""
+    from goldbot.data import us_calendar as uc
     w = window(win, allow_test_old=allow_test_old)
     f = raw_dir() / "calendar" / "us_calendar.parquet"
     if not f.exists():
-        return np.zeros(0, np.int64), np.zeros(0, np.int64)
-    d = pd.read_parquet(f)
-    d = d[d["event_type"].isin(types)]
-    ev = epoch_ns(pd.to_datetime(d["event_utc"], utc=True))
-    av = epoch_ns(pd.to_datetime(d["available_utc"], utc=True))
-    ok = (ev < w.end) & (av <= ev)
-    ev, av = ev[ok], av[ok]
-    u, inv = np.unique(ev, return_inverse=True)
-    first = np.full(len(u), np.iinfo(np.int64).max, dtype=np.int64)
-    np.minimum.at(first, inv, av)
-    return u, first
+        return np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0, np.int64)
+    now = pd.Timestamp.now(tz="UTC")
+    d = pd.concat([pd.read_parquet(f), uc.manual_rows(now), uc.unscheduled_rows(now)], ignore_index=True)
+    d = d[d["event_type"].isin(types)].copy()
+    d["event_utc"] = pd.to_datetime(d["event_utc"], utc=True).dt.as_unit("ns")
+    d["available_utc"] = pd.to_datetime(d["available_utc"], utc=True).dt.as_unit("ns")
+    d = d.drop_duplicates(["event_id", "status"], keep="first")
+    fed = ((d["source"] == "fed") & (d["status"] == uc.SCHEDULED) & d["event_type"].isin(FOMC_SCHEDULED)).to_numpy()
+    if fed.any():
+        yr = pd.DatetimeIndex(d.loc[fed, "event_utc"]).tz_convert(uc.ET).year
+        floor = pd.DatetimeIndex([pd.Timestamp(y - 1, 12, 1, tz="UTC") for y in yr]).as_unit("ns")
+        d.loc[fed, "available_utc"] = np.minimum(d.loc[fed, "available_utc"].to_numpy(), floor.to_numpy())
+    d = d.sort_values(["event_id", "available_utc"], kind="stable").reset_index(drop=True)
+    ev = epoch_ns(d["event_utc"])
+    av = epoch_ns(d["available_utc"])
+    same_next = (d["event_id"].shift(-1) == d["event_id"]).to_numpy()
+    until = np.where(same_next, np.roll(av, -1), np.iinfo(np.int64).max)
+    ok = (d["status"] == uc.SCHEDULED).to_numpy() & (ev < w.end) & (av <= ev) & (av < until)
+    order = np.lexsort((av[ok], ev[ok]))
+    return ev[ok][order], av[ok][order], until[ok][order]
+
+
+FOMC_SCHEDULED = ("fomc_statement", "fomc_press_conference")   # on the Fed's published meeting calendar (not minutes)
 
 
 def asof_ns(t_query: np.ndarray, t_avail: np.ndarray, values: np.ndarray) -> np.ndarray:
