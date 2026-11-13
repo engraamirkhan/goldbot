@@ -1,6 +1,6 @@
-"""Order-flow proxy features (R139, plan item 8): tick-count imbalance, signed tick-count runs and spread dynamics from
-Dukascopy 1m bars, plus our own fill slippage; every value joins the decision bars through `asof_join` on the 1m
-bar's `visible_at` (or the fill's time), never on a later minute.
+"""Order-flow proxy features (R139, plan item 8): quote-update-weighted return scores, signed runs and spread dynamics
+from Dukascopy 1m bars; every value joins the decision bars through `asof_join` on the 1m bar's `visible_at`, never
+on a later minute. No fill column (quant review 2026-11-13: pooled across accounts, endogenous, a date marker).
 """
 from __future__ import annotations
 
@@ -40,14 +40,14 @@ def _bars(start: pd.Timestamp, n: int, tf: str = "1h") -> pd.DataFrame:
 def test_rising_minutes_give_positive_imbalance_falling_negative():
     up = of.orderflow_frame(_m1(600, step=0.08))
     down = of.orderflow_frame(_m1(600, step=-0.08))
-    assert up["of_imb_60m"].iloc[-1] > 0.3
-    assert down["of_imb_60m"].iloc[-1] < -0.3
+    assert up["of_vw_retz_60m"].iloc[-1] > 0.3
+    assert down["of_vw_retz_60m"].iloc[-1] < -0.3
     assert (up["available_utc"] == _m1(600)["visible_at"]).all()
 
 
 def test_imbalance_is_bounded():
     f = of.orderflow_frame(_m1(2000, seed=3))
-    for c in ("of_imb_15m", "of_imb_60m"):
+    for c in ("of_vw_retz_15m", "of_vw_retz_60m"):
         v = f[c].dropna()
         assert ((v >= -1) & (v <= 1)).all()
 
@@ -58,8 +58,8 @@ def test_signed_run_follows_the_current_run_of_same_direction_minutes():
     for c in ("open", "high", "low", "close"):
         df[f"bid_{c}"], df[f"ask_{c}"] = mid - 0.1, mid + 0.1
     f = of.orderflow_frame(df)
-    assert f["of_run"].iloc[-1] > 0
-    assert f["of_run"].iloc[-1] > f["of_run"].iloc[-10]
+    assert f["of_vw_run"].iloc[-1] > 0
+    assert f["of_vw_run"].iloc[-1] > f["of_vw_run"].iloc[-10]
 
 
 def test_spread_widening_shows_in_spread_dynamics():
@@ -75,7 +75,7 @@ def test_minutes_without_volume_are_missing_not_quiet():
     df = _m1(300, seed=6)
     df.loc[df.index[-20:], "tick_count"] = 0.0
     f = of.orderflow_frame(df)
-    assert np.isnan(f["of_imb_15m"].iloc[-1])
+    assert np.isnan(f["of_vw_retz_15m"].iloc[-1])
     assert np.isnan(f["of_tick_rate_15m"].iloc[-1])
 
 
@@ -85,19 +85,32 @@ def test_mid_schema_input_is_accepted():
                         "close": (df["bid_close"] + df["ask_close"]) / 2, "spread": df["spread_mean"],
                         "tick_count": df["tick_count"]})
     a, b = of.orderflow_frame(df), of.orderflow_frame(mid)
-    pd.testing.assert_series_equal(a["of_imb_60m"], b["of_imb_60m"])
+    pd.testing.assert_series_equal(a["of_vw_retz_60m"], b["of_vw_retz_60m"])
 
 
-def test_fill_slippage_is_adverse_positive_and_side_aware():
-    ts = pd.date_range(T0, periods=10, freq="1h")
-    fills = pd.DataFrame({"ts_utc": ts, "client_order_id": [f"c{i}" for i in range(10)],
-                          "side": [1, -1] * 5, "requested": 2000.0,
-                          "filled": [2000.2, 1999.8] * 5})                  # both sides filled 0.2 worse
-    s = of.fill_slippage_frame(fills)
-    assert s["of_fill_slip_bps_20"].iloc[-1] == pytest.approx(1.0)
-    assert (s["available_utc"] == ts).all()
-    fills["side"] = ["buy", "sell"] * 5
-    assert of.fill_slippage_frame(fills)["of_fill_slip_bps_20"].iloc[-1] == pytest.approx(1.0)
+def test_no_fill_column_and_fills_in_ctx_change_nothing():
+    """Quant review 2026-11-13: fill slippage pooled every account and symbol, is endogenous to our own trading and
+    is NaN before October 2026 (a date marker), so it is not a column."""
+    assert not any("fill" in c or "slip" in c for c in of_feat.COLUMNS)
+    assert not hasattr(of, "fill_slippage_frame")
+    name, feats, signed = _enable()
+    try:
+        m1, bars = _m1(180, seed=11), _bars(T0, 3)
+        fills = pd.DataFrame({"ts_utc": [T0], "side": [1], "requested": [2000.0], "filled": [2000.5]})
+        a = registry.build_features(bars, [name], ctx={"bars_1m": m1})
+        b = registry.build_features(bars, [name], ctx={"bars_1m": m1, "fills": fills})
+        pd.testing.assert_frame_equal(a, b)
+    finally:
+        _restore(feats, signed)
+
+
+def test_names_say_what_the_columns_are_and_the_screen_note_sets_the_bar():
+    """Dukascopy's tick_count is the bid side's quote updates, not signed trades: the columns are quote-update-weighted
+    return scores, and a survivor must beat the plain return and momentum features."""
+    assert {"of_vw_retz_15m", "of_vw_retz_60m", "of_vw_run"} <= set(of_feat.COLUMNS)
+    assert not any(c.startswith("of_imb") or c == "of_run" for c in of_feat.COLUMNS)
+    note = of_feat.SCREEN_NOTE
+    assert "quote updates" in note and "momentum" in note and "return" in note
 
 
 def _enable():
@@ -127,7 +140,7 @@ def test_feature_is_truncation_invariant_a_later_minute_changes_no_earlier_bar()
         b = registry.build_features(bars, [name], ctx={"bars_1m": shock})
         early = bars["visible_at"] <= cut
         pd.testing.assert_frame_equal(a[early], b[early])
-        assert b.loc[~early, "of_imb_60m"].notna().any()
+        assert b.loc[~early, "of_vw_retz_60m"].notna().any()
     finally:
         _restore(feats, signed)
 
@@ -139,7 +152,7 @@ def test_the_bar_sees_its_own_last_minute_but_no_later_one():
         bars = _bars(T0, 3)
         x = registry.build_features(bars, [name], ctx={"bars_1m": m1})
         f = of.orderflow_frame(m1).set_index("available_utc")
-        assert x["of_imb_60m"].iloc[1] == pytest.approx(f.loc[bars["visible_at"].iloc[1], "of_imb_60m"])
+        assert x["of_vw_retz_60m"].iloc[1] == pytest.approx(f.loc[bars["visible_at"].iloc[1], "of_vw_retz_60m"])
     finally:
         _restore(feats, signed)
 
@@ -150,8 +163,8 @@ def test_a_1m_data_gap_reads_nan_not_the_stale_value():
         m1 = _m1(120, seed=10)
         bars = _bars(T0, 6)
         x = registry.build_features(bars, [name], ctx={"bars_1m": m1})
-        assert x["of_imb_60m"].iloc[1] == x["of_imb_60m"].iloc[1]
-        assert x[list(of_feat.BAR_COLUMNS)].iloc[2:].isna().all().all()
+        assert x["of_vw_retz_60m"].iloc[1] == x["of_vw_retz_60m"].iloc[1]
+        assert x[list(of_feat.COLUMNS)].iloc[2:].isna().all().all()
     finally:
         _restore(feats, signed)
 
@@ -182,7 +195,7 @@ def test_research_frame_passes_the_pipelines_lookahead_check():
         out = lookahead_check(bars, None, feature_names=[name], ctx=ctx)
         assert out["lookahead_columns"] == [] and out["columns_checked"] == len(of_feat.COLUMNS)
         _, full = build_decision_frame(bars, None, [name], ctx)
-        assert full["of_imb_60m"].notna().mean() > 0.8
+        assert full["of_vw_retz_60m"].notna().mean() > 0.8
     finally:
         _restore(feats, signed)
 

@@ -1,7 +1,8 @@
 """LLM news features (R139, plan item 8): point-in-time columns from the headline collector's own forward history.
 
 The contract under test: a headline reaches a bar only through `asof_join` on `available_utc` = the collector's
-`received_utc` (+ the scoring lag), never on the publication time; a headline the collector first saw long after it
+write time (`written_utc`; for rows from before that stamp, the next poll's `received_utc`, which the sequential
+collector loop proves came after the write), never the publication time; a headline the collector first saw long after it
 was published (a backfill: the first poll of a feed, a press-release archive) never counts; a collector outage reads
 NaN, not "no news".
 """
@@ -15,12 +16,15 @@ from goldbot.data import news_features as nf
 from goldbot.features import news_llm, registry
 
 T0 = pd.Timestamp("2026-11-02 00:00", tz="UTC")
+WRITE = pd.Timedelta(minutes=2)             # the poll's write, after scoring
 
 
 def _row(i: int, received: pd.Timestamp, *, published: pd.Timestamp | None = None, title: str = "Fed holds rates",
          relevance: float = 0.8, rates: str = "dovish", risk: str = "risk_off", dollar: str = "negative",
-         surprise: str = "none", shock: bool = False, source: str = "rss") -> dict:
+         surprise: str = "none", shock: bool = False, source: str = "rss",
+         written: pd.Timestamp | None = None) -> dict:
     return {"item_id": f"id{i}", "ts_utc": published if published is not None else received, "received_utc": received,
+            "written_utc": written if written is not None else received + WRITE,
             "source": source, "title": title, "summary": "", "link": f"https://x/{i}", "scored": not np.isnan(relevance),
             "relevance": relevance, "rates": rates if not np.isnan(relevance) else "",
             "risk": risk if not np.isnan(relevance) else "", "dollar": dollar if not np.isnan(relevance) else "",
@@ -31,6 +35,7 @@ def _news(rows: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
     df["received_utc"] = pd.to_datetime(df["received_utc"], utc=True)
+    df["written_utc"] = pd.to_datetime(df["written_utc"], utc=True)
     return df
 
 
@@ -81,11 +86,25 @@ def test_event_types_from_the_llm_fields_and_the_headline_text():
     assert h.loc["id5", "evt_usd"]
 
 
-def test_available_utc_is_the_received_time_plus_the_scoring_lag_never_the_publication_time():
+def test_available_utc_is_the_write_time_never_the_publication_time():
     pub = T0 + pd.Timedelta(minutes=10)
     rec = T0 + pd.Timedelta(minutes=40)
-    h = nf.headline_features(_news([_row(1, rec, published=pub)]))
-    assert h["available_utc"].iloc[0] == rec + nf.SCORE_LAG
+    h = nf.headline_features(_news([_row(1, rec, published=pub, written=rec + pd.Timedelta(minutes=7))]))
+    assert h["available_utc"].iloc[0] == rec + pd.Timedelta(minutes=7)
+
+
+def test_rows_without_a_write_stamp_are_available_at_the_next_poll_and_the_last_poll_waits():
+    """Legacy rows (collected before `written_utc`): the next poll's receive stamp bounds the write (sequential loop)."""
+    rows = [_row(1, T0), _row(2, T0), _row(3, T0 + pd.Timedelta(minutes=5)), _row(4, T0 + pd.Timedelta(minutes=10))]
+    df = _news(rows).drop(columns=["written_utc"])
+    h = nf.headline_features(df).set_index("item_id")["available_utc"]
+    assert h["id1"] == h["id2"] == T0 + pd.Timedelta(minutes=5)
+    assert h["id3"] == T0 + pd.Timedelta(minutes=10)
+    assert "id4" not in h.index                                   # no later poll yet: its write time is unproven
+    mixed = _news(rows)
+    mixed.loc[0, "written_utc"] = pd.NaT
+    m = nf.headline_features(mixed).set_index("item_id")["available_utc"]
+    assert m["id1"] == T0 + pd.Timedelta(minutes=5) and m["id2"] == T0 + WRITE
 
 
 def test_backfilled_headlines_never_count():
@@ -127,7 +146,29 @@ def test_unscored_share_counts_prefiltered_items_the_budget_left_unscored():
     rows = _background(days=2) + [_row(1, T0 + pd.Timedelta(hours=3), title="Gold rallies", relevance=np.nan),
                                   _row(2, T0 + pd.Timedelta(hours=3), title="Gold dips")]
     g = nf.news_grid(_news(rows)).set_index("available_utc")
-    assert g.loc[T0 + pd.Timedelta(hours=4), "news_unscored_share_24h"] == pytest.approx(0.5)
+    at = T0 + pd.Timedelta(hours=4)
+    assert g.loc[at, "news_unscored_share_24h"] == pytest.approx(0.5)
+    # half the prefiltered headlines unscored (> MAX_UNSCORED): the budget cut-off would bias the counts, so NaN
+    for c in ("news_count_1h", "news_count_4h", "news_count_24h", "news_sent_24h", "news_evt_fed_4h"):
+        assert np.isnan(g.loc[at, c]), c
+    assert g.loc[T0 + pd.Timedelta(hours=2), "news_count_4h"] == 0      # before the unscored item: a known quiet
+
+
+def test_outage_is_masked_before_the_z_scores():
+    """An outage's stamps never enter the z-score's trailing mean and std."""
+    rows = _background(days=20)
+    rng = np.random.default_rng(5)
+    hits = [_row(i, T0 + pd.Timedelta(minutes=int(m))) for i, m in enumerate(sorted(rng.integers(0, 20 * 1440, 600)))]
+    gap = (T0 + pd.Timedelta(days=9), T0 + pd.Timedelta(days=11))
+    keep = [r for r in rows + hits if not (gap[0] < r["received_utc"] <= gap[1])]
+    g = nf.news_grid(_news(keep))
+    down = g["news_count_4h"].isna()
+    assert down.any()
+    assert g.loc[down, "news_sent_z_4h"].isna().all()
+    s = g["news_sent_4h"]
+    n_look, n_min = int(nf.Z_LOOKBACK / nf.GRID), int(nf.Z_MIN / nf.GRID)
+    r = s.rolling(n_look, min_periods=n_min)
+    pd.testing.assert_series_equal(g["news_sent_z_4h"], (s - r.mean()) / r.std(), check_names=False)
 
 
 def test_sentiment_z_needs_its_warm_up():
@@ -196,6 +237,11 @@ def test_opt_in_and_not_in_the_default_set():
     assert len(news_llm.COLUMNS) <= 39
 
 
+def test_news_is_collect_only_until_twelve_months_of_forward_data():
+    assert news_llm.COLLECT_ONLY_MONTHS == 12
+    assert "collect-only" in (news_llm.__doc__ or "") and "collect-only" in news_llm.SCREEN_NOTE
+
+
 def test_shuffled_control_keeps_each_headline_within_its_utc_day():
     rows = _background(days=3)
     ctl = nf.shuffled_control(_news(rows), seed=7)
@@ -234,7 +280,7 @@ def test_research_pass_adds_news_only_when_given_and_stamps_availability():
         assert mod.feature_ctx(None, None) == (None, None)
         ctx, names = mod.feature_ctx(None, None, news=_news(_background(days=1)))
         assert ctx is not None and names == [*research_feature_names(ctx), news_llm.NAME]
-        assert (ctx["news"]["available_utc"] == ctx["news"]["received_utc"] + nf.SCORE_LAG).all()
+        assert (ctx["news"]["available_utc"] == ctx["news"]["written_utc"]).all()
     finally:
         _restore(feats, signed)
 

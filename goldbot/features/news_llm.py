@@ -5,8 +5,10 @@ the per-headline fields and the 15-minute availability grid; each bar reads the 
 `available_utc` at the bar's close (`visible_at`, the bar's start when absent), with a tolerance of one grid step, so a
 bar past the grid reads NaN rather than an old value. Columns: news_features.COLUMNS (17).
 
-Forward-only: the collector started in October 2026, so every research bar before it reads NaN; these columns are
-screen candidates on the forward window only, never in a live model until a discovery trial passes them (max 40
+This family is collect-only (quant review 2026-11-13): forward-only data, since the collector started in October
+2026 and every research bar before it reads NaN. With ~4 usable weeks the screen cannot meet its gates (1,500
+candidates, 3 positive years), so no trial reads these columns until COLLECT_ONLY_MONTHS (12) of forward data exist
+(BACKLOG 211); until then they are registered so the frame and its tests exist, and never in a live model (max 40
 features per live model). Opt-in like positioning: not imported by goldbot.features, listed in
 pipeline.OPT_IN_FEATURES, so the default feature set and its version (what the live engine builds) are unchanged.
 """
@@ -21,7 +23,10 @@ from goldbot.features.registry import FEATURES, FeatureCtx, feature
 
 NAME = "news_llm"
 FAMILY = "news"
-VERSION = "1"
+VERSION = "2"                    # 2: write-time availability, budget and outage masks before the z-scores
+COLLECT_ONLY_MONTHS = 12
+SCREEN_NOTE = ("collect-only: no discovery trial reads news_llm until 12 months of the collector's forward history "
+               "exist (gates: 1,500 candidates, 3 positive years); never a live model input before a trial passes it")
 # gold-signed (positive = supportive for gold): directional for a meta-label model
 SIGNED = {"news_sent_(1h|4h|24h)": 0.0, "news_sent_z_(1h|4h|24h)": 0.0, "news_surprise_4h": 0.0}
 

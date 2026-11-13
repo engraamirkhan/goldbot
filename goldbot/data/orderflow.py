@@ -1,14 +1,16 @@
-"""Order-flow proxies from 1m bars and our own fills (R139, plan item 8; 4-ai-systems.md s.5 rank 4).
+"""Order-flow proxies from 1m bars (R139, plan item 8; 4-ai-systems.md s.5 rank 4).
 
-We have no L2 and no trade signs: Dukascopy gives 1m bid/ask OHLC and a tick volume (the bid side's, stored as
-`tick_count`; scripts/dukascopy_year.py drops the ask side's). So the imbalance is the bulk-volume classification of
-Easley, Lopez de Prado and O'Hara (2012): each minute's tick count is split into buy and sell shares by
-Phi(dp / sigma), dp the minute's mid close-to-close change and sigma the rolling std of dp over the last SIGMA_N minutes.
+We have no L2 and no trade signs: Dukascopy gives 1m bid/ask OHLC and a tick volume that counts the bid side's quote
+updates (stored as `tick_count`; scripts/dukascopy_year.py drops the ask side's), not signed trades. So the "imbalance"
+of the bulk-volume classification (Easley, Lopez de Prado and O'Hara 2012: each minute's count split by Phi(dp / sigma),
+dp the minute's mid close-to-close change, sigma its rolling std over SIGMA_N minutes) is here a quote-update-weighted
+return score, named `of_vw_retz_*` for what it is (quant review 2026-11-13). It is a close cousin of plain returns and
+momentum, so a survivor must beat those features in the same screen (SCREEN_NOTE in goldbot/features/orderflow.py).
 
 Per 1m bar, every value is known at that bar's `visible_at` (its close; a corrected minute's later stamp is kept), so
 `available_utc` = `visible_at`; windows are time-based and end at the bar, (t - w, t]:
-* `of_imb_15m`, `of_imb_60m`: sum(tick_count x (2 Phi - 1)) / sum(tick_count), in [-1, 1];
-* `of_run`: the signed tick count of the current run of same-direction minutes (a flat minute or a gap > RUN_GAP ends
+* `of_vw_retz_15m`, `of_vw_retz_60m`: sum(tick_count x (2 Phi - 1)) / sum(tick_count), in [-1, 1];
+* `of_vw_run`: the signed tick count of the current run of same-direction minutes (a flat minute or a gap > RUN_GAP ends
   it) over the last 60 minutes' tick count;
 * `of_spread_rel_15m`: mean spread over 15 min / mean spread over the trailing day;
 * `of_spread_chg_60m`: mean spread over the last 15 min / over the 45 min before, minus 1;
@@ -17,9 +19,9 @@ Per 1m bar, every value is known at that bar's `visible_at` (its close; a correc
 A minute with tick_count <= 0 (the `warning:no_volume` minutes of the early archive) is missing, never quiet: it
 carries no weight and a window with no volume reads NaN.
 
-Fills (`fill_slippage_frame`): side-signed slippage in basis points (positive = adverse) per fill of the store's
-`fills` table, its rolling mean over the last 20 fills (at least 5), available at the fill's own stamp. MFE/MAE are
-not built: the `fills` table carries no excursion fields on main (lane F records them on exploration closes only).
+No fill columns: fill slippage pooled every account and symbol, is endogenous to our own trading, needed a 7-day stale
+tolerance and is NaN before October 2026, so it would act as a date marker (quant review 2026-11-13). MFE/MAE wait for
+excursion fields in `fills` (BACKLOG 214).
 """
 from __future__ import annotations
 
@@ -30,10 +32,8 @@ from scipy.special import ndtr
 SIGMA_N = 60
 RUN_GAP = pd.Timedelta(minutes=5)
 DAY = "1D"
-COLUMNS: tuple[str, ...] = ("of_imb_15m", "of_imb_60m", "of_run", "of_spread_rel_15m", "of_spread_chg_60m",
+COLUMNS: tuple[str, ...] = ("of_vw_retz_15m", "of_vw_retz_60m", "of_vw_run", "of_spread_rel_15m", "of_spread_chg_60m",
                             "of_spread_max_rel_60m", "of_tick_rate_15m")
-FILL_COLUMNS: tuple[str, ...] = ("of_fill_slip_bps_20",)
-FILL_N, FILL_MIN = 20, 5
 
 
 def _mid_frame(bars: pd.DataFrame) -> pd.DataFrame:
@@ -66,7 +66,7 @@ def orderflow_frame(bars_1m: pd.DataFrame) -> pd.DataFrame:
     signed = tc * (2.0 * ndtr(z) - 1.0)
     out = pd.DataFrame(index=f.index)
     sums = {w: tc.rolling(w).sum() for w in ("15min", "60min", DAY)}
-    for w, col in (("15min", "of_imb_15m"), ("60min", "of_imb_60m")):
+    for w, col in (("15min", "of_vw_retz_15m"), ("60min", "of_vw_retz_60m")):
         out[col] = signed.rolling(w).sum() / sums[w].where(sums[w] > 0)
     # runs of same-direction minutes: a new run at every sign change, flat minute or time gap
     direction = np.sign(dp.fillna(0.0))
@@ -74,7 +74,7 @@ def orderflow_frame(bars_1m: pd.DataFrame) -> pd.DataFrame:
     new_run = (direction != direction.shift()) | (direction == 0) | gap
     run_id = new_run.cumsum()
     run_tc = tc.groupby(run_id).cumsum() * direction
-    out["of_run"] = run_tc / sums["60min"].where(sums["60min"] > 0)
+    out["of_vw_run"] = run_tc / sums["60min"].where(sums["60min"] > 0)
     sp = f["spread"]
     day_mean = sp.rolling(DAY).mean()
     s15, n15 = sp.rolling("15min").sum(), sp.rolling("15min").count()
@@ -91,32 +91,10 @@ def orderflow_frame(bars_1m: pd.DataFrame) -> pd.DataFrame:
         out["of_tick_rate_15m"] = np.log(rate15 / rate_day.where(rate_day > 0))
     # a window whose minutes all lack volume: the volume-derived columns are unknown, not zero
     no_vol15 = vol_min["15min"] == 0
-    out.loc[no_vol15, ["of_imb_15m", "of_tick_rate_15m"]] = np.nan
-    out.loc[sums["60min"] <= 0, ["of_imb_60m", "of_run"]] = np.nan
+    out.loc[no_vol15, ["of_vw_retz_15m", "of_tick_rate_15m"]] = np.nan
+    out.loc[sums["60min"] <= 0, ["of_vw_retz_60m", "of_vw_run"]] = np.nan
     out.insert(0, "available_utc", f["available_utc"].to_numpy())
     return out.reset_index(drop=True)[["available_utc", *COLUMNS]]
-
-
-def _side_sign(side: pd.Series) -> pd.Series:
-    num = pd.to_numeric(side, errors="coerce")
-    txt = side.astype(str).str.lower().map({"buy": 1.0, "long": 1.0, "sell": -1.0, "short": -1.0})
-    return np.sign(num).where(num.notna(), txt)
-
-
-def fill_slippage_frame(fills: pd.DataFrame) -> pd.DataFrame:
-    """DataFrame(available_utc, of_fill_slip_bps_20): the mean side-signed slippage (bps, positive = adverse) of the
-    last FILL_N fills (at least FILL_MIN), at each fill's stamp."""
-    if fills is None or len(fills) == 0 or not {"requested", "filled", "side"} <= set(fills.columns):
-        return pd.DataFrame(columns=["available_utc", *FILL_COLUMNS])
-    f = fills.copy()
-    f["ts_utc"] = pd.to_datetime(f["ts_utc"], utc=True)
-    f = f.sort_values("ts_utc", kind="mergesort")
-    req = pd.to_numeric(f["requested"], errors="coerce")
-    slip = _side_sign(f["side"]) * (pd.to_numeric(f["filled"], errors="coerce") - req) / req.where(req > 0) * 1e4
-    f = f.assign(_slip=slip.to_numpy()).dropna(subset=["_slip"])
-    roll = f["_slip"].rolling(FILL_N, min_periods=FILL_MIN).mean()
-    out = pd.DataFrame({"available_utc": f["ts_utc"].to_numpy(), "of_fill_slip_bps_20": roll.to_numpy()})
-    return out.drop_duplicates("available_utc", keep="last").reset_index(drop=True)
 
 
 def ctx_frame(bars_1m: pd.DataFrame) -> pd.DataFrame:

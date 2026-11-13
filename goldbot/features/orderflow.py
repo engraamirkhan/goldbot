@@ -1,10 +1,13 @@
-"""Order-flow proxy features (opt-in, R139): tick-count imbalance, signed runs, spread dynamics and our fill slippage.
+"""Order-flow proxy features (opt-in, R139): quote-update-weighted return scores, signed runs, spread dynamics.
 
-Inputs: ctx["bars_1m"] (the store's 1m bars: Dukascopy for research; a 1m decision frame is used itself when absent)
-and ctx["fills"] (the store's `fills` table, optional). goldbot/data/orderflow.py computes the values per minute and
-per fill; each bar reads them through `store.asof_join` on `available_utc` at the bar's close (`visible_at`, the bar's
-start when absent). Tolerances: one 1m value older than BAR_TOLERANCE (a data gap) reads NaN, a fill older than
-FILL_TOLERANCE too. MFE/MAE are not built (no excursion fields in `fills`; see the data module).
+Input: ctx["bars_1m"] (the store's 1m bars: Dukascopy for research; a 1m decision frame is used itself when absent).
+goldbot/data/orderflow.py computes the values per minute; each bar reads them through `store.asof_join` on
+`available_utc` at the bar's close (`visible_at`, the bar's start when absent). A 1m value older than BAR_TOLERANCE
+(a data gap) reads NaN. No fill columns and no MFE/MAE (see the data module; BACKLOG 214).
+
+Dukascopy's tick_count counts the bid side's quote updates, not signed trades, so `of_vw_retz_*` and `of_vw_run` are
+quote-update-weighted return scores, not order-flow imbalance (quant review 2026-11-13). SCREEN_NOTE is the bar a
+survivor of the discovery screen must clear.
 
 Opt-in (pipeline.OPT_IN_FEATURES): the default feature set and its version are unchanged; candidates for the discovery
 screen only, never a live model's input until a trial passes them (max 40 features per live model). At 15m the H-14
@@ -15,18 +18,18 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from goldbot.data.orderflow import COLUMNS as BAR_COLUMNS
-from goldbot.data.orderflow import FILL_COLUMNS, fill_slippage_frame, orderflow_frame
+from goldbot.data.orderflow import COLUMNS, orderflow_frame
 from goldbot.data.store import asof_join
 from goldbot.features.registry import FEATURES, FeatureCtx, feature
 
 NAME = "orderflow"
 FAMILY = "orderflow"
-VERSION = "1"
-COLUMNS: tuple[str, ...] = (*BAR_COLUMNS, *FILL_COLUMNS)
+VERSION = "2"                    # 2: columns renamed to what they measure, fill slippage dropped (quant review)
 BAR_TOLERANCE = pd.Timedelta(minutes=5)
-FILL_TOLERANCE = pd.Timedelta(days=7)
-SIGNED = {"of_imb_(15m|60m)": 0.0, "of_run": 0.0}
+SIGNED = {"of_vw_retz_(15m|60m)": 0.0, "of_vw_run": 0.0}
+SCREEN_NOTE = ("tick_count is Dukascopy's bid-side quote updates, not signed trades: of_vw_retz_* and of_vw_run are "
+               "quote-update-weighted return scores; a survivor must beat the plain return and momentum features "
+               "(ret_*, momentum family) in the same screen, or it is read as a restated return")
 
 
 def _close(df: pd.DataFrame) -> pd.Series:
@@ -40,30 +43,20 @@ def _is_1m(df: pd.DataFrame) -> bool:
     return bool(span.median() == pd.Timedelta(minutes=1))
 
 
-def _join(bars: pd.DataFrame, frame: pd.DataFrame, cols: tuple[str, ...], tol: pd.Timedelta) -> dict[str, np.ndarray]:
-    joined = asof_join(bars, frame, tolerance=tol).sort_values("_row")
-    return {c: joined[c].to_numpy(dtype=float) for c in cols}
-
-
 def f_orderflow(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
-    """COLUMNS as known at each bar's close; NaN where an input is absent (the column set is fixed)."""
+    """COLUMNS as known at each bar's close; NaN without 1m input (the column set is fixed)."""
     out = pd.DataFrame({c: np.full(len(df), np.nan) for c in COLUMNS}, index=df.index)
     if len(df) == 0:
         return out
-    bars = pd.DataFrame({"ts_utc": _close(df).to_numpy(), "_row": np.arange(len(df))})
     m1 = ctx.get("bars_1m")
     if m1 is None and _is_1m(df):
         m1 = df
-    if m1 is not None and len(m1):
-        flow = orderflow_frame(m1)
-        for c, v in _join(bars, flow, BAR_COLUMNS, BAR_TOLERANCE).items():
-            out[c] = v
-    fills = ctx.get("fills")
-    if fills is not None and len(fills):
-        slip = fill_slippage_frame(fills)
-        if not slip.empty:
-            for c, v in _join(bars, slip, FILL_COLUMNS, FILL_TOLERANCE).items():
-                out[c] = v
+    if m1 is None or len(m1) == 0:
+        return out
+    bars = pd.DataFrame({"ts_utc": _close(df).to_numpy(), "_row": np.arange(len(df))})
+    joined = asof_join(bars, orderflow_frame(m1), tolerance=BAR_TOLERANCE).sort_values("_row")
+    for c in COLUMNS:
+        out[c] = joined[c].to_numpy(dtype=float)
     return out
 
 
