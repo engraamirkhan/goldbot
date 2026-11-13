@@ -7,3 +7,8 @@
   multi-month holes in the US500/UK100 long files as about 150 holidays each and missed every US/UK holiday from mid-2013.
   Explore S05-V0 events went from 103 to 199. The S05-S07 event sets changed, so they need new registry rows (BACKLOG 236). The
   EVAL-2 harness hash changes, so S0-S6 must be re-run.
+- Quant round 1 (same branch): events leave the schedule once their cancellation is published (2013 NFPs, the FOMC of
+  2020-03-18). The unscheduled FOMC statements of 3 and 15 March 2020 were added (calendar-v1 manual rows; the 2020
+  count check is now 9). Fed-calendar meetings are known from 1 Dec of the prior year (BACKLOG 235, catalogue side),
+  so S07 is back at 625/604. A window past 2027-12-31 raises. Prereg amendment 14b: S06/S07 rows add to K, and S05
+  stays unregistered.

@@ -33,10 +33,16 @@ of record); a runtime dependency on exchange_calendars (a pinned snapshot is rep
 ## Consequences
 - S05-S07 event sets change on every window, so prior S05-S07 reads are void for the new harness hash and the units
   need new registry rows (BACKLOG 236). Explore counts old -> new: S05-V0 103 -> 199, S05-V1 70 -> 149, S06-V0
-  656 -> 652, S06-V1 313 -> 311, S06-V2 372 -> 367, S07-V0 625 -> 692, S07-V1 604 -> 605.
-- S07's "next meeting under 10 days ahead" skip now sees only published meetings; calendar-v1 gives FOMC dates a
-  7-day lead, so it under-skips until FOMC rows carry the Fed's schedule date (BACKLOG 235).
-- Windows before 1990-01-01 raise; the calendar must be extended before 2027-12-31 (BACKLOG 237).
+  656 -> 644, S06-V1 313 -> 306, S06-V2 372 -> 364, S07-V0 625 -> 625, S07-V1 604 -> 604 (prereg amendment 14b).
+- Quant round 1 (2026-11-13): an event leaves the schedule once its cancellation is published (`Ctx.until`; the 2013
+  NFPs, the 2020-03-18 FOMC). The unscheduled FOMC statements of 3 and 15 March 2020 are calendar-v1 manual rows,
+  known when issued. Fed-calendar FOMC meetings are read as known from 1 Dec of the prior year (an assumed floor,
+  BACKLOG 235), so S07's skip of a meeting under 10 days ahead keeps its pre-152 count (625/604). A window past the
+  holiday calendar's end raises.
+- Windows before 1990-01-01 or after 2027-12-31 raise; the calendar must be extended in time (BACKLOG 237).
+- calendar-v1 gains two rows (fomc_statement 2020-03-03 and 2020-03-15, source manual) at the next data-us-calendar
+  run; the 2020 FOMC count check becomes 9. us_calendar features read them from then (historical feature values for
+  March 2020 change: a feature-version note for the quant).
 - Early closes are not listed (S05 exits at the T-1 close as before; BACKLOG 237).
 - What would change this: a measured publication date earlier/later than the floor for a holiday a detector trades
   within a month of 1 December, or exchange_calendars dropping maintenance (then the snapshot is frozen and the

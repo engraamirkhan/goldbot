@@ -443,3 +443,26 @@ not compared with an earlier one without saying so. No K, registry row, unit, co
   newyork 0.166, thin 0.204). Reported, never gated.
 - **Scope.** The dearer-broker max is a screen basis only. H-90 and deployment price each broker on its own cells,
   never the max. The EVAL-2 deciding cost ($0.230) is unchanged.
+
+### 14b. Amendment 2026-11-13: published exchange holidays and point-in-time schedules (BACKLOG 152, ADR 0082)
+
+Dated after the run. It applies **only to catalogue runs at or after the commit that lands it** (branch
+feat/exchange-holiday-calendar). Every earlier read keeps the basis of section 4 and is not re-labelled. A later run
+cites this amendment and its harness hash.
+
+- **Section 4, "exchange holidays (weekdays missing from the cash index history)"**, is replaced by: exchange
+  holidays from the published NYSE/LSE/Xetra calendar (`config/research/exchange_holidays.yaml`, exchange_calendars
+  4.13.2 snapshot `xcals-4.13.2-r1`). Each date carries `available_utc`: regular rules from 1 Dec of the prior year,
+  ad hoc closures from the day after the notice, and unannounced closures from the day after. The S05 `impl_notes`
+  in specs.yaml ("weekdays missing from the cash index history") describe the old basis. They change with the
+  re-registration (BACKLOG 236).
+- **Scheduled events are read point in time.** S05-S07 see a date only while it is on the published schedule at the
+  decision bar's close (available_utc <= t < the cancellation's available_utc). This covers the cancelled NFP of
+  October and November 2013 and the cancelled FOMC of 2020-03-18. The unscheduled FOMC statements of 2020-03-03 and
+  2020-03-15 are known only when issued. FOMC meetings on the Fed's calendar are known from 1 Dec of the prior year
+  (BACKLOG 235), not 7 days ahead. S6 cuts events on the same times.
+- **Explore event counts** (before -> after): S05-V0 103 -> 199, S05-V1 70 -> 149, S06-V0 656 -> 644, S06-V1
+  313 -> 306, S06-V2 372 -> 364, S07-V0 625 -> 625, S07-V1 604 -> 604.
+- **K.** S06/S07 rows re-registered on this basis are ADDED to K (and to the DSR K of 21,333). They never replace
+  the earlier rows, and the reading rule (section 8) is fixed before the re-run. S05 stays unregistered: its 199/149
+  explore events are below its n floor of 300 (section 7).
