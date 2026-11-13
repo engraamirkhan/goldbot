@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from goldbot.data.exchange_holidays import exchange_holidays, load_calendar
 from goldbot.research.catalogue import core as K
 from goldbot.research.catalogue.core import EB, Ctx, Events
 from goldbot.research.catalogue.costs import window_model
@@ -136,12 +137,12 @@ EVENT_SETS = {
     "tier1": ("nfp", "cpi", "fomc_statement", "pce", "ism_manufacturing"),
     "fomc_nfp_cpi": ("fomc_statement", "nfp", "cpi"),
 }
+HOLIDAY_EXCHANGES = ("US", "DE", "UK")          # cash exchanges of US500/USTEC/US30, DE40, UK100 (detectors._exchange)
 LONG_KEYS = {"XAUUSD": "xauusd", "XAGUSD": "xagusd", "XTIUSD": "xtiusd", "US500": "us500", "USTEC": "ustec",
              "DE40": "de40", "UK100": "uk100", "US30": "us30", "USINDEX": "usindex", "EURUSD": "eurusd",
              "GBPUSD": "gbpusd", "AUDUSD": "audusd", "NZDUSD": "nzdusd", "USDJPY": "usdjpy", "USDCAD": "usdcad",
              "USDCHF": "usdchf", "AUDJPY": "audjpy", "EURAUD": "euraud", "GBPAUD": "gbpaud", "EURGBP": "eurgbp",
              "EURJPY": "eurjpy", "GBPJPY": "gbpjpy"}
-HOLIDAY_SOURCE = {"US": "us500", "DE": "de40", "UK": "uk100"}
 
 
 def _long(key: str, end: int) -> pd.DataFrame:
@@ -150,21 +151,31 @@ def _long(key: str, end: int) -> pd.DataFrame:
     return d[av.map(lambda x: x.value) < end].reset_index(drop=True) if len(d) else d
 
 
+def add_holidays(ctx: Ctx, *, end_ns: int, data_from_ns: int | None = None) -> None:
+    """`holiday_<US|UK|DE>`: the exchange's published full-day closures (config/research/exchange_holidays.yaml,
+    BACKLOG 152) as UTC day numbers, with `ctx.avail` = when each was published; only closures published before the
+    window end. Never inferred from missing bars (a data gap is not a holiday)."""
+    cal = load_calendar()
+    lo = int(pd.Timestamp(cal.valid_from, tz="UTC").value)
+    hi = int(pd.Timestamp(cal.valid_through, tz="UTC").value) + 86_400 * 10**9      # end of valid_through
+    if data_from_ns is not None and data_from_ns < lo:
+        raise ValueError(f"exchange holiday calendar {cal.version} starts {cal.valid_from}: window reads earlier")
+    if end_ns > hi:
+        raise ValueError(f"exchange holiday calendar {cal.version} ends {cal.valid_through}: window reads later "
+                         "(extend it, BACKLOG 237)")
+    for ex in HOLIDAY_EXCHANGES:
+        days, av = exchange_holidays(ex, known_by_ns=end_ns - 1)
+        ctx.events[f"holiday_{ex}"], ctx.avail[f"holiday_{ex}"] = days, av
+
+
 def build_ctx(win: str, *, allow_test_old: bool = False) -> Ctx:
-    from goldbot.research.catalogue.data import epoch_ns, fred, us_events
+    from goldbot.research.catalogue.data import epoch_ns, fred, us_events_avail
     w = window(win, allow_test_old=allow_test_old)
     ctx = Ctx(window=win)
     for name, types in EVENT_SETS.items():
-        ctx.events[name] = us_events(win, types, allow_test_old=allow_test_old)
-    for ex, key in HOLIDAY_SOURCE.items():
-        d = _long(key, w.end)
-        src = d["source"].astype(str)
-        dd = d[src.str.startswith("yahoo:^") | src.str.startswith("dukascopy")]
-        days = (epoch_ns(pd.to_datetime(dd["date"]).dt.tz_localize("UTC")) // DAY).astype(np.int64)
-        if len(days):
-            allw = np.arange(days.min(), days.max() + 1)
-            wk = allw[((allw + 3) % 7) < 5]
-            ctx.events[f"holiday_{ex}"] = np.setdiff1d(wk, days)
+        ctx.events[name], ctx.avail[name], ctx.until[name] = us_events_avail(win, types,
+                                                                             allow_test_old=allow_test_old)
+    add_holidays(ctx, end_ns=w.end, data_from_ns=w.data_from)
     for ccy, series in RATES.items():
         ctx.aux[f"rate_{ccy}"] = fred(series, win, allow_test_old=allow_test_old)
     ctx.aux["costs"] = window_model(win, allow_test_old=allow_test_old)       # EVAL-1 section 1, C2
