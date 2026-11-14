@@ -42,6 +42,7 @@ from goldbot.ops import health, jobs, ledger, scheduler
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.ops.monthly_review import MonthlyReview
 from goldbot.ops.observe import ObserveStatus
+from goldbot.ops.swap_reconcile import SwapReconciliation
 from goldbot.research import ruin
 from goldbot.research.attribution import AttributionReport
 from goldbot.research.director import ResearchPlan
@@ -566,7 +567,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                ReviewAction,
                # aux.db monthly_reviews (R142, goldbot/ops/monthly_review.py):
                # tests/test_monthly_review.py::test_a_review_row_a_newer_release_wrote_still_reads
-               MonthlyReview}
+               MonthlyReview,
+               # aux.db swap_reconciliations (BACKLOG 175, goldbot/ops/swap_reconcile.py): tests/test_swap_reconcile.py::
+               # test_a_reconciliation_row_a_newer_or_older_release_wrote_still_reads
+               SwapReconciliation}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

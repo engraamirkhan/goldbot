@@ -537,7 +537,12 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter={quarter_of(): 1})
+    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter={quarter_of(): 1},
+                       retired_families=[])
+    # session_open is retired: its second discovery in a quarter is refused by the shared retired-family trial first
+    # (BACKLOG 91, tests/test_retired_family_trial_guard.py); here the reservation alone is under test, so the guard
+    # reads the same settings with no retired family
+    monkeypatch.setattr("goldbot.config.load_settings", rp.load_settings)
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
                                       "--report", str(report), "--specialist", "session_open", "--discover",
                                       "--discover-config", '{"n_subsamples": 4, "top_k": 5}'])

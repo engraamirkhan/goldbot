@@ -248,6 +248,8 @@ def run(state_dir: str | Path, accounts: Iterable[Account], *, tolerance: float,
 
 def results(state_dir: str | Path, since: pd.Timestamp | None = None) -> list[SwapReconciliation]:
     """The stored reconciliations (holds closed at or after `since`), oldest exit first; raises when unreadable."""
+    if not (Path(state_dir) / "aux.db").exists():
+        return []                       # nothing reconciled yet; a read never creates the store (health is read-only)
     lo = int(epoch_ns(pd.DatetimeIndex([since]))[0]) if since is not None else 0
     with _db(state_dir).read() as conn:
         rows = conn.execute("SELECT body FROM swap_reconciliations WHERE exit_ns >= ? ORDER BY exit_ns",

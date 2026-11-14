@@ -1638,7 +1638,8 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     clock = ctx.clock or (lambda: pd.Timestamp.now("UTC"))
     if not market_quiet(clock()):
         return {"skipped": f"market open at {clock().isoformat()}: runs only in the daily break or at the weekend"}
-    cfg = ctx.settings.ticks
+    from goldbot.config import TickRecordSettings
+    cfg = getattr(ctx.settings, "ticks", None) or TickRecordSettings()      # no settings: the defaults' budget
     deadline = clock() + pd.Timedelta(seconds=cfg.job_budget_s)
     spent = f"job budget of {cfg.job_budget_s:.0f} s spent: pulled by a later run"
     out: dict[str, Any] = {}

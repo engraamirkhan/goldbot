@@ -182,3 +182,31 @@ def test_the_health_module_imports_with_swap_reconcile_in_a_slot_of_its_own() ->
             "from goldbot.ops.checks.compaction import check_compaction\n")
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stderr[-2000:]
+
+
+def test_a_reconciliation_row_a_newer_or_older_release_wrote_still_reads(tmp_path, vantage):
+    """Persistence compat (tests/test_persistence_compat.py): a row with a field this release does not know reads,
+    and a row written before `distinguishable` / `priced_at` (quant review 2026-11-14) reads with their defaults."""
+    import json
+
+    from goldbot.db import Database
+    _terms(tmp_path)
+    _trade(tmp_path, "ex1", swap=3 * RATE * LOTS * FX)
+    swap_reconcile.run(tmp_path, [vantage], tolerance=0.5)
+    [before] = swap_reconcile.results(tmp_path)
+    with Database.open(tmp_path, "aux").write() as conn:
+        body = json.loads(conn.execute("SELECT body FROM swap_reconciliations").fetchone()[0])
+        body["from_a_newer_release"] = 1
+        del body["distinguishable"], body["priced_at"]
+        conn.execute("UPDATE swap_reconciliations SET body = ?", (json.dumps(body),))
+    [row] = swap_reconcile.results(tmp_path)
+    assert row.distinguishable is False and row.priced_at == "refresh"
+    assert row.model_copy(update={"distinguishable": before.distinguishable,
+                                  "priced_at": before.priced_at}) == before
+
+
+def test_health_never_creates_the_aux_store_before_any_reconciliation(tmp_path):
+    """Integration 2026-11-14 (tests/test_phase_gates.py): a health run is read-only; with no aux.db the check is ok
+    and leaves no file behind."""
+    check = health.check_swap_reconcile(_ctx(tmp_path, MON))
+    assert check.status == "ok" and not any(tmp_path.iterdir())
