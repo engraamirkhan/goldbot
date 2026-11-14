@@ -43,6 +43,7 @@ from typing import Any, Literal
 import pandas as pd
 
 from goldbot.base import FrozenRecord
+from goldbot.db.connection import create_private
 from goldbot.research.autodisc.spec import StrategySpec, canonical_json, spec_hash
 
 GENESIS = "0" * 64
@@ -133,6 +134,7 @@ class SearchLedger:
             con.close()
 
     def _connect(self) -> sqlite3.Connection:
+        create_private(self.path)                     # a state database: 0600 like the others (preflight)
         con = sqlite3.connect(self.path, timeout=60, isolation_level=None)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=FULL")

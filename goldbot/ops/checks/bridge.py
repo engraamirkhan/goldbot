@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from goldbot.data.calendar import SessionTable, session_table_from_cache
+from goldbot.db.connection import create_private
 from goldbot.ops.checks._base import AccountRef, Check, Status, _read_json
 from goldbot.ops.checks.registry import BLOCK_ACCOUNT, BLOCK_CORE, register_check
 
@@ -19,7 +20,8 @@ if TYPE_CHECKING:
 # and the steps. The outage's start is kept in state/BRIDGE_DOWN_FILE (SQLite: robust-storage rule) across health
 # runs, so a bridge that answers now and then (a restart loop) cannot restart the clock; an outage that reached FAIL
 # stays one incident until the bridge has answered for BRIDGE_UP_CLOSE_S (no recovered + new page on every flap). A
-# record that cannot be read or written fails at once, as before this change: never silent.
+# record that cannot be read or written fails at once, as before this change: never silent. The file is created and
+# kept 0600 like every state database (incident 2026-11-14: a 0644 record failed preflight's db_files_private).
 BRIDGE_DOWN_FAIL_S = 5 * 60
 BRIDGE_UP_CLOSE_S = 3 * 60
 BRIDGE_DOWN_FILE = "health_outages.db"
@@ -30,7 +32,9 @@ def _outage(ctx: HealthContext, account_id: str, down: bool) -> tuple[float, flo
     None) after recording this probe; (0, None) when nothing is to be said; None when the record is unusable."""
     now = ctx.now.timestamp()
     try:
-        con = sqlite3.connect(ctx.state_dir / BRIDGE_DOWN_FILE, timeout=5.0)
+        path = ctx.state_dir / BRIDGE_DOWN_FILE
+        create_private(path)
+        con = sqlite3.connect(path, timeout=5.0)
     except (sqlite3.Error, OSError):
         return None
     try:
