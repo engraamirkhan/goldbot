@@ -22,8 +22,8 @@ def _seg(days: pd.DatetimeIndex, source: str, hour: int, level: float) -> pd.Dat
 
 def test_a_long_hole_in_the_upper_source_is_filled_from_the_lower_one_with_its_source_kept() -> None:
     all_days = pd.bdate_range("2011-09-01", "2012-02-29")
-    hole = (all_days > "2011-09-22") & (all_days < "2012-01-19")
-    upper = _seg(all_days[(all_days >= "2011-09-19") & ~hole], "dukascopy_h1:USA500IDXUSD", 21, 1200.0)
+    hole = (all_days > pd.Timestamp("2011-09-22")) & (all_days < pd.Timestamp("2012-01-19"))
+    upper = _seg(all_days[(all_days >= pd.Timestamp("2011-09-19")) & ~hole], "dukascopy_h1:USA500IDXUSD", 21, 1200.0)
     lower = _seg(all_days, "yahoo:^GSPC", 21, 1201.0)
     out, stats = stitch([upper, lower])
     got = out.set_index("date")["source"]
@@ -44,7 +44,7 @@ def test_a_short_gap_is_not_filled() -> None:
 
 def test_a_hole_is_reported_and_is_not_an_exchange_holiday() -> None:
     days = pd.bdate_range("2013-01-02", "2013-06-28")
-    hole = (days > "2013-02-25") & (days < "2013-05-23")
+    hole = (days > pd.Timestamp("2013-02-25")) & (days < pd.Timestamp("2013-05-23"))
     df = _seg(days[~hole], "dukascopy_h1:USA500IDXUSD", 21, 1500.0)
     hol, _ = exchange_holidays("US")
     gaps = coverage_gaps(df, hol)

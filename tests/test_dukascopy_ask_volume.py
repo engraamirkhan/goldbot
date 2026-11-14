@@ -75,7 +75,7 @@ def test_the_year_file_keeps_the_column_and_months_built_before_it_read_nan(monk
     sep = pd.date_range("2026-09-08 10:00", periods=300, freq="1min", tz="UTC")
     octo = pd.date_range("2026-10-06 10:00", periods=300, freq="1min", tz="UTC")
     prev = tmp_path / "prev.parquet"
-    full(sep.append(octo), None).assign(source="dukascopy").to_parquet(prev, index=False)
+    full(pd.DatetimeIndex(sep.append(octo)), None).assign(source="dukascopy").to_parquet(prev, index=False)
     monkeypatch.setattr(dy, "month_range", lambda year, today=None: iter(
         [(dt.date(2026, 9, 1), dt.date(2026, 10, 1)), (dt.date(2026, 10, 1), dt.date(2026, 11, 1))]))
     monkeypatch.setattr(dy, "month_bars", lambda start, end, tmp, **kw: full(octo, 0.7)[BAR_COLUMNS

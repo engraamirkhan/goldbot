@@ -57,18 +57,18 @@ def test_a_gap_over_the_outage_in_open_market_time_is_an_outage_and_a_weekend_is
 def test_the_job_writes_each_outage_once_as_a_warning_and_returns_the_readout(tmp_path: Path) -> None:
     store = _store(tmp_path, _news(["2026-11-08 23:30", "2026-11-10 08:00", "2026-11-10 09:00"]))
     ctx = SimpleNamespace(store=store, state_dir=tmp_path / "state")
-    out = JOBS["news_coverage"](ctx, NOW)
+    out = JOBS["news_coverage"](ctx, NOW)  # type: ignore[arg-type]
     assert out["rows"] == 3 and out["outages"] == 1 and out["outages_new"] == 1
     ev = store.read("dq_events", source="rss")
     assert len(ev) == 1 and ev["check"].iloc[0] == "news_outage" and ev["severity"].iloc[0] == "warning"
     assert pd.Timestamp(ev["span_from"].iloc[0]) == pd.Timestamp("2026-11-08 23:30", tz="UTC")
-    again = JOBS["news_coverage"](ctx, NOW)
+    again = JOBS["news_coverage"](ctx, NOW)  # type: ignore[arg-type]
     assert again["outages_new"] == 0 and len(store.read("dq_events", source="rss")) == 1
 
 
 def test_an_empty_news_table_reads_zero_and_writes_nothing(tmp_path: Path) -> None:
     store = Store(tmp_path / "data")
-    out = JOBS["news_coverage"](SimpleNamespace(store=store, state_dir=tmp_path / "state"), NOW)
+    out = JOBS["news_coverage"](SimpleNamespace(store=store, state_dir=tmp_path / "state"), NOW)  # type: ignore[arg-type]
     assert out["rows"] == 0 and out["outages"] == 0
     assert store.read("dq_events", source="rss").empty
 
