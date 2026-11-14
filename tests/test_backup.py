@@ -681,7 +681,21 @@ def test_scheduler_jobs_are_registered_with_a_quiet_daily_slot_and_a_weekend_dri
     assert {"backup", "restore_drill"} <= set(JOBS)
     sch = load_settings().scheduler
     assert sch.backup.kind == "daily" and sch.backup.at == "22:15"
+    assert type(sch).model_fields["backup"].default.at == "22:15"           # the code default matches the yaml
     assert sch.restore_drill.kind == "weekly" and sch.restore_drill.weekday == 6     # Sunday: market closed
+
+
+def test_the_bounded_tick_record_ends_before_the_backup_turns_overdue():
+    """Outage 2026-11-13: tick_record_winter (22:10) ran to 22:47 on copy_ticks timeouts on the single-threaded
+    scheduler and job:backup (22:15) failed as overdue. Its whole-run budget, plus one page past it, now ends before
+    the backup's overdue mark (slot + JOB_OVERDUE_GRACE_S), for both tick slots."""
+    from goldbot.ops.checks._base import JOB_OVERDUE_GRACE_S
+    s = load_settings()
+    backup = pd.Timestamp(f"2026-11-13 {s.scheduler.backup.at}", tz="UTC")
+    for slot in (s.scheduler.tick_record, s.scheduler.tick_record_winter):
+        start = pd.Timestamp(f"2026-11-13 {slot.at}", tz="UTC")
+        end = start + pd.Timedelta(seconds=s.ticks.job_budget_s + s.ticks.page_limit_s)
+        assert end < backup + pd.Timedelta(seconds=JOB_OVERDUE_GRACE_S), slot.at
 
 
 def test_no_workflow_uploads_database_files():

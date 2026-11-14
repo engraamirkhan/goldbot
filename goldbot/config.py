@@ -255,9 +255,10 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
-    # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
-    # contention with them on the 4-core brain), and its weekly restore drill
-    # on Sunday while the market is closed
+    # encrypted off-host backup (goldbot/ops/backup.py) in the daily break, before the nightly jobs start (no CPU
+    # contention with them on the 4-core brain), and its weekly restore drill on Sunday while the market is closed.
+    # tick_record_winter (22:10) runs ahead of it on the single-threaded scheduler; its ticks.job_budget_s ends it well
+    # before job:backup's overdue mark (outage 2026-11-13: unbounded, it ran to 22:47 and the backup failed as overdue)
     backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
     cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
@@ -408,6 +409,12 @@ class TickRecordSettings(_Section):
     # per account per run; an unfinished day is not written. A full day is ~500 pages (~3 min at 0.35 s a page);
     # three accounts x 600 s fit the 45-minute quiet window of the daily break
     run_budget_s: float = Field(600.0, gt=0, le=1800)
+    # the whole job (every account and instrument) stops here, so it cannot hold the single-threaded scheduler
+    # (outage 2026-11-13: tick_record_winter ran 22:10-22:47 on copy_ticks timeouts; the backup failed as overdue)
+    job_budget_s: float = Field(600.0, gt=0, le=2700)
+    # an account whose last this-many pulls in a row each ended on a page timeout (or a slow page) has its remaining
+    # instruments skipped for the run; another account is still pulled
+    max_page_timeouts: int = Field(3, ge=1, le=20)
 
     @model_validator(mode="after")
     def _retention_outlives_the_backfill(self) -> TickRecordSettings:

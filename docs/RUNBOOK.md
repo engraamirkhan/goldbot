@@ -2063,6 +2063,24 @@ and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
 
+### needrestart
+
+Health WARN `needrestart` (outage 2026-11-14: unattended-upgrades restarted 12 goldbot units at 06:58 on a
+Saturday): needrestart is installed on this host but `/etc/needrestart/conf.d/goldbot.conf` is missing, so the next
+library update may restart goldbot units mid-session. On the brain, as root, from root's own clone (`$OPS` =
+`goldbot/ops/linux` in it), run the bootstrap's two lines again:
+`install -d -m 755 -o root -g root /etc/needrestart/conf.d` and
+`install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf`.
+The WARN clears on the next health pass. Nothing is restarted by this; library updates land at the next attended
+restart or reboot.
+
+### CPU steal (`cpu_steal`)
+
+Health WARN `cpu_steal`: the cloud hypervisor gave this host's CPU to other guests for more than 20% of the time in
+every minute of the last 10 (outage 2026-11-12..14: 35-58% on the MT5 boxes slowed the engines without crashing
+anything). Nothing is halted. If it lasts for hours, note it on issue #34; a move to another shape or region is an
+owner decision (spending). The check reads the brain only; the MT5 boxes are BACKLOG 256.
+
 ### Order not confirmed
 
 Health WARN "order(s) not confirmed by the broker" (BACKLOG 72): on the MT5 box, open the terminal and look in Trade for a

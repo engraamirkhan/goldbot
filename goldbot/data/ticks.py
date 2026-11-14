@@ -15,7 +15,9 @@ Bridge load (trading-safety review): the bridge serves one request at a time and
 more than ORDER_MAX_AGE_S (10 s), so the pull must never sit in front of the engine while it can trade. The job runs
 only while gold is closed (`market_quiet`: New York's 17:05-17:50 daily break, or the weekend), and stops when that
 window ends; pages are `ticks.page_ticks` rows with a `pause_s` gap; a page slower than `page_limit_s` or a run past
-`run_budget_s` stops the run. A day is written only when complete, so a stopped day is simply pulled by a later run
+`run_budget_s` stops the run. The daily job as a whole stops at `job_budget_s` and skips an account's remaining
+instruments after `max_page_timeouts` timed-out pulls in a row (outage 2026-11-13: the job held the single-threaded
+scheduler 37 minutes on copy_ticks timeouts). A day is written only when complete, so a stopped day is simply pulled by a later run
 (oldest missing first, `max_days_per_run` a run; the weekend runs catch up).
 
 Layout (state directory, mode 0700 directories and 0600 files, like the rest of state/):
@@ -202,6 +204,10 @@ class PullDeferred(RuntimeError):
     """The pull stopped before the day was complete (time limit or the quiet window ended); nothing is written."""
 
 
+class SlowPage(PullDeferred):
+    """A page slower than `page_limit_s`: the bridge is slow (counted like a page timeout by the daily job)."""
+
+
 class TruncatedPull(RuntimeError):
     """The terminal served no tick near the end of the server day (still loading, or the day closed early with no
     later session yet); nothing is written, newer days are still pulled and a later run retries this one."""
@@ -232,7 +238,7 @@ class Pace:
         self.pages += 1
         took = (self.clock() - started).total_seconds()
         if took > self.page_limit_s:
-            raise PullDeferred(f"page {self.pages} took {took:.1f} s (> {self.page_limit_s} s): bridge slow")
+            raise SlowPage(f"page {self.pages} took {took:.1f} s (> {self.page_limit_s} s): bridge slow")
 
 
 # ------------------------------------------------------------------------------------------- pull
@@ -454,23 +460,30 @@ def _bounded_pages(broker: Any, limit_s: float) -> Iterator[None]:
 
 def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, server_tz: str,
                  cfg: TickRecordSettings, *, clock: Callable[[], pd.Timestamp],
-                 sleep: Callable[[float], None], instrument: str | None = None) -> dict[str, Any]:
+                 sleep: Callable[[float], None], instrument: str | None = None,
+                 deadline: pd.Timestamp | None = None) -> dict[str, Any]:
     """Pull up to `max_days_per_run` due server days not yet on disk, oldest first (idempotent: a recorded day is never
     pulled again; delete its file to re-pull), paced and time-boxed (`Pace`), then prune days older than
     `retain_days`. A deferred day (budget, quiet window, slow bridge) stops the run and is left for a later one; a
     truncated day (`TruncatedPull`) is reported under "incomplete" and skipped, so it never blocks newer days. Returns what it did, for the job record. The
     broker is only ever asked for `copy_ticks`. `instrument`: another instrument of the account (its own directory,
-    paced to `weekend_quiet`, module docstring); None is the account's gold, exactly as before."""
+    paced to `weekend_quiet`, module docstring); None is the account's gold, exactly as before. `deadline`: the daily
+    job's whole-run budget (`job_budget_s`), which caps this call's `run_budget_s`. A deferral by a page timeout or a
+    slow page is flagged `page_timeout` (the job skips an account after `max_page_timeouts` of them in a row)."""
     now = pd.Timestamp(clock())
     have = read_index(state_dir, account, instrument)
     d = account_dir(state_dir, account, instrument)
     missing = [day for day in days_due(now, server_tz, backfill_days=cfg.backfill_days)
                if not (day.isoformat() in have and (d / f"{day.isoformat()}.parquet").exists())]
-    pace = Pace(clock, sleep, pause_s=cfg.pause_s, page_limit_s=cfg.page_limit_s, budget_s=cfg.run_budget_s,
+    budget_s = float(cfg.run_budget_s)
+    if deadline is not None:
+        budget_s = max(0.0, min(budget_s, (deadline - now).total_seconds()))
+    pace = Pace(clock, sleep, pause_s=cfg.pause_s, page_limit_s=cfg.page_limit_s, budget_s=budget_s,
                 quiet=market_quiet if instrument is None else weekend_quiet)
     written: list[str] = []
     incomplete: list[str] = []
     deferred: str | None = None
+    page_timeout = False
     with _bounded_pages(broker, cfg.page_limit_s):
         for day in missing:
             if len(written) >= cfg.max_days_per_run:
@@ -480,12 +493,14 @@ def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, 
                 ticks = pull_day(broker, symbol, start, end, chunk=cfg.page_ticks, pace=pace, whole_day=True)
             except PullDeferred as exc:
                 deferred = f"{day.isoformat()}: {exc}"
+                page_timeout = isinstance(exc, SlowPage)
                 log.warning("tick record %s %s deferred: %s", account, day, exc)
                 break
             except ConnectionError as exc:    # the bridge client's page timeout: a slow page, deferred like one
                 if "timeout" not in str(exc).lower():
                     raise
                 deferred = f"{day.isoformat()}: page timeout after {cfg.page_limit_s} s ({exc})"
+                page_timeout = True
                 log.warning("tick record %s %s deferred: %s", account, day, deferred)
                 break
             except TruncatedPull as exc:          # this day only: newer days are still pulled
@@ -502,6 +517,8 @@ def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, 
                            "behind": len(missing) - len(written), "pages": pace.pages}
     if deferred is not None:
         out["deferred"] = deferred
+    if page_timeout:
+        out["page_timeout"] = True
     if incomplete:
         out["incomplete"] = incomplete
     return out

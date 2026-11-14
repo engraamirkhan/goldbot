@@ -144,6 +144,7 @@ rows.
 | 238 | Fill or quarantine the US500/UK100 long daily holes 2011-2013 | Research data · long daily history | S | proposed (follow-up of R145) · accountable: data-engineer · reviews: quant-reviewer |
 | 242 | Health warns when compaction keeps deferring or leaves a spill directory | ops (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: sre · reviews: data-engineer |
 | 254 | 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081) | Research · BUILD | S | ready (2026-11-13) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
+| 256 | MT5 boxes: CPU steal visible on the brain | Ops (observability) · PROTECT | S | open · accountable: sre · reviews: code-reviewer, security-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1679,6 +1680,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   the CONFIRM of record re-fills at the first 1m open at or after the live entry close, Friday 1d dropped; no 1d/1w arm
   may qualify until that CONFIRM exists.
 - **255. Cost/model ratio in the adaptive-limits replay.** Value: `scripts/replay_limits.py` (goldbot/ops/limits_replay.py) still passes `cost_ratio_20d = None`, so a replay validates every ADR 0031 rule except the cost rule the nightly job now feeds (R150). Acceptance: with `--data-root`, the replay reads each day's store `exit_fills` and 15m bars and calls `goldbot.ops.cost_ratio.cost_ratio_20d` exactly as the job does (no parameter of the definition passed in); the header says when it cannot (no data root: None); a test shows a replay day with a 1.3 ratio gives the floors. Only after quant-reviewer has signed off the definition, since ADR 0031 fixes inputs before any replay.
+- **256. MT5 boxes: CPU steal visible on the brain.** Value: the 2026-11-12..14 outage (~205 entry-blocked minutes) was hypervisor CPU steal of 35-58% on the MT5 boxes; the brain's new `cpu_steal` check (R151, goldbot/ops/checks/host.py) only sees the brain's own /proc/stat, and nothing on the brain reads an MT5 box's OS. Acceptance: the MT5 bridge's GET /health carries the box's `cpu_steal` block (the same `StealSampler`, sampled in the bridge process on the Linux box, the Wine side reads the host's /proc/stat through Z:), the brain's health shows `cpu_steal:<account>` per bridge and warns on the same rule (> 20% in every minute for 10 min), warn-only; an older bridge without the block omits the check; no host name or address in the reason; a test per path.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

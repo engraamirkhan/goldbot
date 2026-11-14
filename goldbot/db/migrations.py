@@ -774,6 +774,11 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (account_id, arm_id)
            ) STRICT""",
     )),
+    # additive (outage 2026-11-12..14, ~205 entry-blocked minutes nobody could attribute afterwards; goldbot/ops/
+    # alert_log.py): `reasons`, a JSON object {check: short scrubbed reason} of each health message sent. NULL for a
+    # row without reasons (the dead man's switch, every row written before it). A release without it never reads it
+    Migration(version=34, name="health_alert_reasons", additive=True, statements=(),
+              add_columns=(("health_alerts", "reasons", "TEXT"),)),
 )
 
 CORE: tuple[Migration, ...] = (

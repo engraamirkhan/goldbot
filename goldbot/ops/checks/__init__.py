@@ -3,6 +3,7 @@
   engine.py      engine and loop: engine state, loop heartbeat, tick errors, failed orders
   entries.py     demo exploration entry supply and silence (entry_silence)
   bridge.py      MT5 bridge: /health, compatibility, broker server clock
+  host.py        host: CPU steal (sampled by the service heartbeats), the needrestart drop-in
   feeds.py       feeds and data: costs, P&L basis, data quality, drift, model watch, feature versions, news, reconciliation
   risk.py        risk and limits: supervisor, owner halt, risk state, phase and gates, loss caps, throttle, open
                  risk, entry windows
@@ -22,6 +23,7 @@ from goldbot.ops.checks import (  # noqa: F401 - registers the checks
     engine,
     entries,
     feeds,
+    host,
     loop,
     operations,
     risk,

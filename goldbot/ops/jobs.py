@@ -1626,7 +1626,10 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     bridge is never busy in trading hours (trading-safety review); `slot` is not used as the time. The account's other
     instruments (multi-instrument demo, `market_watch.account_symbols`) are recorded under their own directory and only
     at the weekend (`weekend_quiet`: gold's daily break is not quiet for the US indices or energy); on a weekday each
-    is reported skipped under `<account>:<symbol>`."""
+    is reported skipped under `<account>:<symbol>`. Bounded so it cannot hold the single-threaded scheduler (outage
+    2026-11-13: 22:10 to 22:47 on copy_ticks timeouts, the 22:15 backup failed as overdue): the whole run stops at
+    `ticks.job_budget_s`, and an account whose last `ticks.max_page_timeouts` pulls in a row each ended on a page
+    timeout or a slow page has its remaining instruments skipped for this run."""
     import time
 
     from goldbot.data.ticks import market_quiet, record_ticks, weekend_quiet
@@ -1635,9 +1638,15 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     clock = ctx.clock or (lambda: pd.Timestamp.now("UTC"))
     if not market_quiet(clock()):
         return {"skipped": f"market open at {clock().isoformat()}: runs only in the daily break or at the weekend"}
+    cfg = ctx.settings.ticks
+    deadline = clock() + pd.Timedelta(seconds=cfg.job_budget_s)
+    spent = f"job budget of {cfg.job_budget_s:.0f} s spent: pulled by a later run"
     out: dict[str, Any] = {}
     failed: list[str] = []
     for acc in ctx.accounts:
+        if clock() >= deadline:
+            out[acc.account_id] = {"skipped": spent}
+            continue
         if getattr(acc, "sessions", "broker") == "always_open":
             # ADR 0062: its quiet hours are not gold's (it trades the weekend this job pulls in) and it has weekend
             # server days the weekday pull skips; its engine records every tick it sees (store `ticks`, its own
@@ -1650,15 +1659,26 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             if broker is None:
                 out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
                 continue
-            out[acc.account_id] = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz,
-                                               ctx.settings.ticks, clock=clock, sleep=ctx.sleep or time.sleep)
+            res = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz, cfg, clock=clock,
+                               sleep=ctx.sleep or time.sleep, deadline=deadline)
+            out[acc.account_id] = res
+            timeouts = 1 if res.get("page_timeout") else 0      # timed-out pulls in a row on this account's bridge
             for sym in account_symbols(acc)[1:]:
                 key = f"{acc.account_id}:{sym}"
                 if not weekend_quiet(clock()):
                     out[key] = {"skipped": "another instrument: pulled only at the weekend, when every market is shut"}
                     continue
-                out[key] = record_ticks(broker, ctx.state_dir, acc.account_id, sym, acc.server_tz, ctx.settings.ticks,
-                                        clock=clock, sleep=ctx.sleep or time.sleep, instrument=sym)
+                if clock() >= deadline:
+                    out[key] = {"skipped": spent}
+                    continue
+                if timeouts >= cfg.max_page_timeouts:
+                    out[key] = {"skipped": f"{timeouts} consecutive page timeouts on this account's bridge: the rest "
+                                           "of its instruments wait for a later run"}
+                    continue
+                res = record_ticks(broker, ctx.state_dir, acc.account_id, sym, acc.server_tz, cfg, clock=clock,
+                                   sleep=ctx.sleep or time.sleep, instrument=sym, deadline=deadline)
+                out[key] = res
+                timeouts = timeouts + 1 if res.get("page_timeout") else 0
         except Exception as exc:
             failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
         finally:

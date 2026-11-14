@@ -5,6 +5,16 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **Outage 2026-11-12..14 fixes (R151, BACKLOG 256; implementer).** The backup stays at 22:15 UTC: `tick_record` stops at `ticks.job_budget_s` (600 s) for the whole run and skips an account's
+  remaining instruments after `ticks.max_page_timeouts` (3) timed-out pulls in a row, so tick_record_winter (22:10) ends before job:backup turns overdue (11-13 it ran to 22:47). aux.db migration 34 adds
+  `health_alerts.reasons` (per alerted check, scrubbed, 160 characters). Two warn-only health checks
+  (goldbot/ops/checks/host.py): `cpu_steal` (steal above 20% in every minute for 10 min, sampled by the service
+  heartbeats on the brain; the MT5 boxes are BACKLOG 256) and `needrestart` (the goldbot drop-in missing where
+  needrestart is installed); both notify the owner after the alert window. MT5 login: -6 with a broker-outage journal
+  reason is status `unavailable` and logged as a temporary outage; before latching, the journal is re-read once after 1 s (a starved
+  box wrote the line late); a latch logs the journal reason it latched on.
+  Brain action: re-run the needrestart step of brain_bootstrap.sh (RUNBOOK "needrestart"). Reviews owed:
+  code-reviewer, sre (checks, slot), trading-safety-reviewer (login classification and logging only).
 - 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
   settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
   measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the
