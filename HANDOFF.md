@@ -57,6 +57,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   worst measured fill against the smallest model charge; logged, in the job row (`cost_ratio_bound`) and the replay
   table, never an input to the limits. No replay was run (ADR 0031's replay log unchanged); nothing on the order path
   changed.
+- 2026-11-14 (branch fix/monthly-tieout-learning-trades; issue #394): the monthly review's broker tie-out now counts
+  exploration, control and cost-probe closes (aux.db, via `learning_ledger.closed_learning_trades`, matched by
+  `account_name`) in the P&L, the trade count and the per-trade tolerance; before, every demo account tied out
+  against zero trades. Rows voided as evidence still count as money (`include_excluded=True`; the evidence readers
+  are unchanged). An unreadable trade ledger and a balance snapshot without a login fingerprint (`identity`: a shared
+  login cannot be ruled out, as before 2026-10-26) are tie-out reasons, never a silent pass. The monthly report reads
+  the same rows on their own line (never in the return, R, drawdown or days), so an exploration-only account has a
+  report. Months before 2026-10-26 will stay flagged on the identity reason by design. Reporting only: the daily
+  ledger, RiskGate, engine and order code are untouched.
 - **Outage 2026-11-12..14 fixes (R151, BACKLOG 256; implementer).** The backup stays at 22:15 UTC: `tick_record` stops at `ticks.job_budget_s` (600 s) for the whole run and skips an account's
   remaining instruments after `ticks.max_page_timeouts` (3) timed-out pulls in a row, so tick_record_winter (22:10) ends before job:backup turns overdue (11-13 it ran to 22:47). aux.db migration 34 adds
   `health_alerts.reasons` (per alerted check, scrubbed, 160 characters). Two warn-only health checks

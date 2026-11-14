@@ -11,7 +11,10 @@ hundreds of exploration trades a day; this is the second source those reports no
 A trade that is in both sources (same account and broker position) is counted once, in the closed-trade record
 (`recorded_keys`): the caller passes that record's keys and the matching ledger rows are dropped.
 
-Voided rows (`evidence == "excluded"`, aux.db `evidence_exclusions`) are skipped; censored rows (closed by anything
+Voided rows (`evidence == "excluded"`, aux.db `evidence_exclusions`) are skipped by default; a money reader (the
+monthly broker tie-out and report, issue #394) passes `include_excluded=True`, because void as evidence is not void as
+money ("the H-61 stops, account P&L and the broker reconciliation keep every trade", research/evidence_exclusions.py).
+Censored rows (closed by anything
 but the arm's own stop, target or hold) are kept and flagged so the reports count them apart, never in net R or money.
 Gross is pnl + commission + swap only (the closed-trade rule), never the ledger's `gross`, which also adds the modelled
 spread and slippage and so depends on engine_<account>.json.
@@ -95,9 +98,10 @@ def _excursion(body: ExplorationRecord | None) -> dict[str, Any]:
             "mfe_usd": body.mfe_usd, "mae_usd": body.mae_usd, "excursion_approx": body.excursion_approx}
 
 
-def read_learning_closes(state_dir: str | Path, now: pd.Timestamp) -> LearningCloses:
+def read_learning_closes(state_dir: str | Path, now: pd.Timestamp, *, include_excluded: bool = False) -> LearningCloses:
     """Every closed, not voided exploration, control and cost-probe trade of the ledger (read-only: the cost-probe
-    source is not migrated). Not yet de-duplicated against the closed-trade record: `without_recorded`."""
+    source is not migrated). Not yet de-duplicated against the closed-trade record: `without_recorded`.
+    `include_excluded`: keep the rows voided as evidence too (money readers: they are still the account's P&L)."""
     from goldbot.api.trades_ledger import build_ledger, exploration_records
     ledger = build_ledger(state_dir, now, read_only=True)
     bodies: dict[str, ExplorationRecord] = {}
@@ -110,7 +114,7 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp) -> LearningCl
     for r in ledger.rows:
         if r.kind not in KINDS or r.status != "closed" or r.exit_utc is None or r.account is None:
             continue
-        if r.evidence == "excluded":
+        if r.evidence == "excluded" and not include_excluded:
             continue
         c = r.costs
         gross = None
@@ -132,6 +136,7 @@ def without_recorded(closes: LearningCloses, recorded: frozenset[tuple[str, int]
 
 
 def closed_learning_trades(state_dir: str | Path, now: pd.Timestamp,
-                           recorded: frozenset[tuple[str, int]] = frozenset()) -> LearningCloses:
+                           recorded: frozenset[tuple[str, int]] = frozenset(), *,
+                           include_excluded: bool = False) -> LearningCloses:
     """`read_learning_closes` less the closed-trade record's own trades. A torn source is named in `unreadable`."""
-    return without_recorded(read_learning_closes(state_dir, now), recorded)
+    return without_recorded(read_learning_closes(state_dir, now, include_excluded=include_excluded), recorded)

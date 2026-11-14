@@ -17,14 +17,20 @@ month is a no-op. Per review:
       opening   the last balance snapshot (ops/ledger.py, daily broker_ledger job) before 00:00 UTC on the 1st, else
                 the month's first snapshot (a note says so);
       closing   the last snapshot before 00:00 UTC on the next 1st;
-      explained every closed record (ops/gates_phase.py) whose exit is after the opening and at or before the closing
-                read, plus the deposits, withdrawals and broker adjustments booked between them (balance_deals; credit
-                is not balance);
+      explained every closed record (ops/gates_phase.py) and every exploration, control and cost-probe close (the
+                trade ledger over aux.db, ops/learning_ledger.py, matched by `account_name`; rows voided as evidence
+                included: "account P&L and the broker reconciliation keep every trade") whose exit is after the opening
+                and at or before the closing read, plus the deposits, withdrawals and broker adjustments booked between
+                them (balance_deals; credit is not balance). Every demo trade is a learning close, never a record
+                (issue #394: without them the tie-out saw no trade on a demo account);
       difference = closing - opening - explained.
   |difference| above `monthly_review.balance_tolerance` + `balance_tolerance_per_trade` x trades is UNRECONCILED: it
   FLAGS the review and never passes. So does a month with no snapshot to tie out (`no_data`), a daily ledger report
-  that failed in the month, a login or currency change between the two reads, a baseline deal inside the window, or a
-  record in another currency than the account's. Gross-only records (costs not recorded) are summed as recorded, so
+  that failed in the month, a login or currency change between the two reads, a baseline deal inside the window, a
+  record in another currency than the account's, a learning close without a recorded P&L, a trade ledger that cannot
+  be read ("missing, not zero"), or a snapshot without a login fingerprint (`identity`): before 2026-10-26 two
+  accounts could share one terminal login, and without the fingerprint a balance moved by the other account's trades
+  cannot be ruled out. Gross-only records (costs not recorded) are summed as recorded, so
   their missing costs show up as a difference rather than being hidden.
 * Agent and infra spend: aux.db agent_spend for the month (USD) and the known hosting costs
   (`monthly_review.hosting_gbp_month`, from docs/finance), in GBP at `monthly_review.gbp_per_usd`.
@@ -70,8 +76,9 @@ from goldbot.db.connection import Database
 from goldbot.db.repo import RecordRepo
 from goldbot.ops import ledger
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades
+from goldbot.ops.learning_ledger import LearningClose, closed_learning_trades
 from goldbot.ops.limits_job import queue_notice
-from goldbot.ops.monthly_report import AccountMonth, build_monthly_report, money
+from goldbot.ops.monthly_report import AccountMonth, build_monthly_report, money, read_learning
 from goldbot.ops.report_days import DAY_BOUNDARY, month_days
 from goldbot.ops.scheduler import JobState, schedule_of
 from goldbot.research.daily_review import scrub
@@ -98,8 +105,9 @@ class MonthTieOut(FrozenRecord):
     to_utc: UtcTimestamp | None = None             # the closing snapshot's read
     opening: float | None = None
     closing: float | None = None
-    trade_pnl: float = 0.0                         # closed records in the window, as recorded
+    trade_pnl: float = 0.0                         # closed records and learning closes in the window, as recorded
     trades: int = 0
+    learning_trades: int = 0                       # ... of which exploration, control and cost-probe closes
     deposits: float = 0.0
     withdrawals: float = 0.0                       # broker sign (negative)
     adjustments: float = 0.0
@@ -191,8 +199,11 @@ def month_window(month: str) -> tuple[pd.Timestamp, pd.Timestamp]:
 
 # ---------------------------------------------------------------------------------------------- tie-out
 def tie_out(db: Database, account_id: str, trades: list[ClosedTrade], month: str,
-            cfg: MonthlyReviewSettings) -> MonthTieOut:
-    """RC-9 for one account over the UTC month (module docstring). Never passes without two snapshots to compare."""
+            cfg: MonthlyReviewSettings, learning: list[LearningClose] | None = None,
+            learning_errors: list[str] | None = None) -> MonthTieOut:
+    """RC-9 for one account over the UTC month (module docstring). Never passes without two snapshots to compare.
+    `learning`: every account's learning closes (matched here by `account_name`); `learning_errors`: why some may be
+    missing, each a reason (never read as zero)."""
     start, end = month_window(month)
     snaps = ledger.snapshots(db, account_id)
     with db.read() as conn:
@@ -200,6 +211,7 @@ def tie_out(db: Database, account_id: str, trades: list[ClosedTrade], month: str
                                         [account_id, _ns(start), _ns(end)], order_by="ts_ns")
     fails = sum(r.status == "fail" for r in reports)
     reasons = [f"{fails} daily ledger tie-out{'s' if fails != 1 else ''} failed in the month"] if fails else []
+    reasons += learning_errors or []
     notes: list[str] = []
     before = [s for s in snaps if s.ts_utc < start]
     inside = [s for s in snaps if start <= s.ts_utc < end]
@@ -215,14 +227,24 @@ def tie_out(db: Database, account_id: str, trades: list[ClosedTrade], month: str
         reasons.append("the account currency changed in the month")
     if opening.identity and closing.identity and opening.identity != closing.identity:
         reasons.append("the terminal's login changed in the month (a new baseline)")
+    if any(s.identity is None for s in [opening, *inside] if s.ts_utc <= closing.ts_utc):
+        reasons.append("a balance snapshot has no login fingerprint: a shared login cannot be ruled out")
     window = [t for t in trades if t.account_id == account_id and opening.ts_utc < t.exit_utc <= closing.ts_utc]
-    def same(t: ClosedTrade) -> bool:
-        return t.pnl_currency is None or t.pnl_currency.upper() == ccy.upper()
+    name = account_name(account_id)
+    learn = [c for c in learning or [] if c.account == name and opening.ts_utc < c.exit_utc <= closing.ts_utc]
 
-    money_rows = [t for t in window if same(t)]
+    def same(c: str | None) -> bool:
+        return c is None or c.upper() == ccy.upper()
+
+    money_rows = [t for t in window if same(t.pnl_currency)]
+    learn_money = [c.pnl for c in learn if same(c.currency) and c.pnl is not None]
     if len(money_rows) < len(window):
         n = len(window) - len(money_rows)
         reasons.append(f"{n} closed record{'s' if n != 1 else ''} in another currency")
+    if other := sum(not same(c.currency) for c in learn):
+        reasons.append(f"{other} exploration or probe trade{'s' if other != 1 else ''} in another currency")
+    if no_pnl := sum(same(c.currency) and c.pnl is None for c in learn):
+        reasons.append(f"{no_pnl} exploration or probe trade{'s' if no_pnl != 1 else ''} without a recorded P&L")
     deals = [d for d in ledger.balance_deals(db, account_id)
              if opening.ts_utc < d.ts_utc <= closing.ts_utc and d.kind != "credit"]
     if any(d.baseline for d in deals):
@@ -232,14 +254,15 @@ def tie_out(db: Database, account_id: str, trades: list[ClosedTrade], month: str
     deps = sum(d.amount for d in deals if d.kind == "deposit")
     wds = sum(d.amount for d in deals if d.kind == "withdrawal")
     adj = sum(d.amount for d in deals if d.kind == "adjustment")
-    pnl = sum(t.pnl for t in money_rows)
+    pnl = sum(t.pnl for t in money_rows) + sum(learn_money)
+    n_trades = len(window) + len(learn)
     diff = closing.balance - (opening.balance + pnl + deps + wds + adj)
-    tol = cfg.balance_tolerance + cfg.balance_tolerance_per_trade * len(window)
+    tol = cfg.balance_tolerance + cfg.balance_tolerance_per_trade * n_trades
     if abs(diff) > tol + 1e-9:
         reasons.insert(0, "the balance moved by more than goldbot's net P&L and the balance deals explain")
     return MonthTieOut(status="unreconciled" if reasons else "reconciled", currency=ccy, from_utc=opening.ts_utc,
                        to_utc=closing.ts_utc, opening=opening.balance, closing=closing.balance, trade_pnl=round(pnl, 2),
-                       trades=len(window), deposits=round(deps, 2), withdrawals=round(wds, 2),
+                       trades=n_trades, learning_trades=len(learn), deposits=round(deps, 2), withdrawals=round(wds, 2),
                        adjustments=round(adj, 2), difference=round(diff, 2), tolerance=round(tol, 2),
                        ledger_days=len(reports), ledger_fail_days=fails, reasons=reasons, notes=notes)
 
@@ -318,11 +341,15 @@ def build_monthly_review(*, settings: Settings, state_dir: str | Path, month: st
     cfg = settings.monthly_review
     db = Database.open(sd, "aux")
     now = _utc(now)
-    rep = build_monthly_report(sd, month=month, now=now, day=month_days(month)[1])
-    by_acc = {a.account_id: a for a in rep.accounts}
     trades, err = load_closed_trades(sd)
+    # read once, for the report and the tie-out alike (issue #394: every demo trade is a learning close)
+    learn, learn_errors = read_learning(sd, now, trades, closed_learning_trades)
+    rep = build_monthly_report(sd, month=month, now=now, day=month_days(month)[1], learning=(learn, learn_errors))
+    by_acc = {a.account_id: a for a in rep.accounts}
     errors = list(rep.errors) + ([err] if err and err not in rep.errors else [])
-    accounts = [AccountReview(account_id=a, report=by_acc.get(a), tie_out=tie_out(db, a, trades, month, cfg))
+    rows = learn.rows if learn is not None else []
+    accounts = [AccountReview(account_id=a, report=by_acc.get(a),
+                              tie_out=tie_out(db, a, trades, month, cfg, rows, learn_errors))
                 for a in sorted(set(account_ids) | set(by_acc))]
     budget = trial_budget(settings, trials, month)
     rel = reliability(db, settings, month, now)
@@ -339,7 +366,7 @@ def build_monthly_review(*, settings: Settings, state_dir: str | Path, month: st
     elif budget.used is not None and budget.budget is not None and budget.used > budget.budget:
         flags.append(f"trial budget exceeded in {budget.quarter}")
     if errors:
-        flags.append(f"{len(errors)} closed-trade record error{'s' if len(errors) != 1 else ''}")
+        flags.append(f"{len(errors)} trade record error{'s' if len(errors) != 1 else ''}")
     return MonthlyReview(month=month, as_of_utc=now, accounts=accounts, spend=spend(db, month, cfg), trials=budget,
                          reliability=rel, flags=flags, status="flagged" if flags else "ok", errors=errors)
 
