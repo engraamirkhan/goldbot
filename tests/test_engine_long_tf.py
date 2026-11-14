@@ -80,7 +80,7 @@ def _engine(b1: pd.DataFrame, arms: list[SpecArm], close: pd.Timestamp, hist: Pa
     engine's session table and the aux ledger next to the history (the decisions persist across engines of a test)."""
     from goldbot.data.calendar import DEFAULT_SESSIONS
     xa = {a.id: exploration.Arm(spec=a, style="swing", control_share=0.1) for a in arms}
-    ex = SimpleNamespace(arms=xa, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
+    ex = SimpleNamespace(arms=xa, retired=frozenset(), deregistered=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
                          needs_context=frozenset(), held_back={}, netting=None, long=None,
                          db=exploration.ledger_db(str(hist.parent / f"{hist.name}-state")))
     cfg = SimpleNamespace(live_clock=False, account_id="t", release_symbol="XAUUSD", decision_tf="15m",

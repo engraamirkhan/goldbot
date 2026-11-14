@@ -215,6 +215,7 @@ from goldbot.ops.checks.services import (
 )
 from goldbot.ops.limits_job import check_limits_controller
 from goldbot.ops.observe import check_observe
+from goldbot.ops.swap_reconcile import check_swap_reconcile
 
 # the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
 # tests import and patch them here)
@@ -380,6 +381,7 @@ __all__ = [
     "check_settings",
     "check_stop_rule",
     "check_supervisor",
+    "check_swap_reconcile",
     "check_throttle",
     "check_tick_errors",
     "check_tick_record",
@@ -653,8 +655,9 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
                   "history_gap:", "entry_silence:", "deploy_read", "news_blackout_cap",
-                  "feedback_loop",
-                  "cpu_steal", "needrestart")   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
+                  "feedback_loop",   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
+                  "cpu_steal", "needrestart",   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule
+                  "swap_reconcile")  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the

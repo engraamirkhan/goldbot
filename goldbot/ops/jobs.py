@@ -1855,6 +1855,15 @@ def har_days(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_job(ctx, slot)
 
 
+def swap_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """BACKLOG 175: every closed weekend hold of a seven-night (crypto) book not reconciled yet, its broker swap (the
+    exploration ledger, from the deals) against the seven-night projection, stored once in aux.db
+    (ops/swap_reconcile.py; health `swap_reconcile` warns past `costs.swap_reconcile_tolerance`). Reads only: never a
+    broker or an order; no weekend hold, nothing written."""
+    from goldbot.ops.swap_reconcile import run
+    return run(ctx.state_dir, ctx.accounts, tolerance=ctx.settings.costs.swap_reconcile_tolerance, now=slot)
+
+
 def monthly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """R142: the review of the calendar month (UTC) before `slot` (ops/monthly_review.py) over the configured accounts;
     the issue goes to GitHub with the keyring's github-token, else to state. Reads only: never a broker or an order."""
@@ -1895,6 +1904,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
     "weekly_review": weekly_review,               # ranked weekly action list the next director run consumes
     "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
+    "swap_reconcile": swap_reconcile,             # BACKLOG 175: weekend crypto holds' broker swap vs the projection
 }
 
 
