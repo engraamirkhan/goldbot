@@ -312,13 +312,20 @@ def weekly_consumed(state_dir: str | Path) -> dict[str, dict[str, str]]:
     return {str(k): {str(a): str(b) for a, b in v.items()} for k, v in doc.items() if isinstance(v, dict)}
 
 
-def mark_weekly_consumed(state_dir: str | Path, name: str, *, by: str, now: pd.Timestamp) -> None:
-    """Record that `by` read the proposals of roll-up `name` (weekly-<day>.json); the first record stands. The loop
-    health check (goldbot/ops/checks/loop.py) fails while a roll-up with proposals stays unread past its window."""
+def mark_weekly_consumed(state_dir: str | Path, name: str, *, by: str, now: pd.Timestamp,
+                         decision: str | None = None) -> bool:
+    """Record that `by` read the proposals of roll-up `name` (weekly-<day>.json), with the research director's
+    `decision` when given (BACKLOG 216); the first record stands. True when this call recorded it. The loop health
+    check (goldbot/ops/checks/loop.py) fails while a roll-up with proposals stays unread past its window."""
     seen = weekly_consumed(state_dir)
-    if name not in seen:
-        seen[name] = {"by": by, "utc": pd.Timestamp(now).tz_convert("UTC").isoformat()}
-        write_atomic(_consumed_path(state_dir), json.dumps(dict(sorted(seen.items())), indent=1))
+    if name in seen:
+        return False
+    rec = {"by": by, "utc": pd.Timestamp(now).tz_convert("UTC").isoformat()}
+    if decision is not None:
+        rec["decision"] = decision
+    seen[name] = rec
+    write_atomic(_consumed_path(state_dir), json.dumps(dict(sorted(seen.items())), indent=1))
+    return True
 
 
 # ---------------------------------------------------------------------------------------------- arm status

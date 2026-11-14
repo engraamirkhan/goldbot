@@ -1,6 +1,6 @@
 # 2026-11-13: trial-registry sync failed for 13 days with no alert (HTTP 403, then an unpublished outbox)
 
-Status: open (closed when R140 is deployed on the brain, `feedback_loop` reports the outbox, and the outbox is published)
+Status: closed 2026-11-14 (R140 deployed on the brain, outbox published from the Mac, weekly proposals marked)
 Severity: S3 (research bookkeeping: the release copy of the registry fell behind the brain's; trading, exits, alerts unaffected)
 Author: sre. Reviewed by: code-reviewer, security-reviewer.
 
@@ -24,6 +24,8 @@ schedules, and logs it at INFO. The rows have waited six days; nothing alerted.
 | 2026-11-01 08:00 | monthly_research result carries the 403; decision: the brain token stays read-only, the Mac publishes |
 | 2026-11-07 12:00 | outbox written by the weekly sync (tournament, research_director); INFO log only |
 | 2026-11-13 | found by the review-loop audit (lane R1); R140 adds the check |
+| 2026-11-13/14 | R140 deployed on the brain (PR #393); `scripts/registry_publish.sh` run from the Mac: 3259 rows published to `research-v1` |
+| 2026-11-14 | unread weekly roll-ups marked read by the research director (Mac session); incident closed (BACKLOG 217) |
 
 ## Root cause
 Not a fault in the HTTP code: the credential is read-only by design, and the error text says so. The fault is in
@@ -41,4 +43,7 @@ next sync.
 
 ## Prevention
 - Shipped: R140 `feedback_loop` health check and `loop_check` job (tests/test_loop_health.py).
-- Follow-ups: BACKLOG 215 (schedule the Mac publish), 217 (deploy, publish the waiting outbox, verify the check clears).
+- Shipped 2026-11-14: BACKLOG 217 (deploy, publish the waiting outbox, mark the proposals); BACKLOG 215 (launchd
+  agent `com.goldbot.registry-publish` publishes daily once installed on the Mac, tests/test_registry_publish_launchd.py);
+  BACKLOG 216 (the Mac research director reads and marks weekly proposals, `scripts/weekly_proposals.sh`,
+  tests/test_weekly_inbox.py).

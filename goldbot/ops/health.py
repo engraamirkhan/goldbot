@@ -129,6 +129,7 @@ from goldbot.ops.checks.bridge import (
     check_server_clock,
     check_terminal,
 )
+from goldbot.ops.checks.compaction import check_compaction
 from goldbot.ops.checks.engine import (
     HISTORY_GAP_MIN_CLOSES,
     HISTORY_GAP_WINDOW_H,
@@ -325,6 +326,7 @@ __all__ = [
     "check_object_storage",
     "check_bridge",
     "check_bridge_compat",
+    "check_compaction",
     "check_costs",
     "check_cost_of_record",
     "check_costs_published",

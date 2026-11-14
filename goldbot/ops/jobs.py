@@ -1690,17 +1690,39 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------- journal compaction (BACKLOG 170)
+def _previous_result(state_dir: Path | None, job: str) -> dict[str, Any] | None:
+    """`job`'s last recorded result from the scheduler status (aux.db, else scheduler.json); None when there is none
+    or it cannot be read (the caller then starts any count over: never an error of the job itself)."""
+    if state_dir is None:
+        return None
+    from goldbot.db.bookkeeping import scheduler_status
+    try:
+        doc = scheduler_status(state_dir)
+        if doc is None:
+            f = Path(state_dir) / "scheduler.json"
+            doc = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+    except (OSError, ValueError, sqlite3.Error):
+        return None
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    entry = jobs.get(job) if isinstance(jobs, dict) else None
+    result = entry.get("last_result") if isinstance(entry, dict) else None
+    return result if isinstance(result, dict) else None
+
+
 def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly, off the engine tick: every closed month partition (before `slot`'s UTC month) of every account's
     `decisions` journal folder is rewritten into one part (goldbot/data/compact.py: under the partition's writer lock,
     atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is never touched.
     BACKLOG 179: the same for every table in settings `compact.tables` (fills, dq_events, observe_ticks; ticks once
     measured), in that order, sharing one time box (`compact.time_box_s`; what is left is `deferred` to the next
-    night, not an error) and paced (`compact.pause_s`). Totals at the top level, each table under `tables`."""
+    night, not an error) and paced (`compact.pause_s`). Totals at the top level, each table under `tables`.
+    BACKLOG 242: each table also carries `deferred_streak`, the consecutive runs that deferred (health check
+    `compaction` WARNs at 3), counted on from the previous result in the scheduler status."""
     import time
 
     from goldbot.config import CompactSettings
-    from goldbot.data.compact import compact_table
+    from goldbot.data import compact as compact_mod
+    compact_table = compact_mod.compact_table
     settings = getattr(ctx, "settings", None)
     cfg = getattr(settings, "compact", None) or CompactSettings()
     t0 = time.monotonic()
@@ -1710,6 +1732,10 @@ def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         tables[table] = compact_table(ctx.store, table, before=slot, min_parts=cfg.min_parts, time_box_s=left,
                                       pause_s=cfg.pause_s, memory_limit=cfg.memory_limit, threads=cfg.threads,
                                       row_group_rows=cfg.row_group_rows).summary()
+    streaks = compact_mod.deferred_streaks(_previous_result(getattr(ctx, "state_dir", None), "journal_compact"),
+                                           tables)
+    for table, streak in streaks.items():
+        tables[table]["deferred_streak"] = streak
     out: dict[str, Any] = {k: sum(int(t[k]) for t in tables.values())
                            for k in ("partitions", "parts_before", "parts_after", "rows", "recovered", "skipped",
                                      "deferred")}

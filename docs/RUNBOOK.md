@@ -2841,11 +2841,52 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   (Mon-Fri 23:10). After the fix the next slot runs it.
 - `reviews`: `state/aux/daily_review/<day>.json` or Monday's `weekly-<sunday>.json` missing for its slot. Read
   `job:daily_review`; rerun one day with `python -m goldbot.ops.run daily-review --date <day>` as the goldbot user.
-- `proposals`: a weekly roll-up with proposals nobody marked read within 8 days. The consumer (research director) calls
-  `goldbot.research.daily_review.mark_weekly_consumed`; until one is wired (BACKLOG 216) this FAILs by design.
+- `proposals`: a weekly roll-up with proposals nobody marked read within 8 days. The consumer is the research
+  director, run from the Mac Claude session (the brain's `research_director` job is off without an Anthropic key;
+  BACKLOG 216): `scripts/weekly_proposals.sh` lists the unread roll-ups (read-only, over ssh, as the goldbot user);
+  for each, decide (queue a proposal for its own pre-registration, or decline with the reason), then
+  `scripts/weekly_proposals.sh --mark weekly-<day>.json "<decision>"` records it in
+  `state/aux/daily_review/consumed.json` (first record stands; any consumer name passes the check). The Saturday
+  `weekly_review` job also marks the roll-ups of its window. Marking runs nothing.
 - `registry`: the latest job's `registry_sync` failed, or rows waited more than 36 h in `state/registry_outbox/`. The
   brain token is read-only on purpose (decision 2026-11-01): publish from the Mac with `scripts/registry_publish.sh`
-  (reads the outbox over ssh, uploads with the Mac's gh); the brain clears the outbox on its next sync. A 403 on a GET
+  (reads the outbox over ssh, uploads with the Mac's gh), which the launchd agent runs daily (see "Registry publish
+  from the Mac" below); the brain clears the outbox on its next sync. A 403 on a GET
   means the token lost `Contents: Read-only` too: sre re-issues it and stores it on the brain with
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.
+
+### Store compaction (`compaction`; BACKLOG 242)
+
+Health check `compaction` (goldbot/ops/checks/compaction.py) appears once `journal_compact` has finished a run (or a
+spill directory exists) and WARNs on either:
+- a table deferred on 3 runs in a row (`deferred_streak` in `job:journal_compact`'s result): the 30 min time box
+  (`compact.time_box_s`) does not drain the backlog. Read the result per table (`partitions`, `deferred`,
+  `duration_s`). One heavy table (a new one in `compact.tables`): let it drain over a weekend, or raise `time_box_s`
+  in `config/settings.local.yaml` within the 03:40-05:00 quiet window (engines keep the disk; `pause_s` stays). A
+  deferral that grows every night means compaction cannot keep up with the writers: data-engineer reviews the table.
+- `<data_root>/.compact_tmp` left unchanged for more than 6 h with no `journal_compact` run in flight: a killed run's
+  DuckDB spill files. Check no run is in flight (`job:journal_compact` finished after it started), then remove it as
+  the goldbot user: `sudo -u goldbot rm -rf <data_root>/.compact_tmp` (the next run recreates it; no partition data
+  lives there). Then find why the run died (`journalctl -u goldbot-scheduler`, OOM in `dmesg`).
+A "can't check" WARN means the scheduler status is unreadable: see the scheduler checks first.
+
+### Registry publish from the Mac (launchd; BACKLOG 215)
+
+The brain's `github-token` cannot write release `research-v1` (decision 2026-11-01), so the Mac publishes the brain's
+`state/registry_outbox/` daily with `scripts/registry_publish.sh`, run by the user agent `com.goldbot.registry-publish`
+(template `goldbot/ops/macos/com.goldbot.registry-publish.plist.template`; runner `scripts/registry_publish_mac.sh`).
+- Install, once, from the main checkout (not a worktree; the agent runs that checkout's scripts):
+  `scripts/install_registry_publish_launchd.sh` (dry run: prints the plist), then the same with `--apply`. It runs
+  at 09:15 local and, after a slot missed while the Mac slept, on wake. Run once at once with
+  `launchctl kickstart gui/$(id -u)/com.goldbot.registry-publish`.
+- Each run appends one line to `~/tmp/registry-publish/publish.log` (`<utc> ok|FAIL rc=<n> <last line>`); the full
+  output is in `run-<utc>.log` next to it (30 kept). Status: `launchctl print gui/$(id -u)/com.goldbot.registry-publish`
+  (`last exit code`).
+- Needs, under launchd: ssh to `goldbot-brain` with a key that needs no prompt (`~/.ssh/goldbot.conf`; a passphrase
+  key must be in the keychain, `UseKeychain yes`), `gh` logged in with write access, the checkout's `.venv` or `uv`.
+  PATH is set in the plist (Homebrew, `~/.local/bin`).
+- Detection when it does not run (Mac off, agent unloaded, ssh or gh failing): the brain's `feedback_loop` FAILs
+  `registry` once rows wait more than 36 h; recovery is the same script by hand, then read the FAIL line in
+  `publish.log` for the cause.
+- Remove: `scripts/install_registry_publish_launchd.sh --uninstall`.
