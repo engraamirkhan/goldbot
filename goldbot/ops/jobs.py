@@ -1885,6 +1885,12 @@ def long_history_refresh(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return refresh_job(ctx.settings, ctx.store, ctx.accounts, slot)
 
 
+def news_coverage(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """BACKLOG 212: the news collector's coverage readout and outage check (goldbot/data/news_coverage.py)."""
+    from goldbot.data.news_coverage import run
+    return run(ctx.store, slot)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1917,6 +1923,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
     "swap_reconcile": swap_reconcile,             # BACKLOG 175: weekend crypto holds' broker swap vs the projection
     "long_history_refresh": long_history_refresh,  # BACKLOG 251: the 1d/1w warm-up file kept current (ops/long_history.py)
+    "news_coverage": news_coverage,               # BACKLOG 212: news collector coverage readout + outage dq_events
 }
 
 

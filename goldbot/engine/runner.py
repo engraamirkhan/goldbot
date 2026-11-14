@@ -2806,11 +2806,11 @@ class Engine:
                 raise
 
     def flush_ticks(self) -> None:
-        """Write buffered ticks as one new part file (append-only; the nightly cost job reads them)."""
+        """Buffered ticks -> one new part file, rows stamped written_utc (BACKLOG 241); append-only, costs read them."""
         if self.store is None or not self._tick_log:
             return
-        df = pd.DataFrame({"ts_utc": [x.ts_utc for x in self._tick_log], "bid": [x.bid for x in self._tick_log],
-                           "ask": [x.ask for x in self._tick_log]})
+        from goldbot.data.compact import stamp_written
+        df = stamp_written(pd.DataFrame({k: [getattr(x, k) for x in self._tick_log] for k in ("ts_utc", "bid", "ask")}))
         self.store.append("ticks", df, source=self.cfg.account_id, symbol=books.store_symbol(self), dedupe=False)
         self._tick_log = []
 

@@ -213,6 +213,7 @@ scheduler:
   har_days:         { kind: daily,   at: "22:05", max_late_hours: 20, run_if_never_run: true }   # N-3 HAR forecast for the next trading day from bars visible at 22:00 UTC (prereg-2026-11-07-n3-har.md); a missed night refuses learning entries (har_unavailable)
   har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
   journal_compact:  { kind: daily,   at: "03:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 170: closed months of the decisions journal -> one part each (goldbot/data/compact.py); never the open month
+  news_coverage:    { kind: daily,   at: "06:05", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 212: news collector coverage readout; a > 12 h open-market gap between polls -> dq_events warning (goldbot/data/news_coverage.py)
   weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
   swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
@@ -520,12 +521,13 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   max_page_timeouts: 3               # timed-out pulls in a row on one account: its remaining instruments wait for a later run
 
 compact:                             # nightly journal_compact (goldbot/data/compact.py; BACKLOG 170, 179): closed months -> one part
-  tables: [decisions, fills, dq_events, observe_ticks]   # + ticks only after the brain measurement (scripts/store_parts_report.py)
+  tables: [decisions, fills, dq_events, observe_ticks, ticks]   # ticks since BACKLOG 239: the brain's largest closed tick month
+                                    # (5,736 parts, 1.38M rows) compacted in 10 s, peak RSS 1.1 GB, no spill (2026-11-14)
   min_parts: 2                       # a closed month is rewritten from this many parts
   time_box_s: 1800                   # no partition started after 30 min; the rest are deferred to the next night
   pause_s: 1.0                       # sleep after each compacted partition: the engines' flushes and reads keep the disk
   memory_limit: 1GB                  # DuckDB's verifying sorted read (spills to <data_root>/.compact_tmp, removed after)
-  threads: 2                         # of the brain's 4 cores
+  threads: 2                         # the brain has 2 cores (nproc, 2026-11-14); measured with 2 (BACKLOG 239)
   row_group_rows: 262144             # rows held at once by the streamed build (and the part's row-group size)
 
 tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)

@@ -20,8 +20,8 @@ so never the one an engine is writing) of every source=/symbol= folder into one 
   file order (`written_utc`). A tick carries no write time of its own; its part's mtime was the only evidence of the
   2026-10-26 tz quarantine. `Store.read` orders by content (backlog 162), so the on-disk order never shows in a read;
 - the verifying read is DuckDB's sorted read with a memory limit, a thread cap and a spill directory under the store
-  root (`.compact_tmp`, removed after the run), hashed batch by batch: memory bounded on the 4-core brain;
-- the tables (settings `compact.tables`): decisions, fills, dq_events, observe_ticks; ticks once measured on the brain.
+  root (`.compact_tmp`, removed after the run), hashed batch by batch: memory bounded on the 2-core brain;
+- the tables (settings `compact.tables`): decisions, fills, dq_events, observe_ticks, ticks (BACKLOG 239, measured).
   A run is time-boxed (`time_box_s`: partitions not started are `deferred` to the next night) and paced (`pause_s`);
   a closed month is compacted from `min_parts` parts. Fills keep every row (no dedupe anywhere here);
 - crash-safe: a manifest (`.compact.json`, fsynced) naming the new part and the parts it replaces is written
@@ -71,7 +71,7 @@ ROW_GROUP_ROWS = 262_144
 class Budget(Record):
     """Resource bounds of one run (settings `compact`)."""
     memory_limit: str = "1GB"             # DuckDB's limit for the verifying sorted read (it spills beyond)
-    threads: int = 2                      # of the brain's 4 cores
+    threads: int = 2                      # the brain has 2 cores (BACKLOG 239)
     row_group_rows: int = ROW_GROUP_ROWS  # rows held at once by the streamed build
 
 
@@ -292,6 +292,14 @@ def written_utc(path: str | Path) -> pd.Series:
     ns = np.repeat(np.array([nat if g["written_ns"] is None else int(str(g["written_ns"])) for g in segs],
                             dtype="int64"), [int(str(g["rows"])) for g in segs])
     return pd.Series(pd.to_datetime(ns, unit="ns", utc=True), name="written_utc")
+
+
+def stamp_written(df: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """`df` with `written_utc` = `now` (default: the wall clock, UTC, ns) on every row (BACKLOG 241): a tick row then
+    carries when it became knowable itself, not only through its part file's mtime or lineage (which a copy without
+    mtimes, an external tool or a dedupe rewrite loses). Rows written before the column read it as null."""
+    at = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    return df.assign(written_utc=pd.Series(at.as_unit("ns"), index=df.index, dtype="datetime64[ns, UTC]"))
 
 
 def _unified_schema(files: list[Path]) -> tuple[pa.Schema, dict[str, str]]:

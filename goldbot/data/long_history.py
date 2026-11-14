@@ -253,7 +253,10 @@ def overlap_stat(lower: pd.DataFrame, upper: pd.DataFrame) -> tuple[int, float |
 def stitch(segments: Sequence[pd.DataFrame]) -> tuple[pd.DataFrame, list[OverlapStat]]:
     """Ranked long-row frames, best first -> one series and the overlap statistic at every hand-over.
 
-    Each lower-ranked frame adds only its dates strictly before the series' current first date."""
+    Each lower-ranked frame adds only its dates strictly before the series' current first date. Then, BACKLOG 238,
+    every hole of at least HOLE_MIN_WEEKDAYS missing weekdays inside the series is filled from the lower-ranked frames
+    in rank order (their own `source` kept), recorded as an OverlapStat with cutover "hole <from>..<to>"; a shorter
+    gap (a holiday, a missing day) is left alone."""
     parts = [s for s in segments if s is not None and not s.empty]
     if not parts:
         return pd.DataFrame(columns=list(LONG_COLUMNS)), []
@@ -270,8 +273,63 @@ def stitch(segments: Sequence[pd.DataFrame]) -> tuple[pd.DataFrame, list[Overlap
         if not add.empty:
             out = pd.concat([add, out], ignore_index=True)
     out = out.sort_values("date").reset_index(drop=True)
+    for seg in parts[1:]:
+        out, filled = _fill_holes(out, seg)
+        stats += filled
     validate_long(out)
     return out, stats
+
+
+HOLE_MIN_WEEKDAYS = 10      # two weeks: no exchange closes that long; the 2011-13 holes are 60-80 weekdays
+
+
+def _fill_holes(out: pd.DataFrame, seg: pd.DataFrame) -> tuple[pd.DataFrame, list[OverlapStat]]:
+    """`out` with `seg`'s rows strictly inside each hole of >= HOLE_MIN_WEEKDAYS missing weekdays."""
+    stats: list[OverlapStat] = []
+    adds = []
+    sd = pd.DatetimeIndex(seg["date"])
+    for a, b, _ in gap_report(out, HOLE_MIN_WEEKDAYS):
+        inside = seg[(sd > pd.Timestamp(a)) & (sd < pd.Timestamp(b))]
+        if inside.empty:
+            continue
+        upper_src = str(out.loc[out["date"] == pd.Timestamp(b), "source"].iloc[0])
+        stats.append(OverlapStat(lower=str(seg["source"].iloc[0]), upper=upper_src, n_common=0, median_abs_pct=None,
+                                 median_signed_pct=None, cutover=f"hole {a}..{b}", rows_added=len(inside)))
+        adds.append(inside)
+    if adds:
+        out = pd.concat([out, *adds], ignore_index=True).sort_values("date").reset_index(drop=True)
+    return out, stats
+
+
+def coverage_gaps(df: pd.DataFrame, closed_days: np.ndarray, min_weekdays: int = 1) -> list[tuple[str, str, int]]:
+    """Runs of weekdays without a row that are not published closures (`closed_days`: UTC day numbers since
+    1970-01-01, goldbot.data.exchange_holidays): (first missing day, last missing day, weekdays), BACKLOG 238. A hole is
+    reported here and never read as a holiday."""
+    if df.empty:
+        return []
+    d = pd.DatetimeIndex(df["date"])
+    span = pd.bdate_range(d.min(), d.max())
+    epoch = pd.Timestamp("1970-01-01")
+    have = set(((d - epoch) // pd.Timedelta(days=1)).tolist())
+    closed = set(np.asarray(closed_days, dtype=np.int64).tolist())
+    nums = ((span - epoch) // pd.Timedelta(days=1)).to_numpy()
+    missing = np.array([n not in have and n not in closed for n in nums.tolist()], dtype=bool)
+    out: list[tuple[str, str, int]] = []
+    i = 0
+    while i < len(nums):
+        if not missing[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(nums) and (missing[j + 1] or int(nums[j + 1]) in closed):
+            j += 1
+        while not missing[j]:
+            j -= 1
+        n = int(missing[i:j + 1].sum())
+        if n >= min_weekdays:
+            out.append((f"{span[i]:%Y-%m-%d}", f"{span[j]:%Y-%m-%d}", n))
+        i = j + 1
+    return out
 
 
 def validate_long(df: pd.DataFrame) -> None:

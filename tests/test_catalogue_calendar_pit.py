@@ -66,11 +66,13 @@ def test_unscheduled_fomc_statements_are_known_only_when_issued(raw: Path) -> No
 
 
 def test_fed_meeting_schedule_is_known_from_its_publication_floor(raw: Path) -> None:
-    """BACKLOG 235: a scheduled FOMC meeting from the Fed's calendar (source fed) is known from 1 Dec of the prior year,
-    not 7 days ahead; a hand-checked (manual) row keeps its own stamp."""
-    ev, av, _ = DA.us_events_avail("confirm", ("fomc_statement",))
-    assert _get(ev, av, _, "2020-01-29 19:00")[0] == _ns("2019-12-01")
-    assert _get(ev, av, _, "2020-03-18 18:00")[0] == _ns("2020-03-11 18:00")
+    """BACKLOG 235: a scheduled FOMC meeting is known from the Fed's schedule notice that first listed it (January 2020
+    on the 2019 schedule of 25 May 2018, 12:00 EDT), not 7 days ahead and no longer from an assumed 1-December
+    floor; the cancelled 18 March 2020 meeting was on the 2020 notice, so it is known from then until its
+    cancellation."""
+    ev, av, until = DA.us_events_avail("confirm", ("fomc_statement",))
+    assert _get(ev, av, until, "2020-01-29 19:00")[0] == _ns("2018-05-25 16:00")    # the 2019 notice lists it
+    assert _get(ev, av, until, "2020-03-18 18:00") == (_ns("2019-05-17 14:00"), _ns("2020-03-15 21:00"))
 
 
 def test_us_calendar_lists_the_2020_unscheduled_statements() -> None:
@@ -115,6 +117,8 @@ def test_truncate_ctx_hides_a_cancellation_published_after_the_cut() -> None:
 
 
 def test_add_holidays_refuses_a_window_past_the_calendar_end() -> None:
+    from goldbot.data.exchange_holidays import load_calendar
+    last = pd.Timestamp(load_calendar().valid_through)                    # 2028-12-31 since BACKLOG 237's refresh
     with pytest.raises(ValueError, match="ends"):
-        D.add_holidays(K.Ctx(window="x"), end_ns=_ns("2028-01-02"))
-    D.add_holidays(K.Ctx(window="x"), end_ns=_ns("2028-01-01"))           # through 2027-12-31: fine
+        D.add_holidays(K.Ctx(window="x"), end_ns=_ns(f"{last + pd.Timedelta(days=2):%Y-%m-%d}"))
+    D.add_holidays(K.Ctx(window="x"), end_ns=_ns(f"{last + pd.Timedelta(days=1):%Y-%m-%d}"))   # through the last day

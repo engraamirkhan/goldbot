@@ -306,6 +306,9 @@ class SchedulerSettings(_Section):
     # hours after the nightly jobs (01:30 autodisc), clear of the 22:00-00:00 UTC cluster; first sight runs it once
     journal_compact: ScheduleSettings = ScheduleSettings(kind="daily", at="03:40", max_late_hours=20,
                                                          run_if_never_run=True)
+    # BACKLOG 212: the news collector's coverage readout and outage dq_events (goldbot/data/news_coverage.py)
+    news_coverage: ScheduleSettings = ScheduleSettings(kind="daily", at="06:05", max_late_hours=20,
+                                                       run_if_never_run=True)
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
@@ -355,7 +358,7 @@ class CompactSettings(_Section):
     time_box_s: float = Field(1800.0, gt=0)          # no partition is started later; the rest wait for the next night
     pause_s: float = Field(1.0, ge=0)                # after each compacted partition: the engines keep the disk
     memory_limit: str = Field("1GB", pattern=r"^\d+(\.\d+)?\s*(KB|MB|GB|KiB|MiB|GiB)$")   # DuckDB's verifying read
-    threads: int = Field(2, ge=1, le=4)              # of the brain's 4 cores
+    threads: int = Field(2, ge=1, le=4)              # the brain has 2 cores (BACKLOG 239)
     row_group_rows: int = Field(262_144, ge=1024)    # rows held at once by the streamed build
 
     @field_validator("tables")

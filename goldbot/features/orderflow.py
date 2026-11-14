@@ -24,7 +24,7 @@ from goldbot.features.registry import FEATURES, FeatureCtx, feature
 
 NAME = "orderflow"
 FAMILY = "orderflow"
-VERSION = "2"                    # 2: columns renamed to what they measure, fill slippage dropped (quant review)
+VERSION = "3"                    # 2: columns renamed, fill slippage dropped (quant review); 3: of_quote_imb_* (213)
 BAR_TOLERANCE = pd.Timedelta(minutes=5)
 SIGNED = {"of_vw_retz_(15m|60m)": 0.0, "of_vw_run": 0.0}
 SCREEN_NOTE = ("tick_count is Dukascopy's bid-side quote updates, not signed trades: of_vw_retz_* and of_vw_run are "
