@@ -1,10 +1,10 @@
 ---
 number: 253
-rank: 81
+rank: 6
 title: 'Lift the 1d/1w settings guard: CONFIRM pass and trading-safety sign-off (BACKLOG 144 blocker 7)'
 stage: Engine · GATE
 size: XS
-status: 'blocked on 251, 252 and a CONFIRM passer · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer'
+status: 'auto-trigger (sweep 2026-11-14): fires when the evaluator records a 1d/1w CONFIRM PASS with a passing lot fit and 251 and 252 are done; no candidate exists today · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer'
 ---
 - **253. Lift the 1d/1w settings guard (BACKLOG 144 blocker 7).** Value: the last step before a qualified 1d/1w arm
   may run on demo. Acceptance: a 1d/1w arm with a CONFIRM pass and a passing lot fit; the settings diff that lists

@@ -3,7 +3,7 @@ number: 69
 title: Monthly audit checks the recorded leverage and the largest order against the gate limits
 stage: Review and audit (monthly finance audit) · RUN
 size: S
-status: 'later (triage 2026-11-13): folded into the finance-auditor''s monthly audit · accountable: finance-auditor · next 2026-12-04'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): folded into the monthly review job (223, PR #388); the leverage and largest-order line runs in each monthly audit, next 2026-12-04 · accountable: finance-auditor'
 ---
 - **69. Monthly audit: leverage and the largest order.** Decided 2026-10-16 by program director + product owner from
   `docs/finance/capital-plan.md` section 6 (finance-auditor row). Value (RUN, protect): the broker allows 1:5000

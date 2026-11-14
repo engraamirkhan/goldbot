@@ -1,10 +1,9 @@
 ---
 number: 117
-rank: 47
 title: A bad exploration arm row must not stop the engine (exits keep running)
 stage: 'build'
 size: 'S'
-status: 'done (implemented 2026-11-13, branch fix/engine-survives-bad-arm-row, R136; in review) · accountable: implementer · reviews: trading-safety-reviewer, code-reviewer'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): PR #386 (branch fix/engine-survives-bad-arm-row, R136); trading-safety and code reviews at the merge · accountable: implementer'
 ---
 - **117. A bad exploration arm row must not stop the engine (exits keep running).** Value: on 2026-10-26 the
   trading-safety review blocked a branch whose G1A/G1C rows used a `window_local` form the `Arm` validator refuses.

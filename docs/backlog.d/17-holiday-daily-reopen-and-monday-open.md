@@ -3,7 +3,7 @@ number: 17
 title: Holiday, daily-reopen and Monday-open entry rules (G-2)
 stage: Operational risk · RUN
 size: S–M
-status: 'later (triage 2026-11-13): built, off by default (PR #74); tightening only, so trading-safety-reviewer recommends and PD+PO decide (no owner input)'
+status: 'auto-trigger (sweep 2026-11-14): built and tested (PR #74), off on demo by design (demo maximises learning volume). The trading-safety-reviewer sets it in the same settings diff as any first live candidate''s go-live gate; no separate work · accountable: trading-safety-reviewer'
 ---
 - **17 (G-2).** Holiday calendar (US, UK, JP, CN, 24 Dec–2 Jan, early closes): no entries on those days. No
   entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.

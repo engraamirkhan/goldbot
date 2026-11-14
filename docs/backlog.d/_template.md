@@ -88,6 +88,17 @@ retired, 127's private-repository step was overtaken by deleting data-v1, and ad
 (17, 18, 19, 21, 35) only tightens, so the PD+PO decide on the trading-safety reviewer's recommendation. 15 ranked
 rows.
 
+**Status sweep 2026-11-14 (product owner; base `11b72577`, PRs #386-#393 merged and deployed).** Owner rule: nothing
+left pending. 29 items marked done with their PR: 117, 149, 150, 207 (#386); 146 (#387); 188, 219-226, 231-233
+(#388); 227-230 (#390); 145, 195 (#391); 144, 152, 179 (#393); 69 (folded into the monthly review job). 188 closed
+as a FAIL: the pre-registered 2010-17 read retired Z10D, Z9D and Z5P and H-90 closed for design futility, so there
+is no live candidate. 16 retired under ADR 0066 (no consumer): 93, 94, 96, 98, 111, 116, 119, 121, 123-126, 134,
+143, 147, 151. 10 carry an automatic trigger, none on the owner: 148 5B (S5 green + first L2 carry), 211 news part
+(2027-10-16), 234 (2027-02-13 or 5 shock periods), 236 (quant note on 14b, due 11-20), 253 (a 1d/1w CONFIRM
+pass), and the rails 17, 18, 19, 21, 35 (set in any first go-live settings diff). Still open: 211 order-flow wiring
+(ready, due 11-21) and 91 governance guard (due 12-18, before the 2027Q1 budget). Items closed by other lanes
+today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) were not touched here.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -113,8 +124,8 @@ hypotheses that go through the trial registry in a future quarter's budget.
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program
 director with the product owner, the CTO on technical and the CFO on financial matters, and reported on #34.
 - **Going live.** Demo until the paper -> tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
-  and the typed phrase. The pilot is deferred (owner, 2026-10-30) until a candidate passes 188's reads and the
-  confirm window. Recommendation: no live step before one arm PASSES against its matched control at its
+  and the typed phrase. The pilot is deferred (owner, 2026-10-30) until a candidate passes its pre-registered read
+  and the confirm window (188's survivors all failed on 2026-11-13). Recommendation: no live step before one arm PASSES against its matched control at its
   pre-registered read; then the CFO prices the pilot.
 - **Phase-gate thresholds** (item 8 values; ROADMAP OD-15: the paper mean's lower 95 % bound above 0).
   Recommendation: yes, as the quant reviewer advised.
@@ -129,34 +140,21 @@ director with the product owner, the CTO on technical and the CFO on financial m
 ## Next parallel wave
 Only items not yet done. The top three ready items have lanes; each lane touches different files.
 
-1. **188 survivor reads** (evaluator, read-only on the brain; `docs/research/`): fill counts on 2026-11-20, verdicts
-   at each pre-registered trigger.
-2. **150 + 149 EVAL-2 runner checks** (implementer, one lane: `goldbot/research/eval2/` runners and
-   `goldbot/research/catalogue/screen.py`, their tests).
-3. **117 bad arm row keeps the engine up** (implementer: `goldbot/engine/exploration.py`,
-   `goldbot/research/arms.py`, a new test file).
-4. **145 N-3 enable** (data-engineer: `scripts/local_bars.sh` refresh and the overlap note; the research director's
-   K row and `config/settings.yaml` `har_abstention` only after both).
-5. **146 session-split cost** (implementer: `goldbot/research/catalogue/costs.py` and its test). Not in the same
-   lane as 150/149 if those touch `costs.py`.
-6. **152 exchange holidays** (data-engineer: `goldbot/research/catalogue/dispatcher.py` calendar input).
+1. **211 order-flow discovery wiring** (research-director with an implementer: `scripts/research_pass.py`
+   `--orderflow` and its test; the pre-registration in `docs/research/`), due 2026-11-21.
+2. **236 S06/S07 re-registration** (strategy-researcher: the trial registry rows and the S05 `impl_notes` in
+   specs.yaml), on the quant note, due 2026-11-20.
+3. **91 retired-family guard** (implementer: `goldbot/research/registry.py`, `goldbot/research/director.py`, a new
+   test file), due 2026-12-18.
 
-Starts after these: 148 Lane 5B (engine consumers; after 150/149 and S5 green), 144 (engine 1d/1w; runner files,
-not in parallel with 148 5B), 90, 187 (once flat), 175 (after the first weekend BTCUSD hold), 142, 179, 105.
+On their triggers, not lanes now: 148 Lane 5B, 234, 253 and the five rails (see their statuses).
 
 ## Later (parked)
 Each item's status names its accountable role and the trigger that brings it back.
-- Rails built and off by default: 17, 18, 19, 21, 35. They only tighten; the trading-safety-reviewer recommends and
-  the PD+PO decide, no owner input.
-- 69, leverage and largest-order audit: folded into the finance-auditor's monthly audit (next 2026-12-04).
-- 91, retired-family guard: before the next registry budget opens.
-- 111 allocator against controls and 116 higher-timeframe features: return with a live candidate or a model lane.
-- Data with no queued consumer: 119 COMEX volume, 121 broker history depth, 123 central-bank and ETF flows, 124
-  second intraday source, 125 GPR/GDELT, 126 COT availability floor (before any positioning read), 147 ALFRED
-  vintages.
-- 143 `accounts delete` (security hygiene, LOW); 151 (only if Lane 3 adds a probe builder).
-- UI and Telegram, at the bottom by the owner's profit focus: 93, 94, 96 (approval card, real money only), 98
-  (Limits screen), 134 (Telegram push policy, matters once real money is live).
+- Rails built and off on demo by design: 17, 18, 19, 21, 35. Automatic: the trading-safety-reviewer sets them in
+  the settings diff of any first go-live gate; no owner input, no separate work.
+- Retired 2026-11-14 (ADR 0066, no consumer; re-proposed only with a consumer): 93, 94, 96, 98, 111, 116, 119, 121,
+  123-126, 134, 143, 147, 151. 69 is done inside the monthly review job.
 - Older parked lines: M28 TreeSHAP per decision, R8 `order_calc_margin`, D10/A2/M9/D11/D13/D7 engine refinements,
   M25 CUSUM calibration, M10 learned allocator, entry order type study (limit vs market).
 

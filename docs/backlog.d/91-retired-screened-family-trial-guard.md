@@ -1,9 +1,10 @@
 ---
 number: 91
+rank: 4
 title: 'Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap'
 stage: Research (governance) · PROVE
 size: S
-status: 'later (triage 2026-11-13): governance guard; re-enters before the next registry budget opens · accountable: implementer'
+status: 'ready (sweep 2026-11-14): governance guard; the procedural rule (H-53 is the only 2027Q1 retired-family trial) holds until it lands; due 2026-12-18, before the 2027Q1 registry budget opens · accountable: implementer · reviews: quant-reviewer'
 ---
 - **91. Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap.**
   - Value: two governance gaps let a retired, screened family (`box_break_close` R-15, `sweep_absorb` R-14) take
