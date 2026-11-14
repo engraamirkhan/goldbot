@@ -147,7 +147,7 @@ rows.
 | 256 | Compact the open month's tick parts (321,590 parts on the brain) | data (follow-up of 239, 2026-11-14) | S | proposed · accountable: data-engineer · reviews: sre |
 | 257 | calendar-v1: the 26-27 Oct 2027 FOMC meeting has no policy decision | Research data · catalogue context | S | proposed · accountable: data-engineer · reviews: quant-reviewer, trading-safety-reviewer |
 | 258 | S05 exits at the exchange's early close | Research catalogue (follow-up of 237) | S | proposed · accountable: strategy-researcher · reviews: quant-reviewer |
-| 259 | News collector: 0 of 393 headlines LLM-scored before 2026-11-13 | data / news (follow-up of 212, 2026-11-14) | S | proposed · accountable: data-engineer · reviews: sre |
+| 259 | News collector: 0 of 393 headlines LLM-scored before 2026-11-13 | data / news (follow-up of 212, 2026-11-14) | S | done 2026-11-14 (branch fix/data-followups-1114); 3-day readout due 2026-11-16 · accountable: data-engineer · reviews: sre |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1697,6 +1697,19 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **257. calendar-v1: the 26-27 Oct 2027 FOMC meeting has no policy decision.** Value: the Fed's revised 2027 schedule (press release 2026-11-12) says the 26-27 October 2027 meeting has no policy decision, but calendar-v1 (2026-11-14) still lists fomc_statement:2027-10-27 as scheduled (the meeting page lists it); the live blackout and research would treat it as a statement day. Acceptance: a hand-checked rule drops the statement and press conference of a meeting the Fed marks as without a decision, stamped at the notice, without a later download reviving it; tested; confirmed on the next release.
 - **258. S05 exits at the exchange's early close.** Value: the S05 spec exits at the T-1 close with early closes honoured; early closes are now in the calendar (exchange_holidays.early_closes, BACKLOG 237) but S05 still exits at the daily bar's close. Acceptance: S05 reads `early_closes` point in time and exits at the early close instant on those days; a test with a 13:00 ET half day; a registry note on the event-count change.
 - **259. News collector: 0 of 393 headlines LLM-scored before 2026-11-13.** Value: the brain's news table holds 399 headlines from 2026-10-16; 393 have `scored` False and no relevance, and only 6 (all on 2026-11-13, scorer rules-v1) are scored: the LLM scorer never scored a headline, so every news_grid window is masked (MAX_UNSCORED) and the forward history the news features need has not been accumulating. Acceptance: root cause (budget, client, key or config) with evidence from the collector's logs; scored share >= 80% of prefiltered headlines over 3 days after the fix, shown by the news_coverage job's readout.
+  **Done 2026-11-14 (root cause, readout).** Root cause, from the brain's collector journal and its `news` table (read
+  2026-11-14): no Anthropic key is in the brain's keyring, so every poll before rules-v1 logged `unscored_reason: no
+  client` and stored its headlines unscored (the LLM scorer never had a client); rules-v1 went live 2026-11-13 12:27 UTC,
+  and since then every prefiltered new headline has been scored (6 of 6 rows; the 7th row is not prefiltered, so never
+  scored by design). Not the budget (spend 0, `rule_blackout_min_today` 0) and not the filters. The readout's 5 of 352
+  (1.4 %) divides by every kept row, including the 86 that are not prefiltered and the 261 prefiltered rows stored
+  before rules-v1. Fix: `news_coverage.readout` adds `prefiltered`, `prefiltered_scored_share` and `scored_share_3d`
+  (prefiltered rows received in the trailing 3 days); on the brain's data at 2026-11-14 09:00 it reads 5/266 overall
+  and 5/36 over 3 days, all 36 being pre-rules rows except the 5 (tests/test_news_coverage_job.py). The 3-day share
+  reaches 1.0 once the window holds only post-rules polls (2026-11-16 12:27 UTC). Not done, by decision: no rules-v1
+  backfill of the old rows. A score computed now is not knowable at their `written_utc` (news_features' availability),
+  the first-release (unscored) rows must stay reproducible, and the rules were tuned on these same headlines, so a
+  backfilled history would be in-sample.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

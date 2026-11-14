@@ -22,17 +22,45 @@ import pandas as pd
 
 from goldbot.data import news_features as nf
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.data.news import PREFILTER
 from goldbot.data.store import Store
 
 CHECK = "news_outage"
 SOURCE = nf.SOURCE                     # the collector's store source (rss); its default symbol
 SYMBOL = "XAUUSD"
+SCORED_WINDOW = pd.Timedelta(days=3)   # BACKLOG 259 acceptance: scored share of prefiltered headlines over 3 days
 
 
-def readout(news: pd.DataFrame | None) -> dict[str, Any]:
-    """news_features.coverage plus `scored_share` (scored / kept rows; None when there are none)."""
-    out: dict[str, Any] = dict(nf.coverage(news if news is not None else pd.DataFrame()))
-    out["scored_share"] = round(out["scored"] / out["rows"], 4) if out["rows"] else None
+def _share(num: int, den: int) -> float | None:
+    return round(num / den, 4) if den else None
+
+
+def readout(news: pd.DataFrame | None, now: pd.Timestamp | None = None) -> dict[str, Any]:
+    """news_features.coverage plus the scored shares (None when the denominator is 0):
+    * `scored_share`: scored / kept rows (every row, prefiltered or not; kept for continuity);
+    * `prefiltered_scored_share`: scored / prefiltered kept rows. Only prefiltered headlines are ever scored (by
+      design, news.worth_scoring), so this is the share that measures the scorer (BACKLOG 259);
+    * `scored_share_3d`: the same over the kept rows received in the SCORED_WINDOW before `now` (the last receipt
+      when None): the scorer's health now, not the history stored before rules-v1 existed (2026-11-13)."""
+    news = news if news is not None else pd.DataFrame()
+    out: dict[str, Any] = dict(nf.coverage(news))
+    out["scored_share"] = _share(out["scored"], out["rows"])
+    out.update(prefiltered=0, prefiltered_scored=0, prefiltered_scored_share=None, prefiltered_3d=0,
+               scored_share_3d=None)
+    if news.empty:
+        return out
+    adm = nf._admissible(news)
+    adm = adm[nf._fresh(adm)]
+    text = adm["title"].fillna("").astype(str) + " " + adm.get("summary", pd.Series("", index=adm.index)) \
+        .fillna("").astype(str)
+    pf = text.str.contains(PREFILTER)
+    scored = pd.to_numeric(adm["relevance"], errors="coerce").notna()
+    end = pd.Timestamp(now).tz_convert("UTC") if now is not None else adm["received_utc"].max()
+    recent = pf & (adm["received_utc"] > end - SCORED_WINDOW) & (adm["received_utc"] <= end)
+    out.update(prefiltered=int(pf.sum()), prefiltered_scored=int((pf & scored).sum()),
+               prefiltered_3d=int(recent.sum()))
+    out["prefiltered_scored_share"] = _share(out["prefiltered_scored"], out["prefiltered"])
+    out["scored_share_3d"] = _share(int((recent & scored).sum()), out["prefiltered_3d"])
     return out
 
 
@@ -75,7 +103,7 @@ def _recorded(store: Store) -> set[tuple[pd.Timestamp, pd.Timestamp]]:
 def run(store: Store, now: pd.Timestamp) -> dict[str, Any]:
     """The daily job: readout + outages; each new outage written once to dq_events (warning)."""
     news = store.read("news")
-    out = readout(news)
+    out = readout(news, now)
     gaps = outages(news)
     seen = _recorded(store)
     new = [g for g in gaps if (g["span_from"], g["span_to"]) not in seen]
