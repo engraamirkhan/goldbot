@@ -24,7 +24,14 @@ month is a no-op. Per review:
                 them (balance_deals; credit is not balance). Every demo trade is a learning close, never a record
                 (issue #394: without them the tie-out saw no trade on a demo account);
       difference = closing - opening - explained.
-  |difference| above `monthly_review.balance_tolerance` + `balance_tolerance_per_trade` x trades is UNRECONCILED: it
+  A learning close counts in the month of its exit (its pnl is net of the entry commission), while the broker books
+  the entry commission when the position opens: a position open across a month boundary moves its entry commission
+  into the opening month's balance but its P&L into the closing month's, a difference of that commission in each
+  (within the tolerance for a few positions).
+  |difference| above `monthly_review.balance_tolerance` + `balance_tolerance_per_trade` x sqrt(trades) is UNRECONCILED
+  (each row's P&L is rounded to the penny, an error of at most half a penny with no sign bias, so the month's sum
+  spreads as the square root of the count: a linear allowance at thousands of learning trades a month would hide
+  real money): it
   FLAGS the review and never passes. So does a month with no snapshot to tie out (`no_data`), a daily ledger report
   that failed in the month, a login or currency change between the two reads, a baseline deal inside the window, a
   record in another currency than the account's, a learning close without a recorded P&L, a trade ledger that cannot
@@ -61,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import re
 import sys
 from pathlib import Path
@@ -257,7 +265,7 @@ def tie_out(db: Database, account_id: str, trades: list[ClosedTrade], month: str
     pnl = sum(t.pnl for t in money_rows) + sum(learn_money)
     n_trades = len(window) + len(learn)
     diff = closing.balance - (opening.balance + pnl + deps + wds + adj)
-    tol = cfg.balance_tolerance + cfg.balance_tolerance_per_trade * n_trades
+    tol = cfg.balance_tolerance + cfg.balance_tolerance_per_trade * math.sqrt(n_trades)   # rounding spread: sqrt(n)
     if abs(diff) > tol + 1e-9:
         reasons.insert(0, "the balance moved by more than goldbot's net P&L and the balance deals explain")
     return MonthTieOut(status="unreconciled" if reasons else "reconciled", currency=ccy, from_utc=opening.ts_utc,

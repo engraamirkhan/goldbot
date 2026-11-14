@@ -66,6 +66,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the same rows on their own line (never in the return, R, drawdown or days), so an exploration-only account has a
   report. Months before 2026-10-26 will stay flagged on the identity reason by design. Reporting only: the daily
   ledger, RiskGate, engine and order code are untouched.
+  Review round (quant): the per-trade tolerance now grows with sqrt(trades), not linearly (per-row rounding spreads
+  as sqrt(n); a linear allowance at thousands of learning trades a month would hide real money). The digest's month
+  line reads no learning rows and shows only accounts with phase-gate trades. The report's learning line says
+  "account money, not evidence" with the voided and censored counts; an account with no phase-gate trades says so
+  instead of zero figures; a learning row on an account the config does not name is an error, not a new account.
 - **Outage 2026-11-12..14 fixes (R151, BACKLOG 256; implementer).** The backup stays at 22:15 UTC: `tick_record` stops at `ticks.job_budget_s` (600 s) for the whole run and skips an account's
   remaining instruments after `ticks.max_page_timeouts` (3) timed-out pulls in a row, so tick_record_winter (22:10) ends before job:backup turns overdue (11-13 it ran to 22:47). aux.db migration 34 adds
   `health_alerts.reasons` (per alerted check, scrubbed, 160 characters). Two warn-only health checks
