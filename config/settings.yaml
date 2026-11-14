@@ -27,7 +27,8 @@ timeframes:
 # settings validator until the go-live blockers (docs/backlog.d engine-1d-1w-golive) are closed.
 engine:
   timeframes_live: [1m, 5m, 15m, 30m, 1h, 4h]
-  long_history_dir: raw/daily
+  # engine-only (the long_history_refresh job appends live minutes to it): never raw/daily, the research file
+  long_history_dir: raw/engine_daily
   # backlog 155: a warm start with fewer 1m bars from the store refuses entries (history_short) until the window holds
   # them; 120 bars of 4h, the longest decision timeframe. Weekday gold only (engine/history.py); 0 turns it off
   warm_start_min_bars: 28800
@@ -176,6 +177,11 @@ costs:
   # spread profile (median and p90 by UTC hour and session, aggregates only; reported, not charged). 10 trading days
   # with all three sessions: docs/research/costs-binding-2026-10-18.md section 1.4 step 4.
   spread_profile_min_days: 10
+  # BACKLOG 175: a weekend hold of a crypto (seven-night) book whose broker swap implies more than this many nights
+  # off the seven-night count warns (health swap_reconcile, told to the owner). In nights, never relative (quant
+  # review 2026-11-14: a relative 25% let a Friday triple pass on a 9-night hold); under 1, so one night more or less
+  # always fails. The interest swap is priced at the position's entry price, not the refresh price.
+  swap_reconcile_tolerance: 0.5
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.
@@ -185,15 +191,12 @@ scheduler:
   tournament:       { kind: weekly,  at: "12:00", weekday: 5, max_late_hours: 30 }   # population round after the retrain
   research_director: { kind: weekly, at: "12:30", weekday: 5, max_late_hours: 30 }   # weekly research plan after the population round
   model_watch:      { kind: daily,   at: "23:30", max_late_hours: 20 }                  # CUSUM on new champions
-  monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
   calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
   calendar_archive_sunday: { kind: weekly, at: "18:00", weekday: 6, max_late_hours: 3 }  # the new week before the Sunday open
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
-  gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
-  backup:           { kind: daily,   at: "22:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py)
+  backup:           { kind: daily,   at: "22:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py); after tick_record_winter, whose ticks.job_budget_s bounds it
   restore_drill:    { kind: weekly,  at: "10:00", weekday: 6, max_late_hours: 30 }      # Sunday: restore latest to a temp dir and verify
-  cpcv_quarterly:   { kind: monthly, at: "14:00", weekday: 6, months: [1, 4, 7, 10], max_late_hours: 30, run_if_never_run: true }   # M16: CPCV + PBO of gate-passing trials, first Sunday of each quarter; run_if_never_run: it was first seen after its 2026-10-04 slot and would have waited until 2027-01-03 (idempotent within the quarter)
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
@@ -203,13 +206,15 @@ scheduler:
   limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
   daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
   loop_check:       { kind: daily,   at: "07:05", max_late_hours: 12, run_if_never_run: true }   # R140 feedback-loop check -> `ci-loop` GitHub issue when a writer is stale or failing
-  autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
   tva_scores:       { kind: daily,   at: "23:35", max_late_hours: 20 }                  # TradingView author ideas shadow score (prereg-2026-10-28 section 6), after feed_reconcile and nightly_costs
   har_days:         { kind: daily,   at: "22:05", max_late_hours: 20, run_if_never_run: true }   # N-3 HAR forecast for the next trading day from bars visible at 22:00 UTC (prereg-2026-11-07-n3-har.md); a missed night refuses learning entries (har_unavailable)
   har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
   journal_compact:  { kind: daily,   at: "03:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 170: closed months of the decisions journal -> one part each (goldbot/data/compact.py); never the open month
+  news_coverage:    { kind: daily,   at: "06:05", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 212: news collector coverage readout; a > 12 h open-market gap between polls -> dq_events warning (goldbot/data/news_coverage.py)
   weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
+  swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
+  long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -469,15 +474,6 @@ gates:                               # design: Roadmap gates and stop rule (gold
   # owner's decision only: the dashboard's Progress tab shows every other PROPOSED threshold as "proposed".
   signed_off: []
 
-gaps:                                # bounded spawning (goldbot/ops/gap_watch.py, TRADER_LIFECYCLE section 3)
-  founders_per_month: 2              # zero-capital SHADOW founders a month (into 4 reserved slots inside the 24 shadow cap)
-  staff_runs_per_week: 3             # on-demand runs of existing read-only roles, inside agents.monthly_cap_usd
-  hypotheses_per_run: 2              # regime / dead-family gaps filed as hypotheses for the research gates
-  dq_window_days: 7                  # repeated data-quality errors: error events on at least
-  dq_min_error_days: 3               #   this many distinct UTC days within the window
-  regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
-  regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
-
 telegram:                            # owner user ids go in config/settings.local.yaml (per server), never here
   digest_at: "06:45"                 # morning learning report at this UTC time, before London; Sundays the weekly digest (goldbot/telegram/digest.py, weekly_digest.py)
   deadman_every_min: 2               # outside dead man's switch: the check's period there; liveness pings every min(60 s, half of it) (goldbot/ops/deadman.py)
@@ -509,15 +505,19 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
   page_limit_s: 5.0                  # a slower page stops the run (cold history page 2-5 s; orders > 10 s refused)
   run_budget_s: 600                  # per account per run (3 accounts fit the 45-min break); unfinished day pulled next run
+  job_budget_s: 600                  # the whole job, all accounts and instruments (outage 2026-11-13: it held the scheduler 37 min)
+  max_page_timeouts: 3               # timed-out pulls in a row on one account: its remaining instruments wait for a later run
 
 compact:                             # nightly journal_compact (goldbot/data/compact.py; BACKLOG 170, 179): closed months -> one part
-  tables: [decisions, fills, dq_events, observe_ticks]   # + ticks only after the brain measurement (scripts/store_parts_report.py)
+  tables: [decisions, fills, dq_events, observe_ticks, ticks]   # ticks since BACKLOG 239: the brain's largest closed tick month
+                                    # (5,736 parts, 1.38M rows) compacted in 10 s, peak RSS 1.1 GB, no spill (2026-11-14)
   min_parts: 2                       # a closed month is rewritten from this many parts
   time_box_s: 1800                   # no partition started after 30 min; the rest are deferred to the next night
   pause_s: 1.0                       # sleep after each compacted partition: the engines' flushes and reads keep the disk
   memory_limit: 1GB                  # DuckDB's verifying sorted read (spills to <data_root>/.compact_tmp, removed after)
-  threads: 2                         # of the brain's 4 cores
+  threads: 2                         # the brain has 2 cores (nproc, 2026-11-14); measured with 2 (BACKLOG 239)
   row_group_rows: 262144             # rows held at once by the streamed build (and the part's row-group size)
+  closed_days_tables: [ticks, observe_ticks]   # BACKLOG 260: their open month too, parts of closed UTC days only
 
 tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)
   enabled: true                      # public listing, no cookie; text stays in state/tv_ideas.db and raw/ (never the repo)

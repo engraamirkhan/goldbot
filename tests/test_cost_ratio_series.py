@@ -415,3 +415,75 @@ def test_the_job_alerts_on_stale_label_bars_and_on_a_failing_series(tmp_path, ph
     events.clear()
     out = decide_account(S, a, [a], cost_bars_15m=lambda s, e: BARS, **kw)
     assert out["cost_ratio_20d"] is None and "cost_ratio_error" in {c for c, _ in events}
+
+
+# ---------------------------------------------------------------------------------------------- the conservative bound
+def test_the_conservative_bound_prices_each_unmeasured_fill_at_the_windows_worst_fill():
+    fills = _two_a_day()
+    worst = _fill(_weekday_entries(1)[0] + pd.Timedelta(minutes=30), spread=0.90)   # the window's costliest fill
+    blind = [_fill(e + pd.Timedelta(hours=6)) for e in _weekday_entries(5)]       # no exit leg: unmeasured
+    got = _ratio([*fills, worst, *blind], legs=pd.DataFrame([leg for _, leg in [*fills, worst]]))
+    assert got.unmeasured == 5 and got.ratio is not None                             # 5 of 46: under the 20% cut
+    assert got.measured_usd_per_oz is not None and got.model_usd_per_oz is not None
+    n, model, worst_cost = got.fills, BAR_SPREAD + 0.20, 0.90 + 0.10 + COMM
+    want = (got.measured_usd_per_oz * n + 5 * worst_cost) / (got.model_usd_per_oz * n + 5 * model)
+    assert got.ratio_bound == pytest.approx(want) and got.ratio_bound > got.ratio
+    full = _ratio(fills)
+    assert full.ratio_bound == pytest.approx(full.ratio)                             # nothing unmeasured: the ratio
+    assert _ratio([]).ratio_bound is None                                            # no measured fill to price at
+
+
+def test_the_conservative_bound_is_reported_but_never_moves_a_limit(tmp_path, phase_file):
+    fills = _good_history(1.3)
+    out = _decide(tmp_path, fills, pd.DataFrame([leg for _, leg in fills[-20:]]), dq=lambda c, d: None)
+    assert out["cost_ratio_20d"] is None and out["cost_ratio_bound"] > 1.25          # the bound would floor; it may not
+    reasons = {r for c in AdaptiveStore(tmp_path).changes("icm-demo") for r in c.reasons}
+    assert not ({"cost_floor", "cost_step"} & reasons)
+
+
+# ---------------------------------------------------------------------------------------------- the replay (BACKLOG 255)
+def _replay(tmp_path: Path, fills: list[tuple[ClosedTrade, dict]], **kw: Any) -> list[Any]:
+    from goldbot.ops.limits_replay import replay
+    tmp_path.mkdir(exist_ok=True)
+    for t, _ in fills:
+        append_closed_trade(tmp_path, t)
+    models = SimpleNamespace(entries=[SimpleNamespace(version="v1", promoted_utc=FREEZE)])
+    a = _acc()
+    return replay(S, a, [a], state_dir=tmp_path, models=models,  # type: ignore[arg-type]
+                  start=date(2026, 11, 16), end=DAY, bars_15m=lambda s, e: BARS, **kw)
+
+
+def test_a_replay_day_with_a_1_3_ratio_gives_the_floors_as_the_nightly_job_would(tmp_path, phase_file):
+    fills = _good_history(1.3)
+    legs = pd.DataFrame([leg for _, leg in fills])
+    days = _replay(tmp_path / "replay", fills, exit_legs=lambda s, e: legs, cost_bars_15m=lambda s, e: BARS)
+    assert len(days) == 8 and all(d.cost_ratio_20d == pytest.approx(1.3) for d in days)
+    assert all("cost_floor" in d.reasons and d.limits.daily_cap == pytest.approx(0.02) for d in days)
+    (tmp_path / "job").mkdir()
+    job = _run_job(tmp_path / "job", 1.3)                                            # the same day through the job
+    assert job["cost_ratio_20d"] == pytest.approx(days[-1].cost_ratio_20d)
+
+
+def test_without_a_data_root_the_replay_leaves_the_cost_ratio_none_and_says_so(tmp_path, phase_file):
+    from goldbot.ops.limits_replay import render
+    days = _replay(tmp_path, _good_history(1.3))
+    assert all(d.cost_ratio_20d is None and "cost_floor" not in d.reasons for d in days)
+    assert any(d.limits.daily_cap > 0.02 for d in days)              # the same record loosens: the floors are the cost's
+    head = render(days, "not given", cost="not given (None: the cost rule inert)")[0]
+    assert "cost/model not given (None: the cost rule inert)" in head
+
+
+def test_the_replay_reads_the_accounts_exit_fills_and_the_labels_dukascopy_bars_as_the_job_does():
+    from goldbot.ops.limits_job import store_exit_legs, store_label_bars
+    reads: list[tuple[str, dict[str, Any]]] = []
+
+    def read(table: str, **kw: Any) -> pd.DataFrame:
+        reads.append((table, kw))
+        return pd.DataFrame()
+
+    store = SimpleNamespace(read=read)
+    s, e = pd.Timestamp("2026-11-01", tz="UTC"), pd.Timestamp("2026-11-02", tz="UTC")
+    store_exit_legs(store, "icm-demo")(s, e)  # type: ignore[arg-type]
+    store_label_bars(store)(s, e)  # type: ignore[arg-type]
+    assert reads == [("exit_fills", {"source": "icm-demo", "symbol": None, "start": s, "end": e}),
+                     ("bars_15m", {"source": "dukascopy", "start": s, "end": e})]

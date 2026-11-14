@@ -3,7 +3,7 @@ number: 35
 title: Open positions' remaining stop risk in the daily £ projection (review MEDIUM-4)
 stage: Capital and drawdown management · RUN
 size: S
-status: 'later (triage 2026-11-13): built, off by default (PR #75); it only tightens; trading-safety-reviewer recommends, PD+PO decide'
+status: 'auto-trigger (sweep 2026-11-14): built (PR #75), off on demo by design. The trading-safety-reviewer sets it in any first live candidate''s go-live settings diff · accountable: trading-safety-reviewer'
 ---
 - **35. Open positions' remaining stop risk in the daily projection (trading-safety review MEDIUM-4).** Value: the
   absolute daily limit (29) projects the loss so far (equity, so open P&L included) plus the NEW trade's stop risk,

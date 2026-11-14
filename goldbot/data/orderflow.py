@@ -1,7 +1,7 @@
 """Order-flow proxies from 1m bars (R139, plan item 8; 4-ai-systems.md s.5 rank 4).
 
 We have no L2 and no trade signs: Dukascopy gives 1m bid/ask OHLC and a tick volume that counts the bid side's quote
-updates (stored as `tick_count`; scripts/dukascopy_year.py drops the ask side's), not signed trades. So the "imbalance"
+updates (stored as `tick_count`; since BACKLOG 213 the ask side's as `tick_count_ask`), not signed trades. So the "imbalance"
 of the bulk-volume classification (Easley, Lopez de Prado and O'Hara 2012: each minute's count split by Phi(dp / sigma),
 dp the minute's mid close-to-close change, sigma its rolling std over SIGMA_N minutes) is here a quote-update-weighted
 return score, named `of_vw_retz_*` for what it is (quant review 2026-11-13). It is a close cousin of plain returns and
@@ -15,7 +15,11 @@ Per 1m bar, every value is known at that bar's `visible_at` (its close; a correc
 * `of_spread_rel_15m`: mean spread over 15 min / mean spread over the trailing day;
 * `of_spread_chg_60m`: mean spread over the last 15 min / over the 45 min before, minus 1;
 * `of_spread_max_rel_60m`: max spread_max over 60 min / mean spread over the trailing day;
-* `of_tick_rate_15m`: log(tick count per minute over 15 min / per minute over the trailing day).
+* `of_tick_rate_15m`: log(tick count per minute over 15 min / per minute over the trailing day);
+* `of_quote_imb_15m`, `of_quote_imb_60m` (BACKLOG 213): the quoted-volume imbalance sum(bid vol - ask vol) /
+  sum(bid vol + ask vol), in [-1, 1], an independent second proxy. Only where both sides exist: a window holding any
+  minute without `tick_count_ask` (bars built before the column, an imputed side, a live feed) reads NaN, never a
+  one-sided value.
 A minute with tick_count <= 0 (the `warning:no_volume` minutes of the early archive) is missing, never quiet: it
 carries no weight and a window with no volume reads NaN.
 
@@ -33,7 +37,7 @@ SIGMA_N = 60
 RUN_GAP = pd.Timedelta(minutes=5)
 DAY = "1D"
 COLUMNS: tuple[str, ...] = ("of_vw_retz_15m", "of_vw_retz_60m", "of_vw_run", "of_spread_rel_15m", "of_spread_chg_60m",
-                            "of_spread_max_rel_60m", "of_tick_rate_15m")
+                            "of_spread_max_rel_60m", "of_tick_rate_15m", "of_quote_imb_15m", "of_quote_imb_60m")
 
 
 def _mid_frame(bars: pd.DataFrame) -> pd.DataFrame:
@@ -48,9 +52,10 @@ def _mid_frame(bars: pd.DataFrame) -> pd.DataFrame:
         spread = bars["spread"].to_numpy(dtype=float)
     smax = bars["spread_max"].to_numpy(dtype=float) if "spread_max" in bars.columns else spread
     tc = bars["tick_count"].to_numpy(dtype=float)
+    ask = bars["tick_count_ask"].to_numpy(dtype=float) if "tick_count_ask" in bars.columns else np.full(len(tc), np.nan)
     vis = pd.to_datetime(bars["visible_at"], utc=True) if "visible_at" in bars.columns else ts + pd.Timedelta(minutes=1)
     f = pd.DataFrame({"close": close, "spread": spread, "spread_max": smax, "tc": np.where(tc > 0, tc, np.nan),
-                      "available_utc": pd.DatetimeIndex(vis)}, index=ts)
+                      "bid_vol": tc, "ask_vol": ask, "available_utc": pd.DatetimeIndex(vis)}, index=ts)
     return f[~f.index.duplicated(keep="last")].sort_index()
 
 
@@ -93,6 +98,14 @@ def orderflow_frame(bars_1m: pd.DataFrame) -> pd.DataFrame:
     no_vol15 = vol_min["15min"] == 0
     out.loc[no_vol15, ["of_vw_retz_15m", "of_tick_rate_15m"]] = np.nan
     out.loc[sums["60min"] <= 0, ["of_vw_retz_60m", "of_vw_run"]] = np.nan
+    # quoted-volume imbalance: both sides in every minute of the window, else unknown
+    both = f["bid_vol"].notna() & f["ask_vol"].notna()
+    diff = (f["bid_vol"] - f["ask_vol"]).where(both, 0.0)
+    tot = (f["bid_vol"] + f["ask_vol"]).where(both, 0.0)
+    one_sided = (~both).astype(float)
+    for w, col in (("15min", "of_quote_imb_15m"), ("60min", "of_quote_imb_60m")):
+        den = tot.rolling(w).sum()
+        out[col] = (diff.rolling(w).sum() / den.where(den > 0)).where(one_sided.rolling(w).sum() == 0)
     out.insert(0, "available_utc", f["available_utc"].to_numpy())
     return out.reset_index(drop=True)[["available_utc", *COLUMNS]]
 

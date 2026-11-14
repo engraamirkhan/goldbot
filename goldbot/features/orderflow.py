@@ -21,15 +21,32 @@ import pandas as pd
 from goldbot.data.orderflow import COLUMNS, orderflow_frame
 from goldbot.data.store import asof_join
 from goldbot.features.registry import FEATURES, FeatureCtx, feature
+from goldbot.features.registry import RESEARCH_ONLY as RESEARCH_ONLY_REGISTRY
 
 NAME = "orderflow"
 FAMILY = "orderflow"
-VERSION = "2"                    # 2: columns renamed to what they measure, fill slippage dropped (quant review)
+VERSION = "3"                    # 2: columns renamed, fill slippage dropped (quant review); 3: of_quote_imb_* (213)
 BAR_TOLERANCE = pd.Timedelta(minutes=5)
-SIGNED = {"of_vw_retz_(15m|60m)": 0.0, "of_vw_run": 0.0}
+# of_quote_imb_*: bid minus ask quoted volume, directional (BACKLOG 213 quant review), neutral 0
+SIGNED = {"of_vw_retz_(15m|60m)": 0.0, "of_vw_run": 0.0, "of_quote_imb_(15m|60m)": 0.0}
+RESEARCH_ONLY_REASON = "needs tick_count_ask, which live bars never carry"
+RESEARCH_ONLY = ("of_quote_imb_15m", "of_quote_imb_60m")
 SCREEN_NOTE = ("tick_count is Dukascopy's bid-side quote updates, not signed trades: of_vw_retz_* and of_vw_run are "
                "quote-update-weighted return scores; a survivor must beat the plain return and momentum features "
-               "(ret_*, momentum family) in the same screen, or it is read as a restated return")
+               "(ret_*, momentum family) in the same screen, or it is read as a restated return. "
+               "of_quote_imb_15m/60m are research-only: they need tick_count_ask (Dukascopy's ask-side volume), which "
+               "live bars never carry, so no live or shadow model may read them (registry.live_feature_check)")
+H14_NOTE = ("at 15m a survivor's own trial also clears the H-14 gate: expected move >= 3x the round trip (spread plus "
+            "the extra cost), or it is not traded")
+
+
+def prereg_notes(timeframe: str) -> tuple[str, ...]:
+    """The pre-registration notes of a discovery screen that carries the `orderflow` family (BACKLOG 211): SCREEN_NOTE
+    always, H14_NOTE when the specialist decides on 15m bars."""
+    return (SCREEN_NOTE, H14_NOTE) if timeframe == "15m" else (SCREEN_NOTE,)
+
+
+RESEARCH_ONLY_REGISTRY.update({c: RESEARCH_ONLY_REASON for c in RESEARCH_ONLY})
 
 
 def _close(df: pd.DataFrame) -> pd.Series:

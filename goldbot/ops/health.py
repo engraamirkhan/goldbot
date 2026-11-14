@@ -129,6 +129,8 @@ from goldbot.ops.checks.bridge import (
     check_server_clock,
     check_terminal,
 )
+from goldbot.ops.checks.compaction import check_compaction
+from goldbot.ops.checks.cpcv import check_cpcv_evidence
 from goldbot.ops.checks.engine import (
     HISTORY_GAP_MIN_CLOSES,
     HISTORY_GAP_WINDOW_H,
@@ -161,6 +163,8 @@ from goldbot.ops.checks.feeds import (
     check_pnl_basis,
     check_qualification,
 )
+from goldbot.ops.checks.host import PROC_STAT, StealSampler, check_cpu_steal, check_needrestart
+from goldbot.ops.checks.long_history import check_long_history  # BACKLOG 251 (registers it)
 from goldbot.ops.checks.loop import check_feedback_loop
 from goldbot.ops.checks.operations import (
     check_accounts,
@@ -213,6 +217,7 @@ from goldbot.ops.checks.services import (
 )
 from goldbot.ops.limits_job import check_limits_controller
 from goldbot.ops.observe import check_observe
+from goldbot.ops.swap_reconcile import check_swap_reconcile
 
 # the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
 # tests import and patch them here)
@@ -324,11 +329,14 @@ __all__ = [
     "check_object_storage",
     "check_bridge",
     "check_bridge_compat",
+    "check_compaction",
     "check_costs",
     "check_cost_of_record",
+    "check_cpcv_evidence",
     "check_costs_published",
     "check_data_quality",
     "check_deadman",
+    "check_cpu_steal",
     "check_feedback_loop",
     "check_deploy_approval",
     "check_deploy_read",
@@ -349,10 +357,12 @@ __all__ = [
     "check_failed_orders",
     "check_feature_versions",
     "check_halt",
+    "check_needrestart",
     "check_heartbeat",
     "check_history_gap",
     "check_kill_switch",
     "check_limits_controller",
+    "check_long_history",
     "check_loss_caps",
     "check_model_watch",
     "check_monthly_review",
@@ -375,6 +385,7 @@ __all__ = [
     "check_settings",
     "check_stop_rule",
     "check_supervisor",
+    "check_swap_reconcile",
     "check_throttle",
     "check_tick_errors",
     "check_tick_record",
@@ -432,6 +443,8 @@ class HealthContext(Record):
     # incident 2026-11-09: () -> {account: entry_silence.AccountSupply} of the exploring demo accounts; None skips
     # check_entry_silence
     entry_supply: Callable[[], dict[str, Any]] | None = None
+    # outage 2026-11-14: the host's /etc, for check_needrestart (from_runtime sets it on Linux); None omits the check
+    etc_dir: Path | None = None
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -471,7 +484,7 @@ class HealthContext(Record):
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
                    commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes,
-                   observe_lanes=observed,
+                   observe_lanes=observed, etc_dir=Path("/etc") if sys.platform.startswith("linux") else None,
                    entry_supply=partial(_entry_supply_view, settings) if settings is not None else None)
 
 
@@ -527,13 +540,16 @@ class Heartbeat:
     A write error is logged, never raised: a full disk must not stop the supervisor's loop. It carries this process's
     bounded `schema_skew` block (ADR 0010), which health checks for every service (`schema_skew:svc:<service>`);
     building the block never costs the beat: on an error the beat carries {"error": <type>} instead, which health
-    WARNs as unreadable."""
+    WARNs as unreadable. With `proc_stat` (`start_heartbeat` passes /proc/stat) each beat also samples the host's CPU
+    steal and carries the last 10 minutes as `cpu_steal` (goldbot/ops/checks/host.py; outage 2026-11-12..14), which
+    health WARNs on when sustained; a host without the file carries no block."""
 
     def __init__(self, state_dir: str | Path, service: str, every_s: float = HEARTBEAT_EVERY_S,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, proc_stat: Path | None = None):
         self.path = heartbeat_path(state_dir, service)
         self.service, self.every_s, self.clock = service, every_s, clock
         self._last: float | None = None
+        self._steal = StealSampler(proc_stat) if proc_stat is not None else None
 
     def beat(self) -> bool:
         now = self.clock()
@@ -545,6 +561,14 @@ class Heartbeat:
         except Exception as exc:             # noqa: BLE001 - liveness first; health WARNs "block unreadable"
             doc["schema_skew"] = {"error": type(exc).__name__}          # the type, never the message
             _note_skew_build_failure(self.service)
+        if self._steal is not None:
+            try:
+                steal = self._steal.sample(now)
+            except Exception:                # noqa: BLE001 - liveness first; the steal check is then omitted
+                log.debug("heartbeat %s: cpu steal sample failed", self.service, exc_info=True)
+                steal = None
+            if steal is not None:
+                doc["cpu_steal"] = steal
         try:
             write_atomic(self.path, json.dumps(doc), durable=False)
         except OSError:
@@ -557,7 +581,7 @@ class Heartbeat:
 def start_heartbeat(state_dir: str | Path, service: str, every_s: float = HEARTBEAT_EVERY_S) -> threading.Thread:
     """A daemon thread beating for a service whose loop lives elsewhere (uvicorn, the Telegram bot, a scheduler
     blocked in a long job): it proves the process is alive; the service's own checks judge its loop."""
-    hb = Heartbeat(state_dir, service, every_s)
+    hb = Heartbeat(state_dir, service, every_s, proc_stat=PROC_STAT)
 
     def loop() -> None:  # pragma: no cover - runs for the life of the process
         while True:
@@ -634,8 +658,10 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 # deploy_read: no version could be offered for 2 h, incident 2026-11-10)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
-                  "history_gap:", "entry_silence:", "deploy_read", "news_blackout_cap",
-                  "feedback_loop")   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
+                  "history_gap:", "long_history:", "entry_silence:", "deploy_read", "news_blackout_cap",
+                  "feedback_loop",   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
+                  "cpu_steal", "needrestart",   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule
+                  "swap_reconcile")  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the
@@ -684,6 +710,7 @@ class AlertStep(FrozenRecord):
     state: WatchState
     kinds: tuple[str, ...] = ()
     checks: tuple[str, ...] = ()
+    reasons: dict[str, str] = Field(default_factory=dict)   # check -> its reason, for each new failure or notice sent
 
 
 def _changes(prev: dict[str, Status], report: HealthReport) -> tuple[list[Check], list[str]]:
@@ -783,7 +810,8 @@ def step_alerts(state: WatchState, report: HealthReport, policy: AlertPolicy) ->
     names = (*(c.name for c in sent_new), *sorted(sent_rec),
              *(n for n in sorted(flaps) if noted.get(n) == ts and n not in state.flap_noted))
     new_state = WatchState(ts=ts, statuses=now, announced=announced, pending=pending, flaps=flaps, flap_noted=noted)
-    return AlertStep(text=text, state=new_state, kinds=kinds, checks=names)
+    return AlertStep(text=text, state=new_state, kinds=kinds, checks=names,
+                     reasons={c.name: c.reason for c in sent_new})
 
 
 class HealthWatch:

@@ -384,10 +384,14 @@ def test_declared_feature_lists_exist_and_fit_the_cap(family, bars_1m):
     assert clone[0] == "side" and len(clone) == MAX_FEATURES and clone[1:] != declared
 
 
-def test_tournament_sees_a_passed_trial_that_exists_only_in_the_release_registry(tmp_path):
-    """H2: research.yml writes trials to the release copy; the weekly tournament syncs before it looks them up."""
+def test_tournament_sees_a_passed_trial_that_exists_only_in_the_release_registry(tmp_path, monkeypatch):
+    """H2: research.yml writes trials to the release copy; the weekly tournament syncs before it looks them up. CPCV
+    at promotion (research/cpcv_gate.py) is stubbed clean here; tests/research/test_cpcv_gate.py covers it."""
     from goldbot.data.store import Store
+    from goldbot.ops import jobs
     from goldbot.ops.jobs import JobContext, tournament
+    from tests.research.test_cpcv_gate import clean_runner
+    monkeypatch.setattr(jobs, "_cpcv_runner", lambda ctx, slot: clean_runner)
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.registry_sync import merge_files
     from tests.test_population import _add_trades, _good

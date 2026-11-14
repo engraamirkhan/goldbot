@@ -466,3 +466,16 @@ cites this amendment and its harness hash.
 - **K.** S06/S07 rows re-registered on this basis are ADDED to K (and to the DSR K of 21,333). They never replace
   the earlier rows, and the reading rule (section 8) is fixed before the re-run. S05 stays unregistered: its 199/149
   explore events are below its n floor of 300 (section 7).
+
+### 14c. Note 2026-11-14: S05 exits at a published early close (BACKLOG 258)
+
+S05's card exits "at the T-1 cash close (early closes honoured)". The exchange calendar has carried early closes
+since r2 (BACKLOG 237); the detector now reads them point in time: when T-1 is an early close published by the T-2
+decision close, the event's time exit is the early close instant (`Events.exit_at`), priced on the instrument's 4h CFD
+bars (the finest the catalogue holds for indices), so a 13:00 ET close exits at the close of the last 4h bar ending at
+or before it (exactly at it only where a bar boundary falls there), never later. A day without finer bars keeps the daily close and is counted
+(`exit_at_unpriced`). Entries are unchanged, so the event counts stay 199 (V0) and 149 (V1); only the exit of the
+trades whose T-1 is an early close moves (Christmas Eve and 3 July on the US exchanges, the year-end half days
+before an LSE or Xetra holiday). The random-time twin still holds whole bars (it does not mirror the earlier
+exit), a known asymmetry to fix if S05 is ever registered. S05 stays unregistered (n floor 300); no K changes. The
+`impl_notes` in specs.yaml are not edited (its sha256 pins the registered unit list); this note supersedes them.

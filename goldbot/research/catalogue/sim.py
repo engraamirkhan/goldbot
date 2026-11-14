@@ -221,6 +221,28 @@ def _fine_exit(fine: Bars, ff: FineFill, f: int, side: int, stop: float, tgt: fl
     return Walk(f, tgt, 2, t)
 
 
+def walk_until(xb: Bars, t0: int, t_end: int, side: int, stop: float, tgt: float, exit_bar: int) -> Walk | None:
+    """BACKLOG 258: the part of a trade from instant t0 (the start of the hold's last bar) to the time exit `t_end`,
+    walked on the finer bars `xb` that open at or after t0 and close at or before t_end (same rules as `walk`; the
+    first one is not checked for a gap at its open). The time exit is the close of the last of them (kind 0), which
+    is t_end when a finer bar closes exactly there and earlier otherwise (never later). None: no such finer bar."""
+    a = int(np.searchsorted(xb.t, t0, "left"))
+    z = int(np.searchsorted(xb.ta, t_end, "right"))
+    if z <= a:
+        return None
+    for j in range(a, z):
+        if j > a and side * (xb.o[j] - stop) <= 0:
+            return Walk(exit_bar, float(xb.o[j]), 1, int(xb.t[j]))
+        if (xb.l[j] <= stop) if side > 0 else (xb.h[j] >= stop):
+            return Walk(exit_bar, stop, 1, int(xb.t[j]))
+        if np.isfinite(tgt):
+            if j > a and side * (xb.o[j] - tgt) >= 0:
+                return Walk(exit_bar, float(xb.o[j]), 2, int(xb.t[j]))
+            if (xb.h[j] >= tgt) if side > 0 else (xb.l[j] <= tgt):
+                return Walk(exit_bar, tgt, 2, int(xb.t[j]))
+    return Walk(exit_bar, float(xb.c[z - 1]), 0, int(xb.ta[z - 1]))
+
+
 def walk_fine(b: Bars, fine: Bars, ff: FineFill, f: int, side: int, fill: float, stop: float, tgt: float, last: int,
               mask: np.ndarray | None, limit_entry: bool = False) -> Walk:
     """Walk of an order filled inside bar f at finer bar ff.m: the rest of bar f on its finer bars, then `walk`."""
@@ -316,14 +338,18 @@ def risk_floor(inst: str, fill: float, spr: float, atr20: float, costs: CostMode
 
 def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: float = 0.0,
              counts: dict[str, int] | None = None, fine: Bars | None = None,
-             costs: CostModel | None = None) -> np.ndarray:
+             costs: CostModel | None = None, exit_bars: Bars | None = None) -> np.ndarray:
     """Trades of one cell as a float array with columns TRADE_COLS (decisions before the window's dec_from and fills
     at or after its end are dropped; a trade still open at the data end exits at the last close). `fine`: finer bars
     of the same instrument (1m) that resolve stop/limit fills inside a bar (C10). `counts`, when given, gets
     "risk_floor" += the events not traded because their stop was inside the risk floor, and "fine_miss" += the
     intrabar fills whose finer bars never reach the order price. `costs`: the window's cost model (the screen always
     passes `costs.window_model`; None = `costs.default_model()`, benchmark rates 0, for synthetic tests). An instrument
-    missing from the cost table raises MissingCost before anything is simulated (fail closed)."""
+    missing from the cost table raises MissingCost before anything is simulated (fail closed).
+    `exit_bars`: finer bars of the same instrument that price an event's `exit_at` (BACKLOG 258: a time exit inside the
+    hold's last bar, at the close of the last finer bar ending at or before it; `fine` when None). A market entry
+    filled at a bar open only; without finer bars covering it the exit stays at the bar close and
+    counts["exit_at_unpriced"] += 1."""
     cm = costs or default_model()
     cm.inst(b.inst)
     n = len(b)
@@ -388,6 +414,18 @@ def simulate(b: Bars, ev: Events, *, control: str, seed_key: str, drift_per_ns: 
             w = walk_fine(b, fine, ff, f, side, fill, stop, tgt, last, mask, kind_k == 2)
         else:
             w = walk(b, start, side, fill, stop, tgt, last, mask, at_open)
+            x_at = 0 if ev.exit_at is None else int(ev.exit_at[k])
+            if x_at and w.kind == 0 and int(b.t[last]) <= x_at < int(b.ta[last]) and at_open:
+                xb = exit_bars if exit_bars is not None else fine
+                w0 = walk(b, start, side, fill, stop, tgt, last - 1, mask, at_open) if last > start else None
+                if w0 is not None and w0.kind != 0:
+                    w = w0
+                else:
+                    wx = None if xb is None else walk_until(xb, int(b.t[last]), x_at, side, stop, tgt, last)
+                    if wx is None:
+                        _count(counts, "exit_at_unpriced")
+                    else:
+                        w = wx
         busy_until = w.exit_bar
         gross = side * (w.exit_px - fill) / risk
         if instant and w.kind == 1:

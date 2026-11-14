@@ -39,7 +39,10 @@ release moved within its day is not seen. PCE at 08:30 ET in 2010-2012 is unveri
 Point in time. A schedule is known before the event, but how long before is not recorded for the past. Rule:
 `available_utc = event_utc - SCHEDULE_LEAD` (7 days), raised to a disruption floor for events of an agency closed by
 a government shutdown (SHUTDOWN_FLOORS, per agency; the Fed and ISM are never closed), never later than the event.
-Features cap their horizon at the same lead, so history and live data look the same. `merge_calendar` keeps the
+Features cap their horizon at the same lead, so history and live data look the same. FOMC statements and press
+conferences also get an appended row stamped at the Fed's schedule press release that first listed them
+(FOMC_SCHEDULE_NOTICES, hand-checked, BACKLOG 235; `add_schedule_notices`, source fed, vintage = the build day): the
+Fed publishes its meeting calendar months ahead. Published rows are never changed. `merge_calendar` keeps the
 history as published. last_ok is kept per event type: a type never downloaded before is a backfill and keeps its rule
 stamps; for a type downloaded before, an event first seen now whose rule stamp has passed was added or moved late and
 is stamped at this download. A future event that disappears adds a `cancelled` row; one that comes back a `scheduled`
@@ -181,7 +184,146 @@ MANUAL_EVENTS: tuple[ManualEvent, ...] = (
     ManualEvent("jolts", "2026-02-03", "2026-02-03 09:59", "bls.gov 2026 lapse table (moved to 2026-02-05)"),
     ManualEvent("nfp", "2026-02-06", "2026-02-06 08:29", "bls.gov 2026 lapse table (moved to 2026-02-11)"),
     ManualEvent("cpi", "2026-02-11", "2026-02-11 08:29", "bls.gov 2026 lapse table (moved to 2026-02-13)"),
+    # BACKLOG 261: the meeting page still lists 26-27 Oct 2027, but the revised schedule says it has no policy decision
+    ManualEvent("fomc_statement", "2027-10-27", "2026-11-12 12:45",
+                "Fed press release 2026-11-12 (monetary20261112a): 26-27 Oct 2027 meeting without a policy decision"),
+    ManualEvent("fomc_press_conference", "2027-10-27", "2026-11-12 12:45",
+                "Fed press release 2026-11-12: no policy decision, so no press conference"),
 )
+# The hand-check wins: a downloaded row for one of these events is dropped (calendar_frame) and a later download that
+# still lists it never revives it (merge_calendar), so the cancellation stays the event's latest status.
+MANUAL_EVENT_IDS = frozenset(f"{e.event_type}:{e.day}" for e in MANUAL_EVENTS)
+
+
+class ScheduleNotice(NamedTuple):
+    at_et: str                     # the press release's time (ET wall time, "For release at"; the index time if none)
+    url: str
+    statements: tuple[str, ...]    # ET statement days it lists (the last day of each meeting)
+    press: tuple[str, ...]         # of those, the days it says a press conference follows
+
+
+_PR = "https://www.federalreserve.gov/newsevents/pressreleases/monetary"
+
+
+def _y(year: int, *mmdd: str) -> tuple[str, ...]:
+    return tuple(f"{year}-{d}" for d in mmdd)
+
+
+# BACKLOG 235: the FOMC's tentative-schedule press releases, hand-checked on 2026-11-14 against federalreserve.gov
+# (the press-release index json/ne-press.json and each release's text). A meeting's statement (and, where the release
+# says so, its press conference) is known from the first release listing that day; a meeting whose day changed later
+# (the 2012 two-day revision, the 2011 September expansion announced in August 2011, not transcribed) is known only
+# from the release with its final day, else from the 7-day rule. Each release also lists the next January meeting.
+# 2019-2023 releases name no press conferences (the every-meeting press conference was announced separately, not
+# transcribed): those keep the 7-day stamp. Add each new release here (BACKLOG 237's yearly refresh checks the index).
+FOMC_SCHEDULE_NOTICES: tuple[ScheduleNotice, ...] = (
+    ScheduleNotice("2009-02-13 10:00", f"{_PR}20090213a.htm", ("2010-01-27",), ()),
+    ScheduleNotice("2009-06-04 10:00", f"{_PR}20090604a.htm",
+                   _y(2010, "01-27", "03-16", "04-28", "06-23", "08-10", "09-21", "11-03", "12-14") + ("2011-01-26",),
+                   ()),
+    ScheduleNotice("2010-05-28 10:00", f"{_PR}20100528b.htm",
+                   _y(2011, "01-26", "03-15", "04-27", "06-22", "08-09", "09-20", "11-02", "12-13") + ("2012-01-25",),
+                   ()),
+    ScheduleNotice("2011-03-25 16:00", f"{_PR}20110325a.htm",
+                   _y(2012, "01-25", "03-13", "04-25", "06-20", "07-31", "09-12", "10-24", "12-11") + ("2013-01-30",),
+                   ()),
+    ScheduleNotice("2012-05-16 14:00", f"{_PR}20120516b.htm",
+                   _y(2012, "06-20", "08-01", "09-13", "10-24", "12-12")
+                   + _y(2013, "01-30", "03-20", "05-01", "06-19", "07-31", "09-18", "10-30", "12-18") + ("2014-01-29",),
+                   _y(2012, "06-20", "09-13", "12-12") + _y(2013, "03-20", "06-19", "09-18", "12-18")),
+    ScheduleNotice("2013-04-05 11:30", f"{_PR}20130405a.htm",
+                   _y(2014, "01-29", "03-19", "04-30", "06-18", "07-30", "09-17", "10-29", "12-17") + ("2015-01-28",),
+                   _y(2014, "03-19", "06-18", "09-17", "12-17")),
+    ScheduleNotice("2014-06-05 14:00", f"{_PR}20140605b.htm",
+                   _y(2015, "01-28", "03-18", "04-29", "06-17", "07-29", "09-17", "10-28", "12-16") + ("2016-01-27",),
+                   _y(2015, "03-18", "06-17", "09-17", "12-16")),
+    ScheduleNotice("2015-05-11 10:30", f"{_PR}20150511a.htm",
+                   _y(2016, "01-27", "03-16", "04-27", "06-15", "07-27", "09-21", "11-02", "12-14") + ("2017-02-01",),
+                   _y(2016, "03-16", "06-15", "09-21", "12-14")),
+    ScheduleNotice("2016-06-28 14:00", f"{_PR}20160628a.htm",
+                   _y(2017, "02-01", "03-15", "05-03", "06-14", "07-26", "09-20", "11-01", "12-13") + ("2018-01-31",),
+                   _y(2017, "03-15", "06-14", "09-20", "12-13")),
+    ScheduleNotice("2017-05-11 14:00", f"{_PR}20170511b.htm",
+                   _y(2018, "01-31", "03-21", "05-02", "06-13", "08-01", "09-26", "11-08", "12-19") + ("2019-01-30",),
+                   _y(2018, "03-21", "06-13", "09-26", "12-19")),
+    ScheduleNotice("2018-05-25 12:00", f"{_PR}20180525a.htm",
+                   _y(2019, "01-30", "03-20", "05-01", "06-19", "07-31", "09-18", "10-30", "12-11") + ("2020-01-29",),
+                   _y(2019, "03-20", "06-19", "09-18", "12-11")),
+    ScheduleNotice("2019-05-17 10:00", f"{_PR}20190517a.htm",
+                   _y(2020, "01-29", "03-18", "04-29", "06-10", "07-29", "09-16", "11-05", "12-16") + ("2021-01-27",),
+                   ()),
+    ScheduleNotice("2020-07-02 10:00", f"{_PR}20200702a.htm",
+                   _y(2021, "01-27", "03-17", "04-28", "06-16", "07-28", "09-22", "11-03", "12-15") + ("2022-01-26",),
+                   ()),
+    ScheduleNotice("2021-06-04 11:00", f"{_PR}20210604a.htm",
+                   _y(2022, "01-26", "03-16", "05-04", "06-15", "07-27", "09-21", "11-02", "12-14") + ("2023-02-01",),
+                   ()),
+    ScheduleNotice("2022-06-24 14:00", f"{_PR}20220624a.htm",
+                   _y(2023, "02-01", "03-22", "05-03", "06-14", "07-26", "09-20", "11-01", "12-13") + ("2024-01-31",),
+                   ()),
+    ScheduleNotice("2023-06-23 11:30", f"{_PR}20230623a.htm",
+                   _y(2024, "01-31", "03-20", "05-01", "06-12", "07-31", "09-18", "11-07", "12-18") + ("2025-01-29",),
+                   ()),
+    ScheduleNotice("2024-08-09 13:30", f"{_PR}20240809a.htm",
+                   _y(2025, "01-29", "03-19", "05-07", "06-18", "07-30", "09-17", "10-29", "12-10")
+                   + _y(2026, "01-28", "03-18", "04-29", "06-17", "07-29", "09-16", "10-28", "12-09") + ("2027-01-27",),
+                   _y(2025, "01-29", "03-19", "05-07", "06-18", "07-30", "09-17", "10-29", "12-10")
+                   + _y(2026, "01-28", "03-18", "04-29", "06-17", "07-29", "09-16", "10-28", "12-09") + ("2027-01-27",)),
+    ScheduleNotice("2025-09-05 13:30", f"{_PR}20250905a.htm",
+                   _y(2027, "01-27", "03-17", "04-28", "06-09", "07-28", "09-15", "10-27", "12-08") + ("2028-01-26",),
+                   _y(2027, "01-27", "03-17", "04-28", "06-09", "07-28", "09-15", "10-27", "12-08") + ("2028-01-26",)),
+    # revised 2027: 26-27 Oct is a strategy meeting without a policy decision, 7-8 Dec moves to 16-17 Nov
+    ScheduleNotice("2026-11-12 12:45", f"{_PR}20261112a.htm",
+                   _y(2027, "01-27", "03-17", "04-28", "06-09", "07-28", "09-15", "11-17") + ("2028-01-26",),
+                   _y(2027, "01-27", "03-17", "04-28", "06-09", "07-28", "09-15", "11-17") + ("2028-01-26",)),
+)
+
+
+def notice_available(event_ids: pd.Series) -> pd.Series:
+    """For FOMC statement / press conference event_ids, when the first schedule notice listing them was published
+    (UTC, ns); NaT for any other id or a day no notice lists."""
+    first: dict[str, pd.Timestamp] = {}
+    for n in FOMC_SCHEDULE_NOTICES:
+        at = pd.Timestamp(n.at_et, tz=ET).tz_convert("UTC").as_unit("ns")
+        for t, days in (("fomc_statement", n.statements), ("fomc_press_conference", n.press)):
+            for d in days:
+                k = f"{t}:{d}"
+                if k not in first or at < first[k]:
+                    first[k] = at
+    return pd.Series(pd.to_datetime(event_ids.map(first), utc=True).to_numpy(), index=event_ids.index,
+                     dtype="datetime64[ns, UTC]")
+
+
+def schedule_notice_rows(cal: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
+    """Rows to append to `cal` (BACKLOG 235): per FOMC statement / press conference with a scheduled row, a
+    `scheduled` row stamped at its first schedule notice (source fed, vintage = `vintage`), when that is before every
+    row the event already has; nothing for an event that already has such a row (idempotent)."""
+    c = cal[cal["event_type"].isin(("fomc_statement", "fomc_press_conference"))].copy()
+    if c.empty:
+        return pd.DataFrame(columns=list(COLUMNS))
+    c["available_utc"] = _utc_ns(c["available_utc"])
+    first_row = c.groupby("event_id")["available_utc"].min()
+    sched = c[c["status"] == SCHEDULED].sort_values("available_utc", kind="stable").drop_duplicates("event_id")
+    sched = sched.assign(available_utc=notice_available(sched["event_id"]).to_numpy())
+    sched = sched[sched["available_utc"].notna()]
+    sched = sched[sched["available_utc"].to_numpy() < first_row.reindex(sched["event_id"]).to_numpy()]
+    out = sched.assign(source="fed", vintage=_naive_day(vintage))
+    out["available_utc"] = _utc_ns(out["available_utc"])
+    out["event_utc"] = _utc_ns(out["event_utc"])
+    out["ts_utc"] = out["available_utc"]
+    return out[list(COLUMNS)].reset_index(drop=True)
+
+
+def add_schedule_notices(cal: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
+    """`cal` with schedule_notice_rows appended; every existing row unchanged (check_keeps_history holds)."""
+    add = schedule_notice_rows(cal, vintage)
+    if add.empty:
+        return cal
+    out = pd.concat([cal, add], ignore_index=True)
+    out["available_utc"], out["event_utc"] = _utc_ns(out["available_utc"]), _utc_ns(out["event_utc"])
+    out["ts_utc"] = out["available_utc"]
+    return out[list(COLUMNS)].sort_values(["event_utc", "event_id", "available_utc"], kind="stable") \
+        .reset_index(drop=True)
 
 
 class UnscheduledEvent(NamedTuple):
@@ -483,6 +625,7 @@ def calendar_frame(fred_dates: dict[str, pd.DatetimeIndex], now: pd.Timestamp,
             frames.append(event_rows(t, rel.release_id, d, rel.at_et, now, "fred"))
     if fomc is not None:
         frames.append(fomc_rows(fomc, now))
+    frames = [f[~f["event_id"].isin(MANUAL_EVENT_IDS)] for f in frames]     # the hand-check wins (MANUAL_EVENT_IDS)
     frames += [rule_rows(now, now), manual_rows(now), unscheduled_rows(now)]
     return pd.concat([f for f in frames if len(f)], ignore_index=True)
 
@@ -835,7 +978,8 @@ def merge_calendar(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
                 & ~fresh["event_id"].isin(SPACING_EXEMPT).to_numpy())
         fresh["available_utc"] = rule.where(~late, now)
         future = np.asarray(pd.DatetimeIndex(fresh["event_utc"]) > now, dtype=bool)
-        back = ~is_new & ~manual & future & (fresh["event_id"].map(state) == CANCELLED).to_numpy()
+        back = ~is_new & ~manual & future & (fresh["event_id"].map(state) == CANCELLED).to_numpy() \
+            & ~fresh["event_id"].isin(MANUAL_EVENT_IDS).to_numpy()
         revived = fresh[back].assign(available_utc=now)
         types = set(fetched_types) if fetched_types is not None else set(fresh["event_type"])
         cancelled = _gone(latest, fresh, now, types).assign(status=CANCELLED, available_utc=now,

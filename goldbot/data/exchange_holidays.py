@@ -11,6 +11,9 @@ reads a closure at instant t only when `available_utc <= t` (`exchange_holidays(
 `Ctx.avail` arrays the catalogue detectors filter on). Validated on every load: weekdays only, sorted, unique, inside
 [valid_from, valid_through], UTC timestamps, regular dates known before the day; any breach raises (never a silent
 partial calendar). Exchange codes: US (XNYS), UK (XLON), DE (XETR).
+
+Early closes (BACKLOG 237, `early_closes`): per exchange, the day, the early close instant (`close_utc`, on that UTC
+day) and `available_utc` by the same rules; a file without the key (r1) has none.
 """
 from __future__ import annotations
 
@@ -40,12 +43,21 @@ class Closure(FrozenRecord):
     name: str
 
 
+class EarlyClose(FrozenRecord):
+    date: date
+    kind: Kind
+    close_utc: pd.Timestamp
+    available_utc: pd.Timestamp
+    name: str
+
+
 class HolidayCalendar(FrozenRecord):
     version: str
     source: str
     valid_from: date
     valid_through: date
     exchanges: dict[str, tuple[Closure, ...]]
+    early: dict[str, tuple[EarlyClose, ...]] = {}
 
 
 def _check(ex: str, rows: list[Closure], lo: date, hi: date) -> None:
@@ -63,10 +75,27 @@ def _check(ex: str, rows: list[Closure], lo: date, hi: date) -> None:
             raise ValueError(f"exchange_holidays {ex} {r.date}: a regular holiday known only on or after the day")
 
 
+def _check_early(ex: str, rows: list[EarlyClose], lo: date, hi: date) -> None:
+    days = [r.date for r in rows]
+    if days != sorted(set(days)):
+        raise ValueError(f"exchange_holidays {ex}: early close dates not sorted and unique")
+    for r in rows:
+        if not lo <= r.date <= hi or r.date.weekday() >= 5:
+            raise ValueError(f"exchange_holidays {ex} {r.date}: early close outside {lo}..{hi} or on a weekend")
+        for t in (r.close_utc, r.available_utc):
+            if t.tzinfo is None or t.utcoffset() != pd.Timedelta(0):
+                raise ValueError(f"exchange_holidays {ex} {r.date}: early close times must be UTC")
+        if r.close_utc.date() != r.date:
+            raise ValueError(f"exchange_holidays {ex} {r.date}: early close at {r.close_utc}, not on its own day")
+        if r.kind == "regular" and r.available_utc >= pd.Timestamp(r.date, tz="UTC"):
+            raise ValueError(f"exchange_holidays {ex} {r.date}: a regular early close known only on or after the day")
+
+
 def _parse(path: Path) -> HolidayCalendar:
     doc = yaml.safe_load(path.read_text())
     lo, hi = date.fromisoformat(str(doc["valid_from"])), date.fromisoformat(str(doc["valid_through"]))
     out: dict[str, tuple[Closure, ...]] = {}
+    early_out: dict[str, tuple[EarlyClose, ...]] = {}
     for ex, body in doc["exchanges"].items():
         rows = []
         for r in body["days"]:
@@ -76,8 +105,14 @@ def _parse(path: Path) -> HolidayCalendar:
                                 available_utc=pd.Timestamp(str(r["available_utc"])), name=str(r["name"])))
         _check(str(ex), rows, lo, hi)
         out[str(ex)] = tuple(rows)
+        early = [EarlyClose(date=date.fromisoformat(str(r["date"])), kind=r["kind"],
+                            close_utc=pd.Timestamp(str(r["close_utc"])),
+                            available_utc=pd.Timestamp(str(r["available_utc"])), name=str(r["name"]))
+                 for r in (body.get("early_closes") or [])]
+        _check_early(str(ex), early, lo, hi)
+        early_out[str(ex)] = tuple(early)
     return HolidayCalendar(version=str(doc["version"]), source=str(doc["source"]), valid_from=lo, valid_through=hi,
-                           exchanges=out)
+                           exchanges=out, early=early_out)
 
 
 @lru_cache(maxsize=4)
@@ -106,3 +141,20 @@ def exchange_holidays(exchange: str, *, known_by_ns: int | None = None, path: Pa
         keep = av <= known_by_ns
         days, av = days[keep], av[keep]
     return days, av
+
+
+def early_closes(exchange: str, *, known_by_ns: int | None = None, path: Path | None = None
+                 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(UTC day numbers, early close instants as epoch ns, available_utc as epoch ns) of `exchange`'s early closes,
+    sorted by day; with `known_by_ns` only those published at or before that instant (BACKLOG 237)."""
+    rows = load_calendar(path).early.get(exchange, ())
+    if not rows:
+        z = np.zeros(0, np.int64)
+        return z, z.copy(), z.copy()
+    days = np.array([(r.date - date(1970, 1, 1)).days for r in rows], dtype=np.int64)
+    close = epoch_ns(pd.DatetimeIndex([r.close_utc for r in rows]))
+    av = epoch_ns(pd.DatetimeIndex([r.available_utc for r in rows]))
+    if known_by_ns is not None:
+        keep = av <= known_by_ns
+        days, close, av = days[keep], close[keep], av[keep]
+    return days, close, av

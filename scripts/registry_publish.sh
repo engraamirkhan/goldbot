@@ -19,7 +19,13 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/registry-publish.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/outbox"
 
-names=$("${SSH[@]}" "sudo ls '$OUTBOX' 2>/dev/null || true" | grep -E '^[0-9a-f]{16}\.jsonl$' || true)
+# A missing outbox on the brain is an empty one (the remote `|| true`); an ssh failure is not: it stops the publish
+# with a non-zero status, so the launchd runner logs FAIL instead of a quiet "0 entries" (code review 2026-11-14)
+if ! listing=$("${SSH[@]}" "sudo ls '$OUTBOX' 2>/dev/null || true"); then
+  echo "registry_publish: ssh to goldbot-brain failed; nothing read, nothing published" >&2
+  exit 3
+fi
+names=$(printf '%s\n' "$listing" | grep -E '^[0-9a-f]{16}\.jsonl$' || true)
 for n in $names; do
   "${SSH[@]}" "sudo cat '$OUTBOX/$n'" > "$work/outbox/$n"
 done

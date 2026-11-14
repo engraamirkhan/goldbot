@@ -140,6 +140,8 @@ from goldbot.research.pipeline import (  # noqa: E402
 )
 from goldbot.research.registry import (  # noqa: E402
     LOOP_RULE_REF,
+    SKIPPED_EXIT,
+    RetiredExplorationUsed,
     TrialBudgetExceeded,
     TrialRegistry,
     gate_pass_counts,
@@ -667,6 +669,9 @@ def main() -> int:
     refusal = None if args.cpcv else dispatch_refusal(args.specialist, args.pooled)
     if refusal:
         raise SystemExit(refusal)
+    refusal = orderflow_refusal(args)
+    if refusal:
+        raise SystemExit(refusal)
     if args.lot_fit and (args.discover or args.cpcv or args.h16):
         raise SystemExit("--lot-fit reports on the walk-forward; it is not wired into --discover, --cpcv or --h16")
     settings = load_settings()
@@ -712,6 +717,16 @@ def main() -> int:
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
                     cost_source=cost_source, macro=macro, macro_info=macro_info, positioning=positioning,
                     positioning_info=positioning_info, us_calendar=us_calendar, us_calendar_info=us_calendar_info)
+
+
+def retired_skip(args: argparse.Namespace, title: str, exc: RetiredExplorationUsed) -> int:
+    """BACKLOG 91: a run the retired-family guard refuses ("The retired families SHARE 1 exploration trial a quarter")
+    is a skip, not an error: the reason goes into the report and the log, no row is written (no look, no trial), and the
+    exit code is SKIPPED_EXIT, which research.yml's cell passes and `cells.record` reports as skipped."""
+    text = f"## {title}: SKIPPED\n\n- {exc}\n- no look at the data and no registry row (not a trial)\n"
+    Path(args.report).write_text(text)
+    print(f"SKIPPED: {exc}", flush=True)
+    return SKIPPED_EXIT
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
@@ -775,6 +790,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                                          settings.research.reserved_for(quarter_of()),
                                                          retired={e.family for e in settings.research.retired_families},
                                                          agents=agents)
+        except RetiredExplorationUsed as exc:
+            return retired_skip(args, jobs[0].family, exc)
         except TrialBudgetExceeded as exc:
             raise SystemExit(str(exc)) from None
         # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)
@@ -890,6 +907,23 @@ def _discovery_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family", "cluster"],
                     help="--discover: group features by registry family (bare flag), by producing feature, or not")
     ap.add_argument("--discover-config", default="{}", help="--discover: JSON overrides of DiscoveryConfig")
+    ap.add_argument("--orderflow", action="store_true",
+                    help="--discover: screen the order-flow proxy family (R139) built from the run's own 1m bars; "
+                         "its pre-registration note (orderflow.SCREEN_NOTE) goes into the plan and the report")
+
+
+def orderflow_refusal(args: argparse.Namespace) -> str | None:
+    """BACKLOG 211: `--orderflow` is a discovery-screen candidate only ("candidates for the discovery screen only, never
+    a live model's input until a trial passes them", goldbot/features/orderflow.py), so it is refused outside
+    `--discover` and with `--cpcv` or `--h16`, before any registry row."""
+    if not getattr(args, "orderflow", False):
+        return None
+    for flag, on in (("--cpcv", getattr(args, "cpcv", None)), ("--h16", getattr(args, "h16", False))):
+        if on:
+            return f"--orderflow is a discovery-screen candidate only; it is not wired into {flag}"
+    if not getattr(args, "discover", False):
+        return "--orderflow is a discovery-screen candidate only; run it with --discover"
+    return None
 
 
 def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.DataFrame, reg: TrialRegistry,
@@ -899,6 +933,12 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
     if args.pooled or args.score_holdout or len(variants) != 1:
         raise SystemExit("--discover runs one specialist configuration (one --variants entry), no --pooled or --score-holdout")
     spec = SPECIALISTS[args.specialist](**variants[0])
+    # BACKLOG 211: --orderflow screens the order-flow proxies of the run's own 1m bars (discovery_pass cuts them at the
+    # holdout with b1) beside the default features, under its pre-registration notes; without it ctx and the feature
+    # list are exactly the default's, so no existing config hash moves
+    orderflow = bool(getattr(args, "orderflow", False))
+    ctx, names = feature_ctx(macro, None, orderflow_bars=b1 if orderflow else None)
+    notes = orderflow_features.prereg_notes(spec.timeframe) if orderflow else ()
     # BACKLOG 50: the data-v1 digests a queued discovery row of this specialist configuration pins, before any look;
     # discovery_pass then cuts the bars at research.holdout_from and refuses a config-hash mismatch against that row
     refusal = queued_digest_refusal(reg._rows(), quarter_of(), [(discovery_family(spec.family), spec.agent_id)],
@@ -912,7 +952,7 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
                                    reserved_setting=settings.research.reserved_for(quarter_of()), cfg=cfg,
                                    group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
-                                   ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
+                                   ctx=ctx, feature_names=names, notes=notes, rationale=args.rationale,
                                    cost_source=cost_source, rule_ref=args.rule_ref,
                                    holdout_from=settings.research.holdout_from,
                                    capped=settings.research.open_budget_capped(quarter_of()))

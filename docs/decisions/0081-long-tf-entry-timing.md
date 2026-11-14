@@ -2,7 +2,11 @@
 
 Status: accepted with amendments (quant-reviewer, 2026-11-13: truncation test, swap to the last weekday close, the
 CONFIRM of record below); engine timing and swap approved by the trading-safety-reviewer on 6c90577c with fixes. 1d/1w
-stay dark (`engine.timeframes_live`) until BACKLOG 144 blocker 7 lifts the settings guard.
+stay dark (`engine.timeframes_live`) until BACKLOG 144 blocker 7 lifts the settings guard. Ratified: quant-reviewer
+APPROVE 2026-11-14 on 11b72577 (no look-ahead; the EET tier-1 22:30 vs 23:30 UTC send gap noted, ~zero effect: no
+tier-1 USD event 22:30-00:15 UTC), on the condition that research enforces the filter in code: built with the hold
+origin and the CONFIRM of record in BACKLOG 254 (amendment 2026-11-14 below; trading-safety review of the hold origin
+pending).
 
 ## Context
 WS-4 (PR #341) shipped 1d and 1w exploration arms dark. BACKLOG 144 lists why a live one would trade nothing or trade
@@ -72,3 +76,23 @@ judge entries at the close (then the 1d family is untradeable as specified and s
   day); a 1w arm's lot fit is judged with it.
 - Intraday behaviour is unchanged: `filter_ts` is the close, `is_bar_close` equals the clock boundary for every
   intraday timeframe, and the replay-identity golden still holds.
+
+## Amendment 2026-11-14 (BACKLOG 254): live == history
+- **The filter, enforced.** `NOMINAL_ENTRY` and `entry_after` moved to `research/arm_rules.py` (the engine's
+  `long_bars` re-exports them). `arm_rules.long_tf_context` runs on every `screened`/`screened_frame` call: a 1d/1w
+  arm's `filter_close` is filled in with `entry_after` of its bars when the caller left it out, and a different one is
+  refused (ValueError); `arm_rules_spec.spec_masks` does the same for a 1d/1w spec. No research caller can judge a
+  1d/1w candidate at its close any more (tests/test_long_tf_live_history.py).
+- **The hold origin.** A 1d/1w signal's hold counts from its decision close: its order id carries the decision close
+  (`long_bars.origin`), its hold for `crosses_friday`, the record and the Intent is the time to the history run's exit
+  (`long_bars.hold_s`: the `hold_bars`-th close of its timeframe after the decision close, `hold_end`), and
+  `exploration.exits` closes it there (`long_bars.time_exit_due`, `time_exit`); the base-bar barrier, counted from the
+  send and so later, stays the backstop. `_week_due` and `crosses_friday` are byte-unchanged: they read the decision
+  close from the order id and the shorter hold. Consequence: a cut-capped 1d rule (DOND) whose frozen hold ends at the
+  week's end from its decision close is now sent (it was refused `weekend_hold` when the hold ran from the send); the
+  same hold without the cut is still refused, and nothing is ever held into the weekend. The swap projection is
+  unchanged (`hold_end` after the decision close and after the send give the same close).
+- **The CONFIRM of record** (point 5): `research/long_confirm.py`; `scripts/run_arm_backtest.py` decides a 1d/1w arm
+  on the engine's own bars (`long_bars.daily_from_1m`, `weekly`: the 21:00 UTC roll, not the feature-day) and fills
+  each trade at the first 1m open at or after its live entry close (`reopen_after`, `entry_close`), a Friday 1d close
+  or one with no reopen dropped. A live == history test on a 1d and a 1w arm pins decision, side, send and exit.

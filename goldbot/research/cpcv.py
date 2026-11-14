@@ -36,8 +36,10 @@ CPCV is NOT a trial. A trial is a look at the data that chooses a configuration;
 is already registered (its trial row holds its config) on the same research window, chooses nothing and changes no
 config, so it takes no budget slot and does not raise the deflated-Sharpe count. Its result is recorded as evidence
 attached to that trial (`TrialRegistry.attach_evidence`, kind "cpcv"), never as a new trial row. It never sees the
-holdout. Run it with `scripts/research_pass.py --cpcv <trial#> [<trial#> ...]` (PBO across the trials named) or the
-quarterly scheduler job `cpcv_quarterly` (every trial that passed the gates, compared with its family's other trials).
+holdout. Run it with `scripts/research_pass.py --cpcv <trial#> [<trial#> ...]` (PBO across the trials named). The
+quarterly scheduler job `cpcv_quarterly` retired with ADR 0083; its amendment moved CPCV to the promotion gate
+(research/cpcv_gate.py: the tournament runs it on demand and refuses a promotion without clean evidence for the
+quarter). `pbo` also serves the discovery search (research/autodisc/stats.py).
 """
 from __future__ import annotations
 

@@ -47,6 +47,10 @@ LEGACY_FEATURES: dict[tuple[str, str], FeatureSpec] = {}
 # short), so models trained with a `side` column see side x (value - neutral): positive always favours the trade.
 SIGNED: dict[str, float] = {}
 _CONTEXT_PREFIX = re.compile(r"^(h1|h4|d1|w1)_")
+# Research-only columns (regex on the column name without its context prefix -> why): built from data the live bars
+# never carry, so a live model would read NaN forever. `live_feature_check` refuses them in any model that trades or
+# shadow-trades (goldbot/research/model_registry.py). Feature modules register their own on import.
+RESEARCH_ONLY: dict[str, str] = {}
 
 
 def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, tags: tuple[str, ...] = (),
@@ -156,6 +160,19 @@ def families() -> dict[str, list[str]]:
     for s in FEATURES.values():
         fam.setdefault(s.family, []).append(s.name)
     return fam
+
+
+def live_feature_check(columns: list[str]) -> None:
+    """Raise ValueError when a live (or shadow) model's input columns include a research-only column."""
+    import goldbot.features.orderflow  # noqa: F401  (registers its RESEARCH_ONLY columns even when not enabled)
+    bad = []
+    for c in columns:
+        base = _CONTEXT_PREFIX.sub("", c)
+        why = next((w for pattern, w in RESEARCH_ONLY.items() if re.fullmatch(pattern, base)), None)
+        if why is not None:
+            bad.append(f"{c} ({why})")
+    if bad:
+        raise ValueError("research-only feature columns in a live model: " + "; ".join(bad))
 
 
 def signed_neutral(column: str) -> float | None:

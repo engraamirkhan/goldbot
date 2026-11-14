@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- BACKLOG 215: the brain's github-token is read-only (decision 2026-11-01), so the Mac publishes the brain's trial
+     registry outbox to release research-v1 daily (scripts/registry_publish_mac.sh -> scripts/registry_publish.sh).
+     scripts/install_registry_publish_launchd.sh fills __REPO__, __LOGDIR__ and __HOME__ and installs this as a user
+     agent. launchd runs a slot missed while the Mac slept when it wakes. No credential, host or account id belongs in
+     this file: ssh reads ~/.ssh/goldbot.conf, gh its own login. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.goldbot.registry-publish</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/registry_publish_mac.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:__HOME__/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/launchd.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

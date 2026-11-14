@@ -60,9 +60,12 @@ BRIDGE_ACCOUNT = "icm-demo"
 
 def ahead(path: Path, rows: pd.DataFrame) -> pd.Series:
     """Rows in [LO, HI) stamped more than AHEAD after their part file was written (per row: a compacted part keeps
-    each row's original part mtime, backlog 179 `written_utc`)."""
+    each row's original part mtime, backlog 179 `written_utc`). A row's own `written_utc` column (BACKLOG 241) wins
+    where it is set; the part file's lineage fills the rest."""
     ts = pd.to_datetime(rows["ts_utc"], utc=True)
     written = pd.Series(written_utc(path).to_numpy(), index=rows.index)
+    if "written_utc" in rows.columns:
+        written = pd.to_datetime(rows["written_utc"], utc=True).fillna(written)
     return (ts >= LO) & (ts < HI) & (ts > written + AHEAD)
 
 

@@ -222,6 +222,43 @@ def test_the_step_names_what_it_sent(tmp_path):
     assert step.text is not None and step.kinds == ("new",) and step.checks == ("supervisor",)
 
 
+def test_the_step_carries_the_reason_of_each_new_failure_it_sent(tmp_path):
+    """Outage 2026-11-12..14: the alert log named the checks but not why they failed, so the ~205 entry-blocked
+    minutes could not be attributed afterwards. A sent failure now carries its reason; a recovery carries none."""
+    w = watch(tmp_path)
+    for m in range(5):
+        w.poll(rep(m, supervisor="fail"))
+    step = w.step(rep(5, supervisor="fail"))
+    assert step.reasons == {"supervisor": "supervisor is fail"}
+    for m in range(6, 12):
+        w.poll(rep(m, supervisor="ok"))
+    assert w.step(rep(12, supervisor="ok")).reasons == {}
+
+
+def test_the_alert_log_keeps_a_short_scrubbed_reason_per_check(tmp_path):
+    from goldbot.ops.alert_log import REASON_CHARS, AlertLog
+    log = AlertLog(tmp_path)
+    log.append(at(0), channel="telegram", kinds=("new",), checks=("bridge:icm", "job:backup", "engine:icm"),
+               reasons={"bridge:icm": "bridge at 10.0.0.12 refused", "job:backup": "x" * 500,
+                        "engine:icm": "logged in to 51234567 instead\nsecond line"})
+    log.append(at(1), channel="deadman", kinds=("fail",), checks=("engine:icm",))
+    with sqlite3.connect(tmp_path / "aux.db") as conn:
+        rows = [r[0] for r in conn.execute("SELECT reasons FROM health_alerts ORDER BY id")]
+    assert rows[1] is None                                    # no reason given: NULL, as every row before migration 34
+    got = json.loads(rows[0])
+    assert set(got) == {"bridge:icm", "job:backup", "engine:icm"}
+    assert "10.0.0.12" not in rows[0] and "51234567" not in rows[0]      # the existing scrub: no host, no login
+    assert got["bridge:icm"] == got["engine:icm"] == "(withheld: it carried a login or a host)"
+    assert got["job:backup"] == "x" * REASON_CHARS
+
+
+def test_reasons_are_an_additive_aux_migration_after_long_tf_decisions():
+    from goldbot.db.migrations import AUX
+    m = next(m for m in AUX if m.name == "health_alert_reasons")
+    assert m.additive and m.version == 34 and m.add_columns == (("health_alerts", "reasons", "TEXT"),)
+    assert [x.version for x in AUX] == list(range(1, len(AUX) + 1))
+
+
 def test_one_refused_order_on_an_engine_never_emails_the_owner(tmp_path):
     """Live 2026-11-04 14:51-15:58: each single BridgeError on vantage-demo turned engine:<account> FAIL for under
     120 s and, on the immediate list, pinged /fail (a down email) and ok (an up email) minutes later."""

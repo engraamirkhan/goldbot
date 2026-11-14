@@ -1,10 +1,9 @@
 ---
 number: 228
-rank: 76
 title: Retire the H-62 online meta-labeller's retrain (code and data kept)
 stage: 'research ops (ML review 2026-11-13, lane ML1)'
 size: S
-status: 'done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): PR #390 (R143) · accountable: implementer'
 ---
 - **228. Retire the H-62 online meta-labeller's retrain.** Evidence (ML review section 2 row 4):
   - `exploration_models` and `exploration_priors` held 0 rows.

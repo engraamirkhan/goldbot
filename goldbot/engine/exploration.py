@@ -58,6 +58,9 @@ The plan's rules, as built here:
   2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected. An arm whose
   frozen spec row records a retirement (`retired_day`/`retired_rule`, e.g. A2 readability 2026-10-30) is retired the
   same way from the start (`spec_retired`, journalled `exploration_arm_retired` with its rule), on every account.
+  BACKLOG 187: once a reconciliation's broker read finds such an arm flat (no position, no order in flight, no
+  signal waiting) it is de-registered (`exploration_deregister`: no signal or bar work, journalled once
+  `exploration_arm_deregistered`); it stays known to the exits and adoption, so nothing is ever closed as an orphan.
 * Qualification before demo (owner rule 2026-10-30, ADR 0061: "every strategy should have been back tested and
   qualified before it is tested and learn from live trades that are taken on demo accounts"): a strategy arm without a
   passing `qualification` on its row (a screen AND a confirm, verdict pass, measured costs) is refused the same way,
@@ -750,6 +753,9 @@ class Exploration:
         self.retired_read: pd.Timestamp | None = None
         # the 1m/5m arms refused new entries for good (`refresh_dormant`); their minute work is skipped
         self.dormant: frozenset[str] = frozenset()
+        # BACKLOG 187: spec-retired arms found flat after a broker read (`exploration_deregister`): no signal or bar
+        # work; still known to the exits and adoption
+        self.deregistered: frozenset[str] = frozenset()
         self.dormant_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
@@ -829,11 +835,12 @@ def make_order_id(account_id: str, arm_id: str, bar_ts: pd.Timestamp) -> str:
 
 
 def pending_id(eng: Engine, arm: Arm, s: Pending) -> str:
-    """A candidate's id: its signal close's order id, a pyramid add's from its group (`exploration_pyramid.add_id`)."""
+    """A candidate's id: its signal close's order id (a 1d/1w signal's decision close, `long_bars.origin`), a pyramid
+    add's from its group (`exploration_pyramid.add_id`)."""
     if s.group_id is not None:
         from goldbot.engine.exploration_pyramid import add_id
         return add_id(eng, arm, s.group_id, s.add_no)
-    return order_id(eng, arm, s.bar_ts)
+    return order_id(eng, arm, long_bars.origin(arm.tf, s.bar_ts, s.decision_utc))
 
 
 def _open(eng: Engine) -> list[int]:
@@ -989,7 +996,7 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
                                   "bar": close_ts.isoformat(), "ahead_s": round(ahead, 3)})
         return False
     release_shifted(eng, ex, close_ts)
-    arms = [a for a in ex.arms.values() if a.tf not in SUB_15M]
+    arms = [a for a in ex.arms.values() if a.tf not in SUB_15M and a.arm_id not in ex.deregistered]
     if not arms or eng.bars_1m.empty:
         return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
@@ -1103,7 +1110,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
-    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant
+    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant | ex.deregistered
             and int(through.timestamp()) % tf_seconds(a.tf) == 0]
     minute = through - pd.Timedelta(minutes=1)
     if arms and broker_bars.awaiting(eng, minute, now):
@@ -1170,7 +1177,8 @@ def _minute_due(ex: Exploration, now: pd.Timestamp) -> bool:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return False
-    return any(a.tf in SUB_15M and a.arm_id not in ex.dormant and int(through.timestamp()) % tf_seconds(a.tf) == 0
+    gone = ex.dormant | ex.deregistered
+    return any(a.tf in SUB_15M and a.arm_id not in gone and int(through.timestamp()) % tf_seconds(a.tf) == 0
                for a in ex.arms.values())
 
 
@@ -1985,6 +1993,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
     unbiased). The arm's share of its pot goes with it (quant Q3). The feature snapshot is not built in the engine
     yet (None). Best effort: never raises."""
+    from goldbot.research.arm_rule_versions import rule_version
     from goldbot.research.exploration_data import record_candidate
     arm = ex.arms[s.arm_id]
     cid = pending_id(eng, arm, s)
@@ -1993,12 +2002,13 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     taken = blocked is None
     try:
         record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, broker=ex.broker, arm_id=arm.arm_id,
-                         family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
-                         stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
+                         family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side,
+                         decision_utc=long_bars.origin(arm.tf, s.bar_ts, s.decision_utc), stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
                          mu=mu if mu is not None else PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
-                         arm_share=share if share is not None else shares(ex, now).get(arm.arm_id))
+                         arm_share=share if share is not None else shares(ex, now).get(arm.arm_id),
+                         arm_rule_version=rule_version(arm.spec.rule))      # BACKLOG 105
     except Exception as exc:
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
 
@@ -2039,7 +2049,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     tag, side, pot = arm.tag, s.side, ex.cfg.pots[arm.style]
     pid = pending_id(eng, arm, s)
     price = tick.ask if side > 0 else tick.bid
-    stop_d, target_d, hold_s = s.stop_usd, s.target_usd, s.hold_bars * tf_seconds(arm.tf)
+    # BACKLOG 254: a 1d/1w hold runs to the history run's exit from its decision close (`long_bars.hold_s`)
+    stop_d, target_d, hold_s = s.stop_usd, s.target_usd, long_bars.hold_s(arm.tf, s.hold_bars, s.bar_ts,
+                                                                          s.decision_utc, now)
     applied: dict[str, Any] = {"arm": arm.arm_id, "tf": arm.tf, "style": arm.style, "stop_usd": round(stop_d, 4),
                                "propensity": round(ps.share.get(arm.arm_id, 0.0), 4)}
 
@@ -2051,6 +2063,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     ps.why = None
     if pid in eng.sent_ids:
         ps.why = "duplicate"
+        return "refused"
+    if arm.tf in long_bars.LONG_TFS and s.decision_utc is not None and hold_s <= 0:
+        # trading-safety review 2026-11-14: a 1d/1w send at or after its history exit would be closed by the time
+        # exit at once; refused, never sent
+        refuse("hold_elapsed")
         return "refused"
     ps.mu = None
     # prereg-amendment-2026-11-07 (`entry_refusals`): the engine-level refusals of the signal the rule produced, before
@@ -2288,7 +2305,8 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
                       commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
-                      hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,
+                      hold_s=float(long_bars.hold_s(arm.tf, s.hold_bars, s.bar_ts, s.decision_utc, now)),
+                      probe_headroom=headroom,
                       **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")},
                       **books.intent_extra(eng, terms))   # a non-gold book: its group, class, P&L currency (L2)
     except ValidationError as exc:
@@ -2301,7 +2319,8 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     """Every pass, with a quote or without (`Engine._retry_closes`), whatever the entry state (halted, propose mode,
     exploration switched off): a 1m/5m arm's position held `hold_s` on the host clock (from its fill; after a restart
     the broker's open time) is closed (`HOLD_EXIT`); a 15m+ position of a rule under the Friday cut is closed at its
-    wall-clock time exit (`_week_due`, `time_exit`); a position whose arm is not configured is closed at once
+    wall-clock time exit (`_week_due`, `time_exit`), a 1d/1w position at its history time exit from its decision
+    close (`long_bars.time_exit_due`, BACKLOG 254); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
     from goldbot.engine import exploration_pyramid
     try:
@@ -2319,6 +2338,9 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 eng._try_close(pid, "time_exit", now)   # quant Q3: every unit of a group at the group's end
             elif arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
                 eng._try_close(pid, HOLD_EXIT, now)
+            elif arm.tf in LONG_TFS and long_bars.time_exit_due(arm.tf, tr.client_order_id, tr.max_bars,
+                                                                tf_seconds(eng.cfg.decision_tf), at):
+                eng._try_close(pid, "time_exit", now)   # BACKLOG 254: the history run's exit from the decision close
             elif arm.tf not in SUB_15M and _week_due(eng, arm, tr, at):
                 eng._try_close(pid, "time_exit", now)
     except Exception:
@@ -2564,8 +2586,10 @@ def sweep(eng: Engine, live: set[int]) -> None:
     broker no longer lists whose exit deal is seen (its stop or target at the broker) is forgotten and its record
     queued, so its arm, pot and host slots and its open risk are free for the next signal instead of at the next
     decision-bar close (a 1m arm signals every minute). One whose exit deal is not seen yet, or whose deals cannot be
-    read, is left to `Engine._sweep_closed` and its confirmation count at the bar close, as every other trade. Never
-    raises."""
+    read, is left to `Engine._sweep_closed` and its confirmation count at the bar close, as every other trade. Then,
+    on this successful read, a spec-retired arm found flat is de-registered (BACKLOG 187, `exploration_deregister`).
+    Never raises."""
+    from goldbot.engine import exploration_deregister
     try:
         for pid, tr in [(k, t) for k, t in eng.open.items() if k not in live and is_exploration(t.agent_id)]:
             try:
@@ -2579,6 +2603,8 @@ def sweep(eng: Engine, live: set[int]) -> None:
             eng._note_closed(pid, tr, "broker_close")
     except Exception:
         log.exception("exploration sweep failed; the bar close's sweep records the close")
+    if eng.exploration is not None:
+        exploration_deregister.refresh(eng, eng.exploration)
 
 
 def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> bool:

@@ -372,8 +372,9 @@ def test_the_review_record_refuses_unknown_fields_and_a_health_word_other_than_b
 
 def test_a_line_carrying_a_login_or_a_host_is_dropped_before_it_is_written_or_sent():
     """Backlog 139 (3): the old blinding check is narrowed to identifiers: the issue texts go to a public repo."""
-    text = "costs ICM $0.37/oz\naccount 51234567 halted\nbridge 10.0.0.12 down\nvolume 1,234,567 of 2,000,000\n+0.3R ok"
-    assert dr.scrub(text).splitlines() == ["costs ICM $0.37/oz", "volume 1,234,567 of 2,000,000", "+0.3R ok"]
+    # a grouped integer of 6+ digits reads as a login (51,234,567; tests/test_daily_review_scrub.py); counts stay below
+    text = "costs ICM $0.37/oz\naccount 51234567 halted\nbridge 10.0.0.12 down\nvolume 12,345 of 20,000\n+0.3R ok"
+    assert dr.scrub(text).splitlines() == ["costs ICM $0.37/oz", "volume 12,345 of 20,000", "+0.3R ok"]
 
 
 def test_the_record_issue_and_report_section_carry_no_arm_r_rank_or_sign(tmp_path):

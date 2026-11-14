@@ -7226,6 +7226,17 @@
       ],
       "title": "Excluded Reason"
      },
+     "excursion_approx": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Excursion Approx"
+     },
      "exit": {
       "anyOf": [
        {
@@ -7338,6 +7349,50 @@
        }
       ],
       "title": "Lots"
+     },
+     "mae_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mae R"
+     },
+     "mae_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mae Usd"
+     },
+     "mfe_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mfe R"
+     },
+     "mfe_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mfe Usd"
      },
      "mode": {
       "anyOf": [

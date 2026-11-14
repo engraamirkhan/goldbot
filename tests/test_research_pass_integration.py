@@ -21,6 +21,16 @@ rp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rp)
 
 
+@pytest.fixture(autouse=True)
+def _no_retired_families(monkeypatch):
+    """These tests drive the runner's mechanics with session_open and intraday_momentum, which are retired (R-02, R-05):
+    with the settings' list, the retired families' one shared exploration trial a quarter (BACKLOG 91) would refuse
+    their second run. The guard itself is tested in tests/test_retired_family_trial_guard.py."""
+    settings = rp.load_settings()
+    patched = settings.model_copy(update={"research": settings.research.model_copy(update={"retired_families": []})})
+    monkeypatch.setattr(rp, "load_settings", lambda: patched)
+
+
 @pytest.fixture(scope="module")
 def release_dir(tmp_path_factory) -> Path:
     d = tmp_path_factory.mktemp("release")
@@ -527,7 +537,12 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter={quarter_of(): 1})
+    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter={quarter_of(): 1},
+                       retired_families=[])
+    # session_open is retired: its second discovery in a quarter is refused by the shared retired-family trial first
+    # (BACKLOG 91, tests/test_retired_family_trial_guard.py); here the reservation alone is under test, so the guard
+    # reads the same settings with no retired family
+    monkeypatch.setattr("goldbot.config.load_settings", rp.load_settings)
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
                                       "--report", str(report), "--specialist", "session_open", "--discover",
                                       "--discover-config", '{"n_subsamples": 4, "top_k": 5}'])

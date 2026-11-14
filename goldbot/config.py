@@ -29,6 +29,9 @@ RETIRED_KEYS: tuple[tuple[str, ...], ...] = (
     ("tv_pull",), ("webhook",),
     ("scheduler", "agents_daily"), ("scheduler", "agents_weekly"), ("scheduler", "agents_presession"),
     ("scheduler", "tv_reconcile"), ("tv", "max_lag_s"), ("tv", "min_bar_match"),
+    # ADR 0083 (BACKLOG 142, 2026-11-14): the scheduled research jobs with no live reader and no consumer
+    ("scheduler", "gap_watch"), ("scheduler", "monthly_research"), ("scheduler", "cpcv_quarterly"),
+    ("scheduler", "autodisc_nightly"), ("gaps",),
 )
 
 TF_SECONDS: dict[str, int] = {
@@ -230,6 +233,11 @@ class CostSettings(_Section):
     # recorded broker-tick days (tick_record) in the cost window before nightly_costs builds the spread profile by
     # hour and session (costs-binding-2026-10-18.md section 1.4 step 4); fewer: no profile, the note says why
     spread_profile_min_days: int = Field(10, ge=1)
+    # BACKLOG 175 (goldbot/ops/swap_reconcile.py): a weekend hold of a seven-night (crypto) book whose broker swap
+    # implies more than this many nights off the seven-night count warns (health `swap_reconcile`). In nights, never
+    # relative (quant review 2026-11-14: 25 % let a Friday triple pass on a 9-night hold); under 1, so one night more
+    # or less always fails. The interest swap is priced at the entry price, so price drift does not move it
+    swap_reconcile_tolerance: float = Field(0.5, gt=0, lt=1)
 
 
 class ScheduleSettings(_Section):
@@ -249,19 +257,16 @@ class SchedulerSettings(_Section):
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
     research_director: ScheduleSettings
-    monthly_research: ScheduleSettings
     calendar_archive: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
-    gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
-    # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
-    # contention with them on the 4-core brain), and its weekly restore drill
-    # on Sunday while the market is closed
+    # encrypted off-host backup (goldbot/ops/backup.py) in the daily break, before the nightly jobs start (no CPU
+    # contention with them on the 4-core brain), and its weekly restore drill on Sunday while the market is closed.
+    # tick_record_winter (22:10) runs ahead of it on the single-threaded scheduler; its ticks.job_budget_s ends it well
+    # before job:backup's overdue mark (outage 2026-11-13: unbounded, it ran to 22:47 and the backup failed as overdue)
     backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
-    cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
-                                                        max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
     # broker ledger (goldbot/ops/ledger.py, finance audit GAP-07/GAP-08): balance snapshot, deposits and withdrawals,
     # positions and balance reconciled with the broker. Every day: the deal history still changes on weekends
@@ -284,8 +289,6 @@ class SchedulerSettings(_Section):
     # R140: the feedback-loop check (goldbot/ops/checks/loop.py) after the daily review; a failing loop opens or
     # comments on the `ci-loop` GitHub issue once a day (health alerts on the same check every pass)
     loop_check: ScheduleSettings = ScheduleSettings(kind="daily", at="07:05", max_late_hours=12, run_if_never_run=True)
-    # ADR 0058 phase 2: the bounded discovery search; skips unless research.autodisc.nightly_enabled (the Mac only)
-    autodisc_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:30", max_late_hours=6)
     # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
     # (goldbot/research/tv_ideas.py), after feed_reconcile has stored the broker's M1 and nightly_costs the cost table
     tva_scores: ScheduleSettings = ScheduleSettings(kind="daily", at="23:35", max_late_hours=20)
@@ -300,6 +303,9 @@ class SchedulerSettings(_Section):
     # hours after the nightly jobs (01:30 autodisc), clear of the 22:00-00:00 UTC cluster; first sight runs it once
     journal_compact: ScheduleSettings = ScheduleSettings(kind="daily", at="03:40", max_late_hours=20,
                                                          run_if_never_run=True)
+    # BACKLOG 212: the news collector's coverage readout and outage dq_events (goldbot/data/news_coverage.py)
+    news_coverage: ScheduleSettings = ScheduleSettings(kind="daily", at="06:05", max_late_hours=20,
+                                                       run_if_never_run=True)
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
@@ -308,6 +314,15 @@ class SchedulerSettings(_Section):
     # 1st was missed (within monthly_review.catch_up_days) or failed, and retries every post that has not gone out. A
     # done month is a no-op (one review, one issue and one Telegram message a month)
     monthly_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:30", max_late_hours=20)
+    # BACKLOG 175 (goldbot/ops/swap_reconcile.py): every day, so a weekend crypto hold is reconciled the night after it
+    # closes; a run with no new weekend hold writes nothing. After broker_ledger (23:25)
+    swap_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:45", max_late_hours=20,
+                                                        run_if_never_run=True)
+    # BACKLOG 251 (goldbot/ops/long_history.py): the engine store's complete days appended to the 1d/1w long daily
+    # history after the 21:00 UTC roll, so a live 1d/1w arm's warm-up keeps reaching the engine window. Every day (a
+    # missed weekday is caught up the next evening; an up-to-date file is left untouched); first sight runs it once
+    long_history_refresh: ScheduleSettings = ScheduleSettings(kind="daily", at="21:40", max_late_hours=20,
+                                                              run_if_never_run=True)
 
 
 class BackupSettings(_Section):
@@ -340,27 +355,19 @@ class CompactSettings(_Section):
     time_box_s: float = Field(1800.0, gt=0)          # no partition is started later; the rest wait for the next night
     pause_s: float = Field(1.0, ge=0)                # after each compacted partition: the engines keep the disk
     memory_limit: str = Field("1GB", pattern=r"^\d+(\.\d+)?\s*(KB|MB|GB|KiB|MiB|GiB)$")   # DuckDB's verifying read
-    threads: int = Field(2, ge=1, le=4)              # of the brain's 4 cores
+    threads: int = Field(2, ge=1, le=4)              # the brain has 2 cores (BACKLOG 239)
     row_group_rows: int = Field(262_144, ge=1024)    # rows held at once by the streamed build
+    # BACKLOG 260: tables whose open month is compacted too, the parts of closed UTC days only (the tick logs: the
+    # engines append only today's ticks and never rewrite a part)
+    closed_days_tables: list[str] = Field(default_factory=lambda: ["ticks", "observe_ticks"])
 
-    @field_validator("tables")
+    @field_validator("tables", "closed_days_tables")
     @classmethod
     def _append_only(cls, v: list[str]) -> list[str]:
         bad = sorted(set(v) - set(COMPACTABLE_TABLES))
         if bad:
             raise ValueError(f"compact.tables: {bad} are not append-only store tables {list(COMPACTABLE_TABLES)}")
         return v
-
-
-class GapSettings(_Section):
-    """Bounded spawning (goldbot/ops/gap_watch.py, docs/TRADER_LIFECYCLE.md section 3)."""
-    founders_per_month: int = Field(2, ge=0, le=4)        # zero-capital shadow founders per calendar month
-    staff_runs_per_week: int = Field(3, ge=0, le=7)       # on-demand runs of existing read-only roles, rolling 7 days
-    hypotheses_per_run: int = Field(2, ge=0, le=2)        # hypotheses gap_watch may file per run
-    dq_window_days: int = Field(7, ge=1, le=30)           # data-quality errors counted over this window
-    dq_min_error_days: int = Field(3, ge=1, le=30)        # distinct UTC days with error events that make a gap
-    regime_window_days: int = Field(20, ge=5, le=120)     # recent realised volatility (mean of daily values)
-    regime_history_days: int = Field(3650, ge=365)        # history the volatility terciles are cut from
 
 
 class AttributionSettings(_Section):
@@ -408,6 +415,12 @@ class TickRecordSettings(_Section):
     # per account per run; an unfinished day is not written. A full day is ~500 pages (~3 min at 0.35 s a page);
     # three accounts x 600 s fit the 45-minute quiet window of the daily break
     run_budget_s: float = Field(600.0, gt=0, le=1800)
+    # the whole job (every account and instrument) stops here, so it cannot hold the single-threaded scheduler
+    # (outage 2026-11-13: tick_record_winter ran 22:10-22:47 on copy_ticks timeouts; the backup failed as overdue)
+    job_budget_s: float = Field(600.0, gt=0, le=2700)
+    # an account whose last this-many pulls in a row each ended on a page timeout (or a slow page) has its remaining
+    # instruments skipped for the run; another account is still pulled
+    max_page_timeouts: int = Field(3, ge=1, le=20)
 
     @model_validator(mode="after")
     def _retention_outlives_the_backfill(self) -> TickRecordSettings:
@@ -987,11 +1000,10 @@ class ShadowSettings(_Section):
 
 
 INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
-# BACKLOG 144: blockers 1-3, 5 (built, ADR 0081) and 6 are closed (engine/long_bars.py); these stay open
+# BACKLOG 144: blockers 1-3, 5 and 6 are closed (engine/long_bars.py, ADR 0081: quant-reviewer APPROVE 2026-11-14,
+# research's 1d/1w filter enforced in arm_rules, BACKLOG 252/254); 4 by the long-history refresh, preflight and alert
+# (ops/long_history.py, BACKLOG 251). This one stays open
 GO_LIVE_BLOCKERS_1D_1W = (
-    "a daily long-history refresh, a preflight check that it reaches the engine window, an alert on a history_gap "
-    "older than a day",
-    "the quant ratification of ADR 0081 (the rules' common filter judged at a 1d/1w entry close)",
     "a CONFIRM pass and trading-safety sign-off on the settings diff",
 )
 
@@ -1004,7 +1016,9 @@ class EngineSettings(_Section):
     `long/<symbol>_daily_long.parquet`; engine/long_bars.py), read point in time; a missing file or a history that
     does not reach the engine's window keeps the arm quiet (`history_gap:<tf>`), never a crash."""
     timeframes_live: list[Timeframe] = Field(default_factory=lambda: list(INTRADAY_LIVE))
-    long_history_dir: str = "raw/daily"
+    # quant review 2026-11-14: engine-only (ops/long_history.py appends live minutes to it); never raw/daily, the
+    # research file, which the refresh must not touch
+    long_history_dir: str = "raw/engine_daily"
     # backlog 155 (engine/history.py): a warm start loading fewer 1m bars from the store refuses every entry
     # (history_short) until the window holds them. 28 800 = 120 bars (engine/frames.py MIN_BARS) of 4h, the longest
     # decision timeframe. Weekday gold only: the other books warm up in book_backfill, a weekend lane has no release.
@@ -1072,7 +1086,6 @@ class Settings(_Section):
     drift: DriftSettings = Field(default_factory=DriftSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     gates: GateSettings = Field(default_factory=GateSettings)
-    gaps: GapSettings = Field(default_factory=GapSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
     compact: CompactSettings = Field(default_factory=CompactSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)

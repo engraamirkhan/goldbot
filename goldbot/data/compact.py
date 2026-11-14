@@ -20,8 +20,8 @@ so never the one an engine is writing) of every source=/symbol= folder into one 
   file order (`written_utc`). A tick carries no write time of its own; its part's mtime was the only evidence of the
   2026-10-26 tz quarantine. `Store.read` orders by content (backlog 162), so the on-disk order never shows in a read;
 - the verifying read is DuckDB's sorted read with a memory limit, a thread cap and a spill directory under the store
-  root (`.compact_tmp`, removed after the run), hashed batch by batch: memory bounded on the 4-core brain;
-- the tables (settings `compact.tables`): decisions, fills, dq_events, observe_ticks; ticks once measured on the brain.
+  root (`.compact_tmp`, removed after the run), hashed batch by batch: memory bounded on the 2-core brain;
+- the tables (settings `compact.tables`): decisions, fills, dq_events, observe_ticks, ticks (BACKLOG 239, measured).
   A run is time-boxed (`time_box_s`: partitions not started are `deferred` to the next night) and paced (`pause_s`);
   a closed month is compacted from `min_parts` parts. Fills keep every row (no dedupe anywhere here);
 - crash-safe: a manifest (`.compact.json`, fsynced) naming the new part and the parts it replaces is written
@@ -32,6 +32,14 @@ so never the one an engine is writing) of every source=/symbol= folder into one 
   append that died before its rename) under the lock, where no append can be mid-write.
 
 Late rows of a closed month (a flush just after the month turned) land as a new part and are folded in the next night.
+
+Closed days of the open month (BACKLOG 260, `closed_days`; settings `compact.closed_days_tables`: ticks,
+observe_ticks): the brain held 321,590 tick parts in the open month against 17,360 in closed months, and one
+folder's Store.read took 139-174 s and 4.9 GB. In the open month only the parts whose rows ALL fall before the run's
+UTC day (`ts_utc` max < `before` floored to the day) are compacted: the engines append today's ticks with dedupe=False
+(a part is never rewritten), so such a part is settled; a part reaching into today or later (a flush across midnight,
+a server-clock error) is left. Each night the month's compacted part and the previous day's parts become one part, by
+the same build, verification, lock and lineage as a closed month.
 """
 from __future__ import annotations
 
@@ -42,7 +50,9 @@ import os
 import shutil
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -70,7 +80,7 @@ ROW_GROUP_ROWS = 262_144
 class Budget(Record):
     """Resource bounds of one run (settings `compact`)."""
     memory_limit: str = "1GB"             # DuckDB's limit for the verifying sorted read (it spills beyond)
-    threads: int = 2                      # of the brain's 4 cores
+    threads: int = 2                      # the brain has 2 cores (BACKLOG 239)
     row_group_rows: int = ROW_GROUP_ROWS  # rows held at once by the streamed build
 
 
@@ -111,24 +121,42 @@ class CompactReport(Record):
                            for p in self.partitions if p.error is not None]}
 
 
+def deferred_streaks(previous: object, tables: Mapping[str, Mapping[str, object]]) -> dict[str, int]:
+    """Per table, how many consecutive runs ended with partitions `deferred` (BACKLOG 242): the previous run's
+    `deferred_streak` (its `journal_compact` result, `previous`) plus one while this run deferred, else 0. A missing
+    or malformed previous result starts the count over; health WARNs at 3 (goldbot/ops/checks/compaction.py)."""
+    before = previous.get("tables") if isinstance(previous, dict) else None
+    out: dict[str, int] = {}
+    for table, summary in tables.items():
+        prev = before.get(table) if isinstance(before, dict) else None
+        streak = prev.get("deferred_streak") if isinstance(prev, dict) else None
+        deferred = summary.get("deferred")
+        out[table] = ((streak if isinstance(streak, int) and streak >= 0 else 0) + 1
+                      if isinstance(deferred, int) and deferred > 0 else 0)
+    return out
+
+
 class CompactMismatch(RuntimeError):
     """The new part does not read back as the old parts did: it is dropped, the old parts stay."""
 
 
 def compact_table(store: Store, table: str, *, before: pd.Timestamp, lock_timeout_s: float | None = None,
                   min_parts: int = 2, time_box_s: float | None = None, pause_s: float = 0.0,
-                  memory_limit: str = "1GB", threads: int = 2, row_group_rows: int = ROW_GROUP_ROWS) -> CompactReport:
+                  memory_limit: str = "1GB", threads: int = 2, row_group_rows: int = ROW_GROUP_ROWS,
+                  closed_days: bool = False) -> CompactReport:
     """Compact every partition of `table` whose month is before `before`'s UTC month (closed months only) and that
     holds at least `min_parts` parts, or an interrupted run's manifest or temp file. One partition failing never stops
     the others: its error is in the report and its old parts stay as they were. The lock wait is bounded
     (`lock_timeout_s`, default the store's): a stuck holder fails that partition loudly instead of hanging the night.
     `time_box_s`: no partition is started after that many seconds (the rest are `deferred`; a started one finishes);
-    `pause_s`: a sleep after each compacted partition, so the engines' flushes and reads keep the disk."""
+    `pause_s`: a sleep after each compacted partition, so the engines' flushes and reads keep the disk.
+    `closed_days`: also compact the open month's parts settled before `before`'s UTC day (module docstring)."""
     timeout = store.lock_timeout_s if lock_timeout_s is None else lock_timeout_s
     budget = Budget(memory_limit=memory_limit, threads=threads, row_group_rows=row_group_rows)
     t = pd.Timestamp(before)
     t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
     cutoff = t.year * 12 + t.month
+    day_ns = int(t.floor("D").value)
     report = CompactReport(table=table)
     tdir = store.table_dir(table)
     if not tdir.exists():
@@ -143,16 +171,22 @@ def compact_table(store: Store, table: str, *, before: pd.Timestamp, lock_timeou
                 y, m = int(year), int(month)
             except (ValueError, IndexError):
                 continue
-            if y * 12 + m >= cutoff:
+            settled: Callable[[Path], bool] | None = None
+            if y * 12 + m > cutoff or (y * 12 + m == cutoff and not closed_days):
                 continue                          # the open month (or a future one): an engine may be writing it
-            if len(list(pdir.glob("*.parquet"))) < max(min_parts, 2) and not any(pdir.glob(".compact*")) \
+            if y * 12 + m == cutoff:              # BACKLOG 260: only the parts of closed days of the open month
+                settled = _settled_before(day_ns)
+                n_parts = sum(1 for f in pdir.glob("*.parquet") if settled(f))
+            else:
+                n_parts = len(list(pdir.glob("*.parquet")))
+            if n_parts < max(min_parts, 2) and not any(pdir.glob(".compact*")) \
                     and not any(pdir.glob(".part-*.tmp")):
                 continue
             if time_box_s is not None and time.monotonic() - t0 >= time_box_s:
                 report.deferred += 1              # the next night's run starts with it
                 continue
             try:
-                res = _compact_partition(pdir, table, timeout, budget, spill)
+                res = _compact_partition(pdir, table, timeout, budget, spill, select=settled)
             except Exception as exc:              # one bad partition does not stop the night's run
                 log.exception("compaction of %s failed; its parts are untouched", pdir)
                 res = PartitionResult(source=source, symbol=symbol, year=y, month=m, parts_before=0, parts_after=0,
@@ -169,12 +203,29 @@ def compact_table(store: Store, table: str, *, before: pd.Timestamp, lock_timeou
     return report
 
 
+def _settled_before(day_ns: int) -> Callable[[Path], bool]:
+    """A part all of whose rows have `ts_utc` before `day_ns` (an empty, unreadable or ts-less part: False)."""
+    def ok(f: Path) -> bool:
+        try:
+            col = pq.read_table(f, columns=["ts_utc"]).column(0)
+        except (OSError, KeyError, pa.ArrowException):
+            return False
+        if len(col) == 0 or col.null_count:
+            return False
+        hi = pd.Timestamp(pc.max(col).as_py())
+        hi = hi.tz_localize("UTC") if hi.tzinfo is None else hi.tz_convert("UTC")
+        return int(hi.value) < day_ns
+    return ok
+
+
 def _compact_partition(pdir: Path, table: str, timeout_s: float, budget: Budget | None = None,
-                       spill: Path | None = None) -> PartitionResult | None:
+                       spill: Path | None = None, select: Callable[[Path], bool] | None = None
+                       ) -> PartitionResult | None:
+    """`select`: compact only the parts it accepts (the open month's settled parts); the others stay as they are."""
     budget = budget or Budget()
     with Store._partition_lock(pdir, timeout_s):          # recovery first: a half-done swap is finished or dropped
         recovered = _recover(pdir)
-        files = sorted(pdir.glob("*.parquet"))
+        files = sorted(f for f in pdir.glob("*.parquet") if select is None or select(f))
     if len(files) <= 1:
         if not recovered:
             return None
@@ -276,6 +327,14 @@ def written_utc(path: str | Path) -> pd.Series:
     ns = np.repeat(np.array([nat if g["written_ns"] is None else int(str(g["written_ns"])) for g in segs],
                             dtype="int64"), [int(str(g["rows"])) for g in segs])
     return pd.Series(pd.to_datetime(ns, unit="ns", utc=True), name="written_utc")
+
+
+def stamp_written(df: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """`df` with `written_utc` = `now` (default: the wall clock, UTC, ns) on every row (BACKLOG 241): a tick row then
+    carries when it became knowable itself, not only through its part file's mtime or lineage (which a copy without
+    mtimes, an external tool or a dedupe rewrite loses). Rows written before the column read it as null."""
+    at = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    return df.assign(written_utc=pd.Series(at.as_unit("ns"), index=df.index, dtype="datetime64[ns, UTC]"))
 
 
 def _unified_schema(files: list[Path]) -> tuple[pa.Schema, dict[str, str]]:

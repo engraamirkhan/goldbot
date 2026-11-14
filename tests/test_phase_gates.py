@@ -82,7 +82,7 @@ def dsr_inputs(dsr: float, *, n: int = 600, k: int = 1) -> dict[str, float]:
 
 def write_trial(path: Path, *, dsr: float = 0.97, n: int = 600, mean_ret: float = 0.002, max_dd: float = 0.05,
                 years_passed: bool = True, status: str = "evaluated") -> None:
-    row = {"trial": 7, "family": "session_open", "status": status,
+    row = {"trial": 7, "family": "session_open", "status": status, "feature_version": "f",
            "results": {"model_filtered": {"n": n, "dsr": dsr, "mean_ret": mean_ret, "max_dd": max_dd,
                                           "dsr_inputs": dsr_inputs(dsr, n=n)},
                        "gates": {"passed": years_passed, "checks": [
@@ -117,7 +117,26 @@ def full_state(tmp_path: Path) -> tuple[Path, Path]:
     return state, trials
 
 
-def report(state: Path, trials: Path, now: pd.Timestamp = NOW) -> GateReport:
+def clean_cpcv(trials: Path, now: pd.Timestamp = NOW) -> None:
+    """Clean CPCV evidence for `now`'s quarter on every walk-forward row (most paths positive, no PBO veto): the
+    gate 1 `cpcv` item's input (research/cpcv_gate.py), so the other items are what a test exercises."""
+    from goldbot.research import cpcv
+    from goldbot.research.registry import TrialRegistry
+    if not trials.exists():
+        return
+    reg = TrialRegistry(trials)
+    for r in reg._rows():
+        if r.get("status") == "evaluated":
+            payload = {"paths": [{"path": i, "mean_r": 0.1} for i in range(5)], "n_paths": 5,
+                       "feature_version": r.get("feature_version"), "pbo": None}
+            reg.attach_evidence(int(r["trial"]), cpcv.EVIDENCE_KIND, cpcv.evidence_payload(payload, None, "test"),
+                                now=now.to_pydatetime())
+
+
+def report(state: Path, trials: Path, now: pd.Timestamp = NOW, *, cpcv: bool = True) -> GateReport:
+    """`cpcv`: attach clean CPCV evidence first (`clean_cpcv`); False leaves the evidence as the test wrote it."""
+    if cpcv:
+        clean_cpcv(trials, now)
     return evaluate_gates(state, SETTINGS, now, trials_path=trials)
 
 
@@ -137,7 +156,7 @@ def trial_row(trial: int, *, dsr: float, mean_ret: float, passed: bool, failed_c
     checks = [{"name": "positive_years", "passed": True, "detail": "positive years [2019, 2021, 2024]"}]
     if failed_check:
         checks.append({"name": failed_check, "passed": False, "detail": f"{failed_check} below the design's minimum"})
-    return {"trial": trial, "family": "session_open", "status": "evaluated",
+    return {"trial": trial, "family": "session_open", "status": "evaluated", "feature_version": "f",
             "results": {"model_filtered": {"n": 600, "dsr": dsr, "mean_ret": mean_ret, "max_dd": 0.05,
                                            "dsr_inputs": dsr_inputs(dsr)},
                         "gates": {"passed": passed, "checks": checks}, **COSTS}}
@@ -712,3 +731,46 @@ def test_an_unpriced_pooled_row_breaches_the_stop_rule_fail_closed():
     legacy = trade(0.001, days_ago=4.0, gross_held_days=0.1).model_copy(update={"entry_price": None})
     s = evaluate_stop_rule([*ok, legacy], PAPER_START, CAP, CFG, NOW)    # gold's unpriced rows: reported, as before
     assert not s.breached and s.imputed.n_unpriced == 1
+
+
+# ------------------------------------------------------------------------------------------------ gate 1: CPCV / PBO
+def test_gate_1_is_unmet_without_cpcv_evidence_and_the_gate_never_runs_cpcv(tmp_path):
+    """ADR 0083 amendment: phase gate 1 requires the promotion's CPCV/PBO evidence, read-only (research/cpcv_gate.py)."""
+    state, trials = full_state(tmp_path)
+    rep = report(state, trials, cpcv=False)
+    assert item(rep, "backtest_to_paper", "research_gates") and not item(rep, "backtest_to_paper", "cpcv")
+    assert not gate_met(rep, "backtest_to_paper") and "no CPCV evidence" in evidence(rep, "backtest_to_paper", "cpcv")
+    assert not trials.with_name(trials.stem + ".evidence.jsonl").exists()      # read-only: nothing run, nothing attached
+
+
+def test_gate_1_is_unmet_on_a_pbo_veto(tmp_path):
+    from goldbot.research import cpcv
+    from goldbot.research.registry import TrialRegistry
+    state, trials = full_state(tmp_path)
+    peer = {**trial_row(8, dsr=0.5, mean_ret=0.0, passed=False), "config": {"band_z": 3.0}}
+    write_rows(trials, [json.loads(trials.read_text()), peer])
+    payload = {"paths": [{"path": i, "mean_r": 0.1} for i in range(5)], "n_paths": 5, "feature_version": "f"}
+    TrialRegistry(trials).attach_evidence(7, cpcv.EVIDENCE_KIND, cpcv.evidence_payload(
+        payload, {"pbo": 0.8, "n_configs": 2, "n_combinations": 20, "logit_median": -1.0}, "test"),
+        now=NOW.to_pydatetime())
+    rep = report(state, trials, cpcv=False)
+    assert not item(rep, "backtest_to_paper", "cpcv") and not gate_met(rep, "backtest_to_paper")
+    assert "PBO 80% > 50%" in evidence(rep, "backtest_to_paper", "cpcv")
+
+
+def test_gate_1_cpcv_evidence_from_an_earlier_quarter_does_not_count(tmp_path):
+    state, trials = full_state(tmp_path)
+    clean_cpcv(trials, NOW - pd.Timedelta(days=120))
+    rep = report(state, trials, cpcv=False)
+    assert not item(rep, "backtest_to_paper", "cpcv") and not gate_met(rep, "backtest_to_paper")
+    assert item(report(state, trials), "backtest_to_paper", "cpcv")          # this quarter's evidence meets it
+
+
+def test_a_corrupt_cpcv_evidence_line_leaves_gate_1_unmet_and_the_report_still_runs(tmp_path):
+    """Trading-safety review: `run.py gates` must not crash on an unreadable evidence sidecar; it reads as no evidence."""
+    state, trials = full_state(tmp_path)
+    trials.with_name(trials.stem + ".evidence.jsonl").write_text("{not json\n")
+    rep = report(state, trials, cpcv=False)
+    assert not item(rep, "backtest_to_paper", "cpcv") and not gate_met(rep, "backtest_to_paper")
+    assert "can't read CPCV evidence" in evidence(rep, "backtest_to_paper", "cpcv")
+    assert "backtest_to_paper" in gates_phase.render(rep)

@@ -56,7 +56,7 @@ from dukascopy_months import parse_months  # noqa: E402
 from goldbot.base import FrozenRecord  # noqa: E402
 from goldbot.data.calendar import DEFAULT_SESSIONS  # noqa: E402
 from goldbot.data.quality import check_bars, quarantine  # noqa: E402
-from goldbot.data.resample import BAR_COLUMNS  # noqa: E402
+from goldbot.data.resample import BAR_COLUMNS, OPTIONAL_BAR_COLUMNS  # noqa: E402
 
 MIN_BARS_PER_FULL_MONTH = 15_000   # ~20 trading days x 1,380 minutes = 27,600; accept down to 15,000
 MIN_BARS_PARTIAL_MONTH = 5_000     # below this a month is reported MISSING
@@ -320,13 +320,18 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 2,
                 # Dukascopy XAUUSD volumes are fractional: an int cast truncated most minutes to 0, which made every
                 # tick-volume feature constant. Features only use ratios and z-scores, so the scale does not matter.
                 "tick_count": m["volume_bid"].fillna(0.0).astype(float).round(6),
+                # BACKLOG 213: the ask side's volume too (a second, quoted-volume imbalance proxy); unknown (NaN, never
+                # 0 or a copy) when either side was imputed
+                "tick_count_ask": (m["volume_ask"].astype(float).round(6) if not imputed
+                                   else pd.Series(np.nan, index=m.index)),
             })
             out["spread_mean"] = (out["ask_close"] - out["bid_close"]).clip(lower=0)
             out["spread_max"] = (out["ask_high"] - out["bid_low"]).clip(lower=0)
             out = out[(out["bid_close"] > 0) & (out["ask_close"] >= out["bid_close"])]
             out = out[DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(out["ts_utc"]))]
             out.insert(1, "visible_at", out["ts_utc"] + pd.Timedelta(minutes=1))
-            out = out[BAR_COLUMNS].sort_values("ts_utc").drop_duplicates("ts_utc").reset_index(drop=True)
+            out = out[BAR_COLUMNS + OPTIONAL_BAR_COLUMNS].sort_values("ts_utc").drop_duplicates("ts_utc") \
+                .reset_index(drop=True)
             out["dq_flag"] = f"warning:{imputed}_imputed" if imputed else ""
             # a minute without volume (the early archive's volume-less days) is kept, flagged: tick-volume features
             # must not read its 0 as a quiet minute
@@ -378,7 +383,15 @@ def merge_never_shrink(published: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataF
         p = int(pn.get(d, 0))
         if n > p or (n == p and bool(pflag.get(d, False)) and not bool(fflag.get(d, False))):
             take_fresh.add(d)
-    out = pd.concat([published[~pday.isin(take_fresh)], fresh[fday.isin(take_fresh)]])
+    kept_rows = published[~pday.isin(take_fresh)].copy()
+    for c in OPTIONAL_BAR_COLUMNS:
+        # BACKLOG 213: a kept published day built before the column gets it from the re-download, minute by minute;
+        # its prices and tick_count stay as published (an enrichment, never a revision of a published value)
+        if c in fresh.columns:
+            add = kept_rows["ts_utc"].map(fresh.drop_duplicates("ts_utc").set_index("ts_utc")[c])
+            kept_rows[c] = (kept_rows[c].astype(float) if c in kept_rows.columns else np.nan)
+            kept_rows[c] = kept_rows[c].fillna(add.astype(float))
+    out = pd.concat([kept_rows, fresh[fday.isin(take_fresh)]])
     kept = sorted(d for d in fn.index if d not in take_fresh and int(pn.get(d, 0)) > 0)
     if kept:
         print(f"  never-shrink: kept {len(kept)} published day(s) the re-download did not improve on", flush=True)
@@ -521,7 +534,9 @@ def main() -> int:
     if not frames:
         return 1
     out = pd.concat(frames).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
-    out = out[[c for c in BAR_COLUMNS] + ["dq_flag"]]
+    for c in OPTIONAL_BAR_COLUMNS:            # months kept from a file built before the column: unknown (NaN), never 0
+        out[c] = out[c].astype(float) if c in out.columns else np.nan
+    out = out[BAR_COLUMNS + OPTIONAL_BAR_COLUMNS + ["dq_flag"]]
     flags = out.pop("dq_flag").fillna("").astype(str)
     out, dq = check_bars(out)
     out["dq_flag"] = [a if a else b for a, b in zip(flags.to_numpy(), out["dq_flag"].to_numpy())]

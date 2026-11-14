@@ -111,11 +111,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:autodisc_nightly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:backup",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -136,11 +131,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:cpcv_quarterly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:daily_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -152,11 +142,6 @@
   ],
   [
    "job:feed_reconcile",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:gap_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -181,6 +166,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:long_history_refresh",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:loop_check",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -191,12 +181,12 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:monthly_research",
+   "job:monthly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:monthly_review",
+   "job:news_coverage",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -222,6 +212,11 @@
   ],
   [
    "job:saturday_retrain",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:swap_reconcile",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -368,7 +363,17 @@
   [
    "feedback_loop",
    "ok",
-   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (monthly_research, cpcv_quarterly, tournament, research_director); jobs: no job's last run errored"
+   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
+  ],
+  [
+   "swap_reconcile",
+   "ok",
+   "no weekend hold of a seven-night book closed in the last 14 days (job swap_reconcile)"
+  ],
+  [
+   "cpcv_evidence",
+   "ok",
+   "no trial registry"
   ]
  ],
  "healthy_static": [
@@ -600,11 +605,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:autodisc_nightly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:backup",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -625,11 +625,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:cpcv_quarterly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:daily_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -641,11 +636,6 @@
   ],
   [
    "job:feed_reconcile",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:gap_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -670,6 +660,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:long_history_refresh",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:loop_check",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -680,12 +675,12 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:monthly_research",
+   "job:monthly_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:monthly_review",
+   "job:news_coverage",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -711,6 +706,11 @@
   ],
   [
    "job:saturday_retrain",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:swap_reconcile",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -882,7 +882,17 @@
   [
    "feedback_loop",
    "ok",
-   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (monthly_research, cpcv_quarterly, tournament, research_director); jobs: no job's last run errored"
+   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
+  ],
+  [
+   "swap_reconcile",
+   "ok",
+   "no weekend hold of a seven-night book closed in the last 14 days (job swap_reconcile)"
+  ],
+  [
+   "cpcv_evidence",
+   "ok",
+   "no trial registry"
   ]
  ],
  "busy_static": [

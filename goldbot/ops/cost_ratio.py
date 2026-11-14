@@ -34,6 +34,12 @@ Definition (pre-registered before any replay; fixed here, every amount USD per o
   biases nothing and does not count as unmeasured. Bounded: when the last label bar closed more than MAX_BAR_LAG_DAYS
   before the decision day (a stalled refresh), nothing is pending, those fills count as unmeasured and `bars_stale`
   makes the job raise a `cost_bars_stale` alert (quant re-check of 76066de6).
+* Conservative bound (quant review of R150, a non-blocking suggestion; reporting only, never an input to the limits):
+  `ratio_bound` prices each unmeasured fill at the window's worst measured fill (its largest measured cost) against the
+  window's smallest model charge, pooled with the measured fills as the ratio is. It reads how high the ratio could be
+  if the unmeasured fills were as costly as the worst one seen; it equals the ratio when nothing is unmeasured and is
+  None without a measured fill or a positive model total. The job logs it and keeps it in its row; the controller only
+  ever reads `ratio`.
 * A fill missing any part of its measure, or with a non-finite one (no side, requested price, decision spread, exit
   leg, a leg without its requested price, no model bar, a NaN or infinite price) is counted `unmeasured` and reported in the job's row, never guessed: a guessed part
   could only understate or overstate the cost.
@@ -97,6 +103,7 @@ class CostRatio(FrozenRecord):
     model_usd_per_oz: float | None = None       # the pooled model charge per fill
     model: str = MODEL_SOURCE
     reason: str | None = None     # why None: too_few_fills, unmeasured_share, model_cost_zero
+    ratio_bound: float | None = None    # reporting only: unmeasured fills at the worst fill (module docstring)
 
 
 def window_start(decision_day: date) -> date:
@@ -228,6 +235,20 @@ def pooled_ratio(fills: list[FillCost], unmeasured: int = 0) -> tuple[float | No
     return measured / model, measured, model, None
 
 
+def conservative_bound(fills: list[FillCost], unmeasured: int) -> float | None:
+    """Reporting only, never a limit input: the pooled ratio with each of the `unmeasured` fills priced at the window's
+    worst measured fill and charged the smallest model of the window (module docstring); None without a measured fill
+    or a positive, finite total."""
+    if not fills:
+        return None
+    _, measured, model, _ = pooled_ratio(fills)
+    measured += unmeasured * max(0.0, max(f.measured for f in fills))
+    model += unmeasured * min(f.model for f in fills)
+    if not (math.isfinite(measured) and math.isfinite(model) and model > 0):
+        return None
+    return measured / model
+
+
 def cost_ratio_20d(trades: Iterable[ClosedTrade], account_id: str, decision_day: date, *, imputer: CostImputer,
                    legs: pd.DataFrame, bars: pd.DataFrame, model_extra_usd: float, model_swap: SwapSpec,
                    acct_per_usd: float | None) -> CostRatio:
@@ -243,8 +264,8 @@ def cost_ratio_20d(trades: Iterable[ClosedTrade], account_id: str, decision_day:
     return CostRatio(ratio=ratio, since=since, fills=n, unmeasured=len(unmeasured), pending=pending,
                      bars_stale=stale,
                      measured_usd_per_oz=measured / n if n else None, model_usd_per_oz=model / n if n else None,
-                     reason=why)
+                     reason=why, ratio_bound=conservative_bound(fills, len(unmeasured)))
 
 
-__all__ = ["BAR_TOLERANCE", "MAX_BAR_LAG_DAYS", "MAX_UNMEASURED_SHARE", "MIN_FILLS", "MODEL_SOURCE", "WINDOW_RISK_DAYS", "CostRatio", "FillCost", "cost_ratio_20d", "fill_costs",
+__all__ = ["BAR_TOLERANCE", "MAX_BAR_LAG_DAYS", "MAX_UNMEASURED_SHARE", "MIN_FILLS", "MODEL_SOURCE", "WINDOW_RISK_DAYS", "CostRatio", "FillCost", "conservative_bound", "cost_ratio_20d", "fill_costs",
            "pooled_ratio", "window_start"]

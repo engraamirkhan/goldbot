@@ -178,7 +178,8 @@ def spec_masks(spec: StrategySpec, prov: PrimitiveProvider,
                filter_close: pd.DatetimeIndex | None = None) -> tuple[BoolArr, SideArr]:
     """(entry mask, side per bar +1 / -1) of `spec` on the provider's bars of its timeframe: entry predicate, filter and
     session window through the provider's leaves, the side rule, and the common filters every arm carries, judged at
-    `filter_close` when given (a 1d/1w bar's entry close, ADR 0081), else at each bar's close. Point in time."""
+    `filter_close` when given, else at each bar's close; a 1d/1w bar always at its entry (`arm_rules.entry_after`, ADR
+    0081, enforced). Point in time."""
     tf = spec.timeframe
     mask = prov.predicate_mask(spec.entry, tf) & prov.session_mask(spec.session_window, tf)
     if spec.filter is not None:
@@ -192,6 +193,8 @@ def spec_masks(spec: StrategySpec, prov: PrimitiveProvider,
         if spec.side_rule == "against":
             side = (-side).astype(np.int8)
     close = utc_index(prov.bars(tf)["visible_at"]) if filter_close is None else filter_close
+    if tf in R.LONG_TFS and filter_close is None:    # ADR 0081, enforced: a 1d/1w bar is judged at its entry
+        close = R.entry_after(close, tf)
     mask = mask & (side != 0) & R.common_filter_ok(close, NO, NO)
     return mask, side
 

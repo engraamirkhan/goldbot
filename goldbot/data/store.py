@@ -228,8 +228,13 @@ class Store:
                 f.close()
 
     @staticmethod
-    def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
-        tmp, name = _stage_part(pdir, pa.Table.from_pandas(df, preserve_index=False))
+    def _write_atomic(pdir: Path, df: pd.DataFrame, metadata: dict[bytes, bytes] | None = None) -> None:
+        """Write `df` as one new part (temp name, fsync, rename). `metadata`: extra Parquet key-value pairs (the
+        quarantine rewrite passes `goldbot.lineage`, so its rows keep their write times, backlog 240)."""
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        if metadata:
+            table = table.replace_schema_metadata({**(table.schema.metadata or {}), **metadata})
+        tmp, name = _stage_part(pdir, table)
         os.replace(tmp, pdir / name)
         _fsync_dir(pdir)
 

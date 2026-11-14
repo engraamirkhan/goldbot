@@ -20,6 +20,9 @@ BAR_COLUMNS = [
     "ts_utc", "visible_at", "bid_open", "bid_high", "bid_low", "bid_close",
     "ask_open", "ask_high", "ask_low", "ask_close", "tick_count", "spread_mean", "spread_max",
 ]
+# Nullable columns a bar source may carry (BACKLOG 213): Dukascopy's ask-side tick volume (`tick_count` is the bid
+# side's). Absent or NaN = unknown, never 0; resample_bars sums it per bar and a bar with any unknown minute reads NaN.
+OPTIONAL_BAR_COLUMNS = ["tick_count_ask"]
 
 
 def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) -> pd.DataFrame:
@@ -125,6 +128,9 @@ def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:
         "spread_max": g["spread_max"].max(),
         "_last_minute": g["ts_utc"].last(),
     })
+    for c in OPTIONAL_BAR_COLUMNS:                # summed like tick_count; one unknown minute -> the bar is unknown
+        if c in b.columns:
+            out[c] = g[c].sum(min_count=1).where(g[c].count() == g[c].size())
     if "visible_at" in b.columns:                # the latest constituent visibility (resample_bars carries it forward)
         out["_minutes_visible"] = g["visible_at"].max()
     out.index.name = "ts_utc"
@@ -165,7 +171,8 @@ def resample_bars(bars_1m: pd.DataFrame, tf: str, *, feature_day_tz: str = "Amer
         out["visible_at"] = vis.where(~carried, late)
         if drop_late:
             out = out[~carried.to_numpy()]
-    return out.drop(columns=["_last_minute"])[BAR_COLUMNS].reset_index(drop=True)
+    return out.drop(columns=["_last_minute"])[BAR_COLUMNS + [c for c in OPTIONAL_BAR_COLUMNS if c in out.columns]] \
+        .reset_index(drop=True)
 
 
 _AGG_INPUTS = [c for c in BAR_COLUMNS if c not in ("ts_utc", "visible_at")]   # what a resampled bar is made of
@@ -223,7 +230,8 @@ class IncrementalResampler:
         if len(ts) > 1 and not bool((np.diff(ts) > 0).all()):
             self._reset()
             return self._resample(bars)
-        checked = [*_AGG_INPUTS, *(["visible_at"] if "visible_at" in bars.columns else [])]   # visibility too
+        checked = [*_AGG_INPUTS, *(c for c in OPTIONAL_BAR_COLUMNS if c in bars.columns),
+                   *(["visible_at"] if "visible_at" in bars.columns else [])]   # visibility too
         cols = {c: _comparable(bars[c]) for c in checked}
         dtypes = tuple(bars[c].dtype for c in ("ts_utc", *checked))
         out = self._update(bars, idx, ts, cols, dtypes)

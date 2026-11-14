@@ -239,13 +239,14 @@ def test_job_compacts_every_configured_table_and_reports_per_table(tmp_path: Pat
     from goldbot.ops.jobs import journal_compact
     s = load_settings().compact
     assert {"decisions", "fills", "dq_events", "observe_ticks"} <= set(s.tables)
-    assert "ticks" not in s.tables          # enabled only after the brain measurement (backlog follow-up 239)
+    assert s.tables[-1] == "ticks"          # enabled after the brain measurement (BACKLOG 239), compacted last
     store = Store(tmp_path)
     _seed(store)
     cfg = CompactSettings(tables=["decisions", "ticks", "observe_ticks", "fills", "dq_events"])
     out = journal_compact(SimpleNamespace(store=store, settings=SimpleNamespace(compact=cfg)), NOW)  # type: ignore[arg-type]
     assert set(out["tables"]) == {"decisions", "ticks", "observe_ticks", "fills", "dq_events"}
-    assert out["tables"]["ticks"]["partitions"] == 2 and out["tables"]["fills"]["rows"] == 3
+    # September, October and (BACKLOG 260) the closed days 2-3 Nov of the open month
+    assert out["tables"]["ticks"]["partitions"] == 3 and out["tables"]["fills"]["rows"] == 3
     assert out["partitions"] == sum(t["partitions"] for t in out["tables"].values())
     assert out["errors"] == [] and out["deferred"] == 0
 

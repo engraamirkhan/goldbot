@@ -774,6 +774,36 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (account_id, arm_id)
            ) STRICT""",
     )),
+    # additive (outage 2026-11-12..14, ~205 entry-blocked minutes nobody could attribute afterwards; goldbot/ops/
+    # alert_log.py): `reasons`, a JSON object {check: short scrubbed reason} of each health message sent. NULL for a
+    # row without reasons (the dead man's switch, every row written before it). A release without it never reads it
+    Migration(version=34, name="health_alert_reasons", additive=True, statements=(),
+              add_columns=(("health_alerts", "reasons", "TEXT"),)),
+    # additive (BACKLOG 187, BACKLOG 175): the first time the engine de-registered a spec-retired arm it found flat
+    # (goldbot/engine/exploration_deregister.py; INSERT OR IGNORE, so it is journalled once), and one row per weekend
+    # hold of a seven-night book whose broker swap was reconciled against the projection (goldbot/ops/swap_reconcile.py,
+    # read-only on the broker; health `swap_reconcile`). A release without them never reads either table
+    Migration(version=35, name="deregistered_arms_swap_reconcile", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_arm_deregistered (
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               deregistered_ns INTEGER NOT NULL,
+               PRIMARY KEY (account_id, arm_id)
+           ) STRICT""",
+        f"""CREATE TABLE IF NOT EXISTS swap_reconciliations (
+               account_id TEXT NOT NULL,
+               client_order_id TEXT NOT NULL,
+               exit_ns INTEGER NOT NULL,
+               ok INTEGER NOT NULL,
+               {_BODY},
+               PRIMARY KEY (account_id, client_order_id)
+           ) STRICT""",
+    )),
+    # additive (BACKLOG 105, goldbot/research/arm_rule_versions.py): the rule-code version in force at each candidate's
+    # decision. `arm_hash` covers the arm's id, rule, timeframe, params and max_open, not its rule code; a code change
+    # to a frozen rule bumps this. NULL on rows recorded before it (and by a release without it, which never reads it)
+    Migration(version=36, name="exploration_obs_rule_version", additive=True, statements=(),
+              add_columns=(("exploration_obs", "arm_rule_version", "INTEGER"),)),
 )
 
 CORE: tuple[Migration, ...] = (

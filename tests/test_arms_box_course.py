@@ -137,7 +137,7 @@ def _engine_at(b1: pd.DataFrame, arm: A.Arm, close: pd.Timestamp) -> SimpleNames
     mem = b1[b1["visible_at"] <= close].tail(MEMORY).reset_index(drop=True)
     xarm = exploration.Arm(spec=arm, style="intraday")
     # what a skipped candidate's log reads: the pots (equal shares without a ledger), the broker, no champion
-    ex = SimpleNamespace(arms={arm.id: xarm}, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None,
+    ex = SimpleNamespace(arms={arm.id: xarm}, retired=frozenset(), deregistered=frozenset(), last_bar={}, queue=deque(), ahead_seen=None,
                          needs_context=frozenset(), cfg=SimpleNamespace(pots={"intraday": None}), weights_cache=None,
                          db=None, broker="icm", champion_seen={}, deferred={}, netting=None, held_back={})
     return SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False, account_id="t"), bars_1m=mem,

@@ -6,6 +6,7 @@ value from bars <= idx. The common filters (tier-1 blackout, no entry 20:45-22:1
 apply to every arm, the random controls included. Existing specialists run their own rule code."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,6 +51,33 @@ class RuleContext:
     def filter_ts(self) -> pd.DatetimeIndex:
         """Where `common_filter_ok` judges each bar: `filter_close`, else the bar's close."""
         return self.close_ts if self.filter_close is None else self.filter_close
+
+
+# ADR 0081 point 3 (quant-reviewer APPROVE 2026-11-14, BACKLOG 252/254): a 1d/1w bar's candidate is judged by the common
+# filter at its nominal entry, as the engine sends it after the reopen: 1d 22:30 UTC on its day (after the rollover
+# filter; a Friday's stays inside the Friday filter, never entered), 1w Sunday 23:15 UTC after its Friday close
+LONG_TFS = ("1d", "1w")
+NOMINAL_ENTRY = {"1d": pd.Timedelta(minutes=90), "1w": pd.Timedelta(days=2, hours=2, minutes=15)}
+
+
+def entry_after(close: pd.DatetimeIndex, tf: str) -> pd.DatetimeIndex:
+    """The nominal entry of each 1d/1w bar closing at `close` (`RuleContext.filter_close`). Timestamps only, so the
+    engine (`engine/long_bars.py`) and every research replay judge the same."""
+    return pd.DatetimeIndex(close) + NOMINAL_ENTRY[tf]
+
+
+def long_tf_context(arm: Arm, ctx: RuleContext) -> RuleContext:
+    """The context a rule of `arm` runs on. Enforced, not by convention (quant condition on ADR 0081): a 1d/1w arm's
+    common filter is judged at `entry_after` of its bars, filled in when the caller left `filter_close` out and refused
+    (ValueError) when the caller passed another one. Every other timeframe: `ctx` unchanged."""
+    if arm.timeframe not in LONG_TFS:
+        return ctx
+    want = entry_after(ctx.close_ts, arm.timeframe)
+    if ctx.filter_close is None:
+        return dataclasses.replace(ctx, filter_close=want)
+    if not pd.DatetimeIndex(ctx.filter_close).equals(want):
+        raise ValueError(f"{arm.id}: a {arm.timeframe} arm's filter_close must be entry_after(its closes) (ADR 0081)")
+    return ctx
 
 
 def empty() -> pd.DataFrame:
@@ -202,7 +230,7 @@ def screened_frame(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[pd.
     if cands.empty:
         cands = cands.drop(columns="skip", errors="ignore")
         return cands, cands.assign(reason=pd.Series(dtype=object))
-    ok, band = _screen(arm, ctx, cands)
+    ok, band = _screen(arm, long_tf_context(arm, ctx), cands)
     cands = cands.drop(columns="skip", errors="ignore")
     inside = np.array([b is None for b in band], dtype=bool)
     skipped = cands[ok & ~inside].assign(reason=band[ok & ~inside]).reset_index(drop=True)
@@ -488,6 +516,7 @@ def screened(arm: Arm, ctx: RuleContext) -> tuple[pd.DataFrame, pd.DataFrame]:
     """The arm's rule run once: (its candidates, the ones its stop band skipped with their `reason`)."""
     if arm.status != "run":
         raise ValueError(f"{arm.id} is blocked: {arm.note}")
+    ctx = long_tf_context(arm, ctx)                 # ADR 0081: a 1d/1w arm's filter at its entry, enforced
     return screened_frame(arm, ctx, RULE_FUNCS[arm.rule](arm, ctx))
 
 

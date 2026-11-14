@@ -5,6 +5,95 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-14 (branch feat/auto-gated-1114; R153, R152; BACKLOG 187, 175): two condition-gated items now finish
+  themselves. 187: at every reconciliation, after a successful broker position read (`exploration.sweep`), the
+  engine de-registers a spec-retired arm its book is flat in (no open trade, no order in flight, no waiting signal;
+  goldbot/engine/exploration_deregister.py). It then does no signal or bar work, so a book whose arms are all retired
+  stops resampling for them. The first time per account and arm it is recorded in aux.db
+  `exploration_arm_deregistered` (migration 35) and journalled `exploration_arm_deregistered`. The arm stays known to
+  the exits and adoption, so nothing is ever closed as `exploration_orphan` and no position is touched. The
+  config/accounts.yaml rows stay (a running service never rewrites the deployed config; a de-registered row is
+  inert). 175: new daily job `swap_reconcile` (23:45 UTC, goldbot/ops/swap_reconcile.py) compares every closed
+  weekend hold of a crypto (seven-night) book, from the exploration ledger's broker swap, with the instruments.db
+  rate x lots x nights in the account currency. Each result is stored once in aux.db `swap_reconciliations` with the
+  nights of the three candidate schedules (seven_night, five_plus_triple, seven_plus_triple). Health
+  `swap_reconcile` warns, and the owner is told, past `costs.swap_reconcile_tolerance` (0.5 night off the seven-night count; quant review 2026-11-14) or when a hold cannot
+  be priced. With no weekend hold the job is a no-op. Read-only: no broker call, no order. The order path is
+  unchanged.
+- 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; ADR 0083; BACKLOG 142): cleanup phase 2. Retired the scheduler jobs
+  `gap_watch`, `monthly_research`, `cpcv_quarterly` and the brain's `autodisc_nightly` (settings, job code, tests),
+  deleted `goldbot/ops/gap_watch.py` and the `gaps:` settings (`daily_realised_vol` moved to research/attribution.py).
+  Their keys are in `config.RETIRED_KEYS`, so a server settings.local.yaml naming one loads with a warning; the
+  scheduler's prune drops their state (no `job:` health line). Kept, with the reader list in ADR 0083:
+  `saturday_retrain`, `tournament`, `model_watch`, `recalibrate` (the engine reads the registry and population they
+  write; model_watch is a rollback) and `research_director`, `attribution` (R141 weekly_review's consumer and input).
+  News shock (D16): option 2, already live as ADR 0079's rules-v1 scorer. CPCV now by hand (`research_pass.py
+  --cpcv`); discovery stays on the Mac's launchd. No order, exit, RiskGate, budget or gate path changed. Needs the
+  trading-safety and quant GOs before merge.
+- 2026-11-14 (branch feat/cpcv-gate-1114; ADR 0083 amendment; M16): CPCV/PBO is enforced at promotion. New
+  `goldbot/research/cpcv_gate.py`: a gate-passing trial is promoted only with CPCV evidence for the UTC quarter that
+  ran on its config and feature version, has no ADR 0003 veto (PBO > 0.5 or most paths negative, verdict recomputed)
+  and has PBO whenever its family has other walk-forward trials on its timeframe; missing evidence is run on demand and
+  attached to the trial (not a trial: no budget, no DSR count). Wired into the weekly `tournament` (shadow -> live);
+  held-back agents and reasons under `cpcv_refused`. Health check `cpcv_evidence` (ops/checks/cpcv.py, tail 180)
+  WARNs on a gate-passing trial without usable evidence. Phase gate 1 has a read-only `cpcv` item (never runs CPCV; missing
+  evidence leaves it unmet), decided under the owner's delegation. Quant fixes: no finite path or no feature version
+  refuses; an on-demand run without a holdout window raises; same-config reruns are not PBO peers. Needs quant-reviewer and trading-safety-reviewer GOs.
+- **1d/1w long history, live == history, rule-code versions (BACKLOG 251, 252, 254, 105; R154; 2026-11-14).** A daily
+  job `long_history_refresh` (21:40 UTC) appends the store's complete days to the engine-only `raw/engine_daily/bars/xauusd_1d.parquet` (never the research file, never a holdout-dated day; `stale` past 120 days; quant review)
+  (`source` `engine_1m:<broker>`), the preflight checks the history reaches the engine window once 1d/1w are live, and
+  health `long_history:<account>` tells the owner when an arm is held back more than a day. ADR 0081 is ratified; the
+  1d/1w filter is enforced on every research caller, a 1d/1w hold and order id count from the decision close, and
+  `run_arm_backtest` is the CONFIRM of record (21:00 UTC roll, fill at the live entry close, Friday 1d dropped). Only
+  blocker 7 (BACKLOG 253) keeps 1d/1w dark. Every arm rule carries a version (`research/arm_rule_versions.py`, pinned
+  by source hash of the rule, every arm_rules* helper it reaches and the common screen, quant review); `exploration_obs.arm_rule_version` (aux migration 36) records it.
+- 2026-11-14 (branch feat/limits-cost-ratio-replay-1114; R150; BACKLOG 255 and 90 done): quant-reviewer approved
+  the R150 cost/model definition 2026-11-14. `scripts/replay_limits.py --data-root DIR` now measures each replay day's
+  20-day cost/model ratio through the nightly job's own `_cost_ratio`, `store_exit_legs` and `store_label_bars` (no
+  definition parameter can be passed in), so replayed limits include the cost rule; without a data root the header
+  says the rule is inert (None). Known differences from the night itself, stated in the module docstring: the store's
+  bars are today's (a fill the job held `pending` is measured) and the USD factor is the engine file's current one.
+  The quant's non-blocking suggestion is in: `CostRatio.ratio_bound` prices each unmeasured fill at the window's
+  worst measured fill against the smallest model charge; logged, in the job row (`cost_ratio_bound`) and the replay
+  table, never an input to the limits. No replay was run (ADR 0031's replay log unchanged); nothing on the order path
+  changed.
+- **Outage 2026-11-12..14 fixes (R151, BACKLOG 256; implementer).** The backup stays at 22:15 UTC: `tick_record` stops at `ticks.job_budget_s` (600 s) for the whole run and skips an account's
+  remaining instruments after `ticks.max_page_timeouts` (3) timed-out pulls in a row, so tick_record_winter (22:10) ends before job:backup turns overdue (11-13 it ran to 22:47). aux.db migration 34 adds
+  `health_alerts.reasons` (per alerted check, scrubbed, 160 characters). Two warn-only health checks
+  (goldbot/ops/checks/host.py): `cpu_steal` (steal above 20% in every minute for 10 min, sampled by the service
+  heartbeats on the brain; the MT5 boxes are BACKLOG 256) and `needrestart` (the goldbot drop-in missing where
+  needrestart is installed); both notify the owner after the alert window. MT5 login: -6 with a broker-outage journal
+  reason is status `unavailable` and logged as a temporary outage; before latching, the journal is re-read once after 1 s (a starved
+  box wrote the line late); a latch logs the journal reason it latched on.
+  Brain action: re-run the needrestart step of brain_bootstrap.sh (RUNBOOK "needrestart"). Reviews owed:
+  code-reviewer, sre (checks, slot), trading-safety-reviewer (login classification and logging only).
+- 2026-11-14 (branch feat/orderflow-governance-1114; M50, M51; BACKLOG 211 order-flow part, 91): `research_pass.py
+  --discover --orderflow` screens the R139 order-flow proxies (built from the run's own 1m bars, cut at the holdout)
+  beside the default features in one discovery trial. The pre-registered plan and the report carry
+  `orderflow.SCREEN_NOTE` (a survivor must beat the plain return and momentum features in the same screen) and, at
+  15m, the H-14 note (expected move >= 3x round trip); the result row's `orderflow_rule` reads it (strictly higher
+  stability than every `ret_*` / momentum column, ties fail). Without the flag nothing changes and no hash moves.
+  `--orderflow` is refused outside `--discover`. News stays collect-only: no `--news` flag until 12 months of data.
+- Retired families now share their one exploration trial a quarter in code. `TrialRegistry.check_budget_reserved`
+  refuses an open-budget run (rule_ref or not) on any family in research.retired_families once the quarter has a
+  retired-family trial (`RetiredExplorationUsed`, with the counts in the message); only a queued pre-registration of
+  the exact config lifts it. The director counts screened retired families too (`box_break_close`, `sweep_absorb`) and
+  reports the trial used (`retired_trials_quarter`). H-53's procedural hold in prereg-2026-10-19-h50-followup.md s.3
+  can drop once quant signs off. Behaviour change: `research_pass.py` defaults to `--specialist session_open`
+  (retired R-02), so a second open-budget session_open run in a quarter is now refused.
+- Fail clean (same branch): a run the retired-family guard refuses is a recorded skip, not an error. research_pass
+  writes the reason to the report, writes no row and exits 75 (`registry.SKIPPED_EXIT`); research.yml's cell passes
+  on 75 and `cells.record` reports the cell as "skipped (retired family; no look, no trial)" (`Recorded.skipped`).
+  Callers checked: research-loop.yml names every family and its loop rows never reach the guard (`loop_refusal`
+  refuses retired families first); the brain's jobs (monthly_research, research_director, the analyst) do not call
+  research_pass. So no scheduled caller relies on the `session_open` default, and the default stays; a manual
+  dispatch on it now ends as a skip.
+- 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; R155; BACKLOG 243): the trades API's `TradeRow` carries a closed
+  exploration or control row's MFE / MAE from its R135 record (`mfe_r`, `mae_r`, `mfe_usd`, `mae_usd`,
+  `excursion_approx`; None on older rows and every other kind). The trade detail's "Details" disclosure shows them
+  for a closed arm trade ("for +1.40 R (+4.20 USD/oz) · against −0.60 R ..."), "not recorded" when the record has
+  none (never 0 R) and "approximate" when part of the path came from the 1m bars. API contract regenerated. Read-only;
+  nothing on the order path changed.
 - 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
   settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
   measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the

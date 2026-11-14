@@ -49,7 +49,7 @@ PROPOSALS_UNREAD_DAYS = 8.0     # the research director runs Saturday; a Monday 
 PROPOSALS_LOOKBACK_DAYS = 35.0  # older roll-ups are moot: their proposals are judged stale with them
 OUTBOX_STALE_H = 36.0           # registry rows waiting for the Mac publish
 ERROR_CHARS = 200
-REGISTRY_JOBS_HINT = "monthly_research, cpcv_quarterly, tournament, research_director"
+REGISTRY_JOBS_HINT = "tournament, research_director"   # the jobs that sync it (BACKLOG 142 retired the rest)
 
 Verdict = Literal["ok", "fail", "cant_check"]
 _LONG_NUMBER = re.compile(r"\d{6,}")

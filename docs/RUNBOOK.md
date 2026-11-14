@@ -87,7 +87,7 @@ attach fails or `/health` finds no account, to the configured login only (`goldb
 `state/mt5-login/icm-demo.refused` (time and code only) and nothing sends it again, through any restart, until you
 store it again with `goldbot-mt5 accounts set mt5-icm-demo` (that clears the mark), because the broker locks an
 account after repeated bad passwords. If the password at the broker was reset and the stored one is right,
-`goldbot-mt5 login icm-demo --retry-refused` tries exactly once. The package gives the same `-6` when the broker's auth service is down (weekend maintenance), so the login reads the terminal journal (`<terminal dir>/logs/<YYYYMMDD>.log`): a `failed (Service is not available)` / `(No connection)` reason is retried like a timeout and never marked. If a mark predates that fix, check the journal before clearing it (reason only, digits masked): `sudo cat <terminal dir>/logs/<day>.log | iconv -f UTF-16LE -t UTF-8 | grep -a 'authoriz' | sed -E 's/[0-9]{5,}/<N>/g'`; a broker-side reason followed by an `authorized on` line means the password is good: stop the watchdog timer and bridge, then `--retry-refused` once (incident 2026-11-01). `Invalid account` means it is not: stop, never retry. While a mark stands the bridge watchdog never restarts the terminal (journal: `login refusal mark stands ... not restarting`; a restart cannot clear it and makes the terminal try its saved login again), and the brain pages once: `FAIL terminal:<account>: MT5 login refused and latched` when the bridge serves /health, or `FAIL bridge:<account>: MT5 bridge unreachable for 5 min` when it is in a restart loop (a warning before 5 min; one page per outage, closed after 3 min answering; outage record `state/health_outages.db`, deleting it only restarts the clock). The watchdog is a root-owned copy: install this release's with `mt5-box-upgrade.sh` (RUNBOOK 0.5). Other failures wait 20 s, 40 s, ... up to 10 min
+`goldbot-mt5 login icm-demo --retry-refused` tries exactly once. The package gives the same `-6` when the broker's auth service is down (weekend maintenance), so the login reads the terminal journal (`<terminal dir>/logs/<YYYYMMDD>.log`): a `failed (Service is not available)` / `(No connection)` reason is retried like a timeout and never marked. Before a `-6` latches, the login waits `JOURNAL_SETTLE_S` (1 s) and reads the journal once more (the line can land late; goldbot/ops/login.py); the bridge's SelfHeal holds the terminal lock through that wait, so a close queued behind it can wait up to 1 s longer (exits are never refused, only delayed). If a mark predates that fix, check the journal before clearing it (reason only, digits masked): `sudo cat <terminal dir>/logs/<day>.log | iconv -f UTF-16LE -t UTF-8 | grep -a 'authoriz' | sed -E 's/[0-9]{5,}/<N>/g'`; a broker-side reason followed by an `authorized on` line means the password is good: stop the watchdog timer and bridge, then `--retry-refused` once (incident 2026-11-01). `Invalid account` means it is not: stop, never retry. While a mark stands the bridge watchdog never restarts the terminal (journal: `login refusal mark stands ... not restarting`; a restart cannot clear it and makes the terminal try its saved login again), and the brain pages once: `FAIL terminal:<account>: MT5 login refused and latched` when the bridge serves /health, or `FAIL bridge:<account>: MT5 bridge unreachable for 5 min` when it is in a restart loop (a warning before 5 min; one page per outage, closed after 3 min answering; outage record `state/health_outages.db`, deleting it only restarts the clock). The watchdog is a root-owned copy: install this release's with `mt5-box-upgrade.sh` (RUNBOOK 0.5). Other failures wait 20 s, 40 s, ... up to 10 min
 between logins, and at most 6 logins an hour are sent; both are kept in `state/mt5-login/`, so restarts reset
 neither. The very first
 login on a freshly built terminal (no `Config/servers.dat` yet) may still need the Open an Account flow above: try the
@@ -1089,11 +1089,17 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `recalibrate` | Saturday 11:30 | Refits only the probability map of each champion and challenger on its recent shadow outcomes (every candidate, taken or not), bounded to +-0.05 per week; logged in `state\recalibration.jsonl`. Promotes nothing. |
 | `tournament` | Saturday 12:00 | Population round: fitness, retirement, promotion to live, cloning, capital shares -> `state\agents.json`. |
 | `agents_weekly` | Saturday 13:00 | Journal coach, improvement agent, research analyst. |
-| `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 | `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
 | `tick_record`, `tick_record_winter` | Daily 21:10 and 22:10 | Read-only, and only while gold is closed (New York's 17:00-18:00 daily break, which is 21:00 UTC in US summer time and 22:00 UTC in winter, or the weekend; the other slot skips): the broker's own XAUUSD ticks of the oldest closed server day not yet recorded (missed days within 7 are back-filled, one a run, and the weekend runs catch up) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
+
+Retired with ADR 0083 (BACKLOG 142, 2026-11-14): `monthly_research`, `gap_watch`, `cpcv_quarterly` and the
+brain's `autodisc_nightly`. Nothing to do on the server: the scheduler drops their state at its next start and
+health shows no `job:` line for them; a `config/settings.local.yaml` that still names one (or a `gaps:` section)
+loads with a warning (delete the lines). CPCV of a gate-passing trial now runs at promotion (the `tournament` job
+runs it on demand; ADR 0083 amendment) or by hand (`scripts/research_pass.py --cpcv`); the discovery search stays on
+the Mac (launchd, `scripts/autodisc.py nightly`).
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -1548,14 +1554,19 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
 * To switch it off and trade the fixed ceilings again: set `risk: { adaptive_limits: false }` in the server's
   `config/settings.local.yaml` and restart the engine.
 * Replay (validation only, never a tuning step):
-  `python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 --state state --models models`
-  prints the decision each day would have had. It writes nothing. Each run is recorded in ADR 0031's replay log.
+  `python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 --state state --models models
+  --data-root DIR` (the Parquet store) prints the decision each day would have had. It writes nothing. Each run is recorded in ADR
+  0031's replay log. With `--data-root` it also measures each day's cost/model ratio exactly as the nightly job does
+  (`cost` and `bound` columns); without it the header says the cost rule is inert (None).
 * The cost/model rule (BACKLOG 90): the nightly row's `cost_ratio_20d` is the account's measured cost over what the
   research labels charged at qualification (`cost_model`: settings priors), on its fills of the last 20 risk days
   (`cost_fills` measured, `cost_unmeasured` missing a part, `cost_pending` entered after the last weekly bar refresh). Above 1.25 the limits go to the floors, 1.10-1.25 one
   step down. `null` with fewer than 20 measured fills or more than 20% unmeasured (dq_event `cost_ratio_unmeasured`):
   the rule is then inert. Then check that the engine writes `exit_fills` and the dukascopy 15m bars are fresh
   (`cost_bars_stale`: no bar within 9 days; `cost_ratio_error`: the series failed, see the job log).
+  `cost_ratio_bound` (also logged when fills are unmeasured) prices each unmeasured fill at the window's worst measured
+  fill: how high the ratio could be. Reporting only; it never moves a limit. A bound above 1.25 while the ratio is
+  `null` means the missing exit legs are worth chasing first.
 
 
 ### icm-demo learning host (ADR 0043 amendment 2026-10-26, ADR 0037 amendment 6)
@@ -2062,6 +2073,24 @@ update script. The Telegram service runs the same checks every minute and messag
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
+
+### needrestart
+
+Health WARN `needrestart` (outage 2026-11-14: unattended-upgrades restarted 12 goldbot units at 06:58 on a
+Saturday): needrestart is installed on this host but `/etc/needrestart/conf.d/goldbot.conf` is missing, so the next
+library update may restart goldbot units mid-session. On the brain, as root, from root's own clone (`$OPS` =
+`goldbot/ops/linux` in it), run the bootstrap's two lines again:
+`install -d -m 755 -o root -g root /etc/needrestart/conf.d` and
+`install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf`.
+The WARN clears on the next health pass. Nothing is restarted by this; library updates land at the next attended
+restart or reboot.
+
+### CPU steal (`cpu_steal`)
+
+Health WARN `cpu_steal`: the cloud hypervisor gave this host's CPU to other guests for more than 20% of the time in
+every minute of the last 10 (outage 2026-11-12..14: 35-58% on the MT5 boxes slowed the engines without crashing
+anything). Nothing is halted. If it lasts for hours, note it on issue #34; a move to another shape or region is an
+owner decision (spending). The check reads the brain only; the MT5 boxes are BACKLOG 256.
 
 ### Order not confirmed
 
@@ -2812,6 +2841,19 @@ Confirm and holdout (design 3.3 / 3.5; each read happens once and is charged one
 A confirm or holdout passer may then become a demo arm with `python -m goldbot.ops.run autodisc-register` (default: passers only;
 `--stage explore` registers an explore survivor as a demo-learning arm, journalled as such). Nothing here touches live.
 
+### CPCV evidence (`cpcv_evidence`; M16, ADR 0083 amendment)
+
+Health check `cpcv_evidence` (goldbot/ops/checks/cpcv.py) WARNs when a trial that passed the research gates has no
+usable CPCV/PBO evidence for the current UTC quarter (missing, failed, another feature version, or no PBO although its
+family has other walk-forward trials). Phase gate 1 (`backtest_to_paper`) has a `cpcv` item that reads the same evidence and never runs CPCV. The
+`tournament` job promotes a shadow agent to live only with clean evidence:
+it runs CPCV on demand when the evidence is missing and lists every agent it held back, with the reason, under
+`cpcv_refused` in its result (`job:tournament`). A "CPCV veto" (PBO above 50% or most paths negative) is the gate
+working: the trial stays in shadow, nothing to fix. To produce the evidence before the tournament, run
+`scripts/research_pass.py --cpcv <trial#> <peer#> ...` (usage in its docstring) on the host where the tournament runs,
+naming the trial and its family's other walk-forward trials on its timeframe: the evidence sidecar is local to the
+host. "CPCV failed: no <tf> bars" means the store has no bars for that timeframe: load the history (section 2.5).
+
 ### Feedback loop (`feedback_loop`, `ci-loop` issue; R140)
 
 Health check `feedback_loop` (goldbot/ops/checks/loop.py) FAILs when a writer the learning loop depends on is stale or
@@ -2823,11 +2865,67 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   (Mon-Fri 23:10). After the fix the next slot runs it.
 - `reviews`: `state/aux/daily_review/<day>.json` or Monday's `weekly-<sunday>.json` missing for its slot. Read
   `job:daily_review`; rerun one day with `python -m goldbot.ops.run daily-review --date <day>` as the goldbot user.
-- `proposals`: a weekly roll-up with proposals nobody marked read within 8 days. The consumer (research director) calls
-  `goldbot.research.daily_review.mark_weekly_consumed`; until one is wired (BACKLOG 216) this FAILs by design.
+- `proposals`: a weekly roll-up with proposals nobody marked read within 8 days. The consumer is the research
+  director, run from the Mac Claude session (the brain's `research_director` job is off without an Anthropic key;
+  BACKLOG 216): `scripts/weekly_proposals.sh` lists the unread roll-ups (read-only, over ssh, as the goldbot user);
+  for each, decide (queue a proposal for its own pre-registration, or decline with the reason), then
+  `scripts/weekly_proposals.sh --mark weekly-<day>.json "<decision>"` records it in
+  `state/aux/daily_review/consumed.json` (first record stands; any consumer name passes the check). The Saturday
+  `weekly_review` job also marks the roll-ups of its window. Marking runs nothing.
 - `registry`: the latest job's `registry_sync` failed, or rows waited more than 36 h in `state/registry_outbox/`. The
   brain token is read-only on purpose (decision 2026-11-01): publish from the Mac with `scripts/registry_publish.sh`
-  (reads the outbox over ssh, uploads with the Mac's gh); the brain clears the outbox on its next sync. A 403 on a GET
+  (reads the outbox over ssh, uploads with the Mac's gh), which the launchd agent runs daily (see "Registry publish
+  from the Mac" below); the brain clears the outbox on its next sync. A 403 on a GET
   means the token lost `Contents: Read-only` too: sre re-issues it and stores it on the brain with
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.
+
+### Store compaction (`compaction`; BACKLOG 242)
+
+Health check `compaction` (goldbot/ops/checks/compaction.py) appears once `journal_compact` has finished a run (or a
+spill directory exists) and WARNs on either:
+- a table deferred on 3 runs in a row (`deferred_streak` in `job:journal_compact`'s result): the 30 min time box
+  (`compact.time_box_s`) does not drain the backlog. Read the result per table (`partitions`, `deferred`,
+  `duration_s`). One heavy table (a new one in `compact.tables`): let it drain over a weekend, or raise `time_box_s`
+  in `config/settings.local.yaml` within the 03:40-05:00 quiet window (engines keep the disk; `pause_s` stays). A
+  deferral that grows every night means compaction cannot keep up with the writers: data-engineer reviews the table.
+- `<data_root>/.compact_tmp` left unchanged for more than 6 h with no `journal_compact` run in flight: a killed run's
+  DuckDB spill files. Check no run is in flight (`job:journal_compact` finished after it started), then remove it as
+  the goldbot user: `sudo -u goldbot rm -rf <data_root>/.compact_tmp` (the next run recreates it; no partition data
+  lives there). Then find why the run died (`journalctl -u goldbot-scheduler`, OOM in `dmesg`).
+A "can't check" WARN means the scheduler status is unreadable: see the scheduler checks first.
+
+### Registry publish from the Mac (launchd; BACKLOG 215)
+
+The brain's `github-token` cannot write release `research-v1` (decision 2026-11-01), so the Mac publishes the brain's
+`state/registry_outbox/` daily with `scripts/registry_publish.sh`, run by the user agent `com.goldbot.registry-publish`
+(template `goldbot/ops/macos/com.goldbot.registry-publish.plist.template`; runner `scripts/registry_publish_mac.sh`).
+- Install, once, from the main checkout (not a worktree; the agent runs that checkout's scripts):
+  `scripts/install_registry_publish_launchd.sh` (dry run: prints the plist), then the same with `--apply`. It runs
+  at 09:15 local and, after a slot missed while the Mac slept, on wake. Run once at once with
+  `launchctl kickstart gui/$(id -u)/com.goldbot.registry-publish`.
+- Each run appends one line to `~/tmp/registry-publish/publish.log` (`<utc> ok|FAIL rc=<n> <last line>`); the full
+  output is in `run-<utc>.log` next to it (30 kept). Status: `launchctl print gui/$(id -u)/com.goldbot.registry-publish`
+  (`last exit code`).
+- Needs, under launchd: ssh to `goldbot-brain` with a key that needs no prompt (`~/.ssh/goldbot.conf`; a passphrase
+  key must be in the keychain, `UseKeychain yes`), `gh` logged in with write access, the checkout's `.venv` or `uv`.
+  PATH is set in the plist (Homebrew, `~/.local/bin`).
+- Detection when it does not run (Mac off, agent unloaded, ssh or gh failing): the brain's `feedback_loop` FAILs
+  `registry` once rows wait more than 36 h; recovery is the same script by hand, then read the FAIL line in
+  `publish.log` for the cause.
+- Remove: `scripts/install_registry_publish_launchd.sh --uninstall`.
+
+### Long daily history (1d/1w warm-up, BACKLOG 251)
+A live 1d/1w arm warms up from `<data_root>/<engine.long_history_dir>/bars/xauusd_1d.parquet` (default
+`raw/engine_daily/bars/`, engine-only: the research file `raw/daily/bars/` is never written by the brain). The job
+`long_history_refresh` (21:40 UTC daily) appends the engine store's complete days to it (rows marked
+`source = engine_1m:<broker>`), never a day dated inside the sealed holdout (`research.holdout_from..holdout_to`); an
+up-to-date file is left alone. While 1d/1w are dark nothing reads it.
+- `long_history:<account>` warns (Telegram) when a 1d/1w arm has been held back (`history_gap`) more than a day; the
+  preflight item `long_history` fails when a live 1d/1w history does not reach the engine window.
+- Fix: read `job:long_history_refresh` in health (the job runs every evening and catches missed days up). Its result says
+  `no_file` (copy the research file `raw/daily/bars/xauusd_1d.parquet` from the Mac to
+  `raw/engine_daily/bars/xauusd_1d.parquet` under the brain's data root first), `stale` (the file's last row is more
+  than 120 days old: copy a current one by hand, never rebuilt), `no_minutes` (the store has no minutes after the
+  file: check the engine's history) or lists `holes` (weekdays without minutes). The next run (21:40 UTC) appends
+  what the store holds after a copied file.

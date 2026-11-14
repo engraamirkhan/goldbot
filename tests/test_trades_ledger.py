@@ -541,3 +541,19 @@ def test_open_trades_belong_only_to_ranges_that_reach_now(tmp_path):
     yesterday = (NOW - pd.Timedelta(days=1)).date()
     assert not tl.query(led, _q(since=yesterday, until=yesterday)).rows
     assert tl.query(led, _q(since=yesterday)).rows
+
+
+# ------------------------------------------------------------------------------------------------ MFE / MAE (BACKLOG 243)
+def test_a_closed_exploration_row_carries_its_recorded_mfe_and_mae_and_whether_they_are_approximate(tmp_path):
+    _engine(tmp_path, SCALP)
+    _arm(tmp_path, "ex-x", "S1A", mfe_r=1.4, mae_r=-0.6, mfe_usd=4.2, mae_usd=-1.8, excursion_approx=True)
+    row = next(r for r in _ledger(tmp_path, _catalog(tmp_path)).rows if r.trade_id.endswith("ex-x"))
+    assert (row.mfe_r, row.mae_r, row.mfe_usd, row.mae_usd, row.excursion_approx) == (1.4, -0.6, 4.2, -1.8, True)
+
+
+def test_mfe_and_mae_are_none_never_zero_on_rows_without_a_record_and_on_every_other_kind(tmp_path):
+    _every_kind(tmp_path)
+    rows = _ledger(tmp_path, _catalog(tmp_path)).rows
+    assert rows
+    for r in rows:
+        assert (r.mfe_r, r.mae_r, r.mfe_usd, r.mae_usd, r.excursion_approx) == (None, None, None, None, None), r.trade_id

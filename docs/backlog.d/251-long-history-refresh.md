@@ -4,7 +4,7 @@ rank: 79
 title: 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4)
 stage: Engine · BUILD
 size: S
-status: 'ready (split from 144, 2026-11-13) · accountable: implementer · reviews: sre, data-engineer · due 2026-11-27'
+status: 'done (2026-11-14, branch feat/engine-backlog-1114): job long_history_refresh (ops/long_history.py), preflight item long_history, health long_history:<account> (NOTIFY_ON_WARN), blocker 4 left GO_LIVE_BLOCKERS_1D_1W; tests tests/test_long_history_refresh.py · reviews: sre, data-engineer'
 ---
 - **251. 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4).** Value: a live
   1d/1w arm warms up from `<data_root>/<engine.long_history_dir>/bars/<symbol>_1d.parquet`; nothing on the brain keeps

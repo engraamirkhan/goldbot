@@ -444,12 +444,12 @@ def test_quant_table_13_locks_8_and_9_with_slots_locks_none_when_4_survivors_run
             _check(reg, cfg, setting=setting)
             _run(reg, p, f"2027-02-{2 + k:02d}T00:00:00+00:00")
         n = 0
-        while True:                                              # every other open trial the quarter allows
+        while True:                                # every other open trial the quarter allows (live family, BACKLOG 91)
             try:
-                _check(reg, {"o": n}, setting=setting, family="trend")
+                _check(reg, {"o": n}, setting=setting, family="tsmom")
             except TrialBudgetExceeded:
                 break
-            reg._append({"trial": reg.n_trials + 1, "ts": "2027-03-01T00:00:00+00:00", "family": "trend",
+            reg._append({"trial": reg.n_trials + 1, "ts": "2027-03-01T00:00:00+00:00", "family": "tsmom",
                          "config_hash": f"o{n}", "status": "evaluated", "config": {}, "results": {}})
             n += 1
         used = quarter_trials(reg._rows(), Q)

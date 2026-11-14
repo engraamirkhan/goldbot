@@ -98,7 +98,9 @@ def test_o4s_15m_group_map_has_no_group_over_39_with_the_context_columns_counted
 def test_a_discovery_refused_for_group_size_writes_no_registry_row_and_spends_no_trial(tmp_path: Path,
                                                                                       b1: pd.DataFrame):
     reg = TrialRegistry(tmp_path / "registry.jsonl")
-    reg.record(agent_id="earlier", family="session_open", config={"a": 1}, feature_version=DEFAULT_VERSION,
+    # an earlier trial on a family that is not retired: session_open is, and a second retired-family trial in the
+    # quarter is refused before the group sizes are checked (BACKLOG 91, discovery_ prefix stripped)
+    reg.record(agent_id="earlier", family="tsmom", config={"a": 1}, feature_version=DEFAULT_VERSION,
                rationale="an earlier trial", results={})
     before, n_eff = reg.path.read_text(), reg.n_trials_effective
     with pytest.raises(ValueError, match="trend has .* over max_selected 39"):

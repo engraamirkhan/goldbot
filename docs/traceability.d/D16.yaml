@@ -1,5 +1,5 @@
 id: D16
 requirement: News features "join as-of on received_utc"; "a high-relevance unscheduled shock triggers a 30-minute entry blackout"
-status: implemented
-code: goldbot/data/news.py:167 `shock_window`; goldbot/engine/runner.py:535
-test: tests/test_news.py::test_shock_blocks_entries_for_30_minutes
+status: 'implemented; BACKLOG 142 (b) decided: option 2, the free deterministic rules-v1 scorer flags a shock without an API key (ADR 0079, R144; recorded in ADR 0083); an LLM score takes precedence when a key exists'
+code: goldbot/data/news.py `shock_window`; goldbot/data/news_rules.py (rules-v1); goldbot/data/news_collector.py; goldbot/engine/runner.py
+test: tests/test_news.py::test_shock_blocks_entries_for_30_minutes; tests/test_news_rules.py::test_a_rule_shock_blocks_entries_and_never_blocks_an_exit, ::test_without_a_client_every_prefiltered_headline_is_scored_by_the_rules

@@ -1,10 +1,9 @@
 ---
 number: 227
-rank: 75
 title: Equal demo arm shares instead of the Thompson bandit (H-61 allocator retired)
 stage: 'research ops (ML review 2026-11-13, lane ML1)'
 size: S
-status: 'done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, code-reviewer'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): PR #390 (feat/ml-cleanup-snapshots, R143) · accountable: implementer'
 ---
 - **227. Equal demo arm shares instead of the Thompson bandit.** Evidence (`docs/research/ml-review-2026-11-13.md` section 2 row 3): over 24 broker-days, bandit-weighted next-day R was +0.085 and equal-weighted +0.086, with a rank correlation of 0.003. Since 11-09 a -0.247 R arm had sat at the 30 % cap. Acceptance:
   - The nightly learner writes equal shares among each style's enterable arms that have a labelled fill.

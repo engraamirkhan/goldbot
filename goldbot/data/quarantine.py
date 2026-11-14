@@ -20,12 +20,15 @@ other span is ignored, so a span can never be used to wave away a feed fault nob
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+from goldbot.data.compact import LINEAGE, Segment, _lineage, _order_ns, _recover
 from goldbot.data.store import Store
 
 SPAN_CHECK = "quarantine_span"
@@ -66,15 +69,17 @@ def move_rows(store: Store, table: str, *, source: str, symbol: str, select: Sel
         with store._partition_lock(pdir):
             # a compaction that died between its rename and its unlinks left the old parts beside the new one:
             # finish (or drop) its swap first, so the rewrite below never carries the replaced rows twice (R146 review)
-            from goldbot.data.compact import _recover
             _recover(pdir)
-            files = sorted(pdir.glob("*.parquet"))
-            keep, out = [], []
+            # parts in write order, rows in file order: the rewrite keeps each kept row's write time (backlog 240)
+            lin = {f: _lineage(f) for f in pdir.glob("*.parquet")}
+            files = sorted(lin, key=lambda f: (_order_ns(lin[f], f), f.name))
+            keep, out, segs = [], [], []
             for f in files:
                 rows = pq.read_table(f).to_pandas()
                 mask = select(f, rows).to_numpy(dtype=bool)
                 keep.append(rows[~mask])
                 out.append(rows[mask])
+                segs += _kept_segments(lin[f], ~mask)
             gone = pd.concat(out, ignore_index=True) if out else pd.DataFrame()
             if gone.empty:
                 continue
@@ -85,12 +90,25 @@ def move_rows(store: Store, table: str, *, source: str, symbol: str, select: Sel
                                quarantined_utc=pd.Timestamp(now).tz_convert("UTC"), from_table=table)
             store.append(qtable, gone.drop(columns=[c for c in ("source", "symbol", "year", "month") if c in gone]),
                          source=source, symbol=symbol)
-            rest = pd.concat(keep, ignore_index=True).sort_values("ts_utc", kind="stable")
+            rest = pd.concat(keep, ignore_index=True)   # file order kept: Store.read orders by content anyway
             if not rest.empty:
-                store._write_atomic(pdir, rest.reset_index(drop=True))
+                store._write_atomic(pdir, rest, metadata={LINEAGE: json.dumps(segs).encode()})
             for f in files:
                 f.unlink(missing_ok=True)
     return moved
+
+
+def _kept_segments(segs: list[Segment], kept: np.ndarray) -> list[Segment]:
+    """The lineage segments of one part's kept rows (`kept`: a mask in file row order); empty segments dropped."""
+    out: list[Segment] = []
+    i = 0
+    for g in segs:
+        n = int(str(g["rows"]))
+        k = int(kept[i:i + n].sum())
+        i += n
+        if k:
+            out.append({"part": g["part"], "written_ns": g["written_ns"], "rows": k})
+    return out
 
 
 def record_span(store: Store, *, source: str, symbol: str, start: pd.Timestamp, end: pd.Timestamp, reason: str,

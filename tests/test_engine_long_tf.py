@@ -80,7 +80,7 @@ def _engine(b1: pd.DataFrame, arms: list[SpecArm], close: pd.Timestamp, hist: Pa
     engine's session table and the aux ledger next to the history (the decisions persist across engines of a test)."""
     from goldbot.data.calendar import DEFAULT_SESSIONS
     xa = {a.id: exploration.Arm(spec=a, style="swing", control_share=0.1) for a in arms}
-    ex = SimpleNamespace(arms=xa, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
+    ex = SimpleNamespace(arms=xa, retired=frozenset(), deregistered=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
                          needs_context=frozenset(), held_back={}, netting=None, long=None,
                          db=exploration.ledger_db(str(hist.parent / f"{hist.name}-state")))
     cfg = SimpleNamespace(live_clock=False, account_id="t", release_symbol="XAUUSD", decision_tf="15m",
@@ -170,9 +170,9 @@ def test_settings_refuse_1d_or_1w_live_naming_the_open_go_live_blockers(tf: str)
         EngineSettings(timeframes_live=[*INTRADAY_LIVE, tf])  # type: ignore[list-item]
     msg = str(err.value)
     assert "go-live blockers" in msg and "engine-1d-1w-golive" in msg
-    for blocker in ("preflight", "ADR 0081", "CONFIRM"):                # BACKLOG 144: the blockers still open
-        assert blocker in msg, blocker
-    for closed in ("22:15 UTC", "Sunday open", "catch-up", "is_bar_close"):
+    assert "CONFIRM" in msg                                             # BACKLOG 144 blocker 7: still open
+    # closed: 1-3, 6 (ADR 0081), 4 (BACKLOG 251: refresh, preflight, alert), 5 (quant ratification, BACKLOG 252/254)
+    for closed in ("22:15 UTC", "Sunday open", "catch-up", "is_bar_close", "preflight", "ADR 0081"):
         assert closed not in msg, closed
 
 
@@ -356,6 +356,27 @@ def test_a_long_timeframe_pending_older_than_one_base_bar_is_dropped_stale(tmp_p
     exploration._enter(eng, ex, tick.ts_utc, tick)
     assert [d["action"] for d in _actions(eng, "exploration_stale")] == ["exploration_stale"]
     assert not ex.queue and not pb.positions()
+
+
+def test_a_1d_send_so_late_that_its_history_exit_has_passed_is_refused_hold_elapsed(tmp_path) -> None:
+    """Trading-safety review 2026-11-14: a 1d/1w send after its history exit (`hold_s` 0) would open a position the
+    time exit closes at once; it is refused `hold_elapsed` and journalled, never sent."""
+    from tests.test_exploration_engine import CLOSE, _at, qualified
+    from tests.test_exploration_engine import _engine as real_engine
+    arm = qualified(exploration.Arm(spec=_arm("D1", "1d"), style="swing", control_share=0.1))
+    eng, pb = real_engine(tmp_path, [arm])
+    ex = eng.exploration
+    assert ex is not None
+    ex.retired = frozenset()
+    tick = _at(eng, pb, CLOSE)
+    decided = pd.Timestamp("2025-02-27 21:00", tz="UTC")       # Thursday close: one bar's exit is Fri 21:00, passed
+    assert long_bars.hold_s("1d", 1, CLOSE, decided, tick.ts_utc) == 0
+    ex.queue.append(Pending(arm_id="D1", side=1, bar_ts=CLOSE, decision_utc=decided, stop_usd=10.0, target_usd=20.0,
+                            hold_bars=1))
+    exploration._enter(eng, ex, tick.ts_utc, tick)
+    rows = _actions(eng, "exploration_refused:")
+    assert [r["action"] for r in rows] == ["exploration_refused:hold_elapsed"], eng.decisions
+    assert not pb.positions()
 
 
 def test_an_oversized_gold_1d_stop_is_refused_min_lot_exceeds_risk_and_journalled(tmp_path, monkeypatch) -> None:

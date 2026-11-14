@@ -1,13 +1,13 @@
 // One trade, fully explained (docs/design/trades-ux-2026-10-27.md §3.3, backlog 133): a sheet on a phone, a 480 px
 // panel on a desktop. Levels on the bars, why it was taken, what closed it, what it cost, whether it counts toward its
-// arm's read, and the ids under Details.
+// arm's read, and under Details the ids and a closed arm trade's MFE / MAE (backlog 243).
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api, ApiError } from "../../lib/api";
 import { modeBadge } from "../../lib/home";
 import { fmtPrice } from "../../lib/instruments";
 import {
-  duration, EVIDENCE_WORDS, exitWords, KIND_WORDS, moneyOrDash, POLL, resultOf, sideArrow, sideWords, signedR,
+  duration, EVIDENCE_WORDS, excursionWords, exitWords, KIND_WORDS, moneyOrDash, POLL, resultOf, sideArrow, sideWords, signedR,
   strategyLabel, type TradeBars, type TradeRow,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
@@ -91,6 +91,7 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
         <summary>Details</summary>
         <dl className="small">
           {t.arm_id && <div><dt>Arm</dt><dd className="mono">{t.arm_id}</dd></div>}
+          {t.arm_id && t.status === "closed" && <div><dt>MFE / MAE</dt><dd className="num">{excursionWords(t)}</dd></div>}
           <div><dt>Trade</dt><dd className="mono">{t.trade_id}</dd></div>
           <div><dt>Family</dt><dd className="mono">{t.family}</dd></div>
         </dl>

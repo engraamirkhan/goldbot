@@ -20,6 +20,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record, UtcTimestamp, load_record
+from goldbot.features.registry import live_feature_check
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.rule_model import RuleModel
 
@@ -106,6 +107,7 @@ class ModelRegistry:
 
     def add_challenger(self, model: MetaLabelModel | RuleModel, *, family: str, agent_id: str, backtest: dict[str, Any],
                        now: UtcTimestamp | None = None, notes: list[str] | None = None) -> ModelEntry:
+        live_feature_check(list(model.feature_names))      # a challenger shadow-trades on live bars
         now = now or pd.Timestamp.now("UTC")
         version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
         n = 1
@@ -126,6 +128,7 @@ class ModelRegistry:
         e = self.get(version)
         if e.status != "challenger":
             raise ValueError(f"{version} is {e.status}, only a challenger can be promoted")
+        live_feature_check(list(e.feature_names))
         for old in self.by_agent(e.agent_id, "previous"):
             old.status = "retired"
         for old in self.by_agent(e.agent_id, "champion"):

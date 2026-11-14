@@ -3,7 +3,7 @@ number: 18
 title: Tier-2 event blackout and proximity feature (G-3)
 stage: Market and macro preparation · RUN
 size: S
-status: 'later (triage 2026-11-13): built, off by default (PR #73, #74); trading-safety-reviewer recommends, PD+PO decide (tightening only, no owner input)'
+status: 'auto-trigger (sweep 2026-11-14): built and tested (PR #73, #74), off on demo by design. The trading-safety-reviewer sets it in any first live candidate''s go-live settings diff; no separate work · accountable: trading-safety-reviewer'
 ---
 - **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
   −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.

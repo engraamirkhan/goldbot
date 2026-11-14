@@ -296,12 +296,15 @@ def us_events_avail(win: str, types: tuple[str, ...], *, allow_test_old: bool = 
     d = d[d["event_type"].isin(types)].copy()
     d["event_utc"] = pd.to_datetime(d["event_utc"], utc=True).dt.as_unit("ns")
     d["available_utc"] = pd.to_datetime(d["available_utc"], utc=True).dt.as_unit("ns")
-    d = d.drop_duplicates(["event_id", "status"], keep="first")
-    fed = ((d["source"] == "fed") & (d["status"] == uc.SCHEDULED) & d["event_type"].isin(FOMC_SCHEDULED)).to_numpy()
-    if fed.any():
-        yr = pd.DatetimeIndex(d.loc[fed, "event_utc"]).tz_convert(uc.ET).year
-        floor = pd.DatetimeIndex([pd.Timestamp(y - 1, 12, 1, tz="UTC") for y in yr]).as_unit("ns")
-        d.loc[fed, "available_utc"] = np.minimum(d.loc[fed, "available_utc"].to_numpy(), floor.to_numpy())
+    # the earliest row per (event, status): a file with the schedule-notice rows (BACKLOG 235) gives the notice time
+    d = d.sort_values("available_utc", kind="stable").drop_duplicates(["event_id", "status"], keep="first")
+    sched = ((d["status"] == uc.SCHEDULED) & d["event_type"].isin(FOMC_SCHEDULED)).to_numpy()
+    if sched.any():
+        # a file built before the notice rows: the hand-checked notice table gives the same time (never the old
+        # 1-December floor, which read the 2012 revised meetings months before they were published)
+        notice = uc.notice_available(d.loc[sched, "event_id"])
+        cur = d.loc[sched, "available_utc"]
+        d.loc[sched, "available_utc"] = cur.where(notice.isna() | (cur <= notice), notice)
     d = d.sort_values(["event_id", "available_utc"], kind="stable").reset_index(drop=True)
     ev = epoch_ns(d["event_utc"])
     av = epoch_ns(d["available_utc"])

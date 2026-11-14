@@ -143,7 +143,6 @@ ATTRIBUTION_MAX_AGE_DAYS = 14    # an older attribution report (the job runs dai
 RETIRED_EXPLORATION = 1          # exploration trials a quarter shared by ALL retired families (never from the pool)
 REINSTATE_T = 2.0                # one-sided bar on the shrunk attribution t before the multiple-testing correction
 REINSTATE_SOURCES = 1            # reinstatement sources tested: attribution trades after the retirement date, only
-GRID_RATIONALE = "monthly bounded label-grid search"   # the rationale prefix jobs.monthly_research records
 ATTRIBUTION_FILE = "attribution.json"   # research/attribution.py REPORT_FILE, in the state directory
 HYPOTHESES_PATH = Path(__file__).resolve().parents[2] / "docs" / "research" / "hypotheses.md"
 RETIRED_SECTION = "## B."
@@ -294,6 +293,9 @@ class ResearchPlan(FrozenRecord):
     reservation: Reservation | None = None
     retired_floor: dict[str, int] = Field(default_factory=dict)     # the shared exploration trial per retired family
     retired_explore: str | None = None                              # the retired family it goes to this quarter
+    # trials stamped this quarter on ANY retired family, allocated or screened (BACKLOG 91): the shared trial is used
+    # once this reaches RETIRED_EXPLORATION
+    retired_trials_quarter: int = 0
     reinstate_t: float | None = None                                # corrected bar on the shrunk attribution t
     hypotheses_sha256: str | None = None                            # the doc as read at plan time
     hypotheses_drift: list[str] = Field(default_factory=list)       # where it disagrees with research.retired_families
@@ -387,10 +389,22 @@ def is_queued(row: dict[str, Any]) -> bool:
     return (ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)) < start
 
 
+DISCOVERY_PREFIX = "discovery_"   # discovery.discovery_family: a discovery trial's registry family
+
+
+def base_family(family: object) -> str:
+    """The specialist family a registry family belongs to: `discovery_<family>` (a discovery trial) is `<family>`, so
+    the retired-family guard matches a discovery run on a retired family (quant review 2026-11-14, BACKLOG 91)."""
+    f = str(family)
+    return f[len(DISCOVERY_PREFIX):] if f.startswith(DISCOVERY_PREFIX) else f
+
+
 def retired_quarter_trials(rows: list[dict[str, Any]], quarter: str, retired: set[str]) -> int:
-    """Trial rows of `quarter` (stamped then) on any family in `retired` (research.retired_families): what the retired
-    families' ONE shared exploration trial a quarter (RETIRED_EXPLORATION) has already used."""
-    return sum(1 for r in rows if is_trial(r) and r.get("family") in retired and _row_quarter(r) == quarter)
+    """Trial rows of `quarter` (stamped then) on any family in `retired` (research.retired_families), a discovery
+    trial on one (`discovery_<family>`) included: what the retired families' ONE shared exploration trial a quarter
+    (RETIRED_EXPLORATION) has already used."""
+    return sum(1 for r in rows
+               if is_trial(r) and base_family(r.get("family", "")) in retired and _row_quarter(r) == quarter)
 
 
 # ---------------------------------------------------------------------------------------------- the queue's ledger
@@ -1473,7 +1487,7 @@ def retired_exploration(scores: Sequence[FamilyScore], quarter: str, used: int) 
     left = max(RETIRED_EXPLORATION - used, 0)
     cands = [s for s in sorted(scores, key=lambda s: s.family) if s.retired and not s.blocked]
     if not cands or left == 0:
-        why = (f"the shared exploration trial was used this quarter ({used} retired-family trial(s))" if cands
+        why = (f"the shared exploration trial was used this quarter ({used} retired-family trial(s))" if left == 0
                else "no clean retired family")
         return out, None, why
     evid = sorted((-s.attribution.t_shrunk, s.family) for s in cands
@@ -1578,7 +1592,8 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
     reinstate_t = reinstatement_threshold(len(retired_map) * REINSTATE_SOURCES)
     base_scores = score_families(fams, evidence_rows, shadow, agents)
     scores = [_with_inputs(s, attr[s.family], retired_map.get(s.family), reinstate_t) for s in base_scores]
-    q_retired = retired_quarter_trials(trials, quarter, set(retired_map))
+    # BACKLOG 91: every retired family counts, screened ones (box_break_close, sweep_absorb) too, not only the allocated
+    q_retired = retired_quarter_trials(trials, quarter, {e.family for e in retired})
     retired_floor, explore, explore_why = retired_exploration(scores, quarter, q_retired)
     explore_note = f"to {explore}: {explore_why}" if explore else explore_why
     evidence_budget, _ = allocate(base_scores, total, floor, cap)
@@ -1625,6 +1640,7 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
                         evidence_budget=evidence_budget, moves=moves, attribution_as_of=attr_as_of,
                         attribution_note=attr_note, hypotheses_note=hyp_note, quarter_reserved=reservation.reserved,
                         reservation=reservation, retired_floor=retired_floor, retired_explore=explore,
+                        retired_trials_quarter=q_retired,
                         reinstate_t=round(reinstate_t, 6),
                         hypotheses_sha256=hashlib.sha256(hypotheses.encode()).hexdigest() if hypotheses else None,
                         hypotheses_drift=drift, review_queue=list(review_queue))
