@@ -116,3 +116,15 @@ def test_the_job_is_scheduled_daily_and_its_tolerance_is_a_setting():
     assert jobs.JOBS["swap_reconcile"] is jobs.swap_reconcile
     assert s.scheduler.swap_reconcile.kind == "daily"
     assert s.costs.swap_reconcile_tolerance == 0.25
+
+
+def test_the_health_module_imports_with_swap_reconcile_in_a_slot_of_its_own() -> None:
+    """Integration 2026-11-14: compaction and swap_reconcile both took tail slot 165, so importing goldbot.ops.health
+    raised and no service started. A fresh interpreter imports it and every registered slot is distinct."""
+    import subprocess
+    import sys
+    code = ("import goldbot.ops.health\n"
+            "from goldbot.ops.swap_reconcile import check_swap_reconcile\n"
+            "from goldbot.ops.checks.compaction import check_compaction\n")
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr[-2000:]

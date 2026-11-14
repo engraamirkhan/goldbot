@@ -224,7 +224,7 @@ def results(state_dir: str | Path, since: pd.Timestamp | None = None) -> list[Sw
     return [load_record_json(SwapReconciliation, b, source="swap_reconciliations") for (b,) in rows]
 
 
-@register_check("global", block=BLOCK_TAIL, pos=165)
+@register_check("global", block=BLOCK_TAIL, pos=166)
 def check_swap_reconcile(ctx: HealthContext) -> Check:
     """swap_reconcile: WARN while a weekend hold of a seven-night book closed in the last RECENT_DAYS has a broker swap
     outside `costs.swap_reconcile_tolerance` of the seven-night projection, or could not be priced (BACKLOG 175: the

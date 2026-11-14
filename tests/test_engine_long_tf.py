@@ -358,6 +358,27 @@ def test_a_long_timeframe_pending_older_than_one_base_bar_is_dropped_stale(tmp_p
     assert not ex.queue and not pb.positions()
 
 
+def test_a_1d_send_so_late_that_its_history_exit_has_passed_is_refused_hold_elapsed(tmp_path) -> None:
+    """Trading-safety review 2026-11-14: a 1d/1w send after its history exit (`hold_s` 0) would open a position the
+    time exit closes at once; it is refused `hold_elapsed` and journalled, never sent."""
+    from tests.test_exploration_engine import CLOSE, _at, qualified
+    from tests.test_exploration_engine import _engine as real_engine
+    arm = qualified(exploration.Arm(spec=_arm("D1", "1d"), style="swing", control_share=0.1))
+    eng, pb = real_engine(tmp_path, [arm])
+    ex = eng.exploration
+    assert ex is not None
+    ex.retired = frozenset()
+    tick = _at(eng, pb, CLOSE)
+    decided = pd.Timestamp("2025-02-27 21:00", tz="UTC")       # Thursday close: one bar's exit is Fri 21:00, passed
+    assert long_bars.hold_s("1d", 1, CLOSE, decided, tick.ts_utc) == 0
+    ex.queue.append(Pending(arm_id="D1", side=1, bar_ts=CLOSE, decision_utc=decided, stop_usd=10.0, target_usd=20.0,
+                            hold_bars=1))
+    exploration._enter(eng, ex, tick.ts_utc, tick)
+    rows = _actions(eng, "exploration_refused:")
+    assert [r["action"] for r in rows] == ["exploration_refused:hold_elapsed"], eng.decisions
+    assert not pb.positions()
+
+
 def test_an_oversized_gold_1d_stop_is_refused_min_lot_exceeds_risk_and_journalled(tmp_path, monkeypatch) -> None:
     """Lot-fit is the RiskGate's, unchanged: a daily stop the minimum lot cannot carry inside the per-trade cap is
     refused and journalled, never resized."""

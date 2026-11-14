@@ -2064,6 +2064,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if pid in eng.sent_ids:
         ps.why = "duplicate"
         return "refused"
+    if arm.tf in long_bars.LONG_TFS and s.decision_utc is not None and hold_s <= 0:
+        # trading-safety review 2026-11-14: a 1d/1w send at or after its history exit would be closed by the time
+        # exit at once; refused, never sent
+        refuse("hold_elapsed")
+        return "refused"
     ps.mu = None
     # prereg-amendment-2026-11-07 (`entry_refusals`): the engine-level refusals of the signal the rule produced, before
     # any room, slot or cap check; fail closed (a refusal that raises refuses as `refusal_error:<name>`). The journal
