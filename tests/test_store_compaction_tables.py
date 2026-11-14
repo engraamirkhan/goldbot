@@ -245,7 +245,8 @@ def test_job_compacts_every_configured_table_and_reports_per_table(tmp_path: Pat
     cfg = CompactSettings(tables=["decisions", "ticks", "observe_ticks", "fills", "dq_events"])
     out = journal_compact(SimpleNamespace(store=store, settings=SimpleNamespace(compact=cfg)), NOW)  # type: ignore[arg-type]
     assert set(out["tables"]) == {"decisions", "ticks", "observe_ticks", "fills", "dq_events"}
-    assert out["tables"]["ticks"]["partitions"] == 2 and out["tables"]["fills"]["rows"] == 3
+    # September, October and (BACKLOG 260) the closed days 2-3 Nov of the open month
+    assert out["tables"]["ticks"]["partitions"] == 3 and out["tables"]["fills"]["rows"] == 3
     assert out["partitions"] == sum(t["partitions"] for t in out["tables"].values())
     assert out["errors"] == [] and out["deferred"] == 0
 

@@ -57,6 +57,9 @@ class Events:
     exit_long: np.ndarray | None = None
     exit_short: np.ndarray | None = None
     oco: np.ndarray | None = None            # 1 where the event is one leg of an OCO pair with the next event (same i)
+    # int64 epoch ns per event: a time exit at this instant inside the hold's last bar (0 = none; BACKLOG 258, S05's
+    # early close); None when no event has one. The sim prices it on the instrument's finer bars (`exit_bars`).
+    exit_at: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.i)
@@ -69,7 +72,8 @@ class Events:
     def subset(self, keep: np.ndarray) -> "Events":
         return Events(self.i[keep], self.side[keep], self.kind[keep], self.px[keep], self.valid[keep], self.stop[keep],
                       self.stop_d[keep], self.tgt[keep], self.tgt_d[keep], self.hold[keep], self.exit_long,
-                      self.exit_short, None if self.oco is None else self.oco[keep])
+                      self.exit_short, None if self.oco is None else self.oco[keep],
+                      None if self.exit_at is None else self.exit_at[keep])
 
 
 class EB:
@@ -77,11 +81,14 @@ class EB:
 
     def __init__(self) -> None:
         self.rows: list[tuple[float, ...]] = []
+        self.exit_at: list[int] = []        # int64 ns kept apart from the float rows (ns do not fit a float64)
         self.exit_long: np.ndarray | None = None
         self.exit_short: np.ndarray | None = None
 
     def add(self, i: int, side: int, *, kind: int = 0, px: float = NAN, valid: int = 1, stop: float = NAN,
-            stop_d: float = NAN, tgt: float = NAN, tgt_d: float = NAN, hold: int = 10**9, oco: int = 0) -> None:
+            stop_d: float = NAN, tgt: float = NAN, tgt_d: float = NAN, hold: int = 10**9, oco: int = 0,
+            exit_at: int = 0) -> None:
+        """`exit_at`: epoch ns of a time exit inside the hold's last bar (0 = none; Events.exit_at)."""
         if not (np.isfinite(stop) or np.isfinite(stop_d)):
             return
         if np.isfinite(stop_d) and stop_d <= 0:
@@ -89,6 +96,7 @@ class EB:
         if kind in (1, 2) and not np.isfinite(px):
             return
         self.rows.append((i, side, kind, px, valid, stop, stop_d, tgt, tgt_d, hold, oco))
+        self.exit_at.append(int(exit_at))
 
     def oco_pair(self, i: int, *, long: dict, short: dict) -> None:
         """Two stop orders, first fill cancels the other; if both trigger on one bar the trade is a full loss."""
@@ -109,12 +117,15 @@ class EB:
 
     def build(self) -> Events:
         a = np.array(self.rows, float).reshape(-1, 11)
+        x = np.array(self.exit_at, np.int64)
         if len(a):
-            a = a[np.lexsort((-a[:, 1], a[:, 0]))]     # same bar: long first, so an OCO pair is (long, short)
+            order = np.lexsort((-a[:, 1], a[:, 0]))     # same bar: long first, so an OCO pair is (long, short)
+            a, x = a[order], x[order]
         return Events(i=a[:, 0].astype(np.int64), side=a[:, 1].astype(np.int8), kind=a[:, 2].astype(np.int8),
                       px=a[:, 3], valid=a[:, 4].astype(np.int64), stop=a[:, 5], stop_d=a[:, 6], tgt=a[:, 7],
                       tgt_d=a[:, 8], hold=a[:, 9].astype(np.int64), exit_long=self.exit_long,
-                      exit_short=self.exit_short, oco=a[:, 10].astype(np.int8))
+                      exit_short=self.exit_short, oco=a[:, 10].astype(np.int8),
+                      exit_at=x if x.any() else None)
 
 
 def empty() -> Events:

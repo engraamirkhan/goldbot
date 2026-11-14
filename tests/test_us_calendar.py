@@ -932,3 +932,37 @@ def test_old_source_keyed_last_ok_is_rejected(tmp_path):
         uc.read_release(str(p))
     with pytest.raises(ValueError, match="last_ok"):
         uc.merge_calendar(_cal(), uc.calendar_frame(_fred_dates(), NOW, _fomc()), NOW, {"fred": NOW})
+
+
+def test_a_meeting_without_a_policy_decision_is_cancelled_at_the_notice_and_never_revived():
+    """BACKLOG 261: the Fed's revised 2027 schedule (2026-11-12 12:45 ET) makes 26-27 Oct 2027 a meeting without a
+    policy decision; the meeting page still lists it. The hand-checked cancellation of its statement and press
+    conference is stamped at the notice, and no later download of the meeting page revives either one."""
+    notice = pd.Timestamp("2026-11-12 12:45", tz=uc.ET).tz_convert("UTC")
+    fomc = pd.DataFrame({"day": pd.DatetimeIndex(["2027-09-15", "2027-10-27", "2027-11-17"]),
+                         "press": [True, True, True], "minutes_day": pd.DatetimeIndex([None, None, None])})
+    t1 = pd.Timestamp("2026-11-14 06:00", tz="UTC")
+    pub = uc.add_schedule_notices(uc.merge_calendar(None, uc.calendar_frame({}, t1, fomc), t1, {}), t1)
+    t2 = t1 + pd.Timedelta(days=1)
+    out = uc.add_schedule_notices(uc.merge_calendar(pub, uc.calendar_frame({}, t2, fomc), t2, _ok(t1)), t2)
+    uc.check_keeps_history(pub, out)
+    for cal in (pub, out):
+        latest = cal.sort_values("available_utc", kind="stable").drop_duplicates("event_id", keep="last") \
+            .set_index("event_id")
+        for t in ("fomc_statement", "fomc_press_conference"):
+            assert latest.loc[f"{t}:2027-10-27", "status"] == "cancelled"
+            assert latest.loc[f"{t}:2027-10-27", "available_utc"] == notice
+            assert latest.loc[f"{t}:2027-09-15", "status"] == "scheduled"
+            assert latest.loc[f"{t}:2027-11-17", "status"] == "scheduled"
+        rows = cal[cal["event_id"] == "fomc_statement:2027-10-27"].sort_values("available_utc")
+        assert rows["available_utc"].iloc[0] < notice                  # known as scheduled before the notice
+        assert not ((rows["status"] == "scheduled") & (rows["available_utc"] > notice)).any()
+    # the published calendar-v1 (2026-11-14) already holds the meeting page's scheduled row: the merge cancels it
+    page = uc.calendar_frame({}, t1, fomc)
+    stale = uc.merge_calendar(None, page[page["source"] != "manual"], t1, {})
+    fixed = uc.merge_calendar(stale, uc.calendar_frame({}, t2, fomc), t2, _ok(t1))
+    uc.check_keeps_history(stale, fixed)
+    last = fixed.sort_values("available_utc", kind="stable").drop_duplicates("event_id", keep="last") \
+        .set_index("event_id")
+    assert last.loc["fomc_statement:2027-10-27", "status"] == "cancelled"
+    assert last.loc["fomc_press_conference:2027-10-27", "status"] == "cancelled"

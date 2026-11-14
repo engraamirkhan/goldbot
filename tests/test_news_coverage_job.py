@@ -76,3 +76,18 @@ def test_an_empty_news_table_reads_zero_and_writes_nothing(tmp_path: Path) -> No
 def test_the_schedule_carries_the_job() -> None:
     from goldbot.config import load_settings
     assert load_settings().scheduler.news_coverage.kind == "daily"
+
+
+def test_the_scored_share_counts_prefiltered_headlines_and_the_trailing_three_days() -> None:
+    """BACKLOG 259: only prefiltered headlines are ever scored (by design), so the share that measures the scorer is
+    prefiltered-scored / prefiltered; `scored_share_3d` is that share over the trailing SCORED_WINDOW, which reads
+    the scorer's health now rather than history from before rules-v1 existed (2026-11-13)."""
+    news = _news(["2026-11-01 08:00", "2026-11-01 09:00", "2026-11-12 08:00", "2026-11-13 08:00", "2026-11-13 09:00",
+                  "2026-11-14 06:00"], [False, False, True, True, False, True])
+    news.loc[4, "title"] = "Agencies extend comment period"          # not prefiltered: never scored by design
+    out = nc.readout(news, NOW)
+    assert out["scored_share"] == 0.5                                # the old share: every kept row
+    assert out["prefiltered"] == 5 and out["prefiltered_scored"] == 3
+    assert out["prefiltered_scored_share"] == 0.6
+    assert out["prefiltered_3d"] == 3 and out["scored_share_3d"] == 1.0
+    assert nc.readout(news.iloc[:2], NOW)["scored_share_3d"] is None  # nothing in the window: no share

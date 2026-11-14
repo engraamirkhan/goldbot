@@ -530,6 +530,7 @@ compact:                             # nightly journal_compact (goldbot/data/com
   memory_limit: 1GB                  # DuckDB's verifying sorted read (spills to <data_root>/.compact_tmp, removed after)
   threads: 2                         # the brain has 2 cores (nproc, 2026-11-14); measured with 2 (BACKLOG 239)
   row_group_rows: 262144             # rows held at once by the streamed build (and the part's row-group size)
+  closed_days_tables: [ticks, observe_ticks]   # BACKLOG 260: their open month too, parts of closed UTC days only
 
 tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)
   enabled: true                      # public listing, no cookie; text stays in state/tv_ideas.db and raw/ (never the repo)
