@@ -343,7 +343,7 @@ class CompactSettings(_Section):
     time_box_s: float = Field(1800.0, gt=0)          # no partition is started later; the rest wait for the next night
     pause_s: float = Field(1.0, ge=0)                # after each compacted partition: the engines keep the disk
     memory_limit: str = Field("1GB", pattern=r"^\d+(\.\d+)?\s*(KB|MB|GB|KiB|MiB|GiB)$")   # DuckDB's verifying read
-    threads: int = Field(2, ge=1, le=4)              # of the brain's 4 cores
+    threads: int = Field(2, ge=1, le=4)              # the brain has 2 cores (BACKLOG 239)
     row_group_rows: int = Field(262_144, ge=1024)    # rows held at once by the streamed build
 
     @field_validator("tables")
