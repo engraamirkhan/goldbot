@@ -19,43 +19,43 @@ from goldbot.research import exploration_data as ex
 from tests.test_daily_review import HOSTS, LONDON, _db, _run
 
 PINS: dict[str, dict[int, str]] = {
-    "absorb_fade": {1: "460fec90f4727017"},
-    "box_break_close": {1: "c321a10af6ce00a0"},
-    "box_next": {1: "1d4b2a2f2a18e3dc"},
-    "clock_anchor": {1: "45303ca696e52bcc"},
-    "clock_anchor_control": {1: "df02eb7611d24f66"},
-    "donchian_break": {1: "c5495642a600c84b"},
-    "ema_pullback": {1: "1ed029cc64862fba"},
-    "extreme_break": {1: "5ac50e23593ae76d"},
-    "friday_long": {1: "33db754be06654ce"},
-    "halfhour_persist": {1: "56739104de4c708c"},
-    "htf_reclaim": {1: "8a7231aab274f9c9"},
-    "htf_stretch_break": {1: "2341399d818413a9"},
-    "htf_stretch_break_control": {1: "99596995ab8a4241"},
-    "hurst_band_break": {1: "c38cd53f4839baab"},
-    "hurst_band_break_control": {1: "371882e1c12df97e"},
-    "level_break": {1: "e5422ac431379449"},
-    "low30_control": {1: "5a670ac762983bf3"},
-    "low30_touch": {1: "edbb0e7e35e7b5ba"},
-    "nr4_break": {1: "9068726d1f91840e"},
-    "ob_retest": {1: "ebe55716358d85f5"},
-    "opening_range_break": {1: "9982fd1cfac424d9"},
-    "pdc_break": {1: "d8224403ed3c50af"},
-    "random_bracket": {1: "456a1e9b3011641b"},
-    "round_break": {1: "5162cf1c9babc1fc"},
-    "round_reject": {1: "d7f16179ef5d4a0a"},
-    "run_fade": {1: "26545f69de302cab"},
-    "scalp_control": {1: "adad7e8760b09f6a"},
-    "session_range_break": {1: "b05f7872081146ea"},
-    "session_range_control": {1: "81034cf39f041892"},
-    "session_vwap_fade": {1: "9982a7f4a164f192"},
-    "spec_rule": {1: "d8b86dc0868bfe85"},
-    "specialist": {1: "0c31b1c9497ea0ca"},
-    "squeeze_release": {1: "71317a2c853e0c98"},
-    "sweep_absorb": {1: "f0c4293742f985f2"},
-    "three_horizon": {1: "133d7bf654e915c4"},
-    "tick_surge": {1: "9f4823a326feeef8"},
-    "tsmom": {1: "542feb3ba6304916"},
+    "absorb_fade": {1: "35735e11e6f59b3d"},
+    "box_break_close": {1: "bf18a06b94315673"},
+    "box_next": {1: "7a807dde912f17da"},
+    "clock_anchor": {1: "af3b5efa66282f15"},
+    "clock_anchor_control": {1: "38cb14a524838d19"},
+    "donchian_break": {1: "76e2398c60940575"},
+    "ema_pullback": {1: "6025cb3bbf0ff4f0"},
+    "extreme_break": {1: "a7387ef3360a7de6"},
+    "friday_long": {1: "ba7b4bdcb463b899"},
+    "halfhour_persist": {1: "4e4d542704293778"},
+    "htf_reclaim": {1: "ddb85f5fcccdcea1"},
+    "htf_stretch_break": {1: "83041d9318daf33b"},
+    "htf_stretch_break_control": {1: "df8582598af718a4"},
+    "hurst_band_break": {1: "e00ce764c7b9fa25"},
+    "hurst_band_break_control": {1: "54da91767bb79fb1"},
+    "level_break": {1: "1e7704bc300b236d"},
+    "low30_control": {1: "7da2e61575613127"},
+    "low30_touch": {1: "6b5caf42edff867e"},
+    "nr4_break": {1: "12475362f2fa1258"},
+    "ob_retest": {1: "72efaa56c73d4dd5"},
+    "opening_range_break": {1: "7bd4d9ee08341a67"},
+    "pdc_break": {1: "9e7c8933e4813b5d"},
+    "random_bracket": {1: "cf8051684df1018f"},
+    "round_break": {1: "27e4a82daace7356"},
+    "round_reject": {1: "1d48a288cd3b6460"},
+    "run_fade": {1: "cfe0797b643b9898"},
+    "scalp_control": {1: "ad232a6dd9350752"},
+    "session_range_break": {1: "b1e3441afc32403c"},
+    "session_range_control": {1: "0894aad477b57f07"},
+    "session_vwap_fade": {1: "73634283fdc52b9e"},
+    "spec_rule": {1: "e202fde4ecc478b2"},
+    "specialist": {1: "8b28c15094127b7f"},
+    "squeeze_release": {1: "feede72f6aca8043"},
+    "sweep_absorb": {1: "823a5dec790f3ebe"},
+    "three_horizon": {1: "50cf239cc0390fbe"},
+    "tick_surge": {1: "73b0d90f9c3ac783"},
+    "tsmom": {1: "be1a50c1f4e4b760"},
 }
 
 
@@ -80,6 +80,28 @@ def test_a_source_change_without_a_bump_fails_and_the_bump_with_its_pin_passes(m
     monkeypatch.setitem(V.RULE_VERSIONS, "random_bracket", 2)
     monkeypatch.setitem(PINS, "random_bracket", {**PINS["random_bracket"], 2: "edited"})
     assert unbumped() == []
+
+
+def test_the_version_covers_the_shared_helpers_each_rule_calls_and_the_common_screen() -> None:
+    """Quant review 2026-11-14: hashing the rule's own function missed its shared helpers (`_screen`, the weekcut
+    walk), so a change there moved every rule's output with no bump. The hash covers the rule, every arm_rules* helper
+    it reaches, and the common post-filter every rule passes through."""
+    from goldbot.research import arm_rules_weekcut as W
+    for rule in V.RULE_VERSIONS:
+        assert R._screen in V.helpers(rule) and R.screened_frame in V.helpers(rule)
+    assert W.capped in V.helpers("pdc_break")                  # PDC4's time exit under the Friday cut, behind the
+    assert W.capped in V.helpers("donchian_break")             # arm_rules wrapper's function-local import
+
+
+def test_changing_a_shared_helper_changes_every_dependent_rules_source_sha(monkeypatch) -> None:
+    from goldbot.research import arm_rules_weekcut as W
+    before = {r: V.source_sha(r) for r in ("pdc_break", "random_bracket")}
+    real = V._source
+    monkeypatch.setattr(V, "_source", lambda f: real(f) + "# edited" if f is W.capped else real(f))
+    assert V.source_sha("pdc_break") != before["pdc_break"]
+    assert V.source_sha("random_bracket") == before["random_bracket"]       # does not reach capped
+    monkeypatch.setattr(V, "_source", lambda f: real(f) + "# edited" if f is R._screen else real(f))
+    assert V.source_sha("random_bracket") != before["random_bracket"]       # every rule passes _screen
 
 
 def test_the_arm_hash_and_the_frozen_arm_ids_are_unchanged_by_the_versions() -> None:

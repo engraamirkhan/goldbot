@@ -27,7 +27,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   1d/1w filter is enforced on every research caller, a 1d/1w hold and order id count from the decision close, and
   `run_arm_backtest` is the CONFIRM of record (21:00 UTC roll, fill at the live entry close, Friday 1d dropped). Only
   blocker 7 (BACKLOG 253) keeps 1d/1w dark. Every arm rule carries a version (`research/arm_rule_versions.py`, pinned
-  by source hash); `exploration_obs.arm_rule_version` (aux migration 36) records it.
+  by source hash of the rule, every arm_rules* helper it reaches and the common screen, quant review); `exploration_obs.arm_rule_version` (aux migration 36) records it.
 - 2026-11-14 (branch feat/limits-cost-ratio-replay-1114; R150; BACKLOG 255 and 90 done): quant-reviewer approved
   the R150 cost/model definition 2026-11-14. `scripts/replay_limits.py --data-root DIR` now measures each replay day's
   20-day cost/model ratio through the nightly job's own `_cost_ratio`, `store_exit_legs` and `store_label_bars` (no
