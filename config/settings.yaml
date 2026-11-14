@@ -27,7 +27,8 @@ timeframes:
 # settings validator until the go-live blockers (docs/backlog.d engine-1d-1w-golive) are closed.
 engine:
   timeframes_live: [1m, 5m, 15m, 30m, 1h, 4h]
-  long_history_dir: raw/daily
+  # engine-only (the long_history_refresh job appends live minutes to it): never raw/daily, the research file
+  long_history_dir: raw/engine_daily
   # backlog 155: a warm start with fewer 1m bars from the store refuses entries (history_short) until the window holds
   # them; 120 bars of 4h, the longest decision timeframe. Weekday gold only (engine/history.py); 0 turns it off
   warm_start_min_bars: 28800

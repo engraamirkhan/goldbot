@@ -84,6 +84,48 @@ def test_a_day_whose_close_has_not_passed_or_whose_first_minutes_are_missing_is_
     assert f"{pd.read_parquet(path)['visible_at'].iloc[-1]:%a %H:%M}" == "Wed 21:00"   # Thursday is not closed yet
 
 
+HOLDOUT = (pd.Timestamp("2025-10-01").date(), pd.Timestamp("2026-09-30").date())
+
+
+def test_the_engine_history_lives_in_an_engine_only_directory_never_the_research_daily_file():
+    """Quant review 2026-11-14: the refresh appended engine minutes to raw/daily/bars/xauusd_1d.parquet, the research
+    file. The engine's 1d/1w history (refresh, reader and preflight alike) is under raw/engine_daily."""
+    assert SETTINGS.engine.long_history_dir == "raw/engine_daily"
+    s = SETTINGS.model_copy(update={"data_root": "/data"})
+    assert long_history.history_path(s) == Path("/data/raw/engine_daily/bars/xauusd_1d.parquet")
+    assert Path(s.engine.history_root(s.data_root)) == Path("/data/raw/engine_daily")
+
+
+def test_a_history_older_than_the_append_window_is_stale_and_left_untouched(tmp_path):
+    path = tmp_path / "bars" / "xauusd_1d.parquet"
+    history_file(path, "2026-06-01 21:00")
+    stamp = path.stat().st_mtime_ns
+    now = pd.Timestamp("2026-11-05 21:40", tz="UTC")              # 157 days on: past MAX_APPEND_DAYS
+    got = long_history.refresh(path, minutes("2026-11-02 00:00", "2026-11-05 21:30"), now, "engine_1m:icm")
+    assert got.status == "stale" and got.appended == 0 and path.stat().st_mtime_ns == stamp
+
+
+def test_a_file_ending_before_the_holdout_with_minutes_inside_it_appends_nothing(tmp_path):
+    path = tmp_path / "bars" / "xauusd_1d.parquet"
+    history_file(path, "2025-09-30 21:00")
+    stamp = path.stat().st_mtime_ns
+    now = pd.Timestamp("2026-07-10 21:40", tz="UTC")
+    got = long_history.refresh(path, minutes("2026-07-06 00:00", "2026-07-10 21:30"), now, "engine_1m:icm",
+                               holdout=HOLDOUT)
+    assert got.appended == 0 and path.stat().st_mtime_ns == stamp
+
+
+def test_no_day_dated_inside_the_sealed_holdout_is_ever_appended(tmp_path):
+    """Quant review 2026-11-14: never a row dated inside research.holdout_from..holdout_to, whatever the staleness."""
+    path = tmp_path / "bars" / "xauusd_1d.parquet"
+    history_file(path, "2025-09-26 21:00")                          # Friday before the holdout
+    now = pd.Timestamp("2025-10-03 21:40", tz="UTC")
+    got = long_history.refresh(path, minutes("2025-09-26 00:00", "2025-10-03 21:30"), now, "engine_1m:icm",
+                               holdout=HOLDOUT)
+    assert got.status == "appended" and got.appended == 2
+    assert [f"{t:%Y-%m-%d}" for t in pd.read_parquet(path)["visible_at"].iloc[-2:]] == ["2025-09-29", "2025-09-30"]
+
+
 def test_the_refresh_is_a_scheduled_job_with_its_settings_entry():
     assert "long_history_refresh" in JOBS
     s = SETTINGS.scheduler.long_history_refresh

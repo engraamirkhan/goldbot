@@ -1027,7 +1027,9 @@ class EngineSettings(_Section):
     `long/<symbol>_daily_long.parquet`; engine/long_bars.py), read point in time; a missing file or a history that
     does not reach the engine's window keeps the arm quiet (`history_gap:<tf>`), never a crash."""
     timeframes_live: list[Timeframe] = Field(default_factory=lambda: list(INTRADAY_LIVE))
-    long_history_dir: str = "raw/daily"
+    # quant review 2026-11-14: engine-only (ops/long_history.py appends live minutes to it); never raw/daily, the
+    # research file, which the refresh must not touch
+    long_history_dir: str = "raw/engine_daily"
     # backlog 155 (engine/history.py): a warm start loading fewer 1m bars from the store refuses every entry
     # (history_short) until the window holds them. 28 800 = 120 bars (engine/frames.py MIN_BARS) of 4h, the longest
     # decision timeframe. Weekday gold only: the other books warm up in book_backfill, a weekend lane has no release.

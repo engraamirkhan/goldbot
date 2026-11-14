@@ -1,5 +1,5 @@
 - **1d/1w long history, live == history, rule-code versions (BACKLOG 251, 252, 254, 105; R154; 2026-11-14).** A daily
-  job `long_history_refresh` (21:40 UTC) appends the store's complete days to `raw/daily/bars/xauusd_1d.parquet`
+  job `long_history_refresh` (21:40 UTC) appends the store's complete days to the engine-only `raw/engine_daily/bars/xauusd_1d.parquet` (never the research file, never a holdout-dated day; `stale` past 120 days; quant review)
   (`source` `engine_1m:<broker>`), the preflight checks the history reaches the engine window once 1d/1w are live, and
   health `long_history:<account>` tells the owner when an arm is held back more than a day. ADR 0081 is ratified; the
   1d/1w filter is enforced on every research caller, a 1d/1w hold and order id count from the decision close, and

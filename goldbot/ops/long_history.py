@@ -6,10 +6,13 @@ Design rule (engine/long_bars.py): "a live 1d/1w arm warms up from `<data_root>/
 good. Here:
 
 - `refresh_job` (scheduler `long_history_refresh`, every evening after the 21:00 UTC roll): the store's complete days
-  after the file's last row, built by the engine's own `long_bars.daily_from_1m` from the release and the traded
+  after the file's last row, in the engine-only file under settings `engine.long_history_dir` (raw/engine_daily: never
+  the research file raw/daily/bars, quant review 2026-11-14), built by the engine's own `long_bars.daily_from_1m` from the release and the traded
   broker's minutes (the engine's history), appended with an atomic write. Point in time: a day is appended only once
   its 21:00 UTC close has passed and the store holds its first minute; nothing already in the file is ever rewritten.
-  An up-to-date file is left untouched (the engine re-reads it on a new mtime only).
+  An up-to-date file is left untouched (the engine re-reads it on a new mtime only). A file whose last row is older
+  than MAX_APPEND_DAYS is `stale` (re-copied by hand, never rebuilt here), and no day dated inside the sealed holdout
+  (research.holdout_from..holdout_to) is ever appended (quant review 2026-11-14).
 - `preflight_item`: fails when a live 1d/1w timeframe's history does not reach the engine window (`long_bars.joined`
   is GAP or the file is missing); skipped while 1d/1w are dark (settings `engine.timeframes_live`).
 
@@ -20,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -43,7 +47,7 @@ PREFLIGHT_WINDOW_DAYS = 14              # the store minutes the preflight judges
 
 
 class RefreshResult(FrozenRecord):
-    status: Literal["appended", "up_to_date", "no_file", "no_minutes", "no_gold_account"]
+    status: Literal["appended", "up_to_date", "no_file", "no_minutes", "no_gold_account", "stale"]
     path: str
     appended: int = 0
     last_visible: str | None = None     # the file's last row after the run
@@ -121,16 +125,34 @@ def _write_atomic(frame: pd.DataFrame, path: Path) -> None:
     os.replace(tmp, path)
 
 
-def refresh(path: Path, minutes: pd.DataFrame, now: pd.Timestamp, source: str) -> RefreshResult:
-    """Append the complete days of `minutes` after the file's last row (by `visible_at`), atomically. The file is not
-    created here: a missing one is copied by hand first (RUNBOOK), its columns are the research file's."""
+def stale(last: pd.Timestamp, now: pd.Timestamp) -> bool:
+    """The file's last row is older than MAX_APPEND_DAYS: re-copied by hand (RUNBOOK), never rebuilt here."""
+    return bool(last < now - pd.Timedelta(days=MAX_APPEND_DAYS))
+
+
+def outside_holdout(days: pd.DataFrame, holdout: tuple[date, date] | None) -> pd.DataFrame:
+    """`days` without any day dated (its 21:00 UTC close's date) inside the sealed holdout, inclusive."""
+    if holdout is None or days.empty:
+        return days
+    d = pd.DatetimeIndex(pd.to_datetime(days["visible_at"], utc=True)).date
+    inside = (d >= holdout[0]) & (d <= holdout[1])
+    return days[~inside].reset_index(drop=True)
+
+
+def refresh(path: Path, minutes: pd.DataFrame, now: pd.Timestamp, source: str,
+            holdout: tuple[date, date] | None = None) -> RefreshResult:
+    """Append the complete days of `minutes` after the file's last row (by `visible_at`), atomically, never one dated
+    inside `holdout` (research.holdout_from..holdout_to). The file is not created here: a missing one is copied by
+    hand first (RUNBOOK), its columns are the research file's; one staler than MAX_APPEND_DAYS is `stale`."""
     if not path.exists():
         return RefreshResult(status="no_file", path=str(path))
     old = pd.read_parquet(path)
     last = pd.Timestamp(pd.to_datetime(old["visible_at"], utc=True).max())
+    if stale(last, now):
+        return RefreshResult(status="stale", path=str(path), last_visible=last.isoformat())
     if minutes.empty:
         return RefreshResult(status="no_minutes", path=str(path), last_visible=last.isoformat())
-    days = new_days(minutes, last, now)
+    days = outside_holdout(new_days(minutes, last, now), holdout)
     if days.empty:
         return RefreshResult(status="up_to_date", path=str(path), last_visible=last.isoformat())
     vis = pd.DatetimeIndex(pd.to_datetime(days["visible_at"], utc=True))
@@ -157,9 +179,13 @@ def refresh_job(settings: Settings, store: Store, accounts: Sequence[Account], s
     if not path.exists():
         return RefreshResult(status="no_file", path=str(path)).model_dump()
     last = pd.Timestamp(pd.to_datetime(pd.read_parquet(path, columns=["visible_at"])["visible_at"], utc=True).max())
+    if stale(last, now):
+        return RefreshResult(status="stale", path=str(path), last_visible=last.isoformat()).model_dump()
     start = max(last - pd.Timedelta(days=1), now - pd.Timedelta(days=MAX_APPEND_DAYS))
     minutes = store_minutes(store, settings.symbol, key, start, now)
-    return refresh(path, minutes, now, SOURCE_PREFIX + key[0]).model_dump()
+    r = settings.research
+    holdout = (r.holdout_from, r.holdout_to) if r.holdout_from is not None and r.holdout_to is not None else None
+    return refresh(path, minutes, now, SOURCE_PREFIX + key[0], holdout=holdout).model_dump()
 
 
 def reach(history_root: str | Path, symbol: str, window_1m: pd.DataFrame, now: pd.Timestamp) -> str | None:
