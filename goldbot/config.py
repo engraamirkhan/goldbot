@@ -230,11 +230,11 @@ class CostSettings(_Section):
     # recorded broker-tick days (tick_record) in the cost window before nightly_costs builds the spread profile by
     # hour and session (costs-binding-2026-10-18.md section 1.4 step 4); fewer: no profile, the note says why
     spread_profile_min_days: int = Field(10, ge=1)
-    # BACKLOG 175 (goldbot/ops/swap_reconcile.py): a weekend hold of a seven-night (crypto) book whose broker swap is
-    # further than this share from the seven-night projection warns (health `swap_reconcile`). The projection prices
-    # an interest swap at its instruments.db refresh price and the order's FX, so a few % of drift is not a schedule
-    # error; one night more or less on a three-night weekend is 33%
-    swap_reconcile_tolerance: float = Field(0.25, gt=0, lt=1)
+    # BACKLOG 175 (goldbot/ops/swap_reconcile.py): a weekend hold of a seven-night (crypto) book whose broker swap
+    # implies more than this many nights off the seven-night count warns (health `swap_reconcile`). In nights, never
+    # relative (quant review 2026-11-14: 25 % let a Friday triple pass on a 9-night hold); under 1, so one night more
+    # or less always fails. The interest swap is priced at the entry price, so price drift does not move it
+    swap_reconcile_tolerance: float = Field(0.5, gt=0, lt=1)
 
 
 class ScheduleSettings(_Section):

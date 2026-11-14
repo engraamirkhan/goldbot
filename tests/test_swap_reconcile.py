@@ -115,7 +115,61 @@ def test_the_job_is_scheduled_daily_and_its_tolerance_is_a_setting():
     s = load_settings()
     assert jobs.JOBS["swap_reconcile"] is jobs.swap_reconcile
     assert s.scheduler.swap_reconcile.kind == "daily"
-    assert s.costs.swap_reconcile_tolerance == 0.25
+    assert s.costs.swap_reconcile_tolerance == 0.5          # nights (quant review 2026-11-14)
+
+
+SAT = pd.Timestamp("2026-11-07 10:00", tz="UTC")       # Saturday 12:00 server
+MON2 = pd.Timestamp("2026-11-16 10:00", tz="UTC")      # Monday a week later: 9 rollovers, one Friday (the 13th)
+
+
+def test_a_nine_night_hold_charged_a_friday_triple_on_top_fails_although_it_is_within_a_quarter_relative():
+    """Quant review 2026-11-14: judged relative, 11 charged nights against 9 projected is 22 % off and passed, so a
+    Friday triple on a long hold was never seen. ok is now |implied - seven_night| <= 0.5 night."""
+    import goldbot.ops.accounts as a
+    acc = a.load_accounts(logins=False)["vantage-demo"]
+    n = swap_reconcile.nights(SAT, MON2, acc.server_tz, triple_weekday=4)
+    assert n == {"seven_night": 9, "five_plus_triple": 7, "seven_plus_triple": 11}
+    rec = SimpleNamespace(account_id="vantage-demo", client_order_id="long", arm_id="I0-BTCUSD", symbol="BTCUSD",
+                          position_id=1, side=1, lots=LOTS, sent_utc=SAT, exit_utc=MON2, swap=11 * RATE * LOTS * FX,
+                          fx_acct_per_usd=FX, fill_price=90_000.0)
+    row = _row(rate=RATE)
+    out = swap_reconcile.reconcile_one(rec, acc, row, 4, "", tolerance=0.5, now=MON2)
+    assert not out.ok and out.implied_nights == pytest.approx(11.0)
+    assert out.matches == ["seven_plus_triple"]
+    assert out.distinguishable is True        # 9, 7 and 11: the hold tells the three schedules apart
+
+
+def test_a_friday_to_monday_hold_tells_seven_plus_triple_apart_but_not_the_other_two():
+    import goldbot.ops.accounts as a
+    acc = a.load_accounts(logins=False)["vantage-demo"]
+    rec = SimpleNamespace(account_id="vantage-demo", client_order_id="w", arm_id="I0-BTCUSD", symbol="BTCUSD",
+                          position_id=1, side=1, lots=LOTS, sent_utc=FRI, exit_utc=MON, swap=3 * RATE * LOTS * FX,
+                          fx_acct_per_usd=FX, fill_price=90_000.0)
+    out = swap_reconcile.reconcile_one(rec, acc, _row(rate=RATE), 4, "", tolerance=0.5, now=MON)
+    assert out.ok and out.matches == ["seven_night", "five_plus_triple"] and out.distinguishable is False
+
+
+def test_an_interest_swap_is_priced_at_the_entry_price_not_the_refresh_price():
+    """Quant review 2026-11-14: an interest (mode 5/6) rate is annual % x price; the row holds it at its refresh
+    price. The projection rescales it to the position's entry price, so a price move between the refresh and the
+    entry is not read as a schedule error."""
+    import goldbot.ops.accounts as a
+    acc = a.load_accounts(logins=False)["vantage-demo"]
+    # refreshed at 60,000: -20 a lot a night there; the position opened at 90,000, so -30 a night is the charge
+    row = _row(rate=RATE, note="swap mode 5: annual % x price 60000 x contract size / 360 in USD")
+    rec = SimpleNamespace(account_id="vantage-demo", client_order_id="p", arm_id="I0-BTCUSD", symbol="BTCUSD",
+                          position_id=1, side=1, lots=LOTS, sent_utc=FRI, exit_utc=MON, swap=3 * -30.0 * LOTS * FX,
+                          fx_acct_per_usd=FX, fill_price=90_000.0)
+    out = swap_reconcile.reconcile_one(rec, acc, row, 4, "", tolerance=0.5, now=MON)
+    assert out.rate_per_lot == pytest.approx(-30.0) and out.priced_at == "entry"
+    assert out.ok and out.implied_nights == pytest.approx(3.0)
+
+
+def _row(*, rate: float, note: str = "") -> Any:
+    return InstrumentTerms(
+        account_id="vantage-demo", symbol="BTCUSD", store_symbol="BTCUSD", contract_size=1.0, digits=2, point=0.01,
+        volume_min=0.01, volume_step=0.01, volume_max=100.0, currency_profit="USD", swap_long_per_lot=rate,
+        swap_short_per_lot=rate, swap_triple_weekday=5, swap_note=note, updated_utc=FRI - pd.Timedelta(days=1))
 
 
 def test_the_health_module_imports_with_swap_reconcile_in_a_slot_of_its_own() -> None:

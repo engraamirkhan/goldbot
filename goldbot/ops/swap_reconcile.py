@@ -10,12 +10,15 @@ The trigger is the hold itself, no one has to watch for it: the daily scheduler 
 account's exploration ledger (aux.db `exploration_trades`: the swap there is the broker's own, from the position's
 deals) for closed positions of a registry crypto instrument (`instruments_db.seven_night`) held across a rollover
 that ends a Friday, Saturday or Sunday server day (`weekend_rollovers`: the nights the candidate schedules price
-differently). Each is compared with the projection: the instruments.db rate per lot per night (profit currency, at
-its refresh price, broker sign) x lots x the seven-night count, in the account currency at the order's
+differently). Each is compared with the projection: the instruments.db rate per lot per night (profit currency, an
+interest rate at the entry price, broker sign) x lots x the seven-night count, in the account currency at the order's
 `fx_acct_per_usd`. Recorded once per position in aux.db `swap_reconciliations` (aux migration 35): the broker's swap,
 the projection, the nights each candidate schedule counts (`nights`: seven_night, five_plus_triple,
-seven_plus_triple), the nights the broker's charge implies, the schedules within tolerance of it, and ok when the
-broker's swap is within `costs.swap_reconcile_tolerance` (relative) of the seven-night projection. Health
+seven_plus_triple), the nights the broker's charge implies, the schedules within tolerance of it, whether the
+schedules count differently on that hold (`distinguishable`), and ok when the implied nights are within
+`costs.swap_reconcile_tolerance` nights (0.5) of the seven-night count (quant review 2026-11-14: a relative tolerance
+let 11 charged nights pass against 9). An interest swap (annual % x price) is priced at the position's entry price,
+not the instruments.db refresh price (`entry_rate`). Health
 `swap_reconcile` warns, and the owner is told (NOTIFY_ON_WARN), while a hold of the last RECENT_DAYS is outside the
 tolerance or could not be priced; the finance-auditor then keeps or corrects the schedule (BACKLOG 153) with a test
 pinning the measured one. No weekend hold: nothing is read past the ledger and nothing is written.
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
@@ -50,6 +54,23 @@ SCHEDULES = ("seven_night", "five_plus_triple", "seven_plus_triple")
 WEEKEND_DAYS = (4, 5, 6)          # a rollover ending a Friday, Saturday or Sunday server day: where they differ
 RECENT_DAYS = 14                  # health reads holds closed this recently (a corrected schedule clears it)
 CHECK = "swap_reconcile"
+# instruments_db.swap_per_lot's note for an interest swap (modes 5/6): the price the rate was computed at
+_INTEREST_PRICE = re.compile(r"annual % x price ([0-9.eE+]+)")
+
+
+def entry_rate(rate: float, note: str, entry_price: float | None) -> tuple[float, str]:
+    """(the rate per lot per night at the position's entry price, "entry"), for an interest swap (annual % x price,
+    instruments_db modes 5/6) whose row was refreshed at another price; any other rate is price-independent here and
+    stays as stored ("refresh"), as does an interest rate without a known entry price (quant review 2026-11-14:
+    "price at the entry price, not the refresh price")."""
+    m = _INTEREST_PRICE.search(note or "")
+    if m is None or entry_price is None or not math.isfinite(entry_price) or entry_price <= 0:
+        return rate, "refresh"
+    try:
+        at = float(m.group(1))
+    except ValueError:
+        return rate, "refresh"
+    return (rate * entry_price / at, "entry") if math.isfinite(at) and at > 0 else (rate, "refresh")
 
 
 class SwapReconciliation(FrozenRecord):
@@ -70,8 +91,13 @@ class SwapReconciliation(FrozenRecord):
     nights: dict[str, int]
     projected: float | None = None            # the seven-night projection; None: it cannot be priced
     implied_nights: float | None = None       # the broker's swap / the charge of one night
-    deviation: float | None = None            # |broker - projected| / |projected|
+    deviation: float | None = None            # |broker - projected| / |projected| (information only)
     matches: list[str] = Field(default_factory=list)   # the schedules whose count is within tolerance of the implied nights
+    # every candidate schedule counts a different number of nights on this hold, so a charge within tolerance names
+    # one schedule; False: the hold cannot tell some of them apart (a Friday-to-Monday hold: seven_night = five_plus_
+    # triple). Quant review 2026-11-14
+    distinguishable: bool = False
+    priced_at: str = "refresh"                # "entry": an interest rate rescaled to the entry price; "refresh": as stored
     tolerance: float
     ok: bool
     reason: str
@@ -149,6 +175,9 @@ def reconcile_one(rec: Any, acc: Account, row: Any, triple: int | None, why: str
             rate, why = None, f"no swap rate: profit currency {row.currency_profit}, the ledger converts USD only"
         elif rate is None or not math.isfinite(rate):
             rate, why = None, "no swap rate: instruments.db rate unknown"
+    priced_at = "refresh"
+    if rate is not None:
+        rate, priced_at = entry_rate(rate, getattr(row, "swap_note", ""), getattr(rec, "fill_price", None))
     fx = rec.fx_acct_per_usd
     if rate is not None and (fx is None or not math.isfinite(fx) or fx <= 0):
         rate, why = None, "no swap rate in the account currency: the order's fx_acct_per_usd is unknown"
@@ -161,12 +190,12 @@ def reconcile_one(rec: Any, acc: Account, row: Any, triple: int | None, why: str
         projected = per_night * n["seven_night"]
         if per_night != 0:
             implied = rec.swap / per_night
-            matches = [k for k in SCHEDULES if k in n and abs(implied - n[k]) <= tolerance * max(n[k], 1)]
-        if projected != 0:
-            deviation = abs(rec.swap - projected) / abs(projected)
-            ok = deviation <= tolerance
+            matches = [k for k in SCHEDULES if k in n and abs(implied - n[k]) <= tolerance]
+            ok = abs(implied - n["seven_night"]) <= tolerance     # nights, never relative (quant review 2026-11-14)
         else:
             ok = abs(rec.swap) < 0.01
+        if projected != 0:
+            deviation = abs(rec.swap - projected) / abs(projected)
         reason = (f"broker {rec.swap:+.2f} against {projected:+.2f} projected over {n['seven_night']} nights"
                   + (f" (implies {implied:.2f} nights; matches {', '.join(matches) or 'none'})"
                      if implied is not None else ""))
@@ -174,7 +203,9 @@ def reconcile_one(rec: Any, acc: Account, row: Any, triple: int | None, why: str
         account_id=rec.account_id, client_order_id=rec.client_order_id, arm_id=rec.arm_id, symbol=rec.symbol,
         position_id=rec.position_id, side=rec.side, lots=rec.lots, entry_utc=rec.sent_utc, exit_utc=rec.exit_utc,
         broker_swap=rec.swap, rate_per_lot=rate, fx_acct_per_usd=fx, nights=n, projected=projected,
-        implied_nights=implied, deviation=deviation, matches=matches, tolerance=tolerance, ok=ok, reason=reason,
+        implied_nights=implied, deviation=deviation, matches=matches,
+        distinguishable=len(set(n.values())) == len(n) > 1, priced_at=priced_at, tolerance=tolerance, ok=ok,
+        reason=reason,
         recorded_utc=now)
 
 
@@ -227,7 +258,7 @@ def results(state_dir: str | Path, since: pd.Timestamp | None = None) -> list[Sw
 @register_check("global", block=BLOCK_TAIL, pos=166)
 def check_swap_reconcile(ctx: HealthContext) -> Check:
     """swap_reconcile: WARN while a weekend hold of a seven-night book closed in the last RECENT_DAYS has a broker swap
-    outside `costs.swap_reconcile_tolerance` of the seven-night projection, or could not be priced (BACKLOG 175: the
+    more than `costs.swap_reconcile_tolerance` nights off the seven-night count, or could not be priced (BACKLOG 175: the
     schedule of BACKLOG 153 is then kept or corrected by the finance-auditor). OK otherwise, also before any weekend
     hold. Never FAIL: a cost projection, not a position."""
     from goldbot.ops.checks._base import Check
