@@ -5,6 +5,12 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; R151; BACKLOG 243): the trades API's `TradeRow` carries a closed
+  exploration or control row's MFE / MAE from its R135 record (`mfe_r`, `mae_r`, `mfe_usd`, `mae_usd`,
+  `excursion_approx`; None on older rows and every other kind). The trade detail's "Details" disclosure shows them
+  for a closed arm trade ("for +1.40 R (+4.20 USD/oz) · against −0.60 R ..."), "not recorded" when the record has
+  none (never 0 R) and "approximate" when part of the path came from the 1m bars. API contract regenerated. Read-only;
+  nothing on the order path changed.
 - 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
   settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
   measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the

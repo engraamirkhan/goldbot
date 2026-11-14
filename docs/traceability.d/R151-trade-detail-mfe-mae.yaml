@@ -1,0 +1,5 @@
+id: R151
+requirement: 'Backlog 243 (follow-up of 195 / R147): the trade detail shows a closed exploration trade''s MFE and MAE. TradeRow gains optional mfe_r, mae_r, mfe_usd, mae_usd and excursion_approx from the exploration_trades body (None on rows closed before R135, on open rows and on every non-exploration kind); the "Details" disclosure shows them in R and as a price move, "not recorded" when None (never 0 R), labelled approximate when excursion_approx. Read-only; no order, exit or gate path touched.'
+status: 'implemented (2026-11-14, branch feat/cleanup2-mfe-ui-1114)'
+code: 'goldbot/api/schema.py (TradeRow mfe_r, mae_r, mfe_usd, mae_usd, excursion_approx); goldbot/api/trades_ledger.py (_arm_row); web/src/lib/trades.ts (excursionWords); web/src/screens/trades/TradeDetail.tsx (Details: MFE / MAE); web/openapi.json, web/src/lib/schema.d.ts'
+test: tests/test_trades_ledger.py::test_a_closed_exploration_row_carries_its_recorded_mfe_and_mae_and_whether_they_are_approximate; ::test_mfe_and_mae_are_none_never_zero_on_rows_without_a_record_and_on_every_other_kind; web/src/lib/trades.test.ts "a trade's MFE and MAE (backlog 243)"

@@ -7,7 +7,7 @@
 // an aggregate of its own over ledger rows, nor ranks anything: the ranking's order and figures are the server's, and
 // every per-strategy figure keeps its n, its CI and "early, not proven" until its read.
 import type { components } from "./schema";
-import { GROUP_ORDER, type InstrumentGroup } from "./instruments";
+import { fmtPrice, GROUP_ORDER, type InstrumentGroup } from "./instruments";
 import { money, NBSP, signedR, withUnit } from "../ui/format";
 
 type S = components["schemas"];
@@ -373,4 +373,17 @@ export const capWords = (c: CapUse | null | undefined, ccy: string | null) =>
   c ? `${money(c.used, ccy)} of ${money(c.limit, ccy)}` : "not reported";
 
 export const KIND_ORDER: TradeKind[] = ["real", "strategy", "exploration", "control", "cost_probe", "shadow"];
+/** How far a closed trade went for it (MFE) and against it (MAE), backlog 243: "for +1.40 R (+4.20 USD/oz) · against
+ * −0.60 R (−1.80 USD/oz)", in R of the initial stop and as a price move in the trade's instrument. The R is left out
+ * when only the move is known (the initial stop was not the trade's); "not recorded" when the record has neither
+ * (closed before R135, or not an exploration trade): never 0 R. A path read partly from the 1m bars is approximate. */
+export function excursionWords(t: TradeRow): string {
+  const move = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmtPrice(t.symbol, Math.abs(x), { unit: true })}`;
+  const side = (word: string, r: number | null | undefined, usd: number | null | undefined) =>
+    r != null ? `${word} ${signedR(r)}${usd != null ? ` (${move(usd)})` : ""}` : usd != null ? `${word} ${move(usd)}` : null;
+  const parts = [side("for", t.mfe_r, t.mfe_usd), side("against", t.mae_r, t.mae_usd)].filter((p) => p != null);
+  if (parts.length === 0) return "not recorded";
+  return `${parts.join(" · ")}${t.excursion_approx ? " · approximate (part of the path from 1m bars)" : ""}`;
+}
+
 export { signedR };

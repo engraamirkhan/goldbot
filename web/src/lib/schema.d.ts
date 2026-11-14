@@ -3304,6 +3304,8 @@ export interface components {
             evidence: "counted" | "excluded" | "censored" | "pending" | "not_evidence";
             /** Excluded Reason */
             excluded_reason: string | null;
+            /** Excursion Approx */
+            excursion_approx?: boolean | null;
             /** Exit */
             exit: number | null;
             /** Exit Reason */
@@ -3329,6 +3331,14 @@ export interface components {
             kind: "real" | "strategy" | "exploration" | "control" | "cost_probe" | "shadow";
             /** Lots */
             lots: number | null;
+            /** Mae R */
+            mae_r?: number | null;
+            /** Mae Usd */
+            mae_usd?: number | null;
+            /** Mfe R */
+            mfe_r?: number | null;
+            /** Mfe Usd */
+            mfe_usd?: number | null;
             /** Mode */
             mode: ("demo" | "live" | "paper") | null;
             /**
