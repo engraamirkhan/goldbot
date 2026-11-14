@@ -254,7 +254,30 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
 
     # 12. retired units (warn only)
     items.append(_retired_units(ctx))
+
+    # 13. the 1d/1w long history reaches the engine window (BACKLOG 251; skipped while 1d/1w are dark)
+    items.append(_long_history_item(ctx, settings))
     return items
+
+
+def _long_history_item(ctx: PreflightContext, settings: Settings | None) -> Item:
+    """long_history: a live 1d/1w timeframe whose long daily history does not reach the engine window keeps its
+    arms quiet (`history_gap:<tf>`, engine/long_bars.py), so it blocks; ok "skipped" while 1d/1w are dark."""
+    from goldbot.ops import long_history
+    fix = ("read `job:long_history_refresh` in `goldbot run health` (it appends the store's days every evening); a "
+           "missing or months-old file is copied by hand first (RUNBOOK 'Long daily history')")
+    if settings is None:
+        return Item(name="long_history", status="warn", blocking=False, fix=fix, detail="not checked: settings")
+    if not long_history.long_tfs_live(settings):
+        return Item(name="long_history", status="ok", fix=fix, detail="skipped: 1d/1w are dark (engine.timeframes_live)")
+    try:
+        from goldbot.data.store import Store
+        accounts = list(ctx.load_accounts().values())
+        status, detail = long_history.preflight_status(settings, Store(settings.data_root), accounts,
+                                                       pd.Timestamp.now("UTC"))
+    except Exception as exc:                        # noqa: BLE001 - unreadable store or accounts: not ready
+        status, detail = "fail", f"not checked: {type(exc).__name__}"
+    return Item(name="long_history", status=status, detail=detail, fix=fix)
 
 
 def _retired_units(ctx: PreflightContext) -> Item:

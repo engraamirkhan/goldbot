@@ -161,6 +161,7 @@ from goldbot.ops.checks.feeds import (
     check_pnl_basis,
     check_qualification,
 )
+from goldbot.ops.checks.long_history import check_long_history  # BACKLOG 251 (registers it)
 from goldbot.ops.checks.loop import check_feedback_loop
 from goldbot.ops.checks.operations import (
     check_accounts,
@@ -353,6 +354,7 @@ __all__ = [
     "check_history_gap",
     "check_kill_switch",
     "check_limits_controller",
+    "check_long_history",
     "check_loss_caps",
     "check_model_watch",
     "check_monthly_review",
@@ -634,7 +636,7 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 # deploy_read: no version could be offered for 2 h, incident 2026-11-10)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
-                  "history_gap:", "entry_silence:", "deploy_read", "news_blackout_cap",
+                  "history_gap:", "long_history:", "entry_silence:", "deploy_read", "news_blackout_cap",
                   "feedback_loop")   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money

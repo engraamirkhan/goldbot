@@ -4,7 +4,7 @@ rank: 82
 title: '1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081)'
 stage: Research · BUILD
 size: S
-status: 'ready (2026-11-13) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer'
+status: 'done (2026-11-14, branch feat/engine-backlog-1114): filter enforced in arm_rules.long_tf_context (+ spec_masks), hold and order id from the decision close (long_bars.origin/hold_s/time_exit_due), CONFIRM of record (research/long_confirm.py, run_arm_backtest), live == history test on 1d and 1w (tests/test_long_tf_live_history.py) · reviews: quant-reviewer, trading-safety-reviewer (pending)'
 ---
 - **254. 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081).**
   Value: two gaps between the engine and a history run of a 1d/1w arm remain. (a) The engine judges the common filter

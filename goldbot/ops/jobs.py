@@ -1819,6 +1819,13 @@ def monthly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary(review)
 
 
+def long_history_refresh(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """BACKLOG 251: the engine store's complete days appended to the 1d/1w long daily history (ops/long_history.py),
+    so a live 1d/1w arm's warm-up keeps reaching the engine window. Writes only that file, atomically."""
+    from goldbot.ops.long_history import refresh_job
+    return refresh_job(ctx.settings, ctx.store, ctx.accounts, slot)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1849,6 +1856,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
     "weekly_review": weekly_review,               # ranked weekly action list the next director run consumes
     "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
+    "long_history_refresh": long_history_refresh,  # BACKLOG 251: the 1d/1w warm-up file kept current (ops/long_history.py)
 }
 
 
