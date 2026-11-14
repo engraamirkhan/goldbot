@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from goldbot.data.exchange_holidays import exchange_holidays, load_calendar
+from goldbot.data.exchange_holidays import early_closes, exchange_holidays, load_calendar
 from goldbot.research.catalogue import core as K
 from goldbot.research.catalogue.core import EB, Ctx, Events
 from goldbot.research.catalogue.costs import window_model
@@ -166,6 +166,8 @@ def add_holidays(ctx: Ctx, *, end_ns: int, data_from_ns: int | None = None) -> N
     for ex in HOLIDAY_EXCHANGES:
         days, av = exchange_holidays(ex, known_by_ns=end_ns - 1)
         ctx.events[f"holiday_{ex}"], ctx.avail[f"holiday_{ex}"] = days, av
+        _, close, eav = early_closes(ex, known_by_ns=end_ns - 1)       # BACKLOG 258: S05 exits at the early close
+        ctx.events[f"early_close_{ex}"], ctx.avail[f"early_close_{ex}"] = close, eav
 
 
 def build_ctx(win: str, *, allow_test_old: bool = False) -> Ctx:
@@ -314,6 +316,21 @@ def get_bars(inst: str, tf: str, win: str, *, allow_test_old: bool = False) -> B
     return b
 
 
+# BACKLOG 258: the finest stored bars of an instrument, which price an event's time exit inside a bar (S05's early
+# close): gold's 1m bars, the 4h CFD bars elsewhere (the finest the catalogue holds for indices and FX). On 4h bars a
+# 13:00 ET early close exits at the close of the last 4h bar ending at or before it: never later than the close.
+EXIT_TF = "4h"
+
+
+def exit_bars(inst: str, tf: str, win: str, *, allow_test_old: bool = False) -> Bars | None:
+    """Finer bars than `tf` for pricing `Events.exit_at` (None when `tf` is already that fine)."""
+    if inst in FINE_INSTRUMENTS:
+        return get_minutes(win, allow_test_old=allow_test_old)
+    if tf not in ("1d", "1w"):
+        return None
+    return get_bars(inst, EXIT_TF, win, allow_test_old=allow_test_old)
+
+
 _MINUTES: dict[str, Bars] = {}
 
 
@@ -403,7 +420,8 @@ def unit_trades(u: dict[str, Any], win: str, ctx: Ctx, control: str | None = Non
     n_ev, share = long_share(evd)
     ctrl = control or choose_control(u, share)
     frames = []
-    counts: dict[str, int] = {"risk_floor": 0, "fine_miss": 0, "no_1m_cells": 0, "excluded_no_1m": 0}
+    counts: dict[str, int] = {"risk_floor": 0, "fine_miss": 0, "no_1m_cells": 0, "excluded_no_1m": 0,
+                              "exit_at_unpriced": 0}
     need = {cell: intrabar(b, ev) for cell, (b, ev) in evd.items()}
     counts["no_1m_cells"] = sum(1 for (inst, _), v in need.items() if v and inst not in FINE_INSTRUMENTS)
     if counts["no_1m_cells"]:
@@ -411,8 +429,9 @@ def unit_trades(u: dict[str, Any], win: str, ctx: Ctx, control: str | None = Non
         evd = {}
     for (inst, tf), (b, ev) in evd.items():
         fine = get_minutes(win, allow_test_old=allow_test_old) if need[(inst, tf)] else None
+        xb = exit_bars(inst, tf, win, allow_test_old=allow_test_old) if ev.exit_at is not None else None
         tr = simulate(b, ev, control=ctrl, seed_key=u["unit"], drift_per_ns=window_drift_per_ns(b), counts=counts,
-                      fine=fine, costs=costs)
+                      fine=fine, costs=costs, exit_bars=xb)
         if len(tr):
             df = pd.DataFrame(tr, columns=TRADE_COLS)
             df["inst"] = inst

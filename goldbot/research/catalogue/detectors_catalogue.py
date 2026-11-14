@@ -197,13 +197,19 @@ def _on(s: Sched, day: int, t: int) -> bool:
 
 
 def s05_preholiday(b: Bars, p: dict, ctx: Ctx) -> Events:
-    """A holiday counts at bar j only once published (available_utc <= the bar's close, BACKLOG 152)."""
-    name = f"holiday_{_exchange(b.inst)}"
+    """A holiday counts at bar j only once published (available_utc <= the bar's close, BACKLOG 152). When T-1 is an
+    early close published by the decision bar's close (`early_close_<exchange>`: the close instants, BACKLOG 237),
+    the event exits at that instant (`exit_at`, BACKLOG 258) rather than at T-1's bar close."""
+    ex = _exchange(b.inst)
+    name = f"holiday_{ex}"
     hol = ctx.events.get(name)
     if hol is None or not len(hol):
         return K.empty()
     d = _bar_dates(b)
     hs = _published_days(ctx, name, np.asarray(hol))
+    ec = np.asarray(ctx.events.get(f"early_close_{ex}", np.zeros(0, np.int64)), np.int64)
+    es = _published_days(ctx, f"early_close_{ex}", ec // DAY)
+    close_of = {int(x) // DAY: int(x) for x in ec.tolist()}
     a = K.atr(b, 20)
     s200 = K.sma(b.c, 200)
     eb = EB()
@@ -218,7 +224,7 @@ def s05_preholiday(b: Bars, p: dict, ctx: Ctx) -> Events:
             continue
         if p.get("trend") and not (b.c[j] > s200[j]):
             continue
-        eb.add(j, 1, stop_d=2.0 * a[j], hold=1)
+        eb.add(j, 1, stop_d=2.0 * a[j], hold=1, exit_at=close_of[t1] if _on(es, t1, now) else 0)
     return eb.build()
 
 
