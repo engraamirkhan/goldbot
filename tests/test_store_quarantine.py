@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 from goldbot.data import crossfeed as cf
@@ -179,3 +180,37 @@ def test_backdated_corrected_minutes_are_repaired_once(tmp_path):
     assert (pd.to_datetime(live["available_utc"], utc=True) == applied).all()          # when it was written: kept
     assert len(store.read("bars_quarantine", source="icm")) == 50                       # the backdated copies, kept
     assert sc.repair_visible_at(store, now=NOW, apply=True) == 0
+
+
+# ------------------------------------------------------------------ backlog 240: the rewrite keeps each row's write time
+def _ahead_written(path: Path, rows: pd.DataFrame) -> pd.Series:
+    """The 2026-10-26 selector's rule on per-row write times (compact.written_utc), as scripts/quarantine_tz_ticks_*."""
+    from goldbot.data.compact import written_utc
+    written = pd.Series(written_utc(path).to_numpy(), index=rows.index)
+    return pd.to_datetime(rows["ts_utc"], utc=True) > written + pd.Timedelta(minutes=30)
+
+
+def test_the_rewritten_part_keeps_the_kept_rows_write_times_and_a_rerun_selects_nothing(tmp_path):
+    from goldbot.data.compact import LINEAGE, written_utc
+    store, ticks, n_bad = _seed(tmp_path)
+    pdir = store.partition_dir("ticks", "icm-demo", "XAUUSD", T0)
+    # a third part, written later than the first, whose rows stay: two write times among the kept rows
+    late = ticks[ticks["ts_utc"] >= T1].head(50).assign(ts_utc=lambda d: d["ts_utc"] + pd.Timedelta(seconds=1))
+    before = set(pdir.glob("*.parquet"))
+    store.append("ticks", late, source="icm-demo", dedupe=False)
+    (f3,) = set(pdir.glob("*.parquet")) - before
+    later = (NOW + pd.Timedelta(hours=2)).timestamp()
+    os.utime(f3, (later, later))
+    want = sorted(pd.concat([written_utc(f)[~_ahead_written(f, pd.read_parquet(f)).to_numpy()]
+                             for f in pdir.glob("*.parquet")]).tolist())
+    n = qr.move_rows(store, "ticks", source="icm-demo", symbol="XAUUSD", select=_ahead_written,
+                     reason=qr.TZ_MISLABEL, now=NOW, apply=True)
+    assert n == n_bad
+    (part,) = list(pdir.glob("*.parquet"))
+    assert LINEAGE in (pq.read_metadata(part).metadata or {})
+    got = written_utc(part)
+    assert got.notna().all() and sorted(got.tolist()) == want      # not the rewrite's own mtime
+    assert {NOW, NOW + pd.Timedelta(hours=2)} == set(got)
+    os.utime(part, (later + 3600, later + 3600))                  # a later touch of the file changes nothing
+    assert qr.move_rows(store, "ticks", source="icm-demo", symbol="XAUUSD", select=_ahead_written,
+                        reason=qr.TZ_MISLABEL, now=NOW, apply=False) == 0
