@@ -795,6 +795,50 @@ def _threshold_line(disc: dict[str, Any]) -> str:
             f"{'—' if below is None else f'{below:.1%}'} (diagnostic)")
 
 
+ORDERFLOW = "orderflow"              # the opt-in order-flow proxy feature (goldbot/features/orderflow.py NAME)
+PLAIN_FEATURES = ("returns",)        # with every feature of the `momentum` family: what an order-flow survivor must beat
+PLAIN_FAMILIES = ("momentum",)
+
+
+def orderflow_screen_rule(table: pd.DataFrame, owners: dict[str, str], selected: list[str]) -> dict[str, Any]:
+    """The order-flow family's pre-registered reading (`orderflow.SCREEN_NOTE`, BACKLOG 211): "a survivor must beat the
+    plain return and momentum features (ret_*, momentum family) in the same screen, or it is read as a restated
+    return". Passed only when a selected `orderflow` column's stability is strictly above every plain column's (the
+    `returns` feature and the `momentum` family, context copies included); a tie is not a beat. `owners`: column ->
+    producing feature (`column_groups(..., "feature")`); `table`: discover's per-feature table (`stability`)."""
+    def best(cols: list[str]) -> tuple[str, float] | None:
+        if not cols:
+            return None
+        stab = table.loc[cols, "stability"].astype(float)
+        return str(stab.idxmax()), float(stab.max())
+    cols = [str(c) for c in table.index if c in owners]
+    flow = [c for c in cols if owners[c] == ORDERFLOW and c in selected]
+    plain = [c for c in cols if owners[c] in PLAIN_FEATURES
+             or (owners[c] in FEATURES and FEATURES[owners[c]].family in PLAIN_FAMILIES)]
+    b_flow, b_plain = best(flow), best(plain)
+    out: dict[str, Any] = {"best_orderflow": None if b_flow is None else list(b_flow),
+                           "best_plain": None if b_plain is None else list(b_plain)}
+    if b_flow is None:
+        return {**out, "passed": False, "detail": "no order-flow survivor"}
+    if b_plain is not None and b_flow[1] <= b_plain[1]:
+        return {**out, "passed": False,
+                "detail": f"{b_flow[0]} stability {b_flow[1]:.2f} does not beat {b_plain[0]} {b_plain[1]:.2f}: read as "
+                          "a restated return"}
+    against = "no return or momentum column screened" if b_plain is None else f"{b_plain[0]} {b_plain[1]:.2f}"
+    return {**out, "passed": True, "detail": f"{b_flow[0]} stability {b_flow[1]:.2f} beats {against}"}
+
+
+def screen_rule_lines(notes: list[str], rule: dict[str, Any] | None) -> list[str]:
+    """The report's pre-registration notes and the order-flow reading (none without either)."""
+    lines: list[str] = []
+    if notes:
+        lines += ["### Pre-registration notes", "", *[f"- {n}" for n in notes], ""]
+    if rule is not None:
+        lines += [f"- order-flow rule (pre-registered): {'**PASS**' if rule['passed'] else '**FAIL**'}: {rule['detail']}",
+                  ""]
+    return lines
+
+
 def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) -> str:
     """Markdown: header, reading verdict, group and feature stability tables, the design's gates."""
     m = d.result.metrics
@@ -815,6 +859,7 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
              f"### Reading rule (pre-registered): **{v['decision'].upper()}**", "", f"- rule: {v['rule']}",
              f"- out-of-fold AUC {_fmt(v['oof_auc'])}, bootstrap 95% lower bound {_fmt(v['auc_lower_bound'])}, "
              f"{v['n_scored']:,} scored; model-filtered {v['n_taken']} trades, net mean R {_fmt(v['taken_mean_r'])}", ""]
+    lines += screen_rule_lines(meta.get("notes") or [], meta.get("orderflow_rule"))
     folds = [c for c in d.group_table.columns if c.startswith("f") and c[1:].isdigit()]
     lines += [f"### Stability by group (top {top})", "",
               "| group | features | " + " | ".join(folds) + " | mean | stability |",
@@ -864,7 +909,8 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
                    cfg: DiscoveryConfig, group_mode: str = "column", extra_cost_usd: float = 0.0, swap: Any = None,
                    holdout: Window | None = None, ctx: dict | None = None, rationale: str = "",
                    cost_source: str = "settings priors", rule_ref: str | None = None,
-                   capped: bool = False, holdout_from: Any = None) -> tuple[dict[str, Any], str]:
+                   capped: bool = False, holdout_from: Any = None, feature_names: list[str] | None = None,
+                   notes: tuple[str, ...] = ()) -> tuple[dict[str, Any], str]:
     """`research_pass.py --discover`: budget check (one trial), the decision frame's group map and its size check
     (`check_group_sizes`, context columns counted; BACKLOG 81), the pre-registration row, then the run and its result
     row (status "discovery"). Call under `reg.locked()`. Returns (result row, report).
@@ -880,7 +926,15 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     window, the 1m bars are cut at its start before the config is built or anything is resampled, as `--h16` does, so
     the hashed `bars_to` is the last bar before the holdout whatever data-v1 reaches on the day of the run. With
     `holdout_from` (research.holdout_from) set but no window (holdout_to missing, so holdout_window() is None) the run
-    is refused rather than run uncut over the held-out bars (quant review 2026-10-16: fail closed)."""
+    is refused rather than run uncut over the held-out bars (quant review 2026-10-16: fail closed). A ctx["bars_1m"]
+    input (the `orderflow` family) is cut at the same instant.
+
+    Opt-in candidates (BACKLOG 211): `feature_names` replaces the default list (research_feature_names(ctx)) in the
+    config, the pre-registration and the frame, so an opt-in family such as `orderflow` is screened and hashed;
+    `notes` are the family's pre-registration notes (`orderflow.prereg_notes`), written into the pre-registered plan
+    and the report. With `orderflow` screened, the row's results carry `orderflow_rule`: "a survivor must beat the
+    plain return and momentum features (ret_*, momentum family) in the same screen, or it is read as a restated
+    return" (`orderflow.SCREEN_NOTE`). Adding the columns costs 0 trials beyond this one discovery trial."""
     from goldbot.data.resample import resample_bars
     from goldbot.features.mtf import TF_LABEL, context_tfs
     from goldbot.features.registry import feature_version
@@ -901,7 +955,11 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
         b1 = b1.loc[np.asarray(utc_index(b1["ts_utc"]) < pd.Timestamp(holdout[0]))].reset_index(drop=True)
         if b1.empty:
             raise ValueError(f"no 1m bars before the holdout start {holdout[0]}: nothing to discover on")
-    names = research_feature_names(ctx)
+        if ctx is not None and ctx.get("bars_1m") is not None:
+            m1 = ctx["bars_1m"]
+            ctx = {**ctx, "bars_1m": m1.loc[np.asarray(utc_index(m1["ts_utc"]) < pd.Timestamp(holdout[0]))]
+                   .reset_index(drop=True)}
+    names = list(feature_names) if feature_names else research_feature_names(ctx)
     family = discovery_family(spec.family)
     config = discovery_trial_config(spec, cfg, group_mode, names, str(b1["ts_utc"].iloc[0]),
                                     str(b1["ts_utc"].iloc[-1]), holdout)
@@ -912,7 +970,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     tf = spec.timeframe
     b_dec = resample_bars(b1, tf, drop_late=True).reset_index(drop=True)   # no decision on a corrected bar
     context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
-    frame = build_decision_frame(b_dec, context, ctx=ctx)
+    frame = build_decision_frame(b_dec, context, feature_names=names, ctx=ctx)
     # BACKLOG 81: the group map of every frame column (context included; prices only, no label) and its size check
     # come before the pre-registration row, so a refused config writes no row and spends no trial. The pool is a
     # subset of the frame's columns, so a map that passes here passes on the pool in run_discovery.
@@ -928,8 +986,9 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
                                  feature_version=feature_version(names), rationale=rationale,
                                  reading_rule=reading_rule(cfg.survivor_unit, cfg.threshold_rule, cfg.tercile_q),
                                  plan={"features": names, "group_mode": group_mode, "trial_status": DISCOVERY,
-                                       "survivor_unit": cfg.survivor_unit, **threshold_plan(cfg)}, queue=False)
-    leak = lookahead_check(b_dec, context, ctx=ctx)
+                                       "survivor_unit": cfg.survivor_unit, **threshold_plan(cfg),
+                                       **({"notes": list(notes)} if notes else {})}, queue=False)
+    leak = lookahead_check(b_dec, context, feature_names=names, ctx=ctx)
     prep = prepare(spec, b_dec, context, extra_cost_usd=extra_cost_usd, holdout=holdout, frame=frame, swap=swap)
     if prep.labels.empty:
         raise ValueError(f"{spec.family} produced no labelled candidates; nothing to discover")
@@ -939,6 +998,10 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
     metrics = {**d.result.metrics, "lookahead": leak, "cost_source": cost_source,
                "bars_from": config["bars_from"], "bars_to": config["bars_to"]}
+    if ORDERFLOW in names:
+        owners = column_groups(pool, "feature", frame[0], names, ctx,
+                               holdout_start=None if holdout is None else pd.Timestamp(holdout[0]))
+        metrics["orderflow_rule"] = orderflow_screen_rule(d.table, owners, d.selected)
     row = reg.record(agent_id=spec.agent_id, family=family, config=config, feature_version=d.result.feature_version,
                      rationale=rationale, results=metrics, status=DISCOVERY, budget_quarter=quarter,
                      preregistration=prereg, rule_ref=cited)
@@ -947,5 +1010,6 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
                                 "to_year": int(b1["ts_utc"].iloc[-1].year), "tf": tf, "trial": row["trial"],
                                 "prereg_ts": prereg["ts"], "n_trials_effective": reg.n_trials_effective,
                                 "lookahead": "clean" if not bad else f"**{len(bad)} columns use future data**",
-                                "cost_source": cost_source})
+                                "cost_source": cost_source, "notes": list(notes),
+                                "orderflow_rule": metrics.get("orderflow_rule")})
     return row, text

@@ -149,7 +149,6 @@ Each item's status names its accountable role and the trigger that brings it bac
 - Rails built and off by default: 17, 18, 19, 21, 35. They only tighten; the trading-safety-reviewer recommends and
   the PD+PO decide, no owner input.
 - 69, leverage and largest-order audit: folded into the finance-auditor's monthly audit (next 2026-12-04).
-- 91, retired-family guard: before the next registry budget opens.
 - 111 allocator against controls and 116 higher-timeframe features: return with a live candidate or a model lane.
 - Data with no queued consumer: 119 COMEX volume, 121 broker history depth, 123 central-bank and ETF flows, 124
   second intraday source, 125 GPR/GDELT, 126 COT availability floor (before any positioning read), 147 ALFRED

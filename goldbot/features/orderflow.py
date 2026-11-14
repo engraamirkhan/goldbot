@@ -30,6 +30,14 @@ SIGNED = {"of_vw_retz_(15m|60m)": 0.0, "of_vw_run": 0.0}
 SCREEN_NOTE = ("tick_count is Dukascopy's bid-side quote updates, not signed trades: of_vw_retz_* and of_vw_run are "
                "quote-update-weighted return scores; a survivor must beat the plain return and momentum features "
                "(ret_*, momentum family) in the same screen, or it is read as a restated return")
+H14_NOTE = ("at 15m a survivor's own trial also clears the H-14 gate: expected move >= 3x the round trip (spread plus "
+            "the extra cost), or it is not traded")
+
+
+def prereg_notes(timeframe: str) -> tuple[str, ...]:
+    """The pre-registration notes of a discovery screen that carries the `orderflow` family (BACKLOG 211): SCREEN_NOTE
+    always, H14_NOTE when the specialist decides on 15m bars."""
+    return (SCREEN_NOTE, H14_NOTE) if timeframe == "15m" else (SCREEN_NOTE,)
 
 
 def _close(df: pd.DataFrame) -> pd.Series:

@@ -48,6 +48,27 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   box wrote the line late); a latch logs the journal reason it latched on.
   Brain action: re-run the needrestart step of brain_bootstrap.sh (RUNBOOK "needrestart"). Reviews owed:
   code-reviewer, sre (checks, slot), trading-safety-reviewer (login classification and logging only).
+- 2026-11-14 (branch feat/orderflow-governance-1114; M50, M51; BACKLOG 211 order-flow part, 91): `research_pass.py
+  --discover --orderflow` screens the R139 order-flow proxies (built from the run's own 1m bars, cut at the holdout)
+  beside the default features in one discovery trial. The pre-registered plan and the report carry
+  `orderflow.SCREEN_NOTE` (a survivor must beat the plain return and momentum features in the same screen) and, at
+  15m, the H-14 note (expected move >= 3x round trip); the result row's `orderflow_rule` reads it (strictly higher
+  stability than every `ret_*` / momentum column, ties fail). Without the flag nothing changes and no hash moves.
+  `--orderflow` is refused outside `--discover`. News stays collect-only: no `--news` flag until 12 months of data.
+- Retired families now share their one exploration trial a quarter in code. `TrialRegistry.check_budget_reserved`
+  refuses an open-budget run (rule_ref or not) on any family in research.retired_families once the quarter has a
+  retired-family trial (`RetiredExplorationUsed`, with the counts in the message); only a queued pre-registration of
+  the exact config lifts it. The director counts screened retired families too (`box_break_close`, `sweep_absorb`) and
+  reports the trial used (`retired_trials_quarter`). H-53's procedural hold in prereg-2026-10-19-h50-followup.md s.3
+  can drop once quant signs off. Behaviour change: `research_pass.py` defaults to `--specialist session_open`
+  (retired R-02), so a second open-budget session_open run in a quarter is now refused.
+- Fail clean (same branch): a run the retired-family guard refuses is a recorded skip, not an error. research_pass
+  writes the reason to the report, writes no row and exits 75 (`registry.SKIPPED_EXIT`); research.yml's cell passes
+  on 75 and `cells.record` reports the cell as "skipped (retired family; no look, no trial)" (`Recorded.skipped`).
+  Callers checked: research-loop.yml names every family and its loop rows never reach the guard (`loop_refusal`
+  refuses retired families first); the brain's jobs (monthly_research, research_director, the analyst) do not call
+  research_pass. So no scheduled caller relies on the `session_open` default, and the default stays; a manual
+  dispatch on it now ends as a skip.
 - 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
   settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
   measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the

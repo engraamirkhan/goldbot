@@ -21,6 +21,16 @@ rp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rp)
 
 
+@pytest.fixture(autouse=True)
+def _no_retired_families(monkeypatch):
+    """These tests drive the runner's mechanics with session_open and intraday_momentum, which are retired (R-02, R-05):
+    with the settings' list, the retired families' one shared exploration trial a quarter (BACKLOG 91) would refuse
+    their second run. The guard itself is tested in tests/test_retired_family_trial_guard.py."""
+    settings = rp.load_settings()
+    patched = settings.model_copy(update={"research": settings.research.model_copy(update={"retired_families": []})})
+    monkeypatch.setattr(rp, "load_settings", lambda: patched)
+
+
 @pytest.fixture(scope="module")
 def release_dir(tmp_path_factory) -> Path:
     d = tmp_path_factory.mktemp("release")
