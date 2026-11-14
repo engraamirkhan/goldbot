@@ -81,10 +81,11 @@ Decision.
    trial without usable evidence for the current quarter, so a gap is seen before a promotion meets it.
 
 5. Phase gate 1 requires CPCV too, read only (decided 2026-11-14 by the program director and the quant reviewer
-   under the owner's delegation of routine research-integrity decisions; a tightening, no threshold changed). Gate
-   `backtest_to_paper` has an item `cpcv`: `cpcv_gate.promotion_refusal` on the best trial without a runner, so the
+   under the owner's delegation of routine research-integrity decisions; a tightening, no threshold changed). Gate 1
+   (`backtest_to_paper`, backtest -> paper; not `paper_to_tiny_live`) has an item `cpcv`: `cpcv_gate.promotion_refusal` on the best trial without a runner, so the
    gate never runs CPCV and missing evidence leaves the item unmet. The evidence is produced by the tournament or by
-   `scripts/research_pass.py --cpcv`. Today no trial passes the gates, so gate 1 was unmet already.
+   `scripts/research_pass.py --cpcv`. Today no trial passes the gates, so gate 1 was unmet already. An unreadable evidence sidecar leaves
+   the item unmet ("can't read CPCV evidence"); the report still runs.
 6. Quant review fixes: evidence with no backtest path of finite mean R, or with no stated feature version, does not
    count; an on-demand run without a configured holdout window raises instead of reading to the slot; a rerun of the
    trial's own configuration (same config hash) is not a PBO peer (it was no alternative to select among).

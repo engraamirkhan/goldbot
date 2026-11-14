@@ -654,8 +654,12 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     # ADR 0083 amendment (decided 2026-11-14): the best trial's CPCV/PBO evidence for this quarter, READ ONLY. The gate
     # never runs CPCV (the tournament or research_pass --cpcv produce it), so missing evidence leaves the item unmet.
     # The registry exists whenever there is a best trial, so TrialRegistry writes nothing here.
-    cpcv_why = (cpcv_gate.promotion_refusal(TrialRegistry(reg_path), best, rows, now=now.to_pydatetime())
-                if best is not None else "no evaluated trial")
+    # An unreadable evidence sidecar is no evidence (trading-safety review): the item is unmet, the report still runs.
+    try:
+        cpcv_why = (cpcv_gate.promotion_refusal(TrialRegistry(reg_path), best, rows, now=now.to_pydatetime())
+                    if best is not None else "no evaluated trial")
+    except (OSError, ValueError) as exc:        # JSONDecodeError is a ValueError
+        cpcv_why = f"can't read CPCV evidence ({type(exc).__name__})"
     items = _previous(1, passed) + [
         GateItem(name="research_gates", met=best_ok, evidence=research_ev,
                  need="the trial passed the design's research gates with swap charged and its cost source stated"),

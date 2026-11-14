@@ -764,3 +764,13 @@ def test_gate_1_cpcv_evidence_from_an_earlier_quarter_does_not_count(tmp_path):
     rep = report(state, trials, cpcv=False)
     assert not item(rep, "backtest_to_paper", "cpcv") and not gate_met(rep, "backtest_to_paper")
     assert item(report(state, trials), "backtest_to_paper", "cpcv")          # this quarter's evidence meets it
+
+
+def test_a_corrupt_cpcv_evidence_line_leaves_gate_1_unmet_and_the_report_still_runs(tmp_path):
+    """Trading-safety review: `run.py gates` must not crash on an unreadable evidence sidecar; it reads as no evidence."""
+    state, trials = full_state(tmp_path)
+    trials.with_name(trials.stem + ".evidence.jsonl").write_text("{not json\n")
+    rep = report(state, trials, cpcv=False)
+    assert not item(rep, "backtest_to_paper", "cpcv") and not gate_met(rep, "backtest_to_paper")
+    assert "can't read CPCV evidence" in evidence(rep, "backtest_to_paper", "cpcv")
+    assert "backtest_to_paper" in gates_phase.render(rep)
