@@ -176,3 +176,31 @@ def test_a_retired_job_is_pruned_from_the_saved_state_and_the_status_document(tm
     doc = scheduler_status(tmp_path)
     assert doc is not None and set(doc["jobs"]) == {"keep"}
     assert new.prune() == []                                # nothing left to drop
+
+
+# --------------------------------------------------------------------------------------- cleanup phase 2 (BACKLOG 142)
+# ADR 0083: the scheduled research jobs with no live reader and no downstream consumer
+RETIRED_PHASE2 = ("gap_watch", "monthly_research", "cpcv_quarterly", "autodisc_nightly")
+
+
+def test_every_configured_job_has_a_registered_job_function_and_no_retired_one_is_registered():
+    from goldbot.config import DEFAULT_SETTINGS, Settings, load_yaml
+    from goldbot.ops.jobs import JOBS
+    configured = set(load_yaml(DEFAULT_SETTINGS)["scheduler"])
+    assert configured == set(JOBS) == set(Settings.model_fields["scheduler"].annotation.model_fields)  # type: ignore[union-attr]
+    for name in RETIRED_PHASE2:
+        assert name not in configured and name not in JOBS
+
+
+def test_a_server_settings_file_still_naming_a_retired_job_or_the_gap_section_loads_with_a_warning(tmp_path, caplog):
+    from goldbot.config import DEFAULT_SETTINGS, settings_dict
+    shipped = tmp_path / "settings.yaml"
+    shipped.write_text(DEFAULT_SETTINGS.read_text())
+    (tmp_path / "settings.local.yaml").write_text(
+        "scheduler:\n" + "".join(f"  {n}: {{ kind: daily, at: \"01:00\" }}\n" for n in RETIRED_PHASE2)
+        + "gaps:\n  founders_per_month: 2\n")
+    from goldbot.config import Settings
+    with caplog.at_level("WARNING", logger="goldbot.config"):
+        s = Settings.model_validate(settings_dict(shipped))
+    assert not set(RETIRED_PHASE2) & set(type(s.scheduler).model_fields)
+    assert all(n in caplog.text for n in (*RETIRED_PHASE2, "gaps"))

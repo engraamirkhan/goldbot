@@ -1,7 +1,9 @@
-"""`autodisc_nightly` (ADR 0058 phase 2): one bounded G2 search on the explore window, judged by the honesty set.
+"""The nightly discovery search (ADR 0058 phase 2): one bounded G2 search on the explore window, judged by the
+honesty set. Run on the owner's Mac by launchd (`scripts/autodisc.py nightly`); the brain's `autodisc_nightly`
+scheduler job, which only ever skipped there, retired with ADR 0083.
 
-    run_nightly_job(settings, state_dir, slot)   the scheduler job (goldbot/ops/jobs.py): skips unless
-                                                 research.autodisc.nightly_enabled, then search_and_judge and the report
+    run_nightly_job(settings, state_dir, slot)   skips unless research.autodisc.nightly_enabled, then
+                                                 search_and_judge and the report
     search_and_judge(t, provider, ledger, cfg)   G2 search, G0 null of the whole search, then the honesty set
     render(result)                               the survivors report text (no confirm-window number in it)
 

@@ -29,6 +29,9 @@ RETIRED_KEYS: tuple[tuple[str, ...], ...] = (
     ("tv_pull",), ("webhook",),
     ("scheduler", "agents_daily"), ("scheduler", "agents_weekly"), ("scheduler", "agents_presession"),
     ("scheduler", "tv_reconcile"), ("tv", "max_lag_s"), ("tv", "min_bar_match"),
+    # ADR 0083 (BACKLOG 142, 2026-11-14): the scheduled research jobs with no live reader and no consumer
+    ("scheduler", "gap_watch"), ("scheduler", "monthly_research"), ("scheduler", "cpcv_quarterly"),
+    ("scheduler", "autodisc_nightly"), ("gaps",),
 )
 
 TF_SECONDS: dict[str, int] = {
@@ -249,19 +252,15 @@ class SchedulerSettings(_Section):
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
     research_director: ScheduleSettings
-    monthly_research: ScheduleSettings
     calendar_archive: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
-    gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
     # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
     # contention with them on the 4-core brain), and its weekly restore drill
     # on Sunday while the market is closed
     backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
-    cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
-                                                        max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
     # broker ledger (goldbot/ops/ledger.py, finance audit GAP-07/GAP-08): balance snapshot, deposits and withdrawals,
     # positions and balance reconciled with the broker. Every day: the deal history still changes on weekends
@@ -284,8 +283,6 @@ class SchedulerSettings(_Section):
     # R140: the feedback-loop check (goldbot/ops/checks/loop.py) after the daily review; a failing loop opens or
     # comments on the `ci-loop` GitHub issue once a day (health alerts on the same check every pass)
     loop_check: ScheduleSettings = ScheduleSettings(kind="daily", at="07:05", max_late_hours=12, run_if_never_run=True)
-    # ADR 0058 phase 2: the bounded discovery search; skips unless research.autodisc.nightly_enabled (the Mac only)
-    autodisc_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:30", max_late_hours=6)
     # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
     # (goldbot/research/tv_ideas.py), after feed_reconcile has stored the broker's M1 and nightly_costs the cost table
     tva_scores: ScheduleSettings = ScheduleSettings(kind="daily", at="23:35", max_late_hours=20)
@@ -350,17 +347,6 @@ class CompactSettings(_Section):
         if bad:
             raise ValueError(f"compact.tables: {bad} are not append-only store tables {list(COMPACTABLE_TABLES)}")
         return v
-
-
-class GapSettings(_Section):
-    """Bounded spawning (goldbot/ops/gap_watch.py, docs/TRADER_LIFECYCLE.md section 3)."""
-    founders_per_month: int = Field(2, ge=0, le=4)        # zero-capital shadow founders per calendar month
-    staff_runs_per_week: int = Field(3, ge=0, le=7)       # on-demand runs of existing read-only roles, rolling 7 days
-    hypotheses_per_run: int = Field(2, ge=0, le=2)        # hypotheses gap_watch may file per run
-    dq_window_days: int = Field(7, ge=1, le=30)           # data-quality errors counted over this window
-    dq_min_error_days: int = Field(3, ge=1, le=30)        # distinct UTC days with error events that make a gap
-    regime_window_days: int = Field(20, ge=5, le=120)     # recent realised volatility (mean of daily values)
-    regime_history_days: int = Field(3650, ge=365)        # history the volatility terciles are cut from
 
 
 class AttributionSettings(_Section):
@@ -1072,7 +1058,6 @@ class Settings(_Section):
     drift: DriftSettings = Field(default_factory=DriftSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     gates: GateSettings = Field(default_factory=GateSettings)
-    gaps: GapSettings = Field(default_factory=GapSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
     compact: CompactSettings = Field(default_factory=CompactSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)

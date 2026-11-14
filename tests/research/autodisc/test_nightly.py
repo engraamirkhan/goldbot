@@ -101,14 +101,6 @@ def test_nightly_imports_nothing_that_trades_or_writes_arms():
         assert banned not in src, banned
 
 
-def test_autodisc_nightly_is_a_scheduled_job_that_health_reports():
-    from goldbot.ops.jobs import JOBS, autodisc_nightly
-    s = load_settings()
-    assert JOBS["autodisc_nightly"] is autodisc_nightly
-    assert "autodisc_nightly" in type(s.scheduler).model_fields             # health: one job:<name> line per field
-    assert s.scheduler.autodisc_nightly.kind == "daily"
-
-
 @pytest.mark.parametrize("bad", [{"population": 2}, {"generations": 0}, {"null_reps": 0}])
 def test_autodisc_settings_are_bounded(bad):
     from goldbot.config import AutodiscSettings

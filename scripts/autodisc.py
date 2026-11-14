@@ -14,8 +14,9 @@ masks from `primitives.PrimitiveProvider`; specs naming a leaf the code base can
 are ledgered. `bench` is synthetic only. Every spec is ledgered before it is evaluated (`SearchLedger.require_logged`),
 K_search and K_null are printed, the ledger head (seq, digest) goes into the run record so a truncated tail is
 detectable, and the report never prints a 2018+ date or year (`assert_no_confirm_numbers`; counts carry thousands
-separators so a count of 2,019 cannot read as a year). `nightly` runs the scheduler's `autodisc_nightly` on this
-machine (the owner's Mac, where the bars are), whatever research.autodisc.nightly_enabled says.
+separators so a count of 2,019 cannot read as a year). `nightly` runs the nightly search (research/autodisc/nightly.py)
+on this machine (the owner's Mac, where the bars are; launchd), whatever research.autodisc.nightly_enabled says. The
+brain's scheduler job retired with ADR 0083: it only ever skipped there.
 """
 from __future__ import annotations
 
@@ -191,7 +192,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
 
 
 def cmd_nightly(args: argparse.Namespace) -> int:
-    """The scheduler's autodisc_nightly on this machine (enabled for this run only; settings.yaml is not changed).
+    """The nightly discovery search on this machine (enabled for this run only; settings.yaml is not changed).
     `--timeframe` overrides research.autodisc.timeframe for this run (the Mac's launchd job runs 15m, 1h, 4h in turn)."""
     s = load_settings()
     upd: dict[str, Any] = {"nightly_enabled": True}

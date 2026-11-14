@@ -46,15 +46,6 @@
                     30-day drawdown against backtest -> state/drift.json (size factors, halted agents, system halt).
                     Halts are sticky until the owner clears them (`run.py drift-review --clear`) or a new champion
                     version replaces the halted one. Entries only: exits are never affected.
-* gap_watch         daily after drift_watch (TRADER_LIFECYCLE section 3): deterministic gap detectors -> zero-capital
-                    shadow founders (capped a month, reserved slots), on-demand runs of existing read-only staff roles
-                    (capped a week, inside the monthly agent budget), hypotheses, BACKLOG suggestions ->
-                    state/gaps.json (ops/gap_watch.py). Creates no live agent and no new family or role.
-* monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
-                    many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
-                    fresh plan), only while research.label_grid_paused is false, never past the quarter's trial
-                    budget less the pre-registered reservation and never into the held-out year, each a
-                    walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
 * backup            daily: encrypted restic snapshot of the SQLite files (online backup API), state JSON, trial
                     registry, models and the brain's own Parquet to Oracle Object Storage, append only: retention
                     runs from the owner's Mac (scripts/backup_retention.sh) -> state/backup_last.json (health checks
@@ -95,10 +86,6 @@
                     exit diagnostics and the Monday roll-up's proposals -> a ranked list in aux.db review_actions (one
                     set a week) that the next research_director run consumes once; backlog suggestions to a GitHub
                     issue labelled `review`. Automatic: only a stop already registered (tighten only).
-* autodisc_nightly  daily (ADR 0058 phase 2, research/autodisc/nightly.py): a bounded G2 search on the 2010-2017
-                    explore window, every spec ledgered first (state/discovery_real.db), its G0 null, RC/SPA, PBO,
-                    DSR, circular-shift and plateau checks -> state/autodisc/survivors-<day>.md and a health line.
-                    Skips unless research.autodisc.nightly_enabled (the owner's Mac only). Creates no arm.
 * tva_scores        daily after feed_reconcile and nightly_costs (prereg-2026-10-28-tv-author-ideas.md section 6,
                     research/tv_ideas.py): the shadow score of the followed authors' live gold ideas from their
                     first-seen snapshot (state/tv_ideas.db read-only), direction read for both sides net of costs on
@@ -109,9 +96,6 @@
                     holdout, low = bottom quintile of the trailing 250 forecasts -> aux.db har_days (first row kept).
                     The engine refuses learning entries on a low day and, once a row exists, on a day without one
                     (`engine/refusals_novel.py`); a stale or short input fails the job and writes nothing.
-* cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
-                    of every trial that passed the gates, PBO against its family's other trials, attached to the
-                    trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
 * monthly_review    daily, UTC (R142, ops/monthly_review.py): builds the calendar month before the slot on the 1st (or a
                     later tick within monthly_review.catch_up_days; a failed build is rebuilt every tick) and resends
                     any review whose message or issue has not gone out; a done month is a no-op. Per account (monthly report, net P&L tied out against the broker balances in aux.db:
@@ -126,7 +110,6 @@ import functools
 import itertools
 import json
 import logging
-import random
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -137,7 +120,7 @@ import pandas as pd
 
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, load_record, write_atomic
-from goldbot.config import DecisionTimeframe, Settings
+from goldbot.config import Settings
 from goldbot.data.account_bars import account_bars_1m
 from goldbot.data.quarantine import QuarantineReadError
 from goldbot.data.release import store_macro
@@ -161,7 +144,6 @@ from goldbot.execution.market_watch import account_symbols
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
-from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Scheduler, schedule_of
 from goldbot.research.cusum import (
@@ -173,7 +155,6 @@ from goldbot.research.cusum import (
     watch_trades,
 )
 from goldbot.research.director import (
-    GRID_RATIONALE,
     PLAN_FILE,
     RETIRED_EXPLORATION,
     AgentEvidence,
@@ -239,7 +220,7 @@ MODEL_WATCH_FILE = "model_watch.json"   # the last run's per-agent watch status 
 CANNOT_ALARM_NOTE = ("too few trades for a CUSUM alarm at the 5% false-alarm rate: this champion relies on drift_watch "
                      "(quarterly residual CUSUM, calibration, PSI) and the drawdown halt")
 BROKER_TERMS_MAX_AGE_DAYS = 7     # older terminal readings are not trusted (the engine refreshes them every few hours)
-PLAN_MAX_AGE_DAYS = 21          # an older research plan is stale evidence: monthly_research falls back to the flat budget
+PLAN_MAX_AGE_DAYS = 21          # an older research plan is stale evidence (`current_plan`: no reinstated family)
 
 
 class JobContext(Record):
@@ -1157,7 +1138,7 @@ def director_evidence(ctx: JobContext) -> tuple[list[ShadowEvidence], list[Agent
 
 def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Weekly research plan (research/director.py): evidence per family -> trial budget per family and a ranked focus
-    list, saved to state/research_plan.json for monthly_research and the research director agent. Decides what to
+    list, saved to state/research_plan.json for the research director agent and `_reinstated`. Decides what to
     research; promotes nothing."""
     synced = _sync_trials(ctx)            # count the research workflow's trials (and their lookahead checks) too
     budget, cap = research_budget(ctx)
@@ -1305,10 +1286,6 @@ def _reinstated(ctx: JobContext, slot: pd.Timestamp) -> set[str]:
     return {s.family for s in plan.evidence if s.retired_id is not None and not s.retired} if plan else set()
 
 
-def _num(v: float | None, fmt: str) -> str:
-    return "" if v is None else format(v, fmt)
-
-
 def _sync_trials(ctx: JobContext) -> int | str | None:
     if ctx.sync_trials is None:
         return None
@@ -1319,207 +1296,6 @@ def _sync_trials(ctx: JobContext) -> int | str | None:
         return f"failed: {exc}"
 
 
-def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Bounded label-grid search. Paused by default (research.label_grid_paused): barrier perturbations of rules with
-    no signal only raise the deflated-Sharpe bar for every later trial. When enabled, each trial is charged to the
-    quarter's pre-registered budget and the loop stops when what the pre-registered queue leaves is spent
-    (budget - used - research.reserved_trials_quarter's reservation, director.reserved_trials); the holdout window is
-    never seen."""
-    r = ctx.settings.research
-    synced_before = _sync_trials(ctx)     # count trials run elsewhere (the research workflow) before deflating
-    if r.label_grid_paused:
-        return {"paused": "label-grid loop paused (research.label_grid_paused in config/settings.yaml)",
-                "registry_sync": synced_before}
-    capped = quarter_of(slot.tz_convert("UTC").to_pydatetime())
-    if r.open_budget_capped(capped):      # E-5: grid variants name no pre-registered rule
-        return {"paused": f"label-grid loop off in {capped}: E-5 cap (research.open_budget_preregistered_only)",
-                "registry_sync": synced_before}
-    rng = random.Random(f"{slot:%Y-%m}")        # reproducible choice of variants for the month
-    plan = current_plan(ctx, slot)
-    source = f"research plan of {plan.created_utc:%Y-%m-%d}" if plan else f"flat budget {r.trial_budget_per_month} per family (no fresh research plan)"
-    lines = [f"# Research loop {slot:%Y-%m}", "", f"Trial budget: {source}.", ""]
-    out: dict[str, Any] = {"plan": plan.created_utc.isoformat() if plan else None}
-    q_budget = quarter_budget(r)
-    # the reservation of the quarter the slot belongs to (a late run near a quarter boundary still plans the slot's
-    # quarter, as the director does with its slot)
-    slot_quarter = quarter_of(slot.tz_convert("UTC").to_pydatetime())
-    h_start, _ = holdout_window(r)
-    end = min(slot, h_start)              # the held-out year is never searched
-    for family in research_families():
-        grid = label_grid(SPECIALISTS[family].default_config, r.label_grid_step)
-        rng.shuffle(grid)
-        tf = SPECIALISTS[family].timeframe
-        history_months = 12 * 30          # everything the store has
-        budget = min(plan.grid_budget.get(family, r.trial_budget_per_month), r.trial_budget_per_month) if plan \
-            else r.trial_budget_per_month
-        rows = []
-        skipped: list[str] = []
-        stopped = False
-        for overrides in grid[:budget]:
-            with ctx.trials.locked():           # check, run and record as one step: two writers cannot both pass
-                reg_rows = read_rows(ctx.trials.path)
-                later = later_preregistration(reg_rows, slot_quarter, family,
-                                              config_hash({**SPECIALISTS[family].default_config, **overrides}))
-                if later is not None:           # queued for a later quarter: not this quarter's grid variant
-                    skipped.append(later_refusal(family, later))
-                    continue
-                reserved = reserved_trials(reg_rows, slot_quarter, r.reserved_for(slot_quarter)).reserved
-                try:
-                    quarter = ctx.trials.check_budget(1, max(q_budget - reserved, 0))
-                except TrialBudgetExceeded as exc:
-                    stopped, out["budget"] = True, f"{exc} ({reserved} of the quarter held for the pre-registered queue)"
-                    break
-                res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, history_months,
-                                    n_trials=ctx.trials.n_trials + 1, holdout=r.holdout_window())
-                if res is None:
-                    break
-                row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
-                                        feature_version=res.feature_version, results=res.metrics, status="evaluated",
-                                        rationale=f"{GRID_RATIONALE} {slot:%Y-%m} (+-{r.label_grid_step:.0%})",
-                                        budget_quarter=quarter)
-            mf = res.metrics.get("model_filtered") or {}
-            rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
-        out[family] = {"trials": len(rows), "budget": budget, "timeframe": tf, "registry_total": ctx.trials.n_trials,
-                       "quarter_budget_spent": stopped, "skipped": skipped}
-        lines += [f"## {family} ({len(rows)} of {budget} budgeted trials, registry total {ctx.trials.n_trials})", ""]
-        if stopped:
-            lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent, counting the trials held for the "
-                      f"pre-registered queue (research.reserved_trials_quarter).", ""]
-        lines += [f"Skipped: {x}" for x in skipped] + ([""] if skipped else [])
-        reasons = next((f.reasons for f in plan.focus if f.family == family), []) if plan else []
-        lines += [f"- director: {x}" for x in reasons] + ([""] if reasons else [])
-        lines += ["| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]
-        for x in sorted(rows, key=lambda x: -(x["dsr"] or 0)):
-            lines.append(f"| {x['trial']} | {x['target_atr']} | {x['stop_atr']} | {x['max_bars']} | {x['n']} | "
-                         f"{_num(x['sharpe'], '.2f')} | {_num(x['dsr'], '.3f')} |")
-        lines += ["", "Variants are candidates for the research analyst; none is promoted by this job.", ""]
-    report = ctx.state_dir / f"research_{slot:%Y-%m}.md"
-    report.write_text("\n".join(lines))
-    out["report"] = str(report)
-    out["registry_sync"] = {"before": synced_before, "after": _sync_trials(ctx)}
-    return out
-
-
-# ---------------------------------------------------------------------------------------------- CPCV (M16)
-CPCV_MAX_CONFIGS = 8            # PBO compares a passing trial with at most this many of its family's trials (itself in)
-
-
-def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Quarterly (design: "Combinatorial purged CV (6 groups, 2 test, 15 paths) runs quarterly"; research/cpcv.py):
-    for every walk-forward trial that passed the design's gates and has no CPCV evidence this quarter, CPCV on the
-    store's bars up to the holdout (never into it), compared for PBO with its family's other walk-forward trials on
-    the same timeframe (the configurations it was selected among, the most recent CPCV_MAX_CONFIGS). The result is
-    attached to the passing trial as evidence: not a trial, no budget slot, no deflated-Sharpe count. It can only
-    veto (ADR 0003: fragile when PBO > 0.5 or most paths negative), and its PBO is a lower bound (the selection set is
-    every registered trial of the family on that timeframe, screened ones included). A trial whose recorded feature
-    version differs from the one the store's bars build now is skipped, not re-run on different inputs. The evidence
-    sidecar is local to the scheduler host (registry_sync does not carry it; docs/decisions/0002). Report ->
-    state/cpcv_<quarter>.md. One trial's failure does not stop the others; the job fails at the end if any did."""
-    from goldbot.research import cpcv
-    from goldbot.research.registry import gate_pass_counts, quarter_of
-    synced = _sync_trials(ctx)
-    r = ctx.settings.research
-    holdout = r.holdout_window()
-    q = quarter_of(slot.to_pydatetime())
-    rows = read_rows(ctx.trials.path)
-    done = {int(e["trial"]) for e in ctx.trials.evidence(kind=cpcv.EVIDENCE_KIND) if e.get("quarter") == q}
-
-    def timeframe(row: dict[str, Any]) -> str | None:
-        try:
-            return cpcv.trial_timeframe(row) if cpcv.cpcv_eligible(row) is None else None
-        except (KeyError, ValueError, TypeError):
-            return None
-
-    passing = [x for x in rows if timeframe(x) is not None and gate_pass_counts(x)]
-    end = min(slot, holdout[0]) if holdout is not None else slot
-    start = end - pd.DateOffset(months=12 * 30)                 # everything the store has
-    out: dict[str, Any] = {"quarter": q, "trials": {}, "errors": {}, "registry_sync": synced}
-    lines = [f"# Combinatorial purged CV {q}", "",
-             f"{len(passing)} trial(s) passed the gates. Evidence on those trials, not new trials.", ""]
-    for row in passing:
-        t = int(row["trial"])
-        if t in done:
-            out["trials"][t] = "already evaluated this quarter"
-            continue
-        try:
-            tf = str(timeframe(row))
-            peers = [x for x in rows if x.get("family") == row["family"] and int(x["trial"]) != t and timeframe(x) == tf]
-            compare = [row, *peers[-(CPCV_MAX_CONFIGS - 1):]]
-            dec = _bars(ctx, tf, start, end)
-            if dec.empty:
-                raise ValueError(f"no {tf} bars in the store before {end:%Y-%m-%d}")
-            ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
-            context = {TF_LABEL[x]: _bars(ctx, x, ctx_start, end) for x in context_tfs(tf)}
-            res = cpcv.cpcv_trials(compare, dec, context, extra_cost_usd=live_extra_cost_usd(ctx), holdout=holdout,
-                                   swap=live_swap(ctx), selection=cpcv.selection_set(rows, {str(row["family"])}, tf),
-                                   skip_stale_features=True)
-            mine = res["per_trial"][t]
-            if "skipped" in mine:                # the trial's features are not what the data builds now
-                out["trials"][t] = f"skipped: {mine['skipped']}"
-                lines += [f"## Trial {t}: {row['family']} ({tf})", "", f"Skipped: {mine['skipped']}.", ""]
-                continue
-            ctx.trials.attach_evidence(t, cpcv.EVIDENCE_KIND, cpcv.evidence_payload(mine, res["pbo"], f"cpcv_quarterly {q}"),
-                                       now=slot.to_pydatetime())
-            out["trials"][t] = {"n_paths": mine.get("n_paths"), "sharpe": mine.get("sharpe"), "mean_r": mine.get("mean_r"),
-                                "pbo": (res["pbo"] or {}).get("pbo"), "compared": [int(x["trial"]) for x in compare],
-                                "fragile": cpcv.verdict(mine, res["pbo"])["fragile"]}
-            lines += [f"## Trial {t}: {row['family']} ({tf})", "", *cpcv.report_lines(res["per_trial"], res["pbo"]), ""]
-        except Exception as exc:                 # one trial's failure must not hide the others' evidence
-            log.exception("cpcv_quarterly: trial %s", t)
-            out["errors"][t] = f"{type(exc).__name__}: {exc}"
-    report = ctx.state_dir / f"cpcv_{q}.md"
-    report.write_text("\n".join(lines))
-    out["report"] = str(report)
-    if out["errors"]:
-        raise RuntimeError(f"cpcv_quarterly failed for trials {sorted(out['errors'])}: {out['errors']} (report {report})")
-    return out
-
-
-# ---------------------------------------------------------------------------------------------- gap watch
-def champion_windows(ctx: JobContext) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    """Each champion's training window as the Saturday retrain builds it: train_months + 4 x test_months up to the
-    day its model was fitted (the 1h window for a timeframe without its own)."""
-    out = []
-    for e in ctx.models.entries:
-        if e.status != "champion":
-            continue
-        m = ctx.population.members.get(e.agent_id)
-        tf = gap_watch_mod.member_timeframe(m.family, m.config) if m is not None else "1h"
-        wf = ctx.settings.walkforward.get(cast(DecisionTimeframe, tf)) or ctx.settings.walkforward["1h"]
-        end = e.created_utc
-        out.append((end - pd.DateOffset(months=wf.train_months + 4 * wf.test_months), end))
-    return out
-
-
-def gap_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Daily after drift_watch (docs/TRADER_LIFECYCLE.md section 3): detects gaps and answers them within the caps
-    (ops/gap_watch.py) -> state/gaps.json. Spawns zero-capital shadow founders only; promotion stays with the gates."""
-    g = ctx.settings.gaps
-    try:
-        dq = ctx.store.read("dq_events", start=slot - pd.Timedelta(days=g.dq_window_days), end=slot)
-    except (ValueError, OSError) as exc:
-        log.warning("gap_watch: dq_events unreadable: %s", exc)
-        dq = pd.DataFrame()
-    try:
-        vol = gap_watch_mod.daily_realised_vol(_bars(ctx, "1h", slot - pd.Timedelta(days=g.regime_history_days), slot))
-    except (ValueError, OSError, KeyError) as exc:
-        log.warning("gap_watch: 1h bars unreadable: %s", exc)
-        vol = pd.Series(dtype=float)
-    stages = {f.stem.removeprefix("engine_"): str(_read_json(f).get("stage", "normal"))
-              for f in sorted(ctx.state_dir.glob("engine_*.json"))}
-    report = gap_watch_mod.run_gap_watch(
-        now=slot, settings=g, population=ctx.population, state_dir=ctx.state_dir,
-        walkforward_tfs=set(ctx.settings.walkforward), drift=_read_json(ctx.state_dir / "drift.json"), dq=dq,
-        daily_vol=vol, champion_windows=champion_windows(ctx), plan=_read_json(ctx.state_dir / PLAN_FILE) or None,
-        trials=read_rows(ctx.trials.path), engine_stages=stages, runner=ctx.agent_runner)
-    if report.spawned:
-        ctx.population.save(ctx.state_dir / "agents.json")
-    return {"gaps": [x.gap_id for x in report.gaps], "spawned": report.spawned,
-            "staff_runs": [a.target for a in report.actions if a.action == "staff_run"],
-            "refused": [f"{r.action} {r.target}: {r.reason}" for r in report.refused]}
-
-
-
 # ---------------------------------------------------------------------------------------------- attribution (BACKLOG 12)
 def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily deterministic attribution (research/attribution.py) -> state/attribution.json and attribution.md.
@@ -1527,14 +1303,20 @@ def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     writes nothing else, so no trade, setting, model or budget changes. A missing input degrades the report (it
     says so in its notes), never the job."""
     from goldbot.execution.costs import settings_swap
-    from goldbot.research.attribution import CostModel, VersionRole, build_report, save_report
+    from goldbot.research.attribution import (
+        CostModel,
+        VersionRole,
+        build_report,
+        daily_realised_vol,
+        save_report,
+    )
     a = ctx.settings.attribution
     since = slot - pd.Timedelta(days=a.window_days)
     trades = [t for b in ShadowBook(ctx.state_dir).books.values() for t in b.closed]
     found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
     costs = CostModel.from_table(found[0], live_swap(ctx)) if found is not None else CostModel.from_settings(ctx.settings)
     try:
-        vol = gap_watch_mod.daily_realised_vol(_bars(ctx, "1h", since - pd.Timedelta(days=365), slot))
+        vol = daily_realised_vol(_bars(ctx, "1h", since - pd.Timedelta(days=365), slot))
     except (ValueError, OSError, KeyError) as exc:
         log.warning("attribution: 1h bars unreadable, regime unknown: %s", exc)
         vol = pd.Series(dtype=float)
@@ -1787,13 +1569,6 @@ def weekly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary(review)
 
 
-def autodisc_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """ADR 0058 phase 2: one bounded discovery search on the explore window (research/autodisc/nightly.py). Off unless
-    research.autodisc.nightly_enabled: "the brain runs only the interpreter and the forward read"."""
-    from goldbot.research.autodisc.nightly import run_nightly_job
-    return run_nightly_job(ctx.settings, ctx.state_dir, slot)
-
-
 def tva_scores(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """The TradingView author ideas' nightly shadow score (research/tv_ideas.py): costs from the canonical broker's
     cost table (`research_costs`, priors before one exists), minutes from its own feeds. Reporting only."""
@@ -1825,24 +1600,20 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "model_watch": model_watch,
     "tournament": tournament,
     "research_director": research_director,
-    "monthly_research": monthly_research,
     "calendar_archive": calendar_archive,
     "calendar_archive_sunday": calendar_archive,  # the new Forex Factory week before the weekly open (review M2)
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
-    "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
     "broker_ledger": broker_ledger,               # GAP-07/08: balance snapshot, positions and balance vs the broker
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
-    "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials
     "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
     "tick_record": tick_record,                   # BACKLOG 79: broker ticks per server day for research (H-A)
     "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
     "loop_check": loop_check,                     # R140 feedback-loop check -> `ci-loop` issue (ops/checks/loop.py)
-    "autodisc_nightly": autodisc_nightly,         # ADR 0058 phase 2 discovery search (off unless enabled; Mac only)
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)

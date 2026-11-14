@@ -360,6 +360,21 @@ def calibration(rows: list[TradeRow], *, bins: int, min_bin: int) -> Calibration
 
 
 # ------------------------------------------------------------------------------------------------ per trade
+def daily_realised_vol(bars: pd.DataFrame) -> pd.Series:
+    """Daily realised volatility from bars: sqrt of the sum of squared log returns of the mid close per UTC day (the
+    regime input of `build_report`; moved here when gap_watch retired, ADR 0083)."""
+    if bars.empty:
+        return pd.Series(dtype=float)
+    close = (bars["bid_close"] + bars["ask_close"]) / 2.0
+    ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
+    r = pd.Series(np.log(close.to_numpy(float)), index=ts).sort_index().diff().dropna()
+    if r.empty:
+        return pd.Series(dtype=float)
+    day = pd.DatetimeIndex(r.index).normalize()
+    rv = ((r ** 2).groupby(day).sum()) ** 0.5
+    return rv[rv > 0]
+
+
 def _regimes(entries: pd.DatetimeIndex, daily_vol: pd.Series | None, now: pd.Timestamp) -> list[str]:
     """Volatility tercile of the last complete UTC day before each entry (visible at decision time), cut against
     the daily history up to `now`; "unknown" without enough history or without a prior day."""
