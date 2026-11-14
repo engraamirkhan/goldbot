@@ -154,8 +154,9 @@ class _Index:
     style_names: list[str]
     labels: list[str]
     choices: list[AccountChoice]
-    prog_unit: np.ndarray               # read progress: each counted fill's read unit code, and its close
+    prog_unit: np.ndarray               # read progress: each counted fill's read unit code, its close and its day
     prog_at: np.ndarray
+    prog_day: np.ndarray                # opportunity (session) day number, for a read's session-day minimum
     units: list[str]
     ncell: int
     nday: int
@@ -173,6 +174,7 @@ def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
                                                   "label", "group", "variant", "arm", "counted", "kind", "tid")}
     prog_unit: list[int] = []
     prog_at: list[float] = []
+    prog_day: list[int] = []
     for r in rows:
         if r.account is not None and r.kind in _ARM_KINDS | _ENGINE_KINDS:
             choices.setdefault(r.account, r.account_label)
@@ -185,6 +187,7 @@ def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
             if to is not None and (not to[1] or r.exit_reason == "stop"):
                 prog_unit.append(units(to[0]))
                 prog_at.append(at)
+                prog_day.append(int((at + _SHIFT_S) // 86400))
         if r.r is None or r.pnl is None or r.evidence == "excluded":
             continue
         tf = r.timeframe or ""
@@ -234,7 +237,8 @@ def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
         groups=groups.names, variants=variants.names, arms=arms_c.names, accounts=accts.code, ccys=ccys.names,
         styles=styles.code, style_names=styles.names, labels=labels.names,
         choices=[AccountChoice(account=a, label=lbl) for a, lbl in sorted(choices.items(), key=lambda kv: kv[1])],
-        prog_unit=np.asarray(prog_unit, dtype=np.int64), prog_at=np.asarray(prog_at, dtype=float), units=units.names,
+        prog_unit=np.asarray(prog_unit, dtype=np.int64), prog_at=np.asarray(prog_at, dtype=float),
+        prog_day=np.asarray(prog_day, dtype=np.int64), units=units.names,
         ncell=max(1, len(accts.names) * nday), nday=nday)
 
 
@@ -430,8 +434,10 @@ def _tf_key(tf: str) -> int:
     return TF_ORDER.index(tf) if tf in TF_ORDER else len(TF_ORDER)
 
 
-def _progress(arms: Collection[str], kind: Kind, cat: Catalog, unit_n: dict[str, int]) -> RankProgress | None:
-    """The row's unread unit closest to its read (n counted of its read size)."""
+def _progress(arms: Collection[str], kind: Kind, cat: Catalog, unit_n: dict[str, int], unit_days: dict[str, int],
+              retired: Collection[str]) -> RankProgress | None:
+    """The row's unread unit closest to its read (n counted of its read size, and its session days of the read's
+    minimum). A unit whose every arm is retired unread has no read coming: none (the weekly review queues no read)."""
     if kind != "exploration":
         return None
     best: RankProgress | None = None
@@ -439,7 +445,11 @@ def _progress(arms: Collection[str], kind: Kind, cat: Catalog, unit_n: dict[str,
         size = next((cat.read_size(a) for a in arms if cat.unit_of(a) == u), None)
         if u in cat.reads or not size:
             continue
-        p = RankProgress(unit=u, n_counted=unit_n.get(u, 0), n_read_at=size)
+        members = [a for a, i in cat.arms.items() if i.unit == u] or [a for a in arms if cat.unit_of(a) == u]
+        if all(cat.retired_unread(a, retired) for a in members):
+            continue
+        p = RankProgress(unit=u, n_counted=unit_n.get(u, 0), n_read_at=size, n_days=unit_days.get(u, 0),
+                         min_days=next((cat.read_days(a) for a in arms if cat.unit_of(a) == u), 0))
         if best is None or p.n_counted / p.n_read_at > best.n_counted / best.n_read_at:
             best = p
     return best
@@ -493,6 +503,10 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
     style_n = np.bincount(ix.group[gsel] * max(1, len(ix.style_names)) + ix.style[gsel])
     unit_n = {ix.units[u]: int(c) for u, c in enumerate(np.bincount(ix.prog_unit[ix.prog_at < hi],
                                                                     minlength=len(ix.units)))}
+    done = ix.prog_at < hi
+    span = int(ix.prog_day.max(initial=0)) + 1
+    unit_day = np.unique(ix.prog_unit[done] * span + ix.prog_day[done])     # each (unit, session day) once
+    unit_days = {ix.units[int(u)]: int(c) for u, c in zip(*np.unique(unit_day // span, return_counts=True))}
     uncounted = {a for a, i in cat.arms.items() if not i.counted}
     built: list[RankRow] = []
     for g, vs in g_vars.items():
@@ -520,7 +534,7 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
             kind=kind, timeframes=sorted({ix.variants[v][1] for v in vs}, key=_tf_key),
             accounts=sorted(ix.labels[x] for x in g_labels.get(g, [])), band=band, rank=None,
             unranked_reason=_why(fig) if band == "too_few" else None, status=status,
-            read_progress=_progress(strat, kind, cat, unit_n), figures=fig, variants=variants))
+            read_progress=_progress(strat, kind, cat, unit_n, unit_days, retired), figures=fig, variants=variants))
     ranked = [r for r in built if r.band == "ranked"]
     k = len(ranked)
     passes = {ix.groups[g][0]: p for g, p in g_pass.items()}

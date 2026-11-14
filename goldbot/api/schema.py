@@ -1326,10 +1326,15 @@ class RankVariant(BaseModel):
 
 class RankProgress(BaseModel):
     """A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where
-    registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted")."""
+    registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted"). A unit
+    whose every arm is retired unread (its stop, or a kill-only retirement) has no read coming and no progress."""
     unit: str
     n_counted: int
     n_read_at: int
+    # the session (opportunity) days its counted fills fall on, and the read's registered minimum (config/arm_reads.yaml
+    # `min_session_days`; 0 = none): "at the 300th admissible family fill on >= 20 session days" (H-81 section 4)
+    n_days: int = 0
+    min_days: int = 0
 
 
 class RankRow(BaseModel):

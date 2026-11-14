@@ -8,8 +8,10 @@ action list (aux.db `review_actions`, goldbot/research/review_actions.py):
   interim edge whose interval lies below zero queues a `below_control` review for the research director; an interval
   spanning zero is "level" and queues nothing. The ranking stays descriptive: nothing here reads, promotes or stops by
   it (ADR 0053 6f), and this module never imports it;
-* reads due at their registered checkpoint (config/arm_reads.yaml read sizes, the ranking's `read_progress`): the
-  evaluator records the read, the review only says it is due;
+* reads due at their registered checkpoint (config/arm_reads.yaml read sizes and session-day minimums, the ranking's
+  `read_progress`): "one read, at the 300th admissible family fill on >= 20 session days" (H-81 section 4), so a read
+  is due only once both counts are met; a unit already read, or retired unread (its stop, A5), has no progress and
+  no read is due. The evaluator records the read, the review only says it is due;
 * loss attribution: the attribution job's report (state/attribution.json), cells signed negative after the row bar
   (`verdict_adj`, ADR 0022), at most `attribution_max_age_days` old;
 * cost drift: the week's measured round trip per broker and session (the daily reviews' cost cells) above the cost of
@@ -172,12 +174,14 @@ def ranking_actions(reads: Sequence[FamilyRead], life_view: RankingView | None, 
     if life_view is not None:
         for row in life_view.rows:
             p = row.read_progress
-            if row.kind == "exploration" and p is not None and p.n_counted >= p.n_read_at:
+            if row.kind == "exploration" and p is not None and p.n_counted >= p.n_read_at and p.n_days >= p.min_days:
                 out.append(ra.ReviewAction(
                     action_id=ra.action_id("read_due", p.unit, str(p.n_read_at)), week=week, kind="read_due",
                     subject=p.unit, source="ranking", score=float(p.n_counted - p.n_read_at),
                     title=f"{row.family}: read due at its registered size ({p.n_read_at})",
-                    detail=f"{p.n_counted} counted fills of {p.n_read_at}: the evaluator records the pre-registered "
+                    detail=f"{p.n_counted} counted fills of {p.n_read_at}"
+                           + (f" on {p.n_days} session days (minimum {p.min_days})" if p.min_days else "")
+                           + ": the evaluator records the pre-registered "
                            "read (config/arm_reads.yaml); nothing is decided here"))
     return out
 

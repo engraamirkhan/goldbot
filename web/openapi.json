@@ -4979,10 +4979,20 @@
     "type": "object"
    },
    "RankProgress": {
-    "description": "A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where\nregistered) closest to its read, counted on the same ledger fills as the row (closed, evidence \"counted\").",
+    "description": "A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where\nregistered) closest to its read, counted on the same ledger fills as the row (closed, evidence \"counted\"). A unit\nwhose every arm is retired unread (its stop, or a kill-only retirement) has no read coming and no progress.",
     "properties": {
+     "min_days": {
+      "default": 0,
+      "title": "Min Days",
+      "type": "integer"
+     },
      "n_counted": {
       "title": "N Counted",
+      "type": "integer"
+     },
+     "n_days": {
+      "default": 0,
+      "title": "N Days",
       "type": "integer"
      },
      "n_read_at": {

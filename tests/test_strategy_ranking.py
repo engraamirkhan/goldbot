@@ -371,3 +371,29 @@ def test_read_progress_of_a_pooled_family_counts_every_counted_arm_of_its_unit_o
     assert p is not None and (p.unit, p.n_counted) == ("U1", 17)
     read = _cat(*pooled.arms.values(), reads={"U1": ArmRead(read_utc=NOW, verdict="no edge")})
     assert sr.rank(rows, read, NOW).retired[0].read_progress is None          # read: no progress to show
+
+
+def test_read_progress_counts_the_units_session_days_and_carries_its_registered_minimum():
+    """H-81 section 4 / HV "Graduation": the read is at the 300th fill "on >= 20 session days"; a session day is the
+    opportunity day the ranking clusters on, counted over the unit's counted fills."""
+    cat = _cat(_info("A1", "alpha", unit="U1", read_days=20), _info("A2", "alpha", "1h", unit="U1", read_days=20),
+               _info("C1", "random_bracket", is_control=True, read_n=None))
+    rows = [*_spread("A1", [0.2] * 10, 5), *_spread("A2", [0.1] * 6, 3, tf="1h"),
+            _row("A1", 0.4, day=9, evidence="censored")]                    # not counted: its day is not either
+    p = _by(sr.rank(rows, cat, NOW), "alpha").read_progress
+    assert p is not None and (p.n_counted, p.n_days, p.min_days) == (16, 5, 20)
+    assert _by(sr.rank(rows, CAT, NOW), "alpha").read_progress.min_days == 0   # no minimum registered: none applies
+
+
+def test_a_unit_whose_arms_are_all_retired_unread_has_no_read_due_progress():
+    """The A5 kill-only retirement (config/exploration_arms.yaml `retired_day`) or the registered stop retires the
+    unit before its read: no read is coming, so no progress to a read is shown or queued."""
+    a5 = _cat(_info("A1", "alpha", unit="U1", retired=True), _info("A2", "alpha", "1h", unit="U1", retired=True),
+              _info("B1", "beta"))
+    rows = [*_spread("A1", [0.2] * 10, 5), *_spread("A2", [0.1] * 6, 3, tf="1h"), *_spread("B1", [0.1] * 4, 2,
+                                                                                          family="beta")]
+    assert _by(sr.rank(rows, a5, NOW), "alpha").read_progress is None
+    assert _by(sr.rank(rows, CAT, NOW, retired={"A1", "A2"}), "alpha").read_progress is None
+    half = _cat(_info("A1", "alpha", unit="U1", retired=True), _info("A2", "alpha", "1h", unit="U1"))
+    p = _by(sr.rank(rows, half, NOW), "alpha").read_progress
+    assert p is not None and p.unit == "U1"                                  # one arm still runs: the unit reads

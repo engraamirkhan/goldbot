@@ -61,7 +61,8 @@ def test_controls_are_the_random_rules_and_the_arms_registered_with_a_control_sh
 
 
 def test_no_arm_is_read_until_arm_reads_lists_it_and_a_broken_file_reads_none(tmp_path):
-    assert load_catalog().reads == {}                                 # as committed: no read recorded yet
+    assert set(load_catalog().reads) == {"H-81:Z4", "H-81:Z7"}         # as committed: the 2026-11-14 void reads
+    assert all(r.state == "R" and r.verdict.startswith("void") for r in load_catalog().reads.values())
     ok = tmp_path / "ok.yaml"
     ok.write_text('reads: {S1A: {read_utc: "2026-11-20T00:00:00Z", verdict: "no edge after costs"}}')
     assert load_catalog(reads_path=ok).is_read("S1A") and not load_catalog(reads_path=ok).is_read("S1B")
@@ -89,8 +90,10 @@ def test_pooled_families_and_read_sizes_come_from_the_evaluators_arm_reads_file(
     spec = {a.id for a in load_arms(SPEC_PATH, check_hash=False)}
     raw = yaml.safe_load(READS_PATH.read_text())
     assert set(raw["read_at"]) <= spec and all(set(u["arms"]) <= spec for u in raw["read_units"].values())
+    assert set(raw["min_session_days"]) <= set(raw["read_at"])
     reads = tmp_path / "reads.yaml"
-    reads.write_text(READS_PATH.read_text().replace("reads: {}", "reads: {'H-81:Z6': {read_utc: '2026-10-20T00:00:00Z', verdict: no edge}}"))
+    raw["reads"] = {"H-81:Z6": {"read_utc": "2026-10-20T00:00:00Z", "verdict": "no edge"}}
+    reads.write_text(yaml.safe_dump(raw))
     assert load_catalog(reads_path=reads).is_read("Z6V")
 
 
@@ -99,3 +102,17 @@ def test_a_broken_reads_file_reads_no_unit_and_pools_nothing(tmp_path):
     bad.write_text("reads: {'H-81:Z6': {read_utc: '2026-10-20T00:00:00Z', verdict: no edge}}\nread_at: {Z6D: 0}\n")
     cat = load_catalog(reads_path=bad)
     assert cat.reads == {} and cat.unit_of("Z6D") == "Z6D" and not cat.is_read("Z6D") and cat.read_size("Z6D") == 300
+
+
+def test_the_session_day_minimum_of_a_read_comes_from_the_arm_reads_file_and_defaults_to_none(tmp_path):
+    """HV "Graduation": "read once, at its 300th admissible trade, provided that trade falls on >= 20 session days";
+    H-81 section 4: "at the 300th admissible family fill on >= 20 session days". Arms without one keep no minimum."""
+    cat = load_catalog()
+    assert {cat.arms[a].read_days for a in ("Z4D", "Z4P", "Z7D", "Z7V", "Z7P", "Z6D", "Z1P", "S1A", "VI2A")} == {20}
+    assert cat.arms["XBB15"].read_days == 0 and cat.arms["WFRI"].read_days == 0     # W1 / WFRI register none
+    assert cat.arms["Z4D"].retired and not cat.arms["S1A"].retired                 # A5 retired_day 2026-11-06
+    mixed = tmp_path / "reads.yaml"
+    raw = yaml.safe_load(READS_PATH.read_text())
+    raw["min_session_days"]["Z6V"] = 10                                             # a unit's arms disagree
+    mixed.write_text(yaml.safe_dump(raw))
+    assert load_catalog(reads_path=mixed).arms["Z6D"].unit == "Z6D"                 # fail closed: no unit read

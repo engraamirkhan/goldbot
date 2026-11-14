@@ -228,6 +228,17 @@ def test_a_read_at_its_registered_checkpoint_is_queued_for_the_evaluator(tmp_pat
     assert [a.subject for a in due] == ["OBR15"] and not due[0].automatic
 
 
+def test_a_read_is_not_due_at_its_fill_count_until_its_registered_session_day_minimum_is_met(tmp_path):
+    """H-81 section 4: "One read, at the 300th admissible family fill on >= 20 session days" (2026-11-14 false
+    alarms: H-81:Z7 at 300 fills on 4 days, H-81:Z4 on 8 days)."""
+    def prog(unit: str, days: int) -> RankProgress:
+        return RankProgress(unit=unit, n_counted=310, n_read_at=300, n_days=days, min_days=20)
+    life = _view([_row("hhp", _fig(), progress=prog("H-81:Z7", 4)), _row("rnr", _fig(), progress=prog("H-81:Z4", 8)),
+                  _row("nrb", _fig(), progress=prog("H-81:Z6", 20))])
+    due = [a.subject for a in _run(tmp_path, life=life).actions if a.kind == "read_due"]
+    assert due == ["H-81:Z6"]
+
+
 def test_loss_drivers_come_from_the_attribution_report_signed_after_the_row_bar(tmp_path):
     def cell(n: int, mean: float, verdict_adj: str, t: float) -> dict[str, Any]:
         return {"n": n, "mean_r_net": mean, "t_stat": t, "verdict_adj": verdict_adj}
