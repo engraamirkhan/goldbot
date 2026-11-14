@@ -120,6 +120,38 @@ def test_evidence_run_on_another_feature_version_does_not_count(tmp_path):
     assert "feature version" in str(_refusal(reg, row))
 
 
+@pytest.mark.parametrize("fv", ["", None])
+def test_evidence_without_a_feature_version_does_not_count(tmp_path, fv):
+    """Quant review: an empty or missing feature version cannot show the CPCV ran on the trial's inputs."""
+    reg = TrialRegistry(tmp_path / "t.jsonl")
+    row = _trial(reg)
+    payload = {k: v for k, v in _result().items() if k != "feature_version"}
+    if fv is not None:
+        payload["feature_version"] = fv
+    _attach(reg, row["trial"], payload, None)
+    assert "feature version" in str(_refusal(reg, row))
+
+
+@pytest.mark.parametrize("paths", [[], [{"path": 0, "mean_r": float("nan")}], [{"path": 0}]])
+def test_evidence_without_a_path_of_finite_mean_r_does_not_count(tmp_path, paths):
+    """Quant review: an empty `paths` list has no negative path to veto on, so it must refuse, not pass."""
+    reg = TrialRegistry(tmp_path / "t.jsonl")
+    row = _trial(reg)
+    _attach(reg, row["trial"], {**_result(), "paths": paths}, None)
+    assert "no backtest path with a finite mean R" in str(_refusal(reg, row))
+
+
+def test_an_on_demand_run_without_a_configured_holdout_raises_and_never_reads_past_it(tmp_path):
+    """Quant review: with no holdout window the run cannot know where the sealed data starts, so it must not run."""
+    from goldbot.ops import jobs
+    ctx, reg, row, pop, now = _tournament_setup(tmp_path)
+    research = ctx.settings.research.model_copy(update={"holdout_from": None, "holdout_to": None})
+    ctx = ctx.model_copy(update={"settings": ctx.settings.model_copy(update={"research": research})})
+    assert ctx.settings.research.holdout_window() is None
+    with pytest.raises(ValueError, match="holdout"):
+        jobs._cpcv_runner(ctx, now)([row], [row["trial"]], cpcv.trial_timeframe(row))
+
+
 def test_a_stored_clean_verdict_is_recomputed_not_trusted(tmp_path):
     reg = TrialRegistry(tmp_path / "t.jsonl")
     row, _ = _trial(reg), _trial(reg, passed=False, asia_range_max_atr_d=1.0)
@@ -178,6 +210,16 @@ def test_an_on_demand_run_that_skips_the_trial_refuses_and_attaches_nothing(tmp_
         return {"per_trial": {row["trial"]: {"skipped": "feature version g differs from the trial's f"}}, "pbo": None}
 
     assert "feature version g" in str(_refusal(reg, row, run)) and reg.evidence(row["trial"]) == []
+
+
+def test_a_rerun_of_the_same_configuration_is_not_a_peer_pbo_needs_another_configuration(tmp_path):
+    """PBO measures selection among configurations; a rerun of the trial's own config was not an alternative."""
+    reg = TrialRegistry(tmp_path / "t.jsonl")
+    _trial(reg)
+    row = _trial(reg)                                               # the latest rerun of the same config decides
+    assert cpcv_gate.peers(row, reg._rows()) == []
+    _attach(reg, row["trial"], _result(), None)
+    assert _refusal(reg, row) is None
 
 
 def test_the_comparison_is_capped_and_keeps_the_most_recent_peers(tmp_path):

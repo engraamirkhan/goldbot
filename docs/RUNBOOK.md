@@ -2822,7 +2822,8 @@ A confirm or holdout passer may then become a demo arm with `python -m goldbot.o
 
 Health check `cpcv_evidence` (goldbot/ops/checks/cpcv.py) WARNs when a trial that passed the research gates has no
 usable CPCV/PBO evidence for the current UTC quarter (missing, failed, another feature version, or no PBO although its
-family has other walk-forward trials). The `tournament` job promotes a shadow agent to live only with clean evidence:
+family has other walk-forward trials). Phase gate 1 (`backtest_to_paper`) has a `cpcv` item that reads the same evidence and never runs CPCV. The
+`tournament` job promotes a shadow agent to live only with clean evidence:
 it runs CPCV on demand when the evidence is missing and lists every agent it held back, with the reason, under
 `cpcv_refused` in its result (`job:tournament`). A "CPCV veto" (PBO above 50% or most paths negative) is the gate
 working: the trial stays in shadow, nothing to fix. To produce the evidence before the tournament, run

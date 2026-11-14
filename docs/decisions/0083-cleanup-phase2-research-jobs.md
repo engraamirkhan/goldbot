@@ -80,14 +80,17 @@ Decision.
 4. Health check `cpcv_evidence` (goldbot/ops/checks/cpcv.py, tail block position 180) WARNs on any gate-passing
    trial without usable evidence for the current quarter, so a gap is seen before a promotion meets it.
 
-Not done, escalated. The phase gate (`gates_phase.evaluate_gates`, gate 1 `research_gates`) also rests on
-`registry.promotion_refusal` and does not read CPCV evidence. Adding the evidence to gate 1 tightens a phase gate;
-phase-gate changes are owner-only, so it is recommended (read-only: `cpcv_gate.evidence_refusal` on the best trial,
-never a run inside the gate evaluation) rather than made here. Today no trial passes the gates, so gate 1 is unmet
-either way.
+5. Phase gate 1 requires CPCV too, read only (decided 2026-11-14 by the program director and the quant reviewer
+   under the owner's delegation of routine research-integrity decisions; a tightening, no threshold changed). Gate
+   `backtest_to_paper` has an item `cpcv`: `cpcv_gate.promotion_refusal` on the best trial without a runner, so the
+   gate never runs CPCV and missing evidence leaves the item unmet. The evidence is produced by the tournament or by
+   `scripts/research_pass.py --cpcv`. Today no trial passes the gates, so gate 1 was unmet already.
+6. Quant review fixes: evidence with no backtest path of finite mean R, or with no stated feature version, does not
+   count; an on-demand run without a configured holdout window raises instead of reading to the slot; a rerun of the
+   trial's own configuration (same config hash) is not a PBO peer (it was no alternative to select among).
 
-Consequences. A gate-passing configuration can no longer reach live through the tournament without CPCV/PBO; the
-first promotion attempt after a pass costs one CPCV run on the brain (minutes per configuration, once a quarter). A
-family with several walk-forward trials and too few rerunnable configurations stays in shadow until PBO can be
-computed. What would change this: a quant ruling on PBO for a selection set made only of screens, or the owner adding
-the evidence to phase gate 1.
+Consequences. A gate-passing configuration can reach neither live through the tournament nor paper through phase
+gate 1 without CPCV/PBO; the first promotion attempt after a pass costs one CPCV run on the brain (minutes per
+configuration, once a quarter). A family with several walk-forward configurations and too few rerunnable ones stays
+in shadow until PBO can be computed. What would change this: a quant ruling on PBO for a selection set made only of
+screens.

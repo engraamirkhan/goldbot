@@ -4,8 +4,9 @@ against the family's other trials before a gate-passing trial is promoted; row M
 The quarterly `cpcv_quarterly` job retired (ADR 0083) because no trial passes the gates; the evidence it produced is
 now demanded where it matters, at promotion. A gate-passing trial (`registry.promotion_refusal` is None) is promoted
 only when it has CPCV evidence (`TrialRegistry.evidence`, kind "cpcv") stamped in the promotion's quarter that:
-* ran: the payload has backtest paths (not an `error` or a `skipped` result);
-* ran on the trial's configuration (config hash) and feature version;
+* ran: the payload has at least one backtest path with a finite mean R (not an `error` or a `skipped` result, not
+  an empty path list);
+* ran on the trial's configuration (config hash) and stated feature version (an unstated one does not count);
 * is not vetoed: `cpcv.verdict`, recomputed here rather than read from the payload, flags it fragile when PBO >
   `cpcv.PBO_FRAGILE` (0.5) or more than half its paths have negative mean R (ADR 0003: CPCV and PBO can only veto);
 * computed PBO when the family has other walk-forward trials on the trial's timeframe (`peers`): without PBO the
@@ -24,6 +25,7 @@ without clean evidence for the current quarter.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from typing import Any, Callable
 
@@ -47,6 +49,13 @@ def _timeframe(row: dict[str, Any]) -> str | None:
         return None
 
 
+def _finite(x: Any) -> bool:
+    try:
+        return math.isfinite(float(x))
+    except (TypeError, ValueError):
+        return False
+
+
 def gate_passing(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Walk-forward trials CPCV can re-evaluate whose research pass counts for a promotion: the trials this gate and
     the health check hold to CPCV evidence."""
@@ -54,10 +63,10 @@ def gate_passing(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def peers(row: dict[str, Any], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The family's other walk-forward trials on the trial's timeframe, in registry order: what PBO compares it with."""
-    tf = _timeframe(row)
-    t = int(row["trial"])
-    return [r for r in rows if r.get("family") == row.get("family") and int(r["trial"]) != t and _timeframe(r) == tf]
+    """The family's walk-forward trials of other configurations on the trial's timeframe, in registry order: what PBO
+    compares it with. A rerun of the trial's own configuration (same config hash) was no alternative to select among."""
+    tf, h = _timeframe(row), row_hash(row)
+    return [r for r in rows if r.get("family") == row.get("family") and row_hash(r) != h and _timeframe(r) == tf]
 
 
 def compare_set(row: dict[str, Any], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -82,9 +91,13 @@ def evidence_gap(row: dict[str, Any], ev: dict[str, Any] | None, rows: list[dict
     payload = ev.get("payload") or {}
     if "paths" not in payload:
         return f"CPCV failed for trial #{t}: {payload.get('error') or payload.get('skipped') or 'no backtest paths'}"
+    # quant review: no finite path leaves the negative-paths veto nothing to read, so it is a gap, never a pass
+    finite = [p for p in payload.get("paths") or [] if _finite(p.get("mean_r"))]
+    if not finite:
+        return f"CPCV for trial #{t} has no backtest path with a finite mean R"
     fv, ran = row.get("feature_version"), payload.get("feature_version")
-    if fv and ran and fv != ran:
-        return f"trial #{t}'s CPCV ran on feature version {ran}, the trial on {fv}"
+    if not ran or fv != ran:       # an unstated version cannot show the run used the trial's inputs
+        return f"trial #{t}'s CPCV ran on feature version {ran or 'unstated'}, the trial on {fv or 'unstated'}"
     if (payload.get("pbo") or {}).get("pbo") is None:
         others = [int(r["trial"]) for r in peers(row, rows)]
         if others:

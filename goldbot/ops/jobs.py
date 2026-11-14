@@ -1132,12 +1132,16 @@ CPCV_HISTORY_MONTHS = 12 * 30   # CPCV at promotion reads everything the store h
 def _cpcv_runner(ctx: JobContext, slot: pd.Timestamp) -> cpcv_gate.Runner:
     """CPCV for a promotion (research/cpcv_gate.py): the store's bars up to the holdout (never into it), the canonical
     broker's costs and swap, the configurations compared on shared groups. A trial whose recorded feature version
-    differs from the one the bars build now is skipped (cpcv_gate then refuses), not re-run on different inputs."""
+    differs from the one the bars build now is skipped (cpcv_gate then refuses), not re-run on different inputs.
+    Without a configured holdout the run raises (quant review): it could not know where the sealed data starts."""
     from goldbot.research import cpcv
 
     def run(compare: list[dict[str, Any]], selection: list[int], tf: str) -> dict[str, Any]:
         holdout = ctx.settings.research.holdout_window()
-        end = min(slot, holdout[0]) if holdout is not None else slot
+        if holdout is None:
+            raise ValueError("no holdout window configured (research.holdout_from/holdout_to): CPCV at promotion "
+                             "will not run on data that may include the sealed holdout")
+        end = min(slot, holdout[0])
         start = end - pd.DateOffset(months=CPCV_HISTORY_MONTHS)
         dec = _bars(ctx, tf, start, end)
         if dec.empty:

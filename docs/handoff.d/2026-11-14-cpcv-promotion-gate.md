@@ -4,5 +4,6 @@
   and has PBO whenever its family has other walk-forward trials on its timeframe; missing evidence is run on demand and
   attached to the trial (not a trial: no budget, no DSR count). Wired into the weekly `tournament` (shadow -> live);
   held-back agents and reasons under `cpcv_refused`. Health check `cpcv_evidence` (ops/checks/cpcv.py, tail 180)
-  WARNs on a gate-passing trial without usable evidence. Phase gate 1 does not read the evidence yet: escalated as an
-  owner decision (ADR 0083 amendment). Needs quant-reviewer and trading-safety-reviewer GOs.
+  WARNs on a gate-passing trial without usable evidence. Phase gate 1 has a read-only `cpcv` item (never runs CPCV; missing
+  evidence leaves it unmet), decided under the owner's delegation. Quant fixes: no finite path or no feature version
+  refuses; an on-demand run without a holdout window raises; same-config reruns are not PBO peers. Needs quant-reviewer and trading-safety-reviewer GOs.

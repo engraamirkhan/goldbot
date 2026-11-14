@@ -5,7 +5,7 @@ met extends the phase rather than being waived". Its thresholds, verbatim from t
 
 * foundation_to_backtest ("leakage audit"): shuffle test at chance; as-of audit clean; broker and Dukascopy bars agree.
 * backtest_to_paper: DSR >= 1.0 on the true trial count; positive in 3 separate years; >= 500 backtest trades;
-  live-tick spread model.
+  live-tick spread model; CPCV/PBO evidence for the quarter, read only (ADR 0083 amendment, research/cpcv_gate.py).
 * paper_to_tiny_live: >= 150 paper trades; expectancy within 50% of backtest; fills within 30% of target; chaos drill
   passed.
 * tiny_live_to_full_size: >= 300 live trades; expectancy within 40% of paper; drawdown under 1.5x backtest; brokers
@@ -66,13 +66,16 @@ from goldbot.config import GateSettings, Settings
 from goldbot.instruments import GOLD
 from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
+from goldbot.research import cpcv, cpcv_gate
 from goldbot.research.gates import current_dsr
 from goldbot.research.metrics import max_drawdown
 from goldbot.research.registry import (
+    TrialRegistry,
     costs_recorded,
     latest_evaluated,
     n_trials_effective,
     promotion_refusal,
+    quarter_of,
     row_hash,
 )
 from goldbot.risk.limits_profile import LimitsTag, counts_as_default_evidence
@@ -596,7 +599,8 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     if err:
         errors.append(err)
     ev = load_evidence(state_dir)
-    rows = _trial_rows(trials_path if trials_path is not None else _registry_path(state_dir, settings))
+    reg_path = trials_path if trials_path is not None else _registry_path(state_dir, settings)
+    rows = _trial_rows(reg_path)
     k_now = n_trials_effective(rows)                 # once per evaluation: best_backtest_trial and gate 1 read the same K
     best = best_backtest_trial(rows, k=k_now)
     mf = ((best or {}).get("results") or {}).get("model_filtered") or {}
@@ -647,9 +651,19 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                    + (f": {refusal}" if refusal and "research gates" not in refusal else "")
                    if best else trial)
     reference = f"{trial}" + ("" if best_ok or best is None else ", which did not pass the research gates: no reference")
+    # ADR 0083 amendment (decided 2026-11-14): the best trial's CPCV/PBO evidence for this quarter, READ ONLY. The gate
+    # never runs CPCV (the tournament or research_pass --cpcv produce it), so missing evidence leaves the item unmet.
+    # The registry exists whenever there is a best trial, so TrialRegistry writes nothing here.
+    cpcv_why = (cpcv_gate.promotion_refusal(TrialRegistry(reg_path), best, rows, now=now.to_pydatetime())
+                if best is not None else "no evaluated trial")
     items = _previous(1, passed) + [
         GateItem(name="research_gates", met=best_ok, evidence=research_ev,
                  need="the trial passed the design's research gates with swap charged and its cost source stated"),
+        GateItem(name="cpcv", met=cpcv_why is None,
+                 evidence=f"{trial}: clean CPCV/PBO evidence for {quarter_of(now.to_pydatetime())}" if cpcv_why is None
+                 else cpcv_why,
+                 need=f"CPCV evidence this quarter with PBO <= {cpcv.PBO_FRAGILE:.0%} and at most half the paths "
+                      "negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"),
         GateItem(name="dsr", met=dsr is not None and dsr >= cfg.backtest_min_dsr,
                  evidence=(f"{_fmt(dsr, '.3f')} at {trial}, recomputed on the registry's {k_now} trials"
                            if dsr is not None else f"n/a at {trial}: {dsr_why}")
