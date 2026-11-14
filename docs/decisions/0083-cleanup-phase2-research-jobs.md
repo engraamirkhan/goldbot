@@ -56,3 +56,42 @@ headline by the free deterministic `rules-v1` scorer when no LLM client exists, 
   population and champion readers (then retire the population loop).
 - Rollback: redeploy the previous SHA; no server data is deleted (`state/gaps.json`, `state/gap_ledger.jsonl`,
   `state/research_*.md` and `state/cpcv_*.md` stay where they are).
+
+## Amendment 2026-11-14: CPCV moves from the quarterly job to the promotion gate
+
+Context. Quant finding: the design requires CPCV/PBO evidence (research/cpcv.py: 6 groups, 2 test, PBO against the
+family's other trials) before a gate-passing trial is promoted, but no promotion or phase-gate code read the
+evidence, even while `cpcv_quarterly` ran. Retiring the job (decision 1) left the requirement with no producer at all.
+
+Decision.
+1. CPCV is enforced where it matters, at promotion, by `goldbot/research/cpcv_gate.py`. A gate-passing trial
+   (`registry.promotion_refusal` is None) is promoted only with CPCV evidence stamped in the promotion's UTC quarter
+   that ran (paths, not an error or a skip), ran on the trial's config hash and feature version, has no ADR 0003 veto
+   (`cpcv.verdict` recomputed: PBO > `cpcv.PBO_FRAGILE` = 0.5, or more than half the paths with negative mean R), and
+   computed PBO whenever the family has other walk-forward trials on the trial's timeframe. A trial with no such peer
+   has nothing to compute PBO against; its paths verdict alone decides.
+2. Missing evidence is produced on demand at promotion: the trial and its most recent peers (at most 8
+   configurations, the old job's cap), the store's bars up to the holdout, the canonical broker's costs and swap,
+   stale feature versions skipped. The result is attached to the trial only (evidence sidecar: no trial row, no
+   budget slot, no deflated-Sharpe count). A run that raises or skips the trial attaches nothing and refuses; the
+   next promotion attempt runs it again.
+3. The promotion path wired now is the weekly `tournament` (shadow -> live, `Population.tournament`'s
+   `research_passed`): an agent held back is listed with its reason under `cpcv_refused` in the job result.
+4. Health check `cpcv_evidence` (goldbot/ops/checks/cpcv.py, tail block position 180) WARNs on any gate-passing
+   trial without usable evidence for the current quarter, so a gap is seen before a promotion meets it.
+
+5. Phase gate 1 requires CPCV too, read only (decided 2026-11-14 by the program director and the quant reviewer
+   under the owner's delegation of routine research-integrity decisions; a tightening, no threshold changed). Gate 1
+   (`backtest_to_paper`, backtest -> paper; not `paper_to_tiny_live`) has an item `cpcv`: `cpcv_gate.promotion_refusal` on the best trial without a runner, so the
+   gate never runs CPCV and missing evidence leaves the item unmet. The evidence is produced by the tournament or by
+   `scripts/research_pass.py --cpcv`. Today no trial passes the gates, so gate 1 was unmet already. An unreadable evidence sidecar leaves
+   the item unmet ("can't read CPCV evidence"); the report still runs.
+6. Quant review fixes: evidence with no backtest path of finite mean R, or with no stated feature version, does not
+   count; an on-demand run without a configured holdout window raises instead of reading to the slot; a rerun of the
+   trial's own configuration (same config hash) is not a PBO peer (it was no alternative to select among).
+
+Consequences. A gate-passing configuration can reach neither live through the tournament nor paper through phase
+gate 1 without CPCV/PBO; the first promotion attempt after a pass costs one CPCV run on the brain (minutes per
+configuration, once a quarter). A family with several walk-forward configurations and too few rerunnable ones stays
+in shadow until PBO can be computed. What would change this: a quant ruling on PBO for a selection set made only of
+screens.

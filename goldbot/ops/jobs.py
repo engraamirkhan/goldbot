@@ -25,7 +25,8 @@
                     rolling window. A family keeps at most one challenger in shadow; a new one
                     replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
 * tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
-                    cloning, capital shares) -> state/agents.json for the dashboard's league table.
+                    cloning, capital shares) -> state/agents.json for the dashboard's league table. Promotion to
+                    live also needs CPCV/PBO evidence for the quarter, run on demand (research/cpcv_gate.py, M16).
 * research_director weekly: scores every family's evidence (trial registry, shadow book,
                     population) and splits what is left of the quarter's trial budget after the pre-registered
                     queue's reservation (research.reserved_trials_quarter) -> state/research_plan.json
@@ -146,6 +147,7 @@ from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Scheduler, schedule_of
+from goldbot.research import cpcv_gate
 from goldbot.research.cusum import (
     WATCH_MAX_WEEKS,
     WATCH_MIN_TRADES,
@@ -203,7 +205,13 @@ from goldbot.research.pipeline import (
 )
 from goldbot.research.population import Population
 from goldbot.research.promotion import EVIDENCE_START_UTC, PerfStats, cusum_alarm, evaluate_promotion
-from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, config_hash, quarter_of
+from goldbot.research.registry import (
+    TrialBudgetExceeded,
+    TrialRegistry,
+    config_hash,
+    latest_evaluated,
+    quarter_of,
+)
 from goldbot.research.registry_sync import read_rows
 from goldbot.research.review_actions import ReviewAction
 from goldbot.research.review_actions import consume as consume_review_actions
@@ -1090,15 +1098,59 @@ def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     clone has its own configuration hash, so it needs its own passed trial (no inheritance from its parent: the design
     counts real trials). Agents held back for that are reported under `awaiting_research`."""
     synced = _sync_trials(ctx)            # the research workflow's trials live on the release copy until synced
+    rows = read_rows(ctx.trials.path)
+    run = _cpcv_runner(ctx, slot)
+    cpcv_refused: dict[str, str] = {}
+
+    def research_passed(m: Any) -> bool:
+        """The passed trial must also clear CPCV/PBO for the quarter (research/cpcv_gate.py; ADR 0003 veto only)."""
+        cfg = {**SPECIALISTS[m.family].default_config, **m.config}
+        if not ctx.trials.passed_gates(m.family, cfg):
+            return False
+        row = latest_evaluated(rows, m.family, config_hash(cfg))
+        why = ("the passed trial is not in the synced registry" if row is None else
+               cpcv_gate.promotion_refusal(ctx.trials, row, rows, now=slot.to_pydatetime(), run=run))
+        if why is not None:
+            cpcv_refused[m.agent_id] = why
+            log.warning("tournament: %s held back: %s", m.agent_id, why)
+        return why is None
+
     summary = ctx.population.tournament(
-        ShadowBook(ctx.state_dir), slot,
-        research_passed=lambda m: ctx.trials.passed_gates(m.family, {**SPECIALISTS[m.family].default_config, **m.config}),
+        ShadowBook(ctx.state_dir), slot, research_passed=research_passed,
         evidence_start=EVIDENCE_START_UTC)       # H-52: trades opened before the history-gap fix are quarantined
     for aid in summary["expired"]:
         ctx.models.retire_agent(aid, "retired agent's six months of shadow trading are over")
     ctx.population.save(ctx.state_dir / "agents.json")
     summary["registry_sync"] = synced
+    summary["cpcv_refused"] = cpcv_refused
     return summary
+
+
+CPCV_HISTORY_MONTHS = 12 * 30   # CPCV at promotion reads everything the store has before the holdout
+
+
+def _cpcv_runner(ctx: JobContext, slot: pd.Timestamp) -> cpcv_gate.Runner:
+    """CPCV for a promotion (research/cpcv_gate.py): the store's bars up to the holdout (never into it), the canonical
+    broker's costs and swap, the configurations compared on shared groups. A trial whose recorded feature version
+    differs from the one the bars build now is skipped (cpcv_gate then refuses), not re-run on different inputs.
+    Without a configured holdout the run raises (quant review): it could not know where the sealed data starts."""
+    from goldbot.research import cpcv
+
+    def run(compare: list[dict[str, Any]], selection: list[int], tf: str) -> dict[str, Any]:
+        holdout = ctx.settings.research.holdout_window()
+        if holdout is None:
+            raise ValueError("no holdout window configured (research.holdout_from/holdout_to): CPCV at promotion "
+                             "will not run on data that may include the sealed holdout")
+        end = min(slot, holdout[0])
+        start = end - pd.DateOffset(months=CPCV_HISTORY_MONTHS)
+        dec = _bars(ctx, tf, start, end)
+        if dec.empty:
+            raise ValueError(f"no {tf} bars in the store before {end:%Y-%m-%d}")
+        ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
+        context = {TF_LABEL[x]: _bars(ctx, x, ctx_start, end) for x in context_tfs(tf)}
+        return cpcv.cpcv_trials(compare, dec, context, extra_cost_usd=live_extra_cost_usd(ctx), holdout=holdout,
+                                swap=live_swap(ctx), selection=selection, skip_stale_features=True)
+    return run
 
 
 # ---------------------------------------------------------------------------------------------- research director

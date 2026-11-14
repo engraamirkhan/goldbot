@@ -1097,8 +1097,9 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 Retired with ADR 0083 (BACKLOG 142, 2026-11-14): `monthly_research`, `gap_watch`, `cpcv_quarterly` and the
 brain's `autodisc_nightly`. Nothing to do on the server: the scheduler drops their state at its next start and
 health shows no `job:` line for them; a `config/settings.local.yaml` that still names one (or a `gaps:` section)
-loads with a warning (delete the lines). CPCV of a trial runs by hand (`scripts/research_pass.py --cpcv`); the
-discovery search stays on the Mac (launchd, `scripts/autodisc.py nightly`).
+loads with a warning (delete the lines). CPCV of a gate-passing trial now runs at promotion (the `tournament` job
+runs it on demand; ADR 0083 amendment) or by hand (`scripts/research_pass.py --cpcv`); the discovery search stays on
+the Mac (launchd, `scripts/autodisc.py nightly`).
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -2839,6 +2840,19 @@ Confirm and holdout (design 3.3 / 3.5; each read happens once and is charged one
 5. Save the registry (`python -m goldbot.research.registry_sync save state/research_registry.jsonl`).
 A confirm or holdout passer may then become a demo arm with `python -m goldbot.ops.run autodisc-register` (default: passers only;
 `--stage explore` registers an explore survivor as a demo-learning arm, journalled as such). Nothing here touches live.
+
+### CPCV evidence (`cpcv_evidence`; M16, ADR 0083 amendment)
+
+Health check `cpcv_evidence` (goldbot/ops/checks/cpcv.py) WARNs when a trial that passed the research gates has no
+usable CPCV/PBO evidence for the current UTC quarter (missing, failed, another feature version, or no PBO although its
+family has other walk-forward trials). Phase gate 1 (`backtest_to_paper`) has a `cpcv` item that reads the same evidence and never runs CPCV. The
+`tournament` job promotes a shadow agent to live only with clean evidence:
+it runs CPCV on demand when the evidence is missing and lists every agent it held back, with the reason, under
+`cpcv_refused` in its result (`job:tournament`). A "CPCV veto" (PBO above 50% or most paths negative) is the gate
+working: the trial stays in shadow, nothing to fix. To produce the evidence before the tournament, run
+`scripts/research_pass.py --cpcv <trial#> <peer#> ...` (usage in its docstring) on the host where the tournament runs,
+naming the trial and its family's other walk-forward trials on its timeframe: the evidence sidecar is local to the
+host. "CPCV failed: no <tf> bars" means the store has no bars for that timeframe: load the history (section 2.5).
 
 ### Feedback loop (`feedback_loop`, `ci-loop` issue; R140)
 

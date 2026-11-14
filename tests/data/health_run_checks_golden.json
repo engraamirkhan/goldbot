@@ -363,12 +363,17 @@
   [
    "feedback_loop",
    "ok",
-   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (monthly_research, cpcv_quarterly, tournament, research_director); jobs: no job's last run errored"
+   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
   ],
   [
    "swap_reconcile",
    "ok",
    "no weekend hold of a seven-night book closed in the last 14 days (job swap_reconcile)"
+  ],
+  [
+   "cpcv_evidence",
+   "ok",
+   "no trial registry"
   ]
  ],
  "healthy_static": [
@@ -877,12 +882,17 @@
   [
    "feedback_loop",
    "ok",
-   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (monthly_research, cpcv_quarterly, tournament, research_director); jobs: no job's last run errored"
+   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
   ],
   [
    "swap_reconcile",
    "ok",
    "no weekend hold of a seven-night book closed in the last 14 days (job swap_reconcile)"
+  ],
+  [
+   "cpcv_evidence",
+   "ok",
+   "no trial registry"
   ]
  ],
  "busy_static": [

@@ -130,6 +130,7 @@ from goldbot.ops.checks.bridge import (
     check_terminal,
 )
 from goldbot.ops.checks.compaction import check_compaction
+from goldbot.ops.checks.cpcv import check_cpcv_evidence
 from goldbot.ops.checks.engine import (
     HISTORY_GAP_MIN_CLOSES,
     HISTORY_GAP_WINDOW_H,
@@ -331,6 +332,7 @@ __all__ = [
     "check_compaction",
     "check_costs",
     "check_cost_of_record",
+    "check_cpcv_evidence",
     "check_costs_published",
     "check_data_quality",
     "check_deadman",

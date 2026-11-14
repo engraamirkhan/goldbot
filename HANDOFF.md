@@ -30,6 +30,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   News shock (D16): option 2, already live as ADR 0079's rules-v1 scorer. CPCV now by hand (`research_pass.py
   --cpcv`); discovery stays on the Mac's launchd. No order, exit, RiskGate, budget or gate path changed. Needs the
   trading-safety and quant GOs before merge.
+- 2026-11-14 (branch feat/cpcv-gate-1114; ADR 0083 amendment; M16): CPCV/PBO is enforced at promotion. New
+  `goldbot/research/cpcv_gate.py`: a gate-passing trial is promoted only with CPCV evidence for the UTC quarter that
+  ran on its config and feature version, has no ADR 0003 veto (PBO > 0.5 or most paths negative, verdict recomputed)
+  and has PBO whenever its family has other walk-forward trials on its timeframe; missing evidence is run on demand and
+  attached to the trial (not a trial: no budget, no DSR count). Wired into the weekly `tournament` (shadow -> live);
+  held-back agents and reasons under `cpcv_refused`. Health check `cpcv_evidence` (ops/checks/cpcv.py, tail 180)
+  WARNs on a gate-passing trial without usable evidence. Phase gate 1 has a read-only `cpcv` item (never runs CPCV; missing
+  evidence leaves it unmet), decided under the owner's delegation. Quant fixes: no finite path or no feature version
+  refuses; an on-demand run without a holdout window raises; same-config reruns are not PBO peers. Needs quant-reviewer and trading-safety-reviewer GOs.
 - **1d/1w long history, live == history, rule-code versions (BACKLOG 251, 252, 254, 105; R154; 2026-11-14).** A daily
   job `long_history_refresh` (21:40 UTC) appends the store's complete days to the engine-only `raw/engine_daily/bars/xauusd_1d.parquet` (never the research file, never a holdout-dated day; `stale` past 120 days; quant review)
   (`source` `engine_1m:<broker>`), the preflight checks the history reaches the engine window once 1d/1w are live, and
