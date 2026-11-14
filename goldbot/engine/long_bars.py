@@ -54,6 +54,10 @@ import pandas as pd
 from goldbot.config import INTRADAY_LIVE, tf_seconds
 from goldbot.data.resample import BAR_COLUMNS
 
+# the nominal entry the rules' common filter judges a 1d/1w bar at (ADR 0081): research's, so the engine and every
+# replay share one definition (`arm_rules.long_tf_context` enforces it on every research caller)
+from goldbot.research.arm_rules import NOMINAL_ENTRY, entry_after  # noqa: F401 - re-exported
+
 if TYPE_CHECKING:
     from goldbot.data.calendar import SessionTable
     from goldbot.db import Database
@@ -75,7 +79,6 @@ ROLLOVER_END = pd.Timedelta(hours=22, minutes=15)   # the common filter's rollov
 SETTLE = {"1d": pd.Timedelta(minutes=15), "1w": pd.Timedelta(minutes=60)}   # after the reopen: no opening spreads
 LATE_AFTER = {"1d": pd.Timedelta(hours=2), "1w": pd.Timedelta(hours=24)}   # a later entry close: given up
 REOPEN_HORIZON = pd.Timedelta(days=4)               # no reopen within it (a 24/7 table, a long closure): given up
-NOMINAL_ENTRY = {"1d": pd.Timedelta(minutes=90), "1w": pd.Timedelta(days=2, hours=2, minutes=15)}
 MISSED_ACTION = "exploration_missed:"
 LATE, NO_REOPEN = "late", "no_reopen"              # why a decision was given up
 
@@ -119,13 +122,6 @@ def entry_close(tf: str, decision: pd.Timestamp, reopen: pd.Timestamp, base_s: i
     return t.ceil(f"{base_s}s")
 
 
-def entry_after(close: pd.DatetimeIndex, tf: str) -> pd.DatetimeIndex:
-    """The nominal entry of each 1d/1w bar for the rules' common filter (`RuleContext.filter_close`, ADR 0081): a 1d
-    bar 22:30 UTC on its day (after the rollover filter; a Friday's stays inside the Friday filter, never entered), a 1w
-    bar Sunday 23:15 UTC after its Friday close. Timestamps only, so a research replay judges the same."""
-    return pd.DatetimeIndex(close) + NOMINAL_ENTRY[tf]
-
-
 def hold_end(tf: str, now: pd.Timestamp, hold_bars: int) -> pd.Timestamp | None:
     """Where a 1d/1w entry at `now` is projected to hold to, for its swap through the RiskGate: the `hold_bars`-th close
     of its timeframe after `now` (1d: weekday 21:00 UTC closes, so a hold across a weekend reaches past it and its
@@ -136,6 +132,38 @@ def hold_end(tf: str, now: pd.Timestamp, hold_bars: int) -> pd.Timestamp | None:
     days = pd.date_range(now.normalize(), periods=7 * max(1, hold_bars) + 8, freq="D") + DAY_CLOSE
     closes = days[(days > now) & ((days.dayofweek < 5) if tf == "1d" else (days.dayofweek == 4))]
     return closes[max(1, hold_bars) - 1]
+
+
+def origin(tf: str, bar_ts: pd.Timestamp, decision_utc: pd.Timestamp | None) -> pd.Timestamp:
+    """Where a signal's hold and its order id count from (BACKLOG 254, ADR 0081: "the time exit of a 1d/1w position
+    counts from its decision close (order id, `_week_due`, the barrier and `crosses_friday` alike)"): a 1d/1w signal's
+    decision close (`decision_utc`, set by `_decide`), every other signal's bar close (`bar_ts`), unchanged."""
+    return decision_utc if tf in LONG_TFS and decision_utc is not None else bar_ts
+
+
+def hold_s(tf: str, hold_bars: int, bar_ts: pd.Timestamp, decision_utc: pd.Timestamp | None,
+           now: pd.Timestamp) -> int:
+    """A signal's hold from `now` in seconds: a 1d/1w signal holds to the history run's exit, the `hold_bars`-th close
+    of its timeframe after its decision close (`hold_end`), so a send up to 2.5 h (1d) or a day (1w catch-up) after
+    the decision close shortens it by that much; every other signal holds `hold_bars` x its timeframe (unchanged)."""
+    if tf not in LONG_TFS or decision_utc is None:
+        return hold_bars * tf_seconds(tf)
+    end = hold_end(tf, decision_utc, hold_bars)
+    assert end is not None
+    return max(0, int((end - now).total_seconds()))
+
+
+def time_exit_due(tf: str, client_order_id: str | None, max_bars: int, base_s: int, at: pd.Timestamp) -> bool:
+    """A 1d/1w position at its history time exit: `hold_end` of the decision close its order id carries (`origin`)
+    and its hold (`max_bars` base bars back in bars of `tf`). False for every other timeframe or an id that carries
+    no close (the base-bar barrier, counted from the send and so later, stays the backstop): only ever closes
+    earlier."""
+    from goldbot.engine.exploration import signal_close
+    decision = signal_close(client_order_id) if tf in LONG_TFS else None
+    if decision is None:
+        return False
+    end = hold_end(tf, decision, max(1, max_bars * base_s // tf_seconds(tf)))
+    return end is not None and at >= end
 
 
 def _store_frame(ts_utc: pd.DatetimeIndex, visible: pd.DatetimeIndex, mid: dict[str, np.ndarray],
@@ -289,6 +317,7 @@ class LongHistory:
         self.root, self.symbol = (Path(root) if root else None), symbol
         self._cache: tuple[tuple[str, int], pd.DataFrame] | None = None
         self.gaps: dict[str, str] = {}              # arm -> why it is held back (journalled once a change)
+        self.held_since: dict[str, tuple[str, pd.Timestamp]] = {}   # arm -> (tf, the first close it was held back at)
         self.decided = decided if decided is not None else Decided(None, "")
         self.reopens: dict[pd.Timestamp, pd.Timestamp | None] = {}     # decision close -> the broker's reopen after it
 
@@ -323,9 +352,20 @@ def _held(eng: Engine, state: LongHistory, arm: Arm, why: str, at: pd.Timestamp)
     if state.gaps.get(arm.arm_id) == why:
         return
     state.gaps[arm.arm_id] = why
+    state.held_since.setdefault(arm.arm_id, (arm.tf, at))
     log.warning("exploration arm %s (%s) held back at %s: %s", arm.arm_id, arm.tf, at, why)
     eng.decisions.append({"ts": time.time(), "agent": arm.tag, "action": GAP_ACTION + arm.tf, "arm": arm.arm_id,
                           "reason": why, "bar": at.isoformat()})
+
+
+def published(ex: Exploration | None) -> dict[str, Any]:
+    """engine_<account>.json `long_history_gap`: per held-back 1d/1w arm its timeframe, why, and the engine close it
+    has been held back since (BACKLOG 251: health warns, NOTIFY_ON_WARN, once that is more than a day). {} = none."""
+    state = getattr(ex, "long", None)
+    if state is None:
+        return {"long_history_gap": {}}
+    return {"long_history_gap": {a: {"tf": tf, "reason": state.gaps.get(a), "since": at.isoformat()}
+                                 for a, (tf, at) in sorted(state.held_since.items())}}
 
 
 def _given_up(eng: Engine, state: LongHistory, arm: Arm, decision: pd.Timestamp, why: str,
@@ -421,6 +461,7 @@ def _decide(eng: Engine, ex: Exploration, state: LongHistory, arm: Arm, complete
         _held(eng, state, arm, got, close_ts)
         return
     state.gaps.pop(arm.arm_id, None)
+    state.held_since.pop(arm.arm_id, None)
     friday = d == close_ts
     if not friday:
         try:

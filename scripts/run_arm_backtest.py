@@ -33,6 +33,8 @@ from goldbot.research import arm_rules as R  # noqa: E402
 from goldbot.research import arm_rules_clock_box as K  # noqa: E402
 from goldbot.research import arm_rules_weekcut as W  # noqa: E402
 from goldbot.research import arms as A  # noqa: E402
+from goldbot.research import long_confirm as LC  # noqa: E402
+from goldbot.research.arm_rule_versions import rule_version  # noqa: E402
 
 WARMUP_DAYS = 400          # feature history before the block (indicators, 1d tsmom lookbacks); entries stay in the block
 TAIL_DAYS = 14             # bars after the block so a trade entered at its end can exit (still capped by the holdout)
@@ -233,7 +235,9 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         costs.require_version(screen.cost_version)          # before any bar is read: a stale table stops the screen
     A.assert_no_holdout_rows(b1)
     b1 = b1.reset_index(drop=True)
-    bars = b1 if arm.timeframe == "1m" else resample_bars(b1, arm.timeframe).reset_index(drop=True)
+    long = arm.timeframe in R.LONG_TFS      # ADR 0081 point 5: a 1d/1w arm's CONFIRM of record (research/long_confirm.py)
+    bars = b1 if arm.timeframe == "1m" else LC.decision_bars(b1, arm.timeframe) if long \
+        else resample_bars(b1, arm.timeframe).reset_index(drop=True)
     lo, hi = blackout if blackout is not None else (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
     cands = R.candidates(arm, R.RuleContext(bars=bars, b1=b1, blackout_lo=lo, blackout_hi=hi))
     n_cands = len(cands)
@@ -241,6 +245,10 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
     if n_cands:
         t = close[cands["idx"].to_numpy()]
         cands = cands[np.asarray((t >= start) & (t < end + pd.Timedelta(days=1)))].reset_index(drop=True)
+    delays = LC.entry_delays(arm.timeframe, close[cands["idx"].to_numpy()]) if long and len(cands) else None
+    if delays is not None:                  # a Friday 1d close (never sent live) or no reopen: no trade
+        cands = cands[np.isfinite(delays)].reset_index(drop=True)
+        delays = delays[np.isfinite(delays)]
     cols = ["ts_utc", "entry_ts", "ts_exit", "side", "entry", "risk_usd", "move_usd", "gross_r", "net_r", "net_r_os", "barrier_hit"]
     trades = pd.DataFrame(columns=cols)
     if len(cands):
@@ -250,6 +258,8 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         sig = cands.assign(target_atr=cands["target_r"])[["idx", "side", "max_bars", "target_atr"]]
         # live == history: the order goes out the arm's send delay after the close (ARM-SPEC section 0, 2026-10-27)
         sig["entry_delay_s"] = [A.send_delay_s(arm.id, arm.timeframe, c) for c in close[sig["idx"].to_numpy()]]
+        if delays is not None:              # 1d/1w: the first 1m open at or after the live entry close
+            sig["entry_delay_s"] = delays
         spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=1, name=arm.id)
         swap = SwapSpec.research_shipped()            # today's financing rate on each trade's own notional
         lab = triple_barrier_next_open_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=swap)
@@ -293,6 +303,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
                     trades[f"twin_{mode}_net_r"] = A.net_r(tmove, r_usd, tstop, costs, os_lo)
                     trades[f"twin_{mode}_net_r_os"] = A.net_r(tmove, r_usd, tstop, costs, os_hi)
     A.assert_no_holdout_rows(trades, "ts_exit")
+    trades["arm_rule_version"] = rule_version(arm.rule)     # BACKLOG 105: the rule code these trades came from
     n = len(trades)
 
     def stat(col: str, rows: pd.DataFrame | None = None) -> dict[str, Any]:
@@ -308,7 +319,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         # arms 8.13 condition 3: the family net without T and each stratum's share of fills (descriptive, no decision)
         extra_summary["strata"] = {str(k): float(v) for k, v in trades["stratum"].value_counts(normalize=True).items()}
         extra_summary["net_r_without_T"] = stat("net_r", trades[trades["stratum"] != "T"])
-    summary = {"arm": arm.id, "config_hash": arm.config_hash, "block": f"{start.date()}:{end.date()}", "n_trades": n,
+    summary = {"arm": arm.id, "config_hash": arm.config_hash, "arm_rule_version": rule_version(arm.rule), "block": f"{start.date()}:{end.date()}", "n_trades": n,
                **extra_summary,
                "n_candidates_in_data": n_cands, "gross_r": stat("gross_r"),
                "net_r_overshoot_0": stat("net_r"), "net_r_overshoot_0.70": stat("net_r_os"),

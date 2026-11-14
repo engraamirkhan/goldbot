@@ -318,6 +318,11 @@ class SchedulerSettings(_Section):
     # closes; a run with no new weekend hold writes nothing. After broker_ledger (23:25)
     swap_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:45", max_late_hours=20,
                                                         run_if_never_run=True)
+    # BACKLOG 251 (goldbot/ops/long_history.py): the engine store's complete days appended to the 1d/1w long daily
+    # history after the 21:00 UTC roll, so a live 1d/1w arm's warm-up keeps reaching the engine window. Every day (a
+    # missed weekday is caught up the next evening; an up-to-date file is left untouched); first sight runs it once
+    long_history_refresh: ScheduleSettings = ScheduleSettings(kind="daily", at="21:40", max_late_hours=20,
+                                                              run_if_never_run=True)
 
 
 class BackupSettings(_Section):
@@ -1003,11 +1008,10 @@ class ShadowSettings(_Section):
 
 
 INTRADAY_LIVE: tuple[Timeframe, ...] = ("1m", "5m", "15m", "30m", "1h", "4h")
-# BACKLOG 144: blockers 1-3, 5 (built, ADR 0081) and 6 are closed (engine/long_bars.py); these stay open
+# BACKLOG 144: blockers 1-3, 5 and 6 are closed (engine/long_bars.py, ADR 0081: quant-reviewer APPROVE 2026-11-14,
+# research's 1d/1w filter enforced in arm_rules, BACKLOG 252/254); 4 by the long-history refresh, preflight and alert
+# (ops/long_history.py, BACKLOG 251). This one stays open
 GO_LIVE_BLOCKERS_1D_1W = (
-    "a daily long-history refresh, a preflight check that it reaches the engine window, an alert on a history_gap "
-    "older than a day",
-    "the quant ratification of ADR 0081 (the rules' common filter judged at a 1d/1w entry close)",
     "a CONFIRM pass and trading-safety sign-off on the settings diff",
 )
 

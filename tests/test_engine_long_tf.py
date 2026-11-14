@@ -170,9 +170,9 @@ def test_settings_refuse_1d_or_1w_live_naming_the_open_go_live_blockers(tf: str)
         EngineSettings(timeframes_live=[*INTRADAY_LIVE, tf])  # type: ignore[list-item]
     msg = str(err.value)
     assert "go-live blockers" in msg and "engine-1d-1w-golive" in msg
-    for blocker in ("preflight", "ADR 0081", "CONFIRM"):                # BACKLOG 144: the blockers still open
-        assert blocker in msg, blocker
-    for closed in ("22:15 UTC", "Sunday open", "catch-up", "is_bar_close"):
+    assert "CONFIRM" in msg                                             # BACKLOG 144 blocker 7: still open
+    # closed: 1-3, 6 (ADR 0081), 4 (BACKLOG 251: refresh, preflight, alert), 5 (quant ratification, BACKLOG 252/254)
+    for closed in ("22:15 UTC", "Sunday open", "catch-up", "is_bar_close", "preflight", "ADR 0081"):
         assert closed not in msg, closed
 
 

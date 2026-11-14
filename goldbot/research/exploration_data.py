@@ -214,7 +214,7 @@ _CANDIDATE_COLS = ("candidate_id", "account_id", "broker", "arm_id", "arm_config
                    "is_control", "decision_ns", "session_day", "stop_dist", "target_dist", "max_hold_s", "taken",
                    "blocked_reason", "branch", "u", "mu", "tau_arm", "pi_rand_arm", "arm_share", "meta_p", "model_version",
                    "bandit_version", "feature_version", "feature_list_id", "features", "available_utc_max_ns",
-                   "snapshot_ref", "quarantine", "recorded_ns")
+                   "snapshot_ref", "quarantine", "recorded_ns", "arm_rule_version")
 
 
 def _candidate_problems(*, style: str, tf: str, side: int, stop_dist: float, target_dist: float, max_hold_s: int,
@@ -263,13 +263,15 @@ def record_candidate(db: Database, *, candidate_id: str, account_id: str, broker
                      arm_share: float | None = None, meta_p: float | None = None, model_version: str | None = None,
                      bandit_version: str | None = None, feature_version: str | None = None,
                      feature_list_id: str | None = None, features: Mapping[str, float | None] | None = None,
-                     available_utc_max: pd.Timestamp | None = None, snapshot_ref: str | None = None) -> bool:
+                     available_utc_max: pd.Timestamp | None = None, snapshot_ref: str | None = None,
+                     arm_rule_version: int | None = None) -> bool:
     """One exploration candidate at its decision (taken or not; a blocked one with mu 0 and its reason). True when
     written, False when `candidate_id` exists (the first record stands). `decision_utc` is the decision bar's close,
     the as-of point of every feature; `broker` is the recording account's broker (accounts.yaml `broker`: the key
     its evidence is learnt under); `stop_dist`/`target_dist` are the arm's own barriers in USD/oz from the entry,
     `max_hold_s` its time limit. `features` is the snapshot as computed at the decision (the style's frozen list),
-    `available_utc_max` the latest availability among its columns. Invalid input is written quarantined."""
+    `available_utc_max` the latest availability among its columns. `arm_rule_version`: the rule-code version in force
+    at the decision (research/arm_rule_versions.py, BACKLOG 105). Invalid input is written quarantined."""
     if not (candidate_id and account_id and broker and arm_id and family):
         raise ValueError("candidate_id, account_id, broker, arm_id and family are required")
     d = _ns(decision_utc)
@@ -284,7 +286,7 @@ def record_candidate(db: Database, *, candidate_id: str, account_id: str, broker
            blocked_reason, branch, _finite(u), _finite(mu), _finite(tau_arm), _finite(pi_rand_arm), _finite(arm_share),
            _finite(meta_p),
            model_version, bandit_version, feature_version, feature_list_id, feats, am, snapshot_ref,
-           "; ".join(bad) or None, now_ns())
+           "; ".join(bad) or None, now_ns(), arm_rule_version)
     with db.write() as conn:
         cur = conn.execute(f"INSERT OR IGNORE INTO exploration_obs ({', '.join(_CANDIDATE_COLS)}) "
                            f"VALUES ({', '.join('?' * len(_CANDIDATE_COLS))})", row)
@@ -325,7 +327,8 @@ def record_fill(db: Database, *, candidate_id: str, entry_utc: pd.Timestamp, exi
 def read_obs(db: Database, *, broker: str | None = None, style: str | None = None, arm_id: str | None = None,
              as_of: pd.Timestamp | None = None, include_quarantined: bool = False,
              evidence: Scope | None = None, held_out: Collection[str] = (), instrument: str | None = None,
-             instruments: Mapping[str, str] | None = None, replay_version: ReplayVersion = REPLAY_V1) -> pd.DataFrame:
+             instruments: Mapping[str, str] | None = None, replay_version: ReplayVersion = REPLAY_V1,
+             rule_version: int | None = None) -> pd.DataFrame:
     """Candidates ordered by decision time; times as UTC datetimes (ns). `as_of`: only labels resolved by then;
     `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`. `evidence`:
     leave out the candidates void for that scope (aux.db `evidence_exclusions`, prereg Amendment 4: "void as evidence
@@ -354,6 +357,9 @@ def read_obs(db: Database, *, broker: str | None = None, style: str | None = Non
     if arm_id is not None:
         where.append("o.arm_id = ?")
         params.append(arm_id)
+    if rule_version is not None:            # BACKLOG 105: only the rows of that rule-code version (NULL rows: none)
+        where.append("o.arm_rule_version = ?")
+        params.append(int(rule_version))
     lbl = "o" if replay_version == REPLAY_V1 else "r"
     if as_of is not None:
         where.append(f"void.candidate_id IS NULL AND {lbl}.{_LABEL_SQL[replay_version]['label_sim_r']} IS NOT NULL "

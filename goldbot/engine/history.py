@@ -919,5 +919,8 @@ def _age_shadow(eng: Engine, tf: str, fr: Any) -> None:
 def published(eng: Engine) -> dict[str, Any]:
     """engine_<account>.json: history_gap (per decision timeframe, the hole in its window at its last close; {} =
     every evaluated window unbroken) and history_backfill (cut-over, fill status, minutes the writer dropped, the
-    failed store read `read_error` and the short warm start `read_short` {bars, min}; null when neither holds)."""
-    return {"history_gap": dict(eng.history.gaps), "history_backfill": dict(eng.history.backfill)}
+    failed store read `read_error` and the short warm start `read_short` {bars, min}; null when neither holds), and
+    the held-back 1d/1w arms (`long_bars.published`)."""
+    from goldbot.engine import long_bars
+    return {"history_gap": dict(eng.history.gaps), "history_backfill": dict(eng.history.backfill),
+            **long_bars.published(getattr(eng, "exploration", None))}

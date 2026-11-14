@@ -234,11 +234,13 @@ def test_ka15_stratum_t_pays_its_signal_time_spread_on_both_legs_and_the_family_
 
 @pytest.mark.parametrize(("rule", "tf", "params", "end"), [
     ("pdc_break", "4h", {"stop_atr": 1.0, "target_r": 2.0, "hold_bars": 32}, "2023-05-01"),
-    ("donchian_break", "1d", {"hold_bars": 10}, "2024-01-01")])           # DOND: 55 daily bars of warm-up, ~1 a month
+    # DOND: 55 daily bars of warm-up; on the 21:00 UTC roll with Friday dropped (ADR 0081) fewer trades: a longer span
+    ("donchian_break", "1d", {"hold_bars": 10}, "2024-09-01")])
 def test_pdc4_and_dond_in_history_exit_on_the_cut_walk_and_never_hold_into_the_weekend(rule, tf, params, end) -> None:
     """ARM-SPEC 8.15: history replays the engine's Friday cut on the 1m path (`arm_rules_weekcut.walk_cut`, the rule
     the engine applies live): losers close at the cut, winners hold under its tightened stop to the week-capped time
-    exit; every exit is before the server's Saturday 00:00."""
+    exit; every exit is before the server's Saturday 00:00. A 1d arm decides on the engine's bars and enters at its
+    live entry close (the CONFIRM of record, ADR 0081 point 5), so its walk starts at its entry minute."""
     from goldbot.research import arm_rules as R
     from goldbot.research import arm_rules_clock_box as K
     from goldbot.research import arm_rules_weekcut as W
@@ -246,7 +248,8 @@ def test_pdc4_and_dond_in_history_exit_on_the_cut_walk_and_never_hold_into_the_w
     arm = A.Arm(id="WEEKX", rule=rule, timeframe=tf, params=params)
     trades, _ = rab.run_arm(b1, arm, START, pd.Timestamp(end, tz="UTC") - pd.Timedelta(days=14), COSTS)
     assert len(trades) > 3, "the fixture must give trades, else the checks are vacuous"
-    bars = rab.resample_bars(b1, tf).reset_index(drop=True)
+    from goldbot.research import long_confirm as LC
+    bars = LC.decision_bars(b1, tf) if tf in R.LONG_TFS else rab.resample_bars(b1, tf).reset_index(drop=True)
     no = np.zeros(0, dtype=np.int64)
     cands = R.candidates(arm, R.RuleContext(bars=bars, b1=b1, blackout_lo=no, blackout_hi=no)).set_index("idx")
     close = pd.DatetimeIndex(bars["visible_at"])
@@ -254,7 +257,7 @@ def test_pdc4_and_dond_in_history_exit_on_the_cut_walk_and_never_hold_into_the_w
     for _, t in trades.iterrows():
         i = int(np.searchsorted(close, t["ts_utc"]))
         exit_at = close[i + 1 + int(cands.at[i, "max_bars"])]  # type: ignore[arg-type]
-        path = K.mid_path(b1, close[i])
+        path = K.mid_path(b1, pd.Timestamp(t["entry_ts"]))
         cut = pd.Timestamp(cands.at[i, "cut_at"])  # type: ignore[arg-type]
         w = W.walk_cut(path, float(t["entry"]), int(t["side"]), float(t["risk_usd"]), cut, exit_at, target_r)
         assert t["barrier_hit"] == w["kind"] and t["exit_px"] == pytest.approx(w["exit"])

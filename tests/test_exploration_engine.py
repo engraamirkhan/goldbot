@@ -1184,17 +1184,22 @@ def _live_1d(eng: Engine, hist: Path) -> None:
     eng.exploration.retired = frozenset()
 
 
-def test_a_dond_1d_hold_capped_at_the_week_end_is_refused_when_sent_after_the_reopen(tmp_path, monkeypatch):
-    """BACKLOG 144 (ADR 0081): a 1d decision (Tuesday 21:00 UTC) is sent at its entry close (23:30 UTC in EET), and its
-    hold runs from the send. A rule whose frozen hold is capped at the week's end from its decision close then reaches
-    the server's Saturday from the send, so it is refused `weekend_hold` like the rule without the cut: never held
-    into the weekend, never shortened silently. Holding from the decision close instead is BACKLOG 254."""
+def test_a_dond_1d_hold_capped_at_the_week_end_counts_from_its_decision_close_and_is_sent(tmp_path, monkeypatch):
+    """BACKLOG 254 (ADR 0081): a 1d decision (Tuesday 21:00 UTC) is sent at its entry close (23:30 UTC in EET) and its
+    hold counts from the decision close, as the history run's: a rule whose frozen hold is capped at the week's end
+    from its decision close ends there live too, so it is sent (its order id carries the decision close) while the
+    same frozen hold without the cut is still refused `weekend_hold`: never held into the weekend. (Before 254 the hold
+    ran from the send and the capped rule was refused as well.)"""
     eng, pb = _week_engine(tmp_path, monkeypatch, "donchian_break", "1d", 10)
     _live_1d(eng, tmp_path / "hist")
     exploration.on_pass(eng, _at(eng, pb, TUE_1D))
-    assert _sent(eng) == [] and not pb.positions()
-    assert sorted((d["agent"], d["action"]) for d in _actions(eng, "exploration_refused:")) == [
-        ("explore:NOCUT", "exploration_refused:weekend_hold"), ("explore:WEEK", "exploration_refused:weekend_hold")]
+    assert [d["agent"] for d in _sent(eng)] == ["explore:WEEK"]
+    assert [(d["agent"], d["action"]) for d in _actions(eng, "exploration_refused:")] == [
+        ("explore:NOCUT", "exploration_refused:weekend_hold")]
+    [rec] = exploration.trades(str(tmp_path))
+    decision = pd.Timestamp("2025-03-04 21:00", tz="UTC")
+    assert exploration.signal_close(rec.client_order_id) == decision
+    assert TUE_1D + pd.Timedelta(seconds=rec.hold_s) <= pd.Timestamp("2025-03-07 21:00", tz="UTC")   # the cut-capped end
 
 
 @pytest.mark.parametrize(("rule", "tf", "hold", "close"), [("pdc_break", "4h", 32, TUE_4H)])
@@ -1321,3 +1326,17 @@ def test_an_exploration_stop_out_at_the_broker_logs_its_exit_leg_at_the_deal_pri
     assert leg["position_id"] == pid and leg["kind"] == "stop" and leg["agent_id"] == "explore:a"
     assert leg["requested"] == sl and leg["filled"] == rec.exit_price and leg["filled"] < sl
     assert leg["client_order_id"] == rec.client_order_id
+
+
+def test_every_candidate_records_the_rule_code_version_in_force_at_its_decision(tmp_path, monkeypatch):
+    """BACKLOG 105: `exploration_obs.arm_rule_version` is the version of the arm's rule code at the decision (taken or
+    blocked alike); a bump later changes the rows after it, never the ones before."""
+    from goldbot.research import arm_rule_versions
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", side=-1)])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    monkeypatch.setitem(arm_rule_versions.RULE_VERSIONS, LONG, 2)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
+    with exploration.ledger_db(str(tmp_path)).connection() as conn:
+        got = conn.execute("SELECT arm_id, decision_ns, arm_rule_version FROM exploration_obs "
+                           "ORDER BY arm_id, decision_ns").fetchall()
+    assert [(a, v) for a, _, v in got] == [("a", 1), ("a", 2), ("b", 1), ("b", 1)]

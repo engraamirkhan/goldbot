@@ -835,11 +835,12 @@ def make_order_id(account_id: str, arm_id: str, bar_ts: pd.Timestamp) -> str:
 
 
 def pending_id(eng: Engine, arm: Arm, s: Pending) -> str:
-    """A candidate's id: its signal close's order id, a pyramid add's from its group (`exploration_pyramid.add_id`)."""
+    """A candidate's id: its signal close's order id (a 1d/1w signal's decision close, `long_bars.origin`), a pyramid
+    add's from its group (`exploration_pyramid.add_id`)."""
     if s.group_id is not None:
         from goldbot.engine.exploration_pyramid import add_id
         return add_id(eng, arm, s.group_id, s.add_no)
-    return order_id(eng, arm, s.bar_ts)
+    return order_id(eng, arm, long_bars.origin(arm.tf, s.bar_ts, s.decision_utc))
 
 
 def _open(eng: Engine) -> list[int]:
@@ -1992,6 +1993,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
     unbiased). The arm's share of its pot goes with it (quant Q3). The feature snapshot is not built in the engine
     yet (None). Best effort: never raises."""
+    from goldbot.research.arm_rule_versions import rule_version
     from goldbot.research.exploration_data import record_candidate
     arm = ex.arms[s.arm_id]
     cid = pending_id(eng, arm, s)
@@ -2000,12 +2002,13 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     taken = blocked is None
     try:
         record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, broker=ex.broker, arm_id=arm.arm_id,
-                         family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
-                         stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
+                         family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side,
+                         decision_utc=long_bars.origin(arm.tf, s.bar_ts, s.decision_utc), stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
                          mu=mu if mu is not None else PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
-                         arm_share=share if share is not None else shares(ex, now).get(arm.arm_id))
+                         arm_share=share if share is not None else shares(ex, now).get(arm.arm_id),
+                         arm_rule_version=rule_version(arm.spec.rule))      # BACKLOG 105
     except Exception as exc:
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
 
@@ -2046,7 +2049,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     tag, side, pot = arm.tag, s.side, ex.cfg.pots[arm.style]
     pid = pending_id(eng, arm, s)
     price = tick.ask if side > 0 else tick.bid
-    stop_d, target_d, hold_s = s.stop_usd, s.target_usd, s.hold_bars * tf_seconds(arm.tf)
+    # BACKLOG 254: a 1d/1w hold runs to the history run's exit from its decision close (`long_bars.hold_s`)
+    stop_d, target_d, hold_s = s.stop_usd, s.target_usd, long_bars.hold_s(arm.tf, s.hold_bars, s.bar_ts,
+                                                                          s.decision_utc, now)
     applied: dict[str, Any] = {"arm": arm.arm_id, "tf": arm.tf, "style": arm.style, "stop_usd": round(stop_d, 4),
                                "propensity": round(ps.share.get(arm.arm_id, 0.0), 4)}
 
@@ -2295,7 +2300,8 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
                       commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
-                      hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,
+                      hold_s=float(long_bars.hold_s(arm.tf, s.hold_bars, s.bar_ts, s.decision_utc, now)),
+                      probe_headroom=headroom,
                       **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")},
                       **books.intent_extra(eng, terms))   # a non-gold book: its group, class, P&L currency (L2)
     except ValidationError as exc:
@@ -2308,7 +2314,8 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     """Every pass, with a quote or without (`Engine._retry_closes`), whatever the entry state (halted, propose mode,
     exploration switched off): a 1m/5m arm's position held `hold_s` on the host clock (from its fill; after a restart
     the broker's open time) is closed (`HOLD_EXIT`); a 15m+ position of a rule under the Friday cut is closed at its
-    wall-clock time exit (`_week_due`, `time_exit`); a position whose arm is not configured is closed at once
+    wall-clock time exit (`_week_due`, `time_exit`), a 1d/1w position at its history time exit from its decision
+    close (`long_bars.time_exit_due`, BACKLOG 254); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
     from goldbot.engine import exploration_pyramid
     try:
@@ -2326,6 +2333,9 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 eng._try_close(pid, "time_exit", now)   # quant Q3: every unit of a group at the group's end
             elif arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
                 eng._try_close(pid, HOLD_EXIT, now)
+            elif arm.tf in LONG_TFS and long_bars.time_exit_due(arm.tf, tr.client_order_id, tr.max_bars,
+                                                                tf_seconds(eng.cfg.decision_tf), at):
+                eng._try_close(pid, "time_exit", now)   # BACKLOG 254: the history run's exit from the decision close
             elif arm.tf not in SUB_15M and _week_due(eng, arm, tr, at):
                 eng._try_close(pid, "time_exit", now)
     except Exception:

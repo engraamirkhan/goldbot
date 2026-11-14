@@ -2895,3 +2895,15 @@ The brain's `github-token` cannot write release `research-v1` (decision 2026-11-
   `registry` once rows wait more than 36 h; recovery is the same script by hand, then read the FAIL line in
   `publish.log` for the cause.
 - Remove: `scripts/install_registry_publish_launchd.sh --uninstall`.
+
+### Long daily history (1d/1w warm-up, BACKLOG 251)
+A live 1d/1w arm warms up from `<data_root>/<engine.long_history_dir>/bars/xauusd_1d.parquet` (default
+`raw/daily/bars/`). The job `long_history_refresh` (21:40 UTC daily) appends the engine store's complete days to it
+(rows marked `source = engine_1m:<broker>`); an up-to-date file is left alone. While 1d/1w are dark nothing reads it.
+- `long_history:<account>` warns (Telegram) when a 1d/1w arm has been held back (`history_gap`) more than a day; the
+  preflight item `long_history` fails when a live 1d/1w history does not reach the engine window.
+- Fix: read `job:long_history_refresh` in health (the job runs every evening and catches missed days up). Its result says
+  `no_file` (copy the research file `raw/daily/bars/xauusd_1d.parquet` from the Mac to the same path under the brain's
+  data root first), `no_minutes` (the store has no minutes after the file: check the engine's history) or lists
+  `holes` (weekdays without minutes; a gap of more than 120 days is copied by hand, never rebuilt). The next run
+  (21:40 UTC) appends what the store holds after a copied file.

@@ -222,6 +222,9 @@ class DailyReview(Record):
     # ADR 0061 amendment 2026-11-02: the learning arms' fills of the day (broker -> arm -> fills; a count only), their
     # own section: unqualified demo evidence, never in a family ranking
     learning: dict[str, dict[str, int]] = Field(default_factory=dict)
+    # BACKLOG 105: an arm whose candidate rows (its whole life on the reviewed hosts) span more than one rule-code
+    # version (research/arm_rule_versions.py): arm -> version -> rows. A count only; {} when every arm has one
+    rule_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     def cost(self, broker: str, host: str, session: str) -> SessionCosts:
         for c in self.costs:
@@ -823,6 +826,10 @@ def report_lines(r: DailyReview) -> list[str]:
     if r.evidence_void:
         out.append(f"Review: {r.evidence_void} trade{'s' if r.evidence_void != 1 else ''} void as evidence "
                    "(dq quarantine; H-61 stops and P&L keep it)")
+    if r.rule_versions:
+        out.append("Review: rule code changed inside an arm's life (rows per version): " + " · ".join(
+            f"{arm} " + ", ".join(f"v{v} {n:,}" for v, n in sorted(per.items(), key=lambda x: int(x[0])))
+            for arm, per in sorted(r.rule_versions.items())))
     if r.learning:
         n_arms = sum(len(v) for v in r.learning.values())
         n_fills = sum(sum(v.values()) for v in r.learning.values())
@@ -1056,7 +1063,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
                          evidence_void=_void(db, hosts, lo, hi),
                          spans_unresolved=unresolved,
-                         learning=learning)
+                         learning=learning, rule_versions=rule_versions(db, hosts))
     if dry_run:
         return review
     before = load_review(sd, day)
@@ -1101,6 +1108,20 @@ def _unresolved(db: Database, store: Any, hosts: Mapping[str, str], settings: Se
                                          "evidence held out or voided cannot be checked"))
         return []
     return ev.unresolved(spans, ev.reloads(db)) if spans else []
+
+
+def rule_versions(db: Database, hosts: Mapping[str, str]) -> dict[str, dict[str, int]]:
+    """BACKLOG 105: per arm whose `exploration_obs` rows on `hosts` carry more than one `arm_rule_version`, the rows
+    per version (a row recorded before the column, NULL, is not counted)."""
+    marks = ", ".join("?" * len(hosts))
+    with db.connection() as conn:
+        rows = conn.execute(f"SELECT arm_id, arm_rule_version, COUNT(*) FROM exploration_obs WHERE account_id IN "
+                            f"({marks}) AND arm_rule_version IS NOT NULL GROUP BY arm_id, arm_rule_version",
+                            tuple(sorted(hosts))).fetchall()
+    out: dict[str, dict[str, int]] = {}
+    for arm, version, n in rows:
+        out.setdefault(str(arm), {})[str(int(version))] = int(n)
+    return {a: v for a, v in sorted(out.items()) if len(v) > 1}
 
 
 def _void(db: Database, hosts: Mapping[str, str], lo: pd.Timestamp, hi: pd.Timestamp) -> int:

@@ -208,7 +208,7 @@ def server(tmp_path, cfg):
 COMMIT = "a" * 40
 EXPECTED = ["settings", "owner_email", "telegram_token", "telegram_allowlist", "tunnel_service", "bridge_config",
             "bridge_health", "terminal_account", "bridge_server_tz", "bridge_compat", "server_clock", "web_dist", "db_files_private", "backups", "time_sync", "disk",
-            "memory", "deploy_timer", "retired_units"]
+            "memory", "deploy_timer", "retired_units", "long_history"]
 
 
 def test_preflight_all_green_exits_zero(server, capsys):

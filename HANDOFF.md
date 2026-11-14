@@ -20,6 +20,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `swap_reconcile` warns, and the owner is told, past `costs.swap_reconcile_tolerance` (0.25) or when a hold cannot
   be priced. With no weekend hold the job is a no-op. Read-only: no broker call, no order. The order path is
   unchanged.
+- **1d/1w long history, live == history, rule-code versions (BACKLOG 251, 252, 254, 105; R154; 2026-11-14).** A daily
+  job `long_history_refresh` (21:40 UTC) appends the store's complete days to `raw/daily/bars/xauusd_1d.parquet`
+  (`source` `engine_1m:<broker>`), the preflight checks the history reaches the engine window once 1d/1w are live, and
+  health `long_history:<account>` tells the owner when an arm is held back more than a day. ADR 0081 is ratified; the
+  1d/1w filter is enforced on every research caller, a 1d/1w hold and order id count from the decision close, and
+  `run_arm_backtest` is the CONFIRM of record (21:00 UTC roll, fill at the live entry close, Friday 1d dropped). Only
+  blocker 7 (BACKLOG 253) keeps 1d/1w dark. Every arm rule carries a version (`research/arm_rule_versions.py`, pinned
+  by source hash); `exploration_obs.arm_rule_version` (aux migration 36) records it.
 - 2026-11-14 (branch feat/limits-cost-ratio-replay-1114; R150; BACKLOG 255 and 90 done): quant-reviewer approved
   the R150 cost/model definition 2026-11-14. `scripts/replay_limits.py --data-root DIR` now measures each replay day's
   20-day cost/model ratio through the nightly job's own `_cost_ratio`, `store_exit_legs` and `store_label_bars` (no

@@ -799,6 +799,11 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (account_id, client_order_id)
            ) STRICT""",
     )),
+    # additive (BACKLOG 105, goldbot/research/arm_rule_versions.py): the rule-code version in force at each candidate's
+    # decision. `arm_hash` covers the arm's id, rule, timeframe, params and max_open, not its rule code; a code change
+    # to a frozen rule bumps this. NULL on rows recorded before it (and by a release without it, which never reads it)
+    Migration(version=36, name="exploration_obs_rule_version", additive=True, statements=(),
+              add_columns=(("exploration_obs", "arm_rule_version", "INTEGER"),)),
 )
 
 CORE: tuple[Migration, ...] = (

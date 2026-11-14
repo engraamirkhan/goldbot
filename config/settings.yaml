@@ -216,6 +216,7 @@ scheduler:
   weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
   swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
+  long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
