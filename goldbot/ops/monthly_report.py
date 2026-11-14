@@ -37,6 +37,15 @@ Per account, for one calendar month of opportunity days (default the one holding
   seen late: `excursion_approx`) get their own median and count and never enter the exact one. A scaled position's
   figures cover the whole position until its final exit.
 
+Exploration, control and cost-probe trades (issue #394): every demo trade is one of these, recorded only in aux.db and
+never in the closed-trade record (engine/exploration.py, engine/cost_probe.py). They are read from the trade ledger
+(ops/learning_ledger.py, rows voided as evidence included: they are still the account's money) and shown on their own
+line as account money, not evidence (net rows in the account's currency, voided and censored rows counted), never in
+the return, R, drawdown or days above, which stay the closed-trade record's. An account with only these trades gets a
+report ("no phase-gate trades"), and a row whose account the config does not name is an error, never a new account. A
+ledger that cannot be read is an error line ("missing, not zero"), never a zero. The digest's month line
+(`month_to_date_line`, real-money accounts) reads none of them and shows only accounts with phase-gate trades.
+
 The report describes; it never sets a day's amount to reach (ADR 0004: a missed £50 day never prompts more risk), so
 the wording has no per-day aim, countdown or shortfall. Reporting only: nothing here changes an order, halt or setting.
 """
@@ -47,6 +56,7 @@ import json
 import math
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +66,9 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.ops.account_view import Milestones, milestones
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
+from goldbot.ops.learning_ledger import LearningClose, LearningCloses, closed_learning_trades, recorded_keys
 from goldbot.ops.report_days import DAY_BOUNDARY, day_buckets, month_days, report_day, weekdays
+from goldbot.telegram.entry_text import account_name
 
 NORTH_STAR_DAY_GBP = 50.0         # ADR 0004 section 6: days at £50+ are counted, never aimed at
 BEST_DAYS = 3
@@ -108,6 +120,12 @@ class AccountMonth(FrozenRecord):
     gross_pnl: float | None = None
     gross_r: float | None = None
     gross_note: str | None = None      # "N trades gross only (costs not recorded)"
+    # exploration, control and cost-probe closes (issue #394; module docstring): never in a figure above
+    learning_trades: int = 0
+    learning_net_trades: int = 0       # net (commission and swap recorded) and in the account's currency
+    learning_pnl: float | None = None  # over the learning_net_trades; None when there are none
+    learning_voided: int = 0           # ... void as evidence (still account money)
+    learning_censored: int = 0         # ... censored (still account money)
 
 
 class MonthlyReport(FrozenRecord):
@@ -146,9 +164,10 @@ def r_understated(trade: Any, account_ccy: str | None) -> bool:
 
 
 def account_month(account: str, trades: list[ClosedTrade], first: str, last: str,
-                  engine: dict[str, Any]) -> AccountMonth:
-    """One account's month: `trades` already selected by their exit's opportunity day, `first`..`last` (YYYY-MM-DD,
-    inclusive) the opportunity days elapsed, for the trading-day count."""
+                  engine: dict[str, Any], learning: list[LearningClose] | None = None) -> AccountMonth:
+    """One account's month: `trades` (and `learning`, the exploration and probe closes) already selected by their
+    exit's opportunity day, `first`..`last` (YYYY-MM-DD, inclusive) the opportunity days elapsed, for the trading-day
+    count."""
     trades = sorted(trades, key=lambda t: t.exit_utc)
     ccy = engine.get("currency") if isinstance(engine.get("currency"), str) else None
     # money in the account's currency only (BACKLOG 28, as the digest): a row whose pnl_currency differs (the
@@ -188,6 +207,10 @@ def account_month(account: str, trades: list[ClosedTrade], first: str, last: str
     exact = [t for t in exc if not t.excursion_approx]
     approx_exc = [t for t in exc if t.excursion_approx]
 
+    learning = learning or []
+    learn_money = [c.pnl for c in learning
+                   if c.net and c.pnl is not None and (c.currency is None or c.currency.upper() == acct)]
+
     def med(rows: list[ClosedTrade], field: str) -> float | None:
         return float(np.median([getattr(t, field) for t in rows])) if rows else None
     return AccountMonth(
@@ -203,17 +226,41 @@ def account_month(account: str, trades: list[ClosedTrade], first: str, last: str
         approx_mae_r_median=med(approx_exc, "mae_r"), approx_mfe_r_median=med(approx_exc, "mfe_r"),
         excursion_approx=len(approx_exc), gross_only=len(gross),
         gross_pnl=sum(gross_money) if gross_money else None, gross_r=sum(gross_rs) if gross_rs else None,
-        gross_note=f"{_trades(len(gross))} gross only (costs not recorded)" if gross else None)
+        gross_note=f"{_trades(len(gross))} gross only (costs not recorded)" if gross else None,
+        learning_trades=len(learning), learning_net_trades=len(learn_money),
+        learning_pnl=sum(learn_money) if learn_money else None,
+        learning_voided=sum(c.voided for c in learning), learning_censored=sum(c.censored for c in learning))
 
 
 def _trades(n: int, kind: str = "") -> str:
     return f"{n} {kind}trade{'s' if n != 1 else ''}"
 
 
+LoadLearning = Callable[..., LearningCloses]
+
+
+def read_learning(state_dir: str | Path, now: pd.Timestamp, trades: list[ClosedTrade],
+                  loader: LoadLearning | None = None) -> tuple[LearningCloses | None, list[str]]:
+    """The exploration, control and probe closes for money (voided-as-evidence rows kept), less the closed-trade
+    record's own trades, and the errors that make them "missing, not zero". `loader` defaults to
+    `closed_learning_trades`."""
+    load = loader or closed_learning_trades
+    try:
+        learn = load(state_dir, now, recorded_keys(trades), include_excluded=True)
+    except Exception as exc:                       # noqa: BLE001 - reporting only: named, never read as zero
+        return None, [f"trade ledger unreadable ({type(exc).__name__}): exploration and probe trades missing, "
+                      "not zero"]
+    if learn.unreadable:
+        return learn, ["trade ledger source(s) unreadable: " + ", ".join(learn.unreadable)
+                       + " (exploration and probe trades missing, not zero)"]
+    return learn, []
+
+
 def build_monthly_report(state_dir: str | Path, *, month: str | None = None, now: pd.Timestamp | None = None,
-                         day: str | None = None) -> MonthlyReport:
+                         day: str | None = None,
+                         learning: tuple[LearningCloses | None, list[str]] | None = None) -> MonthlyReport:
     """`day` (YYYY-MM-DD): the last opportunity day counted, default the one holding `now` (the digest passes its
-    yesterday)."""
+    yesterday). `learning`: `read_learning`'s result when the caller has read it already (the monthly review)."""
     sd = Path(state_dir)
     now = pd.Timestamp.now(tz="UTC") if now is None else now.tz_convert("UTC")
     today = day or report_day(now)
@@ -225,8 +272,26 @@ def build_monthly_report(state_dir: str | Path, *, month: str | None = None, now
     for t in trades:
         if first <= report_day(t.exit_utc) <= last:
             by_acc.setdefault(t.account_id, []).append(t)
-    rows = [account_month(a, ts, first, last, _engine(sd, a)) for a, ts in sorted(by_acc.items())]
-    return MonthlyReport(month=month, as_of_utc=now.isoformat(), accounts=rows, errors=[err] if err else [])
+    learn, learn_errors = learning if learning is not None else read_learning(sd, now, trades)
+    # the ledger cuts digit runs out of an account name: map it back through the record's ids and the accounts config
+    from goldbot.ops import accounts as accounts_config
+    listed = accounts_config.account_ids()
+    ids = {account_name(a): a for a in {*(t.account_id for t in trades), *(listed.listed if listed else ())}}
+    learn_by: dict[str, list[LearningClose]] = {}
+    unknown: dict[str, int] = {}
+    for c in learn.rows if learn is not None else []:
+        if not first <= report_day(c.exit_utc) <= last:
+            continue
+        if c.account in ids:
+            learn_by.setdefault(ids[c.account], []).append(c)
+        else:                                      # never a new account row: the name is the ledger's, scrubbed
+            unknown[c.account] = unknown.get(c.account, 0) + 1
+    unknown_errors = [f"{_trades(n, 'exploration or probe ')} on {name}, not a configured account: not reported"
+                      for name, n in sorted(unknown.items())]
+    rows = [account_month(a, by_acc.get(a, []), first, last, _engine(sd, a), learn_by.get(a))
+            for a in sorted(set(by_acc) | set(learn_by))]
+    return MonthlyReport(month=month, as_of_utc=now.isoformat(), accounts=rows,
+                         errors=([err] if err else []) + learn_errors + unknown_errors)
 
 
 # ---------------------------------------------------------------------------------------------- text
@@ -254,6 +319,44 @@ def _ladder_line(m: Milestones | None, ccy: str | None) -> str:
             f"({100 * (m.progress or 0):.0f}% of the way)")
 
 
+def _closed_lines(a: AccountMonth) -> list[str]:
+    """The closed-trade record's figures for one account (the phase-gate trades; never the learning closes)."""
+    c = a.currency
+    lines: list[str] = []
+    approx = " · approximate: positions overlapped" if a.overlapped else ""
+    lines.append(f"  Return {a.twr_pct:+.2f}% (chained closed-trade return, time-weighted; deposits excluded"
+                 f"{approx}) · net {money(a.pnl, c)}{f' ({a.pnl_note})' if a.pnl_note else ''} over "
+                 f"{_trades(a.net_trades, 'net ')} of {a.trades}")
+    if a.net_r is not None:
+        ci = f", 90% t-interval (approx.) {a.r_ci90[0]:+.2f} to {a.r_ci90[1]:+.2f}" if a.r_ci90 else ""
+        note = f" ({a.r_note})" if a.r_note else ""
+        lines.append(f"  R {a.net_r:+.2f} net · {a.r_per_trade:+.2f} R/trade over {a.r_trades} with R{ci}{note}")
+    else:
+        lines.append("  R: not recorded")
+    parts = []
+    if a.mae_r_median is not None and a.mfe_r_median is not None:
+        parts.append(f"median MAE {a.mae_r_median:+.2f}R · median MFE {a.mfe_r_median:+.2f}R over "
+                     f"{a.excursion_trades} trade{'s' if a.excursion_trades != 1 else ''}")
+    if a.approx_mae_r_median is not None and a.approx_mfe_r_median is not None:
+        parts.append(f"approximate (restart): median MAE {a.approx_mae_r_median:+.2f}R · median MFE "
+                     f"{a.approx_mfe_r_median:+.2f}R over {a.excursion_approx}")
+    if parts:
+        lines.append("  Excursion: " + "; ".join(parts) + " (whole position until the final exit)")
+    lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average "
+                 f"{_avg(a.avg_per_day, c)} per trading day over {a.trading_days} weekdays")
+    best = " · ".join(f"{pd.Timestamp(d.day):%a %d %b} {money(d.pnl, c)}"
+                      + (f" ({d.r:+.1f}R)" if d.r is not None else "") for d in a.best_days)
+    lines.append(f"  Best days: {best}")
+    if a.days_50_plus is not None:
+        lines.append(f"  Days at £50 or more: {a.days_50_plus}")
+    if a.gross_note:
+        figs = ([money(a.gross_pnl, c)] if a.gross_pnl is not None else []) + \
+            ([f"{a.gross_r:+.2f}R"] if a.gross_r is not None else [])
+        lines.append(f"  {a.gross_note}: {' · '.join(figs) + ' gross, ' if figs else ''}"
+                     "left out of every figure above")
+    return lines
+
+
 def format_report(rep: MonthlyReport) -> str:
     name = pd.Timestamp(f"{rep.month}-01").strftime("%B %Y")
     lines = [f"goldbot monthly report · {name} · as of {rep.as_of_utc[:16].replace('T', ' ')} UTC",
@@ -263,38 +366,17 @@ def format_report(rep: MonthlyReport) -> str:
     for a in rep.accounts:
         c = a.currency
         lines.append("")
-        lines.append(f"{a.account_id} ({c or 'currency not reported'})")
-        approx = " · approximate: positions overlapped" if a.overlapped else ""
-        lines.append(f"  Return {a.twr_pct:+.2f}% (chained closed-trade return, time-weighted; deposits excluded"
-                     f"{approx}) · net {money(a.pnl, c)}{f' ({a.pnl_note})' if a.pnl_note else ''} over "
-                     f"{_trades(a.net_trades, 'net ')} of {a.trades}")
-        if a.net_r is not None:
-            ci = f", 90% t-interval (approx.) {a.r_ci90[0]:+.2f} to {a.r_ci90[1]:+.2f}" if a.r_ci90 else ""
-            note = f" ({a.r_note})" if a.r_note else ""
-            lines.append(f"  R {a.net_r:+.2f} net · {a.r_per_trade:+.2f} R/trade over {a.r_trades} with R{ci}{note}")
+        lines.append(f"{account_name(a.account_id)} ({c or 'currency not reported'})")
+        if not a.trades:
+            lines.append("  no phase-gate trades")
         else:
-            lines.append("  R: not recorded")
-        parts = []
-        if a.mae_r_median is not None and a.mfe_r_median is not None:
-            parts.append(f"median MAE {a.mae_r_median:+.2f}R · median MFE {a.mfe_r_median:+.2f}R over "
-                         f"{a.excursion_trades} trade{'s' if a.excursion_trades != 1 else ''}")
-        if a.approx_mae_r_median is not None and a.approx_mfe_r_median is not None:
-            parts.append(f"approximate (restart): median MAE {a.approx_mae_r_median:+.2f}R · median MFE "
-                         f"{a.approx_mfe_r_median:+.2f}R over {a.excursion_approx}")
-        if parts:
-            lines.append("  Excursion: " + "; ".join(parts) + " (whole position until the final exit)")
-        lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average "
-                     f"{_avg(a.avg_per_day, c)} per trading day over {a.trading_days} weekdays")
-        best = " · ".join(f"{pd.Timestamp(d.day):%a %d %b} {money(d.pnl, c)}"
-                          + (f" ({d.r:+.1f}R)" if d.r is not None else "") for d in a.best_days)
-        lines.append(f"  Best days: {best}")
-        if a.days_50_plus is not None:
-            lines.append(f"  Days at £50 or more: {a.days_50_plus}")
-        if a.gross_note:
-            figs = ([money(a.gross_pnl, c)] if a.gross_pnl is not None else []) + \
-                ([f"{a.gross_r:+.2f}R"] if a.gross_r is not None else [])
-            lines.append(f"  {a.gross_note}: {' · '.join(figs) + ' gross, ' if figs else ''}"
-                         "left out of every figure above")
+            lines += _closed_lines(a)
+        if a.learning_trades:
+            net = f"net {money(a.learning_pnl, c)} over {a.learning_net_trades}" if a.learning_pnl is not None \
+                else "no net rows"
+            apart = f"; {a.learning_voided} voided as evidence, {a.learning_censored} censored"
+            lines.append(f"  {_trades(a.learning_trades, 'exploration and probe ')} (account money, not evidence; "
+                         f"not in the phase-gate record): {net}{apart}; left out of every figure above")
         lines.append("  " + _ladder_line(a.milestones, c))
     for e in rep.errors:
         lines.append(f"⚠️ {e}")
@@ -304,13 +386,15 @@ def format_report(rep: MonthlyReport) -> str:
 def month_to_date_line(state_dir: str | Path, now: pd.Timestamp, *, day: str | None = None) -> list[str]:
     """One digest line for the month so far (all accounts) up to opportunity day `day` (default now's), or nothing
     before the month's first closed trade."""
-    rep = build_monthly_report(state_dir, now=now, day=day)
-    if not rep.accounts:
+    # phase-gate trades only: the digest shows this line beside a real-money account, never a demo learning account
+    rep = build_monthly_report(state_dir, now=now, day=day, learning=(None, []))
+    accounts = [a for a in rep.accounts if a.trades]
+    if not accounts:
         return []
     name = pd.Timestamp(f"{rep.month}-01").strftime("%B")
     parts = []
-    for a in rep.accounts:
-        who = f"{a.account_id} " if len(rep.accounts) > 1 else ""
+    for a in accounts:
+        who = f"{account_name(a.account_id)} " if len(accounts) > 1 else ""
         r = f" · {a.net_r:+.2f}R" + (f" ({a.r_note})" if a.r_note else "") if a.net_r is not None else ""
         n = _trades(a.net_trades, "net ") if a.gross_only else _trades(a.trades)
         parts.append(f"{who}{a.twr_pct:+.2f}% time-weighted · {n}{r} · "

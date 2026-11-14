@@ -608,7 +608,7 @@ monthly_review:                      # monthly review (goldbot/ops/monthly_revie
   catch_up_days: 10                  # a month never built is built on any daily tick up to this many days after it ends
   balance_tolerance: 0.50            # account currency over the month: a balance change that goldbot's net P&L and the
                                      #   balance deals do not explain beyond this FLAGS the review (RC-9); never a pass
-  balance_tolerance_per_trade: 0.01  #   ... plus this per closed trade in the window
+  balance_tolerance_per_trade: 0.01  #   ... plus this x sqrt(trades in the window, learning closes included; issue #394)
   gbp_per_usd: 0.75                  # agent spend (USD, aux.db agent_spend) into the month's GBP total
   hosting_gbp_month:                 # known hosting, GBP a month (docs/finance/budget-2026-10.md, docs/deploy/icm-depth-host.md)
     oracle_always_free_brain_and_bridge: 0.0

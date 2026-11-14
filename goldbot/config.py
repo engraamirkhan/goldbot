@@ -773,7 +773,8 @@ class MonthlyReviewSettings(_Section):
     catch_up_days: int = Field(10, ge=1, le=28)
     # account currency over the month: rounding, not money (the daily ledger allows 0.05 a day + 0.01 a deal)
     balance_tolerance: float = Field(0.50, ge=0)
-    balance_tolerance_per_trade: float = Field(0.01, ge=0)   # plus this per closed trade in the window (RC-9)
+    # plus this x sqrt(closed records and learning closes in the window): per-row rounding spreads as sqrt(n)
+    balance_tolerance_per_trade: float = Field(0.01, ge=0)
     gbp_per_usd: float = Field(0.75, gt=0)                   # agent spend (USD) into the month's GBP total
     # known hosting, GBP a month (docs/finance/budget-2026-10.md; docs/deploy/icm-depth-host.md: the vantage E5.Flex box
     # costs £4.52 against the approved £3.57). Labels only, never a host name or address
