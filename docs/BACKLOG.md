@@ -110,7 +110,7 @@ rows.
 | 150 | EVAL-2 L2/L3 and forward runners call assert_harness_sane before any read | Research · EVAL-2 L2/L3/forward runner | S | done (branch fix/eval2-runner-integrity, 2026-11-13; R138) · reviews: quant-reviewer, code-reviewer |
 | 195 | Read MFE/MAE in the performance and exits reports | research reporting (follow-up of R135, research-director ruling 2026-11-13) | S | implemented (2026-11-13, branch feat/mfe-mae-reports, R147) · accountable: performance-analyst · reviews: quant-reviewer |
 | 207 | Quant ruling: L3 cells with no registered time exit | Research · EVAL-2 L3 runner | S | ruled (quant-reviewer, 2026-11-13) · enforced by eval2.runner.cut_at_holdout (branch fix/eval2-runner-integrity) |
-| 211 | Pre-register and wire the order-flow discovery screen; news_llm collect-only for 12 months | research (follow-up of R139, plan item 8, 2026-11-13) | M | proposed · news part blocked until 12 months of forward news data · accountable: research-director · reviews: quant-reviewer, data-engineer |
+| 211 | Pre-register and wire the order-flow discovery screen; news_llm collect-only for 12 months | research (follow-up of R139, plan item 8, 2026-11-13) | M | order-flow part done (2026-11-14, branch feat/orderflow-governance-1114, M50; quant review pending) · news part blocked until 12 months of forward news data (trigger 2027-10-16) · accountable: research-director · reviews: quant-reviewer, data-engineer |
 | 212 | News collector coverage readout and outage check on the brain | data (follow-up of R139, 2026-11-13) | S | proposed · accountable: data-engineer · reviews: sre |
 | 213 | Keep Dukascopy's ask-side tick volume in the 1m bars | data (follow-up of R139, 2026-11-13) | M | proposed · accountable: data-engineer · reviews: quant-reviewer |
 | 214 | Per-account MFE/MAE columns from our own closes once lane F's fields exist | data / research (follow-up of R139, 2026-11-13) | S | proposed · blocked on lane F · accountable: data-engineer · reviews: quant-reviewer |
@@ -1720,7 +1720,6 @@ Each item's status names its accountable role and the trigger that brings it bac
 - Rails built and off by default: 17, 18, 19, 21, 35. They only tighten; the trading-safety-reviewer recommends and
   the PD+PO decide, no owner input.
 - 69, leverage and largest-order audit: folded into the finance-auditor's monthly audit (next 2026-12-04).
-- 91, retired-family guard: before the next registry budget opens.
 - 111 allocator against controls and 116 higher-timeframe features: return with a live candidate or a model lane.
 - Data with no queued consumer: 119 COMEX volume, 121 broker history depth, 123 central-bank and ETF flows, 124
   second intraday source, 125 GPR/GDELT, 126 COT availability floor (before any positioning read), 147 ALFRED

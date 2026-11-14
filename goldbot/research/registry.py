@@ -98,6 +98,11 @@ class PreregisteredForLaterQuarter(TrialBudgetExceeded):
     quarter's budget on a trial the plan put in a later one, and read it by a rule meant for later data."""
 
 
+class RetiredExplorationUsed(TrialBudgetExceeded):
+    """A retired family (research.retired_families, allocated or screened) would take a trial from the open budget
+    beyond the retired families' ONE shared exploration trial a quarter (director.RETIRED_EXPLORATION; BACKLOG 91)."""
+
+
 class QueuedConfigMismatch(TrialBudgetExceeded):
     """The quarter holds a pending queued row of the run's family and agent with another config hash: the run is
     refused rather than charged to the open budget (BACKLOG 50; `director.queued_mismatch`)."""
@@ -873,14 +878,20 @@ class TrialRegistry:
         queued row, no slot and no later row, whose family and agent (None: the family alone) have a pending queued row
         of the quarter with another config hash, raises QueuedConfigMismatch instead of falling back to the open budget
         (BACKLOG 50, `director.queued_mismatch`).
+        Retired families (BACKLOG 91; settings: "The retired families SHARE 1 exploration trial a quarter"): a job on a
+        family in `retired` with no pending queued row of its exact config (an open-budget run, `rule_ref` cited or
+        not) raises RetiredExplorationUsed when the quarter's retired-family trials (`director.retired_quarter_trials`,
+        every retired family, allocated or screened) plus this run's retired jobs would exceed RETIRED_EXPLORATION.
         Raises TrialBudgetExceeded; returns (the quarter, the matching pre-registration or None, per job)."""
         # director imports this module, so the import is local
         from goldbot.research.director import (
+            RETIRED_EXPLORATION,
             later_preregistration,
             later_refusal,
             pending_preregistration,
             queued_mismatch,
             reserved_trials,
+            retired_quarter_trials,
             slot_preregistration,
             slot_refusal,
         )
@@ -909,6 +920,19 @@ class TrialRegistry:
             if p is None and agents is not None and (why := queued_mismatch(rows, q, family, agents[i], config, h)):
                 raise QueuedConfigMismatch(why)
             preregs.append(None if p is not None and any(p is c for c in preregs) else p)   # one row covers one run
+        if any(p is None for p in preregs) and retired is None:
+            from goldbot.config import load_settings
+            retired = {e.family for e in load_settings().research.retired_families}      # fail closed
+        exploring = [f for (f, _), p in zip(jobs, preregs) if p is None and f in (retired or ())]
+        if exploring:
+            used = retired_quarter_trials(rows, q, set(retired or ()))
+            if used + len(exploring) > RETIRED_EXPLORATION:
+                raise RetiredExplorationUsed(
+                    f"{', '.join(sorted(set(exploring)))} is retired (research.retired_families) and has no pending "
+                    f"queued pre-registration of this config: the retired families share {RETIRED_EXPLORATION} "
+                    f"exploration trial a quarter, and {q} has {used} retired-family trial(s) stamped with "
+                    f"{len(exploring)} retired-family job(s) requested. Pre-register the configuration in the queue to "
+                    f"run it from there, or wait for the next quarter (BACKLOG 91)")
         n_open = sum(p is None for p in preregs)
         reserved = reserved_trials(rows, q, reserved_setting).reserved
         if n_open:
