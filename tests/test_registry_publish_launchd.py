@@ -112,3 +112,25 @@ def test_the_installer_applies_and_uninstalls_only_on_a_mac(tmp_path):
 @pytest.mark.parametrize("path", [RUNNER, INSTALL])
 def test_the_scripts_are_executable(path):
     assert os.access(path, os.X_OK)
+
+
+def test_an_ssh_failure_fails_the_publish_and_the_runner_logs_fail_never_zero_entries(tmp_path):
+    """Code review 2026-11-14: an unreachable brain was read as an empty outbox ("0 entries", rc 0), so a broken ssh
+    looked like a quiet day. The publish now exits non-zero before anything is published and the runner logs FAIL."""
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    for script in (RUNNER, ROOT / "scripts" / "registry_publish.sh"):
+        shutil.copy2(script, repo / "scripts" / script.name)
+    (repo / ".venv" / "bin").mkdir(parents=True)
+    py = repo / ".venv" / "bin" / "python"
+    py.write_text(f"#!/bin/sh\ntouch {tmp_path}/published\n")
+    py.chmod(0o755)
+    env = env_for(tmp_path, "Darwin")
+    ssh = Path(env["PATH"].split(":")[0]) / "ssh"
+    ssh.write_text("#!/bin/sh\necho 'ssh: connect to host goldbot-brain: Connection refused' >&2\nexit 255\n")
+    ssh.chmod(0o755)
+    out = subprocess.run(["/bin/bash", str(repo / "scripts" / RUNNER.name)], env=env, capture_output=True, text=True)
+    assert out.returncode != 0
+    assert not (tmp_path / "published").exists()
+    line = (Path(env["HOME"]) / "tmp" / "registry-publish" / "publish.log").read_text().splitlines()[-1]
+    assert " FAIL " in line and "0 entries" not in line and "entries read" not in line

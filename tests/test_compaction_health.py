@@ -78,6 +78,23 @@ def test_the_job_carries_the_streak_from_the_previous_result(tmp_path, monkeypat
     assert out["tables"]["fills"]["deferred_streak"] == 0
 
 
+def test_a_run_that_raised_last_starts_the_streak_over_instead_of_counting_on_from_an_older_success(tmp_path,
+                                                                                                   monkeypatch):
+    """Code review 2026-11-14: the scheduler keeps the last successful result when a run raises, so the streak would
+    count on from a success that is no longer the previous run. The previous run raised: the count starts over."""
+    from goldbot.config import CompactSettings
+    from goldbot.ops.jobs import journal_compact
+    job = _job(started=NOW - pd.Timedelta("1D"), finished=NOW - pd.Timedelta("23h"), result=_result(decisions=(5, 2)))
+    job.update(last_ok=False, last_error="RuntimeError: journal_compact failed")
+    _scheduler(tmp_path, job)
+    monkeypatch.setattr(compact_mod, "compact_table",
+                        lambda store, table, **kw: CompactReport(table=table, deferred=7 if table == "decisions" else 0))
+    ctx = SimpleNamespace(store=None, state_dir=tmp_path, settings=SimpleNamespace(
+        compact=CompactSettings(tables=["decisions", "fills"])))
+    out = journal_compact(ctx, NOW)  # type: ignore[arg-type]
+    assert out["tables"]["decisions"]["deferred_streak"] == 1
+
+
 def test_the_job_without_a_state_dir_starts_the_streak_at_one(monkeypatch):
     from goldbot.ops.jobs import journal_compact
     monkeypatch.setattr(compact_mod, "compact_table",

@@ -1691,8 +1691,10 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------------------------- journal compaction (BACKLOG 170)
 def _previous_result(state_dir: Path | None, job: str) -> dict[str, Any] | None:
-    """`job`'s last recorded result from the scheduler status (aux.db, else scheduler.json); None when there is none
-    or it cannot be read (the caller then starts any count over: never an error of the job itself)."""
+    """`job`'s last recorded result from the scheduler status (aux.db, else scheduler.json); None when there is none,
+    it cannot be read, or the job's last run raised (the scheduler keeps the last successful result then, which is no
+    longer the previous run's; code review 2026-11-14). The caller then starts any count over: never an error of the
+    job itself; the failed run is reported by health `job:<name>`."""
     if state_dir is None:
         return None
     from goldbot.db.bookkeeping import scheduler_status
@@ -1705,7 +1707,9 @@ def _previous_result(state_dir: Path | None, job: str) -> dict[str, Any] | None:
         return None
     jobs = doc.get("jobs") if isinstance(doc, dict) else None
     entry = jobs.get(job) if isinstance(jobs, dict) else None
-    result = entry.get("last_result") if isinstance(entry, dict) else None
+    if not isinstance(entry, dict) or entry.get("last_ok") is False:
+        return None
+    result = entry.get("last_result")
     return result if isinstance(result, dict) else None
 
 
