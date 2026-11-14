@@ -300,6 +300,9 @@ class SchedulerSettings(_Section):
     # hours after the nightly jobs (01:30 autodisc), clear of the 22:00-00:00 UTC cluster; first sight runs it once
     journal_compact: ScheduleSettings = ScheduleSettings(kind="daily", at="03:40", max_late_hours=20,
                                                          run_if_never_run=True)
+    # BACKLOG 212: the news collector's coverage readout and outage dq_events (goldbot/data/news_coverage.py)
+    news_coverage: ScheduleSettings = ScheduleSettings(kind="daily", at="06:05", max_late_hours=20,
+                                                       run_if_never_run=True)
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)

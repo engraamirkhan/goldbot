@@ -1819,6 +1819,12 @@ def monthly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary(review)
 
 
+def news_coverage(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """BACKLOG 212: the news collector's coverage readout and outage check (goldbot/data/news_coverage.py)."""
+    from goldbot.data.news_coverage import run
+    return run(ctx.store, slot)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1848,7 +1854,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
     "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
     "weekly_review": weekly_review,               # ranked weekly action list the next director run consumes
-    "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
+    "monthly_review": monthly_review,
+    "news_coverage": news_coverage,               # BACKLOG 212: news collector coverage readout + outage dq_events             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
 }
 
 
