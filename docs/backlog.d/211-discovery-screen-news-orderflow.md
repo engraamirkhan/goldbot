@@ -1,6 +1,6 @@
 ---
 number: 211
-rank: 74
+rank: 1
 title: Pre-register and wire the order-flow discovery screen; news_llm collect-only for 12 months
 stage: 'research (follow-up of R139, plan item 8, 2026-11-13)'
 size: M

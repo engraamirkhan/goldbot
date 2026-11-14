@@ -89,58 +89,48 @@ retired, 127's private-repository step was overtaken by deleting data-v1, and ad
 (17, 18, 19, 21, 35) only tightens, so the PD+PO decide on the trading-safety reviewer's recommendation. 15 ranked
 rows.
 
+**Status sweep 2026-11-14 (product owner; base `11b72577`, PRs #386-#393 merged and deployed).** Owner rule: nothing
+left pending. 29 items marked done with their PR: 117, 149, 150, 207 (#386); 146 (#387); 188, 219-226, 231-233
+(#388); 227-230 (#390); 145, 195 (#391); 144, 152, 179 (#393); 69 (folded into the monthly review job). 188 closed
+as a FAIL: the pre-registered 2010-17 read retired Z10D, Z9D and Z5P and H-90 closed for design futility, so there
+is no live candidate. 16 retired under ADR 0066 (no consumer): 93, 94, 96, 98, 111, 116, 119, 121, 123-126, 134,
+143, 147, 151. 10 carry an automatic trigger, none on the owner: 148 5B (S5 green + first L2 carry), 211 news part
+(2027-10-16), 234 (2027-02-13 or 5 shock periods), 236 (quant note on 14b, due 11-20), 253 (a 1d/1w CONFIRM
+pass), and the rails 17, 18, 19, 21, 35 (set in any first go-live settings diff). Still open: 211 order-flow wiring
+(ready, due 11-21) and 91 governance guard (due 12-18, before the 2027Q1 budget). Items closed by other lanes
+today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) were not touched here.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
-| 188 | Survivor reads: Z10D, Z9D, Z5P at 300 fills and the H-90 London read | Evaluation · PROVE (profitability-2026-11-12 (b)/(c); prereg-2026-11-12-london-signal-arms.md) | S | ready (added 2026-11-13, triage) · accountable: evaluator · reviews: quant-reviewer · progress check 2026-11-20; each read on its pre-registered trigger |
-| 148 | EVAL-2 build lanes 0-5B | research build (ADR 0076, prereg-2026-11-09-eval2.md) | L | lanes 0-4 and 5A done (PR #344, #347, #348, #355, #356, #358; docs #345); open: Lane 5B engine consumers, one account at a time · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-24 (triage 2026-11-13) |
-| 145 | Enable N-3 HAR abstention: refill 2026 Duka holes, overlap check, K row | research ops (N-3, prereg-2026-11-07-n3-har.md) | S | checks built, N-3 stays off (R148, 2026-11-13): (1) Mac 2026 year has 0 gap days, local replay writes `ok` from 2026-07-02 (older 2024-25 holes -> 247); brain push + `har_check.py dry-run` owed; (2) `har_check.py overlap` owed on the brain (ICM minutes are brain-only); (3) K row NOT recommended: 6 low days in 92 replayed nights (6.5 %), 24/73 windows void, scope mostly retired; research director decides fix-or-drop · reviews: quant-reviewer, trading-safety-reviewer · due 2026-11-18 |
-| 146 | Session-split gold cost of record in the catalogue sim | Research (costs) | S | done (2026-11-13, R137, branch feat/gold-cost-session-split; quant-reviewed with conditions applied) · accountable: implementer · reviews: quant-reviewer |
-| 144 | 1d/1w engine go-live blockers (WS-4) | Engine · BUILD | M | in review (2026-11-14: blockers 1-6 closed: 1-3, 6 R149 / ADR 0081, 4 BACKLOG 251, 5 BACKLOG 252 + 254; only 7 open, BACKLOG 253) · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer · due 2026-11-27 |
-| 152 | Exchange holidays from a published calendar, not missing data days | Research data · catalogue context | M | implemented 2026-11-13 (branch feat/exchange-holiday-calendar, R145, ADR 0082; follow-ups 235-238) · accountable: data-engineer · reviews: quant-reviewer, code-reviewer |
+| 211 | Pre-register and wire the order-flow discovery screen; news_llm collect-only for 12 months | research (follow-up of R139, plan item 8, 2026-11-13) | M | order-flow part done (2026-11-14, branch feat/orderflow-governance-1114, M50; quant review pending) · news part blocked until 12 months of forward news data (trigger 2027-10-16) · accountable: research-director · reviews: quant-reviewer, data-engineer |
+| 236 | Re-register S05-S07 after the published holiday calendar | Research · registry | S | auto-trigger (sweep 2026-11-14): the strategy-researcher writes the S06-V0..V2 and S07-V0/V1 rows (K added, old rows superseded) the day the quant-reviewer's note on prereg section 14b and 235's Fed schedule floor lands; due 2026-11-20 · accountable: strategy-researcher · reviews: quant-reviewer, evaluator |
+| 148 | EVAL-2 build lanes 0-5B | research build (ADR 0076, prereg-2026-11-09-eval2.md) | L | auto-trigger (sweep 2026-11-14): lanes 0-4 and 5A done (PR #344, #347, #348, #355, #356, #358; docs #345). Lane 5B (engine consumers) starts the day the EVAL-2 S5 self-test (`scripts/eval2_selftest.py`) reads green for a broker AND the first L2 carry is recorded; then one account at a time with trading-safety review. With Z10/Z9/Z5 retired (188) no L2 carry exists today, so this may not fire this quarter · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
+| 91 | Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap | Research (governance) · PROVE | S | done (2026-11-14, branch feat/orderflow-governance-1114, M51; quant review pending before the 2027Q1 budget opens) · accountable: implementer |
+| 234 | Measure rules-v1 shock precision on the brain's real headlines | research (follow-up of R144) | S | auto-trigger (sweep 2026-11-14): relevance measured (held-out precision 0.857); shock precision needs real shocks. The ml-researcher re-runs the 150-headline measurement on 2027-02-13 (3 months of headlines), or earlier once the brain's news table holds 5 rule-flagged shock periods; the 120-min cap and fail-closed blackout stay meanwhile · accountable: ml-researcher · reviews: quant-reviewer, trading-safety-reviewer |
+| 253 | Lift the 1d/1w settings guard: CONFIRM pass and trading-safety sign-off (BACKLOG 144 blocker 7) | Engine · GATE | XS | auto-trigger (sweep 2026-11-14): fires when the evaluator records a 1d/1w CONFIRM PASS with a passing lot fit and 251 and 252 are done; no candidate exists today · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
 | 90 | 20-day measured cost/model series for the adaptive limits | Risk (limits) · PROTECT | S | done 2026-11-14 (R150): quant-reviewer APPROVED the definition 2026-11-14 (only tightens; 20 UTC weekdays by exit, cut at 00:00 UTC of the decision day; USD/oz both sides; label bars over 9 days old unmeasured; over 20% unmeasured -> None); its non-blocking suggestion, a conservative bound pricing each unmeasured fill at the window's worst fill, is logged and in the job row, never a limit input (test_the_conservative_bound_is_reported_but_never_moves_a_limit); replay follow-up BACKLOG 255 done |
 | 187 | Drop the retired I0-<instrument> and ZCD registrations once flat | ops / config (follow-up of R133, profitability-2026-11-12, 2026-11-12) | S | implemented, finishes itself (2026-11-14, branch feat/auto-gated-1114, R153): trigger: the engine de-registers each retired arm at the first reconciliation that finds the account flat in it (goldbot/engine/exploration_deregister.py; journalled exploration_arm_deregistered, aux.db exploration_arm_deregistered); the config rows stay, inert · accountable: implementer · reviews: trading-safety-reviewer |
 | 175 | Reconcile Vantage BTCUSD weekend swap charges against the seven-night projection | ops + finance (follow-up of BACKLOG 153, R130) | S | implemented, finishes itself (2026-11-14, branch feat/auto-gated-1114, R152): trigger: the daily swap_reconcile job (23:45 UTC) after any weekend BTCUSD hold closes stores the broker swap against the seven-night projection (aux.db swap_reconciliations); health swap_reconcile warns past costs.swap_reconcile_tolerance; the finance-auditor keeps or corrects the schedule on that warn · accountable: finance-auditor · reviews: quant-reviewer, trading-safety-reviewer |
 | 142 | Retire the population loop, decide the news shock blackout, prune offline research code (cleanup phase 2) | Operations and research hygiene (ADR 0066 phase 2) · PROTECT · RUN | M | ready (phase 1 done, PR #294, #298); (b) is decided by PD+PO after trading-safety review (keyword rule or retire the shock rail); only funding a key stays owner-only · accountable: architect (plan), then implementer · reviews: trading-safety-reviewer, quant-reviewer, code-reviewer · due 2026-11-27 (triage 2026-11-13) |
-| 179 | Compact the other append-only store tables (ticks, observe_ticks, fills, dq_events) | data (follow-up of backlog 170, R131, 2026-11-12) | S | done 2026-11-13 (branch feat/compact-other-tables, R146; ticks enabled after BACKLOG 239) · accountable: data-engineer · reviews: code-reviewer, sre |
 | 105 | Record a rule-code version on each exploration arm row | Research integrity (exploration arms) | S | done (2026-11-14, branch feat/engine-backlog-1114): RULE_VERSIONS per rule (research/arm_rule_versions.py), source pins in tests/test_arm_rule_versions.py, aux migration 36 exploration_obs.arm_rule_version written by the engine and the H-60 run, read_obs(rule_version=), daily-review line; arm_hash and arm ids unchanged · reviews: quant-reviewer, code-reviewer |
-| 117 | A bad exploration arm row must not stop the engine (exits keep running) | build | S | done (implemented 2026-11-13, branch fix/engine-survives-bad-arm-row, R136; in review) · accountable: implementer · reviews: trading-safety-reviewer, code-reviewer |
-| 149 | EVAL-2 Lane 5 runner follow-ups from the Lane 3 quant review | Research (EVAL-2 Lane 5 batch runner) | S | done (branch fix/eval2-runner-integrity, 2026-11-13; R138) · reviews: quant-reviewer, code-reviewer |
-| 150 | EVAL-2 L2/L3 and forward runners call assert_harness_sane before any read | Research · EVAL-2 L2/L3/forward runner | S | done (branch fix/eval2-runner-integrity, 2026-11-13; R138) · reviews: quant-reviewer, code-reviewer |
-| 195 | Read MFE/MAE in the performance and exits reports | research reporting (follow-up of R135, research-director ruling 2026-11-13) | S | implemented (2026-11-13, branch feat/mfe-mae-reports, R147) · accountable: performance-analyst · reviews: quant-reviewer |
-| 207 | Quant ruling: L3 cells with no registered time exit | Research · EVAL-2 L3 runner | S | ruled (quant-reviewer, 2026-11-13) · enforced by eval2.runner.cut_at_holdout (branch fix/eval2-runner-integrity) |
-| 211 | Pre-register and wire the order-flow discovery screen; news_llm collect-only for 12 months | research (follow-up of R139, plan item 8, 2026-11-13) | M | order-flow part done (2026-11-14, branch feat/orderflow-governance-1114, M50; quant review pending) · news part blocked until 12 months of forward news data (trigger 2027-10-16) · accountable: research-director · reviews: quant-reviewer, data-engineer |
 | 212 | News collector coverage readout and outage check on the brain | data (follow-up of R139, 2026-11-13) | S | proposed · accountable: data-engineer · reviews: sre |
 | 213 | Keep Dukascopy's ask-side tick volume in the 1m bars | data (follow-up of R139, 2026-11-13) | M | proposed · accountable: data-engineer · reviews: quant-reviewer |
 | 214 | Per-account MFE/MAE columns from our own closes once lane F's fields exist | data / research (follow-up of R139, 2026-11-13) | S | proposed · blocked on lane F · accountable: data-engineer · reviews: quant-reviewer |
-| 223 | Monthly review job, stored in aux.db | ops / review loop (architect plan 2026-11-13 item 3, R142) | M | implemented (2026-11-13, branch feat/monthly-review) · accountable: implementer · reviews: code-reviewer, sre |
-| 224 | Monthly tie-out of net P&L against the broker balances flags, never passes | finance / review loop (R142; finance audit RC-9) | S | implemented (2026-11-13, branch feat/monthly-review) · accountable: implementer · reviews: finance-auditor, code-reviewer |
-| 225 | Monthly spend, trial budget used and reliability scorecard | finance / ops (R142) | S | implemented (2026-11-13, branch feat/monthly-review) · accountable: implementer · reviews: cfo, cto, sre |
-| 226 | Monthly Telegram message, review-monthly issue and the review cadence | process / review loop (R142) | S | implemented (2026-11-13, branch feat/monthly-review) · accountable: program-director · reviews: security-reviewer |
 | 215 | Publish the brain's registry outbox from the Mac on a schedule | ops (follow-up of R140, 2026-11-13) | S | done (2026-11-14, fix/ops-backlog-1114): launchd agent com.goldbot.registry-publish (goldbot/ops/macos template, scripts/registry_publish_mac.sh: one log line, non-zero on failure; scripts/install_registry_publish_launchd.sh: dry run, --apply, --uninstall), shellcheck clean, tests/test_registry_publish_launchd.py; RUNBOOK "Registry publish from the Mac". Brain token stays read-only (2026-11-01 decision). Open check: feedback_loop registry ok within a day of the install on the Mac |
-| 227 | Equal demo arm shares instead of the Thompson bandit (H-61 allocator retired) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, code-reviewer |
-| 231 | Free rules-v1 headline scorer when no LLM client is configured | build (ML review 2026-11-13, lane ML2) | M | done 2026-11-13 (branch feat/news-rule-scorer, R144, ADR 0079) · accountable: implementer · reviews: quant-reviewer, code-reviewer |
 | 216 | Research director reads and marks the weekly review proposals | research ops (follow-up of R140, 2026-11-13) | S | done (2026-11-14, fix/ops-backlog-1114): consumer is the Mac research director (the brain research_director job is off without an Anthropic key): goldbot/research/weekly_inbox.py (list read-only; mark with the decision on stdin; an unreadable roll-up never marked) and scripts/weekly_proposals.sh over ssh as the goldbot user; mark_weekly_consumed records the decision; tests/test_weekly_inbox.py proves one mark and the loop check passing |
-| 228 | Retire the H-62 online meta-labeller's retrain (code and data kept) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer |
-| 232 | Rule shocks fire the news-shock entry blackout, never an exit | build (ML review 2026-11-13, lane ML2) | S | done 2026-11-13 (branch feat/news-rule-scorer, R144, ADR 0079) · accountable: implementer · reviews: trading-safety-reviewer |
 | 217 | Deploy R140, publish the waiting registry outbox, verify feedback_loop clears | ops (follow-up of R140, 2026-11-13) | XS | done (2026-11-14): R140 deployed on the brain, outbox published from the Mac (3259 rows), weekly proposals marked 2026-11-14; incident 2026-11-13 closed |
-| 229 | Stop the specialists' Saturday LightGBM retrain (watchers kept) | research ops (ML review 2026-11-13, lane ML1) | S | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer (no order path change) |
-| 233 | Health alert when headlines arrive but none is scored in 24 h | build (ML review 2026-11-13, lane ML2) | S | done 2026-11-13 (branch feat/news-rule-scorer, R144) · accountable: implementer · reviews: sre |
-| 230 | Point-in-time feature snapshots on every gold exploration candidate | research data (ML review 2026-11-13 improvement B, lane ML1) | M | done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143; ADR 0080) · accountable: implementer · reviews: quant-reviewer, data-engineer, code-reviewer |
-| 234 | Measure rules-v1 shock precision on the brain's real headlines | research (follow-up of R144) | S | open: relevance measured, shock precision not measurable yet (one real shock in the window); re-measure after a geopolitical shock period or 3 months · accountable: ml-researcher · reviews: quant-reviewer, trading-safety-reviewer |
 | 235 | calendar-v1 FOMC rows carry the Fed's published schedule date | Research data · catalogue context | S | catalogue side done 2026-11-13 (branch feat/exchange-holiday-calendar); release side open · accountable: data-engineer · reviews: quant-reviewer |
 | 239 | Measure tick part counts and compaction cost on the brain, then enable ticks | data (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: data-engineer · reviews: sre · due 2026-11-20 |
 | 243 | Trade detail shows MFE and MAE | dashboard (follow-up of backlog 195 / R147) | S | proposed · accountable: performance-analyst · design: ui-ux-designer · reviews: code-reviewer |
 | 247 | Refill the 2024-2025 Dukascopy gold holes (15 weekdays) | data (raw/ on the Mac, then the brain inbox) | S | ready · accountable: data-engineer · needs network to Dukascopy (Mac outside the Claude sandbox) · due 2026-11-20 (found 2026-11-13, backlog 145) |
 | 251 | 1d/1w long-history daily refresh, preflight and history_gap alert (BACKLOG 144 blocker 4) | Engine · BUILD | S | done (2026-11-14, branch feat/engine-backlog-1114): job long_history_refresh (ops/long_history.py), preflight item long_history, health long_history:<account> (NOTIFY_ON_WARN), blocker 4 left GO_LIVE_BLOCKERS_1D_1W; tests tests/test_long_history_refresh.py · reviews: sre, data-engineer |
 | 255 | Cost/model ratio in the adaptive-limits replay | Risk (limits) · PROTECT | S | done 2026-11-14 (branch feat/limits-cost-ratio-replay-1114): quant-reviewer approved the R150 definition 2026-11-14; replay measures through limits_job._cost_ratio with store_exit_legs / store_label_bars; tests/test_cost_ratio_series.py test_a_replay_day_with_a_1_3_ratio_gives_the_floors_as_the_nightly_job_would, test_without_a_data_root_the_replay_leaves_the_cost_ratio_none_and_says_so, test_the_replay_reads_the_accounts_exit_fills_and_the_labels_dukascopy_bars_as_the_job_does · reviews: quant-reviewer |
-| 236 | Re-register S05-S07 after the published holiday calendar | Research · registry | S | proposed (follow-up of R145) · accountable: strategy-researcher · reviews: quant-reviewer, evaluator |
 | 240 | Quarantine move keeps each row's write time | data (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: data-engineer · reviews: code-reviewer |
 | 252 | Quant ratification of ADR 0081: the common filter at a 1d/1w entry close (BACKLOG 144 blocker 5) | Research · REVIEW | XS | done: quant-reviewer APPROVE 2026-11-14 on 11b72577; no look-ahead; EET tier-1 22:30 vs 23:30 send gap noted, ~zero effect (no tier-1 USD event 22:30-00:15 UTC); its condition (research enforces filter_close in code) built in BACKLOG 254 (branch feat/engine-backlog-1114); blocker 5 left GO_LIVE_BLOCKERS_1D_1W |
 | 237 | Refresh the exchange holiday calendar yearly and add early closes | Research data · catalogue context | S | proposed (follow-up of R145) · accountable: data-engineer · reviews: code-reviewer · due before 2026-12-31 (one year ahead of valid_through) |
 | 241 | Ticks and observe_ticks carry their own written_utc column | data (follow-up of backlog 179, R146, 2026-11-13) | S | open · accountable: data-engineer · reviews: code-reviewer, quant-reviewer |
-| 253 | Lift the 1d/1w settings guard: CONFIRM pass and trading-safety sign-off (BACKLOG 144 blocker 7) | Engine · GATE | XS | blocked on 251, 252 and a CONFIRM passer · accountable: implementer · reviews: trading-safety-reviewer, quant-reviewer |
 | 238 | Fill or quarantine the US500/UK100 long daily holes 2011-2013 | Research data · long daily history | S | proposed (follow-up of R145) · accountable: data-engineer · reviews: quant-reviewer |
 | 242 | Health warns when compaction keeps deferring or leaves a spill directory | ops (follow-up of backlog 179, R146, 2026-11-13) | S | done (2026-11-14, fix/ops-backlog-1114): health check compaction (goldbot/ops/checks/compaction.py) WARNs on deferred_streak >= 3 for a table (journal_compact result) or a .compact_tmp idle over 6 h outside a run; tests/test_compaction_health.py; RUNBOOK "Store compaction" |
 | 254 | 1d/1w live == history: the common filter at the entry close, the hold from the decision close (ADR 0081) | Research · BUILD | S | done (2026-11-14, branch feat/engine-backlog-1114): filter enforced in arm_rules.long_tf_context (+ spec_masks), hold and order id from the decision close (long_bars.origin/hold_s/time_exit_due), CONFIRM of record (research/long_confirm.py, run_arm_backtest), live == history test on 1d and 1w (tests/test_long_tf_live_history.py) · reviews: quant-reviewer, trading-safety-reviewer (pending) |
@@ -1687,8 +1677,8 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program
 director with the product owner, the CTO on technical and the CFO on financial matters, and reported on #34.
 - **Going live.** Demo until the paper -> tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
-  and the typed phrase. The pilot is deferred (owner, 2026-10-30) until a candidate passes 188's reads and the
-  confirm window. Recommendation: no live step before one arm PASSES against its matched control at its
+  and the typed phrase. The pilot is deferred (owner, 2026-10-30) until a candidate passes its pre-registered read
+  and the confirm window (188's survivors all failed on 2026-11-13). Recommendation: no live step before one arm PASSES against its matched control at its
   pre-registered read; then the CFO prices the pilot.
 - **Phase-gate thresholds** (item 8 values; ROADMAP OD-15: the paper mean's lower 95 % bound above 0).
   Recommendation: yes, as the quant reviewer advised.
@@ -1703,33 +1693,21 @@ director with the product owner, the CTO on technical and the CFO on financial m
 ## Next parallel wave
 Only items not yet done. The top three ready items have lanes; each lane touches different files.
 
-1. **188 survivor reads** (evaluator, read-only on the brain; `docs/research/`): fill counts on 2026-11-20, verdicts
-   at each pre-registered trigger.
-2. **150 + 149 EVAL-2 runner checks** (implementer, one lane: `goldbot/research/eval2/` runners and
-   `goldbot/research/catalogue/screen.py`, their tests).
-3. **117 bad arm row keeps the engine up** (implementer: `goldbot/engine/exploration.py`,
-   `goldbot/research/arms.py`, a new test file).
-4. **145 N-3 enable** (data-engineer: `scripts/local_bars.sh` refresh and the overlap note; the research director's
-   K row and `config/settings.yaml` `har_abstention` only after both).
-5. **146 session-split cost** (implementer: `goldbot/research/catalogue/costs.py` and its test). Not in the same
-   lane as 150/149 if those touch `costs.py`.
-6. **152 exchange holidays** (data-engineer: `goldbot/research/catalogue/dispatcher.py` calendar input).
+1. **211 order-flow discovery wiring** (research-director with an implementer: `scripts/research_pass.py`
+   `--orderflow` and its test; the pre-registration in `docs/research/`), due 2026-11-21.
+2. **236 S06/S07 re-registration** (strategy-researcher: the trial registry rows and the S05 `impl_notes` in
+   specs.yaml), on the quant note, due 2026-11-20.
+3. **91 retired-family guard** (implementer: `goldbot/research/registry.py`, `goldbot/research/director.py`, a new
+   test file), due 2026-12-18.
 
-Starts after these: 148 Lane 5B (engine consumers; after 150/149 and S5 green), 144 (engine 1d/1w; runner files,
-not in parallel with 148 5B), 90, 187 (once flat), 175 (after the first weekend BTCUSD hold), 142, 179, 105.
+On their triggers, not lanes now: 148 Lane 5B, 234, 253 and the five rails (see their statuses).
 
 ## Later (parked)
 Each item's status names its accountable role and the trigger that brings it back.
-- Rails built and off by default: 17, 18, 19, 21, 35. They only tighten; the trading-safety-reviewer recommends and
-  the PD+PO decide, no owner input.
-- 69, leverage and largest-order audit: folded into the finance-auditor's monthly audit (next 2026-12-04).
-- 111 allocator against controls and 116 higher-timeframe features: return with a live candidate or a model lane.
-- Data with no queued consumer: 119 COMEX volume, 121 broker history depth, 123 central-bank and ETF flows, 124
-  second intraday source, 125 GPR/GDELT, 126 COT availability floor (before any positioning read), 147 ALFRED
-  vintages.
-- 143 `accounts delete` (security hygiene, LOW); 151 (only if Lane 3 adds a probe builder).
-- UI and Telegram, at the bottom by the owner's profit focus: 93, 94, 96 (approval card, real money only), 98
-  (Limits screen), 134 (Telegram push policy, matters once real money is live).
+- Rails built and off on demo by design: 17, 18, 19, 21, 35. Automatic: the trading-safety-reviewer sets them in
+  the settings diff of any first go-live gate; no owner input, no separate work.
+- Retired 2026-11-14 (ADR 0066, no consumer; re-proposed only with a consumer): 93, 94, 96, 98, 111, 116, 119, 121,
+  123-126, 134, 143, 147, 151. 69 is done inside the monthly review job.
 - Older parked lines: M28 TreeSHAP per decision, R8 `order_calc_margin`, D10/A2/M9/D11/D13/D7 engine refinements,
   M25 CUSUM calibration, M10 learned allocator, entry order type study (limit vs market).
 

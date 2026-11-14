@@ -3,6 +3,6 @@ number: 147
 title: ALFRED first-release benchmark rates for the cost model
 stage: 'Research (data)'
 size: S
-status: 'later (triage 2026-11-13): small financing look-ahead (code review LOW-3) · accountable: data-engineer'
+status: 'retired (sweep 2026-11-14, ADR 0066: no consumer): the demo is gold-only (PR #385); the look-ahead touches only non-USD financing rates'
 ---
 - **147. ALFRED first-release benchmark rates for the cost model.** Value: the catalogue cost model's OECD IR3TIB01 3-month rates (EUR, JPY, GBP, AUD, CAD, CHF, NZD) are the 2026-11-02 vintage, a small look-ahead in financing (code review LOW-3). Acceptance: the first-release value of each monthly observation is pulled from ALFRED (free) into raw/daily with its real `available_utc`; `costs.window_model` reads it; a test shows a revised month uses the first-release value before the revision date; the reading-rule note is removed.

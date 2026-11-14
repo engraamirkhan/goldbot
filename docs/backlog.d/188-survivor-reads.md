@@ -1,10 +1,9 @@
 ---
 number: 188
-rank: 1
 title: 'Survivor reads: Z10D, Z9D, Z5P at 300 fills and the H-90 London read'
 stage: 'Evaluation · PROVE (profitability-2026-11-12 (b)/(c); prereg-2026-11-12-london-signal-arms.md)'
 size: S
-status: 'ready (added 2026-11-13, triage) · accountable: evaluator · reviews: quant-reviewer · progress check 2026-11-20; each read on its pre-registered trigger'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): resolved by the pre-registered 2010-17 kill-or-support read, PR #388 (b7955179; prereg-amendment-2026-11-13-survivor-reads.md). Excess over the matched control: Z10 -0.009 R [-0.016, -0.002], Z9 -0.006 [-0.015, +0.003], Z5 +0.004 [-0.004, +0.011], net -0.05..-0.07 R at the ICM cost of record; all three retired, K kept. H-90 closed before any leg read (design futility, K +0; 62a5d269). Verdict: FAIL, no live candidate · accountable: evaluator'
 ---
 - **188. Survivor reads: Z10D, Z9D, Z5P at 300 fills and the H-90 London read.** Value: PROVE, the only path to a
   live candidate today. The 2026-11-12 profitability read found no live candidate; Z10D, Z9D and Z5P are the only

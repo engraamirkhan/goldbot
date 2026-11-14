@@ -1,10 +1,9 @@
 ---
 number: 229
-rank: 77
 title: Stop the specialists' Saturday LightGBM retrain (watchers kept)
 stage: 'research ops (ML review 2026-11-13, lane ML1)'
 size: S
-status: 'done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer (no order path change)'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): PR #390 (R143) · accountable: implementer'
 ---
 - **229. Stop the specialists' Saturday LightGBM retrain.** Evidence (ML review section 2 row 1):
   - 145 out-of-sample shadow trades gave AUC 0.44 and Brier 0.206, against 0.197 for the base rate.

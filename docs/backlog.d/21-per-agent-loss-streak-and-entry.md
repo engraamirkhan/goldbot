@@ -3,7 +3,7 @@ number: 21
 title: Per-agent loss-streak and entry-rate throttle (G-6)
 stage: Discipline (system analogue) · RUN
 size: S
-status: 'later (triage 2026-11-13): built, off by default (PR #73); trading-safety-reviewer recommends, PD+PO decide (tightening only, no owner input)'
+status: 'auto-trigger (sweep 2026-11-14): built (PR #73), off on demo by design. The trading-safety-reviewer sets it in any first live candidate''s go-live settings diff · accountable: trading-safety-reviewer'
 ---
 - **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
   makes no entries until the next session. Logged and alerted. Never affects exits.

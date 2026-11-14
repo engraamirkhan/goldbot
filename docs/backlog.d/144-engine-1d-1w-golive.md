@@ -1,6 +1,5 @@
 ---
 number: 144
-rank: 8
 title: 1d/1w engine go-live blockers (WS-4)
 stage: Engine · BUILD
 size: M

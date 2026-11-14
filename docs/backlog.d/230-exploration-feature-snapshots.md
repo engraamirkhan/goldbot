@@ -1,10 +1,9 @@
 ---
 number: 230
-rank: 78
 title: Point-in-time feature snapshots on every gold exploration candidate
 stage: 'research data (ML review 2026-11-13 improvement B, lane ML1)'
 size: M
-status: 'done 2026-11-13 (branch feat/ml-cleanup-snapshots; R143; ADR 0080) · accountable: implementer · reviews: quant-reviewer, data-engineer, code-reviewer'
+status: 'done (sweep 2026-11-14, deployed with PRs through #393): PR #390 (R143, ADR 0080; snapshots migration 32) · accountable: implementer'
 ---
 - **230. Point-in-time feature snapshots on every gold exploration candidate.** Value: this turns the demo log into a dataset that matches our broker, our costs and the policy that chose the trades, so later models can learn from our own fills.
 
