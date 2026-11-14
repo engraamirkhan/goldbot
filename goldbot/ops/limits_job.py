@@ -68,6 +68,7 @@ from goldbot.risk.limits_profile import active_overrides, supervisor_ceilings
 
 if TYPE_CHECKING:
     from goldbot.config import Settings
+    from goldbot.data.store import Store
     from goldbot.engine.shadow import ShadowBook
     from goldbot.labels.triple_barrier import SwapSpec
     from goldbot.ops.accounts import Account
@@ -450,6 +451,9 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
                               f"{decision_day.isoformat()}: fills after it unmeasured")
     if cost.reason is not None and cost.reason.startswith("error:"):
         dq("cost_ratio_error", f"{acc.account_id}: cost ratio not measured ({cost.reason[6:]}): cost rule inert")
+    if cost.unmeasured:                      # reporting only (quant review of R150): never an input to the limits
+        log.info("limits_job: %s cost ratio %s, conservative bound %s (%d unmeasured fills at the window's worst)",
+                 acc.account_id, cost.ratio, cost.ratio_bound, cost.unmeasured)
     if cost.reason == "unmeasured_share":
         dq("cost_ratio_unmeasured", f"{acc.account_id}: {cost.unmeasured} of {cost.unmeasured + cost.fills} fills "
                                     f"since {cost.since.isoformat()} without a full cost measure: cost rule inert")
@@ -474,7 +478,7 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
     out: dict[str, Any] = {"day": decision_day.isoformat(), "limits": limits.model_dump(), "changes": len(new),
                            "demo_trades": len(demo), "shadow_trades": len(shadow), "problems": problems[:10],
                            "cost_ratio_20d": cost.ratio, "cost_fills": cost.fills, "cost_unmeasured": cost.unmeasured,
-                           "cost_pending": cost.pending, "cost_model": cost.model}
+                           "cost_pending": cost.pending, "cost_model": cost.model, "cost_ratio_bound": cost.ratio_bound}
     if bounds.dynamic:                       # ADR 0039: the why per strategy and the ATR regime
         st = _state(ctl, acc.account_id)
         out["risk_terms"] = {k: t.model_dump() for k, t in st.risk_terms.items()} if st is not None else {}
@@ -540,6 +544,21 @@ def market_closed_day(day: date) -> bool:
     return day.weekday() >= 5
 
 
+BarsReader = Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame]
+
+
+def store_exit_legs(store: Store, account_id: str) -> BarsReader:
+    """The account's store `exit_fills` between two times: the cost ratio's exit slippage (BACKLOG 90). The nightly
+    job and the replay (BACKLOG 255) read through this one function, so both measure the same legs."""
+    return lambda s, e: store.read("exit_fills", source=account_id, symbol=None, start=s, end=e)
+
+
+def store_label_bars(store: Store) -> BarsReader:
+    """The labels' own 15m bars (LABEL_BARS_SOURCE): the cost ratio's model spread (BACKLOG 90), for the job and the
+    replay alike."""
+    return lambda s, e: store.read("bars_15m", source=LABEL_BARS_SOURCE, start=s, end=e)
+
+
 def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly, before the risk-day roll: one decision per adaptive account (ADR 0031). A failing account never stops
     the others; a dq_event goes to the dq_events table."""
@@ -557,12 +576,7 @@ def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     day = decision_day_of(slot)
     if market_closed_day(day):
         return {"skipped": f"{day.isoformat()} is a weekend day: no decision (the 3-day counts and cooldown keep)"}
-    def legs_of(account_id: str) -> Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame]:
-        return lambda s, e: ctx.store.read("exit_fills", source=account_id, symbol=None, start=s, end=e)
-
-    def label_bars(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:     # the labels' own source (BACKLOG 90)
-        return ctx.store.read("bars_15m", source=LABEL_BARS_SOURCE, start=s, end=e)
-
+    label_bars = store_label_bars(ctx.store)
     for acc in ctx.accounts:
         if not adaptive_enabled(ctx.settings, acc):
             continue
@@ -571,7 +585,7 @@ def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                 ctx.settings, acc, ctx.accounts, state_dir=ctx.state_dir, models=ctx.models, decision_day=day,
                 now_ns=_ns(now), dq=dq, bars_15m=lambda s, e: _bars(ctx, "15m", s, e),
                 extra_cost_usd=live_extra_cost_usd(ctx), swap=live_swap(ctx),
-                exit_legs=legs_of(acc.account_id), cost_bars_15m=label_bars)
+                exit_legs=store_exit_legs(ctx.store, acc.account_id), cost_bars_15m=label_bars)
         except Exception as exc:             # this account keeps yesterday's decision, which the engine floors
             log.exception("limits_job failed for %s", acc.account_id)
             out[acc.account_id] = {"error": type(exc).__name__}

@@ -5,6 +5,16 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-14 (branch feat/limits-cost-ratio-replay-1114; R150; BACKLOG 255 and 90 done): quant-reviewer approved
+  the R150 cost/model definition 2026-11-14. `scripts/replay_limits.py --data-root DIR` now measures each replay day's
+  20-day cost/model ratio through the nightly job's own `_cost_ratio`, `store_exit_legs` and `store_label_bars` (no
+  definition parameter can be passed in), so replayed limits include the cost rule; without a data root the header
+  says the rule is inert (None). Known differences from the night itself, stated in the module docstring: the store's
+  bars are today's (a fill the job held `pending` is measured) and the USD factor is the engine file's current one.
+  The quant's non-blocking suggestion is in: `CostRatio.ratio_bound` prices each unmeasured fill at the window's
+  worst measured fill against the smallest model charge; logged, in the job row (`cost_ratio_bound`) and the replay
+  table, never an input to the limits. No replay was run (ADR 0031's replay log unchanged); nothing on the order path
+  changed.
 - **Outage 2026-11-12..14 fixes (R151, BACKLOG 256; implementer).** The backup stays at 22:15 UTC: `tick_record` stops at `ticks.job_budget_s` (600 s) for the whole run and skips an account's
   remaining instruments after `ticks.max_page_timeouts` (3) timed-out pulls in a row, so tick_record_winter (22:10) ends before job:backup turns overdue (11-13 it ran to 22:47). aux.db migration 34 adds
   `health_alerts.reasons` (per alerted check, scrubbed, 160 characters). Two warn-only health checks
