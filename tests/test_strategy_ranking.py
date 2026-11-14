@@ -15,7 +15,14 @@ import pytest
 from scipy.stats import t as student_t
 
 from goldbot.api import strategy_ranking as sr
-from goldbot.api.schema import CostSplit, RankingWindow, TradeEvidence, TradeKind, TradeRow
+from goldbot.api.schema import (
+    ARM_READS_UNREADABLE,
+    CostSplit,
+    RankingWindow,
+    TradeEvidence,
+    TradeKind,
+    TradeRow,
+)
 from goldbot.api.strategy_labels import ArmInfo, ArmRead, Catalog, Labels
 
 NOW = pd.Timestamp("2026-10-27 12:00", tz="UTC")
@@ -388,12 +395,52 @@ def test_read_progress_counts_the_units_session_days_and_carries_its_registered_
 def test_a_unit_whose_arms_are_all_retired_unread_has_no_read_due_progress():
     """The A5 kill-only retirement (config/exploration_arms.yaml `retired_day`) or the registered stop retires the
     unit before its read: no read is coming, so no progress to a read is shown or queued."""
-    a5 = _cat(_info("A1", "alpha", unit="U1", retired=True), _info("A2", "alpha", "1h", unit="U1", retired=True),
+    gone = (NOW - timedelta(days=30)).date()
+    a5 = _cat(_info("A1", "alpha", unit="U1", retired_day=gone), _info("A2", "alpha", "1h", unit="U1", retired_day=gone),
               _info("B1", "beta"))
     rows = [*_spread("A1", [0.2] * 10, 5), *_spread("A2", [0.1] * 6, 3, tf="1h"), *_spread("B1", [0.1] * 4, 2,
                                                                                           family="beta")]
     assert _by(sr.rank(rows, a5, NOW), "alpha").read_progress is None
     assert _by(sr.rank(rows, CAT, NOW, retired={"A1", "A2"}), "alpha").read_progress is None
-    half = _cat(_info("A1", "alpha", unit="U1", retired=True), _info("A2", "alpha", "1h", unit="U1"))
+    half = _cat(_info("A1", "alpha", unit="U1", retired_day=gone), _info("A2", "alpha", "1h", unit="U1"))
     p = _by(sr.rank(rows, half, NOW), "alpha").read_progress
     assert p is not None and p.unit == "U1"                                  # one arm still runs: the unit reads
+
+
+def test_a_unit_retired_after_its_read_fell_due_keeps_its_read_due_progress():
+    """Review 2026-11-14: retirement suppresses only a read that was not yet due on the retirement day. Counts met on
+    the opportunity day 10 days ago, retired 8 days ago (after): still due. Retired 12 days ago (before): none."""
+    rows = [_row("A1", 0.1, day=d) for d in (14, 13, 12, 11, 10)]            # the 5th fill, 10 days ago, meets n 5
+    def cat(days_ago: int) -> Catalog:
+        return _cat(_info("A1", "alpha", read_n=5, retired_day=(NOW - timedelta(days=days_ago)).date()))
+    p = _by(sr.rank(rows, cat(8), NOW), "alpha").read_progress
+    assert p is not None and (p.n_counted, p.n_read_at) == (5, 5)
+    assert _by(sr.rank(rows, cat(12), NOW), "alpha").read_progress is None
+
+
+def test_every_unread_unit_of_a_row_is_listed_and_a_due_one_comes_first():
+    """Review 2026-11-14 (HIGH): U1 400 of 300 on 6 days (short of 20) must not hide U2 310 of 300 on 25 days."""
+    cat = _cat(_info("A1", "alpha", read_days=20), _info("A2", "alpha", "1h", read_days=20))
+    rows = [*_spread("A1", [0.1] * 400, 6), *_spread("A2", [0.1] * 310, 25, tf="1h")]
+    row = _by(sr.rank(rows, cat, NOW), "alpha")
+    got = {p.unit: (p.n_counted, p.n_days) for p in row.read_units}
+    assert got == {"A1": (400, 6), "A2": (310, 25)}
+    assert row.read_progress is not None and row.read_progress.unit == "A2"
+
+
+def test_session_days_count_the_day_a_fill_was_entered():
+    """A session day is one "with a counted fill": the fill's (entry) opportunity day, not the day it closed."""
+    day = pd.Timestamp("2026-10-20 12:00", tz="UTC")
+    late = _row("A1", 0.1).model_copy(update={"opened_utc": (day - timedelta(hours=14, minutes=30)).to_pydatetime(),
+                                              "exit_utc": (day - timedelta(hours=13, minutes=30)).to_pydatetime()})
+    noon = _row("A1", 0.1).model_copy(update={"opened_utc": (day - timedelta(hours=1)).to_pydatetime(),
+                                              "exit_utc": day.to_pydatetime()})
+    p = _by(sr.rank([late, noon], CAT, NOW), "alpha").read_progress   # entered 21:30 (day D-1), closed 22:30 (day D)
+    assert p is not None and (p.n_counted, p.n_days) == (2, 2)
+
+
+def test_an_unreadable_arm_reads_file_is_reported_in_the_views_unreadable_list():
+    """Fail closed: the weekly review queues no read while the reads file is unreadable (ARM_READS_UNREADABLE)."""
+    bad = Catalog(labels=Labels(), arms=CAT.arms, reads={}, reads_ok=False)
+    assert ARM_READS_UNREADABLE in sr.rank(_spread("A1", [0.1] * 3, 3), bad, NOW).unreadable
+    assert ARM_READS_UNREADABLE not in sr.rank(_spread("A1", [0.1] * 3, 3), CAT, NOW).unreadable

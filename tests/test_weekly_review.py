@@ -16,7 +16,14 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from goldbot.api.schema import RankFigures, RankingView, RankProgress, RankRow, RecentFigures
+from goldbot.api.schema import (
+    ARM_READS_UNREADABLE,
+    RankFigures,
+    RankingView,
+    RankProgress,
+    RankRow,
+    RecentFigures,
+)
 from goldbot.base import write_atomic
 from goldbot.config import load_settings
 from goldbot.db.connection import Database
@@ -57,7 +64,7 @@ def _row(family: str, fig: RankFigures, *, kind: Any = "exploration", progress: 
     return RankRow(key=family, family=family, family_label=family.replace("_", " ").capitalize(), version=1,
                    style="scalp", kind=kind, timeframes=["15m"], accounts=["Lab A"], band=band,
                    rank=1 if band == "ranked" else None, unranked_reason=None, status="early",
-                   read_progress=progress, figures=fig, variants=[])
+                   read_progress=progress, read_units=[progress] if progress else [], figures=fig, variants=[])
 
 
 def _view(rows: list[RankRow], window: Any = "all") -> RankingView:
@@ -237,6 +244,25 @@ def test_a_read_is_not_due_at_its_fill_count_until_its_registered_session_day_mi
                   _row("nrb", _fig(), progress=prog("H-81:Z6", 20))])
     due = [a.subject for a in _run(tmp_path, life=life).actions if a.kind == "read_due"]
     assert due == ["H-81:Z6"]
+
+
+def test_a_due_unit_is_queued_even_when_another_unit_of_its_row_is_further_along_but_short_of_days(tmp_path):
+    """Review 2026-11-14 (HIGH): every unread unit of a row is checked, not only the one closest to its read."""
+    u1 = RankProgress(unit="U1", n_counted=400, n_read_at=300, n_days=6, min_days=20)
+    u2 = RankProgress(unit="U2", n_counted=310, n_read_at=300, n_days=25, min_days=20)
+    row = _row("fam", _fig(), progress=u1).model_copy(update={"read_units": [u1, u2]})
+    due = [a.subject for a in _run(tmp_path, life=_view([row])).actions if a.kind == "read_due"]
+    assert due == ["U2"]
+
+
+def test_an_unreadable_arm_reads_file_queues_no_read_and_says_so_once(tmp_path):
+    """Fail closed: with config/arm_reads.yaml unreadable every arm falls back to its own unit at 300 with no day
+    minimum, so no read is queued from it; one `arm_reads_unreadable` action says why."""
+    p = RankProgress(unit="S1A", n_counted=310, n_read_at=300)
+    life = _view([_row("vwap", _fig(), progress=p).model_copy(update={"read_units": [p]})])
+    life = life.model_copy(update={"unreadable": [ARM_READS_UNREADABLE]})
+    kinds = [a.kind for a in _run(tmp_path, life=life).actions]
+    assert "read_due" not in kinds and kinds.count("arm_reads_unreadable") == 1
 
 
 def test_loss_drivers_come_from_the_attribution_report_signed_after_the_row_bar(tmp_path):

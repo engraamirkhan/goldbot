@@ -1324,6 +1324,11 @@ class RankVariant(BaseModel):
     figures: RankFigures
 
 
+# RankingView.unreadable when config/arm_reads.yaml cannot be read: every arm then falls back to its own unit at 300
+# with no day minimum, so nothing may be queued as due from it (the weekly review fails closed on this marker)
+ARM_READS_UNREADABLE = "arm reads"
+
+
 class RankProgress(BaseModel):
     """A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where
     registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted"). A unit
@@ -1351,6 +1356,9 @@ class RankRow(BaseModel):
     unranked_reason: str | None             # "too few to rank (12 of 30 fills, 4 of 10 days)"
     status: RankStatus
     read_progress: RankProgress | None = None   # None: no unread unit with a read (engine, controls, all read)
+    # every unread unit of the row with a read coming (a due one first, then by progress): a unit short of its day
+    # minimum never hides another that is due (the weekly review's `read_due` reads them all)
+    read_units: list[RankProgress] = Field(default_factory=list)
     figures: RankFigures
     variants: list[RankVariant]
 

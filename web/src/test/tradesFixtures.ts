@@ -155,7 +155,8 @@ const rankRow = (o: Omit<Partial<RankRow>, "figures"> & { figures?: Partial<Rank
   return {
     key: "opening_range", family: "opening_range", family_label: "Opening range", version: 1, style: "intraday",
     kind: "exploration", timeframes: ["15m", "1h"], accounts: ["Scalp lab"], band: "ranked", rank: 1, unranked_reason: null,
-    status: "early", read_progress: { unit: "OR1H", n_counted: 120, n_read_at: 300, n_days: 9, min_days: 0 }, variants: [
+    status: "early", read_progress: { unit: "OR1H", n_counted: 120, n_read_at: 300, n_days: 9, min_days: 0 },
+              read_units: [{ unit: "OR1H", n_counted: 120, n_read_at: 300, n_days: 9, min_days: 0 }], variants: [
       { variant: "15m", timeframe: "15m", status: "early", figures: figures({ n: 300 }) },
       { variant: "1h", timeframe: "1h", status: "early", figures: figures({ n: 112 }) },
     ], ...rest, figures: figures(f),
@@ -173,6 +174,7 @@ export const ranking = (): RankingView => ({
     rankRow({ key: "sweep_absorb", family: "sweep_absorb", family_label: "Sweep + absorb", rank: null, band: "too_few",
               unranked_reason: "too few to rank (12 of 30 fills, 4 of 10 days)", variants: [],
               read_progress: { unit: "SA15", n_counted: 12, n_read_at: 300, n_days: 4, min_days: 0 },
+              read_units: [{ unit: "SA15", n_counted: 12, n_read_at: 300, n_days: 4, min_days: 0 }],
               figures: { n: 12, days: 4, lower_adjusted: null, net_r_per_trade: 0.8 } }),
   ],
   controls: [rankRow({ key: "control:random_bracket", family: "random_bracket", family_label: "Random control", kind: "control",

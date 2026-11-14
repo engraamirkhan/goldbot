@@ -10,11 +10,14 @@
 # one (quant 2026-10-27). The board freezes the read's figures at the unit's first n counted trades closed by
 # `read_utc`.
 #   <unit>: {read_utc: "YYYY-MM-DDTHH:MM:SSZ", verdict: "<plain words>", state: C1, vs_control_r: 0.12, vs_control_ci90: [0.01, 0.23]}
-reads:
-  # 2026-11-14 evaluator (docs/research/weekly-decisions-2026-11-14.md): both reads VOID (300th fill short of the 20
-  # session days of H-81 section 4); the A5 kill-only retirement of 2026-11-06 stands
-  H-81:Z4: {read_utc: "2026-11-14T00:00:00Z", verdict: "void: 300th fill on 8 session days (<20); rule-only net -0.177 R UB -0.117 (futile); retired A5 2026-11-06", state: R}
-  H-81:Z7: {read_utc: "2026-11-14T00:00:00Z", verdict: "void: 300th fill on 4 session days (<20); net +0.064 R, P>0 0.77, UB +0.24 (inconclusive); 640: +0.012 R; retired A5 2026-11-06", state: R}
+reads: {}
+# NOT reads (evaluator 2026-11-14, docs/research/weekly-decisions-2026-11-14.md). No `reads` row: a row would show
+# a read that never happened as one (status not_proven, frozen "read" figures) and unblind the unit. Both units were
+# retired under A5 before their read fell due, so no read is due or shown (goldbot/api/strategy_ranking.py _progress).
+#   H-81:Z4: "VOID, not an H-81 s4 read (300th fill on 8 session days < 20); exploration evidence only, never
+#            promotion or re-entry evidence; retired A5 2026-11-06"
+#   H-81:Z7: "VOID, not an H-81 s4 read (300th fill on 4 session days < 20); exploration evidence only, never
+#            promotion or re-entry evidence; retired A5 2026-11-06"
 # Read size n per arm as pre-registered (evaluator, 2026-10-27, from the frozen texts; every arm of
 # config/exploration_arms.yaml is listed, 300 included). A size below 1 reads no arm. Comment = read source; stop rule.
 # Sources:
@@ -166,10 +169,13 @@ counts:
 # trade, provided that trade falls on >= 20 session days; otherwise the read waits for the 20th day and still uses
 # the first 300 trades only") and Z (H-81 section 4: "One read, at the 300th admissible family fill on >= 20 session
 # days"). A session day is the opportunity day [D-1 22:00, D 22:00) UTC with a counted fill. No read is due before
-# both counts are met (the weekly review's `read_due`). An arm not listed has no minimum (W1, W2, H-80, WFRI, S0R
-# register none); every arm of a pooled unit carries the same minimum (else the file reads no unit).
+# both counts are met (the weekly review's `read_due`). An arm not listed has no minimum (W2, H-80, WFRI, S0R register
+# none); every arm of a pooled unit carries the same minimum (else the file reads no unit). W1 has none FOR NOW: its
+# read is H-61's, and H-61 as amended 2026-10-25 (HV) adds ">= 20 session days"; whether that binds W1 awaits an
+# evaluator ruling (until then W1 reads at its n alone).
 min_session_days:
-  # HV (H-61 arms, icm) and its Vantage twins (amendment 2); F1A / G1A take the HV read (time-structure 2.2, 3.2)
+  # HV (H-61 arms, icm) and its Vantage twins (amendment 2); F1A / G1A take the HV read (time-structure 2.2, 3.2),
+  # futility-only (graduation withdrawn 2026-10-30)
   S1A: 20
   S1B: 20
   S2A: 20

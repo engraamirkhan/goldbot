@@ -5076,6 +5076,13 @@
        }
       ]
      },
+     "read_units": {
+      "items": {
+       "$ref": "#/components/schemas/RankProgress"
+      },
+      "title": "Read Units",
+      "type": "array"
+     },
      "status": {
       "enum": [
        "early",

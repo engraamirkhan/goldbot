@@ -16,14 +16,19 @@ The check was removed by the 11-02 demo-limits ADR and has not fired since. No t
 The weekly review raised `read_due` for both units because each had passed 300 counted family fills.
 H-81 section 4 registers the read as "at the 300th admissible family fill on ≥ 20 session days", and neither unit met the day count.
 Both were also already retired under A5 (history-bounded entries, signed 2026-11-06), so no read was coming.
-The evaluator recorded both reads as void in `config/arm_reads.yaml` (state R):
+The evaluator's verdicts, kept as comments in `config/arm_reads.yaml` and not as `reads` rows (a row would show a read that never happened as one):
 
-- **H-81:Z4**: the 300th fill came on 8 session days (< 20). The rule-only net was -0.177 R with an upper bound of -0.117 R, which is futile.
-- **H-81:Z7**: the 300th fill came on 4 session days (< 20). Net was +0.064 R, P(>0) 0.77, upper bound +0.24 R (inconclusive). At 640 fills it was +0.012 R.
+- **H-81:Z4**: VOID, not an H-81 s4 read (300th fill on 8 session days < 20); exploration evidence only, never promotion or re-entry evidence; retired A5 2026-11-06.
+- **H-81:Z7**: VOID, not an H-81 s4 read (300th fill on 4 session days < 20); exploration evidence only, never promotion or re-entry evidence; retired A5 2026-11-06.
 
-Neither read re-opens the unit. The A5 retirement of 2026-11-06 stands for both.
+Descriptive figures (descriptive, rule-only, net at signal-time cost (label_fill_r); Z7 includes 5 Z7V rows without fill price (BACKLOG 262)):
+
+- H-81:Z4: mean net -0.177 R, one-sided 95% upper bound -0.117 R.
+- H-81:Z7: mean net +0.064 R.
+
+Neither verdict re-opens the unit. The A5 retirement of 2026-11-06 stands for both.
 The weekly review now raises `read_due` only once the fill count and the registered session-day minimum (`min_session_days`) are both met.
-It raises none for a unit that is already read or retired unread.
+It raises none for a unit that is already read, or that was retired unread before its read fell due.
 
 ## Data gap: closed exploration rows without a fill price
 The evaluator found 7 closed `exploration_trades` rows with a P&L but no fill price: 5 Z7V and 2 ZCV.

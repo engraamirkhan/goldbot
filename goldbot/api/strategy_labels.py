@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Collection
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -112,7 +113,7 @@ class ArmInfo(FrozenRecord):
     unit: str = ""                      # its read unit: the arm id, or the pooled family's unit id
     read_n: int | None = READ_AT        # the unit's read size; None: no read registered (a control)
     read_days: int = 0                  # the unit's read's session-day minimum (`min_session_days`); 0: none registered
-    retired: bool = False               # retired unread by a kill-only rule (exploration_arms.yaml `retired_day`)
+    retired_day: date | None = None     # retired by a kill-only rule (exploration_arms.yaml `retired_day`)
     counted: bool = True                # its fills count toward its unit's n (False: virtual exits on another's)
     count: Literal["trades", "stop_exits"] = "trades"
     version: int = 1                    # its rule version (strategy_labels `arms: <id>: {version: 2}`): a ranking row
@@ -135,6 +136,7 @@ class Catalog(FrozenRecord):
     labels: Labels
     arms: dict[str, ArmInfo]
     reads: dict[str, ArmRead]           # by read unit
+    reads_ok: bool = True               # False: config/arm_reads.yaml unreadable (no unit read, no read may fall due)
 
     def family_label(self, family: str) -> str:
         f = self.labels.families.get(family)
@@ -169,11 +171,17 @@ class Catalog(FrozenRecord):
         info = self.arms.get(arm_id)
         return info.read_days if info is not None else 0
 
-    def retired_unread(self, arm_id: str, stopped: Collection[str] = ()) -> bool:
-        """Retired before its unit's read: by a kill-only rule (`retired_day`) or at its registered stop (`stopped`,
-        the ranking's retired arms)."""
+    def retired_unread(self, arm_id: str, stopped: Collection[str] = (), due: date | None = None) -> bool:
+        """Retired before its unit's read fell due: at its registered stop (`stopped`, the ranking's retired arms; a
+        stop is "within" the read's n, so before it), or by a kill-only rule (`retired_day`) before `due`, the
+        opportunity day both of the read's counts were first met (None: not met yet). Retired on or after that day,
+        the read was already due and stays due."""
         info = self.arms.get(arm_id)
-        return arm_id in stopped or (info is not None and info.retired)
+        if arm_id in stopped:
+            return True
+        if info is None or info.retired_day is None:
+            return False
+        return due is None or info.retired_day < due
 
 
 def arm_family(rule: str, params: dict[str, object]) -> str:
@@ -211,9 +219,10 @@ def _registrations() -> tuple[set[str], dict[str, str], dict[str, tuple[str, ...
     return controls, styles, {a: tuple(sorted(v)) for a, v in where.items()}
 
 
-def _reads_file(path: Path) -> ReadsFile:
-    """config/arm_reads.yaml. Fail closed: a broken file, a size below 1, an arm in two units, a unit's arms of
-    different sizes or `counted` outside its arms reads NO unit and pools nothing."""
+def _reads_file(path: Path) -> tuple[ReadsFile, bool]:
+    """config/arm_reads.yaml, and False when it cannot be used. Fail closed: a broken file, a size below 1, an arm in
+    two units, a unit's arms of different sizes or day minimums or `counted` outside its arms reads NO unit, pools
+    nothing and makes no read due (`Catalog.reads_ok`)."""
     try:
         f = ReadsFile.model_validate(safe_load_cached(path) or {})
         seen: set[str] = set()
@@ -227,10 +236,10 @@ def _reads_file(path: Path) -> ReadsFile:
             seen |= set(u.arms)
         if any(v < 1 for v in f.read_at.values()) or any(v < 0 for v in f.min_session_days.values()):
             raise ValueError("a read size below 1 or a negative day minimum")
-        return f
+        return f, True
     except Exception as exc:             # noqa: BLE001 - fail closed: no arm counts as read
         log.error("arm reads unreadable (%s): no arm counts as read", type(exc).__name__)
-        return ReadsFile()
+        return ReadsFile(), False
 
 
 def _prereg(arm: Arm) -> str | None:
@@ -288,7 +297,7 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
         log.warning("arm spec unreadable (%s): arms named by their ledger rows", type(exc).__name__)
         spec = []
     controls, styles, where = _registrations()
-    rf = _reads_file(reads_path)
+    rf, reads_ok = _reads_file(reads_path)
     unit_of = {a: (uid, u) for uid, u in rf.read_units.items() for a in u.arms}
     by_id = {a.id: a for a in spec}
     arms = {}
@@ -304,11 +313,12 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
                              tag=tag.variant if tag else None, version=own.version if own else 1,
                              is_control=control, style=styles.get(a.id),
                              accounts=where.get(a.id, ()), running=a.status == "run", unit=uid, read_n=n,
-                             read_days=rf.min_session_days.get(a.id, 0), retired=a.retired,
+                             read_days=rf.min_session_days.get(a.id, 0),
+                             retired_day=date.fromisoformat(a.retired_day) if a.retired_day else None,
                              counted=u is None or a.id in (u.counted or u.arms), count=rf.counts.get(a.id, "trades"))
     pairs = _pairs(spec, arms)
     arms = {k: v.model_copy(update={"control_arm": pairs.get(k)}) for k, v in arms.items()}
-    return Catalog(labels=labels, arms=arms, reads=rf.reads)
+    return Catalog(labels=labels, arms=arms, reads=rf.reads, reads_ok=reads_ok)
 
 
 @lru_cache(maxsize=1)

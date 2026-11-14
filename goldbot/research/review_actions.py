@@ -24,14 +24,14 @@ import pandas as pd
 from goldbot.base import FrozenRecord, load_record_json
 from goldbot.db.connection import Database
 
-ActionKind = Literal["stop", "read_due", "below_control", "loss_driver", "cost_drift", "exit_diagnostic",
+ActionKind = Literal["stop", "read_due", "arm_reads_unreadable", "below_control", "loss_driver", "cost_drift", "exit_diagnostic",
                      "variant_proposal", "unpaired"]
 # the ranking order of the kinds: what was done, then what a registered rule says is due, then the evidence's
 # warnings, then proposals and housekeeping
-KIND_ORDER: tuple[str, ...] = ("stop", "read_due", "below_control", "loss_driver", "cost_drift", "exit_diagnostic",
+KIND_ORDER: tuple[str, ...] = ("stop", "read_due", "arm_reads_unreadable", "below_control", "loss_driver", "cost_drift", "exit_diagnostic",
                                "variant_proposal", "unpaired")
 AUTOMATIC_KINDS = frozenset({"stop"})
-BACKLOG_KINDS = frozenset({"unpaired", "cost_drift"})     # engineering suggestions: a GitHub issue labelled `review`
+BACKLOG_KINDS = frozenset({"unpaired", "cost_drift", "arm_reads_unreadable"})     # engineering suggestions: a GitHub issue labelled `review`
 
 
 class ReviewAction(FrozenRecord):

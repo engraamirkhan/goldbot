@@ -61,14 +61,15 @@ def test_controls_are_the_random_rules_and_the_arms_registered_with_a_control_sh
 
 
 def test_no_arm_is_read_until_arm_reads_lists_it_and_a_broken_file_reads_none(tmp_path):
-    assert set(load_catalog().reads) == {"H-81:Z4", "H-81:Z7"}         # as committed: the 2026-11-14 void reads
-    assert all(r.state == "R" and r.verdict.startswith("void") for r in load_catalog().reads.values())
+    assert load_catalog().reads == {}                                 # as committed: no read recorded yet (Z4/Z7 VOID)
+    assert load_catalog().reads_ok
     ok = tmp_path / "ok.yaml"
     ok.write_text('reads: {S1A: {read_utc: "2026-11-20T00:00:00Z", verdict: "no edge after costs"}}')
     assert load_catalog(reads_path=ok).is_read("S1A") and not load_catalog(reads_path=ok).is_read("S1B")
     bad = tmp_path / "bad.yaml"
     bad.write_text("reads: {S1A: {verdict: no time}}")
     assert load_catalog(reads_path=bad).reads == {}
+    assert not load_catalog(reads_path=bad).reads_ok                  # fail closed: the reviews queue no read
 
 
 def test_each_strategy_arm_is_read_against_its_named_or_own_family_control_else_its_sleeves_random_control():
@@ -110,9 +111,10 @@ def test_the_session_day_minimum_of_a_read_comes_from_the_arm_reads_file_and_def
     cat = load_catalog()
     assert {cat.arms[a].read_days for a in ("Z4D", "Z4P", "Z7D", "Z7V", "Z7P", "Z6D", "Z1P", "S1A", "VI2A")} == {20}
     assert cat.arms["XBB15"].read_days == 0 and cat.arms["WFRI"].read_days == 0     # W1 / WFRI register none
-    assert cat.arms["Z4D"].retired and not cat.arms["S1A"].retired                 # A5 retired_day 2026-11-06
+    assert str(cat.arms["Z4D"].retired_day) == "2026-11-06" and cat.arms["S1A"].retired_day is None  # A5
     mixed = tmp_path / "reads.yaml"
     raw = yaml.safe_load(READS_PATH.read_text())
     raw["min_session_days"]["Z6V"] = 10                                             # a unit's arms disagree
     mixed.write_text(yaml.safe_dump(raw))
-    assert load_catalog(reads_path=mixed).arms["Z6D"].unit == "Z6D"                 # fail closed: no unit read
+    bad = load_catalog(reads_path=mixed)
+    assert bad.arms["Z6D"].unit == "Z6D" and not bad.reads_ok                    # fail closed: no unit read

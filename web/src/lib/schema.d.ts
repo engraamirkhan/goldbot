@@ -2616,6 +2616,8 @@ export interface components {
             /** Rank */
             rank: number | null;
             read_progress?: components["schemas"]["RankProgress"] | null;
+            /** Read Units */
+            read_units?: components["schemas"]["RankProgress"][];
             /**
              * Status
              * @enum {string}
