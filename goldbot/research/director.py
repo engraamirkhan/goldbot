@@ -390,10 +390,22 @@ def is_queued(row: dict[str, Any]) -> bool:
     return (ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)) < start
 
 
+DISCOVERY_PREFIX = "discovery_"   # discovery.discovery_family: a discovery trial's registry family
+
+
+def base_family(family: object) -> str:
+    """The specialist family a registry family belongs to: `discovery_<family>` (a discovery trial) is `<family>`, so
+    the retired-family guard matches a discovery run on a retired family (quant review 2026-11-14, BACKLOG 91)."""
+    f = str(family)
+    return f[len(DISCOVERY_PREFIX):] if f.startswith(DISCOVERY_PREFIX) else f
+
+
 def retired_quarter_trials(rows: list[dict[str, Any]], quarter: str, retired: set[str]) -> int:
-    """Trial rows of `quarter` (stamped then) on any family in `retired` (research.retired_families): what the retired
-    families' ONE shared exploration trial a quarter (RETIRED_EXPLORATION) has already used."""
-    return sum(1 for r in rows if is_trial(r) and r.get("family") in retired and _row_quarter(r) == quarter)
+    """Trial rows of `quarter` (stamped then) on any family in `retired` (research.retired_families), a discovery
+    trial on one (`discovery_<family>`) included: what the retired families' ONE shared exploration trial a quarter
+    (RETIRED_EXPLORATION) has already used."""
+    return sum(1 for r in rows
+               if is_trial(r) and base_family(r.get("family", "")) in retired and _row_quarter(r) == quarter)
 
 
 # ---------------------------------------------------------------------------------------------- the queue's ledger

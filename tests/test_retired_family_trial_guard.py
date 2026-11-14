@@ -144,3 +144,21 @@ def test_the_plan_reports_the_shared_trial_as_used_even_with_no_allocated_retire
     plan = build_plan(now, jobs.research_families(), [h53], [], [], quarter_budget=100, monthly_total=60,
                       trial_budget_per_month=0, floor=2, retired=SCREENED, promoted={})
     assert plan.retired_trials_quarter == 1 and plan.retired_explore is None
+
+
+def test_a_second_discover_run_on_a_retired_family_in_the_same_quarter_is_refused(tmp_path: Path):
+    """Quant review 2026-11-14: a discovery trial is recorded as `discovery_<family>`, so the guard compared
+    `discovery_session_open` with the retired `session_open` and never matched. The prefix is stripped on both the
+    request and the quarter's stamped trials: the first discovery run on session_open uses the shared trial, a second
+    is refused."""
+    reg = _reg(tmp_path)
+    _stamp(reg, "discovery_session_open", {"timeframe": "15m"}, IN_Q1)
+    with pytest.raises(RetiredExplorationUsed) as exc:
+        _check(reg, [("discovery_session_open", {"timeframe": "1h"})], retired=RETIRED | {"session_open"})
+    assert "discovery_session_open is retired" in str(exc.value)
+
+
+def test_a_first_discover_run_on_a_retired_family_runs_from_the_open_budget(tmp_path: Path):
+    quarter, preregs = _check(_reg(tmp_path), [("discovery_session_open", {"timeframe": "1h"})],
+                              retired=RETIRED | {"session_open"})
+    assert quarter == "2027Q1" and preregs == [None]

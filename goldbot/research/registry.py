@@ -885,13 +885,14 @@ class TrialRegistry:
         of the quarter with another config hash, raises QueuedConfigMismatch instead of falling back to the open budget
         (BACKLOG 50, `director.queued_mismatch`).
         Retired families (BACKLOG 91; settings: "The retired families SHARE 1 exploration trial a quarter"): a job on a
-        family in `retired` with no pending queued row of its exact config (an open-budget run, `rule_ref` cited or
+        family in `retired` (a discovery job `discovery_<family>` included, `director.base_family`) with no pending queued row of its exact config (an open-budget run, `rule_ref` cited or
         not) raises RetiredExplorationUsed when the quarter's retired-family trials (`director.retired_quarter_trials`,
         every retired family, allocated or screened) plus this run's retired jobs would exceed RETIRED_EXPLORATION.
         Raises TrialBudgetExceeded; returns (the quarter, the matching pre-registration or None, per job)."""
         # director imports this module, so the import is local
         from goldbot.research.director import (
             RETIRED_EXPLORATION,
+            base_family,
             later_preregistration,
             later_refusal,
             pending_preregistration,
@@ -929,7 +930,7 @@ class TrialRegistry:
         if any(p is None for p in preregs) and retired is None:
             from goldbot.config import load_settings
             retired = {e.family for e in load_settings().research.retired_families}      # fail closed
-        exploring = [f for (f, _), p in zip(jobs, preregs) if p is None and f in (retired or ())]
+        exploring = [f for (f, _), p in zip(jobs, preregs) if p is None and base_family(f) in (retired or ())]
         if exploring:
             used = retired_quarter_trials(rows, q, set(retired or ()))
             if used + len(exploring) > RETIRED_EXPLORATION:
