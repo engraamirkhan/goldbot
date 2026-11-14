@@ -434,7 +434,7 @@ def test_full_report_healthy_and_static_subset(tmp_path):
     healthy_state(tmp_path)
     r = health.run_checks(make_ctx(tmp_path))
     assert r.status == "ok", health.render(r)
-    assert {"supervisor", "engine:icm-demo", "risk:icm-demo", "job:monthly_research", "news", "alerts",
+    assert {"supervisor", "engine:icm-demo", "risk:icm-demo", "job:research_director", "news", "alerts",
             "heartbeat:telegram", "weekly_cap:icm-demo", "daily_cap:icm-demo"} <= {c.name for c in r.checks}
     s = health.run_checks(make_ctx(tmp_path), static_only=True)
     assert [c.name for c in s.checks] == ["settings", "accounts", "secrets", "disk"]

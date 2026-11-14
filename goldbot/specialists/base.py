@@ -74,7 +74,7 @@ class Specialist(ABC):
     # True while the family's pre-registered rule-only screen has not passed (e.g. asia_drift, H-04): it is usable by
     # research (`research_pass.py --specialist`) but is not seeded as a default population founder
     # (`Population.ensure_founders`) and is not a member of the pooled models (`pipeline.pooled_members`). A passed
-    # walk-forward trial of its exact configuration still becomes a shadow founder (gap_watch `research_ready`)
+    # walk-forward trial of its exact configuration could become a shadow founder (`Population.spawn_founder`)
     screening: bool = False
     # True for a family whose signal needs TradingView values: no input exists since the TradingView chart path retired
     # (2026-11-02), so such a family fails closed everywhere: the engine proposes nothing for it

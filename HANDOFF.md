@@ -20,6 +20,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `swap_reconcile` warns, and the owner is told, past `costs.swap_reconcile_tolerance` (0.5 night off the seven-night count; quant review 2026-11-14) or when a hold cannot
   be priced. With no weekend hold the job is a no-op. Read-only: no broker call, no order. The order path is
   unchanged.
+- 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; ADR 0083; BACKLOG 142): cleanup phase 2. Retired the scheduler jobs
+  `gap_watch`, `monthly_research`, `cpcv_quarterly` and the brain's `autodisc_nightly` (settings, job code, tests),
+  deleted `goldbot/ops/gap_watch.py` and the `gaps:` settings (`daily_realised_vol` moved to research/attribution.py).
+  Their keys are in `config.RETIRED_KEYS`, so a server settings.local.yaml naming one loads with a warning; the
+  scheduler's prune drops their state (no `job:` health line). Kept, with the reader list in ADR 0083:
+  `saturday_retrain`, `tournament`, `model_watch`, `recalibrate` (the engine reads the registry and population they
+  write; model_watch is a rollback) and `research_director`, `attribution` (R141 weekly_review's consumer and input).
+  News shock (D16): option 2, already live as ADR 0079's rules-v1 scorer. CPCV now by hand (`research_pass.py
+  --cpcv`); discovery stays on the Mac's launchd. No order, exit, RiskGate, budget or gate path changed. Needs the
+  trading-safety and quant GOs before merge.
 - **1d/1w long history, live == history, rule-code versions (BACKLOG 251, 252, 254, 105; R154; 2026-11-14).** A daily
   job `long_history_refresh` (21:40 UTC) appends the store's complete days to the engine-only `raw/engine_daily/bars/xauusd_1d.parquet` (never the research file, never a holdout-dated day; `stale` past 120 days; quant review)
   (`source` `engine_1m:<broker>`), the preflight checks the history reaches the engine window once 1d/1w are live, and
@@ -69,6 +79,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   refuses retired families first); the brain's jobs (monthly_research, research_director, the analyst) do not call
   research_pass. So no scheduled caller relies on the `session_open` default, and the default stays; a manual
   dispatch on it now ends as a skip.
+- 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; R155; BACKLOG 243): the trades API's `TradeRow` carries a closed
+  exploration or control row's MFE / MAE from its R135 record (`mfe_r`, `mae_r`, `mfe_usd`, `mae_usd`,
+  `excursion_approx`; None on older rows and every other kind). The trade detail's "Details" disclosure shows them
+  for a closed arm trade ("for +1.40 R (+4.20 USD/oz) · against −0.60 R ..."), "not recorded" when the record has
+  none (never 0 R) and "approximate" when part of the path came from the 1m bars. API contract regenerated. Read-only;
+  nothing on the order path changed.
 - 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
   settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
   measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the

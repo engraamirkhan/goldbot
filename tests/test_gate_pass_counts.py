@@ -13,14 +13,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from goldbot.config import load_settings
-from goldbot.data.store import Store
-from goldbot.ops import gap_watch as G
-from goldbot.ops.accounts import Account
 from goldbot.ops.gates_phase import best_backtest_trial
-from goldbot.ops.jobs import JobContext, cpcv_quarterly
-from goldbot.research.model_registry import ModelRegistry
-from goldbot.research.population import Population
 from goldbot.research.registry import TrialRegistry, costs_recorded, gate_pass_counts
 from goldbot.specialists import SPECIALISTS
 
@@ -58,48 +51,6 @@ def test_the_phase_gates_best_backtest_trial_ignores_a_pre_swap_row_whatever_its
     assert best_backtest_trial([pre_swap, charged]) is charged
     assert best_backtest_trial([pre_swap]) is None                  # no evidence rather than pre-swap evidence
     assert best_backtest_trial([_bt_row(3, 0.99, costs=True, status="holdout"), charged]) is charged
-
-
-# ---------------------------------------------------------------------------------------------- gap watch
-def test_gap_watch_founds_no_agent_from_a_pre_swap_gate_pass(tmp_path: Path):
-    pop = Population(tmp_path / "population.json")
-    pop.ensure_founders(NOW - pd.Timedelta(days=60))
-    base = SPECIALISTS["trend"].default_config
-    pre_swap = {"trial": 7, "family": "trend", "config": {**base, "target_atr": base["target_atr"] * 1.2},
-                "status": "evaluated", "results": _results(costs=False)}
-    charged = {"trial": 8, "family": "trend", "config": {**base, "target_atr": base["target_atr"] * 1.1},
-               "status": "evaluated", "results": _results()}
-    assert [g.gap_id for g in G.research_ready([pre_swap, charged], pop)] == ["research_ready:trial8"]
-
-
-def test_gap_watch_founds_no_agent_from_a_discovery_derived_pass_until_its_holdout_passed(tmp_path: Path):
-    """Quant review 2026-10-16: gap watch reads the same promotion predicate as gate 1 (registry.promotion_pass_counts),
-    so a discovery-derived config is research-ready only with its holdout pass."""
-    from goldbot.research.registry import FROM_DISCOVERY_KEY, config_hash
-    pop = Population(tmp_path / "population.json")
-    pop.ensure_founders(NOW - pd.Timedelta(days=60))
-    base = SPECIALISTS["trend"].default_config
-    cfg = {**base, "target_atr": base["target_atr"] * 1.1, FROM_DISCOVERY_KEY: {"trial": 3}}
-    wf = {"trial": 8, "family": "trend", "config": cfg, "config_hash": config_hash(cfg), "feature_version": "f",
-          "status": "evaluated", "results": _results()}
-    assert G.research_ready([wf], pop) == []
-    holdout = {"trial": 9, "family": "trend", "config": cfg, "config_hash": config_hash(cfg), "feature_version": "f",
-               "status": "holdout", "results": {"holdout_verdict": {"passed": True}, **COSTS}}
-    assert [g.gap_id for g in G.research_ready([wf, holdout], pop)] == ["research_ready:trial8"]
-
-
-# ---------------------------------------------------------------------------------------------- CPCV
-def test_the_quarterly_cpcv_job_re_evaluates_no_pre_swap_gate_pass(tmp_path: Path):
-    acc = Account(account_id="icm-demo", broker="icm", mode="demo", server="ICMarketsSC-Demo", login=None,
-                  terminal_path="", server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100, enabled=True)
-    ctx = JobContext(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
-                     models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "trials.jsonl"),
-                     accounts=[acc], population=Population(tmp_path / "population.json"))
-    ctx.trials.record(agent_id="a", family="session_open", config=dict(SPECIALISTS["session_open"].default_config),
-                      feature_version="v", rationale="a pass from before swap was charged", results=_results(costs=False))
-    out = cpcv_quarterly(ctx, pd.Timestamp("2025-10-05 14:00", tz="UTC"))
-    assert out["trials"] == {} and not out["errors"]
-    assert "0 trial(s) passed the gates" in Path(out["report"]).read_text()
 
 
 def test_research_pass_cpcv_refuses_a_pre_swap_gate_pass_as_failed(tmp_path: Path):

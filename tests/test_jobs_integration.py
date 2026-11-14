@@ -19,13 +19,9 @@ from goldbot.ops.jobs import (
     JobContext,
     attribution,
     build_scheduler,
-    cpcv_quarterly,
-    gap_watch,
     label_grid,
     make_trial_runner,
-    monthly_research,
     nightly_costs,
-    research_families,
     saturday_retrain,
 )
 from goldbot.research.model_registry import ModelRegistry
@@ -142,32 +138,6 @@ def test_a_4h_agent_retrains_into_a_challenger(long_bars_store, tmp_path):
     assert any(f.startswith("d1_") for f in names) and not any(f.startswith(("h1_", "h4_")) for f in names)
 
 
-def test_monthly_label_grid_is_paused_by_default(tmp_path):
-    ctx = _ctx(tmp_path / "data", tmp_path)
-    out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
-    assert "paused" in out and ctx.trials.n_trials == 0
-
-
-def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False)
-    out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
-    # the budget is per specialist; every family's trials count towards one registry total. A family under its
-    # pre-registered screen (asia_drift) gets no grid trial (quant review M1)
-    fams = research_families()
-    assert "asia_drift" in SPECIALISTS and "asia_drift" not in fams and "asia_drift" not in out
-    assert all(out[f]["trials"] == 1 for f in fams) and ctx.trials.n_trials == len(fams)
-    assert ctx.trials.budget_used(quarter_of()) == len(fams)          # and towards the quarter's trial budget
-    report = Path(out["report"]).read_text()
-    assert "Research loop 2025-09" in report and report.count("\n| ") >= 3
-
-
-def test_monthly_research_stops_at_the_quarterly_budget(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2,
-               reserved_trials_quarter={})
-    out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
-    assert ctx.trials.n_trials == 2 and "trial budget exceeded" in out["budget"]
-
-
 def test_label_grid_is_the_26_neighbours_of_the_base():
     grid = label_grid({"target_atr": 1.5, "stop_atr": 1.0, "max_bars": 16}, 0.25)
     assert len(grid) == 26 and {"target_atr": 1.5, "stop_atr": 1.0, "max_bars": 16} not in grid
@@ -181,25 +151,21 @@ def test_build_scheduler_registers_every_job(tmp_path):
     assert nxt == {"nightly_costs": "2026-10-02T23:10:00+00:00", "saturday_retrain": "2026-10-03T06:00:00+00:00",
                    "tournament": "2026-10-03T12:00:00+00:00", "research_director": "2026-10-03T12:30:00+00:00",
                    "model_watch": "2026-10-02T23:30:00+00:00",
-                   "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
+                   "calendar_archive": "2026-10-03T06:10:00+00:00",
                    "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
-                   "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00",
+                   "feed_reconcile": "2026-10-02T23:20:00+00:00",
                    "broker_ledger": "2026-10-02T23:25:00+00:00",
                    "backup": "2026-10-02T22:15:00+00:00", "restore_drill": "2026-10-04T10:00:00+00:00",
                    "attribution": "2026-10-02T23:50:00+00:00", "tick_record": "2026-10-02T21:10:00+00:00",
                    "tick_record_winter": "2026-10-02T22:10:00+00:00",
-                   "cpcv_quarterly": "2026-10-04T14:00:00+00:00",
                    "calendar_archive_sunday": "2026-10-04T18:00:00+00:00",
                    "limits_job": "2026-10-02T23:05:00+00:00", "daily_review": "2026-10-03T06:15:00+00:00",
                    "loop_check": "2026-10-03T07:05:00+00:00",
-                   "autodisc_nightly": "2026-10-03T01:30:00+00:00", "tva_scores": "2026-10-02T23:35:00+00:00",
+                   "tva_scores": "2026-10-02T23:35:00+00:00",
                    "har_days": "2026-10-02T22:05:00+00:00", "har_days_retry": "2026-10-02T22:35:00+00:00",
                    "journal_compact": "2026-10-03T03:40:00+00:00", "weekly_review": "2026-10-03T13:00:00+00:00",
                    "monthly_review": "2026-10-03T06:30:00+00:00", "swap_reconcile": "2026-10-02T23:45:00+00:00",
                    "news_coverage": "2026-10-03T06:05:00+00:00", "long_history_refresh": "2026-10-02T21:40:00+00:00"}
-    # quarterly: after October's run the next is the first Sunday of January
-    later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
-    assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"
 
 
 def test_build_scheduler_drops_the_state_of_a_job_no_longer_in_jobs(tmp_path):
@@ -212,49 +178,6 @@ def test_build_scheduler_drops_the_state_of_a_job_no_longer_in_jobs(tmp_path):
     old.add("agents_daily", Schedule(kind="daily", at="06:00"), lambda slot: None)
     sch = build_scheduler(ctx, clock=clock)
     assert set(sch.state) == set(JOBS)
-
-
-def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_trials(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path)
-    cfg = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.2}
-    peer = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.5}
-    stale = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version="v", rationale="r",
-                              results={"gates": {"passed": True}, **COSTS})
-    ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version="v", rationale="r",
-                      results={"gates": {"passed": False}})
-    ctx.trials.record(agent_id="c", family="session_open", config=cfg, feature_version="v", rationale="r",
-                      results={"gates": {"passed": True}, **COSTS}, status="holdout")      # a holdout scoring is never re-run
-    slot = pd.Timestamp("2025-10-05 14:00", tz="UTC")
-    # a trial recorded with other features than the store's bars build now is skipped, not re-run on new inputs
-    first = cpcv_quarterly(ctx, slot)
-    msg = first["trials"][stale["trial"]]
-    assert msg.startswith("skipped: feature version") and msg.endswith("differs from the trial's v")
-    assert not ctx.trials.evidence(kind="cpcv") and not first["errors"]
-    version = msg.split("feature version ")[1].split(" differs")[0]
-    passed = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version=version,
-                               rationale="r", results={"gates": {"passed": True}, **COSTS})
-    ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version=version, rationale="r",
-                      results={"gates": {"passed": False}})
-    n = ctx.trials.n_trials
-    out = cpcv_quarterly(ctx, slot)
-    assert ctx.trials.n_trials == n                                       # not a trial: no new row, no budget slot
-    assert set(out["trials"]) == {stale["trial"], passed["trial"]} and not out["errors"]
-    assert out["trials"][stale["trial"]].startswith("skipped")
-    (ev,) = ctx.trials.evidence(passed["trial"], "cpcv")
-    p = ev["payload"]
-    assert ev["quarter"] == "2025Q4" and p["n_splits"] == 15 and p["n_paths"] == 5 and len(p["paths"]) == 5
-    assert any(s["fitted"] for s in p["splits"])                         # real models, not empty paths
-    assert pd.Timestamp(p["edges"][-1]) <= pd.Timestamp("2025-10-01", tz="UTC")   # never into the holdout
-    # PBO across the comparable peers only (the stale ones are skipped), labelled a lower bound of the selection set
-    assert p["pbo"] is not None and p["pbo"]["trials"] == [passed["trial"], passed["trial"] + 1]
-    assert p["pbo"]["selection_set"] == 4 and p["pbo"]["lower_bound"] is True
-    assert p["verdict"]["rule"] == "veto only (ADR 0003)" and isinstance(out["trials"][passed["trial"]]["fragile"], bool)
-    text = Path(out["report"]).read_text()
-    assert "Combinatorial purged CV 2025Q4" in text and "lower bound" in text
-    # idempotent within the quarter
-    again = cpcv_quarterly(ctx, slot + pd.Timedelta(hours=1))
-    assert again["trials"][passed["trial"]] == "already evaluated this quarter"
-    assert len(ctx.trials.evidence(kind="cpcv")) == 1
 
 
 def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):
@@ -270,37 +193,6 @@ def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path
     # the quarter's pre-registered budget is enforced for the analyst too
     capped = make_trial_runner(_ctx(bars_store, tmp_path, trial_budget_quarter=1), now=lambda: pd.Timestamp("2025-09-30", tz="UTC"))
     assert "trial budget exceeded" in capped("session_open", {}, "one too many")["error"]
-
-
-def test_gap_watch_job_spawns_shadow_founders_and_saves_the_population(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path)
-    slot = pd.Timestamp("2025-10-01 23:55", tz="UTC")
-    ctx.population.ensure_founders(slot - pd.Timedelta(days=30))
-    out = gap_watch(ctx, slot)
-    assert len(out["spawned"]) == ctx.settings.gaps.founders_per_month
-    saved = Population(tmp_path / "population.json")
-    new = [saved.members[a] for a in out["spawned"]]
-    assert all(m.status == "shadow" and m.capital_weight == 0 and m.gap_id for m in new)
-    report = json.loads((tmp_path / "gaps.json").read_text())
-    assert report["notes"][0].startswith("regime: no champion")
-    assert any("no walk-forward window for 1d" in r["reason"] for r in report["refused"])
-    assert not any("no walk-forward window for 4h" in r["reason"] for r in report["refused"])
-
-
-def test_no_spawn_during_system_halt(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path)
-    slot = pd.Timestamp("2025-10-01 23:55", tz="UTC")
-    ctx.population.ensure_founders(slot - pd.Timedelta(days=30))
-    halt = {"since": slot.isoformat(), "reasons": ["two agents halted"]}
-    (tmp_path / "drift.json").write_text(json.dumps({"halted": {}, "system_halt": halt}))
-    n = len(ctx.population.members)
-    out = gap_watch(ctx, slot)
-    assert out["spawned"] == [] and len(ctx.population.members) == n
-    assert any("system halt" in r for r in out["refused"])
-    report = json.loads((tmp_path / "gaps.json").read_text())
-    assert any(g["kind"] == "system_halt" for g in report["gaps"])
-    # no Anthropic key on this host: the on-demand risk officer is refused, never improvised
-    assert any(r["action"] == "staff_run" and "anthropic-api-key" in r["reason"] for r in report["refused"])
 
 
 def test_attribution_job_writes_the_report_from_the_shadow_book_and_changes_nothing_else(bars_store, tmp_path,

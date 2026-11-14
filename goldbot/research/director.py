@@ -143,7 +143,6 @@ ATTRIBUTION_MAX_AGE_DAYS = 14    # an older attribution report (the job runs dai
 RETIRED_EXPLORATION = 1          # exploration trials a quarter shared by ALL retired families (never from the pool)
 REINSTATE_T = 2.0                # one-sided bar on the shrunk attribution t before the multiple-testing correction
 REINSTATE_SOURCES = 1            # reinstatement sources tested: attribution trades after the retirement date, only
-GRID_RATIONALE = "monthly bounded label-grid search"   # the rationale prefix jobs.monthly_research records
 ATTRIBUTION_FILE = "attribution.json"   # research/attribution.py REPORT_FILE, in the state directory
 HYPOTHESES_PATH = Path(__file__).resolve().parents[2] / "docs" / "research" / "hypotheses.md"
 RETIRED_SECTION = "## B."

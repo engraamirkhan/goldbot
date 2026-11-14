@@ -16,7 +16,8 @@ record, and capital share. The tournament (run weekly by the scheduler) applies 
   multiplies by its family weight). GAP_RESERVED_SLOTS of the shadow slots are kept for gap founders: clones stop
   GAP_RESERVED_SLOTS short of SHADOW_CAP, and gap founders may use only the reserved slots.
 
-Gap founders (`spawn_founder`, called by the daily gap_watch job, docs/TRADER_LIFECYCLE.md section 3): a generation-0
+Gap founders (`spawn_founder`; its daily gap_watch caller retired with ADR 0083, the reserved slots stay
+because the tournament's clone rule reads them; docs/TRADER_LIFECYCLE.md section 3): a generation-0
 agent of a REGISTERED family whose configuration comes from the family itself (its default on another of its
 timeframes) or from a passed research trial, never new code. It always starts in shadow with zero capital, at most
 `max_per_month` a calendar month and only into the reserved slots, and it records the gap that caused it and where its
@@ -58,7 +59,7 @@ CHILDREN_PER_WINNER = (2, 3)
 MAX_LIVE_CHILDREN = 3               # a winner with this many children alive is not cloned again
 MUTATION_FACTORS = (0.8, 0.9, 1.1, 1.25)
 GAP_RESERVED_SLOTS = 4              # shadow slots inside SHADOW_CAP that only gap founders may fill
-GAP_FOUNDERS_PER_MONTH = 2          # default monthly cap on gap founders (settings gaps.founders_per_month)
+GAP_FOUNDERS_PER_MONTH = 2          # default monthly cap on gap founders (the `gaps:` settings retired, ADR 0083)
 FOUNDER_MAX_CHANGE = 0.5            # a founder's numeric setting stays within +-50% of its timeframe's default
 DD_HAIRCUT_AT = 0.30                # a 30% shadow drawdown halves fitness
 

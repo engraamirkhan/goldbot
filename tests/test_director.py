@@ -1,4 +1,4 @@
-"""Research director: evidence per family, the budget allocation rule, the plan file, and monthly_research using it."""
+"""Research director: evidence per family, the budget allocation rule and the plan file."""
 import hashlib
 import json
 import math
@@ -15,15 +15,13 @@ from goldbot.agents.tools import ReadOnlyTools
 from goldbot.config import RetiredFamily, load_settings
 from goldbot.data.store import Store
 from goldbot.ops import jobs
-from goldbot.ops.jobs import JobContext, monthly_research, research_budget, research_director
+from goldbot.ops.jobs import JobContext, research_budget, research_director
 from goldbot.research import registry as registry_mod
 from goldbot.research.attribution import REPORT_FILE
 from goldbot.research.director import (
     ATTRIBUTION_FILE,
     ATTRIBUTION_MAX_AGE_DAYS,
-    DEFAULT_HOLDOUT_FROM,
     DEFAULT_QUARTER_BUDGET,
-    GRID_RATIONALE,
     PLAN_FILE,
     REINSTATE_SOURCES,
     REINSTATE_T,
@@ -207,29 +205,6 @@ def _plan(created: pd.Timestamp, grid: dict[str, int]) -> ResearchPlan:
                         floor=0, cap=26, budget={f: 2 * g for f, g in grid.items()}, grid_budget=grid, unallocated=0,
                         holdout_from="2025-10-01", holdout_to="2026-10-01", holdout_trials_ignored=0, focus=[],
                         evidence=[_score(f, 0.0) for f in FAMILIES])
-
-
-def test_monthly_research_honours_the_plan_the_quarter_budget_and_the_holdout(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ENDS.clear()
-    ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False,   # the grid is paused by default
-               reserved_trials_quarter={})
-    slot = pd.Timestamp.now("UTC").floor("min")      # the registry stamps rows with the wall clock: same quarter
-    grid = {"breakout": 0, "intraday_momentum": 0, "mean_reversion": 5, "session_open": 1, "trend": 2, "tsmom": 0}
-    _plan(slot - pd.Timedelta(days=1), grid).save(tmp_path / PLAN_FILE)
-    out = monthly_research(ctx, slot)
-    assert {f: out[f]["trials"] for f in FAMILIES} == grid
-    assert out["plan"] is not None and "research plan of" in Path(out["report"]).read_text()
-    assert all(e <= pd.Timestamp(DEFAULT_HOLDOUT_FROM, tz="UTC") for e in ENDS)       # never into the held-out year
-    # a stale plan is not used: the flat per-family budget applies, but only until the quarter's 20 trials are spent
-    _plan(slot - pd.Timedelta(days=30), {f: 0 for f in FAMILIES}).save(tmp_path / PLAN_FILE)
-    out = monthly_research(ctx, slot)
-    assert out["plan"] is None and ctx.trials.n_trials == 20
-    assert [out[f]["trials"] for f in FAMILIES] == [6, 6] + [0] * (len(FAMILIES) - 2)   # in family order
-    assert out["session_open"]["quarter_budget_spent"]
-    assert "quarter's trial budget (20) is spent" in Path(out["report"]).read_text()
-    (tmp_path / PLAN_FILE).write_text("{not json")
-    assert jobs.current_plan(ctx, slot) is None
 
 
 def test_quarter_usage_holdout_and_budget_defaults():
@@ -498,22 +473,9 @@ def test_grid_allowance_is_zero_while_the_label_grid_is_paused(tmp_path):
     assert set(build_plan(NOW, FAMILIES, [], [], [], grid_paused=True, **kw).grid_budget.values()) == {0}
     assert max(build_plan(NOW, FAMILIES, [], [], [], **kw).grid_budget.values()) > 0
     ctx = _ctx(tmp_path, label_grid_paused=True, trial_budget_per_month=6)
-    _plan(pd.Timestamp.now("UTC") - pd.Timedelta(days=1), {f: 6 for f in FAMILIES}).save(tmp_path / PLAN_FILE)
-    out = monthly_research(ctx, pd.Timestamp.now("UTC"))
-    assert "paused" in out and ctx.trials.n_trials == 0       # a plan with grid trials does not unpause it
     research_director(ctx, pd.Timestamp.now("UTC"))
     saved = ResearchPlan.load(tmp_path / PLAN_FILE)
     assert saved is not None and set(saved.grid_budget.values()) == {0}
-
-
-def test_monthly_grid_cannot_spend_the_reserved_queue(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False, reserved_trials_quarter={quarter_of(): 13})
-    slot = pd.Timestamp.now("UTC").floor("min")
-    out = monthly_research(ctx, slot)                      # no plan: the flat 6 per family, until 20 - 13 is spent
-    assert ctx.trials.n_trials == 7 and [out[f]["trials"] for f in FAMILIES] == [6, 1] + [0] * (len(FAMILIES) - 2)
-    assert "held for the pre-registered queue" in out["budget"]
-    assert all(str(r["rationale"]).startswith(GRID_RATIONALE) for r in ctx.trials._rows())
 
 
 def test_settings_and_the_hypotheses_doc_agree_on_the_retired_families():
@@ -723,9 +685,6 @@ def test_runners_refuse_a_config_preregistered_for_a_later_quarter(tmp_path, mon
     assert f"pre-registered for {nxt}" in out["error"] and ctx.trials.n_trials == 0
     with pytest.raises(TrialBudgetExceeded, match=f"pre-registered for {nxt}"):        # research_pass and discovery
         ctx.trials.check_budget_reserved([("tsmom", cfg)], 20, 0)
-    monkeypatch.setattr(jobs, "label_grid", lambda default, step: [dict(default)])     # the grid's one variant
-    res = monthly_research(ctx, pd.Timestamp.now("UTC"))
-    assert res["tsmom"]["trials"] == 0 and f"pre-registered for {nxt}" in res["tsmom"]["skipped"][0]
     assert not any(r.get("family") == "tsmom" and r.get("status") != "preregistered" for r in ctx.trials._rows())
 
 
@@ -745,19 +704,6 @@ def test_research_director_job_reads_attribution_settings_and_the_reservation(tm
     assert out["retired_explore"] == plan.retired_explore and plan.retired_explore in retired
     # no promoted model version in this registry: the attribution rows are not out-of-sample evidence
     assert all(s.attribution is not None and s.attribution.n == 0 for s in plan.evidence)
-
-
-def test_monthly_grid_reserves_by_the_slots_quarter_not_the_wall_clock(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ctx = _ctx(tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2,
-               reserved_trials_quarter={})
-    slot = pd.Timestamp("2025-09-07 08:00", tz="UTC")
-    # two queued pre-registrations of the slot's quarter (2025Q3): the slot's reservation holds both trials
-    for i in (1, 2):
-        ctx.trials._append({"trial": i, "ts": "2025-08-01T00:00:00+00:00", "family": "tsmom", "config_hash": f"h{i}",
-                            "status": "preregistered", "config": {}, "results": {}})
-    out = monthly_research(ctx, slot)
-    assert ctx.trials.n_trials == 0 and "2 of the quarter held" in out["budget"]
 
 
 def _analyst_ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> JobContext:

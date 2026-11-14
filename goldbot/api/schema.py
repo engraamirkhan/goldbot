@@ -1076,6 +1076,15 @@ class TradeRow(BaseModel):
     stale: bool                             # open: the engine's figures or rate are old, never shown as current
     position_id: int | None = None          # the broker's position (the "Details" disclosure; its stop moves)
     symbol: str = "XAUUSD"                  # the instrument key (instruments.yaml); prices in its digits and unit
+    # BACKLOG 243: a closed exploration or control row's excursion as its record holds it (R135, ruling 2026-11-13
+    # item 4: "Record MFE and MAE (in R and USD, from fill to exit ...)"); R of the initial stop, USD per oz, MAE <= 0
+    # <= MFE. None on rows closed before R135 and on every other kind: "not recorded", never 0 R. `excursion_approx`:
+    # part of the path came from the stored 1m bars, not ticks (shown as approximate)
+    mfe_r: float | None = None
+    mae_r: float | None = None
+    mfe_usd: float | None = None
+    mae_usd: float | None = None
+    excursion_approx: bool | None = None
 
 
 class TradeTotals(BaseModel):

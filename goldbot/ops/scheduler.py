@@ -64,8 +64,8 @@ class Schedule(FrozenRecord):
     months: tuple[int, ...] = tuple(range(1, 13))
     max_late_hours: float = 12.0
     # A job never run (not started, not skipped) runs once for its most recent slot however late: for a quarterly job
-    # first seen after its slot, anchoring to that slot would mean no run for a whole quarter (brain 2026-10-31:
-    # cpcv_quarterly, seen after 2026-10-04, next due 2027-01-03). Only for work that is idempotent within its period.
+    # first seen after its slot, anchoring to that slot would mean no run for a whole quarter (brain 2026-10-31: the
+    # since-retired cpcv_quarterly, seen after 2026-10-04, next due 2027-01-03). Only for work idempotent in its period.
     run_if_never_run: bool = False
 
     @model_validator(mode="after")

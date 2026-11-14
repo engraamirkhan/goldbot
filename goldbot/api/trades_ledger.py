@@ -377,7 +377,10 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
         gross=round(round(t.pnl, 2) + costs.total, 2) if closed and t.pnl is not None else None,
         pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
         evidence=evidence, excluded_reason=voids.get(t.client_order_id),
-        stale=False if closed else a.stale, position_id=t.position_id, symbol=symbol)
+        stale=False if closed else a.stale, position_id=t.position_id, symbol=symbol,
+        mfe_r=_num(t.mfe_r) if closed else None, mae_r=_num(t.mae_r) if closed else None,
+        mfe_usd=_num(t.mfe_usd) if closed else None, mae_usd=_num(t.mae_usd) if closed else None,
+        excursion_approx=t.excursion_approx if closed else None)
 
 
 def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:

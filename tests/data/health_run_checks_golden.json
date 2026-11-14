@@ -111,11 +111,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:autodisc_nightly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:backup",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -136,11 +131,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:cpcv_quarterly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:daily_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -152,11 +142,6 @@
   ],
   [
    "job:feed_reconcile",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:gap_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -192,11 +177,6 @@
   ],
   [
    "job:model_watch",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:monthly_research",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -620,11 +600,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:autodisc_nightly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:backup",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -645,11 +620,6 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
-   "job:cpcv_quarterly",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
    "job:daily_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -661,11 +631,6 @@
   ],
   [
    "job:feed_reconcile",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:gap_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
@@ -701,11 +666,6 @@
   ],
   [
    "job:model_watch",
-   "ok",
-   "waiting for its first slot; next 2026-10-07 23:00"
-  ],
-  [
-   "job:monthly_research",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],

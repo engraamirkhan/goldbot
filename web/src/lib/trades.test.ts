@@ -3,7 +3,7 @@ import { openPositions, tradeBars } from "../test/tradesFixtures";
 import { parseRoute, routeHash } from "./route";
 import { chartLevels } from "./tradeChart";
 import {
-  apiQuery, boardQuery, boundWords, DEFAULT_FILTERS, edgeWords, etaWords, filtersQuery, groupOpen, heldWords, kindBadge, openTarget,
+  apiQuery, boardQuery, boundWords, DEFAULT_FILTERS, edgeWords, etaWords, excursionWords, filtersQuery, groupOpen, heldWords, kindBadge, openTarget,
   parseBoardQuery, parseFilters, pfWords, rankingQuery, rowName, statusWords,
   totalsLine,
 } from "./trades";
@@ -153,5 +153,24 @@ describe("the ranking and the List's order in the URL (136-139)", () => {
     expect(filtersQuery(f)).toBe("period=7d&sort=best");
     expect(new URLSearchParams(apiQuery(f).slice(1)).get("sort")).toBe("best");
     expect(new URLSearchParams(apiQuery(parseFilters("")).slice(1)).get("sort")).toBeNull();
+  });
+});
+
+describe("a trade's MFE and MAE (backlog 243)", () => {
+  it("shows how far it went for and against it, in R and in price", () => {
+    const t = tradeRow({ mfe_r: 1.4, mae_r: -0.6, mfe_usd: 4.2, mae_usd: -1.8, excursion_approx: false });
+    expect(excursionWords(t)).toBe(`for +1.40${NB}R (+4.20${NB}USD/oz) · against −0.60${NB}R (−1.80${NB}USD/oz)`);
+  });
+  it("says not recorded when the record has none, never 0 R", () => {
+    expect(excursionWords(tradeRow())).toBe("not recorded");
+    expect(excursionWords(tradeRow({ mfe_r: null, mae_r: null, mfe_usd: null, mae_usd: null }))).toBe("not recorded");
+  });
+  it("keeps the price move when the R is unknown (the initial stop was not the trade's)", () => {
+    const t = tradeRow({ mfe_r: null, mae_r: null, mfe_usd: 4.2, mae_usd: 0, excursion_approx: false });
+    expect(excursionWords(t)).toBe(`for +4.20${NB}USD/oz · against 0.00${NB}USD/oz`);
+  });
+  it("labels an excursion read partly from the 1m bars as approximate", () => {
+    const t = tradeRow({ mfe_r: 1, mae_r: 0, mfe_usd: 3, mae_usd: 0, excursion_approx: true });
+    expect(excursionWords(t)).toMatch(/ · approximate \(part of the path from 1m bars\)$/);
   });
 });
