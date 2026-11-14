@@ -19,7 +19,9 @@ One routine, `login_terminal`, used by the command and by the bridge (goldbot/op
   as a timeout (backoff, hourly cap, never latched). Unknown, unreadable or absent reasons latch as before
   (incident 2026-11-01, docs/incidents/2026-11-01-vantage-demo-transient-auth-latched.md). Outage 2026-11-12..14: such
   a -6 is classified `unavailable` and logged as a temporary broker outage, never as a refused password; a latch logs
-  the journal reason it latched on (or that there was none), so the two can be told apart afterwards;
+  the journal reason it latched on (or that there was none), so the two can be told apart afterwards. Before a -6
+  latches the journal is read once more after JOURNAL_SETTLE_S (a starved box wrote the line late); no login is sent
+  in between, so retries and the latch rule are otherwise unchanged;
 * what it prints, logs and returns names the account id only: the login and the password are scrubbed from any terminal
   error text, and neither is ever formatted into a message.
 Real-money accounts take the same path, for their own configured login only: this changes no authority (the phase gate,
@@ -62,6 +64,9 @@ BROKER_UNAVAILABLE = frozenset({"service is not available", "no connection", "se
                                 "too many requests", "timeout"})
 _AUTH_FAILED_LINE = re.compile(r"authorization on .+ failed \((?P<why>[^()]{1,80})\)")
 JOURNAL_SLACK_S = 2.0
+# outage 2026-11-12..14: on a CPU-starved box the terminal wrote "Service is not available" after -6 had returned, so
+# a -6 about to latch re-reads the journal once after this wait (no login is sent meanwhile)
+JOURNAL_SETTLE_S = 1.0
 VK_ESCAPE = 0x1B
 _LONG_DIGITS = re.compile(r"\d{5,}")
 # unavailable: -6 with a BROKER_UNAVAILABLE journal reason, a temporary broker outage (outage 2026-11-12..14); retried
@@ -157,7 +162,8 @@ def _gate(acc: accounts.Account, ledger: LoginLedger, settings: Mt5LoginSettings
 
 
 def _send(acc: accounts.Account, password: str, api: Any, settings: Mt5LoginSettings, *,
-          attached: bool, since: float | None = None) -> LoginResult:
+          attached: bool, since: float | None = None,
+          settle: Callable[[float], None] = time.sleep) -> LoginResult:
     from goldbot.execution.mt5_adapter import MT5_INIT_TIMEOUT_MS, account_info_from_mt5
     assert acc.login is not None
     creds = {"login": int(acc.login), "password": password, "server": acc.server}
@@ -173,7 +179,11 @@ def _send(acc: accounts.Account, password: str, api: Any, settings: Mt5LoginSett
         code, msg = _last_error(api)
         what = "login" if attached else "initialize"
         if code == AUTH_FAILED:
-            why = journal_auth_failure(acc.terminal_path, time.time() if since is None else since)
+            at = time.time() if since is None else since
+            why = journal_auth_failure(acc.terminal_path, at)
+            if why is None or why.lower() not in BROKER_UNAVAILABLE:     # about to latch: the line may land late
+                settle(JOURNAL_SETTLE_S)
+                why = journal_auth_failure(acc.terminal_path, at) or why
             if why is not None and why.lower() in BROKER_UNAVAILABLE:
                 log.warning("MT5 login for %s: %s failed with %d and the journal says %r: a temporary broker outage, "
                             "not a refused password; retried after the backoff, within the hourly cap",
@@ -220,12 +230,14 @@ def _credentials(acc: accounts.Account) -> str | LoginResult:
 def login_terminal(acc: accounts.Account, api: Any, settings: Mt5LoginSettings, *, attached: bool = False,
                    ledger: LoginLedger | None = None, pace_first: bool = True, retry_refused: bool = False,
                    sleep: Callable[[float], None] = time.sleep,
-                   dismiss: Callable[[], None] = dismiss_wizard) -> LoginResult:
+                   dismiss: Callable[[], None] = dismiss_wizard,
+                   settle: Callable[[float], None] | None = None) -> LoginResult:
     """Log the terminal in to `acc`'s configured account and check it is on exactly that account: up to
     `settings.attempts` tries for timeouts only, each after the ledger's backoff (`pace_first=False`: the first try
     does not wait, for the owner's command). `attached` (the bridge holding the IPC open) logs in on the session with
     mt5.login; otherwise mt5.initialize(path=..., login, password, server) attaches and logs in, and the caller shuts
-    the IPC down. `retry_refused`: the owner's deliberate single try past a refusal (`--retry-refused`)."""
+    the IPC down. `retry_refused`: the owner's deliberate single try past a refusal (`--retry-refused`). `settle`:
+    the wait before a -6's one journal re-read (default `sleep`)."""
     ledger = ledger or LoginLedger(acc.account_id)
     password = _credentials(acc)
     if isinstance(password, LoginResult):
@@ -250,7 +262,8 @@ def login_terminal(acc: accounts.Account, api: Any, settings: Mt5LoginSettings, 
                 log.info("could not press Escape on the terminal window; logging in anyway")
         started = ledger.now()
         ledger.begin()
-        result = _send(acc, password, api, settings, attached=attached, since=started)
+        result = _send(acc, password, api, settings, attached=attached, since=started,
+                       settle=settle if settle is not None else sleep)
         ledger.finish(result.ok)
         if result.ok:
             ledger.clear_refusal()
@@ -325,7 +338,8 @@ class SelfHeal:
             self._busy = True
             try:
                 result = login_terminal(self._acc, self._api, self._settings.model_copy(update={"attempts": 1}),
-                                        attached=True, ledger=self._ledger, sleep=lambda _: None)
+                                        attached=True, ledger=self._ledger, sleep=lambda _: None,
+                                        settle=time.sleep)
             finally:
                 self._busy = False
         log.log(logging.INFO if result.ok else logging.ERROR, "MT5 self-heal login for %s: %s: %s",

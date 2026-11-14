@@ -640,3 +640,35 @@ def test_the_real_journal_path_is_used_on_a_refusal(stored, led, clock, tmp_path
     path = _journal(tmp_path, [("01:32:26.434", f"'{LOGIN}': authorization on X-Demo failed (Service is not available)")])
     r = _login(FakeMT5(fail=[(-6, "Terminal: Authorization failed")]), led, clock, acc=_acc_at(path))
     assert r.ok and led.refusal() is None
+
+
+def test_a_journal_line_written_late_is_read_once_more_before_a_refusal_latches(stored, led, clock, tmp_path):
+    """Outage 2026-11-12..14 (CPU-starved box): the terminal wrote "Service is not available" to its journal after
+    -6 had already returned, so the first read found no reason and the password latched as refused. One re-read after
+    JOURNAL_SETTLE_S, before latching; no extra login is sent."""
+    clock.t = _local("20261101", "01:32:26")
+    path = _journal(tmp_path, [("01:28:09.481", f"'{LOGIN}': connection to X-Demo lost")])
+    settles: list[float] = []
+
+    def settle(sec: float) -> None:              # the line lands while the login waits
+        settles.append(sec)
+        _journal(tmp_path, [("01:32:26.434",
+                             f"'{LOGIN}': authorization on X-Demo failed (Service is not available)")])
+    api = FakeMT5(fail=[(-6, "Terminal: Authorization failed")])
+    r = mt5_login.login_terminal(_acc_at(path), api, FAST.model_copy(update={"attempts": 1}), ledger=led,
+                                 sleep=clock.sleep, settle=settle)
+    assert settles == [mt5_login.JOURNAL_SETTLE_S] and 0 < mt5_login.JOURNAL_SETTLE_S <= 2
+    assert r.status == "unavailable" and led.refusal() is None and len(api.calls) == 1
+
+
+def test_a_refusal_still_latches_after_the_one_re_read(stored, led, clock, monkeypatch):
+    reads: list[float] = []
+
+    def none(path: str, since: float) -> None:
+        reads.append(since)
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", none)
+    settles: list[float] = []
+    api = FakeMT5(fail=[(-6, "Terminal: Authorization failed")] * 3)
+    r = mt5_login.login_terminal(_acc(), api, FAST, ledger=led, sleep=clock.sleep, settle=settles.append)
+    assert r.status == "refused" and led.refusal() is not None
+    assert len(reads) == 2 and settles == [mt5_login.JOURNAL_SETTLE_S] and len(api.calls) == 1

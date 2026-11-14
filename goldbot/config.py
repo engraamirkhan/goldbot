@@ -255,10 +255,11 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
-    # encrypted off-host backup (goldbot/ops/backup.py) daily at 23:15, after both tick_record slots (outage
-    # 2026-11-13: at 22:15 it queued behind tick_record_winter on the single-threaded scheduler until 22:47 and
-    # job:backup failed as overdue), and its weekly restore drill on Sunday while the market is closed
-    backup: ScheduleSettings = ScheduleSettings(kind="daily", at="23:15", max_late_hours=20)
+    # encrypted off-host backup (goldbot/ops/backup.py) in the daily break, before the nightly jobs start (no CPU
+    # contention with them on the 4-core brain), and its weekly restore drill on Sunday while the market is closed.
+    # tick_record_winter (22:10) runs ahead of it on the single-threaded scheduler; its ticks.job_budget_s ends it well
+    # before job:backup's overdue mark (outage 2026-11-13: unbounded, it ran to 22:47 and the backup failed as overdue)
+    backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
     cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
                                                         max_late_hours=30)
