@@ -885,7 +885,7 @@ more: the watchdog timer is still off and no floor is set, so a rollback is allo
    tell the program director within 24 h what failed and the new date.
 
 ### 0.6 Backups and restore (brain)
-The scheduler backs up the brain's state every day at 22:15 UTC with `restic`. The backup is encrypted on the
+The scheduler backs up the brain's state every day at 23:15 UTC with `restic`. The backup is encrypted on the
 brain and sent to **Oracle Object Storage** (free tier, 20 GB). It never goes to GitHub. Each backup holds:
 
 * `core.db` and `aux.db`, copied consistently while the services run;
@@ -1090,7 +1090,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `tournament` | Saturday 12:00 | Population round: fitness, retirement, promotion to live, cloning, capital shares -> `state\agents.json`. |
 | `agents_weekly` | Saturday 13:00 | Journal coach, improvement agent, research analyst. |
 | `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
-| `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
+| `backup` | Daily 23:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 | `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
 | `tick_record`, `tick_record_winter` | Daily 21:10 and 22:10 | Read-only, and only while gold is closed (New York's 17:00-18:00 daily break, which is 21:00 UTC in US summer time and 22:00 UTC in winter, or the weekend; the other slot skips): the broker's own XAUUSD ticks of the oldest closed server day not yet recorded (missed days within 7 are back-filled, one a run, and the weekend runs catch up) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
@@ -2062,6 +2062,24 @@ update script. The Telegram service runs the same checks every minute and messag
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
+
+### needrestart
+
+Health WARN `needrestart` (outage 2026-11-14: unattended-upgrades restarted 12 goldbot units at 06:58 on a
+Saturday): needrestart is installed on this host but `/etc/needrestart/conf.d/goldbot.conf` is missing, so the next
+library update may restart goldbot units mid-session. On the brain, as root, from root's own clone (`$OPS` =
+`goldbot/ops/linux` in it), run the bootstrap's two lines again:
+`install -d -m 755 -o root -g root /etc/needrestart/conf.d` and
+`install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf`.
+The WARN clears on the next health pass. Nothing is restarted by this; library updates land at the next attended
+restart or reboot.
+
+### CPU steal (`cpu_steal`)
+
+Health WARN `cpu_steal`: the cloud hypervisor gave this host's CPU to other guests for more than 20% of the time in
+every minute of the last 10 (outage 2026-11-12..14: 35-58% on the MT5 boxes slowed the engines without crashing
+anything). Nothing is halted. If it lasts for hours, note it on issue #34; a move to another shape or region is an
+owner decision (spending). The check reads the brain only; the MT5 boxes are BACKLOG 256.
 
 ### Order not confirmed
 

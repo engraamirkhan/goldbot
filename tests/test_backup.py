@@ -677,10 +677,13 @@ def test_restore_refuses_a_non_empty_target_and_cli_restores_into_an_empty_one(b
 
 
 def test_scheduler_jobs_are_registered_with_a_quiet_daily_slot_and_a_weekend_drill():
+    """Outage 2026-11-13: at 22:15 the backup queued behind tick_record_winter (22:10, ran to 22:47 on copy_ticks
+    timeouts) on the single-threaded scheduler and job:backup failed as overdue. 23:15 is past both tick slots."""
     from goldbot.ops.jobs import JOBS
     assert {"backup", "restore_drill"} <= set(JOBS)
     sch = load_settings().scheduler
-    assert sch.backup.kind == "daily" and sch.backup.at == "22:15"
+    assert sch.backup.kind == "daily" and sch.backup.at == "23:15"
+    assert type(sch).model_fields["backup"].default.at == "23:15"           # the code default matches the yaml
     assert sch.restore_drill.kind == "weekly" and sch.restore_drill.weekday == 6     # Sunday: market closed
 
 

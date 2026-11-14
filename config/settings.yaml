@@ -191,7 +191,7 @@ scheduler:
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
-  backup:           { kind: daily,   at: "22:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py)
+  backup:           { kind: daily,   at: "23:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py); after both tick_record slots (outage 2026-11-13)
   restore_drill:    { kind: weekly,  at: "10:00", weekday: 6, max_late_hours: 30 }      # Sunday: restore latest to a temp dir and verify
   cpcv_quarterly:   { kind: monthly, at: "14:00", weekday: 6, months: [1, 4, 7, 10], max_late_hours: 30, run_if_never_run: true }   # M16: CPCV + PBO of gate-passing trials, first Sunday of each quarter; run_if_never_run: it was first seen after its 2026-10-04 slot and would have waited until 2027-01-03 (idempotent within the quarter)
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
@@ -509,6 +509,8 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
   page_limit_s: 5.0                  # a slower page stops the run (cold history page 2-5 s; orders > 10 s refused)
   run_budget_s: 600                  # per account per run (3 accounts fit the 45-min break); unfinished day pulled next run
+  job_budget_s: 600                  # the whole job, all accounts and instruments (outage 2026-11-13: it held the scheduler 37 min)
+  max_page_timeouts: 3               # timed-out pulls in a row on one account: its remaining instruments wait for a later run
 
 compact:                             # nightly journal_compact (goldbot/data/compact.py; BACKLOG 170, 179): closed months -> one part
   tables: [decisions, fills, dq_events, observe_ticks]   # + ticks only after the brain measurement (scripts/store_parts_report.py)

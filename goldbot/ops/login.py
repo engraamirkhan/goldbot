@@ -17,7 +17,9 @@ One routine, `login_terminal`, used by the command and by the bridge (goldbot/op
   maintenance: "Service is not available"), so on -6 the terminal's own journal (<terminal dir>/logs/<YYYYMMDD>.log)
   is read for the reason of the failure written during this attempt; only a reason in BROKER_UNAVAILABLE is treated
   as a timeout (backoff, hourly cap, never latched). Unknown, unreadable or absent reasons latch as before
-  (incident 2026-11-01, docs/incidents/2026-11-01-vantage-demo-transient-auth-latched.md);
+  (incident 2026-11-01, docs/incidents/2026-11-01-vantage-demo-transient-auth-latched.md). Outage 2026-11-12..14: such
+  a -6 is classified `unavailable` and logged as a temporary broker outage, never as a refused password; a latch logs
+  the journal reason it latched on (or that there was none), so the two can be told apart afterwards;
 * what it prints, logs and returns names the account id only: the login and the password are scrubbed from any terminal
   error text, and neither is ever formatted into a message.
 Real-money accounts take the same path, for their own configured login only: this changes no authority (the phase gate,
@@ -62,7 +64,9 @@ _AUTH_FAILED_LINE = re.compile(r"authorization on .+ failed \((?P<why>[^()]{1,80
 JOURNAL_SLACK_S = 2.0
 VK_ESCAPE = 0x1B
 _LONG_DIGITS = re.compile(r"\d{5,}")
-LoginStatus = Literal["ok", "failed", "refused", "rate_limited"]
+# unavailable: -6 with a BROKER_UNAVAILABLE journal reason, a temporary broker outage (outage 2026-11-12..14); retried
+# exactly like `failed` (backoff, hourly cap, never latched): the status only names it for logs and callers
+LoginStatus = Literal["ok", "failed", "refused", "rate_limited", "unavailable"]
 
 
 class LoginResult(FrozenRecord):
@@ -171,9 +175,15 @@ def _send(acc: accounts.Account, password: str, api: Any, settings: Mt5LoginSett
         if code == AUTH_FAILED:
             why = journal_auth_failure(acc.terminal_path, time.time() if since is None else since)
             if why is not None and why.lower() in BROKER_UNAVAILABLE:
-                return LoginResult(ok=False, code=code, retry=True,
-                                   reason=f"{what} failed: ({code}, broker unavailable: {why}); not a refused "
-                                          "password: retried after the backoff, within the hourly cap")
+                log.warning("MT5 login for %s: %s failed with %d and the journal says %r: a temporary broker outage, "
+                            "not a refused password; retried after the backoff, within the hourly cap",
+                            acc.account_id, what, code, why)
+                return LoginResult(ok=False, code=code, retry=True, status="unavailable",
+                                   reason=f"{what} failed: ({code}, broker unavailable: {why}); a temporary broker "
+                                          "outage, not a refused password: retried after the backoff, within the "
+                                          "hourly cap")
+            log.error("MT5 login for %s: %s failed with %d, latched as a refused password; journal: %s", acc.account_id,
+                      what, code, repr(why) if why is not None else "no reason in the journal for this attempt")
             return LoginResult(ok=False, status="refused", code=code,
                                reason=f"{what} failed: ({code}, {_scrub(msg, acc, password)}): "
                                       + refused_reason(acc, f"code {code}"))

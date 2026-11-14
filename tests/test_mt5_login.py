@@ -580,9 +580,36 @@ def test_a_broker_side_unavailable_is_not_latched_and_is_retried_under_the_backo
 def test_a_broker_side_unavailable_reports_a_failure_not_a_refusal(stored, led, clock, monkeypatch):
     monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: "Service is not available")
     r = _login(FakeMT5(fail=[(-6, "Terminal: Authorization failed")] * 9), led, clock)
-    assert not r.ok and r.status == "failed" and r.code == -6
+    assert not r.ok and r.status == "unavailable" and r.code == -6 and r.retry
     assert "Service is not available" in r.reason and "stored again" not in r.reason
     assert led.refusal() is None
+
+
+def test_a_broker_outage_is_logged_as_temporary_and_never_as_a_refused_password(stored, led, clock, monkeypatch,
+                                                                                 caplog):
+    """Outage 2026-11-12..14: -6 with the journal's "Service is not available" is the broker's auth service down, a
+    temporary outage. It is classified `unavailable` and logged as such; retry safety (backoff, hourly cap) is as
+    before."""
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: "Service is not available")
+    caplog.set_level("INFO", logger=mt5_login.log.name)
+    r = _login(FakeMT5(fail=[(-6, "Terminal: Authorization failed")]), led, clock, s=FAST.model_copy(
+        update={"attempts": 1}))
+    assert r.status == "unavailable" and "temporary broker outage" in r.reason and "password refused" not in r.reason
+    msgs = [x.getMessage() for x in caplog.records if x.levelname == "WARNING"]
+    assert any("temporary broker outage" in m and "not a refused password" in m for m in msgs)
+    for m in [x.getMessage() for x in caplog.records]:
+        _no_secret(m)
+
+
+@pytest.mark.parametrize("why, shown", [("Invalid account", "Invalid account"), (None, "no reason in the journal")])
+def test_a_latched_refusal_logs_the_journal_reason_it_latched_on(stored, led, clock, monkeypatch, caplog, why, shown):
+    """So the next -6 incident can be told apart from a broker outage the journal did not show in time."""
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: why)
+    caplog.set_level("INFO", logger=mt5_login.log.name)
+    r = _login(FakeMT5(fail=[(-6, "Terminal: Authorization failed")]), led, clock)
+    assert r.status == "refused"
+    errs = [x.getMessage() for x in caplog.records if x.levelname == "ERROR"]
+    assert any("latched" in m and shown in m for m in errs)
 
 
 def test_an_unavailable_broker_restart_loop_stays_under_the_hourly_cap(stored, led, clock, monkeypatch):

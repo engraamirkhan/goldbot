@@ -554,6 +554,60 @@ def test_no_copy_ticks_call_once_the_quiet_window_has_ended(tmp_path, hours):
     assert out["written"] == []
 
 
+# ------------------------------------------------------------------------------------------- job bounds (outage 2026-11-13)
+FIVE = ("XAUUSD", "US500", "UK100", "DE40", "JP225")         # gold plus four instruments, all pulled at the weekend
+ACC2 = ACC.model_copy(update={"account_id": "icm-probe"})
+
+
+def _bounded_ctx(tmp_path: Path, broker_for: Any, clock: _Clock, monkeypatch: pytest.MonkeyPatch,
+                 **ticks: Any) -> JobContext:
+    monkeypatch.setattr("goldbot.ops.jobs.account_symbols", lambda acc: FIVE)
+    ctx = _job_ctx(tmp_path, broker_for)
+    s = ctx.settings.model_copy(update={"ticks": ctx.settings.ticks.model_copy(update=ticks)})
+    return ctx.model_copy(update={"settings": s, "accounts": [ACC, ACC2], "clock": clock,
+                                  "sleep": lambda sec: setattr(clock, "t", clock.t + pd.Timedelta(seconds=sec))})
+
+
+def test_an_account_is_skipped_for_the_rest_of_the_run_after_three_consecutive_page_timeouts(tmp_path, monkeypatch):
+    """2026-11-13: tick_record_winter (22:10) ran until 22:47 on copy_ticks timeouts, one instrument after another,
+    and held the single-threaded scheduler (the backup failed as overdue). Three timeouts in a row skip the account's
+    remaining instruments; the next account is still pulled."""
+    clock = _Clock(NOW)
+    stuck = TimedBroker(_week_broker().ticks, clock, page_s=5.0, raise_timeout=True)
+    fine = TimedBroker(_week_broker().ticks)
+    out = tick_record(_bounded_ctx(tmp_path, lambda acc: stuck if acc.account_id == "icm-demo" else fine, clock,
+                                   monkeypatch), NOW)
+    assert len(stuck.seen) == 3                                   # gold, US500, UK100: one timed-out page each
+    for sym in ("DE40", "JP225"):
+        assert "3 consecutive page timeouts" in out[f"icm-demo:{sym}"]["skipped"]
+    assert out["icm-probe"]["written"] and fine.seen               # the other account is not punished
+
+
+def test_a_success_between_page_timeouts_resets_the_count(tmp_path, monkeypatch):
+    clock = _Clock(NOW)
+
+    class Flaky(TimedBroker):
+        def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+            self.raise_timeout = symbol != "UK100"               # every instrument times out but UK100
+            return super().copy_ticks(symbol, since_utc, n)
+    broker = Flaky(_week_broker().ticks)
+    out = tick_record(_bounded_ctx(tmp_path, lambda acc: broker, clock, monkeypatch), NOW)
+    assert all("skipped" not in out[f"icm-demo:{sym}"] for sym in FIVE[1:])
+
+
+def test_the_whole_run_stops_at_the_job_time_budget(tmp_path, monkeypatch):
+    """A total budget (ticks.job_budget_s, 10 min by default) across every account and instrument, so the job can no
+    longer hold the scheduler for (accounts x instruments) x run_budget_s."""
+    clock = _Clock(NOW)
+    s, e = _bounds("2026-10-16")
+    broker = SlowBroker(synthetic_day(s, e, 20_000), clock, page_s=1.0)
+    out = tick_record(_bounded_ctx(tmp_path, lambda acc: broker, clock, monkeypatch, job_budget_s=60, backfill_days=0,
+                                   page_ticks=1_000, run_budget_s=600), NOW)
+    assert broker.calls and clock() <= NOW + pd.Timedelta(seconds=60 + 5)       # at most one page past the budget
+    assert "job budget" in out["icm-probe"]["skipped"]
+    assert load_settings().ticks.job_budget_s == 600 and load_settings().ticks.max_page_timeouts == 3
+
+
 # ------------------------------------------------------------------------------------------- repair: truncated days
 def test_a_truncated_day_is_quarantined_once_backed_up_and_pulled_again(tmp_path):
     s, e = _bounds("2026-10-16")

@@ -276,9 +276,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
     async def _health_pass(self) -> None:
         """Run the health checks and tell the owner about checks whose failure or recovery held for the alert window
         (telegram.alert_confirm_polls / alert_confirm_min; the immediate list at once; state/health_last.json, see
-        goldbot.ops.health.step_alerts), log each message sent (aux.db health_alerts), then hand the verdict to the
-        dead man's switch: confirmed failures, the transient rest, and whether the alert went out. The switch pings
-        from its own liveness thread (goldbot/ops/deadman.py start_liveness), never from here, so neither a slow pass
+        goldbot.ops.health.step_alerts), log each message sent (aux.db health_alerts, with each new failure's scrubbed
+        reason), then hand the verdict to the dead man's switch: confirmed failures, the transient rest, and whether
+        the alert went out. The switch pings from its own liveness thread (goldbot/ops/deadman.py start_liveness), never from here, so neither a slow pass
         nor a hung ping delays the other or a proposal (security review M1)."""
         report, delivered = None, True
         try:
@@ -294,7 +294,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.health.record(report, step)    # only after delivery: a failed send is retried next pass
             if step.text and self.owner_ids:
                 await asyncio.to_thread(log_alert, self.state_dir, report.ts, channel="telegram", kinds=step.kinds,
-                                        checks=step.checks)
+                                        checks=step.checks, reasons=step.reasons)
         except Exception:
             log.exception("health pass")
         if report is not None:
