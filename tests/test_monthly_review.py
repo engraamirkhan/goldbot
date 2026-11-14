@@ -43,10 +43,13 @@ class RecordingSink:
         return "https://github.invalid/issue/1"
 
 
-def _snap(state: Path, account: str, ts: str, balance: float, *, currency: str = "GBP") -> None:
+def _snap(state: Path, account: str, ts: str, balance: float, *, currency: str = "GBP",
+          identity: str | None = "fp-a") -> None:
+    """A snapshot with a login fingerprint by default: one without cannot rule out a shared login (issue #394)."""
     t = pd.Timestamp(ts, tz=UTC)
     snap = ledger.BalanceSnapshot(account_id=account, ts_utc=t, balance=balance, equity=balance, margin=0.0,
-                                  margin_free=balance, currency=currency, deals_through_utc=t, slot_utc=t)
+                                  margin_free=balance, currency=currency, deals_through_utc=t, slot_utc=t,
+                                  identity=identity)
     with Database.open(state, "aux").write() as conn:
         ledger.SNAPSHOTS.upsert(conn, snap)
 

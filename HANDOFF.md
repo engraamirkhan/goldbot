@@ -57,6 +57,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   worst measured fill against the smallest model charge; logged, in the job row (`cost_ratio_bound`) and the replay
   table, never an input to the limits. No replay was run (ADR 0031's replay log unchanged); nothing on the order path
   changed.
+- 2026-11-14 (branch fix/monthly-tieout-learning-trades; issue #394): the monthly review's broker tie-out now counts
+  exploration, control and cost-probe closes (aux.db, via `learning_ledger.closed_learning_trades`, matched by
+  `account_name`) in the P&L, the trade count and the per-trade tolerance; before, every demo account tied out
+  against zero trades. Rows voided as evidence still count as money (`include_excluded=True`; the evidence readers
+  are unchanged). An unreadable trade ledger and a balance snapshot without a login fingerprint (`identity`: a shared
+  login cannot be ruled out, as before 2026-10-26) are tie-out reasons, never a silent pass. The monthly report reads
+  the same rows on their own line (never in the return, R, drawdown or days), so an exploration-only account has a
+  report. Months before 2026-10-26 will stay flagged on the identity reason by design. Reporting only: the daily
+  ledger, RiskGate, engine and order code are untouched.
+  Review round (quant): the per-trade tolerance now grows with sqrt(trades), not linearly (per-row rounding spreads
+  as sqrt(n); a linear allowance at thousands of learning trades a month would hide real money). The digest's month
+  line reads no learning rows and shows only accounts with phase-gate trades. The report's learning line says
+  "account money, not evidence" with the voided and censored counts; an account with no phase-gate trades says so
+  instead of zero figures; a learning row on an account the config does not name is an error, not a new account.
 - **Outage 2026-11-12..14 fixes (R151, BACKLOG 256; implementer).** The backup stays at 22:15 UTC: `tick_record` stops at `ticks.job_budget_s` (600 s) for the whole run and skips an account's
   remaining instruments after `ticks.max_page_timeouts` (3) timed-out pulls in a row, so tick_record_winter (22:10) ends before job:backup turns overdue (11-13 it ran to 22:47). aux.db migration 34 adds
   `health_alerts.reasons` (per alerted check, scrubbed, 160 characters). Two warn-only health checks
@@ -88,6 +102,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   refuses retired families first); the brain's jobs (monthly_research, research_director, the analyst) do not call
   research_pass. So no scheduled caller relies on the `session_open` default, and the default stays; a manual
   dispatch on it now ends as a skip.
+- 2026-11-14 (branch fix/outage-db-private; incident 17:08 UTC): `state/health_outages.db` (the bridge-outage record)
+  was created with the default umask (0644) on the first bridge outage, so preflight's `db_files_private` failed and
+  an icm-demo cut-over rolled back. It now goes through `goldbot.db.connection.create_private` (renamed from
+  `_create_private`, the helper `connect` already used): created 0600 and tightened back to 0600, with its -wal/-shm,
+  on every open. The sweep found the same trap in the discovery ledger's database (`state/discovery_*.db`: the
+  search ledger, the stage journal and the arm-registration journal); fixed the same way. Every other direct
+  `sqlite3.connect` under state/ is read-only (`mode=ro`) or on an existing file. A box that already has a 0644 file
+  is fixed by the next health pass or nightly run (or `sudo chmod 600 state/*.db`). Nothing on the order path changed.
 - 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; R155; BACKLOG 243): the trades API's `TradeRow` carries a closed
   exploration or control row's MFE / MAE from its R135 record (`mfe_r`, `mae_r`, `mfe_usd`, `mae_usd`,
   `excursion_approx`; None on older rows and every other kind). The trade detail's "Details" disclosure shows them

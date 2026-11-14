@@ -49,6 +49,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
+from goldbot.db.connection import create_private
 from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
 from goldbot.research.arms import SPEC_RULE, Arm, arm_hash, load_arms
@@ -126,6 +127,7 @@ class Registration(FrozenRecord):
 
 # ---------------------------------------------------------------- the journal
 def _connect(path: Path) -> sqlite3.Connection:
+    create_private(path)                              # the ledger's database: 0600 (preflight)
     con = sqlite3.connect(path, timeout=60, isolation_level=None)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=FULL")
