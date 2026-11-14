@@ -117,6 +117,8 @@ def test_truncate_ctx_hides_a_cancellation_published_after_the_cut() -> None:
 
 
 def test_add_holidays_refuses_a_window_past_the_calendar_end() -> None:
+    from goldbot.data.exchange_holidays import load_calendar
+    last = pd.Timestamp(load_calendar().valid_through)                    # 2028-12-31 since BACKLOG 237's refresh
     with pytest.raises(ValueError, match="ends"):
-        D.add_holidays(K.Ctx(window="x"), end_ns=_ns("2028-01-02"))
-    D.add_holidays(K.Ctx(window="x"), end_ns=_ns("2028-01-01"))           # through 2027-12-31: fine
+        D.add_holidays(K.Ctx(window="x"), end_ns=_ns(f"{last + pd.Timedelta(days=2):%Y-%m-%d}"))
+    D.add_holidays(K.Ctx(window="x"), end_ns=_ns(f"{last + pd.Timedelta(days=1):%Y-%m-%d}"))   # through the last day
