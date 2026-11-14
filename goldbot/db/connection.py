@@ -62,11 +62,15 @@ def _check_sqlite_version() -> None:
         raise SqliteTooOld(f"SQLite {sqlite3.sqlite_version} < {'.'.join(map(str, MIN_SQLITE))} (STRICT tables)")
 
 
-def _create_private(path: Path) -> None:
+def create_private(path: Path) -> None:
     """Create the database file 0600 before SQLite opens it, and put it back to 0600 on every open (a restore, a
     copy or an older version may have left it group/world readable): aux.db holds password hashes and TOTP
     secrets, and SQLite gives the -wal and -shm files the main file's permissions. A file this process does not
-    own cannot be chmod-ed; that is logged, not fatal (the owning service tightens it on its next open)."""
+    own cannot be chmod-ed; that is logged, not fatal (the owning service tightens it on its next open).
+
+    Every SQLite file under state/ that is opened read-write outside `connect` calls this first (incident
+    2026-11-14: health_outages.db appeared 0644 on the first bridge outage, preflight's db_files_private failed and
+    a cut-over rolled back)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o600))
@@ -83,7 +87,7 @@ def connect(path: str | Path, kind: DbKind, *, busy_timeout_ms: int = DEFAULT_BU
     through `write()` (BEGIN IMMEDIATE ... COMMIT)."""
     _check_sqlite_version()
     p = Path(path)
-    _create_private(p)
+    create_private(p)
     conn = sqlite3.connect(p, isolation_level=None, timeout=busy_timeout_ms / 1000, check_same_thread=False)
     try:
         conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
