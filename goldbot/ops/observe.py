@@ -268,7 +268,8 @@ class Collector:
             self._bars[want] = []
         for want, rows in list(self._ticks.items()):
             if rows:
-                df = pd.DataFrame(rows).drop_duplicates(["ts_utc", "bid", "ask"])
+                from goldbot.data.compact import stamp_written  # BACKLOG 241: the flush's wall clock per row
+                df = stamp_written(pd.DataFrame(rows).drop_duplicates(["ts_utc", "bid", "ask"]))
                 self.store.append(TICKS_TABLE, df, source=self.account_id, symbol=want, dedupe=False)
             self._ticks[want] = []
 

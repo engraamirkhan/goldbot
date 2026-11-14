@@ -35,6 +35,7 @@ from goldbot.data.calendar import (
     WeekendWindow,
     session_table_cache,
 )
+from goldbot.data.compact import stamp_written
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import engine_shock
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
@@ -2811,6 +2812,7 @@ class Engine:
             return
         df = pd.DataFrame({"ts_utc": [x.ts_utc for x in self._tick_log], "bid": [x.bid for x in self._tick_log],
                            "ask": [x.ask for x in self._tick_log]})
+        df = stamp_written(df)        # BACKLOG 241: each row carries the flush's wall clock (UTC)
         self.store.append("ticks", df, source=self.cfg.account_id, symbol=books.store_symbol(self), dedupe=False)
         self._tick_log = []
 

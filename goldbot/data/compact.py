@@ -278,6 +278,14 @@ def written_utc(path: str | Path) -> pd.Series:
     return pd.Series(pd.to_datetime(ns, unit="ns", utc=True), name="written_utc")
 
 
+def stamp_written(df: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """`df` with `written_utc` = `now` (default: the wall clock, UTC, ns) on every row (BACKLOG 241): a tick row then
+    carries when it became knowable itself, not only through its part file's mtime or lineage (which a copy without
+    mtimes, an external tool or a dedupe rewrite loses). Rows written before the column read it as null."""
+    at = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    return df.assign(written_utc=pd.Series(at.as_unit("ns"), index=df.index, dtype="datetime64[ns, UTC]"))
+
+
 def _unified_schema(files: list[Path]) -> tuple[pa.Schema, dict[str, str]]:
     """The columns of `files` unified by name, in first-seen order. Arrow's permissive promotion where it can; a column
     it cannot unify (an int in one part, text in another: dq_events has five writers) takes the type DuckDB's
