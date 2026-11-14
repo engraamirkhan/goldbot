@@ -44,6 +44,7 @@ prints, writes and posts nothing).
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import logging
 import re
@@ -95,18 +96,60 @@ ENGINE_INCIDENTS = ("exploration_error", "exploration_rule_error", "exploration_
 CLOCK_ACTIONS = ("exploration_clock_ahead",)
 REFUSAL_ACTION = re.compile(r"refus|stale|skip|blocked|paused|^gate:|drift_halt|unconfirmed", re.I)
 # what a written or sent text may never carry (backlog 139 narrowed the old blinding to this): an MT5 login (a run of 6
-# or more digits) or a host address. The repo and its issues are public
-_LOGIN = re.compile(r"(?<![\d.,])\d{6,}(?![\d.,])")
+# or more digits, plain or comma-grouped) or a host address (IPv4, IPv6, a host name), an email address, or a URL
+# carrying credentials. The repo and its issues are public. A number followed by `.`/`,` and a digit is a decimal or a
+# grouped amount (2,650.25; $1,234,567.89), not a login; one followed by sentence punctuation is still a login
+_LOGIN = re.compile(r"(?<![\d.])\d{6,}(?!\d|[.,]\d)")
+_GROUPED_LOGIN = re.compile(r"(?<![\d.,])(?:\d{3},\d{3}|\d{1,3}(?:,\d{3}){2,})(?!\d|[.,]\d)")
 _HOST = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b")
+_IPV6_CANDIDATE = re.compile(r"(?<![\w:])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?![\w:])", re.I)
+# a dotted name ending in a top-level domain; file names (loop.py, RUNBOOK.md, settings.yaml) end in none of these
+_HOST_NAME = re.compile(r"(?<![\w.@-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,24})(?![\w-])", re.I)
+_TLDS = frozenset({"com", "net", "org", "io", "dev", "app", "ai", "co", "uk", "de", "nl", "eu", "us", "info", "biz",
+                   "xyz", "cloud", "online", "site", "tech", "host", "internal", "local", "lan", "home", "arpa",
+                   "invalid", "test", "example", "localdomain"})
+# public services an error may name (no identity in them); every other host name drops its line
+_PUBLIC_HOSTS = ("github.com", "githubusercontent.com", "telegram.org", "anthropic.com", "dukascopy.com",
+                 "stlouisfed.org", "tradingview.com")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_URL_USERINFO = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/?#@]+@", re.I)
+_QUERY_SECRET = re.compile(r"[?&](?:[\w-]*(?:token|key|secret|passw(?:or)?d|pwd|auth|sig(?:nature)?|session|sid)"
+                           r"[\w-]*|code|login|user)=", re.I)
 Health = Literal["breached", "ok"]
 IncidentKind = Literal["data_gap", "data_duplicate", "clock", "engine", "health", "unreadable"]
 
 
+def _ipv6(line: str) -> bool:
+    """A colon run that parses as an IPv6 address (13:45:00 does not: too few groups and no `::`)."""
+    for m in _IPV6_CANDIDATE.finditer(line):
+        try:
+            ipaddress.IPv6Address(m.group(0))
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _host_name(line: str) -> bool:
+    """A dotted name ending in a top-level domain that is not one of the public services."""
+    for m in _HOST_NAME.finditer(line):
+        name = m.group(0).lower()
+        if m.group(1).lower() in _TLDS and not any(name == p or name.endswith("." + p) for p in _PUBLIC_HOSTS):
+            return True
+    return False
+
+
+def _identifies(line: str) -> bool:
+    return bool(_LOGIN.search(line) or _GROUPED_LOGIN.search(line) or _HOST.search(line) or _EMAIL.search(line)
+                or _URL_USERINFO.search(line) or _QUERY_SECRET.search(line) or _ipv6(line) or _host_name(line))
+
+
 def scrub(text: str) -> str:
-    """`text` as it may be written or sent: a line carrying a login or a host address is dropped and logged."""
+    """`text` as it may be written or sent: a line carrying a login or a host address is dropped and logged (also an
+    email address or a URL carrying credentials or a query token)."""
     out = []
     for line in text.splitlines():
-        if _LOGIN.search(line) or _HOST.search(line):
+        if _identifies(line):
             log.error("daily review: a line carrying a login or a host was dropped")
             continue
         out.append(line)
