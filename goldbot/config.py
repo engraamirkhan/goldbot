@@ -345,8 +345,11 @@ class CompactSettings(_Section):
     memory_limit: str = Field("1GB", pattern=r"^\d+(\.\d+)?\s*(KB|MB|GB|KiB|MiB|GiB)$")   # DuckDB's verifying read
     threads: int = Field(2, ge=1, le=4)              # the brain has 2 cores (BACKLOG 239)
     row_group_rows: int = Field(262_144, ge=1024)    # rows held at once by the streamed build
+    # BACKLOG 256: tables whose open month is compacted too, the parts of closed UTC days only (the tick logs: the
+    # engines append only today's ticks and never rewrite a part)
+    closed_days_tables: list[str] = Field(default_factory=lambda: ["ticks", "observe_ticks"])
 
-    @field_validator("tables")
+    @field_validator("tables", "closed_days_tables")
     @classmethod
     def _append_only(cls, v: list[str]) -> list[str]:
         bad = sorted(set(v) - set(COMPACTABLE_TABLES))

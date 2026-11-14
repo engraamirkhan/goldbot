@@ -1673,7 +1673,8 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly, off the engine tick: every closed month partition (before `slot`'s UTC month) of every account's
     `decisions` journal folder is rewritten into one part (goldbot/data/compact.py: under the partition's writer lock,
-    atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is never touched.
+    atomic, every row kept, crash-safe by manifest). The open month, which the engines write, is touched only for
+    the tables in `compact.closed_days_tables` and only in its parts of closed UTC days (BACKLOG 256).
     BACKLOG 179: the same for every table in settings `compact.tables` (fills, dq_events, observe_ticks; ticks once
     measured), in that order, sharing one time box (`compact.time_box_s`; what is left is `deferred` to the next
     night, not an error) and paced (`compact.pause_s`). Totals at the top level, each table under `tables`."""
@@ -1689,7 +1690,8 @@ def journal_compact(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         left = max(cfg.time_box_s - (time.monotonic() - t0), 0.0)
         tables[table] = compact_table(ctx.store, table, before=slot, min_parts=cfg.min_parts, time_box_s=left,
                                       pause_s=cfg.pause_s, memory_limit=cfg.memory_limit, threads=cfg.threads,
-                                      row_group_rows=cfg.row_group_rows).summary()
+                                      row_group_rows=cfg.row_group_rows,
+                                      closed_days=table in cfg.closed_days_tables).summary()
     out: dict[str, Any] = {k: sum(int(t[k]) for t in tables.values())
                            for k in ("partitions", "parts_before", "parts_after", "rows", "recovered", "skipped",
                                      "deferred")}
