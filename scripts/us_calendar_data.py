@@ -51,6 +51,7 @@ from goldbot.data.us_calendar import (  # noqa: E402
     FedCalendarError,
     FredError,
     HistoryLoss,
+    add_schedule_notices,
     calendar_frame,
     check_keeps_history,
     count_table,
@@ -138,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
     for n in notes:
         print(n, flush=True)
     merged = merge_calendar(prev, fresh, now, prev_ok, fetched_types=fetched, allow_cancellations=allow)
+    n_merged = len(merged)
+    merged = add_schedule_notices(merged, now)   # BACKLOG 235: appended rows, published rows unchanged
+    print(f"FOMC schedule notices (federalreserve.gov press releases, hand-checked): {len(merged) - n_merged:,} "
+          "rows added", flush=True)
     try:
         check_keeps_history(prev, merged)
     except HistoryLoss as exc:
