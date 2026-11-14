@@ -184,7 +184,15 @@ MANUAL_EVENTS: tuple[ManualEvent, ...] = (
     ManualEvent("jolts", "2026-02-03", "2026-02-03 09:59", "bls.gov 2026 lapse table (moved to 2026-02-05)"),
     ManualEvent("nfp", "2026-02-06", "2026-02-06 08:29", "bls.gov 2026 lapse table (moved to 2026-02-11)"),
     ManualEvent("cpi", "2026-02-11", "2026-02-11 08:29", "bls.gov 2026 lapse table (moved to 2026-02-13)"),
+    # BACKLOG 257: the meeting page still lists 26-27 Oct 2027, but the revised schedule says it has no policy decision
+    ManualEvent("fomc_statement", "2027-10-27", "2026-11-12 12:45",
+                "Fed press release 2026-11-12 (monetary20261112a): 26-27 Oct 2027 meeting without a policy decision"),
+    ManualEvent("fomc_press_conference", "2027-10-27", "2026-11-12 12:45",
+                "Fed press release 2026-11-12: no policy decision, so no press conference"),
 )
+# The hand-check wins: a downloaded row for one of these events is dropped (calendar_frame) and a later download that
+# still lists it never revives it (merge_calendar), so the cancellation stays the event's latest status.
+MANUAL_EVENT_IDS = frozenset(f"{e.event_type}:{e.day}" for e in MANUAL_EVENTS)
 
 
 class ScheduleNotice(NamedTuple):
@@ -617,6 +625,7 @@ def calendar_frame(fred_dates: dict[str, pd.DatetimeIndex], now: pd.Timestamp,
             frames.append(event_rows(t, rel.release_id, d, rel.at_et, now, "fred"))
     if fomc is not None:
         frames.append(fomc_rows(fomc, now))
+    frames = [f[~f["event_id"].isin(MANUAL_EVENT_IDS)] for f in frames]     # the hand-check wins (MANUAL_EVENT_IDS)
     frames += [rule_rows(now, now), manual_rows(now), unscheduled_rows(now)]
     return pd.concat([f for f in frames if len(f)], ignore_index=True)
 
@@ -969,7 +978,8 @@ def merge_calendar(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
                 & ~fresh["event_id"].isin(SPACING_EXEMPT).to_numpy())
         fresh["available_utc"] = rule.where(~late, now)
         future = np.asarray(pd.DatetimeIndex(fresh["event_utc"]) > now, dtype=bool)
-        back = ~is_new & ~manual & future & (fresh["event_id"].map(state) == CANCELLED).to_numpy()
+        back = ~is_new & ~manual & future & (fresh["event_id"].map(state) == CANCELLED).to_numpy() \
+            & ~fresh["event_id"].isin(MANUAL_EVENT_IDS).to_numpy()
         revived = fresh[back].assign(available_utc=now)
         types = set(fetched_types) if fetched_types is not None else set(fresh["event_type"])
         cancelled = _gone(latest, fresh, now, types).assign(status=CANCELLED, available_utc=now,
