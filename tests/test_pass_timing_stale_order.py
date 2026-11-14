@@ -214,7 +214,8 @@ def test_a_book_whose_minute_arms_are_all_dormant_still_runs_its_exits_and_its_p
     eng = _multi(tmp_path)
     arm = SimpleNamespace(tf="1m", arm_id="S0-SYM02")
     eng.books["SYM02"].__dict__["exploration"] = SimpleNamespace(arms={"S0-SYM02": arm}, last_minute=None,
-                                                                 queue=deque(), dormant=frozenset({"S0-SYM02"}))
+                                                                 queue=deque(), dormant=frozenset({"S0-SYM02"}),
+                                                                 deregistered=frozenset())
     exits: list[str] = []
     seen: list[str] = []
 

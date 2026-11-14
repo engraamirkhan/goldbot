@@ -176,6 +176,11 @@ costs:
   # spread profile (median and p90 by UTC hour and session, aggregates only; reported, not charged). 10 trading days
   # with all three sessions: docs/research/costs-binding-2026-10-18.md section 1.4 step 4.
   spread_profile_min_days: 10
+  # BACKLOG 175: a weekend hold of a crypto (seven-night) book whose broker swap is more than this share off the
+  # seven-night projection warns (health swap_reconcile, told to the owner). The projection prices the interest swap
+  # at its instruments.db refresh price and the order's FX, so a few % drift is not a schedule error; one night more
+  # or less on a three-night weekend is 33%.
+  swap_reconcile_tolerance: 0.25
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.
@@ -209,6 +214,7 @@ scheduler:
   har_days_retry:   { kind: daily,   at: "22:35", max_late_hours: 20 }   # the same job again: writes the row when 22:05 failed; a row 22:05 wrote is kept (INSERT OR IGNORE)
   journal_compact:  { kind: daily,   at: "03:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 170: closed months of the decisions journal -> one part each (goldbot/data/compact.py); never the open month
   weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
+  swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
 
 agents:

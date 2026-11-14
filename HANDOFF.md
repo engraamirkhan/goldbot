@@ -5,6 +5,21 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-14 (branch feat/auto-gated-1114; R151, R152; BACKLOG 187, 175): two condition-gated items now finish
+  themselves. 187: at every reconciliation, after a successful broker position read (`exploration.sweep`), the
+  engine de-registers a spec-retired arm its book is flat in (no open trade, no order in flight, no waiting signal;
+  goldbot/engine/exploration_deregister.py). It then does no signal or bar work, so a book whose arms are all retired
+  stops resampling for them. The first time per account and arm it is recorded in aux.db
+  `exploration_arm_deregistered` (migration 34) and journalled `exploration_arm_deregistered`. The arm stays known to
+  the exits and adoption, so nothing is ever closed as `exploration_orphan` and no position is touched. The
+  config/accounts.yaml rows stay (a running service never rewrites the deployed config; a de-registered row is
+  inert). 175: new daily job `swap_reconcile` (23:45 UTC, goldbot/ops/swap_reconcile.py) compares every closed
+  weekend hold of a crypto (seven-night) book, from the exploration ledger's broker swap, with the instruments.db
+  rate x lots x nights in the account currency. Each result is stored once in aux.db `swap_reconciliations` with the
+  nights of the three candidate schedules (seven_night, five_plus_triple, seven_plus_triple). Health
+  `swap_reconcile` warns, and the owner is told, past `costs.swap_reconcile_tolerance` (0.25) or when a hold cannot
+  be priced. With no weekend hold the job is a no-op. Read-only: no broker call, no order. The order path is
+  unchanged.
 - 2026-11-13 (branch feat/compact-other-tables; backlog 179, R146): `journal_compact` now compacts every table in
   settings `compact.tables` (default decisions, fills, dq_events, observe_ticks; `ticks` is supported but off until
   measured on the brain, BACKLOG 239) with the R131 guarantees: closed months only, manifest + partition lock, the

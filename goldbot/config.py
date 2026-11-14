@@ -230,6 +230,11 @@ class CostSettings(_Section):
     # recorded broker-tick days (tick_record) in the cost window before nightly_costs builds the spread profile by
     # hour and session (costs-binding-2026-10-18.md section 1.4 step 4); fewer: no profile, the note says why
     spread_profile_min_days: int = Field(10, ge=1)
+    # BACKLOG 175 (goldbot/ops/swap_reconcile.py): a weekend hold of a seven-night (crypto) book whose broker swap is
+    # further than this share from the seven-night projection warns (health `swap_reconcile`). The projection prices
+    # an interest swap at its instruments.db refresh price and the order's FX, so a few % of drift is not a schedule
+    # error; one night more or less on a three-night weekend is 33%
+    swap_reconcile_tolerance: float = Field(0.25, gt=0, lt=1)
 
 
 class ScheduleSettings(_Section):
@@ -308,6 +313,10 @@ class SchedulerSettings(_Section):
     # 1st was missed (within monthly_review.catch_up_days) or failed, and retries every post that has not gone out. A
     # done month is a no-op (one review, one issue and one Telegram message a month)
     monthly_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:30", max_late_hours=20)
+    # BACKLOG 175 (goldbot/ops/swap_reconcile.py): every day, so a weekend crypto hold is reconciled the night after it
+    # closes; a run with no new weekend hold writes nothing. After broker_ledger (23:25)
+    swap_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:45", max_late_hours=20,
+                                                        run_if_never_run=True)
 
 
 class BackupSettings(_Section):

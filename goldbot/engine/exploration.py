@@ -58,6 +58,9 @@ The plan's rules, as built here:
   2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected. An arm whose
   frozen spec row records a retirement (`retired_day`/`retired_rule`, e.g. A2 readability 2026-10-30) is retired the
   same way from the start (`spec_retired`, journalled `exploration_arm_retired` with its rule), on every account.
+  BACKLOG 187: once a reconciliation's broker read finds such an arm flat (no position, no order in flight, no
+  signal waiting) it is de-registered (`exploration_deregister`: no signal or bar work, journalled once
+  `exploration_arm_deregistered`); it stays known to the exits and adoption, so nothing is ever closed as an orphan.
 * Qualification before demo (owner rule 2026-10-30, ADR 0061: "every strategy should have been back tested and
   qualified before it is tested and learn from live trades that are taken on demo accounts"): a strategy arm without a
   passing `qualification` on its row (a screen AND a confirm, verdict pass, measured costs) is refused the same way,
@@ -750,6 +753,9 @@ class Exploration:
         self.retired_read: pd.Timestamp | None = None
         # the 1m/5m arms refused new entries for good (`refresh_dormant`); their minute work is skipped
         self.dormant: frozenset[str] = frozenset()
+        # BACKLOG 187: spec-retired arms found flat after a broker read (`exploration_deregister`): no signal or bar
+        # work; still known to the exits and adoption
+        self.deregistered: frozenset[str] = frozenset()
         self.dormant_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
@@ -989,7 +995,7 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
                                   "bar": close_ts.isoformat(), "ahead_s": round(ahead, 3)})
         return False
     release_shifted(eng, ex, close_ts)
-    arms = [a for a in ex.arms.values() if a.tf not in SUB_15M]
+    arms = [a for a in ex.arms.values() if a.tf not in SUB_15M and a.arm_id not in ex.deregistered]
     if not arms or eng.bars_1m.empty:
         return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
@@ -1103,7 +1109,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
-    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant
+    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant | ex.deregistered
             and int(through.timestamp()) % tf_seconds(a.tf) == 0]
     minute = through - pd.Timedelta(minutes=1)
     if arms and broker_bars.awaiting(eng, minute, now):
@@ -1170,7 +1176,8 @@ def _minute_due(ex: Exploration, now: pd.Timestamp) -> bool:
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return False
-    return any(a.tf in SUB_15M and a.arm_id not in ex.dormant and int(through.timestamp()) % tf_seconds(a.tf) == 0
+    gone = ex.dormant | ex.deregistered
+    return any(a.tf in SUB_15M and a.arm_id not in gone and int(through.timestamp()) % tf_seconds(a.tf) == 0
                for a in ex.arms.values())
 
 
@@ -2564,8 +2571,10 @@ def sweep(eng: Engine, live: set[int]) -> None:
     broker no longer lists whose exit deal is seen (its stop or target at the broker) is forgotten and its record
     queued, so its arm, pot and host slots and its open risk are free for the next signal instead of at the next
     decision-bar close (a 1m arm signals every minute). One whose exit deal is not seen yet, or whose deals cannot be
-    read, is left to `Engine._sweep_closed` and its confirmation count at the bar close, as every other trade. Never
-    raises."""
+    read, is left to `Engine._sweep_closed` and its confirmation count at the bar close, as every other trade. Then,
+    on this successful read, a spec-retired arm found flat is de-registered (BACKLOG 187, `exploration_deregister`).
+    Never raises."""
+    from goldbot.engine import exploration_deregister
     try:
         for pid, tr in [(k, t) for k, t in eng.open.items() if k not in live and is_exploration(t.agent_id)]:
             try:
@@ -2579,6 +2588,8 @@ def sweep(eng: Engine, live: set[int]) -> None:
             eng._note_closed(pid, tr, "broker_close")
     except Exception:
         log.exception("exploration sweep failed; the bar close's sweep records the close")
+    if eng.exploration is not None:
+        exploration_deregister.refresh(eng, eng.exploration)
 
 
 def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> bool:

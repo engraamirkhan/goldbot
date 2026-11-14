@@ -774,6 +774,26 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (account_id, arm_id)
            ) STRICT""",
     )),
+    # additive (BACKLOG 187, BACKLOG 175): the first time the engine de-registered a spec-retired arm it found flat
+    # (goldbot/engine/exploration_deregister.py; INSERT OR IGNORE, so it is journalled once), and one row per weekend
+    # hold of a seven-night book whose broker swap was reconciled against the projection (goldbot/ops/swap_reconcile.py,
+    # read-only on the broker; health `swap_reconcile`). A release without them never reads either table
+    Migration(version=34, name="deregistered_arms_swap_reconcile", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_arm_deregistered (
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               deregistered_ns INTEGER NOT NULL,
+               PRIMARY KEY (account_id, arm_id)
+           ) STRICT""",
+        f"""CREATE TABLE IF NOT EXISTS swap_reconciliations (
+               account_id TEXT NOT NULL,
+               client_order_id TEXT NOT NULL,
+               exit_ns INTEGER NOT NULL,
+               ok INTEGER NOT NULL,
+               {_BODY},
+               PRIMARY KEY (account_id, client_order_id)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

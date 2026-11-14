@@ -67,7 +67,7 @@ def hist_summer(tmp_path: Path) -> Path:
 def _engine(b1: pd.DataFrame, arms: list[SpecArm], hist: Path, db: Any) -> SimpleNamespace:
     """What `exploration.step` reads at a close, with the engine's session table and the aux ledger."""
     xa = {a.id: exploration.Arm(spec=a, style="swing", control_share=0.1) for a in arms}
-    ex = SimpleNamespace(arms=xa, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
+    ex = SimpleNamespace(arms=xa, retired=frozenset(), deregistered=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
                          needs_context=frozenset(), held_back={}, netting=None, long=None, db=db)
     cfg = SimpleNamespace(live_clock=False, account_id="t", release_symbol="XAUUSD", decision_tf="15m",
                           timeframes_live=(*INTRADAY_LIVE, "1d", "1w"), long_history_dir=str(hist))

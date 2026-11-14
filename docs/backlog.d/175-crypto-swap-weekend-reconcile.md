@@ -4,7 +4,7 @@ rank: 12
 title: Reconcile Vantage BTCUSD weekend swap charges against the seven-night projection
 stage: 'ops + finance (follow-up of BACKLOG 153, R130)'
 size: S
-status: 'ready after the first weekend BTCUSD hold · accountable: finance-auditor · reviews: quant-reviewer, trading-safety-reviewer · due 2026-11-23 (triage 2026-11-13)'
+status: 'implemented, finishes itself (2026-11-14, branch feat/auto-gated-1114, R152): trigger: the daily swap_reconcile job (23:45 UTC) after any weekend BTCUSD hold closes stores the broker swap against the seven-night projection (aux.db swap_reconciliations); health swap_reconcile warns past costs.swap_reconcile_tolerance; the finance-auditor keeps or corrects the schedule on that warn · accountable: finance-auditor · reviews: quant-reviewer, trading-safety-reviewer'
 ---
 - **175. Reconcile Vantage BTCUSD weekend swap charges against the seven-night projection.** Value: BACKLOG 153
   counts a crypto book's swap every server-midnight rollover with no triple day, from the item's reading of the

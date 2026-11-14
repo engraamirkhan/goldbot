@@ -62,7 +62,7 @@ class _World:
 def _ex(sym: str) -> Any:
     arm = SimpleNamespace(tf="1m", arm_id=f"S0-{sym}", family="random", spec=SimpleNamespace(role="control"))
     big = SimpleNamespace(tf="15m", arm_id=f"B-{sym}", family="box", spec=SimpleNamespace(role="strategy"))
-    return SimpleNamespace(arms={arm.arm_id: arm, big.arm_id: big}, queue=deque(), dormant=frozenset(),
+    return SimpleNamespace(arms={arm.arm_id: arm, big.arm_id: big}, queue=deque(), dormant=frozenset(), deregistered=frozenset(),
                            last_minute=CLOSE - pd.Timedelta(minutes=1), last_close=CLOSE - pd.Timedelta(minutes=15),
                            retired_ok=True, learning_group=frozenset(), retired=frozenset(), slow_owed=None)
 
