@@ -100,7 +100,13 @@ class PreregisteredForLaterQuarter(TrialBudgetExceeded):
 
 class RetiredExplorationUsed(TrialBudgetExceeded):
     """A retired family (research.retired_families, allocated or screened) would take a trial from the open budget
-    beyond the retired families' ONE shared exploration trial a quarter (director.RETIRED_EXPLORATION; BACKLOG 91)."""
+    beyond the retired families' ONE shared exploration trial a quarter (director.RETIRED_EXPLORATION; BACKLOG 91).
+    A runner records it as a skip with this reason (`research_pass.py` exits SKIPPED_EXIT), never as an error."""
+
+
+# research_pass.py's exit code for a run the retired-family guard skipped: no look, no trial; research.yml's cell passes
+# on it and `cells.record` reports the cell as skipped (not 0, 1 = SystemExit message or 2 = argparse)
+SKIPPED_EXIT = 75
 
 
 class QueuedConfigMismatch(TrialBudgetExceeded):

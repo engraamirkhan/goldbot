@@ -140,6 +140,8 @@ from goldbot.research.pipeline import (  # noqa: E402
 )
 from goldbot.research.registry import (  # noqa: E402
     LOOP_RULE_REF,
+    SKIPPED_EXIT,
+    RetiredExplorationUsed,
     TrialBudgetExceeded,
     TrialRegistry,
     gate_pass_counts,
@@ -717,6 +719,16 @@ def main() -> int:
                     positioning_info=positioning_info, us_calendar=us_calendar, us_calendar_info=us_calendar_info)
 
 
+def retired_skip(args: argparse.Namespace, title: str, exc: RetiredExplorationUsed) -> int:
+    """BACKLOG 91: a run the retired-family guard refuses ("The retired families SHARE 1 exploration trial a quarter")
+    is a skip, not an error: the reason goes into the report and the log, no row is written (no look, no trial), and the
+    exit code is SKIPPED_EXIT, which research.yml's cell passes and `cells.record` reports as skipped."""
+    text = f"## {title}: SKIPPED\n\n- {exc}\n- no look at the data and no registry row (not a trial)\n"
+    Path(args.report).write_text(text)
+    print(f"SKIPPED: {exc}", flush=True)
+    return SKIPPED_EXIT
+
+
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
@@ -778,6 +790,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                                          settings.research.reserved_for(quarter_of()),
                                                          retired={e.family for e in settings.research.retired_families},
                                                          agents=agents)
+        except RetiredExplorationUsed as exc:
+            return retired_skip(args, jobs[0].family, exc)
         except TrialBudgetExceeded as exc:
             raise SystemExit(str(exc)) from None
         # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)

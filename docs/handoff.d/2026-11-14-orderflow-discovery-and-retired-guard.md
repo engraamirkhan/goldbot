@@ -12,3 +12,10 @@
   reports the trial used (`retired_trials_quarter`). H-53's procedural hold in prereg-2026-10-19-h50-followup.md s.3
   can drop once quant signs off. Behaviour change: `research_pass.py` defaults to `--specialist session_open`
   (retired R-02), so a second open-budget session_open run in a quarter is now refused.
+- Fail clean (same branch): a run the retired-family guard refuses is a recorded skip, not an error. research_pass
+  writes the reason to the report, writes no row and exits 75 (`registry.SKIPPED_EXIT`); research.yml's cell passes
+  on 75 and `cells.record` reports the cell as "skipped (retired family; no look, no trial)" (`Recorded.skipped`).
+  Callers checked: research-loop.yml names every family and its loop rows never reach the guard (`loop_refusal`
+  refuses retired families first); the brain's jobs (monthly_research, research_director, the analyst) do not call
+  research_pass. So no scheduled caller relies on the `session_open` default, and the default stays; a manual
+  dispatch on it now ends as a skip.

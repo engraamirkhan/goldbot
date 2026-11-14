@@ -119,6 +119,8 @@ jobs:
           tail -n 40 out/research.log
           # the rows this cell added; the record job merges them into the fresh registry
           python -m goldbot.research.cells delta snapshot.jsonl cell/registry.jsonl out/rows.jsonl
+          # 75 = registry.SKIPPED_EXIT: the retired families' shared exploration trial is used; a recorded skip, not an error
+          if [ "$RC" = "75" ]; then exit 0; fi
           exit "$RC"
       - name: hand the cell's rows, report and log to the record job
         if: always()

@@ -52,6 +52,7 @@ from goldbot.research.registry import (
     DISCOVERY,
     LOOP_RULE_REF,
     PREREGISTERED,
+    SKIPPED_EXIT,
     TrialRegistry,
     n_trials_effective,
     quarter_of,
@@ -262,6 +263,7 @@ class Recorded(FrozenRecord):
     recorded: int                    # rows merged from cells that ran
     failed: int                      # failed rows written for cells that left nothing
     refused: int                     # cells refused before any look (no row)
+    skipped: int = 0                 # cells the retired-family guard skipped (SKIPPED_EXIT; no look, no row; BACKLOG 91)
     n_trials_effective: int          # the final count every DSR was restated on
     quarter_used: int                # trial rows stamped in the current quarter after the record
     reports: list[dict[str, str]]    # one {"title", "body"} per issue to comment on
@@ -414,7 +416,7 @@ def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) ->
     published = read_rows(registry)
     added: list[dict[str, Any]] = []
     notes: dict[int, tuple[str, str]] = {}          # idx -> (outcome, text)
-    n_failed = n_refused = 0
+    n_failed = n_refused = n_skipped = 0
     for cell in cells_plan:
         d = cell_dir(artifacts, cell, len(cells_plan))
         rows, bad_rows = _read_cell_rows(d / "rows.jsonl", cell)
@@ -425,6 +427,9 @@ def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) ->
         if rows:
             added += rows
             notes[cell["idx"]] = ("ok" if code == 0 else "recorded, then failed", "")
+        elif code == SKIPPED_EXIT and not bad_rows:
+            n_skipped += 1                         # the retired families' shared exploration trial is used (BACKLOG 91)
+            notes[cell["idx"]] = ("skipped (retired family; no look, no trial)", _tail(log, ERROR_TAIL))
         elif code > 0 and log and "Traceback" not in log and not bad_rows:
             n_refused += 1                         # a SystemExit message: refused before any look at the data
             notes[cell["idx"]] = ("refused (no look, no trial)", _tail(log, ERROR_TAIL))
@@ -440,7 +445,7 @@ def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) ->
     final = [restate_dsr(r, k) if _key(r) in keys else r for r in merged]
     write_rows(registry, final)
     mine = {_key(r): r for r in final if _key(r) in keys}
-    return Recorded(recorded=sum(1 for r in added if r.get("status") != FAILED), failed=n_failed, refused=n_refused,
+    return Recorded(recorded=sum(1 for r in added if r.get("status") != FAILED), failed=n_failed, refused=n_refused, skipped=n_skipped,
                     n_trials_effective=k, quarter_used=quarter_trials(final, quarter_of()),
                     reports=_reports(cells_plan, artifacts, notes, mine, k, quarter_trials(final, quarter_of())))
 
