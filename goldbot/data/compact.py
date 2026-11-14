@@ -42,6 +42,7 @@ import os
 import shutil
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -109,6 +110,21 @@ class CompactReport(Record):
                 "folders": folders,
                 "errors": [f"{p.source}/{p.symbol}/{p.year}-{p.month:02d}: {p.error}"
                            for p in self.partitions if p.error is not None]}
+
+
+def deferred_streaks(previous: object, tables: Mapping[str, Mapping[str, object]]) -> dict[str, int]:
+    """Per table, how many consecutive runs ended with partitions `deferred` (BACKLOG 242): the previous run's
+    `deferred_streak` (its `journal_compact` result, `previous`) plus one while this run deferred, else 0. A missing
+    or malformed previous result starts the count over; health WARNs at 3 (goldbot/ops/checks/compaction.py)."""
+    before = previous.get("tables") if isinstance(previous, dict) else None
+    out: dict[str, int] = {}
+    for table, summary in tables.items():
+        prev = before.get(table) if isinstance(before, dict) else None
+        streak = prev.get("deferred_streak") if isinstance(prev, dict) else None
+        deferred = summary.get("deferred")
+        out[table] = ((streak if isinstance(streak, int) and streak >= 0 else 0) + 1
+                      if isinstance(deferred, int) and deferred > 0 else 0)
+    return out
 
 
 class CompactMismatch(RuntimeError):

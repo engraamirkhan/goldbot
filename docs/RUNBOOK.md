@@ -2831,3 +2831,18 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   means the token lost `Contents: Read-only` too: sre re-issues it and stores it on the brain with
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.
+
+### Store compaction (`compaction`; BACKLOG 242)
+
+Health check `compaction` (goldbot/ops/checks/compaction.py) appears once `journal_compact` has finished a run (or a
+spill directory exists) and WARNs on either:
+- a table deferred on 3 runs in a row (`deferred_streak` in `job:journal_compact`'s result): the 30 min time box
+  (`compact.time_box_s`) does not drain the backlog. Read the result per table (`partitions`, `deferred`,
+  `duration_s`). One heavy table (a new one in `compact.tables`): let it drain over a weekend, or raise `time_box_s`
+  in `config/settings.local.yaml` within the 03:40-05:00 quiet window (engines keep the disk; `pause_s` stays). A
+  deferral that grows every night means compaction cannot keep up with the writers: data-engineer reviews the table.
+- `<data_root>/.compact_tmp` left unchanged for more than 6 h with no `journal_compact` run in flight: a killed run's
+  DuckDB spill files. Check no run is in flight (`job:journal_compact` finished after it started), then remove it as
+  the goldbot user: `sudo -u goldbot rm -rf <data_root>/.compact_tmp` (the next run recreates it; no partition data
+  lives there). Then find why the run died (`journalctl -u goldbot-scheduler`, OOM in `dmesg`).
+A "can't check" WARN means the scheduler status is unreadable: see the scheduler checks first.
