@@ -8,8 +8,11 @@ action list (aux.db `review_actions`, goldbot/research/review_actions.py):
   interim edge whose interval lies below zero queues a `below_control` review for the research director; an interval
   spanning zero is "level" and queues nothing. The ranking stays descriptive: nothing here reads, promotes or stops by
   it (ADR 0053 6f), and this module never imports it;
-* reads due at their registered checkpoint (config/arm_reads.yaml read sizes, the ranking's `read_progress`): the
-  evaluator records the read, the review only says it is due;
+* reads due at their registered checkpoint (config/arm_reads.yaml read sizes and session-day minimums, every unread
+  unit of a row in the ranking's `read_units`): "one read, at the 300th admissible family fill on >= 20 session days"
+  (H-81 section 4), so a read is due only once both counts are met; a unit already read, or retired unread before its
+  read fell due (its stop, A5), has no progress and no read is due. An unreadable arm_reads.yaml queues no read and one
+  `arm_reads_unreadable` action (fail closed). The evaluator records the read, the review only says it is due;
 * loss attribution: the attribution job's report (state/attribution.json), cells signed negative after the row bar
   (`verdict_adj`, ADR 0022), at most `attribution_max_age_days` old;
 * cost drift: the week's measured round trip per broker and session (the daily reviews' cost cells) above the cost of
@@ -43,6 +46,7 @@ import pandas as pd
 import yaml
 from pydantic import Field
 
+from goldbot.api.schema import ARM_READS_UNREADABLE
 from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database
@@ -169,15 +173,29 @@ def ranking_actions(reads: Sequence[FamilyRead], life_view: RankingView | None, 
                 title=f"{r.family}: unpaired, no matched control result to compare with",
                 detail=f"{r.n} fills of its own and no paired control result (ADR 0051 pairing): pair a control or "
                        "record why none applies; its result is not an edge until then"))
-    if life_view is not None:
+    if life_view is not None and ARM_READS_UNREADABLE in life_view.unreadable:
+        out.append(ra.ReviewAction(
+            action_id=ra.action_id("arm_reads_unreadable", week), week=week, kind="arm_reads_unreadable",
+            subject="config/arm_reads.yaml", source="ranking", score=0.0,
+            title="config/arm_reads.yaml unreadable: no read can be queued as due",
+            detail="the read sizes, pooled units and session-day minimums could not be read (fail closed: every arm "
+                   "would fall back to its own unit at 300 with no day minimum); fix the file, nothing is read meanwhile"))
+    elif life_view is not None:
+        queued: set[str] = set()
         for row in life_view.rows:
-            p = row.read_progress
-            if row.kind == "exploration" and p is not None and p.n_counted >= p.n_read_at:
+            if row.kind != "exploration":
+                continue
+            for p in row.read_units:                    # every unread unit: one short of its days hides no other
+                if p.n_counted < p.n_read_at or p.n_days < p.min_days or p.unit in queued:
+                    continue
+                queued.add(p.unit)
                 out.append(ra.ReviewAction(
                     action_id=ra.action_id("read_due", p.unit, str(p.n_read_at)), week=week, kind="read_due",
                     subject=p.unit, source="ranking", score=float(p.n_counted - p.n_read_at),
                     title=f"{row.family}: read due at its registered size ({p.n_read_at})",
-                    detail=f"{p.n_counted} counted fills of {p.n_read_at}: the evaluator records the pre-registered "
+                    detail=f"{p.n_counted} counted fills of {p.n_read_at}"
+                           + (f" on {p.n_days} session days (minimum {p.min_days})" if p.min_days else "")
+                           + ": the evaluator records the pre-registered "
                            "read (config/arm_reads.yaml); nothing is decided here"))
     return out
 

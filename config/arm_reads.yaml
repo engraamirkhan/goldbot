@@ -11,6 +11,13 @@
 # `read_utc`.
 #   <unit>: {read_utc: "YYYY-MM-DDTHH:MM:SSZ", verdict: "<plain words>", state: C1, vs_control_r: 0.12, vs_control_ci90: [0.01, 0.23]}
 reads: {}
+# NOT reads (evaluator 2026-11-14, docs/research/weekly-decisions-2026-11-14.md). No `reads` row: a row would show
+# a read that never happened as one (status not_proven, frozen "read" figures) and unblind the unit. Both units were
+# retired under A5 before their read fell due, so no read is due or shown (goldbot/api/strategy_ranking.py _progress).
+#   H-81:Z4: "VOID, not an H-81 s4 read (300th fill on 8 session days < 20); exploration evidence only, never
+#            promotion or re-entry evidence; retired A5 2026-11-06"
+#   H-81:Z7: "VOID, not an H-81 s4 read (300th fill on 4 session days < 20); exploration evidence only, never
+#            promotion or re-entry evidence; retired A5 2026-11-06"
 # Read size n per arm as pre-registered (evaluator, 2026-10-27, from the frozen texts; every arm of
 # config/exploration_arms.yaml is listed, 300 included). A size below 1 reads no arm. Comment = read source; stop rule.
 # Sources:
@@ -158,6 +165,76 @@ read_units:
 # An arm whose n is not its admissible trades (arms-2026-10-25.md 4: S0R's n is its stop exits).
 counts:
   S0R: stop_exits
+# A read registered on a session-day minimum as well as its n: HV "Graduation" ("read once, at its 300th admissible
+# trade, provided that trade falls on >= 20 session days; otherwise the read waits for the 20th day and still uses
+# the first 300 trades only") and Z (H-81 section 4: "One read, at the 300th admissible family fill on >= 20 session
+# days"). A session day is the opportunity day [D-1 22:00, D 22:00) UTC with a counted fill. No read is due before
+# both counts are met (the weekly review's `read_due`). An arm not listed has no minimum (W2, H-80, WFRI, S0R register
+# none); every arm of a pooled unit carries the same minimum (else the file reads no unit). W1 has none FOR NOW: its
+# read is H-61's, and H-61 as amended 2026-10-25 (HV) adds ">= 20 session days"; whether that binds W1 awaits an
+# evaluator ruling (until then W1 reads at its n alone).
+min_session_days:
+  # HV (H-61 arms, icm) and its Vantage twins (amendment 2); F1A / G1A take the HV read (time-structure 2.2, 3.2),
+  # futility-only (graduation withdrawn 2026-10-30)
+  S1A: 20
+  S1B: 20
+  S2A: 20
+  S2B: 20
+  S3A: 20
+  S3B: 20
+  S4: 20
+  S5A: 20
+  S5B: 20
+  S6: 20
+  I1: 20
+  I2A: 20
+  I2B: 20
+  MB15: 20
+  MB30: 20
+  MB1H: 20
+  MSA15: 20
+  I3: 20
+  W1A: 20
+  W1B: 20
+  W2: 20
+  W3: 20
+  VI2A: 20
+  VI2B: 20
+  VMB15: 20
+  VMB30: 20
+  VMB1H: 20
+  VMS15: 20
+  VW1A: 20
+  VW1B: 20
+  VW2: 20
+  F1A: 20
+  G1A: 20
+  # Z (H-81 section 4): family pooled across strata and brokers
+  Z1P: 20
+  Z2P: 20
+  Z3D: 20
+  Z3V: 20
+  Z4D: 20
+  Z4P: 20
+  Z5P: 20
+  Z5V: 20
+  Z6D: 20
+  Z6V: 20
+  Z7D: 20
+  Z7V: 20
+  Z7P: 20
+  Z8P: 20
+  Z9D: 20
+  Z10D: 20
+  # Vantage S-twins: H-61's default (HV) applies
+  VS1A: 20
+  VS1B: 20
+  VS2A: 20
+  VS2B: 20
+  VS3A: 20
+  VS3B: 20
+  VS5A: 20
+  VS5B: 20
 # ---------------------------------------------------------------------------------------------------------------------
 # EVALUATOR RULINGS 2026-10-30 on the research reset (research-plan.md table 3; prereg-amendment-2026-10-30-kill-rules.md
 # "Evaluator rulings"). Comments only: no read is recorded, no `reads:` row is added, nothing here retires an arm until

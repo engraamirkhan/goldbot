@@ -273,7 +273,7 @@ def test_the_stop_families_and_the_pooled_read_units_have_the_same_members():
     BXR arms keep "the H-61 per-arm cumulative-R stop ... unchanged" and whose BXT/BXF virtual twins never stop."""
     from goldbot.api.strategy_labels import READS_PATH, _reads_file
     rules = arm_stops.load_stop_rules()
-    read_units = _reads_file(READS_PATH).read_units
+    read_units = _reads_file(READS_PATH)[0].read_units
     assert read_units, "config/arm_reads.yaml read no unit (fail closed)"
     stop_families = {frozenset(u.arms) for u in rules.units.values() if len(u.arms) > 1}
     read_families = {frozenset(u.arms): u for u in read_units.values()}

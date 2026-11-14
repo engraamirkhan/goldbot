@@ -178,10 +178,14 @@ def _progress(unit: str, members: Sequence[_Arm], cat: Catalog, size: int | None
     status: ArmStatusWord = "read" if read else "retired" if retired else "running" if n else "warming"
     anneal: AnnealState = read.state if read else "R" if retired else "E"
     pace = sum(a.counted_7d for a in counted)
+    # the read's session-day minimum ("at the 300th admissible family fill on >= 20 session days", H-81 4; HV): the
+    # entry opportunity days of the unit's counted closed fills
+    min_days = max((cat.read_days(a.arm_id) for a in counted), default=0)
+    days = len({tl.oday(r.opened_utc) for a in counted for r in a.rows if a.counts(r) and r.exit_utc is not None})
     eta: date | None = None
     if size is not None and status in ("running", "warming"):
         if n >= size:
-            eta = today                                         # due now
+            eta = today if days >= min_days else None           # due now; short of its days: no date to give
         elif pace:
             eta = today + timedelta(days=math.ceil((size - n) / (pace / PACE_DAYS)))
     figures = None

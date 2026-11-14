@@ -224,6 +224,20 @@ def test_s0rs_n_is_its_stop_exits(tmp_path):
     assert (v.n_counted, v.n_read_at, v.pooled) == (2, 100, False) and v.eta_read_date is not None
 
 
+def test_due_now_waits_for_the_reads_session_day_minimum(tmp_path):
+    """HV "Graduation": the read is at the n-th trade "provided that trade falls on >= 20 session days"; until then
+    the board does not say it is due now."""
+    _engine(tmp_path, SCALP)
+    for i in range(14):                                           # 14 counted trades on 7 days
+        _arm(tmp_path, f"a{i}", "S1A", sent=NOW - pd.Timedelta(hours=12 * i + 2), pnl=1.0)
+    raw = yaml.safe_load(READS_PATH.read_text())
+    short = _cat(tmp_path, read_at={**raw["read_at"], "S1A": 10})                # S1A carries 20 session days
+    assert _variant(_board(tmp_path, short), "S1A").eta_read_date is None
+    none = _cat(tmp_path, read_at={**raw["read_at"], "S1A": 10},
+                min_session_days={k: v for k, v in raw["min_session_days"].items() if k != "S1A"})
+    assert _variant(_board(tmp_path, none), "S1A").eta_read_date == NOW.date()
+
+
 def test_units_whose_arms_disagree_on_n_read_nothing_and_pool_nothing(tmp_path):
     bad = _cat(tmp_path, reads={"H-81:Z6": {"read_utc": NOW.isoformat(), "verdict": "x"}},
                read_units={"H-81:Z6": {"arms": ["Z6D", "Z6V", "S1A"]}}, read_at={"Z6D": 300, "Z6V": 300, "S1A": 200})

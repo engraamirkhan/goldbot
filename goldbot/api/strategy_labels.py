@@ -13,10 +13,12 @@ Design rules kept:
   that has a read; "each arm is read once, at its 300th admissible trade", H-61, unless its prereg says otherwise),
   `read_units` (families read POOLED, e.g. W1, W2, H-80, H-81: "the n is the family's pooled count"; quant
   2026-10-27; `counted` names the arms whose fills make the n when others are virtual exits on them, H-80) and
-  `counts` (an arm whose n is not its trades, S0R: stop exits). A unit is read only once `reads` lists it (the arm
-  id, or the unit id). An arm not in `read_at`: a strategy arm reads at READ_AT; a control has no read. A file that
-  cannot be read, or whose units disagree on n, means NO unit is read and every arm is its own unit at READ_AT (fail
-  closed: no read verdict is shown and no arm is promoted on a guess).
+  `counts` (an arm whose n is not its trades, S0R: stop exits) and `min_session_days` (a read registered "at the 300th
+  admissible family fill on >= 20 session days", H-81 section 4 and HV "Graduation": no read is due before both; an
+  arm not listed has no minimum). A unit is read only once `reads` lists it (the arm id, or the unit id). An arm not
+  in `read_at`: a strategy arm reads at READ_AT; a control has no read. A file that cannot be read, or whose units
+  disagree on n or on the day minimum, means NO unit is read and every arm is its own unit at READ_AT (fail closed:
+  no read verdict is shown and no arm is promoted on a guess).
 * Each strategy arm is measured against one control (the strategy board, item 132), in this order: a control whose
   frozen `params.control` names the arm; else a control of the arm's own family (`<family>_control`, or the same rule)
   on its timeframe and a shared account; else a generic random control (one of no strategy's family) on a shared
@@ -28,6 +30,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Collection
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -93,6 +97,7 @@ class ReadsFile(FrozenRecord):
     read_at: dict[str, int] = Field(default_factory=dict)
     read_units: dict[str, ReadUnit] = Field(default_factory=dict)
     counts: dict[str, Literal["trades", "stop_exits"]] = Field(default_factory=dict)
+    min_session_days: dict[str, int] = Field(default_factory=dict)
 
 
 class ArmInfo(FrozenRecord):
@@ -107,6 +112,8 @@ class ArmInfo(FrozenRecord):
     control_arm: str | None = None      # the control it is measured against (module docstring); None for a control
     unit: str = ""                      # its read unit: the arm id, or the pooled family's unit id
     read_n: int | None = READ_AT        # the unit's read size; None: no read registered (a control)
+    read_days: int = 0                  # the unit's read's session-day minimum (`min_session_days`); 0: none registered
+    retired_day: date | None = None     # retired by a kill-only rule (exploration_arms.yaml `retired_day`)
     counted: bool = True                # its fills count toward its unit's n (False: virtual exits on another's)
     count: Literal["trades", "stop_exits"] = "trades"
     version: int = 1                    # its rule version (strategy_labels `arms: <id>: {version: 2}`): a ranking row
@@ -129,6 +136,7 @@ class Catalog(FrozenRecord):
     labels: Labels
     arms: dict[str, ArmInfo]
     reads: dict[str, ArmRead]           # by read unit
+    reads_ok: bool = True               # False: config/arm_reads.yaml unreadable (no unit read, no read may fall due)
 
     def family_label(self, family: str) -> str:
         f = self.labels.families.get(family)
@@ -157,6 +165,23 @@ class Catalog(FrozenRecord):
         """The n its unit's single read is taken at (the evaluator's `read_at`); None when no read is registered."""
         info = self.arms.get(arm_id)
         return info.read_n if info is not None else READ_AT
+
+    def read_days(self, arm_id: str) -> int:
+        """The session days its unit's read also needs (`min_session_days`); 0 when none is registered."""
+        info = self.arms.get(arm_id)
+        return info.read_days if info is not None else 0
+
+    def retired_unread(self, arm_id: str, stopped: Collection[str] = (), due: date | None = None) -> bool:
+        """Retired before its unit's read fell due: at its registered stop (`stopped`, the ranking's retired arms; a
+        stop is "within" the read's n, so before it), or by a kill-only rule (`retired_day`) before `due`, the
+        opportunity day both of the read's counts were first met (None: not met yet). Retired on or after that day,
+        the read was already due and stays due."""
+        info = self.arms.get(arm_id)
+        if arm_id in stopped:
+            return True
+        if info is None or info.retired_day is None:
+            return False
+        return due is None or info.retired_day < due
 
 
 def arm_family(rule: str, params: dict[str, object]) -> str:
@@ -194,23 +219,27 @@ def _registrations() -> tuple[set[str], dict[str, str], dict[str, tuple[str, ...
     return controls, styles, {a: tuple(sorted(v)) for a, v in where.items()}
 
 
-def _reads_file(path: Path) -> ReadsFile:
-    """config/arm_reads.yaml. Fail closed: a broken file, a size below 1, an arm in two units, a unit's arms of
-    different sizes or `counted` outside its arms reads NO unit and pools nothing."""
+def _reads_file(path: Path) -> tuple[ReadsFile, bool]:
+    """config/arm_reads.yaml, and False when it cannot be used. Fail closed: a broken file, a size below 1, an arm in
+    two units, a unit's arms of different sizes or day minimums or `counted` outside its arms reads NO unit, pools
+    nothing and makes no read due (`Catalog.reads_ok`)."""
     try:
         f = ReadsFile.model_validate(safe_load_cached(path) or {})
         seen: set[str] = set()
         for uid, u in f.read_units.items():
             sizes = {f.read_at.get(a) for a in u.arms}
-            if len(sizes) != 1 or None in sizes or seen & set(u.arms) or not set(u.counted or u.arms) <= set(u.arms):
-                raise ValueError(f"read unit {uid}: arms without one shared read size, listed twice or not counted")
+            days = {f.min_session_days.get(a, 0) for a in u.arms}
+            if (len(sizes) != 1 or None in sizes or len(days) != 1 or seen & set(u.arms)
+                    or not set(u.counted or u.arms) <= set(u.arms)):
+                raise ValueError(f"read unit {uid}: arms without one shared read size and day minimum, listed twice "
+                                 "or not counted")
             seen |= set(u.arms)
-        if any(v < 1 for v in f.read_at.values()):
-            raise ValueError("a read size below 1")
-        return f
+        if any(v < 1 for v in f.read_at.values()) or any(v < 0 for v in f.min_session_days.values()):
+            raise ValueError("a read size below 1 or a negative day minimum")
+        return f, True
     except Exception as exc:             # noqa: BLE001 - fail closed: no arm counts as read
         log.error("arm reads unreadable (%s): no arm counts as read", type(exc).__name__)
-        return ReadsFile()
+        return ReadsFile(), False
 
 
 def _prereg(arm: Arm) -> str | None:
@@ -268,7 +297,7 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
         log.warning("arm spec unreadable (%s): arms named by their ledger rows", type(exc).__name__)
         spec = []
     controls, styles, where = _registrations()
-    rf = _reads_file(reads_path)
+    rf, reads_ok = _reads_file(reads_path)
     unit_of = {a: (uid, u) for uid, u in rf.read_units.items() for a in u.arms}
     by_id = {a.id: a for a in spec}
     arms = {}
@@ -284,10 +313,12 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
                              tag=tag.variant if tag else None, version=own.version if own else 1,
                              is_control=control, style=styles.get(a.id),
                              accounts=where.get(a.id, ()), running=a.status == "run", unit=uid, read_n=n,
+                             read_days=rf.min_session_days.get(a.id, 0),
+                             retired_day=date.fromisoformat(a.retired_day) if a.retired_day else None,
                              counted=u is None or a.id in (u.counted or u.arms), count=rf.counts.get(a.id, "trades"))
     pairs = _pairs(spec, arms)
     arms = {k: v.model_copy(update={"control_arm": pairs.get(k)}) for k, v in arms.items()}
-    return Catalog(labels=labels, arms=arms, reads=rf.reads)
+    return Catalog(labels=labels, arms=arms, reads=rf.reads, reads_ok=reads_ok)
 
 
 @lru_cache(maxsize=1)

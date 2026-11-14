@@ -2571,11 +2571,22 @@ export interface components {
         /**
          * RankProgress
          * @description A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where
-         *     registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted").
+         *     registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted"). A unit
+         *     whose every arm is retired unread (its stop, or a kill-only retirement) has no read coming and no progress.
          */
         RankProgress: {
+            /**
+             * Min Days
+             * @default 0
+             */
+            min_days: number;
             /** N Counted */
             n_counted: number;
+            /**
+             * N Days
+             * @default 0
+             */
+            n_days: number;
             /** N Read At */
             n_read_at: number;
             /** Unit */
@@ -2605,6 +2616,8 @@ export interface components {
             /** Rank */
             rank: number | null;
             read_progress?: components["schemas"]["RankProgress"] | null;
+            /** Read Units */
+            read_units?: components["schemas"]["RankProgress"][];
             /**
              * Status
              * @enum {string}
