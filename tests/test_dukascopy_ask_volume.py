@@ -93,7 +93,7 @@ def test_the_year_file_keeps_the_column_and_months_built_before_it_read_nan(monk
 
 
 def _m1_ask(n: int, ask: float | np.ndarray | None, **kw) -> pd.DataFrame:
-    df = _m1(n, **kw)
+    df = _m1(n, ask=False, **kw)
     if ask is not None:
         df["tick_count_ask"] = ask
     return df
@@ -105,7 +105,7 @@ def test_resample_sums_the_ask_volume_and_a_bar_with_any_unknown_minute_reads_na
     out = resample_bars(m, "15m")
     assert out["tick_count_ask"].iloc[0] == pytest.approx(30.0)
     assert np.isnan(out["tick_count_ask"].iloc[1])
-    assert "tick_count_ask" not in resample_bars(_m1(30), "15m").columns     # absent stays absent
+    assert "tick_count_ask" not in resample_bars(_m1(30, ask=False), "15m").columns     # absent stays absent
 
 
 def test_quoted_volume_imbalance_where_both_sides_exist_only():
@@ -120,7 +120,7 @@ def test_quoted_volume_imbalance_where_both_sides_exist_only():
     assert np.isnan(f["of_quote_imb_15m"].iloc[-1])     # a window with a one-sided minute is unknown, not skewed
     assert np.isnan(f["of_quote_imb_60m"].iloc[-1])
     assert f[["of_quote_imb_15m", "of_quote_imb_60m"]].iloc[60:99].notna().all().all()
-    assert of.orderflow_frame(_m1(120))[["of_quote_imb_15m", "of_quote_imb_60m"]].isna().all().all()
+    assert of.orderflow_frame(_m1(120, ask=False))[["of_quote_imb_15m", "of_quote_imb_60m"]].isna().all().all()
 
 
 def test_a_kept_published_day_gains_the_ask_volume_without_any_published_value_changing():

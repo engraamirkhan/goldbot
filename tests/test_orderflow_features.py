@@ -15,8 +15,8 @@ from goldbot.features import registry
 T0 = pd.Timestamp("2026-03-02 00:00", tz="UTC")
 
 
-def _m1(n: int, *, step: float = 0.0, seed: int = 1, start: pd.Timestamp = T0) -> pd.DataFrame:
-    """Store-schema 1m bars (bid/ask), a random walk plus `step` per minute."""
+def _m1(n: int, *, step: float = 0.0, seed: int = 1, start: pd.Timestamp = T0, ask: bool = True) -> pd.DataFrame:
+    """Store-schema 1m bars (bid/ask), a random walk plus `step` per minute; `ask`: with tick_count_ask."""
     rng = np.random.default_rng(seed)
     ts = pd.date_range(start, periods=n, freq="1min")
     mid = 2000.0 + np.cumsum(rng.normal(step, 0.1, n))
@@ -26,6 +26,8 @@ def _m1(n: int, *, step: float = 0.0, seed: int = 1, start: pd.Timestamp = T0) -
         df[f"bid_{c}"] = mid - spread / 2
         df[f"ask_{c}"] = mid + spread / 2
     df["tick_count"] = 50.0 + 10 * rng.random(n)
+    if ask:                                              # BACKLOG 213
+        df["tick_count_ask"] = 50.0 + 10 * rng.random(n)  # the ask side (research data only)
     df["spread_mean"] = spread
     df["spread_max"] = spread * 1.5
     return df
@@ -141,6 +143,8 @@ def test_feature_is_truncation_invariant_a_later_minute_changes_no_earlier_bar()
         early = bars["visible_at"] <= cut
         pd.testing.assert_frame_equal(a[early], b[early])
         assert b.loc[~early, "of_vw_retz_60m"].notna().any()
+        assert b.loc[~early, "of_quote_imb_60m"].notna().any()
+        assert a.loc[early, "of_quote_imb_60m"].notna().any()
     finally:
         _restore(feats, signed)
 
@@ -223,3 +227,35 @@ def test_research_pass_adds_orderflow_only_when_given():
 def test_opt_in_and_not_in_the_default_set():
     from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES, OPT_IN_FEATURES
     assert of_feat.NAME in OPT_IN_FEATURES and of_feat.NAME not in DEFAULT_FEATURE_NAMES
+
+
+def test_the_quote_imbalances_are_signed_around_zero_and_research_only():
+    """BACKLOG 213 quant review: of_quote_imb_* are directional (bid vs ask volume), so a side-aligned model sees
+    side x value; live bars never carry tick_count_ask, so SCREEN_NOTE marks them research-only."""
+    name, feats, signed = _enable()
+    try:
+        assert registry.signed_neutral("of_quote_imb_15m") == 0.0
+        assert registry.signed_neutral("h4_of_quote_imb_60m") == 0.0
+    finally:
+        _restore(feats, signed)
+    assert "research-only" in of_feat.SCREEN_NOTE and "tick_count_ask" in of_feat.SCREEN_NOTE
+    assert set(of_feat.RESEARCH_ONLY) == {"of_quote_imb_15m", "of_quote_imb_60m"}
+
+
+def test_a_live_model_feature_set_rejects_the_quote_imbalances():
+    """Live bars never carry tick_count_ask, so a live model reading of_quote_imb_* would see NaN forever."""
+    registry.live_feature_check(["ret_4", "of_vw_retz_15m", "h1_of_vw_run"])        # allowed
+    for bad in ("of_quote_imb_15m", "of_quote_imb_60m", "h4_of_quote_imb_60m"):
+        with pytest.raises(ValueError, match="research-only"):
+            registry.live_feature_check(["ret_4", bad])
+
+
+def test_the_model_registry_refuses_a_challenger_reading_a_research_only_column(tmp_path):
+    """Challengers shadow-trade on live bars and champions trade: both refuse a research-only input."""
+    from goldbot.research.model import MetaLabelModel
+    from goldbot.research.model_registry import ModelRegistry
+    reg = ModelRegistry(tmp_path / "models")
+    with pytest.raises(ValueError, match="research-only"):
+        reg.add_challenger(MetaLabelModel(feature_names=["ret_4", "of_quote_imb_60m"], feature_version="x"),
+                           family="f", agent_id="a", backtest={})
+    assert reg.entries == []
