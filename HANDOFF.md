@@ -102,6 +102,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   refuses retired families first); the brain's jobs (monthly_research, research_director, the analyst) do not call
   research_pass. So no scheduled caller relies on the `session_open` default, and the default stays; a manual
   dispatch on it now ends as a skip.
+- 2026-11-14 (branch fix/outage-db-private; incident 17:08 UTC): `state/health_outages.db` (the bridge-outage record)
+  was created with the default umask (0644) on the first bridge outage, so preflight's `db_files_private` failed and
+  an icm-demo cut-over rolled back. It now goes through `goldbot.db.connection.create_private` (renamed from
+  `_create_private`, the helper `connect` already used): created 0600 and tightened back to 0600, with its -wal/-shm,
+  on every open. The sweep found the same trap in the discovery ledger's database (`state/discovery_*.db`: the
+  search ledger, the stage journal and the arm-registration journal); fixed the same way. Every other direct
+  `sqlite3.connect` under state/ is read-only (`mode=ro`) or on an existing file. A box that already has a 0644 file
+  is fixed by the next health pass or nightly run (or `sudo chmod 600 state/*.db`). Nothing on the order path changed.
 - 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; R155; BACKLOG 243): the trades API's `TradeRow` carries a closed
   exploration or control row's MFE / MAE from its R135 record (`mfe_r`, `mae_r`, `mfe_usd`, `mae_usd`,
   `excursion_approx`; None on older rows and every other kind). The trade detail's "Details" disclosure shows them

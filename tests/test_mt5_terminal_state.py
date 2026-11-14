@@ -8,6 +8,7 @@ reads. Until the terminal has been seen on the registered account the bridge ser
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from collections.abc import Iterator
@@ -439,6 +440,33 @@ def test_an_unusable_outage_record_fails_at_once_rather_than_never(tmp_path):
         assert _bridge(ro, _at(0), up=False).status == "fail"
     finally:
         ro.chmod(0o700)
+
+
+@pytest.fixture()
+def world_readable_umask() -> Iterator[None]:
+    """The default service umask (022): a file created without an explicit mode would be 0644."""
+    old = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+def test_the_first_bridge_outage_creates_the_outage_record_owner_only(tmp_path, world_readable_umask):
+    """Incident 2026-11-14: health_outages.db appeared 0644 on the first outage, preflight's db_files_private failed and
+    a cut-over rolled back. The record is a state database like the others: 0600 from its creation."""
+    assert _bridge(tmp_path, _at(0), up=False).status == "warn"
+    db = tmp_path / health.BRIDGE_DOWN_FILE
+    assert db.exists() and db.stat().st_mode & 0o077 == 0
+
+
+def test_an_outage_record_left_world_readable_is_made_owner_only_on_the_next_probe(tmp_path, world_readable_umask):
+    assert _bridge(tmp_path, _at(0), up=False).status == "warn"
+    db = tmp_path / health.BRIDGE_DOWN_FILE
+    db.chmod(0o644)                                                  # as an older release left it
+    assert _bridge(tmp_path, _at(1), up=False).status == "warn"      # the outage clock is kept
+    assert db.stat().st_mode & 0o077 == 0
+    assert _bridge(tmp_path, _at(5), up=False).status == "fail"
 
 
 def test_run_checks_places_the_terminal_check_after_the_bridge(tmp_path):

@@ -26,6 +26,7 @@ from typing import Any, Literal
 import pandas as pd
 
 from goldbot.base import FrozenRecord
+from goldbot.db.connection import create_private
 from goldbot.research.autodisc.ledger import GENESIS, LedgerTamperError
 
 Stage = Literal["confirm", "holdout"]
@@ -76,6 +77,7 @@ class StageJournal:
         con.close()
 
     def _connect(self) -> sqlite3.Connection:
+        create_private(self.path)                     # the ledger's database: 0600 (preflight)
         con = sqlite3.connect(self.path, timeout=60, isolation_level=None)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=FULL")
