@@ -1548,14 +1548,19 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
 * To switch it off and trade the fixed ceilings again: set `risk: { adaptive_limits: false }` in the server's
   `config/settings.local.yaml` and restart the engine.
 * Replay (validation only, never a tuning step):
-  `python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 --state state --models models`
-  prints the decision each day would have had. It writes nothing. Each run is recorded in ADR 0031's replay log.
+  `python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 --state state --models models
+  --data-root DIR` (the Parquet store) prints the decision each day would have had. It writes nothing. Each run is recorded in ADR
+  0031's replay log. With `--data-root` it also measures each day's cost/model ratio exactly as the nightly job does
+  (`cost` and `bound` columns); without it the header says the cost rule is inert (None).
 * The cost/model rule (BACKLOG 90): the nightly row's `cost_ratio_20d` is the account's measured cost over what the
   research labels charged at qualification (`cost_model`: settings priors), on its fills of the last 20 risk days
   (`cost_fills` measured, `cost_unmeasured` missing a part, `cost_pending` entered after the last weekly bar refresh). Above 1.25 the limits go to the floors, 1.10-1.25 one
   step down. `null` with fewer than 20 measured fills or more than 20% unmeasured (dq_event `cost_ratio_unmeasured`):
   the rule is then inert. Then check that the engine writes `exit_fills` and the dukascopy 15m bars are fresh
   (`cost_bars_stale`: no bar within 9 days; `cost_ratio_error`: the series failed, see the job log).
+  `cost_ratio_bound` (also logged when fills are unmeasured) prices each unmeasured fill at the window's worst measured
+  fill: how high the ratio could be. Reporting only; it never moves a limit. A bound above 1.25 while the ratio is
+  `null` means the missing exit legs are worth chasing first.
 
 
 ### icm-demo learning host (ADR 0043 amendment 2026-10-26, ADR 0037 amendment 6)
