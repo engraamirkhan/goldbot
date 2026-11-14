@@ -8,6 +8,7 @@
                  risk, entry windows
   services.py    services and heartbeats: scheduler and jobs, heartbeats, schema skew, approvals, alerts, dead man
   auth.py        auth and mail: keyring secrets (presence only), the email sign-in link
+  cpcv.py        CPCV/PBO evidence of gate-passing trials (M16, the promotion gate's input)
   loop.py        the feedback loop (R140): learner weights, daily/weekly reviews, proposals read, registry sync, jobs
   operations.py  ops and backups: settings, accounts, disk, deploys, backups, retention, restore drill, agent spend
 
@@ -19,6 +20,7 @@ quote. run_checks picks the check up from the registry. Also re-export it from g
 from goldbot.ops.checks import (  # noqa: F401 - registers the checks
     auth,
     bridge,
+    cpcv,
     engine,
     entries,
     feeds,

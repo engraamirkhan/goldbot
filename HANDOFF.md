@@ -15,6 +15,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   News shock (D16): option 2, already live as ADR 0079's rules-v1 scorer. CPCV now by hand (`research_pass.py
   --cpcv`); discovery stays on the Mac's launchd. No order, exit, RiskGate, budget or gate path changed. Needs the
   trading-safety and quant GOs before merge.
+- 2026-11-14 (branch feat/cpcv-gate-1114; ADR 0083 amendment; M16): CPCV/PBO is enforced at promotion. New
+  `goldbot/research/cpcv_gate.py`: a gate-passing trial is promoted only with CPCV evidence for the UTC quarter that
+  ran on its config and feature version, has no ADR 0003 veto (PBO > 0.5 or most paths negative, verdict recomputed)
+  and has PBO whenever its family has other walk-forward trials on its timeframe; missing evidence is run on demand and
+  attached to the trial (not a trial: no budget, no DSR count). Wired into the weekly `tournament` (shadow -> live);
+  held-back agents and reasons under `cpcv_refused`. Health check `cpcv_evidence` (ops/checks/cpcv.py, tail 180)
+  WARNs on a gate-passing trial without usable evidence. Phase gate 1 does not read the evidence yet: escalated as an
+  owner decision (ADR 0083 amendment). Needs quant-reviewer and trading-safety-reviewer GOs.
 - 2026-11-14 (branch feat/cleanup2-mfe-ui-1114; R151; BACKLOG 243): the trades API's `TradeRow` carries a closed
   exploration or control row's MFE / MAE from its R135 record (`mfe_r`, `mae_r`, `mfe_usd`, `mae_usd`,
   `excursion_approx`; None on older rows and every other kind). The trade detail's "Details" disclosure shows them
