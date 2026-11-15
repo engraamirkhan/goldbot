@@ -74,7 +74,7 @@ from goldbot.research.registry import (
     costs_recorded,
     latest_evaluated,
     n_trials_effective,
-    promotion_refusal,
+    phase_gate_refusal,
     quarter_of,
     row_hash,
 )
@@ -420,7 +420,7 @@ def best_backtest_trial(rows: list[dict[str, Any]], *, k: int | None = None) -> 
     pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR. Only the latest run of each
     configuration on its feature version competes (`registry.latest_evaluated`; quant review 2026-10-16 N1: "only the
     latest evaluated row ... decides"): a superseded run ranked above its own passing rerun was refused by
-    `promotion_refusal` and left gate 1 unmet although the configuration's deciding run passes. `k`: the registry's
+    `phase_gate_refusal` and left gate 1 unmet although the configuration's deciding run passes. `k`: the registry's
     `n_trials_effective(rows)` when the caller has it already (`evaluate_gates` counts once per evaluation: the count
     builds the registry ledger, the costliest step of the health pass; CPU attribution 2026-11-10, round 3)."""
     if k is None:
@@ -605,10 +605,10 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     best = best_backtest_trial(rows, k=k_now)
     mf = ((best or {}).get("results") or {}).get("model_filtered") or {}
     # the backtest reference for paper expectancy and live drawdown is the best trial only when its research pass
-    # counts for a promotion (registry.promotion_refusal: gates passed with costs recorded, the latest rerun of its
+    # counts for a promotion (registry.phase_gate_refusal: gates passed with costs recorded, the latest rerun of its
     # config, and a discovery-derived config's holdout passed): a trial that fails that is no reference, so the
     # comparator can never silently switch to an unrelated trial and pass (review of 978c667; quant review 2026-10-16)
-    refusal = promotion_refusal(best, rows) if best is not None else "no evaluated trial"
+    refusal = phase_gate_refusal(best, rows) if best is not None else "no evaluated trial"
     best_ok = refusal is None
     bt_mean = float(mf["mean_ret"]) if best_ok and mf.get("mean_ret") is not None else None
     bt_dd = float(mf["max_dd"]) if best_ok and mf.get("max_dd") is not None else None

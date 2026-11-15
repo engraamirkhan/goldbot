@@ -339,12 +339,12 @@ def test_an_o5_survivor_failing_the_day_summed_check_is_read_stop(tmp_path):
 
 
 def test_an_o5_survivor_failing_the_day_summed_check_is_no_promotion_even_with_a_passed_holdout(tmp_path):
-    from goldbot.research.registry import promotion_refusal
+    from goldbot.research.registry import phase_gate_refusal
     reg, row = _survivor(tmp_path, _null_day_summed(), holdout=True)
-    assert "day-summed" in str(promotion_refusal(row, reg._rows()))
+    assert "day-summed" in str(phase_gate_refusal(row, reg._rows()))
     assert not reg.passed_gates("scalp", row["config"], "f")
     reg2, row2 = _survivor(tmp_path / "ok", _strong_day_summed(), holdout=True)
-    assert promotion_refusal(row2, reg2._rows()) is None
+    assert phase_gate_refusal(row2, reg2._rows()) is None
     assert reg2.passed_gates("scalp", row2["config"], "f")
 
 

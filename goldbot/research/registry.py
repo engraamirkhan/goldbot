@@ -71,13 +71,14 @@ LOCK_WAIT_S = 6 * 3600
 PREREGISTERED = "preregistered"
 WITHDRAWN = "withdrawn"                 # a withdrawal of a pre-registration (`TrialRegistry.withdraw`): not a trial
 VERDICT = "verdict"                     # an evaluator's reading of a trial (`TrialRegistry.record_verdict`): not a trial
+NOT_STARTED_POWER = "not_started_power"  # ADR 0085: a card refused by the power-first rule before any read: not a trial
 VERDICT_DECISIONS: tuple[str, ...] = ("continue", "stop", "inconclusive")
 DISCOVERY = "discovery"
 DISCOVERY_BATCH = "discovery_batch"     # an autodisc search batch: sidecar only (`record_discovery_batch`), never a row
 FROM_DISCOVERY_KEY = "from_discovery"   # set on a config whose features came from a discovery trial: its `row_ref`
 SURVIVOR_KEY = "survivor"               # ... and the discovery survivor (cluster, group or feature) the config tests
 SLOT_KINDS: tuple[str, ...] = ("survivor", "followup", "holdout")
-NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN, VERDICT})
+NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN, VERDICT, NOT_STARTED_POWER})
 # the parent's pre-registered reading rule a survivor/holdout slot (and a discovery's follow-up) is read by: H-02's
 # (preregistration-2027Q1.md: cluster stability >= 0.6 AND OOF AUC >= 0.53 with the lower 95% bound > 0.50)
 # the screened-row decision rules coded in director.preregistered_decisions (preregistration-2027Q1.md): a
@@ -151,8 +152,8 @@ def planned_quarter(ts: datetime | None = None) -> str:
 
 
 def is_trial(row: dict[str, Any]) -> bool:
-    """Every row is a trial (a look at the data) except a pre-registration, which is written before the look, and the
-    withdrawal of one (no look at all)."""
+    """Every row is a trial (a look at the data) except a pre-registration, which is written before the look, the
+    withdrawal of one, an evaluator's verdict and a "NOT STARTED (power)" refusal (ADR 0085: no look at all)."""
     return row.get("status") not in NOT_TRIALS
 
 
@@ -379,7 +380,7 @@ def costs_recorded(results: dict[str, Any]) -> bool:
 def gate_pass_counts(row: dict[str, Any]) -> bool:
     """The row's recorded gate pass counts: `results.gates.passed` is True AND the row records the research cost
     treatment (`costs_recorded`). The one predicate every reader of results.gates.passed uses (passed_gates, CPCV, the
-    director's slots; the phase gate's backtest evidence and gap watch through `promotion_refusal`, which adds the
+    director's slots; the phase gate's backtest evidence and gap watch through `phase_gate_refusal`, which adds the
     latest-rerun and discovery-holdout rules). Quant review, 2026-10-11: "A pass from before swap was charged is not a
     pass of the swap-charged configuration." Status is the caller's to check."""
     results = row.get("results")
@@ -424,10 +425,16 @@ def holdout_passed(rows: list[dict[str, Any]], family: str, h: str, feature_vers
                and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
 
 
-def promotion_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
-    """Why the walk-forward `row` is not a research pass a promotion may rest on, or None when it is. The rule
-    `TrialRegistry.passed_gates` applies, for a reader holding a row and the registry (the phase gate's backtest
-    evidence, gap watch's research-ready founders):
+def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
+    """Why the walk-forward `row` is not a research pass the owner's phase gate may rest on, or None when it is. The
+    rule `TrialRegistry.passed_gates` applies, for a reader holding a row and the registry (phase gate 1's backtest
+    evidence, the CPCV promotion gate, gap watch's research-ready founders).
+
+    PINNED by ADR 0085 (power-first research gates, research and demo promotion only): "the owner's paper->tiny-live
+    phase gate must stay exactly as today". This keeps today's criteria: the recorded legacy `results.gates` verdict
+    (DSR at the registry's K pass/fail, the count minimums), the rerun and discovery-holdout rules. Research and demo
+    promotion read `promotion_confirm.research_promotion_refusal` instead; tests/test_phase_gate_pin.py proves the
+    decisions byte-identical to 9d1abbc7. The rule:
     * its own pass counts (`gate_pass_counts`: gates passed, cost treatment recorded);
     * it is the latest evaluated run of its configuration on its feature version (`latest_evaluated`): a later
       failing rerun revokes it;
@@ -453,9 +460,9 @@ def promotion_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | 
     return None
 
 
-def promotion_pass_counts(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
-    """`row`'s research pass counts for a promotion (`promotion_refusal` is None)."""
-    return promotion_refusal(row, rows) is None
+def phase_gate_pass_counts(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    """`row`'s research pass counts for the phase gate (`phase_gate_refusal` is None)."""
+    return phase_gate_refusal(row, rows) is None
 
 
 MIRROR_SUFFIX = ".mirror"      # `<registry>.mirror`: this copy is a read-only mirror (registry_sync.pull_brain)
@@ -534,8 +541,12 @@ class TrialRegistry:
         if status == DISCOVERY_BATCH:
             raise ValueError("a discovery_batch is never a registry row (an older build would count it as a trial): "
                              "use record_discovery_batch")
+        refused = status == NOT_STARTED_POWER
+        if refused and not ((results.get("power_first") or {}).get("started") is False and results.get("card")):
+            raise ValueError("a not_started_power row is written only by power_first.start_or_refuse (results carry "
+                             "power_first.started False and the card)")
         row: dict[str, Any] = {
-            "trial": self.n_trials + 1,
+            "trial": None if refused else self.n_trials + 1,     # a refusal is no trial: no number (ADR 0085)
             "ts": datetime.now(timezone.utc).isoformat(),
             "agent_id": agent_id, "family": family, "config_hash": config_hash(config), "config": config,
             "feature_version": feature_version, "rationale": rationale, "results": results, "status": status,
@@ -975,7 +986,8 @@ class TrialRegistry:
 
         Reruns (quant review 2026-10-16): only the latest evaluated row of the configuration decides
         (`latest_evaluated`), so a later failing rerun revokes an earlier pass; best-of-N over reruns is not a pass.
-        `promotion_refusal` is the same rule for a reader that holds one row."""
+        `phase_gate_refusal` is the same rule for a reader that holds one row. PINNED by ADR 0085: the tournament's
+        shadow -> live check (jobs.tournament) keeps today's criteria; research and demo promotion never read this."""
         h = config_hash(config)
         rows = self._rows()
         latest = latest_evaluated(rows, family, h, feature_version)

@@ -1,0 +1,1365 @@
+{
+ "candidates_failed": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates (failed: candidates)",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "cpcv_missing": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    false,
+    "trial #7 has no CPCV evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    true
+   ]
+  ],
+  "refusals": [
+   null
+  ]
+ },
+ "cpcv_stale_quarter": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    false,
+    "trial #7 has no CPCV evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    true
+   ]
+  ],
+  "refusals": [
+   null
+  ]
+ },
+ "cpcv_veto": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    false,
+    "CPCV veto for trial #7 (ADR 0003): PBO 80% > 50%; 80% of paths with negative mean R",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    true
+   ]
+  ],
+  "refusals": [
+   null
+  ]
+ },
+ "discovery_holdout_failed": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates: discovery-derived configuration without a passed holdout scoring",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 2 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{\"band_z\": 2.0, \"from_discovery\": {\"trial\": 3, \"ts\": \"2026-10-01T00:00:00+00:00\"}}",
+    false
+   ]
+  ],
+  "refusals": [
+   "discovery-derived configuration without a passed holdout scoring",
+   "not a walk-forward trial"
+  ]
+ },
+ "discovery_holdout_passed": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 2 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": true,
+  "passed_gates": [
+   [
+    "session_open",
+    "{\"band_z\": 2.0, \"from_discovery\": {\"trial\": 3, \"ts\": \"2026-10-01T00:00:00+00:00\"}}",
+    true
+   ]
+  ],
+  "refusals": [
+   null,
+   "not a walk-forward trial"
+  ]
+ },
+ "discovery_no_holdout": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates: discovery-derived configuration without a passed holdout scoring",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{\"band_z\": 2.0, \"from_discovery\": {\"trial\": 3, \"ts\": \"2026-10-01T00:00:00+00:00\"}}",
+    false
+   ]
+  ],
+  "refusals": [
+   "discovery-derived configuration without a passed holdout scoring"
+  ]
+ },
+ "dsr_below_bar": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "0.900 at trial #7 (session_open), recomputed on the registry's 1 trials (0.900 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "holdout_row_only": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "no evaluated trial",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    false,
+    "no evaluated trial",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "n/a at no evaluated trial: no stored DSR inputs to recompute it on today's trial count (re-run the trial)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    false,
+    "n/a",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    false,
+    "0 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "not a walk-forward trial"
+  ]
+ },
+ "later_rerun_fails": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #9 (session_open) did not pass the research gates (failed: per_fold)",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #9 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "0.913 at trial #9 (session_open), recomputed on the registry's 2 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "a later rerun of the same configuration (trial #9) decides, and it did not pass",
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "missing_costs": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "no evaluated trial",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    false,
+    "no evaluated trial",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "n/a at no evaluated trial: no stored DSR inputs to recompute it on today's trial count (re-run the trial)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    false,
+    "n/a",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    false,
+    "0 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "missing_results_gates": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    false,
+    "n/a",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "no_dsr_inputs": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "n/a at trial #7 (session_open): no stored DSR inputs to recompute it on today's trial count (re-run the trial) (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    true
+   ]
+  ],
+  "refusals": [
+   null
+  ]
+ },
+ "pass": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": true,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    true
+   ]
+  ],
+  "refusals": [
+   null
+  ]
+ },
+ "per_fold_failed": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates (failed: per_fold)",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    true,
+    "0.970 at trial #7 (session_open), recomputed on the registry's 1 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "registry_k_sinks_dsr": {
+  "cpcv_gate_passing": [
+   7
+  ],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    true,
+    "trial #7 (session_open) passed the research gates",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "0.321 at trial #7 (session_open), recomputed on the registry's 61 trials (0.970 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    true,
+    "600 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "other",
+    "{\"i\": 0}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 10}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 11}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 12}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 13}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 14}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 15}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 16}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 17}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 18}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 19}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 1}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 20}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 21}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 22}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 23}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 24}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 25}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 26}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 27}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 28}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 29}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 2}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 30}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 31}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 32}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 33}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 34}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 35}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 36}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 37}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 38}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 39}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 3}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 40}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 41}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 42}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 43}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 44}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 45}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 46}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 47}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 48}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 49}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 4}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 50}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 51}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 52}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 53}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 54}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 55}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 56}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 57}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 58}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 59}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 5}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 6}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 7}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 8}",
+    false
+   ],
+   [
+    "other",
+    "{\"i\": 9}",
+    false
+   ],
+   [
+    "session_open",
+    "{}",
+    true
+   ]
+  ],
+  "refusals": [
+   null,
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded",
+   "did not pass the research gates with its costs recorded"
+  ]
+ },
+ "rule_only_favoured_by_new_rules": {
+  "cpcv_gate_passing": [],
+  "gate1_items": [
+   [
+    "previous_gate",
+    true,
+    "recorded",
+    "foundation_to_backtest recorded first"
+   ],
+   [
+    "research_gates",
+    false,
+    "trial #7 (session_open) did not pass the research gates (failed: candidates)",
+    "the trial passed the design's research gates with swap charged and its cost source stated"
+   ],
+   [
+    "cpcv",
+    true,
+    "trial #7 (session_open): clean CPCV/PBO evidence for 2026Q4",
+    "CPCV evidence this quarter with PBO <= 50% and at most half the paths negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"
+   ],
+   [
+    "dsr",
+    false,
+    "0.400 at trial #7 (session_open), recomputed on the registry's 1 trials (0.400 stored at run time)",
+    ">= 0.95 on the true trial count"
+   ],
+   [
+    "positive_years",
+    true,
+    "positive years [2019, 2021, 2024]",
+    "positive in 3 separate years incl. 2021-22 (research gates)"
+   ],
+   [
+    "backtest_trades",
+    false,
+    "150 model-filtered trades",
+    ">= 500"
+   ],
+   [
+    "live_tick_spread_model",
+    true,
+    "icm-demo 50,000 ticks",
+    "a spread table measured from the terminal's own ticks"
+   ]
+  ],
+  "gate1_met": false,
+  "passed_gates": [
+   [
+    "session_open",
+    "{}",
+    false
+   ]
+  ],
+  "refusals": [
+   "did not pass the research gates with its costs recorded"
+  ]
+ }
+}

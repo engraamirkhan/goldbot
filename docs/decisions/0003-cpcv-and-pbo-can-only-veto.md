@@ -36,3 +36,7 @@ column is zero for every config.
 - A failed config stays failed whatever its paths look like; the only way forward for it is a new, charged trial.
 - A low PBO is weak comfort (a lower bound); a high one is a strong signal. The rule reads it in that direction only.
 - If the sidecar later feeds a gate, it must be synced the way the registry is (union by trial and kind).
+
+## Amendment (ADR 0085, 2026-11-15)
+The veto-only rule also holds for the ADR 0085 research and demo promotion path. CPCV/PBO never rescue a config that
+failed the fresh-data confirm, and they never pick among the configs of a confirm batch.
