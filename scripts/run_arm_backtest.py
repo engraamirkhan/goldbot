@@ -232,7 +232,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
     table's charged round trip by the entry's session and the overshoot ruling) and `net_r_cor_stress` (0.70 on stop
     exits); the registry columns `net_r` / `net_r_os` keep the frozen 0.23 and [0, 0.70]."""
     if screen is not None:
-        costs.require_version(screen.cost_version)          # before any bar is read: a stale table stops the screen
+        costs.check_pin(screen.cost_version)                # before any bar is read: a stale table stops the screen
     A.assert_no_holdout_rows(b1)
     b1 = b1.reset_index(drop=True)
     long = arm.timeframe in R.LONG_TFS      # ADR 0081 point 5: a 1d/1w arm's CONFIRM of record (research/long_confirm.py)
@@ -288,7 +288,8 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
                 sess = np.where(DEFAULT_SESSIONS.is_open(ets), DEFAULT_SESSIONS.session_label(ets), "")
                 for col, os_usd in (("net_r_cor", None), ("net_r_cor_stress", A.OVERSHOOT_STRESS_USD)):
                     trades[col] = A.screen_net_r(move, r_usd, stop, costs, broker=screen.broker, sessions=sess,
-                                                 version=screen.cost_version, extra_usd=extra, overshoot_usd=os_usd)
+                                                 version=screen.cost_version, extra_usd=extra, overshoot_usd=os_usd,
+                                                 exits=lab["barrier_hit"].to_numpy())
             if "stratum" in cands.columns:
                 trades["stratum"] = cands.set_index("idx")["stratum"].reindex(idx).to_numpy()
                 trades["spread_extra_usd"] = extra
@@ -313,6 +314,10 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         extra_summary["screen"] = {"broker": screen.broker, "cost_of_record": screen.cost_version,
                                    "net_r_of_record": stat("net_r_cor") if n else None,
                                    "net_r_stress_0.70": stat("net_r_cor_stress") if n else None}
+        if costs.fill_to_bar is not None and costs.fill_to_bar.version == screen.cost_version:
+            # ADR 0084 point 4: the share of trades whose stop is cost-dominated at a 15m-or-faster decision bar
+            dom = [costs.cost_dominates(screen.broker, arm.timeframe, float(r)) for r in trades["risk_usd"]] if n else []
+            extra_summary["screen"]["cost_dominated_share"] = float(np.mean(dom)) if dom else None
     if K.is_runner(arm) and n:
         extra_summary["twins"] = twin_summary(trades, arm.id)
     if "stratum" in trades.columns and n:

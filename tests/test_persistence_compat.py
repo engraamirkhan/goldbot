@@ -551,6 +551,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # config/cost_of_record.yaml: tests/test_cost_of_record.py::
                # test_a_table_a_newer_release_wrote_still_reads
                arms.CostOfRecord,
+               # config/cost_of_record_v3.yaml (ADR 0084): tests/test_cost_of_record_v3.py::
+               # test_a_v3_table_a_newer_release_wrote_still_reads
+               arms.FillToBarTable,
                # state/aux/daily_review/: case_daily_review
                dr.DailyReview, dr.WeeklyRollup,
                # engine_<account>.json `sessions.pauses` (ADR 0062): tests/test_weekend_247.py::
