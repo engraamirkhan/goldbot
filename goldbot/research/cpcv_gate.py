@@ -2,7 +2,7 @@
 against the family's other trials before a gate-passing trial is promoted; row M16; ADR 0083 as amended).
 
 The quarterly `cpcv_quarterly` job retired (ADR 0083) because no trial passes the gates; the evidence it produced is
-now demanded where it matters, at promotion. A gate-passing trial (`registry.promotion_refusal` is None) is promoted
+now demanded where it matters, at promotion. A gate-passing trial (`registry.phase_gate_refusal` is None) is promoted
 only when it has CPCV evidence (`TrialRegistry.evidence`, kind "cpcv") stamped in the promotion's quarter that:
 * ran: the payload has at least one backtest path with a finite mean R (not an `error` or a `skipped` result, not
   an empty path list);
@@ -31,7 +31,7 @@ from typing import Any, Callable
 
 from goldbot.research import cpcv
 from goldbot.research.registry import TrialRegistry, quarter_of, row_hash
-from goldbot.research.registry import promotion_refusal as research_refusal
+from goldbot.research.registry import phase_gate_refusal as research_refusal
 
 log = logging.getLogger(__name__)
 

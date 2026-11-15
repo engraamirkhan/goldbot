@@ -37,7 +37,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from goldbot.research.registry import TrialRegistry, _refuse_mirror, is_trial, mirror_marker
+from goldbot.research.registry import (
+    NOT_STARTED_POWER,
+    TrialRegistry,
+    _refuse_mirror,
+    is_trial,
+    mirror_marker,
+)
 
 REPO = "engraamirkhan/goldbot"
 TAG = "research-v1"
@@ -91,6 +97,8 @@ def merge_rows(*sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if is_trial(r):
             n += 1
             out.append({**r, "trial": n})
+        elif r.get("status") == NOT_STARTED_POWER:
+            out.append({**r, "trial": None})      # ADR 0085: a power refusal never takes a trial number
         else:
             out.append({**r, "trial": n + 1})
     number = {(str(r.get("ts")), str(r.get("config_hash"))): r["trial"] for r in out if not is_trial(r)}

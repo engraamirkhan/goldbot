@@ -95,3 +95,9 @@ gate 1 without CPCV/PBO; the first promotion attempt after a pass costs one CPCV
 configuration, once a quarter). A family with several walk-forward configurations and too few rerunnable ones stays
 in shadow until PBO can be computed. What would change this: a quant ruling on PBO for a selection set made only of
 screens.
+
+## Amendment (ADR 0085, 2026-11-15)
+For research and demo promotion only, the confirm runs on fresh data under Holm at the ADR 0085 alpha-spending
+schedule, and the registry-K DSR is reported, not pass/fail. CPCV/PBO stay veto-only there too. Phase gate 1 and the
+tournament keep this ADR as written: `registry.phase_gate_refusal` (formerly `promotion_refusal`) is pinned by
+tests/test_phase_gate_pin.py.
