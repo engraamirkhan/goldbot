@@ -761,6 +761,7 @@ class Exploration:
         self.owner_read: pd.Timestamp | None = None     # the minute the owner experiments' expiry was last read
         self.cost_read_at: pd.Timestamp | None = None   # the minute the cost arms' fills were last counted
         self.cost_read_warned = False                   # an unreadable count is journalled once until a read succeeds
+        self.stop_exits_read = False                    # the stop-exit reads' counts were read (S0R enters only then)
         self.retired_read: pd.Timestamp | None = None
         # the 1m/5m arms refused new entries for good (`refresh_dormant`); their minute work is skipped
         self.dormant: frozenset[str] = frozenset()
@@ -1468,14 +1469,21 @@ def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         with ex.db.connection() as conn:
             counts = {a: stop_exits(conn, a) if a in STOP_EXIT_READS else admissible_fills(conn, a) for a in due}
     except Exception as exc:
-        log.warning("cost-read fills unreadable (%s): cost arms %s keep running", type(exc).__name__, due)
+        # a cost arm keeps running on an unread count (unchanged); a stop-exit read's control does not: its thinning
+        # exemption rests on the count, so it enters nothing until a read succeeds (trading-safety LOW, 2026-11-15)
+        ex.stop_exits_read = False
+        log.warning("cost-read fills unreadable (%s): cost arms %s keep running, stop-exit reads %s refused",
+                    type(exc).__name__, [a for a in due if a not in STOP_EXIT_READS],
+                    [a for a in due if a in STOP_EXIT_READS])
         if not ex.cost_read_warned:
             ex.cost_read_warned = True
             for a in due:
-                eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
-                                      "action": "exploration_cost_read_unread", "arm": a, "error": type(exc).__name__})
+                action = "exploration_stop_exit_read_unread" if a in STOP_EXIT_READS else "exploration_cost_read_unread"
+                eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a, "action": action, "arm": a,
+                                      "error": type(exc).__name__})
         return
     ex.cost_read_warned = False
+    ex.stop_exits_read = True
     done = [a for a in due if counts[a] >= (STOP_EXIT_READS.get(a) or COST_ARMS[a])[1]]
     stop = sorted({*done, *(COST_CONTROLS[a] for a in done if COST_CONTROLS.get(a) in ex.arms)} - ex.retired)
     if not stop:
@@ -1901,6 +1909,14 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: i
     """The queue's stale signals refused, then at most `limit` orders sent (PER_PASS a book's pass in all,
     `on_pass`; the budget reads timed `exploration:budget`): the number sent."""
     from goldbot.engine import books
+    # amendment 2026-11-15: a replay-only control's signals never wait on the room, an unsettled order or the pause;
+    # each is recorded at once (blocked replay_only, mu 0) with its journal row, and none reaches `_send`
+    for s in [s for s in ex.queue if ex.arms[s.arm_id].spec.control_mode == "replay_only"]:
+        ex.queue.remove(s)
+        arm = ex.arms[s.arm_id]
+        eng.decisions.append({"ts": now.isoformat(), "agent": arm.tag, "proposal": pending_id(eng, arm, s),
+                              "action": "exploration_refused:replay_only", "arm": arm.arm_id, "tf": arm.tf})
+        candidate(eng, ex, s, now, "replay_only", mu=0.0)
     keep: deque[Pending] = deque()
     for s in ex.queue:
         age = (now - s.bar_ts).total_seconds()
@@ -2087,9 +2103,13 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
 
     ps.why = None
     if arm.spec.control_mode == "replay_only":
-        # amendment 2026-11-15: recorded and labelled, never sent. First of all checks, so nothing below (the budget,
-        # the gate, `_intent`, the order core) ever sees it; the candidate row is its replay twin (blocked, mu 0)
-        ps.why = "replay_only"
+        # amendment 2026-11-15: recorded and labelled, never sent (`_enter` records them first; this is the guard).
+        # First of all checks, so nothing below (the budget, the gate, `_intent`, the order core) ever sees it
+        refuse("replay_only")
+        return "refused"
+    if arm.arm_id in STOP_EXIT_READS and not ex.stop_exits_read:
+        # its thinning exemption rests on its stop-exit count: unread, no entry (fail closed)
+        refuse("stop_exit_read_unread")
         return "refused"
     if pid in eng.sent_ids:
         ps.why = "duplicate"

@@ -376,10 +376,29 @@ def run_l2_read(cells: pd.DataFrame, *, family: str, spec: H.HierSpec,
     return H.l2_decide(H.posteriors(own, prior, spec=spec, deciding_cost_r=deciding_cost_r), family=family, spec=spec)
 
 
+def forward_revocations(db: Any) -> frozenset[str]:
+    """The replay-parity monitor's revoked scopes (aux.db review_actions kind replay_parity; amendment 2026-11-15
+    section 3), for `run_forward_read` and the deciding cost (`forward.revoked_for`). `ReadRefused` when they cannot be
+    read: an S5 pass is never trusted on revocations nobody could check (fail closed)."""
+    from goldbot.research import replay_parity as rp
+    try:
+        return rp.revoked(db)
+    except Exception as exc:                 # noqa: BLE001 - any failure refuses the read
+        raise ReadRefused(f"replay-parity revocations unreadable ({type(exc).__name__}): S5 is not trusted") from exc
+
+
 def run_forward_read(units: pd.DataFrame, *, family: str, l3_shrunk_r: float, s5_passed: bool,
-                     exit_prior: Mapping[str, float] | None = None,
+                     revoked: frozenset[str], exit_prior: Mapping[str, float] | None = None,
                      exit_prior_hash: str | None = None) -> FW.ForwardState:
-    """The family's L4 forward read on a harness whose S0-S6 (S5 included) passed."""
+    """The family's L4 forward read on a harness whose S0-S6 (S5 included) passed. `revoked`: the replay-parity
+    monitor's scopes (`forward_revocations`, required): a unit in a revoked (broker, band) has its fill columns blanked
+    and `s5_ok` False, and the family's S5 counts as not passed ("L4 forward reads stop counting")."""
     harness_gate(forward=True)
+    if revoked and {"broker", "tf"} <= set(units.columns):
+        hit = np.array([FW.revoked_for(revoked, str(b), str(t)) for b, t in zip(units["broker"], units["tf"],
+                                                                                 strict=True)], dtype=bool)
+        if hit.any():
+            units = FW.blank_units(units, ~hit)
+            s5_passed = False
     return FW.forward_state(units, family=family, l3_shrunk_r=l3_shrunk_r, s5_passed=s5_passed,
                             exit_prior=exit_prior, exit_prior_hash=exit_prior_hash)

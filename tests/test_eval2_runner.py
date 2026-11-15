@@ -162,7 +162,7 @@ def test_a_forward_read_does_not_start_unless_the_harness_and_s5_self_tests_pass
     before = _snap(reg, led)
     monkeypatch.setattr(R.FW, "forward_state", lambda *a, **k: pytest.fail("the forward read started"))
     with pytest.raises(R.ReadRefused, match="self-test"):
-        R.run_forward_read(pd.DataFrame(), family="C03", l3_shrunk_r=0.1, s5_passed=True)
+        R.run_forward_read(pd.DataFrame(), family="C03", l3_shrunk_r=0.1, s5_passed=True, revoked=frozenset())
     assert _snap(reg, led) == before
 
 
@@ -200,7 +200,7 @@ def test_the_l2_and_forward_reads_run_on_a_sane_harness(sane, monkeypatch):
     monkeypatch.setattr(R.FW, "forward_state", fake("forward", "state"))
     cells = pd.DataFrame({"cell_id": ["a"], "family": ["C03"]})
     l2: Any = R.run_l2_read(cells, family="C03", spec=None, deciding_cost_r={"a": 0.1})  # type: ignore[arg-type]
-    fwd: Any = R.run_forward_read(pd.DataFrame(), family="C03", l3_shrunk_r=0.1, s5_passed=True)
+    fwd: Any = R.run_forward_read(pd.DataFrame(), family="C03", l3_shrunk_r=0.1, s5_passed=True, revoked=frozenset())
     assert (l2, fwd) == ("decision", "state")
     assert calls == ["prior", "post", "decide", "forward"]
 

@@ -48,28 +48,64 @@ prereg-amendment-2026-11-15-hv-rule3-replay-control.md (HV Rule 3).
 ## 3. The replay-parity monitor (a step of the daily review; `goldbot/research/replay_parity.py`)
 
 A replay twin is only as good as the replay. The monitor reads, every day, whether the r2 replay still agrees with
-what real fills do. It reuses the EVAL-2 S5 form (day-clustered per broker and TF band, eval2-method section 6).
+what real fills do. It uses the EVAL-2 S5 quantity and population (eval2-method section 6, prereg-2026-11-09-eval2.md
+section 5). Revised before merge on the quant and code reviews of 0fb8fbff: the first draft compared a bid/ask fill
+with the cost-free `label_mid_r` and would have fired on the spread alone.
 
-- **Population:** closed gold `exploration_trades` with a fill, not in `evidence_exclusions`, joined on candidate_id
-  to their r2 label (`exploration_replay`, replay_version r2, not void), closed before the reviewed day's end.
-- **Gap per fill** = side x (exit - fill) / stop_usd - label_mid_r (R; + = the fill did better than the replay's
-  gross path).
-- **Agreement** = the fill's exit reason against the label's barrier. Stop (resting stop, engine stop close, a
-  runner's trailed stop) is stop, target is target; time, weekend and broker exits are time.
-- **Window:** the latest fills reaching at least 300 fills over at least 10 session days, per broker x TF band
-  (`eval2.forward.TF_BAND`) and pooled (every broker and band together).
-- **FIRE** if the day-clustered 95 % CI of the mean gap lies entirely outside [-0.02, +0.02] R, **or** barrier
-  agreement is below 90 % in two consecutive non-overlapping 300-fill windows.
-- **On fire:** an incident in the daily review (`parity`, posted to the `learning-ops` issue) and the feedback-loop
-  health check fails for 3 days; an automatic `review_actions` row (kind `replay_parity`, one per scope); and the
-  scope's replay-twin reads are unvalidated for good, by the gate EVAL-2 already has: the S5 gap is charged in the
-  deciding cost (`catalogue.costs.deciding_cost` `s5_revoked`) and L4 forward reads stop counting
-  (`eval2.forward.apply_s5` `revoked`). A pooled fire unvalidates every scope.
+- **Population:** S5's pairs, `exploration_data.fill_replay_pairs`: gold candidates with a fill label and an r2 label
+  (replay_version r2, not void, not excluded for the cost cells), closed before the reviewed day's end.
+- **Gap per fill** = fill_r - replay_r (`label_fill_r` - r2 `sim_r`), the S5 quantity. Both sides are net of the
+  spread and both are divided by the same stop distance (the candidate's `stop_dist`), so a fill that matches its
+  replay apart from the spread both pay reads 0. For a broker in `DEMO_EXIT_AT_LEVEL` (vantage) the gap is the entry
+  leg only (`entry_fill_minus_replay_r`), because its demo exits fill at the level.
+- **Gap test (one-sided e-process, not a fixed-window CI).** For each scope there are two streams: fill better than
+  replay beyond +0.02 R, and fill worse beyond -0.02 R. Each is `eval2.forward.e_execution` with one term per
+  session day, as a running maximum. A scope FIRES when either stream reaches 20 x the streams formed in that run
+  (2 per scope, Bonferroni), once the scope has at least 300 fills over at least 10 session days. The latest window
+  of at least 300 fills over at least 10 days still gets its mean gap and day-clustered 95 % CI reported, but that
+  figure is never judged.
+  - Why not the CI rule: a simulation of daily re-looks (true gap 0, 13 scopes, 250 days, fill sd 0.3 R, 5-60 fills
+    a day) fired on 97 % of runs under the fixed-window CI rule. Under the e-process it fired on 0 of 100 runs; an
+    e-process is valid at every look.
+  - The test `test_under_daily_relooks_a_true_gap_of_0_fires_in_under_5_percent_of_250_day_runs_over_13_scopes`
+    keeps this property.
+- **Detection (the price of anytime validity).** The bet starts after 5 day terms. At 300 fills over 10 days nothing
+  can fire: a 1 R gap reaches e of about 5 against a threshold of 520 at 13 scopes. Below is the median first fire, in
+  session days, over 5 seeds at 13 scopes ("-" means not within 120 days):
+
+  | fills a day, fill sd | gap 0.04 R | 0.06 R | 0.1 R | 0.2 R | 0.5 R |
+  |---|---|---|---|---|---|
+  | 10, 0.1 R | - | 52 | 36 | 31 | 30 |
+  | 10, 0.3 R | - | - | 61 | 36 | 30 |
+  | 30, 0.1 R | 92 | 47 | 34 | 31 | 30 |
+  | 30, 0.3 R | - | 79 | 40 | 33 | 30 |
+
+  A gap of 0.1 R is caught in about 6-12 weeks, and a gross failure in about 6 weeks. Gaps at the 0.02 R tolerance
+  are not detectable inside a quarter. The bound the twin reads carry is therefore "within about 0.06 R" in practice,
+  not 0.02 R.
+- **Agreement** compares the fill's exit leg with the label's barrier, counted only over exits a label can have:
+  stop (the resting stop, and the engine's stop close, which closes at the stop the label reads), target, and time
+  (the hold). A trailed stop, a weekend flat, a broker or manual close and an orphan are left out of both the
+  numerator and the denominator, and their share is reported with each read. A scope FIRES when agreement is below
+  90 % in two consecutive non-overlapping 300-fill windows that together span at least 10 session days.
+- **Scopes:** every broker x TF band (`eval2.forward.TF_BAND`), plus one pooled read. The pooled read covers every
+  broker and band except the informational 1m-5m band, and uses the entry leg only for exit-at-level brokers. **A
+  pooled fire alerts only and revokes nothing; revocation is per scope.**
+- **On fire:**
+  - an incident in the daily review (`parity`, posted to the `learning-ops` issue);
+  - for a broker x band scope, the feedback-loop health check fails for 3 days and an automatic `review_actions` row
+    is written (kind `replay_parity`, one per scope);
+  - that row unvalidates the scope's replay-twin reads for good, through the gate EVAL-2 already has. L4 forward
+    reads stop counting: `eval2.runner.run_forward_read` requires `revoked`, read by
+    `eval2.runner.forward_revocations`, which refuses the read (`ReadRefused`) while the revocations cannot be read.
+    The S5 gap is charged in the deciding cost via `catalogue.costs.deciding_cost(s5_revoked=forward.revoked_for(...))`;
+  - a fire that cannot be recorded is an `unreadable` incident, and the next review records it.
 - A fire is never lifted by a later passing read, and **nothing re-enables a broker-traded control automatically**.
   Re-validation needs a dated amendment.
-- The thresholds are pre-registered here and are module constants (as S5's are), never settings.
-- Vantage stores the exit at the level on demo (DEMO_EXIT_AT_LEVEL), so its gap read is optimistic. Each vantage read
-  says so.
+- The thresholds are pre-registered here. They are module constants, as S5's are, never settings.
+- S0R's admissions (propensity 1 under point 1.2) are not counted against `controls_per_edge` in any review. They
+  are a cost read's fills, bounded by the day, hour and session budgets and by the 100-stop-exit stop. While S0R's
+  stop-exit count cannot be read, S0R enters nothing (`stop_exit_read_unread`).
 
 ## Bias statement
 

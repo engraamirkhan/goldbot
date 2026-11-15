@@ -22,3 +22,15 @@
     amendment, implementation status). S0 keeps its `control_share` 0.25 of the scalp pot, so no other arm's room
     widens. Review: trading-safety-reviewer (order path `_send`, S0R exemption) and quant-reviewer (parity rule,
     amendments).
+  - Review round 1 (quant, code and trading-safety on 0fb8fbff):
+    - The parity gap is now S5's quantity, fill_r - r2 sim_r from `fill_replay_pairs` (entry leg only for vantage). The
+      fill-vs-mid draft would have fired on the spread alone.
+    - The gap test is a one-sided e-process per direction, Bonferroni over the streams. Under daily re-looks the CI
+      rule fired on 97 % of null runs; the e-process on 0 of 100.
+    - Agreement leaves out exits no label can have and reports their share. The agreement fire also needs 10 session
+      days. The pooled read drops 1m-5m and alerts only.
+    - Revocations are wired: `eval2.runner.run_forward_read` requires `revoked=` from `forward_revocations`, which
+      refuses when the revocations cannot be read.
+    - Replay-only candidates are recorded first in `_enter`, with a journal row. S0R enters nothing while its
+      stop-exit count is unread.
+    - Ranking rows read against S0 carry `control_note` (API contract regenerated).

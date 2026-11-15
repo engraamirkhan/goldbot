@@ -117,8 +117,44 @@ def test_a_replay_only_control_takes_no_place_in_the_daily_budget(tmp_path):
     eng, pb = _engine(tmp_path, [_replay_only(_arm("S0", style="scalp", control_share=0.25, max_open=10))],
                       DailyEntries(max_per_day=50))
     exploration.on_pass(eng, _at(eng, pb, START))
-    assert not _actions(eng, "exploration_refused:")                     # refused before any budget check
+    # refused before any budget check: its one journal row says why, no budget refusal is ever reached
+    assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:replay_only"}
     assert not _sent(eng)
+
+
+def test_replay_only_candidates_are_recorded_and_journalled_even_when_no_entry_may_go(tmp_path, monkeypatch):
+    """Code review LOW: an unsettled order (or no room this pass) holds the queue; a replay-only candidate never
+    waits on it, so it is recorded at once (blocked replay_only, mu 0) instead of going stale."""
+    eng, pb = _engine(tmp_path, [_replay_only(_arm("S0", style="scalp", control_share=0.25, max_open=10))], None)
+    monkeypatch.setattr(exploration, "_unsettled", lambda *a: True)
+    exploration.on_pass(eng, _at(eng, pb, START))
+    [row] = _actions(eng, "exploration_refused:replay_only")
+    assert row["arm"] == "S0"
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    s0 = obs[obs["arm_id"] == "S0"]
+    assert list(s0["blocked_reason"]) == ["replay_only"] and list(s0["mu"]) == [0.0]
+    assert not eng.exploration.queue                                     # type: ignore[union-attr]
+
+
+def test_a_position_open_when_its_arm_turns_replay_only_still_exits_at_its_stop_and_is_recorded(tmp_path):
+    """Trading-safety LOW: the switch is entries only. An S0 position opened while it was broker-traded keeps its
+    stop (and target and hold); the broker's stop closes it and its close is written to the ledger."""
+    from goldbot.execution.broker import Tick
+    from tests.test_exploration_engine import CLOSE
+    from tests.test_exploration_engine import _engine as _plain_engine
+    eng, pb = _plain_engine(tmp_path, [_arm("S0", control_share=0.25, max_open=1)])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [pid] = list(eng.open)
+    ex = eng.exploration
+    assert ex is not None
+    ex.arms["S0"] = _replay_only(ex.arms["S0"])                          # the release that makes S0 replay-only
+    sl = eng.open[pid].sl
+    assert sl is not None
+    eng._last_reconcile = CLOSE
+    eng.on_tick(Tick(ts_utc=CLOSE + pd.Timedelta(seconds=40), bid=sl - 1.0, ask=sl - 0.8))
+    assert not pb.positions() and pid not in eng.open
+    [rec] = exploration.trades(str(tmp_path))
+    assert rec.arm_id == "S0" and rec.exit_utc is not None and rec.exit_reason == "stop"
 
 
 # ------------------------------------------------------------------------------------------------ S0R
@@ -160,6 +196,19 @@ def test_s0r_keeps_entering_at_99_stop_exits_and_its_target_exits_never_count(tm
     exploration.on_pass(eng, _at(eng, pb, START))
     assert "S0R" not in eng.exploration.retired                          # type: ignore[union-attr]
     assert "S0R" in {d["arm"] for d in _sent(eng)}
+
+
+def test_s0r_refuses_entries_while_its_stop_exit_count_cannot_be_read(tmp_path, monkeypatch):
+    """Trading-safety LOW: the exemption rests on the count; unread, S0R enters nothing (fail closed) and says so
+    once. The cost arms keep their old behaviour (they run and warn)."""
+    def broken(*a: Any) -> int:
+        raise OSError("ledger locked")
+    monkeypatch.setattr(exploration, "stop_exits", broken)
+    eng, pb = _engine(tmp_path, [_arm("S0R", style="scalp", control_share=0.05, max_open=10)], None)
+    exploration.on_pass(eng, _at(eng, pb, START))
+    assert not _sent(eng)
+    assert _actions(eng, "exploration_stop_exit_read_unread")
+    assert _actions(eng, "exploration_refused:stop_exit_read_unread")
 
 
 def test_s0r_stops_itself_at_its_100th_stop_exit_and_says_so(tmp_path):

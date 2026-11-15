@@ -1140,8 +1140,9 @@ def _parity(db: Database, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, 
             incidents: list[Incident], *, write: bool) -> list[ParityRead]:
     """Amendment 2026-11-15 section 3 (research/replay_parity.py): the parity reads of the hosts' brokers over the fills
     closed by the day's end. Any fired scope is an incident (scopes only, no figure: the issue is public) and, with
-    `write`, an automatic review_actions row that marks its replay-twin reads unvalidated for good (a scope already
-    recorded is not recorded again). An unreadable ledger is an `unreadable` incident and reads nothing."""
+    `write`, a broker x band scope gets an automatic review_actions row that marks its replay-twin reads unvalidated
+    for good (a scope already recorded is not recorded again; a pooled fire alerts only). An unreadable ledger, or a
+    fire that could not be recorded, is an `unreadable` incident; the review carries on."""
     from goldbot.research import replay_parity as rp
     try:
         reads = rp.reads(rp.parity_fills(db, sorted(set(hosts.values())), before=hi))
@@ -1151,11 +1152,21 @@ def _parity(db: Database, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, 
         return []
     fired = [r for r in reads if r.status == "FIRE"]
     if fired:
-        new = rp.record_fire(db, fired, day=day, now=now) if write else []
+        new: list[str] = []
+        if write:
+            try:
+                new = rp.record_fire(db, fired, day=day, now=now)
+            except Exception as exc:         # noqa: BLE001 - the fire is still an incident; the record is retried
+                incidents.append(Incident(kind="unreadable", host=None, count=1,
+                                          detail=f"replay parity fire not recorded ({type(exc).__name__}): "
+                                                 "the next review records it"))
+        revoking = [r.scope for r in fired if r.revokes]
         incidents.append(Incident(kind="parity", host=None, count=len(fired),
                                   detail="replay parity fired: " + ", ".join(r.scope for r in fired)
                                   + (f" (newly recorded: {', '.join(new)})" if new else "")
-                                  + "; their replay-twin reads are unvalidated (review_actions replay_parity)"))
+                                  + (f"; replay-twin reads unvalidated for {', '.join(revoking)} (review_actions "
+                                     "replay_parity)" if revoking else "")
+                                  + ("; the pooled read alerts only" if len(revoking) < len(fired) else "")))
     return reads
 
 
