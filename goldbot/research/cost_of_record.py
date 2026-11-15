@@ -349,7 +349,9 @@ def _day_bounds(first: str, last: str) -> tuple[pd.Timestamp, pd.Timestamp]:
 #   requested + target, ICM's 5-95% band against it is 4x narrower than against the fill. A real-money target exit then
 #   costs commission + entry slippage against that quote + any adverse fill at the level;
 # * interval: mean +/- t(G-1, 0.975) x the wider of the CR1 and CR2 day-clustered (opportunity day, 22:00 UTC)
-#   standard errors; the charge is its upper bound, never below the cell's commission; a cell with fewer than FTB_MIN_FILLS
+#   standard errors; the charge is max(commission, the upper bound over every fill in the research barrier, the upper
+#   bound over the fills whose broker exit agreed): a favourable disagreement is never credited, an adverse one is
+#   always charged; a cell with fewer than FTB_MIN_FILLS
 #   fills or FTB_MIN_DAYS days is `sparse` and charges at least its broker's pooled cell of that exit;
 # * stops_trusted: false when FTB_EXACT_SHARE or more of a broker's stop exits fill within EXACT_STOP_USD of the stop
 #   level (a demo artefact: Vantage); the screen then adds the 0.70 stress (arms.OVERSHOOT_STRESS_USD) to stop exits;
@@ -516,14 +518,20 @@ def day_clustered_ci(values: np.ndarray, days: np.ndarray, level: float = 0.95) 
     return m, m - q * se, m + q * se
 
 
-def _ftb_cell(x: pd.DataFrame, n_unmatched: int) -> dict[str, Any]:
+def _ftb_cell(x: pd.DataFrame) -> dict[str, Any]:
+    """One cell from every fill whose research barrier is its exit (`x`): charged = max(commission, the upper bound over
+    all of them, the upper bound over those whose broker exit agreed). A disagreement in our favour is never credited;
+    one against us is always charged (quant ruling on 0df6b07f)."""
     m, lo, hi = day_clustered_ci(x["cost_usd"].to_numpy(), x["day"].to_numpy())
+    agree = x[x["matched"].astype(bool)]
+    mm, mlo, mhi = day_clustered_ci(agree["cost_usd"].to_numpy(), agree["day"].to_numpy()) if len(agree) \
+        else (m, lo, hi)
     comm = float(x["commission_usd"].mean())
     n_days = int(x["day"].nunique())
     return {"n_fills": int(len(x)), "n_days": n_days, "n_probes": int(x["probe"].astype(bool).sum()),
-            "n_unmatched": int(n_unmatched), "mean_usd": m, "raw_mean_usd": float(x["raw_cost_usd"].mean()),
-            "ci95": (lo, hi), "commission_usd": comm, "charged_usd": max(hi, comm),
-            "sparse": len(x) < FTB_MIN_FILLS or n_days < FTB_MIN_DAYS}
+            "n_unmatched": int(len(x) - len(agree)), "mean_usd": m, "raw_mean_usd": float(x["raw_cost_usd"].mean()),
+            "ci95": (lo, hi), "mean_matched_usd": mm, "ci95_matched": (mlo, mhi), "commission_usd": comm,
+            "charged_usd": max(comm, hi, mhi), "sparse": len(x) < FTB_MIN_FILLS or n_days < FTB_MIN_DAYS}
 
 
 def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str, str],
@@ -536,26 +544,17 @@ def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str
     for broker in sorted(set(rows["broker"])):
         rb = rows[rows["broker"] == broker]
         ok = rb["matched"].astype(bool)
-        mb, un = rb[ok], rb[~ok]
+        mb = rb[ok]
         row: dict[str, dict[str, Any]] = {}
         for session in (*SESSIONS, ALL):     # every replayed fill, in its RESEARCH barrier's cell (quant review)
             ms = rb if session == ALL else rb[rb["session"] == session]
-            us = un if session == ALL else un[un["session"] == session]
             got: dict[str, Any] = {}
             for ex in (*FTB_EXITS, ALL):
                 x = ms if ex == ALL else ms[ms["exit"] == ex]
                 if not x.empty:
-                    got[ex] = _ftb_cell(x, len(us) if ex == ALL else int((us["exit"] == ex).sum()))
+                    got[ex] = _ftb_cell(x)
             if got:
                 row[session] = got
-        # a disagreement's whole swing lands in its research exit's cell (research stop / broker target: a large
-        # negative cost in `stop`), so no exit charges below its session's all-exit cell: mix-robust, never cheaper
-        # for a stop-heavy arm than the sample's total cost
-        for got in row.values():
-            if ALL in got:
-                for ex in FTB_EXITS:
-                    if ex in got:
-                        got[ex]["charged_usd"] = max(got[ex]["charged_usd"], got[ALL]["charged_usd"])
         pooled = row.get(ALL, {})
         for session, got in row.items():
             for ex, c in got.items():
@@ -581,8 +580,8 @@ def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str
                              "first; a minute opening through the stop fills at its open; time exit at the mid close "
                              "before the cut",
             "interval": f"95% t(G-1) interval on the wider of the CR1 and CR2 standard errors clustered by session day "
-                        f"(22:00 UTC), every replayed fill in its research barrier's cell; charged = "
-                        f"upper bound, never below commission; sparse (< {FTB_MIN_FILLS} fills or < {FTB_MIN_DAYS} "
+                        f"(22:00 UTC); charged = max(commission, upper bound over every fill in its research "
+                        f"barrier, upper bound over the fills whose broker exit agreed); sparse (< {FTB_MIN_FILLS} fills or < {FTB_MIN_DAYS} "
                         f"days) charges at least the broker's pooled exit cell",
             "target_slippage": "floored at 0 per fill against the order's own level, requested price + target (demo "
                                "price improvement is not bankable for real money)",

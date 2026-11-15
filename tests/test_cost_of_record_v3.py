@@ -21,7 +21,7 @@ from goldbot.research import evidence_exclusions as EV
 
 ROOT = Path(__file__).resolve().parents[1]
 COSTS = ROOT / "config" / "arm_costs.yaml"
-V3 = "cor-2026-11-15.4"
+V3 = "cor-2026-11-15.5"
 V2 = "cor-2026-10-31.2"
 HOSTS = {"acct-a": "brk"}
 DAY0 = pd.Timestamp("2026-10-27 09:00", tz="UTC")       # London
@@ -121,17 +121,30 @@ def test_a_fill_whose_barrier_disagrees_is_priced_in_its_research_cell() -> None
     assert cell["mean_usd"] == pytest.approx(float(one[one["exit"] == "target"]["cost_usd"].mean()))
 
 
-def test_no_exit_charges_less_than_its_sessions_pooled_cost() -> None:
-    """Pricing every fill in its research cell moves each disagreement's whole swing into one exit's cell (research
-    stop / broker target lands in `stop` as a large negative cost). So an exit never charges below its session's
-    all-exit cell: a stop-heavy arm is never charged less than the sample's total cost."""
-    rows = pd.concat([_frame(8, 10, -0.40, "stop"), _frame(8, 10, 0.60, "target"), _frame(8, 10, 0.2, "time")])
-    t = C.build_fill_to_bar(rows, version="t", window_utc=("a", "b"), atr14={"1m": 1.0, "5m": 2.0, "15m": 4.0})
-    ldn = t["cells"]["brk"]["london"]
-    assert ldn["stop"]["ci95"][1] < ldn["all"]["charged_usd"]
-    for ex in ("stop", "target", "time"):
-        assert ldn[ex]["charged_usd"] >= ldn["all"]["charged_usd"]
-    assert ldn["target"]["charged_usd"] == pytest.approx(ldn["target"]["ci95"][1])
+def test_a_favourable_disagreement_is_never_credited_and_an_adverse_one_always_charged() -> None:
+    """Quant ruling on 0df6b07f: charged_e = max(commission, UB over every fill whose research barrier is e, UB over
+    the fills where the broker's exit agreed); no session all-exit floor."""
+    atr = {"1m": 1.0, "5m": 2.0, "15m": 4.0}
+    base = pd.concat([_frame(8, 10, 0.10, "stop"), _frame(8, 10, 0.08, "target"), _frame(8, 10, 0.2, "time")])
+    base = base.assign(broker_exit=base["exit"]).reset_index(drop=True)
+    matched_only = C.build_fill_to_bar(base, version="t", window_utc=("a", "b"), atr14=atr)["cells"]["brk"]["london"]
+    # one disagreement a day (a single one would only widen the day-clustered bound, not test the credit)
+    first = base.groupby(["exit", "day"]).head(1)
+    lucky = first[first["exit"] == "stop"].assign(cid=lambda d: "lucky" + d["day"], cost_usd=-8.0, raw_cost_usd=-8.0,
+                                                  cost_with_swap_usd=-8.0, matched=False,
+                                                  broker_exit="target")              # research stop, broker target
+    t = C.build_fill_to_bar(pd.concat([base, lucky], ignore_index=True), version="t", window_utc=("a", "b"),
+                            atr14=atr)["cells"]["brk"]["london"]
+    assert t["stop"]["n_unmatched"] == 8 and t["stop"]["ci95"][1] < matched_only["stop"]["ci95"][1]
+    assert t["stop"]["charged_usd"] == pytest.approx(matched_only["stop"]["charged_usd"])     # never credited
+    unlucky = first[first["exit"] == "target"].assign(cid=lambda d: "unlucky" + d["day"], cost_usd=10.0,
+                                                      raw_cost_usd=10.0, cost_with_swap_usd=10.0, matched=False,
+                                                      broker_exit="stop")    # research target, broker stop
+    t2 = C.build_fill_to_bar(pd.concat([base, lucky, unlucky], ignore_index=True), version="t",
+                             window_utc=("a", "b"), atr14=atr)["cells"]["brk"]["london"]
+    assert t2["target"]["charged_usd"] > matched_only["target"]["charged_usd"] + 0.05
+    assert t2["target"]["charged_usd"] == pytest.approx(t2["target"]["ci95"][1])
+    assert t2["time"]["charged_usd"] == pytest.approx(matched_only["time"]["charged_usd"])   # no session floor
 
 
 def test_the_parity_check_is_stated_under_both_definitions() -> None:
@@ -209,7 +222,7 @@ def test_a_sparse_cell_charges_at_least_the_brokers_pooled_exit_cell() -> None:
     assert asia["sparse"] and asia["charged_usd"] >= pooled["charged_usd"]
     ldn = t["cells"]["brk"]["london"]["stop"]
     assert not ldn["sparse"] and ldn["charged_usd"] == pytest.approx(
-        max(ldn["ci95"][1], ldn["commission_usd"], t["cells"]["brk"]["london"]["all"]["charged_usd"]))
+        max(ldn["ci95"][1], ldn["commission_usd"], ldn["ci95_matched"][1]))
 
 
 def test_the_charge_is_never_below_the_commission() -> None:

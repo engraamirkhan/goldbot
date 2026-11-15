@@ -346,28 +346,35 @@ class FillToBarCell(FrozenRecord):
     """One broker x session x exit cell of the v3 cost of record (ADR 0084), USD per oz, adverse positive: replay gross
     on the research bars less the broker's net (swap left to the screen), target favourable slippage floored at 0;
     every replayed fill in its research barrier's cell; ci95 = mean +/- t(G-1) x the wider of the CR1 / CR2
-    day-clustered standard errors; charged = the upper bound, never below commission nor the session's all-exit cell
-    (a sparse cell: at least the broker's pooled cell of the exit). For a v3 pin it replaces ADR 0064's 0.23 and $0.12
-    floors (ADR 0084 point 2)."""
+    day-clustered standard errors, over all those fills and (ci95_matched) over the ones whose broker exit agreed;
+    charged = max(commission, both upper bounds): a favourable disagreement is never credited, an adverse one always
+    charged (a sparse cell: at least the broker's pooled cell of the exit). For a v3 pin it replaces ADR 0064's 0.23
+    and $0.12 floors (ADR 0084 point 2)."""
     n_fills: int = Field(gt=0)
     n_days: int = Field(ge=0)
     n_probes: int = Field(0, ge=0)
-    n_unmatched: int = Field(0, ge=0)          # the broker exited by another barrier: counted, never priced
+    n_unmatched: int = Field(0, ge=0)          # priced here; the broker exited by another barrier
     mean_usd: float
     raw_mean_usd: float                        # before the target-slippage floor
     ci95: tuple[float, float]
+    mean_matched_usd: float | None = None
+    ci95_matched: tuple[float, float] | None = None
     commission_usd: float = Field(ge=0)
     charged_usd: float = Field(ge=0)
     sparse: bool
 
     @model_validator(mode="after")
     def _consistent(self) -> "FillToBarCell":
-        lo, hi = self.ci95
-        if lo > hi:
-            raise ValueError(f"ci95 is inverted: [{lo}, {hi}]")
-        if self.charged_usd < max(hi, self.commission_usd) - _ROUND_TRIP_TOL:
-            raise ValueError(f"charged_usd {self.charged_usd} is below its upper bound / commission "
-                             f"({max(hi, self.commission_usd):.4f})")
+        floor = self.commission_usd
+        for name in ("ci95", "ci95_matched"):
+            iv = getattr(self, name)
+            if iv is None:
+                continue
+            if iv[0] > iv[1]:
+                raise ValueError(f"{name} is inverted: [{iv[0]}, {iv[1]}]")
+            floor = max(floor, iv[1])
+        if self.charged_usd < floor - _ROUND_TRIP_TOL:
+            raise ValueError(f"charged_usd {self.charged_usd} is below its upper bounds / commission ({floor:.4f})")
         return self
 
 
