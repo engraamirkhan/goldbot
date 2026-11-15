@@ -79,7 +79,7 @@ def research_gates(n_candidates: int, fold_test_sizes: list[int], taken: pd.Data
                 positive.append(int(str(y)))
     chop = any(y in CHOP_YEARS for y in positive)
     checks.append({"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
-                   "detail": f"positive {subject} years (>= {MIN_TRADES_PER_YEAR} trades a year of each): "
+                   "detail": f"positive {subject} years (>= {MIN_TRADES_PER_YEAR} trades each): "
                              f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one of {list(CHOP_YEARS)}"})
     checks.append(dsr_check(model_filtered, subject))
     return {"passed": all(c["passed"] for c in checks), "checks": checks}
@@ -182,7 +182,8 @@ def rule_only_promotion_gates(taken: pd.DataFrame, *, dsr: dict[str, Any] | None
             positive.append(name)
     chop = any(y in CHOP_YEARS for name in positive for y in units[name])
     what = "pre-registered blocks" if blocks else "calendar years"
+    per = "a year of each" if blocks else "each"
     check = {"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
-             "detail": f"positive {what} of pooled family trades (>= {MIN_TRADES_PER_YEAR} trades a year of each): "
+             "detail": f"positive {what} of pooled family trades (>= {MIN_TRADES_PER_YEAR} trades {per}): "
                        f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one holding {list(CHOP_YEARS)}"}
     return {"passed": check["passed"], "checks": [check], "dsr_report_only": dsr, "label": RULE_ONLY_PROMOTION_LABEL}
