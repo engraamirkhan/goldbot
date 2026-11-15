@@ -521,6 +521,32 @@ class ExplorationLearnSettings(_Section):
     snapshot_max_decisions: int = Field(600, ge=1, le=20_000)   # decision bars snapshotted a night, newest first
 
 
+class PowerFirstSettings(_Section):
+    """ADR 0085 power-first rule (goldbot/research/power_first.py), research and demo promotion only: "a card starts
+    only with >= 0.5 power at every gate it must pass and >= 0.25 joint power; else a 'NOT STARTED (power)' registry
+    row with no K and no data read." The thresholds may only tighten (the panel ruling of 2026-11-15 set them); the
+    sd and correlation tables are pre-set, sourced from pooled other-family data, never from the card's own outcomes."""
+    min_gate_power: float = Field(0.5, ge=0.5, lt=1)          # power at EVERY gate the card must pass
+    min_joint_power: float = Field(0.25, ge=0.25, lt=1)       # the chain's joint power, simulated with shared data
+    min_edge_floor_r: float = Field(0.10, ge=0.10)            # condition (a): min edge = max(this, the goal's edge)
+    trading_days_per_year: float = Field(252.0, gt=0)         # trades a day = learn signals a year / this
+    # condition (a): per-trade sd of net R by decision timeframe, from pooled other-family trades
+    sd_r_by_tf: dict[str, float] = Field(default_factory=lambda: dict.fromkeys(("5m", "15m", "1h", "4h", "1d"), 1.2))
+    # condition (c): intraclass correlation of same-instrument same-day trades (day-cluster design effect) and of
+    # same-day trades across instruments of a pooled family (n_eff ~ n / (1 + (m - 1) rho)); pre-set priors
+    rho_day: float = Field(0.25, ge=0, le=1)
+    rho_instrument: float = Field(0.5, ge=0, le=1)
+    sims: int = Field(20_000, ge=2_000)                        # condition (d): joint-power Monte Carlo draws
+    seed: int = 20261115
+
+    def sd_r(self, timeframe: str) -> float:
+        """The pre-set sd for `timeframe`; a timeframe without one is refused (no card may supply its own)."""
+        if timeframe not in self.sd_r_by_tf:
+            raise ValueError(f"no pre-set sd for timeframe {timeframe!r} in research.power_first.sd_r_by_tf "
+                             "(ADR 0085 (a): the sd is never taken from the card's own outcomes)")
+        return float(self.sd_r_by_tf[timeframe])
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -588,6 +614,7 @@ class ResearchSettings(_Section):
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
     har_abstention: HarAbstentionSettings = Field(default_factory=HarAbstentionSettings)
     position: PositionSettings = Field(default_factory=PositionSettings)
+    power_first: PowerFirstSettings = Field(default_factory=PowerFirstSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod

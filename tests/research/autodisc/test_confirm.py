@@ -28,7 +28,7 @@ from goldbot.research.registry import (
     TrialBudgetExceeded,
     TrialRegistry,
     is_trial,
-    promotion_refusal,
+    phase_gate_refusal,
     quarter_of,
 )
 
@@ -407,7 +407,7 @@ def test_confirm_and_holdout_passes_never_count_for_promotion(env):
     rows = reg._rows()
     assert not reg.passed_gates(C.FAMILY, C.config_for(spec(0)))
     stage_rows = [r for r in rows if r.get("family") == C.FAMILY and r.get("status") in (C.STATUS_CONFIRM, "holdout")]
-    assert len(stage_rows) == 2 and all(promotion_refusal(r, rows) is not None for r in stage_rows)
+    assert len(stage_rows) == 2 and all(phase_gate_refusal(r, rows) is not None for r in stage_rows)
 
 
 def _cost_table(tmp: Path) -> str:

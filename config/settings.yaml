@@ -398,6 +398,21 @@ research:
     etc_extra_rt_bps: 5.0            #   round trip = C1 point RT + 5 bp
     cme_fee_usd_per_side: 2.0        # venue C (CME 1OZ, report only): +$2/oz a side at the reference price, DTB3 both
                                      #   ways with no markup, one round trip at each monthly roll
+  power_first:                       # ADR 0085 (research/power_first.py), research + demo promotion ONLY (the phase gate is
+                                     #   pinned to today's criteria): a card starts only with these powers, else a
+                                     #   "NOT STARTED (power)" registry row, no K, no data read. Thresholds only tighten
+    min_gate_power: 0.5              # power at every gate the card must pass (panel ruling 2026-11-15)
+    min_joint_power: 0.25            # the chain's joint power, simulated with the gates sharing data as the real ones do
+    min_edge_floor_r: 0.10           # (a) min edge = max(0.10 R, the edge north_star_daily_gbp needs at the card's rate
+                                     #   with lot_fit_equity x risk.risk_per_trade at risk a trade)
+    trading_days_per_year: 252       # trades a day = learn signal rate a year / this (outcome-blind signal counts)
+    sd_r_by_tf: {5m: 1.2, 15m: 1.2, 1h: 1.2, 4h: 1.2, 1d: 1.2}   # (a) per-trade sd of net R: the gate audit's pooled
+                                     #   cross-family figure (power memo 2026-11-15 s.1); never the card's own outcomes
+    rho_day: 0.25                    # (c) same-instrument same-day correlation (design effect 1 + (c - 1) rho); PRIOR
+    rho_instrument: 0.5              # (c) cross-instrument same-day correlation of a pooled family; PRIOR. Both to be
+                                     #   refreshed from pooled other-family day-summed vs per-trade t (ADR 0085)
+    sims: 20000                      # (d) joint-power Monte Carlo draws (seeded)
+    seed: 20261115
 
 drift:                               # design: Drift and health (goldbot/research/drift.py)
   psi_warn: 0.1                      # PSI on a top-10 feature that warns
