@@ -441,8 +441,11 @@ def load_costs(path: Path) -> ArmCosts:
         try:
             extra["fill_to_bar"] = load_record(FillToBarTable, yaml.safe_load(ftb_path.read_text()),
                                                source="cost_of_record_v3")
-        except (ValidationError, yaml.YAMLError, TypeError, ValueError) as e:
+        except (ValidationError, yaml.YAMLError, TypeError, ValueError, OSError) as e:
             log.warning("cost of record v3 %s not loaded (a v3 pin will be refused): %s", ftb, e)
+    v2, v3 = extra.get("of_record"), extra.get("fill_to_bar")
+    if v2 is not None and v3 is not None and v2.version == v3.version:   # a v2 pin is never priced on v3
+        raise ValueError(f"cost of record v2 and v3 carry the same version {v2.version!r}")
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
                     overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]), **extra)
 

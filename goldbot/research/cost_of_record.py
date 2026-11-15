@@ -402,7 +402,7 @@ def replay(b: MidBars, k0: int, side: int, stop: float, target: float | None,
             return e, (o if side * (o - sl) < 0 else sl), "stop"
         if tp is not None and ((hi >= tp) if side > 0 else (lo <= tp)):
             return e, tp, "target"
-    k = min(k1, len(b.open)) - 1
+    k = max(k0, min(k1, len(b.open)) - 1)     # a cut inside a bar gap: never a bar before the entry
     return e, float(b.close[k]), "time"
 
 
