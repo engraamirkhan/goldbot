@@ -21,7 +21,7 @@ from goldbot.research import evidence_exclusions as EV
 
 ROOT = Path(__file__).resolve().parents[1]
 COSTS = ROOT / "config" / "arm_costs.yaml"
-V3 = "cor-2026-11-15.3"
+V3 = "cor-2026-11-15.4"
 V2 = "cor-2026-10-31.2"
 HOSTS = {"acct-a": "brk"}
 DAY0 = pd.Timestamp("2026-10-27 09:00", tz="UTC")       # London
@@ -104,11 +104,63 @@ def test_target_exit_slippage_is_floored_at_zero() -> None:
     assert r["cost_usd"] == pytest.approx(r["raw_cost_usd"]) == pytest.approx(0.10 + 0.08)
 
 
-def test_a_fill_whose_barrier_disagrees_is_counted_but_not_priced() -> None:
+def test_a_fill_whose_barrier_disagrees_is_priced_in_its_research_cell() -> None:
+    """Quant review of 89e69db3: pricing only agreeing fills selects on the outcome. A fill the research replay takes to
+    target but the broker stops out costs the whole swing, and it is priced in the research (target) cell."""
     bars = _bars(DAY0, 30, {5: (BASE, BASE + 3.5, BASE - 0.5, BASE + 3)})      # research: target
     f = _fill("m1", DAY0, exit_px=BASE - 3.0, reason="stop")                    # broker: stop
-    r = _rows([f], bars).iloc[0]
+    rows = _rows([f], bars)
+    r = rows.iloc[0]
     assert r["exit"] == "target" and not bool(r["matched"])
+    assert r["cost_usd"] == pytest.approx(3.0 - (-3.0 - 0.08))                  # replay +3 less the broker's -3.08
+    pad = pd.concat([_frame(8, 10, 0.10, "stop"), _frame(8, 10, 0.08, "target"), _frame(8, 10, 0.2, "time")])
+    one = pd.concat([pad, rows.assign(day="2026-10-01")])
+    t = C.build_fill_to_bar(one, version="t", window_utc=("a", "b"), atr14={"1m": 1.0, "5m": 2.0, "15m": 4.0})
+    cell = t["cells"]["brk"]["london"]["target"]
+    assert cell["n_fills"] == 81 and cell["n_unmatched"] == 1
+    assert cell["mean_usd"] == pytest.approx(float(one[one["exit"] == "target"]["cost_usd"].mean()))
+
+
+def test_no_exit_charges_less_than_its_sessions_pooled_cost() -> None:
+    """Pricing every fill in its research cell moves each disagreement's whole swing into one exit's cell (research
+    stop / broker target lands in `stop` as a large negative cost). So an exit never charges below its session's
+    all-exit cell: a stop-heavy arm is never charged less than the sample's total cost."""
+    rows = pd.concat([_frame(8, 10, -0.40, "stop"), _frame(8, 10, 0.60, "target"), _frame(8, 10, 0.2, "time")])
+    t = C.build_fill_to_bar(rows, version="t", window_utc=("a", "b"), atr14={"1m": 1.0, "5m": 2.0, "15m": 4.0})
+    ldn = t["cells"]["brk"]["london"]
+    assert ldn["stop"]["ci95"][1] < ldn["all"]["charged_usd"]
+    for ex in ("stop", "target", "time"):
+        assert ldn[ex]["charged_usd"] >= ldn["all"]["charged_usd"]
+    assert ldn["target"]["charged_usd"] == pytest.approx(ldn["target"]["ci95"][1])
+
+
+def test_the_parity_check_is_stated_under_both_definitions() -> None:
+    pad = pd.concat([_frame(8, 10, 0.10, "stop"), _frame(8, 10, 0.08, "target"), _frame(8, 10, 0.2, "time")])
+    pad = pad.reset_index(drop=True)
+    pad.loc[pad.index[:5], "matched"] = False
+    t = C.build_fill_to_bar(pad, version="t", window_utc=("a", "b"),
+                            atr14={"1m": 1.0, "5m": 2.0, "15m": 4.0})
+    assert t["checks"]["brk_controls_parity"]["n_fills"] == 240
+    assert t["checks"]["brk_controls_parity_matched"]["n_fills"] == 235
+
+
+def test_an_unbalanced_day_cluster_charges_the_wider_of_cr1_and_cr2() -> None:
+    """Six days of 1, 2, 3, 4, 5 and 10 fills. Hand-computed: mean 0.14; CR1 upper 0.248740; CR2 (Bell-McCaffrey,
+    intercept only: sum_g S_g^2 / (1 - n_g / n) / n^2) upper 0.261537, lower 0.018463, both with t(5)."""
+    v = np.array([0.5, 0.1, 0.3, 0.0, 0.2, 0.4, 0.1, 0.1, 0.2, 0.0, 0.3, 0.2, 0.1, 0.25, 0.15,
+                  0.05, 0.1, 0.0, 0.1, 0.05, 0.1, 0.0, 0.1, 0.05, 0.05])
+    days = np.repeat(np.arange(6), [1, 2, 3, 4, 5, 10])
+    m, lo, hi = C.day_clustered_ci(v, days)
+    assert m == pytest.approx(0.14)
+    assert hi == pytest.approx(0.26153664, abs=1e-7) and lo == pytest.approx(0.01846336, abs=1e-7)
+
+
+def test_a_cell_whose_realised_mean_exceeds_its_charge_forces_a_refresh() -> None:
+    rows = pd.concat([_frame(8, 10, 0.10, "stop"), _frame(8, 10, 0.08, "target"), _frame(8, 10, 0.2, "time")])
+    t = C.build_fill_to_bar(rows, version="t", window_utc=("a", "b"), atr14={"1m": 1.0, "5m": 2.0, "15m": 4.0})
+    assert C.refresh_due(t, rows) == []
+    dear = rows.assign(cost_usd=np.where(rows["exit"] == "time", 0.9, rows["cost_usd"]))
+    assert C.refresh_due(t, dear) == ["brk/london/time", "brk/london/all", "brk/all/time", "brk/all/all"]
 
 
 def test_scheduled_probes_are_time_exits_at_the_nearest_minute_boundary() -> None:
@@ -156,7 +208,8 @@ def test_a_sparse_cell_charges_at_least_the_brokers_pooled_exit_cell() -> None:
     asia, pooled = t["cells"]["brk"]["asia"]["stop"], t["cells"]["brk"]["all"]["stop"]
     assert asia["sparse"] and asia["charged_usd"] >= pooled["charged_usd"]
     ldn = t["cells"]["brk"]["london"]["stop"]
-    assert not ldn["sparse"] and ldn["charged_usd"] == pytest.approx(max(ldn["ci95"][1], ldn["commission_usd"]))
+    assert not ldn["sparse"] and ldn["charged_usd"] == pytest.approx(
+        max(ldn["ci95"][1], ldn["commission_usd"], t["cells"]["brk"]["london"]["all"]["charged_usd"]))
 
 
 def test_the_charge_is_never_below_the_commission() -> None:
@@ -224,7 +277,8 @@ def test_a_v3_table_a_newer_release_wrote_still_reads(tmp_path: Path) -> None:
     assert c.fill_to_bar.cells["icm"]["asia"]["stop"].n_fills == t["cells"]["icm"]["asia"]["stop"]["n_fills"]
 
 
-def test_a_v3_cell_charged_below_its_upper_bound_is_refused(tmp_path: Path) -> None:
+def test_a_v3_cell_charged_below_its_upper_bound_is_refused(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Refused, not read: logged, left unloaded, and any v3 pin then stops (quant review: never break v2 screens)."""
     t = yaml.safe_load((ROOT / "config" / "cost_of_record_v3.yaml").read_text())
     t["cells"]["icm"]["london"]["stop"]["charged_usd"] = 0.0
     (tmp_path / "v3.yaml").write_text(yaml.safe_dump(t))
@@ -232,8 +286,11 @@ def test_a_v3_cell_charged_below_its_upper_bound_is_refused(tmp_path: Path) -> N
     raw["fill_to_bar_cost"] = "v3.yaml"
     raw.pop("cost_of_record", None)
     (tmp_path / "arm_costs.yaml").write_text(yaml.safe_dump(raw))
-    with pytest.raises(ValueError, match="charged_usd"):
-        arms.load_costs(tmp_path / "arm_costs.yaml")
+    with caplog.at_level("WARNING"):
+        c = arms.load_costs(tmp_path / "arm_costs.yaml")
+    assert c.fill_to_bar is None and "charged_usd" in caplog.text
+    with pytest.raises(ValueError, match="not loaded"):
+        c.check_pin(t["version"])
 
 
 def test_the_cost_model_file_is_unchanged_so_running_lines_keep_their_hash() -> None:
@@ -258,12 +315,39 @@ def test_the_repo_carries_v3_beside_the_pinned_v2() -> None:
 
 
 def test_the_repo_table_reproduces_the_icm_control_parity() -> None:
-    """Acceptance: the builder's ICM random-control cell (matched barrier, swap included: the parity definition)
-    sits at $0.116 +/- 0.01 (why-strategies-fail-2026-11-15 section 1, 993 fills)."""
+    """Acceptance, both definitions (swap included): matched barrier only, the parity table's $0.116 on 993 fills
+    (why-strategies-fail-2026-11-15 section 1); every replayed control fill, what v3 prices (quant review: ~0.196)."""
     c = arms.load_costs(COSTS)
     assert c.fill_to_bar is not None
-    chk = c.fill_to_bar.checks["icm_controls_parity"]
-    assert chk.n_fills >= 900 and chk.mean_usd == pytest.approx(0.116, abs=0.01)
+    matched = c.fill_to_bar.checks["icm_controls_parity_matched"]
+    assert matched.n_fills == 993 and matched.mean_usd == pytest.approx(0.116, abs=0.01)
+    every = c.fill_to_bar.checks["icm_controls_parity"]
+    assert every.n_fills > matched.n_fills and every.mean_usd == pytest.approx(0.196, abs=0.02)
+
+
+def test_the_stress_line_adds_070_once_to_a_v3_stop() -> None:
+    """Quant review: Vantage's built-in stress plus the screen's stress line charged 1.47; the stress line is the cell
+    without its built-in stress + 0.70."""
+    c = arms.load_costs(COSTS)
+    assert c.fill_to_bar is not None
+    cell = c.fill_to_bar.cells["vantage"]["london"]["stop"].charged_usd
+    for broker, base in (("vantage", cell), ("icm", c.fill_to_bar.cells["icm"]["london"]["stop"].charged_usd)):
+        net = arms.screen_net_r(np.array([-3.0]), np.array([3.0]), np.array([True]), c, broker=broker,
+                                sessions=np.array(["london"]), version=V3, exits=np.array(["stop"]),
+                                overshoot_usd=arms.OVERSHOOT_STRESS_USD)
+        assert net[0] == pytest.approx((-3.0 - (base + 0.70)) / 3.0)
+
+
+def test_a_malformed_v3_table_never_breaks_a_v2_screen(tmp_path: Path) -> None:
+    raw = yaml.safe_load(COSTS.read_text())
+    raw["cost_of_record"] = str(ROOT / "config" / "cost_of_record.yaml")
+    (tmp_path / "arm_costs.yaml").write_text(yaml.safe_dump(raw))
+    (tmp_path / arms.FILL_TO_BAR_FILE).write_text("version: broken\ncells: 7\n")
+    c = arms.load_costs(tmp_path / "arm_costs.yaml")
+    assert c.of_record is not None and c.of_record.version == V2 and c.fill_to_bar is None
+    c.check_pin(V2)
+    with pytest.raises(ValueError, match="not loaded"):
+        c.check_pin(V3)
 
 
 def test_v3_charges_per_exit_type_when_the_screen_knows_it() -> None:

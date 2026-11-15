@@ -145,7 +145,7 @@ class ArmCosts(FrozenRecord):
     def _is_v3(self, version: str) -> bool:
         return self.fill_to_bar is not None and self.fill_to_bar.version == version
 
-    def fill_to_bar_charge_usd(self, broker: str, session: str, exit_kind: str) -> float:
+    def fill_to_bar_charge_usd(self, broker: str, session: str, exit_kind: str, *, with_stress: bool = True) -> float:
         """v3: what one round trip ending in `exit_kind` (stop | target | time) costs a screen on `broker` in `session`:
         the cell's charged upper bound (a session or exit the table does not split reads the broker's pooled cell), plus
         the 0.70 stress on a stop exit while the broker's demo stops fill at the stop price (ADR 0043, 0064 point 3)."""
@@ -160,7 +160,8 @@ class ArmCosts(FrozenRecord):
         if exit_kind not in FTB_EXIT_NAMES:
             raise ValueError(f"unknown exit {exit_kind!r}: one of {FTB_EXIT_NAMES}")
         cell = cells.get(session, {}).get(exit_kind) or cells[ALL_SESSIONS][exit_kind]
-        stress = OVERSHOOT_STRESS_USD if exit_kind == "stop" and not t.stops_trusted.get(broker, False) else 0.0
+        stress = OVERSHOOT_STRESS_USD if with_stress and exit_kind == "stop" and not t.stops_trusted.get(broker, False) \
+            else 0.0
         return cell.charged_usd + stress
 
     def stop_cost_r(self, broker: str, stop_usd: float) -> float:
@@ -173,12 +174,12 @@ class ArmCosts(FrozenRecord):
         from goldbot.config import tf_seconds
         return tf_seconds(timeframe) <= SHORT_TF_SECONDS and self.stop_cost_r(broker, stop_usd) > COST_DOMINATES_R
 
-    def _v3_charges(self, broker: str, labels: list[str],
-                    exits: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+    def _v3_charges(self, broker: str, labels: list[str], exits: np.ndarray | None,
+                    with_stress: bool = True) -> tuple[np.ndarray, np.ndarray]:
         def charge(s: str, ex: str) -> float:
             if s == "":                # outside every session: the broker's dearest session for that exit
-                return max(self.fill_to_bar_charge_usd(broker, x, ex) for x in SESSION_NAMES)
-            return self.fill_to_bar_charge_usd(broker, s, ex)
+                return max(self.fill_to_bar_charge_usd(broker, x, ex, with_stress=with_stress) for x in SESSION_NAMES)
+            return self.fill_to_bar_charge_usd(broker, s, ex, with_stress=with_stress)
         if exits is not None:
             kinds = [x if x in ("stop", "target") else "time" for x in (str(e) for e in np.asarray(exits))]
             rt = np.array([charge(s, k) for s, k in zip(labels, kinds, strict=True)], dtype=float)
@@ -219,14 +220,14 @@ class ArmCosts(FrozenRecord):
         return max(OVERSHOOT_FLOOR_USD, cell.overshoot_ci90[1])
 
     def screen_charges(self, broker: str, sessions: np.ndarray, version: str,
-                       exits: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+                       exits: np.ndarray | None = None, *, with_stress: bool = True) -> tuple[np.ndarray, np.ndarray]:
         """Per trade (its entry's session label; "" = outside every session, charged the broker's dearest cell): the
         round trip and the stop-exit overshoot a new pre-registration's screen charges, after pinning `version`.
         A v3 pin charges by exit type: with `exits` (the research barrier per trade) the whole cost is in the round trip
         and the overshoot is 0; without, the dearer of target and time is the round trip and a stop exit is topped up to
         the stop cell. A v2 pin ignores `exits`."""
         if self._is_v3(version):
-            return self._v3_charges(broker, [str(x) for x in np.asarray(sessions)], exits)
+            return self._v3_charges(broker, [str(x) for x in np.asarray(sessions)], exits, with_stress)
         self.require_version(version)
         cells = list(SESSION_NAMES)
         rt = {s: self.charged_round_trip_usd(broker, s) for s in cells}
@@ -279,7 +280,8 @@ def screen_net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarr
     """Net R at the pinned cost of record: the move less the session's charged round trip, less the ruling's overshoot
     on a stop exit (`overshoot_usd` replaces it for the stress line), less `extra_usd`, over the stop distance. `exits`
     (the research barrier per trade) prices a v3 pin by exit type."""
-    rt, os_ = costs.screen_charges(broker, sessions, version, exits)
+    # a v3 stress line is the cell WITHOUT its built-in stop stress + `overshoot_usd`: 0.70 is added once, never twice
+    rt, os_ = costs.screen_charges(broker, sessions, version, exits, with_stress=overshoot_usd is None)
     if overshoot_usd is not None:
         os_ = np.full(len(rt), float(overshoot_usd))
     pnl = np.asarray(move_usd, dtype=float) - rt - os_ * np.asarray(stop_exit, dtype=float)
@@ -343,8 +345,10 @@ class CostOfRecord(FrozenRecord):
 class FillToBarCell(FrozenRecord):
     """One broker x session x exit cell of the v3 cost of record (ADR 0084), USD per oz, adverse positive: replay gross
     on the research bars less the broker's net (swap left to the screen), target favourable slippage floored at 0;
-    ci95 = mean +/- t(G-1) x the day-clustered standard error; charged = the upper bound, never below commission (a
-    sparse cell: at least the broker's pooled cell of the exit)."""
+    every replayed fill in its research barrier's cell; ci95 = mean +/- t(G-1) x the wider of the CR1 / CR2
+    day-clustered standard errors; charged = the upper bound, never below commission nor the session's all-exit cell
+    (a sparse cell: at least the broker's pooled cell of the exit). For a v3 pin it replaces ADR 0064's 0.23 and $0.12
+    floors (ADR 0084 point 2)."""
     n_fills: int = Field(gt=0)
     n_days: int = Field(ge=0)
     n_probes: int = Field(0, ge=0)
@@ -425,11 +429,13 @@ def load_costs(path: Path) -> ArmCosts:
     ftb = raw.get("fill_to_bar_cost") or (FILL_TO_BAR_FILE if raw.get("cost_of_record") else None)
     ftb_path = Path(path).parent / str(ftb) if ftb else None
     if ftb_path is not None and (raw.get("fill_to_bar_cost") or ftb_path.exists()):
+        # a malformed v3 table never breaks a v2 screen: it is logged and left unloaded, so only a v3 pin stops
+        # (check_pin refuses a version that is not loaded)
         try:
             extra["fill_to_bar"] = load_record(FillToBarTable, yaml.safe_load(ftb_path.read_text()),
                                                source="cost_of_record_v3")
-        except ValidationError as e:
-            raise ValueError(f"cost of record v3 {ftb}: {e}") from e
+        except (ValidationError, yaml.YAMLError, TypeError, ValueError) as e:
+            log.warning("cost of record v3 %s not loaded (a v3 pin will be refused): %s", ftb, e)
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
                     overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]), **extra)
 

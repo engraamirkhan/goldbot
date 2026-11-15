@@ -340,15 +340,16 @@ def _day_bounds(first: str, last: str) -> tuple[pd.Timestamp, pd.Timestamp]:
 #   nearest minute boundary of its own exit;
 # * cost = replay gross - broker net + swap (the screen charges swap per rollover itself, never twice);
 #   cost_with_swap = replay gross - broker net (the parity table's definition, kept for the acceptance check);
-# * a fill is priced in the cell of the RESEARCH barrier and only when the broker's exit agrees (stop / target / time);
-#   disagreements are counted (`n_unmatched`), never priced;
+# * EVERY replayed fill is priced in the cell of its RESEARCH barrier (stop / target / time), whatever the broker's
+#   exit: pricing only agreeing fills selects on the outcome (quant review of 89e69db3). `n_unmatched` counts the
+#   fills whose broker exit disagreed, for information;
 # * target exits: favourable slippage against the order's own level is not bankable for real money and is floored per
 #   fill at 0: cost += max(0, side x (exit - anchor) - target_usd), anchor = the quote the bracket was priced from
 #   (requested price; the fill when none). The demo evidence for that anchor: Vantage target exits sit at exactly
 #   requested + target, ICM's 5-95% band against it is 4x narrower than against the fill. A real-money target exit then
 #   costs commission + entry slippage against that quote + any adverse fill at the level;
-# * interval: mean +/- t(G-1, 0.975) x the day-clustered (opportunity day, 22:00 UTC) standard error with the G/(G-1)
-#   correction; the charge is its upper bound, never below the cell's commission; a cell with fewer than FTB_MIN_FILLS
+# * interval: mean +/- t(G-1, 0.975) x the wider of the CR1 and CR2 day-clustered (opportunity day, 22:00 UTC)
+#   standard errors; the charge is its upper bound, never below the cell's commission; a cell with fewer than FTB_MIN_FILLS
 #   fills or FTB_MIN_DAYS days is `sparse` and charges at least its broker's pooled cell of that exit;
 # * stops_trusted: false when FTB_EXACT_SHARE or more of a broker's stop exits fill within EXACT_STOP_USD of the stop
 #   level (a demo artefact: Vantage); the screen then adds the 0.70 stress (arms.OVERSHOOT_STRESS_USD) to stop exits;
@@ -361,7 +362,7 @@ FTB_SHORT_TFS = ("1m", "5m", "15m")
 FTB_MATCH_S = 120
 FTB_TAIL_MIN = 5
 OZ_PER_LOT = 100.0
-FTB_COLUMNS = ["cid", "broker", "sent", "exit", "matched", "probe", "control", "cost_usd", "raw_cost_usd",
+FTB_COLUMNS = ["cid", "broker", "sent", "exit", "broker_exit", "matched", "probe", "control", "cost_usd", "raw_cost_usd",
                "cost_with_swap_usd", "commission_usd", "stop_exact"]
 
 
@@ -465,11 +466,11 @@ def fill_to_bar_rows(fills: Sequence[Any], probes: Sequence[Any], b: MidBars, ho
         with_swap = side * (x - e) - float(t.pnl) / fx / oz
         raw = with_swap + float(t.swap or 0.0) / fx / oz
         anchor = float(t.requested_price if t.requested_price is not None else t.fill_price)
-        lucky = max(0.0, side * (float(t.exit_price) - anchor) - tgt) if bar == "target" and np.isfinite(tgt) else 0.0
+        lucky = max(0.0, side * (float(t.exit_price) - anchor) - tgt) if brk == "target" and np.isfinite(tgt) else 0.0
         exact = brk == "stop" and min(abs(float(t.exit_price) - (a - side * stop))
                                       for a in (anchor, float(t.fill_price))) < EXACT_STOP_USD
         rows.append({"cid": t.client_order_id, "broker": hosts[t.account_id], "sent": sent, "exit": bar,
-                     "matched": bar == brk, "probe": False, "control": t.evidence_class == "control",
+                     "broker_exit": brk, "matched": bar == brk, "probe": False, "control": t.evidence_class == "control",
                      "cost_usd": raw + lucky, "raw_cost_usd": raw, "cost_with_swap_usd": with_swap,
                      "commission_usd": abs(float(t.commission or 0.0)) / fx / oz, "stop_exact": exact})
     for p in probes:
@@ -482,7 +483,7 @@ def fill_to_bar_rows(fills: Sequence[Any], probes: Sequence[Any], b: MidBars, ho
         with_swap = side * (x - float(b.open[k0])) - float(p.pnl) / fx / oz
         raw = with_swap + float(p.swap or 0.0) / fx / oz
         rows.append({"cid": p.client_order_id, "broker": hosts[p.account_id], "sent": sent, "exit": "time",
-                     "matched": True, "probe": True, "control": False, "cost_usd": raw, "raw_cost_usd": raw,
+                     "broker_exit": "time", "matched": True, "probe": True, "control": False, "cost_usd": raw, "raw_cost_usd": raw,
                      "cost_with_swap_usd": with_swap, "commission_usd": abs(float(p.commission or 0.0)) / fx / oz,
                      "stop_exact": False})
     out = pd.DataFrame(rows, columns=FTB_COLUMNS)
@@ -493,8 +494,9 @@ def fill_to_bar_rows(fills: Sequence[Any], probes: Sequence[Any], b: MidBars, ho
 
 
 def day_clustered_ci(values: np.ndarray, days: np.ndarray, level: float = 0.95) -> tuple[float, float, float]:
-    """(mean, lo, hi): the mean +/- t(G-1) x the cluster-robust standard error over G days (G/(G-1) corrected); a
-    single day has no interval (lo = hi = mean)."""
+    """(mean, lo, hi): the mean +/- t(G-1) x the wider of two cluster-robust standard errors over G days: CR1
+    (G/(G-1) corrected) and CR2 (Bell-McCaffrey; for a mean, sum_g S_g^2 / (1 - n_g / n) / n^2), so one large day
+    never narrows the charge (quant review of 89e69db3). A single day has no interval (lo = hi = mean)."""
     from scipy import stats
     v = np.asarray(values, dtype=float)
     m = float(v.mean())
@@ -504,7 +506,12 @@ def day_clustered_ci(values: np.ndarray, days: np.ndarray, level: float = 0.95) 
         return m, m, m
     sums = np.bincount(inv, weights=v, minlength=g)
     counts = np.bincount(inv, minlength=g).astype(float)
-    se = float(np.sqrt(g / (g - 1) * ((sums - counts * m) ** 2).sum()) / len(v))
+    n = len(v)
+    s2 = (sums - counts * m) ** 2
+    se1 = float(np.sqrt(g / (g - 1) * s2.sum()) / n)                                 # CR1
+    lev = counts / n
+    se2 = float(np.sqrt((s2 / (1.0 - lev)).sum()) / n) if (lev < 1).all() else se1   # CR2 (Bell-McCaffrey)
+    se = max(se1, se2)
     q = float(stats.t.ppf(0.5 + level / 2, g - 1))
     return m, m - q * se, m + q * se
 
@@ -531,8 +538,8 @@ def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str
         ok = rb["matched"].astype(bool)
         mb, un = rb[ok], rb[~ok]
         row: dict[str, dict[str, Any]] = {}
-        for session in (*SESSIONS, ALL):
-            ms = mb if session == ALL else mb[mb["session"] == session]
+        for session in (*SESSIONS, ALL):     # every replayed fill, in its RESEARCH barrier's cell (quant review)
+            ms = rb if session == ALL else rb[rb["session"] == session]
             us = un if session == ALL else un[un["session"] == session]
             got: dict[str, Any] = {}
             for ex in (*FTB_EXITS, ALL):
@@ -541,20 +548,31 @@ def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str
                     got[ex] = _ftb_cell(x, len(us) if ex == ALL else int((us["exit"] == ex).sum()))
             if got:
                 row[session] = got
+        # a disagreement's whole swing lands in its research exit's cell (research stop / broker target: a large
+        # negative cost in `stop`), so no exit charges below its session's all-exit cell: mix-robust, never cheaper
+        # for a stop-heavy arm than the sample's total cost
+        for got in row.values():
+            if ALL in got:
+                for ex in FTB_EXITS:
+                    if ex in got:
+                        got[ex]["charged_usd"] = max(got[ex]["charged_usd"], got[ALL]["charged_usd"])
         pooled = row.get(ALL, {})
         for session, got in row.items():
             for ex, c in got.items():
                 if c["sparse"] and session != ALL and ex in pooled:
                     c["charged_usd"] = max(c["charged_usd"], pooled[ex]["charged_usd"])
         cells[broker] = row
-        stops = mb[mb["exit"] == "stop"]
+        bx = rb["broker_exit"] if "broker_exit" in rb.columns else rb["exit"]
+        stops = rb[(bx == "stop").to_numpy()]
         trusted[broker] = not (len(stops) >= MIN_STOPS_FOR_TRUST
                                and float(stops["stop_exact"].astype(bool).mean()) >= FTB_EXACT_SHARE)
-        ctl = mb[mb["control"].astype(bool) & ~mb["probe"].astype(bool)]
-        if len(ctl):
-            m, lo, hi = day_clustered_ci(ctl["cost_with_swap_usd"].to_numpy(), ctl["day"].to_numpy())
-            checks[f"{broker}_controls_parity"] = {"n_fills": int(len(ctl)), "n_days": int(ctl["day"].nunique()),
-                                                   "mean_usd": m, "ci95": (lo, hi)}
+        for suffix, pop in (("", rb), ("_matched", mb)):     # what v3 prices; the parity table's definition
+            ctl = pop[pop["control"].astype(bool) & ~pop["probe"].astype(bool)]
+            if len(ctl):
+                m, lo, hi = day_clustered_ci(ctl["cost_with_swap_usd"].to_numpy(), ctl["day"].to_numpy())
+                checks[f"{broker}_controls_parity{suffix}"] = {"n_fills": int(len(ctl)),
+                                                               "n_days": int(ctl["day"].nunique()),
+                                                               "mean_usd": m, "ci95": (lo, hi)}
     return {"version": version, "basis": "fill_to_research_bar", "window_utc": list(window_utc),
             "source": "closed gold exploration fills (aux.db exploration_trades; pyramid adds and cost_cells exclusions "
                       "dropped) and scheduled cost probes (cost_probes, cost_measurement), replayed on Dukascopy 1m "
@@ -562,7 +580,8 @@ def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str
             "research_bars": "Dukascopy 1m mid; entry at the send minute's mid open; stop/target on mid high/low, stop "
                              "first; a minute opening through the stop fills at its open; time exit at the mid close "
                              "before the cut",
-            "interval": f"95% t(G-1) interval on the standard error clustered by session day (22:00 UTC); charged = "
+            "interval": f"95% t(G-1) interval on the wider of the CR1 and CR2 standard errors clustered by session day "
+                        f"(22:00 UTC), every replayed fill in its research barrier's cell; charged = "
                         f"upper bound, never below commission; sparse (< {FTB_MIN_FILLS} fills or < {FTB_MIN_DAYS} "
                         f"days) charges at least the broker's pooled exit cell",
             "target_slippage": "floored at 0 per fill against the order's own level, requested price + target (demo "
@@ -570,6 +589,21 @@ def build_fill_to_bar(rows: pd.DataFrame, *, version: str, window_utc: tuple[str
             "stops_trusted": trusted, "checks": checks,
             "geometry": {"atr14_median_usd": {k: float(v) for k, v in atr14.items()}},
             "cells": cells}
+
+
+def refresh_due(table: Mapping[str, Any], rows: pd.DataFrame) -> list[str]:
+    """ADR 0084 point 6: the cells ("broker/session/exit") whose realised mean on `rows` (`fill_to_bar_rows` of a later
+    window of ten session days) exceeds the table's charge. Any entry forces a new version (.N+1)."""
+    out: list[str] = []
+    for broker, sessions in table["cells"].items():
+        rb = rows[rows["broker"] == broker]
+        for session, got in sessions.items():
+            rs = rb if session == ALL else rb[rb["session"] == session]
+            for ex, c in got.items():
+                x = rs if ex == ALL else rs[rs["exit"] == ex]
+                if len(x) and float(x["cost_usd"].mean()) > float(c["charged_usd"]):
+                    out.append(f"{broker}/{session}/{ex}")
+    return out
 
 
 def atr14_medians(b: MidBars, lo: pd.Timestamp, hi: pd.Timestamp) -> dict[str, float]:
