@@ -490,6 +490,11 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
         lambda arm, ctx: __import__("goldbot.research.arm_rules_growth", fromlist=["x"]).session_range_break(arm, ctx),
     "session_range_control":
         lambda arm, ctx: __import__("goldbot.research.arm_rules_growth", fromlist=["x"]).session_range_control(arm, ctx),
+    # the red-box week 2026-11-15: RB* and their replay-only controls RBC* (`arm_rules_redbox`)
+    "redbox_break":
+        lambda arm, ctx: __import__("goldbot.research.arm_rules_redbox", fromlist=["x"]).redbox_break(arm, ctx),
+    "redbox_control":
+        lambda arm, ctx: __import__("goldbot.research.arm_rules_redbox", fromlist=["x"]).redbox_control(arm, ctx),
 }
 
 
@@ -533,8 +538,10 @@ def lookback_bars(arm: Arm, default: int) -> int:
         return max(default, warmup_bars(arm))
     from goldbot.research.arm_rules_bands import LOOKBACK_BARS as BANDS
     from goldbot.research.arm_rules_clock_box import LOOKBACK_BARS as CLOCK
+    from goldbot.research.arm_rules_redbox import LOOKBACK_BARS as REDBOX
     from goldbot.research.arm_rules_scalp import LOOKBACK_BARS as SCALP
-    return max(default, BANDS.get(arm.rule, 0), CLOCK.get(arm.rule, 0), SCALP.get(arm.rule, 0))
+    return max(default, BANDS.get(arm.rule, 0), CLOCK.get(arm.rule, 0), SCALP.get(arm.rule, 0),
+               REDBOX.get(arm.rule, 0))
 
 
 def follows_friday_cut(arm: Arm) -> bool:

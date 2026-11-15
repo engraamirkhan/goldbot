@@ -49,7 +49,9 @@ LEARNING_BROKER = "icm"
 # prereg-2026-11-07-n3-har.md section 3: the learning controls in scope (LC* twins of the learning class, ZCD)
 SCOPE_CONTROLS = frozenset({
     "ZCD", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ3D", "LCZ4D", "LCZ4P", "LCZ5P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P",
-    "LCZ7V", "LCZ9D", "LCZ10D"})
+    "LCZ7V", "LCZ9D", "LCZ10D",
+    # prereg-amendment-2026-11-15-redbox-week.md: the red-box arms' replay-only controls (they never reach `_send`)
+    "RBC15", "RBC1H", "RBC4H"})
 WARN_GRACE = pd.Timedelta(minutes=30)           # after the cut-off a missing row is expected: refused, not warned
 _warned: set[tuple[str, date]] = set()          # (account, day) whose har_unavailable was logged
 

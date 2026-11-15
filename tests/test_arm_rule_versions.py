@@ -42,6 +42,8 @@ PINS: dict[str, dict[int, str]] = {
     "opening_range_break": {1: "7bd4d9ee08341a67"},
     "pdc_break": {1: "9e7c8933e4813b5d"},
     "random_bracket": {1: "cf8051684df1018f"},
+    "redbox_break": {1: "7fc657220e651cc7"},
+    "redbox_control": {1: "76ab35985f7f26b7"},
     "round_break": {1: "27e4a82daace7356"},
     "round_reject": {1: "1d48a288cd3b6460"},
     "run_fade": {1: "cfe0797b643b9898"},

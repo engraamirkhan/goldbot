@@ -55,7 +55,10 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          # live in config/spec_arms.yaml and load on demo accounts only (`load_arms(live_class=True)` refuses them)
          SPEC_RULE,
          # growth sprint 2026-11-01 (goldbot.research.arm_rules_growth): GS1 and its random-entry control GS1C
-         "session_range_break", "session_range_control")
+         "session_range_break", "session_range_control",
+         # the red-box week (owner directive 2026-11-15, prereg-amendment-2026-11-15-redbox-week.md): RB* and their
+         # replay-only controls RBC* (goldbot.research.arm_rules_redbox)
+         "redbox_break", "redbox_control")
 
 # Research-director ruling 2026-11-13 (docs/research/ruling-2026-11-13-gold-only.md; live fills n 5,333: non-gold
 # n 1,131 at -GBP 262, -0.21 R a trade; gold n 4,202 at +GBP 5, 93% of them on 1m/5m). Item 1, the `retired_rule` of
@@ -335,6 +338,9 @@ LEARNING_READ_FILLS = 300
 LEARNING_CONTROL_PREFIX = "learning:"
 # what a matched control repeats exactly: the arm's fixed bracket (one stop form, the target in R, the hold in bars)
 BRACKET_KEYS = ("stop_usd", "stop_atr", "target_r", "hold_bars")
+# or, per candidate, the same bracket construction (`_per_trade_refusal`): its name and the params both must share
+PER_TRADE_KEY = "per_trade_bracket"
+PER_TRADE_SAME = ("hold_bars", "min_stop_usd", "max_stop_usd", "end_utc")
 REGISTRY_PREFIX = "registry:"
 _REGISTRY_REF = re.compile(r"^registry:([A-Za-z0-9][A-Za-z0-9:_.#/-]{0,127})(?:@([0-9a-f]{40}))?$")
 _WINDOW = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$")
@@ -441,7 +447,10 @@ def _bracket(arm: Arm) -> dict[str, float] | None:
 def control_match_refusal(arm: Arm, control: Arm) -> str | None:
     """Why `control` is not a matched control of `arm`, None when it is: a random control (`role` control) on the same
     timeframe with the same fixed bracket (stop, target, hold). An arm whose stop or target is not a fixed bracket on
-    its row (a runner exit, a specialist's own stop, a VWAP target, a stop band) cannot be matched."""
+    its row (a runner exit, a specialist's own stop, a VWAP target, a stop band) cannot be matched, except by the
+    per-trade bracket rule (`_per_trade_refusal`)."""
+    if PER_TRADE_KEY in arm.params or PER_TRADE_KEY in control.params:
+        return _per_trade_refusal(arm, control)
     mine = _bracket(arm)
     if mine is None:
         return f"{arm.id} has no fixed bracket (stop_usd or stop_atr, target_r, hold_bars) to match a control on"
@@ -455,6 +464,21 @@ def control_match_refusal(arm: Arm, control: Arm) -> str | None:
     for key, what in (("stop_usd", "stop"), ("stop_atr", "stop"), ("target_r", "target"), ("hold_bars", "hold")):
         if (key in mine) != (key in theirs) or (key in mine and abs(theirs[key] - mine[key]) > 1e-9):
             return f"control {control.id} {what} ({key}) does not match {arm.id}'s"
+    return None
+
+
+def _per_trade_refusal(arm: Arm, control: Arm) -> str | None:
+    """The per-trade bracket match (the KBL card's C10 ruling, adopted by prereg-amendment-2026-11-15-redbox-week.md
+    rule 3): "the twin copies the arm's ... stop distance, target distance, hold" per candidate, so arm and control
+    match when both name the same `per_trade_bracket` construction, the same timeframe and the same PER_TRADE_SAME
+    params (hold, stop band, end); the construction itself is one shared function (`arm_rules_redbox.events`)."""
+    if control.role != "control":
+        return f"control {control.id} is not a control row (role {control.role})"
+    if control.timeframe != arm.timeframe:
+        return f"control {control.id} timeframe {control.timeframe} is not {arm.timeframe}"
+    for key in (PER_TRADE_KEY, *PER_TRADE_SAME):
+        if arm.params.get(key) != control.params.get(key):
+            return f"control {control.id} {key} does not match {arm.id}'s per-trade bracket"
     return None
 
 
@@ -784,6 +808,9 @@ class Arm(FrozenRecord):
             if self.rule in ("session_range_break", "session_range_control"):
                 from goldbot.research.arm_rules_growth import check as check_growth
                 check_growth(self)
+            if self.rule in ("redbox_break", "redbox_control"):
+                from goldbot.research.arm_rules_redbox import check as check_redbox
+                check_redbox(self)
             if self.rule == SPEC_RULE:
                 # ADR 0058 phase 4: a spec the engine cannot run exactly as its research read is refused at load
                 from goldbot.research.arm_rules_spec import check as check_spec

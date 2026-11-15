@@ -453,6 +453,17 @@ accounts:
         LBC-NZDUSD: { style: intraday, max_loss: 8.0, control_share: 0.02 }
         LB-XAUEUR: { style: intraday, max_loss: 8.0 }
         LBC-XAUEUR: { style: intraday, max_loss: 8.0, control_share: 0.02 }
+        # the red-box week (owner directive 2026-11-15; docs/research/prereg-amendment-2026-11-15-redbox-week.md):
+        # every own-timeframe red box break and close on 15m/1h/4h, learning class, 0.01 lot, one open per arm; £32 a
+        # trade = the $40 stop band at 0.01 lot (£30.1) plus the round trip; £100 loss cap each in the spec (£300 the
+        # week). The RBC* controls are replay-only: every candidate is recorded skipped, none is ever sent (their
+        # share and cap are never used). Ends 2026-11-22 22:00 UTC by the rule; rollback: drop these six lines, restart
+        RB15: { style: intraday, max_loss: 32.0 }
+        RBC15: { style: intraday, max_loss: 32.0, control_share: 0.01 }
+        RB1H: { style: intraday, max_loss: 32.0 }
+        RBC1H: { style: intraday, max_loss: 32.0, control_share: 0.01 }
+        RB4H: { style: intraday, max_loss: 32.0 }
+        RBC4H: { style: intraday, max_loss: 32.0, control_share: 0.01 }
   vantage-demo:
     broker: vantage
     mode: demo
