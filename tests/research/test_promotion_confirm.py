@@ -3,6 +3,7 @@ fixed convergent alpha-spending schedule from ONE global never-reset ledger; the
 path's count minimums; registry-K DSR report-only."""
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -41,7 +42,19 @@ def item(family: str = "fam", *, source: PC.Source = "test_old", kind: PC.Kind =
                           learn_ref=learn_ref or {"ts": "2026-11-01T00:00:00+00:00", "config_hash": "x", "trial": 1})
 
 
-def run(reg: TrialRegistry, batch: list[tuple[PC.ConfirmItem, pd.DataFrame]], now: datetime = NOW, **kw) -> list[dict]:
+def preregister(reg: TrialRegistry, it: PC.ConfirmItem, stamp: PC.FrozenStamp = STAMP) -> None:
+    """The card's pre-registration, frozen to `stamp` before any data (plan.frozen_stamp)."""
+    reg.preregister(agent_id="rd", family=it.family, config=it.config, feature_version=stamp.feature_version,
+                    rationale="card", reading_rule="ADR 0085 confirm", plan={"frozen_stamp": stamp.model_dump()})
+
+
+def run(reg: TrialRegistry, batch: list[tuple[PC.ConfirmItem, pd.DataFrame]], now: datetime = NOW, *,
+        prereg: bool = True, **kw) -> list[dict]:
+    if prereg:
+        for it, _ in batch:
+            if reg.preregistration(it.family, it.config) is None:
+                preregister(reg, it)
+    kw.setdefault("eval2_test_old_families", set())
     return PC.run_batch(reg, batch, now=now, mean_block=3.0, agent_id="evaluator", **kw)
 
 
@@ -174,7 +187,8 @@ def test_a_refused_batch_spends_no_slot_and_writes_nothing(tmp_path):
     reg = TrialRegistry(tmp_path / "r.jsonl")
     with pytest.raises(PC.NotFresh):
         run(reg, [(item("b"), units(0.0))], eval2_test_old_families={"b"})
-    assert reg._rows() == [] and PC.PromotionLedger([]).next_slot(NOW).slot == 1
+    assert all(r["status"] == "preregistered" for r in reg._rows())
+    assert PC.PromotionLedger(reg._rows()).next_slot(NOW).slot == 1
 
 
 # ------------------------------------------------------------------------------------------------ the predicate
@@ -224,13 +238,24 @@ def test_rule_only_promotion_gates_have_no_count_minimums_and_report_the_dsr_onl
     assert out["dsr_report_only"] is None or "dsr" in out["dsr_report_only"]
 
 
-def test_pre_registered_multi_year_blocks_let_a_1d_rule_score_its_regime_years():
-    """A 1d rule with 6 trades a year never makes 10 in a calendar year; 2-year blocks hold 12."""
-    ts = pd.to_datetime([f"{y}-0{m}-01" for y in range(2016, 2024) for m in range(1, 7)], utc=True)
+def test_pre_registered_multi_year_blocks_score_an_uneven_1d_rule_at_10_trades_a_year_of_block():
+    """A 1d rule averaging 10 a year but bunched (16 or 4 a year, the chop years thin) fails calendar years; 2-year
+    blocks hold 20 each."""
+    per = {2016: 16, 2017: 4, 2018: 16, 2019: 4, 2020: 16, 2021: 4, 2022: 4, 2023: 16}
+    ts = pd.to_datetime([f"{y}-01-{d:02d}" for y, k in per.items() for d in range(1, k + 1)], utc=True)
     taken = pd.DataFrame({"ts_utc": ts, "ret": 0.1})
     assert not gates.rule_only_promotion_gates(taken, dsr=None)["passed"]
     blocks = [(2016, 2017), (2018, 2019), (2020, 2021), (2022, 2023)]
     assert gates.rule_only_promotion_gates(taken, dsr=None, blocks=blocks)["passed"]
+
+
+def test_a_block_needs_ten_trades_for_every_year_it_spans():
+    """Code review of 734940c3: 30 trades over 2006-2025 in 3 blocks must fail (MIN_TRADES_PER_YEAR per year)."""
+    blocks = [(2006, 2012), (2013, 2019), (2020, 2025)]
+    ts = pd.to_datetime([f"{a + i % (b - a + 1)}-06-{1 + i:02d}" for a, b in blocks for i in range(10)], utc=True)
+    taken = pd.DataFrame({"ts_utc": ts, "ret": 0.1})
+    assert len(taken) == 30
+    assert not gates.rule_only_promotion_gates(taken, dsr=None, blocks=blocks)["passed"]
 
 
 def test_blocks_must_be_pre_registered_disjoint_multi_year_spans():
@@ -238,3 +263,55 @@ def test_blocks_must_be_pre_registered_disjoint_multi_year_spans():
     with pytest.raises(ValueError):
         gates.rule_only_promotion_gates(taken, dsr=None, blocks=[(2018, 2020), (2020, 2021)])
     assert math.isfinite(PC.MIN_FRESH_N_EFF)
+
+
+# ------------------------------------------------------------------------------------------------ code review round
+def test_the_eval2_test_old_families_must_be_passed_never_defaulted(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    preregister(reg, item("a"))
+    with pytest.raises(TypeError):
+        PC.run_batch(reg, [(item("a"), units(0.0))], now=NOW, mean_block=3.0, agent_id="e")  # type: ignore[call-arg]
+
+
+def test_a_family_read_on_test_old_under_eval2_is_derived_from_the_reads_ledger_and_refused(tmp_path):
+    led = tmp_path / "catalogue_reads.jsonl"
+    led.write_text(json.dumps({"kind": "l3_batch_p", "read_window": "test_old", "batch_j": 1, "m_j": 2,
+                               "p": [["b", 0.2], ["c", 0.4]]}) + "\n"
+                   + json.dumps({"kind": "l3_batch_p", "read_window": "confirm", "batch_j": 15, "m_j": 1,
+                                 "p": [["d", 0.3]]}) + "\n")
+    fams = PC.eval2_test_old_families(led)
+    assert fams == {"b", "c"} and PC.eval2_test_old_families(tmp_path / "absent.jsonl") == set()
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    with pytest.raises(PC.NotFresh, match="EVAL-2"):
+        run(reg, [(item("b"), units(0.0))], eval2_test_old_families=fams)
+
+
+def test_ledger_years_are_read_in_utc_and_need_an_aware_time():
+    late = datetime(2027, 11, 15, 0, 30, tzinfo=timezone(timedelta(hours=2)))   # 2027-11-14 22:30 UTC
+    assert PC.ledger_year(late) == 1
+    with pytest.raises(ValueError, match="aware"):
+        PC.ledger_year(datetime(2027, 1, 1))
+
+
+def test_a_ledger_year_below_the_highest_year_used_is_never_reopened(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    run(reg, [(item("a"), units(0.0))], now=datetime(2027, 12, 1, tzinfo=timezone.utc))
+    with pytest.raises(PC.LedgerFull, match="backdated"):
+        run(reg, [(item("b"), units(0.0))], now=NOW)
+
+
+def test_the_frozen_stamp_must_match_the_cards_pre_registration(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    with pytest.raises(PC.NotFresh, match="pre-registration"):
+        run(reg, [(item("a"), units(0.0))], prereg=False)
+    other = STAMP.model_copy(update={"code_sha": "b" * 40})
+    preregister(reg, item("a"), other)
+    with pytest.raises(PC.NotFresh, match="code_sha"):
+        run(reg, [(item("a"), units(0.0))], prereg=False)
+    assert all(r["status"] == "preregistered" for r in reg._rows())
+
+
+def test_two_holdout_reads_of_one_config_in_one_batch_are_refused(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    with pytest.raises(PC.NotFresh, match="holdout"):
+        run(reg, [(item("a", source="holdout"), units(0.0)), (item("a", source="holdout"), units(0.1, seed=3))])

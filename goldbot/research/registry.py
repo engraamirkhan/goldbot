@@ -541,8 +541,12 @@ class TrialRegistry:
         if status == DISCOVERY_BATCH:
             raise ValueError("a discovery_batch is never a registry row (an older build would count it as a trial): "
                              "use record_discovery_batch")
+        refused = status == NOT_STARTED_POWER
+        if refused and not ((results.get("power_first") or {}).get("started") is False and results.get("card")):
+            raise ValueError("a not_started_power row is written only by power_first.start_or_refuse (results carry "
+                             "power_first.started False and the card)")
         row: dict[str, Any] = {
-            "trial": self.n_trials + 1,
+            "trial": None if refused else self.n_trials + 1,     # a refusal is no trial: no number (ADR 0085)
             "ts": datetime.now(timezone.utc).isoformat(),
             "agent_id": agent_id, "family": family, "config_hash": config_hash(config), "config": config,
             "feature_version": feature_version, "rationale": rationale, "results": results, "status": status,

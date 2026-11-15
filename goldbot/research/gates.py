@@ -79,7 +79,7 @@ def research_gates(n_candidates: int, fold_test_sizes: list[int], taken: pd.Data
                 positive.append(int(str(y)))
     chop = any(y in CHOP_YEARS for y in positive)
     checks.append({"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
-                   "detail": f"positive {subject} years (>= {MIN_TRADES_PER_YEAR} trades each): "
+                   "detail": f"positive {subject} years (>= {MIN_TRADES_PER_YEAR} trades a year of each): "
                              f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one of {list(CHOP_YEARS)}"})
     checks.append(dsr_check(model_filtered, subject))
     return {"passed": all(c["passed"] for c in checks), "checks": checks}
@@ -165,7 +165,8 @@ def rule_only_promotion_gates(taken: pd.DataFrame, *, dsr: dict[str, Any] | None
     """ADR 0085's learn-window gates for a rule-only card. `taken`: the family's pooled trades (ts_utc, ret) across
     its cells and instruments; `blocks`: the card's pre-registered multi-year blocks ((first, last) calendar years,
     inclusive), else calendar years. A unit (year or block) counts as positive with at least MIN_TRADES_PER_YEAR
-    trades and a positive mean; MIN_POSITIVE_YEARS positive units are needed, one of them holding a CHOP_YEARS year.
+    trades for every year it spans (code review of 734940c3: the rate is per year, a block only pools uneven years)
+    and a positive mean; MIN_POSITIVE_YEARS positive units are needed, one of them holding a CHOP_YEARS year.
     No candidate or per-fold minimum. `dsr` (the registry-K deflated Sharpe with K and K_eff) is reported only."""
     units: dict[str, list[int]] = {}
     if blocks:
@@ -177,11 +178,11 @@ def rule_only_promotion_gates(taken: pd.DataFrame, *, dsr: dict[str, Any] | None
     positive = []
     for name, ys in units.items():
         g = taken[year.isin(ys)] if len(taken) else taken
-        if len(g) >= MIN_TRADES_PER_YEAR and float(g["ret"].mean()) > 0:
+        if len(g) >= MIN_TRADES_PER_YEAR * len(ys) and float(g["ret"].mean()) > 0:
             positive.append(name)
     chop = any(y in CHOP_YEARS for name in positive for y in units[name])
     what = "pre-registered blocks" if blocks else "calendar years"
     check = {"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
-             "detail": f"positive {what} of pooled family trades (>= {MIN_TRADES_PER_YEAR} trades each): "
+             "detail": f"positive {what} of pooled family trades (>= {MIN_TRADES_PER_YEAR} trades a year of each): "
                        f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one holding {list(CHOP_YEARS)}"}
     return {"passed": check["passed"], "checks": [check], "dsr_report_only": dsr, "label": RULE_ONLY_PROMOTION_LABEL}

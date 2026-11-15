@@ -399,19 +399,21 @@ research:
     cme_fee_usd_per_side: 2.0        # venue C (CME 1OZ, report only): +$2/oz a side at the reference price, DTB3 both
                                      #   ways with no markup, one round trip at each monthly roll
   power_first:                       # ADR 0085 (research/power_first.py), research + demo promotion ONLY (the phase gate is
-                                     #   pinned to today's criteria): a card starts only with these powers, else a
-                                     #   "NOT STARTED (power)" registry row, no K, no data read. Thresholds only tighten
-    min_gate_power: 0.5              # power at every gate the card must pass (panel ruling 2026-11-15)
+                                     #   pinned to today's criteria): a card starts only with these, else a "NOT STARTED
+                                     #   (power)" registry row, no K, no data read. Every value may only tighten
+    min_gate_power: 0.5              # power at every gate: Phi(delta sqrt(n_eff) / sd_tf - z_g), z_g Holm rank 1
     min_joint_power: 0.25            # the chain's joint power, simulated with the gates sharing data as the real ones do
-    min_edge_floor_r: 0.10           # (a) min edge = max(0.10 R, the edge north_star_daily_gbp needs at the card's rate
-                                     #   with lot_fit_equity x risk.risk_per_trade at risk a trade)
-    trading_days_per_year: 252       # trades a day = learn signal rate a year / this (outcome-blind signal counts)
-    sd_r_by_tf: {5m: 1.2, 15m: 1.2, 1h: 1.2, 4h: 1.2, 1d: 1.2}   # (a) per-trade sd of net R: the gate audit's pooled
-                                     #   cross-family figure (power memo 2026-11-15 s.1); never the card's own outcomes
-    rho_day: 0.25                    # (c) same-instrument same-day correlation (design effect 1 + (c - 1) rho); PRIOR
-    rho_instrument: 0.5              # (c) cross-instrument same-day correlation of a pooled family; PRIOR. Both to be
-                                     #   refreshed from pooled other-family day-summed vs per-trade t (ADR 0085)
-    sims: 20000                      # (d) joint-power Monte Carlo draws (seeded)
+    delta_r: 0.10                    # quant re-ruling 2026-11-15: fixed 0.10 R net a trade, no max() with the goal edge
+    n_eff_floor: 200                 # clustered n_eff needed at every fresh-data gate (a card that can't reach it can't pass)
+    trading_days_per_year: 252       # only for goal_edge_R, the GBP 50/day edge, recorded as information (never gates)
+    sd_r_floor: 1.2                  # sd_tf = max(1.2, the demo-measured sd of that timeframe)
+    sd_r_measured_by_tf: {5m: null, 15m: null, 1h: null, 4h: null, 1d: null}   # TODO(ADR 0085 follow-up v): demo
+                                     #   measured 1.10-1.51 R overall, not yet split by timeframe; null = the 1.2 floor
+    rho_day: 0.25                    # PRIOR: same-instrument same-day correlation; to be replaced by a pooled estimate
+                                     #   from other families' learn outcomes, never the card's own
+    rho_instrument: 0.5              # PRIOR: cross-instrument same-day correlation of a pooled family
+    rho_instrument_metals: 0.7       # PRIOR: the same when >= half the pooled instruments are XAU/XAG/XPT/XPD
+    sims: 20000                      # joint-power Monte Carlo draws (seeded)
     seed: 20261115
 
 drift:                               # design: Drift and health (goldbot/research/drift.py)

@@ -15,10 +15,12 @@ The panel ruling of 2026-11-15 (quant-reviewer, on docs/research/power-first-gat
   `research_promotion_refusal` accepts only a confirm stamped LEDGER_ID: an EVAL-2 BatchPRDS rejection (q 0.10) or an
   autodiscovery monthly Holm pass is never research or demo promotion evidence.
 * "fresh data = untouched for that family (TEST-OLD once per family; a family already read on TEST-OLD under EVAL-2
-  can't reuse it; ADR 0067 embargo)": `fresh_refusal`.
+  can't reuse it; ADR 0067 embargo)": `fresh_refusal`, with the EVAL-2 families required of the caller
+  (`eval2_test_old_families` derives them from the reads ledger); two holdout reads of one config in a batch refused.
 * "forward replay frozen before data (registry stamps card hash, code SHA, feature version, cost-of-record version;
-  each look a scheduled charged alpha spend)": `FrozenStamp` on every read; every read is a `run_batch` call that
-  takes a ledger slot and writes trial rows (K).
+  each look a scheduled charged alpha spend)": every read's `FrozenStamp` must equal the one its card's
+  pre-registration froze (`stamp_refusal`); every read is a `run_batch` call that takes a ledger slot and writes
+  trial rows (K). Ledger years are UTC, and a year below the highest used is never reopened.
 * "holdout at most once per config, charged, not a routine source".
 * "clustered p-values (existing stationary day-block bootstrap; cross-instrument day clusters for pooled)": the
   units' `day` is the session day across instruments, resampled by eval2.confirm's stationary day blocks.
@@ -31,9 +33,11 @@ The panel ruling of 2026-11-15 (quant-reviewer, on docs/research/power-first-gat
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections.abc import Collection, Sequence
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple
 
 import numpy as np
@@ -43,11 +47,18 @@ from pydantic import Field
 from goldbot.base import FrozenRecord
 from goldbot.research.eval2.confirm import _day_count_chunks, _DayBlocks, _p_from, confirm_resamples, holm
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DsrInputs
-from goldbot.research.registry import TrialRegistry, config_hash, n_trials_effective, refers_to, row_hash
+from goldbot.research.registry import (
+    PREREGISTERED,
+    TrialRegistry,
+    config_hash,
+    n_trials_effective,
+    refers_to,
+    row_hash,
+)
 
 __all__ = ["BATCHES_PER_YEAR", "LEDGER_EPOCH", "LEDGER_ID", "MIN_FRESH_N_EFF", "PROMOTION_CONFIRM", "Q_PROMOTION",
            "ConfirmItem", "FrozenStamp", "LedgerFull", "LedgerSlot", "NotFresh", "PromotionLedger", "batch_alpha",
-           "clustered_n_eff", "fresh_refusal", "holm", "ledger_year", "research_promotion_refusal", "run_batch"]
+           "clustered_n_eff", "eval2_test_old_families", "fresh_refusal", "holm", "ledger_year", "research_promotion_refusal", "run_batch", "stamp_refusal"]
 
 PROMOTION_CONFIRM: Final = "promotion_confirm"     # a trial row (a look): counted in K like every read
 Q_PROMOTION: Final = 0.05                          # the false-promotion rate over all promotions ever
@@ -108,7 +119,11 @@ def batch_alpha(year: int) -> float:
 
 
 def ledger_year(now: datetime) -> int:
-    """The ledger year of `now`: 1 from LEDGER_EPOCH to its first anniversary, then 2, ..."""
+    """The ledger year of `now`, read in UTC: 1 from LEDGER_EPOCH to its first anniversary, then 2, ... A naive time
+    is refused (its zone would decide the year)."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("ledger_year needs a timezone-aware time")
+    now = now.astimezone(timezone.utc)
     if now < LEDGER_EPOCH:
         raise ValueError(f"no promotion confirm before the ADR 0085 ledger epoch {LEDGER_EPOCH.date()}")
     y = now.year - LEDGER_EPOCH.year
@@ -130,7 +145,12 @@ class PromotionLedger:
                      if pc.get("ledger_id") == LEDGER_ID and "year" in pc and "slot" in pc}
 
     def next_slot(self, now: datetime) -> LedgerSlot:
+        """The next slot of `now`'s ledger year; a year below the highest already used is never reopened (a
+        backdated clock would otherwise spend a lapsed year's larger alpha)."""
         y = ledger_year(now)
+        top = max((yy for yy, _ in self.used), default=0)
+        if y < top:
+            raise LedgerFull(f"ledger year {y} is below year {top} already used: no backdated reopening (ADR 0085)")
         taken = [s for (yy, s) in self.used if yy == y]
         if len(taken) >= BATCHES_PER_YEAR:
             raise LedgerFull(f"ledger year {y} has spent its {BATCHES_PER_YEAR} batches (ADR 0085)")
@@ -154,6 +174,31 @@ def fresh_refusal(rows: list[dict[str, Any]], item: ConfirmItem, eval2_test_old_
         if seen:
             return f"the holdout was already read for {item.family} {h}: at most once per config"
     return None
+
+
+def stamp_refusal(rows: list[dict[str, Any]], item: ConfirmItem) -> str | None:
+    """The read's frozen stamp must equal the one its card's pre-registration froze before any data
+    (`plan.frozen_stamp` of the latest PREREGISTERED row of the family and config): card hash, code SHA, feature
+    version and cost-of-record version."""
+    h = config_hash(item.config)
+    pre = [r for r in rows if r.get("status") == PREREGISTERED and r.get("family") == item.family
+           and r.get("config_hash") == h]
+    frozen = ((pre[-1].get("plan") or {}).get("frozen_stamp") if pre else None) or None
+    if not isinstance(frozen, dict):
+        return f"{item.family} {h}: no pre-registration with a frozen stamp"
+    diff = [k for k, v in item.stamp.model_dump().items() if frozen.get(k) != v]
+    return f"{item.family} {h}: the stamp differs from its pre-registration in {', '.join(diff)}" if diff else None
+
+
+def eval2_test_old_families(ledger: Path) -> set[str]:
+    """The families EVAL-2 read on TEST-OLD: every family of an `l3_batch_p` row with read_window "test_old" in the
+    reads ledger (state/catalogue_reads.jsonl, `eval2.runner.default_ledger`). A missing ledger holds none."""
+    from goldbot.research.eval2.runner import BATCH_P_KIND  # the runner pulls the catalogue: import on use
+    if not ledger.exists():
+        return set()
+    rows = [json.loads(x) for x in ledger.read_text().splitlines() if x.strip()]
+    return {str(f) for r in rows if r.get("kind") == BATCH_P_KIND and r.get("read_window") == "test_old"
+            for f, _ in r.get("p") or []}
 
 
 def clustered_n_eff(x: np.ndarray, day: np.ndarray) -> float:
@@ -193,9 +238,10 @@ def _mean_p(units: pd.DataFrame, *, mean_block: float, resamples: int, seed_key:
 
 
 def run_batch(registry: TrialRegistry, batch: Sequence[tuple[ConfirmItem, pd.DataFrame]], *, now: datetime,
-              mean_block: float, agent_id: str, eval2_test_old_families: Collection[str] = ()) -> list[dict[str, Any]]:
+              mean_block: float, agent_id: str, eval2_test_old_families: Collection[str]) -> list[dict[str, Any]]:
     """Read one confirm batch ONCE under the registry lock: take the ledger's next slot (alpha_j), refuse the whole
-    batch if any window is not fresh (nothing read, nothing written, no slot spent), compute each config's clustered
+    batch if any window is not fresh or any stamp differs from its pre-registration (nothing read, nothing written,
+    no slot spent; `eval2_test_old_families` is required, e.g. `eval2_test_old_families(ledger)`), compute each config's clustered
     p on its fresh units (columns `day`, `net_r` net of measured costs at the upper CI), Holm at alpha_j over the
     batch, and write one PROMOTION_CONFIRM trial row per config. A pass needs the Holm rejection, mean net R > 0 and
     at least MIN_FRESH_N_EFF clustered observations. The registry-K DSR is reported, never decides."""
@@ -205,14 +251,20 @@ def run_batch(registry: TrialRegistry, batch: Sequence[tuple[ConfirmItem, pd.Dat
         rows = registry._rows()
         slot = PromotionLedger(rows).next_slot(now)
         seen: set[str] = set()
+        holdouts: set[tuple[str, str]] = set()
         for it, _ in batch:
-            why = fresh_refusal(rows, it, eval2_test_old_families)
+            why = fresh_refusal(rows, it, eval2_test_old_families) or stamp_refusal(rows, it)
+            hk = (it.family, config_hash(it.config))
             if why is None and it.source == "test_old" and it.family in seen:
                 why = f"{it.family} appears twice on TEST-OLD in one batch: once per family"
+            if why is None and it.source == "holdout" and hk in holdouts:
+                why = f"{it.family} {hk[1]} appears twice on the holdout in one batch: at most once per config"
             if why is not None:
                 raise NotFresh(why)
             if it.source == "test_old":
                 seen.add(it.family)
+            if it.source == "holdout":
+                holdouts.add(hk)
         m = len(batch)
         resamples = confirm_resamples(m, slot.alpha_j)
         k = n_trials_effective(rows) + m

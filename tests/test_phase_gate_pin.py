@@ -6,7 +6,8 @@ ADR 0085 (power-first research gates) changes research and demo promotion only. 
 minimums (1,500 candidates, 60 a fold, 200 trades, 10 a year) and the holdout/rerun rules, as before.
 
 The golden file was written by the code at 9d1abbc7 (origin/main before ADR 0085), where the predicate was named
-`promotion_refusal`. Never regenerate it to make this test pass: a difference IS a change to the phase gate, which is
+`promotion_refusal`: that commit archived into a scratch directory, this test file copied in, and `snapshot` run
+there with `registry.promotion_refusal`. Never regenerate it to make this test pass: a difference IS a change to the phase gate, which is
 owner-only (CLAUDE.md non-negotiables; ADR 0085 consequences)."""
 from __future__ import annotations
 
@@ -36,7 +37,8 @@ Refusal = Callable[[dict[str, Any], list[dict[str, Any]]], str | None]
 
 def _scenarios() -> dict[str, list[dict[str, Any]]]:
     """Representative registries: a pass, each legacy failure, the discovery/holdout and rerun rules, a registry K
-    that sinks the DSR, and a rule-only row that the NEW research rules would favour (its model-path gates failed)."""
+    that sinks the DSR, a rule-only row that the NEW research rules would favour (its model-path gates failed), a CPCV
+    veto, stale-quarter and missing CPCV evidence, and rows missing their costs or their results.gates."""
     rerun_fail = {**trial_row(9, dsr=0.97, mean_ret=0.002, passed=False, failed_check="per_fold"),
                   "ts": "2026-10-05T10:00:00+00:00"}
     first = {**trial_row(7, dsr=0.97, mean_ret=0.002, passed=True), "ts": "2026-10-02T10:00:00+00:00"}
@@ -48,6 +50,11 @@ def _scenarios() -> dict[str, list[dict[str, Any]]]:
     rule_only["results"]["rule_only_gates"] = {"passed": True, "checks": []}
     rule_only["results"]["model_filtered"]["n"] = 150
     rule_only["results"]["model_filtered"]["dsr_inputs"] = dsr_inputs(0.40, n=150)
+    no_costs = trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)
+    for k in COSTS:
+        del no_costs["results"][k]
+    no_gates = trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)
+    del no_gates["results"]["gates"]
     holdout_only = {"trial": 8, "family": "session_open", "status": "holdout", "feature_version": "f",
                     "results": {"holdout_verdict": {"passed": True}, **COSTS}}
     return {
@@ -63,7 +70,35 @@ def _scenarios() -> dict[str, list[dict[str, Any]]]:
         "registry_k_sinks_dsr": [trial_row(7, dsr=0.97, mean_ret=0.002, passed=True), *crowd],
         "rule_only_favoured_by_new_rules": [rule_only],
         "holdout_row_only": [holdout_only],
+        "cpcv_veto": [trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)],
+        "cpcv_stale_quarter": [trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)],
+        "cpcv_missing": [trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)],
+        "missing_costs": [no_costs],
+        "missing_results_gates": [no_gates],
     }
+
+
+# CPCV evidence per scenario (default: clean for the evaluation's quarter, as test_phase_gates.report attaches)
+CPCV_MODE = {"cpcv_veto": "veto", "cpcv_stale_quarter": "stale", "cpcv_missing": "none"}
+
+
+def _attach_cpcv(trials: Path, mode: str) -> None:
+    """`veto`: PBO 80 % and 4 of 5 paths negative (ADR 0003 fragile); `stale`: clean evidence from the previous
+    quarter; `none`: nothing attached."""
+    from goldbot.research import cpcv
+    if mode == "none":
+        return
+    reg = RG.TrialRegistry(trials)
+    for r in reg._rows():
+        if r.get("status") != "evaluated":
+            continue
+        neg = mode == "veto"
+        payload = {"paths": [{"path": i, "mean_r": (-0.1 if neg and i else 0.1)} for i in range(5)], "n_paths": 5,
+                   "feature_version": r.get("feature_version"), "pbo": None}
+        pbo = {"pbo": 0.8, "n_configs": 4} if neg else None
+        when = NOW - pd.Timedelta(days=120) if mode == "stale" else NOW
+        reg.attach_evidence(int(r["trial"]), cpcv.EVIDENCE_KIND, cpcv.evidence_payload(payload, pbo, "test"),
+                            now=when.to_pydatetime())
 
 
 def snapshot(tmp_path: Path, refusal: Refusal) -> dict[str, Any]:
@@ -74,7 +109,10 @@ def snapshot(tmp_path: Path, refusal: Refusal) -> dict[str, Any]:
         root = tmp_path / name
         state, trials = full_state(root)
         write_rows(trials, rows)
-        rep = report(state, trials)
+        mode = CPCV_MODE.get(name, "clean")
+        if mode != "clean":
+            _attach_cpcv(trials, mode)
+        rep = report(state, trials, cpcv=mode == "clean")
         g1 = next(g for g in rep.gates if g.gate == "backtest_to_paper")
         reg = RG.TrialRegistry(trials)
         stored = reg._rows()

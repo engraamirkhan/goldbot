@@ -16,22 +16,36 @@ alpha-spending on fresh data, with the registry-K DSR kept as a reported number 
 Scope: research and demo promotion ONLY. The phase gate, live unlock, real-money confirmation and RiskGate are not
 touched.
 
-1. **Power-first rule** (`goldbot/research/power_first.py`, settings `research.power_first`). A card starts only
-   with **>= 0.5 power at every gate it must pass and >= 0.25 joint power**. Otherwise it gets a "NOT STARTED
-   (power)" registry row (status `not_started_power`, in `registry.NOT_TRIALS`): no K and no data read. Conditions:
-   - (a) min edge = max(0.10 R, the edge the GBP 50/day goal needs at the card's trade rate). The goal's edge uses
-     `north_star_daily_gbp / (trades a day x lot_fit_equity x risk.risk_per_trade)`. The sd comes from a pre-set
-     per-timeframe table (`sd_r_by_tf`, 1.2 R: the gate audit's pooled cross-family figure), never from the card's own
-     outcomes. A card has no sd field.
-   - (b) Expected trades on holdout and forward gates are extrapolated from the learn signal rate, never counted on
-     holdout bars. A card states only its outcome-blind learn signal count and each window's length.
-   - (c) Clustered effective n: n_eff = n / ((1 + (c - 1) rho_day)(1 + (m - 1) rho_instrument)), where c is learn
-     signals per (instrument, session day) and m is the number of instruments of a pooled family.
-   - (d) Joint power is simulated with the data shared as the real gates share it. A gate reads the union of its
-     windows, and gates reading the same window see the same draw.
-   - (e) Every refusal is logged: the registry row plus a warning.
-   - A gate's z is the threshold at the batch index and alpha it will actually receive: Holm's first step,
-     alpha_j / m_j, for the confirm.
+1. **Power-first rule** (`goldbot/research/power_first.py`, settings `research.power_first`). This is condition (a)
+   as re-ruled by the quant-reviewer on 2026-11-15, after the first draft's max(floor, goal) was found to let almost
+   every card through.
+   - **Edge:** delta = **0.10 R net per trade, fixed**, with no max() against the goal's edge. goal_edge_R is the
+     edge the GBP 50/day goal needs at the card's frequency and risk:
+     `north_star_daily_gbp / (trades a day x lot_fit_equity x risk.risk_per_trade)`. It is recorded as information
+     only and **never gates**.
+   - **Effective n:** n_eff = n / (1 + (m_day - 1) rho_day) / (1 + (k - 1) rho_inst).
+     - n is the expected trades at the gate, from outcome-blind signal counts. On holdout and forward windows it is
+       the learn signal rate x the window length; a card states only learn signal counts and window lengths.
+     - m_day is the mean trades per (day, instrument) cluster, floored at 1. k is the number of instruments pooled.
+   - **Gate power:** power_g = Phi(delta sqrt(n_eff) / sd_tf - z_g). z_g is the gate's actual threshold at its
+     batch index and alpha, at Holm rank 1 (alpha_j / m_j).
+   - **Start rule:** a card starts only if every power_g >= 0.5, the simulated joint power >= 0.25, and n_eff >=
+     n_eff_floor (200) at each fresh-data gate. A card whose expected confirm n_eff is below the floor cannot pass,
+     so it is refused before any read. The joint power is simulated with the data shared as the real gates share
+     it: gates reading the same window see the same draw.
+   - **sd_tf:** max(1.2, the demo-measured sd for that timeframe), taken from `sd_r_measured_by_tf`. Demo measured
+     1.10-1.51 R overall but has no split by timeframe yet, so every timeframe uses the 1.2 floor until it is filled
+     (follow-up v). The sd is never taken from the card's own outcomes.
+   - **Correlation priors:** rho_day 0.25 and rho_inst 0.5 are labelled PRIORS. rho_inst is 0.7 when at least half
+     of the pooled instruments are precious metals (XAU, XAG, XPT, XPD). They are to be replaced by a pooled estimate
+     from other families' learn outcomes, never the card's own.
+   - **Settings can only tighten:** the ruling's values are the lower bounds (code review of 734940c3): delta >=
+     0.10, n_eff_floor >= 200, sd floor >= 1.2, rho_day >= 0.25, rho_inst >= 0.5 (metals >= 0.7), and
+     trading_days_per_year bounded to [250, 262].
+   - **Refusals:** a refused card gets a "NOT STARTED (power)" registry row (status `not_started_power`, in
+     `registry.NOT_TRIALS`). It costs no K and takes no trial number, also after a registry merge. The registry
+     accepts the status only with `results.power_first.started` False and the card, which is what
+     `start_or_refuse` writes. Every refusal is also logged.
 2. **Confirm = option D with HOLM, not BH** (`goldbot/research/promotion_confirm.py`).
    - **Holm:** per-batch FWER <= alpha_j under any dependence. It reuses `eval2.confirm.holm` and the EVAL-2
      stationary day-block draws.
@@ -48,10 +62,15 @@ touched.
    - **Fresh data** means data untouched for that family:
      - TEST-OLD once per family. A family already read on TEST-OLD under EVAL-2 cannot reuse it, and neither can two
        configs of one family in one batch. The ADR 0067 embargo applies.
+     - The EVAL-2 TEST-OLD families are a required argument of `run_batch`, so the check can never fail open.
+       `eval2_test_old_families` derives them from the reads ledger.
      - Forward replay is frozen before data. Every read carries a `FrozenStamp` (card hash, code SHA, feature version,
-       cost-of-record version), and each look is a scheduled, charged alpha spend: a `run_batch` call that takes a
-       ledger slot.
-     - The holdout is read at most once per config. It is charged, and it is not a routine source.
+       cost-of-record version), and the stamp must equal the one in its card's pre-registration
+       (`plan.frozen_stamp`). Each look is a scheduled, charged alpha spend: a `run_batch` call that takes a ledger
+       slot.
+     - Ledger years are read in UTC, and a year below the highest year already used is never reopened.
+     - The holdout is read at most once per config, also within one batch. It is charged, and it is not a routine
+       source.
    - **P-values and costs:**
      - P-values are clustered: one-sided basic p from the existing stationary day-block bootstrap. The units' day is
        the session day across instruments, so a pooled family is resampled in cross-instrument day clusters.
@@ -69,7 +88,8 @@ touched.
      it lets a pooled family reach it honestly. Power is a separate guarantee (rule 1), so the floor need not carry it.
    - The regime-robustness intent of "10 trades/yr and 3 positive years incl. 2021-22" is kept. Years are taken from
      the family's pooled trades, or from pre-registered multi-year blocks (each spanning at least 2 years, in order,
-     disjoint), so a 1d rule can be scored.
+     disjoint), so a 1d rule can be scored. A block needs 10 trades for every year it spans (code review of
+     734940c3), so a block only pools uneven years and never lowers the rate.
 4. **The phase gate is pinned.**
    - Gate 1 (`gates_phase.evaluate_gates`) and the tournament's shadow -> live check (`TrialRegistry.passed_gates`)
      read `registry.phase_gate_refusal`. This predicate was called `promotion_refusal` until now, and its body is
@@ -93,14 +113,16 @@ touched.
     under this ruling) and its demo registration to `promotion_confirm.run_batch` and `research_promotion_refusal`.
   - (ii) Retire EVAL-2's confirm-window reads as a promotion source.
   - (iii) Have `scripts/research_pass.py` record `rule_only_promotion_gates` on pooled family trades.
-  - (iv) Refresh `rho_day` and `rho_instrument` from pooled other-family registry rows. Their current values (0.25
-    and 0.5) are PRIORS, not derived. A suggested estimator is the design effect (t_per_trade / t_day_summed)^2 from
-    the stored `DaySummedDsr`.
-- **Open item 1 (quant-reviewer): condition (a) makes the goal's edge bind everywhere.** On today's basis (GBP 1,000
-  x 0.5 % = GBP 5 at risk a trade), the GBP 50/day edge is 4.2 R a trade at 5m, 25 R at 15m, 68 R at 1h, 210 R at 4h
-  and 420 R at 1d. Every one is above the 0.10 R floor, so the deciding power is about 1 and the rule refuses almost
-  nothing on edge grounds. Each verdict therefore also records `power_at_floor`, which is report-only. Recommendation:
-  re-rule (a) with the goal shared across the concurrent cards of a portfolio, or with the floor alone deciding. This
-  is a threshold decision for the panel, so it was coded as ruled.
+  - (iv) Replace the rho priors (0.25 day; 0.5, or 0.7 for metal pools) with a pooled estimate from other families'
+    learn outcomes. A suggested estimator is the design effect (t_per_trade / t_day_summed)^2 from the stored
+    `DaySummedDsr`.
+  - (v) Fill `sd_r_measured_by_tf` from demo trades by timeframe, with the source recorded.
+- **Condition (a) was re-ruled before merge.** The first draft took max(0.10 R, goal edge). On today's basis (GBP
+  1,000 x 0.5 % = GBP 5 at risk a trade) the goal edge is 4.2 R a trade at 5m and up to 420 R at 1d, so the deciding
+  power was about 1 everywhere. The quant re-ruled to a fixed delta of 0.10 R. goal_edge_R is now recorded only.
+  `tests/research/test_power_first.py::test_changing_the_goal_edge_never_changes_the_verdict` holds that.
+- **Worked example (closing test).** A 1h card pooled over 10 metals has 740 TEST-OLD trades and n_eff 740 / 7.3,
+  about 101. It is refused at delta 0.10. At delta 0.20 it is still refused, on the n_eff floor; with 6 TEST-OLD
+  years (n_eff about 304) it starts.
 - **What would change this:** a quant ruling that TEST-OLD or the forward replay is not independent of learn (regime
   overlap). D would then rest on the holdout alone, which has too little power for anything slower than 15m.
