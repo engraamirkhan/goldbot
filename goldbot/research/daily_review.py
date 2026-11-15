@@ -25,6 +25,10 @@ What it does on its own:
 * refits a (broker, session) slippage cell once it has `refit_min_fills` (200) fills since its last fit, floored at
   the research slippage floor (never credited) and never lowered within a day; the label replay charges a cell only
   when it is dearer than the nightly table (jobs.exploration_costs);
+* reads replay parity (amendment 2026-11-15 section 3, research/replay_parity.py: closed gold fills against their r2
+  replay label, per broker x TF band and pooled, `parity`); a fired scope is an incident (`parity`), an automatic
+  review_actions row and its replay-twin reads are unvalidated for good (S5 gap charged, L4 forward reads stop
+  counting). It never re-enables a broker-traded control;
 * opens or comments on the open GitHub issue labelled `learning-ops` for any incident, or when volume is under half
   the plan on two trading days running, with the counted cause; and one status comment a day on issue #34. Each
   kind is posted at most once a day. Without the keyring's github-token, or when a post fails, the body is written
@@ -64,6 +68,7 @@ from goldbot.db.connection import Database, db_path
 from goldbot.ops.report_days import day_bounds
 from goldbot.research.arm_stops import cost_states, load_stop_rules
 from goldbot.research.arms import learning_arm_ids
+from goldbot.research.replay_parity import ParityRead
 
 if TYPE_CHECKING:
     from goldbot.config import DailyReviewSettings, Settings
@@ -116,7 +121,7 @@ _URL_USERINFO = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/?#@]+@", re.I)
 _QUERY_SECRET = re.compile(r"[?&](?:[\w-]*(?:token|key|secret|passw(?:or)?d|pwd|auth|sig(?:nature)?|session|sid)"
                            r"[\w-]*|code|login|user)=", re.I)
 Health = Literal["breached", "ok"]
-IncidentKind = Literal["data_gap", "data_duplicate", "clock", "engine", "health", "unreadable"]
+IncidentKind = Literal["data_gap", "data_duplicate", "clock", "engine", "health", "unreadable", "parity"]
 
 
 def _ipv6(line: str) -> bool:
@@ -268,6 +273,9 @@ class DailyReview(Record):
     # BACKLOG 105: an arm whose candidate rows (its whole life on the reviewed hosts) span more than one rule-code
     # version (research/arm_rule_versions.py): arm -> version -> rows. A count only; {} when every arm has one
     rule_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
+    # amendment 2026-11-15 section 3 (research/replay_parity.py): fills against their r2 replay, per broker x TF band
+    # and pooled; a scope, never an arm
+    parity: list[ParityRead] = Field(default_factory=list)
 
     def cost(self, broker: str, host: str, session: str) -> SessionCosts:
         for c in self.costs:
@@ -1098,6 +1106,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     low_days = (carried + 1 if low else 0) if trading else carried
     learning = _learning_fills(d, _learning_ids(incidents))
     unresolved = _unresolved(db, store, hosts, settings, now, incidents)
+    parity = _parity(db, hosts, day, hi, now, incidents, write=not dry_run)
     review = DailyReview(day=day, generated_utc=now, dry_run=dry_run, trading_day=trading, costs=costs,
                          refusals=_refusals(d), volume=volume, volume_total=total, plan_total=plan_total,
                          of_plan=of_plan, fills_total=sum(v.fills for v in volume), fills_probes=probe_fills,
@@ -1106,7 +1115,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
                          evidence_void=_void(db, hosts, lo, hi),
                          spans_unresolved=unresolved,
-                         learning=learning, rule_versions=rule_versions(db, hosts))
+                         learning=learning, rule_versions=rule_versions(db, hosts), parity=parity)
     if dry_run:
         return review
     before = load_review(sd, day)
@@ -1125,6 +1134,29 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     write_atomic(review_path(sd, day), body)
     _ledger(sd, day, body)
     return review
+
+
+def _parity(db: Database, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, now: pd.Timestamp,
+            incidents: list[Incident], *, write: bool) -> list[ParityRead]:
+    """Amendment 2026-11-15 section 3 (research/replay_parity.py): the parity reads of the hosts' brokers over the fills
+    closed by the day's end. Any fired scope is an incident (scopes only, no figure: the issue is public) and, with
+    `write`, an automatic review_actions row that marks its replay-twin reads unvalidated for good (a scope already
+    recorded is not recorded again). An unreadable ledger is an `unreadable` incident and reads nothing."""
+    from goldbot.research import replay_parity as rp
+    try:
+        reads = rp.reads(rp.parity_fills(db, sorted(set(hosts.values())), before=hi))
+    except Exception as exc:                 # noqa: BLE001 - one unreadable source is an incident, not a crash
+        incidents.append(Incident(kind="unreadable", host=None, count=1,
+                                  detail=f"replay parity unreadable ({type(exc).__name__})"))
+        return []
+    fired = [r for r in reads if r.status == "FIRE"]
+    if fired:
+        new = rp.record_fire(db, fired, day=day, now=now) if write else []
+        incidents.append(Incident(kind="parity", host=None, count=len(fired),
+                                  detail="replay parity fired: " + ", ".join(r.scope for r in fired)
+                                  + (f" (newly recorded: {', '.join(new)})" if new else "")
+                                  + "; their replay-twin reads are unvalidated (review_actions replay_parity)"))
+    return reads
 
 
 def _learning_ids(incidents: list[Incident]) -> frozenset[str]:

@@ -128,5 +128,6 @@ def test_a_broker_whose_configured_arms_cannot_enter_still_records_its_run_all_a
 
 def test_entry_exclusions_names_why_each_spec_arm_cannot_enter(tmp_path):
     db = Database.open(tmp_path, "aux")
-    got = ex.entry_exclusions(db, ["S4", "S6", "S1A", "S0", "S1a"], broker="icm")
-    assert got == {"S4": "retired", "S6": "retired", "S1A": "blocked"}
+    got = ex.entry_exclusions(db, ["S4", "S6", "S1A", "Z3V", "S0", "S1a"], broker="icm")
+    # S1A: retired 2026-11-13 by the 2026-11-15 amendment (it was blocked, unqualified, before)
+    assert got == {"S4": "retired", "S6": "retired", "S1A": "retired", "Z3V": "blocked"}

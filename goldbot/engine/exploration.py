@@ -70,6 +70,13 @@ The plan's rules, as built here:
   2026-10-30), counted once a minute in this host's ledger (`refresh_cost_reads`); then it and its paired control are
   refused the same way (journalled `exploration_arm_cost_read_complete`, "cost read complete, qualify first"). An
   unreadable count keeps them running and warns (`exploration_cost_read_unread`, once until a read succeeds).
+  A control whose registered read counts stop exits (`research.arms.STOP_EXIT_READS`: S0R, "Read once at n = 100
+  stop exits", arms-2026-10-25.md section 4) is exempt from control thinning (propensity 1) and stops the same way at
+  that count (amendment 2026-11-15, `exploration_arm_cost_read_complete` with `stop_exits`).
+* Replay-only controls (docs/research/prereg-amendment-2026-11-15-replay-only-controls.md: "an unpaired gold random
+  control is replay_only"; the row's `control_mode`): every candidate is recorded (`candidate`, blocked
+  `replay_only`, mu 0) and labelled by the r2 replay like any other; `_send` refuses it before any check, so it never
+  reaches the budget, the RiskGate, an order intent or the order core.
 * Refused for good (SRE diagnosis 2026-11-09, fixes 3 and 4b; `terminal_refusal`): an arm in `retired` (`arm_retired`)
   or an unpaired per-instrument control whose cost cell is complete (`thin_cell_complete`) can take no new entry
   again. A stale signal of such an arm is recorded with that refusal, never `exploration_stale`, so the stale count is
@@ -123,6 +130,8 @@ from goldbot.research.arms import (
     LEARNING_RULE,
     OWNER_EXPERIMENT_RULE,
     SPEC_RULE,
+    STOP_EXIT_READ_DONE,
+    STOP_EXIT_READS,
     arm_hash,
     load_arms,
     owner_experiment_refusal,
@@ -180,6 +189,8 @@ SPEC_ARMS_PATH = Path(__file__).parents[2] / "config" / "spec_arms.yaml"
 # a close by the arm's own barrier: anything else censors the label (`trail_close`: a runner arm's own trailed stop,
 # reached before the broker had it; no other arm trails)
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
+# the exits a stop-exit read counts (`stop_exits`; daily_review.STOP_EXITS): the resting stop and the engine's stop close
+STOP_EXIT_REASONS = frozenset({"stop", "engine_stop_close"})
 # prereg-2026-10-27-scalp-volume.md amendment (d): a volume rule's candidate on a minute whose broker bar missed the
 # hold is blocked with this reason (as `spread_wide`); each minute the pass waited for, or decided without, its broker
 # bar is journalled WAIT_ACTION with `hold_ms` and `late` (trading-safety LOW 2; the daily review's late rate)
@@ -1428,21 +1439,34 @@ def admissible_fills(conn: Any, arm_id: str) -> int:
                if t.fill_price is not None and t.exit_utc is not None and t.pnl is not None and not t.censored)
 
 
+def stop_exits(conn: Any, arm_id: str) -> int:
+    """The arm's closed trades in this host's ledger, every account, that its stop closed (STOP_EXIT_REASONS: the
+    resting broker stop or the engine's stop close): the n of a stop-exit read (S0R, arms-2026-10-25.md section 4)."""
+    marks = ",".join("?" * len(STOP_EXIT_REASONS))
+    (n,) = conn.execute("SELECT COUNT(*) FROM exploration_trades WHERE arm_id = ? AND closed = 1 AND json_valid(body) "
+                        f"AND json_extract(body, '$.exit_reason') IN ({marks})",
+                        (arm_id, *sorted(STOP_EXIT_REASONS))).fetchone()
+    return int(n)
+
+
 def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     """Once a minute: a cost arm (`research.arms.COST_ARMS`) whose prereg cost read has its admissible fills is
     refused new entries with its paired control (quant ruling 2026-10-30: "The cost exemption ends when the cost-read
-    fills are counted"); both stay configured, so open positions keep every exit. An unreadable count keeps them
-    running and warns (journalled once until a read succeeds). Entries only."""
+    fills are counted"); both stay configured, so open positions keep every exit. A stop-exit read's control
+    (`STOP_EXIT_READS`, S0R: "Read once at n = 100 stop exits") stops the same way at its stop exits (`stop_exits`;
+    amendment 2026-11-15). An unreadable count keeps them running and warns (journalled once until a read succeeds).
+    Entries only."""
     minute = now.floor("min")
     if ex.cost_read_at == minute:
         return
     ex.cost_read_at = minute
-    due = sorted(a for a in ex.arms if ex.arms[a].spec.role == "cost" and a in COST_ARMS and a not in ex.retired)
+    due = sorted(a for a in ex.arms if a not in ex.retired and (
+        (ex.arms[a].spec.role == "cost" and a in COST_ARMS) or a in STOP_EXIT_READS))
     if not due:
         return
     try:
         with ex.db.connection() as conn:
-            counts = {a: admissible_fills(conn, a) for a in due}
+            counts = {a: stop_exits(conn, a) if a in STOP_EXIT_READS else admissible_fills(conn, a) for a in due}
     except Exception as exc:
         log.warning("cost-read fills unreadable (%s): cost arms %s keep running", type(exc).__name__, due)
         if not ex.cost_read_warned:
@@ -1452,17 +1476,18 @@ def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
                                       "action": "exploration_cost_read_unread", "arm": a, "error": type(exc).__name__})
         return
     ex.cost_read_warned = False
-    done = [a for a in due if counts[a] >= COST_ARMS[a][1]]
+    done = [a for a in due if counts[a] >= (STOP_EXIT_READS.get(a) or COST_ARMS[a])[1]]
     stop = sorted({*done, *(COST_CONTROLS[a] for a in done if COST_CONTROLS.get(a) in ex.arms)} - ex.retired)
     if not stop:
         return
     ex.retired = ex.retired | frozenset(stop)
     for a in stop:
-        ex.unqualified[a] = COST_READ_DONE
-        log.warning("exploration arm %s refused: %s", a, COST_READ_DONE)
+        rule = STOP_EXIT_READ_DONE if a in STOP_EXIT_READS else COST_READ_DONE
+        ex.unqualified[a] = rule
+        log.warning("exploration arm %s refused: %s", a, rule)
         eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
-                              "action": "exploration_arm_cost_read_complete", "arm": a, "rule": COST_READ_DONE,
-                              "fills": counts.get(a)})
+                              "action": "exploration_arm_cost_read_complete", "arm": a, "rule": rule,
+                              "stop_exits" if a in STOP_EXIT_READS else "fills": counts.get(a)})
     _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
 
 
@@ -2061,6 +2086,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                               "action": "exploration_refused:" + why, **applied})
 
     ps.why = None
+    if arm.spec.control_mode == "replay_only":
+        # amendment 2026-11-15: recorded and labelled, never sent. First of all checks, so nothing below (the budget,
+        # the gate, `_intent`, the order core) ever sees it; the candidate row is its replay twin (blocked, mu 0)
+        ps.why = "replay_only"
+        return "refused"
     if pid in eng.sent_ids:
         ps.why = "duplicate"
         return "refused"
@@ -2092,8 +2122,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         if kind != "edge":
             paired = arm.arm_id in ps.pairs
             arms_of = tuple(a for a in ps.pairs.get(arm.arm_id, ()) if a in ps.active)
-            ps.mu = 0.0 if paired and not arms_of else budget.control_propensity(
-                eng, ex, arm.arm_id, arms_of, s.bar_ts, ps.since, daily.controls_per_edge)
+            # amendment 2026-11-15: a stop-exit read's control (S0R) is exempt until its read (then it stops itself)
+            ps.mu = 1.0 if arm.arm_id in STOP_EXIT_READS else 0.0 if paired and not arms_of else \
+                budget.control_propensity(eng, ex, arm.arm_id, arms_of, s.bar_ts, ps.since, daily.controls_per_edge)
             applied["admission_p"] = round(ps.mu, 4)
             if hash_u(arm.arm_id, s.bar_ts) >= ps.mu:
                 refuse("control_thinned")
