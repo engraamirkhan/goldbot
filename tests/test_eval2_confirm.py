@@ -223,7 +223,7 @@ def test_gate_net_uses_deciding_cost_once(fast):
     from goldbot.research.catalogue.costs import deciding_cost, default_model
     dc = deciding_cost("XAUUSD", "1h", side=1, price=1500.0, atr_decision=4.0, stop_atr=0.5, t_fill_ns=0,
                        t_exit_ns=3_600_000_000_000, stop_exit_share=0.3, stop_entry_share=0.0, window="test_old",
-                       costs=default_model()).r
+                       costs=default_model(), s5_revoked=False).r
     u = _years(_units(mu=0.0, n_days=400, seed=31, cost=dc), (2006, 2007, 2008, 2009))
     gross = 2.5 * dc
     u = u.assign(net_r=gross - dc, twin_mean_net_r=0.0, excess_r=gross - dc)       # no noise: the gate is exact

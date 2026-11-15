@@ -16,6 +16,9 @@ against S0; quant ruling 2026-11-06 (d)). The original is not edited.
 3. **Validity:** the replay labels stand in for fills only while the replay-parity monitor holds (companion
    amendment section 3). A read whose broker x TF band scope has fired is reported "control unvalidated" and is
    never a verdict until a dated amendment re-validates the scope. (A pooled fire alerts only.)
+   When read against S0's replay labels, the control's mean is raised by max(0, the scope's latest reported mean
+   gap fill_r − sim_r) before the arm's excess is computed; a scope with no reported gap reads 'control
+   unvalidated'.
 4. S0 fills recorded before this amendment stay where they are, but an arm fill after 2026-11-15 is never compared
    with a pre-2026-11-15 S0 fill: from this date an arm's matched control is S0's replay labels only. A read that
    started before it states both control sources and the date they changed.

@@ -394,7 +394,10 @@ def run_forward_read(units: pd.DataFrame, *, family: str, l3_shrunk_r: float, s5
     monitor's scopes (`forward_revocations`, required): a unit in a revoked (broker, band) has its fill columns blanked
     and `s5_ok` False, and the family's S5 counts as not passed ("L4 forward reads stop counting")."""
     harness_gate(forward=True)
-    if revoked and {"broker", "tf"} <= set(units.columns):
+    if revoked and not {"broker", "tf"} <= set(units.columns):
+        # quant re-review of b0d0e710: a revocation that cannot be matched to the units is never ignored
+        raise ReadRefused("revocations present but units carry no broker/tf")
+    if revoked:
         hit = np.array([FW.revoked_for(revoked, str(b), str(t)) for b, t in zip(units["broker"], units["tf"],
                                                                                  strict=True)], dtype=bool)
         if hit.any():

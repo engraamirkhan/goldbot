@@ -299,12 +299,13 @@ def _stop_usd(atr_decision: float, stop_atr: float) -> float:
 def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: float, stop_atr: float,
                   t_fill_ns: int, t_exit_ns: int, stop_exit_share: float, stop_entry_share: float,
                   window: Literal["explore", "test_old", "confirm", "forward"], broker: str = "icm",
-                  costs: CostModel | None = None, s5_revoked: bool = False) -> DecidingCost:
+                  s5_revoked: bool, costs: CostModel | None = None) -> DecidingCost:
     """EVAL-2 deciding cost in R at 1.0x (module docstring): max(today, bp engine) + overshoot x (stop-exit share +
     stop-entry share) + swap (never a credit) + the positive S5 gap until S5 passes. Every term is >= 0. `costs`: the
     window's model for the swap; required (None raises MissingCost). `s5_revoked`: the replay-parity monitor fired for
     this broker and band (`eval2.forward.revoked_for`; amendment 2026-11-15: "S5 gap charged in deciding cost"), so the
-    gap is charged even where s5_passed lists it. deciding_cost replaces, never adds to, the sim's cost_r."""
+    gap is charged even where s5_passed lists it; required, so no caller forgets the revocations (quant re-review of
+    b0d0e710). deciding_cost replaces, never adds to, the sim's cost_r."""
     if costs is None:
         raise MissingCost("deciding cost needs the window's CostModel")
     if window not in WINDOWS_EVAL2:

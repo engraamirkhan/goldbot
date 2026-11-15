@@ -303,7 +303,7 @@ def test_a_recorded_fire_charges_the_s5_gap_in_the_deciding_cost_even_when_s5_pa
     kw: dict[str, Any] = dict(side=1, price=2000.0, atr_decision=7.0, stop_atr=1.0, t_fill_ns=0,
                               t_exit_ns=60 * 10**9, stop_exit_share=0.5, stop_entry_share=0.0, window="forward",
                               broker="vantage", costs=cc.default_model())
-    assert cc.deciding_cost("XAUUSD", "15m", **kw).s5_gap_r == 0.0
+    assert cc.deciding_cost("XAUUSD", "15m", s5_revoked=False, **kw).s5_gap_r == 0.0
     revoked = fw.revoked_for(er.forward_revocations(db), "vantage", "15m")
     assert cc.deciding_cost("XAUUSD", "15m", s5_revoked=revoked, **kw).s5_gap_r > 0.0
 
@@ -330,3 +330,38 @@ def test_review_record_round_trips_with_parity_reads(tmp_path):
     review = _run(tmp_path, sink=Sink())
     again = dr.load_review(tmp_path, review.day)
     assert again is not None and again.parity == review.parity
+
+
+def test_the_deciding_cost_cannot_be_asked_without_saying_whether_its_scope_is_revoked():
+    """Quant re-review 1: `s5_revoked` is a required keyword, so no caller can forget the revocations."""
+    with pytest.raises(TypeError, match="s5_revoked"):
+        cc.deciding_cost("XAUUSD", "15m", side=1, price=2000.0, atr_decision=7.0, stop_atr=1.0,  # type: ignore[call-arg]
+                         t_fill_ns=0, t_exit_ns=60 * 10**9, stop_exit_share=0.0, stop_entry_share=0.0,
+                         window="forward", costs=cc.default_model())
+
+
+def test_the_forward_read_refuses_revocations_it_cannot_match_to_units_without_broker_or_tf(monkeypatch):
+    """Quant re-review 2: revocations present but units with no broker/tf column cannot be checked: refused."""
+    monkeypatch.setattr(er, "harness_gate", lambda **k: "h")
+    monkeypatch.setattr(er.FW, "forward_state", lambda *a, **k: pytest.fail("the forward read started"))
+    units = pd.DataFrame({"family": ["C03"], "day": ["d"], "s5_ok": [True]})
+    with pytest.raises(er.ReadRefused, match="no broker/tf"):
+        er.run_forward_read(units, family="C03", l3_shrunk_r=0.1, s5_passed=True, revoked=frozenset({"icm:15m-30m"}))
+
+
+def test_a_true_gap_at_the_tolerance_with_heavy_tailed_noise_fires_in_under_5_percent_of_runs():
+    """Quant re-review 4: true gap -0.02 R (on the tolerance), Student-t(3) per-fill noise scaled to sd 0.3 R plus day
+    effects, 13 scopes x 250 days of daily re-looks: under 5 % of runs fire."""
+    rng = np.random.default_rng(20261116)
+    reps, scopes, days = 30, 13, 250
+    threshold = rp.E_PER_STREAM * 2 * scopes
+    scale = 0.3 / np.sqrt(3.0)                       # t(3) has variance 3
+    hits = 0
+    for _ in range(reps):
+        for s in range(scopes):
+            k = (5, 15, 30, 60)[s % 4]
+            x = (-0.02 + rng.normal(0, 0.03, days)[:, None] + scale * rng.standard_t(3, (days, k))).ravel()
+            if rp.gap_evidence(x, np.repeat(np.arange(days), k)) >= threshold:
+                hits += 1
+                break
+    assert hits / reps < 0.05

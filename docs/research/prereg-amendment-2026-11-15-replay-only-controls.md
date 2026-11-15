@@ -64,11 +64,16 @@ with the cost-free `label_mid_r` and would have fired on the spread alone.
   (2 per scope, Bonferroni), once the scope has at least 300 fills over at least 10 session days. The latest window
   of at least 300 fills over at least 10 days still gets its mean gap and day-clustered 95 % CI reported, but that
   figure is never judged.
+  - The e-process is recomputed from the full history every day. A late label or a change to the void list can
+    reorder or drop past day terms, so a past running maximum can move slightly (a small effect, accepted). The
+    threshold rises as new scopes appear (20 x the streams formed in that run).
   - Why not the CI rule: a simulation of daily re-looks (true gap 0, 13 scopes, 250 days, fill sd 0.3 R, 5-60 fills
     a day) fired on 97 % of runs under the fixed-window CI rule. Under the e-process it fired on 0 of 100 runs; an
     e-process is valid at every look.
   - The test `test_under_daily_relooks_a_true_gap_of_0_fires_in_under_5_percent_of_250_day_runs_over_13_scopes`
     keeps this property.
+  - So does `test_a_true_gap_at_the_tolerance_with_heavy_tailed_noise_fires_in_under_5_percent_of_runs`: true gap
+    -0.02 R, Student-t(3) per-fill noise scaled to sd 0.3 R, plus day effects.
 - **Detection (the price of anytime validity).** The bet starts after 5 day terms. At 300 fills over 10 days nothing
   can fire: a 1 R gap reaches e of about 5 against a threshold of 520 at 13 scopes. Below is the median first fire, in
   session days, over 5 seeds at 13 scopes ("-" means not within 120 days):

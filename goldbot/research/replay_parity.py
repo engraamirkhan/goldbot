@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord
+from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database
 from goldbot.execution.costs import DEMO_EXIT_AT_LEVEL
 from goldbot.research import review_actions as ra
@@ -98,7 +99,7 @@ def parity_fills(db: Database, brokers: Collection[str], *, before: pd.Timestamp
         if p.empty:
             continue
         gap = p["entry_fill_minus_replay_r"] if broker in DEMO_EXIT_AT_LEVEL else p["fill_r"] - p["replay_r"]
-        exit_ns = pd.to_datetime(p["exit_utc"], utc=True).astype("int64")
+        exit_ns = epoch_ns(pd.to_datetime(p["exit_utc"], utc=True))
         frames.append(pd.DataFrame({"candidate_id": p["candidate_id"], "broker": p["broker"], "tf": p["tf"],
                                     "session_day": p["session_day"], "exit_ns": exit_ns,
                                     "gap_r": gap.astype(float), "exit_reason": p["exit_reason"],
