@@ -469,3 +469,17 @@ def test_a_named_but_missing_v3_file_never_breaks_a_v2_screen(tmp_path: Path) ->
     assert c.of_record is not None and c.fill_to_bar is None
     with pytest.raises(ValueError, match="not loaded"):
         c.check_pin(V3)
+
+
+def test_a_bar_window_reaching_the_holdout_is_refused(tmp_path: Path) -> None:
+    """The holdout (2025-10-01 .. 2026-09-30) is never read: a window inside it is refused; a window after it, from a
+    file that also covers the holdout, returns only the window's bars."""
+    f = tmp_path / "bars.parquet"
+    pd.concat([_bars(pd.Timestamp("2026-05-01", tz="UTC"), 30), _bars(pd.Timestamp("2026-10-27", tz="UTC"), 30)],
+              ignore_index=True).to_parquet(f)
+    with pytest.raises(ValueError, match="holdout"):
+        C.load_research_bars(f, pd.Timestamp("2026-04-30", tz="UTC"), pd.Timestamp("2026-05-02", tz="UTC"))
+    with pytest.raises(ValueError, match="holdout"):
+        C.load_research_bars(f, pd.Timestamp("2026-10-02", tz="UTC"), pd.Timestamp("2026-10-30", tz="UTC"))
+    b = C.load_research_bars(f, pd.Timestamp("2026-10-26", tz="UTC"), pd.Timestamp("2026-10-28", tz="UTC"))
+    assert len(b) == 30 and pd.to_datetime(b["ts_utc"], utc=True).min() >= pd.Timestamp("2026-10-01", tz="UTC")

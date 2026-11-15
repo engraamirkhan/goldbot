@@ -661,6 +661,24 @@ def render_fill_to_bar_yaml(table: dict[str, Any]) -> str:
     return "\n".join(out) + "\n"
 
 
+FTB_PAD = pd.Timedelta(days=3)          # bars read either side of the window (send-minute matching, ATR warm-up)
+
+
+def load_research_bars(path: str | Path, lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
+    """The research 1m bars of [lo - FTB_PAD, hi + FTB_PAD), read with the window pushed down to the file. The holdout
+    (exploration_data HOLDOUT_START .. HOLDOUT_END, exclusive) is never read: a padded window that reaches it is
+    refused before the file is opened, and a holdout row that comes back anyway stops the build."""
+    from goldbot.research.exploration_data import HOLDOUT_END, HOLDOUT_START
+    a, z = lo - FTB_PAD, hi + FTB_PAD
+    if a < HOLDOUT_END and z > HOLDOUT_START:
+        raise ValueError(f"bar window {a} .. {z} reaches the holdout ({HOLDOUT_START.date()} .. {HOLDOUT_END.date()})")
+    b1 = pd.read_parquet(path, filters=[("ts_utc", ">=", a), ("ts_utc", "<", z)])
+    ts = pd.to_datetime(b1["ts_utc"], utc=True)
+    if bool(((ts >= HOLDOUT_START) & (ts < HOLDOUT_END)).any()):
+        raise ValueError("holdout bars came back from the bar file")
+    return b1[((ts >= a) & (ts < z)).to_numpy()].reset_index(drop=True)
+
+
 def main_fill_to_bar(argv: Sequence[str]) -> None:
     ap = argparse.ArgumentParser(description="Build the cost of record v3 (fill-to-research-bar)")
     ap.add_argument("--state-dir", required=True, help="the folder holding aux.db (opened read-only)")
@@ -673,10 +691,7 @@ def main_fill_to_bar(argv: Sequence[str]) -> None:
     args = ap.parse_args(argv)
     hosts = dict(h.split("=", 1) for h in args.host)
     lo, hi = _day_bounds(args.from_day, args.to_day)
-    b1 = pd.read_parquet(args.bars)
-    ts = pd.to_datetime(b1["ts_utc"], utc=True)
-    keep = ((ts >= lo - pd.Timedelta(days=3)) & (ts < hi + pd.Timedelta(days=3))).to_numpy()
-    b = mid_bars(b1[keep].reset_index(drop=True))
+    b = mid_bars(load_research_bars(args.bars, lo, hi))
     conn = sqlite3.connect(f"file:{Path(args.state_dir) / 'aux.db'}?mode=ro", uri=True)
     try:
         fills, probes = read_fill_to_bar(conn, hosts, lo, hi)
