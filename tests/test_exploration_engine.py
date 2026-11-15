@@ -935,8 +935,8 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
                                                                        "swing": (None, 3), "growth": (80, 2)}
     assert {a.max_loss for a in probe.arms.values() if a.style == "scalp"} == {6.5}
-    # LB/LBC; I0-<key>; £32 the red-box week's arms (prereg-amendment-2026-11-15-redbox-week.md: the $40 band)
-    assert {a.max_loss for a in probe.arms.values() if a.style == "intraday"} == {8.0, 17.0, 32.0}
+    # LB/LBC; I0-<key>; £30 the red-box week's arms (prereg-amendment-2026-11-15-redbox-week.md: the intraday ceiling)
+    assert {a.max_loss for a in probe.arms.values() if a.style == "intraday"} == {8.0, 17.0, 30.0}
     assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0, 30.0}   # £30: wave-1 1h arms
     assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
 

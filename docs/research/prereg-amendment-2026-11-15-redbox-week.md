@@ -44,13 +44,16 @@ Code: `goldbot/research/arm_rules_redbox.py` (rule-code version 1), the same fun
 8. **Size and path.** 0.01 lot, every order through the exploration plumbing and the RiskGate (`cost_probe._place`,
    the only path to an order); every exit is automatic and never gated.
 9. **Stop band.** A stop below $1.00 or above $40.00 is skipped and recorded (`stop_lt_floor`/`stop_gt_cap`), never
-   resized. $40 at 0.01 lot is about £30, inside the arm's £32 per-trade cap with the round trip.
-10. **What still refuses an entry** (pre-registered engine rules, unchanged, each signal recorded and replayed): the
-    common filters (no entry 20:45-22:15 UTC, none on Friday from 19:00 UTC, tier-1 blackout where it refuses), the
-    kill-only `window_0207` refusal (gold entries 02:00-07:00 UTC; prereg-amendment-2026-11-07-kill-only.md), the N-3
-    HAR low-range-day abstention for gold learning arms (prereg-2026-11-07-n3-har.md), the daily entry budget, the
-    learning slots and every RiskGate cap. This amendment does not loosen any of them; whether the owner's "every"
-    should override `window_0207` or N-3 for this family is a separate decision for the research director.
+   resized. The per-trade cap is £30, the intraday ceiling (ADR 0043). $40 at 0.01 lot is about £30.1, so a stop at
+   the very top of the band (loss at the stop plus the round trip above £30) is refused by the cap and recorded.
+10. **What still refuses an entry.** The common filters (rollover 20:45-22:15 UTC, Friday from 19:00 UTC, tier-1
+    blackout) drop a break without recording it, for the arm and the control alike. The review rebuilds every break by
+    running the same rule functions over the week's bars without the common filters and labelling them by replay.
+    window_0207, N-3, the slots, the entry budget and the RiskGate refuse in _send, and each refused signal is recorded
+    blocked and replayed. (window_0207: gold entries 02:00-07:00 UTC, prereg-amendment-2026-11-07-kill-only.md; N-3:
+    the HAR low-range-day abstention for gold learning arms, prereg-2026-11-07-n3-har.md.) This amendment does not
+    loosen any of them; whether the owner's "every" should override `window_0207` or N-3 for this family is a separate
+    decision for the research director.
 
 ## Control (replay-only)
 
@@ -77,6 +80,10 @@ the brain before the first fill). A control is a look at the data too, so it is 
 
 ## The review (after 2026-11-22 22:00 UTC)
 
+One week is descriptive learning evidence, not a verdict: about 30-80 15m, 10-25 1h and 3-8 4h breaks are expected.
+No p-value, no deflated Sharpe and no arm-vs-control difference from this week is read as an edge. Any rule drawn from
+it is a new pre-registered hypothesis with its own K, tested out of sample.
+
 1. Which trades worked and which failed, by timeframe, session, side and box type (box height, break depth, close
    inside another box, higher-timeframe box membership, money-flow confirmation, swing trend, golden zone).
 2. Net P&L after costs (spread, commission, swap) against the control's replayed candidates, per arm and pooled.
@@ -84,4 +91,6 @@ the brain before the first fill). A control is a look at the data too, so it is 
 4. How to make it profitable: which recorded features separate winners from losers (descriptive only; any rule built
    on them is a new hypothesis with its own pre-registration and K), stop and target geometry, timeframe choice.
 5. Risk: worst day, worst run of losses, stops skipped by the band, the refusals' counts (window_0207, N-3, slots).
-6. The pairs dropped where the arm was refused but its control recorded (refusals act on the arm's entry only).
+6. Item 2 compares the arm's replayed candidates (taken and refused) with the control's replayed candidates. A
+   taken-only comparison applies the same window_0207/N-3 time masks to the control's candidates. Comparisons are per
+   candidate, in R and USD, net; never totals.

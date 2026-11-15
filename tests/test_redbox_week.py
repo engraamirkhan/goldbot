@@ -256,7 +256,8 @@ def test_the_arms_are_registered_on_icm_probe_only_at_a_per_trade_cap_that_holds
     assert probe.mode == "demo" and probe.probe_only
     for arm_id in ("RB15", "RB1H", "RB4H"):
         assert probe.exploration is not None
-        assert probe.exploration.arms[arm_id].max_loss >= 40.0 * 0.752 + 0.5      # the $40 band at 0.01 lot
+        # the intraday ceiling (ADR 0043), about the $40 band at 0.01 lot; the band's very top is refused by the cap
+        assert probe.exploration.arms[arm_id].max_loss == 30.0 >= 39.0 * 0.752 + 0.5
 
 
 # ------------------------------------------------------------------------------------------------ in the engine
