@@ -358,8 +358,8 @@ def test_append_refuses_on_a_broken_chain_and_a_duplicate_registration(tmp_path)
     _corrupt(tmp_path, "UPDATE arm_registry SET style = 'swing' WHERE seq = 1")
     with pytest.raises(ValueError, match="chain broken"):
         _register(tmp_path, _hot_row("D2610-2"))
-    assert R.chain_break(R.read_rows(str(tmp_path))) is not None
-    assert json.loads(R.read_rows(str(tmp_path))[0].row)["id"] == HOT
+    assert R.chain_break(R.read_rows(Database.open(str(tmp_path), "aux"))) is not None
+    assert json.loads(R.read_rows(Database.open(str(tmp_path), "aux"))[0].row)["id"] == HOT
 
 
 # ---------------------------------------------------------------- forward-qualified arms never reach real money
@@ -390,3 +390,237 @@ def test_a_forward_qualified_arm_in_a_real_accounts_config_places_no_order(tmp_p
     eng.cfg = eng.cfg.model_copy(update={"mode": "live"})
     with pytest.raises(ValueError, match="demo probe_only accounts only"):
         Exploration.start(eng)
+
+
+# ---------------------------------------------------------------- review round 2026-11-18 (R1-R10)
+def _core(tmp_path: Path) -> Database:
+    return Database.open(str(tmp_path), "core")
+
+
+def _two_loaded(tmp_path: Path) -> tuple[Any, Any, exploration.Exploration]:
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _register(tmp_path)
+    _register(tmp_path, _hot_row("D2610-2"))
+    R.refresh(eng, _ex(eng), None)
+    ex = _ex(eng)
+    assert ex.registry_ok and {HOT, "D2610-2"} <= ex.hot_known
+    got = R.seen(_core(tmp_path), ACCOUNT)
+    assert got is not None and got.tip_seq == 2
+    return eng, pb, ex
+
+
+@pytest.mark.parametrize("sql", ["DELETE FROM arm_registry WHERE seq = 2", "DELETE FROM arm_registry"])
+def test_rows_removed_from_the_end_break_the_chain_against_the_verified_tip_and_refuse_every_hot_entry(tmp_path, sql):
+    eng, _, ex = _two_loaded(tmp_path)
+    _corrupt(tmp_path, sql)
+    R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=5))
+    assert not ex.registry_ok and len(_actions(eng, R.CHAIN)) == 1
+    assert "below the verified tip" in _actions(eng, R.CHAIN)[0]["why"]
+    assert R.entry_refusal(eng, ex, HOT) == R.UNVERIFIED and R.entry_refusal(eng, ex, "D2610-2") == R.UNVERIFIED
+
+
+def test_an_older_copy_of_aux_db_restored_over_the_live_one_is_a_chain_break(tmp_path):
+    _register(tmp_path)
+    old = tmp_path / "old"
+    old.mkdir()
+    with sqlite3.connect(tmp_path / "aux.db") as src, sqlite3.connect(old / "aux.db") as dst:
+        src.backup(dst)                                                   # the copy with one row
+    eng, _, ex = (lambda e: (e[0], e[1], _ex(e[0])))(_engine(tmp_path, [_arm("peer")]))
+    _register(tmp_path, _hot_row("D2610-2"))
+    R.refresh(eng, ex, CLOSE)
+    assert ex.registry_ok and "D2610-2" in ex.hot_known
+    with sqlite3.connect(old / "aux.db") as src, sqlite3.connect(tmp_path / "aux.db") as dst:
+        src.backup(dst)                                                   # restored over the live file
+    R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=1))
+    assert not ex.registry_ok and len(_actions(eng, R.CHAIN)) == 1
+
+
+def test_a_hot_arm_with_no_verifying_row_is_kept_with_its_entries_refused(tmp_path):
+    eng, _, ex = _two_loaded(tmp_path)
+    with _core(tmp_path).write() as conn:                                 # no verified tip to compare with
+        conn.execute("DELETE FROM arm_registry_seen")
+    _corrupt(tmp_path, "DELETE FROM arm_registry WHERE seq = 2")
+    R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=1))
+    assert ex.registry_ok and "D2610-2" in ex.arms and "D2610-2" in ex.retired
+    assert "missing" in ex.unqualified["D2610-2"] and HOT not in ex.retired
+
+
+def test_a_writer_holding_the_lock_never_stalls_the_registry_read(tmp_path):
+    eng, _, ex = _two_loaded(tmp_path)
+    hold = sqlite3.connect(tmp_path / "aux.db", isolation_level=None, timeout=0)
+    hold.execute("BEGIN IMMEDIATE")
+    hold.execute("INSERT INTO exploration_arm_deregistered VALUES ('x', 'y', 1)")
+    try:
+        import time as _t
+        t0 = _t.monotonic()
+        R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=1))
+        assert _t.monotonic() - t0 < 1.0 and ex.registry_ok and ex.registry_fails == 0
+    finally:
+        hold.execute("ROLLBACK")
+        hold.close()
+
+
+def _locked(monkeypatch: pytest.MonkeyPatch) -> None:
+    def locked(db: Any) -> list[R.RegistryRow]:
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(R, "read_rows", locked)
+
+
+def test_a_restart_with_the_registry_locked_never_lifts_a_lifecycle_retirement(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _register(tmp_path)
+    R.refresh(eng, _ex(eng), None)
+    _locked(monkeypatch)
+    eng2, _ = _engine(tmp_path, [_arm("peer")], pb=pb)
+    ex2 = _ex(eng2)
+    assert HOT in ex2.start_held and not ex2.registry_ok
+    assert R.entry_refusal(eng2, ex2, HOT) == R.UNVERIFIED
+    ex2.retired = ex2.retired | {HOT}                                     # the lifecycle's RETIRE, read by the engine
+    monkeypatch.undo()
+    R.refresh(eng2, ex2, CLOSE)
+    assert ex2.registry_ok and ex2.start_held == frozenset() and HOT in ex2.retired
+
+
+def test_a_restart_keeps_only_this_accounts_remembered_arms_each_with_its_own_style(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _register(tmp_path)
+    R.refresh(eng, _ex(eng), None)
+    other = _hot_row("D2610-7")
+    R.remember(_core(tmp_path), "vantage-demo", (1, "x"), {"D2610-7": {"style": "intraday", "max_loss": 5.0,
+                                                                         "row": json.dumps(other)}})
+    _locked(monkeypatch)
+    eng2, _ = _engine(tmp_path, [_arm("peer")], pb=pb)
+    ex2 = _ex(eng2)
+    assert set(ex2.start_held) == {HOT} and "D2610-7" not in ex2.arms
+    assert ex2.arms[HOT].style == "intraday" != next(iter(ex2.cfg.pots))       # its own, not the first pot
+
+
+def test_a_loaded_arm_whose_row_is_refused_later_keeps_its_position_and_is_never_closed_as_an_orphan(
+        tmp_path, monkeypatch, spec_rule_signals):
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _register(tmp_path)
+    R.refresh(eng, _ex(eng), None)
+    _boundary(eng, pb)
+    [pid] = [k for k, t in eng.open.items() if t.agent_id == exploration.PREFIX + HOT]
+    eng.cfg = eng.cfg.model_copy(update={"timeframes_live": tuple(t for t in eng.cfg.timeframes_live if t != "15m")})
+    ex = _ex(eng)
+    R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=2))
+    assert ex.registry_ok and HOT in ex.arms and HOT in ex.retired and "now refused" in ex.unqualified[HOT]
+    closed: list[str] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now: closed.append(why))
+    exploration.exits(eng, CLOSE + pd.Timedelta(minutes=3))
+    assert ORPHAN not in closed and pid in eng.open
+
+
+ORPHAN = exploration.ORPHAN_EXIT
+
+
+def _unknown_position(eng: Any, opened: pd.Timestamp) -> int:
+    from goldbot.engine.store import OpenTrade
+    eng.open[777] = OpenTrade(position_id=777, agent_id=exploration.PREFIX + "orphan", side=1, lots=0.01,
+                              entry_bar_ts=opened, max_bars=4, opened_utc=opened)
+    return 777
+
+
+def test_the_orphan_hold_lasts_at_most_three_minutes_then_the_orphan_closes(tmp_path, monkeypatch):
+    eng, _ = _engine(tmp_path, [_arm("peer")])
+    ex = _ex(eng)
+    ex.registry_settled = False
+    _unknown_position(eng, CLOSE - pd.Timedelta(hours=1))
+    closed: list[str] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now: closed.append(why))
+    exploration.exits(eng, CLOSE)
+    exploration.exits(eng, CLOSE + pd.Timedelta(minutes=R.STALE_CADENCES) - pd.Timedelta(seconds=1))
+    assert closed == []
+    exploration.exits(eng, CLOSE + pd.Timedelta(minutes=R.STALE_CADENCES))
+    assert closed == [ORPHAN]
+
+
+def test_the_orphan_hold_never_runs_past_the_weekend_backstop(tmp_path, monkeypatch):
+    eng, _ = _engine(tmp_path, [_arm("peer")])
+    ex = _ex(eng)
+    ex.registry_settled = False
+    opened = pd.Timestamp("2025-03-07 15:00", tz="UTC")                 # a Friday
+    _unknown_position(eng, opened)
+    closed: list[str] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now: closed.append(why))
+    exploration.exits(eng, exploration.weekend_backstop(opened))        # the first look, already at the backstop
+    assert closed == [ORPHAN]
+
+
+def test_health_fails_an_engine_whose_registry_has_been_unverified_for_more_than_five_minutes(tmp_path):
+    import time as _t
+
+    from goldbot.ops import health
+    from goldbot.ops.checks.engine import ARM_REGISTRY_FAIL_S
+    assert ARM_REGISTRY_FAIL_S == R.HEALTH_FAIL_S
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _at(eng, pb, CLOSE)
+    ex = _ex(eng)
+    now = pd.Timestamp.now("UTC")
+    ctx = health.HealthContext(state_dir=tmp_path, now=now, get_secret=lambda k: None)
+    eng._write_state()
+    assert "hot-loaded arm registry" not in health.check_engine(ctx, ACCOUNT).reason
+    ex.registry_ok, ex.registry_note = False, R.CHAIN
+    ex.registry_bad_since = _t.time() - 120
+    eng._write_state()
+    assert "hot-loaded arm registry" not in health.check_engine(ctx, ACCOUNT).reason   # under five minutes
+    ex.registry_bad_since = _t.time() - 400
+    eng._write_state()
+    c = health.check_engine(ctx, ACCOUNT)
+    assert c.status == "fail" and "hot-loaded arm registry unverified" in c.reason and R.CHAIN in c.reason
+
+
+# ---------------------------------------------------------------- R10: time exit and weekend close of hot arms
+# A spec_rule arm is 15m+ only (StrategySpec: 15m, 1h, 4h, 1d), so its time exit is the engine's bar-count barrier from
+# the position's own persisted max_bars (`downtime.age`), never the 1m/5m host-clock hold (HOLD_EXIT)
+@pytest.mark.parametrize("restart", ["none", "restart", "restart_registry_locked"])
+def test_a_hot_loaded_arms_time_exit_fires_live_and_after_a_restart_even_before_its_registry_verifies(
+        tmp_path, monkeypatch, restart, spec_rule_signals):
+    from goldbot.engine import downtime
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _register(tmp_path)
+    R.refresh(eng, _ex(eng), None)
+    _boundary(eng, pb)
+    [pid] = [k for k, t in eng.open.items() if t.agent_id == exploration.PREFIX + HOT]
+    if restart != "none":
+        if restart == "restart_registry_locked":
+            _locked(monkeypatch)
+        eng2, _ = _engine(tmp_path, [_arm("peer")], pb=pb)
+        assert (HOT in _ex(eng2).start_held) == (restart == "restart_registry_locked")
+        assert exploration.adoption(eng2, next(p for p in pb.positions() if p.position_id == pid))[1] == \
+            exploration.PREFIX + HOT                                      # adopted by its arm, never an orphan
+        eng2.open[pid] = eng.open[pid]
+        eng = eng2
+    tr = eng.open[pid]
+    closed: list[str] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now, **kw: closed.append(why))
+    tr.bars_held = tr.max_bars - 1
+    eng._closed_through = (tr.bars_through or CLOSE) + pd.Timedelta(minutes=15)
+    downtime.age(eng, {pid})
+    assert closed == ["time_exit"]
+    exploration.exits(eng, CLOSE + pd.Timedelta(minutes=20))
+    assert exploration.ORPHAN_EXIT not in closed
+
+
+def test_the_friday_cut_closes_a_losing_hot_arm_position_with_its_registry_broken_and_never_widens_a_stop(
+        tmp_path, spec_rule_signals):
+    from goldbot.engine import weekend_lane
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    _register(tmp_path)
+    R.refresh(eng, _ex(eng), None)
+    _boundary(eng, pb)
+    [pid] = [k for k, t in eng.open.items() if t.agent_id == exploration.PREFIX + HOT]
+    [pos] = [p for p in pb.positions() if p.position_id == pid]
+    _corrupt(tmp_path, "UPDATE arm_registry SET style = 'swing' WHERE seq = 1")   # the registry no longer verifies
+    R.refresh(eng, _ex(eng), CLOSE + pd.Timedelta(minutes=1))
+    assert not _ex(eng).registry_ok
+    winner = Tick(ts_utc=CLOSE + pd.Timedelta(minutes=2), bid=pos.open_price + 2.0, ask=pos.open_price + 2.2)
+    pb.on_tick(winner)
+    weekend_lane.weekday_rule(eng, winner)
+    [after] = [p for p in pb.positions() if p.position_id == pid]
+    assert after.sl is not None and pos.sl is not None and after.sl >= pos.sl     # tightened, never widened
+    loser = Tick(ts_utc=CLOSE + pd.Timedelta(minutes=3), bid=pos.open_price - 1.0, ask=pos.open_price - 0.8)
+    pb.on_tick(loser)
+    weekend_lane.weekday_rule(eng, loser)
+    assert pid not in {p.position_id for p in pb.positions()}

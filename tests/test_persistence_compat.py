@@ -613,11 +613,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: the same frozen Arm rows from config/spec_arms.yaml and the hot-loaded aux.db arm_registry (hash-"
         "checked), read one row at a time so a bad row is dropped and journalled, never a loosened read (ADR 0058 "
         "phase 4; build 3 2026-11-18)",
-    ("goldbot/engine/arm_registry.py", "read_rows", "RegistryRow"):
+    ("goldbot/engine/arm_registry.py", "_rows", "RegistryRow"):
         "strict: the hash-chained arm_registry columns (build 3, trading-safety 2026-11-18); a row that does not read "
         "must refuse every hot-loaded entry, never be read loosely",
-    ("goldbot/engine/arm_registry.py", "append", "RegistryRow"):
-        "strict: the same hash-chained columns, re-read inside the append's write lock to extend a verified chain only",
     ("goldbot/research/arm_lifecycle.py", "_learning", "Learning"):
         "strict: the same checked-in learning block, read by the nightly lifecycle job; an invalid block is no kill "
         "rule's block (the engine refuses that arm already)",

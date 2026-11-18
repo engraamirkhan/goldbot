@@ -309,7 +309,7 @@ class SchedulerSettings(_Section):
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
-    # owner directive 2026-11-18, build 2 (goldbot/research/arm_lifecycle.py): the forward read and decision per demo
+    # owner directive 2026-11-18, build 2 (goldbot/research/arm_lifecycle.py): the kill-only read and decision per demo
     # arm after the 06:15 daily review (whose replay-parity step it reads); a late run still decides
     arm_lifecycle: ScheduleSettings = ScheduleSettings(kind="daily", at="06:25", max_late_hours=12)
     # R142: the monthly review (goldbot/ops/monthly_review.py), daily after the 06:15 daily review: the 1st builds the
@@ -526,7 +526,7 @@ class ExplorationLearnSettings(_Section):
 
 class ArmLifecycleSettings(_Section):
     """Owner directive 2026-11-18, build 2 (goldbot/research/arm_lifecycle.py; docs/research/arm-lifecycle-2026-11-18.md):
-    the nightly forward read and decision per demo arm. The thresholds are the note's pre-registered module constants,
+    the nightly kill-only read and decision per demo arm (RETIRE or HOLD). The thresholds are the note's pre-registered module constants,
     never settings; this only switches the job (off: nothing read, nothing retired)."""
     enabled: bool = True
 

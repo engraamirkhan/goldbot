@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from goldbot.db import Database
 from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
 from goldbot.ops import autodisc_register as R
@@ -394,7 +395,7 @@ def test_to_db_journals_then_appends_one_chained_registry_row_and_writes_no_conf
     spec_before, acc_before = env["spec_arms_path"].read_text(), env["accounts_path"].read_text()
     state = tmp_path / "state"
     reg = _to_db(env, state)
-    [row] = arm_registry.read_rows(str(state))
+    [row] = arm_registry.read_rows(Database.open(str(state), "aux"))
     assert arm_registry.chain_break([row]) is None
     assert (row.account_id, row.arm_id, row.style, row.max_loss) == ("icm-demo", reg.arm_id, reg.style, reg.max_loss)
     body = json.loads(row.row)
@@ -410,7 +411,7 @@ def test_to_db_refuses_an_account_that_is_not_demo_probe_only_and_writes_nothing
     state = tmp_path / "state"
     with pytest.raises(R.RegistrationRefused):
         _to_db(env, state, account)
-    assert R.journal(env["ledger_path"]) == [] and arm_registry.read_rows(str(state)) == []
+    assert R.journal(env["ledger_path"]) == [] and arm_registry.read_rows(Database.open(str(state), "aux")) == []
 
 
 def test_to_db_after_a_crash_between_the_journal_and_the_registry_row_completes_once(env, tmp_path, monkeypatch):
@@ -423,9 +424,9 @@ def test_to_db_after_a_crash_between_the_journal_and_the_registry_row_completes_
     monkeypatch.setattr(arm_registry, "append", crash)
     with pytest.raises(OSError):
         _to_db(env, state)
-    assert len(R.journal(env["ledger_path"])) == 1 and arm_registry.read_rows(str(state)) == []
+    assert len(R.journal(env["ledger_path"])) == 1 and arm_registry.read_rows(Database.open(str(state), "aux")) == []
     monkeypatch.setattr(arm_registry, "append", real)
     _to_db(env, state)
-    assert len(R.journal(env["ledger_path"])) == 1 and len(arm_registry.read_rows(str(state))) == 1
+    assert len(R.journal(env["ledger_path"])) == 1 and len(arm_registry.read_rows(Database.open(str(state), "aux"))) == 1
     with pytest.raises(R.RegistrationRefused, match="registered on"):
         _to_db(env, state)

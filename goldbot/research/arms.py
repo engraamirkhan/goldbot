@@ -856,7 +856,10 @@ def qualification_refusal(arm: Arm, root: Path | None = None, registry: Path | N
     except ValidationError as exc:
         return f"{QUALIFY_RULE}: qualification record invalid ({exc.error_count()} errors)"
     # trading-safety requirement 2026-11-18, item 4: forward demo evidence (`forward:`, ADR 0088's `adr0088:`) can
-    # qualify an arm for demo at most; on an account that is not demo it is a refusal, never a qualification
+    # qualify an arm for demo at most. This refusal applies where an arm is loaded for a non-demo account
+    # (`load_arms(live_class=True)`, research and CI). The engine never builds an exploration block for one: the real
+    # barriers are `engine.exploration.Exploration.start` (demo probe_only only) and the RiskGate's exploration fence
+    # (`exploration_not_demo`, `exploration_terminal_not_demo`), so no arm of any kind sends there
     from goldbot.research.registry import FORWARD_EVIDENCE_PREFIXES
     if live_class and (fwd := [r for r in (q.screen, q.confirm) if r.startswith(FORWARD_EVIDENCE_PREFIXES)]):
         return (f"{QUALIFY_RULE}: forward demo evidence ({fwd[0][:80]!r}) qualifies an arm on a demo account only, "

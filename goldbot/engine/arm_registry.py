@@ -2,7 +2,7 @@
 section 3): discovered arms (`spec_rule`) the engine loads at a pass boundary from aux.db `arm_registry`, with no PR
 and no restart. Rows are written only by `python -m goldbot.ops.run autodisc-register --to-db` (`append`).
 
-The rules, as built here (trading-safety requirements 2026-11-18, binding):
+The rules, as built here (trading-safety requirements 2026-11-18 and the review round of the same day, binding):
 
 * Demo only, one predicate (`risk.gate.is_demo`: accounts.yaml mode demo, no live gate in the phase file, the
   terminal reporting trade_mode "demo", probe_only; anything missing or unreadable is not demo), checked at the load,
@@ -16,15 +16,23 @@ The rules, as built here (trading-safety requirements 2026-11-18, binding):
   (0, the style's ceiling] (`ceiling`, autodisc_register's: the style's strategy arms' largest cap, SHARE_CAP x the
   pot, the exploration budget), gold's book, a live timeframe, an id and 5-character key no arm here has. A bad row
   refuses only its own arm, journalled once (`arm_registry_refused`); it never stops the engine.
-* Integrity: the table is append-only and hash-chained (`digest`). A broken chain (an altered, truncated or removed
-  row) refuses new entries on every hot-loaded arm until the chain verifies, journalled and logged as an error
-  (`arm_registry_chain_broken`, the alert). A read error (a lock, an I/O error) keeps the last good load for at most
-  STALE_CADENCES reads (one a minute), then refuses new hot-loaded entries (`arm_registry_stale`). A load is applied
-  whole or not at all (an error part way leaves nothing of it).
-* After a restart there are zero hot-loaded entries until a full validated load (`Exploration.registry_ok`); the
-  start reads the registry once, so the arms are known before the first reconciliation. An arm the start cannot load
-  is kept from its last good row (`arm_snapshot`) with its entries refused, and while no load has succeeded no
-  position is closed as an orphan (`exploration.exits`): exits run from the position's own brackets.
+* Integrity: the table is append-only and hash-chained (`digest`), and the highest tip this account's engine
+  verified (seq, digest) is kept OUTSIDE aux.db, in core.db `arm_registry_seen` (`seen`). A broken chain (an altered
+  or truncated row), fewer rows than the verified tip (a removed tail, an emptied table, an older aux.db copy) or
+  another digest at its seq refuses new entries on every hot-loaded arm until the chain verifies, journalled and
+  logged as an error (`arm_registry_chain_broken`). A read error (a lock, an I/O error) keeps the last good load for
+  at most STALE_CADENCES reads (one a minute), then refuses new hot-loaded entries (`arm_registry_stale`). A load is
+  applied whole or not at all. Reads go through the block's own aux.db handle (`Exploration.db`, a deferred read:
+  never a migration, never the write lock), so a writer holding the lock never stalls the pass.
+* Every verified load re-judges every row. A hot-loaded arm whose row is now refused (its timeframe left the live
+  list, its cap or pot changed) or missing is kept configured with its entries refused (`retired`, as `config_for`
+  keeps a bad row's arm): its open position keeps every exit and is never closed as an orphan. A retirement (the
+  lifecycle's included) is never lifted here.
+* After a restart there are zero hot-loaded entries until a full validated load (`Exploration.registry_ok`). The
+  start reads the registry once; when that fails, this account's own remembered arms (`seen`, their own style) are
+  kept with their entries held (`start_held`), and for at most STALE_CADENCES minutes no unknown position is closed
+  as an orphan, except at its weekend backstop (`orphan_held`). `published` says how long the registry has been
+  unverified; health FAILs it past HEALTH_FAIL_S (`ops.checks.engine.check_engine`).
 * Caps and RiskGate inherited: a loaded arm's per-trade cap joins the gate's `exploration_arms` (`overlay`, applied
   again after every limits refresh); pots, slots, budgets, the kill switch, halts, propose-only and drift bind it as
   any arm. Loading only ever adds an arm: an open position, its stop, target and hold are never touched.
@@ -38,6 +46,8 @@ import sqlite3
 import time
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
 from goldbot.base import FrozenRecord
 from goldbot.db import Database
 from goldbot.instruments import GOLD
@@ -50,7 +60,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 GENESIS = "0" * 64
-STALE_CADENCES = 3                  # failed reads (one a minute) the last good load is kept for
+STALE_CADENCES = 3                  # failed reads (one a minute) the last good load is kept for; the orphan hold, minutes
+HEALTH_FAIL_S = 300.0               # health FAILs an engine whose registry has been unverified this long
 ROW_KEYS = frozenset({"id", "rule", "timeframe", "params", "max_open", "forward_only", "status", "config_hash",
                       "role", "qualification", "note"})
 PARAM_KEYS = frozenset({"spec", "spec_hash", "prereg"})
@@ -91,22 +102,34 @@ def _of(r: RegistryRow) -> str:
     return digest(r.prev_digest, r.seq, r.account_id, r.arm_id, r.row, r.style, r.max_loss, r.source, r.recorded_ns)
 
 
-def read_rows(state_dir: str) -> list[RegistryRow]:
-    """Every row in order. Raises sqlite3.Error / OSError when the table cannot be read."""
-    with Database.open(state_dir, "aux").read() as conn:
-        got = conn.execute("SELECT seq, account_id, arm_id, row, style, max_loss, source, recorded_ns, prev_digest, "
-                           "digest FROM arm_registry ORDER BY seq").fetchall()
-    cols = list(RegistryRow.model_fields)
-    return [RegistryRow.model_validate(dict(zip(cols, r, strict=True))) for r in got]
+_SELECT = ("SELECT seq, account_id, arm_id, row, style, max_loss, source, recorded_ns, prev_digest, digest "
+           "FROM arm_registry ORDER BY seq")
 
 
-def chain_break(rows: list[RegistryRow]) -> str | None:
-    """Why the chain does not verify (the first bad row), or None."""
+def _rows(got: list[Any]) -> list[RegistryRow]:
+    return [RegistryRow.model_validate(dict(zip(RegistryRow.model_fields, r, strict=True))) for r in got]
+
+
+def read_rows(db: Database) -> list[RegistryRow]:
+    """Every row in order, in one deferred read of `db` (aux.db opened once by its owner: no migration, no write
+    lock). Raises sqlite3.Error / OSError when the table cannot be read."""
+    with db.read() as conn:
+        return _rows(conn.execute(_SELECT).fetchall())
+
+
+def chain_break(rows: list[RegistryRow], tip: tuple[int, str] | None = None) -> str | None:
+    """Why the chain does not verify (the first bad row), or does not reach the verified `tip` (seq, digest) with the
+    same digest there (a removed tail, an emptied table, an older copy), or None."""
     prev = GENESIS
     for i, r in enumerate(rows):
         if r.seq != i + 1 or r.prev_digest != prev or _of(r) != r.digest:
             return f"row {r.seq} ({r.arm_id}) does not verify"
         prev = r.digest
+    if tip is not None and tip[0] > 0:
+        if len(rows) < tip[0]:
+            return f"{len(rows)} rows, below the verified tip at row {tip[0]} (rows removed or an older copy)"
+        if rows[tip[0] - 1].digest != tip[1]:
+            return f"row {tip[0]} is not the verified tip (rows replaced)"
     return None
 
 
@@ -118,9 +141,7 @@ def append(state_dir: str, *, account_id: str, row: dict[str, Any], style: str, 
     arm_id = str(row.get("id"))
     ns = int(now_ns if now_ns is not None else time.time_ns())
     with Database.open(state_dir, "aux").write() as conn:
-        got = conn.execute("SELECT seq, account_id, arm_id, row, style, max_loss, source, recorded_ns, prev_digest, "
-                           "digest FROM arm_registry ORDER BY seq").fetchall()
-        rows = [RegistryRow.model_validate(dict(zip(RegistryRow.model_fields, r, strict=True))) for r in got]
+        rows = _rows(conn.execute(_SELECT).fetchall())
         if (why := chain_break(rows)) is not None:
             raise ValueError(f"arm_registry chain broken ({why}): nothing appended")
         if any(r.account_id == account_id and r.arm_id == arm_id for r in rows):
@@ -132,6 +153,35 @@ def append(state_dir: str, *, account_id: str, row: dict[str, Any], style: str, 
                      (seq, account_id, arm_id, text, style, float(max_loss), source, ns, prev, d))
     return RegistryRow(seq=seq, account_id=account_id, arm_id=arm_id, row=text, style=style, max_loss=float(max_loss),
                        source=source, recorded_ns=ns, prev_digest=prev, digest=d)
+
+
+# ---------------------------------------------------------------------------------------------- the verified tip
+class Seen(FrozenRecord):
+    """core.db `arm_registry_seen` for one account: the verified tip and the hot-loaded arms it ran."""
+    tip_seq: int = 0
+    tip_digest: str = GENESIS
+    arms: dict[str, dict[str, Any]] = {}       # arm id -> {style, max_loss, row}
+
+
+def seen(core: Database, account_id: str) -> Seen | None:
+    """This account's verified tip and arms; None before any. Raises when core.db cannot be read."""
+    with core.read() as conn:
+        got = conn.execute("SELECT tip_seq, tip_digest, body FROM arm_registry_seen WHERE account_id = ?",
+                           (account_id,)).fetchone()
+    if got is None:
+        return None
+    return Seen(tip_seq=int(got[0]), tip_digest=str(got[1]), arms=json.loads(got[2]).get("arms") or {})
+
+
+def remember(core: Database, account_id: str, tip: tuple[int, str], arms: dict[str, dict[str, Any]]) -> None:
+    """Advance this account's verified tip (never lowered) and its arms. Raises on a write error."""
+    with core.write() as conn:
+        got = conn.execute("SELECT tip_seq FROM arm_registry_seen WHERE account_id = ?", (account_id,)).fetchone()
+        if got is not None and int(got[0]) > tip[0]:
+            return
+        conn.execute("INSERT OR REPLACE INTO arm_registry_seen (account_id, tip_seq, tip_digest, updated_ns, body) "
+                     "VALUES (?, ?, ?, ?, ?)", (account_id, tip[0], tip[1], time.time_ns(),
+                                                json.dumps({"arms": arms}, sort_keys=True)))
 
 
 # ---------------------------------------------------------------------------------------------- validation
@@ -212,36 +262,54 @@ def refusal(eng: Engine, ex: Exploration, r: RegistryRow) -> tuple[Arm | None, s
 
 # ---------------------------------------------------------------------------------------------- the engine side
 def init(eng: Engine, ex: Exploration) -> None:
-    """At the engine's start (the state is `Exploration.__init__`'s): one full load (`refresh`, forced), so the arms are known
-    before the first reconciliation. An arm remembered as hot-loaded that this load does not run is kept from its
-    last good row with its entries refused (exits and adoption keep working)."""
+    """At the engine's start (the state is `Exploration.__init__`'s): one full load (`refresh`, forced), so the arms are
+    known before the first reconciliation. When it fails, this account's remembered arms are kept, entries held."""
     if eng.cfg.instrument != GOLD:
         ex.registry_settled = True                 # no hot-loaded arm on another book: nothing to wait for
+        _set_ok(ex, True)
         return
+    try:
+        ex.registry_core = Database.open(eng.cfg.state_dir, "core")
+    except Exception as exc:                       # noqa: BLE001 - no verified tip: every hot entry refused
+        log.error("core.db unreadable for the arm registry (%s): no hot-loaded entry", type(exc).__name__)
     refresh(eng, ex, None)
     if not ex.registry_settled:
         _keep_remembered(eng, ex)
 
 
 def _keep_remembered(eng: Engine, ex: Exploration) -> None:
-    from goldbot.engine import arm_snapshot
-    from goldbot.engine.exploration import Arm
-    from goldbot.research.arms import SPEC_RULE
-    last = arm_snapshot.recall(eng.cfg.state_dir) or {}
+    """R6: this account's own remembered hot-loaded arms (`seen`), each with its own style, held (`start_held`): known
+    to the exits and adoption, no entry until a verified load."""
+    from goldbot.engine.exploration import Arm, spec_arm_row
+    try:
+        got = seen(ex.registry_core, eng.cfg.account_id) if ex.registry_core is not None else None
+    except Exception as exc:                       # noqa: BLE001 - nothing remembered: the orphan hold still applies
+        log.error("remembered hot-loaded arms unreadable (%s)", type(exc).__name__)
+        return
     kept = []
-    for a in sorted(last.values(), key=lambda x: x.id):
-        if a.rule != SPEC_RULE or a.id in ex.arms:
+    for arm_id, a in sorted((got.arms if got is not None else {}).items()):
+        try:
+            arm = Arm(spec=spec_arm_row(json.loads(a["row"])), style=str(a["style"]))
+        except (ValueError, KeyError, TypeError) as exc:
+            log.error("remembered hot-loaded arm %s unreadable (%s)", arm_id, exc)
             continue
-        style = next(iter(ex.cfg.pots), None)      # entries refused: the pot only names it (exits need the arm)
-        if style is None:
+        if arm_id in ex.arms or arm.instrument != GOLD or arm.style not in ex.cfg.pots \
+                or any(x.key == arm.key for x in ex.arms.values()):
             continue
-        arm = Arm(spec=arm_snapshot.refused(a, "hot-loaded registry not verified at the start"), style=style)
-        if arm.instrument != GOLD or any(x.key == arm.key for x in ex.arms.values()):
-            continue
-        _add(eng, ex, arm, journal=False)
-        kept.append(a.id)
+        _install(ex, arm)
+        ex.start_held = ex.start_held | {arm_id}
+        kept.append(arm_id)
     if kept:
-        log.error("hot-loaded arms %s kept from their last good rows, entries refused (registry not verified)", kept)
+        log.error("hot-loaded arms %s kept from this account's last verified load, entries held (registry not "
+                  "verified)", kept)
+
+
+def _set_ok(ex: Exploration, ok: bool) -> None:
+    ex.registry_ok = ok
+    if ok:
+        ex.registry_bad_since = None
+    elif ex.registry_bad_since is None:
+        ex.registry_bad_since = time.time()
 
 
 def _note(eng: Engine, ex: Exploration, action: str, **detail: Any) -> None:
@@ -255,7 +323,6 @@ def _note(eng: Engine, ex: Exploration, action: str, **detail: Any) -> None:
 def refresh(eng: Engine, ex: Exploration, now: Any) -> None:
     """Once a minute (a pass boundary, `exploration._fast`), and at the start (`now` None): read, verify and load.
     Never raises."""
-    import pandas as pd
     if isinstance(now, pd.Timestamp):
         minute = now.floor("min")
         if ex.registry_read_at == minute:
@@ -264,89 +331,105 @@ def refresh(eng: Engine, ex: Exploration, now: Any) -> None:
     try:
         _refresh(eng, ex)
     except Exception as exc:                    # a load part way: nothing of it applied, no hot entry
-        ex.registry_ok = False
+        _set_ok(ex, False)
         log.exception("hot-loaded arm registry load failed; no hot-loaded entry until a full load")
         _note(eng, ex, UNREAD, error=type(exc).__name__)
+
+
+def _hold(eng: Engine, ex: Exploration, arm_id: str, why: str) -> None:
+    """R1/R4: a hot-loaded arm whose row is refused now or gone: kept configured (every exit, never an orphan), its
+    entries refused for good in this process, journalled once."""
+    if arm_id in ex.retired and ex.unqualified.get(arm_id) == why:
+        return
+    ex.unqualified[arm_id] = why
+    ex.retired = ex.retired | {arm_id}
+    log.error("hot-loaded arm %s: %s; kept configured, entries refused", arm_id, why)
+    eng.decisions.append({"ts": time.time(), "agent": "explore:" + arm_id, "action": REFUSED, "arm": arm_id,
+                          "why": why, "kept": True})
 
 
 def _refresh(eng: Engine, ex: Exploration) -> None:
     if eng.cfg.instrument != GOLD:
         return
     try:
-        rows = read_rows(eng.cfg.state_dir)
+        if ex.registry_core is None:
+            ex.registry_core = Database.open(eng.cfg.state_dir, "core")
+        rows = read_rows(ex.db)
+        got = seen(ex.registry_core, eng.cfg.account_id)
     except (sqlite3.Error, OSError) as exc:
         ex.registry_fails += 1
         log.warning("hot-loaded arm registry unreadable (%s), %d of %d reads", type(exc).__name__,
                     ex.registry_fails, STALE_CADENCES)
         if ex.registry_fails > STALE_CADENCES or not ex.registry_settled:
-            ex.registry_ok = False
+            _set_ok(ex, False)
             _note(eng, ex, STALE, error=type(exc).__name__, reads=ex.registry_fails)
         return
-    if (why := chain_break(rows)) is not None:
-        ex.registry_ok = False
+    tip = (got.tip_seq, got.tip_digest) if got is not None else None
+    if (why := chain_break(rows, tip)) is not None:
+        _set_ok(ex, False)
         log.error("hot-loaded arm registry chain broken (%s): every hot-loaded entry refused", why)
         _note(eng, ex, CHAIN, why=why)
         return
-    mine = [r for r in rows if r.account_id == eng.cfg.account_id]
-    if not mine:
-        ex.registry_fails = 0
-        ex.registry_ok = ex.registry_settled = True
-        ex.registry_note = None
-        return
-    if not demo_now(eng):
-        ex.registry_ok = False
+    mine = {r.arm_id: r for r in rows if r.account_id == eng.cfg.account_id}
+    if (mine or ex.hot_known) and not demo_now(eng):
+        _set_ok(ex, False)
         log.error("hot-loaded arm registry: account %s is not demo; every hot-loaded entry refused", eng.cfg.account_id)
         _note(eng, ex, NOT_DEMO, account=eng.cfg.account_id)
         return
     accepted: list[tuple[Arm, float]] = []
     refused: dict[str, str] = {}
-    for r in mine:
-        if r.arm_id in ex.hot_caps:
-            continue
+    for r in mine.values():
         arm, why = refusal(eng, ex, r)
         if arm is None:
             refused[r.arm_id] = why or "refused"
-        else:
+        elif r.arm_id not in ex.hot_caps:
             accepted.append((arm, r.max_loss))
     # the load is whole: applied only now that every row was read and judged
     for arm, cap in accepted:
         ex.hot_caps[arm.arm_id] = cap
-        _add(eng, ex, arm, journal=True)
+        _add(eng, ex, arm)
     for a, why in sorted(refused.items()):
-        if ex.hot_journalled.get(a) != why:
+        if a in ex.hot_known:                   # R4: loaded before (or held from the start): kept, entries refused
+            _hold(eng, ex, a, f"hot-loaded row now refused: {why}")
+        elif ex.hot_journalled.get(a) != why:
             ex.hot_journalled[a] = why
             log.error("hot-loaded arm %s refused: %s", a, why)
             eng.decisions.append({"ts": time.time(), "agent": "explore:" + a, "action": REFUSED, "arm": a,
                                   "why": why})
+    for a in sorted(ex.hot_known - set(mine)):  # R1: an arm whose row no longer verifies here
+        _hold(eng, ex, a, "hot-loaded row missing from the verified registry")
+    ex.start_held = frozenset()                 # R3: a held arm is now loaded or held for good, never by subtraction
     if accepted:
-        from goldbot.engine import arm_snapshot
-        arm_snapshot.remember(eng.cfg.state_dir, (a.spec for a, _ in accepted if not a.spec.entry_refused))
         eng.gate.limits = overlay(eng, eng.gate.limits, ex)
+    if rows:
+        loaded = {a: {"style": mine[a].style, "max_loss": mine[a].max_loss, "row": mine[a].row}
+                  for a in ex.hot_caps if a in mine}
+        remember(ex.registry_core, eng.cfg.account_id, (rows[-1].seq, rows[-1].digest), loaded)
     ex.registry_fails = 0
-    ex.registry_ok = ex.registry_settled = True
+    ex.registry_settled = True
+    _set_ok(ex, True)
     ex.registry_note = None
 
 
-def _add(eng: Engine, ex: Exploration, arm: Arm, *, journal: bool) -> None:
-    """Add `arm` to the running block (never removing or changing another), held as the start holds any arm: its
-    entries refused when its row is (ADR 0061 stamp), when its timeframe is dark."""
-    from goldbot.engine.exploration import PREFIX
+def _install(ex: Exploration, arm: Arm) -> None:
+    """`arm` in the running block (never removing or changing another arm)."""
     from goldbot.engine.exploration_context import needs_context
-    replacing = arm.arm_id in ex.arms              # a remembered row kept at the start, now loaded for real
     ex.arms[arm.arm_id] = arm
     ex.by_key[arm.key] = arm
     ex.hot_known = ex.hot_known | {arm.arm_id}
     ex.cfg = ex.cfg.model_copy(update={"arms": tuple(a for a in ex.cfg.arms if a.arm_id != arm.arm_id) + (arm,)})
     if needs_context(arm.spec):
         ex.needs_context = ex.needs_context | {arm.arm_id}
-    if replacing:
-        ex.unqualified.pop(arm.arm_id, None)
-        ex.retired = ex.retired - {arm.arm_id}
+
+
+def _add(eng: Engine, ex: Exploration, arm: Arm) -> None:
+    """A loaded arm: installed, held as the start holds any arm (entries refused when its row is: the ADR 0061
+    stamp), journalled. Never lifts a retirement (R3)."""
+    from goldbot.engine.exploration import PREFIX
+    _install(ex, arm)
     if arm.spec.entry_refused:
         ex.unqualified[arm.arm_id] = arm.spec.entry_refused
         ex.retired = ex.retired | {arm.arm_id}
-    if not journal:
-        return
     log.warning("exploration arm %s hot-loaded on %s (%s)", arm.arm_id, eng.cfg.account_id,
                 arm.spec.entry_refused or "may enter")
     eng.decisions.append({"ts": time.time(), "agent": PREFIX + arm.arm_id, "action": LOADED, "arm": arm.arm_id,
@@ -355,15 +438,39 @@ def _add(eng: Engine, ex: Exploration, arm: Arm, *, journal: bool) -> None:
 
 
 def entry_refusal(eng: Engine, ex: Exploration, arm_id: str) -> str | None:
-    """`exploration._send`'s check for a hot-loaded arm at its signal: the registry verified and the account demo now
-    (`risk.gate.is_demo`). None for every other arm."""
+    """`exploration._send`'s check for a hot-loaded arm at its signal: not held from the start, the registry verified
+    and the account demo now (`risk.gate.is_demo`). None for every other arm."""
     if arm_id not in getattr(ex, "hot_known", frozenset()):
         return None
-    if not ex.registry_ok:
+    if arm_id in ex.start_held or not ex.registry_ok:
         return UNVERIFIED
     if not demo_now(eng):
         return "not_demo"
     return None
+
+
+def orphan_held(ex: Exploration, opened: pd.Timestamp | None, at: pd.Timestamp) -> bool:
+    """R5: whether a position of no known arm is held back from the orphan close: only while no registry load has
+    succeeded, for at most STALE_CADENCES minutes from the first such look, and never at or past its weekend
+    backstop (`exploration.weekend_backstop`)."""
+    from goldbot.engine.exploration import weekend_backstop
+    if ex.registry_settled:
+        return False
+    if ex.orphan_hold_from is None:
+        ex.orphan_hold_from = at
+    if opened is not None and at >= weekend_backstop(pd.Timestamp(opened)):
+        return False
+    return bool(at - ex.orphan_hold_from < pd.Timedelta(minutes=STALE_CADENCES))
+
+
+def published(eng: Engine) -> dict[str, Any]:
+    """R7, for the engine state file: since when the primary book's registry has been unverified, and why (health
+    FAILs past HEALTH_FAIL_S). Nothing while it verifies."""
+    ex = getattr(getattr(eng, "primary", None), "exploration", None)
+    since = getattr(ex, "registry_bad_since", None)
+    if ex is None or since is None:
+        return {}
+    return {"arm_registry_unverified_since": float(since), "arm_registry_reason": str(ex.registry_note or "unverified")}
 
 
 def overlay(eng: Engine, limits: RiskLimits, loading: Exploration | None = None) -> RiskLimits:
@@ -379,6 +486,7 @@ def overlay(eng: Engine, limits: RiskLimits, loading: Exploration | None = None)
     return limits.model_copy(update={"exploration_arms": {**limits.exploration_arms, **add}})
 
 
-__all__ = ["CHAIN", "FORBIDDEN", "GENESIS", "LOADED", "REFUSED", "STALE", "STALE_CADENCES", "UNVERIFIED",
-           "RegistryRow", "append", "chain_break", "ceiling", "demo_now", "digest", "entry_refusal",
-           "init", "overlay", "read_rows", "refresh", "refusal"]
+__all__ = ["CHAIN", "FORBIDDEN", "GENESIS", "HEALTH_FAIL_S", "LOADED", "REFUSED", "STALE", "STALE_CADENCES",
+           "UNVERIFIED", "RegistryRow", "Seen", "append", "chain_break", "ceiling", "demo_now", "digest",
+           "entry_refusal", "init", "orphan_held", "overlay", "published", "read_rows", "refresh", "refusal",
+           "remember", "seen"]

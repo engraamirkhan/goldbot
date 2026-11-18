@@ -802,6 +802,10 @@ class Exploration:
         self.registry_fails = 0
         self.registry_read_at: pd.Timestamp | None = None
         self.registry_note: str | None = None
+        self.registry_bad_since: float | None = None   # wall time the registry stopped verifying (health, R7)
+        self.registry_core: Database | None = None     # core.db: the verified tip kept outside aux.db (R1)
+        self.start_held: frozenset[str] = frozenset()  # remembered at a start that could not load: no entry (R3)
+        self.orphan_hold_from: pd.Timestamp | None = None
         arm_registry.init(eng, self)
 
     @classmethod
@@ -2354,7 +2358,7 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     wall-clock time exit (`_week_due`, `time_exit`), a 1d/1w position at its history time exit from its decision
     close (`long_bars.time_exit_due`, BACKLOG 254); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
-    from goldbot.engine import exploration_pyramid
+    from goldbot.engine import arm_registry, exploration_pyramid
     try:
         ex = eng.exploration
         at = eng.clock() if eng.cfg.live_clock else now
@@ -2363,9 +2367,10 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 continue
             arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if ex is not None else None
             if arm is None:
-                if ex is not None and not ex.registry_settled:
-                    # trading-safety 2026-11-18: it may be a hot-loaded arm's, unknown until a registry load
-                    # succeeds; its own server stop and target stand, never closed as an orphan meanwhile
+                if ex is not None and arm_registry.orphan_held(ex, tr.opened_utc or tr.entry_bar_ts, at):
+                    # trading-safety 2026-11-18 (R5): it may be a hot-loaded arm's, unknown until a registry load
+                    # succeeds; its own server stop and target stand. Held STALE_CADENCES minutes at most, never
+                    # past its weekend backstop
                     continue
                 eng._try_close(pid, ORPHAN_EXIT, now)
                 continue

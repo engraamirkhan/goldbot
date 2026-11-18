@@ -1,12 +1,13 @@
-"""Build 2 (owner directive 2026-11-18): the automatic forward read and decision per demo arm,
-goldbot/research/arm_lifecycle.py, with the rule of docs/research/arm-lifecycle-2026-11-18.md:
-"RETIRE when the evidence says the arm is worse than its twin, or the existing kill rules fire; SIZE_UP one step ...
-when the evidence says it is better; otherwise HOLD", by the replay-parity monitor's e-process on the forward excess
-over the arm's matched replay twin, every decision journalled, a RETIRE applied through the engine's retirement.
-Synthetic labels only; nothing here is market data."""
+"""Build 2 (owner directive 2026-11-18, revised by the quant review of the same day): the kill-only lifecycle per demo
+arm, goldbot/research/arm_lifecycle.py, with the rule of docs/research/arm-lifecycle-2026-11-18.md: "RETIRE when the
+evidence says the arm is worse than its twin, or the existing kill rules fire ... otherwise HOLD", by the replay-parity
+monitor's e-process on the excess of the arm's replayed candidates over its matched replay twin, the day terms frozen
+at their first read, every decision journalled, a RETIRE applied through the engine's retirement. No promotion, no
+size change. Synthetic labels only; nothing here is market data."""
 from __future__ import annotations
 
 import json
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -30,23 +31,28 @@ def _arm(arm_id: str = "A1", role: str = "strategy", **params: Any) -> Arm:
                params={"stop_usd": 3.0, "target_r": 1.0, "hold_bars": 4, **params})
 
 
-def _obs(arm_r: float, ctrl_r: float = 0.0, *, days: int = 30, per_day: int = 3, seed: int = 1,
-         gap: float = 0.0, arm_id: str = "A1", control: str = "C1", hours: tuple[int, ...] = (9, 14)) -> pd.DataFrame:
-    """`days` session days ending on DAY: `per_day` arm fills a day (net R ~ N(arm_r, 1)) and twice as many control
-    candidates (replay R ~ N(ctrl_r, 1)), in `hours` UTC cells."""
+def _obs(arm_r: float, ctrl_r: float = 0.0, *, days: int = 30, per_day: int = 4, seed: int = 1,
+         gap: float = 0.0, arm_id: str = "A1", control: str = "C1", hours: tuple[int, ...] = (9, 14),
+         taken_share: float = 0.5, end: str = DAY) -> pd.DataFrame:
+    """`days` session days ending on `end`: `per_day` arm candidates a day (replay R ~ N(arm_r, 1); the first
+    `taken_share` of them filled at replay + `gap`) and twice as many control candidates (replay R ~ N(ctrl_r, 1)),
+    in `hours` UTC cells, both sides."""
     rng = np.random.default_rng(seed)
     rows = []
-    for d in pd.date_range(end=DAY, periods=days, freq="D"):
+    for d in pd.date_range(end=end, periods=days, freq="D"):
+        at = d.tz_localize("UTC")
         for i in range(per_day):
-            h = hours[i % len(hours)]
-            fr = float(rng.normal(arm_r, 1.0))
-            rows.append({"arm_id": arm_id, "taken": True, "label_fill_r": fr, "label_sim_r": fr - gap,
-                         "decision_utc": d.tz_localize("UTC") + pd.Timedelta(hours=h), "session_day": f"{d:%Y-%m-%d}"})
+            h, side = hours[i % len(hours)], 1 if (i // len(hours)) % 2 == 0 else -1
+            sim = float(rng.normal(arm_r, 1.0))
+            taken = i < per_day * taken_share
+            rows.append({"arm_id": arm_id, "taken": taken, "label_sim_r": sim, "side": side,
+                         "label_fill_r": sim + gap if taken else np.nan,
+                         "decision_utc": at + pd.Timedelta(hours=h), "session_day": f"{d:%Y-%m-%d}"})
         for i in range(2 * per_day):
-            h = hours[i % len(hours)]
-            rows.append({"arm_id": control, "taken": False, "label_fill_r": np.nan,
+            h, side = hours[i % len(hours)], 1 if (i // len(hours)) % 2 == 0 else -1
+            rows.append({"arm_id": control, "taken": False, "label_fill_r": np.nan, "side": side,
                          "label_sim_r": float(rng.normal(ctrl_r, 1.0)),
-                         "decision_utc": d.tz_localize("UTC") + pd.Timedelta(hours=h), "session_day": f"{d:%Y-%m-%d}"})
+                         "decision_utc": at + pd.Timedelta(hours=h), "session_day": f"{d:%Y-%m-%d}"})
     return pd.DataFrame(rows)
 
 
@@ -56,32 +62,35 @@ def db(tmp_path: Path) -> Database:
 
 
 def _read(db: Database, obs: pd.DataFrame, arm: Arm | None = None, parity: dict[str, L.ParityGap] | None = None,
-          control: str | None = "C1") -> L.ArmRead:
+          control: str | None = "C1", day: str = DAY) -> L.ArmRead:
     return L.read_arm(db, obs, arm or _arm(), broker="icm", control=control, accounts={"icm-probe"},
-                      parity=PASS if parity is None else parity, cap=5.0, day=DAY)
+                      parity=PASS if parity is None else parity, cap=5.0, day=day, now=NOW)
 
 
 # ---------------------------------------------------------------- the twin and the figures
-def test_the_twin_is_the_controls_replay_mean_in_the_same_hour_cell_up_to_the_fills_session_day():
-    fills = pd.DataFrame({"decision_utc": pd.to_datetime(["2026-11-02 09:15", "2026-11-03 09:15", "2026-11-03 14:00"],
-                                                         utc=True), "session_day": ["2026-11-02", "2026-11-03",
-                                                                                    "2026-11-03"]})
-    ctrl = pd.DataFrame({"decision_utc": pd.to_datetime(["2026-11-02 09:40", "2026-11-03 09:05", "2026-11-04 09:05"],
-                                                        utc=True), "session_day": ["2026-11-02", "2026-11-03",
-                                                                                   "2026-11-04"],
-                         "label_sim_r": [1.0, 3.0, 100.0]})
-    got = L.twin_means(fills, ctrl)
+def test_the_twin_is_the_controls_replay_mean_in_the_same_hour_and_side_cell_up_to_the_session_day():
+    cands = pd.DataFrame({"decision_utc": pd.to_datetime(["2026-11-02 09:15", "2026-11-03 09:15", "2026-11-03 14:00",
+                                                          "2026-11-03 09:20"], utc=True),
+                          "session_day": ["2026-11-02", "2026-11-03", "2026-11-03", "2026-11-03"],
+                          "side": [1, 1, 1, -1]})
+    ctrl = pd.DataFrame({"decision_utc": pd.to_datetime(["2026-11-02 09:40", "2026-11-03 09:05", "2026-11-04 09:05",
+                                                         "2026-11-03 09:10"], utc=True),
+                         "session_day": ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-03"],
+                         "side": [1, 1, 1, -1], "label_sim_r": [1.0, 3.0, 100.0, -7.0]})
+    got = L.twin_means(cands, ctrl)
     assert got[0] == 1.0 and got[1] == 2.0           # point in time: the 11-04 label is never read
     assert np.isnan(got[2])                           # no control label at 14:00: unmatched
+    assert got[3] == -7.0                             # the short side reads the short cell only
 
 
-def test_the_read_reports_fills_mean_r_the_fill_replay_gap_and_raises_the_twin_by_the_parity_gap(db):
-    r = _read(db, _obs(0.2, 0.0, gap=0.05))
-    assert r.n_fills == 90 and r.n_days == 30 and r.validated
-    assert r.gap_r == pytest.approx(0.05) and r.control_raise_r == pytest.approx(0.03)
-    assert r.mean_r is not None and r.excess_r is not None
-    assert r.excess_r == pytest.approx(r.mean_r - 0.03 - float(_obs(0.2).query("arm_id == 'C1'")["label_sim_r"]
-                                                               .mean()), abs=0.15)
+def test_the_excess_is_read_on_every_replayed_candidate_taken_or_refused_never_shifted_by_the_fill_gap(db):
+    r = _read(db, _obs(0.2, 0.0, gap=0.5))
+    assert r.n_cands == 120 and r.n_fills == 60 and r.n_excess == 120 and r.n_days == 30 and r.validated
+    assert r.gap_r == pytest.approx(0.5)              # the fill gap is reported
+    obs = _obs(0.2, 0.0, gap=0.5)
+    twin = L.twin_means(obs[obs["arm_id"] == "A1"].reset_index(drop=True), obs[obs["arm_id"] == "C1"])
+    assert r.excess_r is not None and abs(r.excess_r - 0.2) < 0.3     # ~ arm 0.2 - control 0.0, the gap left out
+    assert np.isfinite(twin).all()
 
 
 @pytest.mark.parametrize("parity,why", [
@@ -90,74 +99,92 @@ def test_the_read_reports_fills_mean_r_the_fill_replay_gap_and_raises_the_twin_b
     ({SCOPE: L.ParityGap(scope=SCOPE, status="FIRE", mean_gap_r=0.1, revoked=True)}, "revoked"),
 ])
 def test_an_unvalidated_twin_is_never_evidence_and_the_arm_holds(db, parity, why):
-    r = L.decide(_read(db, _obs(-1.0), parity=parity), m=1)
+    r = L.decide(_read(db, _obs(-1.0), parity=parity))
     assert not r.validated and why in r.reason and r.decision == "HOLD"
     assert r.e_worse > L.E_RETIRE                     # the evidence is there, but the twin is not validated
 
 
-def test_too_few_fills_or_days_hold(db):
-    r = L.decide(_read(db, _obs(-1.0, days=8)), m=1)
+def test_too_few_candidates_or_days_hold(db):
+    r = L.decide(_read(db, _obs(-1.0, days=8)))
     assert r.decision == "HOLD" and "insufficient" in r.reason
 
 
-def test_a_read_with_most_fills_in_cells_without_a_control_label_is_not_readable(db):
-    obs = _obs(-1.0)
-    obs.loc[obs["arm_id"] == "A1", "decision_utc"] += pd.Timedelta(hours=3)      # arm at 12h/17h, control at 9h/14h
-    r = L.decide(_read(db, obs), m=1)
-    assert r.decision == "HOLD" and "not readable" in r.reason and r.unmatched_share == 1.0
+def test_a_read_with_most_candidates_in_cells_without_a_control_label_is_not_readable(db):
+    obs = _obs(-1.0, per_day=8)
+    arm = obs.index[obs["arm_id"] == "A1"]
+    obs.loc[arm[arm % 4 != 0], "decision_utc"] += pd.Timedelta(hours=2)      # 3 in 4 to 11h/16h: no control there
+    r = L.decide(_read(db, obs))
+    assert r.decision == "HOLD" and "not readable" in r.reason and (r.unmatched_share or 0) > L.MAX_UNMATCHED
 
 
 # ---------------------------------------------------------------- the decisions
 def test_an_arm_clearly_worse_than_its_twin_is_retired(db):
-    r = L.decide(_read(db, _obs(-0.8, 0.0)), m=1)
+    r = L.decide(_read(db, _obs(-0.8, 0.0)))
     assert r.decision == "RETIRE" and r.e_worse >= L.E_RETIRE and "worse than its replay twin" in r.reason
 
 
 def test_an_arm_no_different_from_its_twin_holds(db):
-    r = L.decide(_read(db, _obs(0.0, 0.0, seed=3)), m=1)
+    r = L.decide(_read(db, _obs(0.0, 0.0, seed=3)))
     assert r.decision == "HOLD" and r.e_worse < L.E_RETIRE
 
 
-def test_a_strategy_arm_clearly_better_than_its_twin_is_a_size_up_proposal_with_a_bonferroni_bar(db):
-    read = _read(db, _obs(1.0, 0.0)).model_copy(update={"net_gbp": 12.0})
-    up = L.decide(read, m=1)
-    assert up.decision == "SIZE_UP" and not up.applied and "proposal only" in up.reason
-    assert up.e_size_up == L.E_PER_STREAM * 2
-    many = L.decide(read, m=10 ** 6)                   # the bar rises with the arms read in the run
-    assert many.decision == "HOLD" and many.e_size_up == L.E_PER_STREAM * 2 * 10 ** 6
-
-
-def test_a_learning_arm_is_never_sized_up_and_a_money_loser_never_is(db):
-    learn = _read(db, _obs(1.0), arm=_arm(role="strategy")).model_copy(update={"role": "learning", "net_gbp": 9.0})
-    assert L.decide(learn, m=1).decision == "HOLD"
-    loser = _read(db, _obs(1.0)).model_copy(update={"net_gbp": -1.0})
-    assert L.decide(loser, m=1).decision == "HOLD"
+def test_an_arm_clearly_better_than_its_twin_only_holds_with_its_e_better_reported_not_evidence(db):
+    r = L.decide(_read(db, _obs(1.0, 0.0)).model_copy(update={"net_gbp": 50.0}))
+    assert r.decision == "HOLD" and r.e_better >= L.E_RETIRE and "reported, not evidence" in r.reason
+    assert typing.get_args(L.Decision) == ("HOLD", "RETIRE")                              # no SIZE_UP at all
 
 
 def test_a_kill_rule_retires_whatever_the_evidence(db):
-    r = L.decide(_read(db, _obs(1.0)).model_copy(update={"kill": "learning_loss_cap 25 reached"}), m=1)
+    r = L.decide(_read(db, _obs(1.0)).model_copy(update={"kill": "learning_loss_cap 25 reached"}))
     assert r.decision == "RETIRE" and "kill rule" in r.reason
 
 
 def test_no_matched_control_holds(db):
-    r = L.decide(_read(db, _obs(-1.0), control=None), m=1)
+    r = L.decide(_read(db, _obs(-1.0), control=None))
     assert r.decision == "HOLD" and "no matched control" in r.reason
 
 
+# ---------------------------------------------------------------- the frozen path
+def test_adding_later_rows_never_changes_a_journalled_day_term(db):
+    first = _read(db, _obs(-0.3, seed=7, days=20, end="2026-11-07"), day="2026-11-07")
+    with db.connection() as conn:
+        before = conn.execute("SELECT day, term, n FROM arm_lifecycle_terms ORDER BY day").fetchall()
+    # late labels on an earlier day and a later control row in the same cells arrive after the first read
+    obs = pd.concat([_obs(-0.3, seed=7, days=20, end="2026-11-07"),
+                     _obs(5.0, seed=8, days=1, end="2026-11-03"),
+                     _obs(-0.3, seed=9, days=10, end=DAY)], ignore_index=True)
+    second = _read(db, obs)
+    with db.connection() as conn:
+        after = conn.execute("SELECT day, term, n FROM arm_lifecycle_terms ORDER BY day").fetchall()
+    assert after[:len(before)] == before and len(after) == len(before) + 10
+    assert second.n_days == 30 and first.n_days == 20
+    with pytest.raises(Exception, match="append-only"), db.write() as conn:
+        conn.execute("UPDATE arm_lifecycle_terms SET term = 0")
+
+
+def test_the_e_process_reads_the_stored_terms_only(db):
+    r1 = _read(db, _obs(-0.8))
+    r2 = _read(db, _obs(3.0, seed=11))               # the same days read again with other labels: nothing moves
+    assert (r2.e_worse, r2.excess_r, r2.n_days) == (r1.e_worse, r1.excess_r, r1.n_days)
+
+
 # ---------------------------------------------------------------- which arms, and what is applied
-def test_controls_cost_arms_owner_experiments_and_the_red_box_week_arms_are_never_decided():
+def test_controls_cost_arms_and_owner_experiments_are_never_decided_and_red_box_arms_only_by_kill_rules(db):
     arms = {a.id: a for a in load_arms(ROOT / "config" / "exploration_arms.yaml", check_hash=False)}
-    for i in ("RB15", "RBC15", "RB1H", "RBC1H", "RB4H", "RBC4H"):
-        assert not L.decided(arms[i]), i
+    for i in ("RB15", "RB1H", "RB4H"):
+        assert L.fixed_window(arms[i]), i
     assert not any(L.decided(a) for a in arms.values() if a.role in ("control", "cost", "owner_experiment"))
-    assert L.decided(_arm()) and not L.decided(_arm(end_utc="2026-11-22T22:00:00Z"))
+    assert L.decided(_arm()) and not L.fixed_window(_arm(end_utc="2026-11-22T22:00:00Z"))
+    rb = L.decide(_read(db, _obs(-1.0, arm_id="RB15"), arm=arms["RB15"]))
+    assert rb.decision == "HOLD" and "fixed-window" in rb.reason
+    killed = L.decide(rb.model_copy(update={"kill": "learning_expired after 2026-11-22"}))
+    assert killed.decision == "RETIRE"
 
 
 def test_run_journals_every_decision_and_applies_a_retire_through_the_engines_retirement(db, monkeypatch):
     obs = pd.concat([_obs(-0.8, arm_id="BAD"), _obs(0.0, seed=4, arm_id="OK", control="C2")], ignore_index=True)
     monkeypatch.setattr(L, "read_obs", lambda *a, **k: obs)
-    rb = next(a for a in load_arms(ROOT / "config" / "exploration_arms.yaml", check_hash=False) if a.id == "RB15")
-    reads = L.run(db, hosts={"icm-probe": "icm"}, arms=[_arm("BAD"), _arm("OK"), rb],
+    reads = L.run(db, hosts={"icm-probe": "icm"}, arms=[_arm("BAD"), _arm("OK")],
                   controls={"BAD": "C1", "OK": "C2"}, caps={}, day=DAY, now=NOW, parity=PASS)
     assert {r.arm_id: r.decision for r in reads} == {"BAD": "RETIRE", "OK": "HOLD"}
     assert {r.arm_id: (r.decision, r.applied) for r in L.reads_of(db, DAY)} == {"BAD": ("RETIRE", True),
@@ -200,6 +227,30 @@ def test_the_job_is_scheduled_after_the_daily_review():
     s = load_settings()
     assert "arm_lifecycle" in JOBS and s.research.arm_lifecycle.enabled
     assert s.scheduler.arm_lifecycle.at > s.scheduler.daily_review.at
+
+
+def test_the_job_reads_every_good_registry_row_when_one_row_is_bad(tmp_path, monkeypatch):
+    """R9: one bad hot-loaded row is left out alone."""
+    from goldbot.ops import jobs
+    from tests.test_arm_registry import _hot_row, _register
+    _register(tmp_path)
+    _register(tmp_path, _hot_row("D2610-2", config_hash="0" * 16))
+    _register(tmp_path, _hot_row("D2610-3"))
+    rows = jobs.registry_rows(Database.open(str(tmp_path), "aux"))
+    assert [r.arm_id for r in rows] == ["D2610-1", "D2610-2", "D2610-3"]
+    seen: dict[str, Any] = {}
+
+    def run(db: Any, **kw: Any) -> list[Any]:
+        seen.update(kw)
+        return []
+    monkeypatch.setattr(L, "run", run)
+    from goldbot.config import load_settings
+    from goldbot.ops.accounts import load_accounts
+    ctx = type("Ctx", (), {"settings": load_settings(), "state_dir": tmp_path,
+                           "accounts": list(load_accounts(ROOT / "config" / "accounts.yaml", logins=False).values())})()
+    jobs.arm_lifecycle(ctx, NOW)
+    ids = {a.id for a in seen["arms"]}
+    assert {"D2610-1", "D2610-3"} <= ids and "D2610-2" not in ids
 
 
 def test_a_read_a_newer_release_wrote_with_an_extra_field_still_reads(db):
