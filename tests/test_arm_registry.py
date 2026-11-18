@@ -641,3 +641,19 @@ def test_the_verified_tip_is_written_to_core_db_only_when_the_tip_or_the_arm_set
     _register(tmp_path, _hot_row("D2610-3"))
     R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=20))
     assert len(writes) == 1 and writes[0][2][0] == 3
+
+
+def test_the_registry_read_never_runs_in_the_fast_part_and_never_touches_another_books_block(tmp_path, monkeypatch):
+    """Send latency (vantage-demo refusals 2026-11-10; tests/test_fast_arms_first.py): hot-loaded arms are 15m+ only,
+    so the registry read (aux.db, core.db and the terminal's demo check) runs in the 15m+ part, never ahead of a 1m/5m
+    send, and only on gold's book."""
+    from types import SimpleNamespace
+    eng, pb = _engine(tmp_path, [_arm("peer")])
+    tick = _at(eng, pb, CLOSE)
+    calls: list[str] = []
+    monkeypatch.setattr(R, "_refresh", lambda e, x: calls.append("read"))
+    assert exploration._fast(eng, _ex(eng), tick.ts_utc, tick) is not None and calls == []
+    exploration._slow(eng, _ex(eng), tick, tick.ts_utc, 0)
+    assert calls == ["read"]
+    other = SimpleNamespace(cfg=SimpleNamespace(instrument="EURUSD"))
+    R.refresh(other, SimpleNamespace(), CLOSE)              # type: ignore[arg-type]  # no attribute is read

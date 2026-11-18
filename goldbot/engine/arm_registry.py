@@ -446,8 +446,11 @@ def _note(eng: Engine, ex: Exploration, action: str, **detail: Any) -> None:
 
 
 def refresh(eng: Engine, ex: Exploration, now: Any) -> None:
-    """Once a minute (a pass boundary, `exploration._fast`), and at the start (`now` None): read, verify and load.
-    Never raises."""
+    """Once a minute at a pass boundary (the 15m+ part, `exploration._slow`: hot-loaded arms are 15m+ only, so the read
+    never delays a 1m/5m send), and at the start (`now` None): read, verify and load. Gold's book only: any other book
+    returns before touching its block. Never raises."""
+    if eng.cfg.instrument != GOLD:
+        return
     if isinstance(now, pd.Timestamp):
         minute = now.floor("min")
         if ex.registry_read_at == minute:

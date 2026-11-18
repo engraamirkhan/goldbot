@@ -1289,10 +1289,9 @@ def on_pass_slow(eng: Engine) -> None:
 def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | None:
     """The cheap reads, the 1m/5m arms' minute and a send: the orders sent, or None when a step raised (journalled).
     The learning read runs here only when a 1m/5m arm waits on it (its entries read it), else first in `_slow`."""
-    from goldbot.engine import arm_registry, books, exploration_learning
+    from goldbot.engine import books, exploration_learning
     try:
         with books.phase(eng, "exploration:reads"):
-            arm_registry.refresh(eng, ex, now)          # build 3: the hot-loaded arms, at this pass boundary
             refresh_retired(eng, ex, now)
             refresh_cost_reads(eng, ex, now)
             refresh_dormant(eng, ex, now)
@@ -1316,11 +1315,16 @@ def _slow(eng: Engine, ex: Exploration, tick: Tick, at: pd.Timestamp, sent: int)
     multi-book pass, on any book since the pass started holds this part's send (trading-safety M1 and 6). In a
     multi-book pass the send prices on the book's quote read again now (`SplitPass.quote`; code review LOW 2,
     trading-safety 5); a quote that cannot be read or breaks the tick rules (`Engine._quote_fault`) holds the send to
-    a later pass, the signals kept."""
-    from goldbot.engine import books, exploration_learning
+    a later pass, the signals kept.
+
+    Build 3: the hot-loaded arm registry is read here, first (`arm_registry.refresh`, once a minute, gold's book
+    only). Its arms are 15m+ only (`StrategySpec` timeframes), so the read, its core.db tip and its terminal demo check
+    never sit in front of a 1m/5m send (vantage-demo refusals 2026-11-10: the fast part stays cheap)."""
+    from goldbot.engine import arm_registry, books, exploration_learning
     split: SplitPass | None = eng.__dict__.get(SPLIT)
     now = eng._now(tick)
     try:
+        books.timed(eng, "exploration:reads", arm_registry.refresh, eng, ex, now)
         books.timed(eng, "exploration:learning", exploration_learning.refresh, eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and \
