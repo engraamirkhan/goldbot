@@ -425,6 +425,24 @@ def holdout_passed(rows: list[dict[str, Any]], family: str, h: str, feature_vers
                and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
 
 
+FORWARD_EVIDENCE_PREFIXES: tuple[str, ...] = ("forward:", "adr0088:")
+_EVIDENCE_KEYS = ("evidence", "evidence_ref", "source", "confirm", "screen")
+
+
+def forward_evidence(row: dict[str, Any]) -> str | None:
+    """The first `forward:` / `adr0088:` reference `row` rests on (its evidence, source, screen or confirm fields at the
+    top level, in `config` or in `results`), or None. Forward demo evidence qualifies demo arms only."""
+    for part in (row, row.get("config"), row.get("results")):
+        if not isinstance(part, dict):
+            continue
+        for k in _EVIDENCE_KEYS:
+            v = part.get(k)
+            for ref in (v if isinstance(v, list) else [v]):
+                if isinstance(ref, str) and ref.startswith(FORWARD_EVIDENCE_PREFIXES):
+                    return ref
+    return None
+
+
 def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
     """Why the walk-forward `row` is not a research pass the owner's phase gate may rest on, or None when it is. The
     rule `TrialRegistry.passed_gates` applies, for a reader holding a row and the registry (phase gate 1's backtest
@@ -438,9 +456,13 @@ def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str |
     * its own pass counts (`gate_pass_counts`: gates passed, cost treatment recorded);
     * it is the latest evaluated run of its configuration on its feature version (`latest_evaluated`): a later
       failing rerun revokes it;
+    * it rests on no forward demo evidence (`forward_evidence`: `forward:` / `adr0088:`; trading-safety
+      requirement 2026-11-18, item 4), which qualifies demo arms only;
     * a configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) also passed its holdout
       scoring on that feature version (`holdout_passed`): "its features were picked on the same window the
       walk-forward scored, which the deflated Sharpe corrects only partly" (quant review 2026-10-16, HIGH)."""
+    if (ref := forward_evidence(row)) is not None:
+        return f"forward demo evidence ({ref[:80]}) is never phase-gate evidence (trading-safety 2026-11-18)"
     if row.get("status") != "evaluated":
         return "not a walk-forward trial"
     if not gate_pass_counts(row):

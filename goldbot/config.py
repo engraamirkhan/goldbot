@@ -309,6 +309,9 @@ class SchedulerSettings(_Section):
     # the weekly review (goldbot/research/weekly_review.py, architect plan 2026-11-13 item 2): Saturday after the
     # research director (12:30), so the director's next run consumes its action list; the Sunday digest counts it
     weekly_review: ScheduleSettings = ScheduleSettings(kind="weekly", at="13:00", weekday=5, max_late_hours=30)
+    # owner directive 2026-11-18, build 2 (goldbot/research/arm_lifecycle.py): the kill-only read and decision per demo
+    # arm after the 06:15 daily review (whose replay-parity step it reads); a late run still decides
+    arm_lifecycle: ScheduleSettings = ScheduleSettings(kind="daily", at="06:25", max_late_hours=12)
     # R142: the monthly review (goldbot/ops/monthly_review.py), daily after the 06:15 daily review: the 1st builds the
     # calendar month (UTC) before it, after its last day's 23:25 broker_ledger snapshot; a later tick builds it when the
     # 1st was missed (within monthly_review.catch_up_days) or failed, and retries every post that has not gone out. A
@@ -521,6 +524,13 @@ class ExplorationLearnSettings(_Section):
     snapshot_max_decisions: int = Field(600, ge=1, le=20_000)   # decision bars snapshotted a night, newest first
 
 
+class ArmLifecycleSettings(_Section):
+    """Owner directive 2026-11-18, build 2 (goldbot/research/arm_lifecycle.py; docs/research/arm-lifecycle-2026-11-18.md):
+    the nightly kill-only read and decision per demo arm (RETIRE or HOLD). The thresholds are the note's pre-registered module constants,
+    never settings; this only switches the job (off: nothing read, nothing retired)."""
+    enabled: bool = True
+
+
 class PowerFirstSettings(_Section):
     """ADR 0085 power-first rule (goldbot/research/power_first.py), research and demo promotion only, as re-ruled by the
     quant-reviewer on 2026-11-15: "Start only if every power_g >= 0.5, simulated joint power >= 0.25, and n_eff >=
@@ -630,6 +640,7 @@ class ResearchSettings(_Section):
     har_abstention: HarAbstentionSettings = Field(default_factory=HarAbstentionSettings)
     position: PositionSettings = Field(default_factory=PositionSettings)
     power_first: PowerFirstSettings = Field(default_factory=PowerFirstSettings)
+    arm_lifecycle: ArmLifecycleSettings = Field(default_factory=ArmLifecycleSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod

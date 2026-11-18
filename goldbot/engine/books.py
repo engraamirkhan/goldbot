@@ -1264,9 +1264,12 @@ def published(eng: Engine) -> dict[str, Any]:
     `exposure_unknown` instead, never null: the supervisor keeps probe files out of every combined sum, but reads a
     null map as an unreadable file and would halt the real accounts on a probe's unknown. M3: `unbooked_positions`,
     the account's positions on a symbol no book trades (health FAILs on them). Reporting only: no entry or exit reads
-    it."""
+    it. Every engine, multi-book or not: gold's book's hot-loaded arm registry state (`arm_registry.published`, build 3
+    R7: since when it has been unverified; health FAILs it past five minutes)."""
+    from goldbot.engine import arm_registry
+    registry = arm_registry.published(eng)
     if not multi(eng):
-        return {}
+        return registry
     st = eng.state
     out: dict[str, Any] = {}
     symbols: dict[str, Any] = {}
@@ -1310,4 +1313,4 @@ def published(eng: Engine) -> dict[str, Any]:
             "exposure_unknown": unknown, "group_notional": gn,
             "unbooked_positions": [{"position_id": p.position_id, "symbol": p.symbol, "magic": p.magic}
                                    for p in eng.__dict__.get("_unbooked", [])],
-            "passes_deferred": eng.__dict__.get("_passes_deferred", 0)}
+            "passes_deferred": eng.__dict__.get("_passes_deferred", 0), **registry}

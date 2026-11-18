@@ -804,6 +804,54 @@ AUX: tuple[Migration, ...] = (
     # to a frozen rule bumps this. NULL on rows recorded before it (and by a release without it, which never reads it)
     Migration(version=36, name="exploration_obs_rule_version", additive=True, statements=(),
               add_columns=(("exploration_obs", "arm_rule_version", "INTEGER"),)),
+    # additive (owner directive 2026-11-18, builds 2 and 3; docs/research/arm-lifecycle-2026-11-18.md).
+    # `arm_registry`: the machine-registered discovered arms (`spec_rule`, demo only) the engine hot-loads at a pass
+    # boundary (goldbot/engine/arm_registry.py), written only by `autodisc-register --to-db`; append-only and
+    # hash-chained (prev_digest -> digest over every other column), so a truncated or altered row breaks the chain and
+    # refuses every hot-loaded entry. `arm_lifecycle_reads`: the nightly kill-only read and decision per (broker, arm)
+    # (goldbot/research/arm_lifecycle.py), one row a day, the journal of every decision (HOLD included). A release
+    # without them never reads either table
+    Migration(version=37, name="arm_registry_lifecycle", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS arm_registry (
+               seq INTEGER PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               row TEXT NOT NULL,
+               style TEXT NOT NULL,
+               max_loss REAL NOT NULL,
+               source TEXT NOT NULL,
+               recorded_ns INTEGER NOT NULL,
+               prev_digest TEXT NOT NULL,
+               digest TEXT NOT NULL,
+               UNIQUE (account_id, arm_id)
+           ) STRICT""",
+        f"""CREATE TABLE IF NOT EXISTS arm_lifecycle_reads (
+               day TEXT NOT NULL,
+               broker TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               decision TEXT NOT NULL CHECK (decision IN ('HOLD', 'RETIRE')),
+               recorded_ns INTEGER NOT NULL,
+               {_BODY},
+               PRIMARY KEY (day, broker, arm_id)
+           ) STRICT""",
+        # B4/B5 (quant review 2026-11-18): each (broker, arm, session day) excess term frozen once its labels have
+        # settled (the day's end + the arm's hold, weekend included, + 1 day), never updated, so the e-process path the
+        # decisions read can only grow by new days. `void` 1 (term NULL): more than 5 % of the day's candidates were
+        # still unlabelled when it settled
+        """CREATE TABLE IF NOT EXISTS arm_lifecycle_terms (
+               broker TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               day TEXT NOT NULL,
+               term REAL,
+               n INTEGER NOT NULL,
+               n_unlabelled INTEGER NOT NULL,
+               void INTEGER NOT NULL CHECK (void IN (0, 1)),
+               recorded_ns INTEGER NOT NULL,
+               PRIMARY KEY (broker, arm_id, day)
+           ) STRICT""",
+        """CREATE TRIGGER IF NOT EXISTS arm_lifecycle_terms_no_update BEFORE UPDATE ON arm_lifecycle_terms
+           BEGIN SELECT RAISE(ABORT, 'arm_lifecycle_terms is append-only'); END""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
@@ -870,6 +918,19 @@ CORE: tuple[Migration, ...] = (
         f"""CREATE TABLE IF NOT EXISTS pilot_state (
                account_id TEXT PRIMARY KEY,
                ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+    )),
+    # additive (build 3, trading-safety and code review 2026-11-18, R1/R6; goldbot/engine/arm_registry.py): per account,
+    # the highest aux.db arm_registry tip the engine verified (seq, digest) and the hot-loaded arms it ran (style, cap,
+    # frozen row). Kept OUTSIDE aux.db so a removed tail, an emptied table or an older aux.db copy reads as a chain
+    # break, and a restart can keep its own arms (entries held) before the first verified load. Only ever advances
+    Migration(version=6, name="arm_registry_seen", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS arm_registry_seen (
+               account_id TEXT PRIMARY KEY,
+               tip_seq INTEGER NOT NULL,
+               tip_digest TEXT NOT NULL,
+               updated_ns INTEGER NOT NULL,
                {_BODY}
            ) STRICT""",
     )),

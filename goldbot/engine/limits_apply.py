@@ -354,6 +354,9 @@ class EngineLimits:
         if self.dynamic:
             lim, cur = self._dynamic(eng, lim, cur, dd, now)
             eng.gate.limits = lim
+        # build 3: the hot-loaded arms' per-trade caps (engine/arm_registry.py) survive every refresh
+        from goldbot.engine.arm_registry import overlay
+        eng.gate.limits = overlay(eng, eng.gate.limits)
         if self.logged and cur == self.current:
             return
         prev = self.current.profile if self.logged else None

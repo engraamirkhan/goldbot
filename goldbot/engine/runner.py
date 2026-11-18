@@ -3043,7 +3043,7 @@ class Engine:
             # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
             "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self), **broker_bars.published(self),
             **key_zones.published(self),     # the dashboard's key zones: display only, never read for an order
-            **books.published(self),               # more than one book: each instrument's own view
+            **books.published(self),               # each instrument's own view; gold's hot-loaded arm registry (R7)
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

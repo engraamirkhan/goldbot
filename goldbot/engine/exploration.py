@@ -345,19 +345,28 @@ def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm],
     for i, row in enumerate(rows):
         name = str(row.get("id")) if isinstance(row, dict) and row.get("id") else f"row{i}"
         try:
-            arm = stamp_qualification(SpecArm.model_validate(row))      # ADR 0061: kept, entries refused if unqualified
+            arm = spec_arm_row(row)
             if ids.count(arm.id) > 1:
                 raise ValueError("another row has the same id (ambiguous: neither runs)")
-            if arm.config_hash != arm_hash(arm):
-                raise ValueError(f"config_hash {arm.config_hash!r} does not match the arm (an arm is frozen)")
-            if why := ruling_1113_refusal(arm):        # research-director ruling 2026-11-13: no new 1m arm
-                raise ValueError(why)
         except ValueError as exc:
             log.error("discovered arm %s dropped from %s: %s", name, path, exc)
             rejected.append(name)
             continue
         arms.append(arm)
     return arms, rejected
+
+
+def spec_arm_row(row: Any) -> SpecArm:
+    """One discovered-arm row as the loader checks it (`_load_spec_arm_rows`, and the hot-loaded registry,
+    `engine.arm_registry`): it validates (`arm_rules_spec.check` for a spec_rule row), its frozen hash is its own, the
+    research-director ruling 2026-11-13 does not refuse it, and it is stamped by the owner rule 2026-10-30 (ADR 0061:
+    kept, entries refused if unqualified). ValueError names what fails."""
+    arm = stamp_qualification(SpecArm.model_validate(row))
+    if arm.config_hash != arm_hash(arm):
+        raise ValueError(f"config_hash {arm.config_hash!r} does not match the arm (an arm is frozen)")
+    if why := ruling_1113_refusal(arm):        # research-director ruling 2026-11-13: no new 1m arm
+        raise ValueError(why)
+    return arm
 
 
 def spec_retired(cfg: ExplorationConfig) -> frozenset[str]:
@@ -793,6 +802,23 @@ class Exploration:
         self.learning_warned = False
         self.learning_loss: dict[str, float] = {}      # arm -> realised loss since registration, from the last read
         exploration_learning.start(eng, self)
+        # owner directive 2026-11-18, build 3 (`arm_registry`): the hot-loaded discovered arms. Their caps join the
+        # gate's (`arm_registry.overlay`); no hot-loaded arm enters until a full validated load (`registry_ok`), and
+        # until one has succeeded (`registry_settled`) no position is closed as an orphan (`exits`)
+        from goldbot.engine import arm_registry
+        self.hot_caps: dict[str, float] = {}
+        self.hot_known: frozenset[str] = frozenset()
+        self.hot_journalled: dict[str, str] = {}
+        self.registry_ok = False
+        self.registry_settled = False
+        self.registry_fails = 0
+        self.registry_read_at: pd.Timestamp | None = None
+        self.registry_note: str | None = None
+        self.registry_bad_since: float | None = None   # wall time the registry stopped verifying (health, R7)
+        self.registry_core: Database | None = None     # core.db: the verified tip kept outside aux.db (R1)
+        self.start_held: frozenset[str] = frozenset()  # remembered at a start that could not load: no entry (R3)
+        self.orphan_hold_from: pd.Timestamp | None = None
+        arm_registry.init(eng, self)
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -1288,11 +1314,16 @@ def _slow(eng: Engine, ex: Exploration, tick: Tick, at: pd.Timestamp, sent: int)
     multi-book pass, on any book since the pass started holds this part's send (trading-safety M1 and 6). In a
     multi-book pass the send prices on the book's quote read again now (`SplitPass.quote`; code review LOW 2,
     trading-safety 5); a quote that cannot be read or breaks the tick rules (`Engine._quote_fault`) holds the send to
-    a later pass, the signals kept."""
-    from goldbot.engine import books, exploration_learning
+    a later pass, the signals kept.
+
+    Build 3: the hot-loaded arm registry is read here, first (`arm_registry.refresh`, once a minute, gold's book
+    only). Its arms are 15m+ only (`StrategySpec` timeframes), so the read, its core.db tip and its terminal demo check
+    never sit in front of a 1m/5m send (vantage-demo refusals 2026-11-10: the fast part stays cheap)."""
+    from goldbot.engine import arm_registry, books, exploration_learning
     split: SplitPass | None = eng.__dict__.get(SPLIT)
     now = eng._now(tick)
     try:
+        books.timed(eng, "exploration:reads", arm_registry.refresh, eng, ex, now)
         books.timed(eng, "exploration:learning", exploration_learning.refresh, eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and \
@@ -2110,6 +2141,12 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         # First of all checks, so nothing below (the budget, the gate, `_intent`, the order core) ever sees it
         refuse("replay_only")
         return "refused"
+    from goldbot.engine import arm_registry
+    if (why := arm_registry.entry_refusal(eng, ex, arm.arm_id)) is not None:
+        # trading-safety 2026-11-18: a hot-loaded arm enters only while its registry verifies and the account is demo
+        # by the one predicate (`risk.gate.is_demo`), read at the signal; the RiskGate's fence checks again
+        refuse(why)
+        return "refused"
     if arm.arm_id in STOP_EXIT_READS and not ex.stop_exits_read:
         # its thinning exemption rests on its stop-exit count: unread, no entry (fail closed)
         refuse("stop_exit_read_unread")
@@ -2376,7 +2413,7 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     wall-clock time exit (`_week_due`, `time_exit`), a 1d/1w position at its history time exit from its decision
     close (`long_bars.time_exit_due`, BACKLOG 254); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
-    from goldbot.engine import exploration_pyramid
+    from goldbot.engine import arm_registry, exploration_pyramid
     try:
         ex = eng.exploration
         at = eng.clock() if eng.cfg.live_clock else now
@@ -2385,6 +2422,11 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 continue
             arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if ex is not None else None
             if arm is None:
+                if ex is not None and arm_registry.orphan_held(ex, tr.opened_utc or tr.entry_bar_ts, at):
+                    # trading-safety 2026-11-18 (R5): it may be a hot-loaded arm's, unknown until a registry load
+                    # succeeds; its own server stop and target stand. Held STALE_CADENCES minutes at most, never
+                    # past its weekend backstop
+                    continue
                 eng._try_close(pid, ORPHAN_EXIT, now)
                 continue
             since = tr.opened_utc or tr.entry_bar_ts
