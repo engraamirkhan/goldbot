@@ -80,8 +80,9 @@ def test_the_gold_arms_and_their_matched_controls_keep_running(spec) -> None:
     running = {i for i, a in spec.items() if not a.retired and a.status == "run"}
     # Z5P, Z9D, Z10D and their controls retired 2026-11-13 (prereg-amendment-2026-11-13-survivor-reads.md section 2)
     # S1A/S1B retired 2026-11-13 (prereg-amendment-2026-11-15-replay-only-controls.md (a)); S0 runs replay-only
+    # + the red-box week's gold arms and controls (prereg-amendment-2026-11-15-redbox-week.md), registered after it
     assert running == {"S0", "S0R", "Z3V", "Z5V", "WKS0", "WKI0", "GS1", "GS1C",
-                       "VEX15", "VEX1H", "IEX1H"}
+                       "VEX15", "VEX1H", "IEX1H", "RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}
     assert all(spec[i].retired and str(spec[i].retired_day) == "2026-11-13" for i in COST_BUDGET_1113)
 
 

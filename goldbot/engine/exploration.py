@@ -954,6 +954,9 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
     gone = skipped[skipped["idx"] == len(bars) - 1]
     for p, why in zip(_pending(arm, gone, through), gone["reason"].astype(str)):
         _skipped(eng, ex, arm, p, why)
+    if arm.spec.rule in ("redbox_break", "redbox_control"):     # the red-box week's review features (journal only)
+        from goldbot.engine import redbox_week
+        redbox_week.journal(eng, ex, arm, c, skipped, bars, through)
 
 
 def _pending(arm: Arm, rows: pd.DataFrame, through: pd.Timestamp) -> list[Pending]:

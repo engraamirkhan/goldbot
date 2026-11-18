@@ -32,6 +32,8 @@ RULE_VERSIONS: dict[str, int] = {
     "tick_surge": 1, "run_fade": 1, "round_break": 1, "round_reject": 1, "extreme_break": 1, "nr4_break": 1,
     "halfhour_persist": 1, "absorb_fade": 1, "htf_reclaim": 1, "three_horizon": 1, "scalp_control": 1,
     "spec_rule": 1, "session_range_break": 1, "session_range_control": 1,
+    # 2026-11-15: the red-box week's rules enter at version 1 (prereg-amendment-2026-11-15-redbox-week.md)
+    "redbox_break": 1, "redbox_control": 1,
 }
 
 # RULE_FUNCS entries that dispatch to a family module: (dispatcher name in arm_rules, module, its table)
@@ -40,7 +42,8 @@ _DISPATCH = (("channel", "arm_rules_channels", "RULES"), ("clock_box", "arm_rule
 # RULE_FUNCS entries that are lambdas importing their rule: (module, function)
 _LAMBDA = {"level_break": ("arm_rules_levels", "level_break"), "spec_rule": ("arm_rules_spec", "spec_candidates"),
            "session_range_break": ("arm_rules_growth", "session_range_break"),
-           "session_range_control": ("arm_rules_growth", "session_range_control")}
+           "session_range_control": ("arm_rules_growth", "session_range_control"),
+           "redbox_break": ("arm_rules_redbox", "redbox_break"), "redbox_control": ("arm_rules_redbox", "redbox_control")}
 
 
 _PREFIX = "goldbot.research.arm_rules"     # the modules whose helpers a rule's version covers

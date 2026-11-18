@@ -19,6 +19,13 @@ The population's shadow -> live promotion requires a passed research trial for t
 
 The held-out year is judged once per configuration by its own pre-stated rule (holdout_verdict): the model-filtered
 trades in the window have positive mean R with a one-sided t-statistic of at least HOLDOUT_MIN_T.
+
+ADR 0085 (research and demo promotion only; `research_gates` above stays the phase gate's verdict, unchanged): a
+rule-only card is judged by `rule_only_promotion_gates`: "drop 1,500 candidates / 60 per fold for rule-only cards
+(keep for model cards)"; "keep the regime-robustness intent of '10 trades/yr and 3 positive years incl. 2021-22' but
+define years from pooled family trades or pre-registered multi-year blocks so 1d rules can be scored"; the
+registry-K DSR is reported, never a pass/fail item. The 200-trade minimum moves to the fresh-data confirm as a
+minimum clustered n_eff (`promotion_confirm.MIN_FRESH_N_EFF`).
 """
 from __future__ import annotations
 
@@ -137,3 +144,46 @@ def day_summed_check(row: dict[str, Any] | None, rows: list[dict[str, Any]]) -> 
                       f"{res.n_trades} trades, K = {k} (need both >= {DSR_BAR}); per trade on R "
                       f"{res.dsr_per_trade_r:.3f} (R basis, not the gate DSR), t {res.t_day_summed:.2f} day-summed vs "
                       f"{res.t_per_trade_r:.2f} per trade on R ({fall:.1%} lower)"}
+
+
+RULE_ONLY_PROMOTION_LABEL = "rule-only promotion gates (ADR 0085; research and demo promotion only, never the phase gate)"
+
+
+def _check_blocks(blocks: list[tuple[int, int]]) -> None:
+    """Pre-registered blocks: each spans at least two calendar years (a, b inclusive, b > a), in order, disjoint."""
+    prev = None
+    for a, b in blocks:
+        if b <= a:
+            raise ValueError(f"a block spans several years (a < b), got {(a, b)}")
+        if prev is not None and a <= prev:
+            raise ValueError(f"blocks must be in order and disjoint, got {blocks}")
+        prev = b
+
+
+def rule_only_promotion_gates(taken: pd.DataFrame, *, dsr: dict[str, Any] | None,
+                              blocks: list[tuple[int, int]] | None = None) -> dict[str, Any]:
+    """ADR 0085's learn-window gates for a rule-only card. `taken`: the family's pooled trades (ts_utc, ret) across
+    its cells and instruments; `blocks`: the card's pre-registered multi-year blocks ((first, last) calendar years,
+    inclusive), else calendar years. A unit (year or block) counts as positive with at least MIN_TRADES_PER_YEAR
+    trades for every year it spans (code review of 734940c3: the rate is per year, a block only pools uneven years)
+    and a positive mean; MIN_POSITIVE_YEARS positive units are needed, one of them holding a CHOP_YEARS year.
+    No candidate or per-fold minimum. `dsr` (the registry-K deflated Sharpe with K and K_eff) is reported only."""
+    units: dict[str, list[int]] = {}
+    if blocks:
+        _check_blocks(blocks)
+        units = {f"{a}-{b}": list(range(a, b + 1)) for a, b in blocks}
+    year = pd.DatetimeIndex(pd.to_datetime(taken["ts_utc"], utc=True)).year if len(taken) else pd.Index([])
+    if not blocks:
+        units = {str(y): [int(y)] for y in sorted(set(year))}
+    positive = []
+    for name, ys in units.items():
+        g = taken[year.isin(ys)] if len(taken) else taken
+        if len(g) >= MIN_TRADES_PER_YEAR * len(ys) and float(g["ret"].mean()) > 0:
+            positive.append(name)
+    chop = any(y in CHOP_YEARS for name in positive for y in units[name])
+    what = "pre-registered blocks" if blocks else "calendar years"
+    per = "a year of each" if blocks else "each"
+    check = {"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
+             "detail": f"positive {what} of pooled family trades (>= {MIN_TRADES_PER_YEAR} trades {per}): "
+                       f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one holding {list(CHOP_YEARS)}"}
+    return {"passed": check["passed"], "checks": [check], "dsr_report_only": dsr, "label": RULE_ONLY_PROMOTION_LABEL}

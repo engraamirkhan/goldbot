@@ -42,6 +42,8 @@ GROWTH = {"GS1", "GS1C"}           # growth sprint 2026-11-01: icm-demo only
 EXECUTION_ICM = {"IEX15", "IEX1H"}
 EXECUTION_VANTAGE = {"VEX15", "VEX1H"}
 VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
+# the red-box week on icm-probe (prereg-amendment-2026-11-15-redbox-week.md): 3 learning arms, 3 replay-only controls
+REDBOX = {"RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}
 WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
 # multi-instrument demo (lane L3): each listed instrument's random controls, on the account that lists it
 # owner decision 2026-11-04: icm-probe keeps 14 of its 19, vantage-demo trades the 10 added instruments
@@ -100,7 +102,7 @@ def test_icm_probe_ships_the_scalp_arms_and_the_cost_probes(accs):
     # demo-limits ADR 0072 (2026-11-02): the probe sleeve £30 -> £52; the scalp pot slots only, 23 of 24 host slots
     assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
     # learning-mi-2026-11-02.md and lane L3: the multi-instrument pairs and controls beside the scalp arms
-    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"]
+    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"] | REDBOX
     assert set(ex.pots) == {"scalp", "intraday"}
     assert ex.pots["scalp"].gbp is None and ex.max_open_total == 23      # one slot of 24 kept for the scheduled probe
     assert ex.budget_share * 220 == pytest.approx(168, abs=0.05)
@@ -115,7 +117,8 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         assert not clash, f"{aid} shares arms with another host: {clash}"
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
     assert set(seen) == (SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
-                         | EXECUTION_ICM | EXECUTION_VANTAGE | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"])
+                         | EXECUTION_ICM | EXECUTION_VANTAGE | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"]
+                         | REDBOX)
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):

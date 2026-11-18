@@ -45,6 +45,8 @@ ARM_SPEC_IDS |= INSTRUMENT_CONTROLS
 ARM_SPEC_IDS |= {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for g in ("LB", "LBC")}
 # execution/cost calibration controls (docs/research/prereg-amendment-2026-11-10-execution-controls.md)
 ARM_SPEC_IDS |= {"VEX15", "VEX1H", "IEX15", "IEX1H"}
+# the red-box week (docs/research/prereg-amendment-2026-11-15-redbox-week.md): 3 learning arms, 3 replay-only controls
+ARM_SPEC_IDS |= {"RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:

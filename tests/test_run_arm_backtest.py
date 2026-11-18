@@ -298,3 +298,19 @@ def test_a_new_prereg_screen_charges_the_pinned_cost_of_record(b1: pd.DataFrame)
         assert (trades["net_r_cor_stress"] <= trades["net_r_cor"] + 1e-12).all()
     with pytest.raises(ValueError, match="version"):
         rab.run_arm(b1, ARMS["S0"], START, END, COSTS, screen=A.ScreenPin(broker="icm", cost_version="cor-old"))
+
+
+def test_a_v3_pin_charges_each_trade_by_its_research_exit(b1: pd.DataFrame) -> None:
+    """ADR 0084: a screen pinned to the fill-to-bar table charges the cell of each trade's own barrier and reports
+    the share of trades whose stop is cost-dominated (15m or faster)."""
+    assert COSTS.fill_to_bar is not None
+    v3 = COSTS.fill_to_bar.version
+    trades, s = rab.run_arm(b1, ARMS["S0"], START, END, COSTS, screen=A.ScreenPin(broker="icm", cost_version=v3))
+    assert s["screen"]["cost_of_record"] == v3 and "cost_dominated_share" in s["screen"]
+    if len(trades):
+        ets = pd.DatetimeIndex(trades["entry_ts"])
+        from goldbot.data.calendar import DEFAULT_SESSIONS
+        sess = np.where(DEFAULT_SESSIONS.is_open(ets), DEFAULT_SESSIONS.session_label(ets), "")
+        rt, _ = COSTS.screen_charges("icm", sess, v3, exits=trades["barrier_hit"].to_numpy())
+        want = (trades["move_usd"].to_numpy() - rt) / trades["risk_usd"].to_numpy()
+        assert trades["net_r_cor"].to_numpy() == pytest.approx(want, abs=1e-9)

@@ -521,6 +521,47 @@ class ExplorationLearnSettings(_Section):
     snapshot_max_decisions: int = Field(600, ge=1, le=20_000)   # decision bars snapshotted a night, newest first
 
 
+class PowerFirstSettings(_Section):
+    """ADR 0085 power-first rule (goldbot/research/power_first.py), research and demo promotion only, as re-ruled by the
+    quant-reviewer on 2026-11-15: "Start only if every power_g >= 0.5, simulated joint power >= 0.25, and n_eff >=
+    n_eff_floor (200) at each fresh-data gate"; "delta = 0.10 R net per trade, fixed, NO max() with the goal edge".
+    Every value here may only tighten: the bounds below are the ruling's values (the code review of 734940c3). The sd and
+    correlations are pre-set, never taken from the card's own outcomes."""
+    min_gate_power: float = Field(0.5, ge=0.5, lt=1)          # power at EVERY gate the card must pass
+    min_joint_power: float = Field(0.25, ge=0.25, lt=1)       # the chain's joint power, simulated with shared data
+    delta_r: float = Field(0.10, ge=0.10)                     # the edge every gate is powered for, net R a trade
+    n_eff_floor: float = Field(200.0, ge=200)                 # clustered n_eff at every fresh-data gate
+    # goal_edge_R (information only, never gates): trades a day = learn signals a year / this
+    trading_days_per_year: float = Field(252.0, ge=250, le=262)
+    # sd_tf = max(sd_r_floor, the demo-measured sd of that timeframe); null = not measured yet (the floor applies)
+    sd_r_floor: float = Field(1.2, ge=1.2)
+    sd_r_measured_by_tf: dict[str, float | None] = Field(
+        default_factory=lambda: dict.fromkeys(("5m", "15m", "1h", "4h", "1d"), None))
+    # n_eff = n / (1 + (m_day - 1) rho_day) / (1 + (k - 1) rho_inst): PRIORS until a pooled estimate from other
+    # families' learn outcomes replaces them; rho_inst is the metals value when >= half the pool is XAU/XAG/XPT/XPD
+    rho_day: float = Field(0.25, ge=0.25, le=1)
+    rho_instrument: float = Field(0.5, ge=0.5, le=1)
+    rho_instrument_metals: float = Field(0.7, ge=0.7, le=1)
+    sims: int = Field(20_000, ge=2_000)                        # joint-power Monte Carlo draws
+    seed: int = 20261115
+
+    @field_validator("sd_r_measured_by_tf")
+    @classmethod
+    def _measured_positive(cls, v: dict[str, float | None]) -> dict[str, float | None]:
+        bad = {tf: x for tf, x in v.items() if x is not None and not x > 0}
+        if bad:
+            raise ValueError(f"a measured sd is > 0, got {bad}")
+        return v
+
+    def sd_r(self, timeframe: str) -> float:
+        """sd_tf = max(sd_r_floor, the demo-measured sd); a timeframe not in the table is refused."""
+        if timeframe not in self.sd_r_measured_by_tf:
+            raise ValueError(f"no pre-set sd for timeframe {timeframe!r} in research.power_first.sd_r_measured_by_tf "
+                             "(ADR 0085: the sd is never taken from the card's own outcomes)")
+        measured = self.sd_r_measured_by_tf[timeframe]
+        return max(self.sd_r_floor, float(measured)) if measured is not None else self.sd_r_floor
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -588,6 +629,7 @@ class ResearchSettings(_Section):
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
     har_abstention: HarAbstentionSettings = Field(default_factory=HarAbstentionSettings)
     position: PositionSettings = Field(default_factory=PositionSettings)
+    power_first: PowerFirstSettings = Field(default_factory=PowerFirstSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod

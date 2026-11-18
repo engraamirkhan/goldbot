@@ -55,7 +55,10 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          # live in config/spec_arms.yaml and load on demo accounts only (`load_arms(live_class=True)` refuses them)
          SPEC_RULE,
          # growth sprint 2026-11-01 (goldbot.research.arm_rules_growth): GS1 and its random-entry control GS1C
-         "session_range_break", "session_range_control")
+         "session_range_break", "session_range_control",
+         # the red-box week (owner directive 2026-11-15, prereg-amendment-2026-11-15-redbox-week.md): RB* and their
+         # replay-only controls RBC* (goldbot.research.arm_rules_redbox)
+         "redbox_break", "redbox_control")
 
 # Research-director ruling 2026-11-13 (docs/research/ruling-2026-11-13-gold-only.md; live fills n 5,333: non-gold
 # n 1,131 at -GBP 262, -0.21 R a trade; gold n 4,202 at +GBP 5, 93% of them on 1m/5m). Item 1, the `retired_rule` of
@@ -131,6 +134,62 @@ class ArmCosts(FrozenRecord):
     spread_both_legs_usd: float = Field(0.12, ge=0)
     # the measured cost of record by broker x session (config/cost_of_record.yaml); None = the frozen model only
     of_record: CostOfRecord | None = None
+    # v3 (ADR 0084): the fill-to-research-bar cost by broker x session x exit (config/cost_of_record_v3.yaml), charged
+    # only to a screen that pins its version; None = not loaded
+    fill_to_bar: FillToBarTable | None = None
+
+    def check_pin(self, version: str) -> None:
+        """A screen's pinned cost version is loaded (v2 `of_record` or v3 `fill_to_bar`), else it stops before any bar
+        is read."""
+        have = [t.version for t in (self.of_record, self.fill_to_bar) if t is not None]
+        if version not in have:
+            raise ValueError(f"cost of record version {version!r} is not loaded (have {have})")
+
+    def _is_v3(self, version: str) -> bool:
+        return self.fill_to_bar is not None and self.fill_to_bar.version == version
+
+    def fill_to_bar_charge_usd(self, broker: str, session: str, exit_kind: str, *, with_stress: bool = True) -> float:
+        """v3: what one round trip ending in `exit_kind` (stop | target | time) costs a screen on `broker` in `session`:
+        the cell's charged upper bound (a session or exit the table does not split reads the broker's pooled cell), plus
+        the 0.70 stress on a stop exit while the broker's demo stops fill at the stop price (ADR 0043, 0064 point 3)."""
+        t = self.fill_to_bar
+        if t is None:
+            raise ValueError("no fill-to-bar cost of record (v3) loaded")
+        cells = t.cells.get(broker)
+        if cells is None:              # ADR 0043 broker amendment: another broker's measurements are never used
+            raise KeyError(f"no cost of record for broker {broker!r} (has {sorted(t.cells)})")
+        if session != ALL_SESSIONS and session not in SESSION_NAMES:
+            raise ValueError(f"unknown session {session!r}: one of {(*SESSION_NAMES, ALL_SESSIONS)}")
+        if exit_kind not in FTB_EXIT_NAMES:
+            raise ValueError(f"unknown exit {exit_kind!r}: one of {FTB_EXIT_NAMES}")
+        cell = cells.get(session, {}).get(exit_kind) or cells[ALL_SESSIONS][exit_kind]
+        stress = OVERSHOOT_STRESS_USD if with_stress and exit_kind == "stop" and not t.stops_trusted.get(broker, False) \
+            else 0.0
+        return cell.charged_usd + stress
+
+    def stop_cost_r(self, broker: str, stop_usd: float) -> float:
+        """v3: the dearest session's charged stop-exit round trip as a share of a `stop_usd` stop (R)."""
+        return max(self.fill_to_bar_charge_usd(broker, s, "stop") for s in (*SESSION_NAMES, ALL_SESSIONS)) / stop_usd
+
+    def cost_dominates(self, broker: str, timeframe: str, stop_usd: float) -> bool:
+        """v3 geometry flag (ADR 0084 point 4): a decision timeframe of 15m or faster whose stop pays more than
+        COST_DOMINATES_R of R per stop exit. A pre-registration that trips it must say why its gross covers the cost."""
+        from goldbot.config import tf_seconds
+        return tf_seconds(timeframe) <= SHORT_TF_SECONDS and self.stop_cost_r(broker, stop_usd) > COST_DOMINATES_R
+
+    def _v3_charges(self, broker: str, labels: list[str], exits: np.ndarray | None,
+                    with_stress: bool = True) -> tuple[np.ndarray, np.ndarray]:
+        def charge(s: str, ex: str) -> float:
+            if s == "":                # outside every session: the broker's dearest session for that exit
+                return max(self.fill_to_bar_charge_usd(broker, x, ex, with_stress=with_stress) for x in SESSION_NAMES)
+            return self.fill_to_bar_charge_usd(broker, s, ex, with_stress=with_stress)
+        if exits is not None:
+            kinds = [x if x in ("stop", "target") else "time" for x in (str(e) for e in np.asarray(exits))]
+            rt = np.array([charge(s, k) for s, k in zip(labels, kinds, strict=True)], dtype=float)
+            return rt, np.zeros(len(rt))
+        non_stop = np.array([max(charge(s, "target"), charge(s, "time")) for s in labels], dtype=float)
+        stop = np.array([charge(s, "stop") for s in labels], dtype=float)
+        return non_stop, np.maximum(0.0, stop - non_stop)
 
     def _cell(self, broker: str, session: str) -> CostOfRecordCell | None:
         if self.of_record is None:
@@ -145,6 +204,9 @@ class ArmCosts(FrozenRecord):
     def require_version(self, version: str) -> CostOfRecord:
         """The cost of record a pre-registration pinned (ADR: cost-of-record version pinning): the loaded table must be
         exactly that version, else the screen stops before it prices anything."""
+        if self._is_v3(version):
+            raise ValueError(f"{version!r} is the fill-to-bar cost of record (v3): price it through screen_charges, "
+                             f"never as a v2 cell table")
         if self.of_record is None:
             raise ValueError(f"no cost of record loaded; the pre-registration pins version {version!r}")
         if self.of_record.version != version:
@@ -160,9 +222,15 @@ class ArmCosts(FrozenRecord):
             return OVERSHOOT_STRESS_USD
         return max(OVERSHOOT_FLOOR_USD, cell.overshoot_ci90[1])
 
-    def screen_charges(self, broker: str, sessions: np.ndarray, version: str) -> tuple[np.ndarray, np.ndarray]:
+    def screen_charges(self, broker: str, sessions: np.ndarray, version: str,
+                       exits: np.ndarray | None = None, *, with_stress: bool = True) -> tuple[np.ndarray, np.ndarray]:
         """Per trade (its entry's session label; "" = outside every session, charged the broker's dearest cell): the
-        round trip and the stop-exit overshoot a new pre-registration's screen charges, after pinning `version`."""
+        round trip and the stop-exit overshoot a new pre-registration's screen charges, after pinning `version`.
+        A v3 pin charges by exit type: with `exits` (the research barrier per trade) the whole cost is in the round trip
+        and the overshoot is 0; without, the dearer of target and time is the round trip and a stop exit is topped up to
+        the stop cell. A v2 pin ignores `exits`."""
+        if self._is_v3(version):
+            return self._v3_charges(broker, [str(x) for x in np.asarray(sessions)], exits, with_stress)
         self.require_version(version)
         cells = list(SESSION_NAMES)
         rt = {s: self.charged_round_trip_usd(broker, s) for s in cells}
@@ -194,6 +262,12 @@ ALL_SESSIONS = "all"
 SESSION_NAMES: tuple[str, ...] = tuple(DEFAULT_SESSIONS.sessions_local)
 OVERSHOOT_FLOOR_USD = 0.12        # quant ruling on #238: the least a new ICM pre-registration charges per stop exit
 OVERSHOOT_STRESS_USD = 0.70       # the 10-25 scenario: a reported stress line, and Vantage's charge until exit legs exist
+FTB_EXIT_NAMES: tuple[str, ...] = ("stop", "target", "time")
+# ADR 0084 point 4: our own history gross at 1m-15m sits within about +/-0.03 R (why-strategies-fail-2026-11-15
+# section 2), so a stop exit that pays more than 0.05 R is a geometry no measured edge here has covered
+COST_DOMINATES_R = 0.05
+SHORT_TF_SECONDS = 15 * 60
+FILL_TO_BAR_FILE = "cost_of_record_v3.yaml"   # the v3 table, a sibling of the cost model (load_costs)
 
 
 class ScreenPin(FrozenRecord):
@@ -205,10 +279,12 @@ class ScreenPin(FrozenRecord):
 
 def screen_net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, costs: ArmCosts, *, broker: str,
                  sessions: np.ndarray, version: str, extra_usd: np.ndarray | float = 0.0,
-                 overshoot_usd: float | None = None) -> np.ndarray:
+                 overshoot_usd: float | None = None, exits: np.ndarray | None = None) -> np.ndarray:
     """Net R at the pinned cost of record: the move less the session's charged round trip, less the ruling's overshoot
-    on a stop exit (`overshoot_usd` replaces it for the stress line), less `extra_usd`, over the stop distance."""
-    rt, os_ = costs.screen_charges(broker, sessions, version)
+    on a stop exit (`overshoot_usd` replaces it for the stress line), less `extra_usd`, over the stop distance. `exits`
+    (the research barrier per trade) prices a v3 pin by exit type."""
+    # a v3 stress line is the cell WITHOUT its built-in stop stress + `overshoot_usd`: 0.70 is added once, never twice
+    rt, os_ = costs.screen_charges(broker, sessions, version, exits, with_stress=overshoot_usd is None)
     if overshoot_usd is not None:
         os_ = np.full(len(rt), float(overshoot_usd))
     pnl = np.asarray(move_usd, dtype=float) - rt - os_ * np.asarray(stop_exit, dtype=float)
@@ -269,7 +345,82 @@ class CostOfRecord(FrozenRecord):
         return self
 
 
-ArmCosts.model_rebuild()          # `of_record` names CostOfRecord, defined after it
+class FillToBarCell(FrozenRecord):
+    """One broker x session x exit cell of the v3 cost of record (ADR 0084), USD per oz, adverse positive: replay gross
+    on the research bars less the broker's net (swap left to the screen), target favourable slippage floored at 0;
+    every replayed fill in its research barrier's cell; ci95 = mean +/- t(G-1) x the wider of the CR1 / CR2
+    day-clustered standard errors, over all those fills and (ci95_matched) over the ones whose broker exit agreed;
+    charged = max(commission, both upper bounds): a favourable disagreement is never credited, an adverse one always
+    charged (a sparse cell: at least the broker's pooled cell of the exit). For a v3 pin it replaces ADR 0064's 0.23
+    and $0.12 floors (ADR 0084 point 2)."""
+    n_fills: int = Field(gt=0)
+    n_days: int = Field(ge=0)
+    n_probes: int = Field(0, ge=0)
+    n_unmatched: int = Field(0, ge=0)          # priced here; the broker exited by another barrier
+    mean_usd: float
+    raw_mean_usd: float                        # before the target-slippage floor
+    ci95: tuple[float, float]
+    mean_matched_usd: float | None = None
+    ci95_matched: tuple[float, float] | None = None
+    commission_usd: float = Field(ge=0)
+    charged_usd: float = Field(ge=0)
+    sparse: bool
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "FillToBarCell":
+        floor = self.commission_usd
+        for name in ("ci95", "ci95_matched"):
+            iv = getattr(self, name)
+            if iv is None:
+                continue
+            if iv[0] > iv[1]:
+                raise ValueError(f"{name} is inverted: [{iv[0]}, {iv[1]}]")
+            floor = max(floor, iv[1])
+        if self.charged_usd < floor - _ROUND_TRIP_TOL:
+            raise ValueError(f"charged_usd {self.charged_usd} is below its upper bounds / commission ({floor:.4f})")
+        return self
+
+
+class ParityCheck(FrozenRecord):
+    """The builder's reproduction of the parity table's random-control cell (matched barrier, swap included)."""
+    n_fills: int = Field(gt=0)
+    n_days: int = Field(ge=0)
+    mean_usd: float
+    ci95: tuple[float, float]
+
+
+class FillToBarGeometry(FrozenRecord):
+    atr14_median_usd: dict[str, float]         # the window's median ATR14 at 1m / 5m / 15m (mid bars)
+
+
+class FillToBarTable(FrozenRecord):
+    """The v3 cost of record (config/cost_of_record_v3.yaml, ADR 0084): broker -> session (asia, london, newyork, all)
+    -> exit (stop, target, time, all) -> cell, with the version a pre-registration pins."""
+    version: str = Field(min_length=1)
+    basis: Literal["fill_to_research_bar"]
+    window_utc: tuple[str, str]
+    source: str
+    research_bars: str = ""
+    interval: str
+    target_slippage: str = ""
+    stops_trusted: dict[str, bool]
+    checks: dict[str, ParityCheck] = Field(default_factory=dict)
+    geometry: FillToBarGeometry
+    cells: dict[str, dict[str, dict[str, FillToBarCell]]]
+
+    @model_validator(mode="after")
+    def _pooled_cells(self) -> "FillToBarTable":
+        for broker, sessions in self.cells.items():
+            pooled = sessions.get(ALL_SESSIONS, {})
+            missing = [x for x in (*FTB_EXIT_NAMES, ALL_SESSIONS) if x not in pooled]
+            if missing:
+                raise ValueError(f"broker {broker!r} has no pooled {ALL_SESSIONS!r} cell for {missing}")
+            if broker not in self.stops_trusted:
+                raise ValueError(f"broker {broker!r} has no stops_trusted flag")
+        return self
+
+
+ArmCosts.model_rebuild()          # `of_record` / `fill_to_bar` name tables defined after it
 
 
 def load_costs(path: Path) -> ArmCosts:
@@ -282,6 +433,22 @@ def load_costs(path: Path) -> ArmCosts:
             extra["of_record"] = load_record(CostOfRecord, table, source="cost_of_record")
         except ValidationError as e:
             raise ValueError(f"cost of record {raw['cost_of_record']}: {e}") from e
+    # v3 (ADR 0084), beside the pinned v2 table: `fill_to_bar_cost` names it, else the sibling FILL_TO_BAR_FILE when the
+    # cost model carries a v2 table. arm_costs.yaml itself is not edited: it is in the sprint3000 engine content hash,
+    # and a change there would block windows of lines already running (no retro effect, ADR 0084 point 5)
+    ftb = raw.get("fill_to_bar_cost") or (FILL_TO_BAR_FILE if raw.get("cost_of_record") else None)
+    ftb_path = Path(path).parent / str(ftb) if ftb else None
+    if ftb_path is not None and (raw.get("fill_to_bar_cost") or ftb_path.exists()):
+        # a malformed v3 table never breaks a v2 screen: it is logged and left unloaded, so only a v3 pin stops
+        # (check_pin refuses a version that is not loaded)
+        try:
+            extra["fill_to_bar"] = load_record(FillToBarTable, yaml.safe_load(ftb_path.read_text()),
+                                               source="cost_of_record_v3")
+        except (ValidationError, yaml.YAMLError, TypeError, ValueError, OSError) as e:
+            log.warning("cost of record v3 %s not loaded (a v3 pin will be refused): %s", ftb, e)
+    v2, v3 = extra.get("of_record"), extra.get("fill_to_bar")
+    if v2 is not None and v3 is not None and v2.version == v3.version:   # a v2 pin is never priced on v3
+        raise ValueError(f"cost of record v2 and v3 carry the same version {v2.version!r}")
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
                     overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]), **extra)
 
@@ -340,6 +507,9 @@ LEARNING_READ_FILLS = 300
 LEARNING_CONTROL_PREFIX = "learning:"
 # what a matched control repeats exactly: the arm's fixed bracket (one stop form, the target in R, the hold in bars)
 BRACKET_KEYS = ("stop_usd", "stop_atr", "target_r", "hold_bars")
+# or, per candidate, the same bracket construction (`_per_trade_refusal`): its name and the params both must share
+PER_TRADE_KEY = "per_trade_bracket"
+PER_TRADE_SAME = ("hold_bars", "min_stop_usd", "max_stop_usd", "end_utc")
 REGISTRY_PREFIX = "registry:"
 _REGISTRY_REF = re.compile(r"^registry:([A-Za-z0-9][A-Za-z0-9:_.#/-]{0,127})(?:@([0-9a-f]{40}))?$")
 _WINDOW = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$")
@@ -446,7 +616,10 @@ def _bracket(arm: Arm) -> dict[str, float] | None:
 def control_match_refusal(arm: Arm, control: Arm) -> str | None:
     """Why `control` is not a matched control of `arm`, None when it is: a random control (`role` control) on the same
     timeframe with the same fixed bracket (stop, target, hold). An arm whose stop or target is not a fixed bracket on
-    its row (a runner exit, a specialist's own stop, a VWAP target, a stop band) cannot be matched."""
+    its row (a runner exit, a specialist's own stop, a VWAP target, a stop band) cannot be matched, except by the
+    per-trade bracket rule (`_per_trade_refusal`)."""
+    if PER_TRADE_KEY in arm.params or PER_TRADE_KEY in control.params:
+        return _per_trade_refusal(arm, control)
     mine = _bracket(arm)
     if mine is None:
         return f"{arm.id} has no fixed bracket (stop_usd or stop_atr, target_r, hold_bars) to match a control on"
@@ -460,6 +633,21 @@ def control_match_refusal(arm: Arm, control: Arm) -> str | None:
     for key, what in (("stop_usd", "stop"), ("stop_atr", "stop"), ("target_r", "target"), ("hold_bars", "hold")):
         if (key in mine) != (key in theirs) or (key in mine and abs(theirs[key] - mine[key]) > 1e-9):
             return f"control {control.id} {what} ({key}) does not match {arm.id}'s"
+    return None
+
+
+def _per_trade_refusal(arm: Arm, control: Arm) -> str | None:
+    """The per-trade bracket match (the KBL card's C10 ruling, adopted by prereg-amendment-2026-11-15-redbox-week.md
+    rule 3): "the twin copies the arm's ... stop distance, target distance, hold" per candidate, so arm and control
+    match when both name the same `per_trade_bracket` construction, the same timeframe and the same PER_TRADE_SAME
+    params (hold, stop band, end); the construction itself is one shared function (`arm_rules_redbox.events`)."""
+    if control.role != "control":
+        return f"control {control.id} is not a control row (role {control.role})"
+    if control.timeframe != arm.timeframe:
+        return f"control {control.id} timeframe {control.timeframe} is not {arm.timeframe}"
+    for key in (PER_TRADE_KEY, *PER_TRADE_SAME):
+        if arm.params.get(key) != control.params.get(key):
+            return f"control {control.id} {key} does not match {arm.id}'s per-trade bracket"
     return None
 
 
@@ -798,6 +986,9 @@ class Arm(FrozenRecord):
             if self.rule in ("session_range_break", "session_range_control"):
                 from goldbot.research.arm_rules_growth import check as check_growth
                 check_growth(self)
+            if self.rule in ("redbox_break", "redbox_control"):
+                from goldbot.research.arm_rules_redbox import check as check_redbox
+                check_redbox(self)
             if self.rule == SPEC_RULE:
                 # ADR 0058 phase 4: a spec the engine cannot run exactly as its research read is refused at load
                 from goldbot.research.arm_rules_spec import check as check_spec
