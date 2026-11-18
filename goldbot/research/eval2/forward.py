@@ -50,7 +50,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -241,12 +241,27 @@ def execution_streams(fills: pd.DataFrame) -> dict[str, float]:
     return out
 
 
-def apply_s5(units: pd.DataFrame, passed: Mapping[tuple[str, str], bool]) -> pd.DataFrame:
+def revoked_for(revoked: Collection[str], broker: str, tf: str) -> bool:
+    """Whether the replay-parity monitor (`research.replay_parity.revoked`; amendment 2026-11-15 section 3) has marked
+    the (broker, TF band) of `tf` unvalidated: its "<broker>:<band>" scope fired (a pooled fire alerts only)."""
+    return f"{broker}:{TF_BAND.get(str(tf), str(tf))}" in revoked
+
+
+def apply_s5(units: pd.DataFrame, passed: Mapping[tuple[str, str], bool],
+             revoked: Collection[str] = ()) -> pd.DataFrame:
     """C8: the units with `s5_ok` per row (S5 passed for its (broker, TF band)) and every fill column blanked where it
-    has not, so no forward read uses a fill S5 has not cleared."""
+    has not, so no forward read uses a fill S5 has not cleared. `revoked`: the replay-parity monitor's fired scopes
+    (`revoked_for`): such a (broker, band) is not ok whatever S5 read (amendment 2026-11-15: "L4 forward reads stop
+    counting")."""
+    ok = np.array([bool(passed.get((str(b), TF_BAND.get(str(t), "")), False)) and not revoked_for(revoked, str(b), str(t))
+                   for b, t in zip(units["broker"], units["tf"], strict=True)], dtype=bool)
+    return blank_units(units.drop(columns="s5_ok", errors="ignore"), ok)
+
+
+def blank_units(units: pd.DataFrame, ok: np.ndarray) -> pd.DataFrame:
+    """`units` with `s5_ok` = `ok` (and any earlier False kept) and every fill column blanked where it is not."""
     out = units.copy()
-    ok = np.array([bool(passed.get((str(b), TF_BAND.get(str(t), "")), False))
-                   for b, t in zip(out["broker"], out["tf"], strict=True)], dtype=bool)
+    ok = np.asarray(ok, dtype=bool) & (out["s5_ok"].astype(bool).to_numpy() if "s5_ok" in out else True)
     out["s5_ok"] = ok
     for c in FILL_COLS:
         if c in out:
@@ -364,4 +379,4 @@ def s5_read(pairs: pd.DataFrame, *, broker: str, tf_band: str, min_n: int = S5_M
 
 __all__ = ["E_KILL_EXEC", "E_KILL_FUTILITY", "E_PROVEN", "TF_BAND", "TF_BANDS", "ForwardState", "S5Read", "apply_s5",
            "day_terms", "e_edge", "e_execution", "e_futility", "execution_streams", "exit_mix_ok",
-           "exit_prior_from_shadow", "forward_state", "prior_hash", "s5_read"]
+           "blank_units", "exit_prior_from_shadow", "forward_state", "prior_hash", "revoked_for", "s5_read"]

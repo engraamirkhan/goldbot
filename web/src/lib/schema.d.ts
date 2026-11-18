@@ -2601,6 +2601,8 @@ export interface components {
              * @enum {string}
              */
             band: "ranked" | "too_few" | "control" | "retired";
+            /** Control Note */
+            control_note?: string | null;
             /** Family */
             family: string;
             /** Family Label */

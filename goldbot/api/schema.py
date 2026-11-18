@@ -1361,6 +1361,9 @@ class RankRow(BaseModel):
     read_units: list[RankProgress] = Field(default_factory=list)
     figures: RankFigures
     variants: list[RankVariant]
+    # prereg-amendment-2026-11-15-hv-rule3-replay-control.md: a row read against S0, a replay-only control whose matched
+    # read is not wired to its replay labels yet, says so ("control: S0 replay (unwired) - not a verdict"); else None
+    control_note: str | None = None
 
 
 class AccountChoice(BaseModel):

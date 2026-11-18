@@ -319,7 +319,8 @@ def instance_deciding_cost(b: Bars, *, side: int, fill: float, atr_i: float, ris
     try:
         return float(deciding_cost(b.inst, b.tf, side=side, price=fill, atr_decision=atr_i, stop_atr=risk / atr_i,
                                    t_fill_ns=t_fill, t_exit_ns=t_exit, stop_exit_share=float(stop_exit),
-                                   stop_entry_share=float(stop_entry), window="explore", costs=costs).r)
+                                   stop_entry_share=float(stop_entry), window="explore", costs=costs,
+                                   s5_revoked=False).r)     # synthetic harness: no broker scopes
     except (MissingCost, ValueError, KeyError):
         return float("nan")
 

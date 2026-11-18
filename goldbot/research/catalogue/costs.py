@@ -62,7 +62,8 @@ EVAL-2 deciding cost (method section 4, prereg 2026-11-09 section 4.2; pin in co
   bp engine  the same round trip in bp of the pin price (0.565 bp), charged at the decision price and decision ATR
   overshoot  $0.145 per stop leg, in the same branch as the round trip that won the max (x 0.145 / 0.230)
   swap       C2 financing over the hold (strict-interior rollovers, #343), floored at 0: a credit is never taken
-  S5 gap     max(0, measured gap $) at the decision ATR per (broker, band) until "broker:band" is in s5_passed
+  S5 gap     max(0, measured gap $) at the decision ATR per (broker, band) until "broker:band" is in s5_passed, and
+             again from a replay-parity fire on it (`s5_revoked`, amendment 2026-11-15)
   stress     the $-constant round trip ($0.230) at min(decision ATR, the 2010-17 era median ATR): 15m 0.151 R at a
              1-ATR stop in every window
   deciding_cost replaces, never adds to, the sim's cost_r."""
@@ -298,11 +299,13 @@ def _stop_usd(atr_decision: float, stop_atr: float) -> float:
 def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: float, stop_atr: float,
                   t_fill_ns: int, t_exit_ns: int, stop_exit_share: float, stop_entry_share: float,
                   window: Literal["explore", "test_old", "confirm", "forward"], broker: str = "icm",
-                  costs: CostModel | None = None) -> DecidingCost:
+                  s5_revoked: bool, costs: CostModel | None = None) -> DecidingCost:
     """EVAL-2 deciding cost in R at 1.0x (module docstring): max(today, bp engine) + overshoot x (stop-exit share +
     stop-entry share) + swap (never a credit) + the positive S5 gap until S5 passes. Every term is >= 0. `costs`: the
-    window's model for the swap; required (None raises MissingCost). deciding_cost replaces, never adds to, the sim's
-    cost_r."""
+    window's model for the swap; required (None raises MissingCost). `s5_revoked`: the replay-parity monitor fired for
+    this broker and band (`eval2.forward.revoked_for`; amendment 2026-11-15: "S5 gap charged in deciding cost"), so the
+    gap is charged even where s5_passed lists it; required, so no caller forgets the revocations (quant re-review of
+    b0d0e710). deciding_cost replaces, never adds to, the sim's cost_r."""
     if costs is None:
         raise MissingCost("deciding cost needs the window's CostModel")
     if window not in WINDOWS_EVAL2:
@@ -321,7 +324,8 @@ def deciding_cost(inst: str, tf: str, *, side: int, price: float, atr_decision: 
     if gaps is None:
         raise MissingCost(f"deciding cost: no S5 fill-vs-replay gap for broker {broker!r}")
     band = pin["s5_band"][tf]
-    s5_gap_r = 0.0 if f"{broker}:{band}" in (pin.get("s5_passed") or []) else max(0.0, float(gaps[band])) / stop
+    passed = f"{broker}:{band}" in (pin.get("s5_passed") or []) and not s5_revoked
+    s5_gap_r = 0.0 if passed else max(0.0, float(gaps[band])) / stop
     total = max(today_r, bp_engine_r) + overshoot_r + swap_r + s5_gap_r
     return DecidingCost(r=total, today_r=today_r, bp_engine_r=bp_engine_r, overshoot_r=overshoot_r, swap_r=swap_r,
                         s5_gap_r=s5_gap_r, pin=ATR_PIN)

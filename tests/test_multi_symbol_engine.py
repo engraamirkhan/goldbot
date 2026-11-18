@@ -266,7 +266,10 @@ def test_each_book_runs_only_the_arms_of_its_own_instrument():
     assert [a.arm_id for a in silver.arms] == ["S0-XAGUSD", "I0-XAGUSD"] and silver.arms[0].instrument == "XAGUSD"
     assert [a.arm_id for a in gold.arms] == ["S0", "I0"] and gold.arms[0].instrument == "XAUUSD"
     assert X.book_config(cfg, "US500") is None
-    usd = specs["S0"].model_copy(update={"params": {**specs["S0"].params, "instrument": "XAGUSD"}})
+    # re-targeted to silver, S0 is a broker control: replay_only is gold's alone (amendment 2026-11-15; the r2 replay is
+    # gold's) and the Arm validator refuses it on another instrument
+    usd = specs["S0"].model_copy(update={"params": {**specs["S0"].params, "instrument": "XAGUSD"},
+                                         "control_mode": "broker"})
     dollar = X.book_config(cfg.model_copy(update={"arms": (X.Arm(spec=usd, style="scalp"),)}), "XAGUSD")
     assert dollar is not None and dollar.arms == () and dollar.dropped == ("S0",)
 

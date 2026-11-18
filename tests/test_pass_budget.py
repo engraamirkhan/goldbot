@@ -149,7 +149,10 @@ def _reference_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------------------------------------------------------------------------------------------------ tests
 def test_a_multi_book_session_decides_and_trades_exactly_as_the_reference_paths(tmp_path, history_1m, monkeypatch):
     """Two 15m closes and 33 minute closes on gold and two instruments, icm-probe's arms, entries through the RiskGate
-    and the paper terminal: every journal row, open trade, position, gap and queued signal is the same."""
+    and the paper terminal: every journal row, open trade, position, gap and queued signal is the same. Amendment
+    2026-11-15 ("the unpaired gold random control is replay_only"): S0's candidates are decided and journalled
+    (`exploration_refused:replay_only`) but never sent, so the session's decisions count both kinds; at least one
+    entry still goes through the RiskGate and the terminal and is exited."""
     fast = _session(tmp_path / "fast", history_1m)
     with monkeypatch.context() as m:
         _reference_paths(m)
@@ -157,8 +160,11 @@ def test_a_multi_book_session_decides_and_trades_exactly_as_the_reference_paths(
     deals = fast.pop("deals")
     pd.testing.assert_frame_equal(deals, ref.pop("deals"), check_exact=True)   # NaN where NaN
     assert fast == ref
-    sent = [d for s in ("XAUUSD", *KEYS) for d in fast[s]["decisions"] if d.get("action") == "exploration:executed:auto"]
-    assert len(sent) >= 3 and len(deals) >= 2 * len(sent)        # it traded: entries and their exits
+    rows = [d for s in ("XAUUSD", *KEYS) for d in fast[s]["decisions"]]
+    sent = [d for d in rows if d.get("action") == "exploration:executed:auto"]
+    replay_only = [d for d in rows if d.get("action") == "exploration_refused:replay_only"]
+    assert len(sent) >= 1 and len(deals) >= 2 * len(sent)        # it traded: entries and their exits
+    assert len(replay_only) >= 1 and len(sent) + len(replay_only) >= 3   # and decided both kinds of candidate
 
 
 def test_a_book_without_agents_builds_no_features_at_its_bar_close(tmp_path, history_1m, monkeypatch):

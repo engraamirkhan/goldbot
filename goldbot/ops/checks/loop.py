@@ -13,6 +13,8 @@ depends on is stale or failing, so a silent loop is an alert, not a discovery.
                Incident 2026-11-13: the brain token is read-only by decision (2026-11-01), the outbox is published by
                hand, and rows waited six days behind an INFO log line; monthly_research and cpcv_quarterly carried a
                bare HTTP 403 in their results with no alert
+  parity       a replay-parity fire (aux.db review_actions kind replay_parity; amendment 2026-11-15 section 3) within
+               replay_parity.ALERT_DAYS: replay-twin reads unvalidated
   jobs         a scheduler job whose last run errored (also job:<name>; listed here so the ci-loop issue names it)
 
 State that cannot be read is "can't check": a WARN that reaches the owner (NOTIFY_ON_WARN), never a pass. A writer
@@ -263,6 +265,37 @@ def _registry(state_dir: Path, now: pd.Timestamp, jobs: dict[str, Any]) -> LoopI
                     reason="synced" + (f"; outbox waiting {_age((now - since).total_seconds())}" if since else ""))
 
 
+def _parity(state_dir: Path, now: pd.Timestamp) -> LoopItem:
+    """Amendment 2026-11-15 section 3: a replay-parity fire (aux.db review_actions kind replay_parity, written by the
+    daily review) FAILS this check for `replay_parity.ALERT_DAYS` after it, so the owner hears of it at once; the
+    revoked scopes stay named in an ok reason afterwards (the revocation is permanent, the alert is not)."""
+    from goldbot.research import replay_parity as rp
+    p = state_dir / "aux.db"
+    if not p.exists():
+        return LoopItem(writer="parity", verdict="ok", reason="no aux.db: exploration not in use")
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=5)
+        try:
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            rows = con.execute("SELECT subject, recorded_ns FROM (SELECT json_extract(body, '$.subject') AS subject, "
+                               "recorded_ns FROM review_actions WHERE kind = ?) ORDER BY recorded_ns",
+                               (rp.KIND,)).fetchall() if "review_actions" in tables else []
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        return LoopItem(writer="parity", verdict="cant_check", reason=f"aux.db unreadable ({type(exc).__name__})")
+    if not rows:
+        return LoopItem(writer="parity", verdict="ok", reason="replay parity never fired")
+    at = {str(s): pd.Timestamp(int(ns), tz="UTC") for s, ns in rows}
+    recent = sorted(s for s, t in at.items() if (now - t).total_seconds() <= rp.ALERT_DAYS * 86400)
+    if recent:
+        return LoopItem(writer="parity", verdict="fail",
+                        reason=f"replay parity fired: {', '.join(recent)}; replay-twin reads unvalidated (S5 gap "
+                               "charged, L4 forward reads stop counting) until a dated amendment")
+    return LoopItem(writer="parity", verdict="ok", reason=f"replay-twin reads unvalidated since a fire: "
+                                                          f"{', '.join(sorted(at))}")
+
+
 def _errored(jobs: dict[str, Any]) -> LoopItem:
     bad = [f"{n}: {_clean(str(j.get('last_error') or '?'), 120)}" for n, j in sorted(jobs.items())
            if isinstance(j, dict) and j.get("last_ok") is False]
@@ -273,7 +306,7 @@ def _errored(jobs: dict[str, Any]) -> LoopItem:
 
 def loop_items(state_dir: Path, now: pd.Timestamp, settings: Settings | None) -> list[LoopItem]:
     """Every writer's verdict, in a fixed order."""
-    out = [_weights(state_dir, now)]
+    out = [_weights(state_dir, now), _parity(state_dir, now)]
     try:
         doc = _scheduler_doc(state_dir)
     except (ValueError, OSError) as exc:
