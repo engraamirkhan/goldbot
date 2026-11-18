@@ -31,7 +31,7 @@ SLOT = pd.Timestamp("2026-11-18 01:00", tz="UTC")
 def settings(**disc):
     s = load_settings()
     d = s.research.discovery.model_copy(update={"enabled": True, "population": 8, "generations": 2, "null_reps": 2,
-                                                "max_candidates": 4, **disc})
+                                                "max_candidates": 4, "k_cap_quarter": 1_000_000, **disc})
     # the shipped 2026Q4 owner budget (tests/conftest.py strips it so other tests see the base 20)
     research = s.research.model_copy(update={"discovery": d, "trial_budget_overrides": {"2026Q4": 3500}})
     return s.model_copy(update={"research": research})
@@ -99,8 +99,8 @@ def test_k_is_not_spent_on_a_spec_whose_power_is_below_the_adr_0085_floor(tmp_pa
                  GPConfig(timeframe="1h", population=6, generations=2, seed=2, min_events=60, families=FAMS), led,
                  admit=gate)
     assert led.k_search() == 0 and led.entries() == []
-    assert gate.refused == len(run.evaluated) > 0 and gate.admitted == 0
-    assert all(c.evaluation.floor_failures[0].startswith("NOT STARTED (power)") for c in run.evaluated)
+    assert gate.refused > 0 and gate.admitted == 0
+    assert run.evaluated == ()                    # refused at sampling (redrawn), never evaluated
 
 
 def test_a_spec_with_power_at_the_floor_is_searched_and_counted_in_k(tmp_path):
@@ -190,12 +190,17 @@ TSMOM_LABELS = pd.DataFrame({"arm_id": ["X1"] * 500, "family": ["tsmom"] * 500, 
                              "is_control": [False] * 500, "label_sim_r": [1.0] * 500, "decision_utc": [T_LONDON] * 500})
 
 
+def FORWARD_OK(*_a):
+    """A forward window that can judge every survivor (the shipped one cannot: test_the_forward_demo_window...)."""
+    return None
+
+
 def steered():
     return settings(timeframes=["1h"], population=12, generations=3, null_reps=4, max_candidates=20, seed=1)
 
 
 def test_a_run_records_counts_k_survivors_and_power_verdicts_in_aux_and_the_ledger(tmp_path):
-    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None,
+    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None, forward=FORWARD_OK,
                            **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
     assert run.status == "ok" and run.k_spent > 0
     tf = run.timeframes[0]
@@ -225,13 +230,13 @@ def test_a_survivor_that_cannot_run_live_is_recorded_but_never_handed_off(tmp_pa
 
 def test_a_spec_whose_stage_read_failed_is_never_offered_again(tmp_path):
     from goldbot.research.autodisc.stages import StageJournal
-    first = DN.run_discovery(steered(), tmp_path / "a", SLOT, executable=lambda spec: None,
+    first = DN.run_discovery(steered(), tmp_path / "a", SLOT, executable=lambda spec: None, forward=FORWARD_OK,
                              **kw(tmp_path / "a", obs_reader=lambda *a, **k: TSMOM_LABELS))
     h = first.survivors[0]
     j = StageJournal(tmp_path / "b" / NT.LEDGER_FILE["synthetic"])
     j.open("confirm", h, {})
     j.close("confirm", h, {"passed": False})
-    again = DN.run_discovery(steered(), tmp_path / "b", SLOT, executable=lambda spec: None,
+    again = DN.run_discovery(steered(), tmp_path / "b", SLOT, executable=lambda spec: None, forward=FORWARD_OK,
                              **kw(tmp_path / "b", obs_reader=lambda *a, **k: TSMOM_LABELS))
     assert h in again.survivors and again.stage_closed >= 1
     assert h not in {c.spec_hash for c in H.pending(tmp_path / "b" / NT.LEDGER_FILE["synthetic"])}
@@ -269,10 +274,6 @@ def test_the_discovery_module_imports_nothing_that_trades():
         assert banned not in src, banned
 
 
-def test_cost_of_record_v3_charges_the_dearest_cell_of_the_broker():
-    extra, version, line = DN.cor_v3_extra(Path("config/cost_of_record_v3.yaml"), "icm")
-    assert version.startswith("cor-") and extra >= 0.9 - 1e-9 and "v3" in line
-    NT.assert_no_confirm_numbers(line)
 
 
 def test_handoff_rows_are_insert_only_and_registration_removes_them_from_pending(tmp_path):
@@ -302,3 +303,250 @@ def test_a_candidate_row_a_newer_release_wrote_still_reads(tmp_path):
     con.commit()
     con.close()
     assert H.pending(led) == [row]
+
+
+# ------------------------------------------------------------------ review round 1 (quant B1-B3, M1, M2; sre d; code review 3)
+def without_q4_override(**disc):
+    s = settings(**disc)
+    return s.model_copy(update={"research": s.research.model_copy(update={"trial_budget_overrides": {}})})
+
+
+def budget_of(run: DN.DiscoveryRun) -> DN.BudgetLine:
+    assert run.budget is not None
+    return run.budget
+
+
+def test_the_registry_check_counts_one_row_per_timeframe_not_the_planned_spec_k(tmp_path):
+    line = DN.budget_line(settings(), SLOT, lambda q: 0, lambda q: 0)
+    assert line.units == 3 and line.refused is None              # three timeframes -> at most three batch rows
+
+
+def test_without_the_2026q4_override_the_night_is_over_budget(tmp_path):
+    run = DN.run_discovery(without_q4_override(), tmp_path, SLOT, budget_used=lambda q: 158, **kw(tmp_path))
+    assert run.status == "over_budget" and run.k_spent == 0 and "trial budget" in (budget_of(run).refused or "")
+
+
+def test_an_unset_k_cap_refuses_the_night_until_the_research_director_sets_it(tmp_path):
+    assert load_settings().research.discovery.k_cap_quarter == 0
+    run = DN.run_discovery(settings(k_cap_quarter=0), tmp_path, SLOT, **kw(tmp_path))
+    assert run.status == "over_budget" and "k_cap_quarter" in (budget_of(run).refused or "")
+    assert not (tmp_path / NT.LEDGER_FILE["synthetic"]).exists()
+
+
+def real_edge_backends(settings_, timeframe):
+    return edge_backends(settings_, timeframe).model_copy(update={"mode": "real"})
+
+
+def test_two_nights_k_accumulate_against_the_quarters_k_cap(tmp_path, monkeypatch):
+    import goldbot.research.registry as REG
+    monkeypatch.setattr(REG, "_utcnow", lambda: SLOT.to_pydatetime())       # batch rows stamped in the slot's quarter
+    s = steered()
+    cap = DN.planned_k(s.research.discovery) + 1                             # room for one night at its bound
+    s = s.model_copy(update={"research": s.research.model_copy(update={
+        "discovery": s.research.discovery.model_copy(update={"k_cap_quarter": cap})})})
+    k = kw(tmp_path, backends=real_edge_backends)
+    first = DN.run_discovery(s, tmp_path, SLOT, **k)
+    assert first.status == "ok" and first.k_spent > 1 and budget_of(first).k_used == 0
+    second = DN.run_discovery(s, tmp_path, SLOT + pd.Timedelta(days=1), **k)
+    assert budget_of(second).k_used == first.k_spent                             # the prior-search seed is not this spend
+    assert second.status == "over_budget" and "k_cap_quarter" in (budget_of(second).refused or "")
+
+
+V3 = Path("config/cost_of_record_v3.yaml")
+
+
+def test_v3_has_no_spread_split_so_labels_are_mid_and_each_full_cell_is_charged_in_bps():
+    c = DN.cor_v3_cells(V3, "icm", price_usd=4000.0)
+    assert not c.split
+    assert c.bps["newyork"]["target"] == pytest.approx(0.9 / 4000.0 * 1e4)    # 2.25 bp, not 0.90 $/oz on 2010-17 prices
+    assert set(c.bps) == {"asia", "london", "newyork"} and set(c.bps["asia"]) == {"stop", "target", "time"}
+    assert "mid labels" in c.line and "swap prior" in c.line and "not measured" in c.line
+    NT.assert_no_confirm_numbers(c.line)
+
+
+def test_a_cost_table_with_a_spread_split_keeps_bid_ask_labels_and_charges_only_the_non_spread_part(tmp_path):
+    cell = "{charged_usd: 0.50, spread_usd: 0.30}"
+    sess = "{stop: %s, target: %s, time: %s, all: %s}" % ((cell,) * 4)
+    (tmp_path / "v.yaml").write_text(f"version: v-test\ncells:\n  icm:\n    asia: {sess}\n    london: {sess}\n"
+                                     f"    newyork: {sess}\n    all: {sess}\n")
+    c = DN.cor_v3_cells(tmp_path / "v.yaml", "icm", price_usd=2000.0)
+    assert c.split and c.bps["london"]["stop"] == pytest.approx(0.2 / 2000.0 * 1e4)
+    assert "bid/ask labels" in c.line
+
+
+def test_each_label_is_charged_the_cell_of_its_session_and_exit():
+    c = DN.CostCells(version="v", broker="icm", price_usd=1.0, split=False, line="x",
+                     bps={"asia": {"stop": 1.0, "target": 2.0, "time": 3.0},
+                          "london": {"stop": 4.0, "target": 5.0, "time": 6.0},
+                          "newyork": {"stop": 7.0, "target": 8.0, "time": 9.0}})
+    lab = pd.DataFrame({"ts_utc": pd.to_datetime(["2015-03-04 09:00", "2015-03-04 15:00", "2015-03-04 02:00",
+                                                  "2015-03-04 09:00"], utc=True),
+                        "barrier_hit": ["stop", "target", "time", "trail"]})
+    got = DN.cell_charge(c)(lab) * 1e4
+    assert got.tolist() == pytest.approx([4.0, 8.0, 3.0, 4.0])                 # a trail exit is a stop order
+
+
+@pytest.fixture(scope="module")
+def b1_2015():
+    from goldbot.data.resample import ticks_to_1m
+    from goldbot.data.synthetic import synthetic_ticks
+    return ticks_to_1m(synthetic_ticks("2015-03-02", "2015-04-10", ticks_per_minute=2, seed=3))
+
+
+def test_net_r_is_the_mid_r_less_one_cell_charge_so_the_spread_is_charged_once(b1_2015):
+    from goldbot.execution.costs import settings_swap
+    swap = settings_swap(load_settings())
+    c = DN.CostCells(version="v", broker="icm", price_usd=1.0, split=False, line="x",
+                     bps={s: {e: 5.0 for e in ("stop", "target", "time")} for s in ("asia", "london", "newyork")})
+    mid = NT.backends_from_1m(b1_2015, "1h", extra_cost_usd=0.0, swap=swap, cost_line="", mid_labels=True).tensor
+    net = NT.backends_from_1m(b1_2015, "1h", extra_cost_usd=0.0, swap=swap, cost_line="", mid_labels=True,
+                              extra_cost_frac=DN.cell_charge(c)).tensor
+    bid_ask = NT.backends_from_1m(b1_2015, "1h", extra_cost_usd=0.0, swap=swap, cost_line="").tensor
+    ok = np.isfinite(mid.ret) & np.isfinite(net.ret)
+    assert ok.sum() > 100
+    np.testing.assert_allclose((net.ret - mid.ret)[ok], -5e-4)                # one cell charge, nothing else
+    np.testing.assert_allclose(((net.ret - mid.ret) / net.risk)[ok], (-5e-4 / net.risk)[ok])
+    assert np.nanmean(mid.ret - bid_ask.ret) > 0                              # bid/ask labels pay the spread: not used
+
+
+def test_bar_backends_label_at_the_mid_and_charge_the_v3_cells(tmp_path, b1_2015):
+    b1_2015.to_parquet(tmp_path / "xauusd_1m_dukascopy_2015.parquet")
+    b = DN.BarBackends(settings(bars_path=str(tmp_path)))
+    got = b(settings(), "4h")
+    assert not b.cells.split and "swap prior" in got.cost_line
+    want = NT.backends_from_1m(DN.load_explore_bars(tmp_path), "4h", extra_cost_usd=0.0, swap=b.swap, cost_line="",
+                               mid_labels=True, extra_cost_frac=DN.cell_charge(b.cells)).tensor
+    np.testing.assert_array_equal(got.tensor.ret, want.ret)
+
+
+def reads_ledger_with(path: Path, families):
+    from goldbot.research.eval2.runner import BATCH_P_KIND
+    path.write_text(json.dumps({"kind": BATCH_P_KIND, "read_window": "test_old", "p": [[f, 0.4] for f in families]})
+                    + "\n")
+    return path
+
+
+def test_a_reads_ledger_that_read_g2_on_test_old_admits_no_spec(tmp_path):
+    reads = reads_ledger_with(tmp_path / "catalogue_reads.jsonl", ["autodisc:G2"])
+    run = DN.run_discovery(steered(), tmp_path, SLOT, reads_ledger=reads, **kw(tmp_path))
+    assert run.k_spent == 0 and all(not x.searched and x.power.admitted == 0 for x in run.timeframes)
+    assert all("TEST-OLD" in (x.skipped or "") for x in run.timeframes)
+    gate = _gate(learn_years=0.25, closed=DN.test_old_spent(tmp_path / "none.jsonl", reads))
+    mask = np.ones(N, bool)
+    assert gate(StrategySpec(timeframe="1h", side_rule="long", entry=Leaf(kind="time", name="asia"),
+                             exit=ExitTemplate(stop="atr_1.0", target="1R")), mask, np.ones(N, np.int8))
+    assert gate.admitted == 0 and gate.reasons["TEST-OLD spent"] == 1
+
+
+def test_another_familys_test_old_read_leaves_g2_open(tmp_path):
+    reads = reads_ledger_with(tmp_path / "catalogue_reads.jsonl", ["tsmom"])
+    assert DN.test_old_spent(tmp_path / "registry.jsonl", reads) is None
+
+
+def test_a_prior_promotion_read_of_g2_on_test_old_admits_no_spec(tmp_path):
+    reg = tmp_path / "registry.jsonl"
+    reg.write_text(json.dumps({"status": "promotion_confirm", "family": "autodisc:G2",
+                               "results": {"promotion_confirm": {"source": "test_old"}}}) + "\n")
+    assert "once per family" in (DN.test_old_spent(reg, tmp_path / "no_reads.jsonl") or "")
+    run = DN.run_discovery(steered(), tmp_path, SLOT, reads_ledger=tmp_path / "no_reads.jsonl", **kw(tmp_path))
+    assert run.k_spent == 0 and not any(x.searched for x in run.timeframes)
+
+
+def test_the_forward_demo_window_over_the_kill_rule_horizon_cannot_judge_even_an_every_bar_spec():
+    """The learning arm's read: at most LEARNING_MAX_DAYS (45) days or LEARNING_READ_FILLS (300) fills. Its n_eff
+    cannot reach the ADR 0085 fresh-data floor (200), nor the n_eff a 0.10 R edge needs for power 0.5."""
+    from goldbot.engine.exploration_learning import LEARNING_READ_FILLS
+    from goldbot.research.arms import LEARNING_MAX_DAYS
+    assert DN.LEARNING_READ_FILLS == LEARNING_READ_FILLS and LEARNING_MAX_DAYS == 45
+    v = DN.forward_verdict(load_settings(), "1h", signals=47_000, clusters=2080, learn_years=8.0)
+    g = v.gates[-1]
+    assert not v.started and g.name == "forward" and g.fresh and g.n_eff < 200
+    assert DN.forward_refusal(load_settings())("1h", 47_000, 2080, 8.0) is not None
+    for signals, days in ((2080, 2080), (12_000, 2080), (47_000, 2080)):      # one a day .. every bar
+        assert not DN.forward_verdict(load_settings(), "1h", signals=signals, clusters=days, learn_years=8.0).started
+
+
+def test_a_survivor_the_forward_window_cannot_judge_is_never_offered(tmp_path):
+    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None,
+                           **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
+    assert len(run.survivors) >= 1 and run.candidate_arms == 0 and run.forward_refused == len(run.survivors)
+    assert H.pending(tmp_path / NT.LEDGER_FILE["synthetic"]) == []
+
+
+def test_a_demo_label_from_the_holdout_year_has_no_effect_on_the_priors(tmp_path):
+    seeded = pd.DataFrame({"arm_id": ["X9"] * 400, "family": ["nr4_break"] * 400, "tf": ["1h"] * 400,
+                           "is_control": [False] * 400, "label_sim_r": [3.0] * 400,
+                           "decision_utc": [pd.Timestamp("2026-06-10 09:00", tz="UTC")] * 400})
+    s = settings(timeframes=["1h"])
+    clean = DN.run_discovery(s, tmp_path / "a", SLOT, dry_run=True,
+                             **kw(tmp_path / "a", obs_reader=lambda *a, **k: TSMOM_LABELS))
+    mixed = DN.run_discovery(s, tmp_path / "b", SLOT, dry_run=True, **kw(
+        tmp_path / "b", obs_reader=lambda *a, **k: pd.concat([TSMOM_LABELS, seeded], ignore_index=True)))
+    assert clean.timeframes[0].priors == mixed.timeframes[0].priors
+    assert "structure:family_rule:nr4_break" not in mixed.timeframes[0].priors
+
+
+def test_each_judged_candidate_reports_how_many_plateau_neighbours_were_admitted(tmp_path):
+    from goldbot.research.autodisc.gen_gp import neighbours
+    from goldbot.research.autodisc.spec import spec_hash
+
+    def admit(spec, mask, side):                  # outcome-blind: refuses about half the specs by their hash
+        return [] if int(spec_hash(spec)[-1], 16) % 2 == 0 else ["odd"]
+
+    b = edge_backends(None, "1h")
+    led = SearchLedger(tmp_path / "n.db", mode="synthetic")
+    r = NT.search_and_judge(b.tensor, b.provider, led, GPConfig(timeframe="1h", population=12, generations=3, seed=1,
+                                                                min_events=60, families=FAMS),
+                            reps=2, max_candidates=20, admit=admit)
+    judged = [(c.spec_hash, c.neighbours_admitted, c.neighbours_total) for c in r.survivors] + [
+        (c.spec_hash, c.neighbours_admitted, c.neighbours_total) for c in r.rejected]
+    assert judged
+    for h, admitted, total in judged:
+        spec = led.get_spec(h)
+        assert spec is not None
+        nbs = neighbours(spec, "v1")
+        assert total == len(nbs) and admitted == sum(not admit(nb, None, None) for nb in nbs)
+    assert "neighbours admitted" in NT.render(r)
+
+
+def test_refused_specs_are_redrawn_at_sampling_so_search_and_null_evaluate_only_admitted_specs(tmp_path):
+    from goldbot.research.autodisc.gen_gp import gp_null
+    from goldbot.research.autodisc.spec import spec_hash
+
+    def admit(spec, mask, side):
+        return [] if int(spec_hash(spec)[-1], 16) % 2 == 0 else ["odd"]
+
+    led = SearchLedger(tmp_path / "r.db", mode="synthetic")
+    cfg = GPConfig(timeframe="1h", population=10, generations=2, seed=4, min_events=60, families=FAMS)
+    t, prov = make_noise_tensor(N, seed=1, timeframe="1h"), SyntheticProvider(N, seed=0)
+    run = run_gp(t, prov, cfg, led, admit=admit)
+    assert sum(c.generation == 0 for c in run.evaluated) == cfg.population      # refused draws replaced, not lost
+    assert all(not admit(c.spec, None, None) for c in run.evaluated)
+    gp_null(t, prov, cfg, led, reps=2, admit=admit)
+    assert all(int(e.spec_hash[-1], 16) % 2 == 0 for e in led.entries())     # the null inherits the redraw
+
+
+def test_an_over_budget_night_writes_the_report_its_summary_points_to(tmp_path):
+    run = DN.run_discovery(settings(), tmp_path, SLOT, budget_used=lambda q: 10**6, **kw(tmp_path))
+    path = DN.summary(run)["report"]
+    assert path is not None and (tmp_path / path).exists() and "over_budget" in (tmp_path / path).read_text()
+
+
+def test_a_second_run_is_refused_while_another_holds_the_discovery_lock(tmp_path):
+    import fcntl
+    lock = tmp_path / "autodisc" / "discovery.lock"
+    lock.parent.mkdir(parents=True)
+    with open(lock, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="lock"):
+            DN.run_job(settings(bars_path=str(tmp_path)), tmp_path, SLOT)
+    with pytest.raises(FileNotFoundError, match="bars_path"):          # released: the run gets past the lock
+        DN.run_job(settings(bars_path=None), tmp_path, SLOT)
+
+
+def test_the_foreground_dry_run_prints_its_peak_rss_for_the_deploy_note(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(DN, "run_discovery", lambda *a, **k: DN.DiscoveryRun(night="2026-11-18", dry_run=True,
+                                                                            status="dry_run", timeframes=[]))
+    assert DN.main(["--state-dir", str(tmp_path), "--dry-run"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["max_rss_mb"] > 0 and out["report"] is None

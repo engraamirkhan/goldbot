@@ -354,18 +354,22 @@ research:
     seed: 0                          # base seed; each night adds its day number
     budget_s: 5400                   # wall clock: no timeframe starts once spent, or when the last one took longer than what is left
     kill_grace_s: 300                # the child is killed at budget_s + this (a killed night's K is counted by the next sync)
-    nice: 15                         # CPU priority of the child: below the engines on the shared 4-core ARM brain (10..19)
+    nice: 15                         # CPU priority of the child: below the engines on the 2-vCPU ARM brain (one core for the child, one for the engines) (10..19)
     memory_mb: 4096                  # data-segment cap of the child (RLIMIT_DATA, Linux; ~1.5 GB RSS measured on the 2010-17 bars); one process, BLAS at one thread
     confirm_configs_per_batch: 3     # power card (XAUUSD alone): its fresh gate is TEST-OLD at Holm rank 1 of this many configs at the ledger year's alpha_j
     test_old_years: 3.92             # TEST-OLD 2006-02..2009 (only shorter)
-    cost_of_record: config/cost_of_record_v3.yaml   # ADR 0084 v3: the broker's dearest charged cell, on top of the bar spread
-    cost_broker: icm
+    k_cap_quarter: 0                 # TODO(research-director): the quarter's discovery K cap (summed registry k_contrib + the
+                                     #   night's planned K); 0 refuses every night until the research director sets it
+    cost_of_record: config/cost_of_record_v3.yaml   # ADR 0084 v3 per (session, exit) cell in bps of cost_price_usd; v3 has no
+    cost_broker: icm                 #   spread split: mid labels + each full cell (the spread charged once); swap: the settings prior
+    cost_price_usd: 4000.0           # gold $/oz where v3 was measured: below the 4068.7 median of 2026-10-12..11-06
+                                     #   (catalogue_costs.yaml pin_price_usd), so never fewer bps; 4100 at most
     cards_dir: config/research/candidates   # catalogue cards: power verdict only (no K, no run); started ones await a prereg
     prior_n0: 50                     # grammar-node priors from demo labels + discovered arms' forward results: shrunk mean R
     prior_gain: 2.0                  #   = sum R / (n + prior_n0); weight = exp(gain x shrunk), clipped to
     prior_min: 0.5                   #   [prior_min, prior_max]; they steer sampling only, every evaluated spec still counts in K
     prior_max: 2.0
-  har_abstention:                   # N-3 (prereg-2026-11-07-n3-har.md): learning arms and their controls refused on predicted
+  har_abstention:                    # N-3 (prereg-2026-11-07-n3-har.md): learning arms and their controls refused on predicted
                                      #   bottom-quintile range days (refusals_novel.har_low_range); job `har_days`
     enabled: false                   # false: the job writes an `off` row and the engine refuses nothing from it (kill path).
                                      #   Ships off (quant R7): on only after the K row and the Duka/ICM overlap check

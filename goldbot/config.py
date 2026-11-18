@@ -469,11 +469,13 @@ DISCOVERY_FOCUS: tuple[DiscoveryTimeframe, ...] = ("1h", "4h", "1d")
 class DiscoverySettings(_Section):
     """The brain's nightly discovery search (ADR 0090, goldbot/research/autodisc/discovery.py, job `discovery_nightly`).
     ADR 0083 retired `autodisc_nightly` from the brain because it only ever skipped there and nothing read it; this job
-    has a reader (the registration hand-off) and is bounded for the 4-core ARM brain the engines share: one child
+    has a reader (the registration hand-off) and is bounded for the 2-vCPU ARM brain (one core for the child, one for
+    the engines): one child
     process at `nice`, under `memory_mb`, stopped between timeframes at `budget_s` and killed at budget_s +
     kill_grace_s. Focus 1h/4h/1d ("the why-fail audit found no gross edge in single rules at 1m-15m"). Every spec gets
-    the ADR 0085 power-first verdict before it is ledgered; the night's planned K must fit the quarter's trial budget.
-    Explore window only: the 1m bars come through `cost_of_record.load_research_bars`, which refuses the holdout."""
+    the ADR 0085 power-first verdict before it is ledgered; the night's registry rows must fit the quarter's trial
+    budget and its planned K the quarter's discovery K cap (`k_cap_quarter`). Explore window only: the 1m bars come
+    through `cost_of_record.load_research_bars`, which refuses the holdout."""
     enabled: bool = False                           # on per host in settings.local.yaml, with bars_path (RUNBOOK)
     bars_path: str | None = None                    # the research 1m bid/ask parquet; enabled without it fails the job
     timeframes: list[DiscoveryTimeframe] = Field(default_factory=lambda: list(DISCOVERY_FOCUS), min_length=1)
@@ -491,9 +493,17 @@ class DiscoverySettings(_Section):
     # confirm at Holm rank 1 of confirm_configs_per_batch configs at the ledger year's alpha_j (batch_alpha)
     confirm_configs_per_batch: int = Field(3, ge=1, le=50)
     test_old_years: float = Field(3.92, gt=0, le=3.92)       # TEST-OLD 2006-02..2009
-    # costs: the cost of record v3 (ADR 0084), the broker's dearest charged cell on top of the bar spread
+    # the quarter's discovery K (summed registry k_contrib, the prior-search seed excluded) plus the night's planned K
+    # must stay within this. 0 refuses every night: the value is the research director's to set.
+    # TODO(research-director): set k_cap_quarter in config/settings.yaml before the job is enabled on any host.
+    k_cap_quarter: int = Field(0, ge=0, le=1_000_000)
+    # costs: the cost of record v3 (ADR 0084) per (session, exit) cell in bps of `cost_price_usd`, the gold price where
+    # it was measured. A table with a spread split: bid/ask labels + each cell's non-spread part; v3 has none: mid
+    # labels + each full cell, so the spread is charged once
     cost_of_record: str = "config/cost_of_record_v3.yaml"
     cost_broker: str = "icm"
+    # below the 4068.7 Dukascopy median of 2026-10-12..11-06 (catalogue_costs.yaml pin_price_usd): never fewer bps
+    cost_price_usd: float = Field(4000.0, ge=1000, le=4100)
     cards_dir: str = "config/research/candidates"           # catalogue cards: power-triaged, never run by this job
     # grammar-node priors from demo labels and discovered arms' forward results: weight = exp(gain x shrunk mean R),
     # shrunk = sum R / (n + prior_n0), clipped to [prior_min, prior_max] (inside gen_gp.PRIOR_BOUNDS)

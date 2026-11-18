@@ -12,7 +12,7 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
 - ADR 0085 rules that no K is spent on a test that cannot pass: "Start only if every power_g >= 0.5, simulated joint
   power >= 0.25, and n_eff >= n_eff_floor (200) at each fresh-data gate".
 - The why-fail audit found no gross edge in single rules at 1m-15m; 1h, 4h and 1d come first.
-- The brain is a 4-core ARM VM shared with the engines; the scheduler is single-threaded.
+- The brain is a 2-vCPU ARM brain (one core for the child, one for the engines); the scheduler is single-threaded.
 
 ## Decision
 1. **A new brain job `discovery_nightly`** (daily 01:00 UTC, `max_late_hours` 1.5), off by default
@@ -20,17 +20,28 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
    without bars **fails** the job (health shows it): it never skips silently, the failure that retired its
    predecessor.
 2. **Bounded for the brain** (`goldbot/ops/bounded.py`). The night runs in one `spawn` child at `nice` 15 (10..19,
-   never level with the engines), RLIMIT_DATA `memory_mb` 4096 (Linux; RLIMIT_AS is not used: pyarrow and numpy
+   never level with the engines), oom_score_adj 500 on Linux (the kernel kills it before an engine), RLIMIT_DATA
+   `memory_mb` 4096 (Linux; RLIMIT_AS is not used: pyarrow and numpy
    reserve virtual space far beyond what they touch), one BLAS/OpenMP thread. No timeframe starts once `budget_s`
    (5400 s, at most 7200) is spent, or when the last one took longer than what is left; the parent kills the child at
    budget_s + `kill_grace_s` (300 s, at most 600). The window 01:00-03:10 is clear of every other daily job (a test
-   holds it). Measured on the Mac: the 2010-2017 bars load in under 1 s, 2.8 M rows, 1.5 GB RSS.
+   holds it). One run at a time: a non-blocking flock on state/autodisc/discovery.lock (the job and a foreground run
+   share it; a held lock refuses). The job result carries the child's elapsed seconds and peak RSS (ru_maxrss); its
+   health line warns past 80 % of `budget_s`. Every child that does not finish (killed, an error, MemoryError, the
+   OOM killer) writes a `discovery_runs` row (`killed` / `failed`). Measured on the Mac: the 2010-2017 bars load in
+   under 1 s, 2.8 M rows, 1.5 GB RSS; the brain dry run records its own peak RSS in the deploy note.
 3. **Inputs** (`goldbot/research/autodisc/discovery.py`).
-   - The G2 grammar and the honesty set of `nightly.search_and_judge`, unchanged, at the cost of record v3 (ADR 0084):
-     the canonical broker's dearest `charged_usd` cell (icm 0.90 $/oz) on every round trip, on top of the tensor's
-     bar spread. Conservative: v3 measures against the mid, so the bar spread is charged twice.
+   - The G2 grammar and the honesty set of `nightly.search_and_judge`, unchanged, at the cost of record v3 (ADR 0084)
+     per (session, exit) cell, in bps of the gold price where it was measured (`cost_price_usd` 4,000, below the
+     4,068.7 median of its window: never fewer bps), so a 2010-2017 trade pays the same fraction of price (0.90 $/oz
+     on a ~1,300 $/oz price would be three times the cost). v3 measures fills against the mid and has no spread
+     split, so the labels read the mid and each label pays its full cell (session of its decision bar, exit it took):
+     the spread is charged once. A table that states `spread_usd` per cell keeps bid/ask labels and charges only the
+     rest. Swap is the settings prior, not measured swap, and the cost line says so. (Quant review B2: the first
+     build charged the dearest cell in $/oz on top of the bar spread, the spread twice.)
    - Grammar-node priors (`GPConfig.leaf_priors`): demo labels (aux.db `exploration_obs`, gold, non-control,
-     `label_sim_r`, void evidence excluded, as the learner reads them) by family node and decision session; each
+     `label_sim_r`, void evidence excluded, as the learner reads them; only rows decided on or after HOLDOUT_END,
+     2026-10-01) by family node and decision session; each
      registered discovered arm's labels (its forward result) on every node of its spec. Weight = exp(2 x sum R /
      (n + 50)) clipped to [0.5, 2.0]. Priors only change what is sampled; every evaluated spec counts in K, and the G0
      null reruns the whole search with the same priors, so the reality check prices the steering in.
@@ -41,12 +52,26 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
    the search, its null and the plateau neighbours. The card of a G2 spec: XAUUSD alone, learn = its explore signals
    and distinct signal days, one fresh gate, TEST-OLD (3.92 years), at Holm rank 1 of 3 configs at the ledger year's
    alpha_j (`promotion_confirm.batch_alpha`). A refused spec reads no outcome, is never ledgered and gets fitness -inf
-   ("NOT STARTED (power)"); a refused plateau neighbour reads as not positive (conservative). A timeframe on which
-   even an every-bar spec is refused is not searched at all.
-5. **Trial budget.** Before the search, the night's planned K at its bound (timeframes x (population x (generations +
-   1) + max_candidates x 24 neighbours)) must pass `catalogue.run.assert_budget` against the quarter's cap, the
-   registry's used trials and the pre-registered reservation. Discovery K is a sidecar and never a budget slot
-   (ADR 0058 F3), so this is a tightening. Over budget: nothing is searched; the run is recorded.
+   ("NOT STARTED (power)"). The search redraws a refused draw at sampling time (within `_TRIES`), so its population
+   is made of admitted specs; outcome-blind, and the G0 null runs the same loop. A refused plateau neighbour reads as
+   not positive (conservative), and each judged candidate reports how many of its neighbours were admitted. A
+   timeframe on which even an every-bar spec is refused is not searched at all.
+   - TEST-OLD is read once per family, and every G2 spec is family `autodisc:G2`. Once EVAL-2's reads ledger or a
+     promotion read in the registry holds a TEST-OLD read of that family, no spec is admitted and nothing is searched.
+   - A survivor is offered as a demo learning arm only if a second power gate passes: the forward demo window over the
+     learning kill rule's horizon (`arms.LEARNING_MAX_DAYS` 45 days or `LEARNING_READ_FILLS` 300 fills, whichever is
+     first; fresh, one-sided 5 %), where a learning arm is judged. Under ADR 0085's parameters it cannot pass: over 45
+     days a spec has at most ~32 signal days, so n_eff <= 32 x 4 = 128 at rho_day 0.25 (the floor is 200, and power
+     0.5 for 0.10 R at sd 1.2 needs n_eff ~390). Until the quant rules on it, the job offers no candidate arm; its
+     explore survivors stay recorded for the confirm route.
+5. **Trial budget: two checks on two scales** (quant review B1: the first build compared spec K with registry rows).
+   - Registry rows: the night writes at most one discovery batch row per timeframe, so `assert_budget(len(timeframes),
+     ...)` against the quarter's trial budget, its used rows and the pre-registered reservation.
+   - K: the quarter's summed discovery `k_contrib` (registry batches stamped in the quarter; the one-off prior-search
+     seed excluded) plus the night's planned K at its bound (timeframes x (population x (generations + 1) +
+     max_candidates x 24 neighbours)) must stay within `research.discovery.k_cap_quarter`. The research director sets
+     it; 0, the default, refuses every night.
+   Over budget: nothing is searched; the run and its report are recorded.
 6. **Holdout sealed.** The 1m bars come only through `cost_of_record.load_research_bars` (per file of a per-year
    directory, only the explore years opened); a window past 2018-01-01 is refused before any file is opened.
 7. **Screen and stages.** Survivors are `search_and_judge`'s. The stage journal is read, never opened: a spec whose
@@ -67,5 +92,7 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
   gold alone can only find frequent rules; a pooled multi-instrument card (k > 1) is the route to slower ones.
 - Not changed: the trial budget, the holdout, the phase gate, live unlock, RiskGate, any arm or config file, the
   red-box arms.
+- Under the shipped power parameters the forward gate refuses every survivor, so no candidate arm is offered; the
+  quant-reviewer and research director decide whether the learning read's horizon or the hand-off rule changes.
 - What would change this: a quant ruling that the explore stage needs its own power gate, or that priors from 2026
   demo labels contaminate TEST-OLD freshness; an sre finding that the window or the memory cap does not fit the brain.

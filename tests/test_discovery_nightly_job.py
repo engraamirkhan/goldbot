@@ -89,3 +89,80 @@ def test_an_enabled_job_without_bars_fails_through_its_child_instead_of_skipping
     ctx = SimpleNamespace(settings=on, state_dir=tmp_path)
     with pytest.raises(RuntimeError, match="bars_path"):
         discovery_nightly(ctx, SLOT)  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------------------ review round 1 (sre b, c; code review 1, 2)
+def enabled_ctx(tmp_path):
+    s = load_settings()
+    on = s.model_copy(update={"research": s.research.model_copy(update={
+        "discovery": s.research.discovery.model_copy(update={"enabled": True})})})
+    return SimpleNamespace(settings=on, state_dir=tmp_path)
+
+
+def discovery_rows(state_dir):
+    from goldbot.db.connection import Database
+    with Database.open(state_dir, "aux").read() as conn:
+        return conn.execute("SELECT status, body FROM discovery_runs").fetchall()
+
+
+def test_the_child_volunteers_for_the_oom_killer_on_linux(monkeypatch, tmp_path):
+    adj = tmp_path / "oom_score_adj"
+    monkeypatch.setattr(B.sys, "platform", "linux")
+    B.volunteer_for_oom(adj)
+    assert adj.read_text() == "500"
+    B.volunteer_for_oom(tmp_path / "no" / "such" / "file")        # an OSError never stops the child
+    monkeypatch.setattr(B.sys, "platform", "darwin")
+    B.volunteer_for_oom(tmp_path / "mac")
+    assert not (tmp_path / "mac").exists()
+
+
+def test_the_child_reports_its_peak_rss():
+    out = B.run_bounded(os.nice, (0,), budget_s=60, nice=15, memory_mb=None)
+    assert out.ok and out.max_rss_mb is not None and 5 < out.max_rss_mb < 4096
+
+
+def test_a_failed_process_start_closes_both_pipe_ends(monkeypatch):
+    ends = []
+
+    class End:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Ctx:
+        def Pipe(self, duplex=False):
+            ends.extend([End(), End()])
+            return ends[0], ends[1]
+
+        def Process(self, **kw):
+            return SimpleNamespace(start=lambda: (_ for _ in ()).throw(RuntimeError("cannot pickle")),
+                                   is_alive=lambda: False)
+
+    monkeypatch.setattr(B.mp, "get_context", lambda kind: Ctx())
+    with pytest.raises(RuntimeError, match="pickle"):
+        B.run_bounded(os.nice, (0,), budget_s=60, nice=15, memory_mb=None)
+    assert len(ends) == 2 and all(e.closed for e in ends)
+
+
+def test_the_job_result_carries_elapsed_and_peak_rss_and_warns_near_its_budget(monkeypatch, tmp_path):
+    ctx = enabled_ctx(tmp_path)
+    budget = ctx.settings.research.discovery.budget_s
+    for elapsed, warn in ((0.5 * budget, False), (0.85 * budget, True)):
+        monkeypatch.setattr(B, "run_bounded", lambda *a, e=elapsed, **k: B.BoundedResult(
+            ok=True, value={"status": "ok", "health": "discovery ok: K 3"}, elapsed_s=e, max_rss_mb=1500.0))
+        got = discovery_nightly(ctx, SLOT)
+        assert got["elapsed_s"] == elapsed and got["max_rss_mb"] == 1500.0
+        assert ("80 %" in got["health"]) is warn and "discovery ok: K 3" in got["health"]
+
+
+@pytest.mark.parametrize(("result", "status"), [
+    (B.BoundedResult(ok=False, timed_out=True, error="killed after its 5700 s budget"), "killed"),
+    (B.BoundedResult(ok=False, error="MemoryError: "), "failed"),
+    (B.BoundedResult(ok=False, error="the child died with exit code -9", exitcode=-9), "failed")])
+def test_every_child_that_does_not_finish_writes_a_discovery_runs_row(monkeypatch, tmp_path, result, status):
+    monkeypatch.setattr(B, "run_bounded", lambda *a, **k: result)
+    with pytest.raises(RuntimeError, match="discovery_nightly"):
+        discovery_nightly(enabled_ctx(tmp_path), SLOT)
+    rows = discovery_rows(tmp_path)
+    assert [r[0] for r in rows] == [status] and (result.error or "") in rows[0][1]

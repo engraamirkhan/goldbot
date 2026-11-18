@@ -1727,23 +1727,33 @@ def news_coverage(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run(ctx.store, slot)
 
 
+DISCOVERY_WARN_SHARE = 0.8          # the night's health warns once it uses more than this share of budget_s
+
+
 def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """ADR 0090: the bounded discovery night (research/autodisc/discovery.py) in a child process at
     research.discovery.nice under memory_mb, killed at budget_s + kill_grace_s (ops/bounded.py), so the single-threaded
     scheduler and the engines on the brain keep their CPU (ADR 0083's reasons). Off: skipped without a child. A killed
-    or failed child fails the job (health shows it); its K is in the ledger and the next night's sync counts it."""
+    or failed child writes a discovery_runs row and fails the job (health shows it); its K is in the ledger and the
+    next night's sync counts it. The result carries the child's elapsed time and peak RSS; the health line warns past
+    80 % of budget_s."""
     cfg = ctx.settings.research.discovery
     if not cfg.enabled:
         return {"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"}
-    from goldbot.ops.bounded import run_bounded
-    from goldbot.research.autodisc.discovery import record_killed, run_job
-    out = run_bounded(run_job, (ctx.settings, ctx.state_dir, slot), budget_s=cfg.budget_s + cfg.kill_grace_s,
-                      nice=cfg.nice, memory_mb=cfg.memory_mb)
-    if out.ok:
-        return cast(dict[str, Any], out.value)
-    if out.timed_out:
-        record_killed(ctx.state_dir, slot, out.error or "killed")
-    raise RuntimeError(f"discovery_nightly: {out.error}")
+    from goldbot.ops import bounded
+    from goldbot.research.autodisc.discovery import record_failed, run_job
+    out = bounded.run_bounded(run_job, (ctx.settings, ctx.state_dir, slot), budget_s=cfg.budget_s + cfg.kill_grace_s,
+                              nice=cfg.nice, memory_mb=cfg.memory_mb)
+    if not out.ok:
+        record_failed(ctx.state_dir, slot, "killed" if out.timed_out else "failed", out.error or "no error text")
+        raise RuntimeError(f"discovery_nightly: {out.error}")
+    res = dict(cast(dict[str, Any], out.value))
+    res |= {"elapsed_s": round(out.elapsed_s, 1),
+            "max_rss_mb": None if out.max_rss_mb is None else round(out.max_rss_mb, 1)}
+    if "health" in res and out.elapsed_s > DISCOVERY_WARN_SHARE * cfg.budget_s:
+        res["health"] = (f"WARN: {out.elapsed_s:,.0f} s is over 80 % of budget_s {cfg.budget_s:,.0f} s (lower "
+                         f"population or drop a timeframe); {res['health']}")
+    return res
 
 
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {

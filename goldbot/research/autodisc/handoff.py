@@ -61,6 +61,8 @@ class CandidateArm(FrozenRecord):
     meets_confirm_dsr: bool
     k_search: int
     power: dict[str, Any]                            # its ADR 0085 verdict (power_first.PowerVerdict, JSON)
+    neighbours_admitted: int = 0                     # plateau neighbours the power admission let through, of
+    neighbours_total: int = 0                        #   its grid neighbours (a refused one reads as not positive)
     rule: Literal["spec_rule"] = "spec_rule"
     max_open: int = 1
     forward_only: bool = True

@@ -453,6 +453,11 @@ def not_started(t: OutcomeTensor, s: StrategySpec, h: str, reasons: Sequence[str
                       stress_passed=False, input_digest=t.digest, excess_fold_t=[None] * N_FOLDS)
 
 
+def refused_by_power(e: Evaluation) -> bool:
+    """The evaluation is `not_started`'s: the admission rule refused the spec before it was ledgered."""
+    return bool(e.floor_failures) and e.floor_failures[0].startswith(NOT_STARTED)
+
+
 def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: SearchLedger, *,
                     parents: tuple[str, ...] = (), generation: int = 0, min_events: int | None = None,
                     side_override: SideArr | None = None, null: bool = False, version: str = VERSION,
@@ -486,19 +491,33 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
            side_override: SideArr | None = None, null: bool = False, resolver: Resolver | None = None,
            admit: Admit | None = None) -> GPRun:
     """One bounded G2 search on the tensor (module docstring). `side_override` (with null=True) is G0's random side;
-    `admit`: the outcome-blind admission read before each spec is ledgered (`evaluate_logged`)."""
+    `admit`: the outcome-blind admission read at sampling time, before a spec is ledgered. A refused draw (seed or
+    offspring) is redrawn within the `_TRIES` bound, so the population is made of admitted specs; outcome-blind, and
+    `gp_null` reruns this same loop, so the null inherits the redraw."""
     rng = np.random.default_rng(cfg.seed)
     cat = catalogue(cfg.families, cfg.grammar, cfg.leaf_priors)
     res = resolver or Resolver(provider)
     done: dict[str, GPCandidate] = {}
     order: list[GPCandidate] = []
+    admitted: dict[str, bool] = {}
+
+    def admits(s: StrategySpec) -> bool:
+        """The admission read at sampling time (outcome-blind: entry mask and side only), once per spec."""
+        h = spec_hash(s)
+        if admit is None:
+            return True
+        if h not in admitted:
+            mask, side = res.entries(s)
+            if side_override is not None:
+                mask, side = null_view(mask, side, side_override)
+            admitted[h] = not admit(s, mask, side)
+        return admitted[h]
 
     def run_one(s: StrategySpec, parents: tuple[str, ...], gen: int) -> GPCandidate:
         h = spec_hash(s)
-        if h not in done:
+        if h not in done:                       # admitted at sampling: `admit` is not read twice
             done[h] = evaluate_logged(t, res, s, ledger, parents=parents, generation=gen, min_events=cfg.min_events,
-                                      side_override=side_override, null=null, version=VERSION_OF[cfg.grammar],
-                                      admit=admit)
+                                      side_override=side_override, null=null, version=VERSION_OF[cfg.grammar])
             order.append(done[h])
         return done[h]
 
@@ -507,10 +526,11 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
         if len(seeds) == cfg.population:
             break
         s = random_spec(rng, cfg, cat)
-        seeds.setdefault(spec_hash(s), s)
+        if spec_hash(s) not in seeds and admits(s):          # a refused draw is redrawn (ADR 0090, quant M2)
+            seeds[spec_hash(s)] = s
     pop = [run_one(s, (), 0) for s in seeds.values()]
     best_by_gen = [max((gp_fitness(c.evaluation) for c in pop), default=float("-inf"))]
-    for gen in range(1, cfg.generations + 1):
+    for gen in range(1, cfg.generations + 1 if pop else 1):           # nothing admitted: nothing to breed
         rank = _rank(pop, t.n_bars)
 
         def pick() -> int:
@@ -530,7 +550,7 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
             if rng.random() < cfg.p_mutation or spec_hash(child) in done:
                 child = mutate(child, rng, cfg, cat)
             h = spec_hash(child)
-            if h not in done and h not in kids:
+            if h not in done and h not in kids and admits(child):
                 kids[h] = (child, parents)
         if not kids:
             break                                                   # the reachable space is exhausted
