@@ -537,6 +537,11 @@ AMENDMENT_DAY = "2026-11-18"        # 1: "A registration whose arm row carries a
 COST_OF_RECORD_USD = 0.90           # 2.4 (b): "ADR 0084 v3: icm's dearest `charged_usd` cell, 0.90 $/oz"
 GROSS_MULTIPLE = 2.0                # 2.4 (b): "explore gross mean per trade >= 2 x the charged cost of record"
 MIN_N, MIN_DAYS = 50, 10            # 2.4 (f): the kill rule's MIN_N replayed candidates and MIN_DAYS signal days
+# The interlock (quant review of 751cf7ab): every registration is refused until the amendment's section 6 pieces are
+# all on one branch: the lifecycle voids (research/arm_lifecycle.py), the forward power report (`forward_power`) and
+# T5 (feat/discovery-nightly). Flipped to True only in the PR that delivers all of them; never by a setting.
+LIFECYCLE_READY = False
+NOT_READY = "amendment not effective: lifecycle voids, forward power, T5 pending (section 6)"
 PREREG_SECTION = "#5-the-reading-rule-kill-only-hv-rule-3"     # params.prereg: the amendment's reading rule
 
 
@@ -577,6 +582,23 @@ class LearningPlan(FrozenRecord):
     signal_rate: float
     expected_n: float
     expected_days: float
+    power_forward: Any = None           # 2.4 (f): "reported, not evidence"; None until the discovery handoff is merged
+
+
+def forward_power(ledger_path: Path, spec_hash_: str) -> Any:
+    """2.4 (f): the forward power against the twin, "reported, not evidence" (it never refuses or admits an arm): the
+    discovery lane's read-only `handoff.candidate(path, spec_hash)` row's `power_forward`. The SEAM: until
+    feat/discovery-nightly is merged here the module is absent and this reports None; the interlock
+    (LIFECYCLE_READY) keeps every registration refused meanwhile.
+    TODO(feat/discovery-nightly merge): drop the guard and pin the reported value with a test."""
+    import importlib
+    try:
+        handoff: Any = importlib.import_module("goldbot.research.autodisc.handoff")
+    except ModuleNotFoundError:
+        return None
+    row = handoff.candidate(ledger_path, spec_hash_)
+    return None if row is None else row.get("power_forward") if isinstance(row, dict) \
+        else getattr(row, "power_forward", None)
 
 
 def session_days(since: str, until: str) -> int:
@@ -666,11 +688,14 @@ def plan_learning(spec_hash_: str, account_id: str, *, state_dir: Path, registry
     survivor (explore honesty set, no failed or voided stage read), the registration bar (2.4: a 1h/4h gold spec,
     gross >= 2 x the cost of record, net > 0, the kill rule readable by `until`), never registered before, the weekly
     tier, the demo probe_only account and its caps, the rows valid, at most MAX_DISCOVERED running (2.3) and the
-    quarter's budget (2.2). Raises RegistrationRefused naming the first failure."""
+    quarter's budget (2.2), all behind the LIFECYCLE_READY interlock. Raises RegistrationRefused naming the first
+    failure."""
     from goldbot.engine.arm_registry import MAX_DISCOVERED
     from goldbot.research.arm_rules_spec import DISCOVERED_PREREG, LEARNING_TFS, SUNSET
     from goldbot.research.arms import LEARNING_CONTROL_KIND, REGISTRY_PATH, learning_k_config
     from goldbot.research.registry import TrialRegistry
+    if not LIFECYCLE_READY:
+        raise RegistrationRefused(NOT_READY)
     now = now if now is not None else pd.Timestamp.now("UTC")
     since = f"{now.tz_convert('UTC'):%Y-%m-%d}"
     if now < EFFECTIVE_UTC or since < AMENDMENT_DAY:
@@ -747,7 +772,7 @@ def plan_learning(spec_hash_: str, account_id: str, *, state_dir: Path, registry
                         k_config=learning_k_config(arm_id, arm_hash(arm), DISCOVERED_PREREG),
                         control_hash=arm_hash(ctl), control_config=control_config, quarter=q, used=used,
                         reserved=reserved, budget=budget, signal_rate=rec.signal_rate, expected_n=expected_n,
-                        expected_days=expected_days)
+                        expected_days=expected_days, power_forward=forward_power(ledger_path, spec_hash_))
 
 
 def _voided(rows: list[dict[str, Any]], spec_hash_: str) -> bool:

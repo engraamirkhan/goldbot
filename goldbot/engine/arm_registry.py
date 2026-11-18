@@ -53,7 +53,9 @@ engine's learning class unchanged (`exploration_learning`: K row resolved, 300-f
 lot). The control never places an order: every candidate is skipped replay_only and `entry_refusal` refuses it
 anyway. At the entry, a learning arm's bracket is recomputed from the bars closed at its decision
 (`bracket_refusal`): sent later than LATENCY_S after the decision, or off the recompute by more than 1e-9, the
-candidate is void, not sent, and the arm's entries are held (BRACKET_VOID).
+candidate is void, not sent, and the arm's entries are held (BRACKET_VOID). That hold, and a control change's, is
+written as the broker's retirement (`_hold_durably`, `exploration_arm_status`), so no restart re-enables the arm; the
+nightly lifecycle recomputes with the same function (`decision_bracket`).
 """
 from __future__ import annotations
 
@@ -73,6 +75,7 @@ from goldbot.instruments import GOLD
 if TYPE_CHECKING:
     from goldbot.engine.exploration import Arm, Exploration, Pending
     from goldbot.engine.runner import Engine
+    from goldbot.research.arm_rules_spec import Bracket
     from goldbot.risk import RiskLimits
 
 log = logging.getLogger(__name__)
@@ -370,6 +373,7 @@ def _pair_refusals(eng: Engine, ex: Exploration, judged: dict[str, Arm], order: 
                 # the amendment: "its reads are void from the change onward": this is the change's journal stamp
                 eng.decisions.append({"ts": time.time(), "agent": "explore:" + a, "action": CONTROL_CHANGED,
                                       "arm": a, "control": ctl_id, "why": why})
+                _hold_durably(ex, a, pd.Timestamp.now("UTC"), f"control {ctl_id} changed after registration")
     running = sum(1 for a in learning if a not in out and a in ex.hot_caps and a not in ex.retired)
     for a in learning:
         if a in out or a in ex.hot_caps or a in ex.retired:
@@ -467,6 +471,23 @@ def _hold(eng: Engine, ex: Exploration, arm_id: str, why: str) -> None:
     log.error("hot-loaded arm %s: %s; kept configured, entries refused", arm_id, why)
     eng.decisions.append({"ts": time.time(), "agent": "explore:" + arm_id, "action": REFUSED, "arm": arm_id,
                           "why": why, "kept": True})
+
+
+def _hold_durably(ex: Exploration, arm_id: str, now: pd.Timestamp, why: str) -> None:
+    """Trading-safety note on 751cf7ab: the hold of a discovered learning arm after a void bracket or a control change
+    outlives the process. Written as the broker's retirement (aux.db `exploration_arm_status`, INSERT OR IGNORE:
+    never re-dated), which every start and every minute reads (`exploration.refresh_retired`): no restart re-enables
+    the arm, and as for any retirement its open positions keep every exit. A failed write leaves this process's hold
+    standing and is logged."""
+    try:
+        with ex.db.write() as conn:
+            conn.execute("INSERT OR IGNORE INTO exploration_arm_status (broker, arm_id, status, day, rule, recorded_ns) "
+                         "VALUES (?, ?, 'retired', ?, ?, ?)",
+                         (ex.broker, arm_id, f"{pd.Timestamp(now):%Y-%m-%d}", f"arm registry: {why}",
+                          int(pd.Timestamp(now).value)))
+    except Exception as exc:                       # noqa: BLE001 - the in-process hold stands
+        log.error("hot-loaded arm %s: the durable hold could not be written (%s); held in this process only",
+                  arm_id, type(exc).__name__)
 
 
 def _refresh(eng: Engine, ex: Exploration) -> None:
@@ -593,6 +614,7 @@ def entry_refusal(eng: Engine, ex: Exploration, arm_id: str, s: Pending | None =
             eng.decisions.append({"ts": now.isoformat(), "agent": "explore:" + arm_id, "action": BRACKET_VOID,
                                   "arm": arm_id, "bar": s.bar_ts.isoformat(), "why": why})
             _hold(eng, ex, arm_id, f"bracket void at the entry ({why}): entries held")
+            _hold_durably(ex, arm_id, now, f"bracket void at the entry ({why})")
             return "bracket_void"
     return None
 
@@ -603,17 +625,27 @@ def bracket_refusal(eng: Engine, arm: Arm, s: Pending, now: pd.Timestamp) -> str
     stop, target and hold it carries (what the candidate's INSERT records) equal, within 1e-9, to
     `arm_rules_spec.bracket(spec, bars closed <= decision, t)` recomputed now from the same bars the rule read."""
     from goldbot.config import tf_seconds
-    from goldbot.engine.exploration import arm_bars
-    from goldbot.research.arm_rules_spec import LATENCY_S, Bracket, bracket, bracket_mismatch, spec_of
+    from goldbot.research.arm_rules_spec import LATENCY_S, Bracket, bracket_mismatch
     decision = pd.Timestamp(s.bar_ts)
     if (late := (pd.Timestamp(now) - decision).total_seconds()) > LATENCY_S:
         return f"bracket_late: {late:.1f} s after the decision (> {LATENCY_S} s)"
-    complete = eng.bars_1m[eng.bars_1m["visible_at"] <= decision]
-    got = arm_bars(complete, arm.spec, decision) if not complete.empty else None
+    got = decision_bracket(eng.bars_1m, arm.spec, decision)
     if got is None:
         return "bracket_unreadable: no bars closed at the decision"
     stored = Bracket(stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf))
-    return bracket_mismatch(stored, bracket(spec_of(arm.spec), got[0], decision))
+    return bracket_mismatch(stored, got)
+
+
+def decision_bracket(bars_1m: pd.DataFrame, spec: Any, decision: pd.Timestamp) -> Bracket | None:
+    """THE recompute, for the engine at the entry and the nightly lifecycle read alike: `arm_rules_spec.bracket` on
+    the arm's own decision bars from the 1m bars closed at `decision` (`exploration.arm_bars`: the arm's lookback, so
+    Wilder ATR starts where the engine's rule read starts; another window gives another ATR and a false void). None
+    when no bar has closed by then."""
+    from goldbot.engine.exploration import arm_bars
+    from goldbot.research.arm_rules_spec import bracket, spec_of
+    complete = bars_1m[bars_1m["visible_at"] <= decision] if not bars_1m.empty else bars_1m
+    got = arm_bars(complete, spec, decision) if not complete.empty else None
+    return None if got is None else bracket(spec_of(spec), got[0], decision)
 
 
 def orphan_held(ex: Exploration, opened: pd.Timestamp | None, at: pd.Timestamp) -> bool:
@@ -656,6 +688,6 @@ def overlay(eng: Engine, limits: RiskLimits, loading: Exploration | None = None)
 __all__ = ["BRACKET_VOID", "CHAIN", "CONTROL_CHANGED", "CONTROL_SHARE", "FORBIDDEN", "GENESIS", "HEALTH_FAIL_S",
            "LEARNING_FIELDS", "LOADED", "MAX_DISCOVERED", "REFUSED", "STALE", "STALE_CADENCES",
            "UNVERIFIED", "RegistryRow", "Seen", "append", "append_many", "bracket_refusal", "chain_break", "ceiling",
-           "demo_now", "digest",
+           "decision_bracket", "demo_now", "digest",
            "entry_refusal", "init", "orphan_held", "overlay", "published", "read_rows", "refresh", "refusal",
            "remember", "seen"]

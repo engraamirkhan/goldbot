@@ -75,6 +75,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(ARMS, "_now", lambda: NOW)
     state = tmp_path / "state"
     state.mkdir()
+    monkeypatch.setattr(R, "LIFECYCLE_READY", True)             # the interlock, lifted for the route's own tests
     return {"ledger_path": tmp_path / "discovery.db", "accounts_path": tmp_path / "accounts.yaml",
             "spec_arms_path": tmp_path / "spec_arms.yaml", "root": ROOT, "now": NOW, "state_dir": state,
             "registry_path": registry, "research": Research(budget=100, reserved=0),
@@ -334,3 +335,100 @@ def test_the_engine_refuses_a_sixth_concurrent_discovered_arm(env, tmp_path):
     learning = [a for a, arm in ex.arms.items() if arm.spec.role == "learning" and a not in ex.retired]
     assert len(learning) == AR.MAX_DISCOVERED and sixth.reg.arm_id not in learning
     assert any(d.get("arm") == sixth.reg.arm_id and "concurrent" in str(d.get("why")) for d in eng.decisions)
+
+
+# ---------------------------------------------------------------- the interlock (quant review of 751cf7ab)
+def test_lifecycle_ready_is_false_on_this_branch():
+    """Flipped only in the PR that delivers every piece: the lifecycle voids, forward power and T5 (section 6)."""
+    assert R.LIFECYCLE_READY is False
+
+
+def test_every_registration_is_refused_until_the_lifecycle_is_ready(env, monkeypatch):
+    monkeypatch.setattr(R, "LIFECYCLE_READY", False)
+    with pytest.raises(R.RegistrationRefused, match="amendment not effective: lifecycle voids, forward power, T5"):
+        register(env)
+    assert arm_rows(env) == [] and registry_rows(env) == []
+
+
+# The amendment's section 6 tests that live elsewhere:
+# T3 test_booked_k_equals_the_screened_configurations: tests/research/autodisc/test_registry_link.py
+#    test_sync_tops_the_registry_up_to_the_ledger_k_search_once (summed k_contrib = the ledger's distinct K_search,
+#    re-synced once) and test_the_nightly_job_records_its_batch_k_contrib_only_for_a_real_search (n_trials_discovery
+#    rises by exactly k_contrib); n_refused_power is on feat/discovery-nightly.
+# T5 test_power_admission_is_outcome_blind and T8 test_prior_search_seed_is_outside_quarter_k_but_inside_n_trials_
+#    discovery: tests/research/autodisc/test_discovery_nightly.py on feat/discovery-nightly (the admission code is
+#    not on this branch); T4: test_a_bracket_that_does_not_match_its_recompute_at_the_entry_is_void_and_holds_the_arm
+#    here and tests/test_spec_bracket.py; T9: test_a_change_to_the_control_after_registration_voids_the_arm here.
+
+
+# ---------------------------------------------------------------- trading-safety notes on 751cf7ab
+def test_the_staleness_limit_of_a_learning_timeframe_is_the_brackets_latency_limit():
+    """Raising one without the other fails: a signal the engine may still send must be one whose bracket stands."""
+    for tf in S.LEARNING_TFS:
+        assert exploration.stale_s(tf) == S.LATENCY_S, tf
+
+
+def _void_at_the_entry(eng: Any, pb: Any, arm_id: str) -> None:
+    ex = _ex(eng)
+    arm = ex.arms[arm_id]
+    got = exploration.arm_bars(eng.bars_1m[eng.bars_1m["visible_at"] <= CLOSE], arm.spec, CLOSE)
+    assert got is not None
+    b = S.bracket(S.spec_of(arm.spec), got[0], CLOSE)
+    assert b is not None
+    s = exploration.Pending(arm_id=arm_id, side=1, bar_ts=CLOSE, stop_usd=b.stop_dist + 1e-6,
+                            target_usd=b.target_dist, hold_bars=b.max_hold_s // 3600)
+    assert AR.entry_refusal(eng, ex, arm_id, s, CLOSE + pd.Timedelta(seconds=2)) == "bracket_void"
+
+
+def _status(state: Path) -> list[tuple[str, str, str]]:
+    with Database.open(str(state), "aux").connection() as conn:
+        return [(str(b), str(a), str(r)) for b, a, r in
+                conn.execute("SELECT broker, arm_id, rule FROM exploration_arm_status").fetchall()]
+
+
+def test_the_hold_after_a_void_bracket_survives_a_restart_and_the_arm_keeps_its_exits(env, tmp_path):
+    eng, pb, p = _engine_with(env, tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    _void_at_the_entry(eng, pb, p.reg.arm_id)
+    [(broker, arm_id, rule)] = _status(tmp_path / "eng")
+    assert (broker, arm_id) == ("icm", p.reg.arm_id) and "bracket void" in rule
+    again, pb2 = _engine(tmp_path / "eng", [_arm("peer", tf="1h")])           # the restart: a fresh process
+    exploration.on_pass(again, _at(again, pb2, CLOSE + pd.Timedelta(hours=1)))
+    ex = _ex(again)
+    assert p.reg.arm_id in ex.arms and p.reg.arm_id in ex.retired             # configured, entries refused
+    assert exploration.agent_for(again, exploration.PREFIX + p.reg.arm_id) is not None   # its exits keep its barrier
+
+
+def test_the_hold_after_a_control_change_is_written_for_the_broker(env, tmp_path):
+    p = register(env)
+    ctl = ARMS.Arm.model_validate(p.control_row)
+    changed = ctl.model_copy(update={"params": {**ctl.params, "signal_rate": ctl.params["signal_rate"] * 2}})
+    changed = changed.model_copy(update={"config_hash": ARMS.arm_hash(changed)})
+    eng, pb = _engine(tmp_path / "eng", [_arm("peer", tf="1h")])
+    [arm_row, ctl_row] = [json.loads(r.row) for r in arm_rows(env)]
+    style, cap = arm_rows(env)[0].style, arm_rows(env)[0].max_loss
+    ctl_row = {**ctl_row, "params": changed.params, "config_hash": changed.config_hash}
+    AR.append_many(str(tmp_path / "eng"), account_id="icm-probe", entries=[(arm_row, style, cap),
+                                                                         (ctl_row, style, cap)], source="test")
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    got = [(b, a) for b, a, r in _status(tmp_path / "eng") if "control" in r]
+    assert got == [("icm", p.reg.arm_id)]
+
+
+def test_the_lifecycle_recompute_is_the_engines_bracket_for_the_same_candidate(env, tmp_path):
+    """Wilder ATR depends on where its window starts: the nightly recompute reads the engine's exact window
+    (`arm_bars`: the arm's lookback), so a bracket the engine accepted is never voided at night."""
+    from goldbot.research import arm_lifecycle as L
+    eng, pb, p = _engine_with(env, tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    arm = _ex(eng).arms[p.reg.arm_id]
+    got = exploration.arm_bars(eng.bars_1m[eng.bars_1m["visible_at"] <= CLOSE], arm.spec, CLOSE)
+    assert got is not None
+    engine = S.bracket(S.spec_of(arm.spec), got[0], CLOSE)
+    night = L.engine_recompute({"icm-probe": eng.bars_1m})(arm.spec, {"account_id": "icm-probe",
+                                                                       "decision_utc": CLOSE})
+    assert engine is not None and night == engine
+    s = exploration.Pending(arm_id=arm.arm_id, side=1, bar_ts=CLOSE, stop_usd=night.stop_dist,
+                            target_usd=night.target_dist, hold_bars=night.max_hold_s // 3600)
+    assert AR.bracket_refusal(eng, arm, s, CLOSE + pd.Timedelta(seconds=2)) is None
+    assert L.engine_recompute({})(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE}) is None
