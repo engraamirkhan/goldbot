@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from goldbot.data.store import Store
 from goldbot.db import Database
@@ -37,6 +38,13 @@ __all__ = ["env"]                       # the registration fixture, shared with 
 
 HOST = {"icm-probe": ("icm", "XAUUSD")}
 NIGHT = CLOSE + pd.Timedelta(days=1)
+
+
+@pytest.fixture(autouse=True)
+def _engine_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine harness holds about 2,600 minutes; the arm's window is capped below that (engine and night alike:
+    both read `exploration.lookback`), so a whole window exists and `window_incomplete` is not what is tested."""
+    monkeypatch.setattr(exploration, "LOOKBACK_MAX_1M", 2000)
 
 
 def _stored(tmp_path: Path, minutes: pd.DataFrame) -> Store:

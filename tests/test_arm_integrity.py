@@ -24,6 +24,7 @@ from goldbot.engine import broker_bars, exploration, history
 from goldbot.research import arm_integrity as I
 from goldbot.research import arm_lifecycle as L
 from goldbot.research import arm_rules_spec as S
+from goldbot.research.exploration_data import session_day
 from tests.test_arm_lifecycle import (
     DAY,
     GOOD,
@@ -44,6 +45,13 @@ from tests.test_exploration_engine import (
 )
 
 __all__ = ["env"]                       # the registration fixture, shared with test_discovered_arm_registration
+
+
+@pytest.fixture(autouse=True)
+def _engine_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine harness holds about 2,600 minutes; the arm's window is capped below that (engine and night alike:
+    both read `exploration.lookback`), so a whole window exists and `window_incomplete` is not what is tested."""
+    monkeypatch.setattr(exploration, "LOOKBACK_MAX_1M", 2000)
 
 
 @pytest.fixture
@@ -95,19 +103,53 @@ def test_coverage_is_judged_on_every_journal_row_before_the_void_actions_are_fil
     host = I.host_read("icm-probe", _decisions(rows))
     assert host.journal_why is None and set(host.days) == {"2026-11-10", "2026-11-11"}
     assert host.last_ns == int(pd.Timestamp("2026-11-11 14:00Z").value)
-    assert host.capable_ns == int(pd.Timestamp("2026-11-11 14:00Z").value)
+    assert host.marks == {"D1": (int(pd.Timestamp("2026-11-11 14:00Z").value),)}
 
 
 def test_without_a_capability_marker_since_the_registration_the_arm_holds_as_unverified(db):
     obs = _clean()
     before = int(pd.Timestamp("2026-09-01", tz="UTC").value)                 # since is 2026-10-01
-    for capable in (None, before):
-        host = _covered(obs)["icm-probe"].model_copy(update={"capable_ns": capable})
+    for marks in ({}, {"D1": (before,)}):
+        host = _covered(obs)["icm-probe"].model_copy(update={"marks": marks})
         r = _dread(db, obs, hosts={"icm-probe": host})
         assert r.decision == "HOLD" and r.unverified and "capability" in r.reason
     old = _decisions([{"ts": "2026-11-11 14:00Z", "action": I.CAPABLE_ACTION,
                        "detail": json.dumps({"capability": I.CAPABILITY - 1})}])
-    assert I.host_read("icm-probe", old).capable_ns is None                 # an older contract proves nothing
+    assert I.host_read("icm-probe", old).marks == {}                        # an older contract proves nothing
+
+
+def _load(ts: str, arm: str = "D1", mark: bool = True, capability: int = I.CAPABILITY) -> list[dict[str, Any]]:
+    rows = [{"ts": ts, "action": I.LOADED_ACTION, "detail": json.dumps({"arm": arm})}]
+    return rows + ([{"ts": ts, "action": I.CAPABLE_ACTION,
+                     "detail": json.dumps({"arm": arm, "capability": capability})}] if mark else [])
+
+
+def test_every_load_of_the_arm_since_its_registration_needs_its_own_capability_marker(db):
+    """S1 (trading-safety review of deb81d05): a load with no marker of the same arm at the same time, a rollback to
+    an engine without the contract, holds the arm unverified, even when an earlier load was marked."""
+    obs = _clean()
+    days = [{"ts": f"{d} 14:00Z", "action": "exploration:sent"} for d in sorted(set(obs["session_day"]))]
+    last = [{"ts": "2026-11-18 06:00Z", "action": "exploration:sent"}]
+    marked = I.host_read("icm-probe", _decisions(days + last + _load("2026-10-01 12:00Z") + _load("2026-11-02 08:00Z")))
+    assert _dread(db, obs, hosts={"icm-probe": marked}).unverified is False
+    rolled = I.host_read("icm-probe", _decisions(days + last + _load("2026-10-01 12:00Z")
+                                                 + _load("2026-11-02 08:00Z", mark=False)))
+    r = _dread(db, obs, hosts={"icm-probe": rolled})
+    assert r.unverified and "load" in r.reason and "2026-11-02" in r.reason
+    other = I.host_read("icm-probe", _decisions(days + last + _load("2026-10-01 12:00Z")
+                                                + _load("2026-11-02 08:00Z", mark=False)
+                                                + _load("2026-11-02 08:00Z", arm="D9")[1:]))
+    assert _dread(db, obs, hosts={"icm-probe": other}).unverified           # another arm's marker proves nothing
+    old = I.host_read("icm-probe", _decisions(days + last + _load("2026-10-01 12:00Z", capability=0)))
+    assert _dread(db, obs, hosts={"icm-probe": old}).unverified
+
+
+def test_the_engine_writes_the_load_and_its_marker_at_the_same_time(env, tmp_path):
+    eng, pb, p = _engine_with(env, tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    load = [d for d in eng.decisions if d.get("action") == AR.LOADED and d.get("arm") == p.reg.arm_id]
+    mark = [d for d in eng.decisions if d.get("action") == AR.CAPABLE and d.get("arm") == p.reg.arm_id]
+    assert len(load) == len(mark) == 1 and load[0]["ts"] == mark[0]["ts"] and AR.LOADED == I.LOADED_ACTION
 
 
 def test_the_engine_journals_its_capability_when_it_loads_a_discovered_learning_arm(env, tmp_path):
@@ -256,6 +298,77 @@ def test_a_1d_or_1w_window_cannot_be_proven_from_the_store_and_is_void_never_a_r
     assert I.WINDOW_UNPROVABLE not in I.REFUSAL_CAUSES
 
 
+def test_a_window_the_store_cannot_prove_leaves_the_arm_unverified_never_silent(db):
+    """Q2: a 1d/1w candidate is not only void: the arm reads unverified, so the health check tells it."""
+    r = _dread(db, _clean(), recompute=lambda arm, row: I.WINDOW_UNPROVABLE)
+    assert I.WINDOW_UNPROVABLE in I.UNVERIFYING
+    assert r.unverified and r.decision == "HOLD" and I.WINDOW_UNPROVABLE in r.reason
+
+
+def test_registration_refuses_a_1d_or_1w_spec(env):
+    """Q2: discovered learning arms run on 1h/4h only (2.4 (d)), so no 1d/1w arm ever reaches the night (a 1w spec
+    cannot even be written: `StrategySpec.timeframe` has no 1w)."""
+    from goldbot.ops import autodisc_register as R
+    from goldbot.research.autodisc.gen_combine import family_spec
+    from goldbot.research.autodisc.ledger import SearchLedger
+    from goldbot.research.autodisc.spec import spec_hash
+    from tests.test_discovered_arm_registration import GOOD as EXPLORE
+    from tests.test_discovered_arm_registration import T2R
+    assert set(S.LEARNING_TFS) == {"1h", "4h"}
+    ledger = SearchLedger(env["ledger_path"], mode="real")
+    for tf in ("1d",):
+        sp = family_spec("box_break_close", tf, None, T2R)
+        ledger.log_spec(sp, "G1", "1")
+        ledger.record_result(spec_hash(sp), EXPLORE)
+        ledger.log_spec(sp, "G1", "1", null=True)
+        ledger.record_result(spec_hash(sp), {"null_fitness": [0.5, 1.1, None, 0.9]}, null=True)
+        with pytest.raises(R.RegistrationRefused, match=r"2\.4 \(d\)"):
+            R.register_learning_to_db(spec_hash(sp), "icm-demo", **env)
+
+
+def test_a_window_missing_its_last_minutes_is_incomplete_void_and_never_cached_then_stored_when_they_arrive(
+        env, tmp_path):
+    """Q1: night N has the candidate's window without its last 5 minutes (not yet in the brain's store): void
+    `window_incomplete`, not a refusal, no verdict. Night N+1 has them: the verdict is stored, ok."""
+    eng, arm, engine = _held(env, tmp_path)
+    full = _versions(eng.bars_1m)
+    short = full[full["ts_utc"] < CLOSE - pd.Timedelta(minutes=5)]
+    assert I.AccountMinutes(short).held(arm, CLOSE) == I.WINDOW_INCOMPLETE
+    assert I.AccountMinutes(full.tail(200)).held(arm, CLOSE) == I.WINDOW_INCOMPLETE      # shorter than the window
+    assert I.WINDOW_INCOMPLETE not in I.REFUSAL_CAUSES and I.WINDOW_INCOMPLETE not in I.UNVERIFYING
+    db = Database.open(str(tmp_path / "night"), "aux")
+    row = {"arm_id": arm.id, "account_id": "icm-probe", "decision_utc": CLOSE, "session_day": session_day(CLOSE),
+           "taken": False, "stop_dist": engine.stop_dist, "target_dist": engine.target_dist,
+           "max_hold_s": engine.max_hold_s, "recorded_ns": int(CLOSE.value) + 1_000_000_000, "entry_utc": pd.NaT}
+    obs = pd.DataFrame([row])
+    host = {"icm-probe": I.HostRead(account_id="icm-probe", days=(session_day(CLOSE),),
+                                    last_ns=int(CLOSE.value) + 10**12, marks={arm.id: (0,)})}
+    kw: dict[str, Any] = dict(broker="icm", journal=_journal(), accounts={"icm-probe"},
+                              since=pd.Timestamp(0, tz="UTC"), hosts=host, now=CLOSE + pd.Timedelta(days=3),
+                              settled=lambda day, hold: CLOSE + pd.Timedelta(days=2))
+    night_n = I.integrity(db, obs, arm, recompute=I.engine_recompute({"icm-probe": short}), **kw)
+    assert night_n.void_by_cause == {I.WINDOW_INCOMPLETE: 1} and night_n.n_refused == 0
+    assert I.verdicts(db, "icm", arm.id) == {}
+    night_n1 = I.integrity(db, obs, arm, recompute=I.engine_recompute({"icm-probe": full}), **kw)
+    assert night_n1.void_by_cause == {} and night_n1.n_refused == 0
+    assert [v["verdict"] for v in I.verdicts(db, "icm", arm.id).values()] == ["ok"]
+
+
+def test_a_verdict_is_written_only_once_its_day_has_settled_and_its_account_is_covered(db):
+    """Q1: before the settle lag, or while its account's coverage fails, a verdict is read but never frozen."""
+    obs = _clean()
+    since = pd.Timestamp("2026-10-01", tz="UTC")
+    kw: dict[str, Any] = dict(broker="icm", journal=_journal(), recompute=lambda arm, row: GOOD,
+                              accounts={"icm-probe"}, since=since, now=SETTLED)
+    I.integrity(db, obs, _disc(), hosts=_covered(obs), settled=lambda day, hold: SETTLED + pd.Timedelta(days=1), **kw)
+    assert I.verdicts(db, "icm", "D1") == {}                                 # not settled yet
+    gap = _covered(obs)["icm-probe"].model_copy(update={"marks": {}})
+    I.integrity(db, obs, _disc(), hosts={"icm-probe": gap}, settled=lambda day, hold: SETTLED, **kw)
+    assert I.verdicts(db, "icm", "D1") == {}                                 # its account is not covered
+    I.integrity(db, obs, _disc(), hosts=_covered(obs), settled=lambda day, hold: SETTLED, **kw)
+    assert len(I.verdicts(db, "icm", "D1")) == 120
+
+
 def test_release_minutes_after_the_cutover_in_the_window_void_the_candidate(env, tmp_path):
     eng, arm, engine = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
@@ -324,6 +437,25 @@ def test_broker_bars_replace_queues_the_minutes_flagged(monkeypatch):
     assert seen and bool(seen[0][history.REPLACED_COL].all())
 
 
+def test_a_replacement_written_after_the_decision_and_past_the_live_grace_is_found_through_the_store(env, tmp_path):
+    """K1 (code review of deb81d05, ~/tmp/rv/y.py): `as_of_minutes` drops a replacement written after the decision,
+    so the flag is read on every stored version of the window, before the as-of filter."""
+    from goldbot.data.account_bars import LIVE_WRITE_GRACE
+    from goldbot.data.store import Store
+    eng, arm, engine = _held(env, tmp_path)
+    minutes = eng.bars_1m.copy()
+    minutes["available_utc"] = pd.to_datetime(minutes["visible_at"], utc=True) + pd.Timedelta(seconds=1)
+    minutes["replaced"] = False
+    i = minutes.index[-40]
+    minutes.loc[i, "available_utc"] = CLOSE + LIVE_WRITE_GRACE + pd.Timedelta(minutes=3)
+    minutes.loc[i, "replaced"] = True
+    minutes.loc[i, "bid_high"] += 20.0
+    store = Store(tmp_path / "data")
+    store.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1))
+    assert got(arm, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.REPLACED_MINUTE
+
+
 def test_a_quarantined_minute_in_the_window_is_its_own_cause_and_never_a_refusal(env, tmp_path):
     eng, arm, _ = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
@@ -341,9 +473,10 @@ def _health(state: Path, now: pd.Timestamp) -> Any:
     return health.check_discovered_arm_reads(ctx)
 
 
-def _night(db: Database, day: str, unverified: bool, arm_id: str = "D1") -> None:
+def _night(db: Database, day: str, unverified: bool, arm_id: str = "D1", decision: str = "HOLD") -> None:
     r = L.ArmRead(day=day, broker="icm", arm_id=arm_id, role="learning", tf="1h", discovered=True,
-                  unverified=unverified, reason="bracket integrity unverified: x" if unverified else "")
+                  unverified=unverified, reason="bracket integrity unverified: x" if unverified else "",
+                  decision=decision)  # type: ignore[arg-type]
     L.record(db, [r], now=pd.Timestamp(day, tz="UTC") + pd.Timedelta(days=1, hours=6))
 
 
@@ -359,6 +492,24 @@ def test_a_discovered_arm_unverified_two_nights_running_warns_and_the_warning_is
     assert c.name.startswith(health.NOTIFY_ON_WARN)
     _night(db, "2026-11-26", False)
     assert _health(tmp_path, now).status == "ok"
+
+
+def test_an_arm_no_longer_read_or_retired_never_warns(tmp_path):
+    """K2 (code review of deb81d05, ~/tmp/rv/x.py): only the latest lifecycle night counts, and a retired arm is
+    not read any more."""
+    db = Database.open(str(tmp_path), "aux")
+    now = pd.Timestamp("2026-11-26 07:00", tz="UTC")
+    _night(db, "2026-09-01", True, arm_id="OLD")
+    _night(db, "2026-09-02", True, arm_id="OLD")                          # not read since September
+    _night(db, "2026-11-24", True, arm_id="GONE")
+    _night(db, "2026-11-25", True, arm_id="GONE", decision="RETIRE")      # retired on its last read
+    _night(db, "2026-11-25", False, arm_id="LIVE")
+    c = _health(tmp_path, now)
+    assert c.status == "ok", c.reason
+    _night(db, "2026-11-24", True, arm_id="D1")
+    _night(db, "2026-11-25", True, arm_id="D1")
+    c = _health(tmp_path, now)
+    assert c.status == "warn" and "icm:D1" in c.reason and "OLD" not in c.reason and "GONE" not in c.reason
 
 
 def test_the_unverified_check_reads_ok_without_an_aux_db(tmp_path):

@@ -396,7 +396,8 @@ def _covered(obs: pd.DataFrame, account: str = "icm-probe") -> dict[str, I.HostR
     engine's capability marker since the arm's registration (amendment 5.1 coverage rule, F2/F3)."""
     return {account: I.HostRead(account_id=account, days=tuple(sorted(set(obs["session_day"].astype(str)))),
                                 last_ns=int(pd.Timestamp(obs["decision_utc"].max()).value) + 1,
-                                capable_ns=int(pd.Timestamp("2026-10-01", tz="UTC").value))}
+                                loads={"D1": (int(pd.Timestamp("2026-10-01", tz="UTC").value),)},
+                                marks={"D1": (int(pd.Timestamp("2026-10-01", tz="UTC").value),)})}
 
 
 def _dread(db: Database, obs: pd.DataFrame, journal: pd.DataFrame | None = None, **kw: Any) -> L.ArmRead:

@@ -504,8 +504,9 @@ UNVERIFIED_NIGHTS = 2           # F7 (reviews of 611d5adb): a discovered arm unv
 def check_discovered_arm_reads(ctx: HealthContext) -> Check:
     """A discovered learning arm whose nightly lifecycle read was `unverified` (research/arm_integrity.py: the night
     did not see its whole journal, a capable engine or every account's minutes) on its last UNVERIFIED_NIGHTS reads
-    WARNs, told to the owner (NOTIFY_ON_WARN): such an arm is never read as evidence, only its kill rules act. aux.db
-    is opened read-only, never migrated."""
+    WARNs, told to the owner (NOTIFY_ON_WARN): such an arm is never read as evidence, only its kill rules act. Only
+    arms read on the latest lifecycle night count, and not one whose latest read retired it (K2: an arm no longer
+    read never warns for ever). aux.db is opened read-only, never migrated."""
     import json
     import sqlite3
     name = "discovered_arm_reads"
@@ -531,8 +532,10 @@ def check_discovered_arm_reads(ctx: HealthContext) -> Check:
                 got.append((str(day), json.loads(body)))
             except ValueError:
                 got.append((str(day), {"discovered": True, "unverified": True, "reason": "unreadable read row"}))
+    latest = max((str(r[2]) for r in rows), default="")
     bad = [f"{b}:{a} since {nights[-1][0]} ({nights[0][1].get('reason', '')})" for (b, a), nights in sorted(last.items())
-           if len(nights) == UNVERIFIED_NIGHTS and all(n.get("discovered") and n.get("unverified") for _, n in nights)]
+           if len(nights) == UNVERIFIED_NIGHTS and nights[0][0] == latest and nights[0][1].get("decision") != "RETIRE"
+           and all(n.get("discovered") and n.get("unverified") for _, n in nights)]
     if bad:
         return Check(name=name, status="warn", reason=f"discovered arm unverified {UNVERIFIED_NIGHTS} nights running, "
                      "never evidence (check the hosts' decisions, dq_events and minutes reach the brain store): "

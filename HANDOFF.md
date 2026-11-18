@@ -96,6 +96,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Every refusal carries the engine's and the night's bracket; the job summary counts refusals and voids by cause. A
   void the engine journalled at the entry retires as "bracket integrity: void at entry (engine)" (C1, section 5 of
   docs/research/arm-lifecycle-2026-11-18.md). `LIFECYCLE_READY` stays False.
+- 2026-11-18 second review round on the discovered-arm lifecycle: a verdict is cached only once its day has settled
+  and its account's coverage passes; a window not yet whole in the store is void `window_incomplete` and retried;
+  1d/1w reads unverified (and never registers); every load of a discovered arm needs its own capability marker (the
+  engine writes both at one time), so a rollback holds the arm unverified; the replaced-minute check reads every
+  stored version; `discovered_arm_reads` counts only the latest night and skips retired arms.
 - 2026-11-15 (branch feat/power-first-gates; R157; ADR 0085): power-first research gates and the alpha-spending Holm
   confirm, for **research and demo promotion only**. This follows the panel ruling of 2026-11-15 on the evaluator's
   memo, docs/research/power-first-gates-2026-11.md (carried on this branch).

@@ -593,13 +593,14 @@ def _add(eng: Engine, ex: Exploration, arm: Arm) -> None:
         ex.retired = ex.retired | {arm.arm_id}
     log.warning("exploration arm %s hot-loaded on %s (%s)", arm.arm_id, eng.cfg.account_id,
                 arm.spec.entry_refused or "may enter")
-    eng.decisions.append({"ts": time.time(), "agent": PREFIX + arm.arm_id, "action": LOADED, "arm": arm.arm_id,
+    at = time.time()          # the load and its capability marker share it: the night matches them (S1)
+    eng.decisions.append({"ts": at, "agent": PREFIX + arm.arm_id, "action": LOADED, "arm": arm.arm_id,
                           "style": arm.style, "max_loss": ex.hot_caps.get(arm.arm_id),
                           "entry_refused": arm.spec.entry_refused or None})
     from goldbot.research.arm_rules_spec import BRACKET_PREFIX
     from goldbot.research.arms import PER_TRADE_KEY
     if arm.spec.role == "learning" and str(arm.spec.params.get(PER_TRADE_KEY, "")).startswith(BRACKET_PREFIX):
-        eng.decisions.append({"ts": time.time(), "agent": PREFIX + arm.arm_id, "action": CAPABLE, "arm": arm.arm_id,
+        eng.decisions.append({"ts": at, "agent": PREFIX + arm.arm_id, "action": CAPABLE, "arm": arm.arm_id,
                               "capability": CAPABILITY, "actions": [BRACKET_VOID, CONTROL_CHANGED]})
 
 

@@ -13,19 +13,23 @@ Design rules:
   - Coverage (`coverage_refusal`), per arm and per account the arm has candidates on since its `since`: the account's
     whole journal (every row, before the void actions are filtered) was read with its schema, has a row on every
     session day with a candidate, runs to or past the last candidate, and carries the engine's capability marker
-    (`arm_registry_capable` >= CAPABILITY) since `since`: an empty journal is evidence only from an engine that can
-    write the void actions. Any miss: unverified (HOLD, never evidence; the health check tells the owner after 2
+    (`arm_registry_capable` >= CAPABILITY) of the arm since `since`, at the very time of every load of the arm since
+    then (S1: a load without one, e.g. a rollback to an older engine, proves nothing): an empty journal is evidence
+    only from an engine that can write the void actions. Any miss: unverified (HOLD, never evidence; the health check tells the owner after 2
     nights, `ops.checks.feeds.check_discovered_arm_reads`).
 * The recompute (section 4, quant Q6) reads only what the engine held at the decision (`AccountMinutes`): the
   engine's own stored minutes (`bars_1m_live`, rank 0) and the release minutes before its cut-over (rank 3), each
   version as of the decision by its write time, at its nominal close, in the engine's `arm_bars` window. Never the
   broker's M1 or a legacy feed (the engine never reads them). Where the store cannot show what the engine held, the
   candidate is void with its cause, never refused: a 1d/1w window (its start is the engine's last restart), a release
-  minute after the cut-over in the window, a minute replaced after the decision (flagged on the minute itself,
-  `engine.history.REPLACED_COL`, or logged `broker_bar_replaced` within REPLACE_SPAN before it), a minute
-  quarantined (quarantine has no as-of time), no bar at the decision. An account whose minutes, dq events or
+  minute after the cut-over in the window, a minute replaced after the decision (flagged on any stored version of a
+  window minute, `engine.history.REPLACED_COL`, read before the as-of filter, or logged `broker_bar_replaced` within
+  REPLACE_SPAN before it), a minute quarantined (quarantine has no as-of time), no bar at the decision, and a window
+  whose minutes are not all stored yet (`window_incomplete`: shorter than the engine's, or ending before the minute
+  before the decision; tried again the next night). An account whose minutes, dq events or
   quarantine cannot be read, or that has no minutes, leaves the arm unverified (UNVERIFYING): never a silent drop.
-* Each candidate's final verdict (ok, or refused with its cause) is written once to aux.db `arm_lifecycle_verdicts`
+* Each candidate's final verdict (ok, or refused with its cause), once its day has settled (the frozen terms' lag)
+  and its account's coverage passes (quant Q1), is written once to aux.db `arm_lifecycle_verdicts`
   (append-only by trigger) with the engine's (stored) and the night's bracket; later nights read it instead of
   recomputing, so the minutes are read only from the oldest candidate without a verdict. A cached ok whose stored
   bracket has changed since is refused (`bracket_updated`). Voids are not cached: they are tried again.
@@ -59,6 +63,7 @@ log = logging.getLogger(__name__)
 BRACKET_VOID_ACTION = "arm_registry_bracket_void"
 CONTROL_CHANGED_ACTION = "arm_registry_control_changed"
 CAPABLE_ACTION = "arm_registry_capable"
+LOADED_ACTION = "exploration_arm_hot_loaded"   # engine.arm_registry.LOADED: one row per load of a hot-loaded arm
 CAPABILITY = 1                  # the void-journalling contract a marker proves; a lower one proves nothing
 JOURNAL_ACTIONS = (BRACKET_VOID_ACTION, CONTROL_CHANGED_ACTION)
 JOURNAL_COLS = ("ts_utc", "account_id", "agent_id", "action", "detail")
@@ -82,8 +87,9 @@ RELEASE_AFTER_CUTOVER = "release_after_cutover"
 QUARANTINED_MINUTE = "quarantined_minute"
 WINDOW_UNPROVABLE = "window_unprovable"
 NO_BAR = "no_bar_at_decision"
-# ... of which these say the account was not read: the arm is unverified (F4)
-UNVERIFYING = frozenset({NO_MINUTES, MINUTES_UNREADABLE, DQ_UNREADABLE, QUARANTINE_UNREADABLE})
+WINDOW_INCOMPLETE = "window_incomplete"   # the window's minutes are not all in the store yet (quant Q1): tried again
+# ... of which these say the night cannot read the arm as the engine did: the arm is unverified, and told (F4, Q2)
+UNVERIFYING = frozenset({NO_MINUTES, MINUTES_UNREADABLE, DQ_UNREADABLE, QUARANTINE_UNREADABLE, WINDOW_UNPROVABLE})
 # refusal causes (`bracket_void`'s, the journal's, a change after a cached verdict)
 REFUSAL_CAUSES = frozenset({"journalled", "journal_unparseable", "bracket_not_in_insert", "bracket_updated",
                             "bracket_unreadable", "bracket_late", "bracket_mismatch"})
@@ -99,13 +105,15 @@ def discovered(arm: Arm) -> bool:
 
 # ---------------------------------------------------------------------------------------------- the journal
 class HostRead(FrozenRecord):
-    """One host account's journal as the night read it (F1-F3): why it is unusable (None: read, with its schema),
-    the session days with a row, its latest row and its latest capability marker (epoch ns)."""
+    """One host account's journal as the night read it (F1-F3, S1): why it is unusable (None: read, with its schema),
+    the session days with a row, its latest row, and per arm the times (epoch ns) of its loads and of its capability
+    markers (CAPABILITY or later)."""
     account_id: str
     journal_why: str | None = None
     days: tuple[str, ...] = ()
     last_ns: int | None = None
-    capable_ns: int | None = None
+    loads: dict[str, tuple[int, ...]] = {}
+    marks: dict[str, tuple[int, ...]] = {}
 
 
 def _detail(v: Any) -> dict[str, Any] | None:
@@ -134,11 +142,19 @@ def host_read(account: str, frame: pd.DataFrame | None) -> HostRead:
         return HostRead(account_id=account)
     ts = pd.DatetimeIndex(pd.to_datetime(frame["ts_utc"], utc=True))
     ns = epoch_ns(ts)
-    marks = frame["action"].astype(str).to_numpy() == CAPABLE_ACTION
-    capable = [int(n) for n, d in zip(ns[marks], frame.loc[marks, "detail"], strict=True)
-               if isinstance(c := (_detail(d) or {}).get("capability"), int | float) and c >= CAPABILITY]
+    action = frame["action"].astype(str).to_numpy()
+    loads: dict[str, list[int]] = {}
+    marks: dict[str, list[int]] = {}
+    for i in np.flatnonzero((action == LOADED_ACTION) | (action == CAPABLE_ACTION)):
+        d = _detail(frame["detail"].iloc[i]) or {}
+        arm = str(d.get("arm") or str(frame["agent_id"].iloc[i]).removeprefix("explore:"))
+        if action[i] == LOADED_ACTION:
+            loads.setdefault(arm, []).append(int(ns[i]))
+        elif isinstance(c := d.get("capability"), int | float) and c >= CAPABILITY:
+            marks.setdefault(arm, []).append(int(ns[i]))
     return HostRead(account_id=account, days=tuple(sorted(set(session_day(ts)))), last_ns=int(ns.max()),
-                    capable_ns=max(capable) if capable else None)
+                    loads={a: tuple(sorted(v)) for a, v in loads.items()},
+                    marks={a: tuple(sorted(v)) for a, v in marks.items()})
 
 
 def engine_journal(store: Any, accounts: Collection[str], *, start: pd.Timestamp,
@@ -178,11 +194,12 @@ def journalled(journal: pd.DataFrame, action: str, arm_id: str, accounts: Collec
     return out
 
 
-def coverage_refusal(cands: pd.DataFrame, hosts: Mapping[str, HostRead] | None,
-                     since: pd.Timestamp) -> str | None:
-    """Why the night did not see everything of the arm's candidates `cands` (F2/F3), None when it did: per account
-    with a candidate, its journal read with its schema, a row on every candidate session day, its latest row at or
-    after its last candidate, and a capability marker since `since`."""
+def coverage_refusal(cands: pd.DataFrame, hosts: Mapping[str, HostRead] | None, since: pd.Timestamp,
+                     arm_id: str) -> str | None:
+    """Why the night did not see everything of `arm_id`'s candidates `cands` (F2/F3/S1), None when it did: per
+    account with a candidate, its journal read with its schema, a row on every candidate session day, its latest row
+    at or after its last candidate, a capability marker of the arm since `since`, and one at the very time of every
+    load of the arm since `since` (a load without it is an engine without the contract, e.g. after a rollback)."""
     if cands.empty:
         return None
     if hosts is None:
@@ -200,9 +217,13 @@ def coverage_refusal(cands: pd.DataFrame, hosts: Mapping[str, HostRead] | None,
         last = int(epoch_ns(pd.DatetimeIndex(pd.to_datetime(part["decision_utc"], utc=True))).max())
         if h.last_ns is None or h.last_ns < last:
             return f"{acc}: journal ends before its last candidate"
-        if h.capable_ns is None or h.capable_ns < int(since.value):
-            return (f"{acc}: no engine capability marker ({CAPABLE_ACTION} >= {CAPABILITY}) since "
+        marks = {n for n in h.marks.get(arm_id, ()) if n >= int(since.value)}
+        if not marks:
+            return (f"{acc}: no engine capability marker ({CAPABLE_ACTION} >= {CAPABILITY}) of {arm_id} since "
                     f"{since:%Y-%m-%d}")
+        if bare := [n for n in h.loads.get(arm_id, ()) if n >= int(since.value) and n not in marks]:
+            return (f"{acc}: the load of {arm_id} at {pd.Timestamp(bare[0], tz='UTC'):%Y-%m-%d %H:%M} has no "
+                    f"capability marker (an engine without the {CAPABLE_ACTION} contract)")
     return None
 
 
@@ -240,17 +261,23 @@ class AccountMinutes:
         if len(seen) < need and lo > 0:                                # a long gap: the whole prefix
             seen = as_of_minutes(self.v.iloc[:hi], at)
         if seen.empty:
-            return NO_BAR
+            return WINDOW_INCOMPLETE
         win = seen.tail(need)
         wts = epoch_ns(pd.DatetimeIndex(pd.to_datetime(win["ts_utc"], utc=True)))
+        # K1: on every stored version of the window, before the as-of filter (which drops a replacement written
+        # after the decision): a minute replaced after `at` was not what the engine held
+        if "replaced" in self.v.columns and "written_at" in self.v.columns:
+            span_v = self.v.iloc[int(np.searchsorted(self.ts, int(wts.min()), side="left")):hi]
+            flagged = span_v["replaced"].astype("boolean").fillna(False).to_numpy(dtype=bool)
+            late = (pd.to_datetime(span_v["written_at"], utc=True) > at).fillna(False).to_numpy(dtype=bool)
+            if bool((flagged & late).any()):
+                return REPLACED_MINUTE
+        # Q1: the window's minutes not all in the store yet (the last one is the minute before `at`)
+        if len(win) < need or int(wts.max()) < int((at - pd.Timedelta(minutes=1)).value):
+            return WINDOW_INCOMPLETE
         if "rank" in win.columns and self.cutover is not None and \
                 bool(((win["rank"].to_numpy() == RELEASE_RANK) & (wts >= self.cutover)).any()):
             return RELEASE_AFTER_CUTOVER
-        if "replaced" in win.columns and "written_at" in win.columns:
-            flagged = win["replaced"].fillna(False).astype(bool).to_numpy()
-            late = (pd.to_datetime(win["written_at"], utc=True) > at).fillna(False).to_numpy()
-            if bool((flagged & late).any()):
-                return REPLACED_MINUTE
         if bool(((self.quarantined >= wts.min()) & (self.quarantined < at.value)).any()):
             return QUARANTINED_MINUTE
         seen = seen.tail(ENGINE_MINUTES).reset_index(drop=True)
@@ -443,9 +470,13 @@ def _count(d: dict[str, int], cause: str) -> None:
 
 
 def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, journal: pd.DataFrame,
-              recompute: Recompute, accounts: Collection[str], since: pd.Timestamp) -> Integrity:
-    """The module docstring's voids, refusals and kill evidence for `arm` on `broker` (`db` None: no verdict
-    cache)."""
+              recompute: Recompute, accounts: Collection[str], since: pd.Timestamp,
+              hosts: Mapping[str, HostRead] | None = None, now: pd.Timestamp | None = None,
+              settled: Callable[[str, float], pd.Timestamp] | None = None) -> Integrity:
+    """The module docstring's voids, refusals and kill evidence for `arm` on `broker`. A verdict is written to the
+    cache (`db`) only once its inputs have settled (quant Q1): `now` at or after `settled(session day, its hold s)`
+    (the frozen terms' settle lag) and its account's coverage passing (`coverage_refusal`). Without `db`, `now` or
+    `settled` nothing is cached."""
     voids = journalled(journal, BRACKET_VOID_ACTION, arm.id, accounts)
     changes = journalled(journal, CONTROL_CHANGED_ACTION, arm.id, accounts)
     out = Integrity(obs=obs, cands=obs.iloc[:0], engine_void=bool(voids),
@@ -464,6 +495,14 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
     mine = obs[obs["arm_id"] == arm.id]
     mine = mine[pd.to_datetime(mine["decision_utc"], utc=True) >= since].sort_values("decision_utc", kind="stable")
     out.cands = mine
+    covered = {str(a) for a, part in mine.groupby(mine["account_id"].astype(str))
+               if coverage_refusal(part, hosts, since, arm.id) is None} if hosts is not None else set()
+
+    def frozen(row: Mapping[str, Any]) -> bool:
+        if db is None or now is None or settled is None or str(row.get("account_id")) not in covered:
+            return False
+        hold = _num(row.get("max_hold_s"))
+        return pd.Timestamp(now) >= settled(str(row.get("session_day")), float(hold) if hold is not None else 0.0)
     cached = verdicts(db, broker, arm.id) if db is not None else {}
     new: list[tuple[Key, str, str | None, dict[str, Any], dict[str, Any] | None]] = []
     drop: list[Any] = []
@@ -476,7 +515,7 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
         night: dict[str, Any] | None = None
         if key in by_journal:
             cause = by_journal[key]
-            if key not in cached:
+            if key not in cached and frozen(row):
                 new.append((key, "refused", cause, engine, None))
         elif key in cached:
             hit = cached[key]
@@ -500,7 +539,8 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
             night = rec.model_dump()
             why = bracket_void(candidate_row(row), rec)
             cause = None if why is None else why.split(":", 1)[0]
-            new.append((key, "ok" if cause is None else "refused", cause, engine, night))
+            if frozen(row):
+                new.append((key, "ok" if cause is None else "refused", cause, engine, night))
         if cause is not None:
             drop.append(i)
             refused.add(key)
@@ -518,7 +558,8 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
 
 
 __all__ = ["BRACKET_RETIRE_N", "BRACKET_VOID_ACTION", "CAPABILITY", "CAPABLE_ACTION", "CONTROL_CHANGED_ACTION",
-           "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "JOURNAL_ACTIONS", "JOURNAL_COLS",
+           "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "JOURNAL_ACTIONS", "JOURNAL_COLS", "LOADED_ACTION",
+    "WINDOW_INCOMPLETE",
            "MINUTES_UNREADABLE", "NO_BAR", "NO_MINUTES", "NO_RECOMPUTE", "QUARANTINED_MINUTE",
            "QUARANTINE_UNREADABLE", "READ_DAYS", "REFUSAL_CAUSES", "RELEASE_AFTER_CUTOVER", "REPLACED_MINUTE",
            "REPLACE_SPAN", "UNVERIFYING", "WINDOW_UNPROVABLE", "AccountMinutes", "HostRead", "Integrity",

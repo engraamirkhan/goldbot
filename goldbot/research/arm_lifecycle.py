@@ -326,8 +326,11 @@ def read_arm(db: Database, obs: pd.DataFrame, arm: Arm, *, broker: str, control:
         if journal is None or recompute is None:
             unverified = "no journal read" if journal is None else "no bars to recompute"
         else:
+            own = arm_hold(arm)
             g = integrity(db, obs, arm, broker=broker, journal=journal, recompute=recompute, accounts=accounts,
-                          since=since if since is not None else pd.Timestamp(0, tz="UTC"))
+                          since=since if since is not None else pd.Timestamp(0, tz="UTC"), hosts=hosts,
+                          now=pd.Timestamp(now),
+                          settled=lambda d, hold_s: settled_at(d, max(own, pd.Timedelta(seconds=hold_s))))
             obs, change = g.obs, g.change
             extra.update(n_bracket_void=g.n_refused, refusals=g.refusals, refused_by_cause=g.refused_by_cause,
                          void_by_cause=g.void_by_cause)
@@ -342,9 +345,10 @@ def read_arm(db: Database, obs: pd.DataFrame, arm: Arm, *, broker: str, control:
                 kill = "bracket integrity: a refused bracket on a taken candidate (amendment 5.1 (5))"
             elif kill is None and g.n_refused >= BRACKET_RETIRE_N:
                 kill = f"bracket integrity: {g.n_refused} refused brackets on candidates (amendment 5.1 (5))"
-            unverified = coverage_refusal(g.cands, hosts, since if since is not None else pd.Timestamp(0, tz="UTC"))
+            unverified = coverage_refusal(g.cands, hosts, since if since is not None else pd.Timestamp(0, tz="UTC"),
+                                          arm.id)
             if unverified is None and g.unverifying:
-                unverified = f"an account's minutes were not read ({', '.join(g.unverifying)})"
+                unverified = f"the night cannot read the arm as its engine did ({', '.join(g.unverifying)})"
         if unverified is not None:
             extra["unverified"] = True
             unverified = f"bracket integrity unverified: {unverified} (amendment 5.1): no evidence"
