@@ -525,7 +525,7 @@ def test_an_older_release_loads_a_file_with_ambiguous_rows(tmp_path):
 
 def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
-    from goldbot.research import arms
+    from goldbot.research import arm_lifecycle, arms
     from goldbot.research import daily_review as dr
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
@@ -548,6 +548,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # reason is None): tests/test_api_ui_contract.py::
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
                AskReason,
+               # aux.db arm_lifecycle_reads (build 2): tests/test_arm_lifecycle.py::
+               # test_a_read_a_newer_release_wrote_with_an_extra_field_still_reads
+               arm_lifecycle.ArmRead,
                # config/cost_of_record.yaml: tests/test_cost_of_record.py::
                # test_a_table_a_newer_release_wrote_still_reads
                arms.CostOfRecord,
@@ -615,6 +618,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "must refuse every hot-loaded entry, never be read loosely",
     ("goldbot/engine/arm_registry.py", "append", "RegistryRow"):
         "strict: the same hash-chained columns, re-read inside the append's write lock to extend a verified chain only",
+    ("goldbot/research/arm_lifecycle.py", "_learning", "Learning"):
+        "strict: the same checked-in learning block, read by the nightly lifecycle job; an invalid block is no kill "
+        "rule's block (the engine refuses that arm already)",
     ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
         "strict: research replica state snapshot, not persisted operational state (restart of a replica run only)",
     ("goldbot/ops/health.py", "HealthContext.from_runtime", "Settings"): "strict: Settings",

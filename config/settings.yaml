@@ -212,6 +212,7 @@ scheduler:
   journal_compact:  { kind: daily,   at: "03:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 170: closed months of the decisions journal -> one part each (goldbot/data/compact.py); never the open month
   news_coverage:    { kind: daily,   at: "06:05", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 212: news collector coverage readout; a > 12 h open-market gap between polls -> dq_events warning (goldbot/data/news_coverage.py)
   weekly_review:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }   # weekly review after research_director: ranked action list (aux.db review_actions) the next director run consumes
+  arm_lifecycle:    { kind: daily,   at: "06:25", max_late_hours: 12 }   # build 2 (goldbot/research/arm_lifecycle.py): per demo arm net GBP, fills, mean R, excess over its replay twin, fill-replay gap -> aux.db arm_lifecycle_reads; RETIRE by e-process or kill rule (engine retires it within a minute), SIZE_UP proposal only, else HOLD
   swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
   long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
@@ -398,6 +399,8 @@ research:
     etc_extra_rt_bps: 5.0            #   round trip = C1 point RT + 5 bp
     cme_fee_usd_per_side: 2.0        # venue C (CME 1OZ, report only): +$2/oz a side at the reference price, DTB3 both
                                      #   ways with no markup, one round trip at each monthly roll
+  arm_lifecycle:                     # build 2 (goldbot/research/arm_lifecycle.py; docs/research/arm-lifecycle-2026-11-18.md):
+    enabled: true                    #   the nightly per-arm forward read; thresholds are the note's module constants, never settings
   power_first:                       # ADR 0085 (research/power_first.py), research + demo promotion ONLY (the phase gate is
                                      #   pinned to today's criteria): a card starts only with these, else a "NOT STARTED
                                      #   (power)" registry row, no K, no data read. Every value may only tighten
