@@ -940,7 +940,8 @@ def fill_replay_pairs(db: Database, *, broker: str, replay_version: ReplayVersio
     gold candidate of `broker` with both a fill label and a `replay_version` label, not void for the cost cells.
     `fill_r` = label_fill_r, `replay_r` = the version's label; `entry_fill_minus_replay_r` = the entry leg alone, in R,
     + = the fill better than the replay's charged entry (r2 only: r1 stored no entry price); `exit_kind` = the fill's
-    own exit (stop/target/time, else other), for the bias by exit kind (quant C10). `attrs["unknown_arm_labels"]`:
+    own exit (stop/target/time, else other), for the bias by exit kind (quant C10); `exit_utc`, `exit_reason` (raw)
+    and `label_barrier` for the replay-parity monitor (research/replay_parity.py). `attrs["unknown_arm_labels"]`:
     the broker's paired rows left out because the spec names no instrument for their arm. One row per candidate."""
     inst = arm_spec.arm_instruments() if instruments is None else instruments
     every = read_obs(db, broker=broker, replay_version=replay_version, evidence="cost_cells")
@@ -968,7 +969,12 @@ def fill_replay_pairs(db: Database, *, broker: str, replay_version: ReplayVersio
     out = pd.DataFrame({"candidate_id": p["candidate_id"], "broker": p["broker"], "tf": p["tf"],
                         "session_day": p["session_day"], "side": p["side"], "stop_dist": p["stop_dist"],
                         "fill_r": p["label_fill_r"], "replay_r": p["label_sim_r"],
-                        "entry_fill_minus_replay_r": leg, "exit_kind": kind})
+                        "entry_fill_minus_replay_r": leg, "exit_kind": kind,
+                        # the replay-parity monitor's columns (amendment 2026-11-15 section 3): the fill's close, its
+                        # raw exit reason and the label's barrier
+                        "exit_utc": p["exit_utc"],
+                        "exit_reason": p["candidate_id"].map(lambda c: reasons.get(str(c))),
+                        "label_barrier": p["label_barrier"]})
     out.attrs["unknown_arm_labels"] = unknown
     return out
 

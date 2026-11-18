@@ -2,8 +2,10 @@
 writes it, goldbot/research/director.py consumes it, the Sunday digest counts it).
 
 Rules kept (architect plan 2026-11-13 item 2):
-* "The only automatic actions are stops already registered in config/arm_stops.yaml (tighten only)": `stop` is the one
-  automatic kind; every other kind is advice for the research director or the backlog, never applied here.
+* "The only automatic actions are stops already registered in config/arm_stops.yaml (tighten only)": `stop` is an
+  automatic kind; so is `replay_parity` (amendment 2026-11-15 section 3: the daily review's replay-parity fire, which
+  only ever marks replay-twin reads unvalidated; research/replay_parity.py writes it outside `write_week`, rank 0).
+  Every other kind is advice for the research director or the backlog, never applied here.
 * One action set per week: `write_week` records the week in `review_weeks` and its actions in one transaction; a rerun
   of the week (a restart mid-run) gets the stored set back and writes nothing.
 * An action id is stable over its subject (a roll-up proposal: its file and title; a stop: broker and arm), so the same
@@ -24,13 +26,13 @@ import pandas as pd
 from goldbot.base import FrozenRecord, load_record_json
 from goldbot.db.connection import Database
 
-ActionKind = Literal["stop", "read_due", "arm_reads_unreadable", "below_control", "loss_driver", "cost_drift", "exit_diagnostic",
-                     "variant_proposal", "unpaired"]
+ActionKind = Literal["stop", "replay_parity", "read_due", "arm_reads_unreadable", "below_control", "loss_driver",
+                     "cost_drift", "exit_diagnostic", "variant_proposal", "unpaired"]
 # the ranking order of the kinds: what was done, then what a registered rule says is due, then the evidence's
 # warnings, then proposals and housekeeping
-KIND_ORDER: tuple[str, ...] = ("stop", "read_due", "arm_reads_unreadable", "below_control", "loss_driver", "cost_drift", "exit_diagnostic",
-                               "variant_proposal", "unpaired")
-AUTOMATIC_KINDS = frozenset({"stop"})
+KIND_ORDER: tuple[str, ...] = ("stop", "replay_parity", "read_due", "arm_reads_unreadable", "below_control",
+                               "loss_driver", "cost_drift", "exit_diagnostic", "variant_proposal", "unpaired")
+AUTOMATIC_KINDS = frozenset({"stop", "replay_parity"})
 BACKLOG_KINDS = frozenset({"unpaired", "cost_drift", "arm_reads_unreadable"})     # engineering suggestions: a GitHub issue labelled `review`
 
 
