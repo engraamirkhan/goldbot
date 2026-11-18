@@ -48,8 +48,9 @@ The owner's directive of 2026-11-18, "the system finds new strategies itself", a
    are WITHHELD: nothing is handed off (no `candidate_arms` row, so `autodisc_register` has nothing to register), and
    the report lists what it would have offered. Its K is NOT withheld: "a dry search that evaluates outcomes without
    booking K is an uncounted trial", so the night ledgers every spec it evaluated, syncs that K to the registry and
-   writes its run record exactly as any night. A withheld survivor is never offered later; the reviewer flips the flag
-   to false after reading that report.
+   writes its run record exactly as any night. A later night may find it again; its K is already counted, so a
+   re-offer adds no trial. The reviewer flips the flag to false after reading that report (until then every night
+   stays dry and still spends K).
 
 "An explore survivor is a recorded fact, never evidence of edge." Nothing here trades, registers an arm or edits a
 config: registration stays `ops/autodisc_register.py` (demo accounts; the order gate is unchanged)."""

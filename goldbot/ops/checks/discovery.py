@@ -9,8 +9,11 @@ and must not ping the dead man's switch or fail the deploy health gate, but it m
 
   successful night   an aux.db `discovery_runs` row with status ok, budget or over_budget (the night ran and recorded;
                      `killed` and `failed` rows are the job's failures)
-  enabled lately    the scheduler's last slot ran the job disabled (a skip): ok, its first enabled night is pending
-                     and job:discovery_nightly judges whether it runs (a re-enable after a long pause is not stale)
+  enabled lately    the scheduler's last slot ran the job disabled (a skip) BEFORE the settings changed (the enable,
+                     `HealthContext.settings_changed`): ok for at most DISCOVERY_STALE_H from that change, its first
+                     enabled night pending (a re-enable after a long pause is not stale). A disabled skip NEWER than
+                     the change means the scheduler still runs the old settings: WARN "scheduler not restarted since
+                     enable" (review on 2d0e11b8: otherwise pending held forever). Change time unknown: no pending
   no success yet     measured from the first recorded attempt; with no row at all, a WARN
   disabled           not checked at all (`discovery_enabled`): disabled means no alert
 
@@ -75,9 +78,13 @@ def _job_state(ctx: HealthContext) -> dict[str, Any]:
     return dict(jobs.get(JOB) or {})
 
 
-def _last_slot_ran_disabled(job: dict[str, Any]) -> bool:
+def _disabled_skip_at(job: dict[str, Any]) -> pd.Timestamp | None:
+    """When the scheduler last ran the job as disabled (its last result is the disabled skip), else None."""
     result = job.get("last_result") or {}
-    return job.get("last_ok") is True and "enabled is false" in str(result.get("skipped", ""))
+    if job.get("last_ok") is not True or "enabled is false" not in str(result.get("skipped", "")):
+        return None
+    at = job.get("last_finished") or job.get("last_slot")
+    return pd.Timestamp(at) if at else None
 
 
 @register_check("global", block=BLOCK_SCHEDULER, pos=20, when=discovery_enabled)
@@ -92,9 +99,16 @@ def check_discovery_last_run(ctx: HealthContext) -> Check:
     age = (ctx.now - ok_at).total_seconds() if ok_at is not None else None
     if age is not None and age <= limit_s:
         return Check(name=NAME, status="ok", reason=f"last successful night {_age(age)} ago ({status})")
-    if _last_slot_ran_disabled(_job_state(ctx)):
-        return Check(name=NAME, status="ok", reason=f"enabled since its last slot; first enabled night pending "
-                                                    f"(job:{JOB} judges whether it runs)")
+    skip, changed = _disabled_skip_at(_job_state(ctx)), ctx.settings_changed
+    if skip is not None and changed is not None:
+        if skip >= changed:
+            since, ran = (ctx.now - changed).total_seconds(), (ctx.now - skip).total_seconds()
+            return Check(name=NAME, status="warn",
+                         reason=f"scheduler not restarted since enable: settings changed {_age(since)} ago, but "
+                                f"job:{JOB} still ran disabled {_age(ran)} ago; restart the scheduler service")
+        if (ctx.now - changed).total_seconds() <= limit_s:
+            return Check(name=NAME, status="ok", reason=f"enabled since its last slot; first enabled night pending "
+                                                        f"(job:{JOB} judges whether it runs)")
     if age is not None:
         return Check(name=NAME, status="warn",
                      reason=f"enabled, but the last successful discovery night was {_age(age)} ago (over "

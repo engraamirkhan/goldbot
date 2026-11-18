@@ -16,6 +16,7 @@ path."""
 from __future__ import annotations
 
 import ctypes
+import logging
 import multiprocessing as mp
 import os
 import platform
@@ -30,6 +31,7 @@ from typing import Any
 
 from goldbot.base import FrozenRecord
 
+log = logging.getLogger(__name__)
 THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
 TERM_WAIT_S = 10.0
 OOM_SCORE_ADJ = Path("/proc/self/oom_score_adj")
@@ -82,9 +84,14 @@ def idle_io(syscall: Callable[..., int] = _syscall) -> bool:
     if nr is None:
         return False
     try:
-        return syscall(nr, IOPRIO_WHO_PROCESS, 0, IOPRIO_IDLE) == 0
-    except (OSError, AttributeError, TypeError):
-        return False
+        if syscall(nr, IOPRIO_WHO_PROCESS, 0, IOPRIO_IDLE) == 0:
+            return True
+        log.warning("bounded: ioprio_set(idle) refused, errno %d; the child runs at the default IO class",
+                    ctypes.get_errno())
+    except (OSError, AttributeError, TypeError) as exc:
+        log.warning("bounded: ioprio_set(idle) unavailable (%s); the child runs at the default IO class",
+                    type(exc).__name__)
+    return False
 
 
 def peak_rss_mb() -> float:

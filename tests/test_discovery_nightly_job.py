@@ -186,7 +186,7 @@ def test_the_job_health_line_warns_when_the_childs_peak_rss_passes_the_sres_2_gb
         assert ("peak RSS" in got["health"]) is warn and "discovery ok: K 3" in got["health"]
 
 
-def test_the_child_asks_for_the_idle_io_class_on_linux_and_never_stops_on_a_refusal(monkeypatch):
+def test_the_child_asks_for_the_idle_io_class_on_linux_and_never_stops_on_a_refusal(monkeypatch, caplog):
     """SRE condition (f): nice and idle IO. ioprio_set(IOPRIO_WHO_PROCESS, self, IOPRIO_CLASS_IDLE) by its syscall
     number for the host's architecture; an unknown architecture or a refusal never stops the child."""
     calls: list[tuple[int, ...]] = []
@@ -201,7 +201,9 @@ def test_the_child_asks_for_the_idle_io_class_on_linux_and_never_stops_on_a_refu
     assert calls == [(30, 1, 0, 3 << 13)]
     monkeypatch.setattr(B.platform, "machine", lambda: "x86_64")
     assert B.idle_io(record) is True and calls[-1][0] == 251
-    assert B.idle_io(lambda *a: -1) is False                       # refused (EPERM, a sandbox): carry on
+    with caplog.at_level("WARNING", logger=B.__name__):
+        assert B.idle_io(lambda *a: -1) is False                   # refused (EPERM, a sandbox): carry on
+    assert "errno" in caplog.text                                  # ...and the refusal is logged with its errno
     monkeypatch.setattr(B.platform, "machine", lambda: "riscv64")
     assert B.idle_io(record) is False and len(calls) == 2
     monkeypatch.setattr(B.sys, "platform", "darwin")

@@ -327,8 +327,8 @@ class SchedulerSettings(_Section):
     long_history_refresh: ScheduleSettings = ScheduleSettings(kind="daily", at="21:40", max_late_hours=20,
                                                               run_if_never_run=True)
     # ADR 0090: the brain's bounded discovery search (goldbot/research/autodisc/discovery.py) in a niced child process,
-    # in the quiet 01:00-03:10 window (budget_s + kill_grace_s at most 2 h 10 min, before the 03:40 journal_compact);
-    # never caught up into the London open
+    # from 01:00, killed at budget_s + kill_grace_s (5,700 s: 03:35 on time, 04:05 UTC at worst after a 02:30 late
+    # start, which overlaps the 03:40 journal_compact); never caught up into the London open
     discovery_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:00", max_late_hours=1.5)
 
 

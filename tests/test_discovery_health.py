@@ -4,6 +4,7 @@ the owner through the health -> Telegram alert path, and an enabled job whose la
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 
@@ -21,8 +22,9 @@ def settings(enabled: bool = True):
         "discovery": s.research.discovery.model_copy(update={"enabled": enabled})})})
 
 
-def ctx(tmp_path, enabled: bool = True) -> Hm.HealthContext:
-    return Hm.HealthContext(state_dir=tmp_path, now=NOW, settings=settings(enabled), get_secret=lambda k: None)
+def ctx(tmp_path, enabled: bool = True, settings_changed: pd.Timestamp | None = None) -> Hm.HealthContext:
+    return Hm.HealthContext(state_dir=tmp_path, now=NOW, settings=settings(enabled), get_secret=lambda k: None,
+                            settings_changed=settings_changed)
 
 
 def add_run(state_dir, status: str, at: pd.Timestamp, **body) -> None:
@@ -81,8 +83,44 @@ def test_a_job_disabled_at_its_last_slot_is_waiting_for_its_first_enabled_night(
     write_scheduler(tmp_path, last_ok=True, last_finished=(NOW - pd.Timedelta(hours=8)).isoformat(),
                     last_result={"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"},
                     next_slot=(NOW + pd.Timedelta(hours=16)).isoformat())
-    c = D.check_discovery_last_run(ctx(tmp_path))
+    c = D.check_discovery_last_run(ctx(tmp_path, settings_changed=NOW - pd.Timedelta(hours=4)))   # enabled after it
     assert c.status == "ok" and "first enabled night" in c.reason
+
+
+def disabled_skip(state_dir, ago: pd.Timedelta) -> None:
+    write_scheduler(state_dir, last_ok=True, last_finished=(NOW - ago).isoformat(),
+                    last_slot=(NOW - ago).isoformat(),
+                    last_result={"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"})
+
+
+def test_a_disabled_skip_newer_than_the_enable_warns_that_the_scheduler_was_not_restarted(tmp_path):
+    """Review bug on 2d0e11b8: settings enabled for 3 days, but the scheduler still skips as disabled (it never
+    restarted), so 'pending' must not hold."""
+    disabled_skip(tmp_path, pd.Timedelta(hours=2))
+    c = D.check_discovery_last_run(ctx(tmp_path, settings_changed=NOW - pd.Timedelta(days=3)))
+    assert c.status == "warn" and "scheduler not restarted since enable" in c.reason
+
+
+def test_pending_lasts_at_most_26_hours_from_the_enable(tmp_path):
+    disabled_skip(tmp_path, pd.Timedelta(hours=40))
+    c = D.check_discovery_last_run(ctx(tmp_path, settings_changed=NOW - pd.Timedelta(hours=30)))
+    assert c.status == "warn"
+
+
+def test_without_a_known_enable_time_a_disabled_skip_is_not_read_as_pending(tmp_path):
+    disabled_skip(tmp_path, pd.Timedelta(hours=2))
+    assert D.check_discovery_last_run(ctx(tmp_path)).status == "warn"
+
+
+def test_the_runtime_context_stamps_when_the_local_settings_last_changed(tmp_path):
+    import os
+    base = tmp_path / "settings.yaml"
+    base.write_text((Path("config/settings.yaml")).read_text())
+    local = tmp_path / "settings.local.yaml"
+    local.write_text("research: {discovery: {enabled: true}}\n")
+    os.utime(local, (1_700_000_000, 1_700_000_000))
+    c = Hm.HealthContext.from_runtime(tmp_path / "state", settings_path=base, now=NOW)
+    assert c.settings_changed == pd.Timestamp(1_700_000_000, unit="s", tz="UTC")
 
 
 def test_an_enabled_job_with_no_run_recorded_anywhere_warns(tmp_path):

@@ -447,6 +447,9 @@ class HealthContext(Record):
     entry_supply: Callable[[], dict[str, Any]] | None = None
     # outage 2026-11-14: the host's /etc, for check_needrestart (from_runtime sets it on Linux); None omits the check
     etc_dir: Path | None = None
+    # when this host's settings last changed (settings.local.yaml's mtime, else settings.yaml's): the latest moment a
+    # flag such as research.discovery.enabled can have been turned on (check_discovery_last_run); None: unknown
+    settings_changed: UtcTimestamp | None = None
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -487,7 +490,17 @@ class HealthContext(Record):
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
                    commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes,
                    observe_lanes=observed, etc_dir=Path("/etc") if sys.platform.startswith("linux") else None,
-                   entry_supply=partial(_entry_supply_view, settings) if settings is not None else None)
+                   entry_supply=partial(_entry_supply_view, settings) if settings is not None else None,
+                   settings_changed=_settings_changed(Path(settings_path)))
+
+
+def _settings_changed(settings_path: Path) -> pd.Timestamp | None:
+    """The mtime of the host's settings.local.yaml (else settings.yaml), UTC; None when neither can be read."""
+    local = settings_path.with_name("settings.local.yaml")
+    try:
+        return pd.Timestamp((local if local.exists() else settings_path).stat().st_mtime, unit="s", tz="UTC")
+    except OSError:
+        return None
 
 
 def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:

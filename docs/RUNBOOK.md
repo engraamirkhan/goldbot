@@ -1092,7 +1092,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 | `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
-| `discovery_nightly` | Daily 01:00 (to 03:10 at most) | Brain, only with `research.discovery.enabled`, `bars_path` and the quarter listed in `k_cap_quarter` (section "Discovery nightly on the brain"): a bounded G2 search on 1h/4h/1d, explore 2010-2017 only, in a child at nice 15; survivors offered as candidate arm rows; run record in aux.db `discovery_runs`, report `state/autodisc/discovery-<day>.md`. Enabled without bars, killed at its budget, or failed: the job fails (health `job:discovery_nightly`) and leaves a `killed`/`failed` row. |
+| `discovery_nightly` | Daily 01:00 (killed by 04:05 at worst: a 02:30 late start + 5,700 s) | Brain, only with `research.discovery.enabled`, `bars_path` and the quarter listed in `k_cap_quarter` (section "Discovery nightly on the brain"): a bounded G2 search on 1h/4h/1d, explore 2010-2017 only, in a child at nice 15; survivors offered as candidate arm rows; run record in aux.db `discovery_runs`, report `state/autodisc/discovery-<day>.md`. Enabled without bars, killed at its budget, or failed: the job fails (health `job:discovery_nightly`) and leaves a `killed`/`failed` row. |
 | `tick_record`, `tick_record_winter` | Daily 21:10 and 22:10 | Read-only, and only while gold is closed (New York's 17:00-18:00 daily break, which is 21:00 UTC in US summer time and 22:00 UTC in winter, or the weekend; the other slot skips): the broker's own XAUUSD ticks of the oldest closed server day not yet recorded (missed days within 7 are back-filled, one a run, and the weekend runs catch up) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
 
 Retired with ADR 0083 (BACKLOG 142, 2026-11-14): `monthly_research`, `gap_watch`, `cpcv_quarterly` and the
@@ -2837,14 +2837,16 @@ nothing):
    in `goldbot run health`; the job result carries `elapsed_s` and `max_rss_mb`, and its health line starts with
    `WARN` once a night uses more than 80 % of `budget_s` or its peak RSS passes 2,048 MB.
 4. The deploy note records the first enabled night: the child's peak RSS (`max_rss_mb` in the job result), its runtime
-   (`elapsed_s`), and the engine heartbeat lag during 01:00-03:10 UTC (`python -m goldbot.ops.run health --json` at
+   (`elapsed_s`), and the engine heartbeat lag while it runs (01:00 to 04:05 UTC at worst) (`python -m goldbot.ops.run health --json` at
    about 01:30 and 02:30: the largest `heartbeat:` and `engine_loop:<account>` age; compare with a night without the
    job). An engine loop that lags past its warn threshold while the child runs: roll back (below) and tell the sre.
 5. The first enabled night is dry for the hand-off (quant condition (b)): it books its K (ledger and registry, as any
    night: an uncounted search would be a hidden trial) and writes its report and run record, but writes no
    `candidate_arms` row. The report `state/autodisc/discovery-<day>.md` has a "first night dry" section listing what it
    would have offered. The quant-reviewer reads it; only then set `first_night_dry: false` in settings.local.yaml and
-   restart the scheduler. A withheld survivor is not offered later.
+   restart the scheduler. **Flip it once quant has reviewed the first night's report**: until then every night stays
+   dry and still spends K (booked, nothing offered). A withheld survivor is not offered that night; a later night may
+   find it again, and its K is already counted, so a re-offer adds no trial.
 
 **Rollback**: `research.discovery.enabled: false` in settings.local.yaml and restart the scheduler (one flag; the
 default is off). Nothing else needs undoing: the K already spent stays in the ledger and the registry.
