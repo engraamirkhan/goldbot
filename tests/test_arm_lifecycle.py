@@ -246,8 +246,9 @@ def test_the_job_reads_every_good_registry_row_when_one_row_is_bad(tmp_path, mon
         return []
     monkeypatch.setattr(L, "run", run)
     from goldbot.config import load_settings
+    from goldbot.data.store import Store
     from goldbot.ops.accounts import load_accounts
-    ctx = type("Ctx", (), {"settings": load_settings(), "state_dir": tmp_path,
+    ctx = type("Ctx", (), {"settings": load_settings(), "state_dir": tmp_path, "store": Store(tmp_path / "data"),
                            "accounts": list(load_accounts(ROOT / "config" / "accounts.yaml", logins=False).values())})()
     jobs.arm_lifecycle(ctx, NOW)
     ids = {a.id for a in seen["arms"]}
@@ -351,6 +352,7 @@ def test_a_kill_rule_reads_only_the_accounts_of_the_broker_it_retires_for(db):
 # candidates, or on any taken candidate" retires; section 4: a void candidate "is void for the read"; section 2.2:
 # after a control change "its reads are void from the change onward, and it retires".
 from goldbot.engine import arm_registry as AR  # noqa: E402
+from goldbot.research import arm_integrity as I  # noqa: E402
 from goldbot.research import arm_rules_spec as S  # noqa: E402
 
 PASS_1H = {"icm:1h-4h": L.ParityGap(scope="icm:1h-4h", status="PASS", mean_gap_r=0.03)}
@@ -389,11 +391,21 @@ def _journal(*rows: tuple[str, str, pd.Timestamp, dict[str, Any]]) -> pd.DataFra
                         columns=cols)
 
 
+def _covered(obs: pd.DataFrame, account: str = "icm-probe") -> dict[str, I.HostRead]:
+    """A host whose journal covers every candidate day of `obs`, runs past its last candidate and carries the
+    engine's capability marker since the arm's registration (amendment 5.1 coverage rule, F2/F3)."""
+    return {account: I.HostRead(account_id=account, days=tuple(sorted(set(obs["session_day"].astype(str)))),
+                                last_ns=int(pd.Timestamp(obs["decision_utc"].max()).value) + 1,
+                                loads={"D1": (int(pd.Timestamp("2026-10-01", tz="UTC").value),)},
+                                marks={"D1": (int(pd.Timestamp("2026-10-01", tz="UTC").value),)})}
+
+
 def _dread(db: Database, obs: pd.DataFrame, journal: pd.DataFrame | None = None, **kw: Any) -> L.ArmRead:
     return L.decide(L.read_arm(db, obs, _disc(), broker="icm", control="C1", accounts={"icm-probe"},
                                parity=PASS_1H, cap=5.0, day=DAY, now=SETTLED,
                                journal=_journal() if journal is None else journal,
-                               recompute=kw.get("recompute", lambda arm, row: GOOD)))
+                               recompute=kw.get("recompute", lambda arm, row: GOOD),
+                               hosts=kw.get("hosts", _covered(obs))))
 
 
 def _arm_rows(obs: pd.DataFrame, taken: bool) -> pd.Index:
@@ -412,18 +424,27 @@ def test_a_clean_discovered_arm_reads_exactly_as_any_arm(db, tmp_path):
     assert "worse than its replay twin" in r.reason
 
 
-def test_a_bracket_void_candidate_is_excluded_from_the_read_and_two_refusals_do_not_retire(db):
+def test_two_refused_brackets_found_at_night_are_excluded_from_the_read_and_do_not_retire(db):
     obs = _disc_obs(_obs(0.0, seed=3, arm_id="D1"))
-    off, journalled = _arm_rows(obs, taken=False)[:2]
-    obs.loc[off, "stop_dist"] = GOOD.stop_dist + 1e-6                      # not the recompute: void
-    bar = obs.loc[journalled, "decision_utc"]
-    r = _dread(db, obs, _journal((AR.BRACKET_VOID, "D1", bar + pd.Timedelta(seconds=2),
-                                  {"bar": bar.isoformat(), "why": "bracket_mismatch"})))
+    for i in _arm_rows(obs, taken=False)[:2]:
+        obs.loc[i, "stop_dist"] = GOOD.stop_dist + 1e-6                    # not the recompute: void
+    r = _dread(db, obs)
     assert r.n_cands == 118 and r.n_bracket_void == 2                     # 120 replayed, both void ones left out
     assert r.decision == "HOLD" and "bracket" not in (r.kill or "")
     with db.connection() as conn:
         n = conn.execute("SELECT SUM(n) FROM arm_lifecycle_terms WHERE arm_id = 'D1'").fetchone()[0]
     assert n == 118
+
+
+def test_a_void_the_engine_journalled_at_the_entry_retires_the_arm_with_the_engines_reason(db):
+    """C1 (quant 2026-11-18): the first void at the entry retires, journalled 'bracket integrity: void at entry
+    (engine)' (docs/research/arm-lifecycle-2026-11-18.md section 5)."""
+    obs = _disc_obs(_obs(0.0, seed=3, arm_id="D1"))
+    bar = obs.loc[_arm_rows(obs, taken=False)[0], "decision_utc"]
+    r = _dread(db, obs, _journal((AR.BRACKET_VOID, "D1", bar + pd.Timedelta(seconds=2),
+                                  {"bar": bar.isoformat(), "why": "bracket_mismatch"})))
+    assert r.decision == "RETIRE" and r.kill == I.ENGINE_VOID_KILL
+    assert I.ENGINE_VOID_KILL == "bracket integrity: void at entry (engine)"
 
 
 def test_three_refused_brackets_on_candidates_retire_the_arm_journalled_with_its_reason(db, monkeypatch):
@@ -432,7 +453,7 @@ def test_three_refused_brackets_on_candidates_retire_the_arm_journalled_with_its
         obs.loc[i, "recorded_ns"] = int(obs.loc[i, "decision_utc"].value) + 61_000_000_000     # bracket_late
     monkeypatch.setattr(L, "read_obs", lambda *a, **k: obs)
     [r] = L.run(db, hosts={"icm-probe": "icm"}, arms=[_disc()], controls={}, caps={}, day=DAY, now=SETTLED,
-                parity=PASS_1H, journal=_journal(), recompute=lambda arm, row: GOOD)
+                parity=PASS_1H, journal=_journal(), recompute=lambda arm, row: GOOD, hosts_read=_covered(obs))
     assert r.decision == "RETIRE" and r.n_bracket_void == 3 and "bracket integrity" in r.reason
     with db.connection() as conn:
         rows = conn.execute("SELECT arm_id, rule FROM exploration_arm_status").fetchall()

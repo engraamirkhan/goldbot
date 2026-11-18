@@ -96,6 +96,8 @@
                     mean R, the excess over its matched replay twin and the fill-replay gap -> aux.db
                     arm_lifecycle_reads (every decision journalled); RETIRE by a kill rule or the worse e-process (applied
                     through exploration_arm_status, the engines' retirement), else HOLD. Kill-only: never promotes or sizes.
+                    A discovered learning arm's voids read the engines' journal and the bracket recomputed from the
+                    minutes each engine stored (prereg-amendment-2026-11-18-discovered-arms.md 4, 5.1 (5), 2.2).
 * tva_scores        daily after feed_reconcile and nightly_costs (prereg-2026-10-28-tv-author-ideas.md section 6,
                     research/tv_ideas.py): the shadow score of the followed authors' live gold ideas from their
                     first-seen snapshot (state/tv_ideas.db read-only), direction read for both sides net of costs on
@@ -1717,12 +1719,16 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Build 2 (owner directive 2026-11-18; research/arm_lifecycle.py): the kill-only read and decision of every
     decided arm on the demo probe_only exploring hosts for the day before `slot`. The matched controls are the strategy
     ranking's pairing, built here as the API builds it and handed in (ADR 0053 6f: research never imports it); the
-    arms are the ARM-SPEC, the discovered arms and the hot-loaded registry's rows. A RETIRE goes to aux.db
-    exploration_arm_status, which the engines read once a minute. Never a real-money account."""
+    arms are the ARM-SPEC, the discovered arms and the hot-loaded registry's rows. A discovered learning arm's read
+    gets the engines' journal (`arm_registry_bracket_void`, `arm_registry_control_changed`) and the recompute from
+    their stored minutes (`arm_integrity.integrity_inputs`), so its voids and its integrity kill act, and its read is evidence only
+    when the journal and the minutes cover every candidate. A RETIRE goes to
+    aux.db exploration_arm_status, which the engines read once a minute. Never a real-money account."""
     from goldbot.api.strategy_labels import load_catalog
     from goldbot.engine import exploration as X
     from goldbot.ops.accounts import exploration_arm_caps
     from goldbot.ops.report_days import day_before
+    from goldbot.research.arm_integrity import integrity_inputs
     from goldbot.research.arm_lifecycle import run, summary
     from goldbot.research.arms import Arm, load_arms
     if not ctx.settings.research.arm_lifecycle.enabled:
@@ -1749,8 +1755,13 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                         type(exc).__name__)
     cat = load_catalog()
     controls = {k: v.control_arm for k, v in cat.arms.items() if v.control_arm}
+    # a discovered learning arm's voids (amendment 2026-11-18 4, 5.1 (5), 2.2): the engines' journal and the bracket
+    # recomputed from the minutes each engine stored, as it held them at the decision; read only when one is decided
+    night = integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo}, list(arms.values()),
+                             now=slot)
     reads = run(aux, hosts={a.account_id: a.broker for a in demo},
-                arms=list(arms.values()), controls=controls, caps=caps, day=day_before(slot), now=slot)
+                arms=list(arms.values()), controls=controls, caps=caps, day=day_before(slot), now=slot,
+                journal=night.journal, recompute=night.recompute, hosts_read=night.hosts)
     return summary(reads)
 
 

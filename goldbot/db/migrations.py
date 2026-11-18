@@ -866,6 +866,28 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (night, run_ns)
            ) STRICT""",
     )),
+    # additive (reviews of 611d5adb, 2026-11-18, P4; goldbot/research/arm_integrity.py): each discovered learning arm
+    # candidate's final bracket verdict at night (ok, or refused with its cause), with the engine's (stored) and the
+    # night's bracket, written once and never changed, so later nights read it instead of recomputing. A release
+    # without it never reads the table (it recomputes every candidate)
+    Migration(version=39, name="arm_lifecycle_verdicts", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS arm_lifecycle_verdicts (
+               broker TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               account_id TEXT NOT NULL,
+               decision_ns INTEGER NOT NULL,
+               verdict TEXT NOT NULL CHECK (verdict IN ('ok', 'refused')),
+               cause TEXT,
+               engine TEXT NOT NULL CHECK (json_valid(engine)),
+               night TEXT CHECK (night IS NULL OR json_valid(night)),
+               recorded_ns INTEGER NOT NULL,
+               PRIMARY KEY (broker, arm_id, account_id, decision_ns)
+           ) STRICT""",
+        """CREATE TRIGGER IF NOT EXISTS arm_lifecycle_verdicts_no_update BEFORE UPDATE ON arm_lifecycle_verdicts
+           BEGIN SELECT RAISE(ABORT, 'arm_lifecycle_verdicts is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS arm_lifecycle_verdicts_no_delete BEFORE DELETE ON arm_lifecycle_verdicts
+           BEGIN SELECT RAISE(ABORT, 'arm_lifecycle_verdicts is append-only'); END""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
