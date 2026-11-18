@@ -8,3 +8,15 @@
   store keeps only the last copy). An unreadable journal holds the arm as unverified. `LIFECYCLE_READY` stays False:
   the flip waits on the quant and trading-safety re-review. The engine's retirement on the first void at entry (stricter
   than 5.1 (5)) is recorded in docs/research/arm-lifecycle-2026-11-18.md.
+- 2026-11-18 discovered-arm lifecycle, fail closed (the reviews of 611d5adb): new goldbot/research/arm_integrity.py.
+  A discovered arm's read is evidence only when the night saw everything: per account with a candidate, the whole
+  journal (schema, a row on every candidate day, through the last candidate) from an engine that journalled
+  `arm_registry_capable` since the arm's registration (the engine now does when it loads a discovered learning arm),
+  and every account's minutes; otherwise it HOLDs `unverified` (kill rules still act) and health
+  `discovered_arm_reads` WARNs, told, after 2 nights. The recompute reads only what the engine held (bars_1m_live and
+  the release minutes before the cut-over; never broker M1; 1d/1w, a release minute after the cut-over, a minute
+  replaced after the decision (now flagged on the stored minute, `history.REPLACED_COL`) or quarantined: void with its
+  cause, never a refusal). Each verdict is cached once in aux.db `arm_lifecycle_verdicts` (migration 39, append-only).
+  Every refusal carries the engine's and the night's bracket; the job summary counts refusals and voids by cause. A
+  void the engine journalled at the entry retires as "bracket integrity: void at entry (engine)" (C1, section 5 of
+  docs/research/arm-lifecycle-2026-11-18.md). `LIFECYCLE_READY` stays False.

@@ -99,6 +99,10 @@ NOT_DEMO = "arm_registry_not_demo"
 UNVERIFIED = "registry_unverified"  # `_send`'s refusal of a hot-loaded arm while the registry is not verified
 CONTROL_CHANGED = "arm_registry_control_changed"    # a learning arm's control is not the one frozen at registration
 BRACKET_VOID = "arm_registry_bracket_void"          # a learning arm's bracket failed its recompute at the entry
+# journalled when a discovered learning arm loads: this engine writes BRACKET_VOID and CONTROL_CHANGED (contract
+# CAPABILITY), so the night may read an empty journal as "nothing happened" (research/arm_integrity.py, F3)
+CAPABLE = "arm_registry_capable"
+CAPABILITY = 1
 # the discovered learning class (module docstring): the fields a learning or control row may carry beyond a strategy
 # row's, the most running at once (amendment 2.3) and a replay-only control's fixed share of its pot
 LEARNING_FIELDS = frozenset({"learning", "hold_bars", "min_stop_usd", "max_stop_usd"})
@@ -592,6 +596,11 @@ def _add(eng: Engine, ex: Exploration, arm: Arm) -> None:
     eng.decisions.append({"ts": time.time(), "agent": PREFIX + arm.arm_id, "action": LOADED, "arm": arm.arm_id,
                           "style": arm.style, "max_loss": ex.hot_caps.get(arm.arm_id),
                           "entry_refused": arm.spec.entry_refused or None})
+    from goldbot.research.arm_rules_spec import BRACKET_PREFIX
+    from goldbot.research.arms import PER_TRADE_KEY
+    if arm.spec.role == "learning" and str(arm.spec.params.get(PER_TRADE_KEY, "")).startswith(BRACKET_PREFIX):
+        eng.decisions.append({"ts": time.time(), "agent": PREFIX + arm.arm_id, "action": CAPABLE, "arm": arm.arm_id,
+                              "capability": CAPABILITY, "actions": [BRACKET_VOID, CONTROL_CHANGED]})
 
 
 def entry_refusal(eng: Engine, ex: Exploration, arm_id: str, s: Pending | None = None,
@@ -688,7 +697,7 @@ def overlay(eng: Engine, limits: RiskLimits, loading: Exploration | None = None)
     return limits.model_copy(update={"exploration_arms": {**limits.exploration_arms, **add}})
 
 
-__all__ = ["BRACKET_VOID", "CHAIN", "CONTROL_CHANGED", "CONTROL_SHARE", "FORBIDDEN", "GENESIS", "HEALTH_FAIL_S",
+__all__ = ["BRACKET_VOID", "CAPABILITY", "CAPABLE", "CHAIN", "CONTROL_CHANGED", "CONTROL_SHARE", "FORBIDDEN", "GENESIS", "HEALTH_FAIL_S",
            "LEARNING_FIELDS", "LOADED", "MAX_DISCOVERED", "REFUSED", "STALE", "STALE_CADENCES",
            "UNVERIFIED", "RegistryRow", "Seen", "append", "append_many", "bracket_refusal", "chain_break", "ceiling",
            "decision_bracket", "demo_now", "digest",

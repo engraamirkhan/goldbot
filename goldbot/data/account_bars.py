@@ -96,7 +96,8 @@ def minute_versions(store: Any, *, account_id: str, broker: str, symbol: str, st
     visibility (`_visible_ns` without the write time), or its write time `available_utc` when that is more than
     LIVE_WRITE_GRACE later (a minute back-filled or re-pulled after the fact is known only once written; one the
     engine built live and stored at once was known at its close, as the engine knew it), `written` (a write time is
-    stored), the bar columns the features read (META_COLUMNS, NaN where a feed has none) and `rank`. Quarantined
+    stored), `written_at` (that write time, NaT without one), `replaced` (the engine flagged the minute a replacement
+    of the one it decided on), the bar columns the features read (META_COLUMNS, NaN where a feed has none) and `rank`. Quarantined
     minutes are left out of every feed, as in `account_bars_1m`. `as_of_minutes` cuts it at a decision."""
     cut = int(pd.Timestamp(as_of).tz_convert("UTC").value)
     bad: set[int] = set()
@@ -133,10 +134,17 @@ def minute_versions(store: Any, *, account_id: str, broker: str, symbol: str, st
         written = pd.to_datetime(df["available_utc"], utc=True).notna().to_numpy() if "available_utc" in df.columns \
             else np.zeros(len(df), dtype=bool)
         part["written"] = written[keep]
+        # the raw write time and the engine's replacement flag (engine/history.py REPLACED_COL): what the engine held
+        # at a decision is only provable for a minute not replaced after it (research/arm_integrity.py)
+        part["written_at"] = pd.to_datetime(df.loc[keep, "available_utc"], utc=True) \
+            if "available_utc" in df.columns else pd.NaT
+        part["replaced"] = df.loc[keep, "replaced"].astype("boolean").fillna(False).astype(bool).to_numpy() \
+            if "replaced" in df.columns else False
         part["rank"] = rank
         parts.append(part)
     if not parts:
-        return pd.DataFrame(columns=["ts_utc", *PRICE_COLUMNS, *META_COLUMNS, "visible_at", "written", "rank"])
+        return pd.DataFrame(columns=["ts_utc", *PRICE_COLUMNS, *META_COLUMNS, "visible_at", "written", "written_at",
+                                     "replaced", "rank"])
     out = pd.concat(parts, ignore_index=True)
     out["ts_utc"] = pd.to_datetime(out["ts_utc"], utc=True)
     return out.sort_values(["ts_utc", "rank"], kind="stable").reset_index(drop=True)

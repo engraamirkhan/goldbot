@@ -350,7 +350,7 @@ def _replace(eng: Engine, bb: BrokerBars, bars: pd.DataFrame) -> None:
     replaced = list(pd.DatetimeIndex(new.loc[hit, "ts_utc"]))
     bb.fallback -= set(replaced)
     bb.stats["replaced"] += len(replaced)
-    history.queue_minutes(eng, new.loc[hit])
+    history.queue_minutes(eng, new.loc[hit].assign(**{history.REPLACED_COL: True}))   # stored flagged (P3)
     eng._dq_pending.append(DQEvent(ts_utc=min(replaced), check=REPLACED, severity="warning",
                                    detail=f"{len(replaced)} minute(s) from sampled ticks replaced by the broker's bars "
                                           f"(largest close change {moved:.2f}); decisions already taken on them stand"))

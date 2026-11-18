@@ -130,4 +130,6 @@ stays kill-only.
   bracket at the entry (`engine.arm_registry.entry_refusal`, durable through `exploration_arm_status`), stricter than
   the amendment's 5.1 (5) "3 or more candidates, or any taken candidate"; it stands because failing closed costs only a
   £60-capped demo learning arm, while sending an order whose bracket may have been fixed after the decision would void
-  the read it exists for. The signed amendment is unchanged.
+  the read it exists for. This amends 5.1 (5) for every discovered arm registered on or after 2026-11-22 22:00 UTC
+  (pre-registration, before any such arm exists; quant-reviewer concurs 2026-11-18). The night journals it as
+  'bracket integrity: void at entry (engine)'.

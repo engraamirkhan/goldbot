@@ -66,6 +66,9 @@ log = logging.getLogger(__name__)
 MINUTE_NS = 60 * 1_000_000_000
 RELEASE_SOURCE = "dukascopy"        # the release bars research trained on (data/release.py load_into_store)
 LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = broker name (store.TABLES)
+# a minute stored as the broker's replacement of the sampled one a decision may have used (broker_bars._replace): the
+# store keeps only the last copy, so the flag travels with the minute itself (no crash window; research/arm_integrity)
+REPLACED_COL = "replaced"
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
@@ -346,7 +349,10 @@ class BarWriter:
                 # available_utc = when the minutes reached the store (quant review of the feature snapshots: a
                 # back-filled minute's visible_at is its close, so only the write time says when it was known);
                 # the engine's own reads keep BAR_COLUMNS (`_clean`)
-                rows = pd.concat(batch, ignore_index=True)[BAR_COLUMNS].assign(available_utc=pd.Timestamp.now("UTC"))
+                got = pd.concat(batch, ignore_index=True)
+                rows = got[BAR_COLUMNS].assign(available_utc=pd.Timestamp.now("UTC"))
+                if REPLACED_COL in got.columns:
+                    rows[REPLACED_COL] = got[REPLACED_COL].astype("boolean").fillna(False).astype(bool)
                 self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol)
             except Exception as exc:                  # noqa: BLE001 - storing history never stops trading
                 log.warning("engine minutes not stored (%s): a restart's fill re-pulls them", type(exc).__name__)

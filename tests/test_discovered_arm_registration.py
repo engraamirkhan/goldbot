@@ -455,17 +455,17 @@ def test_the_hold_after_a_control_change_is_written_for_the_broker(env, tmp_path
 def test_the_lifecycle_recompute_is_the_engines_bracket_for_the_same_candidate(env, tmp_path):
     """Wilder ATR depends on where its window starts: the nightly recompute reads the engine's exact window
     (`arm_bars`: the arm's lookback), so a bracket the engine accepted is never voided at night."""
-    from goldbot.research import arm_lifecycle as L
+    from goldbot.research import arm_integrity as I
     eng, pb, p = _engine_with(env, tmp_path)
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     arm = _ex(eng).arms[p.reg.arm_id]
     got = exploration.arm_bars(eng.bars_1m[eng.bars_1m["visible_at"] <= CLOSE], arm.spec, CLOSE)
     assert got is not None
     engine = S.bracket(S.spec_of(arm.spec), got[0], CLOSE)
-    night = L.engine_recompute({"icm-probe": eng.bars_1m})(arm.spec, {"account_id": "icm-probe",
+    night = I.engine_recompute({"icm-probe": eng.bars_1m})(arm.spec, {"account_id": "icm-probe",
                                                                        "decision_utc": CLOSE})
     assert engine is not None and night == engine
     s = exploration.Pending(arm_id=arm.arm_id, side=1, bar_ts=CLOSE, stop_usd=night.stop_dist,
                             target_usd=night.target_dist, hold_bars=night.max_hold_s // 3600)
     assert AR.bracket_refusal(eng, arm, s, CLOSE + pd.Timedelta(seconds=2)) is None
-    assert L.engine_recompute({})(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE}) is None
+    assert I.engine_recompute({})(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.NO_MINUTES

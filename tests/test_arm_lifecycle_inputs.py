@@ -23,6 +23,7 @@ from goldbot.db import Database
 from goldbot.engine import arm_registry as AR
 from goldbot.engine import broker_bars, exploration
 from goldbot.ops.accounts import load_accounts
+from goldbot.research import arm_integrity as I
 from goldbot.research import arm_lifecycle as L
 from goldbot.research import arm_rules_spec as S
 from tests.test_arm_lifecycle import _disc_obs, _obs
@@ -61,7 +62,7 @@ def test_the_nightly_recompute_from_the_engines_stored_minutes_equals_the_engine
         env, tmp_path):
     eng, arm, engine = _engine_bracket(env, tmp_path)
     store = _stored(tmp_path, eng.bars_1m)
-    night = L.stored_recompute(store, HOST, start=CLOSE - pd.Timedelta(days=L.READ_DAYS), now=NIGHT)
+    night = I.stored_recompute(store, HOST, now=NIGHT)
     got = night(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE})
     assert got == engine                                       # exactly, not within a tolerance
     s = exploration.Pending(arm_id=arm.arm_id, side=1, bar_ts=CLOSE, stop_usd=got.stop_dist,
@@ -81,7 +82,7 @@ def test_minutes_stored_after_the_decision_are_not_read_by_the_nightly_recompute
     for c in ("bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close"):
         later[c] = later[c] * 1.05
     store = _stored(tmp_path, pd.concat([eng.bars_1m, later], ignore_index=True))
-    night = L.stored_recompute(store, HOST, start=CLOSE - pd.Timedelta(days=L.READ_DAYS), now=NIGHT)
+    night = I.stored_recompute(store, HOST, now=NIGHT)
     assert night(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE}) == engine
 
 
@@ -102,7 +103,6 @@ def test_a_window_minute_the_engine_replaced_after_the_decision_leaves_the_candi
     means the store no longer shows what the engine held: no recompute (void for the read, never a refusal)."""
     eng, arm, engine = _engine_bracket(env, tmp_path)
     held = eng.bars_1m[eng.bars_1m["visible_at"] <= CLOSE]
-    start = CLOSE - pd.Timedelta(days=L.READ_DAYS)
     at = {"account_id": "icm-probe", "decision_utc": CLOSE}
 
     def replaced(tmp: Path, back: int) -> tuple[Store, pd.DataFrame]:
@@ -115,19 +115,19 @@ def test_a_window_minute_the_engine_replaced_after_the_decision_leaves_the_candi
         return _stored(tmp, revised), revised.loc[[i]]
 
     store, minute = replaced(tmp_path / "near", 3)              # a minute of the decision bar
-    blind = L.stored_recompute(store, HOST, start=start, now=NIGHT)(arm.spec, at)
+    blind = I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, at)
     assert blind is not None and blind != engine                 # the hazard is real: not what the engine held
     _replaced_event(store, minute)
-    assert L.stored_recompute(store, HOST, start=start, now=NIGHT)(arm.spec, at) is None
+    assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE
     # a minute replaced more than REPLACE_SPAN before the decision was replaced before it: the stored copy is the
     # one the engine held, so the night recomputes from it
-    back = int(L.REPLACE_SPAN / pd.Timedelta(minutes=1)) + 2
+    back = int(I.REPLACE_SPAN / pd.Timedelta(minutes=1)) + 2
     store, minute = replaced(tmp_path / "far", back)
     _replaced_event(store, minute)
     expected = AR.decision_bracket(pd.concat([held.drop(index=minute.index), minute]).sort_values("ts_utc"),
                                    arm.spec, CLOSE)
     assert expected is not None and expected != engine
-    assert L.stored_recompute(store, HOST, start=start, now=NIGHT)(arm.spec, at) == expected
+    assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, at) == expected
 
 
 def _replaced_event(store: Store, minute: pd.DataFrame) -> None:
@@ -139,7 +139,7 @@ def _replaced_event(store: Store, minute: pd.DataFrame) -> None:
 
 
 def test_the_replacement_span_covers_the_engines_give_up_and_one_rates_call():
-    assert L.REPLACE_SPAN >= broker_bars.GIVE_UP + pd.Timedelta(minutes=broker_bars.FETCH_N + 1)
+    assert I.REPLACE_SPAN >= broker_bars.GIVE_UP + pd.Timedelta(minutes=broker_bars.FETCH_N + 1)
 
 
 def test_unreadable_replacement_events_leave_every_candidate_of_the_account_unrecomputable(env, tmp_path,
@@ -153,8 +153,8 @@ def test_unreadable_replacement_events_leave_every_candidate_of_the_account_unre
             raise OSError("unreadable")
         return real(table, **kw)
     monkeypatch.setattr(store, "read", read)
-    night = L.stored_recompute(store, HOST, start=CLOSE - pd.Timedelta(days=L.READ_DAYS), now=NIGHT)
-    assert night(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE}) is None
+    night = I.stored_recompute(store, HOST, now=NIGHT)
+    assert night(arm.spec, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.DQ_UNREADABLE
 
 
 # ---------------------------------------------------------------- the nightly job acts on the engine's journal
@@ -193,7 +193,7 @@ def test_the_nightly_job_retires_a_discovered_arm_on_a_journalled_control_change
     assert any(a == p.reg.arm_id and "control changed" in rule for a, rule in _status(env["state_dir"]))
 
 
-def test_the_nightly_job_retires_a_discovered_arm_on_a_journalled_bracket_void_at_a_taken_entry(env, tmp_path,
+def test_the_nightly_job_retires_a_discovered_arm_on_a_bracket_void_the_engine_journalled_at_the_entry(env, tmp_path,
                                                                                                monkeypatch):
     from goldbot.ops import jobs
     p = register(env)
@@ -207,7 +207,7 @@ def test_the_nightly_job_retires_a_discovered_arm_on_a_journalled_bracket_void_a
              bar=taken["decision_utc"].isoformat(), why="bracket_mismatch")
     jobs.arm_lifecycle(_ctx(env, store), SLOT)
     [r] = [x for x in L.reads_of(Database.open(str(env["state_dir"]), "aux"), "2026-11-24") if x.arm_id == arm_id and x.broker == "icm"]
-    assert r.decision == "RETIRE" and "taken" in r.reason and r.n_bracket_void >= 1
+    assert r.decision == "RETIRE" and r.kill == I.ENGINE_VOID_KILL and r.n_bracket_void >= 1
     assert any(a == arm_id and "bracket integrity" in rule for a, rule in _status(env["state_dir"]))
 
 
@@ -225,7 +225,7 @@ def test_an_unreadable_journal_holds_a_discovered_arm_as_unverified_never_eviden
     jobs.arm_lifecycle(_ctx(env, store), SLOT)
     [r] = [x for x in L.reads_of(Database.open(str(env["state_dir"]), "aux"), "2026-11-24")
            if x.arm_id == p.reg.arm_id and x.broker == "icm"]
-    assert r.decision == "HOLD" and not r.validated and "no journal read" in r.reason
+    assert r.decision == "HOLD" and r.unverified and not r.validated and "journal" in r.reason
 
 
 def test_the_journal_is_read_from_the_earliest_discovered_arm_registration_on(env, tmp_path):
@@ -236,15 +236,17 @@ def test_the_journal_is_read_from_the_earliest_discovered_arm_registration_on(en
     _journal(store, "icm-demo", AR.BRACKET_VOID, p.reg.arm_id, pd.Timestamp("2026-11-24", tz="UTC"), bar="x")
     from goldbot.research.arms import Arm
     arm = Arm.model_validate(json.loads(arm_rows(env)[0].row))
-    journal, recompute = L.integrity_inputs(store, {"icm-demo": ("icm", "XAUUSD")}, [arm], now=SLOT)
-    assert journal is not None and recompute is not None
-    assert list(journal["action"]) == [AR.BRACKET_VOID]
-    assert L.integrity_inputs(store, {"icm-demo": ("icm", "XAUUSD")}, [], now=SLOT) == (None, None)
+    got = I.integrity_inputs(store, {"icm-demo": ("icm", "XAUUSD")}, [arm], now=SLOT)
+    assert got.journal is not None and got.recompute is not None and got.hosts is not None
+    assert list(got.journal["action"]) == [AR.BRACKET_VOID]
+    assert got.hosts["icm-demo"].journal_why is None                       # coverage reads every row, not only voids
+    assert len(got.hosts["icm-demo"].days) == 1
+    assert I.integrity_inputs(store, {"icm-demo": ("icm", "XAUUSD")}, [], now=SLOT) == I.NightInputs()
 
 
 def test_the_night_reads_the_engines_whole_minute_memory():
     """READ_DAYS of minutes before the earliest registration cover the engine's whole 1m memory (about 62 trading
     days), so no learning timeframe's window is read shorter at night than the engine read it."""
     from goldbot.engine.runner import EngineConfig
-    assert L.ENGINE_MINUTES == EngineConfig.model_fields["max_bars_in_memory"].default
-    assert L.READ_DAYS * 23 * 60 * 5 / 7 >= L.ENGINE_MINUTES
+    assert I.ENGINE_MINUTES == EngineConfig.model_fields["max_bars_in_memory"].default
+    assert I.READ_DAYS * 23 * 60 * 5 / 7 >= I.ENGINE_MINUTES

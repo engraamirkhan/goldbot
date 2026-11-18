@@ -153,6 +153,7 @@ from goldbot.ops.checks.feeds import (
     check_costs,
     check_costs_published,
     check_data_quality,
+    check_discovered_arm_reads,
     check_drift,
     check_exploration_learning,
     check_feature_versions,
@@ -343,6 +344,7 @@ __all__ = [
     "check_deploy",
     "check_disk",
     "check_drift",
+    "check_discovered_arm_reads",
     "check_exploration_learning",
     "check_qualification",
     "check_growth_test",
@@ -661,7 +663,8 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
                   "history_gap:", "long_history:", "entry_silence:", "deploy_read", "news_blackout_cap",
                   "feedback_loop",   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
                   "cpu_steal", "needrestart",   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule
-                  "swap_reconcile")  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
+                  "swap_reconcile",  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
+                  "discovered_arm_reads")   # F7 (reviews of 611d5adb): a discovered arm unverified 2 nights running
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the

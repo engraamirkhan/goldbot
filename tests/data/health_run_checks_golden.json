@@ -341,6 +341,11 @@
    "rule-shock blackout 0 of 120 min today"
   ],
   [
+   "discovered_arm_reads",
+   "ok",
+   "every discovered arm read verified on its last nights"
+  ],
+  [
    "exploration_learning",
    "ok",
    "no exploration trade closed more than 26 h ago"
@@ -868,6 +873,11 @@
    "news_blackout_cap",
    "ok",
    "rule-shock blackout 0 of 120 min today"
+  ],
+  [
+   "discovered_arm_reads",
+   "ok",
+   "every discovered arm read verified on its last nights"
   ],
   [
    "exploration_learning",

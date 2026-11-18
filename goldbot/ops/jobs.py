@@ -1708,13 +1708,15 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     ranking's pairing, built here as the API builds it and handed in (ADR 0053 6f: research never imports it); the
     arms are the ARM-SPEC, the discovered arms and the hot-loaded registry's rows. A discovered learning arm's read
     gets the engines' journal (`arm_registry_bracket_void`, `arm_registry_control_changed`) and the recompute from
-    their stored minutes (`arm_lifecycle.integrity_inputs`), so its voids and its integrity kill act. A RETIRE goes to
+    their stored minutes (`arm_integrity.integrity_inputs`), so its voids and its integrity kill act, and its read is evidence only
+    when the journal and the minutes cover every candidate. A RETIRE goes to
     aux.db exploration_arm_status, which the engines read once a minute. Never a real-money account."""
     from goldbot.api.strategy_labels import load_catalog
     from goldbot.engine import exploration as X
     from goldbot.ops.accounts import exploration_arm_caps
     from goldbot.ops.report_days import day_before
-    from goldbot.research.arm_lifecycle import integrity_inputs, run, summary
+    from goldbot.research.arm_integrity import integrity_inputs
+    from goldbot.research.arm_lifecycle import run, summary
     from goldbot.research.arms import Arm, load_arms
     if not ctx.settings.research.arm_lifecycle.enabled:
         return {"skipped": "research.arm_lifecycle.enabled is false"}
@@ -1742,11 +1744,11 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     controls = {k: v.control_arm for k, v in cat.arms.items() if v.control_arm}
     # a discovered learning arm's voids (amendment 2026-11-18 4, 5.1 (5), 2.2): the engines' journal and the bracket
     # recomputed from the minutes each engine stored, as it held them at the decision; read only when one is decided
-    journal, recompute = integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo},
-                                          list(arms.values()), now=slot)
+    night = integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo}, list(arms.values()),
+                             now=slot)
     reads = run(aux, hosts={a.account_id: a.broker for a in demo},
                 arms=list(arms.values()), controls=controls, caps=caps, day=day_before(slot), now=slot,
-                journal=journal, recompute=recompute)
+                journal=night.journal, recompute=night.recompute, hosts_read=night.hosts)
     return summary(reads)
 
 

@@ -495,3 +495,46 @@ def check_exploration_learning(ctx: HealthContext) -> Check:
         return Check(name=name, status="fail", reason="exploration learner stalled: " + "; ".join(bad)
                      + " (nightly_costs -> exploration_learn)")
     return Check(name=name, status="ok", reason="; ".join(good))
+
+
+UNVERIFIED_NIGHTS = 2           # F7 (reviews of 611d5adb): a discovered arm unverified this many nights running is told
+
+
+@register_check("global", block=BLOCK_TAIL, pos=94, when=_has_aux)
+def check_discovered_arm_reads(ctx: HealthContext) -> Check:
+    """A discovered learning arm whose nightly lifecycle read was `unverified` (research/arm_integrity.py: the night
+    did not see its whole journal, a capable engine or every account's minutes) on its last UNVERIFIED_NIGHTS reads
+    WARNs, told to the owner (NOTIFY_ON_WARN): such an arm is never read as evidence, only its kill rules act. aux.db
+    is opened read-only, never migrated."""
+    import json
+    import sqlite3
+    name = "discovered_arm_reads"
+    if not _has_aux(ctx):
+        return Check(name=name, status="ok", reason="no aux.db yet")
+    try:
+        con = sqlite3.connect(f"file:{ctx.state_dir / 'aux.db'}?mode=ro", uri=True, timeout=5)
+        try:
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "arm_lifecycle_reads" not in tables:
+                return Check(name=name, status="ok", reason="no lifecycle reads yet")
+            rows = con.execute("SELECT broker, arm_id, day, body FROM arm_lifecycle_reads "
+                               "ORDER BY broker, arm_id, day DESC").fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        return Check(name=name, status="warn", reason=f"aux.db unreadable: {type(exc).__name__}")
+    last: dict[tuple[str, str], list[tuple[str, dict[str, Any]]]] = {}
+    for broker, arm_id, day, body in rows:
+        got = last.setdefault((str(broker), str(arm_id)), [])
+        if len(got) < UNVERIFIED_NIGHTS:
+            try:
+                got.append((str(day), json.loads(body)))
+            except ValueError:
+                got.append((str(day), {"discovered": True, "unverified": True, "reason": "unreadable read row"}))
+    bad = [f"{b}:{a} since {nights[-1][0]} ({nights[0][1].get('reason', '')})" for (b, a), nights in sorted(last.items())
+           if len(nights) == UNVERIFIED_NIGHTS and all(n.get("discovered") and n.get("unverified") for _, n in nights)]
+    if bad:
+        return Check(name=name, status="warn", reason=f"discovered arm unverified {UNVERIFIED_NIGHTS} nights running, "
+                     "never evidence (check the hosts' decisions, dq_events and minutes reach the brain store): "
+                     + "; ".join(bad))
+    return Check(name=name, status="ok", reason="every discovered arm read verified on its last nights")
