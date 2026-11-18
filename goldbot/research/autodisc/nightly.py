@@ -42,6 +42,7 @@ from goldbot.research.autodisc.evaluate import STRESS_MULT, Evaluation
 from goldbot.research.autodisc.gen_gp import (
     GENERATOR,
     VERSION_OF,
+    Admit,
     GPCandidate,
     GPConfig,
     Resolver,
@@ -49,6 +50,7 @@ from goldbot.research.autodisc.gen_gp import (
     gp_fitness,
     gp_null,
     neighbours,
+    refused_by_power,
     run_gp,
 )
 from goldbot.research.autodisc.k_link import dsr_k_offset, sync_discovery_k
@@ -100,6 +102,8 @@ class Survivor(FrozenRecord):
     plateau: Plateau
     dsr: float                                # at the cumulative K_search
     meets_confirm_dsr: bool                   # DSR bar on >= MIN_TRADES_FOR_DSR events: what confirm requires
+    neighbours_admitted: int = 0              # plateau neighbours the power admission let through (ADR 0090; a
+    neighbours_total: int = 0                 #   refused one reads as not positive), of its grid neighbours
 
 
 def meets_confirm_bar(dsr: float, n_events: int) -> bool:
@@ -115,6 +119,8 @@ class Rejected(FrozenRecord):
     plateau_share: float
     plateau_ratio: float | None
     failed: list[str]
+    neighbours_admitted: int = 0
+    neighbours_total: int = 0
 
 
 class ExploreFailed(FrozenRecord):
@@ -192,17 +198,20 @@ def _failed(p: float, pl: Plateau, batch_ok: bool) -> list[str]:
 
 def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg: GPConfig, *, reps: int,
                      max_candidates: int = 20, cost_line: str = "", night: str = "adhoc", k_offset: int = 0,
-                     net_r_floor: float | None = None, k_declared: int = 0) -> NightlyResult:
+                     net_r_floor: float | None = None, k_declared: int = 0, admit: Admit | None = None
+                     ) -> NightlyResult:
     """The module docstring's funnel on one tensor. Every evaluated spec (search, null, neighbours) is ledgered first.
     The night's survivors are recorded in the ledger under `night` with their DSR inputs and the night's cost line, so
     the report states the cumulative count. The DSR is read at `k_offset` + the cumulative K_search (`k_offset`: the
     registry's discovery K outside this ledger, `k_link.dsr_k_offset`; quant review of phase 3, F1). Grammar v2
     (`cfg.grammar`): `net_r_floor` is the absolute net-R floor a candidate must also meet, and the DSR is read at
-    max(cumulative K_search, `k_declared`) + `k_offset`, the K declared in the pre-registration before the run."""
+    max(cumulative K_search, `k_declared`) + `k_offset`, the K declared in the pre-registration before the run.
+    `admit` (ADR 0090): the outcome-blind power admission read before any spec of the search, the null or the plateau
+    neighbours is ledgered; a refused neighbour reads as one that is not positive (conservative for the plateau)."""
     k_before = ledger.k_search()
     res = Resolver(provider)
-    real = run_gp(t, provider, cfg, ledger, resolver=res)
-    null = gp_null(t, provider, cfg, ledger, reps=reps, resolver=res)
+    real = run_gp(t, provider, cfg, ledger, resolver=res, admit=admit)
+    null = gp_null(t, provider, cfg, ledger, reps=reps, resolver=res, admit=admit)
     thr = max(null.threshold(), 0.0)
     floors = [c for c in real.evaluated if np.isfinite(gp_fitness(c.evaluation))]
     day_id, n_days = _day_ids(t)
@@ -223,6 +232,7 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
                                     failed=explore_failures(c.evaluation, net_r_floor))
                       for c, o in zip(beat, ok, strict=True) if not o]
     judged: list[tuple[GPCandidate, float, Plateau]] = []
+    nb_count: dict[str, tuple[int, int]] = {}             # spec hash -> (neighbours admitted, neighbours)
     n_nb = 0
     hour = t.ts_utc.hour.to_numpy()
     for c in cands[:max_candidates]:
@@ -232,9 +242,10 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         shift = circular_shift_null(np.where(mask, side, 0).astype(np.int8), r[:, 0], r[:, 1], t.ts_utc,
                                     base_long=base[0], base_short=base[1], seed=cfg.seed)
         nbs = [evaluate_logged(t, res, nb, ledger, parents=(c.spec_hash,), generation=-1, min_events=cfg.min_events,
-                               version=VERSION_OF[cfg.grammar])
+                               version=VERSION_OF[cfg.grammar], admit=admit)
                for nb in neighbours(c.spec, cfg.grammar)]
         n_nb += len(nbs)
+        nb_count[c.spec_hash] = (sum(not refused_by_power(nb.evaluation) for nb in nbs), len(nbs))
         fit = [f if np.isfinite(f := gp_fitness(nb.evaluation)) else None for nb in nbs]
         judged.append((c, shift.p_value, plateau_check(gp_fitness(c.evaluation), fit)))
     k_cum = ledger.k_search()                 # every night's specs: the multiplicity the confirm DSR pays for
@@ -250,10 +261,14 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
             survivors.append(Survivor(spec_hash=c.spec_hash, spec_json=c.spec.model_dump_json(), fitness=f,
                                       mean_r=c.evaluation.mean_r, excess_r=c.evaluation.excess_r,
                                       n_events=c.evaluation.n_events, shift_p=p, plateau=pl, dsr=v,
-                                      meets_confirm_dsr=meets_confirm_bar(v, c.evaluation.n_events)))
+                                      meets_confirm_dsr=meets_confirm_bar(v, c.evaluation.n_events),
+                                      neighbours_admitted=nb_count[c.spec_hash][0],
+                                      neighbours_total=nb_count[c.spec_hash][1]))
         else:
             rejected.append(Rejected(spec_hash=c.spec_hash, fitness=f, shift_p=p, plateau_share=pl.share_positive,
-                                     plateau_ratio=pl.ratio, failed=_failed(p, pl, batch_ok)))
+                                     plateau_ratio=pl.ratio, failed=_failed(p, pl, batch_ok),
+                                     neighbours_admitted=nb_count[c.spec_hash][0],
+                                     neighbours_total=nb_count[c.spec_hash][1]))
     if survivors:
         ledger.record_survivors(night, [(s.spec_hash, s.dsr) for s in survivors], k_search=k_dsr, cost_line=cost_line,
                                 inputs={s.spec_hash: inputs[col_of[s.spec_hash]].model_dump_json() for s in survivors})
@@ -304,13 +319,15 @@ def render(r: NightlyResult) -> str:
     ]
     for s in r.survivors:
         lines.append(f"  {s.spec_hash[:12]}  fitness {_f(s.fitness)}  mean R {_f(s.mean_r)}  excess R {_f(s.excess_r)}  "
-                     f"events {_n(s.n_events)}  shift p {_f(s.shift_p)}  plateau {_f(s.plateau.ratio)}")
+                     f"events {_n(s.n_events)}  shift p {_f(s.shift_p)}  plateau {_f(s.plateau.ratio)} "
+                     f"({_n(s.neighbours_admitted)} of {_n(s.neighbours_total)} neighbours admitted)")
         lines.append(f"    DSR at {_k_text(r)}: {_f(s.dsr)} "
                      f"({'meets' if s.meets_confirm_dsr else 'below'} the {DSR_CONFIRM_BAR:.2f} confirm bar)")
         lines.append(f"    {s.spec_json}")
     lines.append(f"judged candidates that failed {_n(len(r.rejected))}")
     for x in r.rejected:
-        lines.append(f"  {x.spec_hash[:12]}  fitness {_f(x.fitness)}  failed: {'; '.join(x.failed)}")
+        lines.append(f"  {x.spec_hash[:12]}  fitness {_f(x.fitness)}  failed: {'; '.join(x.failed)}  "
+                     f"({_n(x.neighbours_admitted)} of {_n(x.neighbours_total)} neighbours admitted)")
     lines.append(f"specs that beat the null but failed an explore check {_n(len(r.explore_failed))}")
     for e in r.explore_failed:
         lines.append(f"  {e.spec_hash[:12]}  fitness {_f(e.fitness)}  failed: {'; '.join(e.failed)}")
@@ -337,11 +354,7 @@ def real_backends(settings: Settings, timeframe: str, raw: Path | None = None, c
     when no such bars are present (the brain, a fresh clone)."""
     from goldbot.data.release import read_bar_files
     from goldbot.execution.costs import load_research_cost_table, research_costs, settings_extra_cost_usd
-    from goldbot.features.technical import atr
-    from goldbot.research.autodisc.gen_combine import MAX_BARS, existing_family_names
-    from goldbot.research.autodisc.outcomes import build_tensor, default_menu
-    from goldbot.research.autodisc.primitives import PrimitiveProvider
-    from goldbot.research.autodisc.windows import ExploreFrame, truncate_to_explore
+    from goldbot.research.autodisc.windows import truncate_to_explore
 
     a = settings.research.autodisc
     src = raw if raw is not None else raw_dir(a.raw_dir)
@@ -353,15 +366,39 @@ def real_backends(settings: Settings, timeframe: str, raw: Path | None = None, c
         return None
     if len(b1) == 0:
         return None
-    prov = PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
-    bars = prov.bars(timeframe)
     ct = cost_table if cost_table is not None else a.cost_table
     extra, swap, source = research_costs(settings, load_research_cost_table(ct) if ct else None)
     extra = max(extra, settings_extra_cost_usd(settings))     # conservative: never below the settings prior (ADR 0045)
+    return backends_from_1m(b1, timeframe, extra_cost_usd=extra, swap=swap, cost_line=source)
+
+
+def backends_from_1m(b1: pd.DataFrame, timeframe: str, *, extra_cost_usd: float, swap: Any, cost_line: str,
+                     provider: Any = None, mid_labels: bool = False,
+                     extra_cost_frac: Callable[[pd.DataFrame], np.ndarray] | None = None) -> Backends:
+    """Explore-window 1m bars (`ts_utc`; a 2018+ row raises in `ExploreFrame`) -> provider, outcome tensor and the
+    families on `timeframe`, at the given cost. `provider`: one already built on the same bars (shared across
+    timeframes, so the 1m frame is held once). `mid_labels` (ADR 0090): the outcome labels read the mid (bid and ask
+    both set to it), for a cost measured against the mid that already holds the spread; the masks still read bid/ask.
+    `extra_cost_frac`: a per-label charge (`outcomes.build_tensor`)."""
+    from goldbot.features.technical import atr
+    from goldbot.research.autodisc.gen_combine import MAX_BARS, existing_family_names
+    from goldbot.research.autodisc.outcomes import build_tensor, default_menu
+    from goldbot.research.autodisc.primitives import PrimitiveProvider
+    from goldbot.research.autodisc.windows import ExploreFrame
+
+    prov = provider if provider is not None else PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
+    bars = prov.bars(timeframe)
+    if mid_labels:
+        bars = bars.copy()
+        for f in ("open", "high", "low", "close"):
+            if f"bid_{f}" in bars and f"ask_{f}" in bars:
+                mid = (bars[f"bid_{f}"] + bars[f"ask_{f}"]) / 2.0
+                bars[f"bid_{f}"] = bars[f"ask_{f}"] = mid
     t = build_tensor(ExploreFrame.from_frame(bars, "ts_utc"), atr(prov.mid_bars(timeframe), 14),
-                     default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra, swap=swap)
+                     default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra_cost_usd, swap=swap,
+                     extra_cost_frac=extra_cost_frac)
     fams = tuple(f for f in existing_family_names() if f in prov.families(timeframe))
-    return Backends(tensor=t, provider=prov, families=fams, cost_line=source, mode="real")
+    return Backends(tensor=t, provider=prov, families=fams, cost_line=cost_line, mode="real")
 
 
 def _write_atomic(path: Path, text: str) -> None:

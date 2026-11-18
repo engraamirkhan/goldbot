@@ -20,8 +20,8 @@ Selection is NSGA-II (non-dominated fronts, crowding distance, (mu + lambda) sur
 drift as skill against it (quant review F4, 2026-10-30)."""
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from typing import Literal
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Literal, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -29,7 +29,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord
 from goldbot.research.autodisc.contracts import BoolArr, MaskProvider, SideArr
-from goldbot.research.autodisc.evaluate import Evaluation, evaluate
+from goldbot.research.autodisc.evaluate import N_FOLDS, Evaluation, Stat, evaluate
 from goldbot.research.autodisc.gen_combine import MAX_BARS, exit_menu
 from goldbot.research.autodisc.grammar_v2 import (
     R4H,
@@ -42,7 +42,7 @@ from goldbot.research.autodisc.grammar_v2 import (
 )
 from goldbot.research.autodisc.ledger import SearchLedger
 from goldbot.research.autodisc.nulls import NEG_INF, NULL_REPS, NullDistribution, exit_index, hash_sides
-from goldbot.research.autodisc.outcomes import OutcomeTensor
+from goldbot.research.autodisc.outcomes import OutcomeTensor, explore_record
 from goldbot.research.autodisc.spec import (
     MAX_DEPTH,
     ExitTemplate,
@@ -74,6 +74,16 @@ STRUCTURAL_WEIGHT = 2.0
 REGIME_WEIGHT = 1.0
 _TRIES = 50
 _NEG = -1e9                    # objective value of a candidate below the floors (fitness -inf)
+PRIOR_BOUNDS = (0.25, 4.0)     # a grammar-node prior multiplies a leaf's sampling weight within these bounds
+NOT_STARTED = "NOT STARTED (power)"
+
+
+class Admit(Protocol):
+    """An outcome-blind admission rule read BEFORE a spec is ledgered (ADR 0090: the ADR 0085 power-first verdict per
+    spec): the reasons it is refused, empty when admitted. It sees the spec's entry mask and side only, never an
+    outcome, so a refused spec reads nothing and adds nothing to K."""
+
+    def __call__(self, spec: StrategySpec, mask: BoolArr, side: SideArr) -> list[str]: ...
 
 
 class GPConfig(FrozenRecord):
@@ -88,11 +98,19 @@ class GPConfig(FrozenRecord):
     min_events: int | None = Field(None, ge=1)      # None: the evaluator's per-timeframe floor
     families: tuple[str, ...] = ()                  # family rules offered as structure leaves and side primitives
     grammar: Grammar = "v1"                         # v2: grammar_v2's gate leaves, the r4h side and the exit list of 5
+    # grammar-node priors (ADR 0090): `node_key` -> a multiplier of that leaf's sampling weight, within PRIOR_BOUNDS.
+    # They steer what is sampled only: every evaluated spec still counts in K, and the G0 null reruns the search with
+    # the same priors, so the reality check prices the steering in
+    leaf_priors: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _tournament_fits(self) -> "GPConfig":
         if self.tournament > self.population:
             raise ValueError(f"tournament {self.tournament} > population {self.population}")
+        lo, hi = PRIOR_BOUNDS
+        bad = {k: v for k, v in self.leaf_priors.items() if not lo <= v <= hi}
+        if bad:
+            raise ValueError(f"leaf priors outside [{lo}, {hi}]: {bad}")
         return self
 
 
@@ -112,21 +130,33 @@ class GPRun(FrozenRecord):
 
 # ---------------------------------------------------------------- grammar
 
-def catalogue(families: Sequence[str], grammar: Grammar = "v1") -> tuple[tuple[Leaf, float], ...]:
+def node_key(leaf: Leaf) -> str:
+    """A grammar node's name: `kind:name`, and a family rule's own rule (`structure:family_rule:<rule>`)."""
+    base = f"{leaf.kind}:{leaf.name}"
+    return f"{base}:{leaf.params['rule']}" if leaf.kind == "structure" and leaf.name == "family_rule" else base
+
+
+def catalogue(families: Sequence[str], grammar: Grammar = "v1", priors: Mapping[str, float] | None = None
+              ) -> tuple[tuple[Leaf, float], ...]:
     """(leaf, sampling weight): the family rules and time leaves at `STRUCTURAL_WEIGHT`, regime terciles at
     `REGIME_WEIGHT`. Exactly the vocabulary `primitives.PrimitiveProvider.supports` accepts (v2: plus the gate leaves
     of `grammar_v2`, which `PrimitiveProviderV2.supports` accepts; the event day is a time leaf, the HAR band, NR4/NR7
-    and the macro gates draw at the regime weight; r4h is never an entry leaf)."""
+    and the macro gates draw at the regime weight; r4h is never an entry leaf). `priors` (ADR 0090): a node's weight is
+    multiplied by its prior; the vocabulary itself never changes."""
     fam = tuple((Leaf(kind="structure", name="family_rule", params={"rule": f}), STRUCTURAL_WEIGHT)
                 for f in families if f != R4H)
     time = tuple((Leaf(kind="time", name=n), STRUCTURAL_WEIGHT) for n in TIME_LEAVES)
     regime = tuple((Leaf(kind="regime", name=n), REGIME_WEIGHT) for n in REGIME_LEAVES)
     if grammar == "v1":
-        return fam + time + regime
-    time2 = tuple((Leaf(kind="time", name=n), STRUCTURAL_WEIGHT) for n in V2_TIME)
-    regime2 = tuple((Leaf(kind="regime", name=n), REGIME_WEIGHT) for n in V2_REGIME)
-    macro = tuple((Leaf(kind="macro", name=n), REGIME_WEIGHT) for n in V2_MACRO)
-    return fam + time + time2 + regime + regime2 + macro
+        out = fam + time + regime
+    else:
+        time2 = tuple((Leaf(kind="time", name=n), STRUCTURAL_WEIGHT) for n in V2_TIME)
+        regime2 = tuple((Leaf(kind="regime", name=n), REGIME_WEIGHT) for n in V2_REGIME)
+        macro = tuple((Leaf(kind="macro", name=n), REGIME_WEIGHT) for n in V2_MACRO)
+        out = fam + time + time2 + regime + regime2 + macro
+    if not priors:
+        return out
+    return tuple((leaf, w * float(priors.get(node_key(leaf), 1.0))) for leaf, w in out)
 
 
 def side_families(cfg: GPConfig) -> tuple[str, ...]:
@@ -413,21 +443,46 @@ def _num(x: float | None) -> float | None:
     return x if x is not None and np.isfinite(x) else None
 
 
+def not_started(t: OutcomeTensor, s: StrategySpec, h: str, reasons: Sequence[str]) -> Evaluation:
+    """The evaluation of a spec the admission rule refused: no event read, fitness -inf, the reasons as its floor
+    failures (ADR 0090; ADR 0085 "NOT STARTED (power)")."""
+    return Evaluation(spec_hash=h, exit_name=t.exits[exit_index(t, s)].name, n_events=0, mean_r=None, t_stat=None,
+                      time_in_market=0.0, floors_passed=False,
+                      floor_failures=[f"{NOT_STARTED}: {'; '.join(reasons)}"], long=Stat(n=0), short=Stat(n=0),
+                      fold_t=[None] * N_FOLDS, fitness=None, drift_baseline_r=None, excess_r=None, stress_mean_r=None,
+                      stress_passed=False, input_digest=t.digest, excess_fold_t=[None] * N_FOLDS)
+
+
+def refused_by_power(e: Evaluation) -> bool:
+    """The evaluation is `not_started`'s: the admission rule refused the spec before it was ledgered."""
+    return bool(e.floor_failures) and e.floor_failures[0].startswith(NOT_STARTED)
+
+
 def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: SearchLedger, *,
                     parents: tuple[str, ...] = (), generation: int = 0, min_events: int | None = None,
-                    side_override: SideArr | None = None, null: bool = False, version: str = VERSION) -> GPCandidate:
+                    side_override: SideArr | None = None, null: bool = False, version: str = VERSION,
+                    admit: Admit | None = None) -> GPCandidate:
     """Log the spec (ledger first, design 3.1), evaluate it (the evaluator refuses an unlogged hash), record its result.
     The result carries the search fitness (`gp_fitness`, what the search ranked by; null below the floors) and its
     components (per-fold t of net and of excess R, the clustered t, time in market, floor failures), so the top specs
-    of a night can be ranked and read afterwards (first real nightly runs, 2026-10-30)."""
+    of a night can be ranked and read afterwards (first real nightly runs, 2026-10-30), and, for a search spec on a
+    priced explore tensor, the registration bar's explore read (n_bars, n_days, n_signal_days, gross_usd_mean,
+    net_usd_mean: `outcomes.explore_record`). `admit` (ADR 0090) reads the
+    entry mask BEFORE the ledger: a refused spec is never ledgered, reads no outcome and adds nothing to K."""
     h = spec_hash(s)
-    ledger.log_spec(s, GENERATOR, version, parents=parents, null=null)
     mask, side = res.entries(s)
     if side_override is not None:
         mask, side = null_view(mask, side, side_override)
-    e = evaluate(t, mask, side, exit_index(t, s), timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
+    if admit is not None and (why := admit(s, mask, side)):
+        return GPCandidate(spec=s, spec_hash=h, parents=parents, generation=generation,
+                           evaluation=not_started(t, s, h, why))
+    ledger.log_spec(s, GENERATOR, version, parents=parents, null=null)
+    ei = exit_index(t, s)
+    e = evaluate(t, mask, side, ei, timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
                  min_events=min_events)
-    ledger.record_result(h, {"n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
+    # the registration bar's explore read (ADR 0090; `outcomes.explore_record`): search specs on a priced explore tensor
+    reg = {k: v for k, v in (explore_record(t, mask, side, ei) or {}).items() if k != "n_events"} if not null else {}
+    ledger.record_result(h, {**reg, "n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
                              "excess_r": _num(e.excess_r), "excess_fitness": _num(e.excess_fitness),
                              "stress_mean_r": _num(e.stress_mean_r),
                              "floors": e.floors_passed, "generation": generation,
@@ -438,17 +493,34 @@ def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: Se
 
 
 def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: SearchLedger, *,
-           side_override: SideArr | None = None, null: bool = False, resolver: Resolver | None = None) -> GPRun:
-    """One bounded G2 search on the tensor (module docstring). `side_override` (with null=True) is G0's random side."""
+           side_override: SideArr | None = None, null: bool = False, resolver: Resolver | None = None,
+           admit: Admit | None = None) -> GPRun:
+    """One bounded G2 search on the tensor (module docstring). `side_override` (with null=True) is G0's random side;
+    `admit`: the outcome-blind admission read at sampling time, before a spec is ledgered. A refused draw (seed or
+    offspring) is redrawn within the `_TRIES` bound, so the population is made of admitted specs; outcome-blind, and
+    `gp_null` reruns this same loop, so the null inherits the redraw."""
     rng = np.random.default_rng(cfg.seed)
-    cat = catalogue(cfg.families, cfg.grammar)
+    cat = catalogue(cfg.families, cfg.grammar, cfg.leaf_priors)
     res = resolver or Resolver(provider)
     done: dict[str, GPCandidate] = {}
     order: list[GPCandidate] = []
+    admitted: dict[str, bool] = {}
+
+    def admits(s: StrategySpec) -> bool:
+        """The admission read at sampling time (outcome-blind: entry mask and side only), once per spec."""
+        h = spec_hash(s)
+        if admit is None:
+            return True
+        if h not in admitted:
+            mask, side = res.entries(s)
+            if side_override is not None:
+                mask, side = null_view(mask, side, side_override)
+            admitted[h] = not admit(s, mask, side)
+        return admitted[h]
 
     def run_one(s: StrategySpec, parents: tuple[str, ...], gen: int) -> GPCandidate:
         h = spec_hash(s)
-        if h not in done:
+        if h not in done:                       # admitted at sampling: `admit` is not read twice
             done[h] = evaluate_logged(t, res, s, ledger, parents=parents, generation=gen, min_events=cfg.min_events,
                                       side_override=side_override, null=null, version=VERSION_OF[cfg.grammar])
             order.append(done[h])
@@ -459,10 +531,11 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
         if len(seeds) == cfg.population:
             break
         s = random_spec(rng, cfg, cat)
-        seeds.setdefault(spec_hash(s), s)
+        if spec_hash(s) not in seeds and admits(s):          # a refused draw is redrawn (ADR 0090, quant M2)
+            seeds[spec_hash(s)] = s
     pop = [run_one(s, (), 0) for s in seeds.values()]
     best_by_gen = [max((gp_fitness(c.evaluation) for c in pop), default=float("-inf"))]
-    for gen in range(1, cfg.generations + 1):
+    for gen in range(1, cfg.generations + 1 if pop else 1):           # nothing admitted: nothing to breed
         rank = _rank(pop, t.n_bars)
 
         def pick() -> int:
@@ -482,7 +555,7 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
             if rng.random() < cfg.p_mutation or spec_hash(child) in done:
                 child = mutate(child, rng, cfg, cat)
             h = spec_hash(child)
-            if h not in done and h not in kids:
+            if h not in done and h not in kids and admits(child):
                 kids[h] = (child, parents)
         if not kids:
             break                                                   # the reachable space is exhausted
@@ -499,13 +572,14 @@ def null_seed(seed: int, rep: int) -> int:
 
 
 def gp_null(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: SearchLedger, reps: int = NULL_REPS,
-            resolver: Resolver | None = None) -> NullDistribution:
-    """`reps` replications of the whole G2 search on random sides (timing kept); best-of-search per replication."""
+            resolver: Resolver | None = None, admit: Admit | None = None) -> NullDistribution:
+    """`reps` replications of the whole G2 search on random sides (timing kept); best-of-search per replication. The
+    null applies the real search's `admit` rule: it reruns the whole selection, admission included."""
     res = resolver or Resolver(provider)
     best = []
     for r in range(reps):
         sd = null_seed(cfg.seed, r)
         run = run_gp(t, provider, cfg.model_copy(update={"seed": sd}), ledger, side_override=hash_sides(t.n_bars, sd),
-                     null=True, resolver=res)
+                     null=True, resolver=res, admit=admit)
         best.append(run.best)
     return NullDistribution(tuple(best), ledger.k_null())

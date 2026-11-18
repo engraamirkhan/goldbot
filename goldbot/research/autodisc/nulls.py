@@ -214,7 +214,7 @@ def inject_edge(t: OutcomeTensor, mask: BoolArr, side: SideArr, edge_r: float = 
     k = (side[idx] < 0).astype(int)
     ret[idx, k, :] += edge_r * t.risk[idx, k, :]
     return OutcomeTensor(ts_utc=t.ts_utc, exits=t.exits, ret=ret, risk=t.risk, cost=t.cost, t_entry=t.t_entry,
-                         t_exit=t.t_exit, digest=t.digest)
+                         t_exit=t.t_exit, digest=t.digest, entry=t.entry)
 
 
 class SyntheticProvider:

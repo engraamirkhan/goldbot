@@ -326,6 +326,10 @@ class SchedulerSettings(_Section):
     # missed weekday is caught up the next evening; an up-to-date file is left untouched); first sight runs it once
     long_history_refresh: ScheduleSettings = ScheduleSettings(kind="daily", at="21:40", max_late_hours=20,
                                                               run_if_never_run=True)
+    # ADR 0090: the brain's bounded discovery search (goldbot/research/autodisc/discovery.py) in a niced child process,
+    # in the quiet 01:00-03:10 window (budget_s + kill_grace_s at most 2 h 10 min, before the 03:40 journal_compact);
+    # never caught up into the London open
+    discovery_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:00", max_late_hours=1.5)
 
 
 class BackupSettings(_Section):
@@ -459,6 +463,71 @@ class AutodiscSettings(_Section):
     max_candidates: int = Field(20, ge=1, le=500)   # candidates (best first) whose neighbours and shift null are run
     seed: int = 0                                   # base seed; each night adds its day number
     cost_table: str | None = None                   # measured cost table JSON; None: the settings priors
+
+
+DiscoveryTimeframe = Literal["1h", "4h", "1d"]
+DISCOVERY_FOCUS: tuple[DiscoveryTimeframe, ...] = ("1h", "4h", "1d")
+
+
+class DiscoverySettings(_Section):
+    """The brain's nightly discovery search (ADR 0090, goldbot/research/autodisc/discovery.py, job `discovery_nightly`).
+    ADR 0083 retired `autodisc_nightly` from the brain because it only ever skipped there and nothing read it; this job
+    has a reader (the registration hand-off) and is bounded for the 2-vCPU ARM brain (one core for the child, one for
+    the engines): one child
+    process at `nice`, under `memory_mb`, stopped between timeframes at `budget_s` and killed at budget_s +
+    kill_grace_s. Focus 1h/4h/1d ("the why-fail audit found no gross edge in single rules at 1m-15m"). Every spec gets
+    the ADR 0085 power-first verdict before it is ledgered; the night's registry rows must fit the quarter's trial
+    budget and its planned K the quarter's discovery K cap (`k_cap_quarter`). Explore window only: the 1m bars come
+    through `cost_of_record.load_research_bars`, which refuses the holdout."""
+    enabled: bool = False                           # on per host in settings.local.yaml, with bars_path (RUNBOOK)
+    bars_path: str | None = None                    # the research 1m bid/ask parquet; enabled without it fails the job
+    timeframes: list[DiscoveryTimeframe] = Field(default_factory=lambda: list(DISCOVERY_FOCUS), min_length=1)
+    population: int = Field(32, ge=4, le=200)
+    generations: int = Field(8, ge=1, le=50)
+    null_reps: int = Field(20, ge=1, le=100)        # G0 reruns of the whole search (admission and priors included)
+    max_candidates: int = Field(20, ge=1, le=100)
+    seed: int = 0                                   # base seed; each night adds its day number
+    # the brain's bounds (ADR 0083's reasons): wall clock, CPU priority, memory
+    budget_s: float = Field(5400.0, ge=60, le=7200)         # no new timeframe starts once spent
+    kill_grace_s: float = Field(300.0, ge=30, le=600)       # the child is killed at budget_s + this
+    nice: int = Field(15, ge=10, le=19)                     # only gentler than the engines, never level with them
+    memory_mb: int = Field(4096, ge=1024, le=8192)          # RLIMIT_DATA of the child (Linux); ~1.5 GB measured
+    # the ADR 0085 power card of a G2 spec: XAUUSD alone, learn = the explore window, one fresh gate: the TEST-OLD
+    # confirm at Holm rank 1 of confirm_configs_per_batch configs at the ledger year's alpha_j (batch_alpha)
+    confirm_configs_per_batch: int = Field(3, ge=1, le=50)
+    test_old_years: float = Field(3.92, gt=0, le=3.92)       # TEST-OLD 2006-02..2009
+    # quarter -> discovery K cap: the quarter's summed registry k_contrib (the prior-search seed excluded) plus the
+    # night's planned K must stay within it; a quarter not listed, or 0, refuses every night. The research director's
+    # decision, docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15,000; 2027Q1 0, moved to 30,000 only on a
+    # written Q4 read citing that doc's continuation rule
+    k_cap_quarter: dict[str, int] = Field(default_factory=lambda: {"2026Q4": 15_000, "2027Q1": 0})
+    # costs: the cost of record v3 (ADR 0084) per (session, exit) cell in bps of `cost_price_usd`, the gold price where
+    # it was measured. A table with a spread split: bid/ask labels + each cell's non-spread part; v3 has none: mid
+    # labels + each full cell, so the spread is charged once
+    cost_of_record: str = "config/cost_of_record_v3.yaml"
+    cost_broker: str = "icm"
+    # below the 4068.7 Dukascopy median of 2026-10-12..11-06 (catalogue_costs.yaml pin_price_usd): never fewer bps
+    cost_price_usd: float = Field(4000.0, ge=1000, le=4100)
+    cards_dir: str = "config/research/candidates"           # catalogue cards: power-triaged, never run by this job
+    # grammar-node priors from demo labels and discovered arms' forward results: weight = exp(gain x shrunk mean R),
+    # shrunk = sum R / (n + prior_n0), clipped to [prior_min, prior_max] (inside gen_gp.PRIOR_BOUNDS)
+    prior_n0: float = Field(50.0, ge=1)
+    prior_gain: float = Field(2.0, ge=0, le=10)
+    prior_min: float = Field(0.5, ge=0.25, le=1)
+    prior_max: float = Field(2.0, ge=1, le=4)
+
+    @field_validator("k_cap_quarter")
+    @classmethod
+    def _k_caps(cls, v: dict[str, int]) -> dict[str, int]:
+        import re
+        bad = {q: k for q, k in v.items() if not re.fullmatch(r"\d{4}Q[1-4]", q) or not 0 <= k <= 1_000_000}
+        if bad:
+            raise ValueError(f"k_cap_quarter maps a quarter like 2026Q4 to 0..1,000,000 discovery K, got {bad}")
+        return v
+
+    def k_cap_for(self, quarter: str) -> int:
+        """The quarter's discovery K cap; a quarter not listed has none (0: every night refused)."""
+        return int(self.k_cap_quarter.get(quarter, 0))
 
 
 class HarAbstentionSettings(_Section):
@@ -637,6 +706,7 @@ class ResearchSettings(_Section):
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
     autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
+    discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)
     har_abstention: HarAbstentionSettings = Field(default_factory=HarAbstentionSettings)
     position: PositionSettings = Field(default_factory=PositionSettings)
     power_first: PowerFirstSettings = Field(default_factory=PowerFirstSettings)
