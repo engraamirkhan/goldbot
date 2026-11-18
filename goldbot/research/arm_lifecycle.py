@@ -51,10 +51,16 @@ same read, after two voids, with one more kill rule.
 * Rule 5, bracket integrity: "A refused bracket (section 4) on 3 or more candidates, or on any taken candidate"
   retires the arm, journalled with its reason.
 A discovered arm read without the journal or a recompute holds, never read as evidence (its kill rules still decide).
+The nightly job hands both in (`integrity_inputs`): the hosts' `decisions` rows from the earliest registration on,
+and the recompute from the minutes each engine stored (`stored_recompute`: its own `bars_1m_live` first, point in time
+by write time, each minute at its nominal close, in the engine's window), so the night reads the very bars the
+engine's entry check read. Where the store no longer shows them (a minute the engine logged replaced within
+REPLACE_SPAN before the decision: the store keeps only the last copy) the candidate is not recomputable: void for the
+read, never a refusal.
 The frozen day terms (the settle lag, append-only, void days) are unchanged: the voids only choose which candidates
 enter a day before it is frozen.
 
-Reads, plus the three aux.db writes above; no order path.
+Reads (aux.db, and the store's minutes, dq_events and journal), plus the three aux.db writes above; no order path.
 """
 from __future__ import annotations
 
@@ -68,6 +74,8 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord, load_record_json
+from goldbot.data.account_bars import as_of_minutes, minute_versions
+from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database
 from goldbot.research.arm_rules_spec import BRACKET_PREFIX, Bracket, bracket_void
 from goldbot.research.arms import PER_TRADE_KEY, Arm, Learning
@@ -92,6 +100,12 @@ RULE = "arm lifecycle (docs/research/arm-lifecycle-2026-11-18.md)"
 BRACKET_RETIRE_N = 3            # amendment 5.1 (5): "A refused bracket (section 4) on 3 or more candidates"
 BRACKET_VOID_ACTION = "arm_registry_bracket_void"           # engine.arm_registry.BRACKET_VOID (the journal's action)
 CONTROL_CHANGED_ACTION = "arm_registry_control_changed"     # engine.arm_registry.CONTROL_CHANGED
+JOURNAL_ACTIONS = (BRACKET_VOID_ACTION, CONTROL_CHANGED_ACTION)
+ENGINE_MINUTES = 90_000         # the engine's 1m memory (EngineConfig.max_bars_in_memory; tests hold them equal)
+READ_DAYS = 100                 # calendar days of minutes read before the first registration (>= ENGINE_MINUTES)
+# a minute replaced this long before a decision was replaced before it: broker_bars.GIVE_UP + one rates call
+# (FETCH_N minutes) + the minute itself; a replacement logged nearer the decision may postdate it (tests hold it)
+REPLACE_SPAN = pd.Timedelta(minutes=27)
 # (arm, candidate row) -> the bracket recomputed from the bars closed at its decision; None: not recomputable tonight
 Recompute = Callable[[Arm, Mapping[str, Any]], Bracket | None]
 
@@ -153,18 +167,119 @@ def discovered(arm: Arm) -> bool:
     return arm.role == "learning" and str(arm.params.get(PER_TRADE_KEY, "")).startswith(BRACKET_PREFIX)
 
 
-def engine_recompute(bars: Mapping[str, pd.DataFrame]) -> Recompute:
+def engine_recompute(bars: Mapping[str, pd.DataFrame],
+                     replaced: Mapping[str, np.ndarray | None] | None = None) -> Recompute:
     """The recompute from each candidate's account's 1m bars (`bars`: account -> store-schema 1m bars with
-    `visible_at`): the engine's `arm_registry.decision_bracket`, the arm's own lookback window. None when the account
-    has no bars or none closed by the decision."""
+    `visible_at`, or the account's stored minute versions, `stored_recompute`): the engine's
+    `arm_registry.decision_bracket`, the arm's own lookback window. None when the account has no bars or none closed
+    by the decision, and, with `replaced` (account -> the minutes its engine logged replaced, epoch ns; None:
+    unreadable), when a minute within REPLACE_SPAN before the decision was replaced: the store keeps only the last
+    copy, so what the engine held there is gone (void for the read, not a refusal)."""
     from goldbot.engine.arm_registry import decision_bracket
+    ts_of = {a: epoch_ns(pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)))
+             for a, b in bars.items() if "rank" in b.columns}
 
     def recompute(arm: Arm, row: Mapping[str, Any]) -> Bracket | None:
-        b = bars.get(str(row.get("account_id")))
+        acc = str(row.get("account_id"))
+        b = bars.get(acc)
         if b is None or b.empty:
             return None
-        return decision_bracket(b, arm, pd.Timestamp(row["decision_utc"]))
+        at = pd.Timestamp(row["decision_utc"])
+        if replaced is not None:
+            gone = replaced.get(acc, np.zeros(0, dtype=np.int64))
+            if gone is None or bool(((gone >= (at - REPLACE_SPAN).value) & (gone < at.value)).any()):
+                return None
+        held = engine_minutes(b, ts_of[acc], arm, at) if acc in ts_of else b
+        return decision_bracket(held, arm, at)
     return recompute
+
+
+def engine_minutes(versions: pd.DataFrame, ts_ns: np.ndarray, arm: Arm, at: pd.Timestamp) -> pd.DataFrame:
+    """The 1m bars the engine held at `at`, from the account's stored minute versions (`minute_versions`, sorted by
+    ts_utc; `ts_ns` their epoch ns): resolved point in time as of `at` (`as_of_minutes`: a version written after it is
+    not read), each minute at its nominal close, as the engine's memory holds it. Read from the engine's own window:
+    the minutes `exploration.arm_bars` takes for the arm (at least LOOKBACK_1M), the whole memory (ENGINE_MINUTES)
+    for a 1d/1w arm."""
+    from goldbot.config import tf_seconds
+    from goldbot.engine.exploration import LOOKBACK_1M, lookback
+    at = pd.Timestamp(at).tz_convert("UTC")
+    hi = int(np.searchsorted(ts_ns, at.value, side="left"))
+    need = ENGINE_MINUTES if arm.timeframe in ("1d", "1w") else \
+        max((lookback(arm) + 1) * tf_seconds(arm.timeframe) // 60, LOOKBACK_1M)
+    span = pd.Timedelta(days=need // (23 * 60) * 7 // 5 + 7)            # trading minutes -> calendar days, padded
+    lo = int(np.searchsorted(ts_ns, (at - span).value, side="left"))
+    seen = as_of_minutes(versions.iloc[lo:hi], at)
+    if len(seen) < need and lo > 0:                                    # a long gap: the whole prefix
+        seen = as_of_minutes(versions.iloc[:hi], at)
+    seen = seen.tail(ENGINE_MINUTES).reset_index(drop=True)
+    seen["visible_at"] = pd.to_datetime(seen["ts_utc"], utc=True) + pd.Timedelta(minutes=1)
+    return seen
+
+
+def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, start: pd.Timestamp,
+                     now: pd.Timestamp) -> Recompute:
+    """`engine_recompute` on the minutes each host's engine stored (`hosts`: account -> (broker, symbol);
+    `data.account_bars.minute_versions` in [start, now), as of `now`: the engine's own `bars_1m_live` first, the
+    broker's M1, then the release minutes it warm-starts on) with the replacements its engine logged (dq_events
+    REPLACED). An account whose minutes are unreadable has no recompute; one whose replacements are unreadable none
+    either (fail closed: void for the read, never a refusal)."""
+    from goldbot.engine.broker_bars import REPLACED
+    bars: dict[str, pd.DataFrame] = {}
+    replaced: dict[str, np.ndarray | None] = {}
+    for account, (broker, symbol) in sorted(hosts.items()):
+        try:
+            bars[account] = minute_versions(store, account_id=account, broker=broker, symbol=symbol, start=start,
+                                            end=now, as_of=now)
+        except Exception as exc:                # noqa: BLE001 - fail closed: this account's candidates void
+            log.error("arm lifecycle: %s minutes unreadable (%s): no bracket recompute", account, type(exc).__name__)
+            continue
+        try:
+            dq = store.read("dq_events", source=account, symbol=None, start=start, end=now)
+            if dq is None or dq.empty:
+                replaced[account] = np.zeros(0, dtype=np.int64)
+                continue
+            hit = dq[dq["check"].astype(str) == REPLACED]
+            replaced[account] = np.sort(epoch_ns(pd.DatetimeIndex(pd.to_datetime(hit["ts_utc"], utc=True))))
+        except Exception as exc:                # noqa: BLE001 - fail closed: this account's candidates void
+            log.error("arm lifecycle: %s dq_events unreadable (%s): no bracket recompute", account,
+                      type(exc).__name__)
+            replaced[account] = None
+    return engine_recompute(bars, replaced)
+
+
+def engine_journal(store: Any, accounts: Collection[str], *, start: pd.Timestamp,
+                   now: pd.Timestamp) -> pd.DataFrame | None:
+    """The engines' journal rows the discovered-arm voids read (`decisions`, JOURNAL_ACTIONS) of `accounts` in
+    [start, now), every symbol of each account. None when any account's journal is unreadable: a partial journal
+    could miss a void, so the read holds as unverified instead."""
+    cols = ["ts_utc", "account_id", "agent_id", "action", "detail"]
+    parts = []
+    for account in sorted(accounts):
+        try:
+            d = store.read("decisions", source=account, symbol=None, start=start, end=now)
+        except Exception as exc:                # noqa: BLE001 - fail closed: unverified, never evidence
+            log.error("arm lifecycle: %s journal unreadable (%s): discovered arms unverified tonight", account,
+                      type(exc).__name__)
+            return None
+        if d is not None and not d.empty and set(cols) <= set(d.columns):
+            parts.append(d.loc[d["action"].astype(str).isin(JOURNAL_ACTIONS), cols])
+    parts = [p for p in parts if not p.empty]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
+
+
+def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Collection[Arm], *,
+                     now: pd.Timestamp) -> tuple[pd.DataFrame | None, Recompute | None]:
+    """(journal, recompute) for `run`, read only when a decided discovered arm is among `arms` ((None, None)
+    otherwise): the hosts' journal from the earliest such arm's `since`, and the recompute from their stored minutes
+    from READ_DAYS before it (the engine's whole memory before its first candidate)."""
+    disc = [a for a in arms if decided(a) and discovered(a)]
+    if not disc:
+        return None, None
+    now = pd.Timestamp(now).tz_convert("UTC")
+    starts = [pd.Timestamp(b.since, tz="UTC") for a in disc if (b := _learning(a)) is not None]
+    since = min(starts) if len(starts) == len(disc) else now - pd.Timedelta(days=READ_DAYS)
+    return (engine_journal(store, hosts, start=since, now=now),
+            stored_recompute(store, hosts, start=since - pd.Timedelta(days=READ_DAYS), now=now))
 
 
 def _ns_or_none(v: Any) -> int | None:
@@ -548,7 +663,8 @@ def summary(reads: list[ArmRead]) -> dict[str, Any]:
             "validated": sum(r.validated for r in reads)}
 
 
-__all__ = ["BRACKET_RETIRE_N", "E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "Recompute", "discovered",
-           "engine_recompute", "MAX_UNMATCHED", "MIN_DAYS", "MIN_N", "SETTLE_DEFAULT",
+__all__ = ["BRACKET_RETIRE_N", "ENGINE_MINUTES", "E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "JOURNAL_ACTIONS",
+           "READ_DAYS", "REPLACE_SPAN", "Recompute", "discovered", "engine_journal", "engine_minutes",
+           "engine_recompute", "integrity_inputs", "stored_recompute", "MAX_UNMATCHED", "MIN_DAYS", "MIN_N", "SETTLE_DEFAULT",
            "SETTLE_PAD", "VOID_UNLABELLED", "ArmRead", "ParityGap", "arm_hold", "day_terms", "settled_at", "decide", "decided", "fixed_window", "freeze", "parity_gaps", "read_arm",
            "reads_of", "record", "run", "summary", "twin_means"]

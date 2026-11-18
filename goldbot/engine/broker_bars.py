@@ -58,6 +58,7 @@ FETCH_TIMEOUT_S = 2.0                   # the fetcher's own bridge client: one a
 RETRY = pd.Timedelta(seconds=5)         # a late bar is asked again this often (engine clock); doubled per failed call
 BACKOFF_MAX = pd.Timedelta(seconds=60)
 GIVE_UP = pd.Timedelta(minutes=10)      # after this the sampled minute stands for good (counted `never_arrived`)
+REPLACED = "broker_bar_replaced"        # the dq check of a sampled minute replaced by the broker's (research reads it)
 KEEP = pd.Timedelta(minutes=30)         # fetched broker minutes kept for joining
 ERROR_LOG_S = 300.0                     # a failing rates call is logged at most this often
 _PRICES = ["bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close"]
@@ -350,7 +351,7 @@ def _replace(eng: Engine, bb: BrokerBars, bars: pd.DataFrame) -> None:
     bb.fallback -= set(replaced)
     bb.stats["replaced"] += len(replaced)
     history.queue_minutes(eng, new.loc[hit])
-    eng._dq_pending.append(DQEvent(ts_utc=min(replaced), check="broker_bar_replaced", severity="warning",
+    eng._dq_pending.append(DQEvent(ts_utc=min(replaced), check=REPLACED, severity="warning",
                                    detail=f"{len(replaced)} minute(s) from sampled ticks replaced by the broker's bars "
                                           f"(largest close change {moved:.2f}); decisions already taken on them stand"))
 

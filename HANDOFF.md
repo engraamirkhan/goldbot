@@ -74,6 +74,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     report -> state/autodisc/discovery-<night>.md. No confirm read is opened (ADR 0085's 4 batches a year).
   - Outcome-blind reading on the real bars: power admits ~8 % of random G2 specs at 1h, ~5 % at 4h; no catalogue card
     with a stated count passes (31 refused, 0 started).
+- 2026-11-18 discovered-arm lifecycle inputs (prereg-amendment-2026-11-18-discovered-arms.md 4, 5.1 (5), 2.2): the
+  nightly `arm_lifecycle` job now hands the read the engines' journal (`arm_registry_bracket_void`,
+  `arm_registry_control_changed`, store `decisions` from the earliest registration on) and the bracket recompute from
+  the minutes each engine stored (`arm_lifecycle.stored_recompute`: `bars_1m_live` first, point in time by write time,
+  nominal closes, the engine's own `arm_bars` window, so Wilder ATR starts where the engine's did). Bracket voids and
+  control changes now retire a discovered arm at night; before, it only held. A minute the engine logged
+  `broker_bar_replaced` within 27 min before a decision leaves that candidate unrecomputable (void, not a refusal: the
+  store keeps only the last copy). An unreadable journal holds the arm as unverified. `LIFECYCLE_READY` stays False:
+  the flip waits on the quant and trading-safety re-review. The engine's retirement on the first void at entry (stricter
+  than 5.1 (5)) is recorded in docs/research/arm-lifecycle-2026-11-18.md.
 - 2026-11-15 (branch feat/power-first-gates; R157; ADR 0085): power-first research gates and the alpha-spending Holm
   confirm, for **research and demo promotion only**. This follows the panel ruling of 2026-11-15 on the evaluator's
   memo, docs/research/power-first-gates-2026-11.md (carried on this branch).

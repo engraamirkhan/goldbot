@@ -378,14 +378,24 @@ def test_the_forward_power_never_refuses_or_admits_a_registration(env):
     assert [r.arm_id for r in arm_rows(env)] == [a.reg.arm_id, a.reg.arm_id + "C", b.reg.arm_id, b.reg.arm_id + "C"]
 
 
-# The amendment's section 6 tests that live elsewhere:
-# T3 test_booked_k_equals_the_screened_configurations: tests/research/autodisc/test_registry_link.py
+# The amendment's section 6 tests T1-T9, under their pre-registered names unless mapped:
+# T1 test_registration_without_a_k_row_is_refused: here.
+# T2 test_registration_over_the_quarter_budget_is_refused: here (with test_a_sixth_concurrent_discovered_arm_is_refused
+#    and test_an_arm_whose_kill_rule_is_unreadable_by_until_is_refused).
+# T3 test_booked_k_equals_the_screened_configurations, MAPPED to tests/research/autodisc/test_registry_link.py
 #    test_sync_tops_the_registry_up_to_the_ledger_k_search_once (summed k_contrib = the ledger's distinct K_search,
 #    re-synced once) and test_the_nightly_job_records_its_batch_k_contrib_only_for_a_real_search (n_trials_discovery
-#    rises by exactly k_contrib); n_refused_power is in goldbot/research/autodisc/discovery.py.
-# T5 test_power_admission_is_outcome_blind and T8 test_prior_search_seed_is_outside_quarter_k_but_inside_n_trials_
-#    discovery: tests/research/autodisc/test_discovery_nightly.py; T4: test_a_bracket_that_does_not_match_its_recompute_at_the_entry_is_void_and_holds_the_arm
-#    here and tests/test_spec_bracket.py; T9: test_a_change_to_the_control_after_registration_voids_the_arm here.
+#    rises by exactly k_contrib); n_refused_power: test_power_refusals_are_counted_and_reported_never_booked_as_k in
+#    tests/research/autodisc/test_discovery_nightly.py.
+# T4 test_a_bracket_written_after_decision_utc_is_refused: tests/test_spec_bracket.py; at the order path
+#    test_a_bracket_that_does_not_match_its_recompute_at_the_entry_is_void_and_holds_the_arm here; at night
+#    tests/test_arm_lifecycle_inputs.py (the recompute from the engine's stored minutes).
+# T5 test_power_admission_is_outcome_blind: tests/research/autodisc/test_discovery_nightly.py.
+# T6 test_bracket_is_unchanged_by_bars_after_decision: tests/test_spec_bracket.py.
+# T7 test_phase_gate_reads_discovery_k_for_discovered_specs: tests/test_phase_gate_pin.py.
+# T8 test_prior_search_seed_is_outside_quarter_k_but_inside_n_trials_discovery:
+#    tests/research/autodisc/test_discovery_nightly.py.
+# T9 test_a_change_to_the_control_after_registration_voids_the_arm: here.
 
 
 # ---------------------------------------------------------------- trading-safety notes on 751cf7ab

@@ -123,3 +123,11 @@ ADR 0061 (unqualified: no entry).
 A quant ruling that the replay twin is not a fair stand-in beyond the parity bound would hold every evidence decision.
 ADR 0086's forward-read row type would give discovered arms a demo evidence class and a promotion path; this lifecycle
 stays kill-only.
+
+## 5. Dated notes
+
+- 2026-11-18 (research-director ruling): the engine retires a discovered learning arm on the broker at its FIRST void
+  bracket at the entry (`engine.arm_registry.entry_refusal`, durable through `exploration_arm_status`), stricter than
+  the amendment's 5.1 (5) "3 or more candidates, or any taken candidate"; it stands because failing closed costs only a
+  £60-capped demo learning arm, while sending an order whose bracket may have been fixed after the decision would void
+  the read it exists for. The signed amendment is unchanged.

@@ -246,8 +246,9 @@ def test_the_job_reads_every_good_registry_row_when_one_row_is_bad(tmp_path, mon
         return []
     monkeypatch.setattr(L, "run", run)
     from goldbot.config import load_settings
+    from goldbot.data.store import Store
     from goldbot.ops.accounts import load_accounts
-    ctx = type("Ctx", (), {"settings": load_settings(), "state_dir": tmp_path,
+    ctx = type("Ctx", (), {"settings": load_settings(), "state_dir": tmp_path, "store": Store(tmp_path / "data"),
                            "accounts": list(load_accounts(ROOT / "config" / "accounts.yaml", logins=False).values())})()
     jobs.arm_lifecycle(ctx, NOW)
     ids = {a.id for a in seen["arms"]}
