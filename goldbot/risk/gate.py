@@ -476,6 +476,17 @@ def _cost_measurement_sized(intent: Intent, d: GateDecision) -> list[str]:
     return out
 
 
+def is_demo(mode: str | None, gates: list[str] | None, terminal_trade_mode: str | None,
+            probe_only: bool | None) -> bool:
+    """The one demo predicate (trading-safety requirement 2026-11-18, 1: "An account is demo only when ALL of these
+    hold: accounts.yaml `mode: demo`; no live gate in phase_file; the terminal reports trade_mode == "demo";
+    probe_only. If any is missing or unreadable, it is not demo"). `gates`: `phase_gates(phase_file)` (None:
+    unreadable). The hot-loaded arm registry checks it at load, on every re-read and at the signal; the exploration
+    fence (`_exploration_reasons`) refuses the same facts again at the order."""
+    return (mode == "demo" and gates is not None and not (LIVE_GATES & set(gates))
+            and terminal_trade_mode == "demo" and probe_only is True)
+
+
 def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
     """The exploration purpose's fence before sizing (see `Intent.purpose`): a probe_only account
     (`exploration_not_probe_only`); the demo lock by the registry and the phase file, F1's rule

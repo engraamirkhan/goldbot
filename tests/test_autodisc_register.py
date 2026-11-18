@@ -381,3 +381,51 @@ def test_a_journal_row_written_before_phase_3_still_reads():
            "honesty": {"n_events": 1, "mean_r": 0.1, "fitness": 1.0, "excess_r": 0.1, "stress_mean_r": 0.1,
                        "floors": True, "null_threshold": 0.5, "null_reps": 2}}
     assert R.Registration.model_validate(old).requested_stage is None
+
+
+# ---------------------------------------------------------------- build 3: --to-db (the hot-loaded registry)
+def _to_db(env: dict[str, Any], state: Path, account: str = "icm-demo") -> R.Registration:
+    kw = {k: v for k, v in env.items() if k != "root"}
+    return R.register_to_db(spec_hash(spec(0)), account, "prereg.md#d1", state_dir=state, root=env["root"], **kw)
+
+
+def test_to_db_journals_then_appends_one_chained_registry_row_and_writes_no_config_file(env, tmp_path):
+    from goldbot.engine import arm_registry
+    spec_before, acc_before = env["spec_arms_path"].read_text(), env["accounts_path"].read_text()
+    state = tmp_path / "state"
+    reg = _to_db(env, state)
+    [row] = arm_registry.read_rows(str(state))
+    assert arm_registry.chain_break([row]) is None
+    assert (row.account_id, row.arm_id, row.style, row.max_loss) == ("icm-demo", reg.arm_id, reg.style, reg.max_loss)
+    body = json.loads(row.row)
+    assert body["rule"] == "spec_rule" and body["config_hash"] == reg.config_hash and set(body["params"]) == {
+        "spec", "spec_hash", "prereg"}
+    assert R.journal(env["ledger_path"]) == [reg]
+    assert env["spec_arms_path"].read_text() == spec_before and env["accounts_path"].read_text() == acc_before
+
+
+@pytest.mark.parametrize("account", ["icm-live", "vantage-live", "no-such-account"])
+def test_to_db_refuses_an_account_that_is_not_demo_probe_only_and_writes_nothing(env, tmp_path, account):
+    from goldbot.engine import arm_registry
+    state = tmp_path / "state"
+    with pytest.raises(R.RegistrationRefused):
+        _to_db(env, state, account)
+    assert R.journal(env["ledger_path"]) == [] and arm_registry.read_rows(str(state)) == []
+
+
+def test_to_db_after_a_crash_between_the_journal_and_the_registry_row_completes_once(env, tmp_path, monkeypatch):
+    from goldbot.engine import arm_registry
+    state = tmp_path / "state"
+    real = arm_registry.append
+
+    def crash(*a: Any, **kw: Any) -> Any:
+        raise OSError("killed")
+    monkeypatch.setattr(arm_registry, "append", crash)
+    with pytest.raises(OSError):
+        _to_db(env, state)
+    assert len(R.journal(env["ledger_path"])) == 1 and arm_registry.read_rows(str(state)) == []
+    monkeypatch.setattr(arm_registry, "append", real)
+    _to_db(env, state)
+    assert len(R.journal(env["ledger_path"])) == 1 and len(arm_registry.read_rows(str(state))) == 1
+    with pytest.raises(R.RegistrationRefused, match="registered on"):
+        _to_db(env, state)

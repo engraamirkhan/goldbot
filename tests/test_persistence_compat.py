@@ -606,9 +606,15 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "there because learning_refusal has refused its arm already",
     ("goldbot/engine/exploration_learning.py", "_block", "Learning"):
         "strict: the same checked-in learning block in the engine; an invalid block refuses the arm (fail closed)",
-    ("goldbot/engine/exploration.py", "_load_spec_arm_rows", "SpecArm"):
-        "strict: the same frozen Arm rows from config/spec_arms.yaml (hash-checked), read one row at a time so a bad row "
-        "is dropped and journalled, never a loosened read (ADR 0058 phase 4)",
+    ("goldbot/engine/exploration.py", "spec_arm_row", "SpecArm"):
+        "strict: the same frozen Arm rows from config/spec_arms.yaml and the hot-loaded aux.db arm_registry (hash-"
+        "checked), read one row at a time so a bad row is dropped and journalled, never a loosened read (ADR 0058 "
+        "phase 4; build 3 2026-11-18)",
+    ("goldbot/engine/arm_registry.py", "read_rows", "RegistryRow"):
+        "strict: the hash-chained arm_registry columns (build 3, trading-safety 2026-11-18); a row that does not read "
+        "must refuse every hot-loaded entry, never be read loosely",
+    ("goldbot/engine/arm_registry.py", "append", "RegistryRow"):
+        "strict: the same hash-chained columns, re-read inside the append's write lock to extend a verified chain only",
     ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
         "strict: research replica state snapshot, not persisted operational state (restart of a replica run only)",
     ("goldbot/ops/health.py", "HealthContext.from_runtime", "Settings"): "strict: Settings",

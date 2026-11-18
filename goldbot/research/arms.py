@@ -814,7 +814,7 @@ def owner_experiment_refusal(arm: Arm, now: pd.Timestamp | None = None) -> str |
 
 
 def qualification_refusal(arm: Arm, root: Path | None = None, registry: Path | None = None,
-                          now: pd.Timestamp | None = None) -> str | None:
+                          now: pd.Timestamp | None = None, *, live_class: bool = False) -> str | None:
     """Why `arm` may send no demo entry under the owner rule 2026-10-30, or None when it may. Exempt: `role` control
     (a random control: a random_bracket rule or a body naming its `control`), or `role` cost on a COST_ARMS id naming
     its own cost read (`cost_read`). Any other arm needs a `qualification` that validates, with verdict `pass`,
@@ -855,6 +855,12 @@ def qualification_refusal(arm: Arm, root: Path | None = None, registry: Path | N
         q = Qualification.model_validate(arm.qualification)
     except ValidationError as exc:
         return f"{QUALIFY_RULE}: qualification record invalid ({exc.error_count()} errors)"
+    # trading-safety requirement 2026-11-18, item 4: forward demo evidence (`forward:`, ADR 0088's `adr0088:`) can
+    # qualify an arm for demo at most; on an account that is not demo it is a refusal, never a qualification
+    from goldbot.research.registry import FORWARD_EVIDENCE_PREFIXES
+    if live_class and (fwd := [r for r in (q.screen, q.confirm) if r.startswith(FORWARD_EVIDENCE_PREFIXES)]):
+        return (f"{QUALIFY_RULE}: forward demo evidence ({fwd[0][:80]!r}) qualifies an arm on a demo account only, "
+                "never on an account that is not demo")
     if q.verdict != "pass":
         return f"{QUALIFY_RULE}: verdict {q.verdict!r} is not pass"
     if (why := _cost_refusal(q)) is not None:
@@ -883,9 +889,11 @@ def _ref_hash(ref: str) -> str | None:
     return m.group(1) if m is not None else None
 
 
-def stamp_qualification(arm: Arm, root: Path | None = None, registry: Path | None = None) -> Arm:
+def stamp_qualification(arm: Arm, root: Path | None = None, registry: Path | None = None, *,
+                        live_class: bool = False) -> Arm:
     """`arm` with `entry_refused` set from `qualification_refusal` (a value written on the row is overwritten)."""
-    return arm.model_copy(update={"entry_refused": qualification_refusal(arm, root, registry) or ""})
+    return arm.model_copy(update={"entry_refused": qualification_refusal(arm, root, registry,
+                                                                         live_class=live_class) or ""})
 
 
 # ---------------------------------------------------------------- arms
@@ -1060,12 +1068,12 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
     raw = safe_load_cached(path) or {}          # parsed once per file version (goldbot/config.py)
     rows = list(raw.get("arms") or [])
     if rejected is None:
-        out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in rows]
+        out = [stamp_qualification(Arm.model_validate(a), root, registry, live_class=live_class) for a in rows]
     else:
         out = []
         for i, row in enumerate(rows):
             try:
-                out.append(stamp_qualification(Arm.model_validate(row), root, registry))
+                out.append(stamp_qualification(Arm.model_validate(row), root, registry, live_class=live_class))
             except ValueError as exc:                    # pydantic's ValidationError is a ValueError
                 _reject(rejected, _row_name(row, i), path, exc)
         ids = [a.id for a in out]
