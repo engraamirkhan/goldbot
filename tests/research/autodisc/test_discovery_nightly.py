@@ -383,12 +383,14 @@ def test_v3_has_no_spread_split_so_labels_are_mid_and_each_full_cell_is_charged_
 
 
 def test_a_cost_table_with_a_spread_split_keeps_bid_ask_labels_and_charges_only_the_non_spread_part(tmp_path):
-    cell = "{charged_usd: 0.50, spread_usd: 0.30}"
-    sess = "{stop: %s, target: %s, time: %s, all: %s}" % ((cell,) * 4)
+    cell = "{charged_usd: 0.50, spread_usd: 0.30, commission_usd: 0.08}"
+    thin = "{charged_usd: 0.35, spread_usd: 0.30, commission_usd: 0.08}"      # 0.05 left: floored at the commission
+    sess = "{stop: %s, target: %s, time: %s, all: %s}" % (cell, thin, cell, cell)
     (tmp_path / "v.yaml").write_text(f"version: v-test\ncells:\n  icm:\n    asia: {sess}\n    london: {sess}\n"
                                      f"    newyork: {sess}\n    all: {sess}\n")
     c = DN.cor_v3_cells(tmp_path / "v.yaml", "icm", price_usd=2000.0)
     assert c.split and c.bps["london"]["stop"] == pytest.approx(0.2 / 2000.0 * 1e4)
+    assert c.bps["london"]["target"] == pytest.approx(0.08 / 2000.0 * 1e4)
     assert "bid/ask labels" in c.line
 
 
@@ -506,8 +508,11 @@ def test_power_admission_is_outcome_blind(tmp_path):
     import dataclasses
     t = make_noise_tensor(N, seed=1, timeframe="1h")
     rng = np.random.default_rng(0)
-    variants = {"real": t, "permuted": dataclasses.replace(t, ret=rng.permutation(t.ret)),
-                "nan": dataclasses.replace(t, ret=np.full_like(t.ret, np.nan))}
+    variants = {"real": t,
+                "permuted": dataclasses.replace(t, ret=rng.permutation(t.ret), risk=rng.permutation(t.risk),
+                                                cost=rng.permutation(t.cost), t_exit=rng.permutation(t.t_exit)),
+                "nan": dataclasses.replace(t, ret=np.full_like(t.ret, np.nan), risk=np.full_like(t.risk, np.nan),
+                                           cost=np.full_like(t.cost, np.nan), t_exit=np.full_like(t.t_exit, -1))}
     seen = {}
     for name, tt in variants.items():
         gate = _gate(learn_years=0.25)
@@ -515,6 +520,7 @@ def test_power_admission_is_outcome_blind(tmp_path):
                                                                 min_events=60, families=FAMS),
                      SearchLedger(tmp_path / f"{name}.db", mode="synthetic"), admit=gate)
         seen[name] = [c.spec_hash for c in run.evaluated if c.generation == 0]
+        assert gate.refused > 0 and gate.admitted > 0, name          # the gate both refused and admitted: not vacuous
     assert seen["real"] and seen["real"] == seen["permuted"] == seen["nan"]
 
 
@@ -618,3 +624,40 @@ def test_power_refusals_are_counted_and_reported_never_booked_as_k(tmp_path):
     text = (tmp_path / "autodisc" / "discovery-2026-11-18.md").read_text()
     assert f"power-gate refusals {run.n_refused_power:,} (not K)" in text
     assert DN.summary(run)["n_refused_power"] == run.n_refused_power
+
+
+def test_no_v3_cell_is_charged_below_its_commission():
+    import yaml as Y
+    c = DN.cor_v3_cells(V3, "icm", price_usd=4000.0)
+    cells = Y.safe_load(V3.read_text())["cells"]["icm"]
+    for sess, by in c.bps.items():
+        for e, bps in by.items():
+            assert bps >= cells[sess][e]["commission_usd"] / 4000.0 * 1e4 - 1e-12
+
+
+def test_a_demo_label_frame_without_decision_utc_gives_the_uniform_priors(tmp_path):
+    s = settings(timeframes=["1h"])
+    uniform = DN.run_discovery(s, tmp_path / "a", SLOT, dry_run=True, **kw(tmp_path / "a"))
+    undated = DN.run_discovery(s, tmp_path / "b", SLOT, dry_run=True, **kw(
+        tmp_path / "b", obs_reader=lambda *a, **k: TSMOM_LABELS.drop(columns=["decision_utc"])))
+    assert undated.timeframes[0].priors == uniform.timeframes[0].priors == {}
+
+
+def test_a_killed_nights_unsynced_k_counts_against_the_next_nights_cap(tmp_path, monkeypatch):
+    """A night killed before `sync_discovery_k` leaves its K in the ledger only; the next night's cap check counts it."""
+    import goldbot.research.registry as REG
+    monkeypatch.setattr(REG, "_utcnow", lambda: SLOT.to_pydatetime())
+    led = SearchLedger(tmp_path / NT.LEDGER_FILE["real"], mode="real")
+    rng = np.random.default_rng(0)
+    from goldbot.research.autodisc.gen_gp import GENERATOR, random_spec
+    cfg = GPConfig(timeframe="1h", population=8, generations=1, seed=0, families=FAMS)
+    cat = catalogue(FAMS)
+    while led.k_search() < 40:                                  # the killed night's specs, ledgered, never synced
+        led.log_spec(random_spec(rng, cfg, cat), GENERATOR, "v")
+    s = steered()
+    cap = DN.planned_k(s.research.discovery) + 39               # room for the night, not for the unsynced 40 on top
+    s = s.model_copy(update={"research": s.research.model_copy(update={
+        "discovery": s.research.discovery.model_copy(update={"k_cap_quarter": {"2026Q4": cap}})})})
+    run = DN.run_discovery(s, tmp_path, SLOT, **kw(tmp_path, backends=real_edge_backends))
+    assert run.status == "over_budget" and budget_of(run).k_unsynced == 40
+    assert DN.unsynced_k(tmp_path, tmp_path / "registry.jsonl") == 40

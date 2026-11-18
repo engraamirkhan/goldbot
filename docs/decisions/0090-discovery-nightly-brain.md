@@ -37,11 +37,11 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
      on a ~1,300 $/oz price would be three times the cost). v3 measures fills against the mid and has no spread
      split, so the labels read the mid and each label pays its full cell (session of its decision bar, exit it took):
      the spread is charged once. A table that states `spread_usd` per cell keeps bid/ask labels and charges only the
-     rest. Swap is the settings prior, not measured swap, and the cost line says so. (Quant review B2: the first
+     rest. No cell is charged below its own commission. Swap is the settings prior, not measured swap, and the cost line says so. (Quant review B2: the first
      build charged the dearest cell in $/oz on top of the bar spread, the spread twice.)
    - Grammar-node priors (`GPConfig.leaf_priors`): demo labels (aux.db `exploration_obs`, gold, non-control,
      `label_sim_r`, void evidence excluded, as the learner reads them; only rows decided on or after HOLDOUT_END,
-     2026-10-01) by family node and decision session; each
+     2026-10-01; a frame without `decision_utc` gives none, so uniform priors) by family node and decision session; each
      registered discovered arm's labels (its forward result) on every node of its spec. Weight = exp(2 x sum R /
      (n + 50)) clipped to [0.5, 2.0]. Priors only change what is sampled; every evaluated spec counts in K, and the G0
      null reruns the whole search with the same priors, so the reality check prices the steering in.
@@ -69,7 +69,7 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
    - Registry rows: the night writes at most one discovery batch row per timeframe, so `assert_budget(len(timeframes),
      ...)` against the quarter's trial budget, its used rows and the pre-registered reservation.
    - K: the quarter's summed discovery `k_contrib` (registry batches stamped in the quarter; the one-off prior-search
-     seed excluded) plus the night's planned K at its bound (timeframes x (population x (generations + 1) +
+     seed excluded), plus the real ledger's K no batch counts yet (a night killed or failed before its sync), plus the night's planned K at its bound (timeframes x (population x (generations + 1) +
      max_candidates x 24 neighbours)) must stay within that quarter's entry of `research.discovery.k_cap_quarter`, a
      validated per-quarter map. The research director's decision (docs/research/discovery-k-cap-2026-11-18.md):
      2026Q4 15,000, 2027Q1 0 (moved to 30,000 only on a written Q4 read citing that doc's continuation rule); a

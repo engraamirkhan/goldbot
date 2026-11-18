@@ -12,7 +12,7 @@
     (`gen_gp.Admit`): refused, it costs no K and the search redraws it at sampling; none is admitted once `autodisc:G2`
     has been read on TEST-OLD. Two budget checks: one registry row per timeframe against the trial budget
     (`assert_budget`), and the quarter's discovery K plus the night's planned K against
-    the quarter's entry of `research.discovery.k_cap_quarter`, the research director's per-quarter map
+    (with any K a killed night left unsynced) the quarter's entry of `research.discovery.k_cap_quarter`, the research director's per-quarter map
     (docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15000, 2027Q1 0; a quarter not listed refuses). Power-gate
     refusals are counted (`n_refused_power`) and reported, never booked as K.
     Costs: cost of record v3 per (session, exit) cell in bps of 4,000 $/oz on mid labels, so the spread is charged

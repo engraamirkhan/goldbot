@@ -161,14 +161,16 @@ def cor_v3_cells(path: str | Path, broker: str, price_usd: float) -> CostCells:
     2010-2017 price would be about three times the cost. v3 measures fills against the research bars' mid and charges
     `charged_usd`. A table whose every cell also states `spread_usd` keeps the bid/ask labels and charges only the rest
     (the spread paid once, by the labels); v3 states none, so the labels read the mid and each full cell is charged
-    (the spread paid once, inside the cell). The line carries no date (the report is explore-only)."""
+    (the spread paid once, inside the cell). No cell is charged below its `commission_usd`. The line carries no date
+    (the report is explore-only)."""
     table = yaml.safe_load(Path(path).read_text())
     sessions = {k: v for k, v in table["cells"][broker].items() if k != "all"}
     cells = [c for by_exit in sessions.values() for e, c in by_exit.items() if e != "all"]
     split = bool(cells) and all("spread_usd" in c for c in cells)
 
-    def usd(c: Mapping[str, Any]) -> float:
-        return max(0.0, float(c["charged_usd"]) - (float(c["spread_usd"]) if split else 0.0))
+    def usd(c: Mapping[str, Any]) -> float:            # never below the cell's own commission (quant advisory)
+        return max(float(c.get("commission_usd") or 0.0),
+                   float(c["charged_usd"]) - (float(c["spread_usd"]) if split else 0.0))
 
     bps = {sess: {e: usd(c) / float(price_usd) * 1e4 for e, c in by_exit.items() if e != "all"}
            for sess, by_exit in sessions.items()}
@@ -230,10 +232,14 @@ def _sessions(ts: pd.Series) -> np.ndarray:
 
 def after_holdout(obs: pd.DataFrame) -> pd.DataFrame:
     """Only demo labels decided on or after HOLDOUT_END (2026-10-01): an earlier row (the holdout year, or before it)
-    never reaches a prior (quant M1), whatever reader supplied it."""
+    never reaches a prior (quant M1), whatever reader supplied it. A frame without `decision_utc` cannot show that, so
+    none of it does (fails closed: uniform priors)."""
     from goldbot.research.exploration_data import HOLDOUT_END
-    if obs.empty or "decision_utc" not in obs:
+    if obs.empty:
         return obs
+    if "decision_utc" not in obs:
+        log.warning("discovery: demo labels without decision_utc: no priors from them tonight")
+        return obs.iloc[0:0]
     return obs[pd.to_datetime(obs["decision_utc"], utc=True) >= HOLDOUT_END].reset_index(drop=True)
 
 
@@ -447,6 +453,7 @@ class BudgetLine(FrozenRecord):
     planned_k: int                            # the night's K at its bound
     k_cap: int                                # research.discovery.k_cap_quarter[quarter] (0: not listed or closed)
     k_used: int                               # the quarter's discovery K so far (summed k_contrib)
+    k_unsynced: int = 0                       # K in the real ledger no batch row counts yet (a killed or failed night)
     headroom: int | None = None
     refused: str | None = None
 
@@ -458,7 +465,7 @@ def planned_k(cfg: DiscoverySettings) -> int:
 
 
 def budget_line(settings: Settings, slot: pd.Timestamp, used: Callable[[str], int],
-                k_used: Callable[[str], int]) -> BudgetLine:
+                k_used: Callable[[str], int], k_unsynced: int = 0) -> BudgetLine:
     """Both budget checks of the night (module docstring, 4): registry rows on the trial budget's scale, K on its own."""
     from goldbot.research.catalogue.run import BudgetAbort, assert_budget
     from goldbot.research.director import quarter_budget
@@ -478,9 +485,12 @@ def budget_line(settings: Settings, slot: pd.Timestamp, used: Callable[[str], in
         return line.model_copy(update={"refused": (
             f"discovery K: {q} is not listed in research.discovery.k_cap_quarter: every night refused until the "
             "research director's written read adds it")})
+    line = line.model_copy(update={"k_unsynced": int(k_unsynced)})
+    ku += int(k_unsynced)
     if ku + k > line.k_cap:
         return line.model_copy(update={"refused": (
-            f"discovery K: research.discovery.k_cap_quarter {q} {line.k_cap:,}, used {ku:,}, tonight's planned K "
+            f"discovery K: research.discovery.k_cap_quarter {q} {line.k_cap:,}, used {ku:,} ({int(k_unsynced):,} not "
+            f"yet synced), tonight's planned K "
             f"{k:,} -> over by {ku + k - line.k_cap:,}")})
     return line.model_copy(update={"headroom": left})
 
@@ -498,6 +508,21 @@ def quarter_k_used(path: Path) -> Callable[[str], int]:
         return sum(int(b.get("k_contrib") or 0) for b in TrialRegistry(path).discovery_batches()
                    if b.get("ledger_id") not in seed and quarter_of(datetime.fromisoformat(str(b["ts"]))) == q)
     return used
+
+
+def unsynced_k(state_dir: Path, registry_path: Path) -> int:
+    """K in the real discovery ledger that no registry batch counts yet: a night killed or failed before its
+    `sync_discovery_k` (quant re-review 1). Counted in tonight's cap check; read-only (a ledger or registry that does
+    not exist is not created)."""
+    path = Path(state_dir) / LEDGER_FILE["real"]
+    if not path.exists():
+        return 0
+    from goldbot.research.autodisc.k_link import counted
+    from goldbot.research.autodisc.ledger import SearchLedger
+    from goldbot.research.registry import TrialRegistry
+    led = SearchLedger(path, mode="real")
+    synced = counted(TrialRegistry(registry_path), led.ledger_id()) if Path(registry_path).exists() else 0
+    return max(0, led.k_search() - synced)
 
 
 def registry_used(path: Path) -> Callable[[str], int]:
@@ -650,7 +675,8 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     reg_path = Path(registry_path) if registry_path is not None else Path(settings.research.registry)
     cards = card_triage(cards_dir or cfg.cards_dir, settings, slot) if Path(cards_dir or cfg.cards_dir).is_dir() \
         else None
-    budget = budget_line(settings, slot, budget_used or registry_used(reg_path), k_used or quarter_k_used(reg_path))
+    budget = budget_line(settings, slot, budget_used or registry_used(reg_path), k_used or quarter_k_used(reg_path),
+                         unsynced_k(state_dir, reg_path))
     if budget.refused is not None:
         run = DiscoveryRun(night=night, dry_run=dry_run, status="over_budget", budget=budget, cards=cards,
                            timeframes=[TimeframeRun(timeframe=tf, skipped="over the quarter's budget")
