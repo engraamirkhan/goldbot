@@ -5031,6 +5031,17 @@
       "title": "Band",
       "type": "string"
      },
+     "control_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Note"
+     },
      "family": {
       "title": "Family",
       "type": "string"

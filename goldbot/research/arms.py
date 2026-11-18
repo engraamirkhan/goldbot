@@ -489,6 +489,11 @@ OWNER_EXPERIMENT_RULE = "owner experiment (owner instruction 2026-11-01, ADR 006
 COST_ARMS: dict[str, tuple[str, int]] = {"F1A": ("O-11", 200), "G1A": ("O-12", 100)}
 # each cost arm's paired control: no purpose once its arm stops ("F1C stops with F1A, G1C with G1A", prereg 2.2/3.2)
 COST_CONTROLS: dict[str, str] = {"F1A": "F1C", "G1A": "G1C"}
+# Amendment 2026-11-15: a control whose registered read counts stop exits (S0R, arms-2026-10-25.md section 4: "Read
+# once at n = 100 stop exits"; "kept: S0R (overshoot read)", control-thinning amendment point 4). Exempt from control
+# thinning (propensity 1) until the count is reached, then it stops itself (`engine.exploration.refresh_cost_reads`)
+STOP_EXIT_READS: dict[str, tuple[str, int]] = {"S0R": ("arms-2026-10-25 section 4 resting-stop overshoot", 100)}
+STOP_EXIT_READ_DONE = "stop-exit read complete (arms-2026-10-25.md section 4; amendment 2026-11-15)"
 # a measured slippage cell rests on this many fills at least (prereg 2026-10-26 Costs: "per (session x exit type) cell
 # with at least 30 fills")
 MIN_COST_CELL_FILLS = 30
@@ -1003,6 +1008,11 @@ class Arm(FrozenRecord):
     # a cost arm's prereg cost read (COST_ARMS: F1A O-11, G1A O-12). A row field, not `params`: params are hashed, and
     # naming the read is run policy on a frozen body (trading-safety M2 asked for params.cost_read; the hash forbids it)
     cost_read: str = ""
+    # Amendment 2026-11-15 (docs/research/prereg-amendment-2026-11-15-replay-only-controls.md): "an unpaired gold
+    # random control is replay_only": its candidates are recorded and labelled (exploration_obs + the r2 replay) and no
+    # order is ever sent (`engine.exploration._send` refuses it before any check). Gold controls only. Run policy, like
+    # a retirement: not in the hash. `broker` (the default) sends through the RiskGate as before
+    control_mode: Literal["broker", "replay_only"] = "broker"
     entry_refused: str = ""
     config_hash: str | None = None
 
@@ -1025,6 +1035,10 @@ class Arm(FrozenRecord):
         if (self.retired_day is None) != (not self.retired_rule):
             raise ValueError(f"{self.id}: a retirement names both its retired_day and its retired_rule (the rule that "
                              "retired it), or neither")
+        if self.control_mode == "replay_only" and self.role != "control":
+            raise ValueError(f"{self.id}: control_mode replay_only is for a random control (role control) only")
+        if self.control_mode == "replay_only" and self.params.get("instrument", "XAUUSD") != "XAUUSD":
+            raise ValueError(f"{self.id}: control_mode replay_only is for gold controls only (the r2 replay is gold's)")
         if self.status == "blocked" and not self.note:
             raise ValueError(f"{self.id}: a blocked arm needs a note saying what unblocks it")
         if "window_utc" in self.params and "window_local" in self.params:

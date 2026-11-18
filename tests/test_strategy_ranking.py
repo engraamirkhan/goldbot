@@ -444,3 +444,16 @@ def test_an_unreadable_arm_reads_file_is_reported_in_the_views_unreadable_list()
     bad = Catalog(labels=Labels(), arms=CAT.arms, reads={}, reads_ok=False)
     assert ARM_READS_UNREADABLE in sr.rank(_spread("A1", [0.1] * 3, 3), bad, NOW).unreadable
     assert ARM_READS_UNREADABLE not in sr.rank(_spread("A1", [0.1] * 3, 3), CAT, NOW).unreadable
+
+
+def test_a_row_read_against_s0_is_tagged_as_an_unwired_replay_control_and_never_a_verdict():
+    """Quant MEDIUM 8 (prereg-amendment-2026-11-15-hv-rule3-replay-control.md): S0 is replay-only, its matched read
+    is not wired to its replay labels yet, so a row whose control is S0 says so; a row read against another control
+    carries no tag."""
+    cat = _cat(_info("A1", "alpha", control_arm="S0"), _info("B1", "beta", control_arm="C1"),
+               _info("S0", "random_bracket", is_control=True, read_n=None),
+               _info("C1", "random_bracket", is_control=True, read_n=None))
+    view = sr.rank([*_spread("A1", [0.2, -0.1] * 20, 12), *_spread("B1", [0.2, -0.1] * 20, 12, family="beta")],
+                   cat, NOW)
+    assert _by(view, "alpha").control_note == sr.S0_REPLAY_NOTE == "control: S0 replay (unwired) - not a verdict"
+    assert _by(view, "beta").control_note is None

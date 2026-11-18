@@ -5,6 +5,32 @@ Rewritten 2026-10-30 (cycle 2, same day) by the research director, base `48768fd
 `660d2db2:docs/research/research-plan.md`. Their answers stand unless a row below changes them. Kill-rule amendments
 cite `prereg-amendment-2026-10-30-kill-rules.md` (A1-A4 signed with conditions 10-30; A5 draft).
 
+## 0a. Audit 2026-11-15: why everything fails (governs over sections 1-4 where they differ)
+
+Source: `why-strategies-fail-2026-11-15.md` (K +0). The causes, measured:
+
+1. 1m-15m entries have no gross edge (+/-0.01 R). The backtester's gross matches the broker to -0.012 R on 3,653
+   demo fills.
+2. At 1h-1d the gates have no power. A true +0.10 R edge passes explore 8-29 % of the time and L5 0 %. The deflated
+   Sharpe at K 21,333 needs t 5.69.
+3. Screens charge ICM 2.6x the realised fill-to-bar cost: $0.30-0.32 against $0.116 [0.093, 0.140].
+4. Broker-traded random controls are the demo's largest loss (-£572 over 3 weeks).
+
+The owner's own manual record (kept local) shows no gross edge after costs; it is not used as a benchmark.
+
+Live lines (at most 5):
+
+| # | Line | Owner | Kill / date | £/day |
+|---|---|---|---|---|
+| 1 | Demo as an instrument: replay twins replace broker random controls | performance-analyst + data-engineer | revert if parity > $0.05/oz or agreement < 90 % over 300; 11-22 | about +£11 (cost removed) |
+| 2 | Cost of record v3, fill-to-research-bar (ADR 0064 amendment), new pre-registrations only | microstructure-researcher | 11-20 | enabler |
+| 3 | Power-first gates: power >= 0.5 per rung to start; L5 K-basis options to the expert panel | evaluator | memo 11-24, ruling 11-27 | enabler |
+| 4 | EVAL-2 batch 1 (section 0) | research director / evaluator | TEST-OLD read 11-24 | £1-3 if it holds |
+| 5 | empty: needs gross >= 2x parity cost and power >= 0.5 | — | — | — |
+
+H-94 closed 11-13 (FAIL). The section 2 lines 1-3 and 6 closed on their own rules (H-84 failed 10-30, H-89 retired
+11-01, discovery v2 and the TV parser by their dates). They are not reopened.
+
 ## 0. Amendment 2026-11-09: EVAL-2 (ADRs 0076-0078, signed by the quant 2026-11-09)
 
 Every family registered from now on is judged by EVAL-2 (`docs/research/eval2-method-2026-11-09.md`, thresholds and

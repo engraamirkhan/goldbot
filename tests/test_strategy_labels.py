@@ -111,7 +111,7 @@ def test_the_session_day_minimum_of_a_read_comes_from_the_arm_reads_file_and_def
     cat = load_catalog()
     assert {cat.arms[a].read_days for a in ("Z4D", "Z4P", "Z7D", "Z7V", "Z7P", "Z6D", "Z1P", "S1A", "VI2A")} == {20}
     assert cat.arms["XBB15"].read_days == 0 and cat.arms["WFRI"].read_days == 0     # W1 / WFRI register none
-    assert str(cat.arms["Z4D"].retired_day) == "2026-11-06" and cat.arms["S1A"].retired_day is None  # A5
+    assert str(cat.arms["Z4D"].retired_day) == "2026-11-06" and cat.arms["Z3V"].retired_day is None  # A5
     mixed = tmp_path / "reads.yaml"
     raw = yaml.safe_load(READS_PATH.read_text())
     raw["min_session_days"]["Z6V"] = 10                                             # a unit's arms disagree

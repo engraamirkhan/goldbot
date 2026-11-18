@@ -1,5 +1,5 @@
 - 2026-11-18 discovered arms on demo, the learning-class registration (standing amendment
-  docs/research/prereg-amendment-2026-11-18-discovered-arms.md and docs/research/discovery-k-cap-2026-11-18.md; R161).
+  docs/research/prereg-amendment-2026-11-18-discovered-arms.md and docs/research/discovery-k-cap-2026-11-18.md; R163).
   `python -m goldbot.ops.run autodisc-register <hash> --account <demo> --to-db STATE_DIR --learning` checks the 2.4
   bar (explore survivor, 1h/4h gold spec, gross >= 2 x 0.90 $/oz, net > 0, kill rule readable by `until`: >= 50
   expected candidates and >= 10 signal days), the window (from 2026-11-22 22:00 UTC, none after 2027-03-31), at most
