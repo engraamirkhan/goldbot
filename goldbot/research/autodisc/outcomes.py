@@ -16,7 +16,7 @@ at or after 2018-01-01); `tensor.digest` is that frame's digest (the evaluator's
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -26,7 +26,7 @@ import pandas as pd
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec, triple_barrier, triple_barrier_1m
 from goldbot.research.autodisc.spec import ExitTemplate
-from goldbot.research.autodisc.windows import ExploreFrame, StageFrame
+from goldbot.research.autodisc.windows import EXPLORE_CUTOFF, ExploreFrame, StageFrame
 
 LONG, SHORT = 1, -1
 SIDES: tuple[int, int] = (LONG, SHORT)                 # side index 0 / 1
@@ -107,6 +107,7 @@ class OutcomeTensor:
     t_entry: np.ndarray        # position of the entry bar (-1: no outcome)
     t_exit: np.ndarray         # position of the exit bar (-1: no outcome)
     digest: str = ""
+    entry: np.ndarray | None = None    # entry price, $/oz, of every (bar, side, exit) with an outcome (None: unpriced)
     _drift: dict[int, np.ndarray] = field(default_factory=dict, repr=False)
 
     @property
@@ -196,12 +197,15 @@ def _one_at_a_time(t_entry: np.ndarray, t_exit: np.ndarray) -> np.ndarray:
 
 def build_tensor(bars_in: ExploreFrame | StageFrame, atr: pd.Series, exits: Sequence[BarrierExit], *,
                  extra_cost_usd: float = 0.0, swap: SwapSpec | None = None, bars_1m_in: ExploreFrame | None = None,
-                 mode: Literal["bar", "1m"] = "bar") -> OutcomeTensor:
+                 mode: Literal["bar", "1m"] = "bar",
+                 extra_cost_frac: Callable[[pd.DataFrame], np.ndarray] | None = None) -> OutcomeTensor:
     """The outcome tensor of `bars_in` (decision bars as an ExploreFrame: store schema with ts_utc and bid_/ask_ OHLC) for `exits`.
     `atr`: the barrier ATR per bar (the same series the family's labels use). `extra_cost_usd` and `swap` come from
     `execution.costs.research_costs(settings, table)` (the conservative table: the max of the refit cell and the table
     is the caller's choice, ADR 0045). `mode="1m"` reads the barriers on `bars_1m` (`triple_barrier_1m`, a rule
-    pre-registered on 1m barriers); "bar" is the decision-bar labeller every family without `barriers_on_1m` uses."""
+    pre-registered on 1m barriers); "bar" is the decision-bar labeller every family without `barriers_on_1m` uses.
+    `extra_cost_frac` (ADR 0090): the round trip charged to each label row (its `ts_utc` and `barrier_hit`) as a
+    fraction of price, in place of `extra_cost_usd` / entry: a cost cell per (session, exit) in bps."""
     # re-checked here: a frame mutated after its guard is refused (a StageFrame: confirm.py, ADR 0058 phase 3)
     StageFrame(bars_in.frame, bars_in.stage) if isinstance(bars_in, StageFrame) else ExploreFrame(bars_in.frame)
     bars = bars_in.frame.reset_index(drop=True)
@@ -212,6 +216,7 @@ def build_tensor(bars_in: ExploreFrame | StageFrame, atr: pd.Series, exits: Sequ
     shape = (n, 2, e_n)
     ret, risk, cost = np.full(shape, np.nan), np.full(shape, np.nan), np.full(shape, np.nan)
     t_entry, t_exit = np.full(shape, -1, dtype=np.int32), np.full(shape, -1, dtype=np.int32)
+    entry_px = np.full(shape, np.nan)
     a = atr.to_numpy(dtype=float)
     spread = (bars["ask_close"].to_numpy(dtype=float) - bars["bid_close"].to_numpy(dtype=float))
     signals = pd.DataFrame({"idx": np.repeat(np.arange(n), 2), "side": np.tile(np.array(SIDES), n)})
@@ -228,11 +233,33 @@ def build_tensor(bars_in: ExploreFrame | StageFrame, atr: pd.Series, exits: Sequ
         entry = lab["entry"].to_numpy(dtype=float)
         r_ret = lab["ret"].to_numpy(dtype=float)
         swap_ret = lab["swap_ret"].to_numpy(dtype=float) if "swap_ret" in lab else np.zeros(len(lab))
-        extra = extra_cost_usd / entry
+        entry_px[i, s, k] = entry
+        extra = extra_cost_usd / entry if extra_cost_frac is None else np.asarray(extra_cost_frac(lab), dtype=float)
         ret[i, s, k] = r_ret - extra
         risk[i, s, k] = ex.stop_atr * a[i] / entry
         cost[i, s, k] = spread[i] / entry + extra - swap_ret
         t_entry[i, s, k], t_exit[i, s, k] = lab["t_entry"].to_numpy(dtype=int), lab["t_exit"].to_numpy(dtype=int)
     ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
     return OutcomeTensor(ts_utc=ts, exits=tuple(exits), ret=ret, risk=risk, cost=cost, t_entry=t_entry, t_exit=t_exit,
+                         entry=entry_px,
                          digest=bars_in.digest)
+
+
+def explore_record(t: OutcomeTensor, mask: np.ndarray, side: np.ndarray, exit_i: int) -> dict[str, int | float] | None:
+    """The explore read a discovered arm's registration bar rests on (`autodisc_register.ExploreRecord`, amendment
+    2026-11-18 section 2.4), on this tensor's bars: `n_bars` (bars of the spec's timeframe), `n_days` (UTC days with a
+    bar), `n_signal_days` (days with a signal), `n_events` (kept trades, one at a time) and the mean per trade in USD
+    per oz, `gross_usd_mean` before every cost (spread, cost of record, swap: `ret + cost`) and `net_usd_mean` after
+    them (`ret`). Explore only: None for a tensor with any bar at or after EXPLORE_CUTOFF (a confirm stage's), or one
+    without entry prices (no $/oz to state); nothing is ever read past the cutoff."""
+    if t.entry is None or t.n_bars == 0 or t.ts_utc.max() >= EXPLORE_CUTOFF:
+        return None
+    ev = t.select(mask, side, exit_i)
+    px = t.entry[ev.idx, ev.side_i, exit_i]
+    days = t.ts_utc.normalize()
+    sig = np.asarray(mask, bool) & (np.asarray(side) != 0)
+    out: dict[str, int | float] = {"n_bars": int(t.n_bars), "n_days": int(days.nunique()),
+                                   "n_signal_days": int(days[sig].nunique()), "n_events": int(len(ev.idx))}
+    if len(ev.idx):
+        out |= {"gross_usd_mean": float(np.mean((ev.ret + ev.cost) * px)), "net_usd_mean": float(np.mean(ev.ret * px))}
+    return out

@@ -852,6 +852,20 @@ AUX: tuple[Migration, ...] = (
         """CREATE TRIGGER IF NOT EXISTS arm_lifecycle_terms_no_update BEFORE UPDATE ON arm_lifecycle_terms
            BEGIN SELECT RAISE(ABORT, 'arm_lifecycle_terms is append-only'); END""",
     )),
+    # additive (ADR 0090, goldbot/research/autodisc/discovery.py): one row per discovery_nightly run (a rerun of the
+    # night adds a row, never rewrites one; a dry run writes none): counts, K spent, survivors, power verdicts. Research
+    # bookkeeping only: nothing that trades reads it, and a release without it never opens the table
+    Migration(version=38, name="discovery_runs", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS discovery_runs (
+               night TEXT NOT NULL,
+               run_ns INTEGER NOT NULL,
+               status TEXT NOT NULL,
+               k_spent INTEGER NOT NULL CHECK (k_spent >= 0),
+               survivors INTEGER NOT NULL CHECK (survivors >= 0),
+               {_BODY},
+               PRIMARY KEY (night, run_ns)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

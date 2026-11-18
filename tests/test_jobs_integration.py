@@ -165,8 +165,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "har_days": "2026-10-02T22:05:00+00:00", "har_days_retry": "2026-10-02T22:35:00+00:00",
                    "journal_compact": "2026-10-03T03:40:00+00:00", "weekly_review": "2026-10-03T13:00:00+00:00",
                    "monthly_review": "2026-10-03T06:30:00+00:00", "swap_reconcile": "2026-10-02T23:45:00+00:00",
-                   "arm_lifecycle": "2026-10-03T06:25:00+00:00",
-                   "news_coverage": "2026-10-03T06:05:00+00:00", "long_history_refresh": "2026-10-02T21:40:00+00:00"}
+                   "news_coverage": "2026-10-03T06:05:00+00:00", "long_history_refresh": "2026-10-02T21:40:00+00:00",
+                   "arm_lifecycle": "2026-10-03T06:25:00+00:00", "discovery_nightly": "2026-10-03T01:00:00+00:00"}
 
 
 def test_build_scheduler_drops_the_state_of_a_job_no_longer_in_jobs(tmp_path):
