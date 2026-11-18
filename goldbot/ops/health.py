@@ -131,6 +131,7 @@ from goldbot.ops.checks.bridge import (
 )
 from goldbot.ops.checks.compaction import check_compaction
 from goldbot.ops.checks.cpcv import check_cpcv_evidence
+from goldbot.ops.checks.discovery import check_discovery_last_run  # ADR 0090 SRE GO (registers it)
 from goldbot.ops.checks.engine import (
     HISTORY_GAP_MIN_CLOSES,
     HISTORY_GAP_WINDOW_H,
@@ -338,6 +339,7 @@ __all__ = [
     "check_deadman",
     "check_cpu_steal",
     "check_feedback_loop",
+    "check_discovery_last_run",
     "check_deploy_approval",
     "check_deploy_read",
     "check_deploy",
@@ -445,6 +447,9 @@ class HealthContext(Record):
     entry_supply: Callable[[], dict[str, Any]] | None = None
     # outage 2026-11-14: the host's /etc, for check_needrestart (from_runtime sets it on Linux); None omits the check
     etc_dir: Path | None = None
+    # when this host's settings last changed (settings.local.yaml's mtime, else settings.yaml's): the latest moment a
+    # flag such as research.discovery.enabled can have been turned on (check_discovery_last_run); None: unknown
+    settings_changed: UtcTimestamp | None = None
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -485,7 +490,17 @@ class HealthContext(Record):
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
                    commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes,
                    observe_lanes=observed, etc_dir=Path("/etc") if sys.platform.startswith("linux") else None,
-                   entry_supply=partial(_entry_supply_view, settings) if settings is not None else None)
+                   entry_supply=partial(_entry_supply_view, settings) if settings is not None else None,
+                   settings_changed=_settings_changed(Path(settings_path)))
+
+
+def _settings_changed(settings_path: Path) -> pd.Timestamp | None:
+    """The mtime of the host's settings.local.yaml (else settings.yaml), UTC; None when neither can be read."""
+    local = settings_path.with_name("settings.local.yaml")
+    try:
+        return pd.Timestamp((local if local.exists() else settings_path).stat().st_mtime, unit="s", tz="UTC")
+    except OSError:
+        return None
 
 
 def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:
@@ -661,7 +676,8 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
                   "history_gap:", "long_history:", "entry_silence:", "deploy_read", "news_blackout_cap",
                   "feedback_loop",   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
                   "cpu_steal", "needrestart",   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule
-                  "swap_reconcile")  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
+                  "swap_reconcile",  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
+                  "discovery_last_run")  # ADR 0090 SRE GO: an enabled discovery job with no successful night in 26 h
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the
