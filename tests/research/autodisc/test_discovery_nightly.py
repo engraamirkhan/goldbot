@@ -32,7 +32,7 @@ def settings(**disc):
     s = load_settings()
     d = s.research.discovery.model_copy(update={"enabled": True, "population": 8, "generations": 2, "null_reps": 2,
                                                 "max_candidates": 4, "k_cap_quarter": {"2026Q4": 1_000_000},
-                                                **disc})
+                                                "first_night_dry": False, **disc})
     # the shipped 2026Q4 owner budget (tests/conftest.py strips it so other tests see the base 20)
     research = s.research.model_copy(update={"discovery": d, "trial_budget_overrides": {"2026Q4": 3500}})
     return s.model_copy(update={"research": research})
@@ -721,3 +721,49 @@ def test_every_offered_survivor_carries_the_registration_fields_in_its_ledger_re
         got = H.candidate(led_path, c.spec_hash)
         assert got is not None and got.power_forward["reading"] == "reported, not evidence"
         assert "started" in got.power_forward and got.explore == c.explore
+
+
+# ------------------------------------------------------------------ enable conditions (quant (b), 2026-11-18)
+def test_the_shipped_settings_hold_the_first_enabled_night_dry_until_a_reviewer_flips_it():
+    cfg = load_settings().research.discovery
+    assert cfg.enabled is False and cfg.first_night_dry is True
+
+
+def test_a_first_night_dry_run_books_its_k_in_the_registry_but_hands_nothing_off(tmp_path, monkeypatch):
+    """A dry search that evaluates outcomes without booking K is an uncounted trial: the first night's K is booked
+    (ledger, registry discovery batch) exactly as on any night; only the candidate rows (the hand-off) are withheld,
+    and the report lists what would have been offered."""
+    import goldbot.research.registry as REG
+    monkeypatch.setattr(REG, "_utcnow", lambda: SLOT.to_pydatetime())
+    reg = tmp_path / "registry.jsonl"
+    run = DN.run_discovery(steered().model_copy(update={"research": steered().research.model_copy(update={
+        "discovery": steered().research.discovery.model_copy(update={"first_night_dry": True})})}),
+        tmp_path, SLOT, executable=lambda spec: None, kill_unreadable=READABLE,
+        **kw(tmp_path, backends=real_edge_backends, obs_reader=lambda *a, **k: TSMOM_LABELS))
+    assert run.status == "ok" and run.withheld and run.k_spent > 0
+    led_path = tmp_path / NT.LEDGER_FILE["real"]
+    assert SearchLedger(led_path, mode="real").k_search() == run.k_spent         # K in the ledger
+    assert DN.quarter_k_used(reg)("2026Q4") == run.k_spent                        # ...and booked in the registry
+    assert DN.unsynced_k(tmp_path, reg) == 0
+    assert len(run.survivors) >= 1 and run.would_offer == len(run.survivors)
+    assert run.candidate_arms == 0 and H.pending(led_path) == []                  # nothing handed off
+    con = sqlite3.connect(led_path)
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "candidate_arms" not in tables or con.execute("SELECT COUNT(*) FROM candidate_arms").fetchone()[0] == 0
+    finally:
+        con.close()
+    with Database.open(tmp_path, "aux").read() as conn:                          # the run record stays (audit, health)
+        status, body = conn.execute("SELECT status, body FROM discovery_runs").fetchone()
+    assert status == "ok" and json.loads(body)["withheld"] is True
+    text = (tmp_path / "autodisc" / "discovery-2026-11-18.md").read_text()
+    assert "first night dry" in text and "K booked" in text
+    assert all(h[:12] in text for h in run.survivors)                            # what it would have offered
+    assert "withheld" in DN.summary(run)["health"]
+
+
+def test_with_first_night_dry_off_the_same_night_hands_its_survivors_off(tmp_path):
+    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None, kill_unreadable=READABLE,
+                           **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
+    assert not run.withheld and run.candidate_arms == run.would_offer == len(run.survivors) >= 1
+    assert {c.spec_hash for c in H.pending(tmp_path / NT.LEDGER_FILE["synthetic"])} == set(run.survivors)

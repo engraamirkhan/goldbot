@@ -217,7 +217,7 @@ scheduler:
   swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
   long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
-  discovery_nightly: { kind: daily, at: "01:00", max_late_hours: 1.5 }   # ADR 0090 (goldbot/research/autodisc/discovery.py): bounded G2 search in a niced child, 01:00 to at most 03:10 (research.discovery budget_s + kill_grace_s), clear of the 03:40 journal_compact; never caught up into London
+  discovery_nightly: { kind: daily, at: "01:00", max_late_hours: 1.5 }   # ADR 0090 (goldbot/research/autodisc/discovery.py): bounded G2 search in a niced child, 01:00 + budget_s + kill_grace_s (5,700 s) = 03:35 on time; worst case 04:05 UTC (a start at 02:30, the max_late, + 5,700 s), so a late start overlaps the 03:40 journal_compact; never caught up into London. Keep 01:00-04:05 UTC free of any job that must run on time (heartbeat or trading path): the scheduler is single-threaded (SRE 2026-11-18)
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -348,6 +348,8 @@ research:
                                      #   quarter's trial budget; survivors -> candidate arm rows for the registration hand-off
     enabled: false                   # on per host in settings.local.yaml together with bars_path (RUNBOOK); on without bars fails
     bars_path: null                  # research 1m bid/ask parquet (local only, never committed)
+    first_night_dry: true            # quant GO (b): an enabled night books its K (ledger + registry) and writes its report, but
+                                     #   offers no candidate arm; a quant reviewer sets false after reading the first report
     timeframes: [1h, 4h, 1d]         # why-fail audit: no gross edge in single rules at 1m-15m (15m is not accepted here)
     population: 32                   # G2 population x (generations + 1) specs a timeframe at most, each power-gated, then
     generations: 8                   #   ledgered (state/discovery_real.db) and counted in K
@@ -357,7 +359,8 @@ research:
     budget_s: 5400                   # wall clock: no timeframe starts once spent, or when the last one took longer than what is left
     kill_grace_s: 300                # the child is killed at budget_s + this (a killed night's K is counted by the next sync)
     nice: 15                         # CPU priority of the child: below the engines on the 2-vCPU ARM brain (one core for the child, one for the engines) (10..19)
-    memory_mb: 4096                  # data-segment cap of the child (RLIMIT_DATA, Linux; ~1.5 GB RSS measured on the 2010-17 bars); one process, BLAS at one thread
+    memory_mb: 4096                  # data-segment cap of the child (RLIMIT_DATA, Linux) + oom_score_adj 500: the bound (no per-child
+                                     #   cgroup MemoryMax without a unit change); 1.2 GB peak in the brain dry run, health warns past 2 GB
     confirm_configs_per_batch: 3     # power card (XAUUSD alone): its fresh gate is TEST-OLD at Holm rank 1 of this many configs at the ledger year's alpha_j
     test_old_years: 3.92             # TEST-OLD 2006-02..2009 (only shorter)
     k_cap_quarter: {"2026Q4": 15000, "2027Q1": 0}   # quarter -> discovery K cap (summed registry k_contrib + the night's
