@@ -1,4 +1,4 @@
-- 2026-11-18 (branch feat/discovery-nightly; R159, ADR 0090): `discovery_nightly`, the brain's own nightly strategy
+- 2026-11-18 (branch feat/discovery-nightly; R162, ADR 0090): `discovery_nightly`, the brain's own nightly strategy
   search (owner directive 2026-11-18, research director's build 4). Off until a host sets `research.discovery.enabled`
   and `bars_path` (RUNBOOK "Discovery nightly"); quant-reviewer and sre GO first.
   - One bounded child (`goldbot/ops/bounded.py`) on the 2-vCPU ARM brain (one core for the child, one for the
@@ -24,7 +24,7 @@
     on the row as `power_forward`, "reported, not evidence". Each judged candidate reports its admitted plateau
     neighbours. Offered rows go to `candidate_arms` in the discovery ledger's database
     (`goldbot/research/autodisc/handoff.py`, `pending()` for a hot-load path); registration stays
-    `ops/autodisc_register.py`. Run record -> aux.db `discovery_runs` (migration 37) and the ledger's `nightly_runs`;
+    `ops/autodisc_register.py`. Run record -> aux.db `discovery_runs` (migration 38) and the ledger's `nightly_runs`;
     report -> state/autodisc/discovery-<night>.md. No confirm read is opened (ADR 0085's 4 batches a year).
   - Outcome-blind reading on the real bars: power admits ~8 % of random G2 specs at 1h, ~5 % at 4h; no catalogue card
     with a stated count passes (31 refused, 0 started).

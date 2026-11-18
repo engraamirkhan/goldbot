@@ -38,6 +38,8 @@ from goldbot.ops.checks.registry import BLOCK_ACCOUNT, BLOCK_TAIL, register_chec
 from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.risk.supervisor import engine_fault
 
+ARM_REGISTRY_FAIL_S = 300.0     # build 3 (R7): engine/arm_registry.HEALTH_FAIL_S, kept here so health never imports the engine
+
 if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
 
@@ -74,6 +76,13 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         parts.append(f"state {_age(age)} old")
     else:
         parts.append(f"state {_age(age)} old")
+    # build 3 (R7, goldbot/engine/arm_registry.py): the hot-loaded arm registry unverified (a broken chain, a stale or
+    # failed read, an account that is not demo) refuses every hot-loaded entry; past HEALTH_FAIL_S it FAILs
+    since = e.get("arm_registry_unverified_since")
+    if isinstance(since, (int, float)) and _epoch(ctx.now) - float(since) > ARM_REGISTRY_FAIL_S:
+        statuses.append("fail")
+        parts.append(f"hot-loaded arm registry unverified for {_age(_epoch(ctx.now) - float(since))} "
+                     f"({e.get('arm_registry_reason') or 'unverified'}): every hot-loaded entry refused, exits run")
     if e.get("startup_error"):              # the engine refused to start (review LOW-A): name the cause
         statuses.append("fail")
         parts.append(f"engine refused to start: {e['startup_error']}")

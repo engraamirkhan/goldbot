@@ -87,6 +87,11 @@
                     exit diagnostics and the Monday roll-up's proposals -> a ranked list in aux.db review_actions (one
                     set a week) that the next research_director run consumes once; backlog suggestions to a GitHub
                     issue labelled `review`. Automatic: only a stop already registered (tighten only).
+* arm_lifecycle     daily at 06:25 after the daily review (owner directive 2026-11-18, build 2;
+                    goldbot/research/arm_lifecycle.py): per decided arm of the demo probe_only hosts, net GBP, fills,
+                    mean R, the excess over its matched replay twin and the fill-replay gap -> aux.db
+                    arm_lifecycle_reads (every decision journalled); RETIRE by a kill rule or the worse e-process (applied
+                    through exploration_arm_status, the engines' retirement), else HOLD. Kill-only: never promotes or sizes.
 * tva_scores        daily after feed_reconcile and nightly_costs (prereg-2026-10-28-tv-author-ideas.md section 6,
                     research/tv_ideas.py): the shadow score of the followed authors' live gold ideas from their
                     first-seen snapshot (state/tv_ideas.db read-only), direction read for both sides net of costs on
@@ -1680,6 +1685,62 @@ def weekly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary(review)
 
 
+def registry_rows(aux: Database) -> list[Any]:
+    """The hot-loaded registry's rows when its chain verifies, else none (logged): an altered registry is never read."""
+    from goldbot.engine import arm_registry
+    try:
+        rows = arm_registry.read_rows(aux)
+    except (sqlite3.Error, OSError) as exc:
+        log.warning("arm lifecycle: hot-loaded registry unreadable (%s): its arms are not read tonight",
+                    type(exc).__name__)
+        return []
+    if (why := arm_registry.chain_break(rows)) is not None:
+        log.warning("arm lifecycle: hot-loaded registry chain broken (%s): its arms are not read tonight", why)
+        return []
+    return rows
+
+
+def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Build 2 (owner directive 2026-11-18; research/arm_lifecycle.py): the kill-only read and decision of every
+    decided arm on the demo probe_only exploring hosts for the day before `slot`. The matched controls are the strategy
+    ranking's pairing, built here as the API builds it and handed in (ADR 0053 6f: research never imports it); the
+    arms are the ARM-SPEC, the discovered arms and the hot-loaded registry's rows. A RETIRE goes to aux.db
+    exploration_arm_status, which the engines read once a minute. Never a real-money account."""
+    from goldbot.api.strategy_labels import load_catalog
+    from goldbot.engine import exploration as X
+    from goldbot.ops.accounts import exploration_arm_caps
+    from goldbot.ops.report_days import day_before
+    from goldbot.research.arm_lifecycle import run, summary
+    from goldbot.research.arms import Arm, load_arms
+    if not ctx.settings.research.arm_lifecycle.enabled:
+        return {"skipped": "research.arm_lifecycle.enabled is false"}
+    demo = [a for a in ctx.accounts if a.exploration.enabled and a.mode == "demo" and a.probe_only]
+    if not demo:
+        return {"skipped": "no demo probe_only account has exploration on"}
+    caps: dict[str, float] = {}
+    for a in demo:
+        for arm_id, cap in exploration_arm_caps(a).items():
+            caps[arm_id] = max(cap, caps.get(arm_id, 0.0))
+    arms: dict[str, Arm] = {a.id: a for a in load_arms(X.SPEC_PATH, check_hash=False)}
+    if X.SPEC_ARMS_PATH.exists():
+        arms.update({a.id: a for a in load_arms(X.SPEC_ARMS_PATH, check_hash=False) if a.id not in arms})
+    aux = Database.open(ctx.state_dir, "aux")
+    for r in registry_rows(aux):
+        if r.arm_id in arms:
+            continue
+        try:                                     # R9: one bad row is left out alone, the rest are read
+            arms[r.arm_id] = X.spec_arm_row(json.loads(r.row))
+            caps[r.arm_id] = max(r.max_loss, caps.get(r.arm_id, 0.0))
+        except (ValueError, TypeError) as exc:
+            log.warning("arm lifecycle: hot-loaded row %s unreadable (%s): not read tonight", r.arm_id,
+                        type(exc).__name__)
+    cat = load_catalog()
+    controls = {k: v.control_arm for k, v in cat.arms.items() if v.control_arm}
+    reads = run(aux, hosts={a.account_id: a.broker for a in demo},
+                arms=list(arms.values()), controls=controls, caps=caps, day=day_before(slot), now=slot)
+    return summary(reads)
+
+
 def tva_scores(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """The TradingView author ideas' nightly shadow score (research/tv_ideas.py): costs from the canonical broker's
     cost table (`research_costs`, priors before one exists), minutes from its own feeds. Reporting only."""
@@ -1781,6 +1842,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)
     "journal_compact": journal_compact,           # BACKLOG 170: closed months of the decisions journal -> one part each
     "weekly_review": weekly_review,               # ranked weekly action list the next director run consumes
+    "arm_lifecycle": arm_lifecycle,               # build 2: per demo arm kill-only read, RETIRE or HOLD
     "monthly_review": monthly_review,             # R142: the month's review -> aux.db, Telegram, a review-monthly issue
     "swap_reconcile": swap_reconcile,             # BACKLOG 175: weekend crypto holds' broker swap vs the projection
     "long_history_refresh": long_history_refresh,  # BACKLOG 251: the 1d/1w warm-up file kept current (ops/long_history.py)

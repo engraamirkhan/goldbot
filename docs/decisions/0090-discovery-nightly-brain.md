@@ -86,7 +86,7 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
    `candidate_arms` in the discovery ledger's database (`goldbot/research/autodisc/handoff.py`: insert-only,
    `pending()` = offered and not yet in `arm_registrations`). Registration stays `ops/autodisc_register.py`
    (`--stage explore`, demo accounts only, RiskGate unchanged); a hot-load path reads `pending()`. The run record goes
-   to aux.db `discovery_runs` (migration 37) and to the ledger's `nightly_runs`; the report to
+   to aux.db `discovery_runs` (migration 38) and to the ledger's `nightly_runs`; the report to
    state/autodisc/discovery-<night>.md (explore numbers only). A dry run plans and writes nothing.
 
 ## Consequences

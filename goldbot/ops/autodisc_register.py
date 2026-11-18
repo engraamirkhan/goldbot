@@ -469,6 +469,51 @@ def register(spec_hash: str, account_id: str, prereg: str, **kw: Any) -> Registr
         return reg
 
 
+def _arm_of(reg: Registration, ledger_path: Path) -> Arm:
+    """The frozen arm of a journalled registration, rebuilt from the ledger's spec; its hash must be the journalled one."""
+    spec = SearchLedger(ledger_path, mode="real").get_spec(reg.spec_hash)
+    if spec is None:
+        raise RegistrationRefused(f"journalled spec {reg.spec_hash[:12]} is not in the ledger")
+    arm = Arm(id=reg.arm_id, rule=SPEC_RULE, timeframe=spec.timeframe,
+              params={"spec": canonical_json(spec), "spec_hash": reg.spec_hash, "prereg": reg.prereg},
+              max_open=1, forward_only=True)
+    arm = arm.model_copy(update={"config_hash": arm_hash(arm)})
+    if arm.config_hash != reg.config_hash:
+        raise RegistrationRefused(f"{reg.arm_id}: the rebuilt arm's hash differs from the journalled one")
+    return arm
+
+
+def registry_row(arm: Arm) -> dict[str, Any]:
+    """The frozen row as aux.db `arm_registry` carries it: exactly the config/spec_arms.yaml row's fields."""
+    return {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params,
+            "max_open": arm.max_open, "forward_only": True, "status": "run", "config_hash": arm.config_hash}
+
+
+def register_to_db(spec_hash: str, account_id: str, prereg: str, *, state_dir: Path, **kw: Any) -> Registration:
+    """Build 3 (owner directive 2026-11-18): `plan` (every check, the demo probe_only account and the style's caps
+    included), the journal row, then one hash-chained row in `state_dir`'s aux.db `arm_registry`, which the engine
+    hot-loads at its next pass boundary (goldbot/engine/arm_registry.py, where every row is checked again). No file
+    is written and no branch is needed: the registry is the reviewed path for machine-registered demo arms. A journal
+    row whose registry row did not land (a crash) is completed by running the same command again."""
+    from goldbot.engine import arm_registry
+    ledger_path: Path = kw.get("ledger_path", LEDGER_PATH)
+    with _locked(ledger_path):
+        done = {r.spec_hash: r for r in journal(ledger_path)}
+        reg = done.get(spec_hash)
+        if reg is not None and reg.account_id != account_id:
+            raise RegistrationRefused(f"spec {spec_hash[:12]} is journalled for {reg.account_id}, not {account_id}")
+        if reg is None:
+            reg = plan(spec_hash, account_id, prereg, **kw)[0]
+            _append(ledger_path, reg)
+        arm = _arm_of(reg, ledger_path)
+        try:
+            arm_registry.append(str(state_dir), account_id=account_id, row=registry_row(arm), style=reg.style,
+                                max_loss=reg.max_loss, source=f"autodisc-register:{reg.stage}")
+        except ValueError as exc:
+            raise RegistrationRefused(str(exc)) from exc
+        return reg
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run autodisc-register",
                                  description="Register a discovery survivor as a demo exploration arm (ADR 0058). "
@@ -487,6 +532,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stage", choices=["confirm", "explore"], default="confirm",
                     help="confirm (default): only a confirm or holdout passer registers; explore: an explore survivor "
                          "may register as a demo-learning arm (journalled as such)")
+    ap.add_argument("--to-db", type=Path, default=None, metavar="STATE_DIR",
+                    help="register into STATE_DIR's aux.db arm_registry (hot-loaded by the engine, demo only) "
+                         "instead of writing config files")
     a = ap.parse_args(argv)
     if a.verify:
         try:
@@ -500,8 +548,12 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("spec_hash, --account and --prereg are required (or --verify)")
     try:
         kw: dict[str, Any] = {"ledger_path": a.ledger, "style": a.style, "max_loss": a.max_loss, "stage": a.stage}
-        reg = plan(a.spec_hash, a.account, a.prereg, **kw)[0] if a.dry_run else \
-            register(a.spec_hash, a.account, a.prereg, **kw)
+        if a.dry_run:
+            reg = plan(a.spec_hash, a.account, a.prereg, **kw)[0]
+        elif a.to_db is not None:
+            reg = register_to_db(a.spec_hash, a.account, a.prereg, state_dir=a.to_db, **kw)
+        else:
+            reg = register(a.spec_hash, a.account, a.prereg, **kw)
     except (RegistrationRefused, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

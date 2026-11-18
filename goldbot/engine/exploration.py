@@ -345,19 +345,28 @@ def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm],
     for i, row in enumerate(rows):
         name = str(row.get("id")) if isinstance(row, dict) and row.get("id") else f"row{i}"
         try:
-            arm = stamp_qualification(SpecArm.model_validate(row))      # ADR 0061: kept, entries refused if unqualified
+            arm = spec_arm_row(row)
             if ids.count(arm.id) > 1:
                 raise ValueError("another row has the same id (ambiguous: neither runs)")
-            if arm.config_hash != arm_hash(arm):
-                raise ValueError(f"config_hash {arm.config_hash!r} does not match the arm (an arm is frozen)")
-            if why := ruling_1113_refusal(arm):        # research-director ruling 2026-11-13: no new 1m arm
-                raise ValueError(why)
         except ValueError as exc:
             log.error("discovered arm %s dropped from %s: %s", name, path, exc)
             rejected.append(name)
             continue
         arms.append(arm)
     return arms, rejected
+
+
+def spec_arm_row(row: Any) -> SpecArm:
+    """One discovered-arm row as the loader checks it (`_load_spec_arm_rows`, and the hot-loaded registry,
+    `engine.arm_registry`): it validates (`arm_rules_spec.check` for a spec_rule row), its frozen hash is its own, the
+    research-director ruling 2026-11-13 does not refuse it, and it is stamped by the owner rule 2026-10-30 (ADR 0061:
+    kept, entries refused if unqualified). ValueError names what fails."""
+    arm = stamp_qualification(SpecArm.model_validate(row))
+    if arm.config_hash != arm_hash(arm):
+        raise ValueError(f"config_hash {arm.config_hash!r} does not match the arm (an arm is frozen)")
+    if why := ruling_1113_refusal(arm):        # research-director ruling 2026-11-13: no new 1m arm
+        raise ValueError(why)
+    return arm
 
 
 def spec_retired(cfg: ExplorationConfig) -> frozenset[str]:
@@ -793,6 +802,23 @@ class Exploration:
         self.learning_warned = False
         self.learning_loss: dict[str, float] = {}      # arm -> realised loss since registration, from the last read
         exploration_learning.start(eng, self)
+        # owner directive 2026-11-18, build 3 (`arm_registry`): the hot-loaded discovered arms. Their caps join the
+        # gate's (`arm_registry.overlay`); no hot-loaded arm enters until a full validated load (`registry_ok`), and
+        # until one has succeeded (`registry_settled`) no position is closed as an orphan (`exits`)
+        from goldbot.engine import arm_registry
+        self.hot_caps: dict[str, float] = {}
+        self.hot_known: frozenset[str] = frozenset()
+        self.hot_journalled: dict[str, str] = {}
+        self.registry_ok = False
+        self.registry_settled = False
+        self.registry_fails = 0
+        self.registry_read_at: pd.Timestamp | None = None
+        self.registry_note: str | None = None
+        self.registry_bad_since: float | None = None   # wall time the registry stopped verifying (health, R7)
+        self.registry_core: Database | None = None     # core.db: the verified tip kept outside aux.db (R1)
+        self.start_held: frozenset[str] = frozenset()  # remembered at a start that could not load: no entry (R3)
+        self.orphan_hold_from: pd.Timestamp | None = None
+        arm_registry.init(eng, self)
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -1262,9 +1288,10 @@ def on_pass_slow(eng: Engine) -> None:
 def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | None:
     """The cheap reads, the 1m/5m arms' minute and a send: the orders sent, or None when a step raised (journalled).
     The learning read runs here only when a 1m/5m arm waits on it (its entries read it), else first in `_slow`."""
-    from goldbot.engine import books, exploration_learning
+    from goldbot.engine import arm_registry, books, exploration_learning
     try:
         with books.phase(eng, "exploration:reads"):
+            arm_registry.refresh(eng, ex, now)          # build 3: the hot-loaded arms, at this pass boundary
             refresh_retired(eng, ex, now)
             refresh_cost_reads(eng, ex, now)
             refresh_dormant(eng, ex, now)
@@ -2110,6 +2137,12 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         # First of all checks, so nothing below (the budget, the gate, `_intent`, the order core) ever sees it
         refuse("replay_only")
         return "refused"
+    from goldbot.engine import arm_registry
+    if (why := arm_registry.entry_refusal(eng, ex, arm.arm_id)) is not None:
+        # trading-safety 2026-11-18: a hot-loaded arm enters only while its registry verifies and the account is demo
+        # by the one predicate (`risk.gate.is_demo`), read at the signal; the RiskGate's fence checks again
+        refuse(why)
+        return "refused"
     if arm.arm_id in STOP_EXIT_READS and not ex.stop_exits_read:
         # its thinning exemption rests on its stop-exit count: unread, no entry (fail closed)
         refuse("stop_exit_read_unread")
@@ -2376,7 +2409,7 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     wall-clock time exit (`_week_due`, `time_exit`), a 1d/1w position at its history time exit from its decision
     close (`long_bars.time_exit_due`, BACKLOG 254); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
-    from goldbot.engine import exploration_pyramid
+    from goldbot.engine import arm_registry, exploration_pyramid
     try:
         ex = eng.exploration
         at = eng.clock() if eng.cfg.live_clock else now
@@ -2385,6 +2418,11 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 continue
             arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if ex is not None else None
             if arm is None:
+                if ex is not None and arm_registry.orphan_held(ex, tr.opened_utc or tr.entry_bar_ts, at):
+                    # trading-safety 2026-11-18 (R5): it may be a hot-loaded arm's, unknown until a registry load
+                    # succeeds; its own server stop and target stand. Held STALE_CADENCES minutes at most, never
+                    # past its weekend backstop
+                    continue
                 eng._try_close(pid, ORPHAN_EXIT, now)
                 continue
             since = tr.opened_utc or tr.entry_bar_ts

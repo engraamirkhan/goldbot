@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from goldbot.research import cpcv_gate
 from goldbot.research import registry as RG
@@ -171,3 +172,26 @@ def test_a_research_promotion_confirm_pass_never_satisfies_the_phase_gate(tmp_pa
     assert not g1.met
     assert not RG.TrialRegistry(trials).passed_gates("session_open", {})
     assert RG.phase_gate_refusal(confirm, rows) == "not a walk-forward trial"
+
+
+def _with_evidence(row: dict[str, Any], where: str, ref: str) -> dict[str, Any]:
+    out = json.loads(json.dumps(row))
+    if where == "top":
+        out["evidence"] = ref
+    elif where == "config":
+        out["config"] = {**(out.get("config") or {}), "evidence": [ref]}
+    else:
+        out["results"] = {**out["results"], "confirm": ref}
+    return out
+
+
+@pytest.mark.parametrize("prefix", ["forward:", "adr0088:"])
+@pytest.mark.parametrize("where", ["top", "config", "results"])
+def test_the_phase_gate_rejects_forward_and_adr0088_evidence_on_a_row_that_otherwise_passes(prefix, where):
+    """Trading-safety requirement 2026-11-18, item 4: "phase_gate_refusal rejects `forward:*` and `adr0088:*`
+    evidence". Forward demo evidence qualifies demo arms only; the owner's phase gate never rests on it."""
+    row = trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)
+    assert RG.phase_gate_refusal(row, [row]) is None                        # the same row without it passes
+    fwd = _with_evidence(row, where, prefix + "abc123")
+    why = RG.phase_gate_refusal(fwd, [fwd])
+    assert why is not None and "never phase-gate evidence" in why
