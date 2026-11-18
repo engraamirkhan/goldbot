@@ -8,6 +8,7 @@ database beside the chain (whose schema is unchanged), as `record_survivors` doe
 
     write_candidates(path, rows) -> int     rows added (a spec already offered adds nothing)
     pending(path) -> list[CandidateArm]     offered and not yet in `arm_registrations` (ops/autodisc_register.py)
+    candidate(path, spec_hash) -> CandidateArm | None   one offered row: its explore read and power_forward
     registered(path) -> {arm_id: spec_hash} the registration journal's arms (empty before the first registration)
     record_run(path, night, payload) / runs(path)
 
@@ -66,6 +67,9 @@ class CandidateArm(FrozenRecord):
     # the ADR 0085 verdict of the forward window over the learning kill rule, reading "reported, not evidence" (quant
     # ruling (a), 2026-11-18): over that horizon no spec reaches the n_eff floor, so it never gates
     power_forward: dict[str, Any] = {}
+    # the registration bar's explore read, as in the spec's ledger result (`outcomes.explore_record`): n_events,
+    # n_bars, n_days, n_signal_days, gross_usd_mean and net_usd_mean ($/oz a trade), explore window only
+    explore: dict[str, Any] = {}
     rule: Literal["spec_rule"] = "spec_rule"
     max_open: int = 1
     forward_only: bool = True
@@ -74,6 +78,21 @@ class CandidateArm(FrozenRecord):
     def arm_params(self, prereg: str) -> dict[str, str]:
         """The arm's params once its forward reading rule exists (`arm_rules_spec.PARAM_KEYS`)."""
         return {"spec": self.spec, "spec_hash": self.spec_hash, "prereg": prereg}
+
+
+def candidate(path: Path, spec_hash: str) -> CandidateArm | None:
+    """The offered row of `spec_hash` (registered or not), with its explore read and `power_forward` (reported, not
+    evidence), for the registration side; None when it was never offered."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    try:
+        row = con.execute("SELECT payload FROM candidate_arms WHERE spec_hash = ?", (spec_hash,)).fetchone() \
+            if _has(con, "candidate_arms") else None
+    finally:
+        con.close()
+    return None if row is None else load_record_json(CandidateArm, row[0], source="candidate_arms")
 
 
 def _connect(path: Path) -> sqlite3.Connection:

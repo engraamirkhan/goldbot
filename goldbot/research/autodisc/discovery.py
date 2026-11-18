@@ -108,6 +108,8 @@ KILL_READ_DAYS = 42
 MIN_N = 50
 MIN_DAYS = 10
 FORWARD_READING = "reported, not evidence"
+# the registration bar's explore read (autodisc_register.ExploreRecord), copied from the ledger result to the offered row
+EXPLORE_FIELDS = ("n_events", "n_bars", "n_days", "n_signal_days", "gross_usd_mean", "net_usd_mean")
 NEIGHBOUR_BOUND = 24          # plateau neighbours of one candidate at most (gen_gp.neighbours: +-1 rung a leaf, exits)
 Status = Literal["ok", "budget", "over_budget", "dry_run"]
 LOCK_FILE = "discovery.lock"
@@ -773,7 +775,9 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                                           neighbours_admitted=s.neighbours_admitted,
                                           neighbours_total=s.neighbours_total,
                                           power_forward={"reading": FORWARD_READING,
-                                                         **fwd.model_dump(mode="json")}))
+                                                         **fwd.model_dump(mode="json")},
+                                          explore={k: v for k, v in (ledger.result(s.spec_hash) or {}).items()
+                                                   if k in EXPLORE_FIELDS}))
         survivors += [s.spec_hash for s in res.survivors]
         texts.append(_tf_text(tf, gate.tally(), priors) + render(res))
         last = clock() - t0

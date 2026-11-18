@@ -88,6 +88,12 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
    (`--stage explore`, demo accounts only, RiskGate unchanged); a hot-load path reads `pending()`. The run record goes
    to aux.db `discovery_runs` (migration 38) and to the ledger's `nightly_runs`; the report to
    state/autodisc/discovery-<night>.md (explore numbers only). A dry run plans and writes nothing.
+   - The registration bar's explore read (`autodisc_register.ExploreRecord`) is written in every search spec's ledger
+     result and copied to its offered row (`explore`): `n_bars`, `n_days`, `n_signal_days`, `n_events`,
+     `gross_usd_mean` (before spread, cost of record and swap) and `net_usd_mean` (after them), USD per oz a trade
+     (`outcomes.explore_record`). It is computed on the explore tensor only: a tensor reaching EXPLORE_CUTOFF, or one
+     without entry prices, writes none, so the registration fails closed. `handoff.candidate()` reads a row with its
+     `power_forward` (reported, not evidence) for the registration side.
 
 ## Consequences
 - The brain gets one more job that can fail; it fails loudly, at low priority, inside a fixed window. A killed night's

@@ -661,3 +661,63 @@ def test_a_killed_nights_unsynced_k_counts_against_the_next_nights_cap(tmp_path,
     run = DN.run_discovery(s, tmp_path, SLOT, **kw(tmp_path, backends=real_edge_backends))
     assert run.status == "over_budget" and budget_of(run).k_unsynced == 40
     assert DN.unsynced_k(tmp_path, tmp_path / "registry.jsonl") == 40
+
+
+# ------------------------------------------------------------------ the registration bar's explore record (2.4)
+REG_FIELDS = ("n_events", "n_bars", "n_days", "n_signal_days", "gross_usd_mean", "net_usd_mean")
+
+
+def priced(t, price=2000.0):
+    import dataclasses
+    return dataclasses.replace(t, entry=np.where(np.isfinite(t.ret), price, np.nan))
+
+
+def test_the_explore_record_states_counts_and_per_trade_dollars_per_oz():
+    from goldbot.research.autodisc.outcomes import explore_record
+    t = priced(make_noise_tensor(N, seed=1, timeframe="1h"))
+    mask = np.zeros(N, bool)
+    mask[::7] = True
+    side = np.ones(N, np.int8)
+    rec = explore_record(t, mask, side, 0)
+    assert rec is not None
+    ev = t.select(mask, side, 0)
+    days = t.ts_utc.normalize()
+    assert rec["n_bars"] == N and rec["n_days"] == days.nunique() and rec["n_events"] == len(ev.idx)
+    assert rec["n_signal_days"] == days[mask].nunique()
+    assert rec["net_usd_mean"] == pytest.approx(float(np.mean(ev.ret * 2000.0)))                 # after every cost
+    assert rec["gross_usd_mean"] == pytest.approx(float(np.mean((ev.ret + ev.cost) * 2000.0)))   # before any cost
+    assert rec["gross_usd_mean"] - rec["net_usd_mean"] == pytest.approx(float(np.mean(ev.cost)) * 2000.0)
+
+
+def test_the_explore_record_is_never_computed_on_a_window_past_the_explore_cutoff():
+    import dataclasses
+
+    from goldbot.research.autodisc.outcomes import explore_record
+    t = priced(make_noise_tensor(N, seed=1, timeframe="1h"))
+    late = dataclasses.replace(t, ts_utc=t.ts_utc + (pd.Timestamp("2018-06-01", tz="UTC") - t.ts_utc[0]))
+    mask = np.ones(N, bool)
+    assert explore_record(late, mask, np.ones(N, np.int8), 0) is None
+    assert explore_record(make_noise_tensor(N, seed=1, timeframe="1h"), mask, np.ones(N, np.int8), 0) is None  # unpriced
+
+
+def priced_edge_backends(settings_, timeframe):
+    b = edge_backends(settings_, timeframe)
+    return b.model_copy(update={"tensor": priced(b.tensor)})
+
+
+def test_every_offered_survivor_carries_the_registration_fields_in_its_ledger_result_and_its_row(tmp_path):
+    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None, kill_unreadable=READABLE,
+                           **kw(tmp_path, backends=priced_edge_backends, obs_reader=lambda *a, **k: TSMOM_LABELS))
+    led_path = tmp_path / NT.LEDGER_FILE["synthetic"]
+    led = SearchLedger(led_path, mode="synthetic")
+    offered = H.pending(led_path)
+    assert offered and run.candidate_arms == len(offered)
+    for c in offered:
+        res = led.result(c.spec_hash) or {}
+        assert all(res.get(k) is not None for k in REG_FIELDS), res
+        assert isinstance(res["n_bars"], int) and res["n_bars"] == N and res["n_days"] >= res["n_signal_days"] > 0
+        assert isinstance(res["gross_usd_mean"], float) and res["gross_usd_mean"] > res["net_usd_mean"]
+        assert {k: c.explore[k] for k in REG_FIELDS} == {k: res[k] for k in REG_FIELDS}
+        got = H.candidate(led_path, c.spec_hash)
+        assert got is not None and got.power_forward["reading"] == "reported, not evidence"
+        assert "started" in got.power_forward and got.explore == c.explore

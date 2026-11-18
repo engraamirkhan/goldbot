@@ -46,8 +46,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     and session, and from each discovered arm's forward labels on its spec's nodes; the G0 null uses the same priors.
   - Survivors that can run live and whose kill rule can read them by `until` (quant ruling (a): at least 50 expected
     candidates and 10 signal days in 42 days at the explore rate) are offered; the forward-window power verdict rides
-    on the row as `power_forward`, "reported, not evidence". Each judged candidate reports its admitted plateau
-    neighbours. Offered rows go to `candidate_arms` in the discovery ledger's database
+    on the row as `power_forward`, "reported, not evidence", with the registration bar's explore read (`explore`:
+    n_bars, n_days, n_signal_days, n_events, gross_usd_mean, net_usd_mean in $/oz a trade, explore window only; also
+    in the ledger result, where `autodisc_register.explore_record` reads it). Each judged candidate reports its admitted
+    plateau neighbours. Offered rows go to `candidate_arms` in the discovery ledger's database
     (`goldbot/research/autodisc/handoff.py`, `pending()` for a hot-load path); registration stays
     `ops/autodisc_register.py`. Run record -> aux.db `discovery_runs` (migration 38) and the ledger's `nightly_runs`;
     report -> state/autodisc/discovery-<night>.md. No confirm read is opened (ADR 0085's 4 batches a year).

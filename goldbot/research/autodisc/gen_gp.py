@@ -42,7 +42,7 @@ from goldbot.research.autodisc.grammar_v2 import (
 )
 from goldbot.research.autodisc.ledger import SearchLedger
 from goldbot.research.autodisc.nulls import NEG_INF, NULL_REPS, NullDistribution, exit_index, hash_sides
-from goldbot.research.autodisc.outcomes import OutcomeTensor
+from goldbot.research.autodisc.outcomes import OutcomeTensor, explore_record
 from goldbot.research.autodisc.spec import (
     MAX_DEPTH,
     ExitTemplate,
@@ -465,7 +465,9 @@ def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: Se
     """Log the spec (ledger first, design 3.1), evaluate it (the evaluator refuses an unlogged hash), record its result.
     The result carries the search fitness (`gp_fitness`, what the search ranked by; null below the floors) and its
     components (per-fold t of net and of excess R, the clustered t, time in market, floor failures), so the top specs
-    of a night can be ranked and read afterwards (first real nightly runs, 2026-10-30). `admit` (ADR 0090) reads the
+    of a night can be ranked and read afterwards (first real nightly runs, 2026-10-30), and, for a search spec on a
+    priced explore tensor, the registration bar's explore read (n_bars, n_days, n_signal_days, gross_usd_mean,
+    net_usd_mean: `outcomes.explore_record`). `admit` (ADR 0090) reads the
     entry mask BEFORE the ledger: a refused spec is never ledgered, reads no outcome and adds nothing to K."""
     h = spec_hash(s)
     mask, side = res.entries(s)
@@ -475,9 +477,12 @@ def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: Se
         return GPCandidate(spec=s, spec_hash=h, parents=parents, generation=generation,
                            evaluation=not_started(t, s, h, why))
     ledger.log_spec(s, GENERATOR, version, parents=parents, null=null)
-    e = evaluate(t, mask, side, exit_index(t, s), timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
+    ei = exit_index(t, s)
+    e = evaluate(t, mask, side, ei, timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
                  min_events=min_events)
-    ledger.record_result(h, {"n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
+    # the registration bar's explore read (ADR 0090; `outcomes.explore_record`): search specs on a priced explore tensor
+    reg = {k: v for k, v in (explore_record(t, mask, side, ei) or {}).items() if k != "n_events"} if not null else {}
+    ledger.record_result(h, {**reg, "n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
                              "excess_r": _num(e.excess_r), "excess_fitness": _num(e.excess_fitness),
                              "stress_mean_r": _num(e.stress_mean_r),
                              "floors": e.floors_passed, "generation": generation,
