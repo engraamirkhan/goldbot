@@ -179,6 +179,17 @@ def test_the_publish_script_reads_the_brains_whole_registry_and_publishes_it_wit
     assert "brain registry rows read: 1" in out.stdout
 
 
+def test_the_publish_script_skips_an_outbox_entry_that_vanished_between_the_listing_and_the_read(tmp_path):
+    script, env = _publish_repo(tmp_path, '{"ts": "late"}\n', {"0123456789abcdef.jsonl": '{"ts": "snap"}\n'})
+    ssh = Path(env["PATH"].split(":")[0]) / "ssh"                  # the listing names an entry the cat cannot find
+    ssh.write_text('#!/bin/bash\ncmd="${@: -1}"\ncmd="${cmd//sudo /}"\n'
+                   'case "$cmd" in ls*) echo fedcba9876543210.jsonl; eval "$cmd";; *) eval "$cmd";; esac\n')
+    out = subprocess.run(["/bin/bash", str(script)], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    names = {p.name for p in (tmp_path / "calls").iterdir()}
+    assert "0123456789abcdef.jsonl" in names and "fedcba9876543210.jsonl" not in names
+
+
 def test_the_publish_script_stops_when_the_brain_registry_cannot_be_read(tmp_path):
     script, env = _publish_repo(tmp_path, None, {"0123456789abcdef.jsonl": '{"ts": "snap"}\n'})
     out = subprocess.run(["/bin/bash", str(script)], env=env, capture_output=True, text=True)
@@ -193,7 +204,21 @@ def test_the_daily_check_clears_the_outbox_once_the_release_holds_its_rows_even_
     rs.sync(local, "tok")
     published = rs.read_rows(local)
     _add(local, "k", 2)                                           # written after the snapshot, not yet published
-    monkeypatch.setattr(rs, "pull_stamped", _Release(published).pull)
+    since = local.parent / rs.OUTBOX / rs.OUTBOX_SINCE
+    since.write_text("2026-11-01T00:00:00+00:00\n")
+    rel = _Release(published)
+    monkeypatch.setattr(rs, "pull_stamped", rel.pull)
+    assert rs.check_outbox(object(), local) == {"outbox": "cleared", "renewed": 1}  # type: ignore[arg-type]
+    entries = rs._outbox_files(local.parent / rs.OUTBOX)       # the newer row waits in a fresh entry
+    assert len(entries) == 1 and rs._keys(rs.read_rows(entries[0])) == rs._keys(rs.read_rows(local))
+    assert since.read_text() != "2026-11-01T00:00:00+00:00\n" and rel.reads == 1
+
+
+def test_the_daily_check_leaves_no_outbox_when_the_release_holds_every_local_row(tmp_path, monkeypatch):
+    local = _local(tmp_path, [("a", 1)])
+    _forbidden_push(monkeypatch, [])
+    rs.sync(local, "tok")
+    monkeypatch.setattr(rs, "pull_stamped", _Release(rs.read_rows(local)).pull)
     assert rs.check_outbox(object(), local) == {"outbox": "cleared"}  # type: ignore[arg-type]
     assert not rs._outbox_files(local.parent / rs.OUTBOX)
     assert not (local.parent / rs.OUTBOX / rs.OUTBOX_SINCE).exists()

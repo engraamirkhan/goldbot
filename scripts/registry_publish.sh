@@ -28,7 +28,8 @@ if ! listing=$("${SSH[@]}" "sudo ls '$OUTBOX' 2>/dev/null || true"); then
 fi
 names=$(printf '%s\n' "$listing" | grep -E '^[0-9a-f]{16}\.jsonl$' || true)
 for n in $names; do
-  "${SSH[@]}" "sudo cat '$OUTBOX/$n'" > "$work/outbox/$n"
+  # an entry the brain cleared or replaced between the ls and the cat is skipped (the registry read below covers it)
+  "${SSH[@]}" "sudo cat '$OUTBOX/$n'" > "$work/outbox/$n" || { rm -f "$work/outbox/$n"; continue; }
 done
 echo "outbox entries read from the brain: $(echo "$names" | grep -c . || true)"
 

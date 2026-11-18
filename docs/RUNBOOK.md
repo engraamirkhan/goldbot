@@ -2908,7 +2908,8 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   (reads the outbox and the brain's whole `research_registry.jsonl` over ssh, uploads with the Mac's gh), which the
   launchd agent runs daily (see "Registry publish from the Mac" below); the brain's daily `registry_outbox` job (10:20
   UTC) reads the release and clears the outbox once it holds the outbox's rows (`last_result` `{"outbox": "cleared" |
-  "waiting" | "cant_check" | "empty"}` in `state/scheduler.json`). A 403 on a GET
+  "waiting" | "cant_check" | "empty"}` in `state/scheduler.json`). A Mac asleep at 09:15 Mac local time publishes on
+  wake, which can delay the clear by one day (to the next 10:20 run). A 403 on a GET
   means the token lost `Contents: Read-only` too: sre re-issues it and stores it on the brain with
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.

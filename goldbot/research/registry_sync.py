@@ -586,9 +586,10 @@ def sync(local: Path, token: str, repo: str = REPO, *, attempts: int = ATTEMPTS)
 def check_outbox(t: Transport, local: Path) -> dict[str, Any]:
     """The brain's daily acknowledgement (scheduler job `registry_outbox`, incident 2026-11-18): read the release
     (read-only) and clear the outbox once it holds every row of the outbox's entries, so health's `feedback_loop` turns
-    ok the day the Mac publishes, not at the next weekly sync. No read while the outbox is empty. Writes nothing to
-    the release and never adds to the outbox (the weekly sync and the Mac's read of the whole registry do). A release
-    that cannot be read keeps the outbox: health then judges its age, as before."""
+    ok the day the Mac publishes, not at the next weekly sync. Local rows the cleared release still lacks (written
+    after the snapshot) go into a new entry at once, from the release already read, so their wait starts now and the
+    next Mac publish carries them. No read while the outbox is empty; writes nothing to the release. A release that
+    cannot be read keeps the outbox: health then judges its age, as before."""
     outbox = local.parent / OUTBOX
     files = _outbox_files(outbox)
     if not files:
@@ -603,6 +604,10 @@ def check_outbox(t: Transport, local: Path) -> dict[str, Any]:
         return {"outbox": "waiting", "rows": len(missing)}
     _outbox_clear(outbox)
     log.info("trial registry: the release holds every outbox row; outbox cleared")
+    rows = read_rows(local)
+    if newer := _missing(rows, remote):      # rows written after the snapshot: a new entry, its wait starts now
+        _outbox_write(outbox, rows)
+        return {"outbox": "cleared", "renewed": len(newer)}
     return {"outbox": "cleared"}
 
 
