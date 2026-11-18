@@ -58,7 +58,11 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          "session_range_break", "session_range_control",
          # the red-box week (owner directive 2026-11-15, prereg-amendment-2026-11-15-redbox-week.md): RB* and their
          # replay-only controls RBC* (goldbot.research.arm_rules_redbox)
-         "redbox_break", "redbox_control")
+         "redbox_break", "redbox_control",
+         # discovered arms on demo (prereg-amendment-2026-11-18-discovered-arms.md section 4): a learning spec_rule
+         # arm's dedicated replay-only control (`arm_rules_spec.spec_control`), demo only like SPEC_RULE
+         "spec_control")
+SPEC_RULES = (SPEC_RULE, "spec_control")    # the rules `load_arms(live_class=True)` refuses (ADR 0058)
 
 # Research-director ruling 2026-11-13 (docs/research/ruling-2026-11-13-gold-only.md; live fills n 5,333: non-gold
 # n 1,131 at -GBP 262, -0.21 R a trade; gold n 4,202 at +GBP 5, 93% of them on 1m/5m). Item 1, the `retired_rule` of
@@ -686,6 +690,67 @@ def learning_refusal(arm: Arm, root: Path | None = None, registry: Path | None =
     return None
 
 
+LEARNING_CONTROL_KIND = "learning_control"   # config.kind of a discovered arm's control NOT_TRIAL registry row
+# (resolved path) -> ((st_ino, st_mtime_ns, st_size), arm id -> its control's NOT_TRIAL config): one parse per version
+_CONTROL_CACHE: dict[str, tuple[tuple[int, int, int], dict[str, dict[str, Any]]]] = {}
+
+
+def frozen_controls(path: Path) -> dict[str, dict[str, Any]] | None:
+    """Arm id -> the config of its control's first NOT_TRIAL row (`registry.NOT_TRIAL`, config.kind
+    LEARNING_CONTROL_KIND: the arm, its `k_id`, the control id and `control_hash`, the control's frozen `arm_hash`);
+    None when the registry is not there or cannot be read. Parsed once per file version, as `_registry_rows`."""
+    from goldbot.research.registry import NOT_TRIAL
+    try:
+        if not path.is_file():
+            return None
+        key, st = str(path.resolve()), path.stat()
+        version = (st.st_ino, st.st_mtime_ns, st.st_size)
+        hit = _CONTROL_CACHE.get(key)
+        if hit is not None and hit[0] == version:
+            return hit[1]
+        lines = path.read_text().splitlines()
+    except (OSError, ValueError):
+        return None
+    out: dict[str, dict[str, Any]] = {}
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        cfg = row.get("config") if isinstance(row, dict) and row.get("status") == NOT_TRIAL else None
+        if isinstance(cfg, dict) and cfg.get("kind") == LEARNING_CONTROL_KIND and isinstance(cfg.get("arm"), str):
+            out.setdefault(cfg["arm"], cfg)                 # the first row is the registration's: it stands
+    _CONTROL_CACHE[key] = (version, out)
+    return out
+
+
+def control_freeze_refusal(arm: Arm, control: Arm, registry: Path | None = None) -> str | None:
+    """Why `control` is not the control frozen when `arm` was registered (prereg-amendment-2026-11-18-discovered-arms.md
+    section 2.2: "The control's parameters are frozen at registration: its seed, its signal rate, `per_trade_bracket`
+    and `PER_TRADE_SAME`. They are recorded in the `NOT_TRIAL` row by hash. Any change to the control's parameters
+    after registration voids the arm"), None when it is: the arm's NOT_TRIAL control row (`frozen_controls`) names
+    this control, the arm's own `k_id` and the control's `arm_hash` (which covers every param: the seed is the served
+    arm id in `params.control`). Fail closed when the registry cannot be read. Never raises."""
+    registry = REGISTRY_PATH if registry is None else registry
+    got = frozen_controls(registry)
+    if got is None:
+        return f"{LEARNING_RULE}: the registry cannot be read for {arm.id}'s frozen control (fail closed)"
+    rec = got.get(arm.id)
+    if rec is None:
+        return f"{LEARNING_RULE}: no NOT_TRIAL row records {arm.id}'s control"
+    try:
+        k_id = Learning.model_validate(arm.learning).k_id
+    except ValidationError:
+        return f"{LEARNING_RULE}: learning block invalid"
+    if rec.get("k_id") != k_id or rec.get("control") != control.id:
+        return f"{LEARNING_RULE}: the NOT_TRIAL row of {arm.id} names k_id {rec.get('k_id')} and control " \
+               f"{rec.get('control')}, not {k_id} and {control.id}"
+    if rec.get("control_hash") != arm_hash(control):
+        return (f"{LEARNING_RULE}: control {control.id} changed after registration (frozen {rec.get('control_hash')}, "
+                f"now {arm_hash(control)}): {arm.id} is void, its K row stays counted")
+    return None
+
+
 def _window(text: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     m = _WINDOW.match(text)
     if m is None:
@@ -1004,6 +1069,9 @@ class Arm(FrozenRecord):
                 # ADR 0058 phase 4: a spec the engine cannot run exactly as its research read is refused at load
                 from goldbot.research.arm_rules_spec import check as check_spec
                 check_spec(self)
+            if self.rule == "spec_control":
+                from goldbot.research.arm_rules_spec import check_control
+                check_control(self)
         except ValueError as exc:
             raise ValueError(f"{self.id}: {exc}") from exc
         return self
@@ -1104,7 +1172,7 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
         out = [a for a in out if a.id not in rejected]
     cross = learning_cross_refusals(out)
     out = [a.model_copy(update={"entry_refused": cross[a.id]}) if a.id in cross else a for a in out]
-    if live_class and (spec := sorted(a.id for a in out if a.rule == SPEC_RULE)):
+    if live_class and (spec := sorted(a.id for a in out if a.rule in SPEC_RULES)):
         raise ValueError(f"spec_rule arms {spec} load on demo accounts only (ADR 0058): refused for a live-class account")
     ids = [a.id for a in out]
     dup = sorted({i for i in ids if ids.count(i) > 1})

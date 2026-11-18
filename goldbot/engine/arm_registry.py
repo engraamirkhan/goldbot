@@ -36,6 +36,26 @@ The rules, as built here (trading-safety requirements 2026-11-18 and the review 
 * Caps and RiskGate inherited: a loaded arm's per-trade cap joins the gate's `exploration_arms` (`overlay`, applied
   again after every limits refresh); pots, slots, budgets, the kill switch, halts, propose-only and drift bind it as
   any arm. Loading only ever adds an arm: an open position, its stop, target and hold are never touched.
+
+Discovered arms on demo, the learning class (docs/research/prereg-amendment-2026-11-18-discovered-arms.md): besides
+the strategy row above, the registry carries a `role: learning` spec_rule row and its dedicated replay-only control
+(`role: control`, rule `spec_control`), written together by `autodisc-register --to-db --learning`. Only these extra
+fields pass, each with the value the amendment fixes (`_learning_refusal`, `arm_rules_spec.check_learning`): the
+`learning` block (prereg the amendment, `loss_cap_gbp` 60, `until` = min(since + 42 d, 2027-03-31), the control
+`<id>C`) and the per-trade bracket params (`per_trade_bracket` "spec_exit:<hash12>", the spec's `hold_bars`,
+`min_stop_usd` 1, `max_stop_usd` at most the row's per-trade cap, `end_utc`); size, growth, adds and exit fields stay
+forbidden. Across rows (`_pair_refusals`): the arm loads only with its control loaded on this account, matched
+(`control_match_refusal`: "control_match_refusal passes only when both sides carry the key") and the control frozen
+at registration (`control_freeze_refusal`: "Any change to the control's parameters after registration voids the arm.
+The arm's entries are refused ... and it retires. Its K row stays counted", journalled CONTROL_CHANGED); at most
+MAX_DISCOVERED not retired at once ("A sixth registration is refused until one retires"). The learning block is the
+engine's learning class unchanged (`exploration_learning`: K row resolved, 300-fill read, loss cap, `until`, minimum
+lot). The control never places an order: every candidate is skipped replay_only and `entry_refusal` refuses it
+anyway. At the entry, a learning arm's bracket is recomputed from the bars closed at its decision
+(`bracket_refusal`): sent later than LATENCY_S after the decision, or off the recompute by more than 1e-9, the
+candidate is void, not sent, and the arm's entries are held (BRACKET_VOID). That hold, and a control change's, is
+written as the broker's retirement (`_hold_durably`, `exploration_arm_status`), so no restart re-enables the arm; the
+nightly lifecycle recomputes with the same function (`decision_bracket`).
 """
 from __future__ import annotations
 
@@ -53,8 +73,9 @@ from goldbot.db import Database
 from goldbot.instruments import GOLD
 
 if TYPE_CHECKING:
-    from goldbot.engine.exploration import Arm, Exploration
+    from goldbot.engine.exploration import Arm, Exploration, Pending
     from goldbot.engine.runner import Engine
+    from goldbot.research.arm_rules_spec import Bracket
     from goldbot.risk import RiskLimits
 
 log = logging.getLogger(__name__)
@@ -76,6 +97,13 @@ STALE = "arm_registry_stale"
 UNREAD = "arm_registry_unread"
 NOT_DEMO = "arm_registry_not_demo"
 UNVERIFIED = "registry_unverified"  # `_send`'s refusal of a hot-loaded arm while the registry is not verified
+CONTROL_CHANGED = "arm_registry_control_changed"    # a learning arm's control is not the one frozen at registration
+BRACKET_VOID = "arm_registry_bracket_void"          # a learning arm's bracket failed its recompute at the entry
+# the discovered learning class (module docstring): the fields a learning or control row may carry beyond a strategy
+# row's, the most running at once (amendment 2.3) and a replay-only control's fixed share of its pot
+LEARNING_FIELDS = frozenset({"learning", "hold_bars", "min_stop_usd", "max_stop_usd"})
+MAX_DISCOVERED = 5
+CONTROL_SHARE = 0.01
 
 
 class RegistryRow(FrozenRecord):
@@ -137,22 +165,37 @@ def append(state_dir: str, *, account_id: str, row: dict[str, Any], style: str, 
            now_ns: int | None = None) -> RegistryRow:
     """Append one row at the chain's tip in one BEGIN IMMEDIATE transaction (two writers cannot fork it). Refused
     (ValueError) when the chain does not verify or the account already registers the arm."""
-    text = json.dumps(row, sort_keys=True)
-    arm_id = str(row.get("id"))
+    return append_many(state_dir, account_id=account_id, entries=[(row, style, max_loss)], source=source,
+                       now_ns=now_ns)[0]
+
+
+def append_many(state_dir: str, *, account_id: str, entries: list[tuple[dict[str, Any], str, float]], source: str,
+                now_ns: int | None = None) -> list[RegistryRow]:
+    """`append` of every (row, style, max_loss) in `entries`, in order, in ONE transaction: all are written or none
+    (a discovered learning arm and its control, amendment 2.2). Refused (ValueError) as `append`."""
     ns = int(now_ns if now_ns is not None else time.time_ns())
+    out: list[RegistryRow] = []
     with Database.open(state_dir, "aux").write() as conn:
         rows = _rows(conn.execute(_SELECT).fetchall())
         if (why := chain_break(rows)) is not None:
             raise ValueError(f"arm_registry chain broken ({why}): nothing appended")
-        if any(r.account_id == account_id and r.arm_id == arm_id for r in rows):
-            raise ValueError(f"{arm_id} is registered on {account_id} already")
-        seq, prev = len(rows) + 1, rows[-1].digest if rows else GENESIS
-        d = digest(prev, seq, account_id, arm_id, text, style, float(max_loss), source, ns)
-        conn.execute("INSERT INTO arm_registry (seq, account_id, arm_id, row, style, max_loss, source, recorded_ns, "
-                     "prev_digest, digest) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                     (seq, account_id, arm_id, text, style, float(max_loss), source, ns, prev, d))
-    return RegistryRow(seq=seq, account_id=account_id, arm_id=arm_id, row=text, style=style, max_loss=float(max_loss),
-                       source=source, recorded_ns=ns, prev_digest=prev, digest=d)
+        taken = {r.arm_id for r in rows if r.account_id == account_id}
+        prev = rows[-1].digest if rows else GENESIS
+        for row, style, max_loss in entries:
+            text, arm_id = json.dumps(row, sort_keys=True), str(row.get("id"))
+            if arm_id in taken:
+                raise ValueError(f"{arm_id} is registered on {account_id} already")
+            taken.add(arm_id)
+            seq = len(rows) + len(out) + 1
+            d = digest(prev, seq, account_id, arm_id, text, style, float(max_loss), source, ns)
+            conn.execute("INSERT INTO arm_registry (seq, account_id, arm_id, row, style, max_loss, source, "
+                         "recorded_ns, prev_digest, digest) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                         (seq, account_id, arm_id, text, style, float(max_loss), source, ns, prev, d))
+            out.append(RegistryRow(seq=seq, account_id=account_id, arm_id=arm_id, row=text, style=style,
+                                   max_loss=float(max_loss), source=source, recorded_ns=ns, prev_digest=prev,
+                                   digest=d))
+            prev = d
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- the verified tip
@@ -221,18 +264,24 @@ def refusal(eng: Engine, ex: Exploration, r: RegistryRow) -> tuple[Arm | None, s
         return None, "row unreadable (not JSON)"
     if not isinstance(row, dict):
         return None, "row is not an object"
+    from goldbot.research.arm_rules_spec import CONTROL_KEYS, LEARNING_KEYS, SPEC_CONTROL
     raw = row.get("params")
     params: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    if bad := sorted((set(row) | set(params)) & FORBIDDEN):
+    role = row.get("role", "strategy")
+    if role not in ("strategy", "learning", "control"):
+        return None, f"role {role!r} refused (strategy, or a discovered learning arm and its control)"
+    forbidden = FORBIDDEN if role == "strategy" else FORBIDDEN - LEARNING_FIELDS
+    if bad := sorted((set(row) | set(params)) & forbidden):
         return None, f"forbidden field {', '.join(bad)} (size, growth, adds, purpose, exit and bracket fields)"
-    if extra := sorted(set(row) - ROW_KEYS):
+    if extra := sorted(set(row) - ROW_KEYS - ({"learning"} if role == "learning" else set())):
         return None, f"field {', '.join(extra)} is not a frozen arm row's"
-    if extra := sorted(set(params) - PARAM_KEYS):
-        return None, f"param {', '.join(extra)} is not a spec_rule param (spec, spec_hash, prereg only)"
-    if row.get("rule") != SPEC_RULE:
-        return None, "spec_rule arms only"
-    if row.get("role", "strategy") != "strategy":
-        return None, f"role {row.get('role')!r} refused (strategy only)"
+    allowed = {"strategy": PARAM_KEYS, "learning": PARAM_KEYS | LEARNING_KEYS, "control": CONTROL_KEYS}[role]
+    if extra := sorted(set(params) - allowed):
+        return None, f"param {', '.join(extra)} is not a {role} spec arm's param ({', '.join(sorted(allowed))} only)"
+    if row.get("rule") != (SPEC_CONTROL if role == "control" else SPEC_RULE):
+        return None, "spec_rule arms only (a spec_control row as a learning arm's control)"
+    if role != "strategy" and (why := _learning_refusal(row, params, r)) is not None:
+        return None, why
     if row.get("max_open", 1) != 1:
         return None, "max_open must be 1"
     if str(row.get("id")) != r.arm_id:
@@ -241,7 +290,7 @@ def refusal(eng: Engine, ex: Exploration, r: RegistryRow) -> tuple[Arm | None, s
         spec = spec_arm_row(row)
     except ValueError as exc:
         return None, f"invalid row: {str(exc).splitlines()[0][:200]}"
-    arm = Arm(spec=spec, style=r.style)
+    arm = Arm(spec=spec, style=r.style, control_share=CONTROL_SHARE if role == "control" else None)
     if arm.instrument != GOLD:
         return None, "hot-loaded arms run on gold's book only"
     if arm.tf not in set(eng.cfg.timeframes_live):
@@ -258,6 +307,82 @@ def refusal(eng: Engine, ex: Exploration, r: RegistryRow) -> tuple[Arm | None, s
     if not 0 < r.max_loss <= top + 1e-9:
         return None, f"max_loss {r.max_loss:g} is outside the {r.style} caps (0, {top:g}]"
     return arm, None
+
+
+def _learning_refusal(row: dict[str, Any], params: dict[str, Any], r: RegistryRow) -> str | None:
+    """A discovered learning row or its control, beyond `arm_rules_spec.check_learning` (run by the row's
+    validation): the learning block exactly as the amendment fixes it (section 3), the control named `<arm id>C` and
+    serving that arm alone, and no stop band wider than the row's per-trade cap."""
+    from goldbot.research.arm_rules_spec import (
+        CONTROL_SUFFIX,
+        DISCOVERED_PREREG,
+        LOSS_CAP_GBP,
+        learning_until,
+    )
+    top = params.get("max_stop_usd")
+    if isinstance(top, int | float) and not isinstance(top, bool) and top > r.max_loss + 1e-9:
+        return f"max_stop_usd {top:g} is above the row's per-trade cap {r.max_loss:g}"
+    if row.get("role") == "control":
+        served = str(params.get("control", "")).removeprefix("learning:")
+        if r.arm_id != served + CONTROL_SUFFIX:
+            return f"control {r.arm_id} must be its learning arm's id + {CONTROL_SUFFIX!r} ({served!r} served)"
+        return None
+    block = row.get("learning")
+    if not isinstance(block, dict):
+        return "a learning row carries its learning block"
+    if not str(params.get("prereg", "")).startswith(DISCOVERED_PREREG + "#") or block.get("prereg") != DISCOVERED_PREREG:
+        return f"a discovered learning arm registers under {DISCOVERED_PREREG} only"
+    if block.get("loss_cap_gbp") != LOSS_CAP_GBP:
+        return f"loss_cap_gbp must be {LOSS_CAP_GBP:g} (amendment section 3)"
+    if block.get("control") != r.arm_id + CONTROL_SUFFIX:
+        return f"its control must be {r.arm_id + CONTROL_SUFFIX}"
+    try:
+        until = learning_until(pd.Timestamp(str(block.get("since")), tz="UTC"))
+    except ValueError:
+        return "learning.since is not a day"
+    if block.get("until") != until or params.get("end_utc") != f"{until}T22:00:00Z":
+        return f"until must be min(since + 42 days, the sunset) = {until}, end_utc {until}T22:00:00Z"
+    return None
+
+
+def _pair_refusals(eng: Engine, ex: Exploration, judged: dict[str, Arm], order: list[str]) -> dict[str, str]:
+    """Across rows, for the discovered learning arms among `judged` (arm id -> the arm its row gives now, every row
+    that passed `refusal`), in registry order: its control judged too, matched and frozen, and at most MAX_DISCOVERED
+    loaded and not retired (the ones loaded already counted first). Arm id -> why, for the arms refused."""
+    from goldbot.research.arms import Learning, control_freeze_refusal, control_match_refusal
+    out: dict[str, str] = {}
+    learning = [a for a in order if a in judged and judged[a].spec.role == "learning"]
+    for a in learning:
+        arm = judged[a]
+        try:
+            ctl_id = Learning.model_validate(arm.spec.learning).control
+        except ValueError:
+            out[a] = "learning block invalid"
+            continue
+        ctl = judged.get(ctl_id)
+        if ctl is None:
+            out[a] = f"its control {ctl_id} is not loaded on {eng.cfg.account_id}"
+        elif (why := control_match_refusal(arm.spec, ctl.spec)) is not None:
+            out[a] = why
+        elif (why := control_freeze_refusal(arm.spec, ctl.spec)) is not None:
+            out[a] = why
+            key = a + "#" + CONTROL_CHANGED
+            if "changed after registration" in why and ex.hot_journalled.get(key) != why:
+                ex.hot_journalled[key] = why
+                log.error("hot-loaded arm %s: %s", a, why)
+                # the amendment: "its reads are void from the change onward": this is the change's journal stamp
+                eng.decisions.append({"ts": time.time(), "agent": "explore:" + a, "action": CONTROL_CHANGED,
+                                      "arm": a, "control": ctl_id, "why": why})
+                _hold_durably(ex, a, pd.Timestamp.now("UTC"), f"control {ctl_id} changed after registration")
+    running = sum(1 for a in learning if a not in out and a in ex.hot_caps and a not in ex.retired)
+    for a in learning:
+        if a in out or a in ex.hot_caps or a in ex.retired:
+            continue
+        if running >= MAX_DISCOVERED:
+            out[a] = f"at most {MAX_DISCOVERED} concurrent discovered arms (amendment 2.3); loads when one retires"
+        else:
+            running += 1
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- the engine side
@@ -351,6 +476,23 @@ def _hold(eng: Engine, ex: Exploration, arm_id: str, why: str) -> None:
                           "why": why, "kept": True})
 
 
+def _hold_durably(ex: Exploration, arm_id: str, now: pd.Timestamp, why: str) -> None:
+    """Trading-safety note on 751cf7ab: the hold of a discovered learning arm after a void bracket or a control change
+    outlives the process. Written as the broker's retirement (aux.db `exploration_arm_status`, INSERT OR IGNORE:
+    never re-dated), which every start and every minute reads (`exploration.refresh_retired`): no restart re-enables
+    the arm, and as for any retirement its open positions keep every exit. A failed write leaves this process's hold
+    standing and is logged."""
+    try:
+        with ex.db.write() as conn:
+            conn.execute("INSERT OR IGNORE INTO exploration_arm_status (broker, arm_id, status, day, rule, recorded_ns) "
+                         "VALUES (?, ?, 'retired', ?, ?, ?)",
+                         (ex.broker, arm_id, f"{pd.Timestamp(now):%Y-%m-%d}", f"arm registry: {why}",
+                          int(pd.Timestamp(now).value)))
+    except Exception as exc:                       # noqa: BLE001 - the in-process hold stands
+        log.error("hot-loaded arm %s: the durable hold could not be written (%s); held in this process only",
+                  arm_id, type(exc).__name__)
+
+
 def _refresh(eng: Engine, ex: Exploration) -> None:
     if eng.cfg.instrument != GOLD:
         return
@@ -381,12 +523,17 @@ def _refresh(eng: Engine, ex: Exploration) -> None:
         return
     accepted: list[tuple[Arm, float]] = []
     refused: dict[str, str] = {}
+    judged: dict[str, Arm] = {}
     for r in mine.values():
         arm, why = refusal(eng, ex, r)
         if arm is None:
             refused[r.arm_id] = why or "refused"
-        elif r.arm_id not in ex.hot_caps:
-            accepted.append((arm, r.max_loss))
+        else:
+            judged[r.arm_id] = arm
+    refused |= _pair_refusals(eng, ex, judged, [r.arm_id for r in rows if r.arm_id in mine])
+    for a, arm in judged.items():
+        if a not in refused and a not in ex.hot_caps:
+            accepted.append((arm, mine[a].max_loss))
     # the load is whole: applied only now that every row was read and judged
     for arm, cap in accepted:
         ex.hot_caps[arm.arm_id] = cap
@@ -426,6 +573,10 @@ def _install(ex: Exploration, arm: Arm) -> None:
     ex.cfg = ex.cfg.model_copy(update={"arms": tuple(a for a in ex.cfg.arms if a.arm_id != arm.arm_id) + (arm,)})
     if needs_context(arm.spec):
         ex.needs_context = ex.needs_context | {arm.arm_id}
+    from goldbot.research.arms import dedicated_control_of
+    if arm.spec.role == "learning" or dedicated_control_of(arm.spec):
+        # ADR 0061 amendment 2026-11-02: its entries wait on the learning read (`learning_unread` until one succeeds)
+        ex.learning_group = getattr(ex, "learning_group", frozenset()) | {arm.arm_id}
 
 
 def _add(eng: Engine, ex: Exploration, arm: Arm) -> None:
@@ -443,16 +594,61 @@ def _add(eng: Engine, ex: Exploration, arm: Arm) -> None:
                           "entry_refused": arm.spec.entry_refused or None})
 
 
-def entry_refusal(eng: Engine, ex: Exploration, arm_id: str) -> str | None:
-    """`exploration._send`'s check for a hot-loaded arm at its signal: not held from the start, the registry verified
-    and the account demo now (`risk.gate.is_demo`). None for every other arm."""
+def entry_refusal(eng: Engine, ex: Exploration, arm_id: str, s: Pending | None = None,
+                  now: pd.Timestamp | None = None) -> str | None:
+    """`exploration._send`'s check for a hot-loaded arm at its signal: never a replay-only control (REPLAY_ONLY), not
+    held from the start, the registry verified, the account demo now (`risk.gate.is_demo`) and, for a discovered
+    learning arm's signal `s` at `now`, its bracket standing (`bracket_refusal`; a void one holds the arm's entries
+    for good, journalled BRACKET_VOID). None for every other arm."""
+    from goldbot.research.arm_rules_spec import BRACKET_PREFIX, REPLAY_ONLY, SPEC_CONTROL
+    from goldbot.research.arms import PER_TRADE_KEY
     if arm_id not in getattr(ex, "hot_known", frozenset()):
         return None
+    arm = ex.arms.get(arm_id)
+    if arm is not None and arm.spec.rule == SPEC_CONTROL:
+        return REPLAY_ONLY                     # the amendment: "No control places an order"
     if arm_id in ex.start_held or not ex.registry_ok:
         return UNVERIFIED
     if not demo_now(eng):
         return "not_demo"
+    if arm is not None and s is not None and now is not None \
+            and str(arm.spec.params.get(PER_TRADE_KEY, "")).startswith(BRACKET_PREFIX):
+        if (why := bracket_refusal(eng, arm, s, now)) is not None:
+            eng.decisions.append({"ts": now.isoformat(), "agent": "explore:" + arm_id, "action": BRACKET_VOID,
+                                  "arm": arm_id, "bar": s.bar_ts.isoformat(), "why": why})
+            _hold(eng, ex, arm_id, f"bracket void at the entry ({why}): entries held")
+            _hold_durably(ex, arm_id, now, f"bracket void at the entry ({why})")
+            return "bracket_void"
     return None
+
+
+def bracket_refusal(eng: Engine, arm: Arm, s: Pending, now: pd.Timestamp) -> str | None:
+    """Why a discovered learning arm's signal `s` may not be sent at `now` (amendment section 4; quant ruling
+    2026-11-18 Q6), None when it may: sent within LATENCY_S of its decision (the bar close, 1h and 4h only), with the
+    stop, target and hold it carries (what the candidate's INSERT records) equal, within 1e-9, to
+    `arm_rules_spec.bracket(spec, bars closed <= decision, t)` recomputed now from the same bars the rule read."""
+    from goldbot.config import tf_seconds
+    from goldbot.research.arm_rules_spec import LATENCY_S, Bracket, bracket_mismatch
+    decision = pd.Timestamp(s.bar_ts)
+    if (late := (pd.Timestamp(now) - decision).total_seconds()) > LATENCY_S:
+        return f"bracket_late: {late:.1f} s after the decision (> {LATENCY_S} s)"
+    got = decision_bracket(eng.bars_1m, arm.spec, decision)
+    if got is None:
+        return "bracket_unreadable: no bars closed at the decision"
+    stored = Bracket(stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf))
+    return bracket_mismatch(stored, got)
+
+
+def decision_bracket(bars_1m: pd.DataFrame, spec: Any, decision: pd.Timestamp) -> Bracket | None:
+    """THE recompute, for the engine at the entry and the nightly lifecycle read alike: `arm_rules_spec.bracket` on
+    the arm's own decision bars from the 1m bars closed at `decision` (`exploration.arm_bars`: the arm's lookback, so
+    Wilder ATR starts where the engine's rule read starts; another window gives another ATR and a false void). None
+    when no bar has closed by then."""
+    from goldbot.engine.exploration import arm_bars
+    from goldbot.research.arm_rules_spec import bracket, spec_of
+    complete = bars_1m[bars_1m["visible_at"] <= decision] if not bars_1m.empty else bars_1m
+    got = arm_bars(complete, spec, decision) if not complete.empty else None
+    return None if got is None else bracket(spec_of(spec), got[0], decision)
 
 
 def orphan_held(ex: Exploration, opened: pd.Timestamp | None, at: pd.Timestamp) -> bool:
@@ -492,7 +688,9 @@ def overlay(eng: Engine, limits: RiskLimits, loading: Exploration | None = None)
     return limits.model_copy(update={"exploration_arms": {**limits.exploration_arms, **add}})
 
 
-__all__ = ["CHAIN", "FORBIDDEN", "GENESIS", "HEALTH_FAIL_S", "LOADED", "REFUSED", "STALE", "STALE_CADENCES",
-           "UNVERIFIED", "RegistryRow", "Seen", "append", "chain_break", "ceiling", "demo_now", "digest",
+__all__ = ["BRACKET_VOID", "CHAIN", "CONTROL_CHANGED", "CONTROL_SHARE", "FORBIDDEN", "GENESIS", "HEALTH_FAIL_S",
+           "LEARNING_FIELDS", "LOADED", "MAX_DISCOVERED", "REFUSED", "STALE", "STALE_CADENCES",
+           "UNVERIFIED", "RegistryRow", "Seen", "append", "append_many", "bracket_refusal", "chain_break", "ceiling",
+           "decision_bracket", "demo_now", "digest",
            "entry_refusal", "init", "orphan_held", "overlay", "published", "read_rows", "refresh", "refusal",
            "remember", "seen"]

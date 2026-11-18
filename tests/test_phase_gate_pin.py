@@ -195,3 +195,39 @@ def test_the_phase_gate_rejects_forward_and_adr0088_evidence_on_a_row_that_other
     fwd = _with_evidence(row, where, prefix + "abc123")
     why = RG.phase_gate_refusal(fwd, [fwd])
     assert why is not None and "never phase-gate evidence" in why
+
+
+def _discovered(dsr: float = 0.97, k: int = 1) -> dict[str, Any]:
+    """A walk-forward row of a discovered spec (family `autodisc`, its config the spec and hash) that passed its gates
+    with DSR `dsr` on `k` trials."""
+    row = trial_row(7, dsr=dsr, mean_ret=0.002, passed=True)
+    row["family"] = "autodisc"
+    row["config"] = {"spec": "{}", "spec_hash": "a" * 64, "timeframe": "1h"}
+    row["results"]["model_filtered"]["dsr_inputs"] = dsr_inputs(dsr, k=k)
+    return row
+
+
+def test_phase_gate_reads_discovery_k_for_discovered_specs(tmp_path):
+    """T7 (quant-reviewer ruling 2026-11-18, Q1): "The phase gate reads `n_trials_discovery` for any spec whose
+    origin is discovery". A tightening only: every other spec stays at `n_trials_effective` (the golden above)."""
+    row = _discovered()
+    other = trial_row(7, dsr=0.97, mean_ret=0.002, passed=True)
+    assert RG.discovery_origin(row) and not RG.discovery_origin(other)
+    assert RG.phase_gate_k(row, [row], k_discovery=900) == 900
+    assert RG.phase_gate_k(other, [other], k_discovery=900) == RG.n_trials_effective([other])
+    why = RG.phase_gate_refusal(row, [row])                              # the discovery K unread: fail closed
+    assert why is not None and "n_trials_discovery" in why
+    assert RG.phase_gate_refusal(row, [row], k_discovery=1) is None
+    why = RG.phase_gate_refusal(row, [row], k_discovery=20_000)          # the search's K sinks its DSR
+    assert why is not None and "n_trials_discovery" in why
+    assert RG.phase_gate_refusal(other, [other], k_discovery=20_000) is None
+
+    # gate 1 reads the registry's n_trials_discovery for a discovered best trial
+    state, trials = full_state(tmp_path)
+    write_rows(trials, [row])
+    RG.TrialRegistry(trials).record_discovery_batch(k_contrib=20_000, generator="g", ledger_head=(1, "x"))
+    rep = report(state, trials)
+    g1 = next(g for g in rep.gates if g.gate == "backtest_to_paper")
+    dsr_item = next(i for i in g1.items if i.name == "dsr")
+    assert not dsr_item.met and "n_trials_discovery" in dsr_item.evidence and not g1.met
+    assert not RG.TrialRegistry(trials).passed_gates("autodisc", row["config"])     # the tournament's check too

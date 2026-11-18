@@ -72,8 +72,10 @@ from goldbot.research.metrics import max_drawdown
 from goldbot.research.registry import (
     TrialRegistry,
     costs_recorded,
+    discovery_origin,
     latest_evaluated,
     n_trials_effective,
+    phase_gate_k,
     phase_gate_refusal,
     quarter_of,
     row_hash,
@@ -412,6 +414,14 @@ def _trial_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _discovery_k(reg_path: Path) -> int | None:
+    """The registry's `n_trials_discovery` (its K plus every discovery batch's k_contrib), None when unreadable."""
+    try:
+        return TrialRegistry(reg_path).n_trials_discovery if Path(reg_path).exists() else None
+    except (OSError, ValueError):
+        return None
+
+
 def best_backtest_trial(rows: list[dict[str, Any]], *, k: int | None = None) -> dict[str, Any] | None:
     """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR recomputed on the
     registry's trial count today (`current_dsr`; a row that cannot be recomputed ranks last), among rows that record
@@ -608,7 +618,10 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     # counts for a promotion (registry.phase_gate_refusal: gates passed with costs recorded, the latest rerun of its
     # config, and a discovery-derived config's holdout passed): a trial that fails that is no reference, so the
     # comparator can never silently switch to an unrelated trial and pass (review of 978c667; quant review 2026-10-16)
-    refusal = phase_gate_refusal(best, rows) if best is not None else "no evaluated trial"
+    # quant-reviewer ruling 2026-11-18 Q1: a discovered spec's DSR is read at the registry's n_trials_discovery (a
+    # tightening only; every other spec keeps n_trials_effective, tests/test_phase_gate_pin.py)
+    k_disc = _discovery_k(reg_path) if best is not None and discovery_origin(best) else None
+    refusal = phase_gate_refusal(best, rows, k_discovery=k_disc) if best is not None else "no evaluated trial"
     best_ok = refusal is None
     bt_mean = float(mf["mean_ret"]) if best_ok and mf.get("mean_ret") is not None else None
     bt_dd = float(mf["max_dd"]) if best_ok and mf.get("max_dd") is not None else None
@@ -638,7 +651,10 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     gates.append(_status(0, passed, items, when))
 
     # 1 backtest -> paper: from the trial registry and the measured spread table; the DSR recomputed on today's count
-    dsr, dsr_why = current_dsr(best, k_now)
+    k_gate = phase_gate_k(best, rows, k_disc) if best is not None else k_now
+    k_name = f"n_trials_discovery {k_gate}" if best is not None and discovery_origin(best) \
+        else f"the registry's {k_now} trials"
+    dsr, dsr_why = current_dsr(best, k_gate) if k_gate is not None else (None, "n_trials_discovery unread")
     stored = mf.get("dsr")
     gchecks = {c.get("name"): c for c in (((best or {}).get("results") or {}).get("gates") or {}).get("checks", [])}
     years = gchecks.get("positive_years") or {}
@@ -669,7 +685,7 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                  need=f"CPCV evidence this quarter with PBO <= {cpcv.PBO_FRAGILE:.0%} and at most half the paths "
                       "negative (ADR 0003, ADR 0083 amendment; read only, never run by the gate)"),
         GateItem(name="dsr", met=dsr is not None and dsr >= cfg.backtest_min_dsr,
-                 evidence=(f"{_fmt(dsr, '.3f')} at {trial}, recomputed on the registry's {k_now} trials"
+                 evidence=(f"{_fmt(dsr, '.3f')} at {trial}, recomputed on {k_name}"
                            if dsr is not None else f"n/a at {trial}: {dsr_why}")
                  + (f" ({float(stored):.3f} stored at run time)" if stored is not None else ""),
                  need=f">= {cfg.backtest_min_dsr} on the true trial count", threshold="backtest_min_dsr"),
