@@ -215,6 +215,7 @@ scheduler:
   swap_reconcile:   { kind: daily,   at: "23:45", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 175 (goldbot/ops/swap_reconcile.py): weekend crypto holds' broker swap vs the seven-night projection -> aux.db, health swap_reconcile; no weekend hold, nothing written
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
   long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
+  discovery_nightly: { kind: daily, at: "01:00", max_late_hours: 1.5 }   # ADR 0090 (goldbot/research/autodisc/discovery.py): bounded G2 search in a niced child, 01:00 to at most 03:10 (research.discovery budget_s + kill_grace_s), clear of the 03:40 journal_compact; never caught up into London
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -339,7 +340,32 @@ research:
     max_candidates: 20               # best candidates whose grid neighbours (plateau, counted in K) and shift null are run
     seed: 0                          # base seed; each night adds its day number, so nights search new ground
     cost_table: null                 # measured cost table JSON (costs_measured.json); null: the settings priors
-  har_abstention:                    # N-3 (prereg-2026-11-07-n3-har.md): learning arms and their controls refused on predicted
+  discovery:                         # ADR 0090: the brain's nightly discovery (job discovery_nightly, research/autodisc/discovery.py).
+                                     #   G2 on 1h/4h/1d, explore 2010-2017 only (load_research_bars refuses the holdout), every
+                                     #   spec power-gated (ADR 0085) before it is ledgered, the night's planned K inside the
+                                     #   quarter's trial budget; survivors -> candidate arm rows for the registration hand-off
+    enabled: false                   # on per host in settings.local.yaml together with bars_path (RUNBOOK); on without bars fails
+    bars_path: null                  # research 1m bid/ask parquet (local only, never committed)
+    timeframes: [1h, 4h, 1d]         # why-fail audit: no gross edge in single rules at 1m-15m (15m is not accepted here)
+    population: 32                   # G2 population x (generations + 1) specs a timeframe at most, each power-gated, then
+    generations: 8                   #   ledgered (state/discovery_real.db) and counted in K
+    null_reps: 20                    # G0 reruns of the whole search, the admission rule and the priors included
+    max_candidates: 20               # best candidates whose plateau neighbours (power-gated, counted in K) and shift null run
+    seed: 0                          # base seed; each night adds its day number
+    budget_s: 5400                   # wall clock: no timeframe starts once spent, or when the last one took longer than what is left
+    kill_grace_s: 300                # the child is killed at budget_s + this (a killed night's K is counted by the next sync)
+    nice: 15                         # CPU priority of the child: below the engines on the shared 4-core ARM brain (10..19)
+    memory_mb: 4096                  # data-segment cap of the child (RLIMIT_DATA, Linux; ~1.5 GB RSS measured on the 2010-17 bars); one process, BLAS at one thread
+    confirm_configs_per_batch: 3     # power card (XAUUSD alone): its fresh gate is TEST-OLD at Holm rank 1 of this many configs at the ledger year's alpha_j
+    test_old_years: 3.92             # TEST-OLD 2006-02..2009 (only shorter)
+    cost_of_record: config/cost_of_record_v3.yaml   # ADR 0084 v3: the broker's dearest charged cell, on top of the bar spread
+    cost_broker: icm
+    cards_dir: config/research/candidates   # catalogue cards: power verdict only (no K, no run); started ones await a prereg
+    prior_n0: 50                     # grammar-node priors from demo labels + discovered arms' forward results: shrunk mean R
+    prior_gain: 2.0                  #   = sum R / (n + prior_n0); weight = exp(gain x shrunk), clipped to
+    prior_min: 0.5                   #   [prior_min, prior_max]; they steer sampling only, every evaluated spec still counts in K
+    prior_max: 2.0
+  har_abstention:                   # N-3 (prereg-2026-11-07-n3-har.md): learning arms and their controls refused on predicted
                                      #   bottom-quintile range days (refusals_novel.har_low_range); job `har_days`
     enabled: false                   # false: the job writes an `off` row and the engine refuses nothing from it (kill path).
                                      #   Ships off (quant R7): on only after the K row and the Duka/ICM overlap check

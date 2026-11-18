@@ -104,6 +104,12 @@
                     the quarter's trial budget used (K), and a reliability scorecard (scheduler_jobs, health_alerts) ->
                     aux.db monthly_reviews, one Telegram message, one GitHub issue labelled review-monthly (no login,
                     host or balance). Reads only: never a broker, an order, a halt or a setting.
+* discovery_nightly daily at 01:00 (ADR 0090, research/autodisc/discovery.py), only with research.discovery.enabled
+                    and bars_path: a bounded G2 search on 1h/4h/1d, explore window only, every spec power-gated (ADR
+                    0085) before it counts in K, the night's planned K inside the quarter's trial budget, steered by
+                    priors from demo labels and discovered arms' forward results; in a child at nice 15 under a memory
+                    cap, killed at its budget. Survivors -> candidate arm rows (the registration hand-off); the run
+                    record -> aux.db discovery_runs. No arm, no config, no order.
 """
 from __future__ import annotations
 
@@ -1721,6 +1727,25 @@ def news_coverage(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run(ctx.store, slot)
 
 
+def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """ADR 0090: the bounded discovery night (research/autodisc/discovery.py) in a child process at
+    research.discovery.nice under memory_mb, killed at budget_s + kill_grace_s (ops/bounded.py), so the single-threaded
+    scheduler and the engines on the brain keep their CPU (ADR 0083's reasons). Off: skipped without a child. A killed
+    or failed child fails the job (health shows it); its K is in the ledger and the next night's sync counts it."""
+    cfg = ctx.settings.research.discovery
+    if not cfg.enabled:
+        return {"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"}
+    from goldbot.ops.bounded import run_bounded
+    from goldbot.research.autodisc.discovery import record_killed, run_job
+    out = run_bounded(run_job, (ctx.settings, ctx.state_dir, slot), budget_s=cfg.budget_s + cfg.kill_grace_s,
+                      nice=cfg.nice, memory_mb=cfg.memory_mb)
+    if out.ok:
+        return cast(dict[str, Any], out.value)
+    if out.timed_out:
+        record_killed(ctx.state_dir, slot, out.error or "killed")
+    raise RuntimeError(f"discovery_nightly: {out.error}")
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1750,6 +1775,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "swap_reconcile": swap_reconcile,             # BACKLOG 175: weekend crypto holds' broker swap vs the projection
     "long_history_refresh": long_history_refresh,  # BACKLOG 251: the 1d/1w warm-up file kept current (ops/long_history.py)
     "news_coverage": news_coverage,               # BACKLOG 212: news collector coverage readout + outage dq_events
+    "discovery_nightly": discovery_nightly,       # ADR 0090: bounded, power-gated G2 discovery in a niced child
 }
 
 

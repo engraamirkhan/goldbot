@@ -804,6 +804,20 @@ AUX: tuple[Migration, ...] = (
     # to a frozen rule bumps this. NULL on rows recorded before it (and by a release without it, which never reads it)
     Migration(version=36, name="exploration_obs_rule_version", additive=True, statements=(),
               add_columns=(("exploration_obs", "arm_rule_version", "INTEGER"),)),
+    # additive (ADR 0090, goldbot/research/autodisc/discovery.py): one row per discovery_nightly run (a rerun of the
+    # night adds a row, never rewrites one; a dry run writes none): counts, K spent, survivors, power verdicts. Research
+    # bookkeeping only: nothing that trades reads it, and a release without it never opens the table
+    Migration(version=37, name="discovery_runs", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS discovery_runs (
+               night TEXT NOT NULL,
+               run_ns INTEGER NOT NULL,
+               status TEXT NOT NULL,
+               k_spent INTEGER NOT NULL CHECK (k_spent >= 0),
+               survivors INTEGER NOT NULL CHECK (survivors >= 0),
+               {_BODY},
+               PRIMARY KEY (night, run_ns)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

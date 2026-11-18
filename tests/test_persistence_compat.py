@@ -45,6 +45,7 @@ from goldbot.ops.observe import ObserveStatus
 from goldbot.ops.swap_reconcile import SwapReconciliation
 from goldbot.research import ruin
 from goldbot.research.attribution import AttributionReport
+from goldbot.research.autodisc.handoff import CandidateArm
 from goldbot.research.director import ResearchPlan
 from goldbot.research.har_abstention import HarRow
 from goldbot.research.metrics import DaySummedDsr, DsrInputs
@@ -573,7 +574,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                MonthlyReview,
                # aux.db swap_reconciliations (BACKLOG 175, goldbot/ops/swap_reconcile.py): tests/test_swap_reconcile.py::
                # test_a_reconciliation_row_a_newer_or_older_release_wrote_still_reads
-               SwapReconciliation}
+               SwapReconciliation,
+               # the discovery ledger's candidate_arms (ADR 0090, goldbot/research/autodisc/handoff.py):
+               # tests/research/autodisc/test_discovery_nightly.py::test_a_candidate_row_a_newer_release_wrote_still_reads
+               CandidateArm}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 
@@ -591,6 +595,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: config/instruments.yaml (a misspelt key or a repeated magic_block must fail)",
     ("goldbot/research/autodisc/ledger.py", "SearchLedger.get_spec", "StrategySpec"):
         "strict: hash-chained spec; a field dropped on read would change spec_hash and break the ledger chain (ADR 0058)",
+    ("goldbot/research/autodisc/discovery.py", "registered_specs", "StrategySpec"):
+        "strict: a registered arm's hash-chained spec read read-only from the search ledger (as SearchLedger.get_spec; "
+        "ADR 0090)",
     ("goldbot/research/autodisc/gen_gp.py", "_spec", "base"):
         "not persisted: a GP child built in memory from its parent spec; strict so an invalid tree is refused (ADR 0058)",
     ("goldbot/research/arms.py", "load_arms", "Arm"):

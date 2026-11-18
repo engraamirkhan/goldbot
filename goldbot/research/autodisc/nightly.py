@@ -42,6 +42,7 @@ from goldbot.research.autodisc.evaluate import STRESS_MULT, Evaluation
 from goldbot.research.autodisc.gen_gp import (
     GENERATOR,
     VERSION_OF,
+    Admit,
     GPCandidate,
     GPConfig,
     Resolver,
@@ -192,17 +193,20 @@ def _failed(p: float, pl: Plateau, batch_ok: bool) -> list[str]:
 
 def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg: GPConfig, *, reps: int,
                      max_candidates: int = 20, cost_line: str = "", night: str = "adhoc", k_offset: int = 0,
-                     net_r_floor: float | None = None, k_declared: int = 0) -> NightlyResult:
+                     net_r_floor: float | None = None, k_declared: int = 0, admit: Admit | None = None
+                     ) -> NightlyResult:
     """The module docstring's funnel on one tensor. Every evaluated spec (search, null, neighbours) is ledgered first.
     The night's survivors are recorded in the ledger under `night` with their DSR inputs and the night's cost line, so
     the report states the cumulative count. The DSR is read at `k_offset` + the cumulative K_search (`k_offset`: the
     registry's discovery K outside this ledger, `k_link.dsr_k_offset`; quant review of phase 3, F1). Grammar v2
     (`cfg.grammar`): `net_r_floor` is the absolute net-R floor a candidate must also meet, and the DSR is read at
-    max(cumulative K_search, `k_declared`) + `k_offset`, the K declared in the pre-registration before the run."""
+    max(cumulative K_search, `k_declared`) + `k_offset`, the K declared in the pre-registration before the run.
+    `admit` (ADR 0090): the outcome-blind power admission read before any spec of the search, the null or the plateau
+    neighbours is ledgered; a refused neighbour reads as one that is not positive (conservative for the plateau)."""
     k_before = ledger.k_search()
     res = Resolver(provider)
-    real = run_gp(t, provider, cfg, ledger, resolver=res)
-    null = gp_null(t, provider, cfg, ledger, reps=reps, resolver=res)
+    real = run_gp(t, provider, cfg, ledger, resolver=res, admit=admit)
+    null = gp_null(t, provider, cfg, ledger, reps=reps, resolver=res, admit=admit)
     thr = max(null.threshold(), 0.0)
     floors = [c for c in real.evaluated if np.isfinite(gp_fitness(c.evaluation))]
     day_id, n_days = _day_ids(t)
@@ -232,7 +236,7 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         shift = circular_shift_null(np.where(mask, side, 0).astype(np.int8), r[:, 0], r[:, 1], t.ts_utc,
                                     base_long=base[0], base_short=base[1], seed=cfg.seed)
         nbs = [evaluate_logged(t, res, nb, ledger, parents=(c.spec_hash,), generation=-1, min_events=cfg.min_events,
-                               version=VERSION_OF[cfg.grammar])
+                               version=VERSION_OF[cfg.grammar], admit=admit)
                for nb in neighbours(c.spec, cfg.grammar)]
         n_nb += len(nbs)
         fit = [f if np.isfinite(f := gp_fitness(nb.evaluation)) else None for nb in nbs]
@@ -337,11 +341,7 @@ def real_backends(settings: Settings, timeframe: str, raw: Path | None = None, c
     when no such bars are present (the brain, a fresh clone)."""
     from goldbot.data.release import read_bar_files
     from goldbot.execution.costs import load_research_cost_table, research_costs, settings_extra_cost_usd
-    from goldbot.features.technical import atr
-    from goldbot.research.autodisc.gen_combine import MAX_BARS, existing_family_names
-    from goldbot.research.autodisc.outcomes import build_tensor, default_menu
-    from goldbot.research.autodisc.primitives import PrimitiveProvider
-    from goldbot.research.autodisc.windows import ExploreFrame, truncate_to_explore
+    from goldbot.research.autodisc.windows import truncate_to_explore
 
     a = settings.research.autodisc
     src = raw if raw is not None else raw_dir(a.raw_dir)
@@ -353,15 +353,29 @@ def real_backends(settings: Settings, timeframe: str, raw: Path | None = None, c
         return None
     if len(b1) == 0:
         return None
-    prov = PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
-    bars = prov.bars(timeframe)
     ct = cost_table if cost_table is not None else a.cost_table
     extra, swap, source = research_costs(settings, load_research_cost_table(ct) if ct else None)
     extra = max(extra, settings_extra_cost_usd(settings))     # conservative: never below the settings prior (ADR 0045)
+    return backends_from_1m(b1, timeframe, extra_cost_usd=extra, swap=swap, cost_line=source)
+
+
+def backends_from_1m(b1: pd.DataFrame, timeframe: str, *, extra_cost_usd: float, swap: Any, cost_line: str,
+                     provider: Any = None) -> Backends:
+    """Explore-window 1m bars (`ts_utc`; a 2018+ row raises in `ExploreFrame`) -> provider, outcome tensor and the
+    families on `timeframe`, at the given cost. `provider`: one already built on the same bars (shared across
+    timeframes, so the 1m frame is held once)."""
+    from goldbot.features.technical import atr
+    from goldbot.research.autodisc.gen_combine import MAX_BARS, existing_family_names
+    from goldbot.research.autodisc.outcomes import build_tensor, default_menu
+    from goldbot.research.autodisc.primitives import PrimitiveProvider
+    from goldbot.research.autodisc.windows import ExploreFrame
+
+    prov = provider if provider is not None else PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
+    bars = prov.bars(timeframe)
     t = build_tensor(ExploreFrame.from_frame(bars, "ts_utc"), atr(prov.mid_bars(timeframe), 14),
-                     default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra, swap=swap)
+                     default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra_cost_usd, swap=swap)
     fams = tuple(f for f in existing_family_names() if f in prov.families(timeframe))
-    return Backends(tensor=t, provider=prov, families=fams, cost_line=source, mode="real")
+    return Backends(tensor=t, provider=prov, families=fams, cost_line=cost_line, mode="real")
 
 
 def _write_atomic(path: Path, text: str) -> None:
