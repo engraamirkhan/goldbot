@@ -289,6 +289,11 @@ class SchedulerSettings(_Section):
     # R140: the feedback-loop check (goldbot/ops/checks/loop.py) after the daily review; a failing loop opens or
     # comments on the `ci-loop` GitHub issue once a day (health alerts on the same check every pass)
     loop_check: ScheduleSettings = ScheduleSettings(kind="daily", at="07:05", max_late_hours=12, run_if_never_run=True)
+    # incident 2026-11-18: read the trial-registry release (read-only) and clear state/registry_outbox/ once it holds
+    # the outbox's rows (registry_sync.check_outbox), so feedback_loop turns ok the day the Mac publishes, not at the
+    # next weekly sync. After the Mac's launchd publish (09:15 Mac time, 08:15-09:15 UTC); no read while it is empty
+    registry_outbox: ScheduleSettings = ScheduleSettings(kind="daily", at="10:20", max_late_hours=12,
+                                                         run_if_never_run=True)
     # prereg-2026-10-28-tv-author-ideas.md section 6: the shadow score of the followed authors' live ideas
     # (goldbot/research/tv_ideas.py), after feed_reconcile has stored the broker's M1 and nightly_costs the cost table
     tva_scores: ScheduleSettings = ScheduleSettings(kind="daily", at="23:35", max_late_hours=20)

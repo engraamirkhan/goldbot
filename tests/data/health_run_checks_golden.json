@@ -211,6 +211,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:registry_outbox",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:research_director",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -711,6 +716,11 @@
   ],
   [
    "job:recalibrate",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:registry_outbox",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
