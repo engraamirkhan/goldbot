@@ -28,7 +28,8 @@ def dc(tf: str = "15m", *, atr: float, price: float = 4068.7, stop_atr: float = 
     costs = costs or C.default_model()
     return C.deciding_cost("XAUUSD", tf, side=side, price=price, atr_decision=atr, stop_atr=stop_atr,
                            t_fill_ns=T0, t_exit_ns=t_exit, stop_exit_share=exit_share,
-                           stop_entry_share=entry_share, window="explore", broker=broker, costs=costs)
+                           stop_entry_share=entry_share, window="explore", broker=broker, costs=costs,
+                           s5_revoked=False)
 
 
 # ------------------------------------------------------------------ the pin table
@@ -141,7 +142,7 @@ def test_the_deciding_cost_fails_closed_on_unpinned_inputs():
     with pytest.raises(C.MissingCost):
         C.deciding_cost("XAGUSD", "15m", side=1, price=30.0, atr_decision=0.1, stop_atr=1.0, t_fill_ns=T0,
                         t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="explore",
-                        costs=C.default_model())
+                        costs=C.default_model(), s5_revoked=False)
     with pytest.raises(C.MissingCost):
         dc("1m", atr=2.0)
     with pytest.raises(C.MissingCost):
@@ -151,13 +152,14 @@ def test_the_deciding_cost_fails_closed_on_unpinned_inputs():
     with pytest.raises(ValueError):
         C.deciding_cost("XAUUSD", "15m", side=1, price=4068.7, atr_decision=7.0, stop_atr=1.0, t_fill_ns=T0,
                         t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="holdout",  # type: ignore[arg-type]
-                        costs=C.default_model())
+                        costs=C.default_model(), s5_revoked=False)
 
 
 def test_the_deciding_cost_refuses_to_run_without_the_windows_cost_model():
     with pytest.raises(C.MissingCost, match="needs the window's CostModel"):
         C.deciding_cost("XAUUSD", "15m", side=1, price=4068.7, atr_decision=7.0, stop_atr=1.0, t_fill_ns=T0,
-                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="explore")
+                        t_exit_ns=T0 + H, stop_exit_share=0.0, stop_entry_share=0.0, window="explore",
+                        s5_revoked=False)
 
 
 @pytest.mark.parametrize("tf", ["15m", "1h"])

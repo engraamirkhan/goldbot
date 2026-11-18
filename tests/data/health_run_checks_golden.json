@@ -363,7 +363,7 @@
   [
    "feedback_loop",
    "ok",
-   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
+   "weights: no exploration trades yet; parity: replay parity never fired; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
   ],
   [
    "swap_reconcile",
@@ -882,7 +882,7 @@
   [
    "feedback_loop",
    "ok",
-   "weights: no exploration trades yet; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
+   "weights: no exploration trades yet; parity: replay parity never fired; reviews: daily_review has not run yet; proposals: no weekly roll-up yet; registry: no sync reported yet (tournament, research_director); jobs: no job's last run errored"
   ],
   [
    "swap_reconcile",

@@ -50,7 +50,7 @@ for _acc in acc_mod.load_accounts(logins=False).values():
 for _aid, _ids in EXECUTION.items():
     RUNNING[_aid] |= _ids
 NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
-                 "icm-probe": {"S1A", "S1B", "S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
+                 "icm-probe": {"S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
                  "vantage-demo": {"Z6V", "Z7V"}, "vantage-247": set()}
 # ADR 0061 amendment 2026-11-02 (docs/research/learning-2026-11-02.md): the refused arms with a fixed bracket became
 # learning rows, each with a matched control (ZCD/ZCV shared, LC* dedicated). They enter only once their K rows are in
@@ -80,7 +80,10 @@ RETIRED_1109 = {"I0-XAUJPY"}
 RETIRED_1113_COST = {"Z1P", "Z2P", "Z3D", "LCZ1P", "LCZ2P", "LCZ3D"}
 # retired 2026-11-13 (prereg-amendment-2026-11-13-survivor-reads.md section 2): KILL on the 2010-17 replay
 RETIRED_1113_SURVIVORS = {"Z10D", "Z9D", "Z5P", "LCZ10D", "LCZ9D", "LCZ5P"}
-RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114 | RETIRED_1113_COST | RETIRED_1113_SURVIVORS
+# retired 2026-11-13 (prereg-amendment-2026-11-15-replay-only-controls.md (a)): S1A/S1B, as the 2026-11-06 amendment said
+RETIRED_1113_THINNING = {"S1A", "S1B"}
+RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114 | RETIRED_1113_COST | RETIRED_1113_SURVIVORS \
+    | RETIRED_1113_THINNING
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:

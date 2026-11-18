@@ -64,6 +64,9 @@ CI = 0.95                           # the unadjusted interval shown beside the k
 MIN_FILLS = 30                      # quant reviewer, binding: fewer fills cannot be ranked
 MIN_DAYS = 10                       # ... nor fewer opportunity days (a clustered CI needs the clusters)
 FLAT_R = 0.01                       # 7 d and 30 d within this of each other: "flat"
+# prereg-amendment-2026-11-15-hv-rule3-replay-control.md: S0 is replay-only and its matched read is not wired to its
+# replay labels yet, so a row read against it is never a verdict
+S0_REPLAY_NOTE = "control: S0 replay (unwired) - not a verdict"
 HEADING = ("Ranked by the least each trade is likely earning after costs. Early results move a lot; nothing is "
            "proven before its read.")
 WINDOW_DAYS: dict[RankingWindow, int | None] = {"7d": 7, "30d": 30, "all": None}
@@ -575,7 +578,9 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
             kind=kind, timeframes=sorted({ix.variants[v][1] for v in vs}, key=_tf_key),
             accounts=sorted(ix.labels[x] for x in g_labels.get(g, [])), band=band, rank=None,
             unranked_reason=_why(fig) if band == "too_few" else None, status=status,
-            read_progress=units[0] if units else None, read_units=units, figures=fig, variants=variants))
+            read_progress=units[0] if units else None, read_units=units, figures=fig, variants=variants,
+            control_note=S0_REPLAY_NOTE if kind == "exploration" and any(
+                getattr(cat.arm(a), "control_arm", None) == "S0" for a in strat) else None))
     ranked = [r for r in built if r.band == "ranked"]
     k = len(ranked)
     passes = {ix.groups[g][0]: p for g, p in g_pass.items()}
