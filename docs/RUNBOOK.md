@@ -1092,7 +1092,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 | `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
-| `discovery_nightly` | Daily 01:00 (to 03:10 at most) | Brain, only with `research.discovery.enabled`, `bars_path` and a `k_cap_quarter` (section "Discovery nightly on the brain"): a bounded G2 search on 1h/4h/1d, explore 2010-2017 only, in a child at nice 15; survivors offered as candidate arm rows; run record in aux.db `discovery_runs`, report `state/autodisc/discovery-<day>.md`. Enabled without bars, killed at its budget, or failed: the job fails (health `job:discovery_nightly`) and leaves a `killed`/`failed` row. |
+| `discovery_nightly` | Daily 01:00 (to 03:10 at most) | Brain, only with `research.discovery.enabled`, `bars_path` and the quarter listed in `k_cap_quarter` (section "Discovery nightly on the brain"): a bounded G2 search on 1h/4h/1d, explore 2010-2017 only, in a child at nice 15; survivors offered as candidate arm rows; run record in aux.db `discovery_runs`, report `state/autodisc/discovery-<day>.md`. Enabled without bars, killed at its budget, or failed: the job fails (health `job:discovery_nightly`) and leaves a `killed`/`failed` row. |
 | `tick_record`, `tick_record_winter` | Daily 21:10 and 22:10 | Read-only, and only while gold is closed (New York's 17:00-18:00 daily break, which is 21:00 UTC in US summer time and 22:00 UTC in winter, or the weekend; the other slot skips): the broker's own XAUUSD ticks of the oldest closed server day not yet recorded (missed days within 7 are back-filled, one a run, and the weekend runs catch up) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
 
 Retired with ADR 0083 (BACKLOG 142, 2026-11-14): `monthly_research`, `gap_watch`, `cpcv_quarterly` and the
@@ -2818,8 +2818,9 @@ from release `research-v1` with `gh`). Remove: delete the key line from the brai
 
 ### Discovery nightly on the brain (ADR 0090)
 
-Off until the quant-reviewer and the sre have signed ADR 0090 off, and until the research director has set
-`research.discovery.k_cap_quarter` in config/settings.yaml (0, the default, refuses every night). To turn it on (Claude
+Off until the quant-reviewer and the sre have signed ADR 0090 off. `research.discovery.k_cap_quarter` is the research
+director's per-quarter K cap (docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15000, 2027Q1 0); a quarter not
+listed, or 0, refuses every night. 2027Q1 moves to 30000 only on the director's written Q4 read. To turn it on (Claude
 runs it; the owner does nothing):
 1. The 2010-2017 research 1m files are on the brain at `/opt/goldbot/data/_raw/bars` (per-year
    `xauusd_1m_dukascopy_<year>.parquet`; local only, never published). Add to the brain's
@@ -2841,8 +2842,9 @@ If the job is killed at its budget, lower `research.discovery.population` or dro
 night's K stays in the ledger and the next run counts it in the registry). Every night that does not finish (killed,
 an error, out of memory) leaves a `killed` or `failed` row in aux.db `discovery_runs` with the reason. One run at a
 time: a foreground run while the job runs (or the reverse) is refused by the lock `state/autodisc/discovery.lock`.
-Under the shipped power parameters no survivor is offered as a candidate arm (the forward demo window over the learning
-kill rule cannot judge one; ADR 0090 section 4): the report says "forward window cannot judge" for each.
+A survivor whose kill rule could not read it by its `until` (under 50 expected candidates or 10 signal days in 42
+days) is not offered: the report counts it as "kill rule unreadable". The report also counts power-gate refusals
+("not K").
 
 ### Autonomous discovery on the Mac (ADR 0058 phases 2-3)
 

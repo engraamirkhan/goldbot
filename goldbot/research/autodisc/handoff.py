@@ -63,6 +63,9 @@ class CandidateArm(FrozenRecord):
     power: dict[str, Any]                            # its ADR 0085 verdict (power_first.PowerVerdict, JSON)
     neighbours_admitted: int = 0                     # plateau neighbours the power admission let through, of
     neighbours_total: int = 0                        #   its grid neighbours (a refused one reads as not positive)
+    # the ADR 0085 verdict of the forward window over the learning kill rule, reading "reported, not evidence" (quant
+    # ruling (a), 2026-11-18): over that horizon no spec reaches the n_eff floor, so it never gates
+    power_forward: dict[str, Any] = {}
     rule: Literal["spec_rule"] = "spec_rule"
     max_open: int = 1
     forward_only: bool = True

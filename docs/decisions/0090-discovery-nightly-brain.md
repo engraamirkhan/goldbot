@@ -58,19 +58,24 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
    timeframe on which even an every-bar spec is refused is not searched at all.
    - TEST-OLD is read once per family, and every G2 spec is family `autodisc:G2`. Once EVAL-2's reads ledger or a
      promotion read in the registry holds a TEST-OLD read of that family, no spec is admitted and nothing is searched.
-   - A survivor is offered as a demo learning arm only if a second power gate passes: the forward demo window over the
-     learning kill rule's horizon (`arms.LEARNING_MAX_DAYS` 45 days or `LEARNING_READ_FILLS` 300 fills, whichever is
-     first; fresh, one-sided 5 %), where a learning arm is judged. Under ADR 0085's parameters it cannot pass: over 45
-     days a spec has at most ~32 signal days, so n_eff <= 32 x 4 = 128 at rho_day 0.25 (the floor is 200, and power
-     0.5 for 0.10 R at sd 1.2 needs n_eff ~390). Until the quant rules on it, the job offers no candidate arm; its
-     explore survivors stay recorded for the confirm route.
+   - A survivor is offered as a demo learning arm only if its kill rule can read it by its `until` (quant ruling (a),
+     2026-11-18): at the explore rate over 42 days, at least 50 replayed candidates (MIN_N) and 10 signal days
+     (MIN_DAYS); otherwise the hand-off refuses it (`kill_unreadable`). The ADR 0085 verdict of the forward window
+     over the learning kill rule's horizon (45 days or 300 fills, fresh, one-sided 5 %) is kept on the candidate row
+     as `power_forward`, labelled "reported, not evidence": it never gates, because over that horizon no spec can
+     reach the floor (at most ~32 signal days, so n_eff <= 32 x 4 = 128 at rho_day 0.25 against 200; power 0.5 for
+     0.10 R at sd 1.2 needs n_eff ~390).
 5. **Trial budget: two checks on two scales** (quant review B1: the first build compared spec K with registry rows).
    - Registry rows: the night writes at most one discovery batch row per timeframe, so `assert_budget(len(timeframes),
      ...)` against the quarter's trial budget, its used rows and the pre-registered reservation.
    - K: the quarter's summed discovery `k_contrib` (registry batches stamped in the quarter; the one-off prior-search
      seed excluded) plus the night's planned K at its bound (timeframes x (population x (generations + 1) +
-     max_candidates x 24 neighbours)) must stay within `research.discovery.k_cap_quarter`. The research director sets
-     it; 0, the default, refuses every night.
+     max_candidates x 24 neighbours)) must stay within that quarter's entry of `research.discovery.k_cap_quarter`, a
+     validated per-quarter map. The research director's decision (docs/research/discovery-k-cap-2026-11-18.md):
+     2026Q4 15,000, 2027Q1 0 (moved to 30,000 only on a written Q4 read citing that doc's continuation rule); a
+     quarter not listed refuses every night, so a value never carries into the next quarter by default.
+   - Power-gate refusals are counted and reported (`n_refused_power` in the run record and the report), never booked
+     as K.
    Over budget: nothing is searched; the run and its report are recorded.
 6. **Holdout sealed.** The 1m bars come only through `cost_of_record.load_research_bars` (per file of a per-year
    directory, only the explore years opened); a window past 2018-01-01 is refused before any file is opened.
@@ -92,7 +97,8 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
   gold alone can only find frequent rules; a pooled multi-instrument card (k > 1) is the route to slower ones.
 - Not changed: the trial budget, the holdout, the phase gate, live unlock, RiskGate, any arm or config file, the
   red-box arms.
-- Under the shipped power parameters the forward gate refuses every survivor, so no candidate arm is offered; the
-  quant-reviewer and research director decide whether the learning read's horizon or the hand-off rule changes.
+- The hand-off is gated on whether the kill rule can read the arm, not on forward power, which no spec can reach
+  over the learning horizon (quant ruling (a)). A learning arm's forward read stays learning evidence, never
+  qualification.
 - What would change this: a quant ruling that the explore stage needs its own power gate, or that priors from 2026
   demo labels contaminate TEST-OLD freshness; an sre finding that the window or the memory cap does not fit the brain.

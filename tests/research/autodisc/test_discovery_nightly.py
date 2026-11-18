@@ -31,7 +31,8 @@ SLOT = pd.Timestamp("2026-11-18 01:00", tz="UTC")
 def settings(**disc):
     s = load_settings()
     d = s.research.discovery.model_copy(update={"enabled": True, "population": 8, "generations": 2, "null_reps": 2,
-                                                "max_candidates": 4, "k_cap_quarter": 1_000_000, **disc})
+                                                "max_candidates": 4, "k_cap_quarter": {"2026Q4": 1_000_000},
+                                                **disc})
     # the shipped 2026Q4 owner budget (tests/conftest.py strips it so other tests see the base 20)
     research = s.research.model_copy(update={"discovery": d, "trial_budget_overrides": {"2026Q4": 3500}})
     return s.model_copy(update={"research": research})
@@ -190,8 +191,8 @@ TSMOM_LABELS = pd.DataFrame({"arm_id": ["X1"] * 500, "family": ["tsmom"] * 500, 
                              "is_control": [False] * 500, "label_sim_r": [1.0] * 500, "decision_utc": [T_LONDON] * 500})
 
 
-def FORWARD_OK(*_a):
-    """A forward window that can judge every survivor (the shipped one cannot: test_the_forward_demo_window...)."""
+def READABLE(*_a):
+    """A kill rule that can read every survivor."""
     return None
 
 
@@ -200,7 +201,7 @@ def steered():
 
 
 def test_a_run_records_counts_k_survivors_and_power_verdicts_in_aux_and_the_ledger(tmp_path):
-    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None, forward=FORWARD_OK,
+    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None, kill_unreadable=READABLE,
                            **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
     assert run.status == "ok" and run.k_spent > 0
     tf = run.timeframes[0]
@@ -230,13 +231,13 @@ def test_a_survivor_that_cannot_run_live_is_recorded_but_never_handed_off(tmp_pa
 
 def test_a_spec_whose_stage_read_failed_is_never_offered_again(tmp_path):
     from goldbot.research.autodisc.stages import StageJournal
-    first = DN.run_discovery(steered(), tmp_path / "a", SLOT, executable=lambda spec: None, forward=FORWARD_OK,
+    first = DN.run_discovery(steered(), tmp_path / "a", SLOT, executable=lambda spec: None, kill_unreadable=READABLE,
                              **kw(tmp_path / "a", obs_reader=lambda *a, **k: TSMOM_LABELS))
     h = first.survivors[0]
     j = StageJournal(tmp_path / "b" / NT.LEDGER_FILE["synthetic"])
     j.open("confirm", h, {})
     j.close("confirm", h, {"passed": False})
-    again = DN.run_discovery(steered(), tmp_path / "b", SLOT, executable=lambda spec: None, forward=FORWARD_OK,
+    again = DN.run_discovery(steered(), tmp_path / "b", SLOT, executable=lambda spec: None, kill_unreadable=READABLE,
                              **kw(tmp_path / "b", obs_reader=lambda *a, **k: TSMOM_LABELS))
     assert h in again.survivors and again.stage_closed >= 1
     assert h not in {c.spec_hash for c in H.pending(tmp_path / "b" / NT.LEDGER_FILE["synthetic"])}
@@ -326,11 +327,28 @@ def test_without_the_2026q4_override_the_night_is_over_budget(tmp_path):
     assert run.status == "over_budget" and run.k_spent == 0 and "trial budget" in (budget_of(run).refused or "")
 
 
-def test_an_unset_k_cap_refuses_the_night_until_the_research_director_sets_it(tmp_path):
-    assert load_settings().research.discovery.k_cap_quarter == 0
-    run = DN.run_discovery(settings(k_cap_quarter=0), tmp_path, SLOT, **kw(tmp_path))
-    assert run.status == "over_budget" and "k_cap_quarter" in (budget_of(run).refused or "")
+def test_a_quarter_the_k_cap_map_does_not_list_refuses_the_night(tmp_path):
+    q2 = pd.Timestamp("2027-04-10 01:00", tz="UTC")
+    assert "2027Q2" not in load_settings().research.discovery.k_cap_quarter
+    run = DN.run_discovery(settings(), tmp_path, q2, budget_used=lambda q: 0, **kw(tmp_path))
+    assert run.status == "over_budget" and "2027Q2 is not listed" in (budget_of(run).refused or "")
     assert not (tmp_path / NT.LEDGER_FILE["synthetic"]).exists()
+
+
+def test_the_research_directors_q4_cap_is_read_and_q1_stays_closed():
+    """docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15,000; 2027Q1 0 until a written Q4 read moves it."""
+    cfg = load_settings().research.discovery
+    assert cfg.k_cap_quarter == {"2026Q4": 15_000, "2027Q1": 0}
+    assert cfg.k_cap_for("2026Q4") == 15_000 and cfg.k_cap_for("2027Q1") == 0 and cfg.k_cap_for("2027Q2") == 0
+    line = DN.budget_line(load_settings(), SLOT, lambda q: 0, lambda q: 0)
+    assert line.k_cap == 15_000 and line.refused is None
+
+
+@pytest.mark.parametrize("bad", [{"2026-Q4": 10}, {"2026Q5": 10}, {"2026Q4": -1}, {"2026Q4": 2_000_000}])
+def test_the_k_cap_map_only_takes_quarters_and_bounded_values(bad):
+    from goldbot.config import DiscoverySettings
+    with pytest.raises(ValueError):
+        DiscoverySettings(k_cap_quarter=bad)
 
 
 def real_edge_backends(settings_, timeframe):
@@ -343,7 +361,7 @@ def test_two_nights_k_accumulate_against_the_quarters_k_cap(tmp_path, monkeypatc
     s = steered()
     cap = DN.planned_k(s.research.discovery) + 1                             # room for one night at its bound
     s = s.model_copy(update={"research": s.research.model_copy(update={
-        "discovery": s.research.discovery.model_copy(update={"k_cap_quarter": cap})})})
+        "discovery": s.research.discovery.model_copy(update={"k_cap_quarter": {"2026Q4": cap, "2027Q1": 0}})})})
     k = kw(tmp_path, backends=real_edge_backends)
     first = DN.run_discovery(s, tmp_path, SLOT, **k)
     assert first.status == "ok" and first.k_spent > 1 and budget_of(first).k_used == 0
@@ -452,25 +470,63 @@ def test_a_prior_promotion_read_of_g2_on_test_old_admits_no_spec(tmp_path):
     assert run.k_spent == 0 and not any(x.searched for x in run.timeframes)
 
 
-def test_the_forward_demo_window_over_the_kill_rule_horizon_cannot_judge_even_an_every_bar_spec():
-    """The learning arm's read: at most LEARNING_MAX_DAYS (45) days or LEARNING_READ_FILLS (300) fills. Its n_eff
-    cannot reach the ADR 0085 fresh-data floor (200), nor the n_eff a 0.10 R edge needs for power 0.5."""
+def test_the_forward_verdict_is_reported_never_a_gate_and_its_constants_match_the_engine():
+    """Quant ruling (a), 2026-11-18: the forward window over the learning kill rule cannot reach the ADR 0085 floor
+    (n_eff <= 128 < 200), so its verdict is reported on the candidate row, not evidence and not a gate."""
     from goldbot.engine.exploration_learning import LEARNING_READ_FILLS
     from goldbot.research.arms import LEARNING_MAX_DAYS
     assert DN.LEARNING_READ_FILLS == LEARNING_READ_FILLS and LEARNING_MAX_DAYS == 45
     v = DN.forward_verdict(load_settings(), "1h", signals=47_000, clusters=2080, learn_years=8.0)
-    g = v.gates[-1]
-    assert not v.started and g.name == "forward" and g.fresh and g.n_eff < 200
-    assert DN.forward_refusal(load_settings())("1h", 47_000, 2080, 8.0) is not None
-    for signals, days in ((2080, 2080), (12_000, 2080), (47_000, 2080)):      # one a day .. every bar
-        assert not DN.forward_verdict(load_settings(), "1h", signals=signals, clusters=days, learn_years=8.0).started
+    assert not v.started and v.gates[-1].name == "forward" and v.gates[-1].fresh and v.gates[-1].n_eff < 200
 
 
-def test_a_survivor_the_forward_window_cannot_judge_is_never_offered(tmp_path):
-    run = DN.run_discovery(steered(), tmp_path, SLOT, executable=lambda spec: None,
-                           **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
-    assert len(run.survivors) >= 1 and run.candidate_arms == 0 and run.forward_refused == len(run.survivors)
-    assert H.pending(tmp_path / NT.LEDGER_FILE["synthetic"]) == []
+def test_the_hand_off_refuses_an_unreadable_kill_and_passes_a_readable_one():
+    why = DN.kill_unreadable_rule()
+    assert why("1h", 2_080, 2_080, 8.0) is not None and "50" in (why("1h", 2_080, 2_080, 8.0) or "")   # ~30 by until
+    assert "signal days" in (why("1h", 47_000, 400, 8.0) or "")                      # ~6 signal days by until
+    assert why("1h", 47_000, 2_080, 8.0) is None                                     # ~675 candidates, ~30 days
+
+
+def test_a_survivor_whose_kill_rule_cannot_read_it_is_never_offered(tmp_path):
+    never = DN.run_discovery(steered(), tmp_path / "a", SLOT, executable=lambda spec: None,
+                             kill_unreadable=lambda *a: "too few", **kw(tmp_path / "a",
+                                                                     obs_reader=lambda *a, **k: TSMOM_LABELS))
+    assert len(never.survivors) >= 1 and never.candidate_arms == 0 and never.kill_unreadable == len(never.survivors)
+    assert H.pending(tmp_path / "a" / NT.LEDGER_FILE["synthetic"]) == []
+    shipped = DN.run_discovery(steered(), tmp_path / "b", SLOT, executable=lambda spec: None,
+                               **kw(tmp_path / "b", obs_reader=lambda *a, **k: TSMOM_LABELS))
+    offered = H.pending(tmp_path / "b" / NT.LEDGER_FILE["synthetic"])
+    assert shipped.candidate_arms == len(offered) >= 1 and shipped.kill_unreadable == 0
+    assert all(c.power_forward["reading"] == "reported, not evidence" and "started" in c.power_forward
+               for c in offered)
+
+
+def test_power_admission_is_outcome_blind(tmp_path):
+    """Admission reads entry masks and sides only: with the labels permuted or NaN, the same specs are admitted."""
+    import dataclasses
+    t = make_noise_tensor(N, seed=1, timeframe="1h")
+    rng = np.random.default_rng(0)
+    variants = {"real": t, "permuted": dataclasses.replace(t, ret=rng.permutation(t.ret)),
+                "nan": dataclasses.replace(t, ret=np.full_like(t.ret, np.nan))}
+    seen = {}
+    for name, tt in variants.items():
+        gate = _gate(learn_years=0.25)
+        run = run_gp(tt, SyntheticProvider(N, seed=0), GPConfig(timeframe="1h", population=8, generations=1, seed=3,
+                                                                min_events=60, families=FAMS),
+                     SearchLedger(tmp_path / f"{name}.db", mode="synthetic"), admit=gate)
+        seen[name] = [c.spec_hash for c in run.evaluated if c.generation == 0]
+    assert seen["real"] and seen["real"] == seen["permuted"] == seen["nan"]
+
+
+def test_prior_search_seed_is_outside_quarter_k_but_inside_n_trials_discovery(tmp_path, monkeypatch):
+    import goldbot.research.registry as REG
+    from goldbot.research.autodisc.k_link import GRAMMAR_V1_K, ensure_prior_searches
+    monkeypatch.setattr(REG, "_utcnow", lambda: SLOT.to_pydatetime())
+    reg = REG.TrialRegistry(tmp_path / "registry.jsonl")
+    ensure_prior_searches(reg)
+    reg.record_discovery_batch(k_contrib=123, generator="G2 gp", ledger_head=(1, "x"), ledger_id="L1")
+    assert DN.quarter_k_used(reg.path)("2026Q4") == 123
+    assert reg.n_trials_discovery == reg.n_trials_effective + GRAMMAR_V1_K + 123
 
 
 def test_a_demo_label_from_the_holdout_year_has_no_effect_on_the_priors(tmp_path):
@@ -550,3 +606,15 @@ def test_the_foreground_dry_run_prints_its_peak_rss_for_the_deploy_note(tmp_path
     assert DN.main(["--state-dir", str(tmp_path), "--dry-run"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["max_rss_mb"] > 0 and out["report"] is None
+
+
+def test_power_refusals_are_counted_and_reported_never_booked_as_k(tmp_path):
+    run = DN.run_discovery(steered(), tmp_path, SLOT, **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
+    assert run.n_refused_power == sum(x.power.refused for x in run.timeframes) > 0
+    assert run.k_spent == SearchLedger(tmp_path / NT.LEDGER_FILE["synthetic"], mode="synthetic").k_search()
+    with Database.open(tmp_path, "aux").read() as conn:
+        body = json.loads(conn.execute("SELECT body FROM discovery_runs").fetchone()[0])
+    assert body["n_refused_power"] == run.n_refused_power
+    text = (tmp_path / "autodisc" / "discovery-2026-11-18.md").read_text()
+    assert f"power-gate refusals {run.n_refused_power:,} (not K)" in text
+    assert DN.summary(run)["n_refused_power"] == run.n_refused_power

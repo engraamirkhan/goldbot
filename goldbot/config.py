@@ -493,10 +493,11 @@ class DiscoverySettings(_Section):
     # confirm at Holm rank 1 of confirm_configs_per_batch configs at the ledger year's alpha_j (batch_alpha)
     confirm_configs_per_batch: int = Field(3, ge=1, le=50)
     test_old_years: float = Field(3.92, gt=0, le=3.92)       # TEST-OLD 2006-02..2009
-    # the quarter's discovery K (summed registry k_contrib, the prior-search seed excluded) plus the night's planned K
-    # must stay within this. 0 refuses every night: the value is the research director's to set.
-    # TODO(research-director): set k_cap_quarter in config/settings.yaml before the job is enabled on any host.
-    k_cap_quarter: int = Field(0, ge=0, le=1_000_000)
+    # quarter -> discovery K cap: the quarter's summed registry k_contrib (the prior-search seed excluded) plus the
+    # night's planned K must stay within it; a quarter not listed, or 0, refuses every night. The research director's
+    # decision, docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15,000; 2027Q1 0, moved to 30,000 only on a
+    # written Q4 read citing that doc's continuation rule
+    k_cap_quarter: dict[str, int] = Field(default_factory=lambda: {"2026Q4": 15_000, "2027Q1": 0})
     # costs: the cost of record v3 (ADR 0084) per (session, exit) cell in bps of `cost_price_usd`, the gold price where
     # it was measured. A table with a spread split: bid/ask labels + each cell's non-spread part; v3 has none: mid
     # labels + each full cell, so the spread is charged once
@@ -511,6 +512,19 @@ class DiscoverySettings(_Section):
     prior_gain: float = Field(2.0, ge=0, le=10)
     prior_min: float = Field(0.5, ge=0.25, le=1)
     prior_max: float = Field(2.0, ge=1, le=4)
+
+    @field_validator("k_cap_quarter")
+    @classmethod
+    def _k_caps(cls, v: dict[str, int]) -> dict[str, int]:
+        import re
+        bad = {q: k for q, k in v.items() if not re.fullmatch(r"\d{4}Q[1-4]", q) or not 0 <= k <= 1_000_000}
+        if bad:
+            raise ValueError(f"k_cap_quarter maps a quarter like 2026Q4 to 0..1,000,000 discovery K, got {bad}")
+        return v
+
+    def k_cap_for(self, quarter: str) -> int:
+        """The quarter's discovery K cap; a quarter not listed has none (0: every night refused)."""
+        return int(self.k_cap_quarter.get(quarter, 0))
 
 
 class HarAbstentionSettings(_Section):

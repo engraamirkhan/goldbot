@@ -16,14 +16,18 @@ The owner's directive of 2026-11-18, "the system finds new strategies itself", a
    gate is TEST-OLD (2006-02..2009) at Holm rank 1 of `confirm_configs_per_batch` configs at the ledger year's alpha_j
    (`promotion_confirm.batch_alpha`). TEST-OLD is read once per family and every G2 spec is family `autodisc:G2`: once
    EVAL-2's reads ledger or a promotion read has read that family on TEST-OLD, no spec is admitted (`test_old_spent`).
-   A survivor is offered as a demo learning arm only if a second gate, the forward demo window over the learning kill
-   rule's horizon (`forward_verdict`), is powered too: that is where a learning arm is judged.
+   A survivor is offered as a demo learning arm only if its kill rule can read it (`kill_unreadable_rule`, quant
+   ruling (a) of 2026-11-18): at the explore rate, at least MIN_N replayed candidates and MIN_DAYS signal days by its
+   `until` (KILL_READ_DAYS). The ADR 0085 verdict of the forward window (`forward_verdict`) is reported on the row,
+   not evidence and not a gate: over the learning horizon no spec can reach its n_eff floor.
 4. Budget. Two checks, both before the search. The night writes at most one registry row (a discovery batch) per
    timeframe: those rows must fit the quarter's trial budget with the pre-registered queue's reservation held back
    (`catalogue.run.assert_budget`). Its K is bounded on its own scale: the quarter's summed discovery k_contrib plus
-   the night's planned K (every timeframe at its bound) must stay within `k_cap_quarter`, which the research director
-   sets (0, the default, refuses every night). Wall clock: no timeframe starts once `budget_s` is spent, or when the
-   last one took longer than what is left; the parent kills the child at budget_s + kill_grace_s.
+   the night's planned K (every timeframe at its bound) must stay within the quarter's entry of `k_cap_quarter`, the
+   research director's per-quarter map (docs/research/discovery-k-cap-2026-11-18.md); a quarter not listed, or 0,
+   refuses every night. Power-gate refusals are counted and reported (`n_refused_power`), never booked as K. Wall
+   clock: no timeframe starts once `budget_s` is spent, or when the last one took longer than what is left; the
+   parent kills the child at budget_s + kill_grace_s.
 5. Screen. `search_and_judge` (floors, the 1.5x cost stress, the G0 null of the whole search, SPA/PBO, the shift null,
    the plateau, the DSR at the registry's discovery K). Costs (`cor_v3_cells`): the cost of record v3 (ADR 0084) per
    (session, exit) cell, in bps of the price where it was measured, so a 2010-2017 trade pays the same fraction of
@@ -98,6 +102,12 @@ LEARN, TEST_OLD, FORWARD = "learn", "test_old", "forward"
 # imports the engine, a test holds the two equal), and is read one-sided at 5 %
 LEARNING_READ_FILLS = 300
 FORWARD_Z = 1.6448536269514722
+# quant ruling (a), 2026-11-18: the hand-off needs a kill rule that can read the arm by its `until`: at the explore
+# rate over KILL_READ_DAYS, at least MIN_N replayed candidates and MIN_DAYS distinct signal days
+KILL_READ_DAYS = 42
+MIN_N = 50
+MIN_DAYS = 10
+FORWARD_READING = "reported, not evidence"
 NEIGHBOUR_BOUND = 24          # plateau neighbours of one candidate at most (gen_gp.neighbours: +-1 rung a leaf, exits)
 Status = Literal["ok", "budget", "over_budget", "dry_run"]
 LOCK_FILE = "discovery.lock"
@@ -301,11 +311,19 @@ def forward_verdict(settings: Settings, timeframe: str, *, signals: int, cluster
     return evaluate(card, settings)
 
 
-def forward_refusal(settings: Settings) -> Callable[[str, int, int, float], str | None]:
-    """(timeframe, signals, signal days, learn years) -> why the forward window cannot judge the spec, or None."""
+def kill_unreadable_rule() -> Callable[[str, int, int, float], str | None]:
+    """(timeframe, signals, signal days, learn years) -> why the learning arm's kill rule could not read the spec by
+    its `until`, or None: expected replayed candidates (explore rate x KILL_READ_DAYS) < MIN_N, or expected signal days
+    < MIN_DAYS. Outcome-blind: counts only."""
     def why(timeframe: str, signals: int, clusters: int, learn_years: float) -> str | None:
-        v = forward_verdict(settings, timeframe, signals=signals, clusters=clusters, learn_years=learn_years)
-        return None if v.started else "; ".join(v.reasons)
+        span = KILL_READ_DAYS / 365.25 / learn_years if learn_years > 0 else 0.0
+        n, days = signals * span, clusters * span
+        out = []
+        if n < MIN_N:
+            out.append(f"{timeframe}: {n:,.1f} expected candidates by until < {MIN_N}")
+        if days < MIN_DAYS:
+            out.append(f"{timeframe}: {days:,.1f} expected signal days by until < {MIN_DAYS}")
+        return "; ".join(out) or None
     return why
 
 
@@ -427,7 +445,7 @@ class BudgetLine(FrozenRecord):
     reserved: int
     units: int                                # registry rows the night can write: one discovery batch a timeframe
     planned_k: int                            # the night's K at its bound
-    k_cap: int                                # research.discovery.k_cap_quarter
+    k_cap: int                                # research.discovery.k_cap_quarter[quarter] (0: not listed or closed)
     k_used: int                               # the quarter's discovery K so far (summed k_contrib)
     headroom: int | None = None
     refused: str | None = None
@@ -451,16 +469,19 @@ def budget_line(settings: Settings, slot: pd.Timestamp, used: Callable[[str], in
     reserved = int(settings.research.reserved_trials_quarter.get(q, 0))
     units, k, ku = len(cfg.timeframes), planned_k(cfg), int(k_used(q))
     line = BudgetLine(quarter=q, cap=cap, used=u, reserved=reserved, units=units, planned_k=k,
-                      k_cap=cfg.k_cap_quarter, k_used=ku)
+                      k_cap=cfg.k_cap_for(q), k_used=ku)
     try:
         left = assert_budget(units, u, cap, reserved=reserved)
     except BudgetAbort as exc:                    # a SystemExit: never let it reach the scheduler
         return line.model_copy(update={"refused": str(exc)})
-    if ku + k > cfg.k_cap_quarter:
-        unset = " (0: not set yet; the research director sets it)" if cfg.k_cap_quarter == 0 else ""
+    if q not in cfg.k_cap_quarter:
         return line.model_copy(update={"refused": (
-            f"discovery K: research.discovery.k_cap_quarter {cfg.k_cap_quarter:,}{unset}, {q} used {ku:,}, tonight's "
-            f"planned K {k:,} -> over by {ku + k - cfg.k_cap_quarter:,}")})
+            f"discovery K: {q} is not listed in research.discovery.k_cap_quarter: every night refused until the "
+            "research director's written read adds it")})
+    if ku + k > line.k_cap:
+        return line.model_copy(update={"refused": (
+            f"discovery K: research.discovery.k_cap_quarter {q} {line.k_cap:,}, used {ku:,}, tonight's planned K "
+            f"{k:,} -> over by {ku + k - line.k_cap:,}")})
     return line.model_copy(update={"headroom": left})
 
 
@@ -592,7 +613,8 @@ class DiscoveryRun(FrozenRecord):
     survivors: list[str] = []
     candidate_arms: int = 0
     not_executable: int = 0
-    forward_refused: int = 0                  # survivors the forward demo window cannot judge: never offered
+    kill_unreadable: int = 0                  # survivors their kill rule could not read by `until`: never offered
+    n_refused_power: int = 0                  # specs the power gate refused (search, null, neighbours): never K
     stage_closed: int = 0                     # survivors whose confirm/holdout read already failed or was voided
     budget: BudgetLine | None = None
     cards: CardTriage | None = None
@@ -610,11 +632,11 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                   learn_years: Callable[[OutcomeTensor], float] = span_years,
                   cards_dir: Path | None = None, k_used: Callable[[str], int] | None = None,
                   reads_ledger: Path | None = None,
-                  forward: Callable[[str, int, int, float], str | None] | None = None) -> DiscoveryRun:
+                  kill_unreadable: Callable[[str, int, int, float], str | None] | None = None) -> DiscoveryRun:
     """The night (module docstring). Real backends write the registry's discovery K (`k_link`); synthetic ones never
     reach the registry. `dry_run`: everything up to the search (inputs, priors, power reachability, cards, budget),
-    nothing written anywhere. `reads_ledger`: EVAL-2's reads ledger (default beside the registry); `forward`: the
-    forward-window refusal of a survivor (default `forward_refusal`)."""
+    nothing written anywhere. `reads_ledger`: EVAL-2's reads ledger (default beside the registry);
+    `kill_unreadable`: why a survivor's kill rule could not read it (default `kill_unreadable_rule`)."""
     from goldbot.research.autodisc.k_link import dsr_k_offset, sync_discovery_k
     from goldbot.research.autodisc.ledger import SearchLedger
     from goldbot.research.autodisc.stages import StageJournal
@@ -652,14 +674,14 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
 
     get = backends or BarBackends(settings)
     obs = after_holdout((obs_reader or read_demo_obs)(settings, state_dir, slot, write=not dry_run))
-    why_forward = forward or forward_refusal(settings)
+    why_kill_unreadable = kill_unreadable or kill_unreadable_rule()
     out: list[TimeframeRun] = []
     texts: list[str] = []
     offered: list[H.CandidateArm] = []
     status: Status = "dry_run" if dry_run else "ok"
     ledger_path: Path | None = None
     survivors: list[str] = []
-    not_exec = stage_closed = fwd_refused = 0
+    not_exec = stage_closed = unreadable = 0
     last = 0.0
     for tf in cfg.timeframes:
         t0 = clock()
@@ -713,15 +735,19 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                 not_exec += 1
                 continue
             entries = _entries(b, spec)
-            if why_forward(tf, *gate.counts(*entries), years) is not None:
-                fwd_refused += 1
+            counts = gate.counts(*entries)
+            if why_kill_unreadable(tf, *counts, years) is not None:
+                unreadable += 1
                 continue
+            fwd = forward_verdict(settings, tf, signals=counts[0], clusters=counts[1], learn_years=years)
             offered.append(H.CandidateArm(spec_hash=s.spec_hash, night=night, timeframe=tf,
                                           style=H.STYLE_BY_TF[tf], spec=canonical_json(spec), dsr=s.dsr,
                                           meets_confirm_dsr=s.meets_confirm_dsr, k_search=res.k_dsr,
                                           power=gate.verdict(spec, *entries).model_dump(mode="json"),
                                           neighbours_admitted=s.neighbours_admitted,
-                                          neighbours_total=s.neighbours_total))
+                                          neighbours_total=s.neighbours_total,
+                                          power_forward={"reading": FORWARD_READING,
+                                                         **fwd.model_dump(mode="json")}))
         survivors += [s.spec_hash for s in res.survivors]
         texts.append(_tf_text(tf, gate.tally(), priors) + render(res))
         last = clock() - t0
@@ -731,7 +757,8 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                                 survivors=[s.spec_hash for s in res.survivors], batch_ok=res.batch_ok, elapsed_s=last))
     run = DiscoveryRun(night=night, dry_run=dry_run, status=status, timeframes=out,
                        k_spent=sum(x.k_search_tonight for x in out), survivors=survivors,
-                       candidate_arms=len(offered), not_executable=not_exec, forward_refused=fwd_refused,
+                       n_refused_power=sum(x.power.refused for x in out),
+                       candidate_arms=len(offered), not_executable=not_exec, kill_unreadable=unreadable,
                        stage_closed=stage_closed, budget=budget,
                        cards=cards, cost_version=getattr(get, "version", ""), budget_s=cfg.budget_s,
                        elapsed_s=clock() - start)
@@ -758,9 +785,10 @@ def _tf_text(tf: str, p: PowerTally, priors: Mapping[str, float]) -> str:
 def report(run: DiscoveryRun, texts: Sequence[str]) -> str:
     """The night's report: explore-window numbers only (no confirm or holdout date), as the nightly report."""
     b = run.budget
-    head = [f"discovery nightly | status {run.status} | K spent {run.k_spent:,} | survivors {len(run.survivors):,} | "
-            f"candidate arms offered {run.candidate_arms:,} (not executable live {run.not_executable:,}, forward window "
-            f"cannot judge {run.forward_refused:,}, stage read closed {run.stage_closed:,})"]
+    head = [f"discovery nightly | status {run.status} | K spent {run.k_spent:,} | power-gate refusals "
+            f"{run.n_refused_power:,} (not K) | survivors {len(run.survivors):,} | "
+            f"candidate arms offered {run.candidate_arms:,} (not executable live {run.not_executable:,}, "
+            f"kill rule unreadable {run.kill_unreadable:,}, stage read closed {run.stage_closed:,})"]
     if b is not None:
         head.append(f"trial budget: cap {b.cap:,}, used {b.used:,}, reserved {b.reserved:,}, tonight's registry rows "
                     f"{b.units:,} | discovery K: cap {b.k_cap:,}, used {b.k_used:,}, planned {b.planned_k:,}")
@@ -805,7 +833,8 @@ def record_failed(state_dir: Path, slot: pd.Timestamp, status: Literal["killed",
 def summary(run: DiscoveryRun) -> dict[str, Any]:
     per = {x.timeframe: (f"admitted {x.power.admitted:,} refused {x.power.refused:,} K {x.k_search_tonight:,}"
                          if x.searched else f"skipped ({x.skipped})") for x in run.timeframes}
-    return {"status": run.status, "k_spent": run.k_spent, "survivors": len(run.survivors),
+    return {"status": run.status, "k_spent": run.k_spent, "n_refused_power": run.n_refused_power,
+            "survivors": len(run.survivors),
             "candidate_arms": run.candidate_arms, "timeframes": per, "elapsed_s": round(run.elapsed_s, 1),
             "report": f"{REPORT_DIR}/discovery-{run.night}.md" if not run.dry_run else None,
             "health": f"discovery {run.status}: K {run.k_spent:,}, survivors {len(run.survivors)}, offered "

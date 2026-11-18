@@ -358,8 +358,10 @@ research:
     memory_mb: 4096                  # data-segment cap of the child (RLIMIT_DATA, Linux; ~1.5 GB RSS measured on the 2010-17 bars); one process, BLAS at one thread
     confirm_configs_per_batch: 3     # power card (XAUUSD alone): its fresh gate is TEST-OLD at Holm rank 1 of this many configs at the ledger year's alpha_j
     test_old_years: 3.92             # TEST-OLD 2006-02..2009 (only shorter)
-    k_cap_quarter: 0                 # TODO(research-director): the quarter's discovery K cap (summed registry k_contrib + the
-                                     #   night's planned K); 0 refuses every night until the research director sets it
+    k_cap_quarter: {"2026Q4": 15000, "2027Q1": 0}   # quarter -> discovery K cap (summed registry k_contrib + the night's
+                                     #   planned K); a quarter not listed, or 0, refuses every night. Research director's
+                                     #   decision docs/research/discovery-k-cap-2026-11-18.md: 2027Q1 moves to 30000 only
+                                     #   on a written Q4 read citing its continuation rule (one Q4 survivor past the bar)
     cost_of_record: config/cost_of_record_v3.yaml   # ADR 0084 v3 per (session, exit) cell in bps of cost_price_usd; v3 has no
     cost_broker: icm                 #   spread split: mid labels + each full cell (the spread charged once); swap: the settings prior
     cost_price_usd: 4000.0           # gold $/oz where v3 was measured: below the 4068.7 median of 2026-10-12..11-06
