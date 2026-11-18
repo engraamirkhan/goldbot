@@ -1,9 +1,34 @@
 # 0090: Discovery nightly on the brain: power-first, budgeted, niced
 
-Status: proposed (implementer, 2026-11-18; research director's build 4 of the owner directive of 2026-11-18, "the
-system finds new strategies itself"). Needs the quant-reviewer's GO (research path) and the sre's GO (a new brain
-job) before it is enabled on any host. Amends ADR 0058 section 5 ("the brain runs only the interpreter and the
-forward read") for this job only; respects ADR 0083 and ADR 0085.
+Status: Accepted (quant GO 2026-11-18, conditions a-e; SRE GO 2026-11-18, conditions f-k); enable not before
+2026-11-22 22:00 UTC. Amends ADR 0058 section 5 ("the brain runs only the interpreter and the forward read") for this
+job only; respects ADR 0083 and ADR 0085.
+
+Quant conditions:
+- (a) Off until `bars_path` is set and the SRE GO is recorded.
+- (b) The first night is reviewed by quant before any write: `research.discovery.first_night_dry` (default true)
+  withholds the hand-off (no `candidate_arms` row) while the night's K is booked to the ledger and the registry as
+  on any night (a search that reads outcomes without booking K is an uncounted trial); the report lists what it would
+  have offered. The reviewer sets it false after reading that report (section 9).
+- (c) The 2026Q4 cap is 15,000, as the research director recorded (docs/research/discovery-k-cap-2026-11-18.md);
+  2027Q1 stays 0 until set.
+- (d) Hand-offs register only via `autodisc_register` while `LIFECYCLE_READY` is True; forward power is reported, not
+  evidence.
+- (e) The holdout and TEST-OLD refusals stay enforced in code.
+
+SRE conditions:
+- (f) The bounded wrapper with a memory limit, nice and idle IO, outside market-open hours.
+- (g) Telegram alerts on a failure and on a last success older than 26 h, plus a health check
+  (`job:discovery_nightly` FAIL; `discovery_last_run` WARN on NOTIFY_ON_WARN; section 9).
+- (h) A RUNBOOK entry ("Discovery nightly on the brain"), single-flag rollback (`enabled: false`), default off.
+- (i) The first night's RSS, runtime and engine heartbeat lag recorded in the deploy note.
+- (j) Not enabled on the same night as `arm_lifecycle` (nor any other new brain job).
+- (k) Memory: no per-child cgroup MemoryMax is possible without a unit change (`Delegate=yes`), which is out of scope
+  for code; the bound is RLIMIT_DATA `memory_mb` 4,096 MB plus oom_score_adj 500, and the job's health line warns past
+  the SRE's 2,048 MB budget (1.2 GB measured in the brain dry run).
+
+History: proposed by the implementer 2026-11-18 (the research director's build 4 of the owner directive of
+2026-11-18, "the system finds new strategies itself").
 
 ## Context
 - ADR 0083 retired `autodisc_nightly` from the brain: it only ever skipped there (`nightly_enabled` false, no bars) and
@@ -94,6 +119,13 @@ forward read") for this job only; respects ADR 0083 and ADR 0085.
      (`outcomes.explore_record`). It is computed on the explore tensor only: a tensor reaching EXPLORE_CUTOFF, or one
      without entry prices, writes none, so the registration fails closed. `handoff.candidate()` reads a row with its
      `power_forward` (reported, not evidence) for the registration side.
+
+9. **Enable guards** (the conditions above). A failed or killed night already fails the job, so `job:discovery_nightly`
+   FAILs and the health -> Telegram path tells the owner. `discovery_last_run` (goldbot/ops/checks/discovery.py,
+   only while enabled) WARNs, and is told, when no night has succeeded (`ok`, `budget`, `over_budget`) for 26 h: a
+   stale research job is not a trading outage, so it does not ping the dead man's switch. A job that ran disabled at
+   its last slot is pending, not stale. `first_night_dry` keeps the aux run record and the report (the audit trail of
+   the K the night spent, and what the health check reads); only the hand-off is withheld.
 
 ## Consequences
 - The brain gets one more job that can fail; it fails loudly, at low priority, inside a fixed window. A killed night's

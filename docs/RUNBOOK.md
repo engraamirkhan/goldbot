@@ -2818,26 +2818,47 @@ from release `research-v1` with `gh`). Remove: delete the key line from the brai
 
 ### Discovery nightly on the brain (ADR 0090)
 
-Off until the quant-reviewer and the sre have signed ADR 0090 off. `research.discovery.k_cap_quarter` is the research
-director's per-quarter K cap (docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15000, 2027Q1 0); a quarter not
-listed, or 0, refuses every night. 2027Q1 moves to 30000 only on the director's written Q4 read. To turn it on (Claude
-runs it; the owner does nothing):
+Accepted (quant GO and SRE GO 2026-11-18, ADR 0090 Status); **enable not before 2026-11-22 22:00 UTC**, and never on
+the same night as another new brain job (in particular `arm_lifecycle`): one change a night, so a slow engine or a
+memory alarm has one suspect. `research.discovery.k_cap_quarter` is the research director's per-quarter K cap
+(docs/research/discovery-k-cap-2026-11-18.md: 2026Q4 15000, 2027Q1 0); a quarter not listed, or 0, refuses every
+night. 2027Q1 moves to 30000 only on the director's written Q4 read. To turn it on (Claude runs it; the owner does
+nothing):
 1. The 2010-2017 research 1m files are on the brain at `/opt/goldbot/data/_raw/bars` (per-year
    `xauusd_1m_dukascopy_<year>.parquet`; local only, never published). Add to the brain's
-   `config/settings.local.yaml`: `research: {discovery: {enabled: true, bars_path: /opt/goldbot/data/_raw/bars}}`.
-   Only the explore years are ever opened.
+   `config/settings.local.yaml`:
+   `research: {discovery: {enabled: true, bars_path: /opt/goldbot/data/_raw/bars, first_night_dry: true}}`.
+   Only the explore years are ever opened. `first_night_dry: true` is the shipped default; write it anyway so the
+   flip in step 5 is a visible one-line edit.
 2. Try it first without writing anything: `python -m goldbot.research.autodisc.discovery --state-dir state --dry-run`
    (prints, per timeframe, whether it is reachable under the power rule, the priors, the catalogue triage, both
-   budget lines and `max_rss_mb`, the run's peak RSS). Record `max_rss_mb` in the deploy note; above ~3,000 MB the
-   4,096 MB `memory_mb` cap has too little headroom: stop and tell the sre.
-3. Restart the scheduler service. The next 01:00 UTC run shows as `job:discovery_nightly` in `goldbot run health`;
-   the job result carries `elapsed_s` and `max_rss_mb`, and the health line starts with `WARN` once a night uses
-   more than 80 % of `budget_s`.
+   budget lines and `max_rss_mb`, the run's peak RSS). Above ~2,000 MB stop and tell the sre.
+3. Restart the scheduler service. The next 01:00 UTC run shows as `job:discovery_nightly` and `discovery_last_run`
+   in `goldbot run health`; the job result carries `elapsed_s` and `max_rss_mb`, and its health line starts with
+   `WARN` once a night uses more than 80 % of `budget_s` or its peak RSS passes 2,048 MB.
+4. The deploy note records the first enabled night: the child's peak RSS (`max_rss_mb` in the job result), its runtime
+   (`elapsed_s`), and the engine heartbeat lag during 01:00-03:10 UTC (`python -m goldbot.ops.run health --json` at
+   about 01:30 and 02:30: the largest `heartbeat:` and `engine_loop:<account>` age; compare with a night without the
+   job). An engine loop that lags past its warn threshold while the child runs: roll back (below) and tell the sre.
+5. The first enabled night is dry for the hand-off (quant condition (b)): it books its K (ledger and registry, as any
+   night: an uncounted search would be a hidden trial) and writes its report and run record, but writes no
+   `candidate_arms` row. The report `state/autodisc/discovery-<day>.md` has a "first night dry" section listing what it
+   would have offered. The quant-reviewer reads it; only then set `first_night_dry: false` in settings.local.yaml and
+   restart the scheduler. A withheld survivor is not offered later.
+
+**Rollback**: `research.discovery.enabled: false` in settings.local.yaml and restart the scheduler (one flag; the
+default is off). Nothing else needs undoing: the K already spent stays in the ledger and the registry.
+
+Alerts: a failed or killed night FAILs `job:discovery_nightly`, which the health -> Telegram path tells the owner.
+While enabled, `discovery_last_run` WARNs (and is told) when no night has succeeded (status `ok`, `budget` or
+`over_budget` in aux.db `discovery_runs`) for 26 h. Disabled: no check, no alert. Memory: the child's bound is
+RLIMIT_DATA `memory_mb` 4,096 MB plus oom_score_adj 500 (the kernel kills it before an engine); there is no per-child
+cgroup MemoryMax (that would need `Delegate=yes` on the unit), so the 2,048 MB health warning is the early signal.
 
 Each night: `state/autodisc/discovery-<day>.md` (power admitted/refused per timeframe, the survivors report), one row
 in aux.db `discovery_runs`, and the offered survivors in `state/discovery_real.db` (`candidate_arms`). An offered
 survivor becomes a demo arm only through `python -m goldbot.ops.run autodisc-register <spec_hash> --account <demo>
---prereg <path>#<section> --stage explore` (the forward reading rule written first). Turn it off: `enabled: false`.
+--prereg <path>#<section> --stage explore` (the forward reading rule written first).
 If the job is killed at its budget, lower `research.discovery.population` or drop a timeframe; nothing is lost (the
 night's K stays in the ledger and the next run counts it in the registry). Every night that does not finish (killed,
 an error, out of memory) leaves a `killed` or `failed` row in aux.db `discovery_runs` with the reason. One run at a

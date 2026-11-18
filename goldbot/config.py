@@ -481,6 +481,10 @@ class DiscoverySettings(_Section):
     through `cost_of_record.load_research_bars`, which refuses the holdout."""
     enabled: bool = False                           # on per host in settings.local.yaml, with bars_path (RUNBOOK)
     bars_path: str | None = None                    # the research 1m bid/ask parquet; enabled without it fails the job
+    # quant GO 2026-11-18 condition (b): while true an enabled night books its K (ledger, registry) and writes its run
+    # record and report, but hands nothing off (no candidate_arms rows); a quant reviewer flips it after reading that
+    # first report
+    first_night_dry: bool = True
     timeframes: list[DiscoveryTimeframe] = Field(default_factory=lambda: list(DISCOVERY_FOCUS), min_length=1)
     population: int = Field(32, ge=4, le=200)
     generations: int = Field(8, ge=1, le=50)
@@ -491,7 +495,9 @@ class DiscoverySettings(_Section):
     budget_s: float = Field(5400.0, ge=60, le=7200)         # no new timeframe starts once spent
     kill_grace_s: float = Field(300.0, ge=30, le=600)       # the child is killed at budget_s + this
     nice: int = Field(15, ge=10, le=19)                     # only gentler than the engines, never level with them
-    memory_mb: int = Field(4096, ge=1024, le=8192)          # RLIMIT_DATA of the child (Linux); ~1.5 GB measured
+    # RLIMIT_DATA of the child (Linux) + oom_score_adj 500: the bound, no per-child cgroup MemoryMax (ADR 0090); 1.2 GB
+    # peak in the brain dry run, the job's health warns past 2 GB (jobs.DISCOVERY_RSS_WARN_MB)
+    memory_mb: int = Field(4096, ge=1024, le=8192)
     # the ADR 0085 power card of a G2 spec: XAUUSD alone, learn = the explore window, one fresh gate: the TEST-OLD
     # confirm at Holm rank 1 of confirm_configs_per_batch configs at the ledger year's alpha_j (batch_alpha)
     confirm_configs_per_batch: int = Field(3, ge=1, le=50)

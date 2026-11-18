@@ -5,7 +5,8 @@ single-threaded).
     run_bounded(fn, args, *, budget_s, nice, memory_mb) -> BoundedResult
 
 The child is a fresh `spawn` process (no copy of the scheduler's state or locks) that lowers its own CPU priority to
-`nice`, offers itself first to the OOM killer (oom_score_adj 500, Linux), caps its data segment at `memory_mb`
+`nice`, asks for the idle IO class (ioprio_set, Linux: its reads wait for every engine's; honoured by the bfq
+scheduler, ignored by none/mq-deadline, never an error), offers itself first to the OOM killer (oom_score_adj 500, Linux), caps its data segment at `memory_mb`
 (RLIMIT_DATA, Linux; macOS does not enforce it; not RLIMIT_AS, which pyarrow's and numpy's large virtual reservations
 would trip long before real memory runs out) and starts with one BLAS/OpenMP thread, so it never competes with an
 engine at equal priority, never costs an engine its memory, nor oversubscribes the cores. It runs `fn(*args)` and
@@ -14,8 +15,10 @@ then kills it: the result says `timed_out` and the caller decides what that mean
 path."""
 from __future__ import annotations
 
+import ctypes
 import multiprocessing as mp
 import os
+import platform
 import resource
 import sys
 import time
@@ -31,6 +34,10 @@ THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NU
 TERM_WAIT_S = 10.0
 OOM_SCORE_ADJ = Path("/proc/self/oom_score_adj")
 OOM_ADJ = "500"                                # the child goes before the engines (0) when the brain runs out
+# ioprio_set(2): which = IOPRIO_WHO_PROCESS, who = 0 (this process), ioprio = IOPRIO_CLASS_IDLE << IOPRIO_CLASS_SHIFT
+IOPRIO_SET_NR = {"x86_64": 251, "aarch64": 30, "arm64": 30}
+IOPRIO_WHO_PROCESS = 1
+IOPRIO_IDLE = 3 << 13
 
 
 class BoundedResult(FrozenRecord):
@@ -63,6 +70,23 @@ def volunteer_for_oom(path: Path = OOM_SCORE_ADJ) -> None:
         pass
 
 
+def _syscall(*args: int) -> int:
+    return int(ctypes.CDLL(None, use_errno=True).syscall(*args))
+
+
+def idle_io(syscall: Callable[..., int] = _syscall) -> bool:
+    """On Linux, the idle IO class for this process (SRE GO 2026-11-18: "nice and idle IO"): it reads from disk only
+    when no other process wants the disk. True when the kernel took it; an unknown architecture, a refusal or no libc
+    never stops the child. Nothing elsewhere."""
+    nr = IOPRIO_SET_NR.get(platform.machine()) if sys.platform.startswith("linux") else None
+    if nr is None:
+        return False
+    try:
+        return syscall(nr, IOPRIO_WHO_PROCESS, 0, IOPRIO_IDLE) == 0
+    except (OSError, AttributeError, TypeError):
+        return False
+
+
 def peak_rss_mb() -> float:
     """This process's peak resident memory in MB (ru_maxrss: KB on Linux, bytes on macOS)."""
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -72,6 +96,7 @@ def peak_rss_mb() -> float:
 def _child(conn: Connection, fn: Callable[..., Any], args: tuple[Any, ...], nice: int, memory_mb: int | None) -> None:
     try:
         os.nice(max(0, nice - os.nice(0)))
+        idle_io()
         volunteer_for_oom()
         cap_memory(memory_mb)
         conn.send(("ok", fn(*args), peak_rss_mb()))

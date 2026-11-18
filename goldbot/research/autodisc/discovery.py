@@ -43,6 +43,13 @@ The owner's directive of 2026-11-18, "the system finds new strategies itself", a
 7. Out. Survivors that can run live (`arm_rules_spec`, prereg still to come) -> `handoff.candidate_arms`, the
    registration hand-off; the run record -> aux.db `discovery_runs` and the discovery ledger's `nightly_runs`; the
    report -> state/autodisc/discovery-<night>.md (explore numbers only). A dry run reads and plans and writes nothing.
+8. First enabled night (quant GO 2026-11-18, condition (b): "the first night is reviewed by quant before any write").
+   While `research.discovery.first_night_dry` is true, an enabled night runs the full search and its candidate rows
+   are WITHHELD: nothing is handed off (no `candidate_arms` row, so `autodisc_register` has nothing to register), and
+   the report lists what it would have offered. Its K is NOT withheld: "a dry search that evaluates outcomes without
+   booking K is an uncounted trial", so the night ledgers every spec it evaluated, syncs that K to the registry and
+   writes its run record exactly as any night. A withheld survivor is never offered later; the reviewer flips the flag
+   to false after reading that report.
 
 "An explore survivor is a recorded fact, never evidence of edge." Nothing here trades, registers an arm or edits a
 config: registration stays `ops/autodisc_register.py` (demo accounts; the order gate is unchanged)."""
@@ -638,7 +645,10 @@ class DiscoveryRun(FrozenRecord):
     timeframes: list[TimeframeRun]
     k_spent: int = 0
     survivors: list[str] = []
-    candidate_arms: int = 0
+    candidate_arms: int = 0                   # rows written to the hand-off (0 on a withheld night)
+    would_offer: int = 0                      # survivors that passed every hand-off check
+    withheld: bool = False                    # first_night_dry: K booked, the hand-off withheld (module docstring, 8)
+    offered: list[str] = []                   # the offerable specs (hashes), listed in the report
     not_executable: int = 0
     kill_unreadable: int = 0                  # survivors their kill rule could not read by `until`: never offered
     n_refused_power: int = 0                  # specs the power gate refused (search, null, neighbours): never K
@@ -663,7 +673,8 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     """The night (module docstring). Real backends write the registry's discovery K (`k_link`); synthetic ones never
     reach the registry. `dry_run`: everything up to the search (inputs, priors, power reachability, cards, budget),
     nothing written anywhere. `reads_ledger`: EVAL-2's reads ledger (default beside the registry);
-    `kill_unreadable`: why a survivor's kill rule could not read it (default `kill_unreadable_rule`)."""
+    `kill_unreadable`: why a survivor's kill rule could not read it (default `kill_unreadable_rule`).
+    `research.discovery.first_night_dry` (module docstring, 8): K booked, the candidate rows withheld."""
     from goldbot.research.autodisc.k_link import dsr_k_offset, sync_discovery_k
     from goldbot.research.autodisc.ledger import SearchLedger
     from goldbot.research.autodisc.stages import StageJournal
@@ -785,19 +796,30 @@ def run_discovery(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                                 families=len(b.families), k_search_tonight=ledger.k_search() - k0,
                                 k_null=ledger.k_null() - n0, evaluated=res.evaluated, candidates=res.candidates,
                                 survivors=[s.spec_hash for s in res.survivors], batch_ok=res.batch_ok, elapsed_s=last))
+    withhold = cfg.first_night_dry and not dry_run
     run = DiscoveryRun(night=night, dry_run=dry_run, status=status, timeframes=out,
                        k_spent=sum(x.k_search_tonight for x in out), survivors=survivors,
                        n_refused_power=sum(x.power.refused for x in out),
-                       candidate_arms=len(offered), not_executable=not_exec, kill_unreadable=unreadable,
+                       candidate_arms=0 if withhold else len(offered), would_offer=len(offered), withheld=withhold,
+                       offered=[c.spec_hash for c in offered], not_executable=not_exec, kill_unreadable=unreadable,
                        stage_closed=stage_closed, budget=budget,
                        cards=cards, cost_version=getattr(get, "version", ""), budget_s=cfg.budget_s,
                        elapsed_s=clock() - start)
     if not dry_run:
-        if ledger_path is not None and offered:
+        if ledger_path is not None and offered and not withhold:     # the hand-off; never on a withheld night
             run = run.model_copy(update={"candidate_arms": H.write_candidates(ledger_path, offered)})
         write_atomic(state_dir / REPORT_DIR / f"discovery-{night}.md", report(run, texts))
         record(state_dir, run, ledger_path)
     return run
+
+
+def _withheld_text(run: DiscoveryRun) -> str:
+    """The withheld night's section: its K is booked, and the specs it would have offered (hash, explore only)."""
+    rows = "".join(f"- {h[:12]} ({h})\n" for h in run.offered) or "- none\n"
+    return (f"\n## first night dry (research.discovery.first_night_dry, quant GO condition (b))\n"
+            f"K booked {run.k_spent:,} (ledger and registry, as on any night); hand-off withheld: "
+            f"{run.would_offer:,} candidate arm(s) would have been offered, none written. A quant reviewer reads this "
+            f"report, then sets first_night_dry false (RUNBOOK 'Discovery nightly on the brain').\n{rows}")
 
 
 def _entries(b: Backends, spec: StrategySpec) -> tuple[np.ndarray, np.ndarray]:
@@ -831,7 +853,7 @@ def report(run: DiscoveryRun, texts: Sequence[str]) -> str:
         c = run.cards
         head.append(f"catalogue cards: power-started {len(c.started):,} (await a pre-registration), refused "
                     f"{len(c.refused):,}, unscorable {len(c.unscorable):,}, out of focus {c.out_of_focus:,}")
-    text = "\n".join(head) + "\n" + "".join(texts)
+    text = "\n".join(head) + "\n" + (_withheld_text(run) if run.withheld else "") + "".join(texts)
     assert_no_confirm_numbers(text)
     return text
 
@@ -867,8 +889,11 @@ def summary(run: DiscoveryRun) -> dict[str, Any]:
             "survivors": len(run.survivors),
             "candidate_arms": run.candidate_arms, "timeframes": per, "elapsed_s": round(run.elapsed_s, 1),
             "report": f"{REPORT_DIR}/discovery-{run.night}.md" if not run.dry_run else None,
+            "withheld": run.withheld,
             "health": f"discovery {run.status}: K {run.k_spent:,}, survivors {len(run.survivors)}, offered "
-                      f"{run.candidate_arms} (explore only, not evidence)"}
+                      f"{run.candidate_arms} (explore only, not evidence)"
+                      + (f"; first night dry: {run.would_offer} withheld for the quant review (K booked)"
+                         if run.withheld else "")}
 
 
 @contextmanager

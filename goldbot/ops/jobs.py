@@ -1789,6 +1789,10 @@ def news_coverage(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 DISCOVERY_WARN_SHARE = 0.8          # the night's health warns once it uses more than this share of budget_s
+# the SRE's memory budget for the child (SRE GO 2026-11-18, "MemoryMax about 2 GB"; 1.2 GB measured in the brain dry
+# run). No per-child cgroup MemoryMax without a unit change on the host (Delegate=yes), so the hard bound stays
+# RLIMIT_DATA memory_mb (4 GB) + oom_score_adj 500 (ops/bounded.py); this is the early warning below it
+DISCOVERY_RSS_WARN_MB = 2048.0
 
 
 def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
@@ -1796,8 +1800,9 @@ def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     research.discovery.nice under memory_mb, killed at budget_s + kill_grace_s (ops/bounded.py), so the single-threaded
     scheduler and the engines on the brain keep their CPU (ADR 0083's reasons). Off: skipped without a child. A killed
     or failed child writes a discovery_runs row and fails the job (health shows it); its K is in the ledger and the
-    next night's sync counts it. The result carries the child's elapsed time and peak RSS; the health line warns past
-    80 % of budget_s."""
+    next night's sync counts it (and job:discovery_nightly FAILs, which the health -> Telegram path tells the owner).
+    The result carries the child's elapsed time and peak RSS; the health line warns past 80 % of budget_s and past the
+    SRE's 2 GB memory budget (DISCOVERY_RSS_WARN_MB)."""
     cfg = ctx.settings.research.discovery
     if not cfg.enabled:
         return {"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"}
@@ -1814,6 +1819,10 @@ def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     if "health" in res and out.elapsed_s > DISCOVERY_WARN_SHARE * cfg.budget_s:
         res["health"] = (f"WARN: {out.elapsed_s:,.0f} s is over 80 % of budget_s {cfg.budget_s:,.0f} s (lower "
                          f"population or drop a timeframe); {res['health']}")
+    if "health" in res and out.max_rss_mb is not None and out.max_rss_mb > DISCOVERY_RSS_WARN_MB:
+        res["health"] = (f"WARN: peak RSS {out.max_rss_mb:,.0f} MB is over the {DISCOVERY_RSS_WARN_MB:,.0f} MB budget "
+                         f"(hard cap RLIMIT_DATA {cfg.memory_mb:,} MB; lower population or drop a timeframe); "
+                         f"{res['health']}")
     return res
 
 

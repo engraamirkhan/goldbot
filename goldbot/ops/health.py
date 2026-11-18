@@ -131,6 +131,7 @@ from goldbot.ops.checks.bridge import (
 )
 from goldbot.ops.checks.compaction import check_compaction
 from goldbot.ops.checks.cpcv import check_cpcv_evidence
+from goldbot.ops.checks.discovery import check_discovery_last_run  # ADR 0090 SRE GO (registers it)
 from goldbot.ops.checks.engine import (
     HISTORY_GAP_MIN_CLOSES,
     HISTORY_GAP_WINDOW_H,
@@ -338,6 +339,7 @@ __all__ = [
     "check_deadman",
     "check_cpu_steal",
     "check_feedback_loop",
+    "check_discovery_last_run",
     "check_deploy_approval",
     "check_deploy_read",
     "check_deploy",
@@ -661,7 +663,8 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
                   "history_gap:", "long_history:", "entry_silence:", "deploy_read", "news_blackout_cap",
                   "feedback_loop",   # R140: a loop writer whose state cannot be read ("can't check") is told, not passed
                   "cpu_steal", "needrestart",   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule
-                  "swap_reconcile")  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
+                  "swap_reconcile",  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
+                  "discovery_last_run")  # ADR 0090 SRE GO: an enabled discovery job with no successful night in 26 h
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the
