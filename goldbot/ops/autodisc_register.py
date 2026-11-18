@@ -61,6 +61,7 @@ from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
 from goldbot.research.arm_rules_spec import learning_until
 from goldbot.research.arms import SPEC_RULE, Arm, arm_hash, load_arms
+from goldbot.research.autodisc import handoff
 from goldbot.research.autodisc.ledger import GENESIS, SearchLedger
 from goldbot.research.autodisc.nightly import LEDGER_FILE
 from goldbot.research.autodisc.nulls import NEG_INF, NullDistribution
@@ -539,7 +540,8 @@ GROSS_MULTIPLE = 2.0                # 2.4 (b): "explore gross mean per trade >= 
 MIN_N, MIN_DAYS = 50, 10            # 2.4 (f): the kill rule's MIN_N replayed candidates and MIN_DAYS signal days
 # The interlock (quant review of 751cf7ab): every registration is refused until the amendment's section 6 pieces are
 # all on one branch: the lifecycle voids (research/arm_lifecycle.py), the forward power report (`forward_power`) and
-# T5 (feat/discovery-nightly). Flipped to True only in the PR that delivers all of them; never by a setting.
+# T5 (feat/discovery-nightly), now all merged here; the flip waits on the quant and trading-safety re-review.
+# Flipped to True only in the PR that delivers all of them; never by a setting.
 LIFECYCLE_READY = False
 NOT_READY = "amendment not effective: lifecycle voids, forward power, T5 pending (section 6)"
 PREREG_SECTION = "#5-the-reading-rule-kill-only-hv-rule-3"     # params.prereg: the amendment's reading rule
@@ -582,23 +584,15 @@ class LearningPlan(FrozenRecord):
     signal_rate: float
     expected_n: float
     expected_days: float
-    power_forward: Any = None           # 2.4 (f): "reported, not evidence"; None until the discovery handoff is merged
+    power_forward: dict[str, Any] | None = None     # 2.4 (f): "reported, not evidence"; None when never offered
 
 
-def forward_power(ledger_path: Path, spec_hash_: str) -> Any:
+def forward_power(ledger_path: Path, spec_hash_: str) -> dict[str, Any] | None:
     """2.4 (f): the forward power against the twin, "reported, not evidence" (it never refuses or admits an arm): the
-    discovery lane's read-only `handoff.candidate(path, spec_hash)` row's `power_forward`. The SEAM: until
-    feat/discovery-nightly is merged here the module is absent and this reports None; the interlock
-    (LIFECYCLE_READY) keeps every registration refused meanwhile.
-    TODO(feat/discovery-nightly merge): drop the guard and pin the reported value with a test."""
-    import importlib
-    try:
-        handoff: Any = importlib.import_module("goldbot.research.autodisc.handoff")
-    except ModuleNotFoundError:
-        return None
+    `power_forward` of the discovery hand-off row for `spec_hash_` (`handoff.candidate`, read-only, ADR 0090); None
+    when the spec was never offered. The interlock (LIFECYCLE_READY) still keeps every registration refused."""
     row = handoff.candidate(ledger_path, spec_hash_)
-    return None if row is None else row.get("power_forward") if isinstance(row, dict) \
-        else getattr(row, "power_forward", None)
+    return None if row is None else dict(row.power_forward)
 
 
 def session_days(since: str, until: str) -> int:

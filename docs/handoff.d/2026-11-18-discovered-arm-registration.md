@@ -13,5 +13,7 @@
   closed at the decision) is recomputed at the entry: late (> 60 s) or off by > 1e-9 -> void, not sent, arm held.
   1d discovered arms are refused until the 60 s latency guard is ruled on for ADR 0081's 22:30 entry. The phase gate
   and the tournament's `passed_gates` read a discovered spec's DSR at `n_trials_discovery` (a tightening; golden
-  unchanged). `spec_rule` is at rule version 2 (`end_utc`). Not done: the nightly lifecycle read does not void
-  bracket-refused or post-change reads yet.
+  unchanged). `spec_rule` is at rule version 2 (`end_utc`). The nightly lifecycle read voids bracket-refused and
+  post-control-change reads (5.1 (5)). The plan reports the discovery hand-off's `power_forward`
+  (`handoff.candidate`; reported, never a gate). `autodisc_register.LIFECYCLE_READY` stays False: every registration
+  is refused until the quant and trading-safety re-review flips it.

@@ -28,9 +28,10 @@ from goldbot.ops import autodisc_register as R
 from goldbot.research import arm_rules_spec as S
 from goldbot.research import arms as ARMS
 from goldbot.research import registry as RG
+from goldbot.research.autodisc import handoff
 from goldbot.research.autodisc.gen_combine import family_spec
 from goldbot.research.autodisc.ledger import SearchLedger
-from goldbot.research.autodisc.spec import ExitTemplate, Leaf, spec_hash
+from goldbot.research.autodisc.spec import ExitTemplate, Leaf, canonical_json, spec_hash
 from tests.test_exploration_engine import CLOSE, _arm, _at, _engine
 from tests.test_exploration_engine import (
     _rules as _rules,  # noqa: F401  (autouse: the test arms' fixed rules)
@@ -350,14 +351,40 @@ def test_every_registration_is_refused_until_the_lifecycle_is_ready(env, monkeyp
     assert arm_rows(env) == [] and registry_rows(env) == []
 
 
+def offer(env: dict[str, Any], i: int, power_forward: dict[str, Any]) -> None:
+    """The discovery lane's hand-off row for spec(i), as `discovery_nightly` writes it (ADR 0090)."""
+    s = spec(i)
+    handoff.write_candidates(env["ledger_path"], [handoff.CandidateArm(
+        spec_hash=spec_hash(s), night="2026-11-22", timeframe=s.timeframe, style="intraday",
+        spec=canonical_json(s), dsr=None, meets_confirm_dsr=False, k_search=1, power={},
+        power_forward=power_forward)])
+
+
+def test_the_plan_reports_the_offered_candidates_forward_power_and_none_when_never_offered(env):
+    """2.4 (f): the forward power against the twin is the hand-off row's `power_forward`, "reported, not evidence"."""
+    verdict = {"admit": False, "n_eff": 12.5, "floor": 30}
+    offer(env, 0, verdict)
+    args = {k: v for k, v in env.items() if k != "state_dir"}
+    assert R.plan_learning(spec_hash(spec(0)), "icm-demo", state_dir=env["state_dir"], **args).power_forward == verdict
+    assert R.plan_learning(spec_hash(spec(1)), "icm-demo", state_dir=env["state_dir"], **args).power_forward is None
+
+
+def test_the_forward_power_never_refuses_or_admits_a_registration(env):
+    """Reported, not evidence: an underpowered forward verdict still registers; the plan is the same apart from it."""
+    offer(env, 0, {"admit": False, "n_eff": 0.0})
+    offer(env, 1, {"admit": True, "n_eff": 99.0})
+    a, b = register(env, 0), register(env, 1)
+    assert (a.power_forward or {}).get("admit") is False and (b.power_forward or {}).get("admit") is True
+    assert [r.arm_id for r in arm_rows(env)] == [a.reg.arm_id, a.reg.arm_id + "C", b.reg.arm_id, b.reg.arm_id + "C"]
+
+
 # The amendment's section 6 tests that live elsewhere:
 # T3 test_booked_k_equals_the_screened_configurations: tests/research/autodisc/test_registry_link.py
 #    test_sync_tops_the_registry_up_to_the_ledger_k_search_once (summed k_contrib = the ledger's distinct K_search,
 #    re-synced once) and test_the_nightly_job_records_its_batch_k_contrib_only_for_a_real_search (n_trials_discovery
-#    rises by exactly k_contrib); n_refused_power is on feat/discovery-nightly.
+#    rises by exactly k_contrib); n_refused_power is in goldbot/research/autodisc/discovery.py.
 # T5 test_power_admission_is_outcome_blind and T8 test_prior_search_seed_is_outside_quarter_k_but_inside_n_trials_
-#    discovery: tests/research/autodisc/test_discovery_nightly.py on feat/discovery-nightly (the admission code is
-#    not on this branch); T4: test_a_bracket_that_does_not_match_its_recompute_at_the_entry_is_void_and_holds_the_arm
+#    discovery: tests/research/autodisc/test_discovery_nightly.py; T4: test_a_bracket_that_does_not_match_its_recompute_at_the_entry_is_void_and_holds_the_arm
 #    here and tests/test_spec_bracket.py; T9: test_a_change_to_the_control_after_registration_voids_the_arm here.
 
 
