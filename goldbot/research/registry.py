@@ -78,7 +78,16 @@ DISCOVERY_BATCH = "discovery_batch"     # an autodisc search batch: sidecar only
 FROM_DISCOVERY_KEY = "from_discovery"   # set on a config whose features came from a discovery trial: its `row_ref`
 SURVIVOR_KEY = "survivor"               # ... and the discovery survivor (cluster, group or feature) the config tests
 SLOT_KINDS: tuple[str, ...] = ("survivor", "followup", "holdout")
-NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN, VERDICT, NOT_STARTED_POWER})
+# discovered arms on demo (prereg-amendment-2026-11-18-discovered-arms.md section 2.2; quant ruling 2026-11-18 Q3):
+# "Its dedicated replay-only control is not a trial ... recorded in the registry with a `NOT_TRIAL` status and linked
+# to the arm's K row"; and the void marker written against the registry rows when the arm row fails ("The K stays
+# counted and is never deleted"). Neither is a trial, a budget slot or K; neither carries a trial number
+NOT_TRIAL = "not_trial"
+LEARNING_VOID = "learning_void"
+NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN, VERDICT, NOT_STARTED_POWER, NOT_TRIAL, LEARNING_VOID})
+# the phase gate's K for a spec whose origin is discovery (quant-reviewer ruling 2026-11-18, Q1): the autonomous search's
+# registry family (`autodisc.confirm.FAMILY`) or a config carrying a discovered spec's hash
+DISCOVERY_FAMILIES = frozenset({"autodisc"})
 # the parent's pre-registered reading rule a survivor/holdout slot (and a discovery's follow-up) is read by: H-02's
 # (preregistration-2027Q1.md: cluster stability >= 0.6 AND OOF AUC >= 0.53 with the lower 95% bound > 0.50)
 # the screened-row decision rules coded in director.preregistered_decisions (preregistration-2027Q1.md): a
@@ -443,7 +452,22 @@ def forward_evidence(row: dict[str, Any]) -> str | None:
     return None
 
 
-def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
+def discovery_origin(row: dict[str, Any]) -> bool:
+    """`row` tests a spec found by the autonomous search: its family is DISCOVERY_FAMILIES' or its config carries a
+    discovered spec (`spec_hash`, as `autodisc.confirm.config_for` writes it)."""
+    config = row.get("config")
+    return row.get("family") in DISCOVERY_FAMILIES or (isinstance(config, dict) and "spec_hash" in config)
+
+
+def phase_gate_k(row: dict[str, Any], rows: list[dict[str, Any]], k_discovery: int | None = None) -> int | None:
+    """The K the phase gate reads `row`'s DSR at (quant-reviewer ruling 2026-11-18, Q1): `n_trials_discovery`
+    (`k_discovery`, the registry's `TrialRegistry.n_trials_discovery`) for a spec whose origin is discovery, None when
+    the caller did not read it; `n_trials_effective(rows)` for every other spec."""
+    return k_discovery if discovery_origin(row) else n_trials_effective(rows)
+
+
+def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]], *,
+                       k_discovery: int | None = None) -> str | None:
     """Why the walk-forward `row` is not a research pass the owner's phase gate may rest on, or None when it is. The
     rule `TrialRegistry.passed_gates` applies, for a reader holding a row and the registry (phase gate 1's backtest
     evidence, the CPCV promotion gate, gap watch's research-ready founders).
@@ -460,7 +484,11 @@ def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str |
       requirement 2026-11-18, item 4), which qualifies demo arms only;
     * a configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) also passed its holdout
       scoring on that feature version (`holdout_passed`): "its features were picked on the same window the
-      walk-forward scored, which the deflated Sharpe corrects only partly" (quant review 2026-10-16, HIGH)."""
+      walk-forward scored, which the deflated Sharpe corrects only partly" (quant review 2026-10-16, HIGH);
+    * a spec whose origin is discovery (`discovery_origin`) also has its DSR, recomputed at `n_trials_discovery`
+      (`k_discovery`; quant-reviewer ruling 2026-11-18, Q1: "The phase gate reads `n_trials_discovery` for any spec
+      whose origin is discovery"), at or above the gates' `backtest_min_dsr`; refused when the caller did not read
+      that K (fail closed). A tightening only: no other spec reads it, so the pinned decisions are unchanged."""
     if (ref := forward_evidence(row)) is not None:
         return f"forward demo evidence ({ref[:80]}) is never phase-gate evidence (trading-safety 2026-11-18)"
     if row.get("status") != "evaluated":
@@ -472,6 +500,8 @@ def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str |
     if latest is not None and latest != row:
         return (f"a later rerun of the same configuration (trial #{latest.get('trial')}) decides"
                 + ("" if gate_pass_counts(latest) else ", and it did not pass"))
+    if discovery_origin(row) and (why := _discovery_k_refusal(row, k_discovery)) is not None:
+        return why
     if (row.get("config") or {}).get(FROM_DISCOVERY_KEY):
         from goldbot.research.director import survivor_refusal  # director imports this module
         why = survivor_refusal(rows, row)
@@ -479,6 +509,21 @@ def phase_gate_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str |
             return why
         if not holdout_passed(rows, family, h, fv):
             return "discovery-derived configuration without a passed holdout scoring"
+    return None
+
+
+def _discovery_k_refusal(row: dict[str, Any], k_discovery: int | None) -> str | None:
+    """A discovered spec's DSR at `n_trials_discovery` against the gates' backtest_min_dsr (`phase_gate_refusal`)."""
+    if k_discovery is None:
+        return "a discovered spec's DSR is read at n_trials_discovery, which was not read (fail closed)"
+    from goldbot.config import load_settings  # config imports this module's readers lazily
+    from goldbot.research.gates import current_dsr
+    bar = load_settings().gates.backtest_min_dsr
+    dsr, why = current_dsr(row, k_discovery)
+    if dsr is None:
+        return f"a discovered spec's DSR at n_trials_discovery ({k_discovery}) cannot be read: {why}"
+    if dsr < bar:
+        return f"a discovered spec's DSR {dsr:.3f} at n_trials_discovery ({k_discovery}) is below {bar}"
     return None
 
 
@@ -567,8 +612,9 @@ class TrialRegistry:
         if refused and not ((results.get("power_first") or {}).get("started") is False and results.get("card")):
             raise ValueError("a not_started_power row is written only by power_first.start_or_refuse (results carry "
                              "power_first.started False and the card)")
+        unnumbered = refused or status in (NOT_TRIAL, LEARNING_VOID)
         row: dict[str, Any] = {
-            "trial": None if refused else self.n_trials + 1,     # a refusal is no trial: no number (ADR 0085)
+            "trial": None if unnumbered else self.n_trials + 1,  # a refusal or a NOT_TRIAL row is no trial: no number
             "ts": datetime.now(timezone.utc).isoformat(),
             "agent_id": agent_id, "family": family, "config_hash": config_hash(config), "config": config,
             "feature_version": feature_version, "rationale": rationale, "results": results, "status": status,
@@ -1015,6 +1061,8 @@ class TrialRegistry:
         latest = latest_evaluated(rows, family, h, feature_version)
         if latest is None or not gate_pass_counts(latest):
             return False
+        if discovery_origin(latest) and _discovery_k_refusal(latest, self.n_trials_discovery) is not None:
+            return False                 # quant-reviewer ruling 2026-11-18 Q1, as `phase_gate_refusal` (a tightening)
         if not config.get(FROM_DISCOVERY_KEY):
             return True
         from goldbot.research.director import survivor_refusal  # director imports this module

@@ -619,6 +619,16 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/arm_lifecycle.py", "arm_hold", "StrategySpec"):
         "strict: a frozen spec_rule arm's hash-checked canonical spec, read for its time exit only (B5); an invalid spec "
         "falls back to the longest settle lag, never a looser one",
+    ("goldbot/research/arms.py", "control_freeze_refusal", "Learning"):
+        "strict: the same learning block, read for the k_id its control's NOT_TRIAL row must name (discovered arms "
+        "2026-11-18); an invalid block refuses the arm (fail closed)",
+    ("goldbot/engine/arm_registry.py", "_pair_refusals", "Learning"):
+        "strict: the same hash-chained learning block, read for its control's id; an invalid block refuses the arm",
+    ("goldbot/ops/autodisc_register.py", "explore_record", "ExploreRecord"):
+        "strict: the registration bar's explore record from the hash-chained search ledger (2.4); a field missing or "
+        "unreadable must refuse the registration, never be read loosely",
+    ("goldbot/ops/autodisc_register.py", "plan_learning", "Arm"):
+        "not persisted: the arm and control rows this registration builds, validated before anything is written",
     ("goldbot/research/arm_lifecycle.py", "_learning", "Learning"):
         "strict: the same checked-in learning block, read by the nightly lifecycle job; an invalid block is no kill "
         "rule's block (the engine refuses that arm already)",

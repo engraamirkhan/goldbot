@@ -123,6 +123,7 @@ from goldbot.research.arms import (
     LEARNING_RULE,
     OWNER_EXPERIMENT_RULE,
     SPEC_RULE,
+    SPEC_RULES,
     arm_hash,
     load_arms,
     owner_experiment_refusal,
@@ -390,7 +391,7 @@ def qualification_by_account(accounts: list[Account]) -> dict[str, tuple[list[st
         if cfg is None:
             continue
         ok = {a.arm_id for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
-              and (a.spec.rule != SPEC_RULE or acc.mode == "demo")}
+              and (a.spec.rule not in SPEC_RULES or acc.mode == "demo")}
         refused, retired = set(entry_refused(cfg)), spec_retired(cfg)
         out[acc.account_id] = (sorted(ok - refused - retired), sorted((ok & refused) - retired))
     return out
@@ -690,7 +691,7 @@ class Exploration:
         # ADR 0058: a discovered arm (`spec_rule`) runs on a demo account only; refused here again whatever the config
         # said (the loader refuses it first, `config_for`), journalled as dropped like any arm that cannot run
         ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
-              and (a.spec.rule != SPEC_RULE or eng.cfg.mode == "demo")]
+              and (a.spec.rule not in SPEC_RULES or eng.cfg.mode == "demo")]
         for name in [*cfg.dropped, *(a.arm_id for a in cfg.arms if a not in ok)]:
             # trading-safety L2: one bad arm never stops the engine; it is named and the others run
             # BACKLOG 117: a bad row never in a good spec is named with its reason; an engine incident of the review
@@ -2092,7 +2093,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
 
     ps.why = None
     from goldbot.engine import arm_registry
-    if (why := arm_registry.entry_refusal(eng, ex, arm.arm_id)) is not None:
+    if (why := arm_registry.entry_refusal(eng, ex, arm.arm_id, s, now)) is not None:
         # trading-safety 2026-11-18: a hot-loaded arm enters only while its registry verifies and the account is demo
         # by the one predicate (`risk.gate.is_demo`), read at the signal; the RiskGate's fence checks again
         refuse(why)
