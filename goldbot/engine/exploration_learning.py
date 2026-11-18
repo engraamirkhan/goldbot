@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pandas as pd
@@ -131,18 +132,20 @@ class LearningRead(NamedTuple):
     pnl: float              # cumulative net P&L of every filled close
 
 
-def read(conn: Any, arm_id: str, cap: float, since: pd.Timestamp | None = None) -> LearningRead:
+def read(conn: Any, arm_id: str, cap: float, since: pd.Timestamp | None = None,
+         accounts: Collection[str] | None = None) -> LearningRead:
     """`arm_id`'s learning read in this host's ledger, every account, over the fills sent on or after `since` (its
     registration day, quant ruling 2026-11-02 (1)). The P&L sums every filled close; a close without a readable P&L
     counts as a loss at its stop plus its round trip (`cap`, the arm's per-trade cap, when its loss at the stop was
-    not recorded). Censored fills are counted apart, never in the 300 (quant ruling (5))."""
+    not recorded). Censored fills are counted apart, never in the 300 (quant ruling (5)). `accounts`: only these
+    accounts' rows (the nightly lifecycle reads one broker's accounts; the engine, None, reads every account)."""
     from goldbot.engine.exploration import LEDGER, _ns
     where, args = "arm_id = ? AND closed = 1", list[Any]([arm_id])
     if since is not None:
         where, args = where + " AND ts_ns >= ?", [*args, _ns(since)]
     fills, censored, pnl = 0, 0, 0.0
     for t in LEDGER.select(conn, where, tuple(args)):
-        if t.fill_price is None or t.exit_utc is None:
+        if t.fill_price is None or t.exit_utc is None or (accounts is not None and t.account_id not in accounts):
             continue
         if t.pnl is not None:
             pnl += t.pnl

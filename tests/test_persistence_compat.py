@@ -616,6 +616,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/engine/arm_registry.py", "_rows", "RegistryRow"):
         "strict: the hash-chained arm_registry columns (build 3, trading-safety 2026-11-18); a row that does not read "
         "must refuse every hot-loaded entry, never be read loosely",
+    ("goldbot/research/arm_lifecycle.py", "arm_hold", "StrategySpec"):
+        "strict: a frozen spec_rule arm's hash-checked canonical spec, read for its time exit only (B5); an invalid spec "
+        "falls back to the longest settle lag, never a looser one",
     ("goldbot/research/arm_lifecycle.py", "_learning", "Learning"):
         "strict: the same checked-in learning block, read by the nightly lifecycle job; an invalid block is no kill "
         "rule's block (the engine refuses that arm already)",

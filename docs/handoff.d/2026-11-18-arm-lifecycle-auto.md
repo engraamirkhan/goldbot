@@ -9,7 +9,8 @@
   remembered arms until a verified load; orphan close held at most 3 minutes, never past the weekend backstop; health
   FAILs an engine whose registry is unverified for 5 minutes. Build 2: nightly job `arm_lifecycle` (06:25 UTC;
   goldbot/research/arm_lifecycle.py), KILL-ONLY under HV Rule 3: excess of the arm's replayed candidates over its
-  matched control's replay labels per (UTC hour, side) cell, day terms frozen in aux.db `arm_lifecycle_terms`, RETIRE at
+  matched control's replay labels per (UTC hour, side) cell, day terms frozen in aux.db `arm_lifecycle_terms` only once their labels settle (day end + longest hold, weekend
+  included, + 1 day; > 5 % unlabelled then = void day), kill rules read on the broker's own accounts, RETIRE at
   e >= 40 or a kill rule (through `exploration_arm_status`), else HOLD; no promotion, no SIZE_UP; red-box week arms by
   their kill rules only. Until the replay-parity monitor (feat/replay-only-controls) is merged every twin reads
   unvalidated and only kill rules decide. Discovered arms load held by ADR 0061 (no learning-arm registration: needs K

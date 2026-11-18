@@ -404,7 +404,10 @@ def _refresh(eng: Engine, ex: Exploration) -> None:
     if rows:
         loaded = {a: {"style": mine[a].style, "max_loss": mine[a].max_loss, "row": mine[a].row}
                   for a in ex.hot_caps if a in mine}
-        remember(ex.registry_core, eng.cfg.account_id, (rows[-1].seq, rows[-1].digest), loaded)
+        tip_now = (rows[-1].seq, rows[-1].digest)
+        if got is None or (got.tip_seq, got.tip_digest) != tip_now or got.arms != loaded:
+            # safety S2: core.db's write lock only when the tip or the arm set changed, not every minute
+            remember(ex.registry_core, eng.cfg.account_id, tip_now, loaded)
     ex.registry_fails = 0
     ex.registry_settled = True
     _set_ok(ex, True)

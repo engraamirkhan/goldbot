@@ -26,9 +26,14 @@ enters either side. Matched control: the strategy ranking's pairing (`api.strate
 `learning.control`. The replay-parity monitor only **voids** a read (its broker x band scope revoked or not PASS:
 HOLD); it never shifts the excess.
 
-**Frozen path.** Each (broker, arm, session day) term, the day's mean excess, is written once at its first read
-(aux.db `arm_lifecycle_terms`, append-only by trigger). The e-process reads the stored terms only, so a late label or
-a later control row never rewrites a past term (a late label of a frozen day is left out).
+**Frozen path.** Each (broker, arm, session day) term, the day's mean excess, is written once (aux.db
+`arm_lifecycle_terms`, append-only by trigger), and only once the day's labels have settled: day D freezes when now >=
+end(D) + the arm's longest hold (its candidates' time barrier or its row's `hold_bars`; a `spec_rule` arm without one,
+its spec's time exit, else 10 days; a hold that reaches a weekend, or starts at the Friday close, gets the weekend
+added) + 1 day. The number of D's candidates still unlabelled then is stored with it; if more than 5 % are, D is
+stored void (no term) and logged. The e-process reads the stored, non-void terms only, so a later label or control
+row never rewrites a past term, and no day is cut short while its labels are still arriving (which would truncate on
+the outcome).
 
 Who is read: roles strategy and learning, running, not spec-retired. Never: controls, cost arms, owner experiments.
 A fixed-window experiment (`FIXED_WINDOW_PREREGS`, matched on `params.prereg`: today only

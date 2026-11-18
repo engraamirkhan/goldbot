@@ -834,14 +834,18 @@ AUX: tuple[Migration, ...] = (
                {_BODY},
                PRIMARY KEY (day, broker, arm_id)
            ) STRICT""",
-        # B4 (quant review 2026-11-18): each (broker, arm, session day) excess term frozen at its first read, never
-        # updated, so the e-process path the decisions read can only grow by new days
+        # B4/B5 (quant review 2026-11-18): each (broker, arm, session day) excess term frozen once its labels have
+        # settled (the day's end + the arm's hold, weekend included, + 1 day), never updated, so the e-process path the
+        # decisions read can only grow by new days. `void` 1 (term NULL): more than 5 % of the day's candidates were
+        # still unlabelled when it settled
         """CREATE TABLE IF NOT EXISTS arm_lifecycle_terms (
                broker TEXT NOT NULL,
                arm_id TEXT NOT NULL,
                day TEXT NOT NULL,
-               term REAL NOT NULL,
+               term REAL,
                n INTEGER NOT NULL,
+               n_unlabelled INTEGER NOT NULL,
+               void INTEGER NOT NULL CHECK (void IN (0, 1)),
                recorded_ns INTEGER NOT NULL,
                PRIMARY KEY (broker, arm_id, day)
            ) STRICT""",

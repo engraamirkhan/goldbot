@@ -21,9 +21,13 @@ The rule, as registered:
   either side. The replay-parity monitor only VOIDS a read (its broker x band scope revoked, or not PASS: HOLD); it
   never shifts the excess. A candidate whose cell has no control label is unmatched; above MAX_UNMATCHED the read is
   not readable.
-* Frozen path (quant B4): each (broker, arm, session day) term, the day's mean excess, is written once at its first
-  read (`arm_lifecycle_terms`, append-only) and the e-process reads the stored terms only, so a late label or a later
-  control row never rewrites a past term.
+* Frozen path (quant B4, B5): each (broker, arm, session day) term, the day's mean excess, is written once, and only
+  once the day's labels have settled: now >= the day's end + the arm's longest hold (the time barrier of its
+  candidates or of its row; a spec_rule arm without one, its spec's time exit, else SETTLE_DEFAULT; a hold that
+  reaches a weekend gets the weekend added) + SETTLE_PAD (`settled_at`). The number of the day's candidates still
+  unlabelled then is stored with it; above VOID_UNLABELLED of them the day is stored void (no term) and logged. The
+  e-process reads the stored, non-void terms only, so a later label or control row never rewrites a past term, and no
+  day is cut short while its labels are still arriving (outcome-dependent truncation).
 * The test: the EVAL-2 / replay-parity e-process (`eval2.forward.e_edge`: one term per session day, running maximum,
   valid at every look) on the stored terms. Worse (H0 excess >= 0) decides; better is reported, not evidence. Read
   only from MIN_N candidates over MIN_DAYS session days.
@@ -59,6 +63,9 @@ E_PER_STREAM = 20.0             # 1 / q per stream, q = 0.05 (ADR 0085; the pari
 STREAMS = 2                     # worse and better, per arm
 E_RETIRE = E_PER_STREAM * STREAMS
 MAX_UNMATCHED = 0.10            # HV Rule 3: above 10 % of candidates in cells with no control label, "not readable"
+SETTLE_PAD = pd.Timedelta(days=1)       # B5: a day freezes this long after its end + the arm's longest hold
+SETTLE_DEFAULT = pd.Timedelta(days=10)  # B5: the hold of an arm whose row and spec name none
+VOID_UNLABELLED = 0.05          # B5: a settled day with more of its candidates unlabelled is stored void
 DECIDED_ROLES = frozenset({"strategy", "learning"})
 # quant B2: experiments registered to run to a fixed end, matched on params.prereg (the file name, without .md#anchor)
 FIXED_WINDOW_PREREGS = frozenset({"prereg-amendment-2026-11-15-redbox-week"})
@@ -155,15 +162,16 @@ def _ledger(conn: Any, arm_id: str, accounts: Collection[str], since: pd.Timesta
     return n, pnl
 
 
-def _kill(conn: Any, arm: Arm, cap: float, day: str) -> str | None:
-    """The existing kill rules of a learning arm (`engine.exploration_learning`): its loss cap, its read at 300
-    admissible fills, its last day. None for any other arm, or when none fires."""
+def _kill(conn: Any, arm: Arm, cap: float, day: str, accounts: Collection[str]) -> str | None:
+    """The existing kill rules of a learning arm (`engine.exploration_learning`), read over `accounts` only (the
+    broker the RETIRE is written for; safety review S1): its loss cap, its read at 300 admissible fills, its last day.
+    None for any other arm, or when none fires."""
     from goldbot.engine.exploration_learning import read
     from goldbot.research.arms import LEARNING_READ_FILLS
     block = _learning(arm) if arm.role == "learning" else None
     if block is None:
         return None
-    r = read(conn, arm.id, cap, pd.Timestamp(block.since, tz="UTC"))
+    r = read(conn, arm.id, cap, pd.Timestamp(block.since, tz="UTC"), accounts)
     if -r.pnl >= block.loss_cap_gbp - 1e-9:
         return f"learning_loss_cap {block.loss_cap_gbp:g} reached"
     if r.fills >= LEARNING_READ_FILLS:
@@ -173,9 +181,43 @@ def _kill(conn: Any, arm: Arm, cap: float, day: str) -> str | None:
     return None
 
 
+def arm_hold(arm: Arm) -> pd.Timedelta:
+    """The arm's own time barrier (B5): its row's `hold_bars` x its timeframe; a spec_rule arm's spec time exit
+    (`exit.time_bars`); else SETTLE_DEFAULT."""
+    from goldbot.config import tf_seconds
+    tf = tf_seconds(arm.timeframe)
+    if isinstance(arm.params.get("hold_bars"), int | float):
+        return pd.Timedelta(seconds=float(arm.params["hold_bars"]) * tf)
+    if arm.rule == "spec_rule":
+        try:
+            from goldbot.research.autodisc.spec import StrategySpec
+            bars = StrategySpec.model_validate_json(str(arm.params.get("spec"))).exit.time_bars
+        except ValueError:
+            bars = None
+        if bars:
+            return pd.Timedelta(seconds=bars * tf)
+    return SETTLE_DEFAULT
+
+
+def settled_at(day: str, hold: pd.Timedelta) -> pd.Timestamp:
+    """When session day `day`'s labels have settled (B5): its end (the next session's start), plus `hold`, plus a
+    weekend when the hold reaches one, plus SETTLE_PAD."""
+    from goldbot.data.timeutil import NEW_YORK
+    from goldbot.research.exploration_data import session_start
+    end = session_start(f"{pd.Timestamp(day) + pd.Timedelta(days=1):%Y-%m-%d}")
+    due = end + hold
+    ny = end.tz_convert(NEW_YORK)
+    friday_close = ny.dayofweek == 4 and ny.hour >= 17       # the week's last session: its hold runs past the weekend
+    if friday_close or any(d.dayofweek >= 5 for d in pd.date_range(end.normalize(), due.normalize(), freq="D")):
+        due += pd.Timedelta(days=2)
+    return due + SETTLE_PAD
+
+
 def day_terms(obs: pd.DataFrame, arm: Arm, *, control: str | None, day: str) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """(the arm's day terms: day, term, n; the figures). The candidates are the arm's replayed ones up to `day`, taken
-    and refused (quant B1); the fill figures are its taken ones with a fill label."""
+    """(the arm's days: day, term (NaN: no matched candidate), n, n_all, n_unlabelled, hold_s; the figures). The
+    candidates are the arm's replayed ones up to `day`, taken and refused (quant B1); every candidate of a day counts
+    in n_all, the unlabelled ones (no r2 label yet) in n_unlabelled; the fill figures are its taken ones with a fill
+    label."""
     block = _learning(arm)
     since = pd.Timestamp(block.since, tz="UTC") if block is not None else None
     a = obs[(obs["arm_id"] == arm.id) & (obs["session_day"].astype(str) <= day)]
@@ -188,30 +230,51 @@ def day_terms(obs: pd.DataFrame, arm: Arm, *, control: str | None, day: str) -> 
         n_fills=len(fills), n_cands=len(cands),
         mean_r=float(fills["label_fill_r"].mean()) if len(fills) else None,
         gap_r=float((paired["label_fill_r"] - paired["label_sim_r"]).mean()) if len(paired) else None)
-    empty = pd.DataFrame({"day": pd.Series(dtype=str), "term": pd.Series(dtype=float), "n": pd.Series(dtype=int)})
-    if control is None or cands.empty:
-        return empty, fig
+    cols = ["day", "term", "n", "n_all", "n_unlabelled", "hold_s"]
+    if control is None or a.empty:
+        return pd.DataFrame(columns=cols), fig
+    every = pd.DataFrame({"day": a["session_day"].astype(str).to_numpy(),
+                          "unlabelled": a["label_sim_r"].isna().to_numpy(),
+                          "hold_s": pd.to_numeric(a["max_hold_s"], errors="coerce").to_numpy(dtype=float)
+                          if "max_hold_s" in a else np.nan})
+    per = every.groupby("day", sort=True).agg(n_all=("unlabelled", "size"), n_unlabelled=("unlabelled", "sum"),
+                                              hold_s=("hold_s", "max")).reset_index()
     twin = twin_means(cands, obs[(obs["arm_id"] == control) & obs["label_sim_r"].notna()])
     ok = np.isfinite(twin)
-    fig["unmatched_share"] = float(1 - ok.mean())
-    if not ok.any():
-        return empty, fig
+    fig["unmatched_share"] = float(1 - ok.mean()) if len(cands) else None
     x = pd.DataFrame({"day": cands["session_day"].astype(str).to_numpy()[ok],
                       "excess": cands["label_sim_r"].to_numpy(dtype=float)[ok] - twin[ok]})
-    terms = x.groupby("day", sort=True)["excess"].agg(["mean", "count"]).reset_index()
-    return terms.rename(columns={"mean": "term", "count": "n"}), fig
+    terms = x.groupby("day", sort=True)["excess"].agg(term="mean", n="count").reset_index()
+    out = per.merge(terms, on="day", how="left")
+    out["n"] = out["n"].fillna(0).astype(int)
+    return out[cols], fig
 
 
-def freeze(db: Database, broker: str, arm_id: str, terms: pd.DataFrame, *, now_ns: int) -> pd.DataFrame:
-    """Write each day term not stored yet (INSERT OR IGNORE: the first read stands), then every stored term of the
-    arm in day order: the path the e-process reads (quant B4)."""
+def freeze(db: Database, broker: str, arm: Arm, days: pd.DataFrame, *, now: pd.Timestamp) -> pd.DataFrame:
+    """Write each SETTLED day not stored yet (B5: `settled_at` with the longer of its candidates' holds and the arm's
+    own, `arm_hold`; INSERT OR IGNORE: the first settled read stands), void when more than VOID_UNLABELLED of its
+    candidates are still unlabelled; a settled day with no matched candidate is not stored. Then every stored,
+    non-void term of the arm in day order: the path the e-process reads (quant B4)."""
+    own = arm_hold(arm)
+    rows = []
+    for rec in days.to_dict("records"):
+        day, held, term = str(rec["day"]), float(rec["hold_s"]), float(rec["term"])
+        n, n_all, unlabelled = int(rec["n"]), int(rec["n_all"]), int(rec["n_unlabelled"])
+        hold = max(own, pd.Timedelta(seconds=held)) if np.isfinite(held) else own
+        if now < settled_at(day, hold):
+            continue
+        void = n_all > 0 and unlabelled / n_all > VOID_UNLABELLED
+        if void:
+            log.warning("arm lifecycle %s %s: session day %s stored void (%d of %d candidates unlabelled when it "
+                        "settled)", broker, arm.id, day, unlabelled, n_all)
+        elif not np.isfinite(term):
+            continue
+        rows.append((broker, arm.id, day, None if void else term, n, unlabelled, int(void), int(now.value)))
     with db.write() as conn:
-        conn.executemany("INSERT OR IGNORE INTO arm_lifecycle_terms (broker, arm_id, day, term, n, recorded_ns) "
-                         "VALUES (?, ?, ?, ?, ?, ?)",
-                         [(broker, arm_id, str(d), float(t), int(n), now_ns)
-                          for d, t, n in terms[["day", "term", "n"]].itertuples(index=False)])
-        got = conn.execute("SELECT day, term, n FROM arm_lifecycle_terms WHERE broker = ? AND arm_id = ? ORDER BY day",
-                           (broker, arm_id)).fetchall()
+        conn.executemany("INSERT OR IGNORE INTO arm_lifecycle_terms (broker, arm_id, day, term, n, n_unlabelled, "
+                         "void, recorded_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        got = conn.execute("SELECT day, term, n FROM arm_lifecycle_terms WHERE broker = ? AND arm_id = ? AND void = 0 "
+                           "ORDER BY day", (broker, arm.id)).fetchall()
     return pd.DataFrame(got, columns=["day", "term", "n"])
 
 
@@ -223,14 +286,14 @@ def read_arm(db: Database, obs: pd.DataFrame, arm: Arm, *, broker: str, control:
     since = pd.Timestamp(block.since, tz="UTC") if block is not None else None
     with db.connection() as conn:
         n_trades, net = _ledger(conn, arm.id, accounts, since)
-        kill = _kill(conn, arm, cap, day)
+        kill = _kill(conn, arm, cap, day, accounts)
     terms, fig = day_terms(obs, arm, control=control, day=day)
     base: dict[str, Any] = dict(day=day, broker=broker, arm_id=arm.id, role=arm.role, tf=arm.timeframe,
                                 control_arm=control, fixed_window=fixed_window(arm), n_trades=n_trades,
                                 net_gbp=round(net, 2), kill=kill, **fig)
     if control is None:
         return ArmRead(**base, reason="no matched control: no replay twin")
-    stored = freeze(db, broker, arm.id, terms, now_ns=int(pd.Timestamp(now).value))
+    stored = freeze(db, broker, arm, terms, now=pd.Timestamp(now))
     x, d = stored["term"].to_numpy(dtype=float), stored["day"].astype(str).to_numpy()
     base.update(n_excess=int(stored["n"].sum()), n_days=len(stored),
                 excess_r=float(x.mean()) if len(x) else None,
@@ -342,6 +405,6 @@ def summary(reads: list[ArmRead]) -> dict[str, Any]:
             "validated": sum(r.validated for r in reads)}
 
 
-__all__ = ["E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "MAX_UNMATCHED", "MIN_DAYS", "MIN_N", "ArmRead",
-           "ParityGap", "day_terms", "decide", "decided", "fixed_window", "freeze", "parity_gaps", "read_arm",
+__all__ = ["E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "MAX_UNMATCHED", "MIN_DAYS", "MIN_N", "SETTLE_DEFAULT",
+           "SETTLE_PAD", "VOID_UNLABELLED", "ArmRead", "ParityGap", "arm_hold", "day_terms", "settled_at", "decide", "decided", "fixed_window", "freeze", "parity_gaps", "read_arm",
            "reads_of", "record", "run", "summary", "twin_means"]

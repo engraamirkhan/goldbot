@@ -624,3 +624,20 @@ def test_the_friday_cut_closes_a_losing_hot_arm_position_with_its_registry_broke
     pb.on_tick(loser)
     weekend_lane.weekday_rule(eng, loser)
     assert pid not in {p.position_id for p in pb.positions()}
+
+
+def test_the_verified_tip_is_written_to_core_db_only_when_the_tip_or_the_arm_set_changes(tmp_path, monkeypatch):
+    """Safety S2: no core.db write lock every minute."""
+    eng, _, ex = _two_loaded(tmp_path)
+    writes: list[Any] = []
+    real = R.remember
+    def counted(*a: Any, **k: Any) -> None:
+        writes.append(a)
+        real(*a, **k)
+    monkeypatch.setattr(R, "remember", counted)
+    for i in range(3):
+        R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=10 + i))
+    assert writes == [] and ex.registry_ok
+    _register(tmp_path, _hot_row("D2610-3"))
+    R.refresh(eng, ex, CLOSE + pd.Timedelta(minutes=20))
+    assert len(writes) == 1 and writes[0][2][0] == 3

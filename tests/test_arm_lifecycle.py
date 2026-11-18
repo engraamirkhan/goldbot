@@ -22,6 +22,7 @@ from goldbot.research.arms import Arm, load_arms
 ROOT = Path(__file__).resolve().parents[1]
 DAY = "2026-11-17"
 NOW = pd.Timestamp("2026-11-18 06:25", tz="UTC")
+SETTLED = pd.Timestamp("2026-12-01", tz="UTC")             # every day of the synthetic reads has settled (B5)
 SCOPE = "icm:15m-30m"
 PASS = {SCOPE: L.ParityGap(scope=SCOPE, status="PASS", mean_gap_r=0.03)}
 
@@ -62,9 +63,9 @@ def db(tmp_path: Path) -> Database:
 
 
 def _read(db: Database, obs: pd.DataFrame, arm: Arm | None = None, parity: dict[str, L.ParityGap] | None = None,
-          control: str | None = "C1", day: str = DAY) -> L.ArmRead:
+          control: str | None = "C1", day: str = DAY, now: pd.Timestamp = SETTLED) -> L.ArmRead:
     return L.read_arm(db, obs, arm or _arm(), broker="icm", control=control, accounts={"icm-probe"},
-                      parity=PASS if parity is None else parity, cap=5.0, day=day, now=NOW)
+                      parity=PASS if parity is None else parity, cap=5.0, day=day, now=now)
 
 
 # ---------------------------------------------------------------- the twin and the figures
@@ -185,7 +186,7 @@ def test_run_journals_every_decision_and_applies_a_retire_through_the_engines_re
     obs = pd.concat([_obs(-0.8, arm_id="BAD"), _obs(0.0, seed=4, arm_id="OK", control="C2")], ignore_index=True)
     monkeypatch.setattr(L, "read_obs", lambda *a, **k: obs)
     reads = L.run(db, hosts={"icm-probe": "icm"}, arms=[_arm("BAD"), _arm("OK")],
-                  controls={"BAD": "C1", "OK": "C2"}, caps={}, day=DAY, now=NOW, parity=PASS)
+                  controls={"BAD": "C1", "OK": "C2"}, caps={}, day=DAY, now=SETTLED, parity=PASS)
     assert {r.arm_id: r.decision for r in reads} == {"BAD": "RETIRE", "OK": "HOLD"}
     assert {r.arm_id: (r.decision, r.applied) for r in L.reads_of(db, DAY)} == {"BAD": ("RETIRE", True),
                                                                                  "OK": ("HOLD", False)}
@@ -202,7 +203,7 @@ def test_a_retired_decision_is_read_by_the_engine_which_takes_no_new_entry_of_th
     eng, pb = _engine(tmp_path, [engine_arm("BAD"), engine_arm("OK")])
     monkeypatch.setattr(L, "read_obs", lambda *a, **k: _obs(-0.8, arm_id="BAD"))
     L.run(Database.open(str(tmp_path), "aux"), hosts={"icm-probe": "icm"}, arms=[_arm("BAD")],
-          controls={"BAD": "C1"}, caps={}, day=DAY, now=NOW, parity=PASS)
+          controls={"BAD": "C1"}, caps={}, day=DAY, now=SETTLED, parity=PASS)
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert eng.exploration is not None and "BAD" in eng.exploration.retired and "OK" not in eng.exploration.retired
     assert not [t for t in eng.open.values() if t.agent_id == exploration.PREFIX + "BAD"]
@@ -261,3 +262,85 @@ def test_a_read_a_newer_release_wrote_with_an_extra_field_still_reads(db):
                      "VALUES (?, 'icm', 'A1', 'HOLD', 0, ?)", (DAY, json.dumps({**body, "new": 1})))
     [r] = L.reads_of(db, DAY)
     assert r.arm_id == "A1" and r.decision == "HOLD"
+
+
+# ---------------------------------------------------------------- B5: a day freezes only once its labels have settled
+D5 = "2026-11-12"                                                       # a Thursday
+
+
+def _late(obs: pd.DataFrame) -> pd.DataFrame:
+    """`obs` with D5's first arm candidate not labelled yet."""
+    out = obs.copy()
+    i = out.index[(out["arm_id"] == "A1") & (out["session_day"] == D5)][0]
+    out.loc[i, "label_sim_r"] = np.nan
+    return out
+
+
+def _stored(db: Database) -> dict[str, tuple[Any, ...]]:
+    with db.connection() as conn:
+        rows = conn.execute("SELECT day, term, n, n_unlabelled, void FROM arm_lifecycle_terms").fetchall()
+    return {r[0]: r[1:] for r in rows}
+
+
+def test_a_day_is_not_frozen_before_its_labels_settle_and_a_label_arriving_within_the_lag_is_in_its_term(db):
+    full = _obs(-0.3, days=15, end=D5, seed=21)
+    due = L.settled_at(D5, L.arm_hold(_arm()))
+    assert due == pd.Timestamp("2026-11-12 22:00", tz="UTC") + pd.Timedelta(hours=1) + L.SETTLE_PAD
+    _read(db, _late(full), day=D5, now=due - pd.Timedelta(minutes=1))
+    assert D5 not in _stored(db) and "2026-11-11" in _stored(db)          # not before the lag has passed
+    _read(db, full, day=D5, now=due)                                      # the late label has arrived meanwhile
+    days = L.day_terms(full, _arm(), control="C1", day=D5)[0]
+    want: Any = days.loc[days["day"] == D5, "term"].iloc[0]
+    term, n, unlabelled, void = _stored(db)[D5]
+    assert (n, unlabelled, void) == (4, 0, 0) and term == pytest.approx(float(want))
+
+
+def test_a_settled_day_with_more_than_5_percent_unlabelled_is_stored_void_and_never_read(db):
+    r = _read(db, _late(_obs(-0.3, days=15, end=D5, seed=21)), day=D5)
+    term, n, unlabelled, void = _stored(db)[D5]
+    assert term is None and unlabelled == 1 and void == 1
+    assert r.n_days == 14                                                 # the void day is not a term
+
+
+def test_a_hold_that_reaches_the_weekend_waits_for_it_and_a_longer_candidate_hold_is_used(db):
+    friday = L.settled_at("2026-11-13", pd.Timedelta(hours=1))
+    assert friday == pd.Timestamp("2026-11-13 22:00", tz="UTC") + pd.Timedelta(hours=1, days=2) + L.SETTLE_PAD
+    obs = _obs(-0.3, days=15, end=D5, seed=21).assign(max_hold_s=3 * 86400)
+    _read(db, obs, day=D5, now=L.settled_at(D5, pd.Timedelta(hours=1)))
+    assert D5 not in _stored(db)                                          # its candidates hold 3 days
+
+
+def test_an_arm_without_a_hold_on_its_row_or_spec_waits_the_default_and_a_spec_time_exit_is_read():
+    from goldbot.research.autodisc.gen_combine import family_spec
+    from goldbot.research.autodisc.spec import ExitTemplate, canonical_json, spec_hash
+
+    def spec_arm(target: Any, bars: int | None) -> Arm:
+        sp = family_spec("box_break_close", "1h", None, ExitTemplate(stop="atr_1.0", target=target, time_bars=bars))
+        return Arm.model_construct(id="D1", rule="spec_rule", timeframe="1h",   # a time exit never runs live
+                   params={"spec": canonical_json(sp), "spec_hash": spec_hash(sp), "prereg": "docs/x.md#d1"})
+    assert L.arm_hold(spec_arm("2R", None)) == L.SETTLE_DEFAULT
+    assert L.arm_hold(spec_arm("time", 6)) == pd.Timedelta(hours=6)
+    assert L.arm_hold(_arm()) == pd.Timedelta(hours=1)
+
+
+# ---------------------------------------------------------------- S1: the kill rules read the broker's accounts only
+def test_a_kill_rule_reads_only_the_accounts_of_the_broker_it_retires_for(db):
+    from goldbot.engine import exploration
+    learn = Arm(id="LRN", rule="random_bracket", timeframe="15m", role="learning",
+                params={"stop_usd": 3.0, "target_r": 1.0, "hold_bars": 4},
+                learning={"prereg": "docs/x.md", "k_id": "0" * 12, "control": "C1", "loss_cap_gbp": 10.0,
+                          "until": "2026-12-31", "since": "2026-11-01"})
+    t = pd.Timestamp("2026-11-05 10:00", tz="UTC")
+    with db.write() as conn:
+        for i in range(3):                                                # a £15 loss on the vantage account only
+            exploration.LEDGER.upsert(conn, exploration.ExplorationRecord(
+                client_order_id=f"v-{i}", account_id="vantage-demo", arm_id="LRN", family="x", tf="15m", side=1,
+                lots=0.01, signal_utc=t, sent_utc=t, atr_usd=3.0, stop_usd=3.0, target_usd=3.0, hold_s=3600,
+                fill_price=2000.0, exit_utc=t + pd.Timedelta(hours=1), pnl=-5.0, censored=False))
+    reads = L.run(db, hosts={"icm-probe": "icm", "vantage-demo": "vantage"}, arms=[learn], controls={},
+                  caps={}, day=DAY, now=SETTLED, parity={})
+    by = {r.broker: r for r in reads}
+    assert by["icm"].kill is None and by["icm"].decision == "HOLD"
+    assert by["vantage"].kill is not None and by["vantage"].decision == "RETIRE"
+    with db.connection() as conn:
+        assert conn.execute("SELECT broker FROM exploration_arm_status").fetchall() == [("vantage",)]
