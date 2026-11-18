@@ -160,7 +160,7 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "tick_record_winter": "2026-10-02T22:10:00+00:00",
                    "calendar_archive_sunday": "2026-10-04T18:00:00+00:00",
                    "limits_job": "2026-10-02T23:05:00+00:00", "daily_review": "2026-10-03T06:15:00+00:00",
-                   "loop_check": "2026-10-03T07:05:00+00:00",
+                   "loop_check": "2026-10-03T07:05:00+00:00", "registry_outbox": "2026-10-03T10:20:00+00:00",
                    "tva_scores": "2026-10-02T23:35:00+00:00",
                    "har_days": "2026-10-02T22:05:00+00:00", "har_days_retry": "2026-10-02T22:35:00+00:00",
                    "journal_compact": "2026-10-03T03:40:00+00:00", "weekly_review": "2026-10-03T13:00:00+00:00",

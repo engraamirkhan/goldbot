@@ -2905,8 +2905,11 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   `weekly_review` job also marks the roll-ups of its window. Marking runs nothing.
 - `registry`: the latest job's `registry_sync` failed, or rows waited more than 36 h in `state/registry_outbox/`. The
   brain token is read-only on purpose (decision 2026-11-01): publish from the Mac with `scripts/registry_publish.sh`
-  (reads the outbox over ssh, uploads with the Mac's gh), which the launchd agent runs daily (see "Registry publish
-  from the Mac" below); the brain clears the outbox on its next sync. A 403 on a GET
+  (reads the outbox and the brain's whole `research_registry.jsonl` over ssh, uploads with the Mac's gh), which the
+  launchd agent runs daily (see "Registry publish from the Mac" below); the brain's daily `registry_outbox` job (10:20
+  UTC) reads the release and clears the outbox once it holds the outbox's rows (`last_result` `{"outbox": "cleared" |
+  "waiting" | "cant_check" | "empty"}` in `state/scheduler.json`). A Mac asleep at 09:15 Mac local time publishes on
+  wake, which can delay the clear by one day (to the next 10:20 run). A 403 on a GET
   means the token lost `Contents: Read-only` too: sre re-issues it and stores it on the brain with
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.
@@ -2929,7 +2932,8 @@ A "can't check" WARN means the scheduler status is unreadable: see the scheduler
 ### Registry publish from the Mac (launchd; BACKLOG 215)
 
 The brain's `github-token` cannot write release `research-v1` (decision 2026-11-01), so the Mac publishes the brain's
-`state/registry_outbox/` daily with `scripts/registry_publish.sh`, run by the user agent `com.goldbot.registry-publish`
+`state/registry_outbox/` and its whole `state/research_registry.jsonl` (rows written after the outbox snapshot,
+incident 2026-11-18) daily with `scripts/registry_publish.sh`, run by the user agent `com.goldbot.registry-publish`
 (template `goldbot/ops/macos/com.goldbot.registry-publish.plist.template`; runner `scripts/registry_publish_mac.sh`).
 - Install, once, from the main checkout (not a worktree; the agent runs that checkout's scripts):
   `scripts/install_registry_publish_launchd.sh` (dry run: prints the plist), then the same with `--apply`. It runs
