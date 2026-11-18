@@ -81,6 +81,10 @@
 * loop_check        daily at 07:05 (R140, goldbot/ops/checks/loop.py): the feedback-loop check (learner weights,
                     review files, weekly proposals read, trial-registry sync, errored jobs); when not ok, one comment a
                     day on the `ci-loop` issue (else state/aux/daily_review/outbox/). Reads only.
+* registry_outbox   daily at 10:20, after the Mac's registry publish (incident 2026-11-18, registry_sync.check_outbox):
+                    reads the trial-registry release (read-only, the brain's github-token) and clears
+                    state/registry_outbox/ once it holds every outbox row, so feedback_loop does not wait for the
+                    weekly sync. No read while the outbox is empty; a failed read keeps it (health judges its age).
 * weekly_review     Saturday after research_director (goldbot/research/weekly_review.py): per family net result
                     against its matched control (the strategy ranking's figures; no control reads "unpaired"), loss
                     attribution, cost drift against the cost of record, reads due at their registered size, MFE/MAE
@@ -253,6 +257,7 @@ class JobContext(Record):
     accounts: list[Account]
     sync_bars: Callable[[Store], dict[str, int]] | None = None   # release -> store refresh before retraining
     sync_trials: Callable[[Path], int] | None = None            # union the trial registry with the release copy
+    check_outbox: Callable[[Path], dict[str, Any]] | None = None  # clear the registry outbox the release holds (read-only)
     population: Population
     agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
     fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
@@ -1666,6 +1671,14 @@ def loop_check(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_loop_check(ctx.state_dir, slot, ctx.settings, sink_for(ctx.settings, ctx.get_secret))
 
 
+def registry_outbox(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Incident 2026-11-18: "the brain clears the outbox whenever the release holds its rows, without waiting for the
+    weekly sync" (registry_sync.check_outbox; read-only on the release). Skipped without a github-token."""
+    if ctx.check_outbox is None:
+        return {"skipped": "no github-token: the release cannot be read"}
+    return ctx.check_outbox(ctx.trials.path)
+
+
 def weekly_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """The weekly review (research/weekly_review.py) of the seven days before `slot`: the ranked action list in aux.db
     review_actions, the backlog issue (github-token from the keyring, else state), registered stops only. The ranking
@@ -1848,6 +1861,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
     "loop_check": loop_check,                     # R140 feedback-loop check -> `ci-loop` issue (ops/checks/loop.py)
+    "registry_outbox": registry_outbox,           # clear the registry outbox once the release holds it (incident 11-18)
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
     "har_days_retry": har_days,                   # ... the same job at 22:35 when 22:05 failed (the first row is kept)

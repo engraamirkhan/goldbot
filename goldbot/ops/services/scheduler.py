@@ -66,6 +66,7 @@ def run_scheduler() -> None:
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
     from goldbot.research.registry import TrialRegistry
+    from goldbot.research.registry_sync import recheck_outbox
     from goldbot.research.registry_sync import sync as sync_registry
     settings = load_settings()
     # GitHub token for the trial-registry release copy: `python -m goldbot.ops.accounts set github-token` (keyring).
@@ -78,6 +79,7 @@ def run_scheduler() -> None:
                      accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
                      sync_bars=lambda store: sync_release(store, token=gh_token),   # bars (data-v1) + macro (macro-v1)
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
+                     check_outbox=(lambda path: recheck_outbox(path, gh_token)) if gh_token else None,
                      population=Population(Path("state") / "population.json"),
                      broker_for=resolve(_job_broker))   # feed_reconcile (D12) and broker_ledger (GAP-07/08), read-only
     if settings.costs.publish_release:          # measured costs for research.yml (release costs-v1)

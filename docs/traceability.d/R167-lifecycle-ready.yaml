@@ -1,4 +1,4 @@
-id: R164
+id: R167
 requirement: 'docs/research/prereg-amendment-2026-11-18-discovered-arms.md 4, 5.1 (5) and 2.2: the nightly lifecycle read of a discovered learning arm voids a candidate whose bracket the engine journalled void or that does not equal arm_rules_spec.bracket recomputed from the bars closed at its decision (the engine''s bars and window), retires on 3 refused brackets or 1 on a taken candidate, and voids every read from a journalled control change on and retires'
 status: 'implemented (2026-11-18, branch feat/lifecycle-ready); autodisc_register.LIFECYCLE_READY stays False pending the quant and trading-safety re-review; reviews: quant-reviewer, trading-safety-reviewer'
 code: goldbot/ops/jobs.py (arm_lifecycle); goldbot/research/arm_lifecycle.py (integrity_inputs, engine_journal, stored_recompute, engine_minutes, engine_recompute, REPLACE_SPAN); goldbot/engine/broker_bars.py (REPLACED)

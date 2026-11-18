@@ -626,6 +626,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/arm_lifecycle.py", "arm_hold", "StrategySpec"):
         "strict: a frozen spec_rule arm's hash-checked canonical spec, read for its time exit only (B5); an invalid spec "
         "falls back to the longest settle lag, never a looser one",
+    ("goldbot/research/arm_integrity.py", "integrity_inputs", "Learning"):
+        "strict: the same checked-in learning block, read for its `since` (the journal and minutes window of a "
+        "discovered arm's nightly read); an invalid block leaves the arm unverified (fail closed)",
     ("goldbot/research/arms.py", "control_freeze_refusal", "Learning"):
         "strict: the same learning block, read for the k_id its control's NOT_TRIAL row must name (discovered arms "
         "2026-11-18); an invalid block refuses the arm (fail closed)",
