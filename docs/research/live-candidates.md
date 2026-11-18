@@ -3,7 +3,7 @@
 Updated 2026-11-09 by the research director. A candidate needs L3 CONFIRMED, L4 ON TRACK and its holdout route
 (ADR 0076); going live and sizing are the owner's decisions.
 
-**The list is empty.** No strategy has beaten its matched control net of costs out of sample. Nothing here is ready
+**The list is empty** (re-checked 2026-11-15, `why-strategies-fail-2026-11-15.md`: no arm beats its matched control; the owner's own manual record, kept local, shows no gross edge after costs and is not used as a benchmark). No strategy has beaten its matched control net of costs out of sample. Nothing here is ready
 for real money, and nothing is expected to be soon: at batch 1's explore edges, after decay and confirm power, the
 honest range is about £1-3/day on a £10k demo (`eval2-method-2026-11-09.md` section (c)).
 
