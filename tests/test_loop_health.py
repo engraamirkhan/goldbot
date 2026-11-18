@@ -113,6 +113,27 @@ def test_registry_outbox_pending_since_marker_wins_over_mtime(tmp_path):
     assert loop.outbox_pending_since(box) is None
 
 
+def test_health_fails_while_outbox_rows_are_missing_and_turns_ok_once_the_daily_check_finds_them_released(tmp_path,
+                                                                                                         monkeypatch):
+    """Incident 2026-11-18: the brain re-checks the release daily (job `registry_outbox`) and clears the outbox when
+    the release holds its rows, so health does not wait for the weekly sync after the Mac published."""
+    from goldbot.research import registry_sync as rs
+    from goldbot.research.registry import TrialRegistry
+    _healthy(tmp_path)
+    local = tmp_path / "research_registry.jsonl"
+    TrialRegistry(local).record(agent_id="k", family="learning", config={"x": 1}, feature_version="f1",
+                                rationale="t", results={})
+    rs._outbox_write(tmp_path / rs.OUTBOX, rs.read_rows(local))
+    (tmp_path / rs.OUTBOX / rs.OUTBOX_SINCE).write_text((NOW - pd.Timedelta("4D")).isoformat() + "\n")
+    monkeypatch.setattr(rs, "pull_stamped", lambda t, bootstrap=False: ([], (1, "t", 1, "d")))
+    assert rs.check_outbox(object(), local)["outbox"] == "waiting"  # type: ignore[arg-type]
+    c = _check(tmp_path)
+    assert c.status == "fail" and "registry rows waiting" in c.reason
+    monkeypatch.setattr(rs, "pull_stamped", lambda t, bootstrap=False: (rs.read_rows(local), (1, "t", 1, "d")))
+    assert rs.check_outbox(object(), local)["outbox"] == "cleared"  # type: ignore[arg-type]
+    assert _check(tmp_path).status == "ok"
+
+
 def test_weights_older_than_36h_fail_closed(tmp_path):
     _healthy(tmp_path)
     (tmp_path / "aux.db").unlink()

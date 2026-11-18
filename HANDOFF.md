@@ -93,6 +93,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     report -> state/autodisc/discovery-<night>.md. No confirm read is opened (ADR 0085's 4 batches a year).
   - Outcome-blind reading on the real bars: power admits ~8 % of random G2 specs at 1h, ~5 % at 4h; no catalogue card
     with a stated count passes (31 refused, 0 started).
+- Registry outbox never cleared (SRE, 2026-11-18): `scripts/registry_publish.sh` now also reads the brain's whole
+  `state/research_registry.jsonl` (read-only, `sudo cat`; a failed read stops the publish), so rows written after the
+  outbox snapshot are published too; the brain clears the outbox once the release holds the OUTBOX's rows (not every
+  local row), in the weekly sync and in a new daily read-only scheduler job `registry_outbox` (10:20 UTC,
+  `registry_sync.check_outbox`); a sync after a published entry restarts the wait for newer rows. Health
+  `feedback_loop` keeps judging the outbox age (the fallback when the release cannot be read). Deploy to the brain;
+  the stuck entry clears at the first run (`run_if_never_run`).
 - 2026-11-15 (branch feat/power-first-gates; R157; ADR 0085): power-first research gates and the alpha-spending Holm
   confirm, for **research and demo promotion only**. This follows the panel ruling of 2026-11-15 on the evaluator's
   memo, docs/research/power-first-gates-2026-11.md (carried on this branch).

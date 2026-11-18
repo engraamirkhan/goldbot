@@ -533,20 +533,37 @@ def _outbox_write(outbox: Path, rows: list[dict[str, Any]]) -> Path:
     return target
 
 
+def _missing(rows: list[dict[str, Any]], remote: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
+    """Keys of `rows` the release copy does not hold; a `failed` row a repair on the release replaced
+    (`_superseded`) is held."""
+    return _keys(rows) - _keys(remote) - set(_superseded(remote))
+
+
+def _outbox_published(outbox: Path, remote: list[dict[str, Any]]) -> bool:
+    """The release holds every row of the outbox's entries (the Mac published them). Judged on the entries, not on
+    the local registry: rows the brain wrote after the snapshot must not keep a published entry, and its age, alive
+    (incident 2026-11-18: six K rows of 15 Nov held a published entry for a week)."""
+    files = _outbox_files(outbox)
+    return bool(files) and not _missing(merge_rows(*(read_rows(p) for p in files)), remote)
+
+
 def _to_outbox(t: Transport, local: Path, why: Exception) -> int:
     """The token cannot write the release (HTTP 403; decision 2026-11-01: the brain token is not widened). Keep the
     pending payload for the Mac to publish with its own gh (scripts/registry_publish.sh). When the release already
-    holds every local row (the Mac published) the outbox is cleared instead: the brain's side of the acknowledgement."""
+    holds every local row (the Mac published) the outbox is cleared instead: the brain's side of the acknowledgement.
+    An entry the release already holds is cleared before newer rows are written, so their wait starts now."""
     outbox, rows = local.parent / OUTBOX, read_rows(local)
     try:
         remote, _ = pull_stamped(t)
     except Exception as exc:         # a pull that fails too: keep the payload, the next sync decides
         log.info("could not read the release to check the outbox: %s", exc)
         remote = []
-    if rows and _keys(rows) <= _keys(remote):
+    if rows and not _missing(rows, remote):
         _outbox_clear(outbox)
         log.info("trial registry: the release holds every local row; outbox cleared")
     elif rows:
+        if remote and _outbox_published(outbox, remote):
+            _outbox_clear(outbox)
         path = _outbox_write(outbox, rows)
         log.info("trial registry upload forbidden (%s); %d rows waiting in %s for the Mac to publish "
                  "(scripts/registry_publish.sh)", why, len(rows), path)
@@ -564,6 +581,39 @@ def sync(local: Path, token: str, repo: str = REPO, *, attempts: int = ATTEMPTS)
         return _to_outbox(t, local, exc)
     _outbox_clear(local.parent / OUTBOX)
     return n
+
+
+def check_outbox(t: Transport, local: Path) -> dict[str, Any]:
+    """The brain's daily acknowledgement (scheduler job `registry_outbox`, incident 2026-11-18): read the release
+    (read-only) and clear the outbox once it holds every row of the outbox's entries, so health's `feedback_loop` turns
+    ok the day the Mac publishes, not at the next weekly sync. Local rows the cleared release still lacks (written
+    after the snapshot) go into a new entry at once, from the release already read, so their wait starts now and the
+    next Mac publish carries them. No read while the outbox is empty; writes nothing to the release. A release that
+    cannot be read keeps the outbox: health then judges its age, as before."""
+    outbox = local.parent / OUTBOX
+    files = _outbox_files(outbox)
+    if not files:
+        return {"outbox": "empty"}
+    try:
+        remote, _ = pull_stamped(t)
+    except Exception as exc:
+        log.warning("registry outbox check: could not read the release: %s", exc)
+        return {"outbox": "cant_check", "error": str(exc)[:200]}
+    missing = _missing(merge_rows(*(read_rows(p) for p in files)), remote)
+    if missing:
+        return {"outbox": "waiting", "rows": len(missing)}
+    _outbox_clear(outbox)
+    log.info("trial registry: the release holds every outbox row; outbox cleared")
+    rows = read_rows(local)
+    if newer := _missing(rows, remote):      # rows written after the snapshot: a new entry, its wait starts now
+        _outbox_write(outbox, rows)
+        return {"outbox": "cleared", "renewed": len(newer)}
+    return {"outbox": "cleared"}
+
+
+def recheck_outbox(local: Path, token: str, repo: str = REPO) -> dict[str, Any]:
+    """`check_outbox` over the GitHub API with the brain's read-only token (scheduler `check_outbox`)."""
+    return check_outbox(HttpTransport(token, repo), local)
 
 
 def publish_outbox(t: Transport, outbox: Path, work: Path, extra: list[Path] | None = None) -> int | None:
