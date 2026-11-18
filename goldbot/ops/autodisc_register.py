@@ -28,6 +28,13 @@ behind the explicit `--stage explore` flag (a demo-learning arm), journalled as 
 `requested_stage: explore`; its forward demo read (design 4.4) is then its first out-of-sample evidence and the prereg
 must say so. A spec whose confirm or holdout read failed, or was voided, never registers ("the failed hash can never be
 re-confirmed"; the holdout is a one-way stop), whatever the flag.
+
+Discovered arms on demo, the learning class (`--to-db STATE_DIR --learning`; the standing amendment
+docs/research/prereg-amendment-2026-11-18-discovered-arms.md): `plan_learning` applies the registration bar (2.4),
+the window, at most 5 running (2.3) and the quarter's budget (2.2: "Registration needs `used + reserved + 1 <=
+quarter_budget(quarter)`"), then `register_learning_to_db` writes, under the registry lock, the arm's K row, its
+control's NOT_TRIAL row, the journal row and both arm rows (`arm_registry.append_many`), or none of the arm rows and a
+void marker: "The K stays counted and is never deleted". No learning arm registers before EFFECTIVE_UTC.
 """
 from __future__ import annotations
 
@@ -52,11 +59,14 @@ from goldbot.base import FrozenRecord
 from goldbot.db.connection import create_private
 from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
+from goldbot.research.arm_rules_spec import learning_until
 from goldbot.research.arms import SPEC_RULE, Arm, arm_hash, load_arms
+from goldbot.research.autodisc import handoff
 from goldbot.research.autodisc.ledger import GENESIS, SearchLedger
 from goldbot.research.autodisc.nightly import LEDGER_FILE
 from goldbot.research.autodisc.nulls import NEG_INF, NullDistribution
 from goldbot.research.autodisc.spec import StrategySpec, canonical_json
+from goldbot.research.autodisc.spec import spec_hash as hash_of_spec
 from goldbot.research.autodisc.stages import StageJournal
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -319,6 +329,33 @@ def with_registration(accounts_text: str, account_id: str, arm_id: str, style: s
 
 
 # ---------------------------------------------------------------- the plan
+def account_cap(accounts_path: Path, account_id: str, style: str, max_loss: float | None) -> tuple[str, float]:
+    """(style, the per-trade cap in pence) for a spec arm on `account_id`, refused unless the account is demo,
+    probe_only and exploring, the style has a pot and the cap is inside the account's caps for it: its strategy arms'
+    largest, SHARE_CAP x the pot (ADR 0057) and the exploration budget (default: its smallest strategy arm's cap)."""
+    acc = A.load_accounts(accounts_path, logins=False).get(account_id)
+    if acc is None:
+        raise RegistrationRefused(f"account {account_id!r} is not in config/accounts.yaml")
+    ex = acc.exploration
+    if acc.mode != "demo" or not acc.probe_only or not ex.enabled:
+        raise RegistrationRefused(f"{account_id}: spec_rule arms register on demo probe_only exploring accounts only "
+                                  "(ADR 0058)")
+    pot = ex.pots.get(style)
+    if pot is None:
+        raise RegistrationRefused(f"{account_id}: no {style} pot")
+    peers = [a.max_loss for a in ex.arms.values() if a.style == style and a.control_share is None]
+    if not peers:
+        raise RegistrationRefused(f"{account_id}: no {style} strategy arm sets the style's per-trade cap")
+    cap = round(float(max_loss if max_loss is not None else min(peers)), 2)     # pence: journal and config agree
+    # a pot without its £ sleeve (pot_budgets false, demo-limits ADR 2026-11-02) sets no ceiling of its own
+    sleeve = [X.SHARE_CAP * pot.gbp] if pot.gbp is not None else []
+    ceiling = min(max(peers), *sleeve, ex.budget_share * float(acc.daily_loss_limit_abs or 0.0))
+    if not 0 < cap <= ceiling + 1e-9:
+        raise RegistrationRefused(f"max_loss {cap:g} is outside the {account_id} {style} caps (0, {ceiling:g}]: its "
+                                  "strategy arms' largest, SHARE_CAP x the pot (ADR 0057) and the exploration budget")
+    return style, cap
+
+
 def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LEDGER_PATH,
          accounts_path: Path = A.ACCOUNTS_FILE, spec_path: Path = X.SPEC_PATH,
          spec_arms_path: Path = X.SPEC_ARMS_PATH, style: str | None = None, max_loss: float | None = None,
@@ -360,28 +397,7 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     except ValueError as exc:
         raise RegistrationRefused(f"spec {spec_hash[:12]} cannot run live: {exc}") from exc
     arm = arm.model_copy(update={"config_hash": arm_hash(arm)})
-
-    acc = A.load_accounts(accounts_path, logins=False).get(account_id)
-    if acc is None:
-        raise RegistrationRefused(f"account {account_id!r} is not in config/accounts.yaml")
-    ex = acc.exploration
-    if acc.mode != "demo" or not acc.probe_only or not ex.enabled:
-        raise RegistrationRefused(f"{account_id}: spec_rule arms register on demo probe_only exploring accounts only "
-                                  "(ADR 0058)")
-    style = style or STYLE_BY_TF[spec.timeframe]
-    pot = ex.pots.get(style)
-    if pot is None:
-        raise RegistrationRefused(f"{account_id}: no {style} pot")
-    peers = [a.max_loss for a in ex.arms.values() if a.style == style and a.control_share is None]
-    if not peers:
-        raise RegistrationRefused(f"{account_id}: no {style} strategy arm sets the style's per-trade cap")
-    cap = round(float(max_loss if max_loss is not None else min(peers)), 2)     # pence: journal and config agree
-    # a pot without its £ sleeve (pot_budgets false, demo-limits ADR 2026-11-02) sets no ceiling of its own
-    sleeve = [X.SHARE_CAP * pot.gbp] if pot.gbp is not None else []
-    ceiling = min(max(peers), *sleeve, ex.budget_share * float(acc.daily_loss_limit_abs or 0.0))
-    if not 0 < cap <= ceiling + 1e-9:
-        raise RegistrationRefused(f"max_loss {cap:g} is outside the {account_id} {style} caps (0, {ceiling:g}]: its "
-                                  "strategy arms' largest, SHARE_CAP x the pot (ADR 0057) and the exploration budget")
+    style, cap = account_cap(accounts_path, account_id, style or STYLE_BY_TF[spec.timeframe], max_loss)
 
     new_spec = with_arm(spec_text, arm)
     new_accounts = with_registration(accounts_path.read_text(), account_id, arm_id, style, cap, spec_hash)
@@ -514,6 +530,298 @@ def register_to_db(spec_hash: str, account_id: str, prereg: str, *, state_dir: P
         return reg
 
 
+# ---------------------------------------------------------------- discovered arms on demo, the learning class
+# docs/research/prereg-amendment-2026-11-18-discovered-arms.md (standing; its section numbers below)
+LEARNING_AGENT = "autodisc-register"
+EFFECTIVE_UTC = pd.Timestamp("2026-11-22 22:00", tz="UTC")   # "the end of the red-box week. Until then no ... enters"
+AMENDMENT_DAY = "2026-11-18"        # 1: "A registration whose arm row carries a `since` earlier than ... is refused"
+COST_OF_RECORD_USD = 0.90           # 2.4 (b): "ADR 0084 v3: icm's dearest `charged_usd` cell, 0.90 $/oz"
+GROSS_MULTIPLE = 2.0                # 2.4 (b): "explore gross mean per trade >= 2 x the charged cost of record"
+MIN_N, MIN_DAYS = 50, 10            # 2.4 (f): the kill rule's MIN_N replayed candidates and MIN_DAYS signal days
+# The interlock (quant review of 751cf7ab): every registration is refused until the amendment's section 6 pieces are
+# all on one branch: the lifecycle voids (research/arm_lifecycle.py), the forward power report (`forward_power`) and
+# T5 (feat/discovery-nightly), now all merged here; the flip waits on the quant and trading-safety re-review.
+# Flipped to True only in the PR that delivers all of them; never by a setting.
+LIFECYCLE_READY = False
+NOT_READY = "amendment not effective: lifecycle voids, forward power, T5 pending (section 6)"
+PREREG_SECTION = "#5-the-reading-rule-kill-only-hv-rule-3"     # params.prereg: the amendment's reading rule
+
+
+class ExploreRecord(FrozenRecord):
+    """The explore read a registration bar rests on (2.4), from the spec's ledger result. All of it is required: a
+    ledger without these fields registers nothing (fail closed; `discovery_nightly` writes them, ADR 0090).
+    `gross_usd_mean` / `net_usd_mean`: mean per trade, USD per oz, before and after the cost of record; `n_bars`: the
+    explore window's bars of the spec's timeframe; `n_days` / `n_signal_days`: its session days, and those with a
+    signal."""
+    n_events: int = Field(ge=0)
+    n_bars: int = Field(gt=0)
+    n_days: int = Field(gt=0)
+    n_signal_days: int = Field(ge=0)
+    gross_usd_mean: float
+    net_usd_mean: float
+
+    @property
+    def signal_rate(self) -> float:
+        """Signals per bar of the spec's timeframe: the control's Bernoulli rate (section 4)."""
+        return min(self.n_events / self.n_bars, 1.0)
+
+
+class LearningPlan(FrozenRecord):
+    """A learning-class registration, every check passed and nothing written (`plan_learning`): the journal row, the
+    arm and control rows, the K row's config and id, the control's NOT_TRIAL config (its frozen hash), the quarter's
+    budget numbers and the kill rule's expected read by `until`."""
+    reg: Registration
+    arm_row: dict[str, Any]
+    control_row: dict[str, Any]
+    k_id: str
+    k_config: dict[str, str]
+    control_hash: str
+    control_config: dict[str, Any]
+    quarter: str
+    used: int
+    reserved: int
+    budget: int
+    signal_rate: float
+    expected_n: float
+    expected_days: float
+    power_forward: dict[str, Any] | None = None     # 2.4 (f): "reported, not evidence"; None when never offered
+
+
+def forward_power(ledger_path: Path, spec_hash_: str) -> dict[str, Any] | None:
+    """2.4 (f): the forward power against the twin, "reported, not evidence" (it never refuses or admits an arm): the
+    `power_forward` of the discovery hand-off row for `spec_hash_` (`handoff.candidate`, read-only, ADR 0090); None
+    when the spec was never offered. The interlock (LIFECYCLE_READY) still keeps every registration refused."""
+    row = handoff.candidate(ledger_path, spec_hash_)
+    return None if row is None else dict(row.power_forward)
+
+
+def session_days(since: str, until: str) -> int:
+    """Weekdays from `since` to `until`, both included: the session days the arm can trade."""
+    return len(pd.bdate_range(since, until))
+
+
+def explore_record(ledger: SearchLedger, spec_hash_: str) -> ExploreRecord:
+    res = ledger.result(spec_hash_) or {}
+    try:
+        return ExploreRecord.model_validate({k: res.get(k) for k in ExploreRecord.model_fields})
+    except ValueError as exc:
+        raise RegistrationRefused(f"spec {spec_hash_[:12]}: its explore record lacks the registration bar's fields "
+                                  f"({', '.join(sorted(ExploreRecord.model_fields))}): nothing registers on it") from exc
+
+
+def learning_rows(arm_id: str, spec: StrategySpec, *, since: str, max_loss: float,
+                  signal_rate: float) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The arm row and its dedicated replay-only control row (sections 3 and 4), each hash-frozen."""
+    from goldbot.research.arm_rules_spec import (
+        CONTROL_SUFFIX,
+        DISCOVERED_PREREG,
+        LOSS_CAP_GBP,
+        MIN_STOP_USD,
+        SPEC_CONTROL,
+        bracket_key,
+        hold_bars,
+        learning_until,
+    )
+    from goldbot.research.arms import PER_TRADE_KEY, learning_k_id
+    h = hash_of_spec(spec)
+    until = learning_until(pd.Timestamp(since, tz="UTC"))
+    same = {PER_TRADE_KEY: bracket_key(h), "hold_bars": hold_bars(spec), "min_stop_usd": MIN_STOP_USD,
+            # the largest stop that fits the per-trade cap at 0.01 lot (1 oz): $ cap <= £ cap; the RiskGate checks again
+            "max_stop_usd": float(max_loss), "end_utc": f"{until}T22:00:00Z"}
+    ctl_id = arm_id + CONTROL_SUFFIX
+    arm = Arm(id=arm_id, rule=SPEC_RULE, timeframe=spec.timeframe, max_open=1, forward_only=True,
+              params={"spec": canonical_json(spec), "spec_hash": h, "prereg": DISCOVERED_PREREG + PREREG_SECTION,
+                      **same})
+    ctl = Arm(id=ctl_id, rule=SPEC_CONTROL, timeframe=spec.timeframe, max_open=1, forward_only=True, role="control",
+              params={"spec": canonical_json(spec), "spec_hash": h, "control": "learning:" + arm_id,
+                      "signal_rate": float(signal_rate), **same})
+    block = {"prereg": DISCOVERED_PREREG, "k_id": learning_k_id(arm_id, arm_hash(arm), DISCOVERED_PREREG),
+             "control": ctl_id, "loss_cap_gbp": LOSS_CAP_GBP, "since": since, "until": until}
+    common = {"max_open": 1, "forward_only": True, "status": "run"}
+    return ({"id": arm_id, "rule": SPEC_RULE, "timeframe": spec.timeframe, "params": arm.params, **common,
+             "config_hash": arm_hash(arm), "role": "learning", "learning": block},
+            {"id": ctl_id, "rule": SPEC_CONTROL, "timeframe": spec.timeframe, "params": ctl.params, **common,
+             "config_hash": arm_hash(ctl), "role": "control"})
+
+
+def _registry_arms(state_dir: Path) -> list[dict[str, Any]]:
+    """Every row in `state_dir`'s aux.db `arm_registry` (any account), as JSON."""
+    from goldbot.db import Database
+    from goldbot.engine import arm_registry
+    out = []
+    for r in arm_registry.read_rows(Database.open(str(state_dir), "aux")):
+        try:
+            out.append(json.loads(r.row))
+        except ValueError:
+            continue
+    return out
+
+
+def _running(arms: list[dict[str, Any]], today: str) -> int:
+    """Discovered learning arms registered under the amendment whose `until` is not past (2.3). An arm retired early
+    still counts until its `until`: this command cannot see a host's retirements, so it errs to refusing."""
+    from goldbot.research.arm_rules_spec import DISCOVERED_PREREG
+    return sum(1 for a in arms if a.get("role") == "learning" and isinstance(a.get("learning"), dict)
+               and a["learning"].get("prereg") == DISCOVERED_PREREG and str(a["learning"].get("until")) >= today)
+
+
+def _budget(rows: list[dict[str, Any]], research: Any, now: pd.Timestamp) -> tuple[str, int, int, int]:
+    """(quarter, used, reserved, budget) at `now` (2.2: `used + reserved + 1 <= quarter_budget(quarter)`)."""
+    from goldbot.research.director import quarter_budget, reserved_trials
+    from goldbot.research.registry import quarter_of, quarter_trials
+    q = quarter_of(now.to_pydatetime())
+    reserved = reserved_trials(rows, q, int(research.reserved_for(q))).reserved
+    return q, quarter_trials(rows, q), reserved, quarter_budget(research, q)
+
+
+def plan_learning(spec_hash_: str, account_id: str, *, state_dir: Path, registry_path: Path | None = None,
+                  research: Any = None, ledger_path: Path = LEDGER_PATH, accounts_path: Path = A.ACCOUNTS_FILE,
+                  spec_path: Path = X.SPEC_PATH, spec_arms_path: Path = X.SPEC_ARMS_PATH, now: pd.Timestamp | None = None,
+                  root: Path = ROOT, max_loss: float | None = None, style: str | None = None) -> LearningPlan:
+    """Every check of a learning-class registration, nothing written: the window (effective time, sunset), the
+    survivor (explore honesty set, no failed or voided stage read), the registration bar (2.4: a 1h/4h gold spec,
+    gross >= 2 x the cost of record, net > 0, the kill rule readable by `until`), never registered before, the weekly
+    tier, the demo probe_only account and its caps, the rows valid, at most MAX_DISCOVERED running (2.3) and the
+    quarter's budget (2.2), all behind the LIFECYCLE_READY interlock. Raises RegistrationRefused naming the first
+    failure."""
+    from goldbot.engine.arm_registry import MAX_DISCOVERED
+    from goldbot.research.arm_rules_spec import DISCOVERED_PREREG, LEARNING_TFS, SUNSET
+    from goldbot.research.arms import LEARNING_CONTROL_KIND, REGISTRY_PATH, learning_k_config
+    from goldbot.research.registry import TrialRegistry
+    if not LIFECYCLE_READY:
+        raise RegistrationRefused(NOT_READY)
+    now = now if now is not None else pd.Timestamp.now("UTC")
+    since = f"{now.tz_convert('UTC'):%Y-%m-%d}"
+    if now < EFFECTIVE_UTC or since < AMENDMENT_DAY:
+        raise RegistrationRefused(f"the amendment registers from {EFFECTIVE_UTC:%Y-%m-%d %H:%M} UTC only (section 1)")
+    if since > SUNSET:
+        raise RegistrationRefused(f"no registration under the amendment after {SUNSET} (section 7)")
+    if not (root / DISCOVERED_PREREG).is_file():
+        raise RegistrationRefused(f"{DISCOVERED_PREREG} is not in this checkout: written first (section 1)")
+    if not ledger_path.exists():
+        raise RegistrationRefused(f"no search ledger at {ledger_path}")
+    ledger = SearchLedger(ledger_path, mode="real")
+    ledger.verify()
+    spec = ledger.get_spec(spec_hash_)
+    if spec is None:
+        raise RegistrationRefused(f"spec {spec_hash_[:12]} is not in the ledger")
+    honesty = honesty_of(ledger, spec_hash_)
+    if bad := honesty.failures:
+        raise RegistrationRefused(f"spec {spec_hash_[:12]} is not an explore survivor: fails {bad} (2.4 (a))")
+    reached = stage_of(ledger_path, spec_hash_, "explore")
+    if spec.timeframe not in LEARNING_TFS:
+        raise RegistrationRefused(f"spec {spec_hash_[:12]} is {spec.timeframe}: discovered learning arms run on "
+                                  f"{LEARNING_TFS} (2.4 (d))")
+    rec = explore_record(ledger, spec_hash_)
+    if rec.gross_usd_mean < GROSS_MULTIPLE * COST_OF_RECORD_USD:
+        raise RegistrationRefused(f"explore gross mean {rec.gross_usd_mean:.2f} $/oz is below {GROSS_MULTIPLE:g} x "
+                                  f"the cost of record {COST_OF_RECORD_USD:.2f} (2.4 (b))")
+    if not rec.net_usd_mean > 0:
+        raise RegistrationRefused(f"explore net mean {rec.net_usd_mean:.2f} $/oz is not above 0 (2.4 (c))")
+    until = learning_until(pd.Timestamp(since, tz="UTC"))
+    days = session_days(since, until)
+    expected_n, expected_days = rec.n_events / rec.n_days * days, rec.n_signal_days / rec.n_days * days
+    if expected_n < MIN_N or expected_days < MIN_DAYS:
+        raise RegistrationRefused(f"the kill rule is unreadable by {until} (2.4 (f)): {expected_n:.1f} expected "
+                                  f"replayed candidates (need {MIN_N}) over {expected_days:.1f} signal days (need "
+                                  f"{MIN_DAYS}) in {days} session days")
+    done = journal(ledger_path)
+    if spec_hash_ in {r.spec_hash for r in done} | {str(a.params.get("spec_hash")) for a in load_arms(spec_arms_path)}:
+        raise RegistrationRefused(f"spec {spec_hash_[:12]} is registered already: never again under the amendment "
+                                  "(5.4)")
+    week = now.isocalendar()[:2]
+    if sum(pd.Timestamp(r.written_utc).isocalendar()[:2] == week for r in done) >= WEEKLY_MAX:
+        raise RegistrationRefused(f"{WEEKLY_MAX} registrations this week already (ADR 0045 weekly tier)")
+    in_db = _registry_arms(state_dir)
+    if _running(in_db, since) >= MAX_DISCOVERED:
+        raise RegistrationRefused(f"{MAX_DISCOVERED} discovered arms are running (2.3): refused until one retires")
+    style, cap = account_cap(accounts_path, account_id, style or STYLE_BY_TF[spec.timeframe], max_loss)
+    arm_id = _next_id(now, {r.arm_id for r in done} | {a.id for a in load_arms(spec_arms_path)}
+                      | {a.id for a in load_arms(spec_path)} | {str(a.get("id")) for a in in_db})
+    arm_row, control_row = learning_rows(arm_id, spec, since=since, max_loss=cap, signal_rate=rec.signal_rate)
+    try:
+        arm, ctl = Arm.model_validate(arm_row), Arm.model_validate(control_row)
+    except ValueError as exc:
+        raise RegistrationRefused(f"spec {spec_hash_[:12]} cannot run as a learning arm: {exc}") from exc
+    k_id = str(arm_row["learning"]["k_id"])
+    rows = TrialRegistry(registry_path or REGISTRY_PATH)._rows() \
+        if Path(registry_path or REGISTRY_PATH).exists() else []
+    if research is None:
+        from goldbot.config import load_settings
+        research = load_settings().research
+    q, used, reserved, budget = _budget(rows, research, now)
+    if used + reserved + 1 > budget:
+        raise RegistrationRefused(f"{q}: {used} used + {reserved} reserved + 1 is over the quarter's budget {budget} "
+                                  "(research.trial_budget_quarter; an owner decision to raise): nothing written")
+    k_seq, k_digest = ledger.head()
+    reg = Registration(arm_id=arm_id, account_id=account_id, spec_hash=spec_hash_, timeframe=spec.timeframe,
+                       style=style, max_loss=cap, prereg=str(arm.params["prereg"]), k_search=ledger.k_search(),
+                       k_null=ledger.k_null(), ledger_seq=k_seq, ledger_digest=k_digest, honesty=honesty,
+                       config_hash=str(arm.config_hash), written_utc=now.isoformat(), stage=reached,
+                       requested_stage="explore")
+    control_config = {"kind": LEARNING_CONTROL_KIND, "arm": arm_id, "k_id": k_id, "control": ctl.id,
+                      "control_hash": arm_hash(ctl), "signal_rate": rec.signal_rate,
+                      "per_trade_bracket": ctl.params["per_trade_bracket"]}
+    return LearningPlan(reg=reg, arm_row=arm_row, control_row=control_row, k_id=k_id,
+                        k_config=learning_k_config(arm_id, arm_hash(arm), DISCOVERED_PREREG),
+                        control_hash=arm_hash(ctl), control_config=control_config, quarter=q, used=used,
+                        reserved=reserved, budget=budget, signal_rate=rec.signal_rate, expected_n=expected_n,
+                        expected_days=expected_days, power_forward=forward_power(ledger_path, spec_hash_))
+
+
+def _voided(rows: list[dict[str, Any]], spec_hash_: str) -> bool:
+    from goldbot.research.registry import LEARNING_VOID
+    return any(r.get("status") == LEARNING_VOID and (r.get("config") or {}).get("spec_hash") == spec_hash_
+               for r in rows)
+
+
+def register_learning_to_db(spec_hash_: str, account_id: str, *, state_dir: Path, registry_path: Path | None = None,
+                            research: Any = None, **kw: Any) -> LearningPlan:
+    """The amendment's section 2.2, "Same transaction. Under the registry lock, the arm's K row, the control's
+    `NOT_TRIAL` row and the aux.db `arm_registry` row are all written, or none of them": `plan_learning` (the budget
+    read under the registry lock), then the K row (a trial, family learning_class, `config_hash` = the arm's `k_id`),
+    then the control's NOT_TRIAL row (its frozen hash; no trial, no K, no budget slot), then the journal row and both
+    arm rows in one aux.db transaction (`arm_registry.append_many`). A failure after the K row writes a LEARNING_VOID
+    marker against the registry rows: "The K stays counted and is never deleted", and the spec never registers again.
+    Nothing reaches the engine before the arm rows, and an arm row without its K row cannot load (`learning_refusal`)."""
+    from goldbot.engine import arm_registry
+    from goldbot.research.arms import LEARNING_FAMILY, REGISTRY_PATH
+    from goldbot.research.registry import LEARNING_VOID, NOT_TRIAL, TrialRegistry
+    registry_path = Path(registry_path or REGISTRY_PATH)
+    ledger_path: Path = kw.get("ledger_path", LEDGER_PATH)
+    trials = TrialRegistry(registry_path)
+    with _locked(ledger_path), trials.locked():
+        if _voided(trials._rows(), spec_hash_):
+            raise RegistrationRefused(f"spec {spec_hash_[:12]} has a void registration: never registered again (5.4)")
+        p = plan_learning(spec_hash_, account_id, state_dir=state_dir, registry_path=registry_path, research=research,
+                          **kw)
+        why = (f"discovered spec {spec_hash_[:12]} as demo learning arm {p.reg.arm_id}: one K row with its arm row "
+               f"({p.reg.prereg}); never a qualification")
+        k = trials.record(agent_id=LEARNING_AGENT, family=LEARNING_FAMILY, config=p.k_config, feature_version="n/a",
+                          status="learning", rationale=why,
+                          results={"kind": "learning_learning", "arm": p.reg.arm_id, "spec_hash": spec_hash_})
+        try:
+            if k["config_hash"] != p.k_id:
+                raise RegistrationRefused(f"{p.reg.arm_id}: K row hash {k['config_hash']} is not its k_id {p.k_id}")
+            trials.record(agent_id=LEARNING_AGENT, family=LEARNING_FAMILY, config=p.control_config,
+                          feature_version="n/a", status=NOT_TRIAL,
+                          rationale=f"the replay-only control of {p.reg.arm_id}, frozen by hash: not a trial (quant "
+                                    "ruling 2026-11-18 Q3)", results={"kind": "learning_control"})
+            _append(ledger_path, p.reg)
+            arm_registry.append_many(str(state_dir), account_id=account_id, source="autodisc-register:learning",
+                                     entries=[(p.arm_row, p.reg.style, p.reg.max_loss),
+                                              (p.control_row, p.reg.style, p.reg.max_loss)])
+        except Exception as exc:
+            trials.record(agent_id=LEARNING_AGENT, family=LEARNING_FAMILY, feature_version="n/a", status=LEARNING_VOID,
+                          config={"kind": "learning_void", "arm": p.reg.arm_id, "k_id": p.k_id,
+                                  "spec_hash": spec_hash_},
+                          rationale="the arm row was not written: the K row stays counted, the spec never registers "
+                                    "again", results={"why": f"{type(exc).__name__}: {exc}"[:300]})
+            raise RegistrationRefused(f"{p.reg.arm_id}: the arm row was not written ({type(exc).__name__}: {exc}); "
+                                      "its K row stays counted and a void marker is recorded") from exc
+    return p
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run autodisc-register",
                                  description="Register a discovery survivor as a demo exploration arm (ADR 0058). "
@@ -535,7 +843,30 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--to-db", type=Path, default=None, metavar="STATE_DIR",
                     help="register into STATE_DIR's aux.db arm_registry (hot-loaded by the engine, demo only) "
                          "instead of writing config files")
+    ap.add_argument("--learning", action="store_true",
+                    help="with --to-db: register an explore survivor as a demo learning arm with its replay-only "
+                         "control, its K row and the control's NOT_TRIAL row in one transaction "
+                         "(prereg-amendment-2026-11-18-discovered-arms.md; --prereg is that file)")
+    ap.add_argument("--registry", type=Path, default=None,
+                    help="with --learning: the trial registry the K rows go to (default research.registry)")
     a = ap.parse_args(argv)
+    if a.learning:
+        if a.to_db is None or not (a.spec_hash and a.account):
+            ap.error("--learning needs spec_hash, --account and --to-db STATE_DIR")
+        try:
+            lkw: dict[str, Any] = {"ledger_path": a.ledger, "style": a.style, "max_loss": a.max_loss}
+            p = (plan_learning(a.spec_hash, a.account, state_dir=a.to_db, registry_path=a.registry, **lkw)
+                 if a.dry_run else
+                 register_learning_to_db(a.spec_hash, a.account, state_dir=a.to_db, registry_path=a.registry, **lkw))
+        except (RegistrationRefused, ValueError) as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        except (sqlite3.Error, OSError, TimeoutError) as exc:
+            print(f"failed: {type(exc).__name__}: {exc}".splitlines()[0], file=sys.stderr)
+            return 2
+        print(json.dumps({"dry_run": a.dry_run, **json.loads(p.model_dump_json(exclude={"arm_row", "control_row"}))},
+                         indent=1))
+        return 0
     if a.verify:
         try:
             tip = verify(a.ledger, a.head)

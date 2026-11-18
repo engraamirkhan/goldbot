@@ -113,14 +113,14 @@ class Silence(FrozenRecord):
 # ------------------------------------------------------------------------------------------------ the config side
 def supply_for(acc: Account, timeframes_live: Sequence[str]) -> AccountSupply | None:
     """The account's arms as the engine selects them at its start; None when it does not explore."""
-    from goldbot.engine.exploration import SPEC_RULE, config_for, entry_refused, spec_retired
+    from goldbot.engine.exploration import SPEC_RULES, config_for, entry_refused, spec_retired
     from goldbot.research import arm_rules
     cfg = config_for(acc)
     if cfg is None or not cfg.enabled:
         return None
     refused, retired, live = entry_refused(cfg), spec_retired(cfg), set(timeframes_live)
     ok = {a.arm_id: a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
-          and (a.spec.rule != SPEC_RULE or acc.mode == "demo")}
+          and (a.spec.rule not in SPEC_RULES or acc.mode == "demo")}
     arms: dict[str, ArmSupply] = {}
     for a in cfg.arms:
         why = ("not run" if a.arm_id not in ok else "spec retired" if a.arm_id in retired

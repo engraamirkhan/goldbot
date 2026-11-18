@@ -344,3 +344,132 @@ def test_a_kill_rule_reads_only_the_accounts_of_the_broker_it_retires_for(db):
     assert by["vantage"].kill is not None and by["vantage"].decision == "RETIRE"
     with db.connection() as conn:
         assert conn.execute("SELECT broker FROM exploration_arm_status").fetchall() == [("vantage",)]
+
+
+# ---------------------------------------------------------------- discovered learning arms (amendment 2026-11-18, 5.1)
+# docs/research/prereg-amendment-2026-11-18-discovered-arms.md 5.1 (5): "A refused bracket (section 4) on 3 or more
+# candidates, or on any taken candidate" retires; section 4: a void candidate "is void for the read"; section 2.2:
+# after a control change "its reads are void from the change onward, and it retires".
+from goldbot.engine import arm_registry as AR  # noqa: E402
+from goldbot.research import arm_rules_spec as S  # noqa: E402
+
+PASS_1H = {"icm:1h-4h": L.ParityGap(scope="icm:1h-4h", status="PASS", mean_gap_r=0.03)}
+GOOD = S.Bracket(stop_dist=3.0, target_dist=6.0, max_hold_s=7200)
+
+
+def _disc(arm_id: str = "D1") -> Arm:
+    return Arm.model_construct(
+        id=arm_id, rule="spec_rule", timeframe="1h", role="learning", status="run",
+        params={"per_trade_bracket": S.BRACKET_PREFIX + "abcdef012345", "hold_bars": 2,
+                "prereg": S.DISCOVERED_PREREG + "#d1"},
+        learning={"prereg": S.DISCOVERED_PREREG, "k_id": "0" * 12, "control": "C1", "loss_cap_gbp": 60.0,
+                  "until": "2026-12-31", "since": "2026-10-01"})
+
+
+def _disc_obs(obs: pd.DataFrame, arm_id: str = "D1") -> pd.DataFrame:
+    """`obs` with the columns a candidate row carries: its account, id, the bracket in its INSERT (GOOD) recorded 1 s
+    after the decision, and its entry 2 s after it when taken; its short candidates 30 min into the hour (one candidate
+    of an arm a decision bar, as live)."""
+    out = obs.reset_index(drop=True).copy()
+    out.loc[(out["arm_id"] == arm_id) & (out["side"] == -1), "decision_utc"] += pd.Timedelta(minutes=30)
+    dec = out["decision_utc"]
+    out["account_id"] = "icm-probe"
+    out["candidate_id"] = [f"c{i}" for i in range(len(out))]
+    out["stop_dist"], out["target_dist"], out["max_hold_s"] = GOOD.stop_dist, GOOD.target_dist, GOOD.max_hold_s
+    out["recorded_ns"] = [int(t.value) + 1_000_000_000 for t in dec]
+    out["entry_utc"] = [t + pd.Timedelta(seconds=2) if k else pd.NaT for t, k in zip(dec, out["taken"], strict=True)]
+    return out
+
+
+def _journal(*rows: tuple[str, str, pd.Timestamp, dict[str, Any]]) -> pd.DataFrame:
+    """Journal rows as the store's `decisions` table holds them (action, agent, ts_utc, detail JSON)."""
+    cols = ["ts_utc", "account_id", "agent_id", "action", "detail"]
+    return pd.DataFrame([{"ts_utc": ts, "account_id": "icm-probe", "agent_id": "explore:" + arm, "action": action,
+                          "detail": json.dumps({"arm": arm, **detail})} for action, arm, ts, detail in rows],
+                        columns=cols)
+
+
+def _dread(db: Database, obs: pd.DataFrame, journal: pd.DataFrame | None = None, **kw: Any) -> L.ArmRead:
+    return L.decide(L.read_arm(db, obs, _disc(), broker="icm", control="C1", accounts={"icm-probe"},
+                               parity=PASS_1H, cap=5.0, day=DAY, now=SETTLED,
+                               journal=_journal() if journal is None else journal,
+                               recompute=kw.get("recompute", lambda arm, row: GOOD)))
+
+
+def _arm_rows(obs: pd.DataFrame, taken: bool) -> pd.Index:
+    return obs.index[(obs["arm_id"] == "D1") & (obs["taken"] == taken)]
+
+
+def test_a_clean_discovered_arm_reads_exactly_as_any_arm(db, tmp_path):
+    obs = _disc_obs(_obs(-0.8, arm_id="D1"))
+    r = _dread(db, obs)
+    plain = L.decide(L.read_arm(Database.open(str(tmp_path / "other"), "aux"), obs, _arm("D1"), broker="icm",
+                                control="C1", accounts={"icm-probe"}, parity=PASS_1H, cap=5.0, day=DAY,
+                                now=SETTLED))
+    assert L.discovered(_disc()) and not L.discovered(_arm("D1"))
+    assert r.n_bracket_void == 0 and r.void_from is None
+    assert (r.n_cands, r.n_days, r.e_worse, r.decision) == (plain.n_cands, plain.n_days, plain.e_worse, "RETIRE")
+    assert "worse than its replay twin" in r.reason
+
+
+def test_a_bracket_void_candidate_is_excluded_from_the_read_and_two_refusals_do_not_retire(db):
+    obs = _disc_obs(_obs(0.0, seed=3, arm_id="D1"))
+    off, journalled = _arm_rows(obs, taken=False)[:2]
+    obs.loc[off, "stop_dist"] = GOOD.stop_dist + 1e-6                      # not the recompute: void
+    bar = obs.loc[journalled, "decision_utc"]
+    r = _dread(db, obs, _journal((AR.BRACKET_VOID, "D1", bar + pd.Timedelta(seconds=2),
+                                  {"bar": bar.isoformat(), "why": "bracket_mismatch"})))
+    assert r.n_cands == 118 and r.n_bracket_void == 2                     # 120 replayed, both void ones left out
+    assert r.decision == "HOLD" and "bracket" not in (r.kill or "")
+    with db.connection() as conn:
+        n = conn.execute("SELECT SUM(n) FROM arm_lifecycle_terms WHERE arm_id = 'D1'").fetchone()[0]
+    assert n == 118
+
+
+def test_three_refused_brackets_on_candidates_retire_the_arm_journalled_with_its_reason(db, monkeypatch):
+    obs = _disc_obs(_obs(0.0, seed=3, arm_id="D1"))
+    for i in _arm_rows(obs, taken=False)[:3]:
+        obs.loc[i, "recorded_ns"] = int(obs.loc[i, "decision_utc"].value) + 61_000_000_000     # bracket_late
+    monkeypatch.setattr(L, "read_obs", lambda *a, **k: obs)
+    [r] = L.run(db, hosts={"icm-probe": "icm"}, arms=[_disc()], controls={}, caps={}, day=DAY, now=SETTLED,
+                parity=PASS_1H, journal=_journal(), recompute=lambda arm, row: GOOD)
+    assert r.decision == "RETIRE" and r.n_bracket_void == 3 and "bracket integrity" in r.reason
+    with db.connection() as conn:
+        rows = conn.execute("SELECT arm_id, rule FROM exploration_arm_status").fetchall()
+    assert rows[0][0] == "D1" and "bracket integrity" in rows[0][1]
+    assert "bracket integrity" in L.reads_of(db, DAY)[0].reason
+
+
+def test_one_refused_bracket_on_a_taken_candidate_retires_the_arm(db):
+    obs = _disc_obs(_obs(0.0, seed=3, arm_id="D1"))
+    i = _arm_rows(obs, taken=True)[0]
+    obs.loc[i, "recorded_ns"] = int(obs.loc[i, "entry_utc"].value)                      # at the entry: late
+    r = _dread(db, obs)
+    assert r.decision == "RETIRE" and r.n_bracket_void == 1 and "taken" in r.reason
+
+
+def test_an_unverifiable_recompute_voids_the_candidate_but_is_not_a_refusal(db):
+    """No bars at night (the job's store) is not the arm's fault: the candidates are void for the read (fail closed)
+    and the arm holds, never retired on it."""
+    r = _dread(db, _disc_obs(_obs(-0.8, arm_id="D1")), recompute=lambda arm, row: None)
+    assert r.n_cands == 0 and r.n_bracket_void == 0 and r.decision == "HOLD"
+
+
+def test_every_read_from_a_control_change_on_is_void_and_the_arm_retires(db):
+    obs = _disc_obs(_obs(1.0, arm_id="D1"))
+    at = pd.Timestamp("2026-11-08 03:00", tz="UTC")
+    r = _dread(db, obs, _journal((AR.CONTROL_CHANGED, "D1", at, {"control": "C1", "why": "changed after registration"})))
+    assert r.decision == "RETIRE" and "control changed" in r.reason and not r.validated
+    assert r.void_from == at.isoformat()
+    with db.connection() as conn:
+        days = [d for (d,) in conn.execute("SELECT day FROM arm_lifecycle_terms WHERE arm_id = 'D1'")]
+    assert days and max(days) < "2026-11-08"                            # nothing from the change's session day on
+    again = _dread(db, obs, _journal((AR.CONTROL_CHANGED, "D1", at, {"control": "C1"})))
+    assert again.decision == "RETIRE" and again.n_days == r.n_days      # the next night's read is void too
+
+
+def test_a_discovered_arm_read_without_the_journal_or_a_recompute_is_never_evidence(db):
+    obs = _disc_obs(_obs(-0.8, arm_id="D1"))
+    r = L.decide(L.read_arm(db, obs, _disc(), broker="icm", control="C1", accounts={"icm-probe"}, parity=PASS_1H,
+                            cap=5.0, day=DAY, now=SETTLED))
+    assert r.decision == "HOLD" and not r.validated and "bracket integrity unverified" in r.reason

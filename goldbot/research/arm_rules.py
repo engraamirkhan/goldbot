@@ -495,6 +495,8 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
         lambda arm, ctx: __import__("goldbot.research.arm_rules_redbox", fromlist=["x"]).redbox_break(arm, ctx),
     "redbox_control":
         lambda arm, ctx: __import__("goldbot.research.arm_rules_redbox", fromlist=["x"]).redbox_control(arm, ctx),
+    # discovered arms on demo 2026-11-18: a learning spec_rule arm's replay-only control (`arm_rules_spec`)
+    "spec_control": lambda arm, ctx: __import__("goldbot.research.arm_rules_spec", fromlist=["x"]).spec_control(arm, ctx),
 }
 
 
@@ -530,7 +532,7 @@ def lookback_bars(arm: Arm, default: int) -> int:
     engine's `exploration.lookback`): a `specialist` family's warm-up (`arm_rules_specialist.WARMUP_MIN`), a band
     rule's or a clock rule's LOOKBACK_BARS, a `spec_rule` arm's leaves' warm-up (`arm_rules_spec.required_bars`), else
     `default`."""
-    if arm.rule == "spec_rule":
+    if arm.rule in ("spec_rule", "spec_control"):     # a control reads the bars its arm reads (the same ATR)
         from goldbot.research.arm_rules_spec import required_bars, spec_of
         return max(default, required_bars(spec_of(arm)))
     if arm.rule == "specialist":

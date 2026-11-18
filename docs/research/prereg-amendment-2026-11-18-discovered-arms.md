@@ -92,6 +92,9 @@ A `candidate_arms` row is registered only if its explore record shows **all** of
   cell, 0.90 $/oz, so gross >= 1.80 $/oz per round trip;
 - (c) explore net mean per trade > 0 at the cost of record;
 - (d) it runs live through `arm_rules_spec` and `Arm`, on a live timeframe (1h, 4h or 1d), gold only;
+  **1d is held back** (`arm_rules_spec.LEARNING_TFS` is 1h and 4h): a 1d entry is sent 90 min after its
+  decision close, which breaks the 60 s latency guard of section 4. Allowing 1d needs a written amendment (guard =
+  the scheduled send + 60 s, the control replayed from the same instant);
 - (e) it has a per-trade bracket under section 4;
 - (f) its kill rule is readable by `until` (quant ruling 2026-11-18, Q7). These kill-only learning arms have **no
   forward power gate**. Registration is refused only when the kill rule cannot be read. That means either of these,
@@ -277,6 +280,14 @@ added by the quant-reviewer's CHANGES of 2026-11-18. Suggested homes: `tests/tes
 | T7 | `test_phase_gate_reads_discovery_k_for_discovered_specs` | `phase_gate_refusal` reads `n_trials_discovery` for a spec whose origin is discovery, and `n_trials_effective` for every other spec. |
 | T8 | `test_prior_search_seed_is_outside_quarter_k_but_inside_n_trials_discovery` | the `PRIOR_SEARCHES` seed rows (grammar v1, K 864) are excluded from `quarter_k_used` in every quarter, and included in `n_trials_discovery`. |
 | T9 | `test_a_change_to_the_control_after_registration_voids_the_arm` | the control is recorded `NOT_TRIAL`, linked to the arm, and adds no K. Any change to its frozen parameters after registration refuses the arm's entries, voids its reads from the change onward and retires it. Its K row stays. |
+
+Where they live: T5 `test_power_admission_is_outcome_blind` and T8 are in
+`tests/research/autodisc/test_discovery_nightly.py` on branch `feat/discovery-nightly` (the admission code is on that
+branch); T3 is covered by `test_sync_tops_the_registry_up_to_the_ledger_k_search_once` and
+`test_the_nightly_job_records_its_batch_k_contrib_only_for_a_real_search` in
+`tests/research/autodisc/test_registry_link.py`, with `n_refused_power` on `feat/discovery-nightly`. Until every
+piece is on one branch, `autodisc_register.LIFECYCLE_READY` is False and every registration is refused ("amendment
+not effective: lifecycle voids, forward power, T5 pending (section 6)").
 
 Also required, from the same ruling: `control_match_refusal` passes a discovered arm and its control only when both
 carry `per_trade_bracket` with equal `PER_TRADE_SAME` params, and refuses when one lacks it.

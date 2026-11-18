@@ -37,13 +37,31 @@ The rule, as registered:
   `engine.exploration.refresh_retired`: no new entry, every exit of an open position kept; R153 de-registers it once
   flat). Real-money accounts are never read or written: the hosts are demo probe_only.
 
+Discovered learning arms (docs/research/prereg-amendment-2026-11-18-discovered-arms.md, 5.1; `discovered`): the
+same read, after two voids, with one more kill rule.
+* "A bracket that fails either check is refused ... The candidate is void for the read" (section 4): a candidate the
+  engine journalled `arm_registry_bracket_void` at its entry, or one whose row fails `arm_rules_spec.bracket_void`
+  against the recompute from the bars closed at its decision (`engine_recompute`: the engine's own
+  `arm_registry.decision_bracket`, the same window, so a bracket the engine accepted is never voided here), is left
+  out of the terms. A candidate the night cannot recompute (no bars) is left out too, but is not a refusal: the read
+  fails closed without blaming the arm.
+* "Any change to the control's parameters after registration voids the arm ... its reads are void from the change
+  onward, and it retires" (section 2.2): from the first `arm_registry_control_changed` journal row on, no candidate
+  of that session day or later enters a term, every read is void (never validated) and the arm retires.
+* Rule 5, bracket integrity: "A refused bracket (section 4) on 3 or more candidates, or on any taken candidate"
+  retires the arm, journalled with its reason.
+A discovered arm read without the journal or a recompute holds, never read as evidence (its kill rules still decide).
+The frozen day terms (the settle lag, append-only, void days) are unchanged: the voids only choose which candidates
+enter a day before it is frozen.
+
 Reads, plus the three aux.db writes above; no order path.
 """
 from __future__ import annotations
 
 import importlib
+import json
 import logging
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any, Literal
 
 import numpy as np
@@ -51,9 +69,10 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord, load_record_json
 from goldbot.db.connection import Database
-from goldbot.research.arms import Arm, Learning
+from goldbot.research.arm_rules_spec import BRACKET_PREFIX, Bracket, bracket_void
+from goldbot.research.arms import PER_TRADE_KEY, Arm, Learning
 from goldbot.research.eval2.forward import TF_BAND, e_edge
-from goldbot.research.exploration_data import GOLD, REPLAY_V2, read_obs
+from goldbot.research.exploration_data import GOLD, REPLAY_V2, read_obs, session_day
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +89,11 @@ DECIDED_ROLES = frozenset({"strategy", "learning"})
 # quant B2: experiments registered to run to a fixed end, matched on params.prereg (the file name, without .md#anchor)
 FIXED_WINDOW_PREREGS = frozenset({"prereg-amendment-2026-11-15-redbox-week"})
 RULE = "arm lifecycle (docs/research/arm-lifecycle-2026-11-18.md)"
+BRACKET_RETIRE_N = 3            # amendment 5.1 (5): "A refused bracket (section 4) on 3 or more candidates"
+BRACKET_VOID_ACTION = "arm_registry_bracket_void"           # engine.arm_registry.BRACKET_VOID (the journal's action)
+CONTROL_CHANGED_ACTION = "arm_registry_control_changed"     # engine.arm_registry.CONTROL_CHANGED
+# (arm, candidate row) -> the bracket recomputed from the bars closed at its decision; None: not recomputable tonight
+Recompute = Callable[[Arm, Mapping[str, Any]], Bracket | None]
 
 Decision = Literal["HOLD", "RETIRE"]
 
@@ -106,6 +130,8 @@ class ArmRead(FrozenRecord):
     e_better: float = 1.0                   # reported, not evidence
     e_retire: float = E_RETIRE
     kill: str | None = None
+    n_bracket_void: int = 0                 # discovered arms: candidates whose bracket was refused (5.1 (5))
+    void_from: str | None = None            # discovered arms: the control change every read is void from (2.2)
     decision: Decision = "HOLD"
     applied: bool = False
     reason: str = ""
@@ -120,6 +146,95 @@ def fixed_window(arm: Arm) -> bool:
     """A fixed-window experiment (FIXED_WINDOW_PREREGS, on params.prereg): kill rules only, never evidence."""
     pre = str(arm.params.get("prereg") or "").split("#", 1)[0].rsplit("/", 1)[-1].removesuffix(".md")
     return pre in FIXED_WINDOW_PREREGS
+
+
+def discovered(arm: Arm) -> bool:
+    """A discovered learning arm (the amendment's): role learning with a per-trade bracket `spec_exit:<hash12>`."""
+    return arm.role == "learning" and str(arm.params.get(PER_TRADE_KEY, "")).startswith(BRACKET_PREFIX)
+
+
+def engine_recompute(bars: Mapping[str, pd.DataFrame]) -> Recompute:
+    """The recompute from each candidate's account's 1m bars (`bars`: account -> store-schema 1m bars with
+    `visible_at`): the engine's `arm_registry.decision_bracket`, the arm's own lookback window. None when the account
+    has no bars or none closed by the decision."""
+    from goldbot.engine.arm_registry import decision_bracket
+
+    def recompute(arm: Arm, row: Mapping[str, Any]) -> Bracket | None:
+        b = bars.get(str(row.get("account_id")))
+        if b is None or b.empty:
+            return None
+        return decision_bracket(b, arm, pd.Timestamp(row["decision_utc"]))
+    return recompute
+
+
+def _ns_or_none(v: Any) -> int | None:
+    return None if v is None or pd.isna(v) else int(pd.Timestamp(v).value)
+
+
+def _num(v: Any) -> float | int | None:
+    return None if v is None or pd.isna(v) else v
+
+
+def _candidate_row(row: Mapping[str, Any]) -> dict[str, object]:
+    """A read_obs row as `bracket_void` reads a candidate row (plain ints, epoch ns)."""
+    hold = _num(row.get("max_hold_s"))
+    return {"stop_dist": None if (v := _num(row.get("stop_dist"))) is None else float(v),
+            "target_dist": None if (v := _num(row.get("target_dist"))) is None else float(v),
+            "max_hold_s": None if hold is None else int(hold),
+            "decision_ns": _ns_or_none(row.get("decision_utc")),
+            "recorded_ns": None if (v := _num(row.get("recorded_ns"))) is None else int(v),
+            "entry_ns": _ns_or_none(row.get("entry_utc"))}
+
+
+def _journalled(journal: pd.DataFrame, action: str, arm_id: str, accounts: Collection[str]) -> list[dict[str, Any]]:
+    """The journal's `action` rows of `arm_id` on `accounts` (store `decisions` schema: ts_utc, account_id, agent_id,
+    action, detail JSON), each its detail plus `ts_utc` and `account_id`, in time order."""
+    if journal.empty:
+        return []
+    j = journal[(journal["action"] == action) & journal["account_id"].astype(str).isin(set(accounts))]
+    out = []
+    for rec in j.sort_values("ts_utc").to_dict("records"):
+        try:
+            detail = json.loads(rec["detail"]) if isinstance(rec.get("detail"), str) else dict(rec.get("detail") or {})
+        except (ValueError, TypeError):
+            detail = {}
+        if detail.get("arm") == arm_id or rec.get("agent_id") == "explore:" + arm_id:
+            out.append({**detail, "ts_utc": pd.Timestamp(rec["ts_utc"]), "account_id": str(rec["account_id"])})
+    return out
+
+
+def _integrity(obs: pd.DataFrame, arm: Arm, *, journal: pd.DataFrame, recompute: Recompute,
+               accounts: Collection[str]) -> tuple[pd.DataFrame, int, bool, pd.Timestamp | None]:
+    """(`obs` without the arm's void candidates, refused brackets, whether one was on a taken candidate, the control
+    change): the module docstring's discovered-arm voids. Refused: a journalled entry void, or `bracket_void` against
+    the recompute (one the night cannot recompute is left out, not refused); counted per (account, decision)."""
+    block = _learning(arm)
+    since = pd.Timestamp(block.since, tz="UTC") if block is not None else None
+    refused = {(str(e["account_id"]), _ns_or_none(e.get("bar")))
+               for e in _journalled(journal, BRACKET_VOID_ACTION, arm.id, accounts)}
+    changes = _journalled(journal, CONTROL_CHANGED_ACTION, arm.id, accounts)
+    change = changes[0]["ts_utc"] if changes else None
+    mine = obs[obs["arm_id"] == arm.id]
+    if since is not None:
+        mine = mine[mine["decision_utc"] >= since]
+    drop, taken = [], False
+    rows: list[dict[str, Any]] = [{str(k): v for k, v in r.items()} for r in mine.to_dict("records")]
+    for i, row in zip(mine.index, rows, strict=True):
+        key = (str(row.get("account_id")), _ns_or_none(row.get("decision_utc")))
+        why: str | None = "journalled" if key in refused else None
+        if why is None:
+            rec = recompute(arm, row)
+            if rec is None:
+                drop.append(i)                              # not recomputable tonight: void, not a refusal
+                continue
+            why = bracket_void(_candidate_row(row), rec)
+        if why is not None:
+            drop.append(i)
+            refused.add(key)
+            taken = taken or bool(row.get("taken"))
+    if change is not None:
+        drop += list(mine.index[mine["session_day"].astype(str) >= session_day(change)])
+    return obs.drop(index=sorted(set(drop))), len(refused), taken, change
 
 
 def _learning(arm: Arm) -> Learning | None:
@@ -280,24 +395,49 @@ def freeze(db: Database, broker: str, arm: Arm, days: pd.DataFrame, *, now: pd.T
 
 def read_arm(db: Database, obs: pd.DataFrame, arm: Arm, *, broker: str, control: str | None,
              accounts: Collection[str], parity: Mapping[str, ParityGap], cap: float, day: str,
-             now: pd.Timestamp) -> ArmRead:
-    """One arm's figures, its frozen terms and their validity (module docstring); the decision is `decide`'s."""
+             now: pd.Timestamp, journal: pd.DataFrame | None = None,
+             recompute: Recompute | None = None) -> ArmRead:
+    """One arm's figures, its frozen terms and their validity (module docstring); the decision is `decide`'s. A
+    discovered arm's voids and integrity kill read `journal` (the broker's `decisions` rows) and `recompute`."""
     block = _learning(arm)
     since = pd.Timestamp(block.since, tz="UTC") if block is not None else None
     with db.connection() as conn:
         n_trades, net = _ledger(conn, arm.id, accounts, since)
         kill = _kill(conn, arm, cap, day, accounts)
+    extra: dict[str, Any] = {}
+    unverified = change = None
+    if discovered(arm):
+        if journal is None or recompute is None:
+            unverified = "bracket integrity unverified: " + ("no journal read" if journal is None else
+                                                              "no bars to recompute") + " (amendment 5.1): no evidence"
+        else:
+            obs, n_void, on_taken, change = _integrity(obs, arm, journal=journal, recompute=recompute,
+                                                       accounts=accounts)
+            extra["n_bracket_void"] = n_void
+            if change is not None:
+                extra["void_from"] = change.isoformat()
+            if kill is None and change is not None:
+                kill = (f"control changed after registration at {change.isoformat()}: every read void from then on "
+                        "(amendment 2.2)")
+            elif kill is None and on_taken:
+                kill = "bracket integrity: a refused bracket on a taken candidate (amendment 5.1 (5))"
+            elif kill is None and n_void >= BRACKET_RETIRE_N:
+                kill = f"bracket integrity: {n_void} refused brackets on candidates (amendment 5.1 (5))"
     terms, fig = day_terms(obs, arm, control=control, day=day)
     base: dict[str, Any] = dict(day=day, broker=broker, arm_id=arm.id, role=arm.role, tf=arm.timeframe,
                                 control_arm=control, fixed_window=fixed_window(arm), n_trades=n_trades,
-                                net_gbp=round(net, 2), kill=kill, **fig)
+                                net_gbp=round(net, 2), kill=kill, **fig, **extra)
     if control is None:
         return ArmRead(**base, reason="no matched control: no replay twin")
+    if unverified is not None:
+        return ArmRead(**base, reason=unverified)                   # nothing frozen from unchecked candidates
     stored = freeze(db, broker, arm, terms, now=pd.Timestamp(now))
     x, d = stored["term"].to_numpy(dtype=float), stored["day"].astype(str).to_numpy()
     base.update(n_excess=int(stored["n"].sum()), n_days=len(stored),
                 excess_r=float(x.mean()) if len(x) else None,
                 e_worse=e_edge(-x, day=d), e_better=e_edge(x, day=d))
+    if change is not None:
+        return ArmRead(**base, reason=f"void: control changed at {change.isoformat()}")
     scope = parity.get(f"{broker}:{TF_BAND.get(arm.timeframe, arm.timeframe)}")
     unmatched = fig.get("unmatched_share")
     why = None
@@ -344,10 +484,12 @@ def parity_gaps(db: Database, brokers: Collection[str], *, before: pd.Timestamp)
 
 def run(db: Database, *, hosts: Mapping[str, str], arms: Collection[Arm], controls: Mapping[str, str],
         caps: Mapping[str, float], day: str, now: pd.Timestamp,
-        parity: Mapping[str, ParityGap] | None = None) -> list[ArmRead]:
+        parity: Mapping[str, ParityGap] | None = None, journal: pd.DataFrame | None = None,
+        recompute: Recompute | None = None) -> list[ArmRead]:
     """Every decided arm of every broker in `hosts` (account -> broker, demo probe_only accounts only), read,
     decided, journalled (`arm_lifecycle_reads`) and a RETIRE applied (`exploration_arm_status`). `parity`: the
-    scopes (default `parity_gaps`; an unreadable monitor holds every arm on evidence)."""
+    scopes (default `parity_gaps`; an unreadable monitor holds every arm on evidence). `journal` (the hosts'
+    `decisions` rows) and `recompute` (`engine_recompute`): a discovered arm's voids; without them it holds."""
     brokers = sorted(set(hosts.values()))
     if parity is None:
         try:
@@ -365,7 +507,8 @@ def run(db: Database, *, hosts: Mapping[str, str], arms: Collection[Arm], contro
             block = _learning(arm)
             control = controls.get(arm.id) or (block.control if block is not None else None)
             out.append(decide(read_arm(db, obs, arm, broker=broker, control=control, accounts=accounts,
-                                       parity=parity, cap=float(caps.get(arm.id, 0.0)), day=day, now=now)))
+                                       parity=parity, cap=float(caps.get(arm.id, 0.0)), day=day, now=now,
+                                       journal=journal, recompute=recompute)))
     record(db, out, now=now)
     return out
 
@@ -405,6 +548,7 @@ def summary(reads: list[ArmRead]) -> dict[str, Any]:
             "validated": sum(r.validated for r in reads)}
 
 
-__all__ = ["E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "MAX_UNMATCHED", "MIN_DAYS", "MIN_N", "SETTLE_DEFAULT",
+__all__ = ["BRACKET_RETIRE_N", "E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "Recompute", "discovered",
+           "engine_recompute", "MAX_UNMATCHED", "MIN_DAYS", "MIN_N", "SETTLE_DEFAULT",
            "SETTLE_PAD", "VOID_UNLABELLED", "ArmRead", "ParityGap", "arm_hold", "day_terms", "settled_at", "decide", "decided", "fixed_window", "freeze", "parity_gaps", "read_arm",
            "reads_of", "record", "run", "summary", "twin_means"]
