@@ -142,6 +142,7 @@ from goldbot.ops.checks.engine import (
     check_entry_status,
     check_failed_orders,
     check_history_gap,
+    check_quote_age,
     check_symbols,
     check_tick_errors,
     check_weekend_247,
@@ -357,6 +358,7 @@ __all__ = [
     "check_entry_silence",
     "check_entry_status",
     "check_symbols",
+    "check_quote_age",
     "check_entry_windows",
     "check_failed_orders",
     "check_feature_versions",
@@ -680,7 +682,8 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
                   "cpu_steal", "needrestart",   # outage 2026-11-12..14: a CPU-starved host, a missing needrestart rule
                   "swap_reconcile",  # BACKLOG 175: a weekend crypto hold's broker swap off the seven-night projection
                   "discovered_arm_reads",   # F7 (reviews of 611d5adb): a discovered arm unverified 2 nights running
-                  "discovery_last_run")  # ADR 0090 SRE GO: an enabled discovery job with no successful night in 26 h
+                  "discovery_last_run",  # ADR 0090 SRE GO: an enabled discovery job with no successful night in 26 h
+                  "quote_age:")  # incident 2026-11-18/19: a traded symbol's quote stale in its open session
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money
 # and position safety must not wait (a loss cap, a kill switch, an order that failed, a broken backup), and the

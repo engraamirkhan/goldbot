@@ -291,6 +291,40 @@ def check_symbols(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="warn", reason=f"{summary}; {words}"[:600])
 
 
+@register_check("account", block=BLOCK_ACCOUNT, pos=18)
+def check_quote_age(ctx: HealthContext, account_id: str) -> Check | None:
+    """quote_age:<account>, only on a multi-book engine (`books` in engine_<account>.json). Incident 2026-11-18/19
+    (vantage-demo): a closed index held the batched quote read back and the engine re-read a gold quote up to 105 min
+    old; health only warned on engine:, which is not told. Design rule: a traded symbol (gold's book and every book
+    holding a position: the quotes software exits run on) whose quote is older than risk.stale_tick_seconds while its
+    own session is open (the book's `market_closed` is false) WARNs, and the warning is told on Telegram
+    (NOTIFY_ON_WARN). A quiet book holding nothing and a closed session stay OK. Reporting only."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    try:
+        e = _read_json(f) if f.exists() else None
+    except (ValueError, OSError):
+        return None                                  # engine:<account> reports an unreadable file
+    if not isinstance(e, dict) or not isinstance(e.get("books"), dict):
+        return None
+    limit = ctx.settings.risk.stale_tick_seconds if ctx.settings is not None else 20
+    name = f"quote_age:{account_id}"
+    old: list[str] = []
+    traded = 0
+    for sym, b in e["books"].items():
+        if not isinstance(b, dict) or not (b.get("primary") or b.get("open")):
+            continue
+        traded += 1
+        age = b.get("last_tick_age_s")
+        if b.get("market_closed") is False and isinstance(age, (int, float)) and float(age) > limit:
+            held = f", {len(b['open'])} open" if b.get("open") else ""
+            old.append(f"{sym} quote {_age(float(age))} old in an open session{held}")
+    if not old:
+        return Check(name=name, status="ok", reason=f"{traded} traded symbol(s) within {limit} s")
+    return Check(name=name, status="warn",
+                 reason=(f"{'; '.join(old)} (> {limit} s): entries refused (stale_data); software exits run on that "
+                         "quote, broker stops rest on the orders")[:600])
+
+
 TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even after it cleared
 
 
