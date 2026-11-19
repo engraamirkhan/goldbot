@@ -316,10 +316,14 @@ def refusal(eng: Engine, ex: Exploration, r: RegistryRow) -> tuple[Arm | None, s
 def _learning_refusal(row: dict[str, Any], params: dict[str, Any], r: RegistryRow) -> str | None:
     """A discovered learning row or its control, beyond `arm_rules_spec.check_learning` (run by the row's
     validation): the learning block exactly as the amendment fixes it (section 3), the control named `<arm id>C` and
-    serving that arm alone, and no stop band wider than the row's per-trade cap."""
+    serving that arm alone, no stop band wider than the row's per-trade cap, and no `since` before the amendment's
+    effective day (section 1: "Until then no ... enters"; registration refuses before EFFECTIVE_UTC, but a row
+    appended straight to aux.db never went through it. The earliest `since` a registration writes is EFFECTIVE_UTC's
+    UTC day, and `arms.check_learning` gives no entry before `since`)."""
     from goldbot.research.arm_rules_spec import (
         CONTROL_SUFFIX,
         DISCOVERED_PREREG,
+        EFFECTIVE_UTC,
         LOSS_CAP_GBP,
         learning_until,
     )
@@ -341,9 +345,13 @@ def _learning_refusal(row: dict[str, Any], params: dict[str, Any], r: RegistryRo
     if block.get("control") != r.arm_id + CONTROL_SUFFIX:
         return f"its control must be {r.arm_id + CONTROL_SUFFIX}"
     try:
-        until = learning_until(pd.Timestamp(str(block.get("since")), tz="UTC"))
+        since = pd.Timestamp(str(block.get("since")), tz="UTC")
+        until = learning_until(since)
     except ValueError:
         return "learning.since is not a day"
+    if since < EFFECTIVE_UTC.normalize():
+        return (f"learning.since {block.get('since')} is before the amendment's effective day "
+                f"{EFFECTIVE_UTC:%Y-%m-%d} (section 1)")
     if block.get("until") != until or params.get("end_utc") != f"{until}T22:00:00Z":
         return f"until must be min(since + 42 days, the sunset) = {until}, end_utc {until}T22:00:00Z"
     return None

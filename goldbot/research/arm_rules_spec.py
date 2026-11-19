@@ -102,6 +102,10 @@ CONTROL_KEYS = frozenset({"spec", "spec_hash", "control", "signal_rate", *LEARNI
 LOSS_CAP_GBP = 60.0                      # "`loss_cap_gbp` **£60**"
 LEARNING_DAYS = 42                       # "`until` `min(since + 42 days, 2027-03-31)`"
 SUNSET = "2027-03-31"                    # section 7: "No registration under this amendment after 2027-03-31"
+# section 1: "the end of the red-box week. Until then no ... enters". Registration refuses before it
+# (`ops.autodisc_register`, which imports it from here) and the engine's hot loader refuses a learning row whose
+# `since` is before its UTC day (`engine.arm_registry._learning_refusal`): one constant for both
+EFFECTIVE_UTC = pd.Timestamp("2026-11-22 22:00", tz="UTC")
 CONTROL_SUFFIX = "C"                     # the dedicated control's id: the arm id + "C" (D2611-1 -> D2611-1C)
 
 

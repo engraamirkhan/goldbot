@@ -57,7 +57,8 @@
                     agent and research analyst read (`read_attribution`). Reporting only: changes nothing.
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
-                    state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
+                    state/reconcile_<account>.json (health check reconcile:<account>). Then re-pulls the broker M1's
+                    holes over the last 7 days (crossfeed.BACKFILL_MAX; never graded). Skipped without a broker.
 * broker_ledger     daily (finance audit GAP-07/GAP-08, RC-8/RC-9): per account, read-only, a balance snapshot (balance,
                     equity, margin, currency) and the deposits, withdrawals and adjustments in the broker's deal history,
                     the balance tied out against the deals, and goldbot's closed records and open trades reconciled
@@ -1728,7 +1729,7 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     from goldbot.engine import exploration as X
     from goldbot.ops.accounts import exploration_arm_caps
     from goldbot.ops.report_days import day_before
-    from goldbot.research.arm_integrity import integrity_inputs
+    from goldbot.research import arm_integrity
     from goldbot.research.arm_lifecycle import run, summary
     from goldbot.research.arms import Arm, load_arms
     if not ctx.settings.research.arm_lifecycle.enabled:
@@ -1757,8 +1758,11 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     controls = {k: v.control_arm for k, v in cat.arms.items() if v.control_arm}
     # a discovered learning arm's voids (amendment 2026-11-18 4, 5.1 (5), 2.2): the engines' journal and the bracket
     # recomputed from the minutes each engine stored, as it held them at the decision; read only when one is decided
-    night = integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo}, list(arms.values()),
-                             now=slot)
+    # every enabled account of any mode or role on a host's live key (books.live_key of a gold book: broker,
+    # symbol) writes the minutes the night reads: their late minutes void too (quant re-check of 5a9c15ba)
+    sharers = arm_integrity.key_sharers({a.account_id: (a.broker, a.symbol) for a in ctx.accounts if a.enabled})
+    night = arm_integrity.integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo},
+                                           list(arms.values()), now=slot, db=aux, sharers=sharers)
     reads = run(aux, hosts={a.account_id: a.broker for a in demo},
                 arms=list(arms.values()), controls=controls, caps=caps, day=day_before(slot), now=slot,
                 journal=night.journal, recompute=night.recompute, hosts_read=night.hosts)

@@ -48,11 +48,18 @@ def _engine_window(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _stored(tmp_path: Path, minutes: pd.DataFrame) -> Store:
-    """The engine's minutes as its history writer stores them (`bars_1m_live`, source = broker, written live)."""
+    """The engine's minutes as its history writer stores them (`bars_1m_live`, source = broker, written live), and
+    the broker's M1 of the same minutes as the nightly reconcile pulls it (`bars_1m_broker`, source = account)."""
     store = Store(tmp_path / "data")
     store.append("bars_1m_live", minutes.assign(available_utc=pd.to_datetime(minutes["visible_at"], utc=True)
                                                 + pd.Timedelta(seconds=1)), source="icm", symbol="XAUUSD")
+    _broker_m1(store, minutes)
     return store
+
+
+def _broker_m1(store: Store, minutes: pd.DataFrame) -> None:
+    store.append("bars_1m_broker", minutes.assign(available_utc=CLOSE + pd.Timedelta(hours=4)),
+                 source="icm-probe", symbol="XAUUSD")
 
 
 def _engine_bracket(env: dict[str, Any], tmp_path: Path) -> tuple[Any, Any, S.Bracket]:
@@ -138,16 +145,85 @@ def test_a_window_minute_the_engine_replaced_after_the_decision_leaves_the_candi
     assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, at) == expected
 
 
-def _replaced_event(store: Store, minute: pd.DataFrame) -> None:
+def _replaced_event(store: Store, minute: pd.DataFrame, detail: str = "1 minute(s) replaced") -> None:
     """The engine's dq row for a replaced minute (`broker_bars._replace`: ts_utc = the minute)."""
     store.append("dq_events", pd.DataFrame([{"ts_utc": pd.Timestamp(minute["ts_utc"].iloc[0]),
                                              "check": broker_bars.REPLACED, "severity": "warning",
-                                             "detail": "1 minute(s) replaced"}]),
+                                             "detail": detail}]),
                  source="icm-probe", symbol="XAUUSD", dedupe=False)
 
 
 def test_the_replacement_span_covers_the_engines_give_up_and_one_rates_call():
     assert I.REPLACE_SPAN >= broker_bars.GIVE_UP + pd.Timedelta(minutes=broker_bars.FETCH_N + 1)
+
+
+def _flagged_store(tmp: Path, minutes: pd.DataFrame, i: Any, written: pd.Timestamp, *,
+                   flag: bool = True) -> Store:
+    """The engine's minutes as stored live, minute `i` the broker's replacement (`broker_bars._replace` ->
+    `history.queue_minutes`: flagged `replaced`, written at `written`)."""
+    rows = minutes.assign(available_utc=pd.to_datetime(minutes["visible_at"], utc=True) + pd.Timedelta(seconds=1),
+                          replaced=False)
+    rows.loc[i, "replaced"], rows.loc[i, "available_utc"] = flag, written
+    store = Store(tmp / "data")
+    store.append("bars_1m_live", rows, source="icm", symbol="XAUUSD")
+    _broker_m1(store, minutes)
+    return store
+
+
+def test_a_replacement_logged_near_the_decision_but_stored_before_it_is_recomputed_not_voided(env, tmp_path):
+    """The dq event (`broker_bar_replaced`: its ts the first replaced minute, its detail the count and the largest
+    close change) says that minutes were replaced, never when. The stored copy says when: flagged `replaced`, with
+    its write time, which is after the engine swapped the bar in. Written before the decision, the engine held the
+    broker's bar, so the night recomputes from it; written after, K1 voids. Only an event the store cannot show
+    (no flagged copy of its minute, fewer flagged minutes than it counts, a detail that does not parse) voids."""
+    eng, arm, engine = _engine_bracket(env, tmp_path)
+    held = eng.bars_1m[eng.bars_1m["visible_at"] <= CLOSE]
+    at = {"account_id": "icm-probe", "decision_utc": CLOSE}
+    i = held.index[-3]                                          # a minute of the decision bar, inside REPLACE_SPAN
+    revised = eng.bars_1m.copy()
+    for c in ("bid_high", "ask_high"):
+        revised.loc[i, c] = revised.loc[i, c] + 25.0
+    expected = AR.decision_bracket(revised, arm.spec, CLOSE)
+    assert expected is not None and expected != engine
+
+    before = _flagged_store(tmp_path / "before", revised, i, CLOSE - pd.Timedelta(seconds=30))
+    _replaced_event(before, revised.loc[[i]])
+    assert I.stored_recompute(before, HOST, now=NIGHT)(arm.spec, at) == expected
+
+    after = _flagged_store(tmp_path / "after", revised, i, CLOSE + pd.Timedelta(seconds=30))
+    _replaced_event(after, revised.loc[[i]])
+    assert I.stored_recompute(after, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE
+
+    two = _flagged_store(tmp_path / "two", revised, i, CLOSE - pd.Timedelta(seconds=30))
+    _replaced_event(two, revised.loc[[i]], detail="2 minute(s) from sampled ticks replaced by the broker's bars")
+    assert I.stored_recompute(two, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE     # one of two not shown
+
+    vague = _flagged_store(tmp_path / "vague", revised, i, CLOSE - pd.Timedelta(seconds=30))
+    _replaced_event(vague, revised.loc[[i]], detail="minutes replaced")
+    assert I.stored_recompute(vague, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE   # fails closed
+
+    bare = _flagged_store(tmp_path / "bare", revised, i, CLOSE - pd.Timedelta(seconds=30), flag=False)
+    _replaced_event(bare, revised.loc[[i]])
+    assert I.stored_recompute(bare, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE    # a pre-flag store
+
+
+def test_the_night_reads_the_count_of_the_replacement_event_the_engine_writes(monkeypatch):
+    """The count is parsed from the engine's own detail text (`broker_bars._replace`), so a change to that text
+    fails here, not silently at night (an unparseable detail voids)."""
+    t = pd.Timestamp("2026-11-10 10:00", tz="UTC")
+    cols = {"bid_open": 1.0, "bid_high": 1.0, "bid_low": 1.0, "bid_close": 1.0, "ask_open": 1.1, "ask_high": 1.1,
+            "ask_low": 1.1, "ask_close": 1.1, "tick_count": 1, "spread_mean": 0.1, "spread_max": 0.1}
+    mine = pd.DataFrame([{"ts_utc": t + pd.Timedelta(minutes=k), "visible_at": t + pd.Timedelta(minutes=k + 1),
+                          **cols} for k in range(3)])
+    eng = type("E", (), {"bars_1m": mine, "_dq_pending": [], "_resamplers": {}, "_ctx_cache": {},
+                         "_bars_clean": None})()
+    bb = broker_bars.BrokerBars()
+    bb.fallback = set(pd.DatetimeIndex(mine["ts_utc"][:2]))
+    monkeypatch.setattr("goldbot.engine.history.queue_minutes", lambda eng, done: None)
+    broker_bars._replace(eng, bb, mine.iloc[:2].assign(bid_close=1.05, bid_high=1.05))
+    [ev] = [e for e in eng._dq_pending if e.check == broker_bars.REPLACED]
+    assert ev.ts_utc == t and I.replaced_count(ev.detail) == 2
+    assert I.replaced_count("minutes replaced") is None and I.replaced_count(None) is None
 
 
 def test_unreadable_replacement_events_leave_every_candidate_of_the_account_unrecomputable(env, tmp_path,
@@ -258,3 +334,52 @@ def test_the_night_reads_the_engines_whole_minute_memory():
     from goldbot.engine.runner import EngineConfig
     assert I.ENGINE_MINUTES == EngineConfig.model_fields["max_bars_in_memory"].default
     assert I.READ_DAYS * 23 * 60 * 5 / 7 >= I.ENGINE_MINUTES
+
+
+def test_the_nightly_job_passes_every_enabled_account_on_a_live_key_as_a_sharer(env, tmp_path, monkeypatch):
+    """Quant re-check of 5a9c15ba (fails open): `hosts` holds only the demo probe_only exploring accounts, but any
+    enabled account on the same (broker, symbol) live key writes the minutes the night reads (a live account once
+    unlocked, a demo re-roled off probe_only, exploration off). The job hands the night every enabled account grouped
+    by its live key, apart from `hosts`."""
+    from goldbot.ops import jobs
+    register(env)
+    ctx = _ctx(env, Store(tmp_path / "data"))
+    demo = next(a for a in ctx.accounts if a.account_id == "icm-demo")
+    other = demo.model_copy(update={"account_id": "icm-live-x", "mode": "live", "probe_only": False})
+    off = demo.model_copy(update={"account_id": "icm-off", "probe_only": False,
+                                  "exploration": demo.exploration.model_copy(update={"enabled": False})})
+    elsewhere = demo.model_copy(update={"account_id": "vantage-x", "broker": "vantage", "symbol": "XAUUSD+"})
+    ctx.accounts = [*ctx.accounts, other, off, elsewhere]
+    seen: dict[str, Any] = {}
+
+    def spy(store: Any, hosts: Any, arms: Any, **kw: Any) -> I.NightInputs:
+        seen.update(hosts=dict(hosts), **kw)
+        return I.NightInputs()
+    monkeypatch.setattr(I, "integrity_inputs", spy)
+    jobs.arm_lifecycle(ctx, SLOT)
+    assert "icm-live-x" not in seen["hosts"] and "icm-off" not in seen["hosts"]
+    assert {"icm-live-x", "icm-off"} <= set(seen["sharers"]["icm-demo"])
+    assert "vantage-x" not in seen["sharers"]["icm-demo"] and "icm-demo" not in seen["sharers"]["icm-demo"]
+
+
+def test_a_sharer_outside_the_hosts_with_a_late_unreplaced_minute_voids_and_unreadable_stays_unverified(
+        env, tmp_path, monkeypatch):
+    eng, arm, _ = _engine_bracket(env, tmp_path)
+    store = _stored(tmp_path, eng.bars_1m)
+    stamp = pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+    detail = (f"1 minute(s) {stamp[0]}..{stamp[0]} from sampled ticks: the broker's 1m bar was late or missing; "
+              "replaced when it arrives")
+    store.append("dq_events", pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
+                                            "detail": [detail]}), source="icm-live-x", symbol="XAUUSD", dedupe=False)
+    row = {"account_id": "icm-probe", "decision_utc": CLOSE}
+    assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, row) != I.SAMPLED_MINUTE      # not a sharer
+    shared = {"icm-probe": ("icm-live-x",)}
+    assert I.stored_recompute(store, HOST, now=NIGHT, sharers=shared)(arm.spec, row) == I.SAMPLED_MINUTE
+    real = store.read
+
+    def read(table: str, **kw: Any) -> pd.DataFrame:
+        if table == "dq_events" and kw.get("source") == "icm-live-x":
+            raise OSError("unreadable")
+        return real(table, **kw)
+    monkeypatch.setattr(store, "read", read)
+    assert I.stored_recompute(store, HOST, now=NIGHT, sharers=shared)(arm.spec, row) == I.DQ_UNREADABLE

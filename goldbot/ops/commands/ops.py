@@ -66,6 +66,13 @@ def _broker_history_depth(cmd: str, args: list[str]) -> None:
     sys.exit(depth_main(args))
 
 
+@register_command("m1-backfill", pos=211)
+def _m1_backfill(cmd: str, args: list[str]) -> None:
+    """The broker's M1 (bars_1m_broker) back-filled per account over READ_DAYS, read-only on the broker."""
+    from goldbot.ops.m1_backfill import main as m1_backfill_main
+    sys.exit(m1_backfill_main(args))
+
+
 @register_command("monthly-report", pos=220)
 def _monthly_report(cmd: str, args: list[str]) -> None:
     from goldbot.ops.monthly_report import main as monthly_main

@@ -357,3 +357,11 @@ def unknown_arms_are_gold(monkeypatch):
     from goldbot.research import arms
     real = arms.arm_instruments
     monkeypatch.setattr(arms, "arm_instruments", lambda path=None: _UnknownArmsAreGold(real(path)))
+
+
+@pytest.fixture(autouse=True)
+def _no_backfill_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The nightly broker M1 back-fill waits crossfeed.BACKFILL_PAUSE_S between bridge calls; fake brokers need no
+    pacing (tests/test_m1_backfill.py pins the real value)."""
+    from goldbot.data import crossfeed
+    monkeypatch.setattr(crossfeed, "BACKFILL_PAUSE_S", 0.0)

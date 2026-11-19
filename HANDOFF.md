@@ -5,6 +5,27 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-19 discovered-arm integrity voids made precise, still fail closed (goldbot/research/arm_integrity.py; an SRE
+  dry run on settled weekdays found most 15m candidates void `replaced_minute` and every 4h one `release_after_cutover`).
+  (1) A `broker_bar_replaced` event within 27 min before a decision no longer voids by itself: the event (its ts the
+  first replaced minute, its detail the count and the largest close change only) says minutes were replaced, never
+  when. The engine's flagged stored copy (`history.REPLACED_COL`, since 2026-11-18) says when: written before the
+  decision, the engine held the broker's bar and the night recomputes from it; written after, K1 voids. An event the
+  store cannot account for (no flagged copy of its minute, fewer flagged minutes than the counts of all events whose
+  spans overlap it, a detail that does not parse, any event from before the flag) still voids. (2) Root cause of the
+  4h voids: the engine never holds a release minute at or after its cut-over (the earlier of its first stored minute
+  and the rebased cut-over saved in aux.db `history_cutover`), but the night filled every gap in the engine's minutes
+  from the release and voided. Release minutes after the cut-over are no longer read. The window after the cut-over
+  is now proven against the broker's M1 (`bars_1m_broker`, the 23:20 UTC weekday reconcile): not yet pulled past the
+  decision, `window_incomplete` (retried; still not after 96 h, `no_broker_coverage`); pulled but with a hole of more
+  than 2 h of minutes the session table expects open (a missed pull, M1 history shorter than the window),
+  `no_broker_coverage` (unverified, told); a minute the M1 has and the engine's stored minutes lack, the last one
+  included, `gap_after_cutover` (renamed from `release_after_cutover`). Weekends and the daily break are observed
+  silence, never a gap. Consequence: a discovered arm's read needs the broker's M1 pulled for every account it runs
+  on, over its whole window (about 35 trading days for 4h). (3) The engine's hot loader refuses a learning row whose
+  `since` is before the amendment's effective day; `EFFECTIVE_UTC` now lives in `research.arm_rules_spec` (same
+  value) and registration imports it. Kill rules, caps, the prereg, `EFFECTIVE_UTC` and `LIFECYCLE_READY` are
+  unchanged.
 - The engine's stored minutes say what each engine held and since when (2026-11-19). Brain 11-18 17:00..11-19 02:45:
   both gold engines of one broker write `bars_1m_live` under one key (`books.live_key`: broker, symbol) and the store
   keeps the last copy of a minute, so the other engine's plain copy, written seconds after a `broker_bar_replaced`,
@@ -20,6 +41,33 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Behaviour change: a warm start now seeds such a minute from the flagged copy (the broker's bar or the fill), not
   from the last copy written. Nothing changes what a running engine holds or decides. The read side (arm integrity, `account_bars.minute_versions`) needs no
   change for the flag; passing `filled` through is optional. Tests: tests/test_engine_minute_store.py.
+- 2026-11-19 broker M1 back-fill and two arm-integrity follow-ups (quant review of fix/arm-integrity-voids, M1 and L1;
+  SRE brain simulation of 0d8543ae). (1) `feed_reconcile` pulled only the last 24 h, so a missed or late run, or a
+  short broker reply, left a permanent hole in `bars_1m_broker` and held every 4h discovered arm unverified
+  (`no_broker_coverage`) for weeks. Each run now also re-pulls, newest UTC day first, every day from 7 days before
+  the run up to its window whose stored M1 lacks more than 5 open minutes (one bridge call per day, at most 120 s per
+  account; goldbot/data/crossfeed.py `backfill_broker_m1`, BACKFILL_MAX/SLACK/BUDGET_S). It is never graded and emits
+  no divergence event: the 24 h report, its counts and dq_events mean what they meant. A failed call is one
+  `reconcile_backfill_failed` warning and a report note; the next run tries again. Every write of `bars_1m_broker`
+  (the window's too) now keeps the first stored copy of a minute and its write time: a re-pull or re-run never
+  overwrites a stored minute. (2) By hand: `python -m goldbot.ops.run m1-backfill --all --days 100`
+  (goldbot/ops/m1_backfill.py, RUNBOOK "Broker M1 back-fill by hand"): the same back-fill over READ_DAYS, paced 1 s
+  per call, idempotent. Owner/SRE step: run it once on the brain to fill the history from before the back-fill
+  (bars_1m_broker starts mid-to-late October per account, with multi-hour holes 10-21..10-26; a 4h window is about
+  42 trading days, so it must reach mid-September). (3) L1: a live window minute stored after the decision (beyond
+  the 2 min live-write grace) and not among the minutes recomputed voids the candidate (`late_minute`), whether or
+  not the broker's M1 has a bar there. (4) A broker M1 minute the engine's bar table (`DEFAULT_SESSIONS.is_open`)
+  closes, e.g. 23:00/23:01 UTC in winter, is never a `gap_after_cutover` (the simulation's ~80% of remaining 1h
+  voids). (5) Engine finding: both icm engines store gold minutes under one bars_1m_live key and the
+  store keeps the last copy; a window minute this account's engine flagged `broker_bar_late` with no
+  `broker_bar_replaced` of its own within GIVE_UP (10 min) voids (`sampled_minute`), every minute of a late span
+  counted. Every enabled account of any mode or role on the key (same broker and symbol; the job passes them
+  apart from the exploring hosts, `key_sharers`) is read, an unreadable one leaving the arm unverified, each judged
+  against its own replacements; a late detail that does not parse voids any window holding a minute from its ts to
+  GIVE_UP after it. K1's docstring notes sticky flags (fix/engine-minute-store) can only add voids. Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
+  Review round of 4bac3d3e: the back-fill's whole call is inside the warning path (the 24 h report and events are
+  always saved); `Store.append(keep="first")` does the existence check and the write under one partition lock;
+  the nightly back-fill waits 0.5 s between bridge calls (BACKFILL_PAUSE_S).
 - 2026-11-19 fix (trading safety, incident 2026-11-18/19 on a multi-book demo account): `books.QuoteFeed.refresh`
   took `since` from the OLDEST latest tick of every book, so an index closed 21:59:59..01:00:01 UTC held it for three
   hours; the bridge's `ticks_many` (copy_ticks_from, 2,000 rows) then served gold's oldest ticks after the reopen and

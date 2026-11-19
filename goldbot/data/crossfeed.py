@@ -52,6 +52,17 @@
   that severity, the report is state/reconcile_<account>.json, and `check_reconciliation` turns it into a health check
   (warning -> warn, error -> fail, older than RECONCILE_MAX_AGE_HOURS -> warn). The broker's M1 is kept in the store
   table `bars_1m_broker` (source = account), so broker history accumulates for the survival check below.
+  Back-fill (quant review of fix/arm-integrity-voids, M1): the 24 h pull alone left a permanent hole after a missed or
+  late run or a short broker reply, and the nightly discovered-arm read (research/arm_integrity.py) needs the M1 to
+  observe each decision's window (no hole over 2 h of open minutes). So each run also re-pulls, newest first, the
+  UTC days from BACKFILL_MAX before the run up to its window whose stored M1 lacks more than BACKFILL_SLACK minutes
+  the session table expects open (one get_bars_range call per day, at most 1,440 bars, within BACKFILL_BUDGET_S per
+  account; a run more than BACKFILL_MAX late leaves the days before that to `m1-backfill`);
+  `python -m goldbot.ops.run m1-backfill` does the same by hand over READ_DAYS (goldbot/ops/m1_backfill.py). Every
+  write of `bars_1m_broker` keeps the first stored copy of a minute (only minutes not stored yet are written, with
+  their write time as `available_utc`), so a re-pull never overwrites a stored minute. The back-fill is never graded
+  and emits no divergence event: the report, its counts and its dq_events are the 24 h window's, as before; a failed
+  back-fill call is one `reconcile_backfill_failed` warning and a note.
 
 * D20 spike confirmation. The same run screens both feeds with check_bars and keeps a spike warning only when the
   other feed shows no matching move (quality.confirm_spikes).
@@ -75,6 +86,8 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -86,6 +99,7 @@ from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.quality import DQEvent, check_bars, confirm_spikes, events_frame
 from goldbot.data.resample import BAR_COLUMNS, ticks_to_1m
 from goldbot.data.store import Store
+from goldbot.data.timeutil import epoch_ns
 
 if TYPE_CHECKING:
     from goldbot.ops.health import Check, HealthContext, Status
@@ -109,6 +123,11 @@ RECONCILE_WINDOW = pd.Timedelta(days=1)
 RECONCILE_BARS = 1500             # M1 bars asked of a broker without get_bars_range (a day is at most 1,440)
 RECONCILE_MAX_AGE_HOURS = 96      # the job runs Mon-Fri: an older report (a missed weekday) warns
 BROKER_TABLE = "bars_1m_broker"
+BACKFILL_MAX = pd.Timedelta(days=7)       # each run re-pulls holes in the broker's M1 back to this far before it
+BACKFILL_CHUNK = pd.Timedelta(days=1)     # one get_bars_range call: one UTC day, at most 1,440 M1 bars (as the window)
+BACKFILL_SLACK = 5                        # open minutes a day's stored M1 may lack (quiet minutes) before a re-pull
+BACKFILL_BUDGET_S = 120.0                 # per account per run: the scheduler is single-threaded (23:25 broker_ledger)
+BACKFILL_PAUSE_S = 0.5                    # between the nightly back-fill's bridge calls (the bridge serves the engine)
 
 
 def reconcile_file(state_dir: Path, account_id: str) -> Path:
@@ -143,6 +162,7 @@ class ReconcileReport(Record):
     stale_minutes: int = 0                 # minutes in frozen engine-close runs while the broker moved
     missing_broker_short: int = 0          # missing_broker outside the span the broker returned: coverage, not price
     broker_fetch: str = ""                 # "range" (get_bars_range over the window) | "last_n" (get_bars fallback)
+    backfill: dict[str, Any] = {}          # BackfillResult of the days before the window (never graded)
 
     def save(self, state_dir: Path) -> None:
         write_atomic(reconcile_file(state_dir, self.account_id), self.model_dump_json(indent=1), durable=False)
@@ -336,11 +356,115 @@ def _engine_runs(state_dir: Path | None, account_id: str) -> list[tuple[pd.Times
         return []
 
 
+class BackfillResult(Record):
+    """One back-fill of an account's broker M1 over [window_from, window_to)."""
+    account_id: str
+    window_from: UtcTimestamp
+    window_to: UtcTimestamp
+    chunks: int = 0                        # UTC days in the window
+    chunks_needed: int = 0                 # ... whose stored M1 lacked more than BACKFILL_SLACK open minutes
+    chunks_pulled: int = 0                 # ... asked of the broker
+    minutes_added: int = 0                 # minutes not stored before, written
+    open_missing: int = 0                  # open minutes still without a stored M1 bar after the run
+    max_open_hole: int = 0                 # the longest run of them (minutes); the arm read needs <= 120
+    first_stored: UtcTimestamp | None = None
+    stopped: str = ""                      # "" | "budget" | "no_range" | "errors"
+    errors: list[str] = []
+
+
+def _stored_m1(store: Store, account_id: str, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> np.ndarray:
+    got = store.read(BROKER_TABLE, source=account_id, symbol=symbol, start=start, end=end, columns=["ts_utc"])
+    if got is None or got.empty:
+        return np.zeros(0, dtype=np.int64)
+    return np.unique(epoch_ns(pd.DatetimeIndex(pd.to_datetime(got["ts_utc"], utc=True))))
+
+
+def store_new_m1(store: Store, bb: pd.DataFrame, account_id: str, symbol: str) -> int:
+    """Append the broker's M1 rows `bb` (broker_m1_bars) to BROKER_TABLE, only the minutes not stored yet: the first
+    copy of a minute and its write time are kept (point in time: a re-pull never overwrites a stored minute). The check
+    and the write are one step under the partition lock (Store.append keep="first"), so a by-hand m1-backfill
+    overlapping the nightly reconcile never lets a later copy win. Returns the minutes written; `available_utc` is the
+    write time (wall clock)."""
+    if bb.empty:
+        return 0
+    return store.append(BROKER_TABLE, bb.assign(available_utc=pd.Timestamp.now("UTC")), source=account_id,
+                        symbol=symbol, keep="first")
+
+
+def _open_holes(stored: np.ndarray, start: pd.Timestamp, end: pd.Timestamp,
+                sessions: SessionTable) -> tuple[int, int]:
+    """(open minutes in [start, end) without a stored bar, the longest consecutive run of them)."""
+    grid = pd.date_range(start, end, freq="min", inclusive="left")
+    if not len(grid):
+        return 0, 0
+    miss = np.asarray(sessions.expected_open(grid), dtype=bool) & ~np.isin(epoch_ns(grid), stored)
+    if not miss.any():
+        return 0, 0
+    edges = np.diff(np.concatenate(([0], miss.astype(np.int8), [0])))
+    runs = np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)
+    return int(miss.sum()), int(runs.max())
+
+
+def backfill_broker_m1(store: Store, broker: Any, account_id: str, symbol: str, *, start: pd.Timestamp,
+                       end: pd.Timestamp, sessions: SessionTable = DEFAULT_SESSIONS, budget_s: float | None = None,
+                       pause_s: float = 0.0, clock: Callable[[], float] | None = None) -> BackfillResult:
+    """Re-pull the broker's M1 over [start, end), newest UTC day first, for each day whose stored M1 lacks more than
+    BACKFILL_SLACK minutes the session table expects open: one get_bars_range call per day, only new minutes written
+    (store_new_m1). Read-only on the broker; idempotent (a complete day is never asked again). Stops at `budget_s`
+    (clock seconds since the start), on a broker without get_bars_range, or after two failed calls in a row; a failed
+    call is reported in `errors`, never raised. `pause_s` paces the calls (a by-hand run next to the live engine)."""
+    tick = clock or time.monotonic
+    start = pd.Timestamp(start).tz_convert("UTC").floor("min")
+    end = pd.Timestamp(end).tz_convert("UTC").floor("min")
+    out = BackfillResult(account_id=account_id, window_from=start, window_to=end)
+    if start >= end:
+        return out
+    days = list(pd.date_range(start.floor("D"), end, freq=BACKFILL_CHUNK, inclusive="left"))
+    chunks = [(max(d, start), min(d + BACKFILL_CHUNK, end)) for d in reversed(days)]
+    chunks = [(a, b) for a, b in chunks if a < b]
+    out.chunks = len(chunks)
+    stored = _stored_m1(store, account_id, symbol, start, end)
+    needed = [(a, b) for a, b in chunks if _open_holes(stored, a, b, sessions)[0] > BACKFILL_SLACK]
+    out.chunks_needed = len(needed)
+    can_range = callable(getattr(broker, "get_bars_range", None))
+    if needed and not can_range:
+        out.stopped = "no_range"
+    point = _point(broker, symbol) if needed and can_range else POINT_DEFAULT
+    t0, failed_in_row = tick(), 0
+    for i, (a, b) in enumerate(needed if can_range else []):
+        if budget_s is not None and tick() - t0 > budget_s:
+            out.stopped = "budget"
+            break
+        if i and pause_s > 0:
+            time.sleep(pause_s)
+        out.chunks_pulled += 1
+        try:
+            raw = broker.get_bars_range(symbol, "1m", a, b - pd.Timedelta(minutes=1))
+        except Exception as exc:          # a busy bridge or a terminal error: told, the next run tries again
+            out.errors.append(f"{a:%Y-%m-%d}: {type(exc).__name__}: {str(exc)[:120]}")
+            failed_in_row += 1
+            if failed_in_row >= 2:
+                out.stopped = "errors"
+                break
+            continue
+        failed_in_row = 0
+        bb = broker_m1_bars(raw, point)
+        bb = bb[(bb["ts_utc"] >= a) & (bb["ts_utc"] < b)].reset_index(drop=True)
+        out.minutes_added += store_new_m1(store, bb, account_id, symbol)
+    stored = _stored_m1(store, account_id, symbol, start, end)
+    out.open_missing, out.max_open_hole = _open_holes(stored, start, end, sessions)
+    out.first_stored = pd.Timestamp(int(stored[0]), tz="UTC") if len(stored) else None
+    return out
+
+
 def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, now: pd.Timestamp, *,
-                      state_dir: Path | None = None, sessions: SessionTable = DEFAULT_SESSIONS) -> ReconcileReport:
+                      state_dir: Path | None = None, sessions: SessionTable = DEFAULT_SESSIONS,
+                      backfill: pd.Timedelta = BACKFILL_MAX,
+                      backfill_budget_s: float = BACKFILL_BUDGET_S) -> ReconcileReport:
     """D12 for one account over the day before `now` (the current, incomplete minute excluded): engine bars from the
     account's stored ticks against the broker's M1; writes the broker's M1 to `bars_1m_broker`, the divergence and
-    unconfirmed-spike events to dq_events (source = account) and, with `state_dir`, the report file."""
+    unconfirmed-spike events to dq_events (source = account) and, with `state_dir`, the report file. Then back-fills
+    the broker's M1 holes from `backfill` before `now` up to the window (module docstring; never graded)."""
     end = pd.Timestamp(now).tz_convert("UTC").floor("min")
     start = end - RECONCILE_WINDOW
     point = _point(broker, symbol)
@@ -390,15 +514,34 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
         note = "the engine stored no ticks in the window (engine down or not collecting)"
     elif not n["broker_minutes"]:
         note = "the broker returned no M1 bars in the window (market closed or terminal disconnected)"
-    note = "; ".join(x for x in (note, fetch_note) if x)
-    if not bb.empty:
-        # available_utc = the write time (wall clock, not `now`): point in time for every reader of these minutes
-        store.append(BROKER_TABLE, bb.assign(available_utc=pd.Timestamp.now("UTC")), source=account_id, symbol=symbol)
+    # available_utc = the write time (wall clock, not `now`): point in time for every reader of these minutes; a
+    # minute already stored (a re-run, a late run overlapping the last) keeps its first copy
+    store_new_m1(store, bb, account_id, symbol)
+    filled: BackfillResult | None = None
+    if backfill > pd.Timedelta(0):
+        try:                                  # any failure in it (a store read across a month, the point, a write) is
+            filled = backfill_broker_m1(      # a warning: the 24 h report and its events are still saved
+                store, broker, account_id, symbol, start=end - backfill, end=start, sessions=sessions,
+                budget_s=backfill_budget_s, pause_s=BACKFILL_PAUSE_S)
+        except Exception as exc:              # noqa: BLE001 - told as reconcile_backfill_failed, tried again next run
+            filled = BackfillResult(account_id=account_id, window_from=end - backfill, window_to=start,
+                                    stopped="errors", errors=[f"{type(exc).__name__}: {str(exc)[:120]}"])
+        if filled.errors:
+            events.append(DQEvent(ts_utc=filled.window_to, check="reconcile_backfill_failed", severity="warning",
+                                  detail=f"broker M1 back-fill: {len(filled.errors)} failed calls "
+                                         f"({filled.errors[0]}); {filled.max_open_hole} open minutes in the longest "
+                                         "hole left, tried again next run"))
+    fill_note = ""
+    if filled is not None and (filled.errors or filled.stopped):
+        fill_note = (f"broker M1 back-fill {filled.stopped or 'partial'}: {filled.chunks_pulled} of "
+                     f"{filled.chunks_needed} days pulled" + (f", {filled.errors[0]}" if filled.errors else ""))
+    note = "; ".join(x for x in (note, fetch_note, fill_note) if x)
     if events:
         store.append("dq_events", events_frame(events), source=account_id, symbol=symbol, dedupe=False)
     rep = ReconcileReport(account_id=account_id, ts_utc=pd.Timestamp(now), window_from=start, window_to=end,
                           tolerance=tol, spikes_flagged=flagged, spikes_unconfirmed=unconfirmed, note=note,
                           broker_fetch=fetch,
+                          backfill=filled.model_dump(mode="json") if filled is not None else {},
                           **{k: v for k, v in n.items() if k != "first"})
     if state_dir is not None:
         rep.save(state_dir)

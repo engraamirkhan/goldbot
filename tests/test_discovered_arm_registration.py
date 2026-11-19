@@ -262,6 +262,30 @@ def test_the_engine_gives_no_entry_to_an_arm_whose_k_row_does_not_resolve(env, t
     assert p.reg.arm_id in ex.retired and "does not resolve" in ex.unqualified[p.reg.arm_id]
 
 
+def test_the_engine_refuses_a_learning_row_whose_since_is_before_the_amendments_effective_day(env, tmp_path):
+    """Section 1: "Until then no ... enters". Registration refuses before EFFECTIVE_UTC, but a learning row
+    appended straight to aux.db never went through it: the hot loader refuses a `since` before EFFECTIVE_UTC's UTC
+    day (the earliest a registration can write), so with `check_learning`'s "not yet" no such row enters before it.
+    The constant is the one registration reads (one source)."""
+    assert R.EFFECTIVE_UTC is S.EFFECTIVE_UTC
+    p = register(env)
+    eng, pb = _engine(tmp_path / "eng", [_arm("peer", tf="1h")])
+    early = f"{S.EFFECTIVE_UTC - pd.Timedelta(days=1):%Y-%m-%d}"
+    until = S.learning_until(pd.Timestamp(early, tz="UTC"))
+    entries = []
+    for r in arm_rows(env):
+        row = json.loads(r.row)
+        if row["role"] == "learning":
+            row["learning"] = {**row["learning"], "since": early, "until": until}
+            row["params"] = {**row["params"], "end_utc": f"{until}T22:00:00Z"}
+        entries.append((row, r.style, r.max_loss))
+    AR.append_many(str(tmp_path / "eng"), account_id="icm-probe", entries=entries, source="test")
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    why = [str(d.get("why")) for d in eng.decisions if d.get("arm") == p.reg.arm_id]
+    assert p.reg.arm_id not in _ex(eng).arms or p.reg.arm_id in _ex(eng).retired
+    assert any("effective" in w for w in why), why
+
+
 def test_a_bracket_that_does_not_match_its_recompute_at_the_entry_is_void_and_holds_the_arm(env, tmp_path):
     """T4 at the order path: the signal's stop, target and hold (what its candidate INSERT records) are recomputed
     from the bars closed at the decision; off by more than 1e-9, or sent more than 60 s after the decision: void, not

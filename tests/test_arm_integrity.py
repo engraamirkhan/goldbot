@@ -17,7 +17,9 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from goldbot.data import crossfeed
 from goldbot.data.store import Store
+from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database
 from goldbot.engine import arm_registry as AR
 from goldbot.engine import broker_bars, exploration, history
@@ -326,15 +328,25 @@ def test_registration_refuses_a_1d_or_1w_spec(env):
             R.register_learning_to_db(spec_hash(sp), "icm-demo", **env)
 
 
+def _m1(minutes: pd.DataFrame, **cols: Any) -> pd.DataFrame:
+    """The broker's own M1 (`bars_1m_broker`, the reconcile's pull) of `minutes`: evidence, never a bar held."""
+    return _versions(minutes, rank=1, **cols)
+
+
+def _sorted(*parts: pd.DataFrame) -> pd.DataFrame:
+    return pd.concat(parts).sort_values(["ts_utc", "rank"], kind="stable").reset_index(drop=True)
+
+
 def test_a_window_missing_its_last_minutes_is_incomplete_void_and_never_cached_then_stored_when_they_arrive(
         env, tmp_path):
-    """Q1: night N has the candidate's window without its last 5 minutes (not yet in the brain's store): void
-    `window_incomplete`, not a refusal, no verdict. Night N+1 has them: the verdict is stored, ok."""
+    """Q1: night N has the candidate's window without its last 5 minutes (not yet in the brain's store, nor the
+    broker's M1): void `window_incomplete`, not a refusal, no verdict. Night N+1 has them: the verdict is stored,
+    ok."""
     eng, arm, engine = _held(env, tmp_path)
-    full = _versions(eng.bars_1m)
+    full = _sorted(_versions(eng.bars_1m), _m1(eng.bars_1m))
     short = full[full["ts_utc"] < CLOSE - pd.Timedelta(minutes=5)]
     assert I.AccountMinutes(short).held(arm, CLOSE) == I.WINDOW_INCOMPLETE
-    assert I.AccountMinutes(full.tail(200)).held(arm, CLOSE) == I.WINDOW_INCOMPLETE      # shorter than the window
+    assert I.AccountMinutes(full.tail(400)).held(arm, CLOSE) == I.WINDOW_INCOMPLETE      # shorter than the window
     assert I.WINDOW_INCOMPLETE not in I.REFUSAL_CAUSES and I.WINDOW_INCOMPLETE not in I.UNVERIFYING
     db = Database.open(str(tmp_path / "night"), "aux")
     row = {"arm_id": arm.id, "account_id": "icm-probe", "decision_utc": CLOSE, "session_day": session_day(CLOSE),
@@ -370,26 +382,187 @@ def test_a_verdict_is_written_only_once_its_day_has_settled_and_its_account_is_c
 
 
 def test_release_minutes_after_the_cutover_in_the_window_void_the_candidate(env, tmp_path):
+    """A live minute missing after the cut-over: the release minute there is never read. With the broker's M1
+    showing the bar, it is a gap (void); before the broker's M1 is pulled past the decision, the window is not
+    provable yet (`window_incomplete`, tried again), never ok."""
     eng, arm, engine = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
     cut = live.index[len(live) // 2]
     gap = live.loc[[cut + 10]].assign(rank=3)                              # a release minute filling a live gap
-    v = pd.concat([live.drop(index=[cut + 10]), gap]).sort_values(["ts_utc", "rank"]).reset_index(drop=True)
-    assert I.AccountMinutes(v).held(arm, CLOSE) == I.RELEASE_AFTER_CUTOVER
+    v = _sorted(live.drop(index=[cut + 10]), gap)
+    assert I.AccountMinutes(v).held(arm, CLOSE) == I.WINDOW_INCOMPLETE
+    assert I.AccountMinutes(_sorted(v, _m1(eng.bars_1m))).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
     before = live.loc[: cut - 1].assign(rank=3)                            # release only before the first live minute
-    v2 = pd.concat([before, live.loc[cut:]]).sort_values(["ts_utc", "rank"]).reset_index(drop=True)
+    v2 = _sorted(before, live.loc[cut:], _m1(eng.bars_1m))
     held = I.AccountMinutes(v2).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
 
 
-def test_the_brokers_m1_never_fills_a_minute_the_engine_never_held(env, tmp_path):
+def test_a_release_minute_where_the_brokers_m1_shows_no_bar_after_the_cutover_is_not_held_and_the_read_verifies(
+        env, tmp_path):
+    """Root cause of the 4h voids: the engine never holds a release minute at or after its cut-over
+    (`engine.history`: release minutes before the cut-over only), but the night filled every live gap from the
+    release and then voided. A minute the broker's own M1 shows it never had (its M1 observing the span, no bar at
+    the minute) was never an engine minute: the night leaves it out, as the engine did, and recomputes."""
     eng, arm, _ = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
-    gone = live.index[-5]
-    m1 = live.loc[[gone]].assign(rank=1, bid_high=live.loc[gone, "bid_high"] + 30.0)
-    v = pd.concat([live.drop(index=[gone]), m1]).sort_values(["ts_utc", "rank"]).reset_index(drop=True)
+    cut = live.index[len(live) // 2]
+    quiet = cut + 10
+    m1 = live.drop(index=[quiet]).assign(rank=1)                           # the broker had no bar at `quiet`
+    other = live.loc[[quiet]].assign(rank=3, bid_high=live.loc[quiet, "bid_high"] + 40.0)
+    v = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:].drop(index=[quiet]), other, m1)
     held = I.AccountMinutes(v).held(arm, CLOSE)
-    assert isinstance(held, pd.DataFrame) and pd.Timestamp(live.loc[gone, "ts_utc"]) not in set(held["ts_utc"])
+    assert isinstance(held, pd.DataFrame)
+    assert pd.Timestamp(live.loc[quiet, "ts_utc"]) not in set(held["ts_utc"])   # never the release's minute
+    engine_held = I.AccountMinutes(_sorted(live.loc[: cut - 1].assign(rank=3),
+                                           live.loc[cut:].drop(index=[quiet]), m1)).held(arm, CLOSE)
+    assert isinstance(engine_held, pd.DataFrame)
+    assert AR.decision_bracket(held, arm, CLOSE) == AR.decision_bracket(engine_held, arm, CLOSE)
+
+
+def test_a_gap_after_the_cutover_the_brokers_m1_has_a_bar_for_voids_even_without_a_release_minute(env, tmp_path):
+    """A genuine gap: the broker had the minute (its M1 shows it), the engine's stored minutes lack it as of the
+    decision. The engine may have held it (a write lost or late), so the window is not provable: void. This holds
+    after the release ends too (the night used to see such a gap only where the release had the minute)."""
+    eng, arm, _ = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    cut = live.index[len(live) // 2]
+    lost = cut + 10
+    v = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:].drop(index=[lost]), live.assign(rank=1))
+    assert I.AccountMinutes(v).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
+    assert I.GAP_AFTER_CUTOVER not in I.REFUSAL_CAUSES and I.GAP_AFTER_CUTOVER not in I.UNVERIFYING
+    # the broker's M1 itself with a hole of more than BROKER_SILENCE_MAX of open minutes (a missed pull) around it:
+    # it does not observe the span, so nothing is proven either way: unverified and told, never ok
+    far = live.index[(pd.to_datetime(live["ts_utc"], utc=True)
+                      - pd.Timestamp(live.loc[lost, "ts_utc"])).abs() <= I.BROKER_SILENCE_MAX]
+    sparse = live.drop(index=far).assign(rank=1)
+    other = live.loc[[lost]].assign(rank=3)
+    v2 = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:].drop(index=[lost]), other, sparse)
+    assert I.AccountMinutes(v2).held(arm, CLOSE) == I.NO_BROKER_COVERAGE
+    assert I.NO_BROKER_COVERAGE in I.UNVERIFYING
+
+
+def test_a_minute_the_engine_lacks_with_no_broker_m1_after_it_is_never_read_as_ok(env, tmp_path):
+    """Quant review of bd861f03 (MEDIUM): no proof of a gap is not proof of none. The engine stored no copy of a
+    minute and the reconcile has not pulled the broker's M1 past it yet: `window_incomplete` (tried again), never a
+    window shifted one minute back and a final verdict. Still not pulled past COVERAGE_WAIT after the decision:
+    `no_broker_coverage` (unverified, told), never incomplete for ever."""
+    eng, arm, _ = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    lost = live.index[-30]
+    m1 = _m1(eng.bars_1m.loc[: lost - 1])                                   # pulled up to before the minute only
+    v = _sorted(live.drop(index=[lost]), m1)
+    assert I.AccountMinutes(v).held(arm, CLOSE) == I.WINDOW_INCOMPLETE
+    assert I.AccountMinutes(v, now=CLOSE + pd.Timedelta(days=1)).held(arm, CLOSE) == I.WINDOW_INCOMPLETE
+    late = CLOSE + I.COVERAGE_WAIT + pd.Timedelta(minutes=1)
+    assert I.AccountMinutes(v, now=late).held(arm, CLOSE) == I.NO_BROKER_COVERAGE
+    assert I.AccountMinutes(live.drop(index=[lost])).held(arm, CLOSE) == I.WINDOW_INCOMPLETE     # no M1 at all
+    assert I.COVERAGE_WAIT == pd.Timedelta(hours=crossfeed.RECONCILE_MAX_AGE_HOURS)
+
+
+def test_a_lost_last_minute_the_broker_had_is_a_gap_once_its_m1_is_pulled_not_incomplete_for_ever(env, tmp_path):
+    """Trading-safety review of bd861f03 (LOW): the minute before the decision stored by no one but the broker's M1
+    has it: a void (`gap_after_cutover`), not `window_incomplete` night after night."""
+    eng, arm, _ = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    last = live.index[(pd.to_datetime(live["ts_utc"], utc=True) == CLOSE - pd.Timedelta(minutes=1)).to_numpy()][0]
+    v = _sorted(live.drop(index=[last]), _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, now=CLOSE + pd.Timedelta(days=1)).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
+
+
+def test_the_engines_saved_rebased_cutover_cuts_the_release_minutes_off_where_the_engine_did(env, tmp_path):
+    """Quant review of bd861f03 (LOW): the engine's cut-over is the earlier of its first stored minute and the one a
+    history rebase saved (aux.db `history_cutover`, kept even if its minutes were lost). Release minutes between
+    the saved cut-over and the first stored minute were not what the engine held: the night never reads them."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    cut = live.index[len(live) // 2]
+    v = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:], _m1(eng.bars_1m))
+    held = I.AccountMinutes(v).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    saved = int(pd.Timestamp(live.loc[cut - 50, "ts_utc"]).value)
+    assert I.AccountMinutes(v, saved_cutover=saved).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
+    later = int(pd.Timestamp(live.loc[cut + 50, "ts_utc"]).value)          # a later saved one changes nothing
+    held = I.AccountMinutes(v, saved_cutover=later).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+
+
+def test_the_saved_cutover_is_read_from_the_engines_aux_db_and_an_unreadable_one_leaves_the_arm_unverified(
+        env, tmp_path, monkeypatch):
+    eng, arm, _ = _held(env, tmp_path)
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True))
+    store.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    aux = Database.open(str(tmp_path / "aux"), "aux")
+    assert I.saved_cutover(aux, "icm-probe", "icm", "XAUUSD") is None
+    with aux.write() as conn:
+        conn.execute("INSERT INTO history_cutover (account_id, source, symbol, cutover_ns, updated_ns) "
+                     "VALUES (?, ?, ?, ?, ?)", ("icm-probe", "icm", "XAUUSD", 123, 1))
+    assert I.saved_cutover(aux, "icm-probe", "icm", "XAUUSD") == 123
+
+    def boom(*a: Any, **k: Any) -> None:
+        raise sqlite3.OperationalError("no such table")
+    monkeypatch.setattr(I, "saved_cutover", boom)
+    got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1), db=aux)
+    assert got(arm, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.CUTOVER_UNREADABLE
+    assert I.CUTOVER_UNREADABLE in I.UNVERIFYING
+
+
+def test_overlapping_replacement_events_are_accounted_for_together_by_the_sum_of_their_counts(env, tmp_path):
+    """Trading-safety review of bd861f03 (LOW): two events whose spans overlap must not vouch for each other with
+    the same flagged minutes: event A (2 minutes) and event B (1 minute) need 3 flagged minutes, not 2."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    a, b = live.index[-10], live.index[-5]
+    ns = {k: int(pd.Timestamp(live.loc[k, "ts_utc"]).value) for k in (a, b, b + 1)}
+    events = [(ns[a], 2), (ns[b], 1)]
+    two = live.copy()
+    two.loc[[a, b], "replaced"] = True
+    v = _sorted(two, _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, replaced=events).held(arm, CLOSE) == I.REPLACED_MINUTE
+    three = live.copy()
+    three.loc[[a, b, b + 1], "replaced"] = True
+    held = I.AccountMinutes(_sorted(three, _m1(eng.bars_1m)), replaced=events).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+
+
+def test_a_weekend_the_brokers_m1_is_silent_across_is_observed_and_release_minutes_there_are_no_gap():
+    """Quant review of bd861f03 (item 3): the release may print Sunday-open or Friday-close minutes the broker
+    lacks; the broker's M1 hole over the weekend holds almost no minutes the session table expects open, so it
+    observes the span and those minutes are no gap. A missed weekday pull is not silence."""
+    fri = pd.date_range("2025-01-31 18:00", "2025-01-31 21:56", freq="min", tz="UTC")
+    sun = pd.date_range("2025-02-02 23:20", "2025-02-03 02:00", freq="min", tz="UTC", inclusive="left")
+    broker = pd.DatetimeIndex(fri.append(sun))
+    release = pd.date_range("2025-02-02 22:00", "2025-02-02 23:19", freq="min", tz="UTC")
+    at = pd.Timestamp("2025-02-03 02:00", tz="UTC")
+
+    def frame(stamps: pd.DatetimeIndex, rank: int) -> pd.DataFrame:
+        return pd.DataFrame({"ts_utc": stamps, "rank": rank})
+    v = _sorted(frame(broker, 0), frame(broker, 1), frame(release, 3))
+    m = I.AccountMinutes(v)
+    own = epoch_ns(broker)
+    assert m.cutover_cause(own, int(own.min()), at) is None
+    lost = own[own != int(sun[5].value)]                                    # a Sunday minute the broker had
+    assert m.cutover_cause(lost, int(own.min()), at) == I.GAP_AFTER_CUTOVER
+    wed = pd.date_range("2025-02-04 00:00", "2025-02-06 00:00", freq="min", tz="UTC", inclusive="left")
+    gone = (wed >= pd.Timestamp("2025-02-04 12:00", tz="UTC")) & (wed < pd.Timestamp("2025-02-05 12:00", tz="UTC"))
+    pulled = wed[~gone]                                                      # a day of the broker's M1 not pulled
+    w = I.AccountMinutes(_sorted(frame(wed, 0), frame(pulled, 1)))
+    assert w.cutover_cause(epoch_ns(wed), int(wed[0].value), pd.Timestamp("2025-02-06 00:00", tz="UTC")) == \
+        I.NO_BROKER_COVERAGE
+
+
+def test_the_brokers_m1_never_fills_a_minute_the_engine_never_held(env, tmp_path):
+    """The broker's M1 is evidence, never a bar: where the engine's minute is stored, the M1's (another price) is not
+    read; where it is not, the M1 does not fill it, it says the broker had a bar the store lacks (a gap, void)."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    gone = live.index[-5]
+    m1 = _m1(eng.bars_1m)
+    m1.loc[gone, "bid_high"] = m1.loc[gone, "bid_high"] + 30.0
+    held = I.AccountMinutes(_sorted(live, m1)).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    assert I.AccountMinutes(_sorted(live.drop(index=[gone]), m1)).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
 
 
 def test_a_minute_flagged_replaced_and_written_after_the_decision_voids_the_candidate_without_a_dq_event(env,
@@ -401,10 +574,10 @@ def test_a_minute_flagged_replaced_and_written_after_the_decision_voids_the_cand
     i = live.index[-3]
     late = live.copy()
     late.loc[i, "replaced"], late.loc[i, "written_at"] = True, CLOSE + pd.Timedelta(seconds=30)
-    assert I.AccountMinutes(late).held(arm, CLOSE) == I.REPLACED_MINUTE
+    assert I.AccountMinutes(_sorted(late, _m1(eng.bars_1m))).held(arm, CLOSE) == I.REPLACED_MINUTE
     early = live.copy()
     early.loc[i, "replaced"], early.loc[i, "written_at"] = True, CLOSE - pd.Timedelta(seconds=30)
-    held = I.AccountMinutes(early).held(arm, CLOSE)
+    held = I.AccountMinutes(_sorted(early, _m1(eng.bars_1m))).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
 
 
@@ -460,8 +633,8 @@ def test_a_quarantined_minute_in_the_window_is_its_own_cause_and_never_a_refusal
     eng, arm, _ = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
     gone = pd.Timestamp(live.loc[live.index[-20], "ts_utc"])
-    m = I.AccountMinutes(live.drop(index=[live.index[-20]]).reset_index(drop=True),
-                         quarantined=[int(gone.value)])
+    m1 = _m1(eng.bars_1m.drop(index=[live.index[-20]]))                   # quarantine leaves it out of every feed
+    m = I.AccountMinutes(_sorted(live.drop(index=[live.index[-20]]), m1), quarantined=[int(gone.value)])
     assert m.held(arm, CLOSE) == I.QUARANTINED_MINUTE
     assert I.QUARANTINED_MINUTE not in I.REFUSAL_CAUSES
 
@@ -548,3 +721,140 @@ def test_a_retired_spec_hash_never_registers_again_and_writes_no_k_row(env):
     assert len(registry_rows(env)) == k_before                              # no K row for a refused re-registration
     other = register(env, 1)                                                # another spec: a new registration
     assert other.k_id != first.k_id and len(registry_rows(env)) == k_before + 2   # its K row and its NOT_TRIAL row
+
+
+# ---------------------------------------------------------------- quant review of 0d8543ae (L1) and the SRE simulation
+def test_a_live_minute_written_after_the_decision_that_the_recompute_did_not_use_voids_the_candidate(env, tmp_path):
+    """L1 (residual fail-open): a window minute the engine may have held, whose store write came after the decision
+    (beyond the live-write grace), is dropped by the as-of filter. Where the broker's M1 has no bar at it either, the
+    gap test cannot see it, and the window read one minute short ended in a verdict. The stored version proves a
+    minute existed: the engine's window cannot be shown to equal the recompute's, so the candidate is void."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    i = live.index[-30]
+    late = live.copy()
+    late.loc[i, ["written_at", "visible_at"]] = CLOSE + pd.Timedelta(minutes=10)
+    m1 = _m1(eng.bars_1m.drop(index=[i]))                   # the broker's M1 silent at that minute
+    assert I.AccountMinutes(_sorted(late, m1)).held(arm, CLOSE) == I.LATE_MINUTE
+    assert I.LATE_MINUTE not in I.REFUSAL_CAUSES and I.LATE_MINUTE not in I.UNVERIFYING
+    held = I.AccountMinutes(_sorted(live, m1)).held(arm, CLOSE)         # written on time: the window is provable
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    # a late copy of a minute that also has a version visible at the decision changes nothing the recompute used
+    again = pd.concat([live, live.loc[[i]].assign(written_at=CLOSE + pd.Timedelta(minutes=10),
+                                                   visible_at=CLOSE + pd.Timedelta(minutes=10))])
+    held = I.AccountMinutes(_sorted(again, m1)).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+
+
+def test_broker_m1_bars_in_the_engines_daily_break_are_never_a_gap():
+    """SRE brain simulation of 0d8543ae: the broker's M1 prints 23:00 and 23:01 UTC in winter, which the engine's
+    session table (DEFAULT_SESSIONS.is_open, the table its bars are built on) calls the daily break, so the engine
+    never builds them. They are not minutes the engine lacks: no `gap_after_cutover`. An open minute it lacks still
+    is one."""
+    from goldbot.data.calendar import DEFAULT_SESSIONS
+    grid = pd.date_range("2025-01-14 19:00", "2025-01-15 03:00", freq="min", tz="UTC", inclusive="left")
+    engine = grid[DEFAULT_SESSIONS.is_open(grid)]
+    brk = pd.DatetimeIndex([pd.Timestamp("2025-01-14 23:00", tz="UTC"), pd.Timestamp("2025-01-14 23:01", tz="UTC")])
+    assert not DEFAULT_SESSIONS.is_open(brk).any() and not brk.isin(engine).any()
+    broker = engine.append(brk).sort_values()
+    at = pd.Timestamp("2025-01-15 03:00", tz="UTC")
+    v = _sorted(pd.DataFrame({"ts_utc": engine, "rank": 0}), pd.DataFrame({"ts_utc": broker, "rank": 1}))
+    m = I.AccountMinutes(v)
+    own = epoch_ns(engine)
+    assert m.cutover_cause(own, int(own.min()), at) is None
+    lost = own[own != int(pd.Timestamp("2025-01-15 01:00", tz="UTC").value)]
+    assert m.cutover_cause(lost, int(own.min()), at) == I.GAP_AFTER_CUTOVER
+
+
+def _late_detail(stamps: pd.DatetimeIndex) -> str:
+    """broker_bars._merge's `broker_bar_late` detail, verbatim."""
+    return (f"{len(stamps)} minute(s) {stamps[0]}..{stamps[-1]} from sampled ticks: the "
+            "broker's 1m bar was late or missing; replaced when it arrives")
+
+
+def test_a_late_minute_never_replaced_voids_the_window_on_the_shared_live_key(env, tmp_path):
+    """Engine finding: both icm engines store gold minutes under one bars_1m_live key and the store keeps the last
+    copy. An engine whose broker bar never came keeps its sampled minute for good (`broker_bar_late`, no
+    `broker_bar_replaced`), while the stored copy may be the other engine's broker bar: the night cannot recompute on
+    what this engine held, so a window holding such a minute is void (`sampled_minute`). Replaced within GIVE_UP
+    (the engine swapped the broker's bar in, K1 judges when): not this void."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    i = live.index[-60]                                     # outside REPLACE_SPAN: only the late event matters
+    stamp = pd.DatetimeIndex([pd.Timestamp(live.loc[i, "ts_utc"])])
+    ns = int(stamp[0].value)
+    late = I.late_spans([(ns, _late_detail(stamp))])
+    assert late == [(ns, ns, True)]
+    assert I.LATE_GIVE_UP == broker_bars.GIVE_UP
+    v = _sorted(live, _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, late=late).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    assert I.SAMPLED_MINUTE not in I.REFUSAL_CAUSES and I.SAMPLED_MINUTE not in I.UNVERIFYING
+    held = I.AccountMinutes(v, late=late, replaced=[(ns, 1)]).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    # a replacement event for a minute more than GIVE_UP before the late one accounts for nothing
+    early = ns - int((broker_bars.GIVE_UP + pd.Timedelta(minutes=1)).value)
+    assert I.AccountMinutes(v, late=late, replaced=[(early, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    # a late span over three minutes: each must be replaced
+    three = pd.DatetimeIndex(pd.to_datetime(live.loc[[i, i + 1, i + 2], "ts_utc"], utc=True))
+    span = I.late_spans([(int(three[0].value), _late_detail(three))])
+    assert I.AccountMinutes(v, late=span, replaced=[(ns, 2)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    held = I.AccountMinutes(v, late=span, replaced=[(ns, 3)]).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame)
+    # quant (2): a detail that does not parse covers its minute to GIVE_UP after it, and no replacement accounts for
+    # it: any window holding a minute of it is void, never ok
+    garbled = I.late_spans([(ns, "garbled")])
+    assert garbled == [(ns, ns + int(broker_bars.GIVE_UP.value), False)]
+    assert I.AccountMinutes(v, late=garbled, replaced=[(ns, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    # a late minute outside the window changes nothing
+    old = int(pd.Timestamp(live.loc[live.index[0], "ts_utc"]).value) - 10**12
+    held = I.AccountMinutes(v, late=[(old, old)]).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame)
+
+
+def test_the_night_reads_the_accounts_late_events_from_dq_events(env, tmp_path):
+    eng, arm, _ = _held(env, tmp_path)
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True))
+    store.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    store.append(crossfeed.BROKER_TABLE, minutes, source="icm-probe", symbol="XAUUSD")
+    stamp = pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+    ev = pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
+                       "detail": [_late_detail(stamp)]})
+    store.append("dq_events", ev, source="icm-probe", symbol="XAUUSD", dedupe=False)
+    got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1))
+    assert got(arm, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.SAMPLED_MINUTE
+
+
+def test_a_minute_another_engine_on_the_shared_key_kept_sampled_voids_this_accounts_window(env, tmp_path):
+    """Quant review of 4bac3d3e (BLOCKING): engine A got the broker's bar for a minute, engine B on the same live key
+    (broker, symbol) kept its sampled bar for good and wrote later: the stored copy is B's, which A never held. Every
+    account sharing the key is read, each against its own replacement events; any sampled-for-good minute voids."""
+    eng, arm, engine = _held(env, tmp_path)
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True))
+    store.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    store.append(crossfeed.BROKER_TABLE, minutes, source="icm-probe", symbol="XAUUSD")
+    stamp = pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+
+    def events(account: str, check: str, detail: str) -> None:
+        ev = pd.DataFrame({"ts_utc": stamp, "check": [check], "severity": ["warning"], "detail": [detail]})
+        store.append("dq_events", ev, source=account, symbol="XAUUSD", dedupe=False)
+    hosts = {"icm-probe": ("icm", "XAUUSD"), "icm-demo": ("icm", "XAUUSD"), "vantage-demo": ("vantage", "XAUUSD+")}
+    row = {"account_id": "icm-probe", "decision_utc": CLOSE}
+    now = CLOSE + pd.Timedelta(days=1)
+    events("vantage-demo", I.BAR_LATE, _late_detail(stamp))                 # another key: never read
+    got = I.stored_recompute(store, hosts, now=now)(arm, row)
+    assert isinstance(got, S.Bracket) and got == engine
+    events("icm-demo", I.BAR_LATE, _late_detail(stamp))                     # B: late, never replaced
+    events("icm-probe", broker_bars.REPLACED, "1 minute(s) from sampled ticks replaced by the broker's bars")  # A's own
+    assert I.stored_recompute(store, hosts, now=now)(arm, row) == I.SAMPLED_MINUTE
+    assert I.stored_recompute(store, {"icm-probe": hosts["icm-probe"]}, now=now)(arm, row) != I.SAMPLED_MINUTE
+    events("icm-demo", broker_bars.REPLACED, "1 minute(s) from sampled ticks replaced by the broker's bars")   # B replaced it
+    got = I.stored_recompute(store, hosts, now=now)(arm, row)
+    assert isinstance(got, S.Bracket) and got == engine
+    # the same rule on AccountMinutes directly: a sharer's late span with no replacement of its own
+    ns = int(stamp[0].value)
+    v = _sorted(_versions(eng.bars_1m), _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, sharers=[([(ns, ns, True)], [])]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    assert I.AccountMinutes(v, replaced=[(ns, 1)], sharers=[([(ns, ns, True)], [])]).held(arm, CLOSE) == \
+        I.SAMPLED_MINUTE                                                     # A's replacement never covers B's

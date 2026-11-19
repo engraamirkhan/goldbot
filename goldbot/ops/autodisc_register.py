@@ -59,7 +59,7 @@ from goldbot.base import FrozenRecord
 from goldbot.db.connection import create_private
 from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
-from goldbot.research.arm_rules_spec import learning_until
+from goldbot.research.arm_rules_spec import EFFECTIVE_UTC, learning_until
 from goldbot.research.arms import SPEC_RULE, Arm, arm_hash, load_arms
 from goldbot.research.autodisc import handoff
 from goldbot.research.autodisc.ledger import GENESIS, SearchLedger
@@ -533,7 +533,8 @@ def register_to_db(spec_hash: str, account_id: str, prereg: str, *, state_dir: P
 # ---------------------------------------------------------------- discovered arms on demo, the learning class
 # docs/research/prereg-amendment-2026-11-18-discovered-arms.md (standing; its section numbers below)
 LEARNING_AGENT = "autodisc-register"
-EFFECTIVE_UTC = pd.Timestamp("2026-11-22 22:00", tz="UTC")   # "the end of the red-box week. Until then no ... enters"
+# EFFECTIVE_UTC (imported above): "the end of the red-box week. Until then no ... enters"; the engine's hot loader
+# reads the same constant (research.arm_rules_spec)
 AMENDMENT_DAY = "2026-11-18"        # 1: "A registration whose arm row carries a `since` earlier than ... is refused"
 COST_OF_RECORD_USD = 0.90           # 2.4 (b): "ADR 0084 v3: icm's dearest `charged_usd` cell, 0.90 $/oz"
 GROSS_MULTIPLE = 2.0                # 2.4 (b): "explore gross mean per trade >= 2 x the charged cost of record"
