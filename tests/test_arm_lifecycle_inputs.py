@@ -334,3 +334,52 @@ def test_the_night_reads_the_engines_whole_minute_memory():
     from goldbot.engine.runner import EngineConfig
     assert I.ENGINE_MINUTES == EngineConfig.model_fields["max_bars_in_memory"].default
     assert I.READ_DAYS * 23 * 60 * 5 / 7 >= I.ENGINE_MINUTES
+
+
+def test_the_nightly_job_passes_every_enabled_account_on_a_live_key_as_a_sharer(env, tmp_path, monkeypatch):
+    """Quant re-check of 5a9c15ba (fails open): `hosts` holds only the demo probe_only exploring accounts, but any
+    enabled account on the same (broker, symbol) live key writes the minutes the night reads (a live account once
+    unlocked, a demo re-roled off probe_only, exploration off). The job hands the night every enabled account grouped
+    by its live key, apart from `hosts`."""
+    from goldbot.ops import jobs
+    register(env)
+    ctx = _ctx(env, Store(tmp_path / "data"))
+    demo = next(a for a in ctx.accounts if a.account_id == "icm-demo")
+    other = demo.model_copy(update={"account_id": "icm-live-x", "mode": "live", "probe_only": False})
+    off = demo.model_copy(update={"account_id": "icm-off", "probe_only": False,
+                                  "exploration": demo.exploration.model_copy(update={"enabled": False})})
+    elsewhere = demo.model_copy(update={"account_id": "vantage-x", "broker": "vantage", "symbol": "XAUUSD+"})
+    ctx.accounts = [*ctx.accounts, other, off, elsewhere]
+    seen: dict[str, Any] = {}
+
+    def spy(store: Any, hosts: Any, arms: Any, **kw: Any) -> I.NightInputs:
+        seen.update(hosts=dict(hosts), **kw)
+        return I.NightInputs()
+    monkeypatch.setattr(I, "integrity_inputs", spy)
+    jobs.arm_lifecycle(ctx, SLOT)
+    assert "icm-live-x" not in seen["hosts"] and "icm-off" not in seen["hosts"]
+    assert {"icm-live-x", "icm-off"} <= set(seen["sharers"]["icm-demo"])
+    assert "vantage-x" not in seen["sharers"]["icm-demo"] and "icm-demo" not in seen["sharers"]["icm-demo"]
+
+
+def test_a_sharer_outside_the_hosts_with_a_late_unreplaced_minute_voids_and_unreadable_stays_unverified(
+        env, tmp_path, monkeypatch):
+    eng, arm, _ = _engine_bracket(env, tmp_path)
+    store = _stored(tmp_path, eng.bars_1m)
+    stamp = pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+    detail = (f"1 minute(s) {stamp[0]}..{stamp[0]} from sampled ticks: the broker's 1m bar was late or missing; "
+              "replaced when it arrives")
+    store.append("dq_events", pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
+                                            "detail": [detail]}), source="icm-live-x", symbol="XAUUSD", dedupe=False)
+    row = {"account_id": "icm-probe", "decision_utc": CLOSE}
+    assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, row) != I.SAMPLED_MINUTE      # not a sharer
+    shared = {"icm-probe": ("icm-live-x",)}
+    assert I.stored_recompute(store, HOST, now=NIGHT, sharers=shared)(arm.spec, row) == I.SAMPLED_MINUTE
+    real = store.read
+
+    def read(table: str, **kw: Any) -> pd.DataFrame:
+        if table == "dq_events" and kw.get("source") == "icm-live-x":
+            raise OSError("unreadable")
+        return real(table, **kw)
+    monkeypatch.setattr(store, "read", read)
+    assert I.stored_recompute(store, HOST, now=NIGHT, sharers=shared)(arm.spec, row) == I.DQ_UNREADABLE

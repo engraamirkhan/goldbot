@@ -46,7 +46,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   voids). (5) Engine finding: both icm engines store gold minutes under one bars_1m_live key and the
   store keeps the last copy; a window minute this account's engine flagged `broker_bar_late` with no
   `broker_bar_replaced` of its own within GIVE_UP (10 min) voids (`sampled_minute`), every minute of a late span
-  counted. Every account sharing the key (same broker and symbol in the hosts) is read, each judged
+  counted. Every enabled account of any mode or role on the key (same broker and symbol; the job passes them
+  apart from the exploring hosts, `key_sharers`) is read, an unreadable one leaving the arm unverified, each judged
   against its own replacements; a late detail that does not parse voids any window holding a minute from its ts to
   GIVE_UP after it. K1's docstring notes sticky flags (fix/engine-minute-store) can only add voids. Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
   Review round of 4bac3d3e: the back-fill's whole call is inside the warning path (the 24 h report and events are

@@ -603,11 +603,20 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
                           sharers=shared)
 
 
+def key_sharers(keys: Mapping[str, tuple[str, str]]) -> dict[str, tuple[str, ...]]:
+    """Per account, the other accounts writing the same live key (`keys`: every enabled account of any mode ->
+    (broker, symbol), books.live_key of a gold book): the engines whose `broker_bar_late` minutes the store's shared
+    copy may hold."""
+    return {a: tuple(sorted(b for b, kb in keys.items() if kb == k and b != a)) for a, k in keys.items()}
+
+
 def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: pd.Timestamp,
-                     db: Database | None = None) -> Recompute:
+                     db: Database | None = None, sharers: Mapping[str, Sequence[str]] | None = None) -> Recompute:
     """The recompute from the minutes each host's engine stored (`hosts`: account -> (broker, symbol)), read lazily
     per account from READ_DAYS before the earliest decision asked (P4: only candidates without a verdict ask), as of
-    `now`, with each engine's saved cut-over from the engines' aux.db `db` (None: none read)."""
+    `now`, with each engine's saved cut-over from the engines' aux.db `db` (None: none read). `sharers`: per host,
+    every other enabled account on its live key, whatever its mode or role (`key_sharers`; quant re-check of
+    5a9c15ba: `hosts` holds the exploring demo hosts only); the hosts on the same key are always added."""
     now = pd.Timestamp(now).tz_convert("UTC")
     loaded: dict[str, tuple[pd.Timestamp, AccountMinutes | str]] = {}
 
@@ -619,8 +628,10 @@ def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: p
         start = at - pd.Timedelta(days=READ_DAYS)
         got = loaded.get(acc)
         if got is None or start < got[0]:
-            sharers = [a for a, key in hosts.items() if key == hosts[acc] and a != acc]
-            got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now, db=db, sharers=sharers))
+            on_key = {a for a, key in hosts.items() if key == hosts[acc] and a != acc}
+            on_key |= {a for a in (sharers or {}).get(acc, ()) if a != acc}
+            got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now, db=db,
+                                           sharers=sorted(on_key)))
             loaded[acc] = got
         m = got[1]
         return m if isinstance(m, str) else m.bracket(arm, at)
@@ -636,7 +647,8 @@ class NightInputs:
 
 
 def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Collection[Arm], *,
-                     now: pd.Timestamp, db: Database | None = None) -> NightInputs:
+                     now: pd.Timestamp, db: Database | None = None,
+                     sharers: Mapping[str, Sequence[str]] | None = None) -> NightInputs:
     """The journal, the coverage and the recompute, read only when a running discovered arm is among `arms`: the
     hosts' journal from the earliest such arm's `since` (`now` - READ_DAYS when one has no learning block); `db`: the
     engines' aux.db (their saved cut-overs)."""
@@ -652,7 +664,8 @@ def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Col
         except ValueError:
             starts.append(now - pd.Timedelta(days=READ_DAYS))
     journal, read = engine_journal(store, hosts, start=min(starts), now=now)
-    return NightInputs(journal=journal, recompute=stored_recompute(store, hosts, now=now, db=db), hosts=read)
+    return NightInputs(journal=journal, recompute=stored_recompute(store, hosts, now=now, db=db, sharers=sharers),
+                       hosts=read)
 
 
 # ---------------------------------------------------------------------------------------------- the verdicts
