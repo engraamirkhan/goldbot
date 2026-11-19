@@ -48,11 +48,18 @@ def _engine_window(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _stored(tmp_path: Path, minutes: pd.DataFrame) -> Store:
-    """The engine's minutes as its history writer stores them (`bars_1m_live`, source = broker, written live)."""
+    """The engine's minutes as its history writer stores them (`bars_1m_live`, source = broker, written live), and
+    the broker's M1 of the same minutes as the nightly reconcile pulls it (`bars_1m_broker`, source = account)."""
     store = Store(tmp_path / "data")
     store.append("bars_1m_live", minutes.assign(available_utc=pd.to_datetime(minutes["visible_at"], utc=True)
                                                 + pd.Timedelta(seconds=1)), source="icm", symbol="XAUUSD")
+    _broker_m1(store, minutes)
     return store
+
+
+def _broker_m1(store: Store, minutes: pd.DataFrame) -> None:
+    store.append("bars_1m_broker", minutes.assign(available_utc=CLOSE + pd.Timedelta(hours=4)),
+                 source="icm-probe", symbol="XAUUSD")
 
 
 def _engine_bracket(env: dict[str, Any], tmp_path: Path) -> tuple[Any, Any, S.Bracket]:
@@ -159,6 +166,7 @@ def _flagged_store(tmp: Path, minutes: pd.DataFrame, i: Any, written: pd.Timesta
     rows.loc[i, "replaced"], rows.loc[i, "available_utc"] = flag, written
     store = Store(tmp / "data")
     store.append("bars_1m_live", rows, source="icm", symbol="XAUUSD")
+    _broker_m1(store, minutes)
     return store
 
 

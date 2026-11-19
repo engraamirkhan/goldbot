@@ -19,19 +19,24 @@ Design rules:
     nights, `ops.checks.feeds.check_discovered_arm_reads`).
 * The recompute (section 4, quant Q6) reads only what the engine held at the decision (`AccountMinutes`): the
   engine's own stored minutes (`bars_1m_live`, rank 0) and the release minutes before its cut-over (rank 3; the
-  engine never holds one at or after it, `engine.history`), each version as of the decision by its write time, at
-  its nominal close, in the engine's `arm_bars` window. Never the broker's M1 (rank 1) or a legacy feed as data (the
-  engine never reads them); the broker's M1 is read only as evidence of whether the broker had a bar. Where the
-  store cannot show what the engine held, the candidate is void with its cause, never refused: a 1d/1w window (its
-  start is the engine's last restart); a gap after the cut-over (`gap_after_cutover`: a window minute the stored
-  minutes lack as of the decision that the broker's M1 has, or that the release has where the broker's M1 is not
-  seen silent around it within BROKER_SILENCE_MAX: the engine may have held it and its write been lost or late; a
-  minute the broker's M1 shows it never had was never an engine minute and is left out, as the engine left it out);
-  a minute replaced after the decision (flagged on any stored version of a window minute, `engine.history.
-  REPLACED_COL`, read before the as-of filter, K1); a `broker_bar_replaced` event within REPLACE_SPAN before it that
-  the store cannot account for (`stored_replacement`: the event says that minutes were replaced, never when; the
-  flagged copy's write time says when, and K1 judges it. No flagged copy of its minute, fewer flagged minutes than
-  it counts, or a count that does not parse, e.g. an event from an engine before the flag: void); a minute
+  engine never holds one at or after it, `engine.history`; its cut-over is the earlier of its first stored minute
+  and the rebased one it saved in aux.db `history_cutover`, unreadable: unverified), each version as of the decision
+  by its write time, at its nominal close, in the engine's `arm_bars` window. Never the broker's M1 (rank 1) or a
+  legacy feed as data (the engine never reads them); the broker's M1 is read only as evidence of whether the broker
+  had a bar, and no proof is never taken as proof (`AccountMinutes.cutover_cause`). Where the store cannot show
+  what the engine held, the candidate is void with its cause, never refused: a 1d/1w window (its start is the
+  engine's last restart); after the cut-over, the broker's M1 not yet pulled past the decision (`window_incomplete`,
+  tried again; still not COVERAGE_WAIT later: `no_broker_coverage`), or pulled past it but not observing the window
+  (BROKER_SILENCE_MAX: a missed pull, `no_broker_coverage`, unverified and told), or a window minute it has that the
+  stored minutes lack as of the decision (`gap_after_cutover`: the engine may have held it and its write been lost
+  or late; the window's last minute too); a minute it observes silent (a weekend, its break) was never an engine
+  minute and is left out, as the engine left it out; a minute replaced after the decision (flagged on any stored
+  version of a window minute, `engine.history.REPLACED_COL`, read before the as-of filter, K1); a
+  `broker_bar_replaced` event within REPLACE_SPAN before it that the store cannot account for
+  (`stored_replacement`: the event says that minutes were replaced, never when; the flagged copy's write time says
+  when, and K1 judges it. Events whose spans overlap are accounted for together: each one's own minute flagged and
+  the flagged minutes at least the sum of their counts. Otherwise, or with a count that does not parse, e.g. an
+  event from an engine before the flag: void); a minute
   quarantined (quarantine has no as-of time), no bar at the decision, and a window whose minutes are not all stored
   yet (`window_incomplete`: shorter than the engine's, or ending before the minute before the decision; tried again
   the next night). An account whose minutes, dq events or
@@ -59,6 +64,8 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.data.account_bars import QUARANTINE, as_of_minutes, minute_versions
+from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.crossfeed import RECONCILE_MAX_AGE_HOURS
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database
 from goldbot.research.arm_rules_spec import BRACKET_PREFIX, Bracket, bracket_void
@@ -81,11 +88,16 @@ READ_DAYS = 100                 # calendar days of minutes read before a decisio
 # a minute replaced this long before a decision was replaced before it: broker_bars.GIVE_UP + one rates call
 # (FETCH_N minutes) + the minute itself; a replacement logged nearer the decision may postdate it (tests hold it)
 REPLACE_SPAN = pd.Timedelta(minutes=27)
-# the broker's M1 with bars on both sides of a minute at most this far apart, none at it: the broker had no bar then
-# (its break, a quiet minute), so no engine minute either. Longer than the daily break (about 63 minutes, an hour off
-# the session table in the US/EU DST gap weeks), shorter than the day between two reconcile pulls (jobs.
-# feed_reconcile): a missed pull never reads as silence
+# the broker's M1 (`bars_1m_broker`, jobs.feed_reconcile) observes a span when it has a bar at or before its start, one
+# at or after its end, and no hole between holding more than this many minutes the session table expects open
+# (`expected_open`: weekends, the daily break and CME holiday closures hold none). Then a minute it has no bar for is
+# one the broker never had, so no engine minute either. Longer than the daily break plus the hour the table is off
+# the broker in the US/EU DST gap weeks; far shorter than the day a missed reconcile pull leaves, which never reads as
+# silence
 BROKER_SILENCE_MAX = pd.Timedelta(hours=2)
+# a decision the broker's M1 has still not been pulled past this long after it will not be (the reconcile's own age
+# limit, which covers a weekend): `no_broker_coverage`, told, not `window_incomplete` for ever
+COVERAGE_WAIT = pd.Timedelta(hours=RECONCILE_MAX_AGE_HOURS)
 BRACKET_RETIRE_N = 3            # amendment 5.1 (5): "A refused bracket (section 4) on 3 or more candidates"
 ENGINE_VOID_KILL = "bracket integrity: void at entry (engine)"
 # data.account_bars.minute_versions: bars_1m_live, bars_1m_broker (evidence only, never a bar held), the release
@@ -104,8 +116,11 @@ QUARANTINED_MINUTE = "quarantined_minute"
 WINDOW_UNPROVABLE = "window_unprovable"
 NO_BAR = "no_bar_at_decision"
 WINDOW_INCOMPLETE = "window_incomplete"   # the window's minutes are not all in the store yet (quant Q1): tried again
+NO_BROKER_COVERAGE = "no_broker_coverage"  # the broker's M1 does not observe the window after the cut-over (for good)
+CUTOVER_UNREADABLE = "cutover_unreadable"  # aux.db history_cutover (the engine's rebased cut-over) not read
 # ... of which these say the night cannot read the arm as the engine did: the arm is unverified, and told (F4, Q2)
-UNVERIFYING = frozenset({NO_MINUTES, MINUTES_UNREADABLE, DQ_UNREADABLE, QUARANTINE_UNREADABLE, WINDOW_UNPROVABLE})
+UNVERIFYING = frozenset({NO_MINUTES, MINUTES_UNREADABLE, DQ_UNREADABLE, QUARANTINE_UNREADABLE, WINDOW_UNPROVABLE,
+                         NO_BROKER_COVERAGE, CUTOVER_UNREADABLE})
 # refusal causes (`bracket_void`'s, the journal's, a change after a cached verdict)
 REFUSAL_CAUSES = frozenset({"journalled", "journal_unparseable", "bracket_not_in_insert", "bracket_updated",
                             "bracket_unreadable", "bracket_late", "bracket_mismatch"})
@@ -257,11 +272,13 @@ def _ns(frame: pd.DataFrame) -> np.ndarray:
 class AccountMinutes:
     """What one account's engine held, from its stored minute versions (`minute_versions`: its own minutes and the
     release minutes before its cut-over; legacy feeds dropped, the broker's M1 kept apart as evidence), the minutes
-    quarantined and the `broker_bar_replaced` events (first replaced minute in epoch ns, the count it gives or
-    None)."""
+    quarantined, the `broker_bar_replaced` events (first replaced minute in epoch ns, the count it gives or None), the
+    cut-over a history rebase saved (aux.db `history_cutover`, epoch ns or None) and the night's time (None: a
+    missing broker M1 is only ever `window_incomplete`)."""
 
     def __init__(self, versions: pd.DataFrame, *, quarantined: Sequence[int] = (),
-                 replaced: Sequence[tuple[int, int | None]] = ()):
+                 replaced: Sequence[tuple[int, int | None]] = (), saved_cutover: int | None = None,
+                 now: pd.Timestamp | None = None):
         v = versions
         m1 = np.zeros(0, dtype=np.int64)
         if "rank" in v.columns:
@@ -271,56 +288,99 @@ class AccountMinutes:
         v = v.sort_values(["ts_utc", "rank"] if "rank" in v.columns else ["ts_utc"], kind="stable")
         ts = _ns(v)
         live = ts[v["rank"].to_numpy() == LIVE_RANK] if "rank" in v.columns else ts
-        self.cutover: int | None = int(live.min()) if len(live) else None
+        # the engine's cut-over (engine.history.warm_start): its first stored minute, or the rebased one it saved when
+        # earlier (kept even if the minutes behind it were lost); the earlier of the two never reads a release minute
+        # the engine cut off
+        firsts = [int(x) for x in (live.min() if len(live) else None, saved_cutover) if x is not None]
+        self.cutover: int | None = min(firsts) if firsts else None
         # the engine holds release minutes before its cut-over only (engine.history: `rel[ts < cutover]` at the warm
-        # start, a re-read and a release reload): one at or after it is evidence of a bar, never a bar it held
+        # start, a re-read and a release reload): one at or after it is never a bar it held
         after = np.zeros(len(v), dtype=bool)
         if self.cutover is not None and "rank" in v.columns:
             after = (v["rank"].to_numpy() == RELEASE_RANK) & (ts >= self.cutover)
-        self.release_after = np.unique(ts[after])
         self.v = v[~after].reset_index(drop=True)
         self.ts = ts[~after]
         self.broker_m1 = m1
+        self.now = None if now is None else pd.Timestamp(now).tz_convert("UTC")
         self.quarantined = np.sort(np.asarray(quarantined, dtype=np.int64))
         self.replaced = sorted((int(m), n) for m, n in replaced)
+        # events whose REPLACE_SPAN windows overlap (chained) are accounted for together: (first, last, their counts'
+        # sum or None when one does not parse), so one event's flagged minutes never vouch for another's
+        self._groups: list[tuple[int, int, int | None]] = []
+        for m, n in self.replaced:
+            if self._groups and m < self._groups[-1][1] + REPLACE_SPAN.value:
+                first, _, total = self._groups[-1]
+                self._groups[-1] = (first, m, None if total is None or n is None else total + n)
+            else:
+                self._groups.append((m, m, n))
+        self._observed_holes: dict[tuple[int, int], bool] = {}
 
-    def stored_replacement(self, minute: int, n: int | None) -> bool:
-        """Whether the store accounts for a `broker_bar_replaced` event of first minute `minute` and count `n`: the
-        engine's flagged copy of that minute with its write time is stored, and at least `n` flagged minutes from it
-        within REPLACE_SPAN (one `_replace` call queues its minutes as one batch, written together). K1 then judges
-        each by its write time, which is after the engine swapped the bar in. A count that does not parse, or a store
-        without the flag, accounts for nothing (fail closed)."""
-        if n is None or n < 1 or not {"replaced", "written_at"} <= set(self.v.columns):
+    def stored_replacement(self, minute: int) -> bool:
+        """Whether the store accounts for the `broker_bar_replaced` event of first minute `minute`, together with every
+        event whose span overlaps it: each event's own minute is stored as the engine's flagged copy with its write
+        time, and the flagged minutes in their joint span number at least the sum of their counts (one `_replace` call
+        queues its minutes as one batch, written together). K1 then judges each by its write time, which is after the
+        engine swapped the bar in. A count that does not parse, or a store without the flag, accounts for nothing."""
+        group = next((g for g in self._groups if g[0] <= minute <= g[1]), None)
+        if group is None or not {"replaced", "written_at"} <= set(self.v.columns):
             return False
-        lo = int(np.searchsorted(self.ts, minute, side="left"))
-        hi = int(np.searchsorted(self.ts, minute + REPLACE_SPAN.value, side="left"))
+        first, last, total = group
+        if total is None or total < 1:
+            return False
+        lo = int(np.searchsorted(self.ts, first, side="left"))
+        hi = int(np.searchsorted(self.ts, last + REPLACE_SPAN.value, side="left"))
         part = self.v.iloc[lo:hi]
         ok = part["replaced"].astype("boolean").fillna(False).to_numpy(dtype=bool) \
             & pd.to_datetime(part["written_at"], utc=True).notna().to_numpy(dtype=bool)
         if "rank" in part.columns:
             ok &= part["rank"].to_numpy() == LIVE_RANK
         stamps = set(self.ts[lo:hi][ok].tolist())
-        return minute in stamps and len(stamps) >= n
+        own = {m for m, _ in self.replaced if first <= m <= last}
+        return own <= stamps and len(stamps) >= total
 
-    def gap_after_cutover(self, own: np.ndarray, start: int, at: pd.Timestamp) -> bool:
-        """Whether a minute from max(`start`, the cut-over) to the minute before `at` that the engine's stored minutes
-        `own` (as of `at`) lack is one the engine may have held: the broker's M1 has it, or the release has it and the
-        broker's M1 is not seen silent around it (its bars on both sides at most BROKER_SILENCE_MAX apart)."""
-        if self.cutover is None:
-            return False
-        lo, hi = max(start, self.cutover), int((at - pd.Timedelta(minutes=1)).value)
-        seen = np.union1d(self.broker_m1, self.release_after)
-        missing = np.setdiff1d(seen[(seen >= lo) & (seen <= hi)], own)
-        if not len(missing):
-            return False
+    def observed(self, lo: int, hi: int) -> bool:
+        """Whether the broker's M1 observes [lo, hi] (BROKER_SILENCE_MAX): a bar at or before `lo`, one at or after
+        `hi`, and no hole between holding more than BROKER_SILENCE_MAX of minutes the session table expects open."""
         m1 = self.broker_m1
-        if len(m1) < 2:
-            return True
-        k = np.searchsorted(m1, missing, side="left")
-        nxt = m1[np.minimum(k, len(m1) - 1)]
-        between = (k > 0) & (k < len(m1)) & (nxt != missing)       # not in the broker's M1, which runs on both sides
-        silent = between & (nxt - m1[np.maximum(k - 1, 0)] <= BROKER_SILENCE_MAX.value)
-        return not bool(silent.all())
+        i, j = int(np.searchsorted(m1, lo, side="right")) - 1, int(np.searchsorted(m1, hi, side="left"))
+        if i < 0 or j >= len(m1):
+            return False
+        seg = m1[i:j + 1]
+        limit = int(BROKER_SILENCE_MAX / pd.Timedelta(minutes=1))
+        for g in np.flatnonzero(np.diff(seg) > BROKER_SILENCE_MAX.value):
+            key = (int(seg[g]), int(seg[g + 1]))
+            if key not in self._observed_holes:
+                inner = pd.date_range(pd.Timestamp(key[0], tz="UTC") + pd.Timedelta(minutes=1),
+                                      pd.Timestamp(key[1], tz="UTC"), freq="min", inclusive="left")
+                self._observed_holes[key] = int(DEFAULT_SESSIONS.expected_open(inner).sum()) <= limit
+            if not self._observed_holes[key]:
+                return False
+        return True
+
+    def cutover_cause(self, own: np.ndarray, start: int, at: pd.Timestamp) -> str | None:
+        """Why the window's minutes from max(`start`, the cut-over) to the minute before `at` cannot be shown to be all
+        the engine held, None when they can (the engine's own minutes `own`, as of `at`, are all it had there):
+        - the broker's M1 not yet past the decision (the reconcile pulls each weekday's minutes that night):
+          `window_incomplete`, tried again; still not past it COVERAGE_WAIT after the decision: `no_broker_coverage`;
+        - the broker's M1 past it but not observing the span (a missed pull, M1 history shorter than the window):
+          `no_broker_coverage` (unverified, told);
+        - a minute the broker's M1 has and `own` lacks (held but lost or written late, or never held: the store cannot
+          tell): `gap_after_cutover`, a void, whether or not it is the window's last minute.
+        No proof of a gap is never taken as proof of none. A minute the broker's M1 is silent at inside an observed
+        span (a weekend, its break, a quiet minute) was never an engine minute."""
+        if self.cutover is None:
+            return None
+        lo, hi = max(start, self.cutover), int((at - pd.Timedelta(minutes=1)).value)
+        if lo > hi:
+            return None
+        m1 = self.broker_m1
+        if not len(m1) or int(m1[-1]) < hi:
+            late = self.now is not None and self.now - at > COVERAGE_WAIT
+            return NO_BROKER_COVERAGE if late else WINDOW_INCOMPLETE
+        if not self.observed(lo, hi):
+            return NO_BROKER_COVERAGE
+        inside = m1[(m1 >= lo) & (m1 <= hi)]
+        return GAP_AFTER_CUTOVER if len(np.setdiff1d(inside, own)) else None
 
     def held(self, arm: Arm, at: pd.Timestamp) -> pd.DataFrame | str:
         """The 1m bars the engine held at `at` for `arm`'s window (module docstring), or the void cause."""
@@ -329,8 +389,7 @@ class AccountMinutes:
         if arm.timeframe in ("1d", "1w"):
             return WINDOW_UNPROVABLE
         at = pd.Timestamp(at).tz_convert("UTC")
-        if any((at - REPLACE_SPAN).value <= m < at.value and not self.stored_replacement(m, n)
-               for m, n in self.replaced):
+        if any((at - REPLACE_SPAN).value <= m < at.value and not self.stored_replacement(m) for m, _ in self.replaced):
             return REPLACED_MINUTE
         need = max((lookback(arm) + 1) * tf_seconds(arm.timeframe) // 60, LOOKBACK_1M)
         hi = int(np.searchsorted(self.ts, at.value, side="left"))
@@ -351,11 +410,13 @@ class AccountMinutes:
             late = (pd.to_datetime(span_v["written_at"], utc=True) > at).fillna(False).to_numpy(dtype=bool)
             if bool((flagged & late).any()):
                 return REPLACED_MINUTE
+        # after the cut-over the broker's M1 says whether the stored minutes are all the engine had (before the
+        # completeness check: a lost last minute the broker had is a gap, not forever incomplete)
+        if (why := self.cutover_cause(wts, int(wts.min()), at)) is not None:
+            return why
         # Q1: the window's minutes not all in the store yet (the last one is the minute before `at`)
         if len(win) < need or int(wts.max()) < int((at - pd.Timedelta(minutes=1)).value):
             return WINDOW_INCOMPLETE
-        if self.gap_after_cutover(wts, int(wts.min()), at):
-            return GAP_AFTER_CUTOVER
         if bool(((self.quarantined >= wts.min()) & (self.quarantined < at.value)).any()):
             return QUARANTINED_MINUTE
         seen = seen.tail(ENGINE_MINUTES).reset_index(drop=True)
@@ -390,9 +451,25 @@ def engine_recompute(minutes: Mapping[str, pd.DataFrame | AccountMinutes | str])
     return recompute
 
 
+def saved_cutover(db: Database, account: str, broker: str, symbol: str) -> int | None:
+    """The cut-over a history rebase saved for `account`'s live feed (aux.db `history_cutover`, the key the engine
+    writes: account, broker, symbol; engine.history.save_cutover), epoch ns or None. Raises what the read raises."""
+    with db.connection() as conn:
+        r = conn.execute("SELECT cutover_ns FROM history_cutover WHERE account_id = ? AND source = ? AND symbol = ?",
+                         (account, broker, symbol)).fetchone()
+    return int(r[0]) if r is not None else None
+
+
 def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, start: pd.Timestamp,
-                     now: pd.Timestamp) -> AccountMinutes | str:
+                     now: pd.Timestamp, db: Database | None = None) -> AccountMinutes | str:
     from goldbot.engine.broker_bars import REPLACED
+    saved: int | None = None
+    if db is not None:
+        try:
+            saved = saved_cutover(db, account, broker, symbol)
+        except Exception as exc:                # noqa: BLE001 - fail closed: the arm reads unverified
+            log.error("arm integrity: %s history_cutover unreadable (%s)", account, type(exc).__name__)
+            return CUTOVER_UNREADABLE
     try:
         v = minute_versions(store, account_id=account, broker=broker, symbol=symbol, start=start, end=now, as_of=now)
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
@@ -418,13 +495,14 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
         log.error("arm integrity: %s quarantine unreadable (%s)", account, type(exc).__name__)
         return QUARANTINE_UNREADABLE
-    return AccountMinutes(v, quarantined=q, replaced=replaced)
+    return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now)
 
 
-def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: pd.Timestamp) -> Recompute:
+def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: pd.Timestamp,
+                     db: Database | None = None) -> Recompute:
     """The recompute from the minutes each host's engine stored (`hosts`: account -> (broker, symbol)), read lazily
     per account from READ_DAYS before the earliest decision asked (P4: only candidates without a verdict ask), as of
-    `now`."""
+    `now`, with each engine's saved cut-over from the engines' aux.db `db` (None: none read)."""
     now = pd.Timestamp(now).tz_convert("UTC")
     loaded: dict[str, tuple[pd.Timestamp, AccountMinutes | str]] = {}
 
@@ -436,7 +514,7 @@ def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: p
         start = at - pd.Timedelta(days=READ_DAYS)
         got = loaded.get(acc)
         if got is None or start < got[0]:
-            got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now))
+            got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now, db=db))
             loaded[acc] = got
         m = got[1]
         return m if isinstance(m, str) else m.bracket(arm, at)
@@ -452,9 +530,10 @@ class NightInputs:
 
 
 def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Collection[Arm], *,
-                     now: pd.Timestamp) -> NightInputs:
+                     now: pd.Timestamp, db: Database | None = None) -> NightInputs:
     """The journal, the coverage and the recompute, read only when a running discovered arm is among `arms`: the
-    hosts' journal from the earliest such arm's `since` (`now` - READ_DAYS when one has no learning block)."""
+    hosts' journal from the earliest such arm's `since` (`now` - READ_DAYS when one has no learning block); `db`: the
+    engines' aux.db (their saved cut-overs)."""
     from goldbot.research.arms import Learning
     disc = [a for a in arms if discovered(a) and a.status == "run" and not a.retired]
     if not disc:
@@ -467,7 +546,7 @@ def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Col
         except ValueError:
             starts.append(now - pd.Timedelta(days=READ_DAYS))
     journal, read = engine_journal(store, hosts, start=min(starts), now=now)
-    return NightInputs(journal=journal, recompute=stored_recompute(store, hosts, now=now), hosts=read)
+    return NightInputs(journal=journal, recompute=stored_recompute(store, hosts, now=now, db=db), hosts=read)
 
 
 # ---------------------------------------------------------------------------------------------- the verdicts
@@ -637,10 +716,10 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
 
 
 __all__ = ["BRACKET_RETIRE_N", "BRACKET_VOID_ACTION", "BROKER_SILENCE_MAX", "CAPABILITY", "CAPABLE_ACTION",
-           "CONTROL_CHANGED_ACTION", "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "GAP_AFTER_CUTOVER",
+           "CONTROL_CHANGED_ACTION", "COVERAGE_WAIT", "CUTOVER_UNREADABLE", "NO_BROKER_COVERAGE", "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "GAP_AFTER_CUTOVER",
            "JOURNAL_ACTIONS", "JOURNAL_COLS", "LOADED_ACTION", "MINUTES_UNREADABLE", "NO_BAR", "NO_MINUTES",
            "NO_RECOMPUTE", "QUARANTINED_MINUTE", "QUARANTINE_UNREADABLE", "READ_DAYS", "REFUSAL_CAUSES",
            "REPLACED_MINUTE", "REPLACE_SPAN", "UNVERIFYING", "WINDOW_INCOMPLETE", "WINDOW_UNPROVABLE",
            "AccountMinutes", "HostRead", "Integrity", "NightInputs", "Recompute", "candidate_row", "coverage_refusal",
            "discovered", "engine_journal", "engine_recompute", "host_read", "integrity", "integrity_inputs",
-           "journalled", "replaced_count", "stored_recompute", "verdicts"]
+           "journalled", "replaced_count", "saved_cutover", "stored_recompute", "verdicts"]

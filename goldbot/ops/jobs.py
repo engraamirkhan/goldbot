@@ -1758,7 +1758,7 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     # a discovered learning arm's voids (amendment 2026-11-18 4, 5.1 (5), 2.2): the engines' journal and the bracket
     # recomputed from the minutes each engine stored, as it held them at the decision; read only when one is decided
     night = integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo}, list(arms.values()),
-                             now=slot)
+                             now=slot, db=aux)
     reads = run(aux, hosts={a.account_id: a.broker for a in demo},
                 arms=list(arms.values()), controls=controls, caps=caps, day=day_before(slot), now=slot,
                 journal=night.journal, recompute=night.recompute, hosts_read=night.hosts)
