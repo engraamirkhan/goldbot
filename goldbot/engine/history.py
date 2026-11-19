@@ -36,6 +36,15 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   thread merges a finished read at its next bar close (`after_close`), as `absorb` does a fill. A read that has not
   finished delays nothing and changes nothing: the refusal it would lift stays in force, and a read still running
   after READ_HUNG_S is logged once as an error. Exits never wait on it.
+- The stored minutes say what the engine held and since when (brain 2026-11-18/19: the nightly arm read). Every row
+  carries its write time (`available_utc`). A minute a history fill or a rebase joined (a quote stall, a restart, a
+  hole) is stored flagged FILLED_COL: the engine held it only from that write, never from its close. A fill stores
+  only the minutes it joined: one the engine already held keeps its stored copy and write time. Gold engines of one
+  broker share one key (`books.live_key`) and the store keeps one copy per minute, so a minute flagged REPLACED_COL
+  or FILLED_COL is sticky (`Store.append(sticky=...)`): another engine's plain copy written after it never erases the
+  flag or moves its write time back toward the close (a look-ahead for the read); of two flagged copies the newer
+  stays. A warm start therefore seeds such a minute from the flagged copy, not the last one written. Nothing here
+  changes what the engine holds or decides at run time.
 """
 from __future__ import annotations
 
@@ -69,6 +78,8 @@ LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = brok
 # a minute stored as the broker's replacement of the sampled one a decision may have used (broker_bars._replace): the
 # store keeps only the last copy, so the flag travels with the minute itself (no crash window; research/arm_integrity)
 REPLACED_COL = "replaced"
+# a minute a history fill or a rebase joined (absorb / _rebase): the engine held it from its write time, not its close
+FILLED_COL = "filled"
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
@@ -351,9 +362,11 @@ class BarWriter:
                 # the engine's own reads keep BAR_COLUMNS (`_clean`)
                 got = pd.concat(batch, ignore_index=True)
                 rows = got[BAR_COLUMNS].assign(available_utc=pd.Timestamp.now("UTC"))
-                if REPLACED_COL in got.columns:
-                    rows[REPLACED_COL] = got[REPLACED_COL].astype("boolean").fillna(False).astype(bool)
-                self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol)
+                for col in (REPLACED_COL, FILLED_COL):
+                    if col in got.columns:
+                        rows[col] = got[col].astype("boolean").fillna(False).astype(bool)
+                self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol,
+                                  sticky=(REPLACED_COL, FILLED_COL))
             except Exception as exc:                  # noqa: BLE001 - storing history never stops trading
                 log.warning("engine minutes not stored (%s): a restart's fill re-pulls them", type(exc).__name__)
             finally:
@@ -700,9 +713,11 @@ def absorb(eng: Engine) -> bool:
     got = got[got["ts_utc"] >= h.cutover]
     merged = pd.concat([eng.bars_1m, got]) if not eng.bars_1m.empty else got
     merged = merged.drop_duplicates("ts_utc", keep="first").sort_values("ts_utc", kind="stable")
+    # stored: only the minutes this fill joined (the engine's own copy of any other stays as stored), flagged
+    joined = got if eng.bars_1m.empty else got[~got["ts_utc"].isin(eng.bars_1m["ts_utc"])]
     eng.bars_1m = merged.tail(eng.cfg.max_bars_in_memory).reset_index(drop=True)
     eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None    # bars inserted before the last: rebuild
-    _write(eng, got)
+    _write(eng, joined.drop_duplicates("ts_utc", keep="first").assign(**{FILLED_COL: True}))
     return True
 
 
@@ -738,7 +753,7 @@ def _rebase(eng: Engine, f: HistoryFill) -> bool:
     h.cutover = lo
     h.backfill["cutover"] = lo.isoformat()
     h.backfill["bars"] = int(h.backfill["bars"]) + len(bars)
-    _write(eng, bars)
+    _write(eng, bars.assign(**{FILLED_COL: True}))
     save_cutover(eng, lo)
     log.warning("history: cut-over moved back from %s to %s: the release lacks that hole, %d broker minutes replace "
                 "the release from it on", old, lo, len(bars))
