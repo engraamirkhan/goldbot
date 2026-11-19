@@ -2704,7 +2704,9 @@ refused by the engine, its exits still close. Before the instruments go on a box
    both are open). Every problem is fixed (or the instrument stays `enabled: false`) before the account trades it.
 5. Health: `symbols:<account>` appears once the engine reports its symbols; WARN names a symbol whose terms are not loaded,
    whose swap is not priced (`swap not priced: entries refused, exits still close`) or whose feed is stale (its entries
-   refused, exits still close).
+   refused, exits still close). `quote_age:<account>` (told on Telegram) WARNs when gold's book or a book holding a
+   position has a quote older than `risk.stale_tick_seconds` while its own session is open (incident 2026-11-18/19):
+   read `journalctl -u goldbot-engine@<account>` for `ticks_many: ... came back as a backlog` and check the bridge.
 6. CPU budget (incident 2026-11-02): with every book on, `cat /proc/pressure/cpu` on the box must show `some` avg300
    under 20 % (`vmstat 5 6`: steal under 20 %). Measure it after any change to the account's book list. Over budget:
    see "Bridge contention on an MT5 box" below.

@@ -733,7 +733,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     for b in list(eng.books.values())[1:]:    # other books: their own stored minutes only (no tick fill yet: box memory)
         with books.using(eng, b):
             eng.warm_start(pd.Timestamp.now("UTC"), None)
-    feed = books.QuoteFeed(broker) if len(eng.books) > 1 else None
+    # stale_s: the RiskGate stale-tick limit bounds how far back the batched quote read reaches (books.QuoteFeed)
+    feed = books.QuoteFeed(broker, stale_s=eng.gate.limits.stale_tick_seconds) if len(eng.books) > 1 else None
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f, limits %s", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade, eng.limits_current.profile)
     def mtimes() -> tuple[float, ...]:
