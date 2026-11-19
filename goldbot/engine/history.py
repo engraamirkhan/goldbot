@@ -41,8 +41,10 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   hole) is stored flagged FILLED_COL: the engine held it only from that write, never from its close. A fill stores
   only the minutes it joined: one the engine already held keeps its stored copy and write time. Gold engines of one
   broker share one key (`books.live_key`) and the store keeps one copy per minute, so a minute flagged REPLACED_COL
-  is sticky (`Store.append(sticky=...)`): another engine's plain copy written after it never erases the flag. Nothing
-  here changes what the engine holds or decides.
+  or FILLED_COL is sticky (`Store.append(sticky=...)`): another engine's plain copy written after it never erases the
+  flag or moves its write time back toward the close (a look-ahead for the read); of two flagged copies the newer
+  stays. A warm start therefore seeds such a minute from the flagged copy, not the last one written. Nothing here
+  changes what the engine holds or decides at run time.
 """
 from __future__ import annotations
 
@@ -363,7 +365,8 @@ class BarWriter:
                 for col in (REPLACED_COL, FILLED_COL):
                     if col in got.columns:
                         rows[col] = got[col].astype("boolean").fillna(False).astype(bool)
-                self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol, sticky=REPLACED_COL)
+                self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol,
+                                  sticky=(REPLACED_COL, FILLED_COL))
             except Exception as exc:                  # noqa: BLE001 - storing history never stops trading
                 log.warning("engine minutes not stored (%s): a restart's fill re-pulls them", type(exc).__name__)
             finally:

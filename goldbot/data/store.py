@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import IO, Iterable, Iterator, Mapping
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -114,13 +115,16 @@ KEY_COLUMNS = {
 }
 
 
-def _flagged_last(rows: pd.DataFrame, sticky: str | None) -> pd.DataFrame:
-    """`rows` (oldest copy first) reordered so that, per ts_utc, the copies flagged `sticky` come after the unflagged
-    ones, each group in its own order: `drop_duplicates(keep="last")` then keeps the last flagged copy, else the last
-    copy. Unchanged without `sticky` or without that column."""
-    if sticky is None or sticky not in rows.columns:
+def _flagged_last(rows: pd.DataFrame, sticky: tuple[str, ...]) -> pd.DataFrame:
+    """`rows` (oldest copy first) reordered so that, per ts_utc, the copies flagged in any `sticky` column come after
+    the copies flagged in none, each group in its own order: `drop_duplicates(keep="last")` then keeps the newest
+    flagged copy (its own write time), else the newest copy. Unchanged without `sticky` or without those columns."""
+    cols = [c for c in sticky if c in rows.columns]
+    if not cols:
         return rows
-    flag = rows[sticky].astype("boolean").fillna(False).to_numpy(dtype=bool)
+    flag = np.zeros(len(rows), dtype=bool)
+    for c in cols:
+        flag |= rows[c].astype("boolean").fillna(False).to_numpy(dtype=bool)
     order = rows.assign(_flag=flag).sort_values("_flag", kind="stable").sort_values("ts_utc", kind="stable")
     return order.drop(columns="_flag")
 
@@ -148,16 +152,18 @@ class Store:
 
     # ------------------------------------------------------------------ write
     def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True,
-               sticky: str | None = None) -> int:
+               sticky: str | tuple[str, ...] = ()) -> int:
         """Append rows, de-duplicating against the key columns within each partition.
 
         dedupe=False writes each call as a new part file without reading the partition back: for append-only
         logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost.
-        `sticky` (with dedupe): a boolean column whose True a later copy of the key without it never erases: the row
-        flagged stays, a newer flagged copy still replaces it. Decided under the partition lock, so two writers
-        racing on one key cannot lose the flag (engine/history.py BarWriter: two engines on one broker feed)."""
+        `sticky` (with dedupe): boolean column(s): a row flagged in any of them is never replaced by a later copy of
+        its key flagged in none (the flagged row stays, with its write time); a newer copy flagged in any still
+        replaces it. Decided under the partition lock, so two writers racing on one key cannot lose a flag
+        (engine/history.py BarWriter: two engines on one broker feed)."""
         if df.empty:
             return 0
+        flags = (sticky,) if isinstance(sticky, str) else tuple(sticky)
         df = df.copy()
         if "ts_utc" not in df.columns:
             raise ValueError("every table row needs ts_utc")
@@ -172,11 +178,11 @@ class Store:
                 old_files = sorted(pdir.glob("*.parquet"))
                 existing = self._read_partition(pdir) if dedupe else None
                 if existing is not None and not existing.empty:
-                    merged = _flagged_last(pd.concat([existing, part], ignore_index=True), sticky)
+                    merged = _flagged_last(pd.concat([existing, part], ignore_index=True), flags)
                     part_out = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns],
                                                       keep="last").sort_values("ts_utc")
                 else:
-                    part_out = _flagged_last(part, sticky).drop_duplicates(
+                    part_out = _flagged_last(part, flags).drop_duplicates(
                         subset=[k for k in keys if k in part.columns], keep="last") if dedupe else part
                 # new file first (temp name, fsync, atomic rename), old files only after: readers never see an empty
                 # partition; a crash leaves old data or old+new (the next append dedupes by key)

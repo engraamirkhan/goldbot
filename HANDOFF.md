@@ -12,10 +12,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   replaced by one engine only and 6 of 37 by the other did), and the nightly arm read voided most decision points as
   `replaced_minute`. Now `Store.append(sticky=...)` keeps a flagged row against a later unflagged copy of its key
   (decided under the partition lock, so two writers racing cannot lose it; a newer flagged copy still wins) and
-  `history.BarWriter` writes `bars_1m_live` with `sticky="replaced"`. Minutes a history fill or a cut-over rebase
-  joins are stored flagged `filled` (history.FILLED_COL) with their write time, and a fill stores only the minutes it
-  joined: one the engine already held keeps its stored copy and write time (before, the fill rewrote it). Nothing
-  changes what the engine holds or decides. The read side (arm integrity, `account_bars.minute_versions`) needs no
+  `history.BarWriter` writes `bars_1m_live` with `sticky=("replaced", "filled")`. Minutes a history fill or a
+  cut-over rebase joins are stored flagged `filled` (history.FILLED_COL) with their write time, and a fill stores
+  only the minutes it joined: one the engine already held keeps its stored copy and write time (before, the fill
+  rewrote it). A row flagged in either column is never replaced by another engine's later plain copy (which could
+  pull its write time back inside the live grace: a look-ahead for the read); of two flagged copies the newer stays.
+  Behaviour change: a warm start now seeds such a minute from the flagged copy (the broker's bar or the fill), not
+  from the last copy written. Nothing changes what a running engine holds or decides. The read side (arm integrity, `account_bars.minute_versions`) needs no
   change for the flag; passing `filled` through is optional. Tests: tests/test_engine_minute_store.py.
 - 2026-11-18 arm lifecycle, builds 2 and 3 (owner directive "find, deploy, measure, promote and retire strategies by
   itself"; rule docs/research/arm-lifecycle-2026-11-18.md, revised by the quant, trading-safety and code reviews).

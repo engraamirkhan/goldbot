@@ -78,6 +78,34 @@ def test_another_engine_on_the_same_feed_writing_a_minute_after_its_replacement_
     assert pd.Timestamp(got["available_utc"].iloc[0]) == written          # the replacement's own write time
 
 
+def test_another_engines_delayed_plain_copy_after_a_filled_copy_keeps_the_filled_flag_and_its_write_time(tmp_path):
+    """Code review of d99dcb48: engine A joins 21:55 from its history fill (flagged filled, written then); engine B's
+    plain copy of the minute is stored later. Last-write would drop the flag and could pull the write time back
+    inside the live grace of the close: the read would take the minute as held from its close (look-ahead)."""
+    store = Store(tmp_path / "data")
+    a, b = BarWriter(store, "icm", "XAUUSD"), BarWriter(store, "icm", "XAUUSD")
+    a.put(pd.DataFrame([_row(T, 2.0)]).assign(**{FILLED_COL: True}))
+    assert a.join(5.0)
+    written = pd.Timestamp(_stored(store)["available_utc"].iloc[0])
+    b.put(pd.DataFrame([_row(T, 1.0)]))
+    assert b.join(5.0)
+    got = _stored(store)
+    assert _flag(got, FILLED_COL) == [True] and list(got["bid_close"]) == [2.0]
+    assert pd.Timestamp(got["available_utc"].iloc[0]) == written
+
+
+def test_with_several_sticky_flags_a_newer_copy_flagged_in_any_of_them_wins(tmp_path):
+    store = Store(tmp_path / "data")
+    flags = (REPLACED_COL, FILLED_COL)
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(filled=True), source="icm", symbol="XAUUSD",
+                 sticky=flags)
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 3.0)]).assign(replaced=True), source="icm", symbol="XAUUSD",
+                 sticky=flags)
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0)]), source="icm", symbol="XAUUSD", sticky=flags)
+    got = _stored(store)
+    assert list(got["bid_close"]) == [3.0] and _flag(got, REPLACED_COL) == [True]
+
+
 # ------------------------------------------------------------------------------------- B: the filled minutes
 TICKS = synthetic_ticks("2025-03-03", "2025-03-15", ticks_per_minute=1, seed=8)
 STORE_END = pd.Timestamp("2025-03-06", tz="UTC")
