@@ -784,7 +784,7 @@ def test_a_late_minute_never_replaced_voids_the_window_on_the_shared_live_key(en
     stamp = pd.DatetimeIndex([pd.Timestamp(live.loc[i, "ts_utc"])])
     ns = int(stamp[0].value)
     late = I.late_spans([(ns, _late_detail(stamp))])
-    assert late == [(ns, ns)]
+    assert late == [(ns, ns, True)]
     assert I.LATE_GIVE_UP == broker_bars.GIVE_UP
     v = _sorted(live, _m1(eng.bars_1m))
     assert I.AccountMinutes(v, late=late).held(arm, CLOSE) == I.SAMPLED_MINUTE
@@ -800,8 +800,11 @@ def test_a_late_minute_never_replaced_voids_the_window_on_the_shared_live_key(en
     assert I.AccountMinutes(v, late=span, replaced=[(ns, 2)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
     held = I.AccountMinutes(v, late=span, replaced=[(ns, 3)]).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame)
-    # a detail that does not parse covers its own minute: still void, never ok
-    assert I.late_spans([(ns, "garbled")]) == [(ns, ns)]
+    # quant (2): a detail that does not parse covers its minute to GIVE_UP after it, and no replacement accounts for
+    # it: any window holding a minute of it is void, never ok
+    garbled = I.late_spans([(ns, "garbled")])
+    assert garbled == [(ns, ns + int(broker_bars.GIVE_UP.value), False)]
+    assert I.AccountMinutes(v, late=garbled, replaced=[(ns, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
     # a late minute outside the window changes nothing
     old = int(pd.Timestamp(live.loc[live.index[0], "ts_utc"]).value) - 10**12
     held = I.AccountMinutes(v, late=[(old, old)]).held(arm, CLOSE)
@@ -820,3 +823,38 @@ def test_the_night_reads_the_accounts_late_events_from_dq_events(env, tmp_path):
     store.append("dq_events", ev, source="icm-probe", symbol="XAUUSD", dedupe=False)
     got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1))
     assert got(arm, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.SAMPLED_MINUTE
+
+
+def test_a_minute_another_engine_on_the_shared_key_kept_sampled_voids_this_accounts_window(env, tmp_path):
+    """Quant review of 4bac3d3e (BLOCKING): engine A got the broker's bar for a minute, engine B on the same live key
+    (broker, symbol) kept its sampled bar for good and wrote later: the stored copy is B's, which A never held. Every
+    account sharing the key is read, each against its own replacement events; any sampled-for-good minute voids."""
+    eng, arm, engine = _held(env, tmp_path)
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True))
+    store.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    store.append(crossfeed.BROKER_TABLE, minutes, source="icm-probe", symbol="XAUUSD")
+    stamp = pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+
+    def events(account: str, check: str, detail: str) -> None:
+        ev = pd.DataFrame({"ts_utc": stamp, "check": [check], "severity": ["warning"], "detail": [detail]})
+        store.append("dq_events", ev, source=account, symbol="XAUUSD", dedupe=False)
+    hosts = {"icm-probe": ("icm", "XAUUSD"), "icm-demo": ("icm", "XAUUSD"), "vantage-demo": ("vantage", "XAUUSD+")}
+    row = {"account_id": "icm-probe", "decision_utc": CLOSE}
+    now = CLOSE + pd.Timedelta(days=1)
+    events("vantage-demo", I.BAR_LATE, _late_detail(stamp))                 # another key: never read
+    got = I.stored_recompute(store, hosts, now=now)(arm, row)
+    assert isinstance(got, S.Bracket) and got == engine
+    events("icm-demo", I.BAR_LATE, _late_detail(stamp))                     # B: late, never replaced
+    events("icm-probe", broker_bars.REPLACED, "1 minute(s) from sampled ticks replaced by the broker's bars")  # A's own
+    assert I.stored_recompute(store, hosts, now=now)(arm, row) == I.SAMPLED_MINUTE
+    assert I.stored_recompute(store, {"icm-probe": hosts["icm-probe"]}, now=now)(arm, row) != I.SAMPLED_MINUTE
+    events("icm-demo", broker_bars.REPLACED, "1 minute(s) from sampled ticks replaced by the broker's bars")   # B replaced it
+    got = I.stored_recompute(store, hosts, now=now)(arm, row)
+    assert isinstance(got, S.Bracket) and got == engine
+    # the same rule on AccountMinutes directly: a sharer's late span with no replacement of its own
+    ns = int(stamp[0].value)
+    v = _sorted(_versions(eng.bars_1m), _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, sharers=[([(ns, ns, True)], [])]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    assert I.AccountMinutes(v, replaced=[(ns, 1)], sharers=[([(ns, ns, True)], [])]).held(arm, CLOSE) == \
+        I.SAMPLED_MINUTE                                                     # A's replacement never covers B's

@@ -16,7 +16,7 @@ import time
 import uuid
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import IO, Iterable, Iterator, Mapping
+from typing import IO, Iterable, Iterator, Literal, Mapping
 
 import duckdb
 import pandas as pd
@@ -136,11 +136,16 @@ class Store:
         return self.table_dir(table) / f"source={source}" / f"symbol={symbol}" / f"year={ts.year}" / f"month={ts.month:02d}"
 
     # ------------------------------------------------------------------ write
-    def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True) -> int:
+    def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True,
+               keep: Literal["first", "last"] = "last") -> int:
         """Append rows, de-duplicating against the key columns within each partition.
 
         dedupe=False writes each call as a new part file without reading the partition back: for append-only
-        logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost."""
+        logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost.
+        keep="first" keeps a stored row over a new one with the same key (the check and the write under one partition
+        lock, so a concurrent writer never wins over the first copy) and returns only the rows with a new key."""
+        if keep not in ("first", "last") or (keep == "first" and not dedupe):
+            raise ValueError("keep='first' needs dedupe (it compares with the stored rows)")
         if df.empty:
             return 0
         df = df.copy()
@@ -156,6 +161,15 @@ class Store:
             with self._partition_lock(pdir):
                 old_files = sorted(pdir.glob("*.parquet"))
                 existing = self._read_partition(pdir) if dedupe else None
+                if keep == "first":
+                    sub = [k for k in keys if k in part.columns]
+                    part = part.drop_duplicates(subset=sub, keep="first")
+                    if existing is not None and not existing.empty:
+                        have = pd.MultiIndex.from_frame(existing[sub]) if len(sub) > 1 else pd.Index(existing[sub[0]])
+                        mine = pd.MultiIndex.from_frame(part[sub]) if len(sub) > 1 else pd.Index(part[sub[0]])
+                        part = part[~mine.isin(have)]
+                    if part.empty:
+                        continue
                 if existing is not None and not existing.empty:
                     merged = pd.concat([existing, part], ignore_index=True)
                     part_out = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns],

@@ -127,6 +127,7 @@ BACKFILL_MAX = pd.Timedelta(days=7)       # each run re-pulls holes in the broke
 BACKFILL_CHUNK = pd.Timedelta(days=1)     # one get_bars_range call: one UTC day, at most 1,440 M1 bars (as the window)
 BACKFILL_SLACK = 5                        # open minutes a day's stored M1 may lack (quiet minutes) before a re-pull
 BACKFILL_BUDGET_S = 120.0                 # per account per run: the scheduler is single-threaded (23:25 broker_ledger)
+BACKFILL_PAUSE_S = 0.5                    # between the nightly back-fill's bridge calls (the bridge serves the engine)
 
 
 def reconcile_file(state_dir: Path, account_id: str) -> Path:
@@ -380,17 +381,14 @@ def _stored_m1(store: Store, account_id: str, symbol: str, start: pd.Timestamp, 
 
 def store_new_m1(store: Store, bb: pd.DataFrame, account_id: str, symbol: str) -> int:
     """Append the broker's M1 rows `bb` (broker_m1_bars) to BROKER_TABLE, only the minutes not stored yet: the first
-    copy of a minute and its write time are kept (point in time: a re-pull never overwrites a stored minute). Returns
-    the minutes written; `available_utc` is the write time (wall clock)."""
+    copy of a minute and its write time are kept (point in time: a re-pull never overwrites a stored minute). The check
+    and the write are one step under the partition lock (Store.append keep="first"), so a by-hand m1-backfill
+    overlapping the nightly reconcile never lets a later copy win. Returns the minutes written; `available_utc` is the
+    write time (wall clock)."""
     if bb.empty:
         return 0
-    ts = pd.DatetimeIndex(pd.to_datetime(bb["ts_utc"], utc=True))
-    have = _stored_m1(store, account_id, symbol, ts.min(), ts.max() + pd.Timedelta(minutes=1))
-    new = bb[~np.isin(epoch_ns(ts), have)]
-    if new.empty:
-        return 0
-    store.append(BROKER_TABLE, new.assign(available_utc=pd.Timestamp.now("UTC")), source=account_id, symbol=symbol)
-    return len(new)
+    return store.append(BROKER_TABLE, bb.assign(available_utc=pd.Timestamp.now("UTC")), source=account_id,
+                        symbol=symbol, keep="first")
 
 
 def _open_holes(stored: np.ndarray, start: pd.Timestamp, end: pd.Timestamp,
@@ -521,8 +519,13 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
     store_new_m1(store, bb, account_id, symbol)
     filled: BackfillResult | None = None
     if backfill > pd.Timedelta(0):
-        filled = backfill_broker_m1(store, broker, account_id, symbol, start=end - backfill, end=start,
-                                    sessions=sessions, budget_s=backfill_budget_s)
+        try:                                  # any failure in it (a store read across a month, the point, a write) is
+            filled = backfill_broker_m1(      # a warning: the 24 h report and its events are still saved
+                store, broker, account_id, symbol, start=end - backfill, end=start, sessions=sessions,
+                budget_s=backfill_budget_s, pause_s=BACKFILL_PAUSE_S)
+        except Exception as exc:              # noqa: BLE001 - told as reconcile_backfill_failed, tried again next run
+            filled = BackfillResult(account_id=account_id, window_from=end - backfill, window_to=start,
+                                    stopped="errors", errors=[f"{type(exc).__name__}: {str(exc)[:120]}"])
         if filled.errors:
             events.append(DQEvent(ts_utc=filled.window_to, check="reconcile_backfill_failed", severity="warning",
                                   detail=f"broker M1 back-fill: {len(filled.errors)} failed calls "

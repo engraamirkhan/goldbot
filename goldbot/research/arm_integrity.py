@@ -280,18 +280,29 @@ def replaced_count(detail: Any) -> int | None:
     return int(got.group(1)) if got else None
 
 
-def late_spans(events: Sequence[tuple[int, Any]]) -> list[tuple[int, int]]:
-    """(first, last) minute in epoch ns of each `broker_bar_late` event (its ts in epoch ns, its detail). A detail that
-    does not parse covers the event's own minute only (it is the first sampled minute): never no span."""
-    out: list[tuple[int, int]] = []
+LateSpan = tuple[int, int, bool]   # (first, last minute in epoch ns, a replacement event can account for it)
+
+
+def late_spans(events: Sequence[tuple[int, Any]]) -> list[LateSpan]:
+    """(first, last, coverable) per `broker_bar_late` event (its ts in epoch ns, its detail). A detail that does not
+    parse covers its minute to LATE_GIVE_UP after it and no replacement accounts for it (quant review of 4bac3d3e):
+    any window holding a minute of it is void. Never no span."""
+    out: list[LateSpan] = []
     for ts, detail in events:
         got = _LATE_SPAN.match(detail) if isinstance(detail, str) else None
         try:
-            a, b = (int(pd.Timestamp(x).tz_convert("UTC").value) for x in got.groups()) if got else (ts, ts)
+            a, b = (int(pd.Timestamp(x).tz_convert("UTC").value) for x in got.groups()) if got else (0, 0)
         except (ValueError, TypeError):
-            a, b = ts, ts
-        out.append((min(a, int(ts)), max(b, int(ts))))
+            got = None
+        if got is None:
+            out.append((int(ts), int(ts) + LATE_GIVE_UP.value, False))
+        else:
+            out.append((min(a, int(ts)), max(b, int(ts)), True))
     return sorted(out)
+
+
+def _spans(late: Sequence[tuple[int, ...]]) -> list[LateSpan]:
+    return sorted((int(x[0]), int(x[1]), bool(x[2]) if len(x) > 2 else True) for x in late)
 
 
 def _ns(frame: pd.DataFrame) -> np.ndarray:
@@ -307,7 +318,8 @@ class AccountMinutes:
 
     def __init__(self, versions: pd.DataFrame, *, quarantined: Sequence[int] = (),
                  replaced: Sequence[tuple[int, int | None]] = (), saved_cutover: int | None = None,
-                 now: pd.Timestamp | None = None, late: Sequence[tuple[int, int]] = ()):
+                 now: pd.Timestamp | None = None, late: Sequence[tuple[int, ...]] = (),
+                 sharers: Sequence[tuple[Sequence[tuple[int, ...]], Sequence[tuple[int, int | None]]]] = ()):
         v = versions
         m1 = np.zeros(0, dtype=np.int64)
         if "rank" in v.columns:
@@ -338,7 +350,10 @@ class AccountMinutes:
         self.now = None if now is None else pd.Timestamp(now).tz_convert("UTC")
         self.quarantined = np.sort(np.asarray(quarantined, dtype=np.int64))
         self.replaced = sorted((int(m), n) for m, n in replaced)
-        self.late = sorted((int(a), int(b)) for a, b in late)
+        # (late spans, replacement events) of this engine and of every other engine storing on the same live key
+        # (books.live_key = broker, symbol): each judged against its own replacements (quant review of 4bac3d3e)
+        self.late = _spans(late)
+        self.sharers = [(_spans(lt), sorted((int(m), n) for m, n in rp)) for lt, rp in sharers]
         # events whose REPLACE_SPAN windows overlap (chained) are accounted for together: (first, last, their counts'
         # sum or None when one does not parse), so one event's flagged minutes never vouch for another's
         self._groups: list[tuple[int, int, int | None]] = []
@@ -374,21 +389,26 @@ class AccountMinutes:
         return own <= stamps and len(stamps) >= total
 
     def sampled_for_good(self, wts: np.ndarray, at: pd.Timestamp) -> bool:
-        """Whether a window minute (`wts`, before `at`) is one this engine flagged `broker_bar_late` and no
-        `broker_bar_replaced` event of its own accounts for: an event whose first minute is at most LATE_GIVE_UP before
-        it and whose count reaches it (first + count minutes; an event whose count does not parse reaches nothing).
-        Every minute of a late span is taken as sampled (the event gives its first and last only): fail closed."""
-        if not self.late or not len(wts):
+        """Whether a window minute (`wts`, before `at`) is one an engine on this live key (this one or a sharer)
+        flagged `broker_bar_late` and no `broker_bar_replaced` event of that same engine accounts for: an event whose
+        first minute is at most LATE_GIVE_UP before it and whose count reaches it (first + count minutes; a count that
+        does not parse reaches nothing). Every minute of a late span is taken as sampled (the event gives its first and
+        last only), and a span whose detail did not parse is never accounted for: fail closed."""
+        if not len(wts):
             return False
         lo, hi = int(wts.min()), int(at.value)
-        reps = [(m, n) for m, n in self.replaced if n is not None and n > 0]
         step, give_up = pd.Timedelta(minutes=1).value, LATE_GIVE_UP.value
-        for a, b in self.late:
-            if b < lo or a >= hi:
-                continue
-            for m in wts[(wts >= a) & (wts <= b)].tolist():
-                if not any(e <= m < e + n * step and m - e <= give_up for e, n in reps):
+        for late, replaced in [(self.late, self.replaced), *self.sharers]:
+            reps = [(m, n) for m, n in replaced if n is not None and n > 0]
+            for a, b, coverable in late:
+                if b < lo or a >= hi:
+                    continue
+                inside = wts[(wts >= a) & (wts <= b)].tolist()
+                if inside and not coverable:
                     return True
+                for m in inside:
+                    if not any(e <= m < e + n * step and m - e <= give_up for e, n in reps):
+                        return True
         return False
 
     def observed(self, lo: int, hi: int) -> bool:
@@ -527,9 +547,27 @@ def saved_cutover(db: Database, account: str, broker: str, symbol: str) -> int |
     return int(r[0]) if r is not None else None
 
 
-def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, start: pd.Timestamp,
-                     now: pd.Timestamp, db: Database | None = None) -> AccountMinutes | str:
+def _dq_late_replaced(store: Any, account: str, start: pd.Timestamp, now: pd.Timestamp
+                      ) -> tuple[list[LateSpan], list[tuple[int, int | None]]]:
+    """One account's `broker_bar_late` spans and `broker_bar_replaced` events (first minute, count or None)."""
     from goldbot.engine.broker_bars import REPLACED
+    dq = store.read("dq_events", source=account, symbol=None, start=start, end=now)
+    if dq is None or dq.empty:
+        return [], []
+    check = dq["check"].astype(str)
+
+    def rows(name: str) -> tuple[list[int], list[Any]]:
+        hit = dq[check == name]
+        return _ns(hit).tolist(), (list(hit["detail"]) if "detail" in hit.columns else [None] * len(hit))
+    rts, rdet = rows(REPLACED)
+    lts, ldet = rows(BAR_LATE)
+    return late_spans(list(zip(lts, ldet, strict=True))), \
+        list(zip(rts, [replaced_count(d) for d in rdet], strict=True))
+
+
+def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, start: pd.Timestamp,
+                     now: pd.Timestamp, db: Database | None = None,
+                     sharers: Sequence[str] = ()) -> AccountMinutes | str:
     saved: int | None = None
     if db is not None:
         try:
@@ -545,14 +583,10 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
     if v.empty:
         return NO_MINUTES
     try:
-        dq = store.read("dq_events", source=account, symbol=None, start=start, end=now)
-        hit = dq[dq["check"].astype(str) == REPLACED] if dq is not None and not dq.empty else None
-        details = [] if hit is None else (hit["detail"] if "detail" in hit.columns else [None] * len(hit))
-        replaced: list[tuple[int, int | None]] = [] if hit is None else \
-            list(zip(_ns(hit).tolist(), [replaced_count(d) for d in details], strict=True))
-        lat = dq[dq["check"].astype(str) == BAR_LATE] if dq is not None and not dq.empty else None
-        late = [] if lat is None or lat.empty else late_spans(list(zip(
-            _ns(lat).tolist(), lat["detail"] if "detail" in lat.columns else [None] * len(lat), strict=True)))
+        late, replaced = _dq_late_replaced(store, account, start, now)
+        # every other engine storing on this live key (broker, symbol): its sampled-for-good minutes may be the stored
+        # copy of a minute this engine held as the broker's bar (quant review of 4bac3d3e, BLOCKING)
+        shared = [_dq_late_replaced(store, other, start, now) for other in sharers if other != account]
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
         log.error("arm integrity: %s dq_events unreadable (%s)", account, type(exc).__name__)
         return DQ_UNREADABLE
@@ -565,7 +599,8 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
         log.error("arm integrity: %s quarantine unreadable (%s)", account, type(exc).__name__)
         return QUARANTINE_UNREADABLE
-    return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now, late=late)
+    return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now, late=late,
+                          sharers=shared)
 
 
 def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: pd.Timestamp,
@@ -584,7 +619,8 @@ def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: p
         start = at - pd.Timedelta(days=READ_DAYS)
         got = loaded.get(acc)
         if got is None or start < got[0]:
-            got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now, db=db))
+            sharers = [a for a, key in hosts.items() if key == hosts[acc] and a != acc]
+            got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now, db=db, sharers=sharers))
             loaded[acc] = got
         m = got[1]
         return m if isinstance(m, str) else m.bracket(arm, at)

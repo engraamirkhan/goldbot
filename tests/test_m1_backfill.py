@@ -192,3 +192,66 @@ def test_the_backfill_cap_and_budget_are_documented_constants():
     assert cf.BACKFILL_MAX == pd.Timedelta(days=7)
     assert 0 < cf.BACKFILL_BUDGET_S <= 300
     assert Path("docs/RUNBOOK.md").read_text().count("m1-backfill") >= 1
+
+
+# ------------------------------------------------------------------- review round of 4bac3d3e (quant 3, code a-c)
+def test_any_backfill_failure_is_a_warning_and_the_24h_report_and_events_are_still_saved(tmp_path, week_m1,
+                                                                                        monkeypatch):
+    """Quant 3 / code (b): a read of the stored M1 (a month partition), the point or a write failing inside the
+    back-fill must not lose the 24 h report and its dq_events: one `reconcile_backfill_failed` warning instead."""
+    store = Store(tmp_path / "data")
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise OSError("partition unreadable")
+    monkeypatch.setattr(cf, "_stored_m1", boom)
+    rep = cf.reconcile_account(store, RangeBroker(week_m1), ACC.account_id, ACC.symbol, WED, state_dir=tmp_path)
+    assert cf.reconcile_file(tmp_path, ACC.account_id).exists() and rep.broker_minutes > 1000
+    assert "partition unreadable" in rep.note and rep.backfill["errors"]
+    ev = store.read("dq_events", source=ACC.account_id)
+    assert {"reconcile_missing_engine", "reconcile_backfill_failed"} <= set(ev["check"])
+    assert set(ev.loc[ev["check"] == "reconcile_backfill_failed", "severity"]) == {"warning"}
+
+
+def test_a_stored_minute_keeps_its_first_copy_even_when_a_concurrent_writer_lands_between_check_and_append(
+        tmp_path, week_m1, monkeypatch):
+    """Code (a): a by-hand m1-backfill overlapping the 23:20 reconcile. The existence check and the append are one
+    step under the partition lock (Store.append keep="first"): a copy written after another's never wins."""
+    store = Store(tmp_path / "data")
+    first = cf.broker_m1_bars(week_m1.head(30))
+    assert cf.store_new_m1(store, first, ACC.account_id, ACC.symbol) == 30
+    before = _stored(store)
+    monkeypatch.setattr(cf, "_stored_m1", lambda *a, **k: np.zeros(0, dtype=np.int64))   # the race: check saw none
+    moved = week_m1.head(40).copy()
+    moved[["open", "high", "low", "close"]] += 5.0
+    assert cf.store_new_m1(store, cf.broker_m1_bars(moved), ACC.account_id, ACC.symbol) == 10
+    after = _stored(store)
+    pd.testing.assert_frame_equal(after.head(30)[before.columns], before)
+    assert len(after) == 40
+
+
+def test_store_append_keep_first_keeps_the_stored_row_and_counts_only_new_keys(tmp_path):
+    store = Store(tmp_path / "data")
+    ts = pd.date_range("2026-10-30 23:58", periods=4, freq="min", tz="UTC")    # crosses a month partition
+    store.append(cf.BROKER_TABLE, pd.DataFrame({"ts_utc": ts[:2], "x": [1.0, 2.0]}), source="a")
+    n = store.append(cf.BROKER_TABLE, pd.DataFrame({"ts_utc": ts, "x": [9.0, 9.0, 3.0, 4.0]}), source="a",
+                     keep="first")
+    assert n == 2
+    got = store.read(cf.BROKER_TABLE, source="a").sort_values("ts_utc")
+    assert got["x"].tolist() == [1.0, 2.0, 3.0, 4.0]
+    with pytest.raises(ValueError):
+        store.append(cf.BROKER_TABLE, pd.DataFrame({"ts_utc": ts, "x": 0.0}), source="a", keep="first", dedupe=False)
+
+
+def test_the_nightly_backfill_paces_its_bridge_calls(tmp_path, week_m1, monkeypatch):
+    """Code (c): the nightly back-fill waits BACKFILL_PAUSE_S (0.5 s) between bridge calls (tests/conftest.py sets it
+    to 0 for speed; the default is read at call time)."""
+    monkeypatch.setattr(cf, "BACKFILL_PAUSE_S", 0.5)
+    seen: dict[str, Any] = {}
+    real = cf.backfill_broker_m1
+
+    def spy(*a: Any, **k: Any) -> Any:
+        seen.update(k)
+        return real(*a, **{**k, "pause_s": 0.0})
+    monkeypatch.setattr(cf, "backfill_broker_m1", spy)
+    cf.reconcile_account(Store(tmp_path / "data"), RangeBroker(week_m1), ACC.account_id, ACC.symbol, WED)
+    assert seen["pause_s"] == 0.5

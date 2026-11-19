@@ -46,7 +46,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   voids). (5) Engine finding: both icm engines store gold minutes under one bars_1m_live key and the
   store keeps the last copy; a window minute this account's engine flagged `broker_bar_late` with no
   `broker_bar_replaced` of its own within GIVE_UP (10 min) voids (`sampled_minute`), every minute of a late span
-  counted; K1's docstring notes sticky flags (fix/engine-minute-store) can only add voids. Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
+  counted. Every account sharing the key (same broker and symbol in the hosts) is read, each judged
+  against its own replacements; a late detail that does not parse voids any window holding a minute from its ts to
+  GIVE_UP after it. K1's docstring notes sticky flags (fix/engine-minute-store) can only add voids. Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
+  Review round of 4bac3d3e: the back-fill's whole call is inside the warning path (the 24 h report and events are
+  always saved); `Store.append(keep="first")` does the existence check and the write under one partition lock;
+  the nightly back-fill waits 0.5 s between bridge calls (BACKFILL_PAUSE_S).
 - 2026-11-18 arm lifecycle, builds 2 and 3 (owner directive "find, deploy, measure, promote and retire strategies by
   itself"; rule docs/research/arm-lifecycle-2026-11-18.md, revised by the quant, trading-safety and code reviews).
   Build 3: aux.db `arm_registry` (migration 37, append-only, hash-chained; the verified tip kept in core.db
