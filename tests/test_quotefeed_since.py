@@ -113,13 +113,15 @@ def test_new_ticks_older_than_the_stale_limit_are_a_replay_and_never_become_the_
     term = TerminalLike()
     term.add("XAUJPY", T, 5, 1.0, 600000.0)                 # five ticks delivered now, stamped 10 min ago
     term.add("XAUJPY", T + pd.Timedelta(seconds=599), 1, 1.0, 600100.0)
+    term.add("XAUUSD", T + pd.Timedelta(seconds=599), 10, 0.1, 4000.0)   # gold on time: the clocks agree
     term.now = T + pd.Timedelta(seconds=600)
     feed = books.QuoteFeed(term, stale_s=20)
 
     def late(symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
-        return {"XAUJPY": term.ticks["XAUJPY"][:5]}         # the backdated part of a catch-up
+        return {"XAUJPY": term.ticks["XAUJPY"][:5],         # the backdated part of a catch-up
+                "XAUUSD": [t for t in term.ticks["XAUUSD"] if t.ts_utc <= term.now]}
     term.ticks_many = late                                  # type: ignore[method-assign]
-    feed.refresh(["XAUJPY"], term.now)
+    feed.refresh(["XAUJPY", "XAUUSD"], term.now)
     assert feed.last_tick("XAUJPY") == term.newest("XAUJPY")
 
 
@@ -163,3 +165,17 @@ def test_when_the_backlog_symbols_newest_quote_cannot_be_read_the_pass_reads_it_
     term.last_tick = down                                   # type: ignore[method-assign]
     feed.refresh(["XAUUSD"], term.now)
     assert "XAUUSD" not in feed.latest                      # never the backlog tick: the pass's own read raises
+
+
+def test_every_symbol_behind_the_host_clock_is_skew_and_costs_no_per_symbol_read():
+    """Safety review LOW of aa9a046f: broker stamps behind the host (a bad server_tz, NTP drift) make every symbol look
+    like a backlog by age alone; one serial last_tick per book before the exits would be exit latency."""
+    term = TerminalLike()
+    term.add("XAUUSD", T, 50, 0.1, 4000.0)
+    term.add("EURUSD", T, 10, 0.5, 1.1)
+    term.now = T + pd.Timedelta(seconds=5)
+    feed = books.QuoteFeed(term, stale_s=20)
+    host = term.now + pd.Timedelta(seconds=30)             # the host clock 30 s ahead of every broker stamp
+    feed.refresh(["XAUUSD", "EURUSD"], host)
+    assert term.last_tick_calls == []
+    assert feed.latest == {"XAUUSD": term.newest("XAUUSD"), "EURUSD": term.newest("EURUSD")}

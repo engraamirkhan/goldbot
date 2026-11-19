@@ -359,7 +359,11 @@ class QuoteFeed:
     `now`: a tick stamped in the future moves nothing) less `stale_s` (risk.stale_tick_seconds: a tick that late is
     stale for entries anyway); and a symbol whose batch is a backlog (`QUOTE_BACKLOG_ROWS` or more rows, a newest tick
     older than `stale_s` on the host clock, or older than the quote it already has) takes the terminal's newest quote
-    (`last_tick`) instead, so exits always run on the latest quote, never on replayed ones."""
+    (`last_tick`) instead, so exits always run on the latest quote, never on replayed ones. Safety review LOW of
+    aa9a046f: when EVERY symbol that ticked is a backlog by age alone (no full batch, none older than its held quote),
+    the broker's stamps run behind the host clock (a wrong server_tz, NTP drift), not a replay: each batch's newest
+    quote is kept and no per-symbol `last_tick` is read (one serial bridge call per book before the exits), logged once
+    per streak; the stale-data rule already blocks the entries."""
 
     def __init__(self, broker: Any, stale_s: float = 20.0) -> None:
         self.broker = broker
@@ -367,6 +371,7 @@ class QuoteFeed:
         self.batched = True
         self.stale = pd.Timedelta(seconds=stale_s)
         self._backlog: set[str] = set()     # symbols whose batch was a backlog (logged once per streak)
+        self._skewed = False                # every ticking symbol behind the host clock last pass (logged once)
 
     def since(self, symbols: list[str], now: pd.Timestamp) -> pd.Timestamp:
         """The batch's `since`: the oldest latest tick, but never more than `stale_s` before the newest one."""
@@ -375,10 +380,15 @@ class QuoteFeed:
             return now - QUOTE_FIRST_LOOKBACK
         return max(min(seen), min(max(seen), now) - self.stale)
 
-    def _is_backlog(self, symbol: str, ticks: list[Tick], newest: Tick, now: pd.Timestamp) -> bool:
+    def _backlog_kind(self, symbol: str, ticks: list[Tick], newest: Tick, now: pd.Timestamp) -> str | None:
+        """Why this batch is a backlog: "rows" (it may be cut off), "held" (older than the quote held), "age" (its
+        newest tick older than `stale_s` on the host clock); None when it is not one."""
         held = self.latest.get(symbol)
-        return len(ticks) >= QUOTE_BACKLOG_ROWS or newest.ts_utc < now - self.stale \
-            or (held is not None and newest.ts_utc < held.ts_utc)
+        if len(ticks) >= QUOTE_BACKLOG_ROWS:
+            return "rows"
+        if held is not None and newest.ts_utc < held.ts_utc:
+            return "held"
+        return "age" if newest.ts_utc < now - self.stale else None
 
     def refresh(self, symbols: list[str], now: pd.Timestamp) -> None:
         if not self.batched:
@@ -394,18 +404,23 @@ class QuoteFeed:
             log.warning("ticks_many failed (%s): one last_tick per symbol this pass", type(exc).__name__)
             self.latest = {}
             return
-        for s, ticks in got.items():
-            if not ticks:
-                continue
-            newest = max(ticks, key=lambda t: t.ts_utc)
-            if not self._is_backlog(s, ticks, newest, now):
-                self.latest[s] = newest
+        newest = {s: max(ticks, key=lambda t: t.ts_utc) for s, ticks in got.items() if ticks}
+        kinds = {s: self._backlog_kind(s, got[s], t, now) for s, t in newest.items()}
+        skewed = bool(kinds) and all(k == "age" for k in kinds.values())
+        if skewed and not self._skewed:
+            log.warning("ticks_many: every symbol's newest tick is over %s s behind the host clock (%s): broker clock "
+                        "skew, the batch's quotes are kept", self.stale.total_seconds(),
+                        ", ".join(f"{s} {t.ts_utc.isoformat()}" for s, t in sorted(newest.items())))
+        self._skewed = skewed
+        for s, t in newest.items():
+            if kinds[s] is None or skewed:
+                self.latest[s] = t
                 self._backlog.discard(s)
                 continue
             if s not in self._backlog:
                 self._backlog.add(s)
-                log.warning("ticks_many: %s came back as a backlog (%d ticks, newest %s): its newest quote is read "
-                            "with last_tick", s, len(ticks), newest.ts_utc.isoformat())
+                log.warning("ticks_many: %s came back as a backlog (%s: %d ticks, newest %s): its newest quote is read "
+                            "with last_tick", s, kinds[s], len(got[s]), t.ts_utc.isoformat())
             try:
                 self.latest[s] = self.broker.last_tick(s)
             except Exception:                 # never the backlog tick: the pass's own last_tick reads (or raises)
