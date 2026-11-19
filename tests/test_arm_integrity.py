@@ -369,27 +369,77 @@ def test_a_verdict_is_written_only_once_its_day_has_settled_and_its_account_is_c
     assert len(I.verdicts(db, "icm", "D1")) == 120
 
 
+def _sorted(*parts: pd.DataFrame) -> pd.DataFrame:
+    return pd.concat(parts).sort_values(["ts_utc", "rank"], kind="stable").reset_index(drop=True)
+
+
 def test_release_minutes_after_the_cutover_in_the_window_void_the_candidate(env, tmp_path):
+    """A live minute missing after the cut-over that the release has, with no broker M1 to say the broker had no
+    bar then: what the engine held there cannot be shown (its write may have been lost), void."""
     eng, arm, engine = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
     cut = live.index[len(live) // 2]
     gap = live.loc[[cut + 10]].assign(rank=3)                              # a release minute filling a live gap
-    v = pd.concat([live.drop(index=[cut + 10]), gap]).sort_values(["ts_utc", "rank"]).reset_index(drop=True)
-    assert I.AccountMinutes(v).held(arm, CLOSE) == I.RELEASE_AFTER_CUTOVER
+    v = _sorted(live.drop(index=[cut + 10]), gap)
+    assert I.AccountMinutes(v).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
     before = live.loc[: cut - 1].assign(rank=3)                            # release only before the first live minute
-    v2 = pd.concat([before, live.loc[cut:]]).sort_values(["ts_utc", "rank"]).reset_index(drop=True)
+    v2 = _sorted(before, live.loc[cut:])
     held = I.AccountMinutes(v2).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
 
 
-def test_the_brokers_m1_never_fills_a_minute_the_engine_never_held(env, tmp_path):
+def test_a_release_minute_where_the_brokers_m1_shows_no_bar_after_the_cutover_is_not_held_and_the_read_verifies(
+        env, tmp_path):
+    """Root cause of the 4h voids: the engine never holds a release minute at or after its cut-over
+    (`engine.history`: release minutes before the cut-over only), but the night filled every live gap from the
+    release and then voided. A minute the broker's own M1 shows it never had (its bars on both sides, none at the
+    minute) was never an engine minute: the night leaves it out, as the engine did, and recomputes."""
     eng, arm, _ = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    cut = live.index[len(live) // 2]
+    quiet = cut + 10
+    m1 = live.drop(index=[quiet]).assign(rank=1)                           # the broker had no bar at `quiet`
+    other = live.loc[[quiet]].assign(rank=3, bid_high=live.loc[quiet, "bid_high"] + 40.0)
+    v = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:].drop(index=[quiet]), other, m1)
+    held = I.AccountMinutes(v).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame)
+    assert pd.Timestamp(live.loc[quiet, "ts_utc"]) not in set(held["ts_utc"])   # never the release's minute
+    engine_held = I.AccountMinutes(_sorted(live.loc[: cut - 1].assign(rank=3),
+                                           live.loc[cut:].drop(index=[quiet]))).held(arm, CLOSE)
+    assert isinstance(engine_held, pd.DataFrame)
+    assert AR.decision_bracket(held, arm, CLOSE) == AR.decision_bracket(engine_held, arm, CLOSE)
+
+
+def test_a_gap_after_the_cutover_the_brokers_m1_has_a_bar_for_voids_even_without_a_release_minute(env, tmp_path):
+    """A genuine gap: the broker had the minute (its M1 shows it), the engine's stored minutes lack it as of the
+    decision. The engine may have held it (a write lost or late), so the window is not provable: void. This holds
+    after the release ends too (the night used to see such a gap only where the release had the minute)."""
+    eng, arm, _ = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    cut = live.index[len(live) // 2]
+    lost = cut + 10
+    v = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:].drop(index=[lost]), live.assign(rank=1))
+    assert I.AccountMinutes(v).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
+    assert I.GAP_AFTER_CUTOVER not in I.REFUSAL_CAUSES and I.GAP_AFTER_CUTOVER not in I.UNVERIFYING
+    # the broker's M1 silent around the minute only for longer than BROKER_SILENCE_MAX: not proof, void
+    far = live.index[(pd.to_datetime(live["ts_utc"], utc=True)
+                      - pd.Timestamp(live.loc[lost, "ts_utc"])).abs() <= I.BROKER_SILENCE_MAX]
+    sparse = live.drop(index=far).assign(rank=1)
+    other = live.loc[[lost]].assign(rank=3)
+    v2 = _sorted(live.loc[: cut - 1].assign(rank=3), live.loc[cut:].drop(index=[lost]), other, sparse)
+    assert I.AccountMinutes(v2).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
+
+
+def test_the_brokers_m1_never_fills_a_minute_the_engine_never_held(env, tmp_path):
+    """The broker's M1 is evidence, never a bar: where the engine's minute is stored, the M1's (another price) is not
+    read; where it is not, the M1 does not fill it, it says the broker had a bar the store lacks (a gap, void)."""
+    eng, arm, engine = _held(env, tmp_path)
     live = _versions(eng.bars_1m)
     gone = live.index[-5]
     m1 = live.loc[[gone]].assign(rank=1, bid_high=live.loc[gone, "bid_high"] + 30.0)
-    v = pd.concat([live.drop(index=[gone]), m1]).sort_values(["ts_utc", "rank"]).reset_index(drop=True)
-    held = I.AccountMinutes(v).held(arm, CLOSE)
-    assert isinstance(held, pd.DataFrame) and pd.Timestamp(live.loc[gone, "ts_utc"]) not in set(held["ts_utc"])
+    held = I.AccountMinutes(_sorted(live, m1)).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    assert I.AccountMinutes(_sorted(live.drop(index=[gone]), m1)).held(arm, CLOSE) == I.GAP_AFTER_CUTOVER
 
 
 def test_a_minute_flagged_replaced_and_written_after_the_decision_voids_the_candidate_without_a_dq_event(env,

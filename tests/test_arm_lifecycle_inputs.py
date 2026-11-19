@@ -138,16 +138,84 @@ def test_a_window_minute_the_engine_replaced_after_the_decision_leaves_the_candi
     assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, at) == expected
 
 
-def _replaced_event(store: Store, minute: pd.DataFrame) -> None:
+def _replaced_event(store: Store, minute: pd.DataFrame, detail: str = "1 minute(s) replaced") -> None:
     """The engine's dq row for a replaced minute (`broker_bars._replace`: ts_utc = the minute)."""
     store.append("dq_events", pd.DataFrame([{"ts_utc": pd.Timestamp(minute["ts_utc"].iloc[0]),
                                              "check": broker_bars.REPLACED, "severity": "warning",
-                                             "detail": "1 minute(s) replaced"}]),
+                                             "detail": detail}]),
                  source="icm-probe", symbol="XAUUSD", dedupe=False)
 
 
 def test_the_replacement_span_covers_the_engines_give_up_and_one_rates_call():
     assert I.REPLACE_SPAN >= broker_bars.GIVE_UP + pd.Timedelta(minutes=broker_bars.FETCH_N + 1)
+
+
+def _flagged_store(tmp: Path, minutes: pd.DataFrame, i: Any, written: pd.Timestamp, *,
+                   flag: bool = True) -> Store:
+    """The engine's minutes as stored live, minute `i` the broker's replacement (`broker_bars._replace` ->
+    `history.queue_minutes`: flagged `replaced`, written at `written`)."""
+    rows = minutes.assign(available_utc=pd.to_datetime(minutes["visible_at"], utc=True) + pd.Timedelta(seconds=1),
+                          replaced=False)
+    rows.loc[i, "replaced"], rows.loc[i, "available_utc"] = flag, written
+    store = Store(tmp / "data")
+    store.append("bars_1m_live", rows, source="icm", symbol="XAUUSD")
+    return store
+
+
+def test_a_replacement_logged_near_the_decision_but_stored_before_it_is_recomputed_not_voided(env, tmp_path):
+    """The dq event (`broker_bar_replaced`: its ts the first replaced minute, its detail the count and the largest
+    close change) says that minutes were replaced, never when. The stored copy says when: flagged `replaced`, with
+    its write time, which is after the engine swapped the bar in. Written before the decision, the engine held the
+    broker's bar, so the night recomputes from it; written after, K1 voids. Only an event the store cannot show
+    (no flagged copy of its minute, fewer flagged minutes than it counts, a detail that does not parse) voids."""
+    eng, arm, engine = _engine_bracket(env, tmp_path)
+    held = eng.bars_1m[eng.bars_1m["visible_at"] <= CLOSE]
+    at = {"account_id": "icm-probe", "decision_utc": CLOSE}
+    i = held.index[-3]                                          # a minute of the decision bar, inside REPLACE_SPAN
+    revised = eng.bars_1m.copy()
+    for c in ("bid_high", "ask_high"):
+        revised.loc[i, c] = revised.loc[i, c] + 25.0
+    expected = AR.decision_bracket(revised, arm.spec, CLOSE)
+    assert expected is not None and expected != engine
+
+    before = _flagged_store(tmp_path / "before", revised, i, CLOSE - pd.Timedelta(seconds=30))
+    _replaced_event(before, revised.loc[[i]])
+    assert I.stored_recompute(before, HOST, now=NIGHT)(arm.spec, at) == expected
+
+    after = _flagged_store(tmp_path / "after", revised, i, CLOSE + pd.Timedelta(seconds=30))
+    _replaced_event(after, revised.loc[[i]])
+    assert I.stored_recompute(after, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE
+
+    two = _flagged_store(tmp_path / "two", revised, i, CLOSE - pd.Timedelta(seconds=30))
+    _replaced_event(two, revised.loc[[i]], detail="2 minute(s) from sampled ticks replaced by the broker's bars")
+    assert I.stored_recompute(two, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE     # one of two not shown
+
+    vague = _flagged_store(tmp_path / "vague", revised, i, CLOSE - pd.Timedelta(seconds=30))
+    _replaced_event(vague, revised.loc[[i]], detail="minutes replaced")
+    assert I.stored_recompute(vague, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE   # fails closed
+
+    bare = _flagged_store(tmp_path / "bare", revised, i, CLOSE - pd.Timedelta(seconds=30), flag=False)
+    _replaced_event(bare, revised.loc[[i]])
+    assert I.stored_recompute(bare, HOST, now=NIGHT)(arm.spec, at) == I.REPLACED_MINUTE    # a pre-flag store
+
+
+def test_the_night_reads_the_count_of_the_replacement_event_the_engine_writes(monkeypatch):
+    """The count is parsed from the engine's own detail text (`broker_bars._replace`), so a change to that text
+    fails here, not silently at night (an unparseable detail voids)."""
+    t = pd.Timestamp("2026-11-10 10:00", tz="UTC")
+    cols = {"bid_open": 1.0, "bid_high": 1.0, "bid_low": 1.0, "bid_close": 1.0, "ask_open": 1.1, "ask_high": 1.1,
+            "ask_low": 1.1, "ask_close": 1.1, "tick_count": 1, "spread_mean": 0.1, "spread_max": 0.1}
+    mine = pd.DataFrame([{"ts_utc": t + pd.Timedelta(minutes=k), "visible_at": t + pd.Timedelta(minutes=k + 1),
+                          **cols} for k in range(3)])
+    eng = type("E", (), {"bars_1m": mine, "_dq_pending": [], "_resamplers": {}, "_ctx_cache": {},
+                         "_bars_clean": None})()
+    bb = broker_bars.BrokerBars()
+    bb.fallback = set(pd.DatetimeIndex(mine["ts_utc"][:2]))
+    monkeypatch.setattr("goldbot.engine.history.queue_minutes", lambda eng, done: None)
+    broker_bars._replace(eng, bb, mine.iloc[:2].assign(bid_close=1.05, bid_high=1.05))
+    [ev] = [e for e in eng._dq_pending if e.check == broker_bars.REPLACED]
+    assert ev.ts_utc == t and I.replaced_count(ev.detail) == 2
+    assert I.replaced_count("minutes replaced") is None and I.replaced_count(None) is None
 
 
 def test_unreadable_replacement_events_leave_every_candidate_of_the_account_unrecomputable(env, tmp_path,
