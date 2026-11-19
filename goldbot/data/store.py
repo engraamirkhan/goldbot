@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import IO, Iterable, Iterator, Literal, Mapping
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -114,6 +115,20 @@ KEY_COLUMNS = {
 }
 
 
+def _flagged_last(rows: pd.DataFrame, sticky: tuple[str, ...]) -> pd.DataFrame:
+    """`rows` (oldest copy first) reordered so that, per ts_utc, the copies flagged in any `sticky` column come after
+    the copies flagged in none, each group in its own order: `drop_duplicates(keep="last")` then keeps the newest
+    flagged copy (its own write time), else the newest copy. Unchanged without `sticky` or without those columns."""
+    cols = [c for c in sticky if c in rows.columns]
+    if not cols:
+        return rows
+    flag = np.zeros(len(rows), dtype=bool)
+    for c in cols:
+        flag |= rows[c].astype("boolean").fillna(False).to_numpy(dtype=bool)
+    order = rows.assign(_flag=flag).sort_values("_flag", kind="stable").sort_values("ts_utc", kind="stable")
+    return order.drop(columns="_flag")
+
+
 def _utc(x: str | pd.Timestamp) -> pd.Timestamp:
     """Naive values are taken as UTC; aware ones are converted (pd.Timestamp(aware, tz=...) raises)."""
     t = pd.Timestamp(x)
@@ -137,17 +152,23 @@ class Store:
 
     # ------------------------------------------------------------------ write
     def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True,
-               keep: Literal["first", "last"] = "last") -> int:
+               keep: Literal["first", "last"] = "last", sticky: str | tuple[str, ...] = ()) -> int:
         """Append rows, de-duplicating against the key columns within each partition.
 
         dedupe=False writes each call as a new part file without reading the partition back: for append-only
         logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost.
         keep="first" keeps a stored row over a new one with the same key (the check and the write under one partition
-        lock, so a concurrent writer never wins over the first copy) and returns only the rows with a new key."""
+        lock, so a concurrent writer never wins over the first copy) and returns only the rows with a new key.
+
+        `sticky` (with dedupe): boolean column(s): a row flagged in any of them is never replaced by a later copy of
+        its key flagged in none (the flagged row stays, with its write time); a newer copy flagged in any still
+        replaces it. Decided under the partition lock, so two writers racing on one key cannot lose a flag
+        (engine/history.py BarWriter: two engines on one broker feed)."""
         if keep not in ("first", "last") or (keep == "first" and not dedupe):
             raise ValueError("keep='first' needs dedupe (it compares with the stored rows)")
         if df.empty:
             return 0
+        flags = (sticky,) if isinstance(sticky, str) else tuple(sticky)
         df = df.copy()
         if "ts_utc" not in df.columns:
             raise ValueError("every table row needs ts_utc")
@@ -171,12 +192,12 @@ class Store:
                     if part.empty:
                         continue
                 if existing is not None and not existing.empty:
-                    merged = pd.concat([existing, part], ignore_index=True)
+                    merged = _flagged_last(pd.concat([existing, part], ignore_index=True), flags)
                     part_out = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns],
                                                       keep="last").sort_values("ts_utc")
                 else:
-                    part_out = part.drop_duplicates(subset=[k for k in keys if k in part.columns], keep="last") \
-                        if dedupe else part
+                    part_out = _flagged_last(part, flags).drop_duplicates(
+                        subset=[k for k in keys if k in part.columns], keep="last") if dedupe else part
                 # new file first (temp name, fsync, atomic rename), old files only after: readers never see an empty
                 # partition; a crash leaves old data or old+new (the next append dedupes by key)
                 self._write_atomic(pdir, part_out)
