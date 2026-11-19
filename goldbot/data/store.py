@@ -114,6 +114,17 @@ KEY_COLUMNS = {
 }
 
 
+def _flagged_last(rows: pd.DataFrame, sticky: str | None) -> pd.DataFrame:
+    """`rows` (oldest copy first) reordered so that, per ts_utc, the copies flagged `sticky` come after the unflagged
+    ones, each group in its own order: `drop_duplicates(keep="last")` then keeps the last flagged copy, else the last
+    copy. Unchanged without `sticky` or without that column."""
+    if sticky is None or sticky not in rows.columns:
+        return rows
+    flag = rows[sticky].astype("boolean").fillna(False).to_numpy(dtype=bool)
+    order = rows.assign(_flag=flag).sort_values("_flag", kind="stable").sort_values("ts_utc", kind="stable")
+    return order.drop(columns="_flag")
+
+
 def _utc(x: str | pd.Timestamp) -> pd.Timestamp:
     """Naive values are taken as UTC; aware ones are converted (pd.Timestamp(aware, tz=...) raises)."""
     t = pd.Timestamp(x)
@@ -136,11 +147,15 @@ class Store:
         return self.table_dir(table) / f"source={source}" / f"symbol={symbol}" / f"year={ts.year}" / f"month={ts.month:02d}"
 
     # ------------------------------------------------------------------ write
-    def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True) -> int:
+    def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True,
+               sticky: str | None = None) -> int:
         """Append rows, de-duplicating against the key columns within each partition.
 
         dedupe=False writes each call as a new part file without reading the partition back: for append-only
-        logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost."""
+        logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost.
+        `sticky` (with dedupe): a boolean column whose True a later copy of the key without it never erases: the row
+        flagged stays, a newer flagged copy still replaces it. Decided under the partition lock, so two writers
+        racing on one key cannot lose the flag (engine/history.py BarWriter: two engines on one broker feed)."""
         if df.empty:
             return 0
         df = df.copy()
@@ -157,12 +172,12 @@ class Store:
                 old_files = sorted(pdir.glob("*.parquet"))
                 existing = self._read_partition(pdir) if dedupe else None
                 if existing is not None and not existing.empty:
-                    merged = pd.concat([existing, part], ignore_index=True)
+                    merged = _flagged_last(pd.concat([existing, part], ignore_index=True), sticky)
                     part_out = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns],
                                                       keep="last").sort_values("ts_utc")
                 else:
-                    part_out = part.drop_duplicates(subset=[k for k in keys if k in part.columns], keep="last") \
-                        if dedupe else part
+                    part_out = _flagged_last(part, sticky).drop_duplicates(
+                        subset=[k for k in keys if k in part.columns], keep="last") if dedupe else part
                 # new file first (temp name, fsync, atomic rename), old files only after: readers never see an empty
                 # partition; a crash leaves old data or old+new (the next append dedupes by key)
                 self._write_atomic(pdir, part_out)
