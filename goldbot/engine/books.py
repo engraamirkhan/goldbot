@@ -52,6 +52,7 @@ from goldbot.engine.instruments_db import (
     terms_from_info,
 )
 from goldbot.engine.store import JsonEngineStore, OrdersSnapshot, RiskSnapshot
+from goldbot.execution.mt5_adapter import TICKS_MANY_MAX
 from goldbot.instruments import GOLD, InstrumentSpec
 
 if TYPE_CHECKING:
@@ -129,6 +130,12 @@ EX_PHASES: tuple[str, ...] = ("reads", "learning", "step", "minutes", "entry", "
 # pending 1m/5m work at most this long (host clock), so a 1m signal stuck in a queue never holds a close's 15m+ entries
 # (60 s stale limit) back; past it, the part runs first
 SLOW_WAIT_S = 20.0
+# QuoteFeed (incident 2026-11-18/19, vantage-demo): a batch this full may be the OLDEST slice of a longer backlog (the
+# bridge's ticks_many is copy_ticks_from(since, TICKS_MANY_MAX)), so its newest tick is not the symbol's newest. Half
+# the cap: the adapter drops the ticks of since's own second, so a truncated batch can come back a few rows short
+QUOTE_BACKLOG_ROWS = TICKS_MANY_MAX // 2
+# ... and with no newer quote known the feed reads from this far back (its first pass, or every symbol a backlog)
+QUOTE_FIRST_LOOKBACK = pd.Timedelta(minutes=1)
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -342,17 +349,51 @@ class QuoteFeed:
     """The pass's quotes for every book in one call (plan: "batched ticks_many(symbols, since) every 500 ms"): the
     newest tick of each symbol from `Broker.ticks_many`, else (an adapter or bridge that does not serve it yet, or a
     read that failed) that symbol's own `last_tick`. A symbol with no new tick keeps its last quote, so the engine's
-    clock and repeat rule see what one `last_tick` poll would. Read-only; `last_tick` raises as the broker's does."""
+    clock and repeat rule see what one `last_tick` poll would. Read-only; `last_tick` raises as the broker's does.
 
-    def __init__(self, broker: Any) -> None:
+    Incident 2026-11-18/19 (vantage-demo): `since` was the OLDEST latest tick of all books, so a closed index (no tick
+    21:59:59..01:00:01 UTC) held it for three hours; ticks_many returns the oldest TICKS_MANY_MAX ticks after `since`,
+    and from 23:15 the engine re-read a gold quote up to 105 min old (software stops and trails ran on it; at 01:00 the
+    catch-up replayed backdated ticks). Design rule: a closed or quiet symbol never holds back another symbol's ticks,
+    and the feed never serves a backlog tick. So `since` is never further back than the newest known tick (capped at
+    `now`: a tick stamped in the future moves nothing) less `stale_s` (risk.stale_tick_seconds: a tick that late is
+    stale for entries anyway); and a symbol whose batch is a backlog (`QUOTE_BACKLOG_ROWS` or more rows, a newest tick
+    older than `stale_s` on the host clock, or older than the quote it already has) takes the terminal's newest quote
+    (`last_tick`) instead, so exits always run on the latest quote, never on replayed ones. Safety review LOW of
+    aa9a046f: when EVERY symbol that ticked is a backlog by age alone (no full batch, none older than its held quote),
+    the broker's stamps run behind the host clock (a wrong server_tz, NTP drift), not a replay: each batch's newest
+    quote is kept and no per-symbol `last_tick` is read (one serial bridge call per book before the exits), logged once
+    per streak; the stale-data rule already blocks the entries."""
+
+    def __init__(self, broker: Any, stale_s: float = 20.0) -> None:
         self.broker = broker
         self.latest: dict[str, Tick] = {}
         self.batched = True
+        self.stale = pd.Timedelta(seconds=stale_s)
+        self._backlog: set[str] = set()     # symbols whose batch was a backlog (logged once per streak)
+        self._skewed = False                # every ticking symbol behind the host clock last pass (logged once)
+
+    def since(self, symbols: list[str], now: pd.Timestamp) -> pd.Timestamp:
+        """The batch's `since`: the oldest latest tick, but never more than `stale_s` before the newest one."""
+        seen = [t.ts_utc for s, t in self.latest.items() if s in symbols]
+        if not seen:
+            return now - QUOTE_FIRST_LOOKBACK
+        return max(min(seen), min(max(seen), now) - self.stale)
+
+    def _backlog_kind(self, symbol: str, ticks: list[Tick], newest: Tick, now: pd.Timestamp) -> str | None:
+        """Why this batch is a backlog: "rows" (it may be cut off), "held" (older than the quote held), "age" (its
+        newest tick older than `stale_s` on the host clock); None when it is not one."""
+        held = self.latest.get(symbol)
+        if len(ticks) >= QUOTE_BACKLOG_ROWS:
+            return "rows"
+        if held is not None and newest.ts_utc < held.ts_utc:
+            return "held"
+        return "age" if newest.ts_utc < now - self.stale else None
 
     def refresh(self, symbols: list[str], now: pd.Timestamp) -> None:
         if not self.batched:
             return
-        since = min((t.ts_utc for s, t in self.latest.items() if s in symbols), default=now - pd.Timedelta(minutes=1))
+        since = self.since(symbols, now)
         try:
             got = self.broker.ticks_many(symbols, since)
         except NotImplementedError:
@@ -363,9 +404,27 @@ class QuoteFeed:
             log.warning("ticks_many failed (%s): one last_tick per symbol this pass", type(exc).__name__)
             self.latest = {}
             return
-        for s, ticks in got.items():
-            if ticks:
-                self.latest[s] = max(ticks, key=lambda t: t.ts_utc)
+        newest = {s: max(ticks, key=lambda t: t.ts_utc) for s, ticks in got.items() if ticks}
+        kinds = {s: self._backlog_kind(s, got[s], t, now) for s, t in newest.items()}
+        skewed = bool(kinds) and all(k == "age" for k in kinds.values())
+        if skewed and not self._skewed:
+            log.warning("ticks_many: every symbol's newest tick is over %s s behind the host clock (%s): broker clock "
+                        "skew, the batch's quotes are kept", self.stale.total_seconds(),
+                        ", ".join(f"{s} {t.ts_utc.isoformat()}" for s, t in sorted(newest.items())))
+        self._skewed = skewed
+        for s, t in newest.items():
+            if kinds[s] is None or skewed:
+                self.latest[s] = t
+                self._backlog.discard(s)
+                continue
+            if s not in self._backlog:
+                self._backlog.add(s)
+                log.warning("ticks_many: %s came back as a backlog (%s: %d ticks, newest %s): its newest quote is read "
+                            "with last_tick", s, kinds[s], len(got[s]), t.ts_utc.isoformat())
+            try:
+                self.latest[s] = self.broker.last_tick(s)
+            except Exception:                 # never the backlog tick: the pass's own last_tick reads (or raises)
+                self.latest.pop(s, None)
 
     def last_tick(self, symbol: str) -> Tick:
         if self.batched and symbol in self.latest:
