@@ -33,8 +33,14 @@ Design rules:
   broker prints 23:00/23:01 UTC in winter, inside the engine's break, and the engine never builds them); a minute it
   observes silent (a weekend, its break) was never an engine minute and is left out, as the engine left it out; a
   live minute of the window stored only after the decision and not among the minutes recomputed (`late_minute`, L1:
-  the engine may have held it whether or not the broker's M1 has it; void); a minute replaced after the decision (flagged on any stored
-  version of a window minute, `engine.history.REPLACED_COL`, read before the as-of filter, K1); a
+  the engine may have held it whether or not the broker's M1 has it; void); a window minute this account's engine
+  flagged `broker_bar_late` that no `broker_bar_replaced` event of its own (first minute at most GIVE_UP before it,
+  its count reaching it) accounts for (`sampled_minute`: the engine kept its sampled bar for good, while the two icm
+  engines share one bars_1m_live key, books.live_key = broker, symbol, and the store keeps the last copy, which may
+  be the other engine's broker bar; every minute of a late span counts; void); a minute replaced after the decision
+  (flagged on any stored version of a window minute, `engine.history.REPLACED_COL`, read before the as-of filter,
+  K1; with sticky flags, fix/engine-minute-store, K1 also sees minutes the other engine on the shared key replaced,
+  which can only add voids); a
   `broker_bar_replaced` event within REPLACE_SPAN before it that the store cannot account for
   (`stored_replacement`: the event says that minutes were replaced, never when; the flagged copy's write time says
   when, and K1 judges it. Events whose spans overlap are accounted for together: each one's own minute flagged and
@@ -106,6 +112,10 @@ ENGINE_VOID_KILL = "bracket integrity: void at entry (engine)"
 # data.account_bars.minute_versions: bars_1m_live, bars_1m_broker (evidence only, never a bar held), the release
 LIVE_RANK, BROKER_M1_RANK, RELEASE_RANK = 0, 1, 3
 _REPLACED_N = re.compile(r"^\s*(\d+) minute")       # broker_bars._replace: "{n} minute(s) from sampled ticks ..."
+BAR_LATE = "broker_bar_late"    # broker_bars._merge's dq check: "{n} minute(s) {first}..{last} from sampled ticks ..."
+_LATE_SPAN = re.compile(r"^\s*\d+ minute\(s\) (\S+ \S+)\.\.(\S+ \S+) ")
+# broker_bars.GIVE_UP (tests hold them equal): a sampled minute not replaced this long after its close stands for good
+LATE_GIVE_UP = pd.Timedelta(minutes=10)
 
 # void causes: the candidate is left out of the read, never refused
 NO_RECOMPUTE = "no_recompute"
@@ -116,6 +126,7 @@ QUARANTINE_UNREADABLE = "quarantine_unreadable"
 REPLACED_MINUTE = "replaced_minute"
 GAP_AFTER_CUTOVER = "gap_after_cutover"
 LATE_MINUTE = "late_minute"   # a live minute in the window stored after the decision, not in the recompute (L1)
+SAMPLED_MINUTE = "sampled_minute"  # a window minute the engine kept sampled for good (broker bar late, never replaced)
 QUARANTINED_MINUTE = "quarantined_minute"
 WINDOW_UNPROVABLE = "window_unprovable"
 NO_BAR = "no_bar_at_decision"
@@ -269,6 +280,20 @@ def replaced_count(detail: Any) -> int | None:
     return int(got.group(1)) if got else None
 
 
+def late_spans(events: Sequence[tuple[int, Any]]) -> list[tuple[int, int]]:
+    """(first, last) minute in epoch ns of each `broker_bar_late` event (its ts in epoch ns, its detail). A detail that
+    does not parse covers the event's own minute only (it is the first sampled minute): never no span."""
+    out: list[tuple[int, int]] = []
+    for ts, detail in events:
+        got = _LATE_SPAN.match(detail) if isinstance(detail, str) else None
+        try:
+            a, b = (int(pd.Timestamp(x).tz_convert("UTC").value) for x in got.groups()) if got else (ts, ts)
+        except (ValueError, TypeError):
+            a, b = ts, ts
+        out.append((min(a, int(ts)), max(b, int(ts))))
+    return sorted(out)
+
+
 def _ns(frame: pd.DataFrame) -> np.ndarray:
     return epoch_ns(pd.DatetimeIndex(pd.to_datetime(frame["ts_utc"], utc=True)))
 
@@ -282,7 +307,7 @@ class AccountMinutes:
 
     def __init__(self, versions: pd.DataFrame, *, quarantined: Sequence[int] = (),
                  replaced: Sequence[tuple[int, int | None]] = (), saved_cutover: int | None = None,
-                 now: pd.Timestamp | None = None):
+                 now: pd.Timestamp | None = None, late: Sequence[tuple[int, int]] = ()):
         v = versions
         m1 = np.zeros(0, dtype=np.int64)
         if "rank" in v.columns:
@@ -313,6 +338,7 @@ class AccountMinutes:
         self.now = None if now is None else pd.Timestamp(now).tz_convert("UTC")
         self.quarantined = np.sort(np.asarray(quarantined, dtype=np.int64))
         self.replaced = sorted((int(m), n) for m, n in replaced)
+        self.late = sorted((int(a), int(b)) for a, b in late)
         # events whose REPLACE_SPAN windows overlap (chained) are accounted for together: (first, last, their counts'
         # sum or None when one does not parse), so one event's flagged minutes never vouch for another's
         self._groups: list[tuple[int, int, int | None]] = []
@@ -346,6 +372,24 @@ class AccountMinutes:
         stamps = set(self.ts[lo:hi][ok].tolist())
         own = {m for m, _ in self.replaced if first <= m <= last}
         return own <= stamps and len(stamps) >= total
+
+    def sampled_for_good(self, wts: np.ndarray, at: pd.Timestamp) -> bool:
+        """Whether a window minute (`wts`, before `at`) is one this engine flagged `broker_bar_late` and no
+        `broker_bar_replaced` event of its own accounts for: an event whose first minute is at most LATE_GIVE_UP before
+        it and whose count reaches it (first + count minutes; an event whose count does not parse reaches nothing).
+        Every minute of a late span is taken as sampled (the event gives its first and last only): fail closed."""
+        if not self.late or not len(wts):
+            return False
+        lo, hi = int(wts.min()), int(at.value)
+        reps = [(m, n) for m, n in self.replaced if n is not None and n > 0]
+        step, give_up = pd.Timedelta(minutes=1).value, LATE_GIVE_UP.value
+        for a, b in self.late:
+            if b < lo or a >= hi:
+                continue
+            for m in wts[(wts >= a) & (wts <= b)].tolist():
+                if not any(e <= m < e + n * step and m - e <= give_up for e, n in reps):
+                    return True
+        return False
 
     def observed(self, lo: int, hi: int) -> bool:
         """Whether the broker's M1 observes [lo, hi] (BROKER_SILENCE_MAX): a bar at or before `lo`, one at or after
@@ -413,7 +457,8 @@ class AccountMinutes:
         win = seen.tail(need)
         wts = epoch_ns(pd.DatetimeIndex(pd.to_datetime(win["ts_utc"], utc=True)))
         # K1: on every stored version of the window, before the as-of filter (which drops a replacement written
-        # after the decision): a minute replaced after `at` was not what the engine held
+        # after the decision): a minute replaced after `at` was not what the engine held. With sticky flags
+        # (fix/engine-minute-store) it also sees minutes the other engine on the shared live key replaced: only voids
         if "replaced" in self.v.columns and "written_at" in self.v.columns:
             span_v = self.v.iloc[int(np.searchsorted(self.ts, int(wts.min()), side="left")):hi]
             flagged = span_v["replaced"].astype("boolean").fillna(False).to_numpy(dtype=bool)
@@ -432,6 +477,10 @@ class AccountMinutes:
             part = self.ts[lo_w:hi][self.v["rank"].to_numpy()[lo_w:hi] == LIVE_RANK]
             if len(np.setdiff1d(part, wts)):
                 return LATE_MINUTE
+        # the shared live key (books.live_key = broker, symbol; the store keeps the last copy): a minute this engine
+        # kept sampled for good may be stored as the other engine's broker bar, never what this engine held
+        if self.sampled_for_good(wts, at):
+            return SAMPLED_MINUTE
         # Q1: the window's minutes not all in the store yet (the last one is the minute before `at`)
         if len(win) < need or int(wts.max()) < int((at - pd.Timedelta(minutes=1)).value):
             return WINDOW_INCOMPLETE
@@ -501,6 +550,9 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
         details = [] if hit is None else (hit["detail"] if "detail" in hit.columns else [None] * len(hit))
         replaced: list[tuple[int, int | None]] = [] if hit is None else \
             list(zip(_ns(hit).tolist(), [replaced_count(d) for d in details], strict=True))
+        lat = dq[dq["check"].astype(str) == BAR_LATE] if dq is not None and not dq.empty else None
+        late = [] if lat is None or lat.empty else late_spans(list(zip(
+            _ns(lat).tolist(), lat["detail"] if "detail" in lat.columns else [None] * len(lat), strict=True)))
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
         log.error("arm integrity: %s dq_events unreadable (%s)", account, type(exc).__name__)
         return DQ_UNREADABLE
@@ -513,7 +565,7 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
         log.error("arm integrity: %s quarantine unreadable (%s)", account, type(exc).__name__)
         return QUARANTINE_UNREADABLE
-    return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now)
+    return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now, late=late)
 
 
 def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: pd.Timestamp,
@@ -734,7 +786,7 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
 
 
 __all__ = ["BRACKET_RETIRE_N", "BRACKET_VOID_ACTION", "BROKER_SILENCE_MAX", "CAPABILITY", "CAPABLE_ACTION",
-           "CONTROL_CHANGED_ACTION", "COVERAGE_WAIT", "CUTOVER_UNREADABLE", "NO_BROKER_COVERAGE", "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "GAP_AFTER_CUTOVER", "LATE_MINUTE",
+           "CONTROL_CHANGED_ACTION", "COVERAGE_WAIT", "CUTOVER_UNREADABLE", "NO_BROKER_COVERAGE", "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "GAP_AFTER_CUTOVER", "LATE_MINUTE", "SAMPLED_MINUTE",
            "JOURNAL_ACTIONS", "JOURNAL_COLS", "LOADED_ACTION", "MINUTES_UNREADABLE", "NO_BAR", "NO_MINUTES",
            "NO_RECOMPUTE", "QUARANTINED_MINUTE", "QUARANTINE_UNREADABLE", "READ_DAYS", "REFUSAL_CAUSES",
            "REPLACED_MINUTE", "REPLACE_SPAN", "UNVERIFYING", "WINDOW_INCOMPLETE", "WINDOW_UNPROVABLE",

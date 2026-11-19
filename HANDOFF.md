@@ -43,7 +43,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the 2 min live-write grace) and not among the minutes recomputed voids the candidate (`late_minute`), whether or
   not the broker's M1 has a bar there. (4) A broker M1 minute the engine's bar table (`DEFAULT_SESSIONS.is_open`)
   closes, e.g. 23:00/23:01 UTC in winter, is never a `gap_after_cutover` (the simulation's ~80% of remaining 1h
-  voids). Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
+  voids). (5) Engine finding: both icm engines store gold minutes under one bars_1m_live key and the
+  store keeps the last copy; a window minute this account's engine flagged `broker_bar_late` with no
+  `broker_bar_replaced` of its own within GIVE_UP (10 min) voids (`sampled_minute`), every minute of a late span
+  counted; K1's docstring notes sticky flags (fix/engine-minute-store) can only add voids. Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
 - 2026-11-18 arm lifecycle, builds 2 and 3 (owner directive "find, deploy, measure, promote and retire strategies by
   itself"; rule docs/research/arm-lifecycle-2026-11-18.md, revised by the quant, trading-safety and code reviews).
   Build 3: aux.db `arm_registry` (migration 37, append-only, hash-chained; the verified tip kept in core.db

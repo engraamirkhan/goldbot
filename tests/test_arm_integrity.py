@@ -764,3 +764,59 @@ def test_broker_m1_bars_in_the_engines_daily_break_are_never_a_gap():
     assert m.cutover_cause(own, int(own.min()), at) is None
     lost = own[own != int(pd.Timestamp("2025-01-15 01:00", tz="UTC").value)]
     assert m.cutover_cause(lost, int(own.min()), at) == I.GAP_AFTER_CUTOVER
+
+
+def _late_detail(stamps: pd.DatetimeIndex) -> str:
+    """broker_bars._merge's `broker_bar_late` detail, verbatim."""
+    return (f"{len(stamps)} minute(s) {stamps[0]}..{stamps[-1]} from sampled ticks: the "
+            "broker's 1m bar was late or missing; replaced when it arrives")
+
+
+def test_a_late_minute_never_replaced_voids_the_window_on_the_shared_live_key(env, tmp_path):
+    """Engine finding: both icm engines store gold minutes under one bars_1m_live key and the store keeps the last
+    copy. An engine whose broker bar never came keeps its sampled minute for good (`broker_bar_late`, no
+    `broker_bar_replaced`), while the stored copy may be the other engine's broker bar: the night cannot recompute on
+    what this engine held, so a window holding such a minute is void (`sampled_minute`). Replaced within GIVE_UP
+    (the engine swapped the broker's bar in, K1 judges when): not this void."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    i = live.index[-60]                                     # outside REPLACE_SPAN: only the late event matters
+    stamp = pd.DatetimeIndex([pd.Timestamp(live.loc[i, "ts_utc"])])
+    ns = int(stamp[0].value)
+    late = I.late_spans([(ns, _late_detail(stamp))])
+    assert late == [(ns, ns)]
+    assert I.LATE_GIVE_UP == broker_bars.GIVE_UP
+    v = _sorted(live, _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, late=late).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    assert I.SAMPLED_MINUTE not in I.REFUSAL_CAUSES and I.SAMPLED_MINUTE not in I.UNVERIFYING
+    held = I.AccountMinutes(v, late=late, replaced=[(ns, 1)]).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    # a replacement event for a minute more than GIVE_UP before the late one accounts for nothing
+    early = ns - int((broker_bars.GIVE_UP + pd.Timedelta(minutes=1)).value)
+    assert I.AccountMinutes(v, late=late, replaced=[(early, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    # a late span over three minutes: each must be replaced
+    three = pd.DatetimeIndex(pd.to_datetime(live.loc[[i, i + 1, i + 2], "ts_utc"], utc=True))
+    span = I.late_spans([(int(three[0].value), _late_detail(three))])
+    assert I.AccountMinutes(v, late=span, replaced=[(ns, 2)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    held = I.AccountMinutes(v, late=span, replaced=[(ns, 3)]).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame)
+    # a detail that does not parse covers its own minute: still void, never ok
+    assert I.late_spans([(ns, "garbled")]) == [(ns, ns)]
+    # a late minute outside the window changes nothing
+    old = int(pd.Timestamp(live.loc[live.index[0], "ts_utc"]).value) - 10**12
+    held = I.AccountMinutes(v, late=[(old, old)]).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame)
+
+
+def test_the_night_reads_the_accounts_late_events_from_dq_events(env, tmp_path):
+    eng, arm, _ = _held(env, tmp_path)
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True))
+    store.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    store.append(crossfeed.BROKER_TABLE, minutes, source="icm-probe", symbol="XAUUSD")
+    stamp = pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+    ev = pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
+                       "detail": [_late_detail(stamp)]})
+    store.append("dq_events", ev, source="icm-probe", symbol="XAUUSD", dedupe=False)
+    got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1))
+    assert got(arm, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.SAMPLED_MINUTE
