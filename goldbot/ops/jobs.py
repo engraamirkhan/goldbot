@@ -57,7 +57,8 @@
                     agent and research analyst read (`read_attribution`). Reporting only: changes nothing.
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
-                    state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
+                    state/reconcile_<account>.json (health check reconcile:<account>). Then re-pulls the broker M1's
+                    holes over the last 7 days (crossfeed.BACKFILL_MAX; never graded). Skipped without a broker.
 * broker_ledger     daily (finance audit GAP-07/GAP-08, RC-8/RC-9): per account, read-only, a balance snapshot (balance,
                     equity, margin, currency) and the deposits, withdrawals and adjustments in the broker's deal history,
                     the balance tied out against the deals, and goldbot's closed records and open trades reconciled

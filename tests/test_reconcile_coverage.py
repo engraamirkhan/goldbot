@@ -91,7 +91,8 @@ def test_reconcile_account_fetches_the_window_by_range_and_matches(tmp_path):
     store = _store_with(tmp_path, _sampled_some(ticks))
     broker = RangeBroker(as_broker_m1(ticks_to_1m(ticks)))
     rep = cf.reconcile_account(store, broker, "icm-demo", "XAUUSD", NOW, state_dir=tmp_path)
-    assert broker.ranges == [(START, NOW - pd.Timedelta(minutes=1))] and broker.calls == []   # range, inclusive
+    assert broker.ranges[0] == (START, NOW - pd.Timedelta(minutes=1)) and broker.calls == []   # range, inclusive
+    assert all(e < START for _, e in broker.ranges[1:])     # then the M1 back-fill of the days before (test_m1_backfill)
     assert rep.broker_fetch == "range"
     assert rep.matched == rep.engine_minutes == rep.broker_minutes > 1000
     assert rep.missing_broker == 0 and rep.close_mismatch == 0 and rep.close_lag > 0 and rep.severity == "ok"

@@ -24,6 +24,8 @@
   python -m goldbot.ops.run mail-test                    # one test email to auth.owner_email (email sign-in setup)
   python -m goldbot.ops.run broker-history-depth <account_id> [--tf 1m,1h,1d] [--n TF=N]
                                                          # earliest bar the MT5 server serves per timeframe; read-only
+  python -m goldbot.ops.run m1-backfill (--all | <account_id> ...) [--days 100] [--pause-s 1]
+                                                         # the broker's M1 (bars_1m_broker) back-filled; read-only
   python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
                                                          # time-weighted % return, R, drawdown, avg per day, milestones
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds

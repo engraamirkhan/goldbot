@@ -2379,6 +2379,28 @@ the broker's) and the broker ledger (`broker_ledger`). The feed part:
   stored no bars for most of its run. Check `bridge:<account>`, the MT5 terminal's connection and the engine log,
   then restart the bridge and the engine.
 * **fail** with "the engine stored no ticks in the window": the engine collected nothing for a whole trading day.
+* A note "broker M1 back-fill ..." (and a `reconcile_backfill_failed` warning in dq_events): besides its 24 h check,
+  each run re-pulls, newest day first, any day of the last 7 whose stored broker M1 (`bars_1m_broker`) has holes (a
+  missed or late run, a short broker reply), one bridge call per day within 2 minutes per account. It is never
+  graded. A failed call is tried again the next weekday run; nothing to do unless it repeats (check `bridge:<account>`).
+
+#### Broker M1 back-fill by hand (`m1-backfill`)
+
+The nightly discovered-arm read needs the broker's M1 to cover each decision's whole window (a 4h arm: about 42
+trading days) with no hole over 2 h of open minutes, else the arm stays unverified (`no_broker_coverage`). The nightly
+run only reaches back 7 days, so after an outage longer than that, and once to fill the history from before the
+back-fill existed, run on the brain:
+
+```
+sudo -u goldbot sh -c 'cd /opt/goldbot && .venv/bin/python -m goldbot.ops.run m1-backfill --all --days 100'
+```
+
+Read-only on the broker (one call per UTC day with holes, 1 s apart; `--pause-s` changes it), safe next to the
+running engine and scheduler, and safe to run again: it writes only minutes not stored yet (each with its write time),
+and a day already stored is never asked again. One line per account: minutes added, days pulled, the first stored
+minute and the longest hole left. A hole left at the start means the terminal does not serve M1 that far back (its
+"Max bars in chart" setting, or the broker's history); `broker-history-depth <account> --tf 1m` shows how far it
+goes. Exit 1 when a call failed: run it again.
 
 The ledger part:
 

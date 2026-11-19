@@ -26,6 +26,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `since` is before the amendment's effective day; `EFFECTIVE_UTC` now lives in `research.arm_rules_spec` (same
   value) and registration imports it. Kill rules, caps, the prereg, `EFFECTIVE_UTC` and `LIFECYCLE_READY` are
   unchanged.
+- 2026-11-19 broker M1 back-fill and two arm-integrity follow-ups (quant review of fix/arm-integrity-voids, M1 and L1;
+  SRE brain simulation of 0d8543ae). (1) `feed_reconcile` pulled only the last 24 h, so a missed or late run, or a
+  short broker reply, left a permanent hole in `bars_1m_broker` and held every 4h discovered arm unverified
+  (`no_broker_coverage`) for weeks. Each run now also re-pulls, newest UTC day first, every day from 7 days before
+  the run up to its window whose stored M1 lacks more than 5 open minutes (one bridge call per day, at most 120 s per
+  account; goldbot/data/crossfeed.py `backfill_broker_m1`, BACKFILL_MAX/SLACK/BUDGET_S). It is never graded and emits
+  no divergence event: the 24 h report, its counts and dq_events mean what they meant. A failed call is one
+  `reconcile_backfill_failed` warning and a report note; the next run tries again. Every write of `bars_1m_broker`
+  (the window's too) now keeps the first stored copy of a minute and its write time: a re-pull or re-run never
+  overwrites a stored minute. (2) By hand: `python -m goldbot.ops.run m1-backfill --all --days 100`
+  (goldbot/ops/m1_backfill.py, RUNBOOK "Broker M1 back-fill by hand"): the same back-fill over READ_DAYS, paced 1 s
+  per call, idempotent. Owner/SRE step: run it once on the brain to fill the history from before the back-fill
+  (bars_1m_broker starts mid-to-late October per account, with multi-hour holes 10-21..10-26; a 4h window is about
+  42 trading days, so it must reach mid-September). (3) L1: a live window minute stored after the decision (beyond
+  the 2 min live-write grace) and not among the minutes recomputed voids the candidate (`late_minute`), whether or
+  not the broker's M1 has a bar there. (4) A broker M1 minute the engine's bar table (`DEFAULT_SESSIONS.is_open`)
+  closes, e.g. 23:00/23:01 UTC in winter, is never a `gap_after_cutover` (the simulation's ~80% of remaining 1h
+  voids). Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
 - 2026-11-18 arm lifecycle, builds 2 and 3 (owner directive "find, deploy, measure, promote and retire strategies by
   itself"; rule docs/research/arm-lifecycle-2026-11-18.md, revised by the quant, trading-safety and code reviews).
   Build 3: aux.db `arm_registry` (migration 37, append-only, hash-chained; the verified tip kept in core.db
