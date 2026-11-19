@@ -29,8 +29,11 @@ Design rules:
   tried again; still not COVERAGE_WAIT later: `no_broker_coverage`), or pulled past it but not observing the window
   (BROKER_SILENCE_MAX: a missed pull, `no_broker_coverage`, unverified and told), or a window minute it has that the
   stored minutes lack as of the decision (`gap_after_cutover`: the engine may have held it and its write been lost
-  or late; the window's last minute too); a minute it observes silent (a weekend, its break) was never an engine
-  minute and is left out, as the engine left it out; a minute replaced after the decision (flagged on any stored
+  or late; the window's last minute too; only a minute the engine's bar table `DEFAULT_SESSIONS.is_open` opens: the
+  broker prints 23:00/23:01 UTC in winter, inside the engine's break, and the engine never builds them); a minute it
+  observes silent (a weekend, its break) was never an engine minute and is left out, as the engine left it out; a
+  live minute of the window stored only after the decision and not among the minutes recomputed (`late_minute`, L1:
+  the engine may have held it whether or not the broker's M1 has it; void); a minute replaced after the decision (flagged on any stored
   version of a window minute, `engine.history.REPLACED_COL`, read before the as-of filter, K1); a
   `broker_bar_replaced` event within REPLACE_SPAN before it that the store cannot account for
   (`stored_replacement`: the event says that minutes were replaced, never when; the flagged copy's write time says
@@ -112,6 +115,7 @@ DQ_UNREADABLE = "dq_unreadable"
 QUARANTINE_UNREADABLE = "quarantine_unreadable"
 REPLACED_MINUTE = "replaced_minute"
 GAP_AFTER_CUTOVER = "gap_after_cutover"
+LATE_MINUTE = "late_minute"   # a live minute in the window stored after the decision, not in the recompute (L1)
 QUARANTINED_MINUTE = "quarantined_minute"
 WINDOW_UNPROVABLE = "window_unprovable"
 NO_BAR = "no_bar_at_decision"
@@ -301,6 +305,11 @@ class AccountMinutes:
         self.v = v[~after].reset_index(drop=True)
         self.ts = ts[~after]
         self.broker_m1 = m1
+        # the broker's M1 minutes the engine's bar table opens (DEFAULT_SESSIONS.is_open, engine.history: the table its
+        # minutes are built on): the broker prints 23:00/23:01 UTC in winter, inside the engine's daily break, and the
+        # engine never builds those (SRE brain simulation of 0d8543ae: ~80% of the 1h voids). Only these can be a gap
+        self.broker_m1_open = m1[np.asarray(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(pd.to_datetime(m1, utc=True))),
+                                            dtype=bool)] if len(m1) else m1
         self.now = None if now is None else pd.Timestamp(now).tz_convert("UTC")
         self.quarantined = np.sort(np.asarray(quarantined, dtype=np.int64))
         self.replaced = sorted((int(m), n) for m, n in replaced)
@@ -379,7 +388,8 @@ class AccountMinutes:
             return NO_BROKER_COVERAGE if late else WINDOW_INCOMPLETE
         if not self.observed(lo, hi):
             return NO_BROKER_COVERAGE
-        inside = m1[(m1 >= lo) & (m1 <= hi)]
+        opened = self.broker_m1_open
+        inside = opened[(opened >= lo) & (opened <= hi)]
         return GAP_AFTER_CUTOVER if len(np.setdiff1d(inside, own)) else None
 
     def held(self, arm: Arm, at: pd.Timestamp) -> pd.DataFrame | str:
@@ -414,6 +424,14 @@ class AccountMinutes:
         # completeness check: a lost last minute the broker had is a gap, not forever incomplete)
         if (why := self.cutover_cause(wts, int(wts.min()), at)) is not None:
             return why
+        # L1: a live minute of the window stored only after the decision (beyond the live-write grace, so the as-of
+        # read dropped it) and not among the minutes recomputed: the engine may have held it, so its window is not
+        # shown to equal the recompute's. Proven by the store itself, broker M1 or not: void
+        if "rank" in self.v.columns:
+            lo_w = int(np.searchsorted(self.ts, int(wts.min()), side="left"))
+            part = self.ts[lo_w:hi][self.v["rank"].to_numpy()[lo_w:hi] == LIVE_RANK]
+            if len(np.setdiff1d(part, wts)):
+                return LATE_MINUTE
         # Q1: the window's minutes not all in the store yet (the last one is the minute before `at`)
         if len(win) < need or int(wts.max()) < int((at - pd.Timedelta(minutes=1)).value):
             return WINDOW_INCOMPLETE
@@ -716,7 +734,7 @@ def integrity(db: Database | None, obs: pd.DataFrame, arm: Arm, *, broker: str, 
 
 
 __all__ = ["BRACKET_RETIRE_N", "BRACKET_VOID_ACTION", "BROKER_SILENCE_MAX", "CAPABILITY", "CAPABLE_ACTION",
-           "CONTROL_CHANGED_ACTION", "COVERAGE_WAIT", "CUTOVER_UNREADABLE", "NO_BROKER_COVERAGE", "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "GAP_AFTER_CUTOVER",
+           "CONTROL_CHANGED_ACTION", "COVERAGE_WAIT", "CUTOVER_UNREADABLE", "NO_BROKER_COVERAGE", "DQ_UNREADABLE", "ENGINE_MINUTES", "ENGINE_VOID_KILL", "GAP_AFTER_CUTOVER", "LATE_MINUTE",
            "JOURNAL_ACTIONS", "JOURNAL_COLS", "LOADED_ACTION", "MINUTES_UNREADABLE", "NO_BAR", "NO_MINUTES",
            "NO_RECOMPUTE", "QUARANTINED_MINUTE", "QUARANTINE_UNREADABLE", "READ_DAYS", "REFUSAL_CAUSES",
            "REPLACED_MINUTE", "REPLACE_SPAN", "UNVERIFYING", "WINDOW_INCOMPLETE", "WINDOW_UNPROVABLE",

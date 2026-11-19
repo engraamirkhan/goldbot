@@ -721,3 +721,46 @@ def test_a_retired_spec_hash_never_registers_again_and_writes_no_k_row(env):
     assert len(registry_rows(env)) == k_before                              # no K row for a refused re-registration
     other = register(env, 1)                                                # another spec: a new registration
     assert other.k_id != first.k_id and len(registry_rows(env)) == k_before + 2   # its K row and its NOT_TRIAL row
+
+
+# ---------------------------------------------------------------- quant review of 0d8543ae (L1) and the SRE simulation
+def test_a_live_minute_written_after_the_decision_that_the_recompute_did_not_use_voids_the_candidate(env, tmp_path):
+    """L1 (residual fail-open): a window minute the engine may have held, whose store write came after the decision
+    (beyond the live-write grace), is dropped by the as-of filter. Where the broker's M1 has no bar at it either, the
+    gap test cannot see it, and the window read one minute short ended in a verdict. The stored version proves a
+    minute existed: the engine's window cannot be shown to equal the recompute's, so the candidate is void."""
+    eng, arm, engine = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    i = live.index[-30]
+    late = live.copy()
+    late.loc[i, ["written_at", "visible_at"]] = CLOSE + pd.Timedelta(minutes=10)
+    m1 = _m1(eng.bars_1m.drop(index=[i]))                   # the broker's M1 silent at that minute
+    assert I.AccountMinutes(_sorted(late, m1)).held(arm, CLOSE) == I.LATE_MINUTE
+    assert I.LATE_MINUTE not in I.REFUSAL_CAUSES and I.LATE_MINUTE not in I.UNVERIFYING
+    held = I.AccountMinutes(_sorted(live, m1)).held(arm, CLOSE)         # written on time: the window is provable
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+    # a late copy of a minute that also has a version visible at the decision changes nothing the recompute used
+    again = pd.concat([live, live.loc[[i]].assign(written_at=CLOSE + pd.Timedelta(minutes=10),
+                                                   visible_at=CLOSE + pd.Timedelta(minutes=10))])
+    held = I.AccountMinutes(_sorted(again, m1)).held(arm, CLOSE)
+    assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
+
+
+def test_broker_m1_bars_in_the_engines_daily_break_are_never_a_gap():
+    """SRE brain simulation of 0d8543ae: the broker's M1 prints 23:00 and 23:01 UTC in winter, which the engine's
+    session table (DEFAULT_SESSIONS.is_open, the table its bars are built on) calls the daily break, so the engine
+    never builds them. They are not minutes the engine lacks: no `gap_after_cutover`. An open minute it lacks still
+    is one."""
+    from goldbot.data.calendar import DEFAULT_SESSIONS
+    grid = pd.date_range("2025-01-14 19:00", "2025-01-15 03:00", freq="min", tz="UTC", inclusive="left")
+    engine = grid[DEFAULT_SESSIONS.is_open(grid)]
+    brk = pd.DatetimeIndex([pd.Timestamp("2025-01-14 23:00", tz="UTC"), pd.Timestamp("2025-01-14 23:01", tz="UTC")])
+    assert not DEFAULT_SESSIONS.is_open(brk).any() and not brk.isin(engine).any()
+    broker = engine.append(brk).sort_values()
+    at = pd.Timestamp("2025-01-15 03:00", tz="UTC")
+    v = _sorted(pd.DataFrame({"ts_utc": engine, "rank": 0}), pd.DataFrame({"ts_utc": broker, "rank": 1}))
+    m = I.AccountMinutes(v)
+    own = epoch_ns(engine)
+    assert m.cutover_cause(own, int(own.min()), at) is None
+    lost = own[own != int(pd.Timestamp("2025-01-15 01:00", tz="UTC").value)]
+    assert m.cutover_cause(lost, int(own.min()), at) == I.GAP_AFTER_CUTOVER
