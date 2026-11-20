@@ -66,6 +66,10 @@ MI_PAIRS = {a.account_id: {f"{g}-{k}" for k in a.instruments for g in ("LB", "LB
 # refused without their K rows like every learning pair
 REDBOX = {"icm-probe": {"RB15", "RB1H", "RB4H"}, "icm-demo": set(), "vantage-demo": set(), "vantage-247": set()}
 REDBOX_CONTROLS = {k: {"RBC" + a.removeprefix("RB") for a in v} for k, v in REDBOX.items()}
+# GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): a learning arm and its replay-only control per ICM host,
+# refused without their K rows like every learning pair
+GD1 = {"icm-demo": {"GD1D"}, "icm-probe": {"GD1P"}, "vantage-demo": set(), "vantage-247": set()}
+GD1_CONTROLS = {k: {a[:3] + "C" + a[3:] for a in v} for k, v in GD1.items()}
 NO_REGISTRY = Path("/nonexistent/research_registry.jsonl")
 # retired 2026-11-06 (spec rows; prereg-amendment-2026-11-06-control-thinning.md, a5-signoff-2026-11-06.md): neither
 # running nor in the qualification view's refused list (a retirement is its own refusal); still configured
@@ -232,12 +236,13 @@ def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_sto
 
 
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
-    dedicated = set().union(*LEARNING_CONTROLS.values()) | MI_CONTROLS | set().union(*REDBOX_CONTROLS.values())
+    dedicated = set().union(*LEARNING_CONTROLS.values()) | MI_CONTROLS | set().union(*REDBOX_CONTROLS.values()) \
+        | set().union(*GD1_CONTROLS.values())
     assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS) | dedicated
     assert {i for i, a in spec.items() if a.role == "cost"} == set(COSTS)
     assert {i for i, a in spec.items() if a.role == "owner_experiment"} == OWNER_EXPERIMENTS
     assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values()) | MI_ARMS \
-        | set().union(*REDBOX.values())
+        | set().union(*REDBOX.values()) | set().union(*GD1.values())
     for arm_id, a in spec.items():
         if a.role == "owner_experiment":
             assert (a.entry_refused == "") == (pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL), arm_id
@@ -373,7 +378,8 @@ def test_the_runtime_qualification_view_matches_the_engine_per_account(_no_regis
     for account_id, (running, refused) in view.items():
         assert set(running) == RUNNING[account_id] - RETIRED
         assert set(refused) == (NEWLY_REFUSED[account_id] | LEARNING_CONTROLS[account_id] | MI_PAIRS[account_id]
-                                | REDBOX[account_id] | REDBOX_CONTROLS[account_id]) - RETIRED
+                                | REDBOX[account_id] | REDBOX_CONTROLS[account_id] | GD1[account_id]
+                                | GD1_CONTROLS[account_id]) - RETIRED
 
 
 # ------------------------------------------------------------------------------------------------ the cost read's end

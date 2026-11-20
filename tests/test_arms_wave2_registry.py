@@ -46,6 +46,7 @@ FORWARD_ONLY |= INSTRUMENT_CONTROLS
 FORWARD_ONLY |= MI_ARMS | MI_CONTROLS          # the multi-instrument learning pairs (retired ones included)
 FORWARD_ONLY |= {"VEX15", "VEX1H", "IEX15", "IEX1H"}   # execution controls (prereg-amendment-2026-11-10)
 FORWARD_ONLY |= {"RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}   # the red-box week (prereg-amendment-2026-11-15)
+FORWARD_ONLY |= {"GD1D", "GD1P", "GD1CD", "GD1CP"}     # GD-1 A1 on demo (prereg-amendment-2026-11-20-gd1-asia-learning)
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),

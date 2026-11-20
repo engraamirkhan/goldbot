@@ -44,6 +44,8 @@ EXECUTION_VANTAGE = {"VEX15", "VEX1H"}
 VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV", "LCZ6V", "LCZ7V"}
 # the red-box week on icm-probe (prereg-amendment-2026-11-15-redbox-week.md): 3 learning arms, 3 replay-only controls
 REDBOX = {"RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}
+# GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): one learning arm and its replay-only control per ICM host
+GD1_DEMO, GD1_PROBE = {"GD1D", "GD1CD"}, {"GD1P", "GD1CP"}
 WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
 # multi-instrument demo (lane L3): each listed instrument's random controls, on the account that lists it
 # owner decision 2026-11-04: icm-probe keeps 14 of its 19, vantage-demo trades the 10 added instruments
@@ -89,7 +91,7 @@ def test_icm_demo_ships_as_the_intraday_swing_and_h81_scalp_learning_host(accs):
     assert acc.enabled and acc.mode == "demo" and acc.probe_only and acc.login is None
     # demo-limits ADR 0072 (2026-11-02): host cap 24 (23 open), pots slots only; the £198 budget is unchanged
     assert not acc.shadow_host and not acc.cost_probe.enabled and acc.max_positions == 24
-    assert ex.enabled and set(ex.arms) == INTRADAY | SWING | DEMO_SCALP | GROWTH | EXECUTION_ICM \
+    assert ex.enabled and set(ex.arms) == INTRADAY | SWING | DEMO_SCALP | GROWTH | EXECUTION_ICM | GD1_DEMO \
         and set(ex.pots) == {"scalp", "intraday", "swing", "growth"}
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in DEMO_SCALP} == {("scalp", 6.5)}
     assert ex.budget_share * 220 == pytest.approx(198, abs=0.05) and ex.max_open_total == 23
@@ -102,8 +104,8 @@ def test_icm_probe_ships_the_scalp_arms_and_the_cost_probes(accs):
     # demo-limits ADR 0072 (2026-11-02): the probe sleeve £30 -> £52; the scalp pot slots only, 23 of 24 host slots
     assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
     # learning-mi-2026-11-02.md and lane L3: the multi-instrument pairs and controls beside the scalp arms
-    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"] | REDBOX
-    assert set(ex.pots) == {"scalp", "intraday"}
+    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"] | REDBOX | GD1_PROBE
+    assert set(ex.pots) == {"scalp", "intraday", "swing"}               # swing: GD1P's one slot (2026-11-20)
     assert ex.pots["scalp"].gbp is None and ex.max_open_total == 23      # one slot of 24 kept for the scheduled probe
     assert ex.budget_share * 220 == pytest.approx(168, abs=0.05)
 
@@ -118,7 +120,7 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
     assert set(seen) == (SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
                          | EXECUTION_ICM | EXECUTION_VANTAGE | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"]
-                         | REDBOX)
+                         | REDBOX | GD1_DEMO | GD1_PROBE)
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):

@@ -47,6 +47,8 @@ ARM_SPEC_IDS |= {f"{g}-{k}" for k in registry().instruments if k != "XAUUSD" for
 ARM_SPEC_IDS |= {"VEX15", "VEX1H", "IEX15", "IEX1H"}
 # the red-box week (docs/research/prereg-amendment-2026-11-15-redbox-week.md): 3 learning arms, 3 replay-only controls
 ARM_SPEC_IDS |= {"RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}
+# GD-1 A1 (docs/research/prereg-amendment-2026-11-20-gd1-asia-learning.md): 2 learning arms, 2 replay-only controls
+ARM_SPEC_IDS |= {"GD1D", "GD1P", "GD1CD", "GD1CP"}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:

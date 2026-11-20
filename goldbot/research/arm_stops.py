@@ -15,6 +15,10 @@ The rules, as registered and built here:
 * F1C/G1C "stop with" F1A/G1A (prereg-2026-10-26-time-structure.md 2.2, 3.2); every other control never stops.
 * Z 4 "Cost stop per stratum (independent of R). At >= 30 fills, if the 95% UB of signal-time cost per R is > 0.10,
   the stratum's share is halved (ADR 0047 ladder). Above 0.20 it is suspended until a dated amendment."
+* One-off safety checks at a fill count (`Safety`, a unit's `safety` list): WFRI's (time-structure 4) and GD-1 A1's
+  (prereg-amendment-2026-11-20-gd1-asia-learning.md section 5): "kill if realised round-trip cost > 1.1 bp after 40
+  fills; kill if mean net <= -4 bp at 120 fills; at 250 fills continue only if mean net >= +3.5 bp". Each is judged
+  once, on the unit's first `at` fills (a bp figure on its first `at` readable ones), and a later fill never undoes it.
 
 A stop only refuses an arm's NEW entries (aux.db `exploration_arm_status`, written by the daily review, read by the
 engine) and a halved share only lowers its room for new entries: nothing here reads or changes an open position.
@@ -30,7 +34,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import pandas as pd
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from goldbot.base import FrozenRecord
 
@@ -44,11 +48,23 @@ COST_SCALE: dict[str, float] = {"ok": 1.0, "halved": 0.5, "suspended": 0.0}
 
 
 class Safety(FrozenRecord):
-    """time-structure 4 (WFRI): "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the
-    cumulative net <= -10 R." Checked once, at the `at`-th admissible fill (every fill, as the R stop counts them)."""
+    """A one-off check at the `at`-th admissible fill (every fill, as the R stop counts them). time-structure 4 (WFRI):
+    "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the cumulative net <= -10 R." GD-1 A1
+    (prereg-amendment-2026-11-20-gd1-asia-learning.md section 5): "kill if realised round-trip cost > 1.1 bp after 40
+    fills; kill if mean net <= -4 bp at 120 fills; at 250 fills continue only if mean net >= +3.5 bp". A bp figure
+    (net `Fill.bp`, cost `Fill.cost_bp`) is the mean of the first `at` fills where it is readable, so the check waits
+    for `at` readable ones (never judged on fewer); the cumulative R is over the first `at` fills."""
     at: int = Field(gt=0)
-    mean_bp_le: float
-    cum_r_le: float
+    mean_bp_le: float | None = None             # stop when the mean net bp is at or below this
+    mean_bp_lt: float | None = None             # "continue only if the mean net bp >= x": stop below x
+    cum_r_le: float | None = None               # stop when the cumulative net R is at or below this
+    cost_bp_gt: float | None = None             # stop when the mean realised round trip in bp is above this
+
+    @model_validator(mode="after")
+    def _some_threshold(self) -> Safety:
+        if all(v is None for v in (self.mean_bp_le, self.mean_bp_lt, self.cum_r_le, self.cost_bp_gt)):
+            raise ValueError(f"a safety check at {self.at} fills names no threshold")
+        return self
 
 
 class Fill(NamedTuple):
@@ -58,6 +74,7 @@ class Fill(NamedTuple):
     counted: bool                               # counted toward the read (not void as evidence)
     arm: str                                    # its stratum
     bp: float | None = None                     # net return in basis points of the entry notional
+    cost_bp: float | None = None                # realised round trip in bp of the fill price (`realised_cost_bp`)
 
 
 class StopUnit(FrozenRecord):
@@ -68,8 +85,14 @@ class StopUnit(FrozenRecord):
     futility_at: tuple[int, ...] = ()           # read sizes the futility stop is tested at (none: not registered)
     futility_ub: float = 0.03                   # stop when the one-sided 95% UB of the mean net R is below this
     min_days: int = Field(0, ge=0)              # the read waits until its fills span this many UTC days
-    safety: Safety | None = None                # a one-off safety check at a fill count (WFRI, time-structure 4)
+    safety: tuple[Safety, ...] = ()             # one-off checks at fill counts (WFRI time-structure 4, GD-1 A1)
     source: str
+
+    @field_validator("safety", mode="before")
+    @classmethod
+    def _one_or_many(cls, v: object) -> object:
+        """WFRI's row names one check as a mapping; a list names several."""
+        return () if v is None else (v,) if isinstance(v, dict | Safety) else v
 
 
 class CostStop(FrozenRecord):
@@ -148,6 +171,19 @@ def upper_bound(values: Sequence[float], days: Sequence[pd.Timestamp], strata: S
     return centre + z * math.sqrt(var)
 
 
+def realised_cost_bp(t: ExplorationRecord, oz_per_lot: float = 100.0) -> float | None:
+    """A fill's realised round trip in bp of its fill price (GD-1 A1's cost check, prereg-amendment-2026-11-20-gd1-
+    asia-learning.md section 5): the spread it crossed at the send (the full spread stands for the half spread of each
+    leg), its entry slippage against the requested price (adverse positive, by side) and the broker's commission per oz.
+    The exit leg's own slippage has no reference price in the ledger and is not in it. None when a part is not
+    recorded (the check then waits for a readable fill)."""
+    if (t.fill_price is None or t.fill_price <= 0 or t.spread_usd is None or t.requested_price is None
+            or t.commission is None or not t.fx_acct_per_usd or t.lots <= 0):
+        return None
+    commission_usd = abs(t.commission) / (t.lots * oz_per_lot * t.fx_acct_per_usd)
+    return 1e4 * (t.spread_usd + t.side * (t.fill_price - t.requested_price) + commission_usd) / t.fill_price
+
+
 def net_bp(t: ExplorationRecord, oz_per_lot: float = 100.0) -> float | None:
     """A fill's net return in basis points of its entry notional: the broker's net pnl over lots x oz x fill price in
     the account currency (None without the pnl, the fill or the rate)."""
@@ -174,14 +210,10 @@ def unit_stop(unit: StopUnit, rows: Sequence[Fill], band_share: float = 0.5) -> 
         if run <= unit.stop_r + 1e-9:
             hit = UnitStop(band="at_stop", stop_at=i, stop_utc=f.at, stop_r=run, why="r")
             break
-    sc = unit.safety
-    if sc is not None and len(rows) >= sc.at and (hit is None or (hit.stop_at or 0) > sc.at):
-        first = rows[:sc.at]
-        cum = math.fsum(f.r for f in first)
-        bps = [f.bp for f in first if f.bp is not None]
-        bad_mean = len(bps) == sc.at and math.fsum(bps) / sc.at <= sc.mean_bp_le + 1e-9
-        if bad_mean or cum <= sc.cum_r_le + 1e-9:
-            hit = UnitStop(band="at_stop", stop_at=sc.at, stop_utc=first[-1].at, why="safety")
+    for sc in unit.safety:
+        at = _safety_at(sc, rows)
+        if at is not None and (hit is None or (hit.stop_at or 0) > at):
+            hit = UnitStop(band="at_stop", stop_at=at, stop_utc=rows[at - 1].at, why="safety")
     for size in unit.futility_at:
         read: list[Fill] = []
         seen: set[object] = set()
@@ -202,6 +234,34 @@ def unit_stop(unit: StopUnit, rows: Sequence[Fill], band_share: float = 0.5) -> 
     if len(rows) <= unit.within and run <= band_share * unit.stop_r + 1e-9:
         return UnitStop(band="within_50pct")
     return UnitStop()
+
+
+def _first_readable(rows: Sequence[Fill], field: Literal["bp", "cost_bp"], n: int) -> tuple[float, int] | None:
+    """(the mean of the first `n` readable values of `field`, the fill count at the n-th); None before there are n."""
+    vals: list[float] = []
+    for i, f in enumerate(rows, 1):
+        v = getattr(f, field)
+        if v is not None:
+            vals.append(v)
+            if len(vals) == n:
+                return math.fsum(vals) / n, i
+    return None
+
+
+def _safety_at(sc: Safety, rows: Sequence[Fill]) -> int | None:
+    """The fill count at which `sc` stops its unit (the earliest of its thresholds that fires), None when none does
+    or it is not due yet."""
+    hits: list[int] = []
+    if sc.cum_r_le is not None and len(rows) >= sc.at and math.fsum(f.r for f in rows[:sc.at]) <= sc.cum_r_le + 1e-9:
+        hits.append(sc.at)
+    if (sc.mean_bp_le is not None or sc.mean_bp_lt is not None) and (net := _first_readable(rows, "bp", sc.at)):
+        mean, i = net
+        if (sc.mean_bp_le is not None and mean <= sc.mean_bp_le + 1e-9) or \
+                (sc.mean_bp_lt is not None and mean < sc.mean_bp_lt - 1e-9):
+            hits.append(i)
+    if sc.cost_bp_gt is not None and (cost := _first_readable(rows, "cost_bp", sc.at)) and cost[0] > sc.cost_bp_gt + 1e-9:
+        hits.append(cost[1])
+    return min(hits) if hits else None
 
 
 def cost_state(rows: Sequence[ExplorationRecord], cfg: CostStop) -> CostState:
@@ -234,4 +294,4 @@ def cost_states(conn: sqlite3.Connection, arms: Collection[str], *, until: pd.Ti
 
 
 __all__ = ["COST_SCALE", "RULES_PATH", "CostState", "CostStop", "Fill", "Safety", "StopRules", "StopUnit", "UnitStop",
-           "cost_state", "cost_states", "load_stop_rules", "net_bp", "unit_stop", "upper_bound"]
+           "cost_state", "cost_states", "load_stop_rules", "net_bp", "realised_cost_bp", "unit_stop", "upper_bound"]

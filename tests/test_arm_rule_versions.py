@@ -23,6 +23,8 @@ PINS: dict[str, dict[int, str]] = {
     "box_break_close": {1: "bf18a06b94315673"},
     "box_next": {1: "7a807dde912f17da"},
     "clock_anchor": {1: "af3b5efa66282f15"},
+    "clock_hold": {1: "97243f12cbe25548"},
+    "clock_hold_control": {1: "526803e613e394be"},
     "clock_anchor_control": {1: "38cb14a524838d19"},
     "donchian_break": {1: "76e2398c60940575"},
     "ema_pullback": {1: "6025cb3bbf0ff4f0"},
