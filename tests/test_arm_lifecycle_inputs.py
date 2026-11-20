@@ -336,11 +336,12 @@ def test_the_night_reads_the_engines_whole_minute_memory():
     assert I.READ_DAYS * 23 * 60 * 5 / 7 >= I.ENGINE_MINUTES
 
 
-def test_the_nightly_job_passes_every_enabled_account_on_a_live_key_as_a_sharer(env, tmp_path, monkeypatch):
+def test_the_nightly_job_passes_every_configured_account_on_a_live_key_as_a_sharer(env, tmp_path, monkeypatch):
     """Quant re-check of 5a9c15ba (fails open): `hosts` holds only the demo probe_only exploring accounts, but any
-    enabled account on the same (broker, symbol) live key writes the minutes the night reads (a live account once
-    unlocked, a demo re-roled off probe_only, exploration off). The job hands the night every enabled account grouped
-    by its live key, apart from `hosts`."""
+    account on the same (broker, symbol) live key writes the minutes the night reads (a live account once unlocked, a
+    demo re-roled off probe_only, exploration off). Quant and code review of 6fec4099 (A): a disabled account wrote
+    inside READ_DAYS too, so every configured account counts, enabled or not, and the job hands the night every
+    account's key (`keys`) so dq_events evidence from an account on no configured key is read as well."""
     from goldbot.ops import jobs
     register(env)
     ctx = _ctx(env, Store(tmp_path / "data"))
@@ -349,7 +350,8 @@ def test_the_nightly_job_passes_every_enabled_account_on_a_live_key_as_a_sharer(
     off = demo.model_copy(update={"account_id": "icm-off", "probe_only": False,
                                   "exploration": demo.exploration.model_copy(update={"enabled": False})})
     elsewhere = demo.model_copy(update={"account_id": "vantage-x", "broker": "vantage", "symbol": "XAUUSD+"})
-    ctx.accounts = [*ctx.accounts, other, off, elsewhere]
+    disabled = demo.model_copy(update={"account_id": "icm-disabled", "enabled": False})
+    ctx.accounts = [*ctx.accounts, other, off, elsewhere, disabled]
     seen: dict[str, Any] = {}
 
     def spy(store: Any, hosts: Any, arms: Any, **kw: Any) -> I.NightInputs:
@@ -358,7 +360,8 @@ def test_the_nightly_job_passes_every_enabled_account_on_a_live_key_as_a_sharer(
     monkeypatch.setattr(I, "integrity_inputs", spy)
     jobs.arm_lifecycle(ctx, SLOT)
     assert "icm-live-x" not in seen["hosts"] and "icm-off" not in seen["hosts"]
-    assert {"icm-live-x", "icm-off"} <= set(seen["sharers"]["icm-demo"])
+    assert {"icm-live-x", "icm-off", "icm-disabled"} <= set(seen["sharers"]["icm-demo"])
+    assert seen["keys"]["icm-disabled"] == ("icm", "XAUUSD") and seen["keys"]["vantage-x"] == ("vantage", "XAUUSD+")
     assert "vantage-x" not in seen["sharers"]["icm-demo"] and "icm-demo" not in seen["sharers"]["icm-demo"]
 
 
@@ -372,7 +375,8 @@ def test_a_sharer_outside_the_hosts_with_a_late_unreplaced_minute_voids_and_unre
     store.append("dq_events", pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
                                             "detail": [detail]}), source="icm-live-x", symbol="XAUUSD", dedupe=False)
     row = {"account_id": "icm-probe", "decision_utc": CLOSE}
-    assert I.stored_recompute(store, HOST, now=NIGHT)(arm.spec, row) != I.SAMPLED_MINUTE      # not a sharer
+    elsewhere = {**HOST, "icm-live-x": ("other", "XAUUSD")}
+    assert I.stored_recompute(store, HOST, now=NIGHT, keys=elsewhere)(arm.spec, row) != I.SAMPLED_MINUTE  # other key
     shared = {"icm-probe": ("icm-live-x",)}
     assert I.stored_recompute(store, HOST, now=NIGHT, sharers=shared)(arm.spec, row) == I.SAMPLED_MINUTE
     real = store.read

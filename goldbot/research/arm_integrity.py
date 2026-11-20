@@ -37,7 +37,10 @@ Design rules:
   flagged `broker_bar_late` that no `broker_bar_replaced` event of its own (first minute at most GIVE_UP before it,
   its count reaching it) accounts for (`sampled_minute`: the engine kept its sampled bar for good, while the two icm
   engines share one bars_1m_live key, books.live_key = broker, symbol, and the store keeps the last copy, which may
-  be the other engine's broker bar; every minute of a late span counts; void); a minute replaced after the decision
+  be the other engine's broker bar; every minute of a late span counts; void, also for an engine alone on its key:
+  two processes on one account are two writers and nothing stored names the writer, quant review of 6fec4099;
+  the sharers are every configured account on the key, enabled or not, and every account with dq_events on the
+  key's symbol that the config puts on no other key, `evidence_sharers`); a minute replaced after the decision
   (flagged on any stored version of a window minute, `engine.history.REPLACED_COL`, read before the as-of filter,
   K1; with sticky flags, fix/engine-minute-store, K1 also sees minutes the other engine on the shared key replaced,
   which can only add voids); a
@@ -46,7 +49,8 @@ Design rules:
   when, and K1 judges it. Events whose spans overlap are accounted for together: each one's own minute flagged and
   the flagged minutes at least the sum of their counts. Otherwise, or with a count that does not parse, e.g. an
   event from an engine before the flag: void); a minute
-  quarantined (quarantine has no as-of time), no bar at the decision, and a window whose minutes are not all stored
+  quarantined (quarantine has no as-of time; judged before the broker's M1, which the quarantine also leaves out,
+  so a quarantined span is never read as `no_broker_coverage`, SRE brain simulation 2026-11-20), no bar at the decision, and a window whose minutes are not all stored
   yet (`window_incomplete`: shorter than the engine's, or ending before the minute before the decision; tried again
   the next night). An account whose minutes, dq events or
   quarantine cannot be read, or that has no minutes, leaves the arm unverified (UNVERIFYING): never a silent drop.
@@ -485,6 +489,10 @@ class AccountMinutes:
             late = (pd.to_datetime(span_v["written_at"], utc=True) > at).fillna(False).to_numpy(dtype=bool)
             if bool((flagged & late).any()):
                 return REPLACED_MINUTE
+        # quarantine leaves its minutes out of every feed, the broker's M1 evidence too: judged before the M1 is, so a
+        # quarantined span reads as what it is, a void that ages out, never `no_broker_coverage` (unverified, told)
+        if bool(((self.quarantined >= wts.min()) & (self.quarantined < at.value)).any()):
+            return QUARANTINED_MINUTE
         # after the cut-over the broker's M1 says whether the stored minutes are all the engine had (before the
         # completeness check: a lost last minute the broker had is a gap, not forever incomplete)
         if (why := self.cutover_cause(wts, int(wts.min()), at)) is not None:
@@ -498,14 +506,14 @@ class AccountMinutes:
             if len(np.setdiff1d(part, wts)):
                 return LATE_MINUTE
         # the shared live key (books.live_key = broker, symbol; the store keeps the last copy): a minute this engine
-        # kept sampled for good may be stored as the other engine's broker bar, never what this engine held
+        # kept sampled for good may be stored as the other engine's broker bar, never what this engine held. Alone
+        # on its key too: a second process on the same account (a restart overlap, a duplicate service) is a second
+        # writer, and nothing stored names the writing process (quant review of 6fec4099, B): fail closed
         if self.sampled_for_good(wts, at):
             return SAMPLED_MINUTE
         # Q1: the window's minutes not all in the store yet (the last one is the minute before `at`)
         if len(win) < need or int(wts.max()) < int((at - pd.Timedelta(minutes=1)).value):
             return WINDOW_INCOMPLETE
-        if bool(((self.quarantined >= wts.min()) & (self.quarantined < at.value)).any()):
-            return QUARANTINED_MINUTE
         seen = seen.tail(ENGINE_MINUTES).reset_index(drop=True)
         seen["visible_at"] = pd.to_datetime(seen["ts_utc"], utc=True) + pd.Timedelta(minutes=1)
         return seen
@@ -610,13 +618,26 @@ def key_sharers(keys: Mapping[str, tuple[str, str]]) -> dict[str, tuple[str, ...
     return {a: tuple(sorted(b for b, kb in keys.items() if kb == k and b != a)) for a, k in keys.items()}
 
 
+def evidence_sharers(store: Any, symbol: str) -> list[str]:
+    """Every source with a dq_events partition on `symbol` (`Store.partition_dir`: source=/symbol=): the accounts
+    whose engines wrote events there, whatever tonight's config says (quant review of 6fec4099, A: an account
+    disabled or removed after writing on a live key is still a writer of the minutes inside READ_DAYS)."""
+    tdir = store.table_dir("dq_events")
+    if not tdir.exists():
+        return []
+    return sorted(d.parent.name.removeprefix("source=") for d in tdir.glob(f"source=*/symbol={symbol}") if d.is_dir())
+
+
 def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: pd.Timestamp,
-                     db: Database | None = None, sharers: Mapping[str, Sequence[str]] | None = None) -> Recompute:
+                     db: Database | None = None, sharers: Mapping[str, Sequence[str]] | None = None,
+                     keys: Mapping[str, tuple[str, str]] | None = None) -> Recompute:
     """The recompute from the minutes each host's engine stored (`hosts`: account -> (broker, symbol)), read lazily
     per account from READ_DAYS before the earliest decision asked (P4: only candidates without a verdict ask), as of
     `now`, with each engine's saved cut-over from the engines' aux.db `db` (None: none read). `sharers`: per host,
     every other enabled account on its live key, whatever its mode or role (`key_sharers`; quant re-check of
-    5a9c15ba: `hosts` holds the exploring demo hosts only); the hosts on the same key are always added."""
+    5a9c15ba: `hosts` holds the exploring demo hosts only); the hosts on the same key are always added, and so is every
+    account with dq_events on the key's symbol (`evidence_sharers`) that neither `hosts` nor `keys` (every configured
+    account -> its live key) puts on another key: unknown is read as a sharer (fail closed, quant review of 6fec4099)."""
     now = pd.Timestamp(now).tz_convert("UTC")
     loaded: dict[str, tuple[pd.Timestamp, AccountMinutes | str]] = {}
 
@@ -630,6 +651,9 @@ def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: p
         if got is None or start < got[0]:
             on_key = {a for a, key in hosts.items() if key == hosts[acc] and a != acc}
             on_key |= {a for a in (sharers or {}).get(acc, ()) if a != acc}
+            known = {**(keys or {}), **hosts}
+            on_key |= {a for a in evidence_sharers(store, hosts[acc][1])
+                       if a != acc and known.get(a, hosts[acc]) == hosts[acc]}
             got = (start, _account_minutes(store, acc, *hosts[acc], start=start, now=now, db=db,
                                            sharers=sorted(on_key)))
             loaded[acc] = got
@@ -648,10 +672,11 @@ class NightInputs:
 
 def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Collection[Arm], *,
                      now: pd.Timestamp, db: Database | None = None,
-                     sharers: Mapping[str, Sequence[str]] | None = None) -> NightInputs:
+                     sharers: Mapping[str, Sequence[str]] | None = None,
+                     keys: Mapping[str, tuple[str, str]] | None = None) -> NightInputs:
     """The journal, the coverage and the recompute, read only when a running discovered arm is among `arms`: the
     hosts' journal from the earliest such arm's `since` (`now` - READ_DAYS when one has no learning block); `db`: the
-    engines' aux.db (their saved cut-overs)."""
+    engines' aux.db (their saved cut-overs); `sharers`, `keys`: `stored_recompute`'s."""
     from goldbot.research.arms import Learning
     disc = [a for a in arms if discovered(a) and a.status == "run" and not a.retired]
     if not disc:
@@ -664,7 +689,8 @@ def integrity_inputs(store: Any, hosts: Mapping[str, tuple[str, str]], arms: Col
         except ValueError:
             starts.append(now - pd.Timedelta(days=READ_DAYS))
     journal, read = engine_journal(store, hosts, start=min(starts), now=now)
-    return NightInputs(journal=journal, recompute=stored_recompute(store, hosts, now=now, db=db, sharers=sharers),
+    return NightInputs(journal=journal, recompute=stored_recompute(store, hosts, now=now, db=db, sharers=sharers,
+                                                                          keys=keys),
                        hosts=read)
 
 
@@ -840,5 +866,5 @@ __all__ = ["BRACKET_RETIRE_N", "BRACKET_VOID_ACTION", "BROKER_SILENCE_MAX", "CAP
            "NO_RECOMPUTE", "QUARANTINED_MINUTE", "QUARANTINE_UNREADABLE", "READ_DAYS", "REFUSAL_CAUSES",
            "REPLACED_MINUTE", "REPLACE_SPAN", "UNVERIFYING", "WINDOW_INCOMPLETE", "WINDOW_UNPROVABLE",
            "AccountMinutes", "HostRead", "Integrity", "NightInputs", "Recompute", "candidate_row", "coverage_refusal",
-           "discovered", "engine_journal", "engine_recompute", "host_read", "integrity", "integrity_inputs",
-           "journalled", "replaced_count", "saved_cutover", "stored_recompute", "verdicts"]
+           "discovered", "engine_journal", "engine_recompute", "evidence_sharers", "host_read", "integrity",
+           "integrity_inputs", "journalled", "replaced_count", "saved_cutover", "stored_recompute", "verdicts"]
