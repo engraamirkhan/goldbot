@@ -38,9 +38,12 @@ refuse an entry. Pending: quant-reviewer and trading-safety-reviewer sign-off.
     a refused GS1C candidate as a shadow fill at the replay's `label_sim_r`, net of the **modelled** costs, while
     GS1's fills are net of the **realised** costs. The audit measured the modelled cost at about 2.8 x the realised,
     so shadow GS1C would read worse than broker GS1C and bias the paired excess **in GS1's favour**. Not acceptable
-    for a read 7 days from its end. The exception lapses on its own: the test that pins this section fails from
-    2026-11-28 (the day after `research.arms.OWNER_EXPERIMENTS`' GS1 end) until GS1C is replay_only or retired, so
-    GS1C can never become an unpaired broker control after GS1 stops entering.
+    for a read 7 days from its end. The exception ends in the engine, not in CI: from 2026-11-28 00:00 UTC (the day
+    after `research.arms.OWNER_EXPERIMENTS`' GS1 end) `exploration.refresh_owner_experiments` refuses GS1 and every
+    control whose `params.control` names it, GS1C included, once a minute and without a restart, so GS1C can never
+    become an unpaired broker control after GS1 stops entering (tested on the real rows; open positions keep their
+    exits). The config tests check the exception on injected dates, never the wall clock (trading-safety review of
+    e0bd500b). Setting GS1C's `control_mode` to replay_only after the read is tidy-up, not a safety step.
   - S0R: its registered read reached 100 stop exits on 2026-11-19 (221 fills: 100 stop, 115 target, 6 hold) and
     it stopped itself. Replay-only only makes that stop independent of a read count; a section-4 extension to
     n = 200 would need its own amendment anyway.

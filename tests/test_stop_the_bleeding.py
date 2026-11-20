@@ -3,7 +3,7 @@ audit 2026-11-20):
 
 * "Every random control is replay_only": no control on any trading account sends a broker order; each keeps its
   comparison role as a replay twin (candidates recorded and labelled by the r2 replay, never retired). One dated
-  exception: GS1C, paired 1:1 with GS1, until GS1's owner-experiment end.
+  exception: GS1C, paired 1:1 with GS1, until GS1's owner-experiment end, which the engine enforces itself.
 * "Controls <= 1:1 to signal arms, per account" (A4): broker-traded controls never outnumber the account's signal arms.
 * "nr4_break 5m stays retired" (Z6D/Z6V, -0.333 R n 56 on both brokers).
 * "No gold 5m entry decided in Asia, [00:00, 07:00) UTC" (`entry_refusals.ASIA_5M`; -0.167 R n 512, t -6.2, gross).
@@ -36,7 +36,7 @@ PAIRED = {"GS1C": ("icm-demo", "GS1")}
 # the ADR 0062 weekend lane (vantage-247): its controls measure a broker-made weekend quote, which a replay cannot;
 # the account is disabled. Enabling it while these are broker-traded fails this test, so it needs a dated decision
 WEEKEND_LANE = ("vantage-247", frozenset({"WKS0", "WKI0"}))
-TODAY = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+RELEASE_DAY = "2026-11-20"
 
 
 @pytest.fixture(scope="module")
@@ -74,9 +74,31 @@ def _unexcused(accs: dict[str, acc_mod.Account], today: str) -> list[tuple[str, 
 
 
 # ------------------------------------------------------------------------------------------------ controls
-def test_no_control_on_any_enabled_account_can_send_a_broker_order(accs):
-    """Dated: GS1C is excused through GS1's end only; from the day after this fails until GS1C is replay_only."""
-    assert _unexcused(accs, TODAY) == []
+def test_no_control_on_any_enabled_account_can_send_a_broker_order_except_a_paired_one_until_its_arms_end(accs):
+    """Checked on the release day (an injected date, never the wall clock: trading-safety review of e0bd500b)."""
+    assert _unexcused(accs, RELEASE_DAY) == []
+
+
+@pytest.mark.parametrize("control", sorted(PAIRED))
+def test_the_engine_itself_refuses_a_paired_broker_control_from_the_minute_after_its_arms_end(accs, control):
+    """The end binds in the running engine, not in CI: `exploration.refresh_owner_experiments` (once a minute, no
+    restart) refuses the owner experiment past OWNER_EXPERIMENTS' day and every control whose params.control names it,
+    whatever its control_mode. Real spec rows; open positions keep their exits (the arm stays configured)."""
+    from types import SimpleNamespace
+    account, signal = PAIRED[control]
+    rows = {a.arm_id: a for a in _arms(accs[account])}
+    until = owner_experiment_until(signal)
+    assert until is not None and rows[control].spec.params.get("control") == signal
+
+    def refused_at(ts: str) -> frozenset[str]:
+        ex = SimpleNamespace(arms={a: SimpleNamespace(spec=rows[a].spec) for a in (signal, control)},
+                             retired=frozenset(), unqualified={}, owner_read=None, queue=[])
+        exploration.refresh_owner_experiments(SimpleNamespace(decisions=[]), ex,  # type: ignore[arg-type]
+                                              pd.Timestamp(ts, tz="UTC"))
+        return frozenset(ex.retired)
+
+    assert control not in refused_at(f"{until} 23:59")
+    assert {signal, control} <= refused_at(f"{pd.Timestamp(until) + pd.Timedelta(days=1):%Y-%m-%d} 00:01")
 
 
 def test_the_gs1c_exception_lapses_the_day_after_gs1s_owner_experiment_ends(accs):

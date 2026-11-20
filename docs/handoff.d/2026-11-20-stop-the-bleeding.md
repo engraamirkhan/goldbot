@@ -4,7 +4,8 @@
   (candidates recorded and labelled by the r2 replay, never sent; none retired). VEX15/VEX1H/IEX1H lost GBP 471 on
   99 fills 2026-11-13..20; expected saving GBP 35-70 a week, plus about GBP 140 a week of variance removed. GS1C stays
   broker, paired 1:1 with GS1, until GS1's end on 2026-11-27 (switching it would bias GS1's read: shadow fills carry
-  the modelled cost); `tests/test_stop_the_bleeding.py` fails from 2026-11-28 until GS1C is replay_only or retired.
+  the modelled cost); from 2026-11-28 00:00 UTC the engine refuses GS1C with GS1 (`refresh_owner_experiments`,
+  no restart; tested on the real rows). The tests use injected dates, never the wall clock.
   The disabled weekend lane's WKS0/WKI0 stay broker; the same test fails if vantage-247 is enabled with them so.
   (2) nr4_break 5m (Z6D/Z6V) has been retired since 2026-11-06; a test keeps every nr4_break 5m row retired.
   (3) New engine entry refusal `asia_5m` (`goldbot/engine/entry_refusals.py`): a gold 5m signal decided in

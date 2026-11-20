@@ -32,7 +32,7 @@
 # losses that carry no information"): every gold control registered on a trading account is replay_only (VEX15,
 # VEX1H, IEX1H, S0R and the red-box RBC* joined S0); none is retired, so each keeps its replay twin. Two named
 # exceptions, each pinned by tests/test_stop_the_bleeding.py: GS1C stays broker, paired 1:1 with GS1, until GS1's
-# owner-experiment end (2026-11-27; the test fails from the day after), and the disabled weekend lane's WKS0/WKI0
+# owner-experiment end (2026-11-27; the engine refuses it with GS1 from the day after), and the weekend lane's WKS0/WKI0
 # (the test fails if vantage-247 is enabled with them broker-traded).
 arms:
   - { id: S0, rule: random_bracket, timeframe: 1m, params: {"minutes": [0, 10, 20, 30, 40, 50], "window_utc": ["07:00", "19:50"], "stop_usd": 3.0, "target_r": 1.0, "hold_bars": 30}, max_open: 3, status: run, role: control, control_mode: replay_only, config_hash: 9c6a7f3d4e90d8af }
