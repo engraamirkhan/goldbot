@@ -1,4 +1,4 @@
-- 2026-11-20 (branch feat/gd1-asia-learning-arm; R173): GD-1 A1 (H-98, trial #3440) runs forward on demo as a
+- 2026-11-20 (branch feat/gd1-asia-learning-arm; R174): GD-1 A1 (H-98, trial #3440) runs forward on demo as a
   learning-class arm: long gold on the 1h close at 00:00 UTC every weekday, exit 07:00 UTC, 0.01 lot.
   - GD1D on icm-demo and GD1P on icm-probe (one arm id per host), rule `clock_hold`
     (`goldbot/research/arm_rules_clock_hold.py`, rule-code version 1). No signal and no target (50 R). The stop is a

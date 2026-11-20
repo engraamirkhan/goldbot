@@ -31,6 +31,10 @@ The refusals (`REFUSALS`, in order; the first that applies names the refusal):
   Scope is the amendment's three accounts; the ADR 0062 weekend lane (an engine with a `weekend_window`) is outside it.
 * `f1_pit` (amendment section 8): "F1A/F1C entries are refused outside 08:00-13:30 America/New_York (13:00-18:30 UTC
   under US winter time), as an engine-level refusal with the control on the same tz-aware window".
+* `asia_5m` (docs/research/prereg-amendment-2026-11-20-stop-the-bleeding.md section 3): "no gold 5m entry decided in
+  Asia, [00:00, 07:00) UTC": an in-scope gold arm (window_0207's scope) of timeframe 5m whose decision time is in that
+  window. After window_0207, so [02:00, 07:00) keeps its own name and asia_5m names [00:00, 02:00); 21:00-24:00 is
+  not Asia here (the audit's "asia(late)", not in the evidence).
 * `learning_icm_only`, `har_unavailable`, `har_low_range` (signed plan 2026-11-07 WS-6, `refusals_novel`): gold
   learning entries on ICM only (N-1a) and the N-3 HAR low-range-day abstention, fail closed once its job has run.
 
@@ -61,6 +65,9 @@ log = logging.getLogger(__name__)
 ERROR_PREFIX = "refusal_error:"     # a refusal that raised: the entry is refused under this prefix and its name
 WINDOW_0207 = "window_0207"
 WINDOW_0207_UTC = (time(2, 0), time(7, 0))          # [02:00, 07:00) UTC, by decision time (amendment 3.1)
+ASIA_5M = "asia_5m"
+ASIA_5M_UTC = (time(0, 0), time(7, 0))              # [00:00, 07:00) UTC, by decision time (amendment 2026-11-20 s.3)
+ASIA_5M_TF = "5m"
 F1_PIT = "f1_pit"
 F1_PIT_WINDOW = (time(8, 0), time(13, 30))          # [08:00, 13:30) in F1_PIT_TZ (amendment section 8)
 F1_PIT_TZ = ZoneInfo("America/New_York")
@@ -100,6 +107,15 @@ def window_0207(eng: Engine, arm: Arm, s: Pending) -> bool:
     return lo <= _decision_utc(s).time() < hi
 
 
+def asia_5m(eng: Engine, arm: Arm, s: Pending) -> bool:
+    """Amendment 2026-11-20 section 3: "every in-scope gold 5m exploration signal with decision time in [00:00, 07:00)
+    UTC is refused" (gold 5m Asia: -0.167 R a trade, n 512, t -6.2, negative before costs; system audit 2026-11-20)."""
+    if arm.tf != ASIA_5M_TF or not in_window_0207_scope(eng, arm):
+        return False
+    lo, hi = ASIA_5M_UTC
+    return lo <= _decision_utc(s).time() < hi
+
+
 def f1_pit(eng: Engine, arm: Arm, s: Pending) -> bool:
     """Amendment section 8: F1A and F1C are refused outside [08:00, 13:30) America/New_York at their decision time
     (tz-aware, so the window moves with US DST)."""
@@ -112,6 +128,8 @@ def f1_pit(eng: Engine, arm: Arm, s: Pending) -> bool:
 REFUSALS: tuple[EntryRefusal, ...] = (
     EntryRefusal(name=WINDOW_0207, applies=window_0207),
     EntryRefusal(name=F1_PIT, applies=f1_pit),
+    # amendment 2026-11-20 section 3: gold 5m signals decided in Asia (static, like window_0207)
+    EntryRefusal(name=ASIA_5M, applies=asia_5m),
     # signed plan 2026-11-07 WS-6 (`refusals_novel`, prereg-2026-11-07-n3-har.md): gold learning entries on ICM only
     # (N-1a), then N-3's fail-closed availability check and its low-range day
     EntryRefusal(name=refusals_novel.LEARNING_ICM_ONLY, applies=refusals_novel.learning_icm_only),
@@ -124,7 +142,7 @@ REFUSALS: tuple[EntryRefusal, ...] = (
 # account state), so they refuse a past candidate exactly as they would refuse it today: the daily budget's session
 # shares count only the candidates these let through (`exploration_budget.session_budgets`; the HAR refusals read a
 # day's job row and are not static)
-STATIC = frozenset({WINDOW_0207, F1_PIT, refusals_novel.LEARNING_ICM_ONLY})
+STATIC = frozenset({WINDOW_0207, F1_PIT, ASIA_5M, refusals_novel.LEARNING_ICM_ONLY})
 
 
 class Refused(FrozenRecord):

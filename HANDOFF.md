@@ -23,7 +23,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Follow-up, not done: proving a single writer (which would let a solo engine's own late minute verify, and the
   non-sampling icm account skip the other engine's void) needs a writer id on each bars_1m_live row or a gold live
   key per account (books.live_key). Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
-- 2026-11-20 (branch feat/gd1-asia-learning-arm; R173): GD-1 A1 (H-98, trial #3440) runs forward on demo as a
+- 2026-11-20 (branch feat/gd1-asia-learning-arm; R174): GD-1 A1 (H-98, trial #3440) runs forward on demo as a
   learning-class arm: long gold on the 1h close at 00:00 UTC every weekday, exit 07:00 UTC, 0.01 lot.
   - GD1D on icm-demo and GD1P on icm-probe (one arm id per host), rule `clock_hold`
     (`goldbot/research/arm_rules_clock_hold.py`, rule-code version 1). No signal and no target (50 R). The stop is a
@@ -77,6 +77,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - `duplicate_engine_1h:<account>` tells again after an hour of refusals.
   - The 10-26 quarantine script is retired: it refuses once a locked engine start exists.
   - RUNBOOK: restart all engines of a host together; rollback is whole-release.
+- 2026-11-20 stop the bleeding (owner goal "stop known demo losses that carry no information"; system audit
+  2026-11-20; docs/research/prereg-amendment-2026-11-20-stop-the-bleeding.md, kill-only). (1) Every gold control on a
+  trading account is `control_mode: replay_only`: VEX15, VEX1H, IEX1H, S0R and the red-box RBC15/RBC1H/RBC4H join S0
+  (candidates recorded and labelled by the r2 replay, never sent; none retired). VEX15/VEX1H/IEX1H lost GBP 471 on
+  99 fills 2026-11-13..20; expected saving GBP 35-70 a week, plus about GBP 140 a week of variance removed. GS1C stays
+  broker, paired 1:1 with GS1, until GS1's end on 2026-11-27 (switching it would bias GS1's read: shadow fills carry
+  the modelled cost); from 2026-11-28 00:00 UTC the engine refuses GS1C with GS1 (`refresh_owner_experiments`,
+  no restart; tested on the real rows). The tests use injected dates, never the wall clock.
+  The disabled weekend lane's WKS0/WKI0 stay broker; the same test fails if vantage-247 is enabled with them so.
+  (2) nr4_break 5m (Z6D/Z6V) has been retired since 2026-11-06; a test keeps every nr4_break 5m row retired.
+  (3) New engine entry refusal `asia_5m` (`goldbot/engine/entry_refusals.py`): a gold 5m signal decided in
+  [00:00, 07:00) UTC is refused and shadowed (window_0207's scope; after it, so [02:00, 07:00) keeps its name).
+  No 5m arm enters today, so it binds the next one, hot-loaded discovered arms included. Exits, RiskGate, limits,
+  K and every threshold are unchanged. Owner step: none. Deploy: restart the engines (config + engine code).
 - 2026-11-19 discovered-arm integrity voids made precise, still fail closed (goldbot/research/arm_integrity.py; an SRE
   dry run on settled weekdays found most 15m candidates void `replaced_minute` and every 4h one `release_after_cutover`).
   (1) A `broker_bar_replaced` event within 27 min before a decision no longer voids by itself: the event (its ts the
