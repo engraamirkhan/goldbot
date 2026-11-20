@@ -29,7 +29,6 @@ from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, load_record_json, schema_skew_summary
 from goldbot.config import INTRADAY_LIVE, tf_seconds
 from goldbot.data.calendar import (
-    DEFAULT_SESSIONS,
     PauseWindow,
     SessionTable,
     WeekendWindow,
@@ -51,7 +50,9 @@ from goldbot.engine import (
     closed_record,
     commission,
     cost_probe,
+    cost_record,
     downtime,
+    exit_quote,
     exploration,
     frames,
     history,
@@ -223,6 +224,7 @@ class EngineConfig(Record):
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
+    cost_record: str | None = None   # settings costs.engine_record: the versioned engine cost of record (cost_record)
     # broker commission per lot per side, USD, until the cost table measures it (ADR 0075; 0 = none configured)
     commission_per_lot_side_usd: float = Field(0.0, ge=0)
     max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
@@ -1085,8 +1087,9 @@ class Engine:
         dec, a = fr.dec, fr.atr                          # fr.X is built when an agent reads it (engine/frames.py)
         decisions = []
         last = len(dec) - 1
-        cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
-        hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
+        dtf = self.cfg.decision_tf                                         # its cell of the cost record
+        cost_atr = self._cost_atr(float(a.iloc[last]), close_ts, tf=dtf)   # full round trip: the RiskGate's checks
+        hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True, tf=dtf)  # p already pays the spread
         cands_by_agent = self._cands.candidates(fr, agents)     # a requires_tv agent proposes nothing (agent_candidates)
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
@@ -1503,6 +1506,7 @@ class Engine:
         tr = self.open.get(pid)
         err: str | None = None
         quote = self._last_tick                           # the quote the close was decided on (exit fill log)
+        exit_quote.note(tr, quote)                        # P6: and on the trade's record (finance audit 2026-11-20)
         try:
             res = self.broker.close(pid)
         except Exception as e:                            # one position never stops the others
@@ -2455,6 +2459,7 @@ class Engine:
                     (tr.tp is not None and tr.side * (px - tr.tp) >= 0)
                 if at_broker_level and pid not in self._close_due:
                     ex.frozen_utc = t.ts_utc
+                    exit_quote.note(tr, t)     # P6: the quote that took it through the broker's stop or target
                     continue
                 ex.fold(tr.side, px, t.ts_utc)
                 ex.last_utc = t.ts_utc
@@ -2853,18 +2858,10 @@ class Engine:
         end = now.normalize() + pd.Timedelta(days=1)
         return paid_swap_per_oz(swap, side, now, end if until is None else max(end, until))
 
-    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
-        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
-        ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
-        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative).
-        Never below the live spread plus commission (`commission.floor_cost`, ADR 0075)."""
-        table = self._cost_table()
-        if table is None:
-            c: float | None = self.cfg.cost_atr
-        else:
-            session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
-            c = table.round_trip_ex_spread_atr(session, atr_usd) if ex_spread else table.round_trip_atr(session, atr_usd)
-        return commission.floor_cost(self, c if c is not None else self.cfg.cost_atr, atr_usd, ex_spread)
+    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False, tf: str | None = None) -> float:
+        """Round-trip cost in ATR: the versioned engine cost of record's cell, else the nightly table, else the
+        configured cost; never below the live spread plus commission (engine/cost_record.py `cost_atr`)."""
+        return cost_record.cost_atr(self, atr_usd, ts, ex_spread, tf)
 
     def _commission_usd_per_oz(self, price: float | None = None) -> float:
         return commission.usd_per_oz(self, price)

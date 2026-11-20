@@ -66,8 +66,9 @@ from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, w
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.db.connection import Database, db_path
 from goldbot.ops.report_days import day_bounds
-from goldbot.research.arm_stops import cost_states, load_stop_rules
-from goldbot.research.arms import learning_arm_ids
+from goldbot.research.arm_stops import cost_states, edge_cap_states, load_stop_rules
+from goldbot.research.arms import COST_ARMS, learning_arm_ids
+from goldbot.research.realised_costs import EngineCostRecord, current_record
 from goldbot.research.replay_parity import ParityRead
 
 if TYPE_CHECKING:
@@ -95,6 +96,8 @@ FOLLOW_RULE = "stops with its arm (docs/research/prereg-2026-10-26-time-structur
 COST_RULE = "H-81 cost stop, suspended until a dated amendment (docs/research/prereg-2026-10-27-scalp-volume.md 4)"
 CONTROL_COST_RULE = ("execution control cost stop (Z 4 shape), suspended until a dated amendment "
                      "(docs/research/prereg-amendment-2026-11-10-execution-controls.md 4)")
+EDGE_CAP_RULE = ("edge cap: gross R upper bound below its cost share at the engine cost of record "
+                 "(docs/research/prereg-amendment-2026-11-20-edge-cap.md)")
 BROKER_NAMES = {"icm": "ICM", "vantage": "Vantage"}
 # journal actions that are engine incidents (goldbot/engine/exploration.py, runner.py)
 ENGINE_INCIDENTS = ("exploration_error", "exploration_rule_error", "exploration_refused:ledger_unreadable",
@@ -748,7 +751,8 @@ def _family_members(health: Mapping[str, Mapping[str, Health]], why: Mapping[tup
     return out
 
 
-def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) -> dict[str, set[str]]:
+def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp,
+                    record: EngineCostRecord | None = None) -> dict[str, set[str]]:
     """Per broker: the H-81 strata and the execution controls (every arm of `cost_stop.arms`) whose cost stop suspends
     them (Z 4: "Above 0.20 it is suspended until a dated
     amendment"), from their fills sent before `hi`. A halved share is the engine's (`exploration.shares`), not here."""
@@ -757,7 +761,24 @@ def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) ->
         for broker in sorted(set(hosts.values())):
             arms = {str(a) for (a,) in conn.execute(
                 "SELECT DISTINCT arm_id FROM exploration_obs WHERE broker = ?", (broker,))}
-            out[broker] = {a for a, st in cost_states(conn, arms, until=hi).items() if st == "suspended"}
+            out[broker] = {a for a, st in cost_states(conn, arms, until=hi, record=record).items()
+                           if st == "suspended"}
+    return out
+
+
+def _edge_capped(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp, record: EngineCostRecord | None,
+                 exempt: Collection[str]) -> dict[str, set[str]]:
+    """Per broker: the arms the edge cap suspends (quant C3, `arm_stops.edge_cap_states`), controls and cost arms
+    exempt, from fills sent before `hi`; nothing without a record in force."""
+    out: dict[str, set[str]] = {}
+    if record is None:
+        return out
+    rules = load_stop_rules()
+    with db.connection() as conn:
+        for broker in sorted(set(hosts.values())):
+            arms = {str(a) for (a,) in conn.execute(
+                "SELECT DISTINCT arm_id FROM exploration_obs WHERE broker = ?", (broker,))}
+            out[broker] = edge_cap_states(conn, arms, record=record, rules=rules, exempt=exempt, until=hi)
     return out
 
 
@@ -1082,7 +1103,9 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     integrity = _integrity(d, trading, cfg.max_gap_minutes, incidents)
     _health(sd, incidents)
     health, controls, why = _arm_health(db, hosts, hi, store)
-    suspended = _cost_suspended(db, hosts, hi)
+    record = current_record(settings.costs.engine_record)        # ADR 0092 quant C2/C3
+    suspended = _cost_suspended(db, hosts, hi, record)
+    capped = _edge_capped(db, hosts, hi, record, controls | set(COST_ARMS))
     retired: list[Retirement] = []
     family = _family_members(health, why, controls)
     for broker, arms in health.items():
@@ -1093,6 +1116,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
         # prereg-amendment-2026-11-10-execution-controls.md 4 rule 1: a control registered in cost_stop.arms (the
         # execution controls) is suspended on its cost stop too; the halve band and any R stop never retire it
         stops |= {a: CONTROL_COST_RULE for a in sorted(suspended.get(broker, set()) & controls - set(stops))}
+        stops |= {a: EDGE_CAP_RULE for a in sorted(capped.get(broker, set()) - set(stops) - controls)}
         for arm, rule in stops.items():         # else a control is never retired (F1C/G1C only with their arm)
             if arm not in already and (dry_run or retire(db, broker=broker, arm_id=arm, day=day, now=now,
                                                          rule=rule)):

@@ -72,6 +72,11 @@ class OpenTrade(Record):
     # multi-instrument demo (plan 2026-11-02, lanes L3/L4): the instrument the trade is on (a config/instruments.yaml
     # key, never a broker or store symbol); absent on every record before it, which is the account's gold
     symbol: str = "XAUUSD"
+    # finance audit P6 (engine/exit_quote.py): the quote the exit was sent on, or the one that took the position
+    # through the broker's stop or target; None until then, and on every trade saved before it
+    exit_bid: float | None = None
+    exit_ask: float | None = None
+    exit_quote_utc: UtcTimestamp | None = None
 
 
 class PendingClose(Record):

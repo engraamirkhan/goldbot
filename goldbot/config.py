@@ -238,6 +238,10 @@ class CostSettings(_Section):
     # relative (quant review 2026-11-14: 25 % let a Friday triple pass on a 9-night hold); under 1, so one night more
     # or less always fails. The interest swap is priced at the entry price, so price drift does not move it
     swap_reconcile_tolerance: float = Field(0.5, gt=0, lt=1)
+    # finance audit 2026-11-20 P5 (ADR 0092): the versioned engine cost of record
+    # (config/engine_costs/<version>.yaml, goldbot.research.realised_costs) the engine charges first, per account x
+    # session x timeframe; null: the nightly legacy table only. A new version is a new file and a reviewed change here
+    engine_record: str | None = None
 
 
 class ScheduleSettings(_Section):

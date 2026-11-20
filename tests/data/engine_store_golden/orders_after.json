@@ -13,7 +13,7 @@
   "records_lost": [],
   "sent": {}
  },
- "e98d851a433a9742": {
+ "f8d122fb58614cf5": {
   "closing": [],
   "open": {
    "1": {
@@ -27,6 +27,9 @@
     "equity_before": null,
     "excursion": null,
     "excursion_approx": true,
+    "exit_ask": null,
+    "exit_bid": null,
+    "exit_quote_utc": null,
     "flat_at": null,
     "initial_lots": 0.1,
     "initial_sl": 2396.0,

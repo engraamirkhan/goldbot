@@ -1,11 +1,5 @@
 {
- "30bde012f80794b8": {
-  "closing": [],
-  "open": {},
-  "records_lost": [],
-  "sent": {}
- },
- "59d1c6e1ec6b52dc": {
+ "099d70cdd3f5f540": {
   "closing": [],
   "open": {
    "1": {
@@ -19,6 +13,9 @@
     "equity_before": null,
     "excursion": null,
     "excursion_approx": false,
+    "exit_ask": null,
+    "exit_bid": null,
+    "exit_quote_utc": null,
     "flat_at": null,
     "initial_lots": 0.1,
     "initial_sl": 2396.0,
@@ -110,6 +107,12 @@
     "unknown_notified": false
    }
   }
+ },
+ "30bde012f80794b8": {
+  "closing": [],
+  "open": {},
+  "records_lost": [],
+  "sent": {}
  },
  "be447a8013b5f089": {
   "closing": [],

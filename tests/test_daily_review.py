@@ -27,7 +27,9 @@ from goldbot.telegram import labs
 
 pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
 
-S = load_settings()
+# the stops' own rules on the costs as recorded: the shipped engine cost of record (ADR 0092) would reprice these
+# synthetic rows; its repricing (quant C2) and the edge cap (C3) are tested in tests/test_true_costs.py
+S = load_settings().model_copy(update={"costs": load_settings().costs.model_copy(update={"engine_record": None})})
 DAY = "2026-10-22"                                    # a Thursday opportunity day: 2026-10-21 22:00 .. 10-22 22:00 UTC
 LO, HI = pd.Timestamp("2026-10-21 22:00", tz="UTC"), pd.Timestamp("2026-10-22 22:00", tz="UTC")
 NOW = pd.Timestamp("2026-10-23 06:15", tz="UTC")
