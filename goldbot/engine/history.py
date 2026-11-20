@@ -39,15 +39,24 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
 - The stored minutes say what the engine held and since when (brain 2026-11-18/19: the nightly arm read). Every row
   carries its write time (`available_utc`). A minute a history fill or a rebase joined (a quote stall, a restart, a
   hole) is stored flagged FILLED_COL: the engine held it only from that write, never from its close. A fill stores
-  only the minutes it joined: one the engine already held keeps its stored copy and write time. Gold engines of one
-  broker share one key (`books.live_key`) and the store keeps one copy per minute, so a minute flagged REPLACED_COL
-  or FILLED_COL is sticky (`Store.append(sticky=...)`): another engine's plain copy written after it never erases the
+  only the minutes it joined: one the engine already held keeps its stored copy and write time. A minute flagged
+  REPLACED_COL or FILLED_COL is sticky (`Store.append(sticky=...)`): a plain copy written after it never erases the
   flag or moves its write time back toward the close (a look-ahead for the read); of two flagged copies the newer
   stays. A warm start therefore seeds such a minute from the flagged copy, not the last one written. Nothing here
   changes what the engine holds or decides at run time.
+- One writer per stored minute (ADR 0091, 2026-11-20). Gold's minutes are keyed by account
+  (`books.live_key`: account, symbol), no longer by broker, so two gold engines of one broker never write one key;
+  every row carries the writing engine's start (`WRITER_COL`, EngineConfig.boot_id) and each start records whether it
+  holds the account's exclusive writer lock (`record_boot`, dq_events `engine_boot`): the nightly read proves a
+  minute is this engine's own copy by them (research/arm_integrity). The minutes stored under the broker's key before
+  (`books.legacy_live_key`) are read under the account's own (the account's copy of a minute wins), and so is the
+  cut-over saved under it (`saved_cutover`: the earlier of the two), so a restart holds the history and cut-over it
+  held before, byte for byte (trading-safety S4); nothing is written there any more. The writer column never reaches
+  the engine's bars (`_clean`: BAR_COLUMNS only, S5).
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
@@ -80,6 +89,8 @@ LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = brok
 REPLACED_COL = "replaced"
 # a minute a history fill or a rebase joined (absorb / _rebase): the engine held it from its write time, not its close
 FILLED_COL = "filled"
+WRITER_COL = "writer"               # the writing engine start's id (EngineConfig.boot_id) on every stored minute
+BOOT_CHECK = "engine_boot"          # dq_events: one per engine start, its id (writer) and whether it holds the lock
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
@@ -321,8 +332,8 @@ class BarWriter:
     """Writes the engine's minutes to the store on its own thread: `put` never blocks (a full queue drops its oldest
     batch, logged and counted; a restart's fill re-pulls the minutes), queued batches are written as one append."""
 
-    def __init__(self, store: Store, source: str, symbol: str, maxsize: int = WRITER_QUEUE):
-        self.store, self.source, self.symbol = store, source, symbol
+    def __init__(self, store: Store, source: str, symbol: str, maxsize: int = WRITER_QUEUE, writer: str | None = None):
+        self.store, self.source, self.symbol, self.writer = store, source, symbol, writer
         self.q: queue.Queue[pd.DataFrame] = queue.Queue(maxsize)
         self.dropped = 0
         threading.Thread(target=self._run, name="history-writer", daemon=True).start()
@@ -365,6 +376,8 @@ class BarWriter:
                 for col in (REPLACED_COL, FILLED_COL):
                     if col in got.columns:
                         rows[col] = got[col].astype("boolean").fillna(False).astype(bool)
+                if self.writer is not None:         # the row travels with its writer, sticky flag or not
+                    rows[WRITER_COL] = self.writer
                 self.store.append(LIVE_TABLE, rows, source=self.source, symbol=self.symbol,
                                   sticky=(REPLACED_COL, FILLED_COL))
             except Exception as exc:                  # noqa: BLE001 - storing history never stops trading
@@ -530,12 +543,17 @@ def _store_reader(eng: Engine, lo: pd.Timestamp, now: pd.Timestamp
     from goldbot.engine import books
     store, rel_sym = eng.store, eng.cfg.release_symbol
     assert store is not None
-    src, sym = books.live_key(eng)       # gold: (broker, its symbol); another book: (account, store symbol)
+    src, sym = books.live_key(eng)       # (account, its symbol); another book: (account, store symbol)
+    legacy = books.legacy_live_key(eng)  # gold's minutes before the per-account key (broker, its symbol); else None
 
     def read() -> tuple[pd.DataFrame, pd.DataFrame]:
         rel = _clean(store.read("bars_1m", source=RELEASE_SOURCE, symbol=rel_sym, start=lo, end=now), now)
-        own = _clean(store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now), now)
-        return rel, own
+        own = store.read(LIVE_TABLE, source=src, symbol=sym, start=lo, end=now)
+        if legacy is not None:          # S4: the account's own copy of a minute wins (`_clean` keeps the last)
+            old = store.read(LIVE_TABLE, source=legacy[0], symbol=legacy[1], start=lo, end=now)
+            own = pd.concat([x for x in (old, own) if not x.empty], ignore_index=True) \
+                if not (old.empty and own.empty) else own
+        return rel, _clean(own, now)
     return read
 
 
@@ -766,19 +784,29 @@ def _cutover_key(eng: Engine) -> tuple[str, str, str]:
     return eng.cfg.account_id, src, sym
 
 
+def _cutover_keys(eng: Engine) -> list[tuple[str, str, str]]:
+    """The keys a saved cut-over is read under: the live key's, then gold's legacy key's (S4: saved before the
+    per-account key; `books.legacy_live_key`)."""
+    from goldbot.engine import books
+    legacy = books.legacy_live_key(eng)
+    return [_cutover_key(eng), *([(eng.cfg.account_id, *legacy)] if legacy is not None else [])]
+
+
 def saved_cutover(eng: Engine) -> pd.Timestamp | None:
-    """The cut-over a rebase recorded for this account's live feed (aux.db `history_cutover`), or None. An unreadable
-    record is logged and None: the restart then derives the cut-over from the stored broker minutes, as before, and
-    at worst rebases again (fail safe: never a cut-over later than the stored minutes say)."""
+    """The cut-over a rebase recorded for this account's live feed (aux.db `history_cutover`), or None; under the live
+    key or the legacy one, the earlier (each only ever moves back). An unreadable record is logged and None: the
+    restart then derives the cut-over from the stored broker minutes, as before, and at worst rebases again (fail
+    safe: never a cut-over later than the stored minutes say)."""
     from goldbot.db.connection import Database
     try:
         with Database.open(eng.cfg.state_dir, "aux").connection() as conn:
-            r = conn.execute("SELECT cutover_ns FROM history_cutover WHERE account_id = ? AND source = ? AND symbol = ?",
-                             _cutover_key(eng)).fetchone()
+            got = [conn.execute("SELECT cutover_ns FROM history_cutover WHERE account_id = ? AND source = ? "
+                                "AND symbol = ?", key).fetchone() for key in _cutover_keys(eng)]
     except Exception as exc:                          # noqa: BLE001 - a broken record never stops a warm start
         log.warning("history cut-over record unreadable (%s): the stored minutes set the cut-over", type(exc).__name__)
         return None
-    return pd.Timestamp(int(r[0]), unit="ns", tz="UTC") if r is not None else None
+    ns = [int(r[0]) for r in got if r is not None]
+    return pd.Timestamp(min(ns), unit="ns", tz="UTC") if ns else None
 
 
 def save_cutover(eng: Engine, cutover: pd.Timestamp) -> None:
@@ -810,8 +838,29 @@ def _write(eng: Engine, bars: pd.DataFrame) -> None:
         return
     if h.writer is None:
         from goldbot.engine import books
-        h.writer = BarWriter(eng.store, *books.live_key(eng))
+        h.writer = BarWriter(eng.store, *books.live_key(eng), writer=eng.cfg.boot_id)
     h.writer.put(bars)
+
+
+def record_boot(eng: Engine, *, held: bool, at: pd.Timestamp) -> bool:
+    """At engine start (ops.services.engine): one dq_events row `engine_boot` (source = account, ts = when the start
+    took or tried its writer lock, writer = its boot id, detail {"writer_lock": held}), the record the nightly read
+    proves this start's rows by. False when nothing was written (no store, no boot id, a failed write, logged): its
+    rows are then unproven, never proven (fail closed)."""
+    from goldbot.data.quality import DQEvent, events_frame
+    from goldbot.engine import books
+    boot = eng.cfg.boot_id
+    if eng.store is None or boot is None:
+        return False
+    ev = DQEvent(ts_utc=at, check=BOOT_CHECK, severity="info", writer=boot,
+                 detail=json.dumps({"writer_lock": bool(held)}))
+    try:
+        eng.store.append("dq_events", events_frame([ev]), source=eng.cfg.account_id, symbol=books.store_symbol(eng),
+                         dedupe=False)
+    except Exception as exc:                          # noqa: BLE001 - recording never stops trading
+        log.warning("engine boot not recorded (%s): this start's minutes read as unproven", type(exc).__name__)
+        return False
+    return True
 
 
 def queue_minutes(eng: Engine, done: pd.DataFrame) -> None:

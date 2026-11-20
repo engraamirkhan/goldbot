@@ -226,7 +226,7 @@ def test_a_restarted_engine_loads_the_replaced_broker_bars_and_rejoins_without_d
     _feed(first, s[(s["ts_utc"] >= late + pd.Timedelta(minutes=1, seconds=40)) & (s["ts_utc"] < stop)])
     first._rebuild_bars()
     assert first.history.writer is not None and first.history.writer.join(30)
-    stored = Store(tmp_path / "data").read(LIVE_TABLE, source="icm").set_index("ts_utc")
+    stored = Store(tmp_path / "data").read(LIVE_TABLE, source="icm-demo").set_index("ts_utc")
     assert stored.loc[late, "bid_close"] == _as_bars(_rates(TICKS)).loc[late, "bid_close"]   # the last copy wins
 
     second = _engine(tmp_path, term)

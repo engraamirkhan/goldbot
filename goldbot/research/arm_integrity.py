@@ -54,6 +54,20 @@ Design rules:
   yet (`window_incomplete`: shorter than the engine's, or ending before the minute before the decision; tried again
   the next night). An account whose minutes, dq events or
   quarantine cannot be read, or that has no minutes, leaves the arm unverified (UNVERIFYING): never a silent drop.
+* One writer per stored minute (ADR 0091, 2026-11-20; quant conditions 1-6). Each engine start
+  records `engine_boot` (its boot id, whether it holds the account's exclusive writer lock), stamps its id on every
+  minute it stores (`writer`) under the account's own live key (books.live_key = account, symbol) and on each
+  candidate it decides (`boot_id`). A candidate with a boot id is read only when its window is PROVEN
+  (`AccountMinutes.writer_proof`): its boot held the lock and no later start began before the decision; no start
+  without the lock began between the window's start and the decision; and every live minute of the window is the
+  account's own key's copy written by a start that held the lock, the deciding one or one before it, at a write
+  time inside that start's life (from its boot to the next start of the account). Then `sampled_minute` no longer
+  applies (the stored copy is the one this engine held) and no other account's events can void it; every other
+  rule above still does (a replacement written after the decision, K1; a fill or rebase written after it, L1; a
+  corrected row a script wrote with no writer: unproven). Otherwise the candidate is void `unproven_writer`, never
+  refused: legacy-key minutes, a start without the lock (a host without flock, the Windows VPS), an unknown writer,
+  overlapping starts. A candidate without a boot id decided before the account's first recorded start is read by
+  the rules before (the shared-key sharers included); one decided after it was decided by an unknown start: void.
 * Each candidate's final verdict (ok, or refused with its cause), once its day has settled (the frozen terms' lag)
   and its account's coverage passes (quant Q1), is written once to aux.db `arm_lifecycle_verdicts`
   (append-only by trigger) with the engine's (stored) and the night's bracket; later nights read it instead of
@@ -76,7 +90,14 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord
-from goldbot.data.account_bars import QUARANTINE, as_of_minutes, minute_versions
+from goldbot.data.account_bars import (
+    OWN,
+    QUARANTINE,
+    as_of_minutes,
+    engine_boots,
+    live_cutover,
+    minute_versions,
+)
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.crossfeed import RECONCILE_MAX_AGE_HOURS
 from goldbot.data.timeutil import epoch_ns
@@ -137,6 +158,7 @@ NO_BAR = "no_bar_at_decision"
 WINDOW_INCOMPLETE = "window_incomplete"   # the window's minutes are not all in the store yet (quant Q1): tried again
 NO_BROKER_COVERAGE = "no_broker_coverage"  # the broker's M1 does not observe the window after the cut-over (for good)
 CUTOVER_UNREADABLE = "cutover_unreadable"  # aux.db history_cutover (the engine's rebased cut-over) not read
+UNPROVEN_WRITER = "unproven_writer"  # a candidate with a boot id whose window is not proven its engine's own (above)
 # ... of which these say the night cannot read the arm as the engine did: the arm is unverified, and told (F4, Q2)
 UNVERIFYING = frozenset({NO_MINUTES, MINUTES_UNREADABLE, DQ_UNREADABLE, QUARANTINE_UNREADABLE, WINDOW_UNPROVABLE,
                          NO_BROKER_COVERAGE, CUTOVER_UNREADABLE})
@@ -323,8 +345,14 @@ class AccountMinutes:
     def __init__(self, versions: pd.DataFrame, *, quarantined: Sequence[int] = (),
                  replaced: Sequence[tuple[int, int | None]] = (), saved_cutover: int | None = None,
                  now: pd.Timestamp | None = None, late: Sequence[tuple[int, ...]] = (),
-                 sharers: Sequence[tuple[Sequence[tuple[int, ...]], Sequence[tuple[int, int | None]]]] = ()):
+                 sharers: Sequence[tuple[Sequence[tuple[int, ...]], Sequence[tuple[int, int | None]]]] = (),
+                 boots: Sequence[tuple[int, str, bool]] = (), boots_unreadable: bool = False):
         v = versions
+        # the engine starts could not be read: nothing is proven, and no candidate is known to precede them
+        self.boots_unreadable = boots_unreadable
+        # the account's engine starts (start in epoch ns, boot id, held the writer lock), in time order: start i lives
+        # from its boot to the next start's (`writer_proof`)
+        self.boots = sorted((int(t), str(b), bool(k)) for t, b, k in boots)
         m1 = np.zeros(0, dtype=np.int64)
         if "rank" in v.columns:
             rank = v["rank"].to_numpy()
@@ -460,8 +488,39 @@ class AccountMinutes:
         inside = opened[(opened >= lo) & (opened <= hi)]
         return GAP_AFTER_CUTOVER if len(np.setdiff1d(inside, own)) else None
 
-    def held(self, arm: Arm, at: pd.Timestamp) -> pd.DataFrame | str:
-        """The 1m bars the engine held at `at` for `arm`'s window (module docstring), or the void cause."""
+    def writer_proof(self, boot: str, win: pd.DataFrame, at: pd.Timestamp) -> str | None:
+        """Why the window `win` (the minutes as of `at`) is not proven to be what the start `boot` held, None when it
+        is (module docstring, quant conditions 1-3)."""
+        starts = {b: (t, k) for t, b, k in self.boots}
+        if boot not in starts:
+            return "unknown boot"
+        mine, locked = starts[boot]
+        if not locked:
+            return "its start did not hold the writer lock"
+        lo, hi = int(pd.Timestamp(win["ts_utc"].iloc[0]).value), int(at.value)
+        if any(mine < t <= hi for t, _, _ in self.boots):
+            return "a later start began before the decision"
+        if any(lo <= t <= hi and not k for t, _, k in self.boots):
+            return "a start without the writer lock began inside the window"
+        live = win[win["rank"].to_numpy() == LIVE_RANK] if "rank" in win.columns else win
+        if live.empty:
+            return None
+        if not {"writer", "keyed", "written_at"} <= set(live.columns):
+            return "minutes without their writer"
+        ends = {b: next((u for u, _, _ in self.boots if u > t), None) for t, b, _ in self.boots}
+        wrote = pd.to_datetime(live["written_at"], utc=True)
+        for w, keyed, when in zip(live["writer"], live["keyed"], wrote, strict=True):
+            if keyed != OWN or not isinstance(w, str) or w not in starts or pd.isna(when):
+                return "a minute not on the account's key or without a known writer"
+            t, k = starts[w]
+            end = ends[w]
+            if not k or t > mine or int(when.value) < t or (end is not None and int(when.value) >= end):
+                return "a minute written outside a locked start's life"
+        return None
+
+    def held(self, arm: Arm, at: pd.Timestamp, boot: str | None = None) -> pd.DataFrame | str:
+        """The 1m bars the engine held at `at` for `arm`'s window (module docstring), or the void cause. `boot`: the
+        deciding engine start's id (the candidate's `boot_id`), None for a candidate recorded without one."""
         from goldbot.config import tf_seconds
         from goldbot.engine.exploration import LOOKBACK_1M, lookback
         if arm.timeframe in ("1d", "1w"):
@@ -505,11 +564,22 @@ class AccountMinutes:
             part = self.ts[lo_w:hi][self.v["rank"].to_numpy()[lo_w:hi] == LIVE_RANK]
             if len(np.setdiff1d(part, wts)):
                 return LATE_MINUTE
-        # the shared live key (books.live_key = broker, symbol; the store keeps the last copy): a minute this engine
-        # kept sampled for good may be stored as the other engine's broker bar, never what this engine held. Alone
-        # on its key too: a second process on the same account (a restart overlap, a duplicate service) is a second
-        # writer, and nothing stored names the writing process (quant review of 6fec4099, B): fail closed
-        if self.sampled_for_good(wts, at):
+        # one writer per minute (ADR 0091): a candidate with a boot id is read only on a window
+        # proven its own start's (`writer_proof`), and then its sampled minutes are the copies it held; one without
+        # decided after the account's first recorded start came from an unknown start
+        if self.boots_unreadable:
+            return UNPROVEN_WRITER
+        if boot is not None:
+            if (why := self.writer_proof(boot, win, at)) is not None:
+                log.debug("arm integrity: unproven window at %s: %s", at, why)
+                return UNPROVEN_WRITER
+        elif self.boots and at.value >= self.boots[0][0]:
+            return UNPROVEN_WRITER
+        # before the boot record: the shared live key (books.legacy_live_key = broker, symbol; the store kept the last
+        # copy): a minute this engine kept sampled for good may be stored as the other engine's broker bar, never what
+        # this engine held. Alone on its key too: a second process on the same account (a restart overlap, a duplicate
+        # service) was a second writer, and nothing stored named it (quant review of 6fec4099, B): fail closed
+        elif self.sampled_for_good(wts, at):
             return SAMPLED_MINUTE
         # Q1: the window's minutes not all in the store yet (the last one is the minute before `at`)
         if len(win) < need or int(wts.max()) < int((at - pd.Timedelta(minutes=1)).value):
@@ -518,9 +588,9 @@ class AccountMinutes:
         seen["visible_at"] = pd.to_datetime(seen["ts_utc"], utc=True) + pd.Timedelta(minutes=1)
         return seen
 
-    def bracket(self, arm: Arm, at: pd.Timestamp) -> Bracket | str:
+    def bracket(self, arm: Arm, at: pd.Timestamp, boot: str | None = None) -> Bracket | str:
         from goldbot.engine.arm_registry import decision_bracket
-        held = self.held(arm, at)
+        held = self.held(arm, at, boot)
         if isinstance(held, str):
             return held
         return decision_bracket(held, arm, pd.Timestamp(at)) or NO_BAR
@@ -541,18 +611,26 @@ def engine_recompute(minutes: Mapping[str, pd.DataFrame | AccountMinutes | str])
         if isinstance(m, pd.DataFrame) and "rank" in m.columns:
             m = AccountMinutes(m)
         if isinstance(m, AccountMinutes):
-            return m.bracket(arm, at)
+            return m.bracket(arm, at, boot_of(row))
         return decision_bracket(m, arm, at) or NO_BAR
     return recompute
 
 
+def boot_of(row: Mapping[str, Any]) -> str | None:
+    """A candidate's deciding engine start (`boot_id`), None when it has none."""
+    b = row.get("boot_id")
+    return b if isinstance(b, str) and b else None
+
+
 def saved_cutover(db: Database, account: str, broker: str, symbol: str) -> int | None:
-    """The cut-over a history rebase saved for `account`'s live feed (aux.db `history_cutover`, the key the engine
-    writes: account, broker, symbol; engine.history.save_cutover), epoch ns or None. Raises what the read raises."""
+    """The cut-over a history rebase saved for `account`'s live feed (aux.db `history_cutover`, the keys the engine
+    reads: account, account, symbol, and before the per-account key account, broker, symbol; the earlier of the two,
+    as engine.history.saved_cutover), epoch ns or None. Raises what the read raises."""
     with db.connection() as conn:
-        r = conn.execute("SELECT cutover_ns FROM history_cutover WHERE account_id = ? AND source = ? AND symbol = ?",
-                         (account, broker, symbol)).fetchone()
-    return int(r[0]) if r is not None else None
+        got = [conn.execute("SELECT cutover_ns FROM history_cutover WHERE account_id = ? AND source = ? AND symbol = ?",
+                            (account, src, symbol)).fetchone() for src in dict.fromkeys((account, broker))]
+    ns = [int(r[0]) for r in got if r is not None]
+    return min(ns) if ns else None
 
 
 def _dq_late_replaced(store: Any, account: str, start: pd.Timestamp, now: pd.Timestamp
@@ -583,8 +661,16 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
         except Exception as exc:                # noqa: BLE001 - fail closed: the arm reads unverified
             log.error("arm integrity: %s history_cutover unreadable (%s)", account, type(exc).__name__)
             return CUTOVER_UNREADABLE
+    unreadable = False
     try:
-        v = minute_versions(store, account_id=account, broker=broker, symbol=symbol, start=start, end=now, as_of=now)
+        boots = engine_boots(store, account)    # the account's engine starts and their writer locks
+    except Exception as exc:                    # noqa: BLE001 - fail closed for the proof only: every window unproven
+        log.error("arm integrity: %s engine starts unreadable (%s): every window unproven", account,
+                  type(exc).__name__)
+        boots, unreadable = pd.DataFrame(columns=["ts_utc", "writer", "locked"]), True
+    try:
+        v = minute_versions(store, account_id=account, broker=broker, symbol=symbol, start=start, end=now, as_of=now,
+                            legacy_before=live_cutover(boots))
     except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
         log.error("arm integrity: %s minutes unreadable (%s)", account, type(exc).__name__)
         return MINUTES_UNREADABLE
@@ -608,13 +694,16 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
         log.error("arm integrity: %s quarantine unreadable (%s)", account, type(exc).__name__)
         return QUARANTINE_UNREADABLE
     return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now, late=late,
-                          sharers=shared)
+                          sharers=shared, boots_unreadable=unreadable,
+                          boots=[(int(t.value), str(w), bool(k)) for t, w, k in
+                                 zip(boots["ts_utc"], boots["writer"], boots["locked"], strict=True)])
 
 
 def key_sharers(keys: Mapping[str, tuple[str, str]]) -> dict[str, tuple[str, ...]]:
-    """Per account, the other accounts writing the same live key (`keys`: every enabled account of any mode ->
-    (broker, symbol), books.live_key of a gold book): the engines whose `broker_bar_late` minutes the store's shared
-    copy may hold."""
+    """Per account, the other accounts that wrote the same shared live key (`keys`: every configured account ->
+    (broker, symbol), books.legacy_live_key of a gold book, the key before the per-account one): the engines whose
+    `broker_bar_late` minutes the store's shared copy may hold. Read only for a candidate decided before its
+    account's first recorded engine start (module docstring); a proven window needs none."""
     return {a: tuple(sorted(b for b, kb in keys.items() if kb == k and b != a)) for a, k in keys.items()}
 
 
@@ -658,7 +747,7 @@ def stored_recompute(store: Any, hosts: Mapping[str, tuple[str, str]], *, now: p
                                            sharers=sorted(on_key)))
             loaded[acc] = got
         m = got[1]
-        return m if isinstance(m, str) else m.bracket(arm, at)
+        return m if isinstance(m, str) else m.bracket(arm, at, boot_of(row))
     return recompute
 
 
@@ -866,5 +955,5 @@ __all__ = ["BRACKET_RETIRE_N", "BRACKET_VOID_ACTION", "BROKER_SILENCE_MAX", "CAP
            "NO_RECOMPUTE", "QUARANTINED_MINUTE", "QUARANTINE_UNREADABLE", "READ_DAYS", "REFUSAL_CAUSES",
            "REPLACED_MINUTE", "REPLACE_SPAN", "UNVERIFYING", "WINDOW_INCOMPLETE", "WINDOW_UNPROVABLE",
            "AccountMinutes", "HostRead", "Integrity", "NightInputs", "Recompute", "candidate_row", "coverage_refusal",
-           "discovered", "engine_journal", "engine_recompute", "evidence_sharers", "host_read", "integrity",
+           "boot_of", "discovered", "engine_journal", "engine_recompute", "evidence_sharers", "host_read", "integrity",
            "integrity_inputs", "journalled", "replaced_count", "saved_cutover", "stored_recompute", "verdicts"]

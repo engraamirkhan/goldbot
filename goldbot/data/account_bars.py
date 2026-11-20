@@ -5,8 +5,12 @@ Brain 2026-10-27: the nightly learner read `bars_1m` with source=<account>. On t
 reference feed (source=dukascopy), so every replay saw no bars, 0 of 349 candidates were ever labelled and every
 bandit run rested on n = 0, with the job reporting ok. The account's own minutes live in, in this order:
 
-  1. `bars_1m_live`   source = the broker name, symbol = the broker's symbol (XAUUSD+ on Vantage): the engine's minutes
-                      from the broker's ticks, written continuously (goldbot/engine/history.py LIVE_TABLE);
+  1. `bars_1m_live`   source = the account id, symbol = the broker's symbol (XAUUSD+ on Vantage): the engine's minutes
+                      from the broker's ticks, written continuously (goldbot/engine/history.py LIVE_TABLE); under them
+                      the minutes stored before the per-account key (source = the broker name, `books.legacy_live_key`),
+                      only before the account's cut-over (`live_cutover`: its first engine start that held its writer
+                      lock, never its first own minute, which a back-fill moves; quant condition 4 of ADR
+                      0091) and only where the account's own key has no copy of the minute;
   2. `bars_1m_broker` source = the account id: the broker's M1 as its terminal reports it (feed_reconcile, nightly);
   3. `bars_1m`        source = the account id: legacy, kept so an older store still reads.
 
@@ -19,18 +23,115 @@ one minute the last one visible by `as_of`. Timestamps are compared in ns (`time
 """
 from __future__ import annotations
 
-from typing import Any
+import json
+import logging
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 from goldbot.data.timeutil import epoch_ns
 
+log = logging.getLogger(__name__)
+
 MINUTE = pd.Timedelta(minutes=1)
 QUARANTINE = "bars_quarantine"           # data/quarantine.py QUARANTINE_TABLE of bars_1m and bars_1m_live
 PRICE_COLUMNS = [f"{s}_{c}" for s in ("bid", "ask") for c in ("open", "high", "low", "close")]
-FEEDS: tuple[tuple[str, str], ...] = (("bars_1m_live", "broker"), ("bars_1m_broker", "account"),
+# "live": bars_1m_live, the account's own key with the broker's legacy key under it (`live_rows`)
+FEEDS: tuple[tuple[str, str], ...] = (("bars_1m_live", "live"), ("bars_1m_broker", "account"),
                                       ("bars_1m", "account"))
+LIVE_TABLE = "bars_1m_live"
+BOOT_CHECK = "engine_boot"               # engine/history.py BOOT_CHECK: one dq event per engine start
+OWN, LEGACY = "own", "legacy"            # `keyed`: which live key a minute was read from
+
+
+BOOT_COLUMNS = ["ts_utc", "check", "writer", "detail"]   # the only dq_events columns the starts are read from
+# account -> its live cut-over (the first locked engine start, `live_cutover`): once found it never moves, so it is
+# read once per process (per scheduler job run and after), never per bar read; an account with none is read again
+CUTOVER_CACHE: dict[tuple[str, str], pd.Timestamp] = {}
+
+
+def engine_boots(store: Any, account_id: str) -> pd.DataFrame:
+    """Every engine start of `account_id` (dq_events `engine_boot`, any symbol, all time): ts_utc (when it took or
+    tried its writer lock), writer (its boot id), locked (it holds the account's exclusive writer lock), sorted.
+    Only BOOT_COLUMNS are read; no file with a `writer` column is no start. Raises what the store read raises
+    (callers fail closed)."""
+    import duckdb
+    cols = ["ts_utc", "writer", "locked"]
+    try:
+        ev = store.read("dq_events", source=account_id, symbol=None, columns=BOOT_COLUMNS)
+    except duckdb.BinderException:              # no part of the account's dq_events has a writer: no start recorded
+        return pd.DataFrame(columns=cols)
+    if ev is None or ev.empty or "check" not in ev.columns or "writer" not in ev.columns:
+        return pd.DataFrame(columns=cols)
+    ev = ev[ev["check"].astype(str) == BOOT_CHECK]
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    def locked(detail: Any) -> bool:
+        try:
+            return json.loads(str(detail)).get("writer_lock") is True
+        except (ValueError, AttributeError):
+            return False                          # a record that does not parse proves nothing
+    out = pd.DataFrame({"ts_utc": pd.to_datetime(ev["ts_utc"], utc=True), "writer": ev["writer"].astype(object),
+                        "locked": [locked(d) for d in ev["detail"]]})
+    out = out[out["writer"].notna()]
+    return out.sort_values("ts_utc", kind="stable").reset_index(drop=True)
+
+
+def live_cutover(boots: pd.DataFrame) -> pd.Timestamp | None:
+    """The account's live-key cut-over: its first engine start that held the writer lock (`engine_boots`), None
+    before any. Legacy-key minutes are read only before it (quant condition 4)."""
+    held = boots[boots["locked"].astype(bool)] if not boots.empty else boots
+    return pd.Timestamp(held["ts_utc"].iloc[0]) if not held.empty else None
+
+
+def live_rows(store: Any, *, account_id: str, broker: str, symbol: str, start: pd.Timestamp | None,
+              end: pd.Timestamp | None, legacy_before: pd.Timestamp | None) -> pd.DataFrame:
+    """The account's bars_1m_live rows: its own key's (source = account), then the broker's legacy key's before
+    `legacy_before` (None: no bound) for minutes its own key has no copy of; `keyed` says which (OWN, LEGACY)."""
+    own = store.read(LIVE_TABLE, source=account_id, symbol=symbol, start=start, end=end)
+    old = store.read(LIVE_TABLE, source=broker, symbol=symbol, start=start, end=end) if broker != account_id \
+        else pd.DataFrame()
+    parts = []
+    if own is not None and not own.empty:
+        parts.append(own.reset_index(drop=True).assign(keyed=OWN))
+    if old is not None and not old.empty:
+        old = old.reset_index(drop=True)
+        ts = epoch_ns(pd.DatetimeIndex(pd.to_datetime(old["ts_utc"], utc=True)))
+        keep = ~np.isin(ts, epoch_ns(pd.DatetimeIndex(pd.to_datetime(own["ts_utc"], utc=True)))) \
+            if own is not None and not own.empty else np.ones(len(old), dtype=bool)
+        if legacy_before is not None:
+            keep &= ts < int(pd.Timestamp(legacy_before).tz_convert("UTC").value)
+        if keep.any():
+            parts.append(old[keep].assign(keyed=LEGACY))
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
+def cached_cutover(store: Any, account_id: str) -> pd.Timestamp | None:
+    """`live_cutover` of the account's engine starts, cached once found (CUTOVER_CACHE). Raises what the read raises."""
+    key = (str(getattr(store, "root", id(store))), account_id)
+    if key not in CUTOVER_CACHE:
+        cut = live_cutover(engine_boots(store, account_id))
+        if cut is None:
+            return None
+        CUTOVER_CACHE[key] = cut
+    return CUTOVER_CACHE[key]
+
+
+def _legacy_before(store: Any, account_id: str,
+                   legacy_before: pd.Timestamp | None | Literal["boots"]) -> pd.Timestamp | None:
+    """The legacy bound of a bar read. An unreadable dq_events never breaks the bar read (data and quant review of
+    7b439c30): logged, and the legacy key is read with no bound (the account's own copy still wins). Only the arm
+    read's proof fails closed on it (research/arm_integrity: `unproven_writer`)."""
+    if not isinstance(legacy_before, str):
+        return legacy_before
+    try:
+        return cached_cutover(store, account_id)
+    except Exception as exc:                    # noqa: BLE001 - the bars are read; the proof is not this read's
+        log.warning("engine starts of %s unreadable (%s): its live minutes read with no legacy bound", account_id,
+                    type(exc).__name__)
+        return None
 
 
 def _visible_ns(df: pd.DataFrame) -> np.ndarray:
@@ -47,9 +148,11 @@ def _visible_ns(df: pd.DataFrame) -> np.ndarray:
 
 
 def account_bars_1m(store: Any, *, account_id: str, broker: str, symbol: str, start: pd.Timestamp | None,
-                    end: pd.Timestamp | None, as_of: pd.Timestamp) -> pd.DataFrame:
+                    end: pd.Timestamp | None, as_of: pd.Timestamp,
+                    legacy_before: pd.Timestamp | None | Literal["boots"] = "boots") -> pd.DataFrame:
     """ts_utc + bid/ask OHLC of `account_id`'s broker in [start, end), visible by `as_of` (module docstring), one row
-    per minute, sorted, with the `feed` it came from. Empty when no feed has a minute."""
+    per minute, sorted, with the `feed` it came from. Empty when no feed has a minute. `legacy_before`: the live
+    cut-over ("boots": read from the account's engine starts, `live_cutover`)."""
     cut = int(pd.Timestamp(as_of).tz_convert("UTC").value)
     parts: list[pd.DataFrame] = []
     # a minute quarantined from the broker's live feed or the account's bars is left out of EVERY feed (quant
@@ -60,8 +163,9 @@ def account_bars_1m(store: Any, *, account_id: str, broker: str, symbol: str, st
         if q is not None and not q.empty:
             taken.update(epoch_ns(pd.DatetimeIndex(pd.to_datetime(q["ts_utc"], utc=True))).tolist())
     for table, keyed in FEEDS:
-        source = broker if keyed == "broker" else account_id
-        df = store.read(table, source=source, symbol=symbol, start=start, end=end)
+        df = live_rows(store, account_id=account_id, broker=broker, symbol=symbol, start=start, end=end,
+                       legacy_before=_legacy_before(store, account_id, legacy_before)) if keyed == "live" \
+            else store.read(table, source=account_id, symbol=symbol, start=start, end=end)
         if df is None or df.empty or not set(PRICE_COLUMNS) <= set(df.columns):
             continue
         df = df.reset_index(drop=True)
@@ -89,7 +193,8 @@ REFERENCE_FEED = ("bars_1m", "dukascopy")     # the release minutes the engine w
 
 
 def minute_versions(store: Any, *, account_id: str, broker: str, symbol: str, start: pd.Timestamp | None,
-                    end: pd.Timestamp | None, as_of: pd.Timestamp, reference: str | None = "XAUUSD") -> pd.DataFrame:
+                    end: pd.Timestamp | None, as_of: pd.Timestamp, reference: str | None = "XAUUSD",
+                    legacy_before: pd.Timestamp | None | Literal["boots"] = "boots") -> pd.DataFrame:
     """Every stored version of `account_id`'s broker minutes in [start, end) visible by `as_of`, from each feed in
     FEEDS order (`rank` 0, 1, 2), then the release minutes of the `reference` symbol (the engine's release_symbol) the
     engine loads after a restart (rank 3, used only where no broker feed has the minute; None: none). One row per stored row, with `visible_at`: its nominal
@@ -98,19 +203,24 @@ def minute_versions(store: Any, *, account_id: str, broker: str, symbol: str, st
     engine built live and stored at once was known at its close, as the engine knew it), `written` (a write time is
     stored), `written_at` (that write time, NaT without one), `replaced` (the engine flagged the minute a replacement
     of the one it decided on), the bar columns the features read (META_COLUMNS, NaN where a feed has none) and `rank`. Quarantined
-    minutes are left out of every feed, as in `account_bars_1m`. `as_of_minutes` cuts it at a decision."""
+    minutes are left out of every feed, as in `account_bars_1m`. `as_of_minutes` cuts it at a decision. The live
+    feed (rank 0) is `live_rows` (`legacy_before` as in `account_bars_1m`), each row with its `writer` (the engine
+    start that wrote it, None without one) and `keyed` (OWN or LEGACY; "" on the other feeds)."""
     cut = int(pd.Timestamp(as_of).tz_convert("UTC").value)
     bad: set[int] = set()
     for source in dict.fromkeys((broker, account_id)):
         q = store.read(QUARANTINE, source=source, symbol=symbol, start=start, end=end, columns=["ts_utc"])
         if q is not None and not q.empty:
             bad.update(epoch_ns(pd.DatetimeIndex(pd.to_datetime(q["ts_utc"], utc=True))).tolist())
-    feeds = [(t, broker if k == "broker" else account_id, symbol) for t, k in FEEDS]
+    feeds = [(t, k if k == "live" else account_id, symbol) for t, k in FEEDS]
     if reference:
         feeds.append((REFERENCE_FEED[0], REFERENCE_FEED[1], reference))
     parts: list[pd.DataFrame] = []
+    cut_live = _legacy_before(store, account_id, legacy_before)
     for rank, (table, source, sym) in enumerate(feeds):
-        df = store.read(table, source=source, symbol=sym, start=start, end=end)
+        df = live_rows(store, account_id=account_id, broker=broker, symbol=sym, start=start, end=end,
+                       legacy_before=cut_live) if source == "live" \
+            else store.read(table, source=source, symbol=sym, start=start, end=end)
         if df is None or df.empty or not set(PRICE_COLUMNS) <= set(df.columns):
             continue
         df = df.reset_index(drop=True)
@@ -140,11 +250,16 @@ def minute_versions(store: Any, *, account_id: str, broker: str, symbol: str, st
             if "available_utc" in df.columns else pd.NaT
         part["replaced"] = df.loc[keep, "replaced"].astype("boolean").fillna(False).astype(bool).to_numpy() \
             if "replaced" in df.columns else False
+        # the writing engine start and the key (engine/history.py WRITER_COL; quant conditions 1-4): a live minute is
+        # proven this account's engine's own copy only through them (research/arm_integrity.py)
+        part["writer"] = df.loc[keep, "writer"].astype(object).where(df.loc[keep, "writer"].notna(), None).to_numpy() \
+            if "writer" in df.columns else None
+        part["keyed"] = df.loc[keep, "keyed"].to_numpy() if "keyed" in df.columns else ""
         part["rank"] = rank
         parts.append(part)
     if not parts:
         return pd.DataFrame(columns=["ts_utc", *PRICE_COLUMNS, *META_COLUMNS, "visible_at", "written", "written_at",
-                                     "replaced", "rank"])
+                                     "replaced", "writer", "keyed", "rank"])
     out = pd.concat(parts, ignore_index=True)
     out["ts_utc"] = pd.to_datetime(out["ts_utc"], utc=True)
     return out.sort_values(["ts_utc", "rank"], kind="stable").reset_index(drop=True)
@@ -158,4 +273,5 @@ def as_of_minutes(versions: pd.DataFrame, at: pd.Timestamp) -> pd.DataFrame:
     return v.drop_duplicates("ts_utc", keep="first").reset_index(drop=True)
 
 
-__all__ = ["FEEDS", "META_COLUMNS", "REFERENCE_FEED", "account_bars_1m", "as_of_minutes", "minute_versions"]
+__all__ = ["BOOT_CHECK", "FEEDS", "LEGACY", "META_COLUMNS", "OWN", "REFERENCE_FEED", "account_bars_1m", "as_of_minutes",
+           "cached_cutover", "engine_boots", "live_cutover", "live_rows", "minute_versions"]

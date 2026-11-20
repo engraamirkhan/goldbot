@@ -56,6 +56,7 @@ from goldbot.execution.mt5_adapter import TICKS_MANY_MAX
 from goldbot.instruments import GOLD, InstrumentSpec
 
 if TYPE_CHECKING:
+    from goldbot.data.quality import DQEvent
     from goldbot.engine.runner import Engine, EngineConfig
     from goldbot.execution.broker import SymbolInfo, Tick
     from goldbot.labels.triple_barrier import SwapSpec
@@ -974,12 +975,35 @@ def store_symbol(eng: Engine) -> str:
     return eng.cfg.symbol if is_primary(eng) else eng.cfg.release_symbol
 
 
+def append_dq(eng: Engine, events: list[DQEvent]) -> None:
+    """Store a decision close's data-quality events under the account and the active book's store symbol, stamped with
+    this engine start's writer id (`EngineConfig.boot_id`: uuid4 hex from ops.services.engine, also on every
+    bars_1m_live row and exploration candidate, recorded with its writer lock by `history.record_boot`). The nightly
+    arm read proves a stored minute is this account's own engine's copy by it (ADR 0091); None (paper, replays,
+    tests) leaves the rows unproven."""
+    from goldbot.data.quality import events_frame
+    assert eng.store is not None
+    eng.store.append("dq_events", events_frame(events, writer=eng.cfg.boot_id), source=eng.cfg.account_id,
+                     symbol=store_symbol(eng), dedupe=False)
+
+
 def live_key(eng: Engine) -> tuple[str, str]:
-    """(source, symbol) of the active book's `bars_1m_live` minutes. Plan: "store bars_1m_live keyed (source=account,
-    symbol=store_symbol), never pooled with XAUUSD" for a non-gold book; gold keeps (broker name, its symbol), the
-    history it has read and written since ADR 0062 ("XAUUSD paths byte-identical")."""
+    """(source, symbol) of the active book's `bars_1m_live` minutes: (account, symbol), one key per account. Plan:
+    "store bars_1m_live keyed (source=account, symbol=store_symbol), never pooled with XAUUSD" for a non-gold book;
+    gold keys its traded symbol under the account too (ADR 0091, 2026-11-20): two gold engines
+    of one broker no longer share one key, so a stored minute is the copy its own account's engine wrote. Gold's
+    minutes written before that stay on `legacy_live_key`, read but never written."""
     cfg = eng.cfg
-    return (cfg.broker_name, cfg.symbol) if is_primary(eng) else (cfg.account_id, cfg.release_symbol)
+    return (cfg.account_id, cfg.symbol) if is_primary(eng) else (cfg.account_id, cfg.release_symbol)
+
+
+def legacy_live_key(eng: Engine) -> tuple[str, str] | None:
+    """The key gold's minutes were stored under before the per-account key (broker name, its symbol: shared by every
+    gold engine of the broker), read under the account's own minutes (`engine.history`: the account's copy of a
+    minute wins) so a restart holds the history it held before; never written. None for another book (always keyed
+    by account)."""
+    cfg = eng.cfg
+    return (cfg.broker_name, cfg.symbol) if is_primary(eng) else None
 
 
 # ------------------------------------------------------------------ instruments.db terms (non-gold books)

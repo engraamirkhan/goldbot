@@ -325,6 +325,47 @@ def check_quote_age(ctx: HealthContext, account_id: str) -> Check | None:
                          "quote, broker stops rest on the orders")[:600])
 
 
+DUPLICATE_ENGINE_WARN_S = 10 * 60   # a refused duplicate start this recent WARNs (restarts every 10 s refresh it)
+DUPLICATE_ENGINE_TELL_AGAIN_S = 3600   # refusals running this long without a pause are told again (a stray holder)
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=19)
+def check_duplicate_engine(ctx: HealthContext, account_id: str) -> Check | list[Check] | None:
+    """duplicate_engine:<account> (ADR 0091, trading-safety S1): a second engine of the account
+    was refused because another holds its writer lock (state/engine_duplicate_<account>.json, written by
+    `ops.services.engine.refuse_duplicate`). WARN, naming the holder's pid, while the last refusal is younger than
+    DUPLICATE_ENGINE_WARN_S, told once (NOTIFY_ON_WARN); the running engine is untouched. Refusals that have run
+    without a pause for DUPLICATE_ENGINE_TELL_AGAIN_S (trading-safety LOW of 7b439c30: a stray holder that keeps
+    trading) add `duplicate_engine_1h:<account>`, a second WARN, told too. None when no start was ever refused; OK
+    once the refusals stop."""
+    f = ctx.state_dir / f"engine_duplicate_{account_id}.json"
+    if not f.exists():
+        return None
+    name = f"duplicate_engine:{account_id}"
+    try:
+        d = _read_json(f)
+        at = float(d["at"])
+    except (ValueError, OSError, KeyError, TypeError):
+        return Check(name=name, status="warn", reason="duplicate engine record unreadable: check the journal")
+    age = ctx.now.timestamp() - at
+    if age > DUPLICATE_ENGINE_WARN_S:
+        return Check(name=name, status="ok", reason=f"last duplicate start refused {_age(age)} ago")
+    pid = d.get("holder_pid")
+    who = f"engine pid {pid if pid else 'unknown'} holds its writer lock"
+    warn = Check(name=name, status="warn",
+                 reason=(f"a second engine of {account_id} is refused every restart: {who}; stop the duplicate "
+                         "service or process (the running engine trades on)")[:600])
+    try:
+        ran = ctx.now.timestamp() - float(d.get("first", at))
+    except (TypeError, ValueError):
+        ran = 0.0
+    if ran < DUPLICATE_ENGINE_TELL_AGAIN_S:
+        return warn
+    return [warn, Check(name=f"duplicate_engine_1h:{account_id}", status="warn",
+                        reason=(f"a second engine of {account_id} has been refused for {_age(ran)}: {who}; is that "
+                                "holder the engine you want trading? stop the other one")[:600])]
+
+
 TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even after it cleared
 
 

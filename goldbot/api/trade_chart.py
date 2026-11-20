@@ -58,25 +58,39 @@ def _window(row: TradeRow, tf: str, now: pd.Timestamp) -> tuple[pd.Timestamp, pd
     return lo, min(hi, now.ceil("min"))
 
 
-def _broker(account: str) -> str | None:
+def _account_terms(account: str) -> tuple[str, str] | None:
+    """(broker, traded gold symbol) of `account` from config/accounts.yaml; None when unknown or unreadable."""
     try:
         from goldbot.ops.accounts import load_accounts
         acc = load_accounts(logins=False).get(account)
-        return acc.broker if acc is not None else None
+        return (acc.broker, acc.symbol) if acc is not None else None
     except Exception:                      # noqa: BLE001 - the engine's own minutes are one of several feeds
         return None
 
 
-def _sources(account: str | None, gold: bool = True) -> list[tuple[str, str, Literal["broker", "reference"]]]:
-    out: list[tuple[str, str, Literal["broker", "reference"]]] = []
+Part = tuple[str, str, str]                  # (table, source, store symbol)
+Feed = tuple[tuple[Part, ...], Literal["broker", "reference"]]
+
+
+def _sources(account: str | None, gold: bool = True, symbol: str = "XAUUSD") -> list[Feed]:
+    """The feeds in the order tried, each read whole from its parts (a later part's minute wins). `symbol`: the store
+    symbol of a non-gold chart; gold's live minutes are read on the account's traded symbol. Every read names its
+    symbol: an account's non-gold books write bars_1m_live under the same source (books.live_key = account, store
+    symbol) and would otherwise mix into the gold chart (data review of 7b439c30). The live feed is the broker's
+    legacy key with the account's own key over it (ADR 0091), so a chart spanning the change shows every minute."""
+    out: list[Feed] = []
     if account:
-        out.append(("bars_1m_broker", account, "broker"))
-        broker = _broker(account)
-        if broker:
-            out.append(("bars_1m_live", broker, "broker"))
-        out.append(("bars_1m", account, "broker"))
+        out.append(((("bars_1m_broker", account, symbol),), "broker"))
+        if gold:
+            terms = _account_terms(account)
+            traded = terms[1] if terms is not None else symbol
+            legacy = (("bars_1m_live", terms[0], traded),) if terms is not None else ()
+            out.append(((*legacy, ("bars_1m_live", account, traded)), "broker"))
+        else:
+            out.append(((("bars_1m_live", account, symbol),), "broker"))
+        out.append(((("bars_1m", account, symbol),), "broker"))
     if gold:                                 # the reference feed is gold's only
-        out.append(("bars_1m", REFERENCE, "reference"))
+        out.append(((("bars_1m", REFERENCE, symbol),), "reference"))
     return out
 
 
@@ -94,15 +108,17 @@ def _bars(store: Any, account: str | None, tf: str, lo: pd.Timestamp, hi: pd.Tim
     pad = pd.Timedelta(days=1) if tf == "1d" else pd.Timedelta(0)
     gold = symbol == GOLD
     store_symbol, digits = ("XAUUSD", 2) if gold else _symbol_terms(symbol)
-    for table, source, feed in _sources(account, gold):
-        try:
-            m1 = (store.read(table, source=source, start=lo - pad, end=hi + pad) if gold
-                  else store.read(table, source=source, symbol=store_symbol, start=lo - pad, end=hi + pad))
-        except Exception as exc:          # noqa: BLE001 - one unreadable feed is skipped, never a failed chart
-            log.warning("trade chart: %s/%s unreadable (%s)", table, source, type(exc).__name__)
+    for parts, feed in _sources(account, gold, store_symbol):
+        got = []
+        for table, source, sym in parts:
+            try:
+                got.append(store.read(table, source=source, symbol=sym, start=lo - pad, end=hi + pad))
+            except Exception as exc:      # noqa: BLE001 - one unreadable feed is skipped, never a failed chart
+                log.warning("trade chart: %s/%s unreadable (%s)", table, source, type(exc).__name__)
+        got = [g for g in got if g is not None and not g.empty and set(BAR_COLUMNS) <= set(g.columns)]
+        if not got:
             continue
-        if m1 is None or m1.empty or not set(BAR_COLUMNS) <= set(m1.columns):
-            continue
+        m1 = pd.concat(got, ignore_index=True)
         m1 = m1.drop_duplicates("ts_utc", keep="last").sort_values("ts_utc")[BAR_COLUMNS]
         b = m1 if tf == "1m" else resample_bars(m1.reset_index(drop=True), tf)
         ts = pd.to_datetime(b["ts_utc"], utc=True)

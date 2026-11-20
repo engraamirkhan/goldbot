@@ -109,7 +109,7 @@ def test_warm_start_fills_the_gap_from_the_broker_ticks_with_the_live_bar_builde
     pd.testing.assert_frame_equal(got[expect.columns], expect, check_dtype=False)
     assert open_gaps(pd.DatetimeIndex(eng.bars_1m["ts_utc"]), eng.sessions, max_open_min=60) == []
     assert broker.calls > 1                                        # paged
-    kept = Store(tmp_path / "data").read(LIVE_TABLE, source="icm")
+    kept = Store(tmp_path / "data").read(LIVE_TABLE, source="icm-demo")
     assert len(kept) == len(expect)
     assert eng.history.backfill["bars"] == len(expect) and eng.history.backfill["error"] is None
     assert pd.Timestamp(eng.history.backfill["cutover"]) == expect["ts_utc"].iloc[0]
@@ -260,7 +260,7 @@ def test_completed_live_minutes_are_stored_so_a_restart_has_no_hole(tmp_path):
     until = LIVE_FROM + pd.Timedelta(hours=6)
     _feed(eng, TICKS[(TICKS["ts_utc"] >= LIVE_FROM) & (TICKS["ts_utc"] < until)])
     assert eng.history.writer is not None and eng.history.writer.join(30)
-    kept = Store(tmp_path / "data").read(LIVE_TABLE, source="icm")
+    kept = Store(tmp_path / "data").read(LIVE_TABLE, source="icm-demo")
     assert len(kept) and pd.Timestamp(kept["ts_utc"].min()) >= LIVE_FROM
     assert pd.Timestamp(kept["ts_utc"].max()) >= until - pd.Timedelta(minutes=16)
     again = _engine(tmp_path)
@@ -286,7 +286,7 @@ def test_a_locked_store_never_stalls_the_tick_thread(tmp_path, monkeypatch):
     assert time.monotonic() - t0 < 30                              # the writer waits, the ticks did not
     gate.set()
     assert eng.history.writer is not None and eng.history.writer.join(30)
-    assert len(Store(tmp_path / "data").read(LIVE_TABLE, source="icm")) > 0
+    assert len(Store(tmp_path / "data").read(LIVE_TABLE, source="icm-demo")) > 0
 
 
 def test_a_full_writer_queue_drops_its_oldest_batch_with_a_log(tmp_path, monkeypatch, caplog):

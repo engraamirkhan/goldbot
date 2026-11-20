@@ -37,7 +37,7 @@ from goldbot.data.calendar import (
 )
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import engine_shock
-from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
+from goldbot.data.quality import DQEvent, bar_errors, stale_feed
 from goldbot.data.resample import IncrementalResampler, mid, resample_bars
 from goldbot.data.store import Store
 from goldbot.data.timeutil import feature_day, floor_tf, server_wall
@@ -303,6 +303,7 @@ class EngineConfig(Record):
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
     swap_prior: SwapSpec = Field(default_factory=lambda: SwapSpec.shipped())
+    boot_id: str | None = None   # this engine start's writer id (books.append_dq, ADR 0091); None: unproven rows
 
 
 class Engine:
@@ -869,8 +870,7 @@ class Engine:
         self._rebuild_bars()
         self._dq_bar_events, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
         if self._dq_bar_events and self.store is not None:
-            self.store.append("dq_events", events_frame(self._dq_bar_events), source=self.cfg.account_id,
-                              symbol=books.store_symbol(self), dedupe=False)
+            books.append_dq(self, self._dq_bar_events)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         base = self._frame(complete, self.cfg.decision_tf, close_ts) if len(complete) >= 400 else None
         if base is None:                       # too few bars to decide: exits still run (backlog 160, R124)

@@ -2084,7 +2084,8 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
                          mu=mu if mu is not None else PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
                          arm_share=share if share is not None else shares(ex, now).get(arm.arm_id),
-                         arm_rule_version=rule_version(arm.spec.rule))      # BACKLOG 105
+                         arm_rule_version=rule_version(arm.spec.rule),      # BACKLOG 105
+                         boot_id=eng.cfg.boot_id)              # the deciding start (ADR 0091)
     except Exception as exc:
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
 
