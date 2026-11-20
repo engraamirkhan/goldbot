@@ -274,7 +274,7 @@ def test_no_active_gold_learning_arm_or_learning_control_is_registered_on_a_non_
 # ------------------------------------------------------------------------------------------------ registration
 def test_the_shipped_refusals_add_the_icm_guard_then_har_unavailable_then_har_low_range():
     assert [r.name for r in entry_refusals.REFUSALS] == [
-        entry_refusals.WINDOW_0207, entry_refusals.F1_PIT, refusals_novel.LEARNING_ICM_ONLY,
+        entry_refusals.WINDOW_0207, entry_refusals.F1_PIT, entry_refusals.ASIA_5M, refusals_novel.LEARNING_ICM_ONLY,
         refusals_novel.HAR_UNAVAILABLE, refusals_novel.HAR_LOW_RANGE]
 
 

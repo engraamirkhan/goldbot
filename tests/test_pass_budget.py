@@ -64,7 +64,12 @@ def _engine(tmp_path: Path, bars: dict[int, pd.DataFrame]) -> tuple[Engine, _Ter
     assert cfg is not None
     # the pass's paths, not the account's daily entry budget (tests/test_exploration_daily_budget.py): without it the
     # session's controls trade before any edge arm fills
-    cfg = cfg.model_copy(update={"daily": None})
+    # Amendment 2026-11-20 made every gold control on the account replay_only, S0R (the session's sender) included;
+    # this test pins the pass's paths, not the account's control modes, so S0R is broker-traded here to keep an entry
+    # going through the RiskGate and the terminal (tests/test_stop_the_bleeding.py pins the modes)
+    cfg = cfg.model_copy(update={"daily": None, "arms": [
+        a.model_copy(update={"spec": a.spec.model_copy(update={"control_mode": "broker"})}) if a.arm_id == "S0R" else a
+        for a in cfg.arms]})
     reg = load_instruments()
     specs = tuple(BookSpec(key=k, symbol=k, store_symbol=reg.get(k).store_symbol, magic_block=reg.get(k).magic_block,
                            digits=2, point=0.01, contract_size=reg.get(k).contract_size,
