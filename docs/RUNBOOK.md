@@ -615,6 +615,23 @@ and the rest still arrives. It never contains account numbers or emails.
   `goldbot-deploy` does not install units: after this change, reinstall them (copy `goldbot/ops/linux/systemd/*` to
   `/etc/systemd/system`, `daemon-reload`, restart). Until then nothing breaks for reads of existing secrets; only a
   new `accounts set` from a unit environment would be refused.
+* **MT5 boxes: bridges restart only for a bridge change, and not in market hours (ADR 0094).** A deploy whose
+  commits change no bridge file (`goldbot/ops/bridge_files.py` `BRIDGE_FILES_RE`) moves the checkout and restarts
+  nothing, once the target's start check says ok. The record says `no bridge file changed: checkout only`. If the
+  check finds a problem, the record says `refused ... would not start (...)`, the old checkout stays and nothing
+  restarted. Fix the cause it names, or run the same check by hand on the box:
+  `sudo -u mt5 -H bash -c 'cd /opt/goldbot && env WINEDEBUG=-all DISPLAY=:99 wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m goldbot.ops.bridge_files check <account>'`.
+  A deploy that does change a bridge file is refused Mon-Fri 07:00-21:00 UTC with exit 75 and the record
+  `refused: bridge files changed: bridge restarts are held in market hours ...`. Nothing changed: deploy again after
+  21:00 UTC, or add `--now` for a safety fix (an exit, risk or broken-bridge fix). A `--rollback` is never held.
+  Before goldbot-deploy-all deploys the MT5 boxes it opens the brain's alert window (below).
+* **A deploy's own alerts are held (ADR 0094).** While `state/deploy_window.json` (written by goldbot-deploy on the
+  brain, from the switch to 20 min after the record) or `state/deploy_window_manual.json` (opened on the brain with
+  `sudo -u goldbot -H bash -c 'cd /opt/goldbot && .venv/bin/python -m goldbot.ops.deploy_window open --minutes 40'`)
+  is open, new `tick_errors:` and `bridge_compat:` alerts are held. One still bad after the window is told on the next
+  poll. `bridge:`, `engine_loop:`, `heartbeat:` and every other check alert as before. To see whether a window is
+  open: `... -m goldbot.ops.deploy_window show`. A window file that cannot be read, or spans more than 2 h, holds
+  nothing. To end one early, delete the file (as the goldbot user).
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
   Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
   `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script
@@ -2628,6 +2645,27 @@ record's fields) bumps `API_VERSION` in `goldbot/execution/bridge.py`, and `MIN_
 longer interoperate (`tests/test_bridge_compat.py` pins both to `protocol_digest()` and fails otherwise), and says
 "deploy the MT5 box first" in the PR. The Telegram "New version ready" offer warns when an MT5 box runs an older
 commit than the one offered.
+
+After an MT5 deploy that changed no bridge file (ADR 0094) the bridge keeps running its older commit on purpose.
+`bridge_compat:<account>` then says `commits differ ...: no bridge file differs (ADR 0094)` and is ok (the brain asks
+its own git). A plain `commits differ` warning means a bridge file differs: the box is behind. Deploy it in the daily
+break, or with `--now` if the change is a safety fix.
+
+### Bridge port held (bridge exits 77)
+Since 2026-11-20 (audit debt 1, the 11-04 icm-demo outage mode) a bridge whose port is still held when it starts (the
+old process, or Wine's server still holding that process's socket) retries the bind with a doubling wait for up to 30 s.
+The journal shows `bridge port <port> in use (try n): retrying`. It then exits 77 with
+`bridge port <port> still in use after 30 s ... RUNBOOK 'Bridge port held'`. systemd starts it again 10 s later, so a
+port that frees itself recovers on its own. If it does not, `bridge:<account>` FAILs on the brain after 5 min and is
+told at once. On the MT5 box:
+1. `sudo ss -ltnp 'sport = :8765'` (the port from `goldbot-bridge-watchdog@<account>`'s unit) shows who holds it.
+2. A stray `python.exe` of the bridge: `sudo systemctl stop goldbot-bridge@<account>`, check it is gone (`pgrep -af
+   'goldbot.ops.run bridge'`), then `sudo systemctl start goldbot-bridge@<account>`.
+3. `wineserver` holding it: restart the terminal unit, which restarts the bridge with it:
+   `sudo systemctl restart goldbot-mt5-terminal@<account>`. The terminal logs in again from its saved login.
+   Do it with the book flat or at the weekend if you can. Exits rest with the broker meanwhile.
+4. Check `systemctl show -p NRestarts goldbot-bridge@<account>` stops rising and `goldbot run health` on the brain shows
+   `bridge:<account>` ok.
 
 ### Order lane and close priority (BACKLOG 135, protocol v7)
 
