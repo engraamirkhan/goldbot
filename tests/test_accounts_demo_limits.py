@@ -123,7 +123,8 @@ def test_the_three_demo_learning_hosts_carry_the_demo_limits() -> None:
     pots = {k: {s: p.max_open for s, p in accs[k].exploration.pots.items()} for k in DEMO}
     assert accs["icm-demo"].exploration.pots["growth"].gbp == 80        # M1: GS1/GS1C's £80 day unchanged
     assert pots == {"icm-demo": {"scalp": 11, "intraday": 10, "swing": 3, "growth": 2},
-                    "icm-probe": {"scalp": 19, "intraday": 12},    # learning-mi-2026-11-02.md: slots only
+                    # learning-mi-2026-11-02.md: slots only; swing: GD1P's one slot (prereg-amendment-2026-11-20)
+                    "icm-probe": {"scalp": 19, "intraday": 12, "swing": 1},
                     "vantage-demo": {"scalp": 11, "intraday": 14, "swing": 2}}   # 11-04 (a)
 
 

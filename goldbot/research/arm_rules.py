@@ -497,6 +497,12 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
         lambda arm, ctx: __import__("goldbot.research.arm_rules_redbox", fromlist=["x"]).redbox_control(arm, ctx),
     # discovered arms on demo 2026-11-18: a learning spec_rule arm's replay-only control (`arm_rules_spec`)
     "spec_control": lambda arm, ctx: __import__("goldbot.research.arm_rules_spec", fromlist=["x"]).spec_control(arm, ctx),
+    # GD-1 A1 on demo 2026-11-20: GD1D/GD1P and their replay-only controls GD1CD/GD1CP (`arm_rules_clock_hold`)
+    "clock_hold":
+        lambda arm, ctx: __import__("goldbot.research.arm_rules_clock_hold", fromlist=["x"]).clock_hold(arm, ctx),
+    "clock_hold_control":
+        lambda arm, ctx: __import__("goldbot.research.arm_rules_clock_hold", fromlist=["x"]).clock_hold_control(arm,
+                                                                                                             ctx),
 }
 
 

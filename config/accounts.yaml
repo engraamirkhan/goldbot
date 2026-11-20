@@ -226,6 +226,14 @@ accounts:
         # once their open positions are flat (retire by retired_day first), restart
         IEX15: { style: intraday, max_loss: 17.0, control_share: 0.04 }
         IEX1H: { style: intraday, max_loss: 30.0, control_share: 0.04 }
+        # GD-1 A1 (docs/research/prereg-amendment-2026-11-20-gd1-asia-learning.md): long 00:00 -> 07:00 UTC each weekday,
+        # learning class, 0.01 lot, one open; GBP 40 a trade, the ADR 0043 swing cap: the $48 stop at 0.01 lot is about
+        # GBP 36 at 0.752 GBP per USD (GBP 38.4 at 0.80) plus a ~GBP 0.3 round trip; GBP 800 loss cap in the spec (20 x
+        # the cap). GD1CD is replay-only: every candidate is recorded refused, none is ever sent (its share and cap are
+        # never used). Rollback: retire GD1D by retired_day first (an open position keeps every exit), drop these two
+        # lines once it is flat, restart
+        GD1D: { style: swing, max_loss: 40.0 }
+        GD1CD: { style: swing, max_loss: 40.0, control_share: 0.01 }
   icm-probe:
     broker: icm
     mode: demo
@@ -348,7 +356,10 @@ accounts:
       # slots for the multi-instrument learning pairs. Slot counts only: max_open_total 23, max_positions 24, every
       # per-trade cap, the margin floor and the notional ceiling are unchanged and still bind (the pots' slots sum past
       # 23 on purpose; the host total decides). Rollback: intraday 4 (or drop it with the LB/LBC rows below), restart
-      pots: { scalp: { max_open: 19 }, intraday: { max_open: 12 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
+      # GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): a swing pot of one slot for GD1P (slots only, as
+      # every pot here; max_open_total 23, max_positions 24, the per-trade cap and the GBP 220 day still bind).
+      # Rollback: drop `swing` with the GD1P/GD1CP lines below once GD1P is flat, restart
+      pots: { scalp: { max_open: 19 }, intraday: { max_open: 12 }, swing: { max_open: 1 } }   # 19 + mirrors 3 + scheduled 1 inside 24 (max_open_total 23 binds)
       # multi-instrument demo (lane L3): the intraday pot also holds the instruments' I0-<key> controls
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
@@ -465,6 +476,11 @@ accounts:
         RBC1H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
         RB4H: { style: intraday, max_loss: 30.0 }
         RBC4H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
+        # GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): icm-probe's own arm and replay-only control, as
+        # GD1D/GD1CD on icm-demo (one arm id per host); £40 a trade, the ADR 0043 swing cap. Rollback: retire GD1P by
+        # retired_day first, drop these two lines and the swing pot once it is flat, restart
+        GD1P: { style: swing, max_loss: 40.0 }
+        GD1CP: { style: swing, max_loss: 40.0, control_share: 0.01 }
   vantage-demo:
     broker: vantage
     mode: demo

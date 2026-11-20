@@ -19,6 +19,8 @@ families:
   box_next: {label: "Box break, exit study", why: "Close outside the box; the exit is what is measured"}
   redbox_break: {label: "Red box week", why: "Every close through a red box, target the next box (owner, 2026-11-15)"}
   redbox_control: {label: "Red box week random control", why: "The same rule on random boxes with the same spacing; never traded"}
+  clock_hold: {label: "Asia session long", why: "Long 00:00 to 07:00 UTC every weekday (GD-1)"}
+  clock_hold_control: {label: "Asia session long control", why: "Long 7 hours from a random 07:00-13:00 UTC; never traded"}
   session_range_break: {label: "Session range breakout", why: "Asia range broken in London, London range in New York"}
   session_range_control: {label: "Growth test random control", why: "Random time and side in the same session windows: GS1's null"}
   ema_pullback: {label: "EMA pullback", why: "Pullback to the EMA in a trend"}
