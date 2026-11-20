@@ -67,3 +67,25 @@ Per variant, on daily net returns r_t (flat days = 0) and excess e_t = r_t - f x
 ## Trial cost
 K +1 (one registry row, family `gold_daily_gd1`, rule_ref this file @ its commit). No other look at these windows for
 this family after the run.
+
+## Result (2026-11-20, run once at `cadea702`; registry trial #3440, K +1)
+Script `scripts/research/gold_daily_gd1.py`; statistics only (no prices) kept outside the repo. Holdout not loaded.
+
+| variant | days | f | gross bp/d | net bp/d | net 2x | SR net [CI 1-0.05/3] | excess bp/d [CI 1-0.05/3] | pass |
+|---|---|---|---|---|---|---|---|---|
+| A1 Asia long (2003-09) | 1,327 | 0.30 | +6.53 | +5.98 | +5.43 | 2.08 [1.05, 3.17] | +4.42 [+1.06, +7.48] | **yes** |
+| B1 RY and USD falling | 2,862 | 0.32 | +0.71 | +0.13 | -0.46 | 0.03 [-0.56, 0.63] | -1.28 [-3.39, +0.82] | no |
+| B2 RY+USD z-sum < 0 | 2,740 | 0.54 | +2.35 | +1.40 | +0.46 | 0.29 [-0.35, 0.94] | -0.73 [-2.84, +1.38] | no |
+
+**Verdict by the rule: family PASS on A1.** B1/B2 fail (excess over drift negative in both windows): R-16 reconfirmed
+in the long/flat form; the macro filter is closed without a new information source.
+
+A1 detail: net positive in 7/7 years (2008 +0.7 bp the weakest); excess positive 7/7; beta on buy-and-hold 0.12,
+alpha +5.3 bp/day; without 2006-07 SR 1.96, excess +4.0 bp/day. Caveat: 2003-09 coverage is thin (2003 86/261
+weekdays kept, 2004-09 70-88 %), so early-year days are those with a bar near 00:00 and 07:00.
+
+Disclosed context, NOT gating (2010-01..2025-09 was already spent by H-04 #44; rule unchanged, read after the
+verdict): n 3,991, net +1.32 bp/day, SR 0.52 (95 % CI 0.02-1.03), excess over drift +0.90 bp/day (95 % CI -0.42 to
++2.25). 2018-25 net by year: -3.2, -1.1, -2.4, +4.6, -2.1, +0.2, +2.2, +4.7 bp. **The effect is ~4-5x smaller after
+2009 and not distinguishable from drift since 2010.** The pass is a historical one; tradability today rests on the
+forward demo, with the kill rule in the deploy plan (`~/tmp/plan-1120/gold-daily.md`, research director's call).
