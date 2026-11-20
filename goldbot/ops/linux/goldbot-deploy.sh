@@ -201,21 +201,41 @@ bridge_start_check() {  # MT5 box, in the checkout: the target's own start check
 }
 
 checkout_only() {  # MT5 box, no bridge file changed: move the checkout, restart nothing, once the start check says ok.
-  # Exits on ok (deployed) and on a problem (old checkout back, refused); returns when the check could not run, with
-  # the old checkout back, so the full deploy runs instead
+  # Exits on ok (deployed), on a problem or a timeout (old checkout back, refused) and when the old checkout cannot be
+  # put back (failed). Returns when the check could not run, with the old checkout back, so the full deploy runs
+  # instead (with its own rollback). Diffing against the checkout rather than the bridge's running commit is exact:
+  # every checkout move without a bridge restart changed no bridge file, so a running bridge's files always equal
+  # the checkout's (ADR 0094; the root-run probe returns one token, never the /health body with the commit).
   local out rc=0
-  g checkout -q --detach "$TARGET" || { g checkout -q --detach "$CUR" || true; FULL_NOTE="checkout failed; "; return 1; }
+  if ! g checkout -q --detach "$TARGET"; then
+    restore_checkout "the checkout of the target failed"
+    FULL_NOTE="checkout failed, full deploy; "
+    return 1
+  fi
   out=$(bridge_start_check) || rc=$?
   if [ "$rc" = 0 ]; then
     log deployed "$CUR" "$TARGET" "no bridge file changed: checkout only, bridges not restarted (start check ok)${MANUAL:+ (manual)}"
     exit 0
   fi
-  g checkout -q --detach "$CUR" || true
-  if [ "$rc" = 3 ]; then
-    refuse "no bridge file changed, but the target's bridge would not start (${out:-no detail}); previous checkout kept, nothing restarted"
-  fi
+  case "$rc" in
+    3)
+      restore_checkout "the target's bridge would not start (${out:-no detail})"
+      refuse "no bridge file changed, but the target's bridge would not start (${out:-no detail}); previous checkout kept, nothing restarted" ;;
+    124)
+      restore_checkout "the target's start check timed out after $START_CHECK_S s"
+      refuse "no bridge file changed, but the target's start check timed out after $START_CHECK_S s; previous checkout kept, nothing restarted" ;;
+  esac
+  restore_checkout "the target's start check could not run (exit $rc)"
   FULL_NOTE="start check could not run (exit $rc), full deploy; "
   return 1
+}
+
+restore_checkout() {  # $1 why: put the running commit back. When even that fails: `failed`, which goldbot-deploy-all
+  # reports, and exit 1. The bridges keep running, but their next start would load an unchecked tree.
+  if g checkout -q --detach "$CUR" && [ "$(g rev-parse HEAD)" = "$CUR" ]; then return 0; fi
+  log failed "$CUR" "$TARGET" "$1; checkout NOT restored: the bridges still run, but their next start loads an unchecked tree; nothing restarted. On the box: git status as $OWNER in $ROOT, then sudo goldbot-deploy --rollback to the running commit or fix the checkout by hand"
+  drop_approval
+  exit 1
 }
 usage() {
   echo "usage: goldbot-deploy [latest | <40-hex commit id> | --rollback <40-hex commit id> | --stage <40-hex commit id>]"

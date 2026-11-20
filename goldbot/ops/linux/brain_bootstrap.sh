@@ -26,14 +26,16 @@ trap '' PIPE HUP
 exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
 echo "== goldbot brain bootstrap $(date -u +%FT%TZ) ref=${REF:-main}"
 
-# A 4 GB swap file on every shape. On the fallback 1 GB x86 micro (docs/deploy/first-deploy.md "If Oracle has no A1
-# capacity") it keeps the dashboard build and the Saturday retrain from being killed. On the A1 (12 GB) it is the
-# OOM buffer (SRE audit 2026-11-20: no swap while the nightly jobs peaked at 5.4 GB next to the engines; added on the
-# live brain the same day). Swappiness 10: swap only under pressure, never paging out idle engine memory.
-if ! swapon --show | grep -q /swapfile; then
-  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-  grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
-fi
+# Swap in compressed RAM (zram), never on disk: process memory holds tokens (security review of 70de628d). On the A1
+# (12 GB) it is the OOM buffer (SRE audit 2026-11-20: no swap while the nightly jobs peaked at 5.4 GB next to the
+# engines; set up on the live brain the same day). At most 4 GB, and never more than RAM (the fallback 1 GB micro of
+# docs/deploy/first-deploy.md gets 1 GB: its builds are slower or need the stage build elsewhere). Swappiness 10: swap
+# only under pressure, never paging out idle engine memory.
+apt-get update -y -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q systemd-zram-generator
+printf '[zram0]\nzram-size = min(ram, 4096)\ncompression-algorithm = zstd\nswap-priority = 100\n' \
+  > /etc/systemd/zram-generator.conf
+systemctl daemon-reload
+systemctl start systemd-zram-setup@zram0.service
 echo "vm.swappiness = 10" > /etc/sysctl.d/99-goldbot-swap.conf
 sysctl -q -p /etc/sysctl.d/99-goldbot-swap.conf || true
 

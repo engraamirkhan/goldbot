@@ -11,7 +11,8 @@ Two files in the state folder, either may open a window:
 * `deploy_window.json`: goldbot-deploy on the brain, from its switch to MUTE_AFTER_S (20 min) after its record.
 * `deploy_window_manual.json`: `python -m goldbot.ops.deploy_window open --minutes N` (at most MAX_OPEN_MIN), which
   goldbot-deploy-all runs on the brain before it deploys the MT5 boxes (their deploys cannot write the brain's state).
-  It only extends an open window, never shortens one.
+  It only extends an open window, never shortens one; an extension that would span more than MAX_WINDOW_S (which
+  `active` ignores) starts a new window at now instead, so the file always holds a window that is honoured.
 
 Each is {"from": epoch s, "until": epoch s, "source": text}. One that cannot be read, or spans more than MAX_WINDOW_S,
 holds nothing: a stale or junk file can never mute alerts for long.
@@ -31,7 +32,7 @@ HELD_PREFIXES = ("tick_errors:", "bridge_compat:")
 FILES = ("deploy_window.json", "deploy_window_manual.json")
 MANUAL = FILES[1]
 MAX_WINDOW_S = 2 * 3600          # longer than any deploy (brain: 90 s watch + 8 min bridge wait + 20 min after)
-MAX_OPEN_MIN = 120
+MAX_OPEN_MIN = 30               # safety review L3: a manual window holds alerts 30 min at a time
 
 
 class Window(FrozenRecord):
@@ -74,7 +75,8 @@ def open_manual(state_dir: str | Path, minutes: int, *, now: pd.Timestamp | None
     old = _read(path)
     start, until = t, t + int(minutes) * 60
     if old is not None and old.start <= t <= old.until:
-        start, until = old.start, max(old.until, until)
+        until = max(old.until, until)
+        start = old.start if until - old.start <= MAX_WINDOW_S else t     # code review LOW1: never an ignored span
     w = Window(start=start, until=until, source="manual")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")

@@ -67,6 +67,10 @@ if [ -n "${FAKE_HEAD:-}" ]; then
   eval "$(declare -f g | sed '1s/^g ()/real_g ()/')"
   g() { if [ "$1 ${2:-}" = "rev-parse HEAD" ]; then echo "$FAKE_HEAD"; else real_g "$@"; fi; }
 fi
+if [ -n "${FAIL_CHECKOUT_TO:-}" ]; then              # a checkout back to this commit fails (a locked index, a full disk)
+  eval "$(declare -f g | sed '1s/^g ()/real_g2 ()/')"
+  g() { if [ "$*" = "checkout -q --detach $FAIL_CHECKOUT_TO" ]; then return 1; else real_g2 "$@"; fi; }
+fi
 id() { echo 0; }
 install() { mkdir -p "${@: -1}"; }
 flock() { return 0; }
@@ -270,6 +274,11 @@ echo "$PWD env=$UV_PROJECT_ENVIRONMENT $*" >> "$T/uv.log"
 [ -z "$UV_PROJECT_ENVIRONMENT" ] || mkdir -p "$UV_PROJECT_ENVIRONMENT"
 """
 
+# A hang guard only: every wait in the script runs on the fake clock. Measured 2026-11-20 at -n 4 on an idle Mac, the
+# slowest single runs take ~60 s of real time (the MT5 8-minute bridge wait, the F2 signal tests), so 120 s failed
+# under a loaded machine (the code review's 1-of-45 failure of 70de628d was not reproducible in 4 full runs, 3 orders).
+RUN_TIMEOUT_S = 300
+
 UNITS = {"goldbot-supervisor.service": True, "goldbot-engine@icm-demo.service": True, "goldbot-api.service": True,
          "goldbot-scheduler.service": True, "goldbot-telegram.service": True,
          "goldbot-engine@vantage-demo.service": False}          # a loaded but disabled stray instance
@@ -389,7 +398,7 @@ class Box:
                "HOME": str(self.t), **(env or {})}
         assert BASH is not None
         return subprocess.run([BASH, str(self.t / "harness.sh"), *args], capture_output=True, text=True, env=env,
-                              timeout=120)
+                              timeout=RUN_TIMEOUT_S)
 
     def head(self) -> str:
         return _git(self.root, "rev-parse", "HEAD")
@@ -1379,6 +1388,32 @@ def test_a_start_check_that_finds_a_problem_restores_the_checkout_and_refuses(tm
     assert rec["result"] == "refused" and "would not start" in rec["detail"] and box.head() == box.c2
     assert box.actions() == []
     assert '"' not in rec["detail"] and "\\" not in rec["detail"]          # the problem text kept the line valid
+
+
+def test_a_start_check_that_times_out_refuses_like_a_problem(tmp_path):
+    """Code review LOW3: a hung check (timeout's exit 124) is a target whose bridge may not start: refused, never a full
+    deploy that would restart the bridges onto it."""
+    box = _mt5_box(tmp_path, answer_after=1, running="c2")
+    c3 = _ahead(box, {"docs/x.md": "doc\n"}, "docs")
+    (tmp_path / "start_check_rc").write_text("124")
+    p = box.run(c3)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "refused" and "timed out" in rec["detail"] and box.head() == box.c2
+    assert box.actions() == []
+
+
+@pytest.mark.parametrize("rc", ["3", "124", "1"])
+def test_a_checkout_that_cannot_be_restored_is_recorded_failed_never_kept(tmp_path, rc):
+    """Code review LOW2: the old checkout could not be put back after the start check: `failed`, naming it."""
+    box = _mt5_box(tmp_path, answer_after=1, running="c2")
+    c3 = _ahead(box, {"docs/x.md": "doc\n"}, "docs")
+    (tmp_path / "start_check_rc").write_text(rc)
+    p = box.run(c3, env={"FAIL_CHECKOUT_TO": box.c2})
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "failed" and "checkout NOT restored" in rec["detail"], rec
+    assert "kept" not in rec["detail"] and box.actions() == []
 
 
 def test_a_start_check_that_cannot_run_falls_back_to_the_full_deploy(tmp_path):

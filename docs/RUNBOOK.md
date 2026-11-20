@@ -619,15 +619,22 @@ and the rest still arrives. It never contains account numbers or emails.
   commits change no bridge file (`goldbot/ops/bridge_files.py` `BRIDGE_FILES_RE`) moves the checkout and restarts
   nothing, once the target's start check says ok. The record says `no bridge file changed: checkout only`. If the
   check finds a problem, the record says `refused ... would not start (...)`, the old checkout stays and nothing
-  restarted. Fix the cause it names, or run the same check by hand on the box:
+  restarted. A check that hangs past 300 s is refused the same way (`timed out`). If the old checkout cannot be put
+  back, the record is `failed ... checkout NOT restored`, and goldbot-deploy-all reports it: the bridges keep running,
+  but fix the checkout (`git status` as mt5 in /opt/goldbot, then `sudo goldbot-deploy --rollback <running commit>`)
+  before anything restarts them. Fix the cause it names, or run the same check by hand on the box:
   `sudo -u mt5 -H bash -c 'cd /opt/goldbot && env WINEDEBUG=-all DISPLAY=:99 wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m goldbot.ops.bridge_files check <account>'`.
   A deploy that does change a bridge file is refused Mon-Fri 07:00-21:00 UTC with exit 75 and the record
   `refused: bridge files changed: bridge restarts are held in market hours ...`. Nothing changed: deploy again after
   21:00 UTC, or add `--now` for a safety fix (an exit, risk or broken-bridge fix). A `--rollback` is never held.
-  Before goldbot-deploy-all deploys the MT5 boxes it opens the brain's alert window (below).
+  `--now` exists only for a manual deploy with a target. The Telegram approval path (the brain's deploy timer)
+  rejects it, and the MT5 boxes are not deployed by it. So an owner-approved safety fix that changes a bridge file
+  waits until 21:00 UTC unless Claude deploys it with `goldbot-deploy-all <sha> --now`.
+  Before goldbot-deploy-all deploys the MT5 boxes it opens the brain's alert window (below). It holds the brain
+  whenever any MT5 box is not on the target.
 * **A deploy's own alerts are held (ADR 0094).** While `state/deploy_window.json` (written by goldbot-deploy on the
   brain, from the switch to 20 min after the record) or `state/deploy_window_manual.json` (opened on the brain with
-  `sudo -u goldbot -H bash -c 'cd /opt/goldbot && .venv/bin/python -m goldbot.ops.deploy_window open --minutes 40'`)
+  `sudo -u goldbot -H bash -c 'cd /opt/goldbot && .venv/bin/python -m goldbot.ops.deploy_window open --minutes 30'`; at most 30, re-run to extend)
   is open, new `tick_errors:` and `bridge_compat:` alerts are held. One still bad after the window is told on the next
   poll. `bridge:`, `engine_loop:`, `heartbeat:` and every other check alert as before. To see whether a window is
   open: `... -m goldbot.ops.deploy_window show`. A window file that cannot be read, or spans more than 2 h, holds

@@ -17,6 +17,17 @@
     Held means deferred: one still bad after the window is told at once, and one that clears inside it is no flap.
   - `bridge_compat:<account>` is ok when the bridge's and the brain's commits differ only outside the bridge files
     (git on the brain).
-  Hosts (Claude-run, 2026-11-20): see the SRE hand-back for the brain swapfile and the one backup prune.
+  Review round (security PASS, trading-safety GO, code GO), all fixed:
+  - A start check that times out (exit 124) refuses like a problem.
+  - An old checkout that cannot be put back is recorded `failed ... checkout NOT restored`, never "kept".
+  - A manual alert window is at most 30 min. An extension never spans over 2 h; past that it starts a new window.
+  - The RUNBOOK says the approval path rejects `--now`.
+  - ADR 0094 says the brain is held whenever an MT5 box is not on the target, and why the diff uses the checkout
+    rather than the bridge's running commit.
+  - The brain bootstrap uses zram swap (compressed RAM, at most 4 GB) instead of a disk swapfile: memory holds
+    tokens.
+  Hosts (2026-11-20): a 4 GB disk swapfile was added on the brain at 12:43 UTC (0 B used since). Its replacement by
+  zram was blocked by the permission classifier and is pending (see the SRE hand-back). The backup prune is blocked
+  on the retention credentials.
   To install: goldbot-deploy.sh changed, so install the root copy on all four hosts (RUNBOOK 0.5 "Installing a new
   goldbot-deploy"). The first bridge-file deploy runs in the daily break.

@@ -22,15 +22,21 @@ The 2026-11-20 SRE audit (window 11-06..11-20) found that our own operations cos
    goldbot import of the set, failing on one that is neither in it nor named in `NOT_FOLLOWED` with its reason. An
    MT5 forward deploy without a bridge change moves the checkout and restarts nothing, after the target's start
    check (`python -m goldbot.ops.bridge_files check <accounts>` as the service user: imports, settings, accounts,
-   symbols and magic blocks resolve) says ok. A problem there puts the old checkout back and refuses. A check that
-   cannot run falls back to the full deploy.
+   symbols and magic blocks resolve) says ok. A problem or a timeout there puts the old checkout back and refuses.
+   A check that cannot run falls back to the full deploy. If the old checkout cannot be put back, the record is
+   `failed` ("checkout NOT restored"), never "kept".
+   The diff is taken against the checkout, not the bridge's running commit. That is exact: every checkout move
+   without a bridge restart changed no bridge file, so a running bridge's files always equal the checkout's. Reading
+   the running commit would need the root-run probe to pass on more of the /health body than one token, which its
+   security conditions forbid. A hand-made checkout on the box is the only exception: it is out of process.
 2. **Bridge restarts are held in market hours.** On an MT5 box a deploy that changes a bridge file is refused Mon-Fri
    07:00-21:00 UTC (exit 75, nothing changed) unless `--now`, which Claude's goldbot-deploy-all passes for safety
-   fixes only. Rollbacks are recovery and are never held.
+   fixes only. Rollbacks are recovery and are never held. The approval path rejects `--now`, so an owner-approved
+   safety fix that changes a bridge file waits until 21:00 UTC unless Claude deploys it with `--now`.
 3. **A deploy's own alerts are held for its own window.** goldbot-deploy on the brain writes
    `state/deploy_window.json` from its switch to 20 min after its record. goldbot-deploy-all opens
-   `state/deploy_window_manual.json` (`python -m goldbot.ops.deploy_window open --minutes N`) on the brain before it
-   deploys the MT5 boxes. Inside a window new `tick_errors:` and `bridge_compat:` alerts wait in the hysteresis
+   `state/deploy_window_manual.json` (`python -m goldbot.ops.deploy_window open --minutes N`, at most 30, re-run to
+   extend; an extension past 2 h starts a new window) on the brain before it deploys the MT5 boxes. Inside a window new `tick_errors:` and `bridge_compat:` alerts wait in the hysteresis
    state. One still bad when the window ends is told on the next poll, and one that clears inside it is not a flap.
    Nothing else is held: `bridge:` (5 min, immediate), `engine_loop:` and `heartbeat:` still alert a real outage.
    A window file that cannot be read, or that spans more than 2 h, holds nothing.
@@ -57,9 +63,8 @@ about 21 s plus the entry block, and holding them would hold every brain fix too
   the start check bound this: the bridge loads its modules and config at start only, and its lane starts once.
 - After a checkout-only deploy the bridge reports its older commit on /health. bridge_compat reads that as ok
   through git on the brain.
-- goldbot-deploy-all (Claude's, outside the repo), when an MT5 box returns 75: deploy the brain only when the
-  bridge protocol files (`goldbot/execution/bridge.py`, `bridge_lane.py`, `bridge_queue.py`) are unchanged between
-  the boxes' commit and the target. Otherwise hold the brain for the same window. A brain on code that needs a new
+- goldbot-deploy-all (Claude's, outside the repo) holds the brain whenever any MT5 box is not on the target
+  (refused for the window, failed, or rolled back; trading-safety review M1). A brain on code that needs a new
   bridge method would refuse entries (`bridge_incompatible`) until the boxes catch up.
 - What would change this decision: a bridge-path regression that the set missed (widen the set or follow the cut),
   or a measured cost of the 21:00 deferral that is higher than one restart's lost minutes.

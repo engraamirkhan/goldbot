@@ -51,16 +51,32 @@ def test_open_extends_and_never_shortens(tmp_path):
     assert (w.start, w.until) == (S0, S0 + 1800)
     w = dw.open_manual(tmp_path, 10, now=T0 + pd.Timedelta(minutes=5))
     assert (w.start, w.until) == (S0, S0 + 1800)                                      # kept the longer one
-    w = dw.open_manual(tmp_path, 60, now=T0 + pd.Timedelta(minutes=5))
-    assert (w.start, w.until) == (S0, S0 + 300 + 3600)
+    w = dw.open_manual(tmp_path, 30, now=T0 + pd.Timedelta(minutes=20))
+    assert (w.start, w.until) == (S0, S0 + 1200 + 1800)
     assert json.loads((tmp_path / "deploy_window_manual.json").read_text())["source"] == "manual"
 
 
-def test_open_caps_the_minutes(tmp_path):
-    assert dw.main(["open", "--minutes", "500", "--state-dir", str(tmp_path)]) == 2
+def test_an_extension_never_makes_a_window_that_holds_nothing(tmp_path):
+    """Code review LOW1: re-opening for ever must not grow one window past MAX_WINDOW_S (which `active` ignores): an
+    extension that would starts a new window at `now`, so the file always holds an honoured window."""
+    t = T0
+    for _ in range(int(dw.MAX_WINDOW_S / 1500) + 3):                                 # every 25 min, 30 min more
+        w = dw.open_manual(tmp_path, dw.MAX_OPEN_MIN, now=t)
+        assert w.until - w.start <= dw.MAX_WINDOW_S and w.until >= int(t.timestamp()) + 1800
+        assert dw.active(tmp_path, t) == w
+        t += pd.Timedelta(minutes=25)
+
+
+def test_open_caps_the_minutes_at_30(tmp_path, capsys):
+    """Safety review L3: a manual window holds alerts for at most 30 min at a time."""
+    assert dw.MAX_OPEN_MIN == 30
+    assert dw.main(["open", "--minutes", "31", "--state-dir", str(tmp_path)]) == 2
     assert dw.main(["open", "--minutes", "0", "--state-dir", str(tmp_path)]) == 2
-    assert dw.main(["open", "--minutes", "45", "--state-dir", str(tmp_path)]) == 0
-    assert dw.active(tmp_path, pd.Timestamp.now("UTC")) is not None
+    capsys.readouterr()
+    assert dw.main(["open", "--minutes", "30", "--state-dir", str(tmp_path)]) == 0
+    w = dw.active(tmp_path, pd.Timestamp.now("UTC"))
+    assert w is not None
+    assert f"{pd.Timestamp(w.until, unit='s', tz='UTC'):%H:%M:%S}" in capsys.readouterr().out    # the real end
 
 
 def _report(ts: pd.Timestamp, *checks: Check) -> health.HealthReport:
