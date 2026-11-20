@@ -29,6 +29,8 @@ refuse an entry. Pending: quant-reviewer and trading-safety-reviewer sign-off.
   - VEX15/VEX1H/IEX1H: the execution reads keep the fills they have (cost per R, entry-leg fill against replay);
     rule 3's sample stop and the 2026-12-09 end are unchanged, and no new fill is added to them. Section 4 rule 1
     (cost stop) cannot fire without fills, which is the intended state.
+    Rule 3's read is truncated at the 2026-11-20 sample: it is reported with each cell's n, and no cell under 100
+    fills becomes a cost of record. Rule 2 (entry fill against replay) stops adding data on 2026-11-20 (quant C1).
   - **GS1C stays broker-traded until GS1's owner-experiment end (2026-11-27), then must be replay_only.** It is
     paired 1:1 with GS1 (A4 holds on icm-demo: 1 control, 1 signal arm), it is not a leak (+GBP 118.64 on 26 fills
     since 2026-11-02; -GBP 7.04 on 7 since 11-13; expected saving about GBP 2.5 a week), and switching it would
@@ -70,6 +72,11 @@ refuse an entry. Pending: quant-reviewer and trading-safety-reviewer sign-off.
 - 21:00-24:00 UTC ("asia(late)" in the audit) is not in the rule: the evidence is for decisions before 07:00 only.
 - Today no 5m arm is configured to enter on any enabled account (the last 5m fill was 2026-11-13 12:20 UTC); the
   rule binds the next 5m arm, including a hot-loaded discovered one (5m is a live timeframe).
+
+- **Quant C2:** a later 5m read cannot use the Asia cut as evidence of edge. Any 5m backtest or read applies the cut
+  ex-ante to both the arm and its control, and the 512 fills from 2026-11-01 to 2026-11-13 are never reused as
+  evidence for any 5m arm.
+- **Quant C3:** lifting the cut needs its own pre-registered read.
 
 ## 4. What does not change
 
