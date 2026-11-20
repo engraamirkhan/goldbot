@@ -56,6 +56,7 @@ from goldbot.execution.mt5_adapter import TICKS_MANY_MAX
 from goldbot.instruments import GOLD, InstrumentSpec
 
 if TYPE_CHECKING:
+    from goldbot.data.quality import DQEvent
     from goldbot.engine.runner import Engine, EngineConfig
     from goldbot.execution.broker import SymbolInfo, Tick
     from goldbot.labels.triple_barrier import SwapSpec
@@ -972,6 +973,18 @@ def store_symbol(eng: Engine) -> str:
     """The store's symbol for the active book's rows (ticks, decisions, fills, exit legs, dq events): gold keeps its
     traded symbol as today; another book its unique `store_symbol`, so nothing is ever pooled with XAUUSD."""
     return eng.cfg.symbol if is_primary(eng) else eng.cfg.release_symbol
+
+
+def append_dq(eng: Engine, events: list[DQEvent]) -> None:
+    """Store a decision close's data-quality events under the account and the active book's store symbol, stamped with
+    this engine start's writer id (`EngineConfig.boot_id`: uuid4 hex from ops.services.engine, also on every
+    bars_1m_live row and exploration candidate, recorded with its writer lock by `history.record_boot`). The nightly
+    arm read proves a stored minute is this account's own engine's copy by it (ADR 0091); None (paper, replays,
+    tests) leaves the rows unproven."""
+    from goldbot.data.quality import events_frame
+    assert eng.store is not None
+    eng.store.append("dq_events", events_frame(events, writer=eng.cfg.boot_id), source=eng.cfg.account_id,
+                     symbol=store_symbol(eng), dedupe=False)
 
 
 def live_key(eng: Engine) -> tuple[str, str]:

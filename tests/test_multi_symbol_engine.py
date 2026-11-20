@@ -280,7 +280,8 @@ def test_a_non_gold_books_rows_are_keyed_by_account_and_store_symbol_never_poole
     pb = MultiPaper(equity=10_000)
     spec = SILVER.model_copy(update={"symbol": "XAGUSD.x", "store_symbol": "XAGUSD"})
     eng = _engine(tmp_path, pb, specs=(spec,), data_root=str(tmp_path / "data"))
-    assert books.live_key(eng) == ("icm", "XAUUSD")                  # gold: unchanged
+    assert books.live_key(eng) == ("icm-probe", "XAUUSD")            # gold: per account since ADR 0091
+    assert books.legacy_live_key(eng) == ("icm", "XAUUSD")           # its pre-0091 shared key, read only
     with using(eng, eng.books["XAGUSD.x"]):
         assert books.live_key(eng) == ("icm-probe", "XAGUSD") and books.store_symbol(eng) == "XAGUSD"
         for k in range(3):
