@@ -686,6 +686,7 @@ NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "b
                   "discovered_arm_reads",   # F7 (reviews of 611d5adb): a discovered arm unverified 2 nights running
                   "discovery_last_run",  # ADR 0090 SRE GO: an enabled discovery job with no successful night in 26 h
                   "duplicate_engine:",   # ADR 0091 S1: a second engine refused, told once
+                  "duplicate_engine_1h:",   # ... and again once the refusals have run an hour
                   "quote_age:")  # incident 2026-11-18/19: a traded symbol's quote stale in its open session
 
 # Hysteresis exceptions (owner complaint 2026-11-04): a failing check on this list alerts on the first poll. Real money

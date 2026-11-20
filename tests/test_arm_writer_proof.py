@@ -307,12 +307,22 @@ def test_every_reader_of_the_live_minutes_is_known_and_none_lists_them_by_source
 
 def test_the_long_history_and_the_trade_chart_read_the_accounts_own_live_key_over_the_brokers(monkeypatch):
     """Q5: the 1d history refresh reads the legacy key, then the account's own (whose minute wins); the trade chart
-    asks the account's own key before the broker's."""
+    reads the broker's key with the account's own over it."""
 
     from goldbot.api import trade_chart
     from goldbot.ops import long_history
     from tests.test_long_history_refresh import GOLD, SETTINGS
     assert long_history.gold_key(SETTINGS, [GOLD]) == (("icm", "XAUUSD"), ("icm-demo", "XAUUSD"))
-    monkeypatch.setattr(trade_chart, "_broker", lambda account: "icm")
-    live = [s for s in trade_chart._sources("icm-demo") if s[0] == "bars_1m_live"]
-    assert [s[1] for s in live] == ["icm-demo", "icm"]
+    monkeypatch.setattr(trade_chart, "_account_terms", lambda account: ("icm", "XAUUSD"))
+    live = [parts for parts, _ in trade_chart._sources("icm-demo") if parts[0][0] == "bars_1m_live"]
+    assert live == [(("bars_1m_live", "icm", "XAUUSD"), ("bars_1m_live", "icm-demo", "XAUUSD"))]   # own key last: wins
+
+
+def test_engine_starts_that_cannot_be_read_leave_every_window_unproven(env, tmp_path):
+    """Data and quant review of 7b439c30: a dq_events read that fails never breaks the bar read; the proof fails
+    closed, for a candidate with a boot id and one without alike."""
+    eng, arm, _ = _held(env, tmp_path)
+    v = _sorted(_own(eng), _m1(eng.bars_1m))
+    boots = _boots((_start(eng) - pd.Timedelta(days=1), A, True))
+    m = I.AccountMinutes(v, boots=boots, boots_unreadable=True)
+    assert m.held(arm, CLOSE, A) == I.UNPROVEN_WRITER and m.held(arm, CLOSE) == I.UNPROVEN_WRITER

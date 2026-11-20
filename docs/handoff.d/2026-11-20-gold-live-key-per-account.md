@@ -16,3 +16,12 @@
 
   Benefit only for rows written after the deploy (about 9 trading days to age out; the 24 Nov re-sim is not
   rescued). Kill rules, caps, the prereg, `LIFECYCLE_READY`, RiskGate and exits are unchanged.
+  Review round (data NO-GO, safety/quant LOW):
+  - Every gold read of bars_1m_live names its symbol. The trade chart unions the legacy key with the account's own
+    over it, so the account's non-gold books never mix into the gold chart.
+  - Engine starts are read from engine_boot rows only, and the cut-over is cached. An unreadable dq_events no
+    longer breaks a bar read; it only leaves the proof unproven.
+  - engine_boot no longer counts as a data_quality warning.
+  - `duplicate_engine_1h:<account>` tells again after an hour of refusals.
+  - The 10-26 quarantine script is retired: it refuses once a locked engine start exists.
+  - RUNBOOK: restart all engines of a host together; rollback is whole-release.

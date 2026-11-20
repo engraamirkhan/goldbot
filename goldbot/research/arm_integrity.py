@@ -346,8 +346,10 @@ class AccountMinutes:
                  replaced: Sequence[tuple[int, int | None]] = (), saved_cutover: int | None = None,
                  now: pd.Timestamp | None = None, late: Sequence[tuple[int, ...]] = (),
                  sharers: Sequence[tuple[Sequence[tuple[int, ...]], Sequence[tuple[int, int | None]]]] = (),
-                 boots: Sequence[tuple[int, str, bool]] = ()):
+                 boots: Sequence[tuple[int, str, bool]] = (), boots_unreadable: bool = False):
         v = versions
+        # the engine starts could not be read: nothing is proven, and no candidate is known to precede them
+        self.boots_unreadable = boots_unreadable
         # the account's engine starts (start in epoch ns, boot id, held the writer lock), in time order: start i lives
         # from its boot to the next start's (`writer_proof`)
         self.boots = sorted((int(t), str(b), bool(k)) for t, b, k in boots)
@@ -565,6 +567,8 @@ class AccountMinutes:
         # one writer per minute (ADR 0091): a candidate with a boot id is read only on a window
         # proven its own start's (`writer_proof`), and then its sampled minutes are the copies it held; one without
         # decided after the account's first recorded start came from an unknown start
+        if self.boots_unreadable:
+            return UNPROVEN_WRITER
         if boot is not None:
             if (why := self.writer_proof(boot, win, at)) is not None:
                 log.debug("arm integrity: unproven window at %s: %s", at, why)
@@ -657,11 +661,13 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
         except Exception as exc:                # noqa: BLE001 - fail closed: the arm reads unverified
             log.error("arm integrity: %s history_cutover unreadable (%s)", account, type(exc).__name__)
             return CUTOVER_UNREADABLE
+    unreadable = False
     try:
         boots = engine_boots(store, account)    # the account's engine starts and their writer locks
-    except Exception as exc:                    # noqa: BLE001 - fail closed: the arm reads unverified
-        log.error("arm integrity: %s engine starts unreadable (%s)", account, type(exc).__name__)
-        return DQ_UNREADABLE
+    except Exception as exc:                    # noqa: BLE001 - fail closed for the proof only: every window unproven
+        log.error("arm integrity: %s engine starts unreadable (%s): every window unproven", account,
+                  type(exc).__name__)
+        boots, unreadable = pd.DataFrame(columns=["ts_utc", "writer", "locked"]), True
     try:
         v = minute_versions(store, account_id=account, broker=broker, symbol=symbol, start=start, end=now, as_of=now,
                             legacy_before=live_cutover(boots))
@@ -688,8 +694,9 @@ def _account_minutes(store: Any, account: str, broker: str, symbol: str, *, star
         log.error("arm integrity: %s quarantine unreadable (%s)", account, type(exc).__name__)
         return QUARANTINE_UNREADABLE
     return AccountMinutes(v, quarantined=q, replaced=replaced, saved_cutover=saved, now=now, late=late,
-                          sharers=shared, boots=[(int(t.value), str(w), bool(k)) for t, w, k in
-                                                 zip(boots["ts_utc"], boots["writer"], boots["locked"], strict=True)])
+                          sharers=shared, boots_unreadable=unreadable,
+                          boots=[(int(t.value), str(w), bool(k)) for t, w, k in
+                                 zip(boots["ts_utc"], boots["writer"], boots["locked"], strict=True)])
 
 
 def key_sharers(keys: Mapping[str, tuple[str, str]]) -> dict[str, tuple[str, ...]]:

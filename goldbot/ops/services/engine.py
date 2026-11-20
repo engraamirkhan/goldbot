@@ -239,6 +239,7 @@ def refuse_disabled(account_id: str, why: str) -> NoReturn:
 # EX_TEMPFAIL, restarted by goldbot-engine@.service (Restart=always) until the holder ends. Never `start_refused`:
 # that writes `startup_error` into the HOLDER's engine_<account>.json and the supervisor halts every real account
 ENGINE_DUPLICATE_EXIT = 75
+DUPLICATE_EPISODE_GAP_S = 600.0     # refusals further apart than this start a new episode (`first` reset)
 
 
 def duplicate_path(state_dir: str | Path, account_id: str) -> Path:
@@ -247,17 +248,24 @@ def duplicate_path(state_dir: str | Path, account_id: str) -> Path:
 
 def refuse_duplicate(account_id: str, why: str, holder_pid: int | None, state_dir: str | Path = "state") -> NoReturn:
     """End a start refused because another engine of the account holds its writer lock: the journal line names the
-    holder's pid, state/engine_duplicate_<account>.json records when (health `duplicate_engine:<account>` WARNs while
-    it is fresh and the owner is told once, NOTIFY_ON_WARN, so the 10 s restarts never repeat it), then
-    ENGINE_DUPLICATE_EXIT. Nothing of the running engine's state is written."""
+    holder's pid, state/engine_duplicate_<account>.json records when, and since when the refusals run without a
+    pause (`first`; health `duplicate_engine:<account>` WARNs while it is fresh and the owner is told once,
+    NOTIFY_ON_WARN, so the 10 s restarts never repeat it; `duplicate_engine_1h:<account>` tells again once they have
+    run an hour), then ENGINE_DUPLICATE_EXIT. Nothing of the running engine's state is written."""
     import json
     log.error("refusing to start %s: %s; exit %d, restarted by the service manager until it ends", account_id, why,
               ENGINE_DUPLICATE_EXIT)
     f = duplicate_path(state_dir, account_id)
+    now = time.time()
+    try:
+        prev = json.loads(f.read_text()) if f.exists() else {}
+        first = float(prev["first"]) if now - float(prev.get("at", 0)) <= DUPLICATE_EPISODE_GAP_S else now
+    except (ValueError, OSError, KeyError, TypeError):
+        first = now
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
         tmp = f.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"at": time.time(), "holder_pid": holder_pid, "why": why}))
+        tmp.write_text(json.dumps({"at": now, "first": first, "holder_pid": holder_pid, "why": why}))
         os.replace(tmp, f)
     except OSError:
         log.exception("duplicate engine start not recorded for health")

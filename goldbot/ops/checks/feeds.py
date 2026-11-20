@@ -219,8 +219,10 @@ def check_data_quality(ctx: HealthContext) -> Check:
     except (ValueError, OSError) as exc:
         return Check(name="data_quality", status="warn", reason=f"dq_events unreadable: {exc}")
     errs = ev[ev["severity"] == "error"] if not ev.empty and "severity" in ev.columns else ev.iloc[0:0]
+    # an engine start's record (`engine_boot`, severity info, ADR 0091) is no finding: never counted as a warning
+    warned = int((ev["severity"] != "info").sum()) if not ev.empty and "severity" in ev.columns else len(ev)
     if errs.empty:
-        return Check(name="data_quality", status="ok", reason=f"no error events in {DQ_WINDOW_HOURS} h ({len(ev)} warnings)")
+        return Check(name="data_quality", status="ok", reason=f"no error events in {DQ_WINDOW_HOURS} h ({warned} warnings)")
     kinds = ", ".join(f"{k} x{n}" for k, n in errs["check"].value_counts().items())
     return Check(name="data_quality", status="warn",
                  reason=f"{len(errs)} error events in {DQ_WINDOW_HOURS} h ({kinds}): rows quarantined, see bars_quarantine")

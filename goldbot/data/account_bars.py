@@ -24,12 +24,15 @@ one minute the last one visible by `as_of`. Timestamps are compared in ns (`time
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 from goldbot.data.timeutil import epoch_ns
+
+log = logging.getLogger(__name__)
 
 MINUTE = pd.Timedelta(minutes=1)
 QUARANTINE = "bars_quarantine"           # data/quarantine.py QUARANTINE_TABLE of bars_1m and bars_1m_live
@@ -42,12 +45,23 @@ BOOT_CHECK = "engine_boot"               # engine/history.py BOOT_CHECK: one dq 
 OWN, LEGACY = "own", "legacy"            # `keyed`: which live key a minute was read from
 
 
+BOOT_COLUMNS = ["ts_utc", "check", "writer", "detail"]   # the only dq_events columns the starts are read from
+# account -> its live cut-over (the first locked engine start, `live_cutover`): once found it never moves, so it is
+# read once per process (per scheduler job run and after), never per bar read; an account with none is read again
+CUTOVER_CACHE: dict[tuple[str, str], pd.Timestamp] = {}
+
+
 def engine_boots(store: Any, account_id: str) -> pd.DataFrame:
     """Every engine start of `account_id` (dq_events `engine_boot`, any symbol, all time): ts_utc (when it took or
     tried its writer lock), writer (its boot id), locked (it holds the account's exclusive writer lock), sorted.
-    Raises what the store read raises (callers fail closed)."""
+    Only BOOT_COLUMNS are read; no file with a `writer` column is no start. Raises what the store read raises
+    (callers fail closed)."""
+    import duckdb
     cols = ["ts_utc", "writer", "locked"]
-    ev = store.read("dq_events", source=account_id, symbol=None)
+    try:
+        ev = store.read("dq_events", source=account_id, symbol=None, columns=BOOT_COLUMNS)
+    except duckdb.BinderException:              # no part of the account's dq_events has a writer: no start recorded
+        return pd.DataFrame(columns=cols)
     if ev is None or ev.empty or "check" not in ev.columns or "writer" not in ev.columns:
         return pd.DataFrame(columns=cols)
     ev = ev[ev["check"].astype(str) == BOOT_CHECK]
@@ -94,9 +108,30 @@ def live_rows(store: Any, *, account_id: str, broker: str, symbol: str, start: p
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
+def cached_cutover(store: Any, account_id: str) -> pd.Timestamp | None:
+    """`live_cutover` of the account's engine starts, cached once found (CUTOVER_CACHE). Raises what the read raises."""
+    key = (str(getattr(store, "root", id(store))), account_id)
+    if key not in CUTOVER_CACHE:
+        cut = live_cutover(engine_boots(store, account_id))
+        if cut is None:
+            return None
+        CUTOVER_CACHE[key] = cut
+    return CUTOVER_CACHE[key]
+
+
 def _legacy_before(store: Any, account_id: str,
                    legacy_before: pd.Timestamp | None | Literal["boots"]) -> pd.Timestamp | None:
-    return live_cutover(engine_boots(store, account_id)) if isinstance(legacy_before, str) else legacy_before
+    """The legacy bound of a bar read. An unreadable dq_events never breaks the bar read (data and quant review of
+    7b439c30): logged, and the legacy key is read with no bound (the account's own copy still wins). Only the arm
+    read's proof fails closed on it (research/arm_integrity: `unproven_writer`)."""
+    if not isinstance(legacy_before, str):
+        return legacy_before
+    try:
+        return cached_cutover(store, account_id)
+    except Exception as exc:                    # noqa: BLE001 - the bars are read; the proof is not this read's
+        log.warning("engine starts of %s unreadable (%s): its live minutes read with no legacy bound", account_id,
+                    type(exc).__name__)
+        return None
 
 
 def _visible_ns(df: pd.DataFrame) -> np.ndarray:
@@ -239,4 +274,4 @@ def as_of_minutes(versions: pd.DataFrame, at: pd.Timestamp) -> pd.DataFrame:
 
 
 __all__ = ["BOOT_CHECK", "FEEDS", "LEGACY", "META_COLUMNS", "OWN", "REFERENCE_FEED", "account_bars_1m", "as_of_minutes",
-           "engine_boots", "live_cutover", "live_rows", "minute_versions"]
+           "cached_cutover", "engine_boots", "live_cutover", "live_rows", "minute_versions"]

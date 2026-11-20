@@ -35,6 +35,7 @@ from goldbot.engine import books, history
 from goldbot.engine.history import FILLED_COL, LIVE_TABLE, REPLACED_COL, WRITER_COL, BarWriter
 from goldbot.ops import accounts, engine_lock, health
 from goldbot.ops import run as run_mod
+from goldbot.ops.checks._base import Check
 from goldbot.ops.services import engine as engine_service
 from tests.test_engine_history_read import LIVE_FROM, TICKS, _engine
 from tests.test_health import make_ctx
@@ -234,8 +235,8 @@ def test_a_refused_duplicate_start_exits_for_a_restart_before_any_bridge_and_nev
     assert json.loads((state / "engine_icm-demo.json").read_text()) == {"account_id": "icm-demo", "equity": 1000.0}
     now = pd.Timestamp.now("UTC")
     c = health.check_duplicate_engine(make_ctx(state, now=now), "icm-demo")
-    assert c is not None and c.status == "warn" and "4242" in c.reason
+    assert isinstance(c, Check) and c.status == "warn" and "4242" in c.reason
     assert health._alerting(c.name, c.status)                                  # told (NOTIFY_ON_WARN)
     later = health.check_duplicate_engine(make_ctx(state, now=now + pd.Timedelta(hours=1)), "icm-demo")
-    assert later is not None and later.status == "ok"
+    assert isinstance(later, Check) and later.status == "ok"
     assert health.check_duplicate_engine(make_ctx(tmp_path / "none", now=now), "icm-demo") is None

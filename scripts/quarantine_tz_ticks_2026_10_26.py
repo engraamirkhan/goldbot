@@ -58,6 +58,17 @@ AHEAD = pd.Timedelta(minutes=30)
 BRIDGE_ACCOUNT = "icm-demo"
 
 
+def refuse_after_key_change(store: Store) -> None:
+    """Refuse once any account of the span has an engine start that held its writer lock (ADR 0091, quant LOW of
+    7b439c30): this script writes corrected minutes to the broker's legacy key (BARS_SOURCE) with no writer, which
+    the readers take only before that start; after it the run would be partly invisible and partly unproven."""
+    from goldbot.data.account_bars import engine_boots, live_cutover
+    for acc in TICK_SOURCES:
+        if (cut := live_cutover(engine_boots(store, acc))) is not None:
+            raise SystemExit(f"refused: {acc} has stored its minutes under the per-account live key since {cut} "
+                             "(ADR 0091); this 2026-10-26 repair writes the legacy key and is retired")
+
+
 def ahead(path: Path, rows: pd.DataFrame) -> pd.Series:
     """Rows in [LO, HI) stamped more than AHEAD after their part file was written (per row: a compacted part keeps
     each row's original part mtime, backlog 179 `written_utc`). A row's own `written_utc` column (BACKLOG 241) wins
@@ -186,6 +197,7 @@ def main() -> int:
     a = ap.parse_args()
     from goldbot.config import load_settings
     store = Store(a.data_root or load_settings().data_root)
+    refuse_after_key_change(store)
     now = pd.Timestamp.now("UTC")
     rng = stamped_range(store)
     if rng is None:

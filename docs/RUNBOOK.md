@@ -1905,6 +1905,22 @@ Hosts without flock (the Windows VPS under NSSM) never refuse a start. Their eng
 in their `engine_boot` dq event. Their minutes are unproven, so the nightly discovered-arm read voids those
 accounts' decisions (`unproven_writer`).
 
+If the refusals run for more than an hour, health raises a second WARN, `duplicate_engine_1h:<account>`, and tells
+you again. Check that the holder is the engine you want trading.
+
+**Deploying the release with ADR 0091.** Restart every engine on a host together; on the brain that is
+`sudo systemctl restart 'goldbot-engine@*'`. A warm start reads the broker's legacy key with no cut-over bound, and
+the account's own copy of a minute wins (`engine/history.py` `_store_reader`). If one icm engine still ran the old
+release, it would keep writing the shared legacy key, and the new engine would read that engine's minutes under its
+own.
+
+Rollback is whole-release only: revert both commits (the engine side and the readers), never `books.live_key`
+alone. Engines writing the legacy key again after a locked `engine_boot` exists would have their new minutes
+dropped by the readers, which take legacy minutes only before that start.
+
+`scripts/quarantine_tz_ticks_2026_10_26.py` is retired. It refuses to run once icm-demo or icm-probe has a locked
+`engine_boot`, because it writes the legacy key.
+
 ### Every close refused history_gap
 
 `WARN history_gap:<account>` (told on Telegram): over the last 6 h the account's agents were refused `history_gap:<tf>`
