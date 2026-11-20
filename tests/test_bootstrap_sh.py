@@ -69,10 +69,16 @@ def test_the_mt5_box_gets_4_gb_of_swap():
     assert "fallocate -l 4G /swapfile" in _text("mt5")
 
 
-def test_a_small_fallback_brain_gets_swap_and_the_a1_shape_none():
+def test_every_brain_gets_compressed_ram_swap_never_disk_swap():
+    """SRE audit 2026-11-20 finding 5 (no swap while the nightly jobs peaked at 5.4 GB next to the engines) and the
+    security review of 70de628d: process memory holds tokens, so it may never be paged to disk. zram (compressed RAM,
+    gone at power-off) of up to 4 GB on every shape, swappiness 10; no swap file."""
     s = _text("brain")
-    assert "-lt 4000000 ] && ! swapon --show | grep -q /swapfile" in s and "fallocate -l 4G /swapfile" in s
-    assert s.index("fallocate -l 4G") < s.index("npm ci")
+    assert "fallocate" not in s and "/swapfile" not in s and "-lt 4000000" not in s
+    assert "systemd-zram-generator" in s and "/etc/systemd/zram-generator.conf" in s
+    assert "zram-size = min(ram, 4096)" in s and "systemctl start systemd-zram-setup@zram0.service" in s
+    assert "vm.swappiness = 10" in s and "/etc/sysctl.d/99-goldbot-swap.conf" in s
+    assert s.index("zram-generator.conf") < s.index("npm ci")
 
 
 def test_m1_the_brain_key_on_the_mt5_box_can_run_no_command():

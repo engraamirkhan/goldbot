@@ -52,7 +52,7 @@ from goldbot.base import (
     schema_skew_summary,
     write_atomic,
 )
-from goldbot.config import DEFAULT_SETTINGS, Settings, TelegramSettings, settings_dict
+from goldbot.config import DEFAULT_SETTINGS, ROOT, Settings, TelegramSettings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.crossfeed import check_reconciliation
 from goldbot.data.ticks import check_tick_record
@@ -439,6 +439,9 @@ class HealthContext(Record):
     bridge_info: Callable[[str], Any] | None = None           # url -> bridge_compat.BridgeInfo from /health; None: not probed
     terminal_probe: Callable[[str], Any] | None = None        # url -> (terminal token, seconds in it); None: not probed
     commit: str | None = None                                 # this checkout's commit, compared with the bridge's
+    # ADR 0094: (bridge commit, this commit) -> True when they differ only outside the bridge's files
+    # (goldbot/ops/bridge_files.py), False when a bridge file differs, None when git cannot tell; None: not compared
+    bridge_diff: Callable[[str, str], bool | None] | None = None
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
     memo: dict[str, Any] = Field(default_factory=dict)        # per-run reads shared by the per-account checks
@@ -488,13 +491,15 @@ class HealthContext(Record):
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health, probe_terminal
         from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
+        from goldbot.ops.bridge_files import differs_outside_bridge
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err, pilot_accounts=pilots,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
-                   commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes,
+                   commit=repo_commit(), bridge_diff=partial(differs_outside_bridge, ROOT),
+                   qualification=_qualification_view, weekend_lanes=lanes,
                    observe_lanes=observed, etc_dir=Path("/etc") if sys.platform.startswith("linux") else None,
                    entry_supply=partial(_entry_supply_view, settings) if settings is not None else None,
                    settings_changed=_settings_changed(Path(settings_path)))
@@ -780,13 +785,16 @@ def alert_text(prev: dict[str, Status], report: HealthReport) -> str | None:
     return _message(new, recovered, now, sorted(report.failing() - {c.name for c in new}), [])
 
 
-def step_alerts(state: WatchState, report: HealthReport, policy: AlertPolicy) -> AlertStep:
+def step_alerts(state: WatchState, report: HealthReport, policy: AlertPolicy,
+                hold: tuple[str, ...] = ()) -> AlertStep:
     """The alert rule with hysteresis (owner complaint 2026-11-04: one-off blips sent a FAIL and a "recovered"
     minutes later). A change against what the owner was last told (`state.announced`) is told only once it held on
     `confirm_polls` consecutive passes AND for `confirm_s` since first seen; a new failure on the immediate list
     (`alerts_at_once`) is told at once. A failure that clears inside the window sends nothing and counts as a flap; a
-    check with `flap_note_at` flaps in the last hour gets one "flapping" line, at most once an hour. Pure: the caller
-    persists `state` after the message was delivered."""
+    check with `flap_note_at` flaps in the last hour gets one "flapping" line, at most once an hour. `hold`
+    (goldbot/ops/deploy_window.py, inside a deploy's own window): a new alert of a check with one of these prefixes
+    waits in `pending` (first seen kept, so it is told on the first poll after the window if still bad) and is never
+    a flap when it clears. Pure: the caller persists `state` after the message was delivered."""
     ts = report.ts
     told = state.announced
     new, recovered = _changes(told, report)
@@ -805,7 +813,9 @@ def step_alerts(state: WatchState, report: HealthReport, policy: AlertPolicy) ->
                   if old is not None and old.kind == kind else AlertStreak(kind=kind, first_seen=ts))
         held = (streak.polls >= policy.confirm_polls
                 and (ts - streak.first_seen).total_seconds() >= policy.confirm_s)
-        if not held and not (kind == "new" and alerts_at_once(by_name[name])):
+        if kind == "new" and hold and name.startswith(hold):          # a deploy's own noise: deferred
+            pending[name] = streak
+        elif not held and not (kind == "new" and alerts_at_once(by_name[name])):
             pending[name] = streak
         elif kind == "new":
             sent_new.append(by_name[name])
@@ -818,8 +828,8 @@ def step_alerts(state: WatchState, report: HealthReport, policy: AlertPolicy) ->
                 announced.pop(name, None)
     flaps = {n: [t for t in v if ts - t < FLAP_WINDOW] for n, v in state.flaps.items()}
     for name, s in state.pending.items():
-        if s.kind == "new" and events.get(name) != "new":                  # cleared before it was confirmed
-            flaps.setdefault(name, []).append(ts)
+        if s.kind == "new" and events.get(name) != "new" and not (hold and name.startswith(hold)):
+            flaps.setdefault(name, []).append(ts)                          # cleared before it was confirmed
     flaps = {n: v for n, v in flaps.items() if v}
     noted = {n: t for n, t in state.flap_noted.items() if ts - t < FLAP_WINDOW}
     sent_names = {c.name for c in sent_new}
@@ -854,8 +864,10 @@ class HealthWatch:
             self.state = WatchState()       # unreadable: start clean (current fails are announced once more)
 
     def step(self, report: HealthReport) -> AlertStep:
-        """The message for this report and the state after it. Records nothing."""
-        return step_alerts(self.state, report, self.policy)
+        """The message for this report and the state after it (alerts a deploy causes itself are held inside its
+        window, goldbot/ops/deploy_window.py). Records nothing."""
+        from goldbot.ops.deploy_window import held
+        return step_alerts(self.state, report, self.policy, hold=held(self.path.parent, report.ts))
 
     def alert(self, report: HealthReport) -> str | None:
         """The text to send for this report (None: nothing to tell). Does not record anything."""

@@ -10,6 +10,16 @@
 # Owner flags for the manual forms:
 #   --drop-unknown-local-keys  move settings.local.yaml keys the target code does not know aside (dated backup kept
 #                              next to it) instead of refusing; only unknown keys, never an invalid value
+#   --now                      MT5 box: restart the bridges even in market hours (a safety fix only; ADR 0094)
+#
+# MT5 box (audit 2026-11-20, ADR 0094): a forward deploy that changes no bridge file (BRIDGE_FILES_RE, the same string
+# as goldbot/ops/bridge_files.py, pinned by tests/test_bridge_files.py) restarts nothing: it moves the checkout, runs
+# the target's start check as the service user (`python -m goldbot.ops.bridge_files check <accounts>`: imports, settings,
+# accounts and each bridge's symbols resolve) and keeps it only when that says ok; a problem puts the old checkout back
+# and refuses; a check that cannot run falls back to the full deploy below. One that does change a bridge file is
+# refused Mon-Fri MARKET_FROM_H..MARKET_TO_H UTC (exit 75, nothing changed) unless --now. A rollback is never held.
+# Brain: from the switch to MUTE_AFTER_S after the record, state/deploy_window.json tells health.py to hold
+# tick_errors and bridge_compat alerts the deploy's own restarts cause (a real fault still alerts once it outlasts it).
 #   --interrupt-jobs           deploy even while a scheduler job runs (that job's slot is not re-run)
 #
 # A forward deploy must be on main, a fast-forward of what runs, and must have passed CI (latest GitHub Actions runs
@@ -99,6 +109,13 @@ PROBE=/usr/local/sbin/goldbot-bridge-probe   # root-owned (mt5_bootstrap.sh); ru
 PROBE_TIMEOUT_S=20
 BRIDGE_PORT_DEFAULT=8765                  # a bridge without a watchdog drop-in naming another port (mt5-instance.sh)
 BEAT_SERVICES=" supervisor scheduler telegram news api "   # = HEARTBEAT_SERVICES (tested)
+# = goldbot/ops/bridge_files.py BRIDGE_FILES_RE (tests/test_bridge_files.py): a change here restarts the MT5 bridges
+BRIDGE_FILES_RE='^(goldbot/__init__\.py|goldbot/(config|base|instruments)\.py|goldbot/execution/[a-z0-9_]+\.py|goldbot/ops/(__init__|run|accounts|login|login_ledger|observe|bridge_compat)\.py|goldbot/ops/services/(__init__|_base|bridge|engine)\.py|goldbot/ops/commands/(__init__|registry|services)\.py|goldbot/data/(__init__|timeutil|calendar|cme_holidays)\.py|goldbot/engine/(__init__|magic)\.py|goldbot/risk/(__init__|sizing)\.py|goldbot/labels/(__init__|triple_barrier|exit_policy)\.py|config/(settings|accounts|instruments)\.yaml|goldbot/ops/linux/mt5-bridge-requirements\.txt)$'
+MARKET_FROM_H=7                           # MT5 box: bridge restarts refused Mon-Fri from 07:00 ...
+MARKET_TO_H=21                            # ... to 21:00 UTC (London open to the New York close) unless --now
+DEFERRED_EXIT=75                          # EX_TEMPFAIL: refused for the window, deploy again after it (or --now)
+START_CHECK_S=300                         # the start check's limit (the Wine Python imports everything once)
+MUTE_AFTER_S=1200                         # brain: tick_errors' 15 min memory + the 5 min alert confirmation
 APPROVED=$ROOT/state/deploy/approved.json
 PY_BRAIN=$ROOT/.venv/bin/python           # run only as the service user
 BRIDGE_REQS=goldbot/ops/linux/mt5-bridge-requirements.txt   # MT5 box: hash-pinned from uv.lock (scripts/bridge_requirements.py)
@@ -109,6 +126,9 @@ MANUAL=""
 MODE=approval
 DROP_KEYS=0
 INTERRUPT_JOBS=0
+NOW=0                                     # --now: MT5 bridge restarts allowed in market hours (safety fixes)
+WINDOW_FROM=0                             # brain: when the alert window opened (0: no switch started)
+FULL_NOTE=""                              # MT5 box: why a deploy without a bridge file still restarted them
 STARTED=0
 SETTLED=0
 ENGINE_STOPPED=0
@@ -140,13 +160,86 @@ log() {  # result from to detail -- every value is a sha, empty, fixed text writ
   printf '{"ts":"%s","role":"%s","result":"%s","from":"%s","to":"%s","detail":"%s"}\n' \
     "$(date -u +%FT%TZ)" "$ROLE" "$1" "$2" "$3" "$4" >> "$LOG"
   publish_log
+  [ "$WINDOW_FROM" = 0 ] || deploy_window "$MUTE_AFTER_S"    # a switch ran: hold its alerts until MUTE_AFTER_S after
   echo "$1: $4"
 }
 drop_approval() { [ -n "${MANUAL:-}" ] || as_owner rm -f -- "$APPROVED"; }
 refuse() { log refused "$CUR" "$TARGET" "$1"; drop_approval; exit 1; }
+
+deploy_window() {  # brain, $1 seconds: state/deploy_window.json {"from","until" epoch s} for health.py's alert hold.
+  # Numbers and fixed text only, written by the service user (root only pipes it), as publish_log
+  [ "$ROLE" = brain ] || return 0
+  local now; now=$(date +%s)
+  [ "$WINDOW_FROM" != 0 ] || WINDOW_FROM=$now
+  printf '{"from":%s,"until":%s,"source":"goldbot-deploy"}\n' "$WINDOW_FROM" "$((now + $1))" \
+    | sudo -u "$OWNER" sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' _ "$ROOT/state/deploy_window.json" || true
+}
+
+market_hours() {  # 0 Mon-Fri MARKET_FROM_H..MARKET_TO_H UTC, from `date +%s` (1970-01-01 was a Thursday)
+  local now dow hr
+  now=$(date +%s); dow=$(( (now / 86400 + 4) % 7 )); hr=$(( now % 86400 / 3600 ))
+  [ "$dow" -ge 1 ] && [ "$dow" -le 5 ] && [ "$hr" -ge "$MARKET_FROM_H" ] && [ "$hr" -lt "$MARKET_TO_H" ]
+}
+
+bridge_files_changed() {  # $1 from, $2 to: 0 when a bridge file differs or git cannot tell, 1 when none does
+  local names
+  names=$(g diff --name-only "$1" "$2") || return 0
+  grep -qE "$BRIDGE_FILES_RE" <<< "$names"
+}
+
+bridge_start_check() {  # MT5 box, in the checkout: the target's own start check as the service user. Prints at most
+  # 200 characters of [A-Za-z0-9_.:,<> -] (the record stays valid JSON and holds no value); returns its exit status
+  local py=() accts=() s t=() rc=0 out
+  read -r -a py <<< "$(target_py)"
+  for s in $(services); do enabled "$s" || continue; s=${s#goldbot-bridge@}; accts+=("${s%.service}"); done
+  [ "${#accts[@]}" -gt 0 ] || { echo "no enabled bridge"; return 4; }
+  command -v timeout > /dev/null && t=(timeout "$START_CHECK_S")
+  out=$(as_owner bash -c 'cd -- "$1" && shift && exec "$@"' _ "$ROOT" "${t[@]}" "${py[@]}" \
+          -m goldbot.ops.bridge_files check "${accts[@]}" 2>/dev/null) || rc=$?
+  printf '%s' "$out" | tr '\n' ' ' | tr -cd 'A-Za-z0-9_.:,<> -' | head -c 200
+  return "$rc"
+}
+
+checkout_only() {  # MT5 box, no bridge file changed: move the checkout, restart nothing, once the start check says ok.
+  # Exits on ok (deployed), on a problem or a timeout (old checkout back, refused) and when the old checkout cannot be
+  # put back (failed). Returns when the check could not run, with the old checkout back, so the full deploy runs
+  # instead (with its own rollback). Diffing against the checkout rather than the bridge's running commit is exact:
+  # every checkout move without a bridge restart changed no bridge file, so a running bridge's files always equal
+  # the checkout's (ADR 0094; the root-run probe returns one token, never the /health body with the commit).
+  local out rc=0
+  if ! g checkout -q --detach "$TARGET"; then
+    restore_checkout "the checkout of the target failed"
+    FULL_NOTE="checkout failed, full deploy; "
+    return 1
+  fi
+  out=$(bridge_start_check) || rc=$?
+  if [ "$rc" = 0 ]; then
+    log deployed "$CUR" "$TARGET" "no bridge file changed: checkout only, bridges not restarted (start check ok)${MANUAL:+ (manual)}"
+    exit 0
+  fi
+  case "$rc" in
+    3)
+      restore_checkout "the target's bridge would not start (${out:-no detail})"
+      refuse "no bridge file changed, but the target's bridge would not start (${out:-no detail}); previous checkout kept, nothing restarted" ;;
+    124)
+      restore_checkout "the target's start check timed out after $START_CHECK_S s"
+      refuse "no bridge file changed, but the target's start check timed out after $START_CHECK_S s; previous checkout kept, nothing restarted" ;;
+  esac
+  restore_checkout "the target's start check could not run (exit $rc)"
+  FULL_NOTE="start check could not run (exit $rc), full deploy; "
+  return 1
+}
+
+restore_checkout() {  # $1 why: put the running commit back. When even that fails: `failed`, which goldbot-deploy-all
+  # reports, and exit 1. The bridges keep running, but their next start would load an unchecked tree.
+  if g checkout -q --detach "$CUR" && [ "$(g rev-parse HEAD)" = "$CUR" ]; then return 0; fi
+  log failed "$CUR" "$TARGET" "$1; checkout NOT restored: the bridges still run, but their next start loads an unchecked tree; nothing restarted. On the box: git status as $OWNER in $ROOT, then sudo goldbot-deploy --rollback to the running commit or fix the checkout by hand"
+  drop_approval
+  exit 1
+}
 usage() {
   echo "usage: goldbot-deploy [latest | <40-hex commit id> | --rollback <40-hex commit id> | --stage <40-hex commit id>]"
-  echo "                      [--drop-unknown-local-keys] [--interrupt-jobs]"
+  echo "                      [--drop-unknown-local-keys] [--interrupt-jobs] [--now]"
   exit 2
 }
 
@@ -846,6 +939,7 @@ watch_run() {  # --watch (holds the deploy lock): until WATCH_S after the switch
   line="$bad restarted or stopped within ${WATCH_S} s of the switch (after the deploy was reported)"
   echo "$line; restoring $CUR"
   RESTORE=1
+  deploy_window $((WATCH_S + BRIDGE_ANSWER_S + MUTE_AFTER_S))   # brain: the rollback's own restarts, as a deploy's
   local rc=0
   switch_to "$TARGET" "$CUR" && healthy full || rc=1
   ensure_started
@@ -1001,6 +1095,7 @@ main() {
       --rollback) [ $# -ge 2 ] && [ "$MODE" = approval ] || usage; MODE=rollback; TARGET=$2; shift ;;
       --drop-unknown-local-keys) DROP_KEYS=1 ;;
       --interrupt-jobs) INTERRUPT_JOBS=1 ;;
+      --now) NOW=1 ;;
       --stage) [ $# -ge 2 ] && [ "$MODE" = approval ] || usage; MODE=stage; TARGET=$2; shift ;;
       --watch) [ $# -eq 1 ] || usage; MODE=watch ;;
       -*) usage ;;
@@ -1008,7 +1103,7 @@ main() {
     esac
     shift
   done
-  if [ "$MODE" = approval ] && { [ "$DROP_KEYS" = 1 ] || [ "$INTERRUPT_JOBS" = 1 ]; }; then usage; fi
+  if [ "$MODE" = approval ] && { [ "$DROP_KEYS" = 1 ] || [ "$INTERRUPT_JOBS" = 1 ] || [ "$NOW" = 1 ]; }; then usage; fi
   [ "$MODE" = approval ] || MANUAL=1
   if [ "$MODE" = stage ]; then stage "$TARGET"; exit 0; fi
 
@@ -1071,6 +1166,14 @@ main() {
   [[ "$aux" != refuse* ]] \
     || refuse "aux.db is at schema ${aux#refuse }, which the target cannot open and no step-back is known; nothing changed"
   check_settings
+  if [ "$ROLE" = mt5 ] && [ "$MODE" = deploy ]; then   # ADR 0094: a rollback is recovery and is never held back
+    bridge_files_changed "$CUR" "$TARGET" || checkout_only || true   # exits unless the full deploy must run after all
+    if market_hours && [ "$NOW" != 1 ]; then
+      log refused "$CUR" "$TARGET" "${FULL_NOTE}bridge files changed: bridge restarts are held in market hours (Mon-Fri $MARKET_FROM_H:00-$MARKET_TO_H:00 UTC); deploy again after $MARKET_TO_H:00 UTC, or with --now for a safety fix; nothing changed"
+      exit "$DEFERRED_EXIT"
+    fi
+    [ "$NOW" != 1 ] || ! market_hours || FULL_NOTE+="bridges restarted in market hours (--now); "
+  fi
   BASELINE=0
   if [ "$ROLE" = brain ]; then
     if health_out "$HEALTH_BEFORE"; then BASELINE=1; STOPPED=$(stopped_engines); else echo "note: no health baseline (health did not run); no comparison after the deploy"; fi
@@ -1086,6 +1189,7 @@ main() {
   # review F2: a Ctrl-C or a TERM from here on would leave the services stopped or the switch half done: ignored until
   # the outcome is logged (the process exits right after it). Run it under systemd-run --wait (RUNBOOK 0.5).
   trap '' INT TERM
+  deploy_window $((WATCH_S + BRIDGE_ANSWER_S + MUTE_AFTER_S))   # brain: until the record moves it to MUTE_AFTER_S after
   local full=""; [ "$MODE" = deploy ] || full=full     # a manual rollback waits the whole 90 s; a forward deploy does not
   switch_to "$CUR" "$TARGET" && healthy $full
   local ok=$?
@@ -1113,7 +1217,7 @@ main() {
       done
       [ "$raw" = "$worse" ] || note="${raw#*$'\n'}; "
     fi
-    note="${NEW_NOTE}${BRIDGE_NOTE}${note}"
+    note="${FULL_NOTE}${NEW_NOTE}${BRIDGE_NOTE}${note}"
     if [ "$MODE" = rollback ]; then
       log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${note}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
     elif [ -n "$worse" ] || [[ "$NEW_NOTE" == *"blocked by its bridge"* ]]; then
