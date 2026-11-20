@@ -92,6 +92,13 @@ def _repair_lost_record(cmd: str, args: list[str]) -> None:
     sys.exit(repair_main(args))
 
 
+@register_command("findings", pos=212)
+def _findings(cmd: str, args: list[str]) -> None:
+    """Owner 2026-11-20: the findings register's table, evaluated now (read-only) or as last stored (--stored)."""
+    from goldbot.ops.findings import main as findings_main
+    sys.exit(findings_main(args))
+
+
 @register_command("bridge-smoke", pos=250)
 def _bridge_smoke(cmd: str, args: list[str]) -> None:
     """BACKLOG 1 (ADR 0021): one minimum-lot round trip on a demo terminal, after one owner click."""

@@ -339,6 +339,11 @@ class SchedulerSettings(_Section):
     # from 01:00, killed at budget_s + kill_grace_s (5,700 s: 03:35 on time, 04:05 UTC at worst after a 02:30 late
     # start, which overlaps the 03:40 journal_compact); never caught up into the London open
     discovery_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:00", max_late_hours=1.5)
+    # owner 2026-11-20 ("feedback must close itself"; goldbot/ops/findings.py): every row of config/findings.yaml
+    # re-measured on the brain's data after the morning reviews (daily_review 06:15, arm_lifecycle 06:25, monthly_review
+    # 06:30, loop_check 07:05); a new, regressed, closed or past-due row is announced once a day on the status issue
+    findings_check: ScheduleSettings = ScheduleSettings(kind="daily", at="07:15", max_late_hours=12,
+                                                        run_if_never_run=True)
 
 
 class BackupSettings(_Section):
@@ -921,6 +926,17 @@ class MonthlyReviewSettings(_Section):
     issue_label: str = Field("review-monthly", pattern=r"^[\w.-]+$")   # the program-director clears these each session
 
 
+class FindingsSettings(_Section):
+    """The findings register (goldbot/ops/findings.py; owner 2026-11-20: "feedback must close itself"). Every audit
+    finding and owner directive is a row of `register` with an owner, a due date and a measurable check; the daily
+    `findings_check` job re-measures each row and announces what changed. Reporting only: it never changes an order,
+    an arm, a limit or a setting."""
+    path: str = "config/findings.yaml"                      # the register, relative to the checkout (versioned, public-safe)
+    status_issue: int = Field(34, ge=1)                     # the program's status issue: at most one comment a day
+    remind_days: int = Field(7, ge=1, le=60)                # an overdue row is announced again after this many days
+    telegram: bool = True                                   # also one Telegram line a day for critical/high events
+
+
 class TradesViewSettings(_Section):
     """The trades screens' plan figures (docs/design/trades-ux-2026-10-27.md §2.4, item 131; goldbot/api/today_ledger.py).
     Reporting only: nothing here sizes, gates or limits a trade."""
@@ -1239,6 +1255,7 @@ class Settings(_Section):
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
     weekly_review: WeeklyReviewSettings = Field(default_factory=WeeklyReviewSettings)
     monthly_review: MonthlyReviewSettings = Field(default_factory=MonthlyReviewSettings)
+    findings: FindingsSettings = Field(default_factory=FindingsSettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")

@@ -39,6 +39,7 @@ from goldbot.execution.costs import (
     load_research_cost_table,
 )
 from goldbot.ops import health, jobs, ledger, scheduler
+from goldbot.ops.findings import FindingStatus
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.ops.monthly_review import MonthlyReview
 from goldbot.ops.observe import ObserveStatus
@@ -578,6 +579,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # aux.db monthly_reviews (R142, goldbot/ops/monthly_review.py):
                # tests/test_monthly_review.py::test_a_review_row_a_newer_release_wrote_still_reads
                MonthlyReview,
+               # aux.db findings_history (R175, goldbot/ops/findings.py): tests/test_findings.py::
+               # test_a_status_row_a_newer_release_wrote_still_reads
+               FindingStatus,
                # aux.db swap_reconciliations (BACKLOG 175, goldbot/ops/swap_reconcile.py): tests/test_swap_reconcile.py::
                # test_a_reconciliation_row_a_newer_or_older_release_wrote_still_reads
                SwapReconciliation,
@@ -597,6 +601,12 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
         "strict: the hash-chained arm registration journal (ADR 0058); a row that does not read must refuse",
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/ops/findings.py", "load_register", "Register"):
+        "strict: config/findings.yaml, versioned config (a misspelt key or an unknown check must fail the load)",
+    ("goldbot/ops/finding_checks.py", "parse_params", "spec.params"):
+        "strict: a register row's check parameters (config/findings.yaml; a misspelt parameter must fail the load)",
+    ("goldbot/ops/findings.py", "evaluate_one", "spec.params"):
+        "not persisted: the same register row's parameters, already validated strictly at load",
     ("goldbot/instruments.py", "load_instruments", "Instruments"):
         "strict: config/instruments.yaml (a misspelt key or a repeated magic_block must fail)",
     ("goldbot/research/autodisc/ledger.py", "SearchLedger.get_spec", "StrategySpec"):

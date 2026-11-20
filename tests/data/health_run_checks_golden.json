@@ -156,6 +156,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:findings_check",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:har_days",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -666,6 +671,11 @@
   ],
   [
    "job:feed_reconcile",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:findings_check",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
