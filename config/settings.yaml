@@ -218,6 +218,7 @@ scheduler:
   monthly_review:   { kind: daily,   at: "06:30", max_late_hours: 20 }   # R142 (goldbot/ops/monthly_review.py): the 1st reviews the UTC month before (after its last 23:25 broker_ledger snapshot); later ticks build it when missed (monthly_review.catch_up_days) or failed and retry unsent posts; a done month is a no-op
   long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
   discovery_nightly: { kind: daily, at: "01:00", max_late_hours: 1.5 }   # ADR 0090 (goldbot/research/autodisc/discovery.py): bounded G2 search in a niced child, 01:00 + budget_s + kill_grace_s (5,700 s) = 03:35 on time; worst case 04:05 UTC (a start at 02:30, the max_late, + 5,700 s), so a late start overlaps the 03:40 journal_compact; never caught up into London. Keep 01:00-04:05 UTC free of any job that must run on time (heartbeat or trading path): the scheduler is single-threaded (SRE 2026-11-18)
+  findings_check:   { kind: daily,   at: "07:15", max_late_hours: 12, run_if_never_run: true }   # owner 2026-11-20 (goldbot/ops/findings.py): every config/findings.yaml row re-measured on the brain's data -> aux.db findings_history; a new, regressed, closed or past-due row is announced once a day on issue #34
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -670,6 +671,11 @@ monthly_review:                      # monthly review (goldbot/ops/monthly_revie
     oracle_always_free_brain_and_bridge: 0.0
     oracle_e5flex_vantage_mt5: 4.52  # 0.125 OCPU E5.Flex + boot volume: measured £4.52 against the approved £3.57
   issue_label: review-monthly        # label of the monthly GitHub issue; the program-director clears these each session
+findings:                            # findings register (goldbot/ops/findings.py; owner 2026-11-20 "feedback must close itself"); reporting only
+  path: config/findings.yaml         # the register: every finding/directive: owner role, due date, severity, a registered measurable check
+  status_issue: 34                   # the program's status issue: at most one findings comment a day
+  remind_days: 7                     # an overdue row is announced again after this many days while it stays overdue
+  telegram: true                     # plus one Telegram line a day when a critical or high row is new, regressed or overdue
 trades_view:                         # trades screens' plan figures (goldbot/api/today_ledger.py, item 131); reporting only
   fills_target: 200                  # fills a day for a demo account not listed below; live accounts have none
   # ADR 0049 D1/D1a step-1 targets (fills a day): icm-probe scalp 269 + probes 24 (54 before the 2026-11-01 demo

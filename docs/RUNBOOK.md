@@ -2996,6 +2996,31 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.
 
+### Findings register (`findings`, issue #34; R173)
+
+Every audit finding and owner directive is a row of `config/findings.yaml` (owner role, severity, due date, source,
+and a check: goldbot/ops/finding_checks.py lists them). The daily `findings_check` job (07:15 UTC) re-measures every
+row on the brain's data, stores the result in aux.db `findings_history`, and comments once a day on #34 with each row
+that is new, regressed, closed or past due (an overdue row again every `findings.remind_days`, 7); critical/high
+events also send one Telegram line. Status: `closed` (check passes), `open` (fails, not due), `unknown` (check cannot
+read its data, not due), `overdue` (past due and not closed; "can't check" past due is overdue: no evidence is not a
+fix). Health `findings` WARNs while a critical/high row is overdue (shown once the job has run; not told on Telegram:
+the job already announces it).
+- Read the table: `python -m goldbot.ops.run findings --stored` as the goldbot user (the last run), or without
+  `--stored` to evaluate now (read-only: nothing stored or posted; `--no-github` skips the GitHub reads).
+- Close a row by fixing what its check measures; the next run says `closed`. A `manual` row closes only by setting
+  `done_on` and `evidence` (a commit, PR or document) in a PR. Never delete an open row: move its due date or change
+  its check in a reviewed PR, with the reason in `source`.
+- Add a row for every new finding or directive in the same PR that reports it (the owner is the role accountable for
+  the fix). The file is public: no login, host, email, account number or money figure; the loader refuses them.
+- `job:findings_check` failing: the register does not load (an unknown check, a bad parameter, a duplicate id, an
+  unknown owner or a refused line; the error names it). Fix the file on main and the next slot runs.
+- No comment on #34 although events exist: no `github-token` on the brain or the post failed; the events stay pending
+  (`posted` 0) and go out with the next day's comment.
+- SEC-SCANNING reads "can't check" on the brain: GitHub shows `security_and_analysis` only to an admin token. Verify
+  in the repository settings; if no admin read is possible, change the row's check to `manual` with the date and the
+  evidence in a reviewed PR (it would otherwise turn overdue on its due date).
+
 ### Store compaction (`compaction`; BACKLOG 242)
 
 Health check `compaction` (goldbot/ops/checks/compaction.py) appears once `journal_compact` has finished a run (or a

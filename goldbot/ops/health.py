@@ -167,6 +167,7 @@ from goldbot.ops.checks.feeds import (
     check_pnl_basis,
     check_qualification,
 )
+from goldbot.ops.checks.findings import check_findings  # owner 2026-11-20 findings register (registers it)
 from goldbot.ops.checks.host import PROC_STAT, StealSampler, check_cpu_steal, check_needrestart
 from goldbot.ops.checks.long_history import check_long_history  # BACKLOG 251 (registers it)
 from goldbot.ops.checks.loop import check_feedback_loop
@@ -342,6 +343,7 @@ __all__ = [
     "check_deadman",
     "check_cpu_steal",
     "check_feedback_loop",
+    "check_findings",
     "check_discovery_last_run",
     "check_deploy_approval",
     "check_deploy_read",

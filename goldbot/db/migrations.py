@@ -893,6 +893,28 @@ AUX: tuple[Migration, ...] = (
     # before it (and by a release without it, which never reads it)
     Migration(version=40, name="exploration_obs_boot_id", additive=True, statements=(),
               add_columns=(("exploration_obs", "boot_id", "TEXT"),)),
+    # additive (owner 2026-11-20, "feedback must close itself"; goldbot/ops/findings.py): the findings register's status
+    # history, one row per finding per daily `findings_check` run (its verdict, status and the event it raised against
+    # the row before; `posted` 1 once the event went out on the status issue), and one row per day an announcement went
+    # out (the once-a-day rate limit). Reporting only: nothing that trades reads either table, and a release without
+    # them never opens them. After the boot id's 40
+    Migration(version=41, name="findings_register", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS findings_history (
+               finding_id TEXT NOT NULL,
+               run_ns INTEGER NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('closed', 'open', 'overdue', 'unknown')),
+               event TEXT CHECK (event IS NULL OR event IN ('new', 'regressed', 'past_due', 'reminder', 'closed')),
+               posted INTEGER NOT NULL DEFAULT 0 CHECK (posted IN (0, 1)),
+               {_BODY},
+               PRIMARY KEY (finding_id, run_ns)
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS findings_history_pending ON findings_history(posted, event)",
+        f"""CREATE TABLE IF NOT EXISTS findings_posts (
+               day TEXT PRIMARY KEY,
+               posted_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

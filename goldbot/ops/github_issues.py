@@ -58,6 +58,20 @@ class GitHubIssues:
         got = self._call("POST", f"/issues/{int(number)}/comments", {"body": body[:MAX_BODY]})
         return str(got.get("html_url", "")) if isinstance(got, dict) else ""
 
+    def issue(self, number: int) -> dict[str, Any]:
+        """One issue as GitHub returns it (read-only; the findings register's `github_issue_closed`)."""
+        got = self._call("GET", f"/issues/{int(number)}")
+        if not isinstance(got, dict):
+            raise GitHubError(f"GitHub issue {int(number)}: not an object")
+        return got
+
+    def repository(self) -> dict[str, Any]:
+        """The repository as GitHub returns it (read-only; `security_and_analysis` only for an admin token)."""
+        got = self._call("GET", "")
+        if not isinstance(got, dict):
+            raise GitHubError("GitHub repository: not an object")
+        return got
+
     def open_issue(self, label: str, title: str, body: str) -> str:
         """A new issue labelled `label` (the monthly review: one issue a month, closed once it is cleared)."""
         got = self._call("POST", "/issues", {"title": title[:250], "body": body[:MAX_BODY], "labels": [label]})

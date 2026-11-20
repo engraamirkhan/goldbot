@@ -11,6 +11,8 @@
   auth.py        auth and mail: keyring secrets (presence only), the email sign-in link
   cpcv.py        CPCV/PBO evidence of gate-passing trials (M16, the promotion gate's input)
   loop.py        the feedback loop (R140): learner weights, daily/weekly reviews, proposals read, registry sync, jobs
+  findings.py    the findings register (R173): a critical/high finding past due and not closed (registered through
+                 goldbot/ops/health.py's import, as discovery.py and compaction.py are)
   operations.py  ops and backups: settings, accounts, disk, deploys, backups, retention, restore drill, agent spend
 
 Adding a check: write it in its area module with `@register_check(scope, block=..., pos=...)` (registry.py explains

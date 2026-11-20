@@ -48,6 +48,9 @@
   python -m goldbot.ops.run repair-lost-record <account> [--state DIR] [--position ID ...] [--dry-run]
                                                          # engine stopped: lost exploration records written from the
                                                          # broker's deals, dropped from the engine's lost list
+  python -m goldbot.ops.run findings [--state DIR] [--stored] [--no-github] [--json]
+                                                         # the findings register (config/findings.yaml), worst first:
+                                                         # evaluated now (read-only) or the last stored run
   python -m goldbot.ops.run autodisc-register <spec_hash> --account ID --prereg PATH#SECTION [--stage explore] [--max-loss X] [--dry-run]
                                                          # a discovery survivor -> a demo spec_rule arm (ADR 0058):
                                                          # journalled first, then config files; no order, no start

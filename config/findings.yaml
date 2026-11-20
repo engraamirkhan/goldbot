@@ -1,0 +1,431 @@
+# The findings register (owner 2026-11-20: "feedback must close itself"; goldbot/ops/findings.py, RUNBOOK
+# "Findings register"). One row per audit finding or owner directive. A row is closed only when its CHECK measures it
+# fixed on the brain's data; the daily `findings_check` job re-measures every row and announces new, regressed,
+# closed and past-due rows once a day on issue #34 (critical/high also on Telegram). Health `findings` WARNs while a
+# critical/high row is past due.
+#
+# Rules for editing (refused at load otherwise, tests/test_findings.py):
+# - PUBLIC file: no login, host, email, account number or money figure (no currency amount). Name accounts only
+#   through patterns (`reconcile:*`), never the owner's real-money record.
+# - owner: an agent role in .claude/agents/ (the role accountable for the fix, not who found it).
+# - check.fn: a registered check (goldbot/ops/finding_checks.py) with valid params. Prefer a measurement; `manual`
+#   only where nothing can be measured, closed by setting done_on + evidence (a commit, PR or document) in a PR.
+# - Never delete an open row to make it go away: change its due date or check in a reviewed PR with the reason in
+#   `source`. Retiring a finding (e.g. the learner retired honestly) is a reviewed edit of its check.
+#
+# Seeded 2026-11-20 from the system audit (finance, performance, SRE, engineering, security, research, team) and the
+# learning plan L1-L4. Due dates follow the audits' recommendations; PD + PO confirm owners and dates at the next cycle.
+version: 1
+findings:
+  # ---------------------------------------------------------------- money and evidence (finance A1-A6, performance)
+  - id: A1-NET-LOSS
+    title: The demo book loses net of costs; no class shows a positive net edge out of sample
+    owner: research-director
+    severity: high
+    due: 2026-12-18
+    source: audit 2026-11-20 summary 1-2, finance N1-N3 (A1, A2), performance s.1
+    check: {fn: mean_net_r, params: {min_mean_r: 0.0, min_n: 300, days: 20, kinds: [exploration, control]}}
+
+  - id: A4-CONTROLS
+    title: Broker-filled random controls at most one per signal trade on every account (A4, P8)
+    owner: program-director
+    severity: high
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 4-5, finance N5 / P8, performance leak 1; failing since 2026-10-30
+    check: {fn: controls_to_signal_ratio, params: {max_ratio: 1.0, days: 7}}
+
+  - id: A4-VOLUME
+    title: Demo trades a day inside the owner's 150-250 band on every weekday (owner decision 2026-10-30)
+    owner: program-director
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 9, finance N9, performance s.11
+    check: {fn: trades_per_day, params: {min: 150, max: 250, days: 5}}
+
+  - id: A6-FAILED-FILLED
+    title: No exploration send reported failed that the broker filled (A6, P4)
+    owner: program-director
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 12, finance N7 / P4 (bridge re-queries positions and deals before "failed")
+    check: {fn: failed_but_filled, params: {days: 30, max_count: 0}}
+
+  - id: P8-CONTROLS-REPLAY
+    title: The broker-traded 15m/1h/4h random controls run replay-only (why-fail audit order of 2026-11-15)
+    owner: research-director
+    severity: high
+    due: 2026-11-22
+    source: audit 2026-11-20 plan 2, research s.4, performance leak 1 (VEX15, VEX1H, IEX1H, W0, I0)
+    check: {fn: arms_not_trading, params: {arms: [VEX15, VEX1H, IEX1H, W0, I0], days: 2}}
+
+  - id: PERF-NR4-RETIRE
+    title: nr4_break 5m retired (negative on both accounts)
+    owner: research-director
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 plan 2, performance leak 5 (Z6V, Z6D)
+    check: {fn: arms_not_trading, params: {arms: [Z6V, Z6D], days: 2}}
+
+  - id: PERF-BLEEDING-ARMS
+    title: No arm still trading whose mean net R is under -0.25 R over 30+ trades in 14 days
+    owner: research-director
+    severity: high
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 4, performance s.6 bleeding arms; finance R5
+    check: {fn: bleeding_arms, params: {max_mean_r: -0.25, min_n: 30, days: 14, active_days: 2}}
+
+  - id: P5-COST-MODEL
+    title: The engine's per-trade cost estimate recalibrated to realised costs (2.8x over since 9 Nov)
+    owner: program-director
+    severity: medium
+    due: 2026-12-04
+    source: audit 2026-11-20 plan 2, finance N10 / P5, research s.6 item 4
+    check: {fn: manual, params: {}}
+
+  - id: P6-EXIT-QUOTE
+    title: Exit bid/ask recorded on at least 95 percent of exploration exits
+    owner: program-director
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 finance N10 / P6 (0 of 811 exits since 9 Nov); replace with a measured check once the field exists
+    check: {fn: manual, params: {}}
+
+  - id: P9-HOSTING-BOOKS
+    title: Hosting booked from the cloud provider's cost report and settled against the invoice
+    owner: cfo
+    severity: high
+    due: 2026-12-03
+    source: audit 2026-11-20 summary 10, finance N4 / P9, SRE cost section
+    check: {fn: manual, params: {}}
+
+  - id: P10-OCT-REVIEW
+    title: October monthly review rebuilt with the #394 fix and its flags closed
+    owner: finance-auditor
+    severity: medium
+    due: 2026-11-24
+    source: audit 2026-11-20 summary 5, finance N12 / P10, team review (unowned since 2026-11-14)
+    check: {fn: github_issue_closed, params: {number: 394}}
+
+  - id: FIN-OCT-LEDGER
+    title: October ledger and finance audit committed to main
+    owner: finance-auditor
+    severity: low
+    due: 2026-11-27
+    source: audit 2026-11-20 finance N12, security info (untracked docs/finance files)
+    check: {fn: file_exists, params: {pattern: "docs/finance/ledger-2026-10.md"}}
+
+  - id: LOOP-392
+    title: Feedback-loop failure (#392) owned and closed
+    owner: program-director
+    severity: medium
+    due: 2026-11-24
+    source: audit 2026-11-20 summary 5, team review (open since 2026-11-13, unowned)
+    check: {fn: github_issue_closed, params: {number: 392}}
+
+  - id: R6-REDBOX-VERDICT
+    title: Red-box verdict pre-registered on replay R against its control, before the Monday review
+    owner: research-director
+    severity: medium
+    due: 2026-11-23
+    source: audit 2026-11-20 finance R6, performance s.9
+    check: {fn: manual, params: {}}
+
+  - id: R7-VANTAGE-REVIEW
+    title: Vantage account review split into broker cost and arm mix before any new arm goes there
+    owner: research-director
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 finance N8 / R7, performance leak 3
+    check: {fn: manual, params: {}}
+
+  - id: PERF-NONGOLD-LABELS
+    title: Non-gold replay labels with absolute R over 5 repaired or voided
+    owner: data-engineer
+    severity: low
+    due: 2026-12-04
+    source: audit 2026-11-20 performance s.3 (1,283 S0 labels)
+    check: {fn: manual, params: {}}
+
+  - id: PERF-ATTRIBUTION-BLIND
+    title: The daily attribution job reads the exploration and control trades actually placed
+    owner: performance-analyst
+    severity: medium
+    due: 2026-12-04
+    source: audit 2026-11-20 performance s.10 (attribution reports 0 champion-path trades)
+    check: {fn: manual, params: {}}
+
+  # ---------------------------------------------------------------- research and learning (research audit, L1-L4)
+  - id: RES-POOLED-TEST
+    title: One pre-registered pooled test of gold 1h/4h trend and momentum against a drift-matched control, power checked
+    owner: research-director
+    severity: high
+    due: 2026-11-27
+    source: audit 2026-11-20 plan 3, research s.6
+    check: {fn: manual, params: {}}
+
+  - id: RES-DISCOVERY-RULING
+    title: Quant ruling on discovery running before its start condition, before the wet night's output is used
+    owner: quant-reviewer
+    severity: high
+    due: 2026-11-22
+    source: audit 2026-11-20 research s.5 items 1-2
+    check: {fn: manual, params: {}}
+
+  - id: RES-CONFIRM-SPENT
+    title: 2018-25 marked spent for trend, momentum, level-break and squeeze families in discovery
+    owner: quant-reviewer
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 research s.5 item 1
+    check: {fn: manual, params: {}}
+
+  - id: RES-LEARNER
+    title: The learner trains on its labels (models and weights written), or is retired by a reviewed edit of this row
+    owner: ml-researcher
+    severity: high
+    due: 2026-12-18
+    source: audit 2026-11-20 summary 3, plan 4, research s.3; learning plan L4 (meta-labeller on the first positive-gross base signal)
+    check: {fn: learner_outputs, params: {tables: [exploration_models, exploration_weights], min_rows: 1}}
+
+  - id: L1-POOLED-LEARNER
+    title: One pre-registered pooled ML test on replay and fill labels (learning plan L1)
+    owner: ml-researcher
+    severity: medium
+    due: 2026-11-21
+    source: learning plan 2026-11-20 L1
+    check: {fn: manual, params: {done_on: 2026-11-20, evidence: "H-95 pooled learner read: FAIL under its pre-registered rule (registry trial 3439); TEST-OLD not read"}}
+
+  - id: L2-BREAKEVEN-EXIT
+    title: Breakeven-at-+0.5R exit tested on history, adopted only at +0.05 R or better (learning plan L2)
+    owner: exits-researcher
+    severity: medium
+    due: 2026-11-21
+    source: learning plan 2026-11-20 L2, performance hypothesis H-B
+    check: {fn: manual, params: {done_on: 2026-11-20, evidence: "profit-protecting stops on every gold arm's entries: FAIL, 0 of 3 variants (exits read 2026-11-20)"}}
+
+  - id: L3-THOMPSON
+    title: Thompson allocation back only once two or more arms beat their control out of sample (learning plan L3)
+    owner: ml-researcher
+    severity: low
+    due: 2026-12-31
+    source: learning plan 2026-11-20 L3 (conditional; allocator stays equal until then)
+    check: {fn: manual, params: {}}
+
+  # ---------------------------------------------------------------- reliability (SRE, engineering)
+  - id: ENG-BRIDGE-BIND
+    title: Bridge restart waits for its port and retries the bind with backoff, with a test that holds the port
+    owner: sre
+    severity: critical
+    due: 2026-11-25
+    source: audit 2026-11-20 summary 7, engineering debt 1 (the 2026-11-04 failure mode)
+    check: {fn: manual, params: {}}
+
+  - id: SRE-VANTAGE-STALE
+    title: Nightly stale gold quote fix (#412) proven by the reconcile and quote-age checks on every account
+    owner: sre
+    severity: high
+    due: 2026-11-22
+    source: audit 2026-11-20 summary 6, SRE risk 1
+    check: {fn: health_ok, params: {names: ["reconcile:*", "quote_age:*"]}}
+
+  - id: SRE-DEPLOY-HOURS
+    title: Deploys restart a bridge only on a bridge change and outside market hours unless a safety fix
+    owner: sre
+    severity: high
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 8, SRE risk 2, engineering s.2
+    check: {fn: manual, params: {}}
+
+  - id: SRE-ALERT-NOISE
+    title: Deploy-caused alerts muted during a deploy window; broker_bar_late no longer a standing warn
+    owner: sre
+    severity: medium
+    due: 2026-12-04
+    source: audit 2026-11-20 summary 8, SRE risk 3
+    check: {fn: manual, params: {}}
+
+  - id: SRE-NAMED-TUNNEL
+    title: Dashboard on a persistent named tunnel as a non-root unit with edge auth (quick tunnel retired)
+    owner: sre
+    severity: medium
+    due: 2026-11-30
+    source: audit 2026-11-20 SRE risk 4, security F4
+    check: {fn: manual, params: {}}
+
+  - id: SRE-BRAIN-MEMORY
+    title: Brain swap file and memory limits on the scheduler, OOM priority on the engines
+    owner: sre
+    severity: medium
+    due: 2026-12-04
+    source: audit 2026-11-20 SRE risk 5
+    check: {fn: manual, params: {}}
+
+  - id: SRE-PM-VANTAGE-QUOTE
+    title: Postmortem of the vantage nightly stale quote (2026-11-09 to 11-18)
+    owner: sre
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 5, SRE risk 6, engineering debt 2
+    check: {fn: file_exists, params: {pattern: "docs/incidents/2026-11-*vantage*quote*.md"}}
+
+  - id: SRE-PM-1114-PROBE
+    title: Postmortem of the 2026-11-14 probe bridge crash loop and latched terminal login
+    owner: sre
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 SRE risk 6
+    check: {fn: file_exists, params: {pattern: "docs/incidents/2026-11-14-*probe*.md"}}
+
+  - id: SRE-PM-1114-VANTAGE
+    title: Postmortem of the 2026-11-14 vantage bridge failure that spilled into the Sunday open
+    owner: sre
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 SRE risk 6
+    check: {fn: file_exists, params: {pattern: "docs/incidents/2026-11-14-*vantage*.md"}}
+
+  - id: SRE-PM-1115-ROLLBACK
+    title: Postmortem of the 2026-11-15 automatic rollback
+    owner: sre
+    severity: low
+    due: 2026-11-27
+    source: audit 2026-11-20 SRE risk 6
+    check: {fn: file_exists, params: {pattern: "docs/incidents/2026-11-15-*rollback*.md"}}
+
+  - id: ENG-PM-1104-BRIDGE
+    title: Postmortem of the 2026-11-04 bridge port-bind outage
+    owner: cto
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 engineering debt 2
+    check: {fn: file_exists, params: {pattern: "docs/incidents/2026-11-04-*bridge*.md"}}
+
+  - id: SRE-BACKUP-PRUNE
+    title: Backup retention has run at least once (before the 45-day prune warning)
+    owner: sre
+    severity: medium
+    due: 2026-11-30
+    source: audit 2026-11-20 SRE risk 7
+    check: {fn: state_field_set, params: {file: backup_last.json, field: last_prune_ts}}
+
+  - id: SRE-OLD-VM
+    title: The stopped old MT5 VM and its boot volume terminated (block storage back under the free tier)
+    owner: sre
+    severity: low
+    due: 2026-11-25
+    source: audit 2026-11-20 SRE risk 8, finance running costs
+    check: {fn: manual, params: {}}
+
+  - id: SRE-REBUILD-DRILL
+    title: Bare-host brain rebuild rehearsed with the measured recovery time in the RUNBOOK
+    owner: sre
+    severity: low
+    due: 2026-12-31
+    source: audit 2026-11-20 SRE risk 9
+    check: {fn: manual, params: {}}
+
+  - id: SRE-STUCK-ALERTS
+    title: Every opened alert gets a recovered row (four checks stuck open in the alert log)
+    owner: sre
+    severity: low
+    due: 2026-12-04
+    source: audit 2026-11-20 SRE health and alerts
+    check: {fn: manual, params: {}}
+
+  - id: ENG-PROPOSED-ADRS
+    title: No risk-bearing ADR on an order path still Proposed (0016, 0031, 0032, 0052, 0056, 0075)
+    owner: cto
+    severity: high
+    due: 2026-12-04
+    source: audit 2026-11-20 engineering debt 4
+    check: {fn: file_text, params: {patterns: ["docs/decisions/0016-*.md", "docs/decisions/0031-*.md", "docs/decisions/0032-*.md", "docs/decisions/0052-*.md", "docs/decisions/0056-*.md", "docs/decisions/0075-*.md"], regex: "(?im)^status: proposed", expect: absent}}
+
+  - id: ENG-ORDER-PATH-GUARD
+    title: AST guard test that every place_order goes through order_send after RiskGate.check; exploration.py capped
+    owner: cto
+    severity: high
+    due: 2026-12-04
+    source: audit 2026-11-20 engineering debt 5
+    check: {fn: manual, params: {}}
+
+  - id: ENG-TEST-SPEED
+    title: Default test run under 10 minutes; the five flakiest tests fixed (0 reruns in 5 runs)
+    owner: test-engineer
+    severity: medium
+    due: 2026-12-04
+    source: audit 2026-11-20 engineering debts 6-7
+    check: {fn: manual, params: {}}
+
+  - id: ENG-RUNTIME-DEPS
+    title: Runtime dependencies with known advisories bumped (certifi, opentelemetry-api)
+    owner: release-manager
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 engineering s.2 dependencies
+    check: {fn: file_text, params: {patterns: ["uv.lock"], regex: "^name = \"certifi\"\\nversion = \"2026\\.7\\.22\"|^name = \"opentelemetry-api\"\\nversion = \"1\\.45\\.1\"", expect: absent}}
+
+  - id: ENG-SPRAWL
+    title: Merged worktrees pruned and unmerged branches triaged
+    owner: release-manager
+    severity: low
+    due: 2026-12-04
+    source: audit 2026-11-20 engineering debt 8
+    check: {fn: manual, params: {}}
+
+  # ---------------------------------------------------------------- security
+  - id: SEC-SCANNING
+    title: Secret scanning, push protection and Dependabot security updates enabled on the repository
+    owner: security-reviewer
+    severity: high
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 11, security F1
+    check: {fn: github_security, params: {features: [secret_scanning, secret_scanning_push_protection, dependabot_security_updates]}}
+
+  - id: SEC-GITLEAKS
+    title: gitleaks in pre-commit with custom rules for logins, chat ids and hosts
+    owner: security-reviewer
+    severity: high
+    due: 2026-11-27
+    source: audit 2026-11-20 plan 6, security F1
+    check: {fn: file_text, params: {patterns: [".pre-commit-config.yaml"], regex: "gitleaks", expect: present}}
+
+  - id: SEC-COMMIT-EMAIL
+    title: Owner email kept private on new commits (web merges included)
+    owner: security-reviewer
+    severity: medium
+    due: 2026-11-27
+    source: audit 2026-11-20 summary 11, security F2
+    check: {fn: manual, params: {}}
+
+  - id: SEC-PRIVATE-BRANCH
+    title: The private research branch has no upstream and lives outside the public clone
+    owner: security-reviewer
+    severity: medium
+    due: 2026-11-22
+    source: audit 2026-11-20 security F3
+    check: {fn: manual, params: {}}
+
+  - id: SEC-BRAIN-SECRETS
+    title: Broker passwords off the brain's store; GitHub token scoped and expiring
+    owner: security-reviewer
+    severity: medium
+    due: 2026-12-04
+    source: audit 2026-11-20 security F5
+    check: {fn: manual, params: {}}
+
+  - id: SEC-HOST-HARDENING
+    title: Secret file modes, reboot window, branch protection and SSH hardening (security F6-F10)
+    owner: sre
+    severity: low
+    due: 2026-12-11
+    source: audit 2026-11-20 security F6-F10
+    check: {fn: manual, params: {}}
+
+  # ---------------------------------------------------------------- cadence (team review)
+  - id: TEAM-SCORECARD
+    title: Daily independent scorecard re-armed and the roadmap re-planned against money or a first survivor
+    owner: program-director
+    severity: high
+    due: 2026-11-21
+    source: audit 2026-11-20 team review (no scorecard for 35 days, roadmap stale 18 days)
+    check: {fn: manual, params: {}}

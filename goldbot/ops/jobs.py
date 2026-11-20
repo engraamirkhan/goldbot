@@ -82,6 +82,11 @@
 * loop_check        daily at 07:05 (R140, goldbot/ops/checks/loop.py): the feedback-loop check (learner weights,
                     review files, weekly proposals read, trial-registry sync, errored jobs); when not ok, one comment a
                     day on the `ci-loop` issue (else state/aux/daily_review/outbox/). Reads only.
+* findings_check    daily at 07:15 (owner 2026-11-20, goldbot/ops/findings.py): every config/findings.yaml row (owner,
+                    due date, severity, a registered check) re-measured on the brain's data -> aux.db findings_history;
+                    new, regressed, closed and past-due rows in one comment a day on the status issue (#34), plus one
+                    Telegram line for critical/high events; without a token or on a failed post they stay pending.
+                    Reads only.
 * registry_outbox   daily at 10:20, after the Mac's registry publish (incident 2026-11-18, registry_sync.check_outbox):
                     reads the trial-registry release (read-only, the brain's github-token) and clears
                     state/registry_outbox/ once it holds every outbox row, so feedback_loop does not wait for the
@@ -1672,6 +1677,18 @@ def loop_check(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return run_loop_check(ctx.state_dir, slot, ctx.settings, sink_for(ctx.settings, ctx.get_secret))
 
 
+def findings_check(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Owner 2026-11-20, "feedback must close itself": every row of the findings register re-measured; what changed
+    goes out once a day on the status issue (goldbot/ops/findings.py). GitHub reads and the comment use the keyring's
+    github-token; without one the GitHub checks read can't check and the events stay pending. Reads only."""
+    from goldbot.ops.findings import run_findings_check
+    from goldbot.ops.github_issues import GitHubIssues
+    from goldbot.research.daily_review import sink_for
+    sink = sink_for(ctx.settings, ctx.get_secret)
+    github = sink if isinstance(sink, GitHubIssues) else None
+    return run_findings_check(ctx.state_dir, slot, ctx.settings, sink, github=github)
+
+
 def registry_outbox(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Incident 2026-11-18: "the brain clears the outbox whenever the release holds its rows, without waiting for the
     weekly sync" (registry_sync.check_outbox; read-only on the release). Skipped without a github-token."""
@@ -1880,6 +1897,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
     "loop_check": loop_check,                     # R140 feedback-loop check -> `ci-loop` issue (ops/checks/loop.py)
+    "findings_check": findings_check,             # owner 2026-11-20 findings register -> issue #34 (ops/findings.py)
     "registry_outbox": registry_outbox,           # clear the registry outbox once the release holds it (incident 11-18)
     "tva_scores": tva_scores,                     # TradingView author ideas shadow score (research/tv_ideas.py)
     "har_days": har_days,                         # N-3 HAR low-range forecast the engine's refusals read
