@@ -242,6 +242,22 @@ if not os.path.exists(src):
 shutil.copy(src, out)
 """
 
+# goldbot/ops/bridge_files.py's start check as the MT5 box runs it (through `wine`, stubbed to this Python): exit 0
+# "ok", 3 with a problem line, anything else when it could not run; $T/start_check_rc sets the answer
+FAKE_START_CHECK = """
+import os, sys
+T = os.environ["T"]
+open(os.path.join(T, "start_check.log"), "a").write(os.getcwd() + " " + " ".join(sys.argv[1:]) + "\\n")
+f = os.path.join(T, "start_check_rc")
+rc = int(open(f).read()) if os.path.exists(f) else 0
+print("ok" if rc == 0 else 'icm-probe: ValueError: "bad" \\\\ <x>')
+sys.exit(rc)
+"""
+FAKE_WINE = """#!/bin/sh
+shift
+exec "$PYTHON" "$@"
+"""
+
 FAKE_NPM = """#!/bin/sh
 echo "$PWD $*" >> "$T/npm.log"
 case "$1" in
@@ -325,6 +341,7 @@ class Box:
         origin.mkdir(parents=True)
         _git(origin, "init", "-q", "-b", "main")
         base = {"goldbot/__init__.py": "", "goldbot/ops/__init__.py": "", "goldbot/ops/run.py": FAKE_HEALTH,
+                "goldbot/ops/bridge_files.py": FAKE_START_CHECK,
                 "config/settings.yaml": "risk:\n  max_risk: 0.01\n",
                 ".gitignore": "config/settings.local.yaml\nstate/\n"}
         self.c1 = _commit(origin, {**base, "goldbot/config.py": CONFIG_OLD,
@@ -1188,9 +1205,18 @@ if [ "$after" -gt 0 ] && [ "$n" -ge "$after" ]; then cat "$T/probe_answer" 2>/de
 """
 
 
-def _mt5_box(tmp_path: Path, *, answer_after: int | None, token: str = "ok") -> Box:
-    box = Box(tmp_path, running="c1", aux=None)
+SATURDAY_NOON = 1795262400          # 2026-11-21 12:00 UTC: outside the MT5 boxes' market-hours window
+WEDNESDAY_NOON = 1795003200         # 2026-11-18 12:00 UTC: inside it (Mon-Fri 07:00-21:00 UTC)
+
+
+def _mt5_box(tmp_path: Path, *, answer_after: int | None, token: str = "ok", at: int = SATURDAY_NOON,
+             running: str = "c1") -> Box:
+    box = Box(tmp_path, running=running, aux=None)
     (tmp_path / "role").write_text("mt5\n")
+    (tmp_path / "clock").write_text(str(at))
+    wine = tmp_path / "bin" / "wine"
+    wine.write_text(FAKE_WINE)
+    wine.chmod(0o755)
     (tmp_path / "units.json").write_text(json.dumps({"units": {
         "goldbot-bridge@icm-probe.service": {"enabled": True, "active": True}}}))
     if answer_after is not None:
@@ -1316,3 +1342,105 @@ def test_l1_the_probe_runs_unprivileged_with_an_empty_environment(tmp_path):
     assert box.run(box.c2).returncode == 0
     calls = _lines(box, "setpriv.log")
     assert calls and all("--reuid=nobody" in c and "-- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin " in c for c in calls)
+
+
+# ---------------------------------------------------------------- audit 2026-11-20 (ADR 0094): no bridge restart for
+# nothing, and none in market hours unless --now. A deploy that changes no bridge file (goldbot/ops/bridge_files.py's
+# BRIDGE_FILES_RE) only moves the checkout after the target's start check passes; one that does is refused Mon-Fri
+# 07:00-21:00 UTC (exit 75, nothing changed) unless the owner's or Claude's `--now` says it is a safety fix.
+def _ahead(box: Box, files: dict[str, str], msg: str) -> str:
+    """A commit on top of origin's main (c2): the box must run c2 for the diff to be this commit's alone."""
+    return _commit(box.origin, files, msg)
+
+
+def test_a_deploy_without_a_bridge_file_moves_the_checkout_and_restarts_nothing(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1, at=WEDNESDAY_NOON, running="c2")               # market hours: still allowed
+    c3 = _ahead(box, {"docs/x.md": "doc\n", "goldbot/engine/runner.py": "x = 1\n"}, "brain only")
+    p = box.run(c3)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.head() == c3 and box.actions() == []
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed" and "no bridge file changed" in rec["detail"], rec
+    assert _lines(box, "start_check.log") == [f"{box.root} check icm-probe"]  # the target's code, in the checkout
+    assert "mt5 " in (tmp_path / "sudo.log").read_text()                      # as the service user, never root
+    assert not (tmp_path / "watch_spawned").exists() and _lines(box, "probe.log") == []
+
+
+def test_a_start_check_that_finds_a_problem_restores_the_checkout_and_refuses(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1, running="c2")
+    c3 = _ahead(box, {"docs/x.md": "doc\n"}, "docs")
+    (tmp_path / "start_check_rc").write_text("3")
+    p = box.run(c3)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "refused" and "would not start" in rec["detail"] and box.head() == box.c2
+    assert box.actions() == []
+    assert '"' not in rec["detail"] and "\\" not in rec["detail"]          # the problem text kept the line valid
+
+
+def test_a_start_check_that_cannot_run_falls_back_to_the_full_deploy(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1, running="c2")         # Saturday: restarts allowed
+    c3 = _ahead(box, {"docs/x.md": "doc\n"}, "docs")
+    (tmp_path / "start_check_rc").write_text("1")                             # e.g. no such module on an old target
+    p = box.run(c3)
+    assert p.returncode == 0, (p.stdout + p.stderr, box.records(), box.actions())
+    assert box.head() == c3 and any(a.startswith("restart goldbot-bridge@icm-probe") for a in box.actions())
+    assert "start check could not run" in box.records()[-1]["detail"]
+
+
+def test_a_bridge_change_in_market_hours_is_refused_unless_now(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1, at=WEDNESDAY_NOON)
+    p = box.run(box.c2)                                                       # c2 changes goldbot/config.py
+    assert p.returncode == 75, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "refused" and "market hours" in rec["detail"] and "--now" in rec["detail"]
+    assert box.head() == box.c1 and box.actions() == []
+    p = box.run(box.c2, "--now")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.head() == box.c2 and box.records()[-1]["result"] == "deployed"
+    assert "--now" in box.records()[-1]["detail"]
+
+
+@pytest.mark.parametrize("at", [SATURDAY_NOON, WEDNESDAY_NOON - 6 * 3600, WEDNESDAY_NOON + 9 * 3600])
+def test_a_bridge_change_outside_market_hours_restarts_the_bridges(tmp_path, at):
+    box = _mt5_box(tmp_path, answer_after=1, at=at)                           # Sat noon, Wed 06:00, Wed 21:00
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.head() == box.c2 and any(a.startswith("restart goldbot-bridge@icm-probe") for a in box.actions())
+
+
+def test_a_bridge_requirements_change_is_a_bridge_change(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1, at=WEDNESDAY_NOON, running="c2")
+    c3 = _ahead(box, {"goldbot/ops/linux/mt5-bridge-requirements.txt": "x==1\n"}, "pins")
+    assert box.run(c3).returncode == 75 and box.head() == box.c2
+
+
+def test_an_mt5_rollback_in_market_hours_is_not_held_back(tmp_path):
+    box = _mt5_box(tmp_path, answer_after=1, at=WEDNESDAY_NOON)
+    _git(box.root, "checkout", "-q", "--detach", box.c2)
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.head() == box.c1
+
+
+def test_the_brain_ignores_market_hours_and_opens_its_alert_window(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    (tmp_path / "clock").write_text(str(WEDNESDAY_NOON))
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    w = json.loads((box.root / "state" / "deploy_window.json").read_text())
+    assert w["source"] == "goldbot-deploy" and w["from"] <= WEDNESDAY_NOON + 5
+    assert w["until"] >= _clock(box) + 20 * 60 - 5                          # the report + 20 min
+    assert "goldbot " in (tmp_path / "sudo.log").read_text()
+
+
+def test_a_refused_brain_deploy_opens_no_alert_window(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    box.ci("failure")
+    assert box.run(box.c2).returncode == 1
+    assert not (box.root / "state" / "deploy_window.json").exists()
+
+
+def test_now_without_a_target_is_a_usage_error(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    assert box.run("--now").returncode == 2
