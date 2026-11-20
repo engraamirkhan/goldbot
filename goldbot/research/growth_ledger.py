@@ -43,7 +43,8 @@ NOT_SHADOW = frozenset({"duplicate", "weekend_hold", "arm_retired", "arm_status_
 
 
 class LedgerTrade(FrozenRecord):
-    """One GS1/GS1C trade in R: a real fill (net) or a shadow fill (a capped entry scored on the bars, gross)."""
+    """One GS1/GS1C trade in R: a real fill (net of its realised costs) or a shadow fill (a capped entry scored on the
+    bars by the replay, `label_sim_r`, net of the modelled costs)."""
     arm_id: str
     entry_utc: UtcTimestamp
     exit_utc: UtcTimestamp
