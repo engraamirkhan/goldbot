@@ -888,6 +888,11 @@ AUX: tuple[Migration, ...] = (
         """CREATE TRIGGER IF NOT EXISTS arm_lifecycle_verdicts_no_delete BEFORE DELETE ON arm_lifecycle_verdicts
            BEGIN SELECT RAISE(ABORT, 'arm_lifecycle_verdicts is append-only'); END""",
     )),
+    # additive (ADR 0091, quant condition 1): the deciding engine start's id (EngineConfig.boot_id)
+    # on each exploration candidate, so the nightly arm read proves what that very start held. NULL on rows recorded
+    # before it (and by a release without it, which never reads it)
+    Migration(version=40, name="exploration_obs_boot_id", additive=True, statements=(),
+              add_columns=(("exploration_obs", "boot_id", "TEXT"),)),
 )
 
 CORE: tuple[Migration, ...] = (

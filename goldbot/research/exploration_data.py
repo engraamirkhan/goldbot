@@ -214,7 +214,7 @@ _CANDIDATE_COLS = ("candidate_id", "account_id", "broker", "arm_id", "arm_config
                    "is_control", "decision_ns", "session_day", "stop_dist", "target_dist", "max_hold_s", "taken",
                    "blocked_reason", "branch", "u", "mu", "tau_arm", "pi_rand_arm", "arm_share", "meta_p", "model_version",
                    "bandit_version", "feature_version", "feature_list_id", "features", "available_utc_max_ns",
-                   "snapshot_ref", "quarantine", "recorded_ns", "arm_rule_version")
+                   "snapshot_ref", "quarantine", "recorded_ns", "arm_rule_version", "boot_id")
 
 
 def _candidate_problems(*, style: str, tf: str, side: int, stop_dist: float, target_dist: float, max_hold_s: int,
@@ -264,14 +264,16 @@ def record_candidate(db: Database, *, candidate_id: str, account_id: str, broker
                      bandit_version: str | None = None, feature_version: str | None = None,
                      feature_list_id: str | None = None, features: Mapping[str, float | None] | None = None,
                      available_utc_max: pd.Timestamp | None = None, snapshot_ref: str | None = None,
-                     arm_rule_version: int | None = None) -> bool:
+                     arm_rule_version: int | None = None, boot_id: str | None = None) -> bool:
     """One exploration candidate at its decision (taken or not; a blocked one with mu 0 and its reason). True when
     written, False when `candidate_id` exists (the first record stands). `decision_utc` is the decision bar's close,
     the as-of point of every feature; `broker` is the recording account's broker (accounts.yaml `broker`: the key
     its evidence is learnt under); `stop_dist`/`target_dist` are the arm's own barriers in USD/oz from the entry,
     `max_hold_s` its time limit. `features` is the snapshot as computed at the decision (the style's frozen list),
     `available_utc_max` the latest availability among its columns. `arm_rule_version`: the rule-code version in force
-    at the decision (research/arm_rule_versions.py, BACKLOG 105). Invalid input is written quarantined."""
+    at the decision (research/arm_rule_versions.py, BACKLOG 105). `boot_id`: the deciding engine start's id
+    (EngineConfig.boot_id; the nightly arm read proves what that start held, research/arm_integrity). Invalid input is
+    written quarantined."""
     if not (candidate_id and account_id and broker and arm_id and family):
         raise ValueError("candidate_id, account_id, broker, arm_id and family are required")
     d = _ns(decision_utc)
@@ -286,7 +288,7 @@ def record_candidate(db: Database, *, candidate_id: str, account_id: str, broker
            blocked_reason, branch, _finite(u), _finite(mu), _finite(tau_arm), _finite(pi_rand_arm), _finite(arm_share),
            _finite(meta_p),
            model_version, bandit_version, feature_version, feature_list_id, feats, am, snapshot_ref,
-           "; ".join(bad) or None, now_ns(), arm_rule_version)
+           "; ".join(bad) or None, now_ns(), arm_rule_version, boot_id)
     with db.write() as conn:
         cur = conn.execute(f"INSERT OR IGNORE INTO exploration_obs ({', '.join(_CANDIDATE_COLS)}) "
                            f"VALUES ({', '.join('?' * len(_CANDIDATE_COLS))})", row)

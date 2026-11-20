@@ -17,8 +17,10 @@ from goldbot.data.timeutil import epoch_ns
 class DQEvent(Record):
     ts_utc: pd.Timestamp
     check: str
-    severity: str  # "warning" | "error"
+    severity: str  # "warning" | "error"; "info" for a record that is no finding (`engine_boot`)
     detail: str
+    # the engine start that wrote it (EngineConfig.boot_id); None from every other writer, whose rows keep no column
+    writer: str | None = None
 
 
 def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTable = DEFAULT_SESSIONS,
@@ -115,10 +117,16 @@ def stale_feed(last_tick_utc: pd.Timestamp, now_utc: pd.Timestamp, *, limit_seco
     return (now_utc - last_tick_utc).total_seconds() > limit_seconds
 
 
-def events_frame(events: list[DQEvent]) -> pd.DataFrame:
+def events_frame(events: list[DQEvent], writer: str | None = None) -> pd.DataFrame:
+    """The store rows of `events`; `writer` (an engine's boot id) stamps every event that names none. A `writer`
+    column only when one is named: the other writers' rows keep their columns."""
     if not events:
         return pd.DataFrame(columns=["ts_utc", "check", "severity", "detail"])
-    return pd.DataFrame([e.model_dump() for e in events])
+    rows = [e.model_dump() for e in events]
+    for r in rows:
+        r["writer"] = r["writer"] or writer
+    out = pd.DataFrame(rows)
+    return out if out["writer"].notna().any() else out.drop(columns="writer")
 
 
 def _mid_series(bars: pd.DataFrame) -> pd.Series:

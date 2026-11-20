@@ -975,11 +975,22 @@ def store_symbol(eng: Engine) -> str:
 
 
 def live_key(eng: Engine) -> tuple[str, str]:
-    """(source, symbol) of the active book's `bars_1m_live` minutes. Plan: "store bars_1m_live keyed (source=account,
-    symbol=store_symbol), never pooled with XAUUSD" for a non-gold book; gold keeps (broker name, its symbol), the
-    history it has read and written since ADR 0062 ("XAUUSD paths byte-identical")."""
+    """(source, symbol) of the active book's `bars_1m_live` minutes: (account, symbol), one key per account. Plan:
+    "store bars_1m_live keyed (source=account, symbol=store_symbol), never pooled with XAUUSD" for a non-gold book;
+    gold keys its traded symbol under the account too (ADR 0091, 2026-11-20): two gold engines
+    of one broker no longer share one key, so a stored minute is the copy its own account's engine wrote. Gold's
+    minutes written before that stay on `legacy_live_key`, read but never written."""
     cfg = eng.cfg
-    return (cfg.broker_name, cfg.symbol) if is_primary(eng) else (cfg.account_id, cfg.release_symbol)
+    return (cfg.account_id, cfg.symbol) if is_primary(eng) else (cfg.account_id, cfg.release_symbol)
+
+
+def legacy_live_key(eng: Engine) -> tuple[str, str] | None:
+    """The key gold's minutes were stored under before the per-account key (broker name, its symbol: shared by every
+    gold engine of the broker), read under the account's own minutes (`engine.history`: the account's copy of a
+    minute wins) so a restart holds the history it held before; never written. None for another book (always keyed
+    by account)."""
+    cfg = eng.cfg
+    return (cfg.broker_name, cfg.symbol) if is_primary(eng) else None
 
 
 # ------------------------------------------------------------------ instruments.db terms (non-gold books)

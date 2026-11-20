@@ -32,7 +32,7 @@ def _row(ts: pd.Timestamp, close: float = 1.0) -> dict[str, Any]:
 
 
 def _stored(store: Store) -> pd.DataFrame:
-    return store.read(LIVE_TABLE, source="icm", symbol="XAUUSD").sort_values("ts_utc").reset_index(drop=True)
+    return store.read(LIVE_TABLE, source="icm-demo", symbol="XAUUSD").sort_values("ts_utc").reset_index(drop=True)
 
 
 def _flag(frame: pd.DataFrame, col: str) -> list[bool]:
@@ -44,21 +44,21 @@ def _flag(frame: pd.DataFrame, col: str) -> list[bool]:
 # ------------------------------------------------------------------------------------- A: the replaced flag
 def test_a_store_row_with_a_sticky_flag_is_replaced_only_by_a_flagged_copy(tmp_path):
     store = Store(tmp_path / "data")
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(replaced=True), source="icm", symbol="XAUUSD",
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(replaced=True), source="icm-demo", symbol="XAUUSD",
                  sticky=REPLACED_COL)
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0), _row(T + pd.Timedelta(minutes=1))]), source="icm",
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0), _row(T + pd.Timedelta(minutes=1))]), source="icm-demo",
                  symbol="XAUUSD", sticky=REPLACED_COL)
     got = _stored(store)
     assert list(got["bid_close"]) == [2.0, 1.0] and _flag(got, REPLACED_COL) == [True, False]
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 3.0)]).assign(replaced=True), source="icm", symbol="XAUUSD",
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 3.0)]).assign(replaced=True), source="icm-demo", symbol="XAUUSD",
                  sticky=REPLACED_COL)
     assert list(_stored(store)["bid_close"]) == [3.0, 1.0]                 # a newer flagged copy still wins
 
 
 def test_without_a_sticky_column_the_store_keeps_the_last_copy_as_before(tmp_path):
     store = Store(tmp_path / "data")
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(replaced=True), source="icm", symbol="XAUUSD")
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0)]), source="icm", symbol="XAUUSD")
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(replaced=True), source="icm-demo", symbol="XAUUSD")
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0)]), source="icm-demo", symbol="XAUUSD")
     got = _stored(store)
     assert list(got["bid_close"]) == [1.0] and _flag(got, REPLACED_COL) == [False]
 
@@ -67,7 +67,7 @@ def test_another_engine_on_the_same_feed_writing_a_minute_after_its_replacement_
     """The brain case: icm-probe replaces 21:55 (its sampled bar was late) and stores the broker's bar flagged;
     icm-demo, which had the broker's bar in time, stores its plain copy a few seconds later on the same key."""
     store = Store(tmp_path / "data")
-    probe, demo = BarWriter(store, "icm", "XAUUSD"), BarWriter(store, "icm", "XAUUSD")
+    probe, demo = BarWriter(store, "icm-demo", "XAUUSD"), BarWriter(store, "icm-demo", "XAUUSD")
     probe.put(pd.DataFrame([_row(T, 2.0)]).assign(**{REPLACED_COL: True}))
     assert probe.join(5.0)
     written = pd.Timestamp(_stored(store)["available_utc"].iloc[0])
@@ -83,7 +83,7 @@ def test_another_engines_delayed_plain_copy_after_a_filled_copy_keeps_the_filled
     plain copy of the minute is stored later. Last-write would drop the flag and could pull the write time back
     inside the live grace of the close: the read would take the minute as held from its close (look-ahead)."""
     store = Store(tmp_path / "data")
-    a, b = BarWriter(store, "icm", "XAUUSD"), BarWriter(store, "icm", "XAUUSD")
+    a, b = BarWriter(store, "icm-demo", "XAUUSD"), BarWriter(store, "icm-demo", "XAUUSD")
     a.put(pd.DataFrame([_row(T, 2.0)]).assign(**{FILLED_COL: True}))
     assert a.join(5.0)
     written = pd.Timestamp(_stored(store)["available_utc"].iloc[0])
@@ -97,11 +97,11 @@ def test_another_engines_delayed_plain_copy_after_a_filled_copy_keeps_the_filled
 def test_with_several_sticky_flags_a_newer_copy_flagged_in_any_of_them_wins(tmp_path):
     store = Store(tmp_path / "data")
     flags = (REPLACED_COL, FILLED_COL)
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(filled=True), source="icm", symbol="XAUUSD",
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 2.0)]).assign(filled=True), source="icm-demo", symbol="XAUUSD",
                  sticky=flags)
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 3.0)]).assign(replaced=True), source="icm", symbol="XAUUSD",
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 3.0)]).assign(replaced=True), source="icm-demo", symbol="XAUUSD",
                  sticky=flags)
-    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0)]), source="icm", symbol="XAUUSD", sticky=flags)
+    store.append(LIVE_TABLE, pd.DataFrame([_row(T, 1.0)]), source="icm-demo", symbol="XAUUSD", sticky=flags)
     got = _stored(store)
     assert list(got["bid_close"]) == [3.0] and _flag(got, REPLACED_COL) == [True]
 
@@ -183,7 +183,7 @@ def test_the_broker_minutes_a_rebase_stores_are_flagged_filled(tmp_path):
     store = Store(tmp_path / "data")
     store.append("bars_1m", rel, source="dukascopy")
     store.append(LIVE_TABLE, ticks_to_1m(TICKS[(TICKS["ts_utc"] >= own_from) & (TICKS["ts_utc"] < LIVE_FROM)]),
-                 source="icm", symbol="XAUUSD")
+                 source="icm-demo", symbol="XAUUSD")
     point = 0.01
     b = ticks_to_1m(TICKS[TICKS["ts_utc"] < LIVE_FROM])
     rates = pd.DataFrame({"ts_utc": b["ts_utc"], "open": b["bid_open"], "high": b["bid_high"], "low": b["bid_low"],

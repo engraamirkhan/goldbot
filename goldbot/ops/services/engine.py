@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
@@ -232,6 +233,35 @@ def refuse_disabled(account_id: str, why: str) -> NoReturn:
     (`engine_startup_refused`), and a switched-off account must not stop the enabled ones."""
     log.error("refusing to start %s: %s (exit %d, not restarted)", account_id, why, ENGINE_DISABLED_EXIT)
     raise SystemExit(ENGINE_DISABLED_EXIT)
+
+
+# A second engine of an account whose writer lock another engine holds (trading-safety S1 of the gold live key plan):
+# EX_TEMPFAIL, restarted by goldbot-engine@.service (Restart=always) until the holder ends. Never `start_refused`:
+# that writes `startup_error` into the HOLDER's engine_<account>.json and the supervisor halts every real account
+ENGINE_DUPLICATE_EXIT = 75
+
+
+def duplicate_path(state_dir: str | Path, account_id: str) -> Path:
+    return Path(state_dir) / f"engine_duplicate_{account_id}.json"
+
+
+def refuse_duplicate(account_id: str, why: str, holder_pid: int | None, state_dir: str | Path = "state") -> NoReturn:
+    """End a start refused because another engine of the account holds its writer lock: the journal line names the
+    holder's pid, state/engine_duplicate_<account>.json records when (health `duplicate_engine:<account>` WARNs while
+    it is fresh and the owner is told once, NOTIFY_ON_WARN, so the 10 s restarts never repeat it), then
+    ENGINE_DUPLICATE_EXIT. Nothing of the running engine's state is written."""
+    import json
+    log.error("refusing to start %s: %s; exit %d, restarted by the service manager until it ends", account_id, why,
+              ENGINE_DUPLICATE_EXIT)
+    f = duplicate_path(state_dir, account_id)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"at": time.time(), "holder_pid": holder_pid, "why": why}))
+        os.replace(tmp, f)
+    except OSError:
+        log.exception("duplicate engine start not recorded for health")
+    raise SystemExit(ENGINE_DUPLICATE_EXIT)
 
 
 def disabled_wind_down(acc: Account, broker: Any) -> bool:
@@ -545,9 +575,14 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         refuse_disabled(account_id, "live account not enabled or not unlocked by the phase gate")
     if why := approval_ids_problem(account_id):
         start_refused(acc, f"refusing to start {account_id}: {why}")
-    from goldbot.ops.engine_lock import hold_engine
+    from goldbot.ops.engine_lock import hold_engine, hold_writer
     if why := hold_engine("state", account_id):      # held for the process's life: no repair rewrites its files
         start_refused(acc, f"refusing to start {account_id}: {why}")
+    # one engine per account writes its minutes (S1/S2): before any bridge connection; never through start_refused
+    writer = hold_writer("state", account_id)
+    if writer.refused is not None:
+        refuse_duplicate(account_id, writer.refused, writer.holder_pid)
+    boot_id, boot_at = uuid.uuid4().hex, pd.Timestamp.now("UTC")     # this start's id on every row it writes
     settings = load_settings()
     bridge = accounts.bridge_endpoint(account_id)
     verify: Callable[[Any], str | None] | None = None      # R1: the start check, run again on every account read
@@ -664,7 +699,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               shock_rule_cap_min=settings.news.rule_shock_cap_min_per_day, live_clock=True,
                               broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
-                              swap_prior=settings_swap(settings), instruments=instruments,
+                              swap_prior=settings_swap(settings), instruments=instruments, boot_id=boot_id,
                               # demo non-gold fill audit 2026-11-03: the cost and the planned risk count commission
                               commission_per_lot_side_usd=settings.costs.commission_per_lot_side_usd.get(acc.broker,
                                                                                                          0.0)),
@@ -672,6 +707,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
     wire_terminal_check(eng, acc, verify)      # R1 (engine/terminal_account.py): None on the paper stand-in
+    from goldbot.engine import history
+    history.record_boot(eng, held=writer.held, at=boot_at)   # the nightly read proves this boot's rows by it
     if shadow_host and eng.store is not None:      # replica agents (box_break_close): carried state, shadow only
         resolve(attach_replica)(eng, settings)
     from goldbot.data.calendar import BrokerSessions, SessionTable

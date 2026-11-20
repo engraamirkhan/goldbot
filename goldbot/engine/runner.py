@@ -303,6 +303,11 @@ class EngineConfig(Record):
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
     swap_prior: SwapSpec = Field(default_factory=lambda: SwapSpec.shipped())
+    # this engine start's id (uuid4 hex, ops.services.engine), on every bars_1m_live row and dq event it writes and on
+    # each exploration candidate, recorded with its writer lock (`history.record_boot`): the nightly arm read proves
+    # a stored minute is this account's own engine's copy by it (ADR 0091). None: paper, replays
+    # and tests; such rows are unproven
+    boot_id: str | None = None
 
 
 class Engine:
@@ -869,7 +874,8 @@ class Engine:
         self._rebuild_bars()
         self._dq_bar_events, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
         if self._dq_bar_events and self.store is not None:
-            self.store.append("dq_events", events_frame(self._dq_bar_events), source=self.cfg.account_id,
+            self.store.append("dq_events", events_frame(self._dq_bar_events, writer=self.cfg.boot_id),
+                              source=self.cfg.account_id,
                               symbol=books.store_symbol(self), dedupe=False)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         base = self._frame(complete, self.cfg.decision_tf, close_ts) if len(complete) >= 400 else None
