@@ -232,9 +232,11 @@ def test_the_budget_report_counts_the_rows_still_missing_against_the_quarter(tmp
     assert report["missing"] == len(mod.k_rows(SPEC)) and report["used"] == 0
     assert report["fits"] and report["cap"] == 3500 and report["quarter"] == "2026Q4"
     # + the red-box week's 3 arms and 3 dedicated controls (prereg-amendment-2026-11-15-redbox-week.md)
+    # + GD-1 A1's 2 arms and 2 dedicated controls (prereg-amendment-2026-11-20-gd1-asia-learning.md)
     assert report["by_prereg"] == {"docs/research/learning-2026-11-02.md": 30, PREREG: 72,
-                                   "docs/research/prereg-amendment-2026-11-15-redbox-week.md": 6}
-    assert report["left_after"] == 3500 - 108
+                                   "docs/research/prereg-amendment-2026-11-15-redbox-week.md": 6,
+                                   "docs/research/prereg-amendment-2026-11-20-gd1-asia-learning.md": 4}
+    assert report["left_after"] == 3500 - 112
     assert mod.budget_report(reg, SPEC, cap=10, quarter="2026Q4")["fits"] is False
 
 

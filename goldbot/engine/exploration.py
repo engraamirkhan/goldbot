@@ -2412,7 +2412,8 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     """Every pass, with a quote or without (`Engine._retry_closes`), whatever the entry state (halted, propose mode,
     exploration switched off): a 1m/5m arm's position held `hold_s` on the host clock (from its fill; after a restart
     the broker's open time) is closed (`HOLD_EXIT`); a 15m+ position of a rule under the Friday cut is closed at its
-    wall-clock time exit (`_week_due`, `time_exit`), a 1d/1w position at its history time exit from its decision
+    wall-clock time exit (`_week_due`, `time_exit`), so is a clock-hold position (`_clock_due`, GD-1 A1's 07:00 UTC),
+    a 1d/1w position at its history time exit from its decision
     close (`long_bars.time_exit_due`, BACKLOG 254); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
     from goldbot.engine import arm_registry, exploration_pyramid
@@ -2439,7 +2440,7 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
             elif arm.tf in LONG_TFS and long_bars.time_exit_due(arm.tf, tr.client_order_id, tr.max_bars,
                                                                 tf_seconds(eng.cfg.decision_tf), at):
                 eng._try_close(pid, "time_exit", now)   # BACKLOG 254: the history run's exit from the decision close
-            elif arm.tf not in SUB_15M and _week_due(eng, arm, tr, at):
+            elif arm.tf not in SUB_15M and (_week_due(eng, arm, tr, at) or _clock_due(eng, arm, tr, at)):
                 eng._try_close(pid, "time_exit", now)
     except Exception:
         log.exception("exploration exits failed; retried next pass")
@@ -2463,6 +2464,19 @@ def _week_due(eng: Engine, arm: Arm, tr: OpenTrade, at: pd.Timestamp) -> bool:
     # the week it opened in, 15 min before the 17:00 New York weekly close, while a close can still fill
     since = signal if signal is not None else (tr.opened_utc or tr.entry_bar_ts)
     return since is not None and at >= weekend_backstop(pd.Timestamp(since))
+
+
+def _clock_due(eng: Engine, arm: Arm, tr: OpenTrade, at: pd.Timestamp) -> bool:
+    """A position of a clock-hold rule (`arm_rules_clock_hold.WALL_CLOCK_EXIT`; GD-1 A1, prereg-amendment-2026-11-20-
+    gd1-asia-learning.md section 3: "time exit at 07:00 UTC") at its wall-clock time exit: its signal close (from its
+    order id; after a restart that lost it, its open time) plus its hold (`max_bars` decision bars). The bar count alone
+    runs past 07:00 when a decision bar is missing. Only ever closes earlier than the bar count."""
+    from goldbot.research.arm_rules_clock_hold import WALL_CLOCK_EXIT
+    if arm.spec.rule not in WALL_CLOCK_EXIT:
+        return False
+    since = signal_close(tr.client_order_id) or tr.opened_utc or tr.entry_bar_ts
+    return since is not None and at >= pd.Timestamp(since) + pd.Timedelta(
+        seconds=tr.max_bars * tf_seconds(eng.cfg.decision_tf))
 
 
 WEEKEND_BACKSTOP_S = 15 * 60

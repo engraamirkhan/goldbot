@@ -42,6 +42,8 @@ LEARNING = {acc: {a: "LC" + a for a in ids} for acc, ids in {
 NO_BRACKET = {"BXR15", "BXR30", "BXR1H", "BXR4H", "XBB15", "S1A", "S1B"}
 # the red-box week (prereg-amendment-2026-11-15-redbox-week.md): per-trade brackets, replay-only controls
 REDBOX = {"RB15": "RBC15", "RB1H": "RBC1H", "RB4H": "RBC4H"}
+# GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): one arm per ICM host, each with a replay-only control
+GD1 = {"GD1D": "GD1CD", "GD1P": "GD1CP"}
 
 
 @pytest.fixture(autouse=True)
@@ -235,7 +237,7 @@ def test_the_k_row_script_writes_each_row_once_inside_the_quarters_budget(tmp_pa
     reg = tmp_path / "research_registry.jsonl"
     want = mod.k_rows(SPEC)
     # 15 gold arms and their 15 controls, the multi-instrument pairs (learning-mi-2026-11-02.md), the red-box week
-    assert len(want) == 2 * sum(len(v) for v in LEARNING.values()) + len(MI_ARMS | MI_CONTROLS) + 2 * len(REDBOX)
+    assert len(want) == 2 * sum(len(v) for v in LEARNING.values()) + len(MI_ARMS | MI_CONTROLS) + 2 * len(REDBOX | GD1)
     assert mod.record(reg, SPEC, dry_run=True) and not TrialRegistry(reg)._rows()
     monkeypatch.setattr(TrialRegistry, "check_budget", lambda self, n, cap, now=None: "2026Q4")
     written = mod.record(reg, SPEC)
@@ -273,7 +275,7 @@ def k_rows(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_the_spec_registers_every_fixed_bracket_arm_the_gate_refused_as_a_learning_row(k_rows) -> None:
     spec = {a.id: a for a in arms.load_arms(SPEC)}
     wanted = {a for per in LEARNING.values() for a in per}
-    assert {i for i, a in spec.items() if a.role == "learning"} == wanted | MI_ARMS | set(REDBOX)
+    assert {i for i, a in spec.items() if a.role == "learning"} == wanted | MI_ARMS | set(REDBOX) | set(GD1)
     for per in LEARNING.values():
         for arm_id, control in per.items():
             a = spec[arm_id]
@@ -329,7 +331,8 @@ def test_every_learning_arm_is_registered_on_its_account_with_its_control_and_no
 
 # ------------------------------------------------------------------------------------------------ reports
 def test_the_spec_names_its_learning_arms_for_the_reports() -> None:
-    assert arms.learning_arm_ids(SPEC) == frozenset(a for per in LEARNING.values() for a in per) | MI_ARMS | set(REDBOX)
+    assert arms.learning_arm_ids(SPEC) == frozenset(a for per in LEARNING.values() for a in per) | MI_ARMS | set(REDBOX) \
+        | set(GD1)
 
 
 def test_the_perf_report_shows_learning_arms_in_their_own_section_never_in_the_family_rankings(

@@ -36,6 +36,8 @@ RULE_VERSIONS: dict[str, int] = {
     "redbox_break": 1, "redbox_control": 1,
     # 2026-11-18: the discovered learning arms' replay-only control (prereg-amendment-2026-11-18-discovered-arms.md)
     "spec_control": 1,
+    # 2026-11-20: GD-1 A1's learning arm and its replay-only control (prereg-amendment-2026-11-20-gd1-asia-learning.md)
+    "clock_hold": 1, "clock_hold_control": 1,
 }
 
 # RULE_FUNCS entries that dispatch to a family module: (dispatcher name in arm_rules, module, its table)
@@ -46,7 +48,9 @@ _LAMBDA = {"level_break": ("arm_rules_levels", "level_break"), "spec_rule": ("ar
            "session_range_break": ("arm_rules_growth", "session_range_break"),
            "session_range_control": ("arm_rules_growth", "session_range_control"),
            "redbox_break": ("arm_rules_redbox", "redbox_break"), "redbox_control": ("arm_rules_redbox", "redbox_control"),
-           "spec_control": ("arm_rules_spec", "spec_control")}
+           "spec_control": ("arm_rules_spec", "spec_control"),
+           "clock_hold": ("arm_rules_clock_hold", "clock_hold"),
+           "clock_hold_control": ("arm_rules_clock_hold", "clock_hold_control")}
 
 
 _PREFIX = "goldbot.research.arm_rules"     # the modules whose helpers a rule's version covers

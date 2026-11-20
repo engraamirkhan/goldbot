@@ -61,7 +61,10 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          "redbox_break", "redbox_control",
          # discovered arms on demo (prereg-amendment-2026-11-18-discovered-arms.md section 4): a learning spec_rule
          # arm's dedicated replay-only control (`arm_rules_spec.spec_control`), demo only like SPEC_RULE
-         "spec_control")
+         "spec_control",
+         # GD-1 A1 on demo (prereg-amendment-2026-11-20-gd1-asia-learning.md): GD1D/GD1P and their replay-only
+         # controls GD1CD/GD1CP (goldbot.research.arm_rules_clock_hold)
+         "clock_hold", "clock_hold_control")
 SPEC_RULES = (SPEC_RULE, "spec_control")    # the rules `load_arms(live_class=True)` refuses (ADR 0058)
 
 # Research-director ruling 2026-11-13 (docs/research/ruling-2026-11-13-gold-only.md; live fills n 5,333: non-gold
@@ -1065,6 +1068,9 @@ class Arm(FrozenRecord):
             if self.rule in ("redbox_break", "redbox_control"):
                 from goldbot.research.arm_rules_redbox import check as check_redbox
                 check_redbox(self)
+            if self.rule in ("clock_hold", "clock_hold_control"):
+                from goldbot.research.arm_rules_clock_hold import check as check_clock_hold
+                check_clock_hold(self)
             if self.rule == SPEC_RULE:
                 # ADR 0058 phase 4: a spec the engine cannot run exactly as its research read is refused at load
                 from goldbot.research.arm_rules_spec import check as check_spec

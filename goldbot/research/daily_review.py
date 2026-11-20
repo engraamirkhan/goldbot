@@ -89,7 +89,8 @@ RULES = {"HV": RULE,
          "W1": "W1 per-family stop (docs/research/arms-expansion-2026-10-26.md 2.1)",
          "W2": "W2 family stop or futility (docs/research/arms-2026-10-25.md 8.0)",
          "Z": "H-81 family stop or futility (docs/research/prereg-2026-10-27-scalp-volume.md 4)",
-         "TS": "H-61 stop or futility (docs/research/prereg-2026-10-26-time-structure.md)"}
+         "TS": "H-61 stop or futility (docs/research/prereg-2026-10-26-time-structure.md)",
+         "GD1": "GD-1 A1 kill rule or H-61 swing stop (docs/research/prereg-amendment-2026-11-20-gd1-asia-learning.md 5)"}
 FOLLOW_RULE = "stops with its arm (docs/research/prereg-2026-10-26-time-structure.md 2.2, 3.2)"
 COST_RULE = "H-81 cost stop, suspended until a dated amendment (docs/research/prereg-2026-10-27-scalp-volume.md 4)"
 CONTROL_COST_RULE = ("execution control cost stop (Z 4 shape), suspended until a dated amendment "

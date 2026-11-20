@@ -931,7 +931,10 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     assert (probe.budget_share + accs["icm-probe"].cost_probe.budget_share) * 220 == pytest.approx(220, abs=0.01)
     assert not probe.pot_budgets and not demo.pot_budgets
     # learning-mi-2026-11-02.md section 5: an intraday pot of 12 slots (the pairs and lane L3's I0-<key>); 23 binds
-    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (None, 19), "intraday": (None, 12)}
+    # prereg-amendment-2026-11-20-gd1-asia-learning.md: a swing pot of one slot for GD1P at the £40 swing cap
+    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (None, 19), "intraday": (None, 12),
+                                                                        "swing": (None, 1)}
+    assert {a.max_loss for a in probe.arms.values() if a.style == "swing"} == {40.0}
     assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
                                                                        "swing": (None, 3), "growth": (80, 2)}
     assert {a.max_loss for a in probe.arms.values() if a.style == "scalp"} == {6.5}
