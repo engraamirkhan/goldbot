@@ -205,6 +205,17 @@ def test_the_engine_charges_the_versioned_cell_of_its_account_session_and_timefr
     assert cost_record.version(eng, MON, "5m") == "ecr-test.1"
 
 
+def test_a_live_account_never_charges_the_record_even_when_a_version_carries_its_cell(tmp_path):
+    # trading-safety 2026-11-20: real money keeps the legacy (dearer) table by code, not by which hosts a version lists
+    _table().save(tmp_path / "costs_icm-demo.json")
+    saved = str(_saved(tmp_path))
+    live = _eng(tmp_path, cost_record=saved, mode="live")
+    assert cost_record.cell(live, MON, "5m") is None
+    assert cost_record.version(live, MON, "5m").startswith("table:")
+    demo = _eng(tmp_path, cost_record=saved, mode="demo")
+    assert cost_record.cell(demo, MON, "5m") is not None
+
+
 def test_a_cell_the_record_lacks_and_an_unreadable_record_keep_the_legacy_table(tmp_path):
     _table().save(tmp_path / "costs_icm-demo.json")
     asia = pd.Timestamp("2025-03-03 02:00", tz="UTC")

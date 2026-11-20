@@ -45,7 +45,8 @@ def _session(ts: pd.Timestamp) -> str:
 def cell(eng: Engine, ts: pd.Timestamp, tf: str | None) -> tuple[EngineCostRecord, CellCost] | None:
     """The record and its cell for this decision; None off gold's book, without a record or without a cell."""
     path = eng.cfg.cost_record
-    if not path or eng.book is not eng.primary:
+    # a live (real-money) account always keeps the legacy table, whatever hosts a record version lists (safety review)
+    if not path or eng.book is not eng.primary or eng.cfg.mode == "live":
         return None
     rec = _load(str(path))
     c = rec.cell(eng.cfg.account_id, _session(ts), tf) if rec is not None else None
