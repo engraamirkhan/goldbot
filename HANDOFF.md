@@ -44,6 +44,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     These sit beside H-61's swing stop, the £800 learning loss cap, the 300-fill read and the end. To support it,
     `arm_stops.Safety` became a list of one-off checks, with `mean_bp_lt`, `cost_bp_gt` and a new
     `realised_cost_bp`. WFRI's check is unchanged.
+  - Review round (same day): no kill check falls due in the first 45-day run (about 23 fills an arm after the HAR
+    abstention), so only H-61 and the £800 cap can stop it then; a renewal changes `since`/`until` only and adds no K.
+    The arm-versus-control read is replay labels against replay labels, never fills against the control. A single
+    `safety` mapping (WFRI) keeps its old all-readable rule; only the list form waits for readable figures.
   - Runs 2026-11-23 to 2027-01-04. K +4 (2 arms + 2 controls): run `scripts/record_learning_k_rows.py` on the brain
     before the first fill. The arms stay refused until those rows exist. icm-probe gains a one-slot swing pot.
   - Pre-registration: docs/research/prereg-amendment-2026-11-20-gd1-asia-learning.md. The GD-1 card and result are

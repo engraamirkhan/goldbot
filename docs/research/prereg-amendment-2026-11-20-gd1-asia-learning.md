@@ -96,9 +96,15 @@ fills (`config/arm_stops.yaml` units GD1D and GD1P, source `GD1`, applied by the
    of the fill price. The exit leg's own slippage has no reference price in the ledger and is not in it (the checks
    measured about 0.15 bp a round trip of slippage on ICM exits; the 1.1 bp threshold sits about 0.5 bp above the
    measured 0.56-0.77 bp all-in). A fill without a readable cost is skipped: the check waits for 40 readable fills.
+   **This figure reads about 0.1-0.3 bp low** (quant C2): it has no exit-leg slippage, and it charges the exit leg the
+   entry's spread although the 07:00 spread is wider than the 00:00 one (pooled medians $0.08 against $0.07; Mondays
+   $0.11 against $0.065).
 2. **Loss.** Kill if the **mean net <= -4 bp at 120 fills** (net: the broker's net P&L over the entry notional,
    `arm_stops.net_bp`).
-3. **Continue.** At **250 fills** continue only if the **mean net >= +3.5 bp**: below it, kill.
+3. **Continue.** At **250 fills** continue only if the **mean net >= +3.5 bp**: below it, kill. **Continue is not
+   edge** (quant C2): the +3.5 bp bar can be met by gold's trend alone (7/24 of a 40 %/yr trend is about 4 bp a day).
+   Any promotion needs an excess over the 7/23 x buy-and-hold drift AND over the control's replay labels (section 6),
+   under its own pre-registration; continuing under this rule is never promotion evidence.
 4. Beside them: H-61's swing stop (running net R -10 R within 40 fills), the learning class's **loss cap of GBP 800**
    (20 x the GBP 40 per-trade cap, `learning.loss_cap_gbp`), its read at 300 admissible fills and its end.
 5. The controls stop with their arm (`follows`), and the engine retires a dedicated control once its arm may not enter.
@@ -109,9 +115,14 @@ cost check is its own. The counts in checks 2-3 are per arm, so they stand for w
 ## 6. Dates, K and the budget
 
 - **Run.** `since` 2026-11-23 (the first entry, Monday 00:00 UTC), `until` 2027-01-04 (inside the class's 45 days).
-  About 27 entry days per arm in this run: the 40-fill cost check falls due near its end at the earliest; the 120- and
-  250-fill checks need later runs. A further run is a dated amendment with a new `since` and `until`; the arm-stop
-  checks count every fill of the arm id ever (not from `since`), so they carry across runs.
+  Corrected 2026-11-20 (quant C1): about 29 weekdays per 45-day run, less about 1 in 5 refused by the HAR abstention
+  (section 7), is **about 23 fills per arm per run**. So **no kill check falls due in this run**, not even the 40-fill
+  cost check: in this run only H-61's swing stop (-10 R within 40) and the GBP 800 loss cap can stop an arm. The
+  120-fill check falls due after about 7 months and the 250-fill check after about 15 months, about 9 renewals. A
+  renewal is a dated amendment that changes only `since` and `until`: the arm rows, their hashes and
+  `learning.prereg` (this file; the k_id is derived from it) stay, so the same k_ids are reused and **a renewal adds
+  no K**. The arm-stop checks count every fill of the arm id ever (not from
+  `since`), so they carry across runs; the learning class's loss cap and 300-fill read restart at each `since`.
 - **K +4**, one learning K row per arm and per dedicated control (family `learning_class`, `scripts/
   record_learning_k_rows.py`, written on the brain before the first fill; without its row the arm is refused, fail
   closed). The request to make the registration K-neutral cannot be met inside the learning class: its rows count in K
@@ -123,10 +134,16 @@ cost check is its own. The counts in checks 2-3 are per arm, so they stand for w
 | GD1D | icm-demo | clock_hold, 1h, 00:00 UTC weekdays | $48 / 50 R / 7 x 1h | 1fc498509f07 | GD1CD | clock_hold_control, seeded 07-13 UTC, replay_only | 8e83a9a6de3c |
 | GD1P | icm-probe | clock_hold, 1h, 00:00 UTC weekdays | $48 / 50 R / 7 x 1h | 764e5fe04d07 | GD1CP | clock_hold_control, seeded 07-13 UTC, replay_only | d76e9e0e1c20 |
 
+- **The arm-versus-control read** (quant point 4) compares like with like: the arm's r2 replay labels over **every**
+  candidate, taken or refused (HAR-abstained days included), against the control's r2 replay labels over its
+  candidates (`exploration_data.read_obs`, replay r2, `label_sim_r`, the arm's from its `since`). It never compares
+  the arm's **fills** with the control: the fills are the HAR-selected days (section 7), the control's labels are not.
+  The fills feed only the kill rule (section 5) and the cost read. No GD-1-specific read code exists in this change;
+  whoever writes the read (performance-analyst) takes this definition, and the nightly lifecycle already reads
+  replay labels on taken and refused candidates alike (section 4).
 - **Reported with each read (descriptive, never a gate):** the arm's mean net bp a day and its fills' mean realised
-  cost; the control's mean r2 replay label over its candidates; the arm's own r2 replay label over every candidate,
-  taken or refused; the 7/23 x buy-and-hold drift of the same days from the engine's bars; the 00:00 entry slippage of
-  every fill (the checks flagged hour-00 slippage on n = 7).
+  cost; the read above; the 7/23 x buy-and-hold drift of the same days from the engine's bars; the 00:00 entry
+  slippage of every fill (the checks flagged hour-00 slippage on n = 7).
 
 ## 7. Other rules in force, disclosed
 

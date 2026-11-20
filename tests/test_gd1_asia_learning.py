@@ -227,7 +227,10 @@ def test_the_amendment_names_each_arm_its_k_id_its_control_and_the_kill_numbers(
         ctl_k = A.learning_k_id(control_id, A.arm_hash(spec[control_id]), PREREG)
         assert ctl_k in text
     for phrase in ("1.1 bp", "40 fills", "-4 bp", "120 fills", "+3.5 bp", "250 fills", "replay_only",
-                   "time_exit_ev_unsupported", "H-98"):
+                   "time_exit_ev_unsupported", "H-98",
+                   # review round 2026-11-20: quant C1, C2 and point 4
+                   "no kill check falls due in this run", "a renewal adds", "Continue is not", "reads about 0.1-0.3 bp low",
+                   "never compares"):
         assert phrase in text, phrase
 
 
@@ -236,11 +239,11 @@ def _engine_arm(spec: A.Arm) -> exploration.Arm:
     return exploration.Arm(spec=spec, style="swing", control_share=0.01 if spec.role == "control" else None)
 
 
-def _gd1_engine(tmp_path: Path, spec: A.Arm) -> tuple[Any, Any]:
+def _gd1_engine(tmp_path: Path, spec: A.Arm, cap: float = 50.0) -> tuple[Any, Any]:
     """The exploration test engine with both accounts' demo ceiling for a minimum-lot entry (accounts.yaml
     `risk_overrides.ceilings.min_lot_risk_cap` 0.01, ADR 0032): the $48 stop at 0.01 lot fits it. The paper account is
     in USD, so the arm's cap is $50 here; the GBP 40 cap of the accounts is tested on the accounts above."""
-    eng, pb = _engine(tmp_path, [_engine_arm(spec)], caps={spec.id: 50.0})
+    eng, pb = _engine(tmp_path, [_engine_arm(spec)], caps={spec.id: cap})
     eng.gate.limits = eng.gate.limits.model_copy(update={"min_lot_risk_cap": 0.01})
     return eng, pb
 
@@ -284,6 +287,47 @@ def test_the_position_is_closed_at_0700_utc_on_the_wall_clock_even_when_its_bars
     exploration.exits(eng, seven)
     assert closes == [(pid, "time_exit")]
     assert not exploration._censored(eng.exploration.arms["GD1D"], "time_exit", eng.open[pid])
+
+
+def test_after_a_restart_without_its_order_row_the_wall_clock_exit_runs_from_the_positions_open_time(
+        tmp_path, monkeypatch) -> None:
+    """Trading-safety LOW: an adopted position whose order id (the signal close) is lost exits 7 hours after it
+    opened, never later; the bar count stays the backstop."""
+    eng, pb = _gd1_engine(tmp_path, _arm("GD1D"))
+    exploration.on_pass(eng, _at(eng, pb, TUE_00))
+    [pid] = list(eng.open)
+    tr = eng.open[pid]
+    tr.client_order_id, tr.bars_held = None, 0                   # adopted: no order row, every bar of the hold missed
+    tr.opened_utc = TUE_00 + pd.Timedelta(seconds=40)
+    closes: list[tuple[int, str]] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now, **kw: closes.append((p, why)))
+    due = TUE_00 + pd.Timedelta(hours=7, seconds=40)
+    exploration.exits(eng, due - pd.Timedelta(seconds=1))
+    assert not closes
+    exploration.exits(eng, due)
+    assert closes == [(pid, "time_exit")]
+
+
+def test_at_an_extreme_exchange_rate_the_entry_is_refused_never_resized_or_given_a_wider_stop(tmp_path) -> None:
+    """Trading-safety LOW: below about 1.20 USD per GBP the $48 stop at 0.01 lot is over the GBP 40 cap; the cap
+    refuses the entry (it never clamps). Here the paper account is in USD: a cap just under the $48 stop stands for it."""
+    assert 48.0 / 1.18 + 0.3 > 40.0 > 48.0 / 1.33 + 0.3                    # GBP/USD 1.18 refused, 1.33 (0.752) fits
+    eng, pb = _gd1_engine(tmp_path, _arm("GD1D"), cap=47.0)
+    seen: list[Any] = []
+    check = eng.gate.check
+
+    def spy(intent: Any, *a: Any, **kw: Any) -> Any:
+        gd = check(intent, *a, **kw)
+        seen.append((intent, gd))
+        return gd
+
+    eng.gate.check = spy
+    exploration.on_pass(eng, _at(eng, pb, TUE_00))
+    assert not _sent(eng) and not pb.positions() and not eng.open
+    assert [d["action"] for d in eng.decisions if str(d.get("action", "")).startswith("exploration_refused:")] == [
+        "exploration_refused:exploration_arm_cap"]
+    assert all(i.volume_min == i.volume_max == 0.01 for i, _ in seen)       # never a smaller lot
+    assert all(d["stop_usd"] == 48.0 for d in eng.decisions if d.get("arm") == "GD1D")   # never another stop
 
 
 def test_the_replay_only_control_never_reaches_the_riskgate_and_its_candidate_is_recorded(tmp_path,
@@ -401,3 +445,27 @@ def test_a_check_is_judged_once_on_its_first_fills_and_a_later_recovery_does_not
     _fills(tmp_path, "GD1D", 130, pnl=3.0, start=START + pd.Timedelta(days=200), tag="b")
     st = _status(tmp_path, "GD1D")
     assert (st.band, st.stop_at) == ("at_stop", 120)
+
+
+def _rows_bp(bps: list[float | None]) -> list[arm_stops.Fill]:
+    return [arm_stops.Fill(r=0.0, at=START + pd.Timedelta(days=i), counted=True, arm="X", bp=b, cost_bp=b)
+            for i, b in enumerate(bps)]
+
+
+def test_a_legacy_single_mapping_check_fires_only_when_all_its_first_fills_are_readable() -> None:
+    """Code review LOW: WFRI's form (one mapping) keeps its rule: the mean over the first `at` fills, judged only when
+    every one of them is readable; a missing figure among them means no fire, then or later."""
+    unit = arm_stops.StopUnit.model_validate({"arms": ["X"], "stop_r": -10.0, "within": 40, "source": "TS",
+                                              "safety": {"at": 3, "mean_bp_le": -20.0, "cum_r_le": -10.0}})
+    assert len(unit.safety) == 1 and not unit.safety[0].readable_only
+    assert arm_stops.unit_stop(unit, _rows_bp([-30.0, -30.0, -30.0])).stop_at == 3
+    assert arm_stops.unit_stop(unit, _rows_bp([-30.0, None, -30.0, -30.0])).band != "at_stop"
+
+
+def test_a_list_form_check_waits_for_its_first_readable_figures() -> None:
+    unit = arm_stops.StopUnit.model_validate({"arms": ["X"], "stop_r": -10.0, "within": 40, "source": "GD1",
+                                              "safety": [{"at": 3, "mean_bp_le": -20.0}, {"at": 3, "cost_bp_gt": 1.1}]})
+    assert all(s.readable_only for s in unit.safety)
+    assert arm_stops.unit_stop(unit, _rows_bp([-30.0, None, -30.0])).band != "at_stop"       # 2 readable: not due
+    st = arm_stops.unit_stop(unit, _rows_bp([-30.0, None, -30.0, -30.0]))
+    assert (st.band, st.stop_at) == ("at_stop", 4)

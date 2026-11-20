@@ -18,7 +18,8 @@ The rules, as registered and built here:
 * One-off safety checks at a fill count (`Safety`, a unit's `safety` list): WFRI's (time-structure 4) and GD-1 A1's
   (prereg-amendment-2026-11-20-gd1-asia-learning.md section 5): "kill if realised round-trip cost > 1.1 bp after 40
   fills; kill if mean net <= -4 bp at 120 fills; at 250 fills continue only if mean net >= +3.5 bp". Each is judged
-  once, on the unit's first `at` fills (a bp figure on its first `at` readable ones), and a later fill never undoes it.
+  once, on the unit's first `at` fills (in the list form a bp figure on its first `at` readable ones; WFRI's single
+  mapping keeps its rule: all of the first `at` readable, else no fire), and a later fill never undoes it.
 
 A stop only refuses an arm's NEW entries (aux.db `exploration_arm_status`, written by the daily review, read by the
 engine) and a halved share only lowers its room for new entries: nothing here reads or changes an open position.
@@ -51,14 +52,16 @@ class Safety(FrozenRecord):
     """A one-off check at the `at`-th admissible fill (every fill, as the R stop counts them). time-structure 4 (WFRI):
     "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the cumulative net <= -10 R." GD-1 A1
     (prereg-amendment-2026-11-20-gd1-asia-learning.md section 5): "kill if realised round-trip cost > 1.1 bp after 40
-    fills; kill if mean net <= -4 bp at 120 fills; at 250 fills continue only if mean net >= +3.5 bp". A bp figure
-    (net `Fill.bp`, cost `Fill.cost_bp`) is the mean of the first `at` fills where it is readable, so the check waits
-    for `at` readable ones (never judged on fewer); the cumulative R is over the first `at` fills."""
+    fills; kill if mean net <= -4 bp at 120 fills; at 250 fills continue only if mean net >= +3.5 bp". The cumulative
+    R is over the first `at` fills. A bp figure (net `Fill.bp`, cost `Fill.cost_bp`) is the mean of the first `at`
+    fills, judged only when every one is readable (the legacy single-mapping form, WFRI's rule unchanged); with
+    `readable_only` (the list form, GD-1 A1) the mean of the first `at` READABLE figures, so the check waits for them."""
     at: int = Field(gt=0)
     mean_bp_le: float | None = None             # stop when the mean net bp is at or below this
     mean_bp_lt: float | None = None             # "continue only if the mean net bp >= x": stop below x
     cum_r_le: float | None = None               # stop when the cumulative net R is at or below this
     cost_bp_gt: float | None = None             # stop when the mean realised round trip in bp is above this
+    readable_only: bool = False                 # set by the list form (`StopUnit._one_or_many`), never by WFRI's
 
     @model_validator(mode="after")
     def _some_threshold(self) -> Safety:
@@ -91,8 +94,15 @@ class StopUnit(FrozenRecord):
     @field_validator("safety", mode="before")
     @classmethod
     def _one_or_many(cls, v: object) -> object:
-        """WFRI's row names one check as a mapping; a list names several."""
-        return () if v is None else (v,) if isinstance(v, dict | Safety) else v
+        """WFRI's row names one check as a mapping (the legacy rule: every one of the first `at` figures readable); a
+        list names several, each read over the first `at` readable figures (`Safety.readable_only`)."""
+        if v is None:
+            return ()
+        if isinstance(v, dict | Safety):
+            return (v,)
+        if isinstance(v, list | tuple):
+            return tuple({"readable_only": True, **x} if isinstance(x, dict) else x for x in v)
+        return v
 
 
 class CostStop(FrozenRecord):
@@ -236,8 +246,16 @@ def unit_stop(unit: StopUnit, rows: Sequence[Fill], band_share: float = 0.5) -> 
     return UnitStop()
 
 
-def _first_readable(rows: Sequence[Fill], field: Literal["bp", "cost_bp"], n: int) -> tuple[float, int] | None:
-    """(the mean of the first `n` readable values of `field`, the fill count at the n-th); None before there are n."""
+def _first_readable(rows: Sequence[Fill], field: Literal["bp", "cost_bp"], n: int,
+                    readable_only: bool) -> tuple[float, int] | None:
+    """(the mean of `field` and the fill count it is judged at), None when it is not judged: with `readable_only` the
+    first `n` readable values (None before there are n); else the first `n` fills, judged only when all are readable
+    (the legacy rule: one unreadable figure among them and the check never fires)."""
+    if not readable_only:
+        first = [getattr(f, field) for f in rows[:n]]
+        if len(first) < n or any(v is None for v in first):
+            return None
+        return math.fsum(first) / n, n
     vals: list[float] = []
     for i, f in enumerate(rows, 1):
         v = getattr(f, field)
@@ -254,12 +272,14 @@ def _safety_at(sc: Safety, rows: Sequence[Fill]) -> int | None:
     hits: list[int] = []
     if sc.cum_r_le is not None and len(rows) >= sc.at and math.fsum(f.r for f in rows[:sc.at]) <= sc.cum_r_le + 1e-9:
         hits.append(sc.at)
-    if (sc.mean_bp_le is not None or sc.mean_bp_lt is not None) and (net := _first_readable(rows, "bp", sc.at)):
+    if (sc.mean_bp_le is not None or sc.mean_bp_lt is not None) and \
+            (net := _first_readable(rows, "bp", sc.at, sc.readable_only)):
         mean, i = net
         if (sc.mean_bp_le is not None and mean <= sc.mean_bp_le + 1e-9) or \
                 (sc.mean_bp_lt is not None and mean < sc.mean_bp_lt - 1e-9):
             hits.append(i)
-    if sc.cost_bp_gt is not None and (cost := _first_readable(rows, "cost_bp", sc.at)) and cost[0] > sc.cost_bp_gt + 1e-9:
+    if sc.cost_bp_gt is not None and (cost := _first_readable(rows, "cost_bp", sc.at, sc.readable_only)) \
+            and cost[0] > sc.cost_bp_gt + 1e-9:
         hits.append(cost[1])
     return min(hits) if hits else None
 

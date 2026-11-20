@@ -22,7 +22,8 @@
 #   stop_r / within: the unit stops when its running net R reaches stop_r within its first `within` admissible fills.
 #   safety: a one-off check at the `at`-th fill (every fill), or a list of them: stop when the mean net bp is
 #     <= mean_bp_le or < mean_bp_lt, the cumulative net R <= cum_r_le, or the mean realised round trip in bp >
-#     cost_bp_gt. A bp mean is over the first `at` fills where it is readable (the check waits for that many).
+#     cost_bp_gt. One mapping (WFRI): a bp mean over the first `at` fills, judged only if all are readable. A list
+#     (GD1): each bp mean over the first `at` readable figures (the check waits for that many).
 #   futility_at: the read sizes at which the futility stop is tested (empty: none registered). At each, over the
 #     unit's first n COUNTED fills (evidence exclusions left out, as in the read), the unit stops when the one-sided
 #     95% upper bound of the mean net R (SE clustered by UTC exit day, CR1) is below futility_ub.
