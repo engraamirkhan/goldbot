@@ -533,6 +533,30 @@ def test_health_passes_a_matching_bridge_and_warns_on_a_commit_mismatch(tmp_path
     assert health.alert_text({}, health.HealthReport(ts=WED, status="warn", checks=[w])) is None   # no Telegram noise
 
 
+def test_a_commit_mismatch_outside_the_bridges_files_is_ok(tmp_path, current_bridge):
+    """ADR 0094: an MT5 box whose deploy changed no bridge file keeps its bridge running the older commit; when git
+    says the two commits differ only outside goldbot/ops/bridge_files.py's set, that is not a standing warning."""
+    asked: list[tuple[str, str]] = []
+
+    def diff(bridge_commit: str, brain_commit: str) -> bool | None:
+        asked.append((bridge_commit, brain_commit))
+        return answer
+
+    for answer, status in ((True, "ok"), (False, "warn"), (None, "warn")):
+        ctx = _hctx(tmp_path, lambda url: bc.read_bridge_info(current_bridge), commit=SHA_B)
+        ctx.bridge_diff = diff
+        c = health.check_bridge_compat(ctx, ctx.accounts[0])
+        assert c is not None and c.status == status, (answer, c)
+        assert "commits differ" in c.reason
+        assert ("no bridge file" in c.reason) is (answer is True)
+    assert asked[-1][1] == SHA_B and asked[-1][0] != SHA_B
+
+
+def test_from_runtime_compares_commits_through_the_bridge_file_set(tmp_path):
+    ctx = health.HealthContext.from_runtime(tmp_path)
+    assert ctx.bridge_diff is not None
+
+
 def test_health_reports_an_unreachable_bridge_and_fails_while_the_engine_still_blocks(tmp_path):
     dead = _dead_url()
     ctx = _hctx(tmp_path, lambda url: bc.read_bridge_info(dead, 1.0))

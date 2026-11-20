@@ -193,7 +193,8 @@ def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None
     """BACKLOG 42 (gap G6): the bridge's /health against this checkout (goldbot/ops/bridge_compat.py). FAIL when a
     method this brain calls is missing, the protocol is older, the zone differs or the bridge does not report them: the
     engine refuses entries (`bridge_incompatible`) until the MT5 box runs a compatible commit; exits are unaffected.
-    A different commit alone is a warning (doc-only commits differ). /health unreachable is a warning here
+    A different commit alone is a warning (doc-only commits differ), and ok when git says no bridge file differs
+    (ADR 0094: an MT5 deploy without one restarts no bridge). /health unreachable is a warning here
     (`bridge:<account>` fails for it) unless the engine's last verdict still blocks. A contended terminal (incident
     2026-11-02: `lock_wait_s` / `slow_calls` on the same /health answer, `bridge_compat.contention`) is a warning.
     Omitted without a bridge URL or an info reader."""
@@ -234,6 +235,14 @@ def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None
         return Check(name=name, status="fail" if past_grace else "warn", reason=f"{v.reason}; {why}")
     if (busy := contention(info)) is not None:   # incident 2026-11-02: read from the same GET, no extra call
         return Check(name=name, status="warn", reason=f"{v.reason}; {busy}")
+    if v.commit_differs and ctx.bridge_diff is not None and info.commit and ctx.commit:
+        # ADR 0094: an MT5 deploy that changed no bridge file leaves the bridge on its older commit on purpose
+        try:
+            same_bridge = ctx.bridge_diff(info.commit, ctx.commit)
+        except Exception:                 # noqa: BLE001 - cannot tell: the plain mismatch warning below
+            same_bridge = None
+        if same_bridge is True:
+            return Check(name=name, status="ok", reason=f"{v.reason}: no bridge file differs (ADR 0094)")
     return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
 
 
