@@ -100,14 +100,19 @@ def test_rows_that_cannot_be_measured_or_are_not_evidence_are_dropped_never_impu
     assert len(df) == 1
 
 
-def test_probe_exit_slip_is_the_brokers_p75_against_the_quote_floored_at_zero():
+def test_probe_exit_slip_is_the_brokers_mean_against_the_quote_floored_at_zero():
     probes = [dict(client_order_id=f"p{i}", purpose="cost_measurement", account_id="icm-probe", side=1,
-                   sent_utc="2026-11-10T09:00:00+00:00", exit_price=4000.0 - s, exit_bid=4000.0, exit_ask=4000.1)
+                   sent_utc="2026-11-10T09:00:00+00:00", exit_price=4000.0 - s, exit_bid=4000.0, exit_ask=4000.1,
+                   exit_reason="cost_probe_hold", exit_utc="2026-11-10T09:01:00.500+00:00",
+                   exit_quote_utc="2026-11-10T09:01:00+00:00")
               for i, s in enumerate([0.0, 0.01, 0.02, 0.04])]
     probes.append(dict(probes[0], client_order_id="shadow", purpose="cost_probe", exit_price=3990.0))
     probes.append(dict(probes[0], client_order_id="vneg", account_id="vantage-demo", exit_price=4000.5))
+    # the quote of a probe its broker stopped is not that exit's (set by the hold pass 888 s later): not evidence
+    probes.append(dict(probes[0], client_order_id="stale", exit_reason="stop", exit_price=3989.0))
+    probes.append(dict(probes[0], client_order_id="old", exit_price=3989.0, exit_quote_utc="2026-11-10T09:00:50+00:00"))
     got = rc.probe_exit_slip(probes, BROKERS)
-    assert got[("icm", "london")] == pytest.approx(np.quantile([0.0, 0.01, 0.02, 0.04], 0.75))
+    assert got[("icm", "london")] == pytest.approx(np.mean([0.0, 0.01, 0.02, 0.04]))   # quant point 5: the mean
     assert got[("vantage", "london")] == 0.0                            # favourable: floored, never credited
 
 
@@ -289,3 +294,174 @@ def test_the_shipped_settings_charge_a_version_that_loads_and_is_named_by_its_fi
         assert all(c.charged_usd >= c.point_usd - 1e-9 for by_s in rec.cells.values() for by_tf in by_s.values()
                    for c in by_tf.values())
     assert rc.EngineCostRecord.load(path).version == Path(path).stem
+    shipped = rc.EngineCostRecord.load(path)                             # quant C1 + point 5: version .2 is charged
+    assert shipped.version == "ecr-2026-11-20.2" and shipped.probe_exit_stat == "mean" and shipped.brokers
+    assert shipped.large_exits.get("checked", 0) > 0
+
+
+# ----------------------------------------------------------------------------------------------- quant C1: large exits
+LEVEL_T = pd.Timestamp("2026-11-06 13:30:01", tz="UTC")
+
+
+def _ticks(points: list[tuple[float, float]]) -> pd.DataFrame:
+    """(seconds after LEVEL_T, bid) -> a tick frame with a 0.10 spread."""
+    return pd.DataFrame({"ts": [LEVEL_T + pd.Timedelta(seconds=s) for s, _ in points],
+                         "bid": [b for _, b in points], "ask": [b + 0.10 for _, b in points]})
+
+
+def _big(**kw: Any) -> dict[str, Any]:
+    """A long stopped 8.9 below its 3995.00 level, 3 s after the first bid through it (an NFP-like gap)."""
+    return _row(**{"sent_utc": "2026-11-06T13:00:00+00:00", "exit_utc": str(LEVEL_T + pd.Timedelta(seconds=3)),
+                   "exit_price": 3986.10, **kw})
+
+
+def test_a_large_stop_slip_is_kept_when_the_brokers_ticks_show_the_gap_and_dropped_when_they_do_not():
+    gap = _ticks([(-1, 3995.40), (0, 3994.0), (1, 3990.0), (2.5, 3986.10), (4, 3987.0)])
+    assert rc.large_exit_error(_big(), gap) is None                                 # genuine: kept, never trimmed
+    never = _ticks([(-1, 3996.0), (0, 3995.5), (2.5, 3995.2)])
+    assert rc.large_exit_error(_big(), never) == "ticks never reached the level"
+    unquoted = _ticks([(-1, 3995.4), (0, 3994.9), (2.5, 3994.5)])
+    assert rc.large_exit_error(_big(), unquoted) == "exit price not quoted at the exit"
+    late = _ticks([(-30, 3994.0), (-29, 3986.0)])
+    assert rc.large_exit_error(_big(), late) == "exit price not quoted at the exit"
+    assert rc.large_exit_error(_big(), None) is None                                # unverifiable: kept (counted)
+    assert rc.large_exit_error(_row(), gap) is None                                 # $0.10 slip: not checked
+
+
+def test_the_screen_drops_only_data_errors_and_counts_every_check():
+    rows = [_big(client_order_id="real"), _big(client_order_id="bad"), _big(client_order_id="blind"),
+            _row(client_order_id="small")]
+    gap = _ticks([(-1, 3995.40), (0, 3994.0), (2.5, 3986.10)])
+    never = _ticks([(-1, 3996.0), (2.5, 3995.2)])
+    by_id = {"real": gap, "bad": never, "blind": None}
+    kept, audit = rc.screen_large_exits(_costs(rows), {r["client_order_id"]: r for r in rows},
+                                        lambda r: by_id.get(r["client_order_id"]))
+    assert sorted(kept["client_order_id"]) == ["blind", "real", "small"]
+    assert audit == {"checked": 3, "genuine": 1, "unverified_no_ticks": 1,
+                     "dropped": {"ticks never reached the level": 1}}
+
+
+# ----------------------------------------------------------------------------------------------- quant C1: broker pool
+def _acct(rows: list[dict], account: str) -> list[dict]:
+    return [dict(r, account=account) for r in rows]
+
+
+def test_a_cell_under_ten_days_is_pooled_across_its_brokers_accounts():
+    thin = _acct(_trades(40, "5m", 4, 0.30), "icm-probe")              # 40 fills, 4 days: under 10
+    full = _acct(_trades(120, "5m", 12, 0.20), "icm-demo")
+    rec = rc.build_record(pd.DataFrame(thin + full), version="v", window=(MON, MON), exit_prior_usd=0.15,
+                          probe_slip={}, brokers={"icm-demo": "icm", "icm-probe": "icm"})
+    probe, demo = rec.cells["icm-probe"]["london"]["5m"], rec.cells["icm-demo"]["london"]["5m"]
+    assert probe.pooled_from == "broker" and demo.pooled_from == "account"
+    broker = rc.build_record(pd.DataFrame(thin + full).assign(account="icm"), version="b", window=(MON, MON),
+                             exit_prior_usd=0.15, probe_slip={}).cells["icm"]["london"]["5m"]
+    assert probe.charged_usd == pytest.approx(max(probe.point_usd, broker.charged_usd), abs=1e-4)
+    assert demo.charged_usd == pytest.approx(max(demo.point_usd, demo.ci95[1]), abs=1e-4)
+    assert rec.brokers == {"icm-demo": "icm", "icm-probe": "icm"} and rec.probe_exit_stat == "mean"
+
+
+# ----------------------------------------------------------------------------------------------- quant C2: H-81 repriced
+def _xrec(**kw: Any) -> exploration.ExplorationRecord:
+    base: dict[str, Any] = dict(client_order_id="x", account_id="icm-demo", arm_id="Z1P", family="f", tf="15m",
+                                side=1, lots=0.01, signal_utc=MON, sent_utc=MON, atr_usd=5.0, stop_usd=5.0,
+                                target_usd=10.0, hold_s=3600, requested_price=2400.0, fill_price=2400.05,
+                                spread_usd=0.1, stop_loss=3.75, cost=0.05, fx_acct_per_usd=0.75)
+    base.update(kw)
+    return exploration.ExplorationRecord(**base)
+
+
+def _one_cell_record(charged: float, account: str = "icm-demo", session: str = "london", tf: str = "15m",
+                     version: str = "ecr-test.2") -> rc.EngineCostRecord:
+    c = rc.CellCost(n=100, n_days=12, mean_usd=charged, ci95=(charged, charged), p50_usd=charged, p75_usd=charged,
+                    p90_usd=charged, spread_usd=0.1, entry_slip_usd=0.0, exit_slip_usd=0.0, commission_usd=0.08,
+                    swap_paid_usd=0.0, point_usd=charged, exit_sources={"level": 100}, engine_cost_usd=0.46,
+                    sparse=False, charged_usd=charged)
+    return rc.EngineCostRecord(version=version, built_utc=MON, window_utc=(MON, MON), exit_prior_usd=0.15,
+                               cells={account: {session: {tf: c, rc.ALL: c}}}, brokers={account: "icm"})
+
+
+def test_every_h81_row_is_repriced_on_the_current_version_and_a_suspended_state_survives_the_switch():
+    from goldbot.research.arm_stops import CostStop, cost_per_r, cost_state
+    rec = _one_cell_record(1.25)                                           # 1.25 x 0.75 / 3.75 = 0.25 per R
+    legacy = [_xrec(client_order_id=f"l{i}", sent_utc=MON + pd.Timedelta(days=i % 5)) for i in range(40)]
+    new = [_xrec(client_order_id=f"n{i}", cost=0.94, cost_version="ecr-test.2") for i in range(5)]
+    assert cost_per_r(legacy[0], rec) == pytest.approx(0.25)               # the legacy row's 0.05 is repriced
+    assert cost_per_r(legacy[0], None) == pytest.approx(0.05 / 3.75)       # no record: as recorded
+    assert cost_per_r(_xrec(account_id="icm-live"), rec) == pytest.approx(0.05 / 3.75)   # no cell: as recorded
+    cfg = CostStop(arms=("Z1P",))
+    assert cost_state(legacy + new, cfg, rec) == "suspended"               # never reset to ok by the switch
+    assert cost_state(new, cfg, rec) == "ok"                               # what filtering would have done (n < 30)
+    assert cost_state(legacy + new, cfg, None) == "ok"                     # as recorded, 0.013 R
+
+
+# ----------------------------------------------------------------------------------------------- quant C3: edge cap
+def test_the_edge_cap_trips_only_at_200_fills_when_even_the_upper_bound_of_gross_r_is_below_the_cost_share():
+    from goldbot.research.arm_stops import EdgeCap, edge_cap_trips
+    days = [MON + pd.Timedelta(days=i % 20) for i in range(250)]
+    noise = np.where((np.arange(250) // 20) % 2, 0.5, -0.5)               # both signs on every day
+    cap = EdgeCap(min_fills=200)
+    assert edge_cap_trips(list(0.0 + noise), days, cost_share=0.10, cap=cap) is True       # UB ~0.05 < 0.10
+    assert edge_cap_trips(list(0.3 + noise), days, cost_share=0.10, cap=cap) is False
+    assert edge_cap_trips(list(0.0 + noise[:199]), days[:199], cost_share=0.10, cap=cap) is False   # too few
+
+
+def _ledger_rows(arm: str, n: int, *, exit_reason: str,
+                 account: str = "icm-probe") -> list[exploration.ExplorationRecord]:
+    """Closed long fills of `arm`: a stop exit at its level (gross -0.98 R) or a target exit (gross +2.02 R)."""
+    exit_px = 3995.0 if exit_reason == "stop" else 4010.0
+    out = []
+    for i in range(n):
+        sent = CLOSE - pd.Timedelta(days=1 + i % 12)
+        out.append(_xrec(client_order_id=f"{arm}-{i}", account_id=account, arm_id=arm, tf="15m", sent_utc=sent,
+                         signal_utc=sent, requested_price=4000.0, fill_price=4000.0, exit_price=exit_px,
+                         exit_reason=exit_reason, exit_utc=sent + pd.Timedelta(minutes=30), commission=-0.06,
+                         swap=0.0, pnl=-3.8, position_id=i + 1, retcode=10009))
+    return out
+
+
+def test_edge_cap_states_suspend_a_strategy_arm_that_cannot_cover_its_cost_never_a_control(tmp_path):
+    from goldbot.research.arm_stops import edge_cap_states, load_stop_rules
+    rec = _one_cell_record(0.30, account="icm-probe", session="newyork")
+    db = exploration.ledger_db(str(tmp_path))
+    with db.write() as conn:
+        for r in _ledger_rows("LOSER", 210, exit_reason="stop") + _ledger_rows("WINNER", 210, exit_reason="target") \
+                + _ledger_rows("S0", 210, exit_reason="stop") + _ledger_rows("YOUNG", 150, exit_reason="stop"):
+            exploration.LEDGER.upsert(conn, r)
+    with db.connection() as conn:
+        got = edge_cap_states(conn, {"LOSER", "WINNER", "S0", "YOUNG"}, record=rec, rules=load_stop_rules(),
+                              exempt={"S0"})
+    assert got == {"LOSER"}
+
+
+def test_an_edge_capped_arm_is_refused_new_entries_through_the_cost_stop_path(tmp_path):
+    rec = _one_cell_record(0.30, account="icm-probe", session="newyork")
+    path = tmp_path / "ecr-test.2.yaml"
+    rec.save(path)
+    eng, pb = _engine(tmp_path, [_arm("a")])
+    ex = eng.exploration
+    assert ex is not None
+    with ex.db.write() as conn:
+        for r in _ledger_rows("a", 210, exit_reason="stop"):
+            exploration.LEDGER.upsert(conn, r)
+    ex.cost_record = str(path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert not eng.open
+    assert [d for d in eng.decisions if str(d.get("action", "")).endswith("cost_suspended")]
+
+
+def test_the_daily_review_retires_an_edge_capped_arm_per_broker_and_never_a_control(tmp_path):
+    from goldbot.research import daily_review
+    rec = _one_cell_record(0.30, account="icm-probe", session="newyork")
+    db = exploration.ledger_db(str(tmp_path))
+    with db.write() as conn:
+        for arm in ("LOSER", "S0"):
+            for r in _ledger_rows(arm, 210, exit_reason="stop"):
+                exploration.LEDGER.upsert(conn, r)
+            conn.execute("INSERT INTO exploration_obs (candidate_id, account_id, arm_id, family, style, tf, side, "
+                         "is_control, decision_ns, session_day, taken, broker, recorded_ns) VALUES (?, 'icm-probe', ?, 'f', "
+                         "'intraday', '15m', 1, 0, 0, '2025-03-04', 1, 'icm', 0)", (f"obs-{arm}", arm))
+    hosts = {"icm-probe": "icm"}
+    assert daily_review._edge_capped(db, hosts, CLOSE, rec, exempt={"S0"}) == {"icm": {"LOSER"}}
+    assert daily_review._edge_capped(db, hosts, CLOSE, None, exempt={"S0"}) == {}   # no record: no cap
+    assert "prereg-amendment-2026-11-20-edge-cap.md" in daily_review.EDGE_CAP_RULE
+    assert Path("docs/research/prereg-amendment-2026-11-20-edge-cap.md").exists()

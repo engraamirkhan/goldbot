@@ -143,7 +143,7 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 262 | Closed exploration rows without a fill price | Data integrity · exploration ledger | S | proposed 2026-11-14 (evaluator, weekly review 2026-11-14) · accountable: data-engineer · reviews: quant-reviewer, trading-safety-reviewer |
 | 263 | One session_day() for read-due and futility stop | Research integrity · read rules | S | proposed 2026-11-14 (quant re-review of fix/weekly-read-due) · accountable: implementer, evaluator · reviews: quant-reviewer |
 | 264 | Reject commits whose author email is not a noreply address | Security · public repo hygiene | S | proposed 2026-11-14 (security review of fix/weekly-read-due) · accountable: implementer, release-manager · reviews: security-reviewer |
-| 265 | H-81 cost stop: read one cost version per stratum after ADR 0092 | Research integrity · costs | S | proposed 2026-11-20 (data-engineer, ADR 0092) · accountable: quant-reviewer, implementer |
+| 265 | H-81 cost stop: reprice every row on the cost version in force (ADR 0092) | Research integrity · costs | S | done 2026-11-20 (branch fix/true-costs, quant C2) · accountable: data-engineer · reviews: quant-reviewer |
 | 266 | Engine cost of record: next version from quote-measured exits (P6 coverage >= 95%) | Data · costs | S | proposed 2026-11-20 (data-engineer, ADR 0092) · accountable: data-engineer · reviews: quant-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
@@ -1765,13 +1765,13 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   2. the check prints only the commit sha and the rule, never the offending email;
   3. a test covers one passing and one failing commit;
   4. RUNBOOK and the bootstrap scripts set `user.email` to the noreply address on every machine that commits.
-- **265. H-81 cost stop: read one cost version per stratum after ADR 0092.** Value: `arm_stops.cost_state` takes the
+- **265. H-81 cost stop: reprice every row on the cost version in force (ADR 0092).** Value: `arm_stops.cost_state` takes the
   95% UB of the recorded `cost` / `stop_loss` over a stratum's fills. After ADR 0092 a stratum's window mixes legacy
   rows ($0.30 slippage prior) with rows charged on `ecr-2026-11-20.1`. Its state then follows the mix, not the arm.
   Acceptance:
-  1. a quant ruling chooses one of two rules: the stop reads only rows of the newest `cost_version`, with its own
-     30-fill minimum; or every row is repriced on one version;
-  2. the rule is built with a test that seeds rows of two versions;
+  1. quant ruling (C2 on ADR 0092): every row is repriced on the version in force (`arm_stops.cost_per_r`), never
+     filtered to new-version rows (that would reset suspended strata to ok);
+  2. a test seeds rows of two versions; a suspended state survives the switch;
   3. the daily review names the version each cost-stop state rests on.
 - **266. Engine cost of record: next version from quote-measured exits.** Value: `ecr-2026-11-20.1` imputes every
   Vantage exit and every ICM time exit from the probes. Since ADR 0092 each exploration exit records its quote, so

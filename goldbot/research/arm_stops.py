@@ -14,7 +14,15 @@ The rules, as registered and built here:
   "still count toward H-61 stops", not toward the read); the R stop counts every admissible fill.
 * F1C/G1C "stop with" F1A/G1A (prereg-2026-10-26-time-structure.md 2.2, 3.2); every other control never stops.
 * Z 4 "Cost stop per stratum (independent of R). At >= 30 fills, if the 95% UB of signal-time cost per R is > 0.10,
-  the stratum's share is halved (ADR 0047 ladder). Above 0.20 it is suspended until a dated amendment."
+  the stratum's share is halved (ADR 0047 ladder). Above 0.20 it is suspended until a dated amendment." Quant condition
+  C2 of ADR 0092: every row's cost is REPRICED on the engine cost of record in force (`cost_per_r`: its cell's charge
+  at the row's lots and rate over its loss at the stop), never filtered to the new version's rows (a filter would
+  reset a suspended stratum to ok below 30 fills); a row the record has no cell for keeps its recorded cost.
+* Edge cap (quant condition C3, docs/research/prereg-amendment-2026-11-20-edge-cap.md): an arm with >= 200 measured
+  gold fills whose one-sided 95% upper bound of gross R (`realised_costs` gross: the move before every price cost, over
+  the arm's R; SE clustered by UTC day) is below its mean cost share of R at the record's charge is suspended through
+  the H-81 path (`edge_cap_states`: the engine's share 0, `cost_suspended`; the daily review retires it). Controls
+  and cost arms are exempt. K-neutral: it can only stop an arm, never qualify or rank one.
 
 A stop only refuses an arm's NEW entries (aux.db `exploration_arm_status`, written by the daily review, read by the
 engine) and a halved share only lowers its room for new entries: nothing here reads or changes an open position.
@@ -36,6 +44,7 @@ from goldbot.base import FrozenRecord
 
 if TYPE_CHECKING:
     from goldbot.engine.exploration import ExplorationRecord
+    from goldbot.research.realised_costs import EngineCostRecord
 
 RULES_PATH = Path(__file__).parents[2] / "config" / "arm_stops.yaml"
 Z95 = 1.6448536269514722            # the one-sided 95% normal quantile
@@ -80,12 +89,19 @@ class CostStop(FrozenRecord):
     arms: tuple[str, ...] = ()
 
 
+class EdgeCap(FrozenRecord):
+    """Quant C3's entry cap (prereg-amendment-2026-11-20-edge-cap.md)."""
+    min_fills: int = Field(200, gt=1)
+    z: float = Field(Z95, gt=0)               # one-sided 95%
+
+
 class StopRules(FrozenRecord):
     units: dict[str, StopUnit] = Field(default_factory=dict)
     follows: dict[str, str] = Field(default_factory=dict)       # control -> the arm it stops with
     h61: tuple[str, ...] = ()                                   # documentation: the per-style default
     none: tuple[str, ...] = ()                                  # documentation: never stopped
     cost_stop: CostStop = CostStop()
+    edge_cap: EdgeCap | None = None                             # off unless the rules file registers it
 
     @model_validator(mode="after")
     def _once(self) -> StopRules:
@@ -204,10 +220,24 @@ def unit_stop(unit: StopUnit, rows: Sequence[Fill], band_share: float = 0.5) -> 
     return UnitStop()
 
 
-def cost_state(rows: Sequence[ExplorationRecord], cfg: CostStop) -> CostState:
-    """Z 4 for one stratum: its filled orders' signal-time cost per R (`cost` / `stop_loss` at the send)."""
-    pts = [(t.cost / t.stop_loss, t.sent_utc) for t in rows
-           if t.fill_price is not None and t.cost is not None and t.stop_loss and t.stop_loss > 0]
+def cost_per_r(t: ExplorationRecord, record: EngineCostRecord | None) -> float | None:
+    """One row's cost per R for the H-81 stop: its cell's charge in the engine cost of record in force (USD per oz x
+    lots x 100 oz x the row's account-per-USD rate) over its loss at the stop; the cost recorded at the send when no
+    record is in force or it has no cell for the row (another account, a live one, another instrument). None without a
+    cost or a loss at the stop."""
+    if t.cost is None or not t.stop_loss or t.stop_loss <= 0:
+        return None
+    if record is not None and t.symbol == "XAUUSD" and t.fx_acct_per_usd and t.lots > 0:
+        from goldbot.research.realised_costs import GOLD_OZ, session_of
+        charged = record.charged_usd(t.account_id, session_of(t.sent_utc), t.tf)
+        if charged is not None:
+            return charged * t.lots * GOLD_OZ * t.fx_acct_per_usd / t.stop_loss
+    return t.cost / t.stop_loss
+
+
+def cost_state(rows: Sequence[ExplorationRecord], cfg: CostStop, record: EngineCostRecord | None = None) -> CostState:
+    """Z 4 for one stratum: its filled orders' cost per R, every row repriced on `record` (quant C2, `cost_per_r`)."""
+    pts = [(c, t.sent_utc) for t in rows if t.fill_price is not None and (c := cost_per_r(t, record)) is not None]
     if len(pts) < cfg.min_fills:
         return "ok"
     ub = upper_bound([c for c, _ in pts], [d for _, d in pts])
@@ -217,7 +247,7 @@ def cost_state(rows: Sequence[ExplorationRecord], cfg: CostStop) -> CostState:
 
 
 def cost_states(conn: sqlite3.Connection, arms: Collection[str], *, until: pd.Timestamp | None = None,
-                rules: StopRules | None = None) -> dict[str, CostState]:
+                rules: StopRules | None = None, record: EngineCostRecord | None = None) -> dict[str, CostState]:
     """The cost state of every registered cost-stop stratum among `arms` (its fills on every account), sent before
     `until` when given."""
     from goldbot.engine.exploration import LEDGER
@@ -230,8 +260,50 @@ def cost_states(conn: sqlite3.Connection, arms: Collection[str], *, until: pd.Ti
     by_arm: dict[str, list[ExplorationRecord]] = {a: [] for a in want}
     for t in LEDGER.select(conn, f"arm_id IN ({marks}){cut}", args):
         by_arm[t.arm_id].append(t)
-    return {a: cost_state(rows, rules.cost_stop) for a, rows in by_arm.items()}
+    return {a: cost_state(rows, rules.cost_stop, record) for a, rows in by_arm.items()}
 
 
-__all__ = ["COST_SCALE", "RULES_PATH", "CostState", "CostStop", "Fill", "Safety", "StopRules", "StopUnit", "UnitStop",
-           "cost_state", "cost_states", "load_stop_rules", "net_bp", "unit_stop", "upper_bound"]
+def edge_cap_trips(gross_r: Sequence[float], days: Sequence[pd.Timestamp], *, cost_share: float, cap: EdgeCap) -> bool:
+    """C3: True when there are at least `cap.min_fills` fills and even the one-sided upper bound of their mean gross R
+    (SE clustered by UTC day) is below `cost_share` (the arm's mean cost per R at the charge in force)."""
+    if len(gross_r) < cap.min_fills or not math.isfinite(cost_share):
+        return False
+    ub = upper_bound(list(gross_r), list(days), z=cap.z)
+    return ub is not None and ub < cost_share
+
+
+def edge_cap_states(conn: sqlite3.Connection, arms: Collection[str], *, record: EngineCostRecord | None,
+                    rules: StopRules, exempt: Collection[str] = (), until: pd.Timestamp | None = None) -> set[str]:
+    """C3: the arms among `arms` (less `exempt`: controls and cost arms) the edge cap suspends, from their closed gold
+    fills on every account the record measures (`realised_costs.trade_costs`, its probe exit slip and prior). Nothing
+    without a registered cap or a record in force (the cap is defined at the record's charge)."""
+    import json
+
+    import numpy as np
+
+    from goldbot.research.realised_costs import trade_costs
+    cap = rules.edge_cap
+    want = sorted(set(arms) - set(exempt))
+    if cap is None or record is None or not record.brokers or not want:
+        return set()
+    marks = ",".join("?" * len(want))
+    cut, args = ("", tuple(want)) if until is None else (" AND ts_ns < ?", (*want, int(pd.Timestamp(until).value)))
+    rows = [json.loads(b) for (b,) in conn.execute(
+        f"SELECT body FROM exploration_trades WHERE closed = 1 AND arm_id IN ({marks}){cut}", args)]   # noqa: S608
+    probe = {tuple(k.split(":", 1)): v for k, v in record.probe_exit_slip_usd.items()}
+    df = trade_costs(rows, record.brokers, exit_prior_usd=record.exit_prior_usd, probe_slip=probe)  # type: ignore[arg-type]
+    out: set[str] = set()
+    for arm, g in df[df["stop_usd"] > 0].groupby("arm_id"):
+        charged = [record.charged_usd(a, s, tf) for a, s, tf in zip(g["account"], g["session"], g["tf"], strict=True)]
+        per_oz = np.array([c if c is not None else e for c, e in zip(charged, g["engine_cost"], strict=True)], float)
+        stop = g["stop_usd"].to_numpy(dtype=float)
+        share = float(np.nanmean(per_oz / stop))
+        if edge_cap_trips(list(g["gross"].to_numpy(dtype=float) / stop), list(g["sent_utc"]), cost_share=share,
+                          cap=cap):
+            out.add(str(arm))
+    return out
+
+
+__all__ = ["COST_SCALE", "RULES_PATH", "CostState", "CostStop", "EdgeCap", "Fill", "Safety", "StopRules", "StopUnit",
+           "UnitStop", "cost_per_r", "cost_state", "cost_states", "edge_cap_states", "edge_cap_trips", "load_stop_rules",
+           "net_bp", "unit_stop", "upper_bound"]

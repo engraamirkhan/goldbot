@@ -67,6 +67,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     three null fields (192 cases, no other change).
   - Most cells now charge 25-50% less. ICM 15m cells charge more ($0.72-2.00), because their stop exits slip.
     Research v3 (ADR 0084) is unchanged. Rollback: `costs.engine_record: null`.
+  - Review conditions, built as version `ecr-2026-11-20.2` (settings charge it; `.1` is kept unchanged):
+    - A live account never reads the record (trading-safety).
+    - C1: 11 exit slips above $2 were checked against broker ticks; all 11 are genuine news gaps, none dropped. A cell
+      under 10 days is charged on its broker's cell.
+    - Point 5: unmeasured exits are imputed with the probe mean, from hold exits within 2 s of their quote only.
+    - C2: the H-81 cost stop reprices every row on the version in force.
+    - C3: a pre-registered edge cap (docs/research/prereg-amendment-2026-11-20-edge-cap.md) suspends an arm with at
+      least 200 fills whose gross-R upper bound is below its cost share. It uses the H-81 path; controls and cost arms
+      are exempt. None trips today.
 - 2026-11-19 discovered-arm integrity voids made precise, still fail closed (goldbot/research/arm_integrity.py; an SRE
   dry run on settled weekdays found most 15m candidates void `replaced_minute` and every 4h one `release_after_cutover`).
   (1) A `broker_bar_replaced` event within 27 min before a decision no longer voids by itself: the event (its ts the

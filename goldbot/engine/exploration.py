@@ -737,6 +737,10 @@ class Exploration:
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
         self.budget_cache: dict[Any, Any] = {}         # the daily budget's day and minute reads (`exploration_budget`)
         self.cost_scale: dict[str, float] = {}         # H-81 cost stop: arm -> its share's scale (`shares`)
+        # ADR 0092 quant C2/C3: the engine cost of record the H-81 stop reprices on and the edge cap charges at (never
+        # a live account's: it keeps the legacy table, safety review); the cap's last read (monotonic s, arms capped)
+        self.cost_record: str | None = eng.cfg.cost_record if eng.cfg.mode != "live" else None
+        self.edge_cap_read: tuple[float, set[str]] | None = None
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
         # arms retired at their stop (`refresh_retired`), from the start every arm its spec row retires (`spec_retired`)
         self.retired: frozenset[str] = spec_retired(cfg) & frozenset(a.arm_id for a in ok)
@@ -1644,26 +1648,45 @@ class StopRulesUnreadable(RuntimeError):
     """config/arm_stops.yaml is missing or invalid: no exploration entry goes out (its own refusal reason)."""
 
 
+EDGE_CAP_EVERY_S = 3600.0          # quant C3: the edge cap needs >= 200 fills, so an hourly read is current enough
+
+
 def _cost_scale(ex: Exploration) -> dict[str, float]:
-    """The H-81 cost stop's scale of each registered stratum this host runs, below 1 only (`shares`); the scales last
-    read on a ledger read error. No registered stratum here: nothing is read. An unreadable rules file raises
-    `StopRulesUnreadable` (fail closed: the stops cannot be known)."""
+    """The H-81 cost stop's scale of each registered stratum this host runs, below 1 only (`shares`), every row
+    repriced on the engine cost of record in force (quant C2); and 0 for every arm the edge cap suspends (quant C3,
+    `arm_stops.edge_cap_states`, read at most hourly: the same `cost_suspended` refusal). The scales last read on a
+    ledger read error. An unreadable rules file raises `StopRulesUnreadable` (fail closed: the stops cannot be known)."""
     from goldbot.research.arm_stops import COST_SCALE, cost_states, load_stop_rules
     try:
         rules = load_stop_rules()
     except (OSError, ValueError) as exc:
         raise StopRulesUnreadable(type(exc).__name__) from exc
     mine = set(ex.arms) & set(rules.cost_stop.arms)
-    if not mine:
+    if not mine and (rules.edge_cap is None or not ex.cost_record):
         return {}
+    from goldbot.engine.cost_record import _load
+    record = _load(ex.cost_record) if ex.cost_record else None
     try:
         with ex.db.connection() as conn:
-            got = cost_states(conn, mine, rules=rules)
+            got = cost_states(conn, mine, rules=rules, record=record) if mine else {}
+            capped = _edge_capped(ex, conn, rules, record)
     except Exception as exc:                        # the scales last read stand
         log.warning("exploration cost stop unreadable (%s): the scales last read stand", type(exc).__name__)
         return ex.cost_scale
-    ex.cost_scale = {a: COST_SCALE[st] for a, st in got.items() if st != "ok"}
+    ex.cost_scale = {a: COST_SCALE[st] for a, st in got.items() if st != "ok"} | {a: 0.0 for a in capped}
     return ex.cost_scale
+
+
+def _edge_capped(ex: Exploration, conn: Any, rules: Any, record: Any) -> set[str]:
+    """Quant C3: this host's arms the edge cap suspends (controls and cost arms exempt), read at most hourly."""
+    from goldbot.research.arm_stops import edge_cap_states
+    now = time.monotonic()
+    if ex.edge_cap_read is not None and now - ex.edge_cap_read[0] < EDGE_CAP_EVERY_S:
+        return ex.edge_cap_read[1]
+    exempt = {a for a, arm in ex.arms.items() if arm.control_share is not None or arm.spec.role in ("control", "cost")}
+    got = edge_cap_states(conn, set(ex.arms), record=record, rules=rules, exempt=exempt)
+    ex.edge_cap_read = (now, got)
+    return got
 
 
 def realised(eng: Engine, ex: Exploration, since: pd.Timestamp,

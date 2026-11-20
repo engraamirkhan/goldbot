@@ -140,3 +140,8 @@ cost_stop:
   # only, so the halve band binds nothing and is reported by the performance-analyst (amendment 4, "as built")
   arms: [Z1P, Z2P, Z3D, Z3V, Z4D, Z4P, Z5P, Z5V, Z6D, Z6V, Z7D, Z7V, Z7P, Z8P, Z9D, Z10D,
          VEX15, VEX1H, IEX15, IEX1H]
+# Quant condition C3 of ADR 0092 (docs/research/prereg-amendment-2026-11-20-edge-cap.md): an arm (controls and cost
+# arms exempt) with >= 200 measured gold fills whose one-sided 95% upper bound of gross R (day-clustered) is below its
+# mean cost share of R at the engine cost of record in force is suspended through the H-81 path. K-neutral (a stop only).
+edge_cap:
+  min_fills: 200

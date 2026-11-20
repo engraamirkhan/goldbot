@@ -57,14 +57,33 @@ pre-registrations; it is not changed here.
    restart between the trigger and the sweep keeps it (the engine-store golden gains three null fields, 192 cases, no
    other change).
 
+7. **Review conditions (quant GO with C1-C3, trading-safety GO), as built in version `ecr-2026-11-20.2`** (the version
+   settings charge; `.1` stays as written):
+   - **Live accounts never read the record** (trading-safety MEDIUM). `cost_record.cell` returns None in live mode, and
+     the exploration stops do not read it there either.
+   - **C1.** Every level exit slip above $2 is checked against the broker's recorded ticks (`large_exit_error`). It is
+     kept when a quote reached the level and the exit price was quoted at the exit. It is dropped with its reason when
+     not; with no ticks it is kept and counted. Result: 11 checked, all 11 genuine (news gaps on 28 Oct 16:54/18:00,
+     3 Nov 12:47/15:00 and 6 Nov 13:30), 0 dropped. Nothing is trimmed: the mean stays the estimator. A cell under 10
+     session days is charged on its broker's cell (ICM's two accounts share a server), never below its own point
+     (`pooled_from: broker`).
+   - **Point 5.** The probe exit slip imputed to unmeasured exits is the mean (floored at 0), not the p75. Only hold
+     exits within 2 s of their quote count. A probe its broker stopped carried the quote of a later hold pass (up to
+     888 s after its deal), which would have charged vantage New York $0.23 instead of $0.02.
+   - **C2.** The H-81 cost stop reprices every row on the record in force (`arm_stops.cost_per_r`). It never filters to
+     new-version rows, so a suspended stratum stays suspended. A row with no cell keeps its recorded cost.
+   - **C3.** A pre-registered, K-neutral edge cap (docs/research/prereg-amendment-2026-11-20-edge-cap.md) applies to an
+     arm with at least 200 fills. If its one-sided 95 % upper bound of gross R is below its cost share at the record's
+     charge, it is suspended through the H-81 path: the engine's share is 0 (`cost_suspended`) and the daily review
+     retires it (`EDGE_CAP_RULE`). Controls and cost arms are exempt. On the brain's ledger today, 4 arms have at
+     least 200 fills (S0, S0R, Z7D, Z7P) and none trips.
+
 ## Consequences
-* Most cells charge 25-50 % less (e.g. icm-probe London 1m $0.234 vs $0.459; vantage-demo London 15m $0.231 vs
-  $0.454): entries the gate refused on the prior's $0.30 now pass when their real cost allows. ICM 15m cells charge
-  more (icm-probe London 15m $1.996, icm-demo London 15m $1.445, icm-demo NY 15m $0.774, icm-probe Asia 15m $0.725):
-  those arms' entries now meet a truer, higher cost. Both directions are the point of the change.
-* The H-81 cost stop (`arm_stops.cost_state`) reads the recorded `cost` per R across rows; after the switch a stratum's
-  30-fill window mixes bases. `cost_version` makes the split readable; whether the stop reads one version only is a
-  quant decision (flagged).
+* With `.2`, most cells charge 25-50 % less (e.g. icm-probe London 1m $0.232 vs $0.459; vantage-demo London 15m
+  $0.221 vs $0.454): entries the gate refused on the prior's $0.30 now pass when their real cost allows. ICM 15m cells
+  charge more (icm-probe London 15m $1.487, icm-demo London 15m $1.440, icm-demo NY 15m $0.767, icm-probe Asia 15m
+  $0.584): those arms' entries now meet a truer, higher cost. Both directions are the point of the change.
+* The H-81 cost stop prices every row on the version in force (C2), so it moves with a new version, by design.
 * Exit quotes make the next version's exit legs `quote`-measured instead of imputed; rebuild once >= 95 % of a month's
   exits carry one (audit P6 target) or when cost drift says so. Rebuilding is a reviewed new version, never an edit.
 * Real-money accounts keep the legacy (dearer) table until their own fills measure them; nothing here borrows demo
