@@ -1,4 +1,4 @@
-- 2026-11-20 findings register (owner: "feedback must close itself"; R173). The system audit found findings unowned
+- 2026-11-20 findings register (owner: "feedback must close itself"; R174). The system audit found findings unowned
   for weeks (A4 failing a month, #392/#394 without an owner). Every finding and directive is now a row of
   `config/findings.yaml`: owner role (an agent in .claude/agents/), severity, due date, source and a CHECK naming a
   registered check with parameters (goldbot/ops/finding_checks.py: controls_to_signal_ratio, trades_per_day,

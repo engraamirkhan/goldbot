@@ -2996,7 +2996,7 @@ alerted: the state it reads is unreadable, which is never a pass. Per writer:
   `python -m goldbot.ops.accounts set github-token`.
 - `jobs`: a job's last run errored; the same text is in `job:<name>`.
 
-### Findings register (`findings`, issue #34; R173)
+### Findings register (`findings`, issue #34; R174)
 
 Every audit finding and owner directive is a row of `config/findings.yaml` (owner role, severity, due date, source,
 and a check: goldbot/ops/finding_checks.py lists them). The daily `findings_check` job (07:15 UTC) re-measures every
