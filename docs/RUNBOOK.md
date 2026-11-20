@@ -3017,7 +3017,9 @@ the job already announces it).
   unknown owner or a refused line; the error names it). Fix the file on main and the next slot runs.
 - No comment on #34 although events exist: no `github-token` on the brain or the post failed; the events stay pending
   (`posted` 0) and go out with the next day's comment.
-- SEC-SCANNING reads "can't check" on the brain: GitHub shows `security_and_analysis` only to an admin token. Verify
+- A `private: true` row (an open security weakness) has a generic title and its measurement is never posted; read it
+  with the CLI on the brain and the private audit notes. Never write the weakness itself into the register.
+- A `github_security` row reads "can't check" on the brain: GitHub shows `security_and_analysis` only to an admin token. Verify
   in the repository settings; if no admin read is possible, change the row's check to `manual` with the date and the
   evidence in a reviewed PR (it would otherwise turn overdue on its due date).
 

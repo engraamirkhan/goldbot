@@ -57,8 +57,10 @@ URGENT: tuple[Severity, ...] = ("critical", "high")
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _STATUS_RANK = {"overdue": 0, "open": 1, "unknown": 2, "closed": 3}
 NOTICE_ROLE = "findings"
+PRIVATE_NOTE = "see private notes"
 AGENTS_DIR = ROOT / ".claude" / "agents"
-_MONEY = re.compile(r"[£$€]\s?\d|\d\s?(GBP|USD|EUR)\b")
+_MONEY = re.compile(r"[£$€]\s?\d|\d\s?(gbp|usd|eur|pounds?|dollars?|euros?|quid)\b|\b(gbp|usd|eur)\s?\d",
+                    re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------------------------- the register
@@ -80,6 +82,9 @@ class Finding(FrozenRecord):
     due: date
     source: str = Field(..., min_length=3)
     check: CheckRef
+    # an open security weakness (security review of ee15815e): the public title names no specifics, and the comment
+    # and Telegram line never carry its measurement (the detail stays in the private audit notes)
+    private: bool = False
 
 
 class Register(FrozenRecord):
@@ -142,6 +147,7 @@ class FindingStatus(FrozenRecord):
     value: str | None = None
     event: Event | None = None
     announced_utc: UtcTimestamp | None = None    # the latest event this row raised (a reminder counts from it)
+    private: bool = False                        # Finding.private: the measurement is never published
 
 
 def evaluate_one(f: Finding, ctx: fc.FindingsContext) -> fc.CheckResult:
@@ -174,7 +180,7 @@ def classify(f: Finding, result: fc.CheckResult, now: pd.Timestamp, prev: Findin
         status = "open" if verdict == "fail" else "unknown"
     event: Event | None = None
     if status == "closed":
-        event = "closed" if prev is not None and prev.status != "closed" else None
+        event = "closed" if prev is not None and prev.status in ("open", "overdue") else None   # never told: silent
     elif prev is not None and prev.status == "closed":
         event = "regressed"
     elif status == "overdue":
@@ -187,6 +193,7 @@ def classify(f: Finding, result: fc.CheckResult, now: pd.Timestamp, prev: Findin
     announced = now if event is not None else (prev.announced_utc if prev is not None else None)
     return FindingStatus(id=f.id, title=f.title, owner=f.owner, severity=f.severity, due=f.due, run_utc=now,
                          verdict=result.verdict, status=status, reason=reason, value=result.value, event=event,
+                         private=f.private,
                          announced_utc=announced)
 
 
@@ -218,10 +225,16 @@ def _parse(rows: list[Any]) -> dict[str, FindingStatus]:
     return {r.id: r for r in out}
 
 
-def latest(state_dir: Path) -> dict[str, FindingStatus]:
-    """The last stored status of every finding (aux.db, migrated on open: the job's read)."""
+def latest(state_dir: Path, before: pd.Timestamp | None = None) -> dict[str, FindingStatus]:
+    """The last stored status of every finding (aux.db, migrated on open: the job's read); with `before`, the last
+    one stored for an earlier slot, so a re-run of a slot compares against the run before it, not against itself."""
+    if before is None:
+        with _db(state_dir).read() as conn:
+            return _parse(conn.execute(_LATEST).fetchall())
     with _db(state_dir).read() as conn:
-        return _parse(conn.execute(_LATEST).fetchall())
+        return _parse(conn.execute(
+            "SELECT h.body FROM findings_history h JOIN (SELECT finding_id, MAX(run_ns) AS run_ns FROM findings_history "
+            "WHERE run_ns < ? GROUP BY finding_id) m USING (finding_id, run_ns)", (_ns(before),)).fetchall())
 
 
 def stored_latest(state_dir: Path) -> dict[str, FindingStatus] | None:
@@ -245,8 +258,12 @@ def stored_latest(state_dir: Path) -> dict[str, FindingStatus] | None:
 
 def _store(state_dir: Path, rows: list[FindingStatus]) -> None:
     with _db(state_dir).write() as conn:
-        conn.executemany("INSERT OR REPLACE INTO findings_history (finding_id, run_ns, status, event, posted, body) "
-                         "VALUES (?, ?, ?, ?, 0, ?)",
+        # a re-run of a slot replaces its row; an event it already announced stays announced
+        conn.executemany("INSERT INTO findings_history (finding_id, run_ns, status, event, posted, body) "
+                         "VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (finding_id, run_ns) DO UPDATE SET "
+                         "status = excluded.status, body = excluded.body, posted = CASE WHEN "
+                         "findings_history.event IS excluded.event THEN findings_history.posted ELSE 0 END, "
+                         "event = excluded.event",
                          [(r.id, _ns(r.run_utc), r.status, r.event, r.model_dump_json()) for r in rows])
 
 
@@ -264,6 +281,7 @@ def _announced_today(state_dir: Path, day: str) -> bool:
 
 
 def _mark(state_dir: Path, keys: list[tuple[str, int]], day: str, now: pd.Timestamp, detail: dict[str, Any]) -> None:
+    """The announced events marked posted and the day's announcement recorded, in one transaction."""
     with _db(state_dir).write() as conn:
         conn.executemany("UPDATE findings_history SET posted = 1 WHERE finding_id = ? AND run_ns = ?", keys)
         conn.execute("INSERT OR REPLACE INTO findings_posts (day, posted_ns, body) VALUES (?, ?, ?)",
@@ -287,8 +305,9 @@ def comment_body(events: list[FindingStatus], current: list[FindingStatus], now:
     lines = [f"**Findings register** {now:%Y-%m-%d} (config/findings.yaml): {counts(current)}.", "",
              "| Event | Finding | Severity | Owner | Due | Status | Measured |", "|---|---|---|---|---|---|---|"]
     for r in ordered(events):
+        measured = PRIVATE_NOTE if r.private else _cell(r.reason)
         lines.append(f"| {r.event} | {r.id}: {_cell(r.title, 80)} | {r.severity} | {r.owner} | {r.due} | {r.status} | "
-                     f"{_cell(r.reason)} |")
+                     f"{measured} |")
     told = {r.id for r in events}
     rest = [r for r in ordered(current) if r.status == "overdue" and r.id not in told]
     if rest:
@@ -319,7 +338,7 @@ def run_findings_check(state_dir: str | Path, now: pd.Timestamp, settings: Setti
     reg = load_register(register or register_path(settings), agents_dir=agents_dir)
     ctx = fc.FindingsContext(state_dir=sd, repo_root=ROOT, now=now, settings=settings, github=github,
                              closes_loader=closes_loader, records_loader=records_loader)
-    rows = evaluate(reg, ctx, latest(sd), cfg.remind_days)
+    rows = evaluate(reg, ctx, latest(sd, before=now), cfg.remind_days)
     _store(sd, rows)
     out: dict[str, Any] = {"findings": len(rows), "summary": counts(rows),
                            "events": {r.id: r.event for r in rows if r.event is not None}}
@@ -348,9 +367,9 @@ def run_findings_check(state_dir: str | Path, now: pd.Timestamp, settings: Setti
         out["posted"] = f"post failed ({type(exc).__name__}): events pending"
         return out
     detail["issue"] = "posted"
+    _mark(sd, [(i, ns) for i, ns, _ in waiting], day, now, detail)       # before anything else can fail: no re-post
     if cfg.telegram and (text := telegram_text(events)) is not None:
         detail["telegram"] = "queued" if queue_notice(sd, text, role=NOTICE_ROLE) else "failed"
-    _mark(sd, [(i, ns) for i, ns, _ in waiting], day, now, detail)
     out["posted"] = f"issue #{cfg.status_issue}: {len(events)} event(s)" + \
         (f", telegram {detail['telegram']}" if "telegram" in detail else "")
     return out

@@ -6,7 +6,8 @@
 #
 # Rules for editing (refused at load otherwise, tests/test_findings.py):
 # - PUBLIC file: no login, host, email, account number or money figure (no currency amount). Name accounts only
-#   through patterns (`reconcile:*`), never the owner's real-money record.
+#   through patterns (`reconcile:*`), never the owner's real-money record. An open security weakness is a
+#   `private: true` row with a generic title (detail in the private audit notes); its measurement is never published.
 # - owner: an agent role in .claude/agents/ (the role accountable for the fix, not who found it).
 # - check.fn: a registered check (goldbot/ops/finding_checks.py) with valid params. Prefer a measurement; `manual`
 #   only where nothing can be measured, closed by setting done_on + evidence (a commit, PR or document) in a PR.
@@ -244,14 +245,6 @@ findings:
     source: audit 2026-11-20 summary 8, SRE risk 3
     check: {fn: manual, params: {}}
 
-  - id: SRE-NAMED-TUNNEL
-    title: Dashboard on a persistent named tunnel as a non-root unit with edge auth (quick tunnel retired)
-    owner: sre
-    severity: medium
-    due: 2026-11-30
-    source: audit 2026-11-20 SRE risk 4, security F4
-    check: {fn: manual, params: {}}
-
   - id: SRE-BRAIN-MEMORY
     title: Brain swap file and memory limits on the scheduler, OOM priority on the engines
     owner: sre
@@ -372,53 +365,69 @@ findings:
     source: audit 2026-11-20 engineering debt 8
     check: {fn: manual, params: {}}
 
-  # ---------------------------------------------------------------- security
-  - id: SEC-SCANNING
-    title: Secret scanning, push protection and Dependabot security updates enabled on the repository
+  # ---------------------------------------------------------------- security (private: open weaknesses are never
+  # described here or in the #34 comment; the detail stays in the private audit notes, outside the repository)
+  - id: SEC-1
+    title: Repository security setting from the 2026-11-20 security audit (see private notes)
     owner: security-reviewer
     severity: high
     due: 2026-11-27
-    source: audit 2026-11-20 summary 11, security F1
+    source: private security audit notes 2026-11-20, item 1
+    private: true
     check: {fn: github_security, params: {features: [secret_scanning, secret_scanning_push_protection, dependabot_security_updates]}}
 
-  - id: SEC-GITLEAKS
-    title: gitleaks in pre-commit with custom rules for logins, chat ids and hosts
+  - id: SEC-2
+    title: Pre-commit guard from the 2026-11-20 security audit (see private notes)
     owner: security-reviewer
     severity: high
     due: 2026-11-27
-    source: audit 2026-11-20 plan 6, security F1
+    source: private security audit notes 2026-11-20, item 2
+    private: true
     check: {fn: file_text, params: {patterns: [".pre-commit-config.yaml"], regex: "gitleaks", expect: present}}
 
-  - id: SEC-COMMIT-EMAIL
-    title: Owner email kept private on new commits (web merges included)
+  - id: SEC-3
+    title: Account setting from the 2026-11-20 security audit (see private notes)
     owner: security-reviewer
     severity: medium
     due: 2026-11-27
-    source: audit 2026-11-20 summary 11, security F2
+    source: private security audit notes 2026-11-20, item 3
+    private: true
     check: {fn: manual, params: {}}
 
-  - id: SEC-PRIVATE-BRANCH
-    title: The private research branch has no upstream and lives outside the public clone
+  - id: SEC-4
+    title: Repository hygiene item from the 2026-11-20 security audit (see private notes)
     owner: security-reviewer
     severity: medium
     due: 2026-11-22
-    source: audit 2026-11-20 security F3
+    source: private security audit notes 2026-11-20, item 4
+    private: true
     check: {fn: manual, params: {}}
 
-  - id: SEC-BRAIN-SECRETS
-    title: Broker passwords off the brain's store; GitHub token scoped and expiring
+  - id: SEC-5
+    title: Credential storage item from the 2026-11-20 security audit (see private notes)
     owner: security-reviewer
     severity: medium
     due: 2026-12-04
-    source: audit 2026-11-20 security F5
+    source: private security audit notes 2026-11-20, item 5
+    private: true
     check: {fn: manual, params: {}}
 
-  - id: SEC-HOST-HARDENING
-    title: Secret file modes, reboot window, branch protection and SSH hardening (security F6-F10)
+  - id: SEC-6
+    title: Host hardening items from the 2026-11-20 security audit (see private notes)
     owner: sre
     severity: low
     due: 2026-12-11
-    source: audit 2026-11-20 security F6-F10
+    source: private security audit notes 2026-11-20, items 6-10
+    private: true
+    check: {fn: manual, params: {}}
+
+  - id: SEC-7
+    title: Dashboard exposure item from the 2026-11-20 security and SRE audits (see private notes)
+    owner: sre
+    severity: medium
+    due: 2026-11-30
+    source: private security audit notes 2026-11-20, item 11
+    private: true
     check: {fn: manual, params: {}}
 
   # ---------------------------------------------------------------- cadence (team review)

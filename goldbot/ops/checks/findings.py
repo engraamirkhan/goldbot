@@ -15,6 +15,8 @@ from __future__ import annotations
 import sqlite3
 from typing import TYPE_CHECKING
 
+import yaml
+
 from goldbot.ops.checks._base import Check
 from goldbot.ops.checks.registry import BLOCK_TAIL, register_check
 
@@ -39,7 +41,7 @@ def check_findings(ctx: HealthContext) -> Check:
     try:
         reg = fm.load_register(fm.register_path(ctx.settings), agents_dir=None)
         stored = fm.stored_latest(ctx.state_dir) or {}
-    except (OSError, ValueError, sqlite3.Error) as exc:
+    except (OSError, ValueError, sqlite3.Error, yaml.YAMLError) as exc:
         return Check(name=NAME, status="warn", reason=f"can't check: register or store unreadable ({type(exc).__name__})")
     today = ctx.now.date()
     late = fm.urgent_past_due(reg, stored, today)

@@ -13,5 +13,9 @@
   - Health `findings` (present once the job has run) WARNs while a critical/high row is past due and not closed; not
     on NOTIFY_ON_WARN (the job already announces it; avoids the standing-warn noise the SRE audit measured).
   - CLI: `python -m goldbot.ops.run findings [--stored] [--no-github] [--json]`.
-  - Not done: the GitHub security check needs an admin token (the brain's reads "can't check", so SEC-SCANNING turns
+  - Review round of ee15815e: open security weaknesses are `private: true` rows (SEC-1..7) with generic titles whose
+    measurement never reaches #34 or Telegram; the money filter is case-insensitive and catches currency-first and
+    "pounds"; a re-run of a slot keeps its pending or posted events; events are marked posted in one transaction right
+    after the comment; unknown -> closed is silent; health WARNs (not FAILs) on a register that is not YAML.
+  - Not done: the GitHub security check needs an admin token (the brain's reads "can't check", so the repository-settings row SEC-1 turns
     overdue on 2026-11-27 unless verified another way); P6 and P5 stay manual until the exit quote is a recorded field.

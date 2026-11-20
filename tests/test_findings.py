@@ -57,7 +57,7 @@ def test_the_shipped_register_seeds_the_audit_headline_findings():
     assert ids["A4-CONTROLS"].check.fn == "controls_to_signal_ratio"
     assert ids["A4-VOLUME"].check.params == {"min": 150, "max": 250, "days": 5}
     assert ids["RES-LEARNER"].check.fn == "learner_outputs"
-    assert ids["SEC-SCANNING"].check.fn == "github_security"
+    assert ids["SEC-1"].check.fn == "github_security"
     assert ids["ENG-BRIDGE-BIND"].severity == "critical"
     assert {"LOOP-392", "P10-OCT-REVIEW"} <= set(ids)
 
@@ -570,3 +570,71 @@ def test_the_cli_prints_one_line_per_finding_from_the_last_stored_run(tmp_path, 
 def test_findings_is_a_registered_ops_command():
     from goldbot.ops.commands.registry import find
     assert find("findings") is not None
+
+
+# --------------------------------------------------------------------------------------------- review round of ee15815e
+def test_open_security_rows_are_private_and_name_no_weakness():
+    reg = fm.load_register(ROOT / SETTINGS.findings.path)
+    sec = [f for f in reg.findings if f.id.startswith("SEC-") or f.owner == "security-reviewer"]
+    assert sec and all(f.private for f in sec)
+    for f in sec:
+        assert "private notes" in f.title
+        for word in ("password", "token", "ssh", "root", "email", "branch", "scanning", "tunnel", "mode"):
+            assert word not in f.title.lower() and word not in f.source.lower(), (f.id, word)
+
+
+def test_a_private_row_shows_no_measurement_in_the_comment_or_telegram():
+    f = finding().model_copy(update={"private": True})
+    rows = [fm.classify(f, fc.CheckResult(verdict="fail", reason="not enabled: secret_scanning"), NOW, None, 7)]
+    body = fm.comment_body(rows, rows, NOW)
+    assert "secret_scanning" not in body and "see private notes" in body
+    assert "secret_scanning" not in (fm.telegram_text(rows) or "")
+
+
+@pytest.mark.parametrize("line", ["    source: lost 120 gbp", "    source: GBP 120 lost", "    source: 40 pounds a month",
+                                  "    source: usd 5 a box"])
+def test_money_in_any_case_or_currency_first_is_refused(tmp_path, line):
+    with pytest.raises(ValueError, match="not public-safe"):
+        fm.load_register(_write(tmp_path, ROW.replace("    source: a test", line)), agents_dir=None)
+
+
+def test_re_running_the_same_slot_keeps_a_pending_event(tmp_path):
+    job(tmp_path, BAD, None)                                   # no token: events pending
+    job(tmp_path, BAD, None)                                   # the same slot again (a scheduler retry)
+    assert ("A4-CONTROLS", "open", "new", 0) in history(tmp_path)
+    sink = Sink()
+    job(tmp_path, BAD, sink, now=NOW + pd.Timedelta(days=1))
+    assert len(sink.posts) == 1 and "| new | A4-CONTROLS" in sink.posts[0][1]
+
+
+def test_re_running_a_posted_slot_does_not_post_its_events_again(tmp_path):
+    sink = Sink()
+    job(tmp_path, BAD, sink)
+    job(tmp_path, BAD, sink)                                   # the same slot again after the post
+    job(tmp_path, BAD, sink, now=NOW + pd.Timedelta(days=1))
+    assert len(sink.posts) == 1
+
+
+def test_events_are_marked_posted_as_soon_as_the_comment_succeeds(tmp_path, monkeypatch):
+    def broken(*a: Any, **k: Any) -> bool:
+        raise RuntimeError("disk full")
+    monkeypatch.setattr("goldbot.ops.limits_job.queue_notice", broken)
+    sink = Sink()
+    with pytest.raises(RuntimeError):
+        job(tmp_path, BAD, sink)
+    job(tmp_path, BAD, sink, now=NOW + pd.Timedelta(days=1))
+    assert len(sink.posts) == 1
+
+
+def test_a_row_never_announced_open_closes_without_an_event():
+    unknown = fm.classify(finding(), CANT, NOW, None, 7)
+    assert fm.classify(finding(), PASS, NOW + pd.Timedelta(days=1), unknown, 7).event is None
+
+
+def test_health_findings_warns_on_a_register_that_is_not_yaml(tmp_path, monkeypatch):
+    from goldbot.ops.checks import findings as hf
+    bad = tmp_path / "findings.yaml"
+    bad.write_text("version: 1\nfindings: [\n  {id: : }", encoding="utf-8")
+    monkeypatch.setattr(fm, "register_path", lambda settings: bad)
+    got = hf.check_findings(_hctx(tmp_path))
+    assert got.status == "warn" and got.reason.startswith("can't check")
