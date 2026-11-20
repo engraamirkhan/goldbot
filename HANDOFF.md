@@ -23,6 +23,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Follow-up, not done: proving a single writer (which would let a solo engine's own late minute verify, and the
   non-sampling icm account skip the other engine's void) needs a writer id on each bars_1m_live row or a gold live
   key per account (books.live_key). Kill rules, caps, the prereg and `LIFECYCLE_READY` are unchanged.
+- 2026-11-20 gold live key per account (ADR 0091; architect plan, quant Q1-Q6, trading-safety S1-S5). Before this,
+  gold engines of one broker stored their minutes under one key, so the night could not tell which engine wrote a
+  minute: icm cross-account and vantage own `sampled_minute` voids. Changes:
+  - `books.live_key` is (account, symbol). The broker's key is legacy: read under the account's own minutes, never
+    written. A restart holds the same bars and cut-over as before (S4).
+  - An exclusive per-account writer lock (`engine_lock.hold_writer`, its own lock file, pid inside) is taken before
+    any bridge. A duplicate start is refused with a journal line, health `duplicate_engine:<account>` WARN (told once)
+    and exit 75 (systemd restarts it). It never goes through `start_refused` (S1).
+  - A boot id (`EngineConfig.boot_id`) on every bars_1m_live row (`writer`), every engine dq event and every
+    exploration candidate (aux.db migration 40), plus a dq `engine_boot` per start recording its lock.
+  - The night reads a candidate with a boot id only on a proven window (`AccountMinutes.writer_proof`), and then
+    without the sampled void. Anything unproven is void `unproven_writer`. Candidates decided before the first
+    recorded start keep the old rules.
+  - Readers union both keys, legacy minutes only before the first locked start: account_bars, arm_integrity,
+    long_history, trade_chart.
+
+  Benefit only for rows written after the deploy (about 9 trading days to age out; the 24 Nov re-sim is not
+  rescued). Kill rules, caps, the prereg, `LIFECYCLE_READY`, RiskGate and exits are unchanged.
 - 2026-11-19 discovered-arm integrity voids made precise, still fail closed (goldbot/research/arm_integrity.py; an SRE
   dry run on settled weekdays found most 15m candidates void `replaced_minute` and every 4h one `release_after_cutover`).
   (1) A `broker_bar_replaced` event within 27 min before a decision no longer voids by itself: the event (its ts the

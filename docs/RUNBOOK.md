@@ -1886,6 +1886,25 @@ The reasons (from `goldbot/risk/gate.py`) and what to do:
 | `supervisor_halt` with `engine_heartbeat_future` | An `engine_<account>.json` is stamped more than 5 s ahead of the supervisor's clock: entries stop on every account. Health names the file on the `supervisor` line and fails that `engine:<account>` line. | Check the host clock, then restart that engine (its next state write clears the halt), or move a leftover file aside if that engine no longer runs. |
 | `data_quality_error` | Reserved; the engine does not set it today. | - |
 
+### A second engine of one account is refused (`duplicate_engine:<account>`)
+
+From ADR 0091, one engine per account writes its minutes. At start the engine takes an exclusive flock on
+`state/.engine-writer-<account>.lock` (before any bridge connection) and writes its pid into that file. While another
+engine of the same account holds the lock, a new start is refused:
+- the journal says `refusing to start <account>: another engine of <account> holds its writer lock (pid N)`;
+- the process exits 75 and systemd restarts it every 10 s until the holder ends;
+- health WARNs `duplicate_engine:<account>`, names the pid and tells you once.
+
+The running engine trades on. Its `engine_<account>.json` is not touched and no account is halted.
+
+To fix it, find the duplicate (`ps -fp N`; a manual `python -m goldbot.ops.run engine <account>`, or a second unit)
+and stop the one you do not want. If the holder is a hung process, `kill -9 N` releases the lock: the kernel frees a
+flock when its holder dies, and the next restart takes it. The WARN clears 10 min after the last refusal.
+
+Hosts without flock (the Windows VPS under NSSM) never refuse a start. Their engines start with `writer_lock: false`
+in their `engine_boot` dq event. Their minutes are unproven, so the nightly discovered-arm read voids those
+accounts' decisions (`unproven_writer`).
+
 ### Every close refused history_gap
 
 `WARN history_gap:<account>` (told on Telegram): over the last 6 h the account's agents were refused `history_gap:<tf>`

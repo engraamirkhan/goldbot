@@ -1758,10 +1758,13 @@ def arm_lifecycle(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     controls = {k: v.control_arm for k, v in cat.arms.items() if v.control_arm}
     # a discovered learning arm's voids (amendment 2026-11-18 4, 5.1 (5), 2.2): the engines' journal and the bracket
     # recomputed from the minutes each engine stored, as it held them at the decision; read only when one is decided
-    # every account of any mode or role on a host's live key (books.live_key of a gold book: broker, symbol) writes
-    # the minutes the night reads: their late minutes void too (quant re-check of 5a9c15ba). Enabled or not: one
-    # disabled tonight may have written inside READ_DAYS (quant and code review of 6fec4099); `keys` lets the night
-    # read dq_events evidence from accounts the config has on no other key
+    # hosts: account -> (broker, symbol); the night reads the account's own live key (books.live_key: account, symbol)
+    # and the broker's legacy key under it (account_bars.live_rows). Sharers: before the per-account key every account
+    # of any mode or role on a host's broker key (books.legacy_live_key: broker, symbol) wrote the minutes the night
+    # reads, so for a candidate decided then their late minutes void too (quant re-check of 5a9c15ba). Enabled or not:
+    # one disabled tonight may have written inside READ_DAYS (quant and code review of 6fec4099); `keys` lets the
+    # night read dq_events evidence from accounts the config has on no other key. A candidate with a boot id needs
+    # none of them: its window is proven its own engine's (ADR 0091)
     keys = {a.account_id: (a.broker, a.symbol) for a in ctx.accounts}
     night = arm_integrity.integrity_inputs(ctx.store, {a.account_id: (a.broker, a.symbol) for a in demo},
                                            list(arms.values()), now=slot, db=aux,

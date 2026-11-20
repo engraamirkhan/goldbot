@@ -71,8 +71,9 @@ def _sources(account: str | None, gold: bool = True) -> list[tuple[str, str, Lit
     out: list[tuple[str, str, Literal["broker", "reference"]]] = []
     if account:
         out.append(("bars_1m_broker", account, "broker"))
+        out.append(("bars_1m_live", account, "broker"))     # the engine's own key (books.live_key)
         broker = _broker(account)
-        if broker:
+        if broker:                                           # its minutes before the per-account key
             out.append(("bars_1m_live", broker, "broker"))
         out.append(("bars_1m", account, "broker"))
     if gold:                                 # the reference feed is gold's only

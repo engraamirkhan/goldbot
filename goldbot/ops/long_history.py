@@ -59,23 +59,26 @@ def history_path(settings: Settings) -> Path:
     return Path(settings.engine.history_root(settings.data_root)) / "bars" / f"{settings.symbol.lower()}_1d.parquet"
 
 
-def gold_key(settings: Settings, accounts: Sequence[Account]) -> tuple[str, str] | None:
-    """(broker, traded symbol) of the first enabled account whose release symbol is settings.symbol (the engine's
-    `books.live_key` of a gold book), by account id; None when there is none."""
+def gold_key(settings: Settings, accounts: Sequence[Account]) -> tuple[tuple[str, str], ...] | None:
+    """The live keys of the first enabled account whose release symbol is settings.symbol, by account id, in read
+    order: the broker's legacy key (broker, traded symbol; `books.legacy_live_key`), then the account's own
+    (account, traded symbol; `books.live_key`), whose minute wins (ADR 0091); None when there is
+    none."""
     from goldbot.ops.services.engine import release_symbol
     for acc in sorted(accounts, key=lambda a: a.account_id):
         if acc.enabled and release_symbol(settings, acc) == settings.symbol:
-            return acc.broker, acc.symbol
+            return (acc.broker, acc.symbol), (acc.account_id, acc.symbol)
     return None
 
 
-def store_minutes(store: Store, symbol: str, key: tuple[str, str], start: pd.Timestamp,
+def store_minutes(store: Store, symbol: str, key: tuple[tuple[str, str], ...], start: pd.Timestamp,
                   end: pd.Timestamp) -> pd.DataFrame:
     """The engine's history in [start, end), visible by `end`: release minutes, the traded broker's over them (the
-    engine takes the broker's from its cut-over on; here the broker's minute wins where both exist)."""
+    engine takes the broker's from its cut-over on; here the broker's minute wins where both exist), each live key of
+    `key` over the one before it (`gold_key`: the account's own key over the legacy one)."""
     from goldbot.data.resample import BAR_COLUMNS
     parts = [store.read("bars_1m", source=RELEASE_SOURCE, symbol=symbol, start=start, end=end),
-             store.read(LIVE_TABLE, source=key[0], symbol=key[1], start=start, end=end)]
+             *(store.read(LIVE_TABLE, source=src, symbol=sym, start=start, end=end) for src, sym in key)]
     b = pd.concat([p[[c for c in BAR_COLUMNS if c in p.columns]] for p in parts if not p.empty], ignore_index=True) \
         if any(not p.empty for p in parts) else pd.DataFrame(columns=BAR_COLUMNS)
     if b.empty:
@@ -185,7 +188,7 @@ def refresh_job(settings: Settings, store: Store, accounts: Sequence[Account], s
     minutes = store_minutes(store, settings.symbol, key, start, now)
     r = settings.research
     holdout = (r.holdout_from, r.holdout_to) if r.holdout_from is not None and r.holdout_to is not None else None
-    return refresh(path, minutes, now, SOURCE_PREFIX + key[0], holdout=holdout).model_dump()
+    return refresh(path, minutes, now, SOURCE_PREFIX + key[0][0], holdout=holdout).model_dump()
 
 
 def reach(history_root: str | Path, symbol: str, window_1m: pd.DataFrame, now: pd.Timestamp) -> str | None:
