@@ -576,7 +576,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                # aux.db monthly_reviews (R142, goldbot/ops/monthly_review.py):
                # tests/test_monthly_review.py::test_a_review_row_a_newer_release_wrote_still_reads
                MonthlyReview,
-               # aux.db findings_history (R174, goldbot/ops/findings.py): tests/test_findings.py::
+               # aux.db findings_history (R175, goldbot/ops/findings.py): tests/test_findings.py::
                # test_a_status_row_a_newer_release_wrote_still_reads
                FindingStatus,
                # aux.db swap_reconciliations (BACKLOG 175, goldbot/ops/swap_reconcile.py): tests/test_swap_reconcile.py::

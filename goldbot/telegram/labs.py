@@ -38,7 +38,15 @@ from goldbot.base import Record
 from goldbot.db.connection import db_path
 from goldbot.engine.exploration import ExplorationRecord
 from goldbot.ops.monthly_report import SYMBOLS
-from goldbot.research.arm_stops import Fill, StopUnit, UnitStop, load_stop_rules, net_bp, unit_stop
+from goldbot.research.arm_stops import (
+    Fill,
+    StopUnit,
+    UnitStop,
+    load_stop_rules,
+    net_bp,
+    realised_cost_bp,
+    unit_stop,
+)
 
 log = logging.getLogger(__name__)
 
@@ -390,10 +398,12 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
 
 
 def _fill(t: ExplorationRecord, counted: bool) -> Fill | None:
-    """An admissible close as a stop rule reads it (net R, exit, counted toward the read, stratum, net bp)."""
+    """An admissible close as a stop rule reads it (net R, exit, counted toward the read, stratum, net bp, realised
+    round trip in bp)."""
     if t.exit_utc is None:
         return None
-    return Fill(r=trade_r(t) or 0.0, at=t.exit_utc, counted=counted, arm=t.arm_id, bp=net_bp(t, CONTRACT_OZ))
+    return Fill(r=trade_r(t) or 0.0, at=t.exit_utc, counted=counted, arm=t.arm_id, bp=net_bp(t, CONTRACT_OZ),
+                cost_bp=realised_cost_bp(t, CONTRACT_OZ))
 
 
 def _held_out(conn: sqlite3.Connection, accounts: Sequence[str], store: Any, now: pd.Timestamp | None) -> set[str]:

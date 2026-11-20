@@ -51,7 +51,9 @@ SCOPE_CONTROLS = frozenset({
     "ZCD", "LCS5A", "LCS5B", "LCZ1P", "LCZ2P", "LCZ3D", "LCZ4D", "LCZ4P", "LCZ5P", "LCZ6D", "LCZ6V", "LCZ7D", "LCZ7P",
     "LCZ7V", "LCZ9D", "LCZ10D",
     # prereg-amendment-2026-11-15-redbox-week.md: the red-box arms' replay-only controls (they never reach `_send`)
-    "RBC15", "RBC1H", "RBC4H"})
+    "RBC15", "RBC1H", "RBC4H",
+    # prereg-amendment-2026-11-20-gd1-asia-learning.md: GD-1 A1's replay-only controls (they never reach `_send`)
+    "GD1CD", "GD1CP"})
 WARN_GRACE = pd.Timedelta(minutes=30)           # after the cut-off a missing row is expected: refused, not warned
 _warned: set[tuple[str, date]] = set()          # (account, day) whose har_unavailable was logged
 

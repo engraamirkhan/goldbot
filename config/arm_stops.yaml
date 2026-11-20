@@ -16,11 +16,14 @@
 #   TS  = prereg-2026-10-26-time-structure.md 2.2 / 3.2: H-61's stop plus futility (F1A at 300 and 1,000, G1A at 300);
 #         "F1C stops with" F1A, "G1C stops with" G1A; 4: WFRI's 26-Friday safety check beside H-61's swing stop.
 #   H-80 = prereg-exits-adaptive-2026-10-26.md 5 R1: "the H-61 per-arm cumulative-R stop ... unchanged" (BXR*).
+#   GD1  = prereg-amendment-2026-11-20-gd1-asia-learning.md 5: H-61's swing stop plus the quant's three one-off checks.
 #
 # `units`: a stop unit (a family, or one arm) -> its arms, pooled in exit order across every account and broker.
 #   stop_r / within: the unit stops when its running net R reaches stop_r within its first `within` admissible fills.
-#   safety: a one-off check at the `at`-th fill (every fill): stop when the mean net bp is <= mean_bp_le or the
-#     cumulative net R <= cum_r_le.
+#   safety: a one-off check at the `at`-th fill (every fill), or a list of them: stop when the mean net bp is
+#     <= mean_bp_le or < mean_bp_lt, the cumulative net R <= cum_r_le, or the mean realised round trip in bp >
+#     cost_bp_gt. One mapping (WFRI): a bp mean over the first `at` fills, judged only if all are readable. A list
+#     (GD1): each bp mean over the first `at` readable figures (the check waits for that many).
 #   futility_at: the read sizes at which the futility stop is tested (empty: none registered). At each, over the
 #     unit's first n COUNTED fills (evidence exclusions left out, as in the read), the unit stops when the one-sided
 #     95% upper bound of the mean net R (SE clustered by UTC exit day, CR1) is below futility_ub.
@@ -68,11 +71,23 @@ units:
   # TS 4 (H-72): H-61's swing stop, and "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the
   # cumulative net <= -10 R" (one fill a Friday; the mean is the net return over the entry notional), first to fire
   WFRI: {arms: [WFRI], stop_r: -10.0, within: 40, safety: {at: 26, mean_bp_le: -20.0, cum_r_le: -10.0}, source: TS}
+  # ------------------------------------------------------------------ GD1 (prereg-amendment-2026-11-20-gd1-asia-learning.md)
+  # Section 5, the quant's kill rule, per arm on its own fills (one a weekday on its account), each check judged once
+  # on the arm's first `at` fills: "kill if realised round-trip cost > 1.1 bp after 40 fills; kill if mean net <= -4 bp
+  # at 120 fills; at 250 fills continue only if mean net >= +3.5 bp" (cost: arm_stops.realised_cost_bp; net: net_bp).
+  # Beside H-61's swing stop (-10 R within 40) and the learning class's GBP 800 loss cap, 300-fill read and end
+  GD1D: {arms: [GD1D], stop_r: -10.0, within: 40, source: GD1,
+         safety: [{at: 40, cost_bp_gt: 1.1}, {at: 120, mean_bp_le: -4.0}, {at: 250, mean_bp_lt: 3.5}]}
+  GD1P: {arms: [GD1P], stop_r: -10.0, within: 40, source: GD1,
+         safety: [{at: 40, cost_bp_gt: 1.1}, {at: 120, mean_bp_le: -4.0}, {at: 250, mean_bp_lt: 3.5}]}
 
 # A control that stops with its arm (TS 2.2 / 3.2): never a stop of its own, retired the day its leader is.
 follows:
   F1C: F1A
   G1C: G1A
+  # GD-1 A1's replay-only controls stop with their arm (prereg-amendment-2026-11-20-gd1-asia-learning.md section 4)
+  GD1CD: GD1D
+  GD1CP: GD1P
 
 # HV per-arm stop by style (telegram.labs ARM_STOP), unchanged. Listed so every arm of the spec is classified once
 # (tests/test_arm_stops.py); an arm in no list also falls back to it.
