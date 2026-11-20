@@ -170,6 +170,16 @@ def test_the_p75_rule_is_never_below_the_ub95_rule():
     assert b.charged_usd == pytest.approx(max(a.charged_usd, b.p75_usd), abs=1e-4)
 
 
+def test_a_version_a_newer_release_wrote_still_reads(tmp_path):
+    import yaml
+    raw = _record().model_dump(mode="json")
+    raw["future_field"] = 1
+    raw["cells"]["icm-demo"]["london"]["5m"]["future_cell_field"] = "x"
+    path = tmp_path / "v.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    assert rc.EngineCostRecord.load(path) == _record()              # ADR 0010: extra fields dropped, logged
+
+
 def test_a_version_is_immutable_and_loads_back_exactly(tmp_path):
     rec, path = _record(), tmp_path / "ecr-test.1.yaml"
     rec.save(path)

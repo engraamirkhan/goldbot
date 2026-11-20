@@ -1662,10 +1662,11 @@ def _cost_scale(ex: Exploration) -> dict[str, float]:
     except (OSError, ValueError) as exc:
         raise StopRulesUnreadable(type(exc).__name__) from exc
     mine = set(ex.arms) & set(rules.cost_stop.arms)
-    if not mine and (rules.edge_cap is None or not ex.cost_record):
+    path = getattr(ex, "cost_record", None)            # a stand-in state without the record reads none (no cap)
+    if not mine and (rules.edge_cap is None or not path):
         return {}
     from goldbot.engine.cost_record import _load
-    record = _load(ex.cost_record) if ex.cost_record else None
+    record = _load(path) if path else None
     try:
         with ex.db.connection() as conn:
             got = cost_states(conn, mine, rules=rules, record=record) if mine else {}
@@ -1681,8 +1682,11 @@ def _edge_capped(ex: Exploration, conn: Any, rules: Any, record: Any) -> set[str
     """Quant C3: this host's arms the edge cap suspends (controls and cost arms exempt), read at most hourly."""
     from goldbot.research.arm_stops import edge_cap_states
     now = time.monotonic()
-    if ex.edge_cap_read is not None and now - ex.edge_cap_read[0] < EDGE_CAP_EVERY_S:
-        return ex.edge_cap_read[1]
+    last = getattr(ex, "edge_cap_read", None)
+    if record is None:
+        return set()
+    if last is not None and now - last[0] < EDGE_CAP_EVERY_S:
+        return last[1]
     exempt = {a for a, arm in ex.arms.items() if arm.control_share is not None or arm.spec.role in ("control", "cost")}
     got = edge_cap_states(conn, set(ex.arms), record=record, rules=rules, exempt=exempt)
     ex.edge_cap_read = (now, got)

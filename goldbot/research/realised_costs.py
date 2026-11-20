@@ -73,7 +73,7 @@ import yaml
 from pydantic import Field
 from scipy import stats
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.data.calendar import DEFAULT_SESSIONS
 
 GOLD_OZ = 100.0
@@ -344,7 +344,8 @@ class EngineCostRecord(FrozenRecord):
 
     @classmethod
     def load(cls, path: str | Path) -> EngineCostRecord:
-        return cls.model_validate(yaml.safe_load(Path(path).read_text()))
+        """A version file, read tolerantly (ADR 0010): a field a newer release added is dropped and logged."""
+        return load_record(EngineCostRecord, yaml.safe_load(Path(path).read_text()), source="engine_cost_record")
 
     def save(self, path: str | Path) -> None:
         p = Path(path)
@@ -451,26 +452,31 @@ def read_rows(conn: sqlite3.Connection) -> tuple[list[dict[str, Any]], list[dict
 
 
 class TickFiles:
-    """The broker tick record read for the C1 check: the account's server-date files around an exit (UTC ns)."""
+    """The broker tick record read for the C1 check: the account's server-date days around an exit, through
+    `goldbot.data.ticks.load_day` (sha256-checked against its index; live demo ticks, never research bars, so the
+    research holdout does not apply). A day missing or failing its digest reads as no ticks (counted unverified)."""
 
-    def __init__(self, root: Path):
-        self.root, self.cache = root, {}  # type: ignore[var-annotated]
+    def __init__(self, state_dir: Path):
+        self.state_dir = state_dir
+        self.cache: dict[tuple[str, str], pd.DataFrame | None] = {}
+
+    def _day(self, account: str, day: str) -> pd.DataFrame | None:
+        from goldbot.data.ticks import load_day
+        if (account, day) not in self.cache:
+            try:
+                self.cache[(account, day)] = load_day(account, day, state_dir=self.state_dir)
+            except (FileNotFoundError, ValueError):
+                self.cache[(account, day)] = None
+        return self.cache[(account, day)]
 
     def around(self, r: Mapping[str, Any]) -> pd.DataFrame | None:
         t = pd.Timestamp(r["exit_utc"])
-        frames = []
-        for d in pd.date_range((t - pd.Timedelta(days=1)).date(), (t + pd.Timedelta(days=1)).date()):
-            key = (str(r["account_id"]), d.date())
-            if key not in self.cache:
-                f = self.root / key[0] / f"{key[1]}.parquet"
-                self.cache[key] = pd.read_parquet(f, columns=["time_ns", "bid", "ask"]) if f.exists() else None
-            if self.cache[key] is not None:
-                frames.append(self.cache[key])
+        days = pd.date_range((t - pd.Timedelta(days=1)).date(), (t + pd.Timedelta(days=1)).date())
+        frames = [f for d in days if (f := self._day(str(r["account_id"]), d.date().isoformat())) is not None]
         if not frames:
             return None
-        df = pd.concat(frames)
+        df = pd.concat(frames).rename(columns={"ts_utc": "ts"})
         lo, hi = t - pd.Timedelta(hours=2), t + pd.Timedelta(minutes=1)
-        df = df.assign(ts=pd.to_datetime(df["time_ns"], unit="ns", utc=True))
         df = df[(df["ts"] >= lo) & (df["ts"] <= hi)].sort_values("ts")
         return None if df.empty else df
 
@@ -494,7 +500,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version")
     ap.add_argument("--out", help="write the record here (refuses an existing file)")
     ap.add_argument("--json", help="also write the per-cell table as JSON (aggregates) here")
-    ap.add_argument("--ticks-dir", default=None, help="broker tick record (default <state-dir>/ticks)")
     a = ap.parse_args(argv)
     hosts = a.host or ["icm-demo=icm", "icm-probe=icm", "vantage-demo=vantage"]
     brokers = _brokers(None, hosts)
@@ -503,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
     rows, probes, void = read_rows(conn)
     pslip = probe_exit_slip(probes, brokers, void=void)
     df = trade_costs(rows, brokers, exit_prior_usd=a.exit_prior_usd, probe_slip=pslip, void=void, lo=lo, hi=hi)
-    ticks = TickFiles(Path(a.ticks_dir or Path(a.state_dir, "ticks")))
+    ticks = TickFiles(Path(a.state_dir))
     n_all = len(df)
     df, audit = screen_large_exits(df, {str(r.get("client_order_id")): r for r in rows}, ticks.around)
     rec = build_record(df, version=a.version or f"ecr-{a.to_day}.draft", window=(lo, hi),
