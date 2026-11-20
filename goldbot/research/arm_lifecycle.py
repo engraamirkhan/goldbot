@@ -68,6 +68,7 @@ from goldbot.db.connection import Database
 from goldbot.research.arm_integrity import (
     BRACKET_RETIRE_N,
     ENGINE_VOID_KILL,
+    QUARANTINED_MINUTE,
     HostRead,
     Recompute,
     coverage_refusal,
@@ -135,6 +136,7 @@ class ArmRead(FrozenRecord):
     refusals: list[dict[str, Any]] = []     # discovered arms: each refused bracket, its cause, engine's and night's
     refused_by_cause: dict[str, int] = {}
     void_by_cause: dict[str, int] = {}      # candidates left out without blame, by cause
+    n_integrity_cands: int = 0              # discovered arms: candidates the integrity read saw (void ones included)
     decision: Decision = "HOLD"
     applied: bool = False
     reason: str = ""
@@ -333,7 +335,7 @@ def read_arm(db: Database, obs: pd.DataFrame, arm: Arm, *, broker: str, control:
                           settled=lambda d, hold_s: settled_at(d, max(own, pd.Timedelta(seconds=hold_s))))
             obs, change = g.obs, g.change
             extra.update(n_bracket_void=g.n_refused, refusals=g.refusals, refused_by_cause=g.refused_by_cause,
-                         void_by_cause=g.void_by_cause)
+                         void_by_cause=g.void_by_cause, n_integrity_cands=len(g.cands))
             if change is not None:
                 extra["void_from"] = change.isoformat()
             if kill is None and change is not None:
@@ -479,7 +481,9 @@ def reads_of(db: Database, day: str) -> list[ArmRead]:
 
 
 def summary(reads: list[ArmRead]) -> dict[str, Any]:
-    """The job's result: counts by decision and the arms retired."""
+    """The job's result: counts by decision and the arms retired, and per discovered arm the share of its candidates
+    void as `quarantined_minute` (quant condition on judging the quarantine first, review of 6fec4099: a quarantine
+    void never unverifies, so it is reported here; the broker's coverage is told apart by feed_reconcile)."""
     retired = [f"{r.broker}:{r.arm_id}" for r in reads if r.decision == "RETIRE"]
     refused: dict[str, int] = {}
     void: dict[str, int] = {}
@@ -489,7 +493,10 @@ def summary(reads: list[ArmRead]) -> dict[str, Any]:
                 into[k] = into.get(k, 0) + n
     return {"arms": len(reads), "hold": len(reads) - len(retired), "retire": len(retired), "retired": retired,
             "validated": sum(r.validated for r in reads), "unverified": sum(r.unverified for r in reads),
-            "bracket_refused_by_cause": refused, "bracket_void_by_cause": void}
+            "bracket_refused_by_cause": refused, "bracket_void_by_cause": void,
+            "quarantine_void_share": {f"{r.broker}:{r.arm_id}": round(r.void_by_cause.get(QUARANTINED_MINUTE, 0)
+                                                                       / r.n_integrity_cands, 4)
+                                      for r in reads if r.discovered and r.n_integrity_cands}}
 
 
 __all__ = ["BRACKET_RETIRE_N", "E_PER_STREAM", "E_RETIRE", "FIXED_WINDOW_PREREGS", "MAX_UNMATCHED", "MIN_DAYS",

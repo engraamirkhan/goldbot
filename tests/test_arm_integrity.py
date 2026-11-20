@@ -787,27 +787,28 @@ def test_a_late_minute_never_replaced_voids_the_window_on_the_shared_live_key(en
     assert late == [(ns, ns, True)]
     assert I.LATE_GIVE_UP == broker_bars.GIVE_UP
     v = _sorted(live, _m1(eng.bars_1m))
-    assert I.AccountMinutes(v, late=late).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    shared: list[Any] = [([], [])]                          # icm-demo writes the same key (no events of its own)
+    assert I.AccountMinutes(v, sharers=shared, late=late).held(arm, CLOSE) == I.SAMPLED_MINUTE
     assert I.SAMPLED_MINUTE not in I.REFUSAL_CAUSES and I.SAMPLED_MINUTE not in I.UNVERIFYING
-    held = I.AccountMinutes(v, late=late, replaced=[(ns, 1)]).held(arm, CLOSE)
+    held = I.AccountMinutes(v, sharers=shared, late=late, replaced=[(ns, 1)]).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame) and AR.decision_bracket(held, arm, CLOSE) == engine
     # a replacement event for a minute more than GIVE_UP before the late one accounts for nothing
     early = ns - int((broker_bars.GIVE_UP + pd.Timedelta(minutes=1)).value)
-    assert I.AccountMinutes(v, late=late, replaced=[(early, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    assert I.AccountMinutes(v, sharers=shared, late=late, replaced=[(early, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
     # a late span over three minutes: each must be replaced
     three = pd.DatetimeIndex(pd.to_datetime(live.loc[[i, i + 1, i + 2], "ts_utc"], utc=True))
     span = I.late_spans([(int(three[0].value), _late_detail(three))])
-    assert I.AccountMinutes(v, late=span, replaced=[(ns, 2)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
-    held = I.AccountMinutes(v, late=span, replaced=[(ns, 3)]).held(arm, CLOSE)
+    assert I.AccountMinutes(v, sharers=shared, late=span, replaced=[(ns, 2)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    held = I.AccountMinutes(v, sharers=shared, late=span, replaced=[(ns, 3)]).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame)
     # quant (2): a detail that does not parse covers its minute to GIVE_UP after it, and no replacement accounts for
     # it: any window holding a minute of it is void, never ok
     garbled = I.late_spans([(ns, "garbled")])
     assert garbled == [(ns, ns + int(broker_bars.GIVE_UP.value), False)]
-    assert I.AccountMinutes(v, late=garbled, replaced=[(ns, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+    assert I.AccountMinutes(v, sharers=shared, late=garbled, replaced=[(ns, 30)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
     # a late minute outside the window changes nothing
     old = int(pd.Timestamp(live.loc[live.index[0], "ts_utc"]).value) - 10**12
-    held = I.AccountMinutes(v, late=[(old, old)]).held(arm, CLOSE)
+    held = I.AccountMinutes(v, sharers=shared, late=[(old, old)]).held(arm, CLOSE)
     assert isinstance(held, pd.DataFrame)
 
 
@@ -821,7 +822,8 @@ def test_the_night_reads_the_accounts_late_events_from_dq_events(env, tmp_path):
     ev = pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
                        "detail": [_late_detail(stamp)]})
     store.append("dq_events", ev, source="icm-probe", symbol="XAUUSD", dedupe=False)
-    got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1))
+    got = I.stored_recompute(store, {"icm-probe": ("icm", "XAUUSD")}, now=CLOSE + pd.Timedelta(days=1),
+                               sharers={"icm-probe": ("icm-demo",)})            # icm-demo shares the key
     assert got(arm, {"account_id": "icm-probe", "decision_utc": CLOSE}) == I.SAMPLED_MINUTE
 
 
@@ -848,7 +850,12 @@ def test_a_minute_another_engine_on_the_shared_key_kept_sampled_voids_this_accou
     events("icm-demo", I.BAR_LATE, _late_detail(stamp))                     # B: late, never replaced
     events("icm-probe", broker_bars.REPLACED, "1 minute(s) from sampled ticks replaced by the broker's bars")  # A's own
     assert I.stored_recompute(store, hosts, now=now)(arm, row) == I.SAMPLED_MINUTE
-    assert I.stored_recompute(store, {"icm-probe": hosts["icm-probe"]}, now=now)(arm, row) != I.SAMPLED_MINUTE
+    # quant review of 6fec4099 (A): icm-demo's events on the key's symbol make it a sharer even when no host or config
+    # names it; the config putting it on another key is what leaves it out
+    assert I.stored_recompute(store, {"icm-probe": hosts["icm-probe"]}, now=now)(arm, row) == I.SAMPLED_MINUTE
+    elsewhere = {**hosts, "icm-demo": ("other", "XAUUSD")}
+    assert I.stored_recompute(store, {"icm-probe": hosts["icm-probe"]}, now=now, keys=elsewhere)(arm, row) != \
+        I.SAMPLED_MINUTE
     events("icm-demo", broker_bars.REPLACED, "1 minute(s) from sampled ticks replaced by the broker's bars")   # B replaced it
     got = I.stored_recompute(store, hosts, now=now)(arm, row)
     assert isinstance(got, S.Bracket) and got == engine
@@ -858,3 +865,118 @@ def test_a_minute_another_engine_on_the_shared_key_kept_sampled_voids_this_accou
     assert I.AccountMinutes(v, sharers=[([(ns, ns, True)], [])]).held(arm, CLOSE) == I.SAMPLED_MINUTE
     assert I.AccountMinutes(v, replaced=[(ns, 1)], sharers=[([(ns, ns, True)], [])]).held(arm, CLOSE) == \
         I.SAMPLED_MINUTE                                                     # A's replacement never covers B's
+
+
+# ---------------------------------------------------------------- SRE brain simulation 2026-11-20: false voids
+def test_a_quarantined_span_the_brokers_m1_also_lacks_is_a_quarantined_void_never_unverified_or_told(env, tmp_path):
+    """SRE brain simulation 2026-11-20 (icm 4h): the 10-26 timezone-mislabel quarantine leaves its minutes out of
+    every feed, the broker's M1 evidence too, so a span of more than BROKER_SILENCE_MAX read as unobserved and the
+    candidate as `no_broker_coverage`: the arm unverified and the owner told. The quarantine is judged first: a plain
+    `quarantined_minute` void (it ages out of the window), never unverifying."""
+    eng, arm, _ = _held(env, tmp_path)
+    live = _versions(eng.bars_1m)
+    gone = live.index[-400:-200]                                          # 200 minutes: > BROKER_SILENCE_MAX open
+    stamps = epoch_ns(pd.DatetimeIndex(pd.to_datetime(live.loc[gone, "ts_utc"], utc=True))).tolist()
+    now = CLOSE + pd.Timedelta(days=1)
+    v = _sorted(live.drop(index=gone), _m1(eng.bars_1m.drop(index=gone)))
+    assert I.AccountMinutes(v, now=now).held(arm, CLOSE) == I.NO_BROKER_COVERAGE   # the span alone: unobserved
+    assert I.AccountMinutes(v, quarantined=stamps, now=now).held(arm, CLOSE) == I.QUARANTINED_MINUTE
+    assert I.QUARANTINED_MINUTE not in I.UNVERIFYING
+    r = _dread(Database.open(str(tmp_path), "aux"), _clean(), recompute=lambda a, row: I.QUARANTINED_MINUTE)
+    assert not r.unverified and r.void_by_cause.get(I.QUARANTINED_MINUTE, 0) > 0
+
+
+
+def _late_store(tmp_path: Path, eng: Any, broker: str, symbol: str, account: str) -> tuple[Store, pd.DatetimeIndex]:
+    """The engine's minutes on (broker, symbol), the account's broker M1, and the minute 60 before the close."""
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True))
+    store.append("bars_1m_live", minutes, source=broker, symbol=symbol)
+    store.append(crossfeed.BROKER_TABLE, minutes, source=account, symbol=symbol)
+    return store, pd.DatetimeIndex([pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-60])]).tz_convert("UTC")
+
+
+def _late_event(store: Store, stamp: pd.DatetimeIndex, account: str, symbol: str) -> None:
+    ev = pd.DataFrame({"ts_utc": stamp, "check": [I.BAR_LATE], "severity": ["warning"],
+                       "detail": [_late_detail(stamp)]})
+    store.append("dq_events", ev, source=account, symbol=symbol, dedupe=False)
+
+
+def test_an_engines_own_late_minute_voids_even_alone_on_its_key_as_no_store_record_proves_a_single_writer(
+        env, tmp_path):
+    """Quant review of 6fec4099 (B): two processes on one account (a restart overlap, a duplicate service) are two
+    writers of its live key, and nothing stored names the writing process (dq_events carry ts, check, severity and
+    detail only; the loop heartbeat's pid is one overwritten VPS file): a single writer cannot be shown, so this
+    engine's own late, never-replaced minute voids whether or not another account shares the key (fail closed)."""
+    eng, arm, _ = _held(env, tmp_path)
+    store, stamp = _late_store(tmp_path, eng, "vantage", "XAUUSD+", "vantage-demo")
+    _late_event(store, stamp, "vantage-demo", "XAUUSD+")
+    keys = {"vantage-demo": ("vantage", "XAUUSD+"), "icm-demo": ("icm", "XAUUSD"), "icm-probe": ("icm", "XAUUSD")}
+    row, now = {"account_id": "vantage-demo", "decision_utc": CLOSE}, CLOSE + pd.Timedelta(days=1)
+    got = I.stored_recompute(store, {"vantage-demo": keys["vantage-demo"]}, now=now, sharers=I.key_sharers(keys),
+                             keys=keys)(arm, row)
+    assert got == I.SAMPLED_MINUTE
+    ns = int(stamp[0].value)
+    v = _sorted(_versions(eng.bars_1m), _m1(eng.bars_1m))
+    assert I.AccountMinutes(v, late=[(ns, ns, True)]).held(arm, CLOSE) == I.SAMPLED_MINUTE
+
+
+def test_an_account_no_longer_configured_whose_late_minutes_are_on_the_key_still_voids(env, tmp_path):
+    """Quant review of 6fec4099 (A): the config of tonight is not the writers of the last READ_DAYS. An account
+    removed after writing on the key leaves its `broker_bar_late` events in dq_events: every account with events on
+    the key's symbol is read as a sharer unless the config puts it on another key (survivorship in kills)."""
+    eng, arm, engine = _held(env, tmp_path)
+    store, stamp = _late_store(tmp_path, eng, "icm", "XAUUSD", "icm-probe")
+    _late_event(store, stamp, "icm-gone", "XAUUSD")
+    host = {"icm-probe": ("icm", "XAUUSD")}
+    row, now = {"account_id": "icm-probe", "decision_utc": CLOSE}, CLOSE + pd.Timedelta(days=1)
+    assert I.stored_recompute(store, host, now=now)(arm, row) == I.SAMPLED_MINUTE
+    keys = {**host, "icm-gone": ("other", "XAUUSD")}                          # configured on another broker's key
+    got = I.stored_recompute(store, host, now=now, keys=keys)(arm, row)
+    assert isinstance(got, S.Bracket) and got == engine
+    assert I.evidence_sharers(store, "XAUUSD") == ["icm-gone"]
+
+
+def test_a_sampled_minute_lost_and_refilled_after_a_restart_past_the_decision_is_never_read_as_held(env, tmp_path):
+    """Quant review of 6fec4099 (C): the engine samples a minute (its broker bar never came), its store write is lost,
+    it restarts after the decision and a history fill joins the broker's copy (flagged filled, written then). The
+    night's read as of the decision (account_bars `available_utc`: a copy written past LIVE_WRITE_GRACE is known only
+    from its write) never takes the refilled copy for the one the engine held: it voids, with or without the late
+    event. A sampled copy kept in the store is read as it was held (and voids on its late event)."""
+    eng, arm, engine = _held(env, tmp_path)
+    store = Store(tmp_path / "data")
+    minutes = eng.bars_1m.assign(available_utc=pd.to_datetime(eng.bars_1m["visible_at"], utc=True), filled=False)
+    i = minutes.index[-60]
+    stamp = pd.DatetimeIndex([pd.Timestamp(minutes.loc[i, "ts_utc"])]).tz_convert("UTC")
+    refill = minutes.copy()
+    refill.loc[i, [c for c in refill.columns if c.startswith(("bid_", "ask_"))]] += 5.0
+    refill.loc[i, "available_utc"] = CLOSE + pd.Timedelta(hours=2)           # the restart's fill, after the decision
+    refill.loc[i, "filled"] = True
+    store.append("bars_1m_live", refill, source="icm", symbol="XAUUSD", sticky=(history.FILLED_COL,))
+    store.append(crossfeed.BROKER_TABLE, minutes.drop(columns=["filled"]), source="icm-probe", symbol="XAUUSD")
+    host, row = {"icm-probe": ("icm", "XAUUSD")}, {"account_id": "icm-probe", "decision_utc": CLOSE}
+    now = CLOSE + pd.Timedelta(days=1)
+    got = I.stored_recompute(store, host, now=now)(arm, row)
+    assert isinstance(got, str) and got in (I.GAP_AFTER_CUTOVER, I.LATE_MINUTE)
+    _late_event(store, stamp, "icm-probe", "XAUUSD")
+    got = I.stored_recompute(store, host, now=now)(arm, row)
+    assert isinstance(got, str) and got not in I.REFUSAL_CAUSES
+    kept = Store(tmp_path / "kept")                                          # the sampled copy kept: as held
+    kept.append("bars_1m_live", minutes, source="icm", symbol="XAUUSD")
+    kept.append(crossfeed.BROKER_TABLE, minutes.drop(columns=["filled"]), source="icm-probe", symbol="XAUUSD")
+    got = I.stored_recompute(kept, host, now=now)(arm, row)
+    assert isinstance(got, S.Bracket) and got == engine
+
+
+def test_the_nightly_summary_reports_each_discovered_arms_quarantine_void_share(db):
+    """Quant condition on the quarantine-first order: a quarantine void is silent (never unverifying), so the job
+    reports per arm the share of its candidates dropped as `quarantined_minute`."""
+    obs = _clean()
+    quarantined = set(obs.loc[_arm_rows(obs, taken=False)[:30], "decision_utc"])
+    r = _dread(db, obs, recompute=lambda arm, row: I.QUARANTINED_MINUTE
+               if pd.Timestamp(row["decision_utc"]) in quarantined else GOOD)
+    n = int((obs["arm_id"] == "D1").sum())
+    assert r.n_integrity_cands == n and r.void_by_cause == {I.QUARANTINED_MINUTE: 30}
+    assert L.summary([r])["quarantine_void_share"] == {f"icm:{r.arm_id}": round(30 / n, 4)}
+    plain = r.model_copy(update={"discovered": False, "n_integrity_cands": 0, "void_by_cause": {}})
+    assert L.summary([plain])["quarantine_void_share"] == {}
