@@ -2656,8 +2656,10 @@ Since 2026-11-20 (audit debt 1, the 11-04 icm-demo outage mode) a bridge whose p
 old process, or Wine's server still holding that process's socket) retries the bind with a doubling wait for up to 30 s.
 The journal shows `bridge port <port> in use (try n): retrying`. It then exits 77 with
 `bridge port <port> still in use after 30 s ... RUNBOOK 'Bridge port held'`. systemd starts it again 10 s later, so a
-port that frees itself recovers on its own. If it does not, `bridge:<account>` FAILs on the brain after 5 min and is
-told at once. On the MT5 box:
+port that frees itself recovers on its own. The bridge watchdog restarts the terminal unit after
+`GOLDBOT_BRIDGE_ATTACH_RESTARTS` (3) unsettled bridge restarts while the terminal has been up 10 min. That
+restarts Wine's server and frees a port it held, so step 3 below usually happens without you. If it does not,
+`bridge:<account>` FAILs on the brain after 5 min and is told at once. On the MT5 box:
 1. `sudo ss -ltnp 'sport = :8765'` (the port from `goldbot-bridge-watchdog@<account>`'s unit) shows who holds it.
 2. A stray `python.exe` of the bridge: `sudo systemctl stop goldbot-bridge@<account>`, check it is gone (`pgrep -af
    'goldbot.ops.run bridge'`), then `sudo systemctl start goldbot-bridge@<account>`.

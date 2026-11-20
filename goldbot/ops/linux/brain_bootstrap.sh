@@ -26,13 +26,16 @@ trap '' PIPE HUP
 exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
 echo "== goldbot brain bootstrap $(date -u +%FT%TZ) ref=${REF:-main}"
 
-# Fallback host (docs/deploy/first-deploy.md "If Oracle has no A1 capacity"): on a box with under 4 GB of RAM (a 1 GB
-# x86 micro) a 4 GB swap file keeps the dashboard build and the Saturday retrain from being killed. The A1 shape
-# (12 GB) gets none.
-if [ "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)" -lt 4000000 ] && ! swapon --show | grep -q /swapfile; then
+# A 4 GB swap file on every shape. On the fallback 1 GB x86 micro (docs/deploy/first-deploy.md "If Oracle has no A1
+# capacity") it keeps the dashboard build and the Saturday retrain from being killed. On the A1 (12 GB) it is the
+# OOM buffer (SRE audit 2026-11-20: no swap while the nightly jobs peaked at 5.4 GB next to the engines; added on the
+# live brain the same day). Swappiness 10: swap only under pressure, never paging out idle engine memory.
+if ! swapon --show | grep -q /swapfile; then
   fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
   grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
 fi
+echo "vm.swappiness = 10" > /etc/sysctl.d/99-goldbot-swap.conf
+sysctl -q -p /etc/sysctl.d/99-goldbot-swap.conf || true
 
 # A watchdog SIGABRT (goldbot-engine@ WatchdogSec) must not leave process memory, which holds tokens and the
 # file-store secrets, in a core file or a crash report. A pipe core_pattern (apport, systemd-coredump) ignores

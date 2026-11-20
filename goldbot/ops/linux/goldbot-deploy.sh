@@ -919,6 +919,7 @@ watch_run() {  # --watch (holds the deploy lock): until WATCH_S after the switch
   line="$bad restarted or stopped within ${WATCH_S} s of the switch (after the deploy was reported)"
   echo "$line; restoring $CUR"
   RESTORE=1
+  deploy_window $((WATCH_S + BRIDGE_ANSWER_S + MUTE_AFTER_S))   # brain: the rollback's own restarts, as a deploy's
   local rc=0
   switch_to "$TARGET" "$CUR" && healthy full || rc=1
   ensure_started

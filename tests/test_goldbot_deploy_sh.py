@@ -965,9 +965,12 @@ def test_the_report_starts_a_watcher_that_rolls_back_a_later_restart_and_otherwi
     target, previous, _ = first.split()
     (tmp_path / "var" / "watch").write_text(f"{target} {previous} {_clock(box) + 60}\n{rest}")      # a fresh deadline
     (tmp_path / "bump").write_text("")
+    (box.root / "state" / "deploy_window.json").unlink()
     p = box.run("--watch")
     assert p.returncode == 1, p.stdout + p.stderr
     assert box.head() == box.c1 and _last(box) in ("rolled_back", "failed")
+    w = json.loads((box.root / "state" / "deploy_window.json").read_text())   # ADR 0094: its restarts' alerts held
+    assert w["until"] >= _clock(box) + 20 * 60 - 5
 
 
 def test_a_watcher_for_a_version_that_no_longer_runs_does_nothing(tmp_path):

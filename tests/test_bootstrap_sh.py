@@ -69,9 +69,13 @@ def test_the_mt5_box_gets_4_gb_of_swap():
     assert "fallocate -l 4G /swapfile" in _text("mt5")
 
 
-def test_a_small_fallback_brain_gets_swap_and_the_a1_shape_none():
+def test_every_brain_gets_4_gb_of_swap_used_only_under_pressure():
+    """SRE audit 2026-11-20 finding 5: the A1 brain (12 GB) had no swap while the nightly jobs peaked at 5.4 GB next
+    to the engines. Swap on every shape, swappiness 10 (an OOM buffer, not paging the engines out)."""
     s = _text("brain")
-    assert "-lt 4000000 ] && ! swapon --show | grep -q /swapfile" in s and "fallocate -l 4G /swapfile" in s
+    assert "-lt 4000000" not in s
+    assert "if ! swapon --show | grep -q /swapfile; then" in s and "fallocate -l 4G /swapfile" in s
+    assert "vm.swappiness = 10" in s and "/etc/sysctl.d/99-goldbot-swap.conf" in s
     assert s.index("fallocate -l 4G") < s.index("npm ci")
 
 
