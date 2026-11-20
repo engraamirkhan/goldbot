@@ -182,6 +182,12 @@ costs:
   # review 2026-11-14: a relative 25% let a Friday triple pass on a 9-night hold); under 1, so one night more or less
   # always fails. The interest swap is priced at the position's entry price, not the refresh price.
   swap_reconcile_tolerance: 0.5
+  # ADR 0092 (finance audit 2026-11-20 P5): the engine charges this versioned cost of record first, per account x
+  # session x timeframe (realised round trips of 4,302 gold exploration fills 2026-10-26..11-19, charged at the 95%
+  # day-clustered upper bound of the mean; a sparse cell never below its pooled cell); the nightly legacy table
+  # (state/costs_<account>.json, $0.15/side slippage prior) charges every cell it lacks (non-gold, live accounts).
+  # A version is immutable; a new measurement is a new file and a reviewed change of this line. Rollback: null
+  engine_record: config/engine_costs/ecr-2026-11-20.1.yaml
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.

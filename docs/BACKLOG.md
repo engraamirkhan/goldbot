@@ -143,6 +143,8 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 262 | Closed exploration rows without a fill price | Data integrity · exploration ledger | S | proposed 2026-11-14 (evaluator, weekly review 2026-11-14) · accountable: data-engineer · reviews: quant-reviewer, trading-safety-reviewer |
 | 263 | One session_day() for read-due and futility stop | Research integrity · read rules | S | proposed 2026-11-14 (quant re-review of fix/weekly-read-due) · accountable: implementer, evaluator · reviews: quant-reviewer |
 | 264 | Reject commits whose author email is not a noreply address | Security · public repo hygiene | S | proposed 2026-11-14 (security review of fix/weekly-read-due) · accountable: implementer, release-manager · reviews: security-reviewer |
+| 265 | H-81 cost stop: read one cost version per stratum after ADR 0092 | Research integrity · costs | S | proposed 2026-11-20 (data-engineer, ADR 0092) · accountable: quant-reviewer, implementer |
+| 266 | Engine cost of record: next version from quote-measured exits (P6 coverage >= 95%) | Data · costs | S | proposed 2026-11-20 (data-engineer, ADR 0092) · accountable: data-engineer · reviews: quant-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1763,6 +1765,24 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   2. the check prints only the commit sha and the rule, never the offending email;
   3. a test covers one passing and one failing commit;
   4. RUNBOOK and the bootstrap scripts set `user.email` to the noreply address on every machine that commits.
+- **265. H-81 cost stop: read one cost version per stratum after ADR 0092.** Value: `arm_stops.cost_state` takes the
+  95% UB of the recorded `cost` / `stop_loss` over a stratum's fills. After ADR 0092 a stratum's window mixes legacy
+  rows ($0.30 slippage prior) with rows charged on `ecr-2026-11-20.1`. Its state then follows the mix, not the arm.
+  Acceptance:
+  1. a quant ruling chooses one of two rules: the stop reads only rows of the newest `cost_version`, with its own
+     30-fill minimum; or every row is repriced on one version;
+  2. the rule is built with a test that seeds rows of two versions;
+  3. the daily review names the version each cost-stop state rests on.
+- **266. Engine cost of record: next version from quote-measured exits.** Value: `ecr-2026-11-20.1` imputes every
+  Vantage exit and every ICM time exit from the probes. Since ADR 0092 each exploration exit records its quote, so
+  the next version can measure exit slip on every exit. Acceptance:
+  1. a weekly read reports the share of closed gold exploration exits per account that carry `exit_bid` and
+     `exit_ask`, against the 95% P6 target;
+  2. once the target holds for 14 session days, `python -m goldbot.research.realised_costs` writes a new version
+     file (never an edit of the old one);
+  3. the report sets that version's cells beside `ecr-2026-11-20.1`, cell by cell. `costs.engine_record` moves only
+     after a quant review;
+  4. a drift alert fires when a full cell's 14-day mean leaves the charged version's 95% interval.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

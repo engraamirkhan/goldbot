@@ -118,6 +118,7 @@ from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import arm_snapshot, auto_entry, cost_probe, entry_refusals, long_bars, weekend_lane
+from goldbot.engine.cost_record import version as cost_version_of
 from goldbot.engine.long_bars import LONG_TFS, LongHistory, is_bar_close
 from goldbot.engine.store import Resolution
 from goldbot.instruments import GOLD, arm_instrument, contract_size
@@ -601,6 +602,15 @@ class ExplorationRecord(FrozenRecord):
     mfe_usd: float | None = None
     mae_usd: float | None = None
     excursion_approx: bool | None = None
+    # finance audit 2026-11-20 (P6, engine/exit_quote.py): the quote the exit was sent on, or the first one through the
+    # broker's stop or target, so exit slippage is measured (research.realised_costs); None on older rows and on a gap
+    # the engine never quoted. JSON body only
+    exit_bid: float | None = None
+    exit_ask: float | None = None
+    exit_quote_utc: UtcTimestamp | None = None
+    # P5 (engine/cost_record.py `version`): the basis `cost` was charged on: an engine cost of record version,
+    # `table:<day>` (the nightly legacy table) or `fallback`; None on rows before it. A read prices a row on its own
+    cost_version: str | None = None
 
 
 class TwinRecord(FrozenRecord):
@@ -2238,7 +2248,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         refuse("not_auto")
         return "refused"
     loss = cost_probe.stop_loss(eng, side, price, stop_d, float(lot))
-    cost = cost_probe.stop_loss(eng, side, price, eng._cost_atr(stop_d, now) * stop_d, float(lot))
+    cost = cost_probe.stop_loss(eng, side, price, eng._cost_atr(stop_d, now, tf=arm.tf) * stop_d, float(lot))
+    cost_version = cost_version_of(eng, now, arm.tf)
     if loss is None or cost is None:
         refuse("loss_unknown")
         return "refused"
@@ -2322,7 +2333,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             requested_price=price, spread_usd=round(tick.ask - tick.bid, 6), latency_ms=round(latency_ms, 3),
             retcode=res.retcode, position_id=res.position_id if filled else None,
             fill_price=(res.price if res.price is not None else price) if filled else None,
-            stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"),
+            stop_loss=round(at_stop, 2), cost=round(cost, 2), cost_version=cost_version,
+            fx_acct_per_usd=terms.get("acct_per_usd"),
             decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id,
             evidence_class=EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
             blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
@@ -2392,7 +2404,7 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
     from goldbot.risk import Intent
     try:
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
-                      atr_usd=s.stop_usd, cost_atr=eng._cost_atr(s.stop_usd, now), multiplier=1.0, price=price,
+                      atr_usd=s.stop_usd, cost_atr=eng._cost_atr(s.stop_usd, now, tf=arm.tf), multiplier=1.0, price=price,
                       timeframe=arm.tf, family=arm.family,
                       swap_usd_per_oz=eng._swap_usd_per_oz(side, now, long_bars.hold_end(arm.tf, now, s.hold_bars)),
                       commission_usd_per_oz=eng._commission_usd_per_oz(price), learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
@@ -2735,7 +2747,8 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
         rec = rec.model_copy(update={
             "position_id": pid, "exit_utc": known.get("exit_utc", at), "exit_price": known.get("exit_price", px),
             "exit_reason": why, "swap": known.get("swap"), "commission": known.get("commission"),
-            "pnl": known.get("pnl"), "censored": censored})
+            "pnl": known.get("pnl"), "censored": censored,
+            "exit_bid": tr.exit_bid, "exit_ask": tr.exit_ask, "exit_quote_utc": tr.exit_quote_utc})
         rec = rec.model_copy(update=_excursion(eng, pid, tr, rec, start, exit_known=info is not None or px is not None))
         LEDGER.upsert(conn, rec)
     level = {"stop": tr.sl, "target": tr.tp}.get(known["reason"]) if known.get("reason") else None
