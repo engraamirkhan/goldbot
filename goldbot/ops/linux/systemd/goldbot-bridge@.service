@@ -1,5 +1,9 @@
 [Unit]
-# never give up restarting (a bridge outage causes fast exits on purpose)
+# never give up restarting (a bridge outage causes fast exits on purpose). A start limit would leave the account
+# without exits until someone acts; a restart loop is seen instead by the brain's bridge:<account> (FAIL after
+# 5 min, told at once) and the watchdog. A port still held by the old process or by Wine's server is waited for
+# inside the bridge (execution/bridge.py bind_server: backoff up to 30 s, then exit 77; audit 2026-11-20): systemd
+# already empties this unit's cgroup before it starts it again, so an ExecStartPre could only watch the same port.
 StartLimitIntervalSec=0
 Description=goldbot MT5 bridge for account %i (terminal under Wine)
 # The terminal is started by its own unit, never by the bridge: starting the bridge starts the terminal first, and an

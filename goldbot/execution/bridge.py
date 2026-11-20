@@ -205,6 +205,16 @@ LOCK_WAIT_S = 2.0
 TERMINAL_LOST_READS = 2         # consecutive not_running reads after which the bridge exits to be re-attached
 TERMINAL_LOST_MIN_SPAN_S = 30.0  # ... and only when those reads span at least this long (review L1)
 TERMINAL_LOST_EXIT = 75         # EX_TEMPFAIL: systemd's Restart=always starts it again
+# The listen bind waits for its port (audit 2026-11-20, debt 1; the 11-04 icm-demo outage mode): a restart whose old
+# process, or Wine's server still holding that process's socket, has not let go yet retries the bind with a doubling
+# backoff (BIND_BACKOFF_FIRST_S .. BIND_BACKOFF_MAX_S) for at most BIND_WAIT_S, then exits BIND_FAILED_EXIT with an
+# ERROR naming the port. Restart=always tries again after RestartSec; the brain's bridge:<account> FAILs (5 min) and
+# alerts. Any other bind error (permission, bad address) is raised at once: waiting cannot fix it.
+BIND_WAIT_S = 30.0
+BIND_BACKOFF_FIRST_S = 0.5
+BIND_BACKOFF_MAX_S = 5.0
+BIND_FAILED_EXIT = 77
+_ADDR_IN_USE = frozenset({98, 48, 10048})   # EADDRINUSE on Linux, macOS; WSAEADDRINUSE under Wine / Windows
 TERMINAL_FOR_CAP_S = 99_999     # terminal_for_s never has six digits (security condition 6: no 6-digit run on /health)
 # Incident 2026-11-02 (docs/incidents/2026-11-02-multi-instrument.md): 20 books' calls serialised on one terminal of a
 # CPU-starved box, and the bridge said nothing; the contention showed only as the engine's ReadTimeouts. A call that
@@ -630,6 +640,30 @@ class _BridgeServer(ThreadingHTTPServer):
     request_queue_size = MAX_QUEUED
 
 
+def bind_server(make: Callable[[], ThreadingHTTPServer], port: int, *, sleep: Callable[[float], None] = time.sleep,
+                clock: Callable[[], float] = time.monotonic) -> ThreadingHTTPServer:
+    """`make()` (which binds), retried while the port is in use: doubling waits capped at BIND_BACKOFF_MAX_S, for at
+    most BIND_WAIT_S in all; then SystemExit(BIND_FAILED_EXIT) after an ERROR naming the port. Any other OSError is
+    raised at once."""
+    start, wait, tries = clock(), BIND_BACKOFF_FIRST_S, 0
+    while True:
+        tries += 1
+        try:
+            return make()
+        except OSError as exc:
+            in_use = exc.errno in _ADDR_IN_USE or getattr(exc, "winerror", None) in _ADDR_IN_USE
+            if not in_use:
+                raise
+            spent = clock() - start
+            if spent >= BIND_WAIT_S:
+                log.error("bridge port %d still in use after %.0f s and %d tries (the old bridge, or Wine holding its "
+                          "socket): exiting %d; RUNBOOK 'Bridge port held'", port, spent, tries, BIND_FAILED_EXIT)
+                raise SystemExit(BIND_FAILED_EXIT) from exc
+            log.warning("bridge port %d in use (try %d): retrying in %.1f s", port, tries, wait)
+            sleep(wait)
+            wait = min(wait * 2, BIND_BACKOFF_MAX_S)
+
+
 def serve(broker: Any, host: str, port: int, token: str, commit: str | None = None,
           verify_first: bool = False, lock: threading.Lock | None = None,
           login_status: Callable[[], str | None] | None = None,
@@ -651,9 +685,10 @@ def serve(broker: Any, host: str, port: int, token: str, commit: str | None = No
         stop(TERMINAL_LOST_EXIT)
     if lane is not None:
         lane.on_spawned = lambda: stop(lane.spawned_exit)
-    httpd = holder["httpd"] = make_server(broker, host, port, token, commit=commit, verify_first=verify_first,
-                                          lock=lock, login_status=login_status, on_terminal_lost=lost, lane=lane,
-                                          observe_only=observe_only)
+    httpd = holder["httpd"] = bind_server(
+        lambda: make_server(broker, host, port, token, commit=commit, verify_first=verify_first, lock=lock,
+                            login_status=login_status, on_terminal_lost=lost, lane=lane, observe_only=observe_only),
+        port)
     if lane is not None:
         threading.Thread(target=lane.start, name="bridge-order-lane-start", daemon=True).start()
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
