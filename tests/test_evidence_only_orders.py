@@ -1,8 +1,9 @@
 """Owner priority 2026-11-22: only arms with evidence place orders.
 
-Weekly 15-20 Nov lost £412.63, 85 % of it from random controls that sent live orders, and no arm beat its random twin.
-From the red-box week's end (2026-11-22 22:00 UTC) the frozen spec lets exactly the GD-1 learning arms (GD1D/GD1P, a
-recorded history pass, prereg-amendment-2026-11-20-gd1-asia-learning.md) reach the broker. Every other arm is retired,
+Most of the 15-20 Nov demo loss (85 %) came from random controls that sent broker orders; no arm beat its random twin.
+From the red-box week's end (2026-11-22 22:00 UTC) the frozen spec lets exactly the GD-1 learning arms (GD1D/GD1P: a
+pre-registered history-screen pass, A1 2003-09, DQ-flagged, decayed since 2010, no confirm; learning class only,
+prereg-amendment-2026-11-20-gd1-asia-learning.md) reach the broker. Every other arm is retired,
 replay-only, or refused at load (an unqualified strategy). The pass check is the same rule read on the brain after the
 deploy: zero orders from any other arm.
 """
@@ -70,3 +71,11 @@ def test_no_random_control_on_the_spec_sends_to_the_broker() -> None:
     live_controls = [a.id for a in spec if a.role == "control" and a.status == "run" and not a.retired
                      and a.control_mode == "broker"]
     assert live_controls == []
+
+
+def test_no_enabled_account_sends_cost_probes() -> None:
+    """Trading-safety F1 (2026-11-22): a scheduled or mirror cost probe is a random-time order with no edge."""
+    from goldbot.ops import accounts as acc_mod
+    accs = acc_mod.load_accounts(ROOT / "config" / "accounts.yaml", logins=False)
+    on = [n for n, a in accs.items() if a.enabled and a.cost_probe is not None and a.cost_probe.enabled]
+    assert on == []

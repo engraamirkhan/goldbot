@@ -370,6 +370,8 @@ def _explorer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, lane: bool) ->
     from goldbot.engine.exploration import Arm, ExplorationConfig, Pot
     monkeypatch.setattr(cost_probe, "stop_loss", lambda *a, **k: 1.0)
     spec = {a.id: a for a in arms.load_arms(SPEC)}
+    # WKI0 is replay-only in the shipped spec since 2026-11-22; the lane's send path is exercised on a broker copy
+    spec["WKI0"] = spec["WKI0"].model_copy(update={"control_mode": "broker"})
     cfg = ExplorationConfig(enabled=True, budget_share=0.8, max_open_total=6,
                             pots={"intraday": Pot(gbp=8, max_open=3)},
                             arms=(Arm(spec=spec["WKI0"], style="intraday", control_share=1.0),))

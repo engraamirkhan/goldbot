@@ -245,7 +245,6 @@ def test_the_family_is_three_learning_arms_each_with_its_replay_only_control_one
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-15 22:00", tz="UTC"))
         loaded = {a.id: a for a in A.load_arms(path, registry=reg)}
-        # the week ran unrefused; since the 2026-11-20 review RB15 and RBC15 are retired, so they load refused
         # the week ran unrefused; since then every red-box arm is retired (15m by the review, 1h/4h at the week's end)
         assert all(loaded[k].entry_refused for k in RETIRED_15M | RETIRED_1H4H)
         mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-23 00:00", tz="UTC"))

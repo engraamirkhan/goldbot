@@ -123,6 +123,9 @@ cost check is its own. The counts in checks 2-3 are per arm, so they stand for w
   `learning.prereg` (this file; the k_id is derived from it) stay, so the same k_ids are reused and **a renewal adds
   no K**. The arm-stop checks count every fill of the arm id ever (not from
   `since`), so they carry across runs; the learning class's loss cap and 300-fill read restart at each `since`.
+- **Amended 2026-11-22:** `since` 2026-11-22 (an engine loaded before `since` refuses the arm for its whole run;
+  stopgap, findings ENG-LEARNING-SINCE). The first entry is still Monday 2026-11-23 00:00 UTC (weekdays only); no
+  read, kill rule, K row or threshold changes.
 - **K +4**, one learning K row per arm and per dedicated control (family `learning_class`, `scripts/
   record_learning_k_rows.py`, written on the brain before the first fill; without its row the arm is refused, fail
   closed). The request to make the registration K-neutral cannot be met inside the learning class: its rows count in K

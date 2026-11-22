@@ -54,7 +54,8 @@ def test_the_shipped_registry_makes_icm_probe_the_only_shadow_host_after_the_swi
     assert _hosts(accs) == ["icm-probe"] and not accs["icm-demo"].cost_probe.enabled
     probe = accs["icm-probe"]
     assert probe.enabled and probe.mode == "demo" and probe.probe_only and probe.shadow_host
-    assert probe.login is None and probe.cost_probe.enabled and probe.approval_mode == "auto"
+    # cost probes off since 2026-11-22 (owner priority: only arms with evidence place orders)
+    assert probe.login is None and not probe.cost_probe.enabled and probe.approval_mode == "auto"
     raw = yaml.safe_load(registry.read_text())["accounts"]["icm-probe"]
     assert raw["login"] is None                                   # public repo: never a login here
 
