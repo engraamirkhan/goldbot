@@ -98,11 +98,15 @@ def test_icm_demo_ships_as_the_intraday_swing_and_h81_scalp_learning_host(accs):
     assert not ex.pot_budgets
 
 
-def test_icm_probe_ships_the_scalp_arms_and_the_cost_probes(accs):
+def test_icm_probe_ships_the_scalp_arms_with_its_cost_probes_kept_but_switched_off(accs):
     acc = accs["icm-probe"]
     ex = acc.exploration
-    # demo-limits ADR 0072 (2026-11-02): the probe sleeve £30 -> £52; the scalp pot slots only, 23 of 24 host slots
-    assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(52, abs=0.05)
+    # demo-limits ADR 0072 (2026-11-02): the probe sleeve £30 -> £52; the scalp pot slots only, 23 of 24 host slots.
+    # Owner priority 2026-11-22 (only arms with evidence place orders; trading-safety F1): the probes are off, the
+    # sleeve is kept unchanged so the rollback is `enabled: true`
+    cp = acc.cost_probe
+    assert acc.shadow_host and not cp.enabled and not cp.scheduled.enabled
+    assert cp.budget_share * 220 == pytest.approx(52, abs=0.05)
     # learning-mi-2026-11-02.md and lane L3: the multi-instrument pairs and controls beside the scalp arms
     assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"] | REDBOX | GD1_PROBE
     assert set(ex.pots) == {"scalp", "intraday", "swing"}               # swing: GD1P's one slot (2026-11-20)

@@ -298,7 +298,9 @@ accounts:
     # prereg-amendment-2026-11-07-kill-only.md section 4 (WS-1): scheduled and mirror probes only with a slot time in
     # [07:00, 21:00) UTC (hours_utc); every_min stays 120 (the CFO's halving: fewer probes only, never more). The
     # Asia cells stop accruing (ICM asia already holds 227 scheduled fills). Rollback: drop hours_utc, restart
-    cost_probe: { enabled: true, budget_share: 0.2363, max_open: 3, max_loss: 10.0, hours_utc: ["07:00", "21:00"], scheduled: { enabled: true, budget_share: 0.5, every_min: 120 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # owner priority 2026-11-22 (only arms with evidence place orders; trading-safety F1): cost probes are random-time
+    # orders with no edge, so they are off; gold costs are measured on GD-1's own fills. Rollback: enabled true, restart
+    cost_probe: { enabled: false, budget_share: 0.2363, max_open: 3, max_loss: 10.0, hours_utc: ["07:00", "21:00"], scheduled: { enabled: false, budget_share: 0.5, every_min: 120 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
@@ -531,7 +533,9 @@ accounts:
     # account's loss): scheduled probes only with a slot time in [07:00, 21:00) UTC, every_min 15 -> 60 (about 14 a
     # day); the Vantage Asia slippage cell (202 fills) is frozen at its last fit. Measurement only, no K. Rollback: drop
     # hours_utc and every_min, restart
-    cost_probe: { enabled: true, budget_share: 0.175, max_open: 1, max_loss: 4.0, hours_utc: ["07:00", "21:00"], scheduled: { enabled: true, budget_share: 0.5, every_min: 60 } }
+    # owner priority 2026-11-22 (only arms with evidence place orders; trading-safety F1): cost probes are random-time
+    # orders with no edge, so they are off; gold costs are measured on GD-1's own fills. Rollback: enabled true, restart
+    cost_probe: { enabled: false, budget_share: 0.175, max_open: 1, max_loss: 4.0, hours_utc: ["07:00", "21:00"], scheduled: { enabled: false, budget_share: 0.5, every_min: 60 } }
     shadow_host: false        # icm-probe hosts the shadow book (one host per deployment)
     # a learning host (ADR 0037 amendment 6): no live agent, every non-learning entry refused, out of the supervisor's
     # combined limits, the limits evidence and the phase gate

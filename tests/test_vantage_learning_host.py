@@ -64,9 +64,11 @@ def test_vantage_demo_ships_configured_as_a_demo_probe_only_learning_host_switch
     assert acc.risk_overrides is not None and acc.risk_overrides.profile == "demo-2026-10-18"
 
 
-def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound_share(vantage):
+def test_vantage_demo_keeps_its_probe_sleeve_with_the_scheduled_probes_switched_off(vantage):
     cp = vantage.cost_probe
-    assert cp.enabled and cp.scheduled.enabled
+    # owner priority 2026-11-22 (only arms with evidence place orders; trading-safety F1): scheduled probes are
+    # random-time orders with no edge, so they are off; the sleeve below is kept for the rollback (`enabled: true`)
+    assert not cp.enabled and not cp.scheduled.enabled
     # demo-limits ADR 0072 (f, 2026-11-02): the sleeve £15 -> £35 (0.175 of the £200 day)
     assert cp.budget_share * 200 == pytest.approx(35, abs=0.01)
     # prereg K10 (PD 2026-10-26): at most half the sleeve (the 50% share is the bound): £7.50, now £17.50 a day

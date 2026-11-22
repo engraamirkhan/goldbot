@@ -571,9 +571,11 @@ def test_the_kill_list_and_a5_retire_their_rows_and_the_paired_controls_stay():
     # section 2: KILL on the 2010-17 replay)
     survivors = ("Z9D", "Z10D", "Z5P", "LCZ9D", "LCZ10D", "LCZ5P")
     assert all(str(rows[a].retired_day) == "2026-11-13" and "survivor-reads" in rows[a].retired_rule for a in survivors)
-    keep = ["S0", "S0R", "GS1C",
+    keep = ["S0", "S0R",
             *(a for a in rows if a.startswith("LBC-") and not rows["LB-" + a[4:]].retired)]
     assert all(a in rows and not rows[a].retired for a in keep)
+    # owner priority 2026-11-22 (only arms with evidence place orders): GS1C stops with GS1, its arm, not on its own
+    assert rows["GS1"].retired and rows["GS1C"].retired_day == rows["GS1"].retired_day == "2026-11-22"
 
 
 def test_aux_migrations_23_24_backfill_each_rows_signal_close_and_index_it(tmp_path):

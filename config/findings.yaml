@@ -438,3 +438,39 @@ findings:
     due: 2026-11-21
     source: audit 2026-11-20 team review (no scorecard for 35 days, roadmap stale 18 days)
     check: {fn: manual, params: {}}
+
+  # ---------------------------------------------------------------- owner priority 2026-11-22 (only arms with evidence trade)
+  - id: EVIDENCE-ONLY-ORDERS
+    title: No broker fill from any arm without a history or confirm pass, nor from any random control
+    owner: program-director
+    severity: critical
+    due: 2026-11-24
+    source: owner 2026-11-22 (weekly loss mostly from live-order random controls; no arm beat its random twin); spec
+      retires GS1, GS1C and the red-box arms, WKS0/WKI0 replay-only (tests/test_evidence_only_orders.py)
+    check: {fn: arms_not_trading, params: {arms: [GS1, GS1C, RB15, RBC15, RB1H, RBC1H, RB4H, RBC4H, VEX15, VEX1H, IEX1H, WKS0, WKI0, S0, S0R], days: 2}}
+
+  - id: EVIDENCE-RB-HISTORY
+    title: History replay of the red-box rule on 1h and 4h read against its random ladder before any return to demo
+    owner: research-director
+    severity: medium
+    due: 2026-12-04
+    source: owner 2026-11-22 priority 1 (RB1H/RB4H retired without a history pass; history replay queued); needs a prereg
+      (window, read rule, K row) before dispatch; 2025-10..2026-09 excluded; include 15m or state why not
+    check: {fn: manual, params: {}}
+
+  - id: ENG-LEARNING-SINCE
+    title: A learning arm loaded before its start day is refused for the engine's whole run (never re-read at the day)
+    owner: implementer
+    severity: medium
+    due: 2026-12-04
+    source: cycle 2026-11-22 (GD-1 would have missed its run without a restart; since moved a day early as the stopgap)
+    check: {fn: manual, params: {}}
+
+  - id: LEDGER-MISSING-CLOSE
+    title: Every broker-filled trade has its close recorded; daily broker tie-out tolerance tightened to pennies
+    owner: program-director
+    severity: low
+    due: 2026-12-04
+    source: finance reconciliation 2026-11-22 (one icm-probe Brent short of 2026-11-04 filled with no recorded close; a
+      small residual absorbed by the daily check's tolerance); also relabel the October cost probes executed on icm-demo
+    check: {fn: manual, params: {}}

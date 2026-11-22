@@ -20,7 +20,7 @@ from goldbot.engine import entry_refusals, exploration
 from goldbot.engine.entry_refusals import ASIA_5M, WINDOW_0207
 from goldbot.engine.exploration import Arm
 from goldbot.ops import accounts as acc_mod
-from goldbot.research.arms import owner_experiment_until
+from goldbot.research.arms import dedicated_control_of, owner_experiment_until
 from tests.test_entry_refusals import TUE, _at_utc, _cfg_engine, _obs, _sig, _spec_arm, _spy_gate
 from tests.test_exploration_engine import _actions, _arm, _at, _engine, _sent
 from tests.test_exploration_engine import (
@@ -101,19 +101,27 @@ def test_the_engine_itself_refuses_a_paired_broker_control_from_the_minute_after
     assert {signal, control} <= refused_at(f"{pd.Timestamp(until) + pd.Timedelta(days=1):%Y-%m-%d} 00:01")
 
 
-def test_the_gs1c_exception_lapses_the_day_after_gs1s_owner_experiment_ends(accs):
+def test_gs1c_is_retired_with_gs1_before_its_exception_would_lapse(accs):
+    """Owner priority 2026-11-22 (only arms with evidence place orders): GS1 and its random twin GS1C are retired on
+    2026-11-22, before the owner experiment's 2026-11-27 end, so no broker-traded control is left to excuse."""
     until = owner_experiment_until("GS1")
     assert until == "2026-11-27"
+    rows = {a.arm_id: a for acc in accs.values() for a in _arms(acc)}
+    assert rows["GS1"].spec.retired_day == rows["GS1C"].spec.retired_day == "2026-11-22"
     after = (pd.Timestamp(until) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    assert _unexcused(accs, until) == []
-    assert ("icm-demo", "GS1C") in _unexcused(accs, after)
+    assert _unexcused(accs, until) == [] and _unexcused(accs, after) == []
 
 
 @pytest.mark.parametrize("arm_id", TURNED)
 def test_each_formerly_broker_traded_control_is_a_replay_twin_not_a_retirement(accs, arm_id):
-    """A retirement records no candidates, so it would leave no twin (amendment 2026-11-15, "Why")."""
+    """A retirement records no candidates, so it would leave no twin (amendment 2026-11-15, "Why"). A control dedicated
+    to learning arms is retired only once every arm it serves is (RBC15 with RB15, red-box review 2026-11-20): it has
+    nothing left to be a twin of."""
     rows = {a.arm_id: a for acc in accs.values() for a in _arms(acc)}
-    assert rows[arm_id].spec.control_mode == "replay_only" and not rows[arm_id].spec.retired
+    spec = rows[arm_id].spec
+    serves = dedicated_control_of(spec)
+    assert spec.control_mode == "replay_only"
+    assert not spec.retired or (serves and all(rows[s].spec.retired for s in serves)), arm_id
 
 
 def test_broker_traded_controls_never_outnumber_signal_arms_on_any_enabled_account(accs):
@@ -124,10 +132,11 @@ def test_broker_traded_controls_never_outnumber_signal_arms_on_any_enabled_accou
         assert len(_broker_controls(acc)) <= len(signals), (name, _broker_controls(acc))
 
 
-def test_only_gs1c_and_the_disabled_weekend_lane_keep_broker_traded_controls(accs):
-    name, ids = WEEKEND_LANE
+def test_no_account_keeps_a_broker_traded_control(accs):
+    """Owner priority 2026-11-22: GS1C retired with GS1, the weekend lane's WKS0/WKI0 replay-only (the lane stays off)."""
+    name, _ids = WEEKEND_LANE
     broker = {n: _broker_controls(acc) for n, acc in accs.items()}
-    assert {n: x for n, x in broker.items() if x} == {"icm-demo": {"GS1C"}, name: set(ids)}
+    assert {n: x for n, x in broker.items() if x} == {}
     assert not accs[name].enabled
 
 

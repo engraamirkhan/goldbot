@@ -66,12 +66,14 @@ def test_s0_is_replay_only_and_not_retired_so_it_keeps_recording_its_twin():
 
 def test_s0r_and_the_execution_controls_are_replay_only_from_the_2026_11_20_amendment():
     """prereg-amendment-2026-11-20-stop-the-bleeding.md section 1 supersedes this amendment's point 4 ("Unchanged
-    and broker-traded: GS1C, IEX1H, VEX15, VEX1H"); GS1C stays broker until GS1's end, and
+    and broker-traded: GS1C, IEX1H, VEX15, VEX1H"); GS1C stayed broker until GS1's end, and
     tests/test_stop_the_bleeding.py holds the account-wide rule and that dated exception."""
     rows = _spec_rows()
     for a in ("S0R", "IEX1H", "VEX15", "VEX1H"):
         assert rows[a].control_mode == "replay_only" and not rows[a].retired, a
-    assert rows["GS1C"].control_mode == "broker" and not rows["GS1C"].retired
+    # owner priority 2026-11-22 (only arms with evidence place orders): GS1 ended that day, so GS1C (still a broker
+    # row, frozen) is retired with it and sends nothing
+    assert rows["GS1C"].control_mode == "broker" and rows["GS1C"].retired_day == "2026-11-22"
 
 
 def test_s1a_and_s1b_carry_the_retirement_the_control_thinning_amendment_named():
