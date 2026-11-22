@@ -492,7 +492,9 @@ def test_an_engine_restarted_after_the_expiry_refuses_gs1_and_gs1c_from_the_star
                                 X.Arm(spec=got["GS1C"], style="intraday", control_share=0.3)], qualify=False)
     ex = eng.exploration
     assert ex is not None and {"GS1", "GS1C"} <= ex.retired
-    journalled = {d["arm"] for d in eng.decisions if d.get("action") == "exploration_arm_unqualified"}
+    # retired in the spec since 2026-11-22 (only arms with evidence place orders): journalled as a retirement
+    journalled = {d["arm"] for d in eng.decisions
+                  if d.get("action") in ("exploration_arm_unqualified", "exploration_arm_retired")}
     assert {"GS1", "GS1C"} <= journalled
     assert not any(d.get("action") == X.OWNER_EXPERIMENT_ACTION for d in eng.decisions)
 

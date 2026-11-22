@@ -86,8 +86,12 @@ RETIRED_1113_COST = {"Z1P", "Z2P", "Z3D", "LCZ1P", "LCZ2P", "LCZ3D"}
 RETIRED_1113_SURVIVORS = {"Z10D", "Z9D", "Z5P", "LCZ10D", "LCZ9D", "LCZ5P"}
 # retired 2026-11-13 (prereg-amendment-2026-11-15-replay-only-controls.md (a)): S1A/S1B, as the 2026-11-06 amendment said
 RETIRED_1113_THINNING = {"S1A", "S1B"}
+# retired 2026-11-22 (research-director red-box week review 2026-11-20): RB15, no edge, with its dedicated control
+RETIRED_1122_REDBOX = {"RB15", "RBC15"}
+# retired 2026-11-22 (owner priority: only arms with evidence place orders): no history pass
+RETIRED_1122_NO_EVIDENCE = {"GS1", "GS1C", "RB1H", "RBC1H", "RB4H", "RBC4H"}
 RETIRED = RETIRED_1106 | RETIRED_1107 | RETIRED_1109 | RETIRED_1113 | RETIRED_1114 | RETIRED_1113_COST | RETIRED_1113_SURVIVORS \
-    | RETIRED_1113_THINNING
+    | RETIRED_1113_THINNING | RETIRED_1122_REDBOX | RETIRED_1122_NO_EVIDENCE
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:

@@ -30,6 +30,10 @@ END = "2026-11-22T22:00:00Z"
 HOLD = {"15m": 96, "1h": 48, "4h": 24}
 TFS: tuple[A.Timeframe, ...] = ("15m", "1h", "4h")
 CUT = pd.Timestamp("2023-11-22", tz="UTC")
+# research-director review 2026-11-20: RB15 no edge, retired; RBC15 exists only to pair with it
+RETIRED_15M = frozenset({"RB15", "RBC15"})
+# owner priority 2026-11-22: the 1h/4h arms and controls retired at the week's end (no history pass)
+RETIRED_1H4H = frozenset({"RB1H", "RBC1H", "RB4H", "RBC4H"})
 
 
 def _params(tf: str, **kw: Any) -> dict[str, Any]:
@@ -241,7 +245,9 @@ def test_the_family_is_three_learning_arms_each_with_its_replay_only_control_one
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-15 22:00", tz="UTC"))
         loaded = {a.id: a for a in A.load_arms(path, registry=reg)}
-        assert all(a.entry_refused == "" for a in loaded.values()), {k: a.entry_refused for k, a in loaded.items()}
+        # the week ran unrefused; since the 2026-11-20 review RB15 and RBC15 are retired, so they load refused
+        # the week ran unrefused; since then every red-box arm is retired (15m by the review, 1h/4h at the week's end)
+        assert all(loaded[k].entry_refused for k in RETIRED_15M | RETIRED_1H4H)
         mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-23 00:00", tz="UTC"))
         late = {a.id: a for a in A.load_arms(path, registry=reg)}
         assert all("ended" in late[k].entry_refused for k in learning), "the learning end is the backstop"
@@ -330,3 +336,34 @@ def test_the_session_of_a_decision_close() -> None:
     at = pd.Timestamp("2026-11-16", tz="UTC")
     got = [redbox_week.session_label(at + pd.Timedelta(hours=h)) for h in (0, 6, 7, 11, 12, 15, 16, 21, 22, 23)]
     assert got == ["asia", "asia", "london", "london", "overlap", "overlap", "newyork", "newyork", "asia", "asia"]
+
+
+# ------------------------------------------------------------------------------------------------ the review's retirement
+
+
+def test_rb15_and_its_dedicated_control_are_retired_from_the_sunday_open_under_the_directors_review() -> None:
+    """Research-director review 2026-11-20 of the red-box week: RB15 replayed -0.077 R a candidate against its random
+    ladder's -0.061 R, no edge, so it is retired (prereg "End": "the arms get `retired_day` 2026-11-22 in the spec");
+    RBC15 is dedicated to RB15 alone and stops with it (as LCS5A/LCS5B with S5A/S5B)."""
+    arms = {k: A.Arm.model_validate(r) for k, r in _rows().items()}
+    for arm_id in RETIRED_15M:
+        a = arms[arm_id]
+        assert a.retired and a.retired_day == "2026-11-22", arm_id
+        assert "research-director 2026-11-20" in a.retired_rule and "-0.077 R" in a.retired_rule, a.retired_rule
+        assert not A.A2_RULE.search(a.retired_rule)                         # a review verdict, not A2 readability
+    assert A.dedicated_control_of(arms["RBC15"]) == ("RB15",)
+
+
+def test_rb1h_rb4h_and_their_controls_retire_at_the_weeks_end_without_a_history_pass() -> None:
+    arms = {k: A.Arm.model_validate(r) for k, r in _rows().items()}
+    assert {k for k, a in arms.items() if a.retired} == RETIRED_15M | RETIRED_1H4H
+    assert all(arms[k].retired_day == "2026-11-22" and "history replay" in arms[k].retired_rule for k in RETIRED_1H4H)
+
+
+def test_the_engine_on_icm_probe_takes_no_new_rb15_or_rbc15_entry_and_keeps_both_configured_for_their_exits() -> None:
+    probe = acc_mod.load_accounts(ROOT / "config" / "accounts.yaml", logins=False)["icm-probe"]
+    cfg = exploration.config_for(probe)
+    assert cfg is not None
+    configured = {a.arm_id for a in cfg.arms}
+    assert RETIRED_15M | RETIRED_1H4H <= configured                          # an open position keeps every exit
+    assert exploration.spec_retired(cfg) & set(_rows()) == RETIRED_15M | RETIRED_1H4H

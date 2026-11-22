@@ -168,7 +168,7 @@ def test_the_spec_has_two_learning_arms_each_with_its_own_replay_only_control(tm
         assert a.params == _params(prereg="prereg-amendment-2026-11-20-gd1-asia-learning.md#rules")
         assert block.prereg == PREREG and (ROOT / PREREG).is_file()
         assert block.control == control_id and A.control_match_refusal(a, c) is None
-        assert (block.since, block.until) == ("2026-11-23", "2027-01-04")
+        assert (block.since, block.until) == ("2026-11-22", "2027-01-04")   # since a day early: Sunday deploy loads it unrefused
         assert block.loss_cap_gbp == 800.0                     # the class's 20 x its £40 per-trade cap
         assert c.role == "control" and c.control_mode == "replay_only" and c.forward_only
         assert A.dedicated_control_of(c) == (arm_id,)
@@ -179,7 +179,7 @@ def test_the_spec_has_two_learning_arms_each_with_its_own_replay_only_control(tm
     path = tmp_path / "arms.yaml"
     path.write_text(yaml.safe_dump({"arms": list(rows.values())}))
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-22 23:00", tz="UTC"))
+        mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-21 23:00", tz="UTC"))
         early = {a.id: a for a in A.load_arms(path, registry=reg)}
         assert all("not yet" in early[a].entry_refused for a in ARMS), "no fill before its registration day"
         mp.setattr(A, "_now", lambda: pd.Timestamp("2026-11-23 00:00", tz="UTC"))
