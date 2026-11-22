@@ -15,6 +15,7 @@ import pytest
 from goldbot.engine import cost_probe, exploration
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules, arms
+from tests.test_evidence_only_orders import NO_EVIDENCE_1122
 from tests.test_exploration_engine import CLOSE, LOSS, SHORT, _arm, _at, _engine, _rule
 from tests.test_retire_loss_arms_1112 import RETIRED_1113  # the six arms and five named I0 rows
 
@@ -87,7 +88,9 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
                for i in SURVIVOR_KILL_1113)
     assert {i for i, a in spec.items() if a.retired} == \
         set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113 | gold_only | COST_BUDGET_1113 | SURVIVOR_KILL_1113 \
-        | THINNING_1113
+        | THINNING_1113 | NO_EVIDENCE_1122
+    # owner priority 2026-11-22 (only arms with evidence place orders): GS1/GS1C and the red-box arms, dated that day
+    assert all(str(spec[i].retired_day) == "2026-11-22" for i in NO_EVIDENCE_1122)
     assert all(str(spec[i].retired_day) == "2026-11-13" and "control-thinning" in spec[i].retired_rule
                for i in THINNING_1113)
     for arm_id in {*EXEMPT} - RETIRED_1106 - RETIRED_1113 - COST_BUDGET_1113 - SURVIVOR_KILL_1113:
@@ -149,6 +152,9 @@ def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active
             emptied = any(i in RETIRED_1106 for i in mine)
             # a pot whose last arms the gold-only ruling of 2026-11-13 retired (icm-probe intraday) is empty on purpose
             emptied = emptied or any(spec[i].retired_rule == GOLD_ONLY for i in mine)
+            # a pot whose last arms the owner priority of 2026-11-22 retired (only arms with evidence place orders;
+            # icm-demo growth: GS1/GS1C) is empty on purpose: its caps stay, nothing in it can enter
+            emptied = emptied or any(i in NO_EVIDENCE_1122 for i in mine)
             assert waits or emptied or any(not spec[i].retired and spec[i].status == "run" for i in mine), \
                 (acc.account_id, style)
 
