@@ -138,9 +138,11 @@ descriptive only and never a promotion source.
   stop is taken first.
 - **Costs.** C4 as written (section 1): the round-trip commission and extra once, on the full size; the $0.145 stop
   add-on on the fraction stopped. Stress is 1.5 × the added costs, plus the shortfall when the median spread paid is
-  below $0.129.
-- **Refusal codes** (counted, each a row): `one_side_only`, `no_signal`, `r_below_3`, `no_targets_left`,
-  `entry_after_window`.
+  below $0.129. The row's `r_stress` carries the 1.5 × added costs; the reader applies the shortfall from the median
+  `spread_usd` of the events read, divided by each event's `risk_usd`.
+- **Refusal codes** (counted, each a row): `one_side_only`, `extractor_abstain` (no setup extracted), `no_signal`,
+  `r_below_3`, `no_targets_left`, `entry_after_window`, `no_bars` (a hole in the minutes still there 5 weekdays after
+  the twins' week closed).
 - **Holdout (C1 clock rule).** A BC event is admitted only if fill minute + window end < 2025-10-01 00:00 UTC; every
   bar read, including the twins, is before 2025-10-01 00:00 UTC.
 
@@ -149,19 +151,31 @@ descriptive only and never a promotion source.
 - **(a) Random-shift ladders, matched.**
   - Per post, 200 replicates seeded on (idea_id, r). The whole block (both levels and both ladders) is shifted by
     U(−w, +w), where w is the post's box width.
+  - Every replicate is run on every side and timeframe, also where the author's side did not fire or was refused
+    (stored on that row too); a replicate that does not fire or is refused counts as no event.
   - The rule is identical. Δa = author mean net R − replicate mean; p_a = (1 + #{r: mean_r ≥ author}) / 201.
 - **(b) Dropped, with the reason.** Our `sr_channels` boxes were the red-box week's object (no edge against random).
   The claim here is KoG's placement against the same geometry at random places, which is (a).
 - **P4: EVAL-2 matched twins**, as the 2026-11-15 ruling defines them:
-  - 20 per event;
+  - min(20, eligible) per event, drawn without replacement; the count (`twin_n`) is stored. A 1h event has at most
+    15 eligible bars (3 server hours on 5 weekdays);
   - the same TF, side and server hour ±1 h;
   - drawn from the decision bars of the 7 days after the event's exit, excluding bars where a KWR signal fires;
   - stop and target distances are the event's ATR14 multiples at the twin's own ATR;
-  - the same entry lag, costs and clock rule.
-- **(c) Random-side twin.** The same fill, stop and targets, with the side from a seeded coin. Report only.
+  - the same entry lag, costs and clock rule; no $3 floor on a twin's R (its distances are the event's, which passed
+    it).
+- **(c) Random-side twin.** The same fill, stop and targets, with the side from a seeded coin. Report only. Heads keeps
+  the event; tails takes the other side at the same entry minute, with the stop and every target mirrored about its
+  own fill at the event's distances.
 - **Seeds and twin geometry.** Control (a), (c) and the P4 draws use
-  `numpy.random.SeedSequence([zlib.crc32(idea_id.encode()), r])`. The twins' ATR14 is on the event's timeframe, and
-  each ladder target is mapped as its own ATR multiple.
+  `numpy.random.SeedSequence([zlib.crc32(str(idea_id).encode()), r])`, with r = the replicate (0-199) for (a),
+  1000 + s for the twins and 2000 + s for the coin, where s = 2 × tf (1h 0, 15m 1) + side (long 0, short 1). The
+  twins' ATR14 (simple mean of 14 true ranges) is on the event's timeframe, and each ladder target is mapped as its own
+  ATR multiple.
+- **Amendment 2026-11-23 (implemented controls; before any forward outcome).** The four bullets above were made exact
+  to match `goldbot/research/kog_weekly_shadow.py` after quant and code review: twins min(20, eligible), seed streams,
+  control (a) on every side, control (c) mirrored about its fill, no twin floor, refusal codes `extractor_abstain` and
+  `no_bars`, and the stress shortfall applied by the reader. No forward week had been scored.
 
 ## 5. Reading rule (EVAL-2, P1-P8; written before any outcome)
 
