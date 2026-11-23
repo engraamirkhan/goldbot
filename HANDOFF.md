@@ -17,7 +17,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     `kog_weekly_shadow.error`, and the ideas' score still completes. The job reports counts only.
   - aux.db migration 42 `kog_weekly_shadow`: one final row per (post, side, tf), or one per post refused whole
     (`one_side_only`, `extractor_abstain`, `no_bars`). Refusal codes `no_signal`, `r_below_3`, `no_targets_left`,
-    `entry_after_window`. No idea text and no price level in any row or log line.
+    `entry_after_window`. Control (a) is stored on every side row, fired or not; `risk_usd` is R as a distance.
+    No idea text and no price level in any row or log line (a shadow failure logs only the exception type).
   - First rows: the 2026-11-22 post after Friday 2026-12-04's close. Forward precision/recall is counted from the
     2026-11-29 post. A 1h event has at most 15 eligible twins (3 server hours x 5 weekdays), so `twin_n` is stored.
 - 2026-11-20 arm-integrity false voids (SRE brain simulation: 0/206 1h and 0/56 4h discovered-arm decisions ok on

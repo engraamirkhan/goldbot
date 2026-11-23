@@ -936,7 +936,7 @@ AUX: tuple[Migration, ...] = (
                extractor_abstain TEXT,
                signal_utc TEXT, fill_utc TEXT, exit_utc TEXT,
                n_targets INTEGER, frac_stopped REAL,
-               r_net REAL, r_gross REAL, r_stress REAL, spread_usd REAL,
+               r_net REAL, r_gross REAL, r_stress REAL, spread_usd REAL, risk_usd REAL,
                control_a_mean REAL, control_a_n INTEGER,
                control_a_r TEXT NOT NULL CHECK (json_valid(control_a_r)),
                control_c_r REAL, control_c_flipped INTEGER,

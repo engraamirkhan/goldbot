@@ -738,7 +738,8 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
         shadow = _kog_weekly_shadow(settings, aux, ideas, canonical_bars, costs=costs, holdout=holdout, slot=slot,
                                     holidays=holidays)
     except Exception as exc:                                           # noqa: BLE001 - reported, the job goes on
-        log.exception("tva_scores: kog_weekly_shadow failed")
+        # the type only: an exception's message or frames could carry an author level, which never enters a log
+        log.warning("tva_scores: kog_weekly_shadow failed (%s)", type(exc).__name__)
         shadow = {"error": type(exc).__name__}
     return {"ideas": len(ideas), "rescored": len(work), "written": written, "bars_account": bars_from,
             "cost_source": costs.source, "extractors": sorted(ADMITTED_EXTRACTORS), "holidays": calendar,
@@ -753,9 +754,13 @@ def _kog_weekly_shadow(settings: Settings, aux: Database, ideas: pd.DataFrame,
     research/kog_weekly_shadow.py, so the frozen extractor's file stays byte-identical). Reads the canonical broker's
     minutes from the earliest weekly report not yet stored, less 3 days for the ATR14; reports counts only."""
     from goldbot.research import kog_weekly_shadow as kws
+    from goldbot.research.kog_weekly import is_weekly_report
     since = pd.Timestamp(settings.tv_ideas.kog_weekly_shadow_from, tz="UTC")
     done = kws.stored_post_ids(aux)
-    todo = ideas[(ideas["available_utc"] >= since) & ~ideas["idea_id"].isin(done)]
+    weekly = [is_weekly_report(str(a), str(t), pd.Timestamp(p)) for a, t, p in
+              zip(ideas["author"], ideas["title"], ideas["published_utc"], strict=True)]
+    # only KoG weekly reports not stored yet set the load start: another author's idea never holds it back
+    todo = ideas[np.asarray(weekly, dtype=bool) & (ideas["available_utc"] >= since) & ~ideas["idea_id"].isin(done)]
     bars, _ = (canonical_bars(todo["available_utc"].min() - pd.Timedelta(days=3)) if not todo.empty
                else (pd.DataFrame(), None))
     rows = kws.score_shadow(ideas, bars, costs, since=since, now=slot, skip=done, holdout=holdout, holidays=holidays)

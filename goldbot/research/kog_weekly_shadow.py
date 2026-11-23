@@ -40,7 +40,7 @@ Controls (section 4), all seeded with `numpy.random.SeedSequence([zlib.crc32(str
 
 A post is scored once its week has closed plus 7 days (the twins' week) and the minutes are in. A hole in the
 minutes (tv_ideas `bad_gaps`) waits, and 5 weekdays later is final `no_bars`. Every row is final when written and
-never rewritten. No idea text and no price level is in any row or log line.
+never rewritten. No idea text and no price level is in any row or log line; `risk_usd` is a distance.
 """
 from __future__ import annotations
 
@@ -123,6 +123,7 @@ class ShadowRow(FrozenRecord):
     r_gross: float | None = None
     r_stress: float | None = None
     spread_usd: float | None = None                  # the spread paid, $/oz (entry half + the parts' exit halves)
+    risk_usd: float | None = None                    # R = |fill - stop|, $/oz: a distance, never a level
     control_a_mean: float | None = None
     control_a_n: int | None = None
     control_a_r: tuple[float | None, ...] = ()
@@ -380,9 +381,13 @@ def score_shadow(posts: pd.DataFrame, b1: pd.DataFrame, costs: ScoreCosts, *, si
     # pass 1: every post's setups, window and signals (the twins exclude every KWR signal bar)
     plans: list[tuple[dict[str, Any], Any, pd.Timestamp | None]] = []
     fires: dict[Tf, set[int]] = {tf: set() for tf in TFS}
+    first = m.ts(0) if m.n else None
     for p in cast(list[dict[str, Any]], weekly.to_dict("records")):
         ex = extract(str(p["description"]))
-        end = window_end(m, pd.Timestamp(p["available_utc"]))
+        # a post available before the first loaded minute has no window in these minutes (the job loads from the
+        # earliest post not stored yet): no signals from it, and it is not scored here
+        inside = first is not None and pd.Timestamp(p["available_utc"]) >= first
+        end = window_end(m, pd.Timestamp(p["available_utc"])) if inside else None
         plans.append((p, ex, end))
         sides = {s.side: s for s in ex.setups}
         if end is None or len(sides) != 2:
@@ -432,25 +437,27 @@ def _score_post(m: Minutes, bars: dict[Tf, TfBars], p: dict[str, Any], lo: Any, 
         for si, side in enumerate(_SIDES):
             setup = lo if side == "long" else sh
             stream = 2 * ti + si
-            got = _score_side(m, tb, sees, end, side, lo.level, sh.level, setup.targets, costs)
-            if isinstance(got, str):
-                out.append(ShadowRow(side=side, tf=tf, status="refused", reason=got, **base))
-                continue
+            # control (a) on every side, fired or not: replicates of fired sides only would bias delta-a toward 0
             reps: list[float | None] = []
             for d in shifts:
                 rep = _score_side(m, tb, sees, end, side, lo.level + d, sh.level + d,
                                   [t + d for t in setup.targets], costs)
                 reps.append(None if isinstance(rep, str) else rep.r_net)
             fired = [x for x in reps if x is not None]
+            ctrl: dict[str, Any] = dict(control_a_mean=float(np.mean(fired)) if fired else None,
+                                        control_a_n=len(fired), control_a_r=tuple(reps))
+            got = _score_side(m, tb, sees, end, side, lo.level, sh.level, setup.targets, costs)
+            if isinstance(got, str):
+                out.append(ShadowRow(side=side, tf=tf, status="refused", reason=got, **ctrl, **base))
+                continue
             s = 1 if side == "long" else -1
             twins = _twins(m, tb, got, s, iid, stream, fires[tf], costs)
             c_r, flipped = _coin(m, got, s, iid, stream, end, costs)
             out.append(ShadowRow(
                 side=side, tf=tf, status="scored", signal_utc=got.signal_utc, fill_utc=got.fill_utc,
                 exit_utc=got.exit_utc, n_targets=got.n_targets, frac_stopped=got.frac_stopped, r_net=got.r_net,
-                r_gross=got.r_gross, r_stress=got.r_stress, spread_usd=got.spread_usd,
-                control_a_mean=float(np.mean(fired)) if fired else None, control_a_n=len(fired),
-                control_a_r=tuple(reps), control_c_r=c_r, control_c_flipped=flipped,
+                r_gross=got.r_gross, r_stress=got.r_stress, spread_usd=got.spread_usd, risk_usd=got.risk,
+                control_c_r=c_r, control_c_flipped=flipped, **ctrl,
                 twin_mean_r=float(np.mean(twins)) if twins else None, twin_n=len(twins), twin_r=tuple(twins),
                 **base))
     return out
