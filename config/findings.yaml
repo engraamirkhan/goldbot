@@ -129,7 +129,7 @@ findings:
     severity: medium
     due: 2026-11-23
     source: audit 2026-11-20 finance R6, performance s.9
-    check: {fn: manual, params: {}}
+    check: {fn: manual, params: {done_on: 2026-11-23, evidence: "Superseded 2026-11-22: the red-box amendment had no pass rule, the week read gave no edge verdict (arm close to its control), all red-box arms retired in PR 424; any return needs the EVIDENCE-RB-HISTORY prereg on replay R against its random ladder"}}
 
   - id: R7-VANTAGE-REVIEW
     title: Vantage account review split into broker cost and arm mix before any new arm goes there
@@ -170,7 +170,7 @@ findings:
     severity: high
     due: 2026-11-22
     source: audit 2026-11-20 research s.5 items 1-2
-    check: {fn: manual, params: {}}
+    check: {fn: manual, params: {done_on: 2026-11-23, evidence: "Quant ruling 2026-11-23: nights 20-23 Nov ran before the ADR 0090 date and ADR 0088 acceptance, nights 2-4 wet without a recorded read; 0 survivors, 0 arms offered or written, spec_arms empty, LIFECYCLE_READY False: nothing invalidated; discovery K booked in n_trials_discovery under its sidecar cap; continue, no registration until ADR 0088 is Accepted"}}
 
   - id: RES-CONFIRM-SPENT
     title: 2018-25 marked spent for trend, momentum, level-break and squeeze families in discovery
@@ -401,7 +401,7 @@ findings:
     due: 2026-11-22
     source: private security audit notes 2026-11-20, item 4
     private: true
-    check: {fn: manual, params: {}}
+    check: {fn: manual, params: {done_on: 2026-11-23, evidence: "Done per the private audit notes (2026-11-23)"}}
 
   - id: SEC-5
     title: Credential storage item from the 2026-11-20 security audit (see private notes)
@@ -437,7 +437,7 @@ findings:
     severity: high
     due: 2026-11-21
     source: audit 2026-11-20 team review (no scorecard for 35 days, roadmap stale 18 days)
-    check: {fn: manual, params: {}}
+    check: {fn: manual, params: {done_on: 2026-11-23, evidence: "Daily scorecard resumed in docs/process/scorecards/2026-11-23.md and armed in the autonomous cycle prompt; docs/ROADMAP.md re-planned 2026-11-23 to milestones tied to net demo result or a first survivor"}}
 
   # ---------------------------------------------------------------- owner priority 2026-11-22 (only arms with evidence trade)
   - id: EVIDENCE-ONLY-ORDERS
