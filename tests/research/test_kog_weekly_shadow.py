@@ -115,6 +115,7 @@ def test_a_long_break_exits_half_at_the_first_target_and_half_at_the_stop_net_of
     assert r.r_net == pytest.approx(net / risk)
     assert r.r_stress == pytest.approx((net - 0.5 * (EXTRA + 0.145 * 0.5)) / risk)
     assert r.n_targets == 2 and r.frac_stopped == pytest.approx(0.5)
+    assert r.risk_usd == pytest.approx(risk)                             # a distance, not a level
     m15 = got[(7, "long", "15m")]
     assert m15.signal_utc == SIG_BAR + pd.Timedelta(minutes=15) and m15.r_net == pytest.approx(net / risk)
 
@@ -295,15 +296,17 @@ def test_the_kog_modules_import_nothing_from_the_engine_or_execution_or_riskgate
 class _Store:
     def __init__(self, b: pd.DataFrame):
         self.b = b
+        self.starts: list[pd.Timestamp] = []
 
     def read(self, table: str, *, source: str, symbol: str, start=None, end=None, columns=None) -> pd.DataFrame:
         if table != "bars_1m_live" or source != "icm":
             return pd.DataFrame()
+        self.starts.append(start)
         b = self.b
         return b[(b["ts_utc"] >= start) & (b["ts_utc"] < end)] if start is not None else b
 
 
-def _job(tmp_path: Path):
+def _job(tmp_path: Path, *extra: tuple[str, str, pd.Timestamp]):
     from types import SimpleNamespace
 
     from goldbot.config import load_settings
@@ -313,6 +316,11 @@ def _job(tmp_path: Path):
     det = make_idea(1, author="KnightsofGold", created=PUB.timestamp(), title="THE KOG REPORT", description=text())
     idea, ups = ti.idea_from_detail(det)
     db.record(idea, ups, AVAIL, live_since=PUB - pd.Timedelta(days=1), latency_s=900)
+    for k, (author, title, published) in enumerate(extra, start=2):
+        det = make_idea(k, author=author, created=published.timestamp(), title=title, description=text())
+        other, ups = ti.idea_from_detail(det)
+        db.record(other, ups, published + pd.Timedelta(minutes=5), live_since=PUB - pd.Timedelta(days=60),
+                  latency_s=900)
     accounts = [SimpleNamespace(account_id="acc-a", broker="icm", symbol="XAUUSD")]
     return load_settings(), accounts, idea.idea_id
 
@@ -333,7 +341,53 @@ def test_a_shadow_failure_is_logged_and_does_not_break_the_ideas_job(tmp_path, m
     def boom(*a, **k):
         raise RuntimeError("synthetic")
     monkeypatch.setattr(kws, "score_shadow", boom)
-    with caplog.at_level("ERROR"):
+    with caplog.at_level("WARNING"):
         out = tva.run_job(settings, tmp_path, store=_Store(long_week()), accounts=accounts, slot=NOW, costs=COSTS)
     assert out["kog_weekly_shadow"] == {"error": "RuntimeError"}
-    assert out["written"] >= 1 and "kog_weekly_shadow" in caplog.text
+    assert out["written"] >= 1 and "kog_weekly_shadow" in caplog.text and "RuntimeError" in caplog.text
+    assert "synthetic" not in caplog.text                    # an exception message could carry a level: never logged
+
+
+def test_the_shadow_s_bar_load_moves_forward_once_the_kog_weekly_rows_are_stored(tmp_path):
+    """Code review: another author's idea, or a KoG post that is not a weekly report, never holds the shadow's bar load
+    at an old date: it starts 3 days before the earliest KoG weekly report not stored yet."""
+    nxt = PUB + pd.Timedelta(days=7)                                           # Sunday 11-29: not scoreable by NOW
+    settings, accounts, _ = _job(tmp_path, ("Goldviewfx", "Some idea", pd.Timestamp("2026-11-23 09:00", tz="UTC")),
+                                 ("KnightsofGold", "THE KOG REPORT - Update", PUB + pd.Timedelta(days=1)),
+                                 ("KnightsofGold", "THE KOG REPORT", nxt))
+    tva.run_job(settings, tmp_path, store=_Store(long_week()), accounts=accounts, slot=NOW, costs=COSTS)
+    store = _Store(long_week())
+    out = tva.run_job(settings, tmp_path, store=store, accounts=accounts, slot=NOW, costs=COSTS)
+    assert out["kog_weekly_shadow"]["written"] == 0
+    shadow_start = nxt + pd.Timedelta(minutes=5) - pd.Timedelta(days=3)
+    assert shadow_start in store.starts
+    assert pd.Timestamp("2026-11-23 09:05", tz="UTC") - pd.Timedelta(days=3) not in store.starts
+
+
+# ------------------------------------------------------------------------------------------------- quant review round
+def test_control_a_replicates_are_stored_on_a_side_that_did_not_fire_too():
+    """Quant review: replicates on fired sides only would bias delta-a toward 0. The short never closes below 1990,
+    but a block shifted up by more than 10 does fire on the flat 2000 before Tuesday."""
+    r = score()[(7, "short", "1h")]
+    assert r.status == "refused" and r.reason == "no_signal"
+    assert len(r.control_a_r) == kws.N_SHIFT and r.control_a_n is not None and r.control_a_n > 0
+    assert r.control_a_mean == pytest.approx(float(np.mean([x for x in r.control_a_r if x is not None])))
+
+
+def test_scoring_at_the_horizon_and_with_30_more_days_of_minutes_gives_identical_rows():
+    b = long_week()
+    later = bars(end="2027-01-08")
+    full = pd.concat([b, later[later["ts_utc"] > b["ts_utc"].max()]], ignore_index=True)
+    early = score(b=full, now=HORIZON + pd.Timedelta(hours=1))
+    late = score(b=full, now=HORIZON + pd.Timedelta(days=30))
+    assert early.keys() == late.keys() and len(early) == 4
+    assert all(early[k].model_dump() == late[k].model_dump() for k in early)
+
+
+def test_a_break_bar_closing_before_available_utc_never_fires():
+    """The 15m bar closing 10:15 is beyond the level, but the post is first seen at 10:20: the first bar that can see
+    it closes 10:30."""
+    seen = SIG_BAR + pd.Timedelta(minutes=20)
+    r = score(posts(post(available=seen)))[(7, "long", "15m")]
+    assert r.signal_utc == SIG_BAR + pd.Timedelta(minutes=30)
+    assert r.fill_utc == SIG_BAR + pd.Timedelta(minutes=31)
