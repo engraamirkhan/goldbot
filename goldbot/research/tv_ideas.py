@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import logging
 import re
 import sqlite3
 from collections.abc import Callable, Iterable, Mapping
@@ -111,6 +112,7 @@ FULL_DAY_SHARE = 0.8                                           # a day with < 80
 FINAL: frozenset[str] = frozenset({"scored", "no_bars_final", "backfilled", "not_gold", "holdout"})
 SCORER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 DB_FILE = "tv_ideas.db"                                        # = goldbot.data.tv_ideas.DB_FILE
+log = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------------------------------- extractors
@@ -709,9 +711,8 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
     live = work[(work["symbol"].map(symbol_class) != "other") & ~work["backfilled"]
                 & ~work["published_utc"].map(lambda t: _holdout(t, holdout))
                 & ~work["available_utc"].map(lambda t: _holdout(t, holdout))]
-    bars, bars_from = pd.DataFrame(), None
-    if not live.empty:
-        start = live["available_utc"].min() - pd.Timedelta(days=3 * ATR_DAYS)
+
+    def canonical_bars(start: pd.Timestamp) -> tuple[pd.DataFrame, str | None]:
         if holdout is not None and start < holdout[1]:
             start = holdout[1]
         for acc in accounts:
@@ -720,8 +721,12 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
             got = account_bars_1m(store, account_id=acc.account_id, broker=acc.broker, symbol=acc.symbol,
                                   start=start, end=slot, as_of=slot)
             if not got.empty:
-                bars, bars_from = got, acc.account_id
-                break
+                return got, acc.account_id
+        return pd.DataFrame(), None
+
+    bars, bars_from = pd.DataFrame(), None
+    if not live.empty:
+        bars, bars_from = canonical_bars(live["available_utc"].min() - pd.Timedelta(days=3 * ATR_DAYS))
     holidays, calendar = _holidays(settings)
     rows = score_ideas(work, bars, costs=costs, holdout=holdout, as_of=slot, holidays=holidays)
     written = save_scores(aux, rows, scored_utc=slot)
@@ -729,9 +734,33 @@ def run_job(settings: Settings, state_dir: str | Path, *, store: Any, accounts: 
         with aux.write() as conn:
             conn.executemany("UPDATE tva_scores SET edited = 1 WHERE idea_id = ? AND edited = 0",
                              [(int(i),) for i in edited])
+    try:                       # the KoG weekly shadow: a failure is logged and never breaks the ideas' score
+        shadow = _kog_weekly_shadow(settings, aux, ideas, canonical_bars, costs=costs, holdout=holdout, slot=slot,
+                                    holidays=holidays)
+    except Exception as exc:                                           # noqa: BLE001 - reported, the job goes on
+        log.exception("tva_scores: kog_weekly_shadow failed")
+        shadow = {"error": type(exc).__name__}
     return {"ideas": len(ideas), "rescored": len(work), "written": written, "bars_account": bars_from,
             "cost_source": costs.source, "extractors": sorted(ADMITTED_EXTRACTORS), "holidays": calendar,
-            "authors": summarise(stored_rows(aux))}
+            "authors": summarise(stored_rows(aux)), "kog_weekly_shadow": shadow}
+
+
+def _kog_weekly_shadow(settings: Settings, aux: Database, ideas: pd.DataFrame,
+                       canonical_bars: Callable[[pd.Timestamp], tuple[pd.DataFrame, str | None]], *,
+                       costs: ScoreCosts, holdout: tuple[pd.Timestamp, pd.Timestamp] | None, slot: pd.Timestamp,
+                       holidays: HolidayList | None) -> dict[str, Any]:
+    """prereg-2026-11-23-kog-weekly-redbox.md 7.1: "after `score_ideas`, call a new `kog_weekly.score_shadow`" (in
+    research/kog_weekly_shadow.py, so the frozen extractor's file stays byte-identical). Reads the canonical broker's
+    minutes from the earliest weekly report not yet stored, less 3 days for the ATR14; reports counts only."""
+    from goldbot.research import kog_weekly_shadow as kws
+    since = pd.Timestamp(settings.tv_ideas.kog_weekly_shadow_from, tz="UTC")
+    done = kws.stored_post_ids(aux)
+    todo = ideas[(ideas["available_utc"] >= since) & ~ideas["idea_id"].isin(done)]
+    bars, _ = (canonical_bars(todo["available_utc"].min() - pd.Timedelta(days=3)) if not todo.empty
+               else (pd.DataFrame(), None))
+    rows = kws.score_shadow(ideas, bars, costs, since=since, now=slot, skip=done, holdout=holdout, holidays=holidays)
+    written = kws.save_shadow(aux, rows, scored_utc=slot)
+    return {"posts": len({r.idea_id for r in rows}), "written": written, "rows": kws.summarise(rows)}
 
 
 def _holidays(settings: Settings) -> tuple[HolidayList | None, str]:

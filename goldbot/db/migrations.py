@@ -915,6 +915,39 @@ AUX: tuple[Migration, ...] = (
                {_BODY}
            ) STRICT""",
     )),
+    # additive (prereg-2026-11-23-kog-weekly-redbox.md section 7.1; goldbot/research/kog_weekly_shadow.py): the KoG
+    # weekly red-box forward shadow, one row per (post, side, timeframe), or one per post refused whole (side, tf '-').
+    # Every row is final when written and never rewritten. Holds no idea text and no price level: times, R multiples,
+    # the control (a) replicates and P4 twins' R (JSON arrays) and counts. Descriptive only: nothing that trades reads
+    # it, and a release without it never opens it. After the findings register's 41
+    Migration(version=42, name="kog_weekly_shadow", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS kog_weekly_shadow (
+               idea_id INTEGER NOT NULL,
+               side TEXT NOT NULL CHECK (side IN ('long', 'short', '-')),
+               tf TEXT NOT NULL CHECK (tf IN ('1h', '15m', '-')),
+               published_utc TEXT NOT NULL,
+               available_utc TEXT NOT NULL,
+               window_end_utc TEXT,
+               status TEXT NOT NULL CHECK (status IN ('scored', 'refused')),
+               reason TEXT CHECK (reason IS NULL OR reason IN ('one_side_only', 'extractor_abstain', 'no_signal',
+                                                               'r_below_3', 'no_targets_left', 'entry_after_window',
+                                                               'no_bars')),
+               extractor TEXT NOT NULL,
+               extractor_abstain TEXT,
+               signal_utc TEXT, fill_utc TEXT, exit_utc TEXT,
+               n_targets INTEGER, frac_stopped REAL,
+               r_net REAL, r_gross REAL, r_stress REAL, spread_usd REAL,
+               control_a_mean REAL, control_a_n INTEGER,
+               control_a_r TEXT NOT NULL CHECK (json_valid(control_a_r)),
+               control_c_r REAL, control_c_flipped INTEGER,
+               twin_mean_r REAL, twin_n INTEGER,
+               twin_r TEXT NOT NULL CHECK (json_valid(twin_r)),
+               cost_source TEXT NOT NULL,
+               scorer_sha TEXT NOT NULL,
+               scored_utc TEXT NOT NULL,
+               PRIMARY KEY (idea_id, side, tf)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
