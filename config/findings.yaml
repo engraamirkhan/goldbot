@@ -401,7 +401,7 @@ findings:
     due: 2026-11-22
     source: private security audit notes 2026-11-20, item 4
     private: true
-    check: {fn: manual, params: {done_on: 2026-11-23, evidence: "Done per the private audit notes (2026-11-23); local guard added"}}
+    check: {fn: manual, params: {done_on: 2026-11-23, evidence: "Done per the private audit notes (2026-11-23)"}}
 
   - id: SEC-5
     title: Credential storage item from the 2026-11-20 security audit (see private notes)
