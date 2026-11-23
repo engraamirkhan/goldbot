@@ -1129,6 +1129,9 @@ class TvIdeasSettings(_Section):
     backoff_max_s: float = Field(default=21600, gt=0)
     timeout_s: float = Field(default=30, gt=0)
     stale_hours: float = Field(default=2.0, gt=0)                 # health tv_ideas WARNs past this on a weekday
+    # prereg-2026-11-23-kog-weekly-redbox.md 7.1: the KoG weekly red-box forward shadow (research/kog_weekly_shadow.py,
+    # run by tva_scores) scores the weekly reports available from this day (UTC) on; descriptive only, never an order
+    kog_weekly_shadow_from: date = date(2026, 11, 22)
 
     @model_validator(mode="after")
     def _backoff_ordered(self) -> TvIdeasSettings:

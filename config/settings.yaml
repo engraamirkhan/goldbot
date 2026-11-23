@@ -598,6 +598,7 @@ tv_ideas:                            # followed TradingView authors' published i
   backoff_max_s: 21600
   timeout_s: 30
   stale_hours: 2.0                   # health tv_ideas WARNs past this without a successful poll on a weekday
+  kog_weekly_shadow_from: 2026-11-22     # KoG weekly red-box forward shadow (prereg-2026-11-23 7.1): reports from this day
 observe:                             # ADR 0063: the observe-only live account's collector (goldbot/ops/observe.py), read only
   tick_every_s: 15                   # a quote (bid, ask, spread) per symbol this often, all week ...
   weekend_tick_every_s: 5            # ... and this often inside the weekend window (XAUUSD247 quotes, gold is closed)
