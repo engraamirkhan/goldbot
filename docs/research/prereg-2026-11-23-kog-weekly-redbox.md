@@ -93,10 +93,11 @@ descriptive only and never a promotion source.
 | Exposed 2026-10/11 (development, not evidence) | 7 | 14 | 14 | 14 | 100 % | 100 % | – |
 
 - **Why recall fails.**
-  - 33 of the 45 BC posts with a block use a header other than "RED BOX TARGETS". That is every post from 2024-09-29
-    to 2025-06-15, and 2 in August 2025.
-  - The literal header is KoG's format from 2025-06-22 onward: 10 of the 12 BC posts in that span, and 7 of the 7
-    exposed posts.
+  - 33 of the 45 BC posts with a block use a header other than "RED BOX TARGETS". That is every post with a block
+    from 2024-09-29 to 2025-06-15 except one (2025-02-23), and 2 in August 2025.
+  - The literal header is KoG's format from 2025-06-22 onward: 12 BC posts (11 of the 13 posts with a block in that
+    span, the other 2 in August 2025 using another header, plus the one earlier post of 2025-02-23), and 7 of 7
+    exposed posts. Counts re-checked 2026-11-23 against the stored first snapshots; they reconcile with the table.
 - **Consequences.**
   - No iteration on the BC: it is spent as an audit set.
   - A header-variant extractor (kogw-2) could only be audited on forward posts not yet seen. It is not proposed,
@@ -108,7 +109,8 @@ descriptive only and never a promotion source.
 
 - **Setups.** The extractor's setups for one weekly post. A setup is used only if both sides of its post were
   extracted, because the stop needs the box.
-- **Validity window.** From `available_utc` to the broker's Friday close minus 5 minutes of the same trading week.
+- **Validity window.** From `available_utc` to the broker's Friday close minus 5 minutes of the first broker trading
+  week with bars after `available_utc` (the broker's server clock, NY+7: Friday close 24:00, window end 23:55).
   - A post that becomes available after Friday's close is valid for the next week.
   - A later weekly post does not cut the window short; one post covers one week.
 - **Signal (primary 1h; 15m reported as a stratum).** The first bar of that timeframe that closes strictly beyond
@@ -118,22 +120,29 @@ descriptive only and never a promotion source.
   - Bars are aligned to the broker server clock and use mid closes.
   - Each side fires at most once per post. Both sides may fire in one week, one after the other or overlapping. Each
     is its own event.
-- **Entry.** At the first 1m bar at or after the signal bar's close + 60 s: ask for a long, bid for a short.
+- **Entry.** At the open of the first 1m bar at or after the signal bar's close + 60 s: ask for a long, bid for a
+  short. No entry if that bar is at or after the window end (refused and counted).
 - **Stop (chosen before any outcome): the opposite break level**, i.e. the far edge of KoG's red box.
   - A long's stop is the post's BELOW level; a short's is its ABOVE level.
   - R = |fill − stop|. If R is below $3 the event is refused and counted. There is no upper cap.
 - **Targets: the ladder, in equal parts.**
   - Targets at or behind the fill price are dropped. If none are left, there is no trade (counted).
-  - With n targets left, 1/n of the position exits at each target as the 1m bid (long) or ask (short) reaches it.
+  - With n targets left, 1/n of the position exits at each target as the 1m bid (long) or ask (short) reaches it,
+    filled at the target price on touch.
   - The stop never moves.
-  - Whatever is left exits at the window's end (the 1m close). Weekend-flat therefore applies, and swap is charged for
-    each rollover strictly inside the hold (triple on the triple day, never credited).
+  - Whatever is left exits at the window's end at the last 1m close before it: bid for a long, ask for a short.
+    Weekend-flat therefore applies, and swap is charged for each rollover strictly inside each part's hold (triple
+    on the triple day, never credited).
+  - Net R is the sum of the 1/n parts, each in units of the initial R.
 - **Outcome resolution.** On 1m bid/ask, the first barrier decides. If the stop and a target fall in one 1m bar, the
   stop is taken first.
-- **Costs.** C4 as written (section 1). Stress is 1.5 × the added costs, plus the shortfall when the median spread
-  paid is below $0.129.
-- **Holdout (C1 clock rule).** A BC event is admitted only if fill minute + window end < 2025-10-01 00:00 UTC. No
-  holdout bar is read.
+- **Costs.** C4 as written (section 1): the round-trip commission and extra once, on the full size; the $0.145 stop
+  add-on on the fraction stopped. Stress is 1.5 × the added costs, plus the shortfall when the median spread paid is
+  below $0.129.
+- **Refusal codes** (counted, each a row): `one_side_only`, `no_signal`, `r_below_3`, `no_targets_left`,
+  `entry_after_window`.
+- **Holdout (C1 clock rule).** A BC event is admitted only if fill minute + window end < 2025-10-01 00:00 UTC; every
+  bar read, including the twins, is before 2025-10-01 00:00 UTC.
 
 ## 4. Controls
 
@@ -150,6 +159,9 @@ descriptive only and never a promotion source.
   - stop and target distances are the event's ATR14 multiples at the twin's own ATR;
   - the same entry lag, costs and clock rule.
 - **(c) Random-side twin.** The same fill, stop and targets, with the side from a seeded coin. Report only.
+- **Seeds and twin geometry.** Control (a), (c) and the P4 draws use
+  `numpy.random.SeedSequence([zlib.crc32(idea_id.encode()), r])`. The twins' ATR14 is on the event's timeframe, and
+  each ladder target is mapped as its own ATR multiple.
 
 ## 5. Reading rule (EVAL-2, P1-P8; written before any outcome)
 
@@ -169,7 +181,8 @@ descriptive only and never a promotion source.
 - **FAIL** if the one-sided 90 % UB of Δa < +0.03 R with SE(Δa) ≤ 0.055 R, or the 90 % UB of net mean R < 0.
 - **INCONCLUSIVE** otherwise. It gives no arm, and the BC is spent.
 - The deflated Sharpe at the real K is reported, not gated.
-- **K:** one registry row, k_eff 2, booked only while `assert_budget` passes for the quarter.
+- **K:** one registry row, k_eff 2, booked only while `assert_budget` passes for the quarter. Applies only to a
+  future scored run; KWR-1 is booked `not_started_power`, n_trials 0.
 
 ## 6. Power (ADR 0085) and K: the refusal
 
@@ -191,7 +204,8 @@ descriptive only and never a promotion source.
 - **Registry check (brain, registry of record, 2026-11-23).**
   - 2026Q4 used 3,416 of 3,500, so 84 left and 0 reserved. n_trials_effective is 3,492.
   - This card books **0** trials.
-  - The forward shadow arm and its control (section 7) count **+2** arm ids when registered.
+  - The recommended forward shadow (7.1) books +0. The 7.1 alternative (arm rows) would book +2 arm ids and needs
+    an amendment to this card first.
 
 ## 7. Forward shadow (zero risk; descriptive only)
 
@@ -199,7 +213,10 @@ descriptive only and never a promotion source.
   of section 3 on the 1h and 15m strata, together with control (a) and the P4 twins.
   - Shadow only: never an order, never a promotion source, never real money.
   - Each week the shadow also logs kogw-1's abstains and an independent staff hand read of the block, so that forward
-    precision and recall are measured.
+    precision and recall are measured. They are counted from the 2026-11-29 post: the 2026-11-22 post was in the
+    extractor's development set (its outcomes stay in the shadow).
+  - Shadow weeks scored before a new card's commit are exposed. They cannot be that card's evidence or confirm set;
+    only posts published after that commit count.
 - **What it can tell us.** At about 90 events a year, it cannot confirm a 0.10 R edge (section 6). It can only show:
   - a gross effect large enough to justify a new card with new mechanism evidence;
   - or the absence of one, closed at the 2027-05-23 review.
@@ -223,7 +240,7 @@ That is zero order risk by construction, but it does not fit this object as it s
   - selects the weekly posts with `available_utc` ≥ the setting `tv_ideas.kog_weekly_shadow_from: 2026-11-22`;
   - extracts them with the frozen kogw-1;
   - scores section 3 (1h and 15m) with control (a), (c) and the P4 twins on the 1m bid/ask bars once the post's week
-    has closed.
+    has closed plus 7 days (P4 twins).
 - **Storage.** Rows go to a new aux table `kog_weekly_shadow`, with no idea text and no level in any log: post id,
   side, tf, the fill and exit times, net R, the control R and the abstain reason.
 - **Config.** One settings key. No arm row, no `exploration_arms.yaml` change, no RiskGate or engine import (a test
