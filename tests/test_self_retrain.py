@@ -163,8 +163,8 @@ def test_the_pre_registered_constants_are_the_cards():
     assert (sr.MIN_OOS, sr.MIN_KEPT, sr.MIN_OOS_DAYS, sr.MIN_CONTROL, sr.MIN_EDGE_R, sr.ALPHA, sr.BOOT, sr.SEED) == (
         200, 100, 10, 50, 0.05, 0.10, 10_000, 20261124)
     assert (sr.DEMOTE_EDGE_R, sr.MIN_FORWARD, sr.MIN_CONFIRM, sr.MAX_JUDGED, sr.STOP_MATCH) == (0.0, 60, 30, 10, 0.10)
-    assert PRENAMED_REAL == ("RB15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P")
-    assert not {"RBR1H", "RBR4H", "G1A"} & set(PRENAMED_REAL)
+    assert PRENAMED_REAL == ("RBR15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P")
+    assert not {"RBR1H", "RBR4H", "G1A", "RB15"} & set(PRENAMED_REAL) and sr.HISTORY_OF == {"RB15": "RBR15"}
     assert sr.NOMINAL_FROM == pd.Timestamp("2026-11-15", tz="UTC")
     assert (Path(__file__).resolve().parents[1] / sr.PREREG).exists()
 
@@ -392,6 +392,24 @@ def test_a_pre_named_retired_arm_is_judged_out_of_sample_only_after_its_retired_
     assert not set(pre["candidate_id"]) & set(oos["candidate_id"])
 
 
+def test_rb15_rows_are_rbr15_history_that_trains_and_is_never_out_of_sample():
+    """RB15 is hard-stopped at its end_utc 2026-11-22; its successor RBR15 (PR #435) records the forward rows. RB15's
+    rows train RBR15's filter only: every OOS row is RBR15's own and decided after the last RB15 row."""
+    f = _frame(np.random.default_rng(13), arms=1, days=40, per_day=20, ctrl_per_day=10,
+               start=pd.Timestamp("2026-10-20 08:00", tz="UTC"))
+    a0 = f["arm_id"] == "A0"
+    f.loc[a0 & (f["decision_utc"] < pd.Timestamp("2026-11-22", tz="UTC")), "arm_id"] = "RB15"
+    f.loc[a0 & (f["decision_utc"] >= pd.Timestamp("2026-11-24", tz="UTC")), "arm_id"] = "RBR15"
+    f = f[f["arm_id"] != "A0"]
+    rules = {"RB15": {"retired_day": "2026-11-22", "control_mode": "broker", "role": "learning"}}   # RBR15 unknown yet
+    got = sr.read_arms(f, named_controls={"RBR15": "CTRL"}, rules=rules,
+                       cutoff=pd.Timestamp("2026-12-20", tz="UTC"), boot=200)
+    assert set(got) == {"RBR15"}
+    assert got["RBR15"]["metrics"]["n_rows"] == int(f["arm_id"].isin(["RB15", "RBR15"]).sum())
+    own = f[f["arm_id"] == "RBR15"]
+    assert 0 < got["RBR15"]["metrics"]["n_oos"] <= len(own)
+
+
 def test_the_baseline_is_the_named_or_a_matched_stop_control_never_a_style_fallback():
     f = _frame(np.random.default_rng(12), arms=1, days=5, per_day=5, ctrl_per_day=5)
     since = START - pd.Timedelta(days=1)
@@ -516,6 +534,14 @@ def test_switched_off_the_job_records_a_disabled_run_and_demotes_every_active_mo
         runs = sr.latest_runs(conn)
     assert runs and runs[0]["status"] == "disabled"
     assert sr.health(runs, slot, enabled=False)[0] == "warn"
+
+
+def test_a_model_row_a_newer_release_wrote_with_an_extra_field_still_reads():
+    """AGENT_STANDARDS S12 / ADR 0010: a stored model with a field this release does not know is read, not refused."""
+    m = sr.fit_logit(sr.design(_frame(np.random.default_rng(14), arms=1, days=8, per_day=20, ctrl_per_day=0)),
+                     np.r_[np.zeros(80), np.ones(80)].astype(int))
+    newer = json.dumps({**json.loads(m.model_dump_json()), "calibrator": {"kind": "platt"}})
+    assert sr._model(newer) == m
 
 
 def test_no_engine_or_execution_module_reads_the_self_retrain_tables():

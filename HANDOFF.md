@@ -14,7 +14,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     is at most 0.10. It becomes ACTIVE only after two consecutive passes; otherwise it stays shadow. A model whose
     edge decays is demoted.
   - **Judged arms.** No live strategy arm is left after #424, so the judged arms are 10 pre-named retired gold arms
-    (RB15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P). Each is read out of sample only on its candidates after
+    (RBR15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P). Each is read out of sample only on its candidates after
     its retirement. ACTIVE means a re-activation candidate: nothing trades.
   - **Record.** Every run is written to `self_retrain_runs`.
   - **Health.** `self_retrain` WARNs when the job is off, missed, failed or trained on 0 labels.

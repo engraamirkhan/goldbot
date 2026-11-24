@@ -47,10 +47,16 @@ R-07, R-20 and MLNET all trained on Dukascopy proxies with prior costs.
 
 Restricting to live, non-retired arms would therefore judge nothing, ever. So the **judged arms are a pre-named list
 of 10 retired gold arms** (PR #435 makes them `replay_only`), constant `PRENAMED`:
-RB15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P.
+RBR15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P.
 - **Why these ten.** They are the 10 of PR #435's 11 with the most candidates. G1A is dropped: it is the smallest,
   with 11 fills and absent from the post-13-Nov counts.
 - **Excluded:** RBR1H and RBR4H, which #432 STOPped.
+- **RB15 is judged as RBR15.** RB15's row is hard-stopped by its `end_utc` (2026-11-22) and never records again. Its
+  forward candidates come under the new id **RBR15** (PR #435: `retired_day` 2026-11-24, role strategy,
+  `replay_only`, twin RBRC15).
+  - Mapping (`HISTORY_OF` = {RB15: RBR15}): RB15's rows are RBR15's **history**. They are training rows only.
+  - Every RBR15 OOS row is RBR15's own, decided after both RBR15's `retired_day` and RB15's last row.
+  - RBRC15 is RBR15's named control once PR #435 names it. Until then the matched-stop rule applies.
 - **Each pairing of "retired arm + learned filter" is a NEW pre-registered hypothesis.** It is not a re-read of the
   arm's retired verdict.
 - **Rows of a pre-named arm, split in two:**
@@ -234,23 +240,23 @@ that only selects wider stops (cheaper in R) with no gross edge cannot pass.
 broker.
 - **Forward rows (OOS-eligible) on hand today:**
   - Z3D 16, Z1P 6, Z9D 6, Z10D 5;
-  - RB15 about 0 (retired 2026-11-22: its 146 candidates since 13 Nov are pre-retirement rows, so training only);
+  - RBR15 0 (new id from PR #435; RB15's 146 candidates since 13 Nov are its history, training only);
   - S1A, S1B, F1A, Z2P, Z5P about 0.
 - **New forward rows need PR #435.** Since 23 Nov the engine records almost no candidates for retired arms (2 in
   all). Forward rows accrue only once PR #435 makes these arms `replay_only`, so their candidates are recorded and
   replay-labelled again.
-- **Rates after #435.** At the pre-retirement rates, RB15 would add about 13 candidates a session day. The other nine
+- **Rates after #435.** At RB15's pre-retirement rates, RBR15 would add about 13 candidates a session day. The other nine
   would add 0.5-2 a day each.
 - **The gate needs 200 OOS rows over at least 10 session days.**
-  - RB15 reaches that about 16 session days after #435 deploys, so about the 2026-12-20 run.
+  - RBR15 reaches that about 16 session days after #435 deploys, so about the 2026-12-20 run.
   - No other pre-named arm reaches 200 forward rows in Q4.
 
 **What that means for Q4:**
-- The first judged pair is about RB15 on its broker at the 2026-12-20 run.
+- The first judged pair is about RBR15 on its broker at the 2026-12-20 run.
 - The earliest re-activation candidate is the 2026-12-27 run, because two consecutive passes are needed.
 - Every earlier run reads "insufficient". That is the correct output, not a fault.
 
-**Prior.** That RB15 plus its filter becomes a re-activation candidate within Q4: **about 5 %**. RB15 was retired on
+**Prior.** That RBR15 plus its filter becomes a re-activation candidate within Q4: **about 5 %**. RB15 was retired on
 its own evidence (#424), and the new information is the forward replay plus a cost-first filter.
 
 ## 5. K (multiple testing)
@@ -266,7 +272,7 @@ its own evidence (#424), and the new information is the forward replay plus a co
   then the Sundays 11-29 to 12-27).
 - **Realistic: about 6.**
   - The 4 runs up to 12-13 judge nothing and book 1 each.
-  - The 12-20 and 12-27 runs each judge about 1 pair (RB15).
+  - The 12-20 and 12-27 runs each judge about 1 pair (RBR15).
 - Both fit the roughly 82 left (ADR 0073). ADR 0088 is still Proposed. A run never books more than 10.
 
 **Not promotion evidence.** It is never ledger-stamped and never reaches real money (learning-class rules, ADR 0061

@@ -50,7 +50,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, load_record_json
 from goldbot.db.connection import Database, now_ns
 from goldbot.research.exploration_data import GOLD, REPLAY_V1, REPLAY_V2, read_obs
 from goldbot.research.model import check_feature_cap
@@ -107,7 +107,11 @@ MAX_JUDGED = 10                 # judged (broker, arm) pairs a run at most (K = 
 # + learned filter" a new hypothesis (card section 2). The 10 of PR #435's replay_only gold arms with the most
 # candidates (G1A dropped: the fewest); RBR1H / RBR4H are excluded (STOPped by #432). Judged on any broker, at most
 # MAX_JUDGED (broker, arm) pairs a run by candidate count
-PRENAMED: tuple[str, ...] = ("RB15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P")
+PRENAMED: tuple[str, ...] = ("RBR15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P")
+# a pre-named arm recorded under a new id after its retirement (PR #435): RB15's row is hard-stopped by its end_utc
+# 2026-11-22 and never records again; its replay_only successor RBR15 (twin RBRC15) does. The old arm's rows are the new
+# arm's HISTORY: training rows only, never out of sample (every OOS row is decided after the last history row)
+HISTORY_OF: dict[str, str] = {"RB15": "RBR15"}
 STOP_MATCH = 0.10               # a matched-stop control's median stop within 10 % of the arm's (same timeframe)
 MIN_CONFIRM = 30                # the first passer's forward rows from which its forward edge must be >= 0
 # demotion reads the FROZEN active model's forward record (rows after its activation), not a refit: below 0 R on
@@ -422,12 +426,15 @@ def forward_read(rows: pd.DataFrame, arm_id: str, model: LogitModel, activation_
 
 
 # ---------------------------------------------------------------------------------------------- the store
+def _model(text: str) -> LogitModel:
+    return load_record_json(LogitModel, text, source="aux.db self_retrain_models")
+
+
 def active_models(db: Database, broker: str) -> dict[str, dict[str, Any]]:
     with db.connection() as conn:
         got = conn.execute("SELECT arm_id, model_version, activation_ns, model FROM self_retrain_models "
                            "WHERE broker = ? AND status = 'active'", (broker,)).fetchall()
-    return {str(a): {"model_version": v, "activation_ns": int(t), "model": LogitModel.model_validate_json(m)}
-            for a, v, t, m in got}
+    return {str(a): {"model_version": v, "activation_ns": int(t), "model": _model(m)} for a, v, t, m in got}
 
 
 def previous_passes(db: Database, broker: str, cutoff: pd.Timestamp) -> dict[str, dict[str, Any]]:
@@ -439,8 +446,7 @@ def previous_passes(db: Database, broker: str, cutoff: pd.Timestamp) -> dict[str
             return {}
         got = conn.execute("SELECT arm_id, model_version, activation_ns, model FROM self_retrain_models "
                            "WHERE run_id = ? AND gate_pass = 1", (r[0],)).fetchall()
-    return {str(a): {"model_version": v, "activation_ns": int(t), "model": LogitModel.model_validate_json(m)}
-            for a, v, t, m in got}
+    return {str(a): {"model_version": v, "activation_ns": int(t), "model": _model(m)} for a, v, t, m in got}
 
 
 def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: Mapping[str, Mapping[str, Any]],
@@ -451,12 +457,21 @@ def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: M
     if rows.empty:
         return {}
     strat = rows[~rows["is_control"].astype(bool)]
+    hist = strat["arm_id"].astype(str).isin(HISTORY_OF)
+    last_hist: dict[str, pd.Timestamp] = {}
+    if hist.any():
+        strat = strat.copy()
+        strat.loc[hist, "arm_id"] = strat.loc[hist, "arm_id"].astype(str).map(HISTORY_OF)
+        for new, d in strat[hist].groupby("arm_id")["decision_utc"]:
+            last_hist[str(new)] = pd.Timestamp(d.max()) + pd.Timedelta(microseconds=1)
     strat = strat[[str(a) in PRENAMED or not strategy_excluded(str(a), rules) for a in strat["arm_id"]]]
     out: dict[str, dict[str, Any]] = {}
     for arm_id, ar in strat.groupby("arm_id"):
         arm = str(arm_id)
         rd = (rules.get(arm) or {}).get("retired_day") if arm in PRENAMED else None
-        oos = walk_forward(ar, oos_from=None if rd is None else pd.Timestamp(str(rd), tz="UTC") + pd.Timedelta(days=1))
+        cuts = [c for c in (None if rd is None else pd.Timestamp(str(rd), tz="UTC") + pd.Timedelta(days=1),
+                            last_hist.get(arm)) if c is not None]
+        oos = walk_forward(ar, oos_from=max(cuts) if cuts else None)
         since = pd.Timestamp(oos["decision_utc"].min()) if len(oos) else cutoff
         m = oos_metrics(oos, control_rows(rows, arm, named=named_controls, since=since, rules=rules), boot=boot)
         m["n_rows"] = int(len(ar))
