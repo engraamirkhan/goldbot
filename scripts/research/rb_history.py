@@ -33,7 +33,7 @@ ARMS = ("RB1H", "RBC1H", "RB4H", "RBC4H")
 PAIRS = {"1h": ("RB1H", "RBC1H"), "4h": ("RB4H", "RBC4H")}
 RT_BP = 0.575            # W2 bps round trip ($0.23 at $4,000), cost of record scale
 OVERSHOOT_BP = 1.75      # stop-exit overshoot in bp ($0.70 at $4,000)
-WORKERS = 6
+WORKERS = 5
 
 
 def _arm(arm_id: str) -> A.Arm:
@@ -117,8 +117,20 @@ def _bps_net(trades: pd.DataFrame) -> np.ndarray:
 
 
 def _run_one(args: tuple[str, str, str, int, bool]) -> pd.DataFrame:
-    from run_arm_backtest import load_blackout, run_arm
+    """One (arm, year, population) job; its trades are cached under ~/tmp/rb-history/parts so a rerun resumes."""
     arm_id, bars_dir, window, year, every = args
+    part = Path.home() / "tmp" / "rb-history" / "parts" / f"{window}_{arm_id}_{year}_{'every' if every else 'one'}.parquet"
+    if part.exists():
+        return pd.read_parquet(part)
+    out = _run_job(arm_id, bars_dir, window, year, every)
+    part.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(part, index=False)
+    print(f"done {part.name} n={len(out)}", flush=True)
+    return out
+
+
+def _run_job(arm_id: str, bars_dir: str, window: str, year: int, every: bool) -> pd.DataFrame:
+    from run_arm_backtest import load_blackout, run_arm
     _replayed_control()
     arm = _arm(arm_id)
     if every:       # the card's primary population: every replayed candidate (amendment review item 6), no slot limit
