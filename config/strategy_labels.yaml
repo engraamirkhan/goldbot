@@ -218,6 +218,12 @@ arms:
   LBC-COFFEE: {variant: "COFFEE control"}
   S1A: {variant: "target VWAP"}
   S1B: {variant: "target 1R"}
+  RBR15: {variant: "replay only"}
+  RBR1H: {variant: "replay only"}
+  RBR4H: {variant: "replay only"}
+  RBRC15: {variant: "replay only"}
+  RBRC1H: {variant: "replay only"}
+  RBRC4H: {variant: "replay only"}
   S2A: {variant: "15-min range"}
   S2B: {variant: "30-min range"}
   S3A: {variant: "target 1R"}

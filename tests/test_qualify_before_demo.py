@@ -242,7 +242,9 @@ def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_sto
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
     dedicated = set().union(*LEARNING_CONTROLS.values()) | MI_CONTROLS | set().union(*REDBOX_CONTROLS.values()) \
         | set().union(*GD1_CONTROLS.values())
-    assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS) | dedicated
+    from tests.test_replay_only_retired_arms import REPLAY_BORN_RETIRED
+    replay_controls = {i for i in REPLAY_BORN_RETIRED if i.startswith("RBRC")}      # retired, never sent
+    assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS) | dedicated | replay_controls
     assert {i for i, a in spec.items() if a.role == "cost"} == set(COSTS)
     assert {i for i, a in spec.items() if a.role == "owner_experiment"} == OWNER_EXPERIMENTS
     assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values()) | MI_ARMS \

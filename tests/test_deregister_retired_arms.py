@@ -24,7 +24,7 @@ from tests.test_exploration_engine import (
 
 ACTION = exploration_deregister.ACTION
 R133 = {"icm-probe": {"I0-USTEC", "I0-XAUEUR", "I0-DE40", "I0-US500"}, "vantage-demo": {"I0-US30", "I0-XAUJPY"},
-        "icm-demo": {"ZCD"}}
+        "icm-demo": set()}      # ZCD records replay-only since 2026-11-24: never de-registered
 
 
 def _retired(arm: Arm) -> Arm:

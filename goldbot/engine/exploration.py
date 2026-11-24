@@ -76,7 +76,12 @@ The plan's rules, as built here:
 * Replay-only controls (docs/research/prereg-amendment-2026-11-15-replay-only-controls.md: "an unpaired gold random
   control is replay_only"; the row's `control_mode`): every candidate is recorded (`candidate`, blocked
   `replay_only`, mu 0) and labelled by the r2 replay like any other; `_send` refuses it before any check, so it never
-  reaches the budget, the RiskGate, an order intent or the order core.
+  reaches the budget, the RiskGate, an order intent or the order core. Since amendment 2026-11-24
+  (docs/research/prereg-amendment-2026-11-24-replay-only-retired-arms.md: "a retired or no-evidence gold arm of any
+  role may record replay_only") a replay-only arm's candidates are recorded at its signal (`_signal`), never queued;
+  a retired, unqualified or otherwise refused arm with the mode (`Exploration.recording`) keeps its rule running for
+  that record only (not when hash-refused, invalid or dark), is never dormant nor de-registered, and its records are
+  capped at REPLAY_RETIRED_DAILY_CAP a UTC day per book (journalled `exploration_replay_cap` once a day).
 * Refused for good (SRE diagnosis 2026-11-09, fixes 3 and 4b; `terminal_refusal`): an arm in `retired` (`arm_retired`)
   or an unpaired per-instrument control whose cost cell is complete (`thin_cell_complete`) can take no new entry
   again. A stale signal of such an arm is recorded with that refusal, never `exploration_stale`, so the stale count is
@@ -135,6 +140,7 @@ from goldbot.research.arms import (
     STOP_EXIT_READ_DONE,
     STOP_EXIT_READS,
     arm_hash,
+    dedicated_control_of,
     load_arms,
     owner_experiment_refusal,
     owner_experiment_until,
@@ -173,6 +179,9 @@ LOOKBACK = 200                      # bars of an arm's timeframe its rule reads,
 LOOKBACK_MAX_1M = 90_000
 LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
+# amendment 2026-11-24: replay records a UTC day per book (the engine clock's day) from arms that may send no entry (`Exploration.recording`
+# less the runnable ones); the estimate is ~280 a day over all hosts, so the cap only stops a runaway rule (2-core brain)
+REPLAY_RETIRED_DAILY_CAP = 1000
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side lots on gold's book; other books net_lot_cap
 MAX_NET_MIN_LOTS = 10               # the same cap in minimum lots, for an instrument whose minimum lot is not gold's 0.01
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
@@ -774,6 +783,20 @@ class Exploration:
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_dark", "arm": a,
                                   "tf": self.arms[a].tf})
             self.retired = self.retired | {a}
+        # amendment 2026-11-24: the replay-only arms whose rule still runs whatever refuses their entries (they send
+        # nothing at all); not a row edited after it was frozen, a bad row kept from its last good one, nor a dark tf.
+        # Never a 1d/1w arm (long_bars stamps its decision after its close; code review LOW-3), and never a dedicated
+        # control without a retirement of its own: it stops with its learning arm at a runtime stop
+        # (`exploration_learning._stop` puts it in `retired`), so its twin rows end with the arm's (quant C2)
+        self.recording: frozenset[str] = frozenset(
+            a for a, arm in self.arms.items() if arm.spec.control_mode == "replay_only" and arm.tf in live
+            and arm.tf not in LONG_TFS and a not in cfg.hash_refused and a not in cfg.invalid
+            and not (dedicated_control_of(arm.spec) and not arm.spec.retired))
+        for a in sorted(self.recording & self.retired):
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_replay_only",
+                                  "arm": a, "rule": REPLAY_RULE})
+        # (UTC day, replay records of refused arms that day), seeded from today's rows so a restart keeps the bound
+        self.replay_day: tuple[str, int] = _replay_seed(eng, self)
         self.long: LongHistory | None = None            # the 1d/1w warm-up, read at their first close (long_bars)
         # ADR 0061 amendment 2026-11-01: each owner experiment running under its exemption, journalled once at start
         # with its last day (`research.arms.OWNER_EXPERIMENTS`); its expiry is re-read once a minute
@@ -973,7 +996,7 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
     BROKER_BAR_LATE the same way (prereg-2026-10-27-scalp-volume.md amendment (d)). `filter_close`: where the common
     filters judge each bar (a 1d/1w arm's entry closes, `long_bars.step`; ADR 0081)."""
     from goldbot.research import arm_rules
-    if arm.arm_id in ex.retired or ex.last_bar.get(arm.arm_id) == through:
+    if silent(ex, arm.arm_id) or ex.last_bar.get(arm.arm_id) == through:
         return
     ex.last_bar[arm.arm_id] = through
     try:
@@ -991,13 +1014,85 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
         skipped = pd.concat([skipped, c[now_rows].assign(reason=BROKER_BAR_LATE)], ignore_index=True)
         c = c[~now_rows]
     for p in _pending(arm, c[c["idx"] == len(bars) - 1], through):
-        ex.queue.append(p)
+        if arm.spec.control_mode == "replay_only":
+            _replay(eng, ex, arm, p)                    # recorded now, never queued: nothing can send it
+        else:
+            ex.queue.append(p)
     gone = skipped[skipped["idx"] == len(bars) - 1]
     for p, why in zip(_pending(arm, gone, through), gone["reason"].astype(str)):
         _skipped(eng, ex, arm, p, why)
     if arm.spec.rule in ("redbox_break", "redbox_control"):     # the red-box week's review features (journal only)
         from goldbot.engine import redbox_week
         redbox_week.journal(eng, ex, arm, c, skipped, bars, through)
+
+
+REPLAY_RULE = "replay-only recording (prereg-amendment-2026-11-24-replay-only-retired-arms.md)"
+
+
+def silent(ex: Exploration, arm_id: str) -> bool:
+    """The arm's rule does not run: it may send no entry (`retired`) and does not record replay-only (`recording`)."""
+    return arm_id in ex.retired and arm_id not in ex.recording
+
+
+def _utc_day(eng: Engine) -> str:
+    """The engine clock's UTC day (YYYY-MM-DD)."""
+    return pd.Timestamp(eng.clock()).tz_convert("UTC").strftime("%Y-%m-%d")
+
+
+def _replay_seed(eng: Engine, ex: Exploration) -> tuple[str, int]:
+    """(today, the records already written today by this book's refused recording arms): the cap's counter at the
+    start (code review LOW-1). Unreadable: (today, 0), logged; the cap is a load bound, not a safety one."""
+    arms = sorted(ex.recording & ex.retired)
+    if not arms:
+        return "", 0                                   # nothing to bound: the clock is read at the first record
+    day = _utc_day(eng)
+    lo = pd.Timestamp(day, tz="UTC")
+    try:
+        with ex.db.connection() as conn:
+            (n,) = conn.execute(
+                f"SELECT COUNT(*) FROM exploration_obs WHERE account_id = ? AND decision_ns >= ? AND decision_ns < ? "
+                f"AND arm_id IN ({','.join('?' * len(arms))})",
+                (eng.cfg.account_id, _ns(lo), _ns(lo + pd.Timedelta(days=1)), *arms)).fetchone()
+    except Exception as exc:
+        log.warning("exploration: today's replay records unreadable (%s); the cap counts from 0", type(exc).__name__)
+        return day, 0
+    return day, int(n)
+
+
+def _replay_room(eng: Engine, ex: Exploration, arm: Arm, at: pd.Timestamp) -> bool:
+    """Whether a record of `arm` fits the day's bound: always for an arm that may enter; for a refused recording arm
+    at most REPLAY_RETIRED_DAILY_CAP a UTC day per book (amendment 2026-11-24; the first record over it is journalled
+    `exploration_replay_cap` at `at`, the rest dropped quietly; that day is void for every reader of these rows). The
+    day is the engine clock's (trading-safety L1): bar closes of mixed timeframes interleave either side of midnight."""
+    if arm.arm_id not in ex.retired or arm.arm_id not in ex.recording:
+        return True
+    day = _utc_day(eng)
+    n = ex.replay_day[1] + 1 if ex.replay_day[0] == day else 1
+    ex.replay_day = (day, n)
+    if n <= REPLAY_RETIRED_DAILY_CAP:
+        return True
+    if n == REPLAY_RETIRED_DAILY_CAP + 1:
+        log.warning("exploration: replay records of refused arms reached %d on %s; the rest of the day is not recorded",
+                    REPLAY_RETIRED_DAILY_CAP, day)
+        eng.decisions.append({"ts": at.isoformat(), "agent": None, "action": "exploration_replay_cap", "day": day,
+                              "cap": REPLAY_RETIRED_DAILY_CAP, "arm": arm.arm_id})
+    return False
+
+
+def _replay(eng: Engine, ex: Exploration, arm: Arm, s: Pending) -> None:
+    """A replay-only arm's candidate (amendments 2026-11-15 and 2026-11-24): journalled `exploration_refused:replay_only`
+    and recorded blocked `replay_only`, mu 0, for the r2 replay to label; never queued, so no budget, RiskGate, order
+    intent or order core ever sees it. A refused recording arm's records are bounded a day per book (`_replay_room`).
+    While the book warms (`books.warming`) the record is blocked `book_warming` instead."""
+    from goldbot.engine import books
+    if not _replay_room(eng, ex, arm, s.bar_ts):
+        return
+    # trading-safety L3: before the book's history backfill completes, its bars are not the history run's; recorded
+    # `book_warming` as a queued signal would be, so no reader takes it for a replay twin
+    why = "book_warming" if books.warming(eng) else "replay_only"
+    eng.decisions.append({"ts": s.bar_ts.isoformat(), "agent": arm.tag, "proposal": pending_id(eng, arm, s),
+                          "action": "exploration_refused:" + why, "arm": arm.arm_id, "tf": arm.tf})
+    candidate(eng, ex, s, s.bar_ts, why, mu=0.0)
 
 
 def _pending(arm: Arm, rows: pd.DataFrame, through: pd.Timestamp) -> list[Pending]:
@@ -1021,7 +1116,10 @@ def _skipped(eng: Engine, ex: Exploration, arm: Arm, s: Pending, why: str) -> No
     """Arms expansion 2026-10-26, section 4: "A candidate outside its £ cap or stop band is skipped and logged with its
     propensity": journalled (`exploration_skipped:<why>`, the arm's share of its pot as `propensity`, as `_send`'s
     refusals) and recorded blocked with its reason (`candidate`: mu 0, so off-policy estimates stay unbiased). Best
-    effort: a failure here is logged and never stops the other arms' signals."""
+    effort: a failure here is logged and never stops the other arms' signals. A refused recording arm's skipped
+    candidates (RBRC*, spec controls) count against its day's bound (`_replay_room`)."""
+    if not _replay_room(eng, ex, arm, s.bar_ts):
+        return
     try:
         share = shares(ex, s.bar_ts).get(arm.arm_id)
         eng.decisions.append({"ts": s.bar_ts.isoformat(), "agent": arm.tag, "proposal": pending_id(eng, arm, s),
@@ -1135,7 +1233,7 @@ def _with_context(eng: Engine, ex: Exploration, arm: Arm, complete: pd.DataFrame
     or held back (`exploration_held_back`, journalled once each time the reason changes) and nothing queued. A
     retired arm reads nothing."""
     from goldbot.engine.exploration_context import NO_BAR
-    if arm.arm_id in ex.retired or not is_bar_close(arm.tf, close_ts):
+    if silent(ex, arm.arm_id) or not is_bar_close(arm.tf, close_ts):
         return
     got = ex.context.inputs(arm.spec, complete, close_ts)
     if isinstance(got, str):
@@ -1458,7 +1556,7 @@ def refresh_dormant(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     ex.dormant_read = minute
     why: dict[str, str] = {}
     try:
-        for arm in (a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant):
+        for arm in (a for a in ex.arms.values() if a.tf in SUB_15M and a.arm_id not in ex.dormant | ex.recording):
             if (r := terminal_refusal(eng, ex, arm, now)) is not None:
                 why[arm.arm_id] = r
     except Exception as exc:
@@ -1982,7 +2080,8 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: i
     `on_pass`; the budget reads timed `exploration:budget`): the number sent."""
     from goldbot.engine import books
     # amendment 2026-11-15: a replay-only control's signals never wait on the room, an unsettled order or the pause;
-    # each is recorded at once (blocked replay_only, mu 0) with its journal row, and none reaches `_send`
+    # each is recorded at once (blocked replay_only, mu 0) with its journal row, and none reaches `_send`. Since
+    # 2026-11-24 `_signal` records them and never queues one; this sweep stays as the guard for any other path in
     for s in [s for s in ex.queue if ex.arms[s.arm_id].spec.control_mode == "replay_only"]:
         ex.queue.remove(s)
         arm = ex.arms[s.arm_id]
