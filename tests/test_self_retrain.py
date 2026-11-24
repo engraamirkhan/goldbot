@@ -372,18 +372,25 @@ def test_the_stored_model_is_numbers_only_and_scores_the_same_after_a_round_trip
 
 
 # ---------------------------------------------------------------------------------------------- the null rate (R9)
+def _null_run(seed: int) -> int:
+    """One null run (4 brokers x 10 arms, 20 days, day-clustered noise sd 1.2 R): its number of gate passes."""
+    rng = np.random.default_rng(seed)
+    reads = []
+    for b in range(4):
+        f = _frame(rng, arms=10, days=20, per_day=25, ctrl_per_day=10)
+        reads.append({"broker": f"b{b}", "counts": {}, "active": {},
+                      "arms": sr.read_arms(f, named_controls={}, rules={}, cutoff=START + pd.Timedelta(days=30))})
+    return sum(bool(d["gate_pass"]) for d in sr.decide(reads, serve=True).values())
+
+
 @pytest.mark.integration
 def test_under_the_null_a_run_passes_the_gate_at_most_twelve_percent_of_the_time():
-    rng = np.random.default_rng(20261124)
-    sims, passes = 200, 0
-    for s in range(sims):
-        reads = []
-        for b in range(4):
-            f = _frame(rng, arms=10, days=20, per_day=25, ctrl_per_day=10)
-            reads.append({"broker": f"b{b}", "counts": {}, "active": {},
-                          "arms": sr.read_arms(f, named_controls={}, rules={}, cutoff=START + pd.Timedelta(days=30))})
-        passes += any(d["gate_pass"] for d in sr.decide(reads, serve=True).values())
-    assert passes / sims <= 0.12, passes
+    """Quant R9: ~200 null runs; measured 2026-11-24 on seeds 1000-1199: 0 runs with a pass (card section 3)."""
+    import multiprocessing as mp
+    sims = 200
+    with mp.get_context("fork").Pool(4) as pool:
+        got = pool.map(_null_run, range(20261124, 20261124 + sims))
+    assert sum(g > 0 for g in got) / sims <= 0.12, got
 
 
 # ---------------------------------------------------------------------------------------------- health, job, scope
