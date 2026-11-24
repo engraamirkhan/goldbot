@@ -339,7 +339,8 @@ def cost_states(conn: sqlite3.Connection, arms: Collection[str], *, until: pd.Ti
     cut, args = ("", tuple(want)) if until is None else (" AND ts_ns < ?", (*want, int(pd.Timestamp(until).value)))
     by_arm: dict[str, list[ExplorationRecord]] = {a: [] for a in want}
     for t in LEDGER.select(conn, f"arm_id IN ({marks}){cut}", args):
-        by_arm[t.arm_id].append(t)
+        if t.evidence_class != "learning_cohort":   # ADR 0095 quant C2: cohort fills never feed an H-81 stop
+            by_arm[t.arm_id].append(t)
     return {a: cost_state(rows, rules.cost_stop, record) for a, rows in by_arm.items()}
 
 
@@ -370,6 +371,7 @@ def edge_cap_states(conn: sqlite3.Connection, arms: Collection[str], *, record: 
     cut, args = ("", tuple(want)) if until is None else (" AND ts_ns < ?", (*want, int(pd.Timestamp(until).value)))
     rows = [json.loads(b) for (b,) in conn.execute(
         f"SELECT body FROM exploration_trades WHERE closed = 1 AND arm_id IN ({marks}){cut}", args)]   # noqa: S608
+    rows = [r for r in rows if r.get("evidence_class") != "learning_cohort"]   # ADR 0095 quant C2: never an edge read
     probe = {tuple(k.split(":", 1)): v for k, v in record.probe_exit_slip_usd.items()}
     df = trade_costs(rows, record.brokers, exit_prior_usd=record.exit_prior_usd, probe_slip=probe)  # type: ignore[arg-type]
     out: set[str] = set()

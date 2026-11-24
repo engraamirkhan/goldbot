@@ -36,8 +36,11 @@ INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             "F2A", "F2C", "OBR15", "BXR15", "BXR30", "BXR1H"}
 SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
 # H-81 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pots): icm-demo's and vantage-demo's scalp strata
-DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD",
-              "LCZ3D", "LCZ4D", "LCZ6D", "LCZ7D", "LCZ9D", "LCZ10D"}                # LC*: ADR 0072 learning controls
+DEMO_SCALP = {"Z4D", "Z6D", "Z7D", "ZCD", "LCZ4D", "LCZ6D", "LCZ7D"}        # LC*: ADR 0072 learning controls
+# ADR 0095 (demo learning cohort, 2026-11-24): icm-demo's Z3D/Z9D/Z10D trade in icm-probe's cohort (orders on icm-probe
+# only), with their replay-only LC* controls
+COHORT_MOVED = {"Z3D", "Z9D", "Z10D", "LCZ3D", "LCZ9D", "LCZ10D"}
+SCALP = SCALP | COHORT_MOVED
 GROWTH = {"GS1", "GS1C"}           # growth sprint 2026-11-01: icm-demo only
 # execution/cost calibration controls (prereg-amendment-2026-11-10-execution-controls.md)
 EXECUTION_ICM = {"IEX15", "IEX1H"}

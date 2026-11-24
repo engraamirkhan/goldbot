@@ -237,8 +237,9 @@ def test_supply_from_the_real_config_blocks_every_spec_retired_arm():
         s = view[acc.account_id]
         assert s.broker == acc.broker and s.daily == cfg.daily
         assert set(s.arms) == {a.arm_id for a in cfg.arms}
+        cohort = set(cfg.cohort.arms) if cfg.cohort is not None else set()     # ADR 0095: supply though retired
         for arm_id in spec_retired(cfg):
-            assert s.arms[arm_id].blocked is not None
+            assert (s.arms[arm_id].blocked is None) == (arm_id in cohort), arm_id
 
 
 def _engine_arm(arm_id: str, tf: str = "15m", instrument: str | None = None, role: str = "strategy",

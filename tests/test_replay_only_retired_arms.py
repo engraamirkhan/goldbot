@@ -45,6 +45,8 @@ REVIVED = ("S1A", "S1B", "F1A", "F1C", "G1A", "G1C", "Z1P", "Z2P", "Z5P", "LCZ1P
 REDBOX_REPLAY = {"RBR15": "RB15", "RBR1H": "RB1H", "RBR4H": "RB4H",
                  "RBRC15": "RBC15", "RBRC1H": "RBC1H", "RBRC4H": "RBC4H"}
 REPLAY_BORN_RETIRED = frozenset(REDBOX_REPLAY)      # the new rows, retired from birth (other tests' pinned sets)
+# ADR 0095 (demo learning cohort, 2026-11-24): these trade again on icm-probe, still retired, back in control_mode broker
+COHORT = frozenset({"RBR15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P"})
 LEFT_RETIRED = ("GS1", "GS1C", "RB15", "RB1H", "RB4H", "S0-XAGUSD", "LB-US500")
 # replay-only since the red-box week, so they would record again, but their hashed end_utc decides no candidate after
 # the week's end: RBRC* records the random ladder from now on
@@ -79,7 +81,7 @@ def _retired(arm: Arm) -> Arm:
 def test_every_gold_arm_retired_for_lack_of_evidence_since_2026_11_13_records_replay_only_and_stays_retired():
     rows = _rows()
     for a in REVIVED:
-        assert rows[a].control_mode == "replay_only" and rows[a].retired, a
+        assert rows[a].control_mode == ("broker" if a in COHORT else "replay_only") and rows[a].retired, a
 
 
 def test_the_arms_left_retired_keep_recording_nothing():
@@ -98,7 +100,7 @@ def test_the_red_box_rule_records_again_under_new_replay_only_ids_with_the_old_b
         assert {k: v for k, v in a.params.items() if k not in ("end_utc", "control", "prereg")} == \
             {k: v for k, v in b.params.items() if k not in ("end_utc", "control", "prereg")}, new
         assert a.params["end_utc"] == "2026-12-31T22:00:00Z", new
-        assert a.retired and a.control_mode == "replay_only", new
+        assert a.retired and a.control_mode == ("broker" if new in COHORT else "replay_only"), new
 
 
 def test_replay_only_recording_adds_no_k_row():

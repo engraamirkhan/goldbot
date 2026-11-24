@@ -48,7 +48,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.engine import exploration_budget as budget
 from goldbot.engine.exploration import Arm
 from goldbot.instruments import GOLD
-from goldbot.ops.accounts import DailyEntries
+from goldbot.ops.accounts import DailyEntries, LearningCohort
 
 if TYPE_CHECKING:
     from goldbot.data.calendar import SessionTable
@@ -82,6 +82,8 @@ class AccountSupply(FrozenRecord):
     arms: dict[str, ArmSupply] = Field(default_factory=dict)
     pairs: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     engine_arms: dict[str, Arm] = Field(default_factory=dict)
+    # ADR 0095: the account's demo learning cohort; its arms count as supply though retired (`supply_for`)
+    cohort: LearningCohort | None = None
 
 
 class Silence(FrozenRecord):
@@ -119,6 +121,11 @@ def supply_for(acc: Account, timeframes_live: Sequence[str]) -> AccountSupply | 
     if cfg is None or not cfg.enabled:
         return None
     refused, retired, live = entry_refused(cfg), spec_retired(cfg), set(timeframes_live)
+    # ADR 0095: a cohort arm may enter though retired and unqualified (the engine's `exploration_cohort.start`; its
+    # caps are coarser here, so a capped cohort reads as supply and (b) is the backstop: a WARN then is the cap)
+    cohort = frozenset(cfg.cohort.arms) if cfg.cohort is not None else frozenset()
+    retired = retired - cohort
+    refused = {k: v for k, v in refused.items() if k not in cohort}
     ok = {a.arm_id: a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
           and (a.spec.rule not in SPEC_RULES or acc.mode == "demo")}
     arms: dict[str, ArmSupply] = {}
@@ -127,7 +134,8 @@ def supply_for(acc: Account, timeframes_live: Sequence[str]) -> AccountSupply | 
                else "unqualified" if a.arm_id in refused else "timeframe dark" if a.tf not in live
                else NOT_SLOT if a.spec.role == "learning" and cfg.learning_max_open == 0 else None)
         arms[a.arm_id] = ArmSupply(kind=budget.entry_kind(a), instrument=a.instrument, tf=a.tf, blocked=why)
-    return AccountSupply(broker=acc.broker, daily=cfg.daily, arms=arms, pairs=budget.pairs(ok), engine_arms=ok)
+    return AccountSupply(broker=acc.broker, daily=cfg.daily, arms=arms, pairs=budget.pairs(ok), engine_arms=ok,
+                         cohort=cfg.cohort)
 
 
 def supply_by_account(accounts: list[Account], timeframes_live: Sequence[str]) -> dict[str, AccountSupply]:
@@ -248,8 +256,9 @@ def _enterable(s: AccountSupply, led: _Ledger, thin_today: int) -> tuple[list[st
 
     active: set[str] = set()
     engine_active: set[str] = set()
+    cohort = frozenset(s.cohort.arms) if s.cohort is not None else frozenset()
     for arm_id, a in s.arms.items():
-        if arm_id in led.retired:
+        if arm_id in led.retired and arm_id not in cohort:     # ADR 0095: the cohort's caps replace the stops
             no("retired at its stop")
         elif a.blocked is not None:
             no(a.blocked)
@@ -361,5 +370,32 @@ def describe(v: Silence) -> str:
     return (f"{state}; longest London/NY silence today {v.run_min // 60} h {v.run_min % 60:02d} min{tail}")[:600]
 
 
+def cohort_line(s: AccountSupply, aux: Path, now: pd.Timestamp) -> str | None:
+    """ADR 0095: the cohort's week so far for the health detail ("cohort week-to-date P&L"), from the ledger with the
+    engine's read (`exploration_cohort.read`); None without a cohort. Raises sqlite3.Error on a torn read. A WARN of
+    entry silence while the cohort is held is the cap, by design."""
+    from goldbot.engine.exploration_cohort import read, week_start
+    co = s.cohort
+    if co is None:
+        return None
+    now = pd.Timestamp(now).tz_convert("UTC")
+    loss: dict[str, float] = {}
+    week_pnl, fills = 0.0, 0
+    if aux.exists():
+        con = _connect(aux)
+        try:
+            got = read(con, co, co.arms, now, {})
+        finally:
+            con.close()
+        loss, week_pnl, fills = got.loss, got.week_pnl, got.fills
+    capped = sorted(a for a, v in loss.items() if v >= co.arm_loss_cap_gbp - 1e-9)
+    nxt = week_start(now) + pd.Timedelta(days=7)
+    state = ("ended" if now.normalize() > pd.Timestamp(co.until, tz="UTC")
+             else f"held to {nxt:%a %Y-%m-%d} 00:00 UTC by the weekly cap" if -week_pnl >= co.week_loss_cap_gbp - 1e-9
+             else "open")
+    return (f"cohort ({len(co.arms)} arms, to {co.until}): week to date {week_pnl:+.2f} of the -{co.week_loss_cap_gbp:g} "
+            f"cap over {fills} closes, {state}; arms at their {co.arm_loss_cap_gbp:g} cap: {', '.join(capped) or 'none'}")
+
+
 __all__ = ["NOT_SLOT", "RUNBOOK", "SILENCE_MIN", "SILENT_SEGMENTS", "SPENT", "VIEW_TTL_S", "AccountSupply", "ArmSupply",
-           "Silence", "cached_supply", "describe", "evaluate", "supply_by_account", "supply_for"]
+           "Silence", "cached_supply", "cohort_line", "describe", "evaluate", "supply_by_account", "supply_for"]

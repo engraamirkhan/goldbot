@@ -155,6 +155,12 @@ def admissible(t: ExplorationRecord) -> bool:
     return t.fill_price is not None and t.exit_utc is not None and t.pnl is not None and not t.censored
 
 
+def counts_toward_reads(t: ExplorationRecord) -> bool:
+    """`admissible` and not a demo learning cohort fill (ADR 0095, quant C2: "fill P&L is never compared with a
+    control or counted toward any H-61/H-81 unit"): what an arm's n and its stops read."""
+    return admissible(t) and t.evidence_class != "learning_cohort"
+
+
 def trades(conn: sqlite3.Connection, where: str = "", params: Sequence[object] = ()) -> list[ExplorationRecord]:
     """`exploration_trades` rows (a trusted `where` over its columns), in exit order then send order."""
     from goldbot.engine.exploration import LEDGER
@@ -350,7 +356,7 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
     by_arm: dict[str, list[ExplorationRecord]] = {}
     cut, upto = ("", ()) if until is None else (" AND exit_ns < ?", (_ns(until),))
     for t in trades(conn, f"account_id IN ({marks}) AND closed = 1{cut}", (*accounts, *upto)):
-        if admissible(t):
+        if counts_toward_reads(t):
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
     spec_controls = control_arm_ids()
@@ -365,7 +371,7 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
             u = rules.units[name]
             m = ",".join("?" * len(u.arms))
             pooled = [_fill(t, t.client_order_id not in void) for t in trades(
-                conn, f"arm_id IN ({m}) AND closed = 1{cut}", (*u.arms, *upto)) if admissible(t)]
+                conn, f"arm_id IN ({m}) AND closed = 1{cut}", (*u.arms, *upto)) if counts_toward_reads(t)]
             units[name] = unit_stop(u, [f for f in pooled if f is not None], BAND_SHARE)
         return units[name]
 

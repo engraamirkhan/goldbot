@@ -44,6 +44,9 @@ NO_BRACKET = {"BXR15", "BXR30", "BXR1H", "BXR4H", "XBB15", "S1A", "S1B"}
 REDBOX = {"RB15": "RBC15", "RB1H": "RBC1H", "RB4H": "RBC4H"}
 # GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): one arm per ICM host, each with a replay-only control
 GD1 = {"GD1D": "GD1CD", "GD1P": "GD1CP"}
+# ADR 0095 (demo learning cohort, 2026-11-24): these icm-demo learning arms moved to icm-probe's cohort with their
+# dedicated replay-only controls
+COHORT_MOVED = {"Z3D": "icm-probe", "Z9D": "icm-probe", "Z10D": "icm-probe"}
 
 
 @pytest.fixture(autouse=True)
@@ -295,7 +298,7 @@ def test_each_learning_loss_cap_is_twenty_times_its_arms_per_trade_cap() -> None
     accounts = acc_mod.load_accounts(logins=False)
     for acc_id, per in LEARNING.items():
         for arm_id in per:
-            cap = accounts[acc_id].exploration.arms[arm_id].max_loss
+            cap = accounts[COHORT_MOVED.get(arm_id, acc_id)].exploration.arms[arm_id].max_loss
             assert arms.Learning.model_validate(spec[arm_id].learning).loss_cap_gbp == pytest.approx(20 * cap)
 
 
@@ -322,11 +325,11 @@ def test_without_its_k_rows_every_learning_arm_and_dedicated_control_is_refused_
 def test_every_learning_arm_is_registered_on_its_account_with_its_control_and_no_growth_or_adds() -> None:
     accounts = acc_mod.load_accounts(logins=False)
     for acc_id, per in LEARNING.items():
-        reg = accounts[acc_id].exploration.arms
         for arm_id, control in per.items():
-            assert arm_id in reg and control in reg, (acc_id, arm_id)
-            assert reg[arm_id].sizing == "min_lot" and reg[arm_id].adds == 0
-            assert reg[control].control_share is not None
+            own = accounts[COHORT_MOVED.get(arm_id, acc_id)].exploration.arms
+            assert arm_id in own and control in own, (acc_id, arm_id)
+            assert own[arm_id].sizing == "min_lot" and own[arm_id].adds == 0
+            assert own[control].control_share is not None
 
 
 # ------------------------------------------------------------------------------------------------ reports

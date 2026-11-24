@@ -47,6 +47,8 @@ ROWS: dict[str, tuple[str, float, float, int]] = {
 TWINS = {"VS0": "S0", "VS1A": "S1A", "VS1B": "S1B", "VS2A": "S2A", "VS2B": "S2B", "VS3A": "S3A", "VS3B": "S3B",
          "VS5A": "S5A", "VS5B": "S5B"}
 PROBE = {"Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P"}
+# ADR 0095 (2026-11-24): icm-demo's Z3D/Z9D/Z10D moved to icm-probe's demo learning cohort (orders on icm-probe only)
+COHORT_MOVED = {"Z3D", "Z9D", "Z10D"}
 
 
 @pytest.fixture(scope="module")
@@ -532,7 +534,7 @@ def test_icm_probe_registers_its_six_strata_in_the_re_split_scalp_pot_at_the_sca
     """Amendment (a) 7.1: "icm-probe's scalp pot `max_open` goes 12 -> 14, inside the unchanged `max_open_total` 17
     ... The pot is re-split to £168 (section 3.4); the £198 and `budget_share` are unchanged" (ADR 0057)."""
     ex = accounts["icm-probe"].exploration
-    assert {a for a in ex.arms if a in ROWS} == PROBE
+    assert {a for a in ex.arms if a in ROWS} == PROBE | COHORT_MOVED
     assert {(ex.arms[a].style, ex.arms[a].max_loss, ex.arms[a].control_share) for a in PROBE} == {("scalp", 6.5, None)}
     # demo-limits ADR 0072 (2026-11-02): the pot is slots only (pot_budgets false), 14 -> 19, max_open_total 23
     assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (None, 19, 23)

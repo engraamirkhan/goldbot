@@ -146,6 +146,7 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 265 | H-81 cost stop: reprice every row on the cost version in force (ADR 0092) | Research integrity · costs | S | done 2026-11-20 (branch fix/true-costs, quant C2) · accountable: data-engineer · reviews: quant-reviewer |
 | 266 | Engine cost of record: next version from quote-measured exits (P6 coverage >= 95%) | Data · costs | S | proposed 2026-11-20 (data-engineer, ADR 0092) · accountable: data-engineer · reviews: quant-reviewer |
 | 267 | Snapshot writer stores the count of unstamped minutes in the last 24 h | Research data (learning loop) | S | proposed |
+| 268 | Learning-class fills (evidence_class learning) stay out of rankings, read progress and board n | Research integrity · API | S | proposed |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1796,6 +1797,18 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     1. The column is NULL for snapshots written before the change.
     2. Its value equals `snapshot_audit.audit` on the same minutes, checked in a parity test over 12 cuts.
     3. The self-retrain uses the column where it is set and keeps the audit only for NULL rows.
+- **268. Learning-class fills (evidence_class learning) stay out of rankings, read progress and board n.** Value (quant
+  review C2 of #440, ADR 0095): demo learning cohort fills (`evidence_class: learning_cohort`) are now listed as
+  `not_evidence` and kept out of every strategy ranking row, read progress, board n and H-61/H-81 stop unit
+  (`trades_ledger._arm_row`, `strategy_ranking`, `labs.counts_toward_reads`). Learning-class fills (`evidence_class:
+  learning`, unqualified demo evidence per the ADR 0061 amendment 2026-11-02) have the same gap: they are `counted` in
+  the trade ledger and can enter a family ranking row and read progress, although "never a qualification, never in a
+  family ranking". Acceptance:
+  - quant decides which readers may count a learning fill (the learning arm's own kill read and its loss cap do;
+    rankings and the board's n do not);
+  - the trade ledger, the strategy ranking and the board follow that decision;
+  - a test shows a learning fill is listed but in no ranking row, read progress or board n where the ruling says
+    not.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

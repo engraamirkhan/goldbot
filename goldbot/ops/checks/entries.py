@@ -46,6 +46,13 @@ def check_entry_silence(ctx: HealthContext, account_id: str) -> Check | None:
             return None
         return Check(name=name, status=last.status,
                      reason=f"{last.reason} [aux.db unreadable now ({type(exc).__name__}): last verdict kept]"[:700])
-    out = Check(name=name, status="warn" if v.no_supply or v.silent else "ok", reason=es.describe(v))
+    reason = es.describe(v)
+    try:                                               # ADR 0095: the cohort's week so far, where the account has one
+        line = es.cohort_line(s, ctx.state_dir / "aux.db", ctx.now)
+    except Exception as exc:                       # noqa: BLE001 - reporting only: never fails the check
+        line = f"cohort week unreadable ({type(exc).__name__})"
+    if line:
+        reason = f"{reason[:380]}; {line}"
+    out = Check(name=name, status="warn" if v.no_supply or v.silent else "ok", reason=reason[:700])
     es._LAST[key] = out
     return out

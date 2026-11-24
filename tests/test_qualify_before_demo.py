@@ -58,6 +58,13 @@ NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D
 LEARNING = {"icm-demo": {"Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
             "icm-probe": {"S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"}, "vantage-demo": {"Z6V", "Z7V"},
             "vantage-247": set()}
+# ADR 0095 (demo learning cohort, 2026-11-24): Z3D/Z9D/Z10D moved from icm-demo to icm-probe's cohort, with their LC*
+# controls
+COHORT_MOVED = {"Z3D", "Z9D", "Z10D"}
+LEARNING["icm-demo"] -= COHORT_MOVED
+LEARNING["icm-probe"] |= COHORT_MOVED
+NEWLY_REFUSED["icm-demo"] -= COHORT_MOVED
+NEWLY_REFUSED["icm-probe"] |= COHORT_MOVED
 LEARNING_CONTROLS = {k: {"LC" + a for a in v} for k, v in LEARNING.items()}      # one per arm (quant (2)/(3))
 # learning-mi-2026-11-02.md (run since lane L3): each listed instrument's learning pair, refused without its K rows
 MI_PAIRS = {a.account_id: {f"{g}-{k}" for k in a.instruments for g in ("LB", "LBC")}
