@@ -55,7 +55,8 @@ def test_the_shipped_register_loads_with_registered_checks_and_agent_owners():
 def test_the_shipped_register_seeds_the_audit_headline_findings():
     ids = {f.id: f for f in fm.load_register(ROOT / SETTINGS.findings.path).findings}
     assert ids["A4-CONTROLS"].check.fn == "controls_to_signal_ratio"
-    assert ids["A4-VOLUME"].check.params == {"min": 150, "max": 250, "days": 5}
+    assert ids["A4-VOLUME"].check.fn == "manual"  # superseded 2026-11-24 by the evidence-only priority (11-22)
+    assert ids["A4-VOLUME"].check.params["done_on"] is not None
     assert ids["RES-LEARNER"].check.fn == "learner_outputs"
     assert ids["SEC-1"].check.fn == "github_security"
     assert ids["ENG-BRIDGE-BIND"].severity == "critical"
