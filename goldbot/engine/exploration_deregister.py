@@ -41,8 +41,9 @@ ACTION = "exploration_arm_deregistered"
 def candidates(cfg: ExplorationConfig) -> list[str]:
     """The arms of `cfg` the engine drops once flat: those whose frozen spec row records a retirement. An arm retired
     at its stop (aux.db status) or refused for any other reason is not one: only the spec retirement is permanent by
-    the frozen row itself."""
-    return sorted(a.arm_id for a in cfg.arms if a.spec.retired)
+    the frozen row itself. A retired arm in `control_mode: replay_only` is not one either: its rule keeps running to
+    record replay-only candidates (amendment 2026-11-24, `exploration.Exploration.recording`)."""
+    return sorted(a.arm_id for a in cfg.arms if a.spec.retired and a.spec.control_mode != "replay_only")
 
 
 def holds(eng: Engine, ex: Exploration, arm_id: str) -> str | None:

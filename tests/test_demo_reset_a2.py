@@ -76,6 +76,7 @@ def test_every_a2_id_is_retired_on_its_own_registry_row_with_the_rule_and_keeps_
 def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_stays_active(spec) -> None:
     # besides A2: the owner's instrument decision of 2026-11-04 retired every row of a removed instrument
     from tests.test_learning_mi import REMOVED
+    from tests.test_replay_only_retired_arms import REPLAY_BORN_RETIRED
     owner = {i for i, a in spec.items() if a.params.get("instrument") in REMOVED}
     assert all(spec[i].retired_day == "2026-11-04" for i in owner)
     assert all(str(spec[i].retired_day) == "2026-11-06" for i in RETIRED_1106)
@@ -88,7 +89,7 @@ def test_nothing_but_the_a2_list_is_retired_and_every_control_and_exempt_arm_sta
                for i in SURVIVOR_KILL_1113)
     assert {i for i, a in spec.items() if a.retired} == \
         set(A2) | owner | RETIRED_1106 | RETIRED_1107 | RETIRED_1113 | gold_only | COST_BUDGET_1113 | SURVIVOR_KILL_1113 \
-        | THINNING_1113 | NO_EVIDENCE_1122
+        | THINNING_1113 | NO_EVIDENCE_1122 | REPLAY_BORN_RETIRED
     # owner priority 2026-11-22 (only arms with evidence place orders): GS1/GS1C and the red-box arms, dated that day
     assert all(str(spec[i].retired_day) == "2026-11-22" for i in NO_EVIDENCE_1122)
     assert all(str(spec[i].retired_day) == "2026-11-13" and "control-thinning" in spec[i].retired_rule

@@ -478,6 +478,15 @@ accounts:
         RBC1H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
         RB4H: { style: intraday, max_loss: 30.0 }
         RBC4H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
+        # amendment 2026-11-24 (prereg-amendment-2026-11-24-replay-only-retired-arms.md): the red-box rule recorded
+        # again, replay-only and retired from birth, so no entry is ever sent (cap and share never used). Rollback:
+        # drop these six lines, restart
+        RBR15: { style: intraday, max_loss: 30.0 }
+        RBRC15: { style: intraday, max_loss: 30.0, control_share: 0.01 }
+        RBR1H: { style: intraday, max_loss: 30.0 }
+        RBRC1H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
+        RBR4H: { style: intraday, max_loss: 30.0 }
+        RBRC4H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
         # GD-1 A1 (prereg-amendment-2026-11-20-gd1-asia-learning.md): icm-probe's own arm and replay-only control, as
         # GD1D/GD1CD on icm-demo (one arm id per host); £40 a trade, the ADR 0043 swing cap. Rollback: retire GD1P by
         # retired_day first, drop these two lines and the swing pot once it is flat, restart
