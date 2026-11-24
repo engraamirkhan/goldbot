@@ -52,7 +52,7 @@ def _replayed_control() -> None:
 
     def replayed(arm: A.Arm, ctx: R.RuleContext) -> pd.DataFrame:
         out = redbox_control(arm, ctx)
-        return out.assign(skip=[None if s == REPLAY_ONLY else s for s in out["skip"]]) if len(out) else out
+        return out.assign(skip=out["skip"].where(out["skip"] != REPLAY_ONLY, None)) if len(out) else out
     R.RULE_FUNCS["redbox_control"] = replayed
 
 
@@ -222,9 +222,10 @@ def read(trades: pd.DataFrame, col: str = "net_bp") -> dict[str, Any]:
             "target_share_arm": float((a["barrier_hit"] == "target").mean()),
             "risk_bp_p50_arm": float(np.median(a["risk_usd"] / a["entry"] * 1e4)),
         }
-        cont = (res["t_delta"] >= Z_SCREEN and res["t_arm"] >= Z_SCREEN and stress > 0
-                and res["years_arm_pos"] >= 5 and res["years_delta_pos"] >= 5)
-        stop = (se_d <= 0.06 and (res["ub90_delta"] < 0.05 or res["ub90_arm"] < 0))
+        yrs_a = sum(v > 0 for v in ya.values())
+        yrs_d = sum(ya[y] - yc[y] > 0 for y in ya)
+        cont = (d / se_d >= Z_SCREEN and m_a / se_a >= Z_SCREEN and stress > 0 and yrs_a >= 5 and yrs_d >= 5)
+        stop = (se_d <= 0.06 and (d + 1.2816 * se_d < 0.05 or m_a + 1.2816 * se_a < 0))
         res["verdict"] = "CONTINUE" if cont else "STOP" if stop else "INCONCLUSIVE"
         out[tf] = res
     return out
