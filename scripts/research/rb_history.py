@@ -7,7 +7,8 @@ ladders RBC1H/RBC4H on the W2 research windows, through the established history 
   run     the pre-registered read of ONE window (learn only in this card's first stage; confirm needs the quant's
           signature, test_old needs a confirm pass: `windows.allow_test_old_for`). Writes per-trade parquet + JSON.
 
-Never reads the holdout (windows.read_window_bars / arms guards). Market data stays local (--bars raw/)."""
+Never reads the holdout (cut_at_holdout / arms guards). Bars come from read_bar_files directly: warm-up and exit tails
+may include adjacent-window bars (test_old Sep-Dec 2009, confirm Jan 2018) for state only; no outcome from them is read. Market data stays local (--bars raw/)."""
 from __future__ import annotations
 
 import argparse

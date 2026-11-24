@@ -79,6 +79,9 @@ geometry (stop width, target distance, side frequency) a box rule imposes on any
 - Holdout 2025-10-01 onward: never read (arms/windows guards; exits after 2025-09-30 are cut by `cut_at_holdout`).
 - Data: Dukascopy 1m XAUUSD yearly Parquet in the Mac's `raw/` (local only, never published). Each year is run with
   120 calendar days of earlier bars for warm-up (the channel state needs 313 bars, about 75 days at 4h) and 14 days of tail for exits.
+  The driver reads these bars with `read_bar_files` directly, so warm-up for 2010 includes Sep-Dec 2009 (test_old) bars
+  and exit tails for 2017 include Jan 2018 (confirm) bars. Those bars are price history for state and exits only: no
+  candidate or outcome from either window is read or scored (quant review 2026-11-24).
 
 ## 5. Cost model (fixed now)
 
@@ -195,9 +198,9 @@ nothing over random boxes with the same spacing (Delta CI excludes +0.05 R at 1h
 loses about 0.16 R a candidate net. RB1H/RB4H do not return to demo. Confirm and test_old stay unread for this family
 (not needed: no CONTINUE). Any red-box variant needs a new mechanism, not a new filter, exit or timeframe (R-10).
 
-**15m (finding asked "include 15m or state why not"; stated after the read, for a reason independent of it):** 15m
-own-timeframe box breaks are already closed by R-15 (2010-25, STOP) and H-80 R2 (2018-25), and RB15's week read was
--0.077 vs -0.061; a 15m stop is about half the 1h one, so costs in R about double. A 15m read would spend K to confirm
-a closed result.
+**15m (finding asked "include 15m or state why not"):** not tested; deferred by post-hoc judgement (written after the
+learn read, quant review 2026-11-24). R-15 tested a filtered `box_break_close` with ATR brackets and H-80 R2 read only
+2018-25, so neither closes the red-box rule at 15m. RB15's week read was -0.077 vs -0.061 and a 15m stop is about half
+the 1h one (costs in R about double), so a 15m read is not worth K now; any 15m return needs its own card.
 
-**K:** +2 to book on the brain registry with this result (status evaluated, rule_ref this file); 2026Q4 84 -> 82 left.
+**K:** +2 booked on the brain registry 2026-11-24 (trials 3451 RB1H and 3452 RB4H, status evaluated, rule_ref this file); 2026Q4 3,418 of 3,500 used, 82 left.
