@@ -665,3 +665,13 @@ improvement A of the ML review 2026-11-13. Prior 10-15 %; R-17 is evidence again
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-98 (GD-1) | Gold daily family, 3 fixed variants: A1 long 00:00-07:00 UTC every weekday (2003-09, the only window H-04 has not read); B1 long/flat on 21-obs DFII10 and broad-dollar change both falling, B2 on their z-sum < 0 (2006-02..2009 + 2018..2025-09); costs 0.553 bp round trip + ICM swap 1.228 bp/night | **A1 PASS, B1/B2 fail** 2026-11-20 (trial #3440; `prereg-2026-11-20-gold-daily.md`): A1 net SR 2.08, excess over drift +4.4 bp/day (CI lb +1.06) on 2003-09; spent 2010-25 context only +0.9 bp/day excess, CI spans 0 (decay). B re-tested R-16 in long/flat form: excess -1.3 / -0.7 bp/day | 1 (K +1, #3440) | Per variant: net SR >= 0.5, SR CI and excess-over-drift CI (f x buy-and-hold, equal time in market) lower bounds > 0 at 1 - 0.05/3, net > 0 at 2 x cost; family passes on >= 1 variant, else retired |
+
+## A37. Red-box rule on history (strategy researcher, 2026-11-24)
+
+Card `prereg-2026-11-24-rb-history.md` (weekly decisions 2026-11-22 step 6, finding EVIDENCE-RB-HISTORY). Prior about
+5 %: own-timeframe box breaks failed at 15m (R-15) and 15m-4h on 2018-25 (H-80 R2), so confirm is CONFIRM-SEEN and
+test_old 2008-09 is the only fresh gate.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-99 | RB1H / RB4H (`redbox_break`, own-timeframe `sr_channels` boxes, stop beyond the broken box, target the next box, no filter) beat their seeded random ladders RBC1H / RBC4H in mean net R per replayed candidate (W2 bps costs), and net > 0 | **failed 2026-11-24 (learn STOP, both TFs)**: net -0.159 R (1h) / -0.162 R (4h) a candidate, Delta vs random ladder -0.008 R (95 % CI -0.046, +0.031) / -0.054 R (-0.120, +0.011); 0 of 8 years net > 0. Retired: no red-box variant without a new mechanism; confirm and test_old not read | K +2 (k_eff 2) | card s.6: learn CONTINUE (t Delta and t net >= 1.96, stress > 0, >= 5/8 years) -> confirm after quant signature -> test_old 2008-09; STOP if SE(Delta) <= 0.06 and UB90(Delta) < 0.05 or UB90(net) < 0 |

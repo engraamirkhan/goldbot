@@ -456,7 +456,7 @@ findings:
     due: 2026-12-04
     source: owner 2026-11-22 priority 1 (RB1H/RB4H retired without a history pass; history replay queued); needs a prereg
       (window, read rule, K row) before dispatch; 2025-10..2026-09 excluded; include 15m or state why not
-    check: {fn: manual, params: {}}
+    check: {fn: manual, params: {done_on: 2026-11-24, evidence: "prereg-2026-11-24-rb-history.md: learn 2010-17 STOP at 1h and 4h (net -0.16 R a candidate, Delta vs random ladder -0.008 / -0.054 R, CIs exclude +0.05 R); 15m not tested, deferred by post-hoc judgement; K +2 booked on the brain registry (trials 3451, 3452)"}}
 
   - id: ENG-LEARNING-SINCE
     title: A learning arm loaded before its start day is refused for the engine's whole run (never re-read at the day)
