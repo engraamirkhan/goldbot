@@ -31,8 +31,8 @@ What one run does, per broker (evidence never pooled across brokers, ADR 0043 am
 
 Scope and safety: this module reads aux.db and writes only its own two tables. An ACTIVE model may only ever drop
 (filter) candidates of a demo strategy arm before the RiskGate; it can never add an order, raise a size, touch a control
-or a replay_only arm, a risk limit or a live account. Serving in the engine is a separate, trading-safety-reviewed
-change: until it lands, ACTIVE is recorded and reported, and nothing in goldbot/engine reads these tables.
+or a replay_only arm, a risk limit or a live account. The engine serves ACTIVE models in goldbot/engine/meta_filter.py
+(read-only, the status column only; trading-safety-reviewed): no other engine, execution or risk module reads them.
 """
 from __future__ import annotations
 

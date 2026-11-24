@@ -1349,8 +1349,9 @@ def published(eng: Engine) -> dict[str, Any]:
     the account's positions on a symbol no book trades (health FAILs on them). Reporting only: no entry or exit reads
     it. Every engine, multi-book or not: gold's book's hot-loaded arm registry state (`arm_registry.published`, build 3
     R7: since when it has been unverified; health FAILs it past five minutes)."""
-    from goldbot.engine import arm_registry
-    registry = arm_registry.published(eng)
+    from goldbot.engine import arm_registry, meta_filter
+    # owner 2026-11-24: the self-retrain filter's serving counts and its last fail-open (health WARNs on it)
+    registry = arm_registry.published(eng) | meta_filter.published(eng)
     if not multi(eng):
         return registry
     st = eng.state

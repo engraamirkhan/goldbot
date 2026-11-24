@@ -834,6 +834,9 @@ class Exploration:
         self.start_held: frozenset[str] = frozenset()  # remembered at a start that could not load: no entry (R3)
         self.orphan_hold_from: pd.Timestamp | None = None
         arm_registry.init(eng, self)
+        # owner 2026-11-24 (`meta_filter`): the weekly self-retrain's ACTIVE per-arm filters, drop-only at `_send`
+        from goldbot.engine.meta_filter import MetaFilter
+        self.meta_filter = MetaFilter()
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -1944,6 +1947,9 @@ class _Pass:
         self.cap: int | None = -1                   # -1: not read yet (the first signal's terms read it)
         self.why: str | None = None                 # the last signal's refusal
         self.mu: float | None = None                # the last control's admission propensity (`budget`)
+        # the last signal's score from its arm's ACTIVE self-retrain filter (`meta_filter`), recorded with its candidate
+        self.meta_p: float | None = None
+        self.meta_version: str | None = None
         # the daily entry budget (`exploration_budget`), read only when the account has one
         from goldbot.engine import exploration_budget as budget
         # the budget's day is the risk day, the UTC date (`capital_flows.roll_risk_period`), from its midnight: a first
@@ -2049,7 +2055,8 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: i
         if ps.why != "duplicate":
             # a control's admission draw (quant Q1 2026-11-06): its p is the propensity, taken or thinned
             mu = ps.mu if res == "sent" or ps.why == "control_thinned" else None
-            candidate(eng, ex, s, now, None if res == "sent" else ps.why, ps.share.get(arm.arm_id), mu=mu)
+            candidate(eng, ex, s, now, None if res == "sent" else ps.why, ps.share.get(arm.arm_id), mu=mu,
+                      meta_p=ps.meta_p, model_version=ps.meta_version)
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
@@ -2100,12 +2107,14 @@ def draw(candidate_id: str) -> float:
 
 
 def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, blocked: str | None,
-              share: float | None = None, mu: float | None = None) -> None:
+              share: float | None = None, mu: float | None = None, meta_p: float | None = None,
+              model_version: str | None = None) -> None:
     """Every candidate, taken or not, to lane L3's `exploration_data.record_candidate` with its propensity: the random
     branch takes an admissible candidate when u < PI_RANDOM (mu = PI_RANDOM); a candidate a cap, the budget, the gate,
     staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
-    unbiased). The arm's share of its pot goes with it (quant Q3). The feature snapshot is not built in the engine
-    yet (None). Best effort: never raises."""
+    unbiased). The arm's share of its pot goes with it (quant Q3), and the score of its arm's ACTIVE self-retrain
+    filter when one scored it (`meta_p`, `model_version`; `meta_filter`). The feature snapshot is not built in the
+    engine yet (None). Best effort: never raises."""
     from goldbot.research.arm_rule_versions import rule_version
     from goldbot.research.exploration_data import record_candidate
     arm = ex.arms[s.arm_id]
@@ -2121,6 +2130,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
                          mu=mu if mu is not None else PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
                          arm_share=share if share is not None else shares(ex, now).get(arm.arm_id),
+                         meta_p=meta_p, model_version=model_version,
                          arm_rule_version=rule_version(arm.spec.rule),      # BACKLOG 105
                          boot_id=eng.cfg.boot_id)              # the deciding start (ADR 0091)
     except Exception as exc:
@@ -2174,7 +2184,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         eng.decisions.append({"ts": now.isoformat(), "agent": tag, "proposal": pid,
                               "action": "exploration_refused:" + why, **applied})
 
-    ps.why = None
+    ps.why = ps.meta_p = ps.meta_version = None
     if arm.spec.control_mode == "replay_only":
         # amendment 2026-11-15: recorded and labelled, never sent (`_enter` records them first; this is the guard).
         # First of all checks, so nothing below (the budget, the gate, `_intent`, the order core) ever sees it
@@ -2206,6 +2216,16 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         applied.update(bid=tick.bid, ask=tick.ask, **({"error": no.error} if no.error else {}))
         refuse(no.reason)
         return "refused"
+    # owner 2026-11-24 (`meta_filter`; prereg-2026-11-24-self-retrain.md section 3: "It may only drop candidates of a
+    # demo strategy arm before the RiskGate"): the arm's ACTIVE self-retrain filter, before any budget, room or slot,
+    # so a dropped signal spends none. Drop-only; any error fails open (the signal goes on as without it)
+    from goldbot.engine import meta_filter
+    if (mv := meta_filter.check(eng, ex, arm, s, now)) is not None:
+        ps.meta_p, ps.meta_version = mv.meta_p, mv.model_version
+        if mv.drop:
+            applied.update(meta_p=round(mv.meta_p, 4), model_version=mv.model_version)
+            refuse(meta_filter.refusal(mv.model_version))
+            return "refused"
     if (daily := ex.cfg.daily) is not None:
         # the daily entry budget (owner decision 2026-10-30; `exploration_budget`): the day, the hour or the session
         # spent stops every signal of this pass ("cap": recorded blocked at once); the rest stop this signal only

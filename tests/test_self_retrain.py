@@ -253,13 +253,18 @@ def test_switched_off_the_job_records_a_disabled_run_and_demotes_every_active_mo
     assert sr.health(runs, pd.Timestamp("2027-01-03 16:00", tz="UTC"), enabled=False)[0] == "warn"
 
 
-def test_no_engine_or_execution_module_reads_the_self_retrain_tables():
+def test_only_the_engines_meta_filter_reads_the_self_retrain_tables_and_no_execution_or_risk_module_does():
+    """The serving hook (goldbot/engine/meta_filter.py, tests/test_meta_filter_serve.py) is the one engine module that
+    names them, read-only; execution and risk never do."""
     root = Path(__file__).resolve().parents[1] / "goldbot"
     for sub in ("engine", "execution", "risk"):
         for f in (root / sub).rglob("*.py"):
             text = f.read_text()
-            assert "self_retrain" not in text, f
             ast.parse(text)
+            if f.relative_to(root).as_posix() == "engine/meta_filter.py":
+                assert "self_retrain_models" in text and "INSERT" not in text and "UPDATE " not in text
+                continue
+            assert "self_retrain_" not in text if sub == "engine" else "self_retrain" not in text, f
 
 
 def test_the_pre_registered_constants_are_the_cards():

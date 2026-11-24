@@ -624,8 +624,9 @@ class SelfRetrainSettings(_Section):
     constants, never settings: this only switches the job and whether a passing model may become ACTIVE."""
     # the Sunday job trains, gates and records (off: a `disabled` run row, every active model demoted, health WARNs)
     enabled: bool = True
-    # a model passing the gate becomes ACTIVE (a demo-only entry filter, once the engine serves it); off: every model
-    # stays shadow and any active one is demoted
+    # a model passing the gate becomes ACTIVE, and the engine serves it (engine/meta_filter.py: drops a demo strategy
+    # arm's exploration candidate scoring below its cut, before the RiskGate); off: every model stays shadow, any active
+    # one is demoted and the engine scores nothing
     serve: bool = True
 
 

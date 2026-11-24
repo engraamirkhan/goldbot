@@ -334,7 +334,9 @@ research:
                                      #   candidate (taken or not) + point-in-time snapshots, purged walk-forward, gate vs
                                      #   no-model AND the random control net of costs; thresholds are module constants
     enabled: true                    # off: a `disabled` run row, every active model demoted, health self_retrain WARNs
-    serve: true                      # a gate-passing model becomes ACTIVE (demo entry filter only; drop, never add)
+    serve: true                      # a gate-passing model becomes ACTIVE and the engine serves it (engine/meta_filter.py:
+                                     #   drops a demo strategy arm's 15m/1h/4h gold candidate below its cut before the
+                                     #   RiskGate, recorded blocked self_retrain:<model>; never adds; fails open)
   lot_fit_equity: 1000               # H-27 lot-fit overlay (research/lot_fit.py, opt-in, reporting only): the account the
   lot_fit_acct_per_usd: 0.75         #   research sizes trades for, in its currency; GBP per USD (GBPUSD ~1.33), a research
                                      #   assumption (the engine reads the broker's figure). Trades the gate would refuse

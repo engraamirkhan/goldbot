@@ -231,6 +231,7 @@ class EngineConfig(Record):
     timeframes_live: tuple[str, ...] = INTRADAY_LIVE   # settings engine.timeframes_live: 1d/1w ship dark (WS-4)
     long_history_dir: str | None = None   # settings engine.long_history_dir: the 1d/1w warm-up (long_bars)
     feature_window: int = 800            # decision bars the features are computed on
+    meta_filter_serve: bool = False      # engine/meta_filter.py: serve the self-retrain's ACTIVE filters (drop-only)
     # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
     backfill_max_days: int = Field(30, ge=0, le=30)
     backfill_page_ticks: int = Field(2000, ge=100, le=10_000)   # ~120 KB of JSON a page, as tick_record
