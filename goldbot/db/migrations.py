@@ -982,6 +982,7 @@ AUX: tuple[Migration, ...] = (
                spec_version TEXT NOT NULL,
                status TEXT NOT NULL CHECK (status IN ('active', 'shadow', 'demoted', 'superseded')),
                status_reason TEXT NOT NULL,
+               gate_pass INTEGER NOT NULL CHECK (gate_pass IN (0, 1)),
                cutoff_ns INTEGER NOT NULL,
                activation_ns INTEGER NOT NULL CHECK (activation_ns > cutoff_ns),
                n_train INTEGER NOT NULL,

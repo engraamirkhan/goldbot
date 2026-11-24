@@ -1,38 +1,40 @@
 """Weekly self-retraining of a per-arm meta-label FILTER on the exploration replay labels (owner 2026-11-24;
-pre-registration docs/research/prereg-2026-11-24-self-retrain.md, spec `SPEC_VERSION`). aux.db migration 43.
+pre-registration docs/research/prereg-2026-11-24-self-retrain.md, spec `SPEC_VERSION` sr-v2). aux.db migration 43.
 
 Replaces the two retrains retired on 2026-11-13 (docs/research/ml-review-2026-11-13.md: the specialists' Saturday
 LightGBM, shadow AUC 0.44 on 145 trades, and the H-62 meta-labeller, 0 model rows because no candidate carried a
-feature snapshot). Since then every gold candidate gets its point-in-time feature vector (research/feature_snapshots.py,
-`exploration_feature_snapshots`), so the labels can finally be learnt from.
+feature snapshot). Since then every gold candidate gets its feature vector at its decision
+(research/feature_snapshots.py, `exploration_feature_snapshots`).
 
-What one run does, per broker (evidence never pooled across brokers, ADR 0043 amendment):
-1. Rows: every gold exploration candidate, taken or not, whose r1 replay label (`label_sim_r`, net of the broker's
-   cost model; `label_mid_r` is the gross diagnostic) resolved by the data cutoff (`label_exit_ns` <= cutoff, the last
-   Friday 21:00 UTC), not quarantined, not void as posterior evidence, with a strictly point-in-time snapshot
-   (`pit` = written, `available_utc_max_ns` <= decision). Rows inside the sealed holdout window are refused (none can
-   exist: the log starts 2026-10-25; the guard fails the run if one does). Control arms' rows are the random baseline,
-   never a training row.
+One weekly run (the job `self_retrain` in goldbot/ops/jobs.py drives it):
+1. `compute_broker` per broker (evidence never pooled across brokers, ADR 0043 amendment). Rows: every gold exploration
+   candidate, taken or not, whose replay **r2** label (`exploration_replay`, measured legs, never a credit; r1 is read
+   alongside as `label_r1`) resolved by the data cutoff (the last Friday 21:00 UTC) AND whose full horizon
+   (decision + MAX_SEND_DELAY + max_hold_s) ended by then (a quick stop is never kept while its open twins are not:
+   no truncation bias); not quarantined, not void as posterior evidence; with a snapshot available at its decision:
+   `pit` written, or `pit` nominal decided on/after NOMINAL_FROM (card section 2: every minute of the last day before
+   such a decision carries its write time and the daily reconcile had settled older minutes). Holdout rows fail the
+   run. Arms retired in the spec and replay_only strategy rows are excluded (card section 2). Control arms are the
+   random baseline, never training rows.
 2. Per strategy arm, one fixed model (no grid): median-imputed, standardised L2 logistic regression (C = `C_REG`) on
-   the frozen `FEATURES` (39 market columns, the directional ones signed by the candidate's side) + `side` = 40 inputs,
-   y = 1[label_sim_r > 0]. Expanding walk-forward over session days: the last half of the days in `N_BLOCKS`
-   contiguous test blocks; a training row must have its label EXITED before the block's first decision and be decided
-   at least `EMBARGO` before it. The filter keeps a candidate when p >= tau, tau = the `DROP_SHARE` quantile of the
-   training fold's own scores (drops the bottom third), fixed before any test row is seen.
-3. Gate (`gate`): ACTIVE only if, out of sample, the kept candidates beat BOTH no-model (every candidate of the arm)
-   and the arm's random control (its named control, else the broker's controls of its style, decided in the same OOS
-   window), each by at least `MIN_EDGE_R` net R per candidate, with minimum counts, and the day-block bootstrap p of
-   the edge over no-model, Holm-adjusted across the arms tested in the run, at most `ALPHA`. Otherwise SHADOW.
-4. Demotion: an ACTIVE model is DEMOTED when the run's own walk-forward fails the gate, or when its forward record
-   (candidates decided after its activation, scored by the frozen model) shows an edge over no-model below
-   `DEMOTE_EDGE_R` on at least `MIN_FORWARD` candidates. A new passer SUPERSEDES the arm's previous active model.
-5. Every run writes `self_retrain_runs` (label, feature and weight counts, per-arm OOS metrics and decisions) and each
-   fitted model `self_retrain_models` (its coefficients as JSON: no pickle, nothing executable is ever loaded).
+   the frozen `FEATURES` (39 market columns, the directional ones signed by side) + `side` = 40 inputs,
+   y = 1[r2 net R > 0]. Expanding walk-forward over session days (last half in `N_BLOCKS` blocks); a training row's
+   whole horizon, its label exit, and its decision + EMBARGO all lie before the block's first decision. Keep when
+   p >= tau, tau = the `DROP_SHARE` quantile of the training fold's own scores.
+3. `decide` once per RUN over every (broker, arm): judged pairs (at most MAX_JUDGED, PRENAMED or ranked by candidate
+   count, label-blind) are Holm-adjusted together on p = max(p vs no-model, p vs control) (intersection-union).
+   A pass needs both edges >= MIN_EDGE_R, the gross edge (label_mid_r) >= 0 and Holm p <= ALPHA. ACTIVE needs a pass
+   in TWO consecutive runs, and the first passer's frozen forward edge >= 0 once it has MIN_CONFIRM forward rows.
+4. Demotion is read first: a previous ACTIVE model whose forward edge is missing or below DEMOTE_EDGE_R on at least
+   MIN_FORWARD rows is demoted and this run's model of the arm is forced to shadow. An ACTIVE model is otherwise
+   superseded by a new active one or demoted (gate failed, or no rows this run).
+5. `apply` writes `self_retrain_models` (coefficients as JSON, never a pickle) and `self_retrain_runs`; the job writes
+   the K rows BEFORE it (one per judged pair); if they cannot be written nothing becomes active (fail closed).
 
-Scope and safety: this module reads aux.db and writes only its own two tables. An ACTIVE model may only ever drop
-(filter) candidates of a demo strategy arm before the RiskGate; it can never add an order, raise a size, touch a control
-or a replay_only arm, a risk limit or a live account. Serving in the engine is a separate, trading-safety-reviewed
-change: until it lands, ACTIVE is recorded and reported, and nothing in goldbot/engine reads these tables.
+Scope and safety: reads aux.db, writes only its own two tables. An ACTIVE model may only ever drop candidates of a demo
+strategy arm before the RiskGate (a dropped candidate stays recorded and replay-labelled); never an order, a size, a
+control, a replay_only arm, a risk limit or a live account. Engine serving is a separate, trading-safety-reviewed change:
+until it lands nothing in goldbot/engine reads these tables.
 """
 from __future__ import annotations
 
@@ -40,25 +42,24 @@ import json
 import logging
 import sqlite3
 from collections.abc import Collection, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from goldbot.base import FrozenRecord
 from goldbot.db.connection import Database, now_ns
-from goldbot.research.exploration_data import GOLD, read_obs
+from goldbot.research.exploration_data import GOLD, REPLAY_V1, REPLAY_V2, read_obs
 from goldbot.research.model import check_feature_cap
 
 log = logging.getLogger("goldbot.self_retrain")
 
 # ---------------------------------------------------------------------------------------------- the frozen spec
-SPEC_VERSION = "sr-v1"
+SPEC_VERSION = "sr-v2"
 PREREG = "docs/research/prereg-2026-11-24-self-retrain.md"
 REGISTRY_FAMILY = "self_retrain_meta_filter"
-# 39 market columns of the snapshot vector (research/feature_snapshots.py, the engine's default frame); cost and
-# range-to-cost first (the binding constraint in every ML failure so far: cost per R), then volatility regime, clock,
-# trend, location and the daily context. Frozen for the quarter; a change is a new SPEC_VERSION and a new K row
 FEATURES: tuple[str, ...] = (
     # cost / range-to-cost (8)
     "em_atr_cost", "em_yz_4_cost", "em_yz_16_cost", "em_yz_48_cost", "spread_atr", "spread_rel_median_48",
@@ -76,31 +77,37 @@ FEATURES: tuple[str, ...] = (
     # daily context (3)
     "d1_atr_ratio_14_100", "d1_slope_ema20", "d1_rv_ratio",
 )
-# directional columns enter signed by the candidate's side (a long and a short read the same move oppositely); the
-# centre is subtracted first so the sign flips around neutral
 SIGNED: dict[str, float] = {"ret_4": 0.0, "ret_16": 0.0, "ret_96": 0.0, "tsmom_score": 0.0, "slope_ema50": 0.0,
                             "dist_ema50_atr": 0.0, "bb_z_20": 0.0, "rsi14": 50.0, "donchian_pos_20": 0.5,
                             "dist_vwap48_atr": 0.0, "d1_slope_ema20": 0.0}
 INPUTS: tuple[str, ...] = (*FEATURES, "side")
 check_feature_cap(list(INPUTS))
-C_REG = 0.1                     # L2 strength (sklearn C): strong shrinkage, a few hundred rows an arm
-DROP_SHARE = 1.0 / 3.0          # the filter drops the bottom third of the training fold's scores
-N_BLOCKS = 4                    # OOS test blocks over the last half of the session days
+C_REG = 0.1
+DROP_SHARE = 1.0 / 3.0
+N_BLOCKS = 4
 EMBARGO = pd.Timedelta(days=1)
-MIN_TRAIN = 100                 # training rows a fold needs (both classes present)
+MIN_TRAIN = 100
+# a candidate's horizon: decision + the longest send delay (arms.send_delay_s is at most 7 s; 60 s is the bound) + hold
+MAX_SEND_DELAY = pd.Timedelta(seconds=60)
+# nominal-pit snapshots are admitted from this decision time (minute write stamps began 2026-11-13; one day later the
+# whole last day before a decision is stamped, and older minutes were settled by the daily broker-M1 reconcile)
+NOMINAL_FROM = pd.Timestamp("2026-11-15", tz="UTC")
 # the promotion gate (pre-registered; never tuned on the data)
-MIN_OOS = 200                   # OOS candidates of the arm
-MIN_KEPT = 100                  # OOS candidates the filter kept
-MIN_OOS_DAYS = 10               # OOS session days
-MIN_CONTROL = 50                # OOS control candidates in the same window
-MIN_EDGE_R = 0.05               # kept mean minus no-model mean, and kept mean minus control mean, net R per candidate
-ALPHA = 0.10                    # Holm-adjusted one-sided bootstrap p of the edge over no-model, across the run's arms
-BOOT = 1000                     # day-block bootstrap draws
+MIN_OOS = 200
+MIN_KEPT = 100
+MIN_OOS_DAYS = 10
+MIN_CONTROL = 50
+MIN_EDGE_R = 0.05
+ALPHA = 0.10
+BOOT = 10_000
 SEED = 20261124
-# demotion (hysteresis below the promotion edge)
+MAX_JUDGED = 10                 # judged (broker, arm) pairs a run at most (K = pairs judged)
+PRENAMED: tuple[tuple[str, str], ...] = ()     # PD + quant may pin the judged pairs; empty: top MAX_JUDGED by count
+MIN_CONFIRM = 30                # the first passer's forward rows from which its forward edge must be >= 0
+# demotion reads the FROZEN active model's forward record (rows after its activation), not a refit: below 0 R on
+# MIN_FORWARD rows it goes. Lower than the OOS promotion edge on purpose (a forward record is shorter and noisier)
 DEMOTE_EDGE_R = 0.0
 MIN_FORWARD = 60
-# health: the run is weekly (Sunday); older than this, or 0 labels, WARNs
 RUN_MAX_AGE = pd.Timedelta(days=8)
 
 Status = Literal["active", "shadow", "demoted", "superseded"]
@@ -131,12 +138,11 @@ class LogitModel(FrozenRecord):
 
 
 def fit_logit(X: pd.DataFrame, y: np.ndarray) -> LogitModel:
-    """The fixed model on one training set: column medians (0 for an all-missing column), mean/sd standardisation,
-    L2 logistic regression at C_REG; tau = the DROP_SHARE quantile of its own training scores."""
+    """The fixed model on one training set; tau = the DROP_SHARE quantile of its own training scores."""
     from sklearn.linear_model import LogisticRegression
     m = X.reindex(columns=list(INPUTS)).to_numpy(dtype=float)
-    med = np.nanmedian(np.where(np.isfinite(m), m, np.nan), axis=0) if len(m) else np.zeros(m.shape[1])
-    med = np.where(np.isfinite(med), med, 0.0)
+    finite = np.where(np.isfinite(m), m, np.nan)
+    med = np.array([np.nanmedian(c) if np.isfinite(c).any() else 0.0 for c in finite.T])
     m = np.where(np.isfinite(m), m, med)
     mu, sd = m.mean(axis=0), m.std(axis=0)
     sd = np.where(sd > 1e-12, sd, 1.0)
@@ -145,8 +151,48 @@ def fit_logit(X: pd.DataFrame, y: np.ndarray) -> LogitModel:
     model = LogitModel(inputs=INPUTS, medians=tuple(map(float, med)), means=tuple(map(float, mu)),
                        scales=tuple(map(float, sd)), coef=tuple(map(float, clf.coef_[0])),
                        intercept=float(clf.intercept_[0]), tau=0.0)
-    tau = float(np.quantile(model.score(X), DROP_SHARE))
-    return model.model_copy(update={"tau": tau})
+    return model.model_copy(update={"tau": float(np.quantile(model.score(X), DROP_SHARE))})
+
+
+# ---------------------------------------------------------------------------------------------- arm rules
+def arm_rules(paths: Sequence[Path] | None = None) -> dict[str, dict[str, Any]]:
+    """Each spec row's run policy: retired_day, control_mode and role (ARM-SPEC, then discovered arms; an ARM-SPEC
+    row wins an id both name, as in the engine)."""
+    from goldbot.research import arms as arm_spec
+    if paths is None:
+        paths = [arm_spec.REPO_ROOT / "config" / "spec_arms.yaml", arm_spec.REPO_ROOT / "config" / "exploration_arms.yaml"]
+    out: dict[str, dict[str, Any]] = {}
+    for p in paths:
+        if not Path(p).exists():
+            continue
+        for r in (yaml.safe_load(Path(p).read_text()) or {}).get("arms", []):
+            if isinstance(r, dict) and "id" in r:
+                out[str(r["id"])] = {"retired_day": r.get("retired_day"), "control_mode": r.get("control_mode",
+                                     "broker"), "role": r.get("role", "strategy")}
+    return out
+
+
+def strategy_excluded(arm_id: str, rules: Mapping[str, Mapping[str, Any]]) -> bool:
+    """A strategy arm retired in the spec, or a replay_only row that is not a control: never trained, never judged."""
+    r = rules.get(arm_id)
+    if r is None:
+        return False
+    return r.get("retired_day") is not None or (r.get("control_mode") == "replay_only" and r.get("role") != "control")
+
+
+def baseline_rows(rows: pd.DataFrame, rules: Mapping[str, Mapping[str, Any]], named: Collection[str]) -> pd.Series:
+    """Control rows usable as the style-fallback baseline: not decided on/after its arm's retired_day, not a
+    replay_only non-control row; a named control always stays."""
+    def ok(arm: str, day: str) -> bool:
+        if arm in named:
+            return True
+        r = rules.get(arm) or {}
+        rd = r.get("retired_day")
+        if rd is not None and day >= str(rd):
+            return False
+        return not (r.get("control_mode") == "replay_only" and r.get("role") != "control")
+    days = pd.to_datetime(rows["decision_utc"], utc=True).dt.strftime("%Y-%m-%d")
+    return pd.Series([ok(str(a), d) for a, d in zip(rows["arm_id"], days, strict=True)], index=rows.index, dtype=bool)
 
 
 # ---------------------------------------------------------------------------------------------- rows
@@ -160,72 +206,86 @@ def design(rows: pd.DataFrame) -> pd.DataFrame:
     return X.reset_index(drop=True)
 
 
+def horizon_end(rows: pd.DataFrame) -> pd.DatetimeIndex:
+    """decision + MAX_SEND_DELAY + max_hold_s: when the candidate's label is resolved whatever its path."""
+    dec = pd.DatetimeIndex(pd.to_datetime(rows["decision_utc"], utc=True))
+    return dec + MAX_SEND_DELAY + pd.to_timedelta(rows["max_hold_s"].fillna(0).astype(float).to_numpy(), unit="s")
+
+
 def _snapshots(db: Database) -> pd.DataFrame:
-    """Strictly point-in-time snapshot vectors (status ok, pit written), with their availability."""
     with db.connection() as conn:
         rows = conn.execute(
-            "SELECT s.candidate_id, s.decision_ns, s.available_utc_max_ns, v.features "
+            "SELECT s.candidate_id, s.decision_ns, s.available_utc_max_ns, s.pit, v.features "
             "FROM exploration_feature_snapshots s JOIN exploration_feature_vectors v ON v.sha256 = s.vector_sha256 "
-            "WHERE s.status = 'ok' AND s.pit = 'written'").fetchall()
+            "WHERE s.status = 'ok' AND (s.pit = 'written' OR (s.pit = 'nominal' AND s.decision_ns >= ?))",
+            (int(NOMINAL_FROM.value),)).fetchall()
     if not rows:
-        return pd.DataFrame(columns=["candidate_id", "_snap_decision_ns", "_avail_ns", *FEATURES])
+        return pd.DataFrame(columns=["candidate_id", "_snap_decision_ns", "_avail_ns", "_pit", *FEATURES])
     vals = pd.DataFrame([json.loads(f) for *_, f in rows]).reindex(columns=list(FEATURES)).astype(float)
-    head = pd.DataFrame([r[:3] for r in rows], columns=["candidate_id", "_snap_decision_ns", "_avail_ns"])
+    head = pd.DataFrame([r[:4] for r in rows], columns=["candidate_id", "_snap_decision_ns", "_avail_ns", "_pit"])
     return pd.concat([head, vals], axis=1)
 
 
 def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
               held_out: Collection[str] = (), instruments: Mapping[str, str] | None = None
               ) -> tuple[pd.DataFrame, dict[str, int]]:
-    """(rows, counts): the broker's gold candidates whose r1 label resolved by `cutoff`, with a written-pit snapshot.
-    Fails (ValueError) on a holdout row or a snapshot available after its decision: never silently dropped."""
+    """(rows, counts): the broker's gold candidates with an r2 label and a full horizon by `cutoff` and an admitted
+    snapshot (module docstring step 1). A holdout row or a snapshot after its decision fails (ValueError)."""
     obs = read_obs(db, broker=broker, as_of=cutoff, evidence="posterior", held_out=held_out, instrument=GOLD,
-                   instruments=instruments)
+                   instruments=instruments, replay_version=REPLAY_V2)
     obs = obs[obs["label_sim_r"].notna()].reset_index(drop=True)
     dec = pd.DatetimeIndex(obs["decision_utc"])
     if holdout is not None and len(obs) and ((dec >= holdout[0]) & (dec < holdout[1])).any():
         raise ValueError("self-retrain: a candidate decided inside the sealed holdout window: refused")
-    snaps = _snapshots(db)
-    rows = obs.merge(snaps, on="candidate_id", how="inner")
-    if len(rows):
-        if (rows["_avail_ns"].notna() & (rows["_avail_ns"] > rows["_snap_decision_ns"])).any():
-            raise ValueError("self-retrain: a snapshot available after its decision (look-ahead): refused")
-        if (pd.to_datetime(rows["label_exit_utc"], utc=True) > cutoff).any():
-            raise ValueError("self-retrain: a label exits after the cutoff: refused")
-    counts = {"labels": int(len(obs)), "with_features": int(len(rows)),
-              "no_snapshot": int(len(obs) - len(rows)), "controls": int(rows["is_control"].sum()) if len(rows) else 0}
+    n_labels = len(obs)
+    open_h = horizon_end(obs) > cutoff if len(obs) else np.zeros(0, dtype=bool)
+    obs = obs[~np.asarray(open_h)].reset_index(drop=True)
+    r1 = read_obs(db, broker=broker, as_of=cutoff, evidence="posterior", held_out=held_out, instrument=GOLD,
+                  instruments=instruments, replay_version=REPLAY_V1)[["candidate_id", "label_sim_r"]]
+    obs = obs.merge(r1.rename(columns={"label_sim_r": "label_r1"}), on="candidate_id", how="left")
+    rows = obs.merge(_snapshots(db), on="candidate_id", how="inner")
+    if len(rows) and (rows["_avail_ns"].notna() & (rows["_avail_ns"] > rows["_snap_decision_ns"])).any():
+        raise ValueError("self-retrain: a snapshot available after its decision (look-ahead): refused")
+    counts = {"labels": int(n_labels), "open_horizon": int(np.asarray(open_h).sum()),
+              "with_features": int(len(rows)), "no_snapshot": int(len(obs) - len(rows)),
+              "nominal": int((rows["_pit"] == "nominal").sum()) if len(rows) else 0,
+              "controls": int(rows["is_control"].sum()) if len(rows) else 0}
     return rows.sort_values(["decision_utc", "candidate_id"]).reset_index(drop=True), counts
 
 
 # ---------------------------------------------------------------------------------------------- walk-forward
+_OOS_COLS = ["candidate_id", "block", "session_day", "decision_utc", "r", "r_mid", "r1", "kept", "p"]
+
+
 def walk_forward(arm_rows: pd.DataFrame) -> pd.DataFrame:
-    """Out-of-sample scores of one arm's candidates (module docstring step 2): columns candidate_id, session_day,
-    decision_utc, r (net), kept, p. Empty when too few days or training rows."""
+    """Out-of-sample scores of one arm's candidates (module docstring step 2)."""
     tab = arm_rows.sort_values(["decision_utc", "candidate_id"]).reset_index(drop=True)
     days = np.array(sorted(set(tab["session_day"].astype(str))))
-    out: list[pd.DataFrame] = []
     if len(days) < 2 * N_BLOCKS:
-        return pd.DataFrame(columns=["candidate_id", "session_day", "decision_utc", "r", "kept", "p"])
+        return pd.DataFrame(columns=_OOS_COLS)
     X_all, y_all = design(tab), (tab["label_sim_r"].to_numpy(dtype=float) > 0).astype(int)
     dec = pd.DatetimeIndex(pd.to_datetime(tab["decision_utc"], utc=True))
     ext = pd.DatetimeIndex(pd.to_datetime(tab["label_exit_utc"], utc=True))
+    hor = horizon_end(tab)
     sd = tab["session_day"].astype(str).to_numpy()
-    for block in np.array_split(days[len(days) // 2:], N_BLOCKS):
+    r1 = tab["label_r1"].to_numpy(dtype=float) if "label_r1" in tab else np.full(len(tab), np.nan)
+    out: list[pd.DataFrame] = []
+    for b, block in enumerate(np.array_split(days[len(days) // 2:], N_BLOCKS)):
         test = np.flatnonzero(np.isin(sd, block))
         if len(test) == 0:
             continue
         t0 = dec[test].min()
-        train = np.flatnonzero((ext < t0) & (dec < t0 - EMBARGO))
+        train = np.flatnonzero((ext < t0) & (hor < t0) & (dec < t0 - EMBARGO))
         if len(train) < MIN_TRAIN or len(set(y_all[train].tolist())) < 2:
             continue
         model = fit_logit(X_all.iloc[train], y_all[train])
         p = model.score(X_all.iloc[test])
-        out.append(pd.DataFrame({"candidate_id": tab["candidate_id"].to_numpy()[test], "session_day": sd[test],
-                                 "decision_utc": dec[test], "r": tab["label_sim_r"].to_numpy(dtype=float)[test],
+        out.append(pd.DataFrame({"candidate_id": tab["candidate_id"].to_numpy()[test], "block": b,
+                                 "session_day": sd[test], "decision_utc": dec[test],
+                                 "r": tab["label_sim_r"].to_numpy(dtype=float)[test],
+                                 "r_mid": tab["label_mid_r"].to_numpy(dtype=float)[test], "r1": r1[test],
                                  "kept": p >= model.tau, "p": p}))
-    if not out:
-        return pd.DataFrame(columns=["candidate_id", "session_day", "decision_utc", "r", "kept", "p"])
-    return pd.concat(out, ignore_index=True)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=_OOS_COLS)
 
 
 def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
@@ -233,48 +293,62 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
     return float(roc_auc_score(y, p)) if len(set(y.tolist())) == 2 else None
 
 
-def _by_day(r: np.ndarray, days: np.ndarray) -> dict[str, np.ndarray]:
-    return {d: r[days == d] for d in sorted(set(days.tolist()))}
+def _p_value(edges: np.ndarray) -> float:
+    """One-sided bootstrap p: (1 + #draws <= 0) / (1 + B); a draw with no kept row (NaN) counts against."""
+    return float((1 + int((~(edges > 0)).sum())) / (1 + len(edges)))
 
 
-def oos_metrics(oos: pd.DataFrame, control: pd.DataFrame, *, seed: int = SEED) -> dict[str, Any]:
-    """The arm's OOS read: counts, mean net R of all (no-model), kept and control candidates, both edges, AUC and the
-    one-sided day-block bootstrap p of the edge over no-model (and of the edge over control, both samples resampled)."""
+def _day_sums(days: np.ndarray, *cols: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
+    uniq, inv = np.unique(days, return_inverse=True)
+    return uniq, [np.bincount(inv, weights=c, minlength=len(uniq)) for c in cols]
+
+
+def _mean(a: np.ndarray, mask: np.ndarray) -> float | None:
+    m = mask & np.isfinite(a)
+    return float(a[m].mean()) if m.any() else None
+
+
+def oos_metrics(oos: pd.DataFrame, control: pd.DataFrame, *, seed: int = SEED, boot: int = BOOT) -> dict[str, Any]:
+    """The arm's OOS read (r2 net R unless named): counts, means, both edges, the gross (label_mid_r) and r1 edges, AUC,
+    and the day-block bootstrap p of each edge (arm days and control days resampled independently)."""
     n, kept = len(oos), int(oos["kept"].sum()) if len(oos) else 0
     res: dict[str, Any] = {"n_oos": n, "n_kept": kept, "n_days": int(oos["session_day"].nunique()) if n else 0,
                            "n_control": int(len(control))}
+    empty = {"mean_all": None, "mean_kept": None, "mean_control": None, "edge_vs_nomodel": None,
+             "edge_vs_control": None, "edge_gross": None, "edge_r1": None, "p_nomodel": None, "p_control": None,
+             "auc": None, "boot_no_kept": None}
     if n == 0 or kept == 0:
-        return res | {"mean_all": None, "mean_kept": None, "mean_control": None, "edge_vs_nomodel": None,
-                      "edge_vs_control": None, "p_nomodel": None, "p_control": None, "auc": None}
+        return res | empty
     r, k = oos["r"].to_numpy(dtype=float), oos["kept"].to_numpy(dtype=bool)
-    days = oos["session_day"].astype(str).to_numpy()
+    rm, r1 = oos["r_mid"].to_numpy(dtype=float), oos["r1"].to_numpy(dtype=float)
+    every = np.ones(n, dtype=bool)
     mean_all, mean_kept = float(r.mean()), float(r[k].mean())
     cr = control["r"].to_numpy(dtype=float) if len(control) else np.zeros(0)
     mean_ctrl = float(cr.mean()) if len(cr) else None
+    k1, a1 = _mean(r1, k), _mean(r1, every)
+    gk, ga = _mean(rm, k), _mean(rm, every)
     rng = np.random.default_rng(seed)
-    uniq = np.array(sorted(set(days.tolist())))
-    idx = {d: np.flatnonzero(days == d) for d in uniq}
-    cdays = control["session_day"].astype(str).to_numpy() if len(control) else np.zeros(0, dtype=str)
-    cu = np.array(sorted(set(cdays.tolist())))
-    cidx = {d: np.flatnonzero(cdays == d) for d in cu}
-    e_nm, e_ct = np.empty(BOOT), np.empty(BOOT)
-    for b in range(BOOT):
-        take = np.concatenate([idx[d] for d in rng.choice(uniq, len(uniq))])
-        rk = r[take][k[take]]
-        km = rk.mean() if len(rk) else np.nan
-        e_nm[b] = km - r[take].mean()
-        if len(cu):
-            ct = np.concatenate([cidx[d] for d in rng.choice(cu, len(cu))])
-            e_ct[b] = km - cr[ct].mean()
+    uniq, (s_all, n_all, s_k, n_k) = _day_sums(oos["session_day"].astype(str).to_numpy(), r, every.astype(float),
+                                                r * k, k.astype(float))
+    W = rng.multinomial(len(uniq), np.full(len(uniq), 1.0 / len(uniq)), size=boot).astype(float)
+    nk = W @ n_k
+    with np.errstate(invalid="ignore", divide="ignore"):
+        km = (W @ s_k) / nk
+        e_nm = km - (W @ s_all) / (W @ n_all)
+        if len(cr):
+            cu, (cs, cn) = _day_sums(control["session_day"].astype(str).to_numpy(), cr, np.ones(len(cr)))
+            Wc = rng.multinomial(len(cu), np.full(len(cu), 1.0 / len(cu)), size=boot).astype(float)
+            e_ct = km - (Wc @ cs) / (Wc @ cn)
         else:
-            e_ct[b] = np.nan
-    ok_nm, ok_ct = e_nm[np.isfinite(e_nm)], e_ct[np.isfinite(e_ct)]
+            e_ct = np.full(boot, np.nan)
     return res | {"mean_all": mean_all, "mean_kept": mean_kept, "mean_control": mean_ctrl,
                   "edge_vs_nomodel": mean_kept - mean_all,
                   "edge_vs_control": None if mean_ctrl is None else mean_kept - mean_ctrl,
-                  "p_nomodel": float((ok_nm <= 0).mean()) if len(ok_nm) else None,
-                  "p_control": float((ok_ct <= 0).mean()) if len(ok_ct) else None,
-                  "auc": _auc((r > 0).astype(int), oos["p"].to_numpy(dtype=float))}
+                  "edge_gross": None if gk is None or ga is None else gk - ga,
+                  "edge_r1": None if k1 is None or a1 is None else k1 - a1,
+                  "p_nomodel": _p_value(e_nm), "p_control": _p_value(e_ct) if len(cr) else None,
+                  "auc": _auc((r > 0).astype(int), oos["p"].to_numpy(dtype=float)),
+                  "boot_no_kept": int((nk == 0).sum())}
 
 
 def eligible(m: Mapping[str, Any]) -> str | None:
@@ -286,9 +360,9 @@ def eligible(m: Mapping[str, Any]) -> str | None:
     return None
 
 
-def holm(p: Mapping[str, float]) -> dict[str, float]:
+def holm(p: Mapping[Any, float]) -> dict[Any, float]:
     """Holm step-down adjusted p values (monotone, capped at 1)."""
-    order = sorted(p, key=lambda a: p[a])
+    order = sorted(p, key=lambda a: (p[a], str(a)))
     out, run = {}, 0.0
     for i, a in enumerate(order):
         run = max(run, min(1.0, (len(order) - i) * p[a]))
@@ -296,43 +370,35 @@ def holm(p: Mapping[str, float]) -> dict[str, float]:
     return out
 
 
-def gate(metrics: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Per arm: {"pass": bool, "reason": str, "p_holm": float | None}. Holm runs over the arms meeting the minimum
-    counts (the run's family of tests)."""
-    judged = {a: m for a, m in metrics.items() if eligible(m) is None}
-    adj = holm({a: float(m["p_nomodel"] if m["p_nomodel"] is not None else 1.0) for a, m in judged.items()})
-    out: dict[str, dict[str, Any]] = {}
-    for arm, m in metrics.items():
-        why = eligible(m)
-        if why is not None:
-            out[arm] = {"pass": False, "reason": f"insufficient: {why}", "p_holm": None}
-            continue
-        fails = []
-        if float(m["edge_vs_nomodel"]) < MIN_EDGE_R:
-            fails.append(f"edge vs no-model {m['edge_vs_nomodel']:+.3f} R < {MIN_EDGE_R}")
-        if m["edge_vs_control"] is None or float(m["edge_vs_control"]) < MIN_EDGE_R:
-            fails.append(f"edge vs control {m['edge_vs_control']} R < {MIN_EDGE_R}")
-        if adj[arm] > ALPHA:
-            fails.append(f"Holm p {adj[arm]:.3f} > {ALPHA}")
-        out[arm] = {"pass": not fails, "reason": "; ".join(fails) or "passed", "p_holm": adj[arm]}
-    return out
-
-
-def control_rows(rows: pd.DataFrame, arm_id: str, *, named: Mapping[str, str], since: pd.Timestamp) -> pd.DataFrame:
-    """The arm's random baseline over its OOS window: its named control's candidates when it has one with rows, else
-    every control candidate of its style (same broker: `rows` is one broker's)."""
+def control_rows(rows: pd.DataFrame, arm_id: str, *, named: Mapping[str, str], since: pd.Timestamp,
+                 rules: Mapping[str, Mapping[str, Any]] | None = None) -> pd.DataFrame:
+    """The arm's random baseline over its OOS window: its named control's candidates when it has rows, else the
+    control candidates of its style admitted by `baseline_rows` (same broker: `rows` is one broker's)."""
     ctrl = rows[rows["is_control"].astype(bool) & (pd.to_datetime(rows["decision_utc"], utc=True) >= since)]
     mine = ctrl[ctrl["arm_id"] == named[arm_id]] if arm_id in named else ctrl.iloc[0:0]
     if mine.empty:
         style = rows.loc[rows["arm_id"] == arm_id, "style"]
         mine = ctrl[ctrl["style"] == (style.iloc[0] if len(style) else None)]
+        if len(mine):
+            mine = mine[baseline_rows(mine, rules or {}, set(named.values())).to_numpy()]
     return pd.DataFrame({"session_day": mine["session_day"].astype(str).to_numpy(),
                          "r": mine["label_sim_r"].to_numpy(dtype=float)})
 
 
+def forward_read(rows: pd.DataFrame, arm_id: str, model: LogitModel, activation_ns: int) -> dict[str, Any]:
+    """A frozen model on the arm's candidates decided at or after `activation_ns` (horizon-complete rows only)."""
+    act = pd.Timestamp(int(activation_ns), unit="ns", tz="UTC")
+    fw = rows[(rows["arm_id"] == arm_id) & (pd.to_datetime(rows["decision_utc"], utc=True) >= act)]
+    if fw.empty:
+        return {"n": 0, "n_kept": 0, "edge_vs_nomodel": None}
+    k = model.keep(design(fw))
+    r = fw["label_sim_r"].to_numpy(dtype=float)
+    return {"n": int(len(fw)), "n_kept": int(k.sum()),
+            "edge_vs_nomodel": float(r[k].mean() - r.mean()) if k.any() else None}
+
+
 # ---------------------------------------------------------------------------------------------- the store
 def active_models(db: Database, broker: str) -> dict[str, dict[str, Any]]:
-    """The broker's ACTIVE model per arm: version, activation and the model."""
     with db.connection() as conn:
         got = conn.execute("SELECT arm_id, model_version, activation_ns, model FROM self_retrain_models "
                            "WHERE broker = ? AND status = 'active'", (broker,)).fetchall()
@@ -340,16 +406,127 @@ def active_models(db: Database, broker: str) -> dict[str, dict[str, Any]]:
             for a, v, t, m in got}
 
 
-def forward_read(rows: pd.DataFrame, arm_id: str, active: Mapping[str, Any]) -> dict[str, Any]:
-    """The frozen active model on the arm's candidates decided at or after its activation."""
-    act = pd.Timestamp(int(active["activation_ns"]), unit="ns", tz="UTC")
-    fw = rows[(rows["arm_id"] == arm_id) & (pd.to_datetime(rows["decision_utc"], utc=True) >= act)]
-    if fw.empty:
-        return {"n": 0, "edge_vs_nomodel": None}
-    k = active["model"].keep(design(fw))
-    r = fw["label_sim_r"].to_numpy(dtype=float)
-    return {"n": int(len(fw)), "n_kept": int(k.sum()),
-            "edge_vs_nomodel": float(r[k].mean() - r.mean()) if k.any() else None}
+def previous_passes(db: Database, broker: str, cutoff: pd.Timestamp) -> dict[str, dict[str, Any]]:
+    """The arms whose model passed the gate in the broker's previous ok run (strictly earlier cutoff)."""
+    with db.connection() as conn:
+        r = conn.execute("SELECT run_id FROM self_retrain_runs WHERE broker = ? AND status = 'ok' AND cutoff_ns < ? "
+                         "ORDER BY cutoff_ns DESC LIMIT 1", (broker, int(cutoff.value))).fetchone()
+        if r is None:
+            return {}
+        got = conn.execute("SELECT arm_id, model_version, activation_ns, model FROM self_retrain_models "
+                           "WHERE run_id = ? AND gate_pass = 1", (r[0],)).fetchall()
+    return {str(a): {"model_version": v, "activation_ns": int(t), "model": LogitModel.model_validate_json(m)}
+            for a, v, t, m in got}
+
+
+def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: Mapping[str, Mapping[str, Any]],
+              cutoff: pd.Timestamp, active: Mapping[str, Mapping[str, Any]] | None = None,
+              passes: Mapping[str, Mapping[str, Any]] | None = None, boot: int = BOOT) -> dict[str, dict[str, Any]]:
+    """Per eligible strategy arm: OOS metrics, the final model fitted on all its rows, the forward read of its active
+    model (demotion) and of its previous-run passer (confirmation). Pure: no store."""
+    if rows.empty:
+        return {}
+    strat = rows[~rows["is_control"].astype(bool)]
+    strat = strat[[not strategy_excluded(str(a), rules) for a in strat["arm_id"]]]
+    out: dict[str, dict[str, Any]] = {}
+    for arm_id, ar in strat.groupby("arm_id"):
+        arm = str(arm_id)
+        oos = walk_forward(ar)
+        since = pd.Timestamp(oos["decision_utc"].min()) if len(oos) else cutoff
+        m = oos_metrics(oos, control_rows(rows, arm, named=named_controls, since=since, rules=rules), boot=boot)
+        m["n_rows"] = int(len(ar))
+        y = (ar["label_sim_r"].to_numpy(dtype=float) > 0).astype(int)
+        model = fit_logit(design(ar), y) if len(ar) >= MIN_TRAIN and len(set(y.tolist())) == 2 else None
+        act = (active or {}).get(arm)
+        first = (passes or {}).get(arm)
+        out[arm] = {"metrics": m, "model": model,
+                    "active": act, "forward": forward_read(rows, arm, act["model"], act["activation_ns"]) if act
+                    else None,
+                    "first_pass": first, "confirm": forward_read(rows, arm, first["model"], first["activation_ns"])
+                    if first else None}
+    return out
+
+
+def compute_broker(db: Database, *, broker: str, cutoff: pd.Timestamp,
+                   holdout: tuple[pd.Timestamp, pd.Timestamp] | None, named_controls: Mapping[str, str],
+                   rules: Mapping[str, Mapping[str, Any]], held_out: Collection[str] = (),
+                   instruments: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """One broker's reads (nothing written)."""
+    rows, counts = load_rows(db, broker=broker, cutoff=cutoff, holdout=holdout, held_out=held_out,
+                             instruments=instruments)
+    active = active_models(db, broker)
+    arms = read_arms(rows, named_controls=named_controls, rules=rules, cutoff=cutoff, active=active,
+                     passes=previous_passes(db, broker, cutoff))
+    return {"broker": broker, "counts": counts, "arms": arms, "active": active}
+
+
+def judged_pairs(reads: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+    """The run's judged (broker, arm) pairs: PRENAMED among the eligible, else the MAX_JUDGED eligible pairs with the
+    most candidates (label-blind ranking; ties by broker then arm)."""
+    ok = [(str(rd["broker"]), a, int(v["metrics"].get("n_rows") or 0)) for rd in reads
+          for a, v in rd["arms"].items() if eligible(v["metrics"]) is None and v["model"] is not None]
+    if PRENAMED:
+        return [(b, a) for b, a, _ in ok if (b, a) in set(PRENAMED)][:MAX_JUDGED]
+    return [(b, a) for b, a, _ in sorted(ok, key=lambda t: (-t[2], t[0], t[1]))[:MAX_JUDGED]]
+
+
+def decide(reads: Sequence[Mapping[str, Any]], *, serve: bool) -> dict[tuple[str, str], dict[str, Any]]:
+    """Every (broker, arm) of the run: gate, confirmation and demotion (module docstring steps 3-4)."""
+    judged = judged_pairs(reads)
+    pj: dict[tuple[str, str], float] = {}
+    for rd in reads:
+        for a, v in rd["arms"].items():
+            if (rd["broker"], a) in judged:
+                m = v["metrics"]
+                pj[(rd["broker"], a)] = max(float(m["p_nomodel"] if m["p_nomodel"] is not None else 1.0),
+                                            float(m["p_control"] if m["p_control"] is not None else 1.0))
+    adj = holm(pj)
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for rd in reads:
+        for a, v in rd["arms"].items():
+            key = (str(rd["broker"]), a)
+            m = v["metrics"]
+            why = eligible(m)
+            fails: list[str] = []
+            if why is not None:
+                fails.append(f"insufficient: {why}")
+            elif key not in adj:
+                fails.append(f"not judged: outside the run's {MAX_JUDGED} judged pairs")
+            else:
+                if float(m["edge_vs_nomodel"]) < MIN_EDGE_R:
+                    fails.append(f"edge vs no-model {m['edge_vs_nomodel']:+.3f} R < {MIN_EDGE_R}")
+                if m["edge_vs_control"] is None or float(m["edge_vs_control"]) < MIN_EDGE_R:
+                    fails.append(f"edge vs control {m['edge_vs_control']} R < {MIN_EDGE_R}")
+                if m["edge_gross"] is None or float(m["edge_gross"]) < 0:
+                    fails.append(f"gross edge {m['edge_gross']} R < 0")
+                if adj[key] > ALPHA:
+                    fails.append(f"Holm p {adj[key]:.4f} > {ALPHA}")
+            passed = not fails and v["model"] is not None
+            fwd, conf = v["forward"], v["confirm"]
+            decayed = fwd is not None and fwd["n"] >= MIN_FORWARD and (fwd["edge_vs_nomodel"] is None
+                                                                       or fwd["edge_vs_nomodel"] < DEMOTE_EDGE_R)
+            confirmed = v["first_pass"] is not None and (conf is None or conf["n"] < MIN_CONFIRM or (
+                conf["edge_vs_nomodel"] is not None and conf["edge_vs_nomodel"] >= 0))
+            if decayed:
+                status, reason = "shadow", f"forced shadow: active model's forward edge {fwd['edge_vs_nomodel']} R " \
+                                           f"< {DEMOTE_EDGE_R} on {fwd['n']}"
+            elif passed and not serve:
+                status, reason = "shadow", "passed, serving switched off"
+            elif passed and confirmed:
+                status, reason = "active", "passed in two consecutive runs"
+            elif passed:
+                status, reason = "shadow", ("passed; awaiting a second consecutive pass" if v["first_pass"] is None
+                                            else f"passed; first passer's forward edge {conf and conf['edge_vs_nomodel']}"
+                                                 " R < 0")
+            else:
+                status, reason = "shadow", "; ".join(fails) or "no model"
+            prev = None
+            if v["active"] is not None:
+                prev = ("superseded", f"superseded ({key[1]} active again)") if status == "active" else (
+                    "demoted", reason if decayed else f"walk-forward this run: {reason}")
+            out[key] = {"status": status, "reason": reason, "gate_pass": passed, "judged": key in adj,
+                        "p_holm": adj.get(key), "previous": prev}
+    return out
 
 
 def _set_status(conn: Any, version: str, status: Status, reason: str) -> None:
@@ -357,76 +534,71 @@ def _set_status(conn: Any, version: str, status: Status, reason: str) -> None:
                  (status, reason, now_ns(), version))
 
 
-def run_broker(db: Database, *, broker: str, slot: pd.Timestamp, cutoff: pd.Timestamp, activation: pd.Timestamp,
-               holdout: tuple[pd.Timestamp, pd.Timestamp] | None, serve: bool, named_controls: Mapping[str, str],
-               held_out: Collection[str] = (), instruments: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """One broker's weekly run (module docstring), recorded in self_retrain_runs and self_retrain_models."""
+def apply(db: Database, read: Mapping[str, Any], decisions: Mapping[tuple[str, str], Mapping[str, Any]], *,
+          slot: pd.Timestamp, cutoff: pd.Timestamp, activation: pd.Timestamp, k_ok: bool) -> dict[str, Any]:
+    """Write one broker's models, status changes and run row. `k_ok` False: nothing becomes active (fail closed)."""
+    broker = str(read["broker"])
     run_id = f"{SPEC_VERSION}-{broker}-{cutoff:%Y%m%dT%H%M}"
-    rows, counts = load_rows(db, broker=broker, cutoff=cutoff, holdout=holdout, held_out=held_out,
-                             instruments=instruments)
-    strat = rows[~rows["is_control"].astype(bool)] if len(rows) else rows
-    metrics: dict[str, dict[str, Any]] = {}
-    oos_of: dict[str, pd.DataFrame] = {}
-    for arm_id, arm_rows in (strat.groupby("arm_id") if len(strat) else []):
-        oos = walk_forward(arm_rows)
-        oos_of[str(arm_id)] = oos
-        since = pd.Timestamp(oos["decision_utc"].min()) if len(oos) else cutoff
-        metrics[str(arm_id)] = oos_metrics(oos, control_rows(rows, str(arm_id), named=named_controls, since=since))
-        metrics[str(arm_id)]["n_rows"] = int(len(arm_rows))
-    verdicts = gate(metrics)
-    active = active_models(db, broker)
-    decisions: dict[str, dict[str, Any]] = {}
+    counts = read["counts"]
+    detail: dict[str, Any] = {}
     n_weights = 0
     with db.write() as conn:
-        for arm_id, arm_rows in (strat.groupby("arm_id") if len(strat) else []):
-            arm_id = str(arm_id)
-            v = verdicts[arm_id]
-            y = (arm_rows["label_sim_r"].to_numpy(dtype=float) > 0).astype(int)
-            model = fit_logit(design(arm_rows), y) if len(arm_rows) >= MIN_TRAIN and len(set(y.tolist())) == 2 \
-                else None
-            status: Status = "active" if (v["pass"] and serve and model is not None) else "shadow"
-            reason = v["reason"] if serve or not v["pass"] else "passed, serving switched off"
-            prev = active.get(arm_id)
-            fwd = forward_read(rows, arm_id, prev) if prev is not None else None
-            if prev is not None:
-                if status == "active":
-                    _set_status(conn, prev["model_version"], "superseded", f"superseded by run {run_id}")
-                elif fwd is not None and fwd["n"] >= MIN_FORWARD and (fwd["edge_vs_nomodel"] is None
-                                                                       or fwd["edge_vs_nomodel"] < DEMOTE_EDGE_R):
-                    _set_status(conn, prev["model_version"], "demoted",
-                                f"forward edge {fwd['edge_vs_nomodel']} R < {DEMOTE_EDGE_R} on {fwd['n']}")
-                else:
-                    _set_status(conn, prev["model_version"], "demoted", f"run {run_id} walk-forward: {v['reason']}")
+        for arm, v in read["arms"].items():
+            d = dict(decisions[(broker, arm)])
+            if d["status"] == "active" and not k_ok:
+                d["status"], d["reason"] = "shadow", "passed; K rows not written: fail closed"
+                if d["previous"] is not None:
+                    d["previous"] = ("demoted", "K rows not written: fail closed")
+            if v["active"] is not None and d["previous"] is not None:
+                _set_status(conn, v["active"]["model_version"], d["previous"][0], d["previous"][1])
+            model: LogitModel | None = v["model"]
             if model is not None:
                 n_weights += model.n_weights
                 conn.execute(
                     "INSERT OR REPLACE INTO self_retrain_models (model_version, run_id, broker, arm_id, spec_version, "
-                    "status, status_reason, cutoff_ns, activation_ns, n_train, n_features, n_weights, model, oos, "
-                    "recorded_ns, status_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (f"{run_id}-{arm_id}", run_id, broker, arm_id, SPEC_VERSION, status, reason,
-                     int(cutoff.value), int(activation.value), int(len(arm_rows)), len(INPUTS), model.n_weights,
-                     model.model_dump_json(), json.dumps(metrics[arm_id] | v, default=float), now_ns(), now_ns()))
-            decision = status if prev is None or status == "active" else "demoted"
-            decisions[arm_id] = {"decision": decision, "reason": reason,
-                                 "previous": prev["model_version"] if prev else None, "forward": fwd,
-                                 **{k: metrics[arm_id].get(k) for k in ("n_rows", "n_oos", "n_kept", "auc",
-                                                                         "edge_vs_nomodel", "edge_vs_control")},
-                                 "p_holm": v["p_holm"]}
-        n_active = sum(1 for d in decisions.values() if d["decision"] == "active")
-        n_demoted = sum(1 for d in decisions.values() if d["decision"] == "demoted")
-        summary = {"run_id": run_id, "broker": broker, "labels": counts["labels"],
-                   "with_features": counts["with_features"], "no_snapshot": counts["no_snapshot"],
-                   "controls": counts["controls"], "features": len(INPUTS), "weights": n_weights,
-                   "arms_trained": sum(1 for d in decisions.values() if d.get("n_rows")),
-                   "active": n_active, "demoted": n_demoted, "shadow": len(decisions) - n_active - n_demoted}
+                    "status, status_reason, gate_pass, cutoff_ns, activation_ns, n_train, n_features, n_weights, "
+                    "model, oos, recorded_ns, status_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (f"{run_id}-{arm}", run_id, broker, arm, SPEC_VERSION, d["status"], d["reason"],
+                     int(bool(d["gate_pass"])), int(cutoff.value), int(activation.value),
+                     int(v["metrics"]["n_rows"]), len(INPUTS), model.n_weights, model.model_dump_json(),
+                     json.dumps(v["metrics"] | {k: d[k] for k in ("judged", "p_holm")}, default=float), now_ns(),
+                     now_ns()))
+            detail[arm] = {"decision": d["status"], "reason": d["reason"], "judged": d["judged"],
+                           "p_holm": d["p_holm"], "previous": d["previous"], "forward": v["forward"],
+                           "confirm": v["confirm"],
+                           **{k: v["metrics"].get(k) for k in ("n_rows", "n_oos", "n_kept", "auc", "edge_vs_nomodel",
+                                                                "edge_vs_control", "edge_gross", "edge_r1",
+                                                                "p_nomodel", "p_control", "boot_no_kept")}}
+        # an active model whose arm had no rows this run is demoted: it is never left active unjudged
+        for arm, act in read["active"].items():
+            if arm not in read["arms"]:
+                _set_status(conn, act["model_version"], "demoted", f"no rows in run {run_id}")
+                detail[arm] = {"decision": "demoted", "reason": "no rows in run", "previous": act["model_version"]}
+        n_active = int(conn.execute("SELECT COUNT(*) FROM self_retrain_models WHERE broker = ? AND status = 'active'",
+                                    (broker,)).fetchone()[0])
+        n_demoted = sum(1 for d in detail.values() if (d.get("previous") or ("",))[0] == "demoted"
+                        or d["decision"] == "demoted")
+        n_shadow = sum(1 for d in detail.values() if d["decision"] == "shadow")
         conn.execute(
             "INSERT OR REPLACE INTO self_retrain_runs (run_id, broker, spec_version, slot_ns, cutoff_ns, run_ns, status, "
             "n_labels, n_with_features, n_features, n_weights, n_arms, n_active, n_shadow, n_demoted, detail) "
             "VALUES (?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (run_id, broker, SPEC_VERSION, int(slot.value), int(cutoff.value), now_ns(), counts["labels"],
-             counts["with_features"], len(INPUTS), n_weights, len(decisions), n_active, summary["shadow"], n_demoted,
-             json.dumps({"counts": counts, "decisions": decisions}, default=float)))
-    return summary
+             counts["with_features"], len(INPUTS), n_weights, len(read["arms"]), n_active, n_shadow, n_demoted,
+             json.dumps({"counts": counts, "decisions": detail, "k_ok": k_ok}, default=float)))
+    return {"run_id": run_id, "broker": broker, **counts, "features": len(INPUTS), "weights": n_weights,
+            "arms_trained": len(read["arms"]), "active": n_active, "demoted": n_demoted, "shadow": n_shadow}
+
+
+def run_broker(db: Database, *, broker: str, slot: pd.Timestamp, cutoff: pd.Timestamp, activation: pd.Timestamp,
+               holdout: tuple[pd.Timestamp, pd.Timestamp] | None, serve: bool, named_controls: Mapping[str, str],
+               rules: Mapping[str, Mapping[str, Any]] | None = None, held_out: Collection[str] = (),
+               instruments: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """A one-broker run end to end (tests and the CLI; the job runs `compute_broker` per broker, one `decide`, the K
+    rows, then `apply`)."""
+    read = compute_broker(db, broker=broker, cutoff=cutoff, holdout=holdout, named_controls=named_controls,
+                          rules=rules or {}, held_out=held_out, instruments=instruments)
+    return apply(db, read, decide([read], serve=serve), slot=slot, cutoff=cutoff, activation=activation, k_ok=True)
 
 
 def record_failure(db: Database, *, broker: str, slot: pd.Timestamp, cutoff: pd.Timestamp, status: str,
@@ -449,8 +621,8 @@ def demote_all(db: Database, reason: str) -> int:
 
 
 def latest_runs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """The newest run's rows (one per broker); [] before any run or before the table exists (health reads it on a
-    read-only connection)."""
+    """The newest run's rows (one per broker), each with `n_active` read from the models table (every model active
+    now, not only this run's decisions); [] before any run or before the table exists."""
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'self_retrain_runs'").fetchone() \
             is None:
         return []
@@ -459,8 +631,13 @@ def latest_runs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         return []
     cols = ["run_id", "broker", "status", "slot_ns", "run_ns", "n_labels", "n_with_features", "n_features",
             "n_weights", "n_arms", "n_active", "n_shadow", "n_demoted", "detail"]
-    got = conn.execute(f"SELECT {', '.join(cols)} FROM self_retrain_runs WHERE slot_ns = ?", (r[0],)).fetchall()
-    return [dict(zip(cols, g, strict=True)) for g in got]
+    got = [dict(zip(cols, g, strict=True)) for g in
+           conn.execute(f"SELECT {', '.join(cols)} FROM self_retrain_runs WHERE slot_ns = ?", (r[0],)).fetchall()]
+    active = dict(conn.execute("SELECT broker, COUNT(*) FROM self_retrain_models WHERE status = 'active' "
+                               "GROUP BY broker").fetchall())
+    for g in got:
+        g["n_active"] = int(active.get(g["broker"], 0))
+    return got
 
 
 def health(runs: Sequence[Mapping[str, Any]], now: pd.Timestamp, *, enabled: bool) -> tuple[str, str]:
