@@ -127,6 +127,13 @@
                     priors from demo labels and discovered arms' forward results; in a child at nice 15 under a memory
                     cap, killed at its budget. Survivors -> candidate arm rows (the registration hand-off); the run
                     record -> aux.db discovery_runs. No arm, no config, no order.
+* self_retrain      weekly, Sunday 15:00 (owner 2026-11-24, research/self_retrain.py,
+                    prereg-2026-11-24-self-retrain.md), while research.self_retrain.enabled: per broker and strategy arm,
+                    the fixed meta-label filter retrained on every resolved gold candidate's replay label (taken or not)
+                    with a strictly point-in-time snapshot; purged walk-forward; ACTIVE only if it beats no-model and the
+                    random control out of sample net of costs (Holm across arms), else shadow; an active model whose
+                    edge decays is demoted -> aux.db self_retrain_runs / self_retrain_models, one registry row a run.
+                    Places nothing: the engine does not read these tables yet.
 """
 from __future__ import annotations
 
@@ -1877,6 +1884,86 @@ def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return res
 
 
+def named_controls(path: Path | None = None) -> dict[str, str]:
+    """Strategy arm -> its named random control from the ARM-SPEC (a learning arm's `learning.control`, or a control
+    row's params.control "learning:<id>,<id>"); arms with none fall back to their style's controls in the self-retrain."""
+    import yaml
+
+    from goldbot.research import arms as arm_spec
+    raw = yaml.safe_load(Path(arm_spec.REPO_ROOT / "config" / "exploration_arms.yaml" if path is None else path)
+                         .read_text()) or {}
+    out: dict[str, str] = {}
+    for r in raw.get("arms", []):
+        if not isinstance(r, dict) or "id" not in r:
+            continue
+        lrn = r.get("learning")
+        if isinstance(lrn, dict) and isinstance(lrn.get("control"), str):
+            out[str(r["id"])] = lrn["control"]
+        named = (r.get("params") or {}).get("control") if r.get("role") == "control" else None
+        if isinstance(named, str) and named.startswith(arm_spec.LEARNING_CONTROL_PREFIX):
+            for a in named.removeprefix(arm_spec.LEARNING_CONTROL_PREFIX).split(","):
+                out.setdefault(a.strip(), str(r["id"]))
+    return out
+
+
+def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Sunday (owner 2026-11-24; research/self_retrain.py, prereg-2026-11-24-self-retrain.md): per broker, the per-arm
+    meta-label filter retrained on the replay labels of every resolved gold candidate with a point-in-time snapshot,
+    judged out of sample against no-model and the random control, ACTIVE or shadow, and the run recorded (aux.db
+    self_retrain_runs). One registry row per run (the run is one look of the one pre-registered spec; Holm inside it
+    across arms). Switched off: a `disabled` row and every active model demoted, so health says learning is off."""
+    from goldbot.research import self_retrain as sr
+    from goldbot.research.exploration_data import model_cutoff
+    db = Database.open(ctx.state_dir, "aux")
+    cutoff, activation = model_cutoff(slot)
+    cfg = ctx.settings.research.self_retrain
+    brokers = sorted({str(b) for b in read_obs(db)["broker"].dropna()} | {acc.broker for acc in ctx.accounts})
+    if not cfg.enabled:
+        demoted = sr.demote_all(db, "research.self_retrain.enabled is off")
+        for broker in brokers:
+            sr.record_failure(db, broker=broker, slot=slot, cutoff=cutoff, status="disabled", error="switched off")
+        return {"enabled": False, "demoted": demoted, "health": "WARN: self-retrain switched off"}
+    if not cfg.serve:
+        sr.demote_all(db, "research.self_retrain.serve is off")
+    try:
+        _, held = evidence_exclusions(ctx, db, slot)
+    except Exception as exc:       # noqa: BLE001 - fail closed: no fit on evidence not screened
+        log.exception("self-retrain: evidence exclusions not computed")
+        for broker in brokers:
+            sr.record_failure(db, broker=broker, slot=slot, cutoff=cutoff, status="error",
+                              error=f"evidence_exclusions:{type(exc).__name__}")
+        return {"error": f"evidence_exclusions:{type(exc).__name__}"}
+    controls = named_controls()
+    out: dict[str, Any] = {}
+    for broker in brokers:
+        try:                       # one broker's failure never skips another's run
+            out[broker] = sr.run_broker(db, broker=broker, slot=slot, cutoff=cutoff, activation=activation,
+                                        holdout=ctx.settings.research.holdout_window(), serve=cfg.serve,
+                                        named_controls=controls, held_out=held)
+        except Exception as exc:   # noqa: BLE001 - recorded: health WARNs on a failed run
+            log.exception("self-retrain failed for broker %s", broker)
+            sr.record_failure(db, broker=broker, slot=slot, cutoff=cutoff, status="error",
+                              error=f"{type(exc).__name__}: {exc}")
+            out[broker] = {"error": type(exc).__name__}
+    trained = {b: o for b, o in out.items() if "error" not in o and o.get("arms_trained")}
+    k_row: Any = None
+    if trained:
+        try:
+            k_row = ctx.trials.record(
+                agent_id="self_retrain", family=sr.REGISTRY_FAMILY, rule_ref=sr.PREREG,
+                config={"spec": sr.SPEC_VERSION, "cutoff": cutoff.isoformat()}, feature_version=sr.SPEC_VERSION,
+                rationale="weekly self-retrain look (one pre-registered spec; Holm across arms inside the run)",
+                results={b: {k: o.get(k) for k in ("labels", "with_features", "arms_trained", "active", "demoted")}
+                         for b, o in trained.items()}).get("trial")
+        except Exception as exc:   # noqa: BLE001 - the run stands; the missing K row is reported
+            log.warning("self-retrain: registry row not written (%s)", type(exc).__name__)
+            k_row = f"not written: {type(exc).__name__}"
+    with db.connection() as conn:
+        status, reason = sr.health(sr.latest_runs(conn), slot, enabled=True)
+    return {"brokers": out, "cutoff": cutoff.isoformat(), "k_row": k_row,
+            "health": f"{status.upper()}: {reason}"}
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1910,6 +1997,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "long_history_refresh": long_history_refresh,  # BACKLOG 251: the 1d/1w warm-up file kept current (ops/long_history.py)
     "news_coverage": news_coverage,               # BACKLOG 212: news collector coverage readout + outage dq_events
     "discovery_nightly": discovery_nightly,       # ADR 0090: bounded, power-gated G2 discovery in a niced child
+    "self_retrain": self_retrain,                 # owner 2026-11-24: Sunday per-arm meta-label filter retrain + gate
 }
 
 

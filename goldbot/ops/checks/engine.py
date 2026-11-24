@@ -44,6 +44,19 @@ if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
 
 
+META_FILTER_WARN_S = 900.0      # engine/meta_filter.ERROR_WINDOW_S, kept here so health never imports the engine
+
+
+def meta_filter_part(e: dict[str, Any], now_s: float) -> tuple[Status, str] | None:
+    """Owner 2026-11-24 (engine/meta_filter.py): a self-retrain filter that failed open in the last META_FILTER_WARN_S
+    WARNs (the candidate went on unfiltered: learning must never be silently off). None otherwise."""
+    err, at = e.get("meta_filter_error"), e.get("meta_filter_error_at")
+    if not err or not isinstance(at, (int, float)) or now_s - float(at) > META_FILTER_WARN_S:
+        return None
+    return "warn", (f"self-retrain filter failed open ({err}): those candidates went on unfiltered, "
+                    "exits and the RiskGate unaffected")
+
+
 @register_check("account", block=BLOCK_ACCOUNT, pos=10)
 def check_engine(ctx: HealthContext, account_id: str) -> Check:
     name = f"engine:{account_id}"
@@ -83,6 +96,9 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail")
         parts.append(f"hot-loaded arm registry unverified for {_age(_epoch(ctx.now) - float(since))} "
                      f"({e.get('arm_registry_reason') or 'unverified'}): every hot-loaded entry refused, exits run")
+    if (mf := meta_filter_part(e, _epoch(ctx.now))) is not None:
+        statuses.append(mf[0])
+        parts.append(mf[1])
     if e.get("startup_error"):              # the engine refused to start (review LOW-A): name the cause
         statuses.append("fail")
         parts.append(f"engine refused to start: {e['startup_error']}")

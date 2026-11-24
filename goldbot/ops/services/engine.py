@@ -700,6 +700,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               # `blackout_entries` (engine_limits)
                               news_blackout=True,
                               demo_weekend_flat=engine_weekend_flat(acc),   # demo-limits ADR 2026-11-02
+                              meta_filter_serve=meta_filter_serve(settings),   # owner 2026-11-24, drop-only
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
@@ -899,6 +900,14 @@ def paper_stand_in(broker: Any) -> bool:
     string: re-verification LOW). Only then is the account's absolute daily limit dropped (engine_limits)."""
     from goldbot.execution.paper import PaperBroker
     return isinstance(broker, PaperBroker)
+
+
+def meta_filter_serve(settings: Settings) -> bool:
+    """Owner 2026-11-24 (engine/meta_filter.py): the engine serves the weekly self-retrain's ACTIVE filters only while
+    the job runs and serving is on (settings research.self_retrain enabled and serve); the demo-only and strategy-arm
+    rules are the filter's own, read at every signal."""
+    cfg = settings.research.self_retrain
+    return bool(cfg.enabled and cfg.serve)
 
 
 def engine_weekend_flat(acc: Account) -> bool:

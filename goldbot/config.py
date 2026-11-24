@@ -344,6 +344,11 @@ class SchedulerSettings(_Section):
     # 06:30, loop_check 07:05); a new, regressed, closed or past-due row is announced once a day on the status issue
     findings_check: ScheduleSettings = ScheduleSettings(kind="daily", at="07:15", max_late_hours=12,
                                                         run_if_never_run=True)
+    # owner 2026-11-24 (goldbot/research/self_retrain.py): the weekly per-arm meta-label filter retrain on the
+    # exploration replay labels, Sunday (the retired H-62 meta-labeller's day) after the 10:00 restore drill and before
+    # the 18:00 calendar fetch and the 22:00 open; data cutoff Friday 21:00 UTC, activation at the Sunday open
+    self_retrain: ScheduleSettings = ScheduleSettings(kind="weekly", at="15:00", weekday=6, max_late_hours=6,
+                                                      run_if_never_run=True)
 
 
 class BackupSettings(_Section):
@@ -613,6 +618,18 @@ class ExplorationLearnSettings(_Section):
     snapshot_max_decisions: int = Field(600, ge=1, le=20_000)   # decision bars snapshotted a night, newest first
 
 
+class SelfRetrainSettings(_Section):
+    """The weekly self-retrain of the per-arm meta-label filter (goldbot/research/self_retrain.py; owner 2026-11-24,
+    docs/research/prereg-2026-11-24-self-retrain.md). The spec, gate and thresholds are the module's pre-registered
+    constants, never settings: this only switches the job and whether a passing model may become ACTIVE."""
+    # the Sunday job trains, gates and records (off: a `disabled` run row, every active model demoted, health WARNs)
+    enabled: bool = True
+    # a model passing the gate becomes ACTIVE, and the engine serves it (engine/meta_filter.py: drops a demo strategy
+    # arm's exploration candidate scoring below its cut, before the RiskGate); off: every model stays shadow, any active
+    # one is demoted and the engine scores nothing
+    serve: bool = True
+
+
 class ArmLifecycleSettings(_Section):
     """Owner directive 2026-11-18, build 2 (goldbot/research/arm_lifecycle.py; docs/research/arm-lifecycle-2026-11-18.md):
     the nightly kill-only read and decision per demo arm (RETIRE or HOLD). The thresholds are the note's pre-registered module constants,
@@ -715,6 +732,7 @@ class ResearchSettings(_Section):
     # recalibration, drift and decay watchers still run
     specialist_retrain: bool = False
     exploration: ExplorationLearnSettings = Field(default_factory=ExplorationLearnSettings)
+    self_retrain: SelfRetrainSettings = Field(default_factory=SelfRetrainSettings)
     # H-27 lot-fit overlay (research/lot_fit.py, opt-in): the account the research sizes trades for
     lot_fit_equity: float = Field(1000.0, gt=0)          # account currency
     lot_fit_acct_per_usd: float = Field(0.75, gt=0)      # account currency per USD (GBP at GBPUSD ~1.33)

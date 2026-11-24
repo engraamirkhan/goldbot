@@ -601,6 +601,10 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
         "strict: the hash-chained arm registration journal (ADR 0058); a row that does not read must refuse",
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/research/self_retrain.py", "active_models", "LogitModel"):
+        "strict: a fitted self-retrain filter's numbers (aux.db self_retrain_models); a row that does not read must fail",
+    ("goldbot/engine/meta_filter.py", "load_active", "sr.LogitModel"):
+        "strict: the served filter's numbers; a row that does not read is skipped and named, never served tolerantly",
     ("goldbot/ops/findings.py", "load_register", "Register"):
         "strict: config/findings.yaml, versioned config (a misspelt key or an unknown check must fail the load)",
     ("goldbot/ops/finding_checks.py", "parse_params", "spec.params"):
