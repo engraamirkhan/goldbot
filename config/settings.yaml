@@ -226,6 +226,7 @@ scheduler:
   long_history_refresh: { kind: daily, at: "21:40", max_late_hours: 20, run_if_never_run: true }   # BACKLOG 251 (goldbot/ops/long_history.py): the store's complete days appended to raw/daily/bars/<symbol>_1d.parquet after the 21:00 UTC roll (the 1d/1w warm-up); an up-to-date file is left untouched
   discovery_nightly: { kind: daily, at: "01:00", max_late_hours: 1.5 }   # ADR 0090 (goldbot/research/autodisc/discovery.py): bounded G2 search in a niced child, 01:00 + budget_s + kill_grace_s (5,700 s) = 03:35 on time; worst case 04:05 UTC (a start at 02:30, the max_late, + 5,700 s), so a late start overlaps the 03:40 journal_compact; never caught up into London. Keep 01:00-04:05 UTC free of any job that must run on time (heartbeat or trading path): the scheduler is single-threaded (SRE 2026-11-18)
   findings_check:   { kind: daily,   at: "07:15", max_late_hours: 12, run_if_never_run: true }   # owner 2026-11-20 (goldbot/ops/findings.py): every config/findings.yaml row re-measured on the brain's data -> aux.db findings_history; a new, regressed, closed or past-due row is announced once a day on issue #34
+  self_retrain:     { kind: weekly,  at: "15:00", weekday: 6, max_late_hours: 6, run_if_never_run: true }   # owner 2026-11-24 (goldbot/research/self_retrain.py): Sunday per-arm meta-label filter retrain on the replay labels (cutoff Friday 21:00, activation at the Sunday 22:00 open); run record aux.db self_retrain_runs, health self_retrain
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -328,6 +329,12 @@ research:
     meta_labeller: false             # H-62 Sunday retrain: retired 2026-11-13 (0 model rows, no candidate trainable)
     feature_snapshots: true          # default-feature vector of every gold candidate, point in time, from stored bars
     snapshot_max_decisions: 600      #   decision bars a night (newest first; the backlog fills over later nights)
+  self_retrain:                      # weekly per-arm meta-label filter (owner 2026-11-24; research/self_retrain.py,
+                                     #   docs/research/prereg-2026-11-24-self-retrain.md): replay labels of every
+                                     #   candidate (taken or not) + point-in-time snapshots, purged walk-forward, gate vs
+                                     #   no-model AND the random control net of costs; thresholds are module constants
+    enabled: true                    # off: a `disabled` run row, every active model demoted, health self_retrain WARNs
+    serve: true                      # a gate-passing model becomes ACTIVE (demo entry filter only; drop, never add)
   lot_fit_equity: 1000               # H-27 lot-fit overlay (research/lot_fit.py, opt-in, reporting only): the account the
   lot_fit_acct_per_usd: 0.75         #   research sizes trades for, in its currency; GBP per USD (GBPUSD ~1.33), a research
                                      #   assumption (the engine reads the broker's figure). Trades the gate would refuse
