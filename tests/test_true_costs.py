@@ -443,6 +443,18 @@ def test_edge_cap_states_suspend_a_strategy_arm_that_cannot_cover_its_cost_never
     assert got == {"LOSER"}
 
 
+def test_learning_cohort_fills_never_trip_the_edge_cap(tmp_path):
+    """ADR 0095 quant C2: a demo learning cohort fill is never an edge read."""
+    from goldbot.research.arm_stops import edge_cap_states, load_stop_rules
+    rec = _one_cell_record(0.30, account="icm-probe", session="newyork")
+    db = exploration.ledger_db(str(tmp_path))
+    with db.write() as conn:
+        for r in _ledger_rows("COHORT", 210, exit_reason="stop"):
+            exploration.LEDGER.upsert(conn, r.model_copy(update={"evidence_class": "learning_cohort"}))
+    with db.connection() as conn:
+        assert edge_cap_states(conn, {"COHORT"}, record=rec, rules=load_stop_rules()) == set()
+
+
 def test_an_edge_capped_arm_is_refused_new_entries_through_the_cost_stop_path(tmp_path):
     rec = _one_cell_record(0.30, account="icm-probe", session="newyork")
     path = tmp_path / "ecr-test.2.yaml"
