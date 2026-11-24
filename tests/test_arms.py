@@ -49,6 +49,8 @@ ARM_SPEC_IDS |= {"VEX15", "VEX1H", "IEX15", "IEX1H"}
 ARM_SPEC_IDS |= {"RB15", "RB1H", "RB4H", "RBC15", "RBC1H", "RBC4H"}
 # GD-1 A1 (docs/research/prereg-amendment-2026-11-20-gd1-asia-learning.md): 2 learning arms, 2 replay-only controls
 ARM_SPEC_IDS |= {"GD1D", "GD1P", "GD1CD", "GD1CP"}
+# the red-box rule recorded replay-only (prereg-amendment-2026-11-24-replay-only-retired-arms.md)
+ARM_SPEC_IDS |= {"RBR15", "RBR1H", "RBR4H", "RBRC15", "RBRC1H", "RBRC4H"}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:

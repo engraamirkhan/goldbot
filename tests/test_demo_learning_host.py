@@ -23,6 +23,7 @@ from goldbot.risk.supervisor import Supervisor
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Terminal
 from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
+from tests.test_replay_only_retired_arms import REPLAY_BORN_RETIRED  # amendment 2026-11-24
 
 SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
          "KA15", "XC15",                                                                     # wave 2 (8.8, 8.9)
@@ -108,7 +109,8 @@ def test_icm_probe_ships_the_scalp_arms_with_its_cost_probes_kept_but_switched_o
     assert acc.shadow_host and not cp.enabled and not cp.scheduled.enabled
     assert cp.budget_share * 220 == pytest.approx(52, abs=0.05)
     # learning-mi-2026-11-02.md and lane L3: the multi-instrument pairs and controls beside the scalp arms
-    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"] | REDBOX | GD1_PROBE
+    assert ex.enabled and set(ex.arms) == SCALP | ICM_INSTRUMENTS | MI_ON["icm-probe"] | REDBOX | GD1_PROBE \
+        | REPLAY_BORN_RETIRED
     assert set(ex.pots) == {"scalp", "intraday", "swing"}               # swing: GD1P's one slot (2026-11-20)
     assert ex.pots["scalp"].gbp is None and ex.max_open_total == 23      # one slot of 24 kept for the scheduled probe
     assert ex.budget_share * 220 == pytest.approx(168, abs=0.05)
@@ -124,7 +126,7 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
     assert set(seen) == (SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247 | GROWTH
                          | EXECUTION_ICM | EXECUTION_VANTAGE | ICM_INSTRUMENTS | VANTAGE_INSTRUMENTS | MI_ON["icm-probe"] | MI_ON["vantage-demo"]
-                         | REDBOX | GD1_DEMO | GD1_PROBE)
+                         | REDBOX | GD1_DEMO | GD1_PROBE | REPLAY_BORN_RETIRED)
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):

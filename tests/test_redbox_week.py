@@ -216,7 +216,8 @@ def test_a_row_on_another_timeframe_or_hold_or_without_its_end_is_refused_at_loa
 # ------------------------------------------------------------------------------------------------ the spec rows
 def _rows() -> dict[str, dict[str, Any]]:
     raw = yaml.safe_load((ROOT / "config" / "exploration_arms.yaml").read_text())["arms"]
-    return {r["id"]: r for r in raw if r["rule"] in X.REDBOX_RULES}
+    # the week's rows; RBR*/RBRC* (the rule recorded replay-only from 2026-11-24) are tests/test_replay_only_retired_arms.py's
+    return {r["id"]: r for r in raw if r["rule"] in X.REDBOX_RULES and not r["id"].startswith("RBR")}
 
 
 def test_the_family_is_three_learning_arms_each_with_its_replay_only_control_one_open_and_the_weeks_caps(

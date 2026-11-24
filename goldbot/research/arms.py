@@ -1014,7 +1014,10 @@ class Arm(FrozenRecord):
     # Amendment 2026-11-15 (docs/research/prereg-amendment-2026-11-15-replay-only-controls.md): "an unpaired gold
     # random control is replay_only": its candidates are recorded and labelled (exploration_obs + the r2 replay) and no
     # order is ever sent (`engine.exploration._send` refuses it before any check). Gold controls only. Run policy, like
-    # a retirement: not in the hash. `broker` (the default) sends through the RiskGate as before
+    # a retirement: not in the hash. `broker` (the default) sends through the RiskGate as before.
+    # Amendment 2026-11-24 (docs/research/prereg-amendment-2026-11-24-replay-only-retired-arms.md): "a retired or
+    # no-evidence gold arm of any role may record replay_only": a retired row with it keeps its retirement (no entry
+    # on any account) and its rule runs again, every candidate recorded taken 0 and blocked replay_only, never sent
     control_mode: Literal["broker", "replay_only"] = "broker"
     entry_refused: str = ""
     config_hash: str | None = None
@@ -1038,8 +1041,6 @@ class Arm(FrozenRecord):
         if (self.retired_day is None) != (not self.retired_rule):
             raise ValueError(f"{self.id}: a retirement names both its retired_day and its retired_rule (the rule that "
                              "retired it), or neither")
-        if self.control_mode == "replay_only" and self.role != "control":
-            raise ValueError(f"{self.id}: control_mode replay_only is for a random control (role control) only")
         if self.control_mode == "replay_only" and self.params.get("instrument", "XAUUSD") != "XAUUSD":
             raise ValueError(f"{self.id}: control_mode replay_only is for gold controls only (the r2 replay is gold's)")
         if self.status == "blocked" and not self.note:

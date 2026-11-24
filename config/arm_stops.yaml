@@ -140,7 +140,10 @@ none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
        # arm stops at its learning block's £100 loss cap, its 300-fill read or the week's end (params.end_utc
        # 2026-11-22 22:00 UTC, learning.until the backstop; engine/exploration_learning.py). The RBC* replay-only
        # controls send nothing and stop with their arm
-       RB15, RB1H, RB4H, RBC15, RBC1H, RBC4H]
+       RB15, RB1H, RB4H, RBC15, RBC1H, RBC4H,
+       # amendment 2026-11-24 (prereg-amendment-2026-11-24-replay-only-retired-arms.md): replay-only from birth,
+       # retired, never traded, so no stop applies
+       RBR15, RBR1H, RBR4H, RBRC15, RBRC1H, RBRC4H]
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above

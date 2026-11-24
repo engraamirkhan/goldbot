@@ -45,11 +45,13 @@ def _spec_rows() -> dict[str, SpecArm]:
 
 
 # ------------------------------------------------------------------------------------------------ the schema
-def test_replay_only_is_a_control_mode_and_refused_on_any_other_role():
-    with pytest.raises(ValidationError, match="replay_only"):
-        SpecArm(id="X", rule="random_bracket", timeframe="1m", role="strategy", control_mode="replay_only",
+def test_replay_only_on_another_role_is_allowed_since_the_2026_11_24_amendment():
+    """prereg-amendment-2026-11-24-replay-only-retired-arms.md supersedes "for a random control only": a retired or
+    no-evidence gold arm of any role records replay_only (tests/test_replay_only_retired_arms.py)."""
+    a = SpecArm(id="X", rule="random_bracket", timeframe="1m", role="strategy", control_mode="replay_only",
                 params={"minutes": [0], "window_utc": ["07:00", "19:50"], "stop_usd": 3.0, "target_r": 1.0,
                         "hold_bars": 30})
+    assert a.control_mode == "replay_only"
 
 
 def test_replay_only_is_refused_on_a_non_gold_control():
