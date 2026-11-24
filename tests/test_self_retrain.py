@@ -513,7 +513,7 @@ def _null_single(seed: int) -> tuple[bool, bool]:
     return out[0], out[0] and out[1]
 
 
-@pytest.mark.integration
+@pytest.mark.selftest  # minutes of Monte Carlo: run by selftest.yml, not the 20-min integration shards
 def test_m1_null_single_run_pass_rate_is_at_most_ten_percent():
     """Quant S4: measured 2026-11-24 (card section 3)."""
     import multiprocessing as mp
@@ -534,7 +534,7 @@ def _null_run(seed: int) -> int:
     return sum(bool(d["gate_pass"]) for d in sr.decide(reads, serve=True).values())
 
 
-@pytest.mark.integration
+@pytest.mark.selftest  # minutes of Monte Carlo: run by selftest.yml, not the 20-min integration shards
 def test_under_the_null_a_run_passes_the_gate_at_most_twelve_percent_of_the_time():
     """Quant R9: ~200 null runs; measured 2026-11-24 on seeds 1000-1199: 0 runs with a pass (card section 3)."""
     import multiprocessing as mp
