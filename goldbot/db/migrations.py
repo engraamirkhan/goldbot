@@ -948,6 +948,53 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (idea_id, side, tf)
            ) STRICT""",
     )),
+    # additive (owner 2026-11-24, docs/research/prereg-2026-11-24-self-retrain.md; goldbot/research/self_retrain.py):
+    # the weekly self-retrain of the per-arm meta-label filter. `self_retrain_runs`: one row per (weekly run, broker)
+    # with its label, feature and weight counts and every arm's OOS read and decision (health reads the newest).
+    # `self_retrain_models`: each fitted filter (its coefficients as JSON, never a pickle) and its status (active,
+    # shadow, demoted, superseded). Written by the weekly job only; nothing in goldbot/engine reads them yet. A release
+    # without them never opens them. After the KoG weekly shadow's 42
+    Migration(version=43, name="self_retrain", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS self_retrain_runs (
+               run_id TEXT PRIMARY KEY,
+               broker TEXT NOT NULL,
+               spec_version TEXT NOT NULL,
+               slot_ns INTEGER NOT NULL,
+               cutoff_ns INTEGER NOT NULL,
+               run_ns INTEGER NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('ok', 'error', 'disabled')),
+               n_labels INTEGER NOT NULL,
+               n_with_features INTEGER NOT NULL,
+               n_features INTEGER NOT NULL CHECK (n_features <= 40),
+               n_weights INTEGER NOT NULL,
+               n_arms INTEGER NOT NULL,
+               n_active INTEGER NOT NULL,
+               n_shadow INTEGER NOT NULL,
+               n_demoted INTEGER NOT NULL,
+               detail TEXT NOT NULL CHECK (json_valid(detail))
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS self_retrain_runs_slot ON self_retrain_runs(slot_ns)",
+        """CREATE TABLE IF NOT EXISTS self_retrain_models (
+               model_version TEXT PRIMARY KEY,
+               run_id TEXT NOT NULL,
+               broker TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               spec_version TEXT NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('active', 'shadow', 'demoted', 'superseded')),
+               status_reason TEXT NOT NULL,
+               gate_pass INTEGER NOT NULL CHECK (gate_pass IN (0, 1)),
+               cutoff_ns INTEGER NOT NULL,
+               activation_ns INTEGER NOT NULL CHECK (activation_ns > cutoff_ns),
+               n_train INTEGER NOT NULL,
+               n_features INTEGER NOT NULL CHECK (n_features <= 40),
+               n_weights INTEGER NOT NULL,
+               model TEXT NOT NULL CHECK (json_valid(model)),
+               oos TEXT NOT NULL CHECK (json_valid(oos)),
+               recorded_ns INTEGER NOT NULL,
+               status_ns INTEGER NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS self_retrain_models_arm ON self_retrain_models(broker, arm_id, status)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

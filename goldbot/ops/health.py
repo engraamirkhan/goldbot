@@ -202,6 +202,7 @@ from goldbot.ops.checks.risk import (
     check_supervisor,
     check_throttle,
 )
+from goldbot.ops.checks.self_retrain import check_self_retrain  # owner 2026-11-24 (registers it)
 from goldbot.ops.checks.services import (
     SKEW_CLICK_SOURCE,
     SKEW_REASON_CHARS,
@@ -373,6 +374,7 @@ __all__ = [
     "check_kill_switch",
     "check_limits_controller",
     "check_long_history",
+    "check_self_retrain",
     "check_loss_caps",
     "check_model_watch",
     "check_monthly_review",
