@@ -48,9 +48,10 @@ def test_the_defaults_are_the_old_behaviour() -> None:
 def test_a_pot_without_gbp_loads_only_without_pot_budgets() -> None:
     pots = {"scalp": {"max_open": 4}}
     arms = {"S0": {"style": "scalp", "max_loss": 6.5, "control_share": 0.25}}
+    bare = {"exploration.pots": pots, "exploration.arms": arms, "exploration.cohort": None}     # ADR 0095: its arms
     with pytest.raises(ValueError, match="gbp"):
-        _with("icm-probe", **{"exploration.pots": pots, "exploration.arms": arms, "exploration.pot_budgets": True})
-    acc = _with("icm-probe", **{"exploration.pots": pots, "exploration.arms": arms, "exploration.pot_budgets": False})
+        _with("icm-probe", **bare, **{"exploration.pot_budgets": True})
+    acc = _with("icm-probe", **bare, **{"exploration.pot_budgets": False})
     assert acc.exploration.pots["scalp"].gbp is None
 
 

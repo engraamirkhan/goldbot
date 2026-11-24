@@ -6,6 +6,10 @@ pre-registered history-screen pass, A1 2003-09, DQ-flagged, decayed since 2010, 
 prereg-amendment-2026-11-20-gd1-asia-learning.md) reach the broker. Every other arm is retired,
 replay-only, or refused at load (an unqualified strategy). The pass check is the same rule read on the brain after the
 deploy: zero orders from any other arm.
+
+One exception since 2026-11-24 (ADR 0095, prereg-amendment-2026-11-24-demo-learning-cohort.md): icm-probe's demo
+learning cohort. Its retired arms keep their retirement in the spec (so the read below is unchanged) and send capped
+minimum-lot demo orders on icm-probe only (tests/test_demo_learning_cohort.py).
 """
 from __future__ import annotations
 
@@ -79,3 +83,13 @@ def test_no_enabled_account_sends_cost_probes() -> None:
     accs = acc_mod.load_accounts(ROOT / "config" / "accounts.yaml", logins=False)
     on = [n for n, a in accs.items() if a.enabled and a.cost_probe is not None and a.cost_probe.enabled]
     assert on == []
+
+
+def test_the_only_retired_arms_that_may_reach_the_broker_are_icm_probes_cohort_and_only_there() -> None:
+    """ADR 0095: the cohort is the one named exception, on one demo probe_only account; no other account has one."""
+    from goldbot.ops import accounts as acc_mod
+    from goldbot.research.self_retrain import PRENAMED
+    accs = acc_mod.load_accounts(ROOT / "config" / "accounts.yaml", logins=False)
+    cohorts = {n: a.exploration.cohort for n, a in accs.items() if a.exploration.cohort is not None}
+    assert list(cohorts) == ["icm-probe"] and set(cohorts["icm-probe"].arms) == set(PRENAMED)
+    assert accs["icm-probe"].mode == "demo" and accs["icm-probe"].probe_only

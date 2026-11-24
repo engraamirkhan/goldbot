@@ -230,6 +230,39 @@ class DailyEntries(FrozenRecord):
     scalp_day_cap: int | None = Field(30, ge=1)
 
 
+COHORT_MAX_DAYS = 60         # a learning cohort's since..until at most this long: a cohort is a bounded run, never a mode
+
+
+class LearningCohort(FrozenRecord):
+    """A demo learning cohort (docs/research/prereg-amendment-2026-11-24-demo-learning-cohort.md, ADR 0095): retired
+    gold arms that "send REAL DEMO ORDERS again on icm-probe only, 0.01 lot, as a capped learning cohort, while their
+    controls stay replay_only". The arms stay retired for promotion and learning weights; only their order path opens,
+    inside the caps here and every cap the account already has (`engine.exploration_cohort`). Entries only: exits are
+    never gated. Validated against its account by `Account._cohort_fenced`."""
+    prereg: str = Field(min_length=1)
+    arms: tuple[str, ...] = Field(min_length=1)
+    since: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")       # the first UTC day its fills count (and it may enter)
+    until: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")       # the last UTC day it may enter
+    # each arm's net loss since `since` (account currency) at which that arm stops for good
+    arm_loss_cap_gbp: float = Field(gt=0)
+    # the cohort's net loss over the ISO week (Monday 00:00 UTC on) at which every cohort arm is held to next Monday
+    week_loss_cap_gbp: float = Field(gt=0)
+    # positions of one cohort arm open at once (the frozen row's own max_open still binds when smaller)
+    max_open_per_arm: int = Field(1, ge=1)
+
+    @model_validator(mode="after")
+    def _bounded(self) -> LearningCohort:
+        import datetime as dt
+        first, last = dt.date.fromisoformat(self.since), dt.date.fromisoformat(self.until)
+        if last < first or (last - first).days > COHORT_MAX_DAYS:
+            raise ValueError(f"a learning cohort runs since <= until, at most {COHORT_MAX_DAYS} days")
+        if len(set(self.arms)) != len(self.arms):
+            raise ValueError("a learning cohort names each arm once")
+        if self.arm_loss_cap_gbp > self.week_loss_cap_gbp:
+            raise ValueError("a cohort arm's loss cap is at most the cohort's weekly loss cap")
+        return self
+
+
 class Exploration(FrozenRecord):
     """Exploration arms (plan 2026-10-25, lane L1): minimum-lot demo entries that trade to MEASURE an edge, so the
     RiskGate's purpose `exploration` skips only its expected-value rules, inside its fence (goldbot/risk/gate.py
@@ -256,6 +289,8 @@ class Exploration(FrozenRecord):
     learning_max_open: int = Field(0, ge=0)
     # the daily entry budget (`DailyEntries`); None: no count bound (the £ budgets and slots still bind)
     daily: DailyEntries | None = None
+    # amendment 2026-11-24 (ADR 0095): retired arms that send capped minimum-lot demo orders again; None: no cohort
+    cohort: LearningCohort | None = None
 
 
 def growth_arm_ids(acc: Account) -> frozenset[str]:
@@ -538,6 +573,32 @@ class Account(Record):
             raise ValueError(f"pilot needs daily_loss_limit_abs on the same account, at most {PILOT_MAX_DAILY_LOSS:g}")
         if self.dynamic_limits or self.risk_overrides is not None:
             raise ValueError("pilot needs dynamic_limits off and no risk_overrides (ADR 0055)")
+        return self
+
+    @model_validator(mode="after")
+    def _cohort_fenced(self) -> Account:
+        """ADR 0095 (amendment 2026-11-24: "real demo orders ... on icm-probe only, 0.01 lot, as a capped learning
+        cohort"): a cohort lives only inside an enabled exploration block (itself demo probe_only, `_exploration_fenced`),
+        and each of its arms is registered here at the minimum lot (no growth sizing, adds or unit lots), is no control
+        (no control_share) and loses at most the cohort's per-arm cap in one trade (max_loss <= arm_loss_cap_gbp)."""
+        co = self.exploration.cohort
+        if co is None:
+            return self
+        if not (self.exploration.enabled and self.mode == "demo" and self.probe_only):
+            raise ValueError(f"{self.account_id}: a learning cohort needs exploration enabled on a demo probe_only "
+                             "account (ADR 0095)")
+        for arm_id in co.arms:
+            reg = self.exploration.arms.get(arm_id)
+            if reg is None:
+                raise ValueError(f"{self.account_id}: cohort arm {arm_id} is not registered in exploration.arms")
+            if reg.sizing != "min_lot" or reg.adds or reg.unit_lots is not None:
+                raise ValueError(f"{self.account_id}: cohort arm {arm_id} trades the minimum lot only (ADR 0095)")
+            if reg.control_share is not None:
+                raise ValueError(f"{self.account_id}: cohort arm {arm_id} is a control (control_share): controls "
+                                 "stay replay_only (ADR 0095)")
+            if reg.max_loss > co.arm_loss_cap_gbp + 1e-9:
+                raise ValueError(f"{self.account_id}: cohort arm {arm_id} max_loss {reg.max_loss:g} is above the "
+                                 f"cohort's per-arm loss cap {co.arm_loss_cap_gbp:g}")
         return self
 
     @model_validator(mode="after")
@@ -871,6 +932,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                          "(ADR 0062)")
     if clash := magic_clashes(out.values()):
         raise ValueError(f"config/accounts.yaml: {clash}")
+    if clash := cohort_clashes(out.values()):
+        raise ValueError(f"config/accounts.yaml: {clash}")
     hosts =[a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
@@ -931,6 +994,22 @@ def magic_clashes(accounts: Iterable[Account]) -> str | None:
             return f"{seen[i]} and {a.account_id} share instrument_magic_index {i}: their magics would collide"
         if i is not None:
             seen[i] = a.account_id
+    return None
+
+
+def cohort_clashes(accounts: Iterable[Account]) -> str | None:
+    """ADR 0095 ("real demo orders again on icm-probe only"): why a learning cohort's orders could leave its account,
+    None when they cannot: a cohort arm registered on any other account, or named by two accounts' cohorts."""
+    accs = list(accounts)
+    for a in accs:
+        co = a.exploration.cohort
+        if co is None:
+            continue
+        for b in accs:
+            if b.account_id == a.account_id:
+                continue
+            if both := sorted(set(co.arms) & set(b.exploration.arms)):
+                return f"cohort arms {both} of {a.account_id} are also registered on {b.account_id} (ADR 0095)"
     return None
 
 

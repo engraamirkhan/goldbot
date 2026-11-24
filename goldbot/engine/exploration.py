@@ -128,7 +128,7 @@ from goldbot.engine.long_bars import LONG_TFS, LongHistory, is_bar_close
 from goldbot.engine.store import Resolution
 from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
-from goldbot.ops.accounts import DailyEntries
+from goldbot.ops.accounts import DailyEntries, LearningCohort
 from goldbot.research.arms import (
     COST_ARMS,
     COST_CONTROLS,
@@ -320,6 +320,8 @@ class ExplorationConfig(FrozenRecord):
     learning_max_open: int = Field(0, ge=0)
     # the account's daily entry budget (accounts.yaml `exploration.daily`, `DailyEntries`); None: no count bound
     daily: DailyEntries | None = None
+    # ADR 0095: the account's demo learning cohort (accounts.yaml `exploration.cohort`, `exploration_cohort`); None: none
+    cohort: LearningCohort | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> ExplorationConfig:
@@ -501,7 +503,7 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH, spec_arms_path: Path =
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
                              arms=tuple(arms), dropped=tuple(dropped), pot_budgets=ex.pot_budgets,
-                             learning_max_open=ex.learning_max_open, daily=ex.daily,
+                             learning_max_open=ex.learning_max_open, daily=ex.daily, cohort=ex.cohort,
                              hash_refused=tuple(i for i in hash_refused if i in running),
                              invalid=invalid)
 
@@ -783,6 +785,17 @@ class Exploration:
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_dark", "arm": a,
                                   "tf": self.arms[a].tf})
             self.retired = self.retired | {a}
+        # ADR 0095 (`exploration_cohort`): the account's demo learning cohort, retired arms whose order path opens
+        # again inside the cohort's caps; set here, after every start refusal, so a member leaves `retired` only once
+        from goldbot.engine import exploration_cohort
+        self.cohort: frozenset[str] = frozenset()
+        self.cohort_ok = False
+        self.cohort_read_at: tuple[pd.Timestamp, tuple[int, ...]] | None = None    # (minute, open member positions)
+        self.cohort_warned = False
+        self.cohort_loss: dict[str, float] = {}        # member -> its net loss since the cohort's start, last read
+        self.cohort_week_loss: float | None = None     # the cohort's net loss this ISO week, last read
+        self.cohort_week_told: pd.Timestamp | None = None
+        exploration_cohort.start(eng, self)
         # amendment 2026-11-24: the replay-only arms whose rule still runs whatever refuses their entries (they send
         # nothing at all); not a row edited after it was frozen, a bad row kept from its last good one, nor a dark tf.
         # Never a 1d/1w arm (long_bars stamps its decision after its close; code review LOW-3), and never a dedicated
@@ -1014,7 +1027,8 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
         skipped = pd.concat([skipped, c[now_rows].assign(reason=BROKER_BAR_LATE)], ignore_index=True)
         c = c[~now_rows]
     for p in _pending(arm, c[c["idx"] == len(bars) - 1], through):
-        if arm.spec.control_mode == "replay_only":
+        # a member the demo learning cohort stopped records replay-only again (ADR 0095, `exploration_cohort.refresh`)
+        if arm.spec.control_mode == "replay_only" or (arm.arm_id in ex.retired and arm.arm_id in ex.recording):
             _replay(eng, ex, arm, p)                    # recorded now, never queued: nothing can send it
         else:
             ex.queue.append(p)
@@ -1401,12 +1415,13 @@ def on_pass_slow(eng: Engine) -> None:
 def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | None:
     """The cheap reads, the 1m/5m arms' minute and a send: the orders sent, or None when a step raised (journalled).
     The learning read runs here only when a 1m/5m arm waits on it (its entries read it), else first in `_slow`."""
-    from goldbot.engine import books, exploration_learning
+    from goldbot.engine import books, exploration_cohort, exploration_learning
     try:
         with books.phase(eng, "exploration:reads"):
             refresh_retired(eng, ex, now)
             refresh_cost_reads(eng, ex, now)
             refresh_dormant(eng, ex, now)
+            exploration_cohort.refresh(eng, ex, now)
         # quant C1 (review of R118): also when a learning-group signal is queued, whatever its timeframe, as this part
         # may send it
         if any(ex.arms[a].tf in SUB_15M for a in ex.learning_group - ex.retired) or \
@@ -1514,7 +1529,9 @@ def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
                     "" if ex.retired_ok else "; no entry until it is read")
         return
     ex.retired_ok = True
-    new = sorted((got & set(ex.arms)) - ex.retired)
+    # ADR 0095: a cohort member is retired already; its cohort caps replace the daily review's evidence stops
+    from goldbot.engine.exploration_cohort import members
+    new = sorted((got & set(ex.arms)) - ex.retired - members(ex))
     if not new:
         return
     ex.retired = ex.retired | frozenset(new)
@@ -1608,7 +1625,9 @@ def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     if ex.cost_read_at == minute:
         return
     ex.cost_read_at = minute
-    due = sorted(a for a in ex.arms if a not in ex.retired and (
+    from goldbot.engine.exploration_cohort import members
+    # ADR 0095: a cohort member's cost read is not what stops it (its cohort caps do)
+    due = sorted(a for a in ex.arms if a not in ex.retired and a not in members(ex) and (
         (ex.arms[a].spec.role == "cost" and a in COST_ARMS) or a in STOP_EXIT_READS))
     if not due:
         return
@@ -2054,9 +2073,11 @@ class _Pass:
         if ex.cfg.daily is not None:
             self.entries = budget.entries_today(eng, ex, self.since, now, self.arms)
             self.pairs = budget.pairs(self.arms)
-            self.active = frozenset(a for a, arm in self.arms.items() if not arm.spec.retired
-                                    and a not in ex.retired and not (arm.spec.entry_refused
-                                                                     or qualification_refusal(arm.spec)))
+            from goldbot.engine.exploration_cohort import members
+            cohort = members(ex) - ex.retired              # ADR 0095: a live cohort member enters though retired
+            self.active = frozenset(a for a, arm in self.arms.items() if a in cohort or (
+                not arm.spec.retired and a not in ex.retired and not (arm.spec.entry_refused
+                                                                      or qualification_refusal(arm.spec))))
             # the session shares count only arms that can still enter: every book's retirements, not this book's alone,
             # so each book of the account reads the same split
             self.sessions = budget.session_budgets(eng, ex, ex.cfg.daily, self.since,
@@ -2331,7 +2352,14 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         # ADR 0061 amendment 2026-11-02: its fills and loss are not known (no read of the ledger yet, or it failed)
         refuse("learning_unread")
         return "refused"
-    if ex.cost_scale.get(arm.arm_id) == 0.0:
+    from goldbot.engine import exploration_cohort
+    in_cohort = arm.arm_id in exploration_cohort.members(ex)
+    if in_cohort and not ex.cohort_ok:
+        # ADR 0095: the cohort's losses are not known (no read of the ledger yet, or it failed)
+        refuse("cohort_unread")
+        return "refused"
+    if ex.cost_scale.get(arm.arm_id) == 0.0 and not in_cohort:
+        # ADR 0095: a cohort member is exempt (its cohort caps replace the evidence stops it was retired by)
         # H-81 cost stop above 0.20: suspended. Refused before any room check, so no first-trade-of-the-day bypass
         # (trading-safety 2026-10-27 b); the daily review records the suspension for good
         refuse("cost_suspended")
@@ -2355,6 +2383,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     if not add and ps.count.get(arm.arm_id, 0) >= arm.max_open:
         refuse("arm_max_open")
+        return "refused"
+    if not add and (why := exploration_cohort.max_open_refusal(ex, arm.arm_id, ps.count.get(arm.arm_id, 0))):
+        refuse(why)
         return "refused"
     if arm.spec.role == "learning" and ps.count.get(LEARNING_SLOT, 0) >= ex.cfg.learning_max_open:
         refuse("learning_slots")
@@ -2389,7 +2420,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if held_arm is None or held_pot is None or held_all is None:
         refuse("open_risk_unknown")
         return "refused"
-    if arm.spec.role == "learning":
+    if arm.spec.role == "learning" and not in_cohort:
         # trading-safety L1: realised loss (since registration) + this arm's open risk at its stops + the new trade's
         # loss at its stop and round trip may not reach the arm's loss cap; an arm not read yet is refused
         from goldbot.engine.exploration_learning import loss_cap
@@ -2400,6 +2431,10 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         if lost + held_arm + loss + cost >= cap_l - 1e-9:
             refuse("learning_loss_cap")
             return "refused"
+    if in_cohort and (why := exploration_cohort.send_refusal(ex, arm.arm_id, loss + cost, ps.held)) is not None:
+        # ADR 0095: the member's own cap and the cohort's weekly cap, each on realised loss + open risk + this trade
+        refuse(why)
+        return "refused"
     plan = None
     if add:
         # the earlier units go to the add's level before it is sent (`before_send`): the bounds count them there
@@ -2413,7 +2448,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         applied.update(group=plan.group.group_id, add=s.add_no, group_sl=plan.stop)
     # what the new trade may lose at its stop under each bound, in the order they are journalled
     rooms = {"arm_cap": arm_cap - cost,              # trading-safety LOW: the round trip counts too
-             "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0}
+             "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
+             # ADR 0095: a member's cohort caps, judged again on the loss at the gate's stop by the order core
+             **exploration_cohort.rooms(ex, arm.arm_id, cost, ps.held)}
     if pot.gbp is not None:
         # the ADR 0043 sleeves. Without pot budgets (demo-limits ADR 2026-11-02: "drop pot and arm_budget when
         # pot_budgets is false. Keep arm_cap and budget") only a pot that still names its £ keeps them (trading-safety
@@ -2462,7 +2499,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             stop_loss=round(at_stop, 2), cost=round(cost, 2), cost_version=cost_version,
             fx_acct_per_usd=terms.get("acct_per_usd"),
             decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id,
-            evidence_class=EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
+            evidence_class=exploration_cohort.EVIDENCE_CLASS if in_cohort else
+            EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
             blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
             symbol=eng.cfg.instrument)      # the instrument KEY (never the store symbol): never pooled with XAUUSD
 

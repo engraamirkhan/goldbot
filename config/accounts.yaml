@@ -195,22 +195,19 @@ accounts:
         BXR4H: { style: swing, max_loss: 40.0 }
         # H-81 scalp volume (prereg-2026-10-27-scalp-volume.md section 1): icm-demo's strata at ICM's fixed stops ($3.00
         # 1m = £2.26, $4.50 5m = £3.38) and their random control ZCD (a fixed share, never allocated by results: its
-        # ~15 of the ~128 scalp fills a day, section 3.2)
-        Z3D: { style: scalp, max_loss: 6.5 }
+        # ~15 of the ~128 scalp fills a day, section 3.2). Z3D, Z9D and Z10D moved to icm-probe's demo learning cohort
+        # on 2026-11-24 (ADR 0095: the cohort's orders go to icm-probe only), with their replay-only dedicated controls
+        # LCZ3D/LCZ9D/LCZ10D (an arm and its twin on one host: the board pairs them by account). Rollback: move the six
+        # lines back with the cohort's removal, restart both engines
         Z4D: { style: scalp, max_loss: 6.5 }
         Z6D: { style: scalp, max_loss: 6.5 }
         Z7D: { style: scalp, max_loss: 6.5 }
-        Z9D: { style: scalp, max_loss: 6.5 }
-        Z10D: { style: scalp, max_loss: 6.5 }
         ZCD: { style: scalp, max_loss: 6.5, control_share: 0.12 }
         # learning class 2026-11-02 (docs/research/learning-2026-11-02.md; quant ruling 2026-11-02 (2)/(3)): each
         # learning arm's own dedicated random control (its timeframe, bracket and window W); ZCD stays H-81's
-        LCZ3D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ4D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ6D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         LCZ7D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
-        LCZ9D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
-        LCZ10D: { style: scalp, max_loss: 6.5, control_share: 0.05 }
         # growth sprint 2026-11-01: GS1 (owner experiment to 2026-11-27) and its random-entry control at the same size.
         # `adds: 3` (section 3, ADR 0065): a unit at each +1 R of the first unit's entry, every earlier stop moved to the
         # newest add's so the group never loses more than one unit; the pair adds alike. Each add is gate-checked; the
@@ -342,6 +339,23 @@ accounts:
       # research lead 2026-11-02 (learning-mi-2026-11-02.md section 5): 6 -> 14 learning positions open at once, for the
       # 19 multi-instrument pairs beside the 7 gold learning arms; slot count only. Rollback: 6, restart
       learning_max_open: 14
+      # Demo learning cohort (ADR 0095; docs/research/prereg-amendment-2026-11-24-demo-learning-cohort.md; owner
+      # 2026-11-24 "it is quite concerning that it is not trading at all", PD + research director + CFO): the ten
+      # retired arms the self-retrain judges send real demo orders again, here only, at 0.01 lot, while their controls
+      # stay replay_only. They stay retired for promotion and learning weights. Caps of their own, on top of every cap
+      # this account has (the RiskGate, the £220 day, the weekly limit, the daily entry budget, slots: none loosened):
+      # one open per arm; an arm stops for good at a £15 net loss since `since`; the ten together are held to next
+      # Monday 00:00 UTC at a £50 net loss in the ISO week. Each check counts realised loss + open risk at the stops +
+      # the new trade. Exits are never gated. Rollback: drop `cohort` (the ten send nothing again; open positions keep
+      # every exit), restart
+      cohort:
+        prereg: docs/research/prereg-amendment-2026-11-24-demo-learning-cohort.md
+        arms: [RBR15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P]
+        since: "2026-11-24"
+        until: "2027-01-15"
+        arm_loss_cap_gbp: 15.0
+        week_loss_cap_gbp: 50.0
+        max_open_per_arm: 1
       # Daily entry budget (owner decision 2026-10-30: demo 150-250 fills a day in total; PD 2026-11-06, measured
       # 830-860 a day on 2026-11-04..06, 69% random controls): icm-probe 85 (scalp, instrument pairs).
       # At most `max_per_day` exploration fills a day on this account (every book, by signal close), `max_per_hour`
@@ -391,6 +405,16 @@ accounts:
         Z1P: { style: scalp, max_loss: 6.5 }
         Z2P: { style: scalp, max_loss: 6.5 }
         Z5P: { style: scalp, max_loss: 6.5 }
+        # demo learning cohort (ADR 0095): icm-demo's three H-81 strata of the ten, moved here (the cohort's orders go to
+        # icm-probe only); one arm id per host. Their dedicated controls came with them: replay-only, never sent, so the
+        # share is 0.01 (never used; 0.05 each would take the scalp pot's control shares past 1, as GD1CP). Rollback:
+        # move the six lines back to icm-demo (controls at 0.05) with the cohort's removal, restart
+        Z3D: { style: scalp, max_loss: 6.5 }
+        Z9D: { style: scalp, max_loss: 6.5 }
+        Z10D: { style: scalp, max_loss: 6.5 }
+        LCZ3D: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        LCZ9D: { style: scalp, max_loss: 6.5, control_share: 0.01 }
+        LCZ10D: { style: scalp, max_loss: 6.5, control_share: 0.01 }
         Z8P: { style: scalp, max_loss: 6.5 }
         Z7P: { style: scalp, max_loss: 6.5 }
         Z4P: { style: scalp, max_loss: 6.5 }
@@ -480,8 +504,10 @@ accounts:
         RBC4H: { style: intraday, max_loss: 30.0, control_share: 0.01 }
         # amendment 2026-11-24 (prereg-amendment-2026-11-24-replay-only-retired-arms.md): the red-box rule recorded
         # again, replay-only and retired from birth, so no entry is ever sent (cap and share never used). Rollback:
-        # drop these six lines, restart
-        RBR15: { style: intraday, max_loss: 30.0 }
+        # drop these six lines, restart. RBR15 is in the demo learning cohort since 2026-11-24 (ADR 0095): its per-trade
+        # cap is the cohort's £15 per-arm cap (was £30), so one trade never loses more than the arm may in all; a stop
+        # wider than about $19 at 0.01 lot is refused and recorded. Rollback: max_loss 30.0 with the cohort's removal
+        RBR15: { style: intraday, max_loss: 15.0 }
         RBRC15: { style: intraday, max_loss: 30.0, control_share: 0.01 }
         RBR1H: { style: intraday, max_loss: 30.0 }
         RBRC1H: { style: intraday, max_loss: 30.0, control_share: 0.01 }

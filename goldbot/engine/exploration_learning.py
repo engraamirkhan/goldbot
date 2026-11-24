@@ -64,9 +64,12 @@ def _block(arm: Any) -> Learning | None:
 
 
 def group(ex: Exploration) -> frozenset[str]:
-    """The arms whose entries wait on a learning read: every learning arm and every control dedicated to one."""
-    return frozenset(a for a, arm in ex.arms.items()
-                     if arm.spec.role == "learning" or dedicated_control_of(arm.spec))
+    """The arms whose entries wait on a learning read: every learning arm and every control dedicated to one. A
+    learning-class arm in the account's demo learning cohort (ADR 0095, `exploration_cohort`) is the cohort's: its
+    caps, not the learning block's, bind it."""
+    from goldbot.engine.exploration_cohort import members
+    return frozenset(a for a, arm in ex.arms.items() if a not in members(ex)
+                     and (arm.spec.role == "learning" or dedicated_control_of(arm.spec)))
 
 
 def _stop(eng: Engine, ex: Exploration, stops: dict[str, tuple[str, str, dict[str, Any]]], now: Any) -> None:
@@ -106,8 +109,9 @@ def start(eng: Engine, ex: Exploration) -> None:
     """At the engine's start: a learning arm whose control is not configured on this account, is refused, or is not
     matched is refused with the reason; then every dedicated control left with no learning arm that may enter."""
     stops: dict[str, tuple[str, str, dict[str, Any]]] = {}
+    from goldbot.engine.exploration_cohort import members
     for a, arm in sorted(ex.arms.items()):
-        if arm.spec.role != "learning" or a in ex.retired:
+        if arm.spec.role != "learning" or a in ex.retired or a in members(ex):    # ADR 0095: the cohort's
             continue
         block = _block(arm)
         if block is None:                     # refused at load already (entry_refused); kept here as a backstop
@@ -177,7 +181,9 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     if ex.learning_read_at == minute:
         return
     ex.learning_read_at = minute
-    due = sorted(a for a in ex.arms if ex.arms[a].spec.role == "learning" and a not in ex.retired)
+    from goldbot.engine.exploration_cohort import members
+    due = sorted(a for a in ex.arms if ex.arms[a].spec.role == "learning" and a not in ex.retired
+                 and a not in members(ex))                       # ADR 0095: a cohort member is read by the cohort
     if not due:
         ex.learning_ok = True
         _stop(eng, ex, _controls(ex, set()), now)
