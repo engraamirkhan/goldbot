@@ -174,7 +174,9 @@ activates in the past.
 
 **Expected false-activation rate.** Null Monte Carlo in `tests/test_self_retrain.py` (integration):
 - Setup: 200 runs, 4 brokers x 10 arms, 20 days, a day-clustered noise sd of 1.2 R, every label null.
-- The single-run pass rate is asserted to be <= 0.12. The measured value is in the PR.
+- The single-run pass rate is asserted to be <= 0.12.
+- **Measured on 2026-11-24** (seeds 1000-1199, 200 runs): **0 runs with any pass, 0 passes** in 8,000 null
+  (broker, arm) reads. The one-sided 95 % upper bound is about 1.5 % a run.
 - ACTIVE needs two consecutive passes, plus a non-negative forward edge for the first passer. So per run, the null
   activation rate is at most the single-run pass rate.
 - With 6 runs left in Q4, the expected number of false activations in the quarter is at most 6 x that rate. Most
