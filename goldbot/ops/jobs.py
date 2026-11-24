@@ -1983,8 +1983,11 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[rd["broker"]] = {"error": type(exc).__name__}
     with db.connection() as conn:
         status, reason = sr.health(sr.latest_runs(conn), slot, enabled=True)
+    candidates = sorted(f"{b}:{a}" for (b, a), d in decisions.items() if d["status"] == "active" and k_ok)
+    if candidates:
+        log.warning("self-retrain: re-activation candidate(s) %s (nothing trades; learning-class route)", candidates)
     return {"brokers": out, "cutoff": cutoff.isoformat(), "activation": activation.isoformat(),
-            "n_judged": len(judged), "k_rows": k_rows, "k_ok": k_ok, "health": f"{status.upper()}: {reason}"}
+            "reactivation_candidates": candidates, "n_judged": len(judged), "k_rows": k_rows, "k_ok": k_ok, "health": f"{status.upper()}: {reason}"}
 
 
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {

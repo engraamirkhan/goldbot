@@ -21,8 +21,9 @@ One weekly run (the job `self_retrain` in goldbot/ops/jobs.py drives it):
    y = 1[r2 net R > 0]. Expanding walk-forward over session days (last half in `N_BLOCKS` blocks); a training row's
    whole horizon, its label exit, and its decision + EMBARGO all lie before the block's first decision. Keep when
    p >= tau, tau = the `DROP_SHARE` quantile of the training fold's own scores.
-3. `decide` once per RUN over every (broker, arm): judged pairs (at most MAX_JUDGED, PRENAMED or ranked by candidate
-   count, label-blind) are Holm-adjusted together on p = max(p vs no-model, p vs control) (intersection-union).
+3. `decide` once per RUN over every (broker, arm): judged pairs (eligible pairs of the PRENAMED retired arms, at most
+   MAX_JUDGED, ranked by candidate count, label-blind; a pre-named arm's OOS rows are only those decided after its
+   retired_day, its earlier rows train only) are Holm-adjusted together on p = max(p vs no-model, p vs control) (intersection-union).
    A pass needs both edges >= MIN_EDGE_R, the gross edge (label_mid_r) >= 0 and Holm p <= ALPHA. ACTIVE needs a pass
    in TWO consecutive runs, and the first passer's frozen forward edge >= 0 once it has MIN_CONFIRM forward rows.
 4. Demotion is read first: a previous ACTIVE model whose forward edge is missing or below DEMOTE_EDGE_R on at least
@@ -31,10 +32,10 @@ One weekly run (the job `self_retrain` in goldbot/ops/jobs.py drives it):
 5. `apply` writes `self_retrain_models` (coefficients as JSON, never a pickle) and `self_retrain_runs`; the job writes
    the K rows BEFORE it (one per judged pair); if they cannot be written nothing becomes active (fail closed).
 
-Scope and safety: reads aux.db, writes only its own two tables. An ACTIVE model may only ever drop candidates of a demo
-strategy arm before the RiskGate (a dropped candidate stays recorded and replay-labelled); never an order, a size, a
-control, a replay_only arm, a risk limit or a live account. Engine serving is a separate, trading-safety-reviewed change:
-until it lands nothing in goldbot/engine reads these tables.
+Scope and safety: reads aux.db, writes only its own two tables. The judged arms are retired, so ACTIVE means a
+RE-ACTIVATION CANDIDATE: nothing trades; the run records it (`reactivation_candidate`), health and the job output name
+it, and re-activation as a demo learning arm goes through the existing learning-class route with trading-safety review
+(out of scope here). Nothing in goldbot/engine reads these tables.
 """
 from __future__ import annotations
 
@@ -102,7 +103,12 @@ ALPHA = 0.10
 BOOT = 10_000
 SEED = 20261124
 MAX_JUDGED = 10                 # judged (broker, arm) pairs a run at most (K = pairs judged)
-PRENAMED: tuple[tuple[str, str], ...] = ()     # PD + quant may pin the judged pairs; empty: top MAX_JUDGED by count
+# PD + research-director 2026-11-24 (no live strategy arm is left after #424): the ONLY judged arms, each "retired arm
+# + learned filter" a new hypothesis (card section 2). The 10 of PR #435's replay_only gold arms with the most
+# candidates (G1A dropped: the fewest); RBR1H / RBR4H are excluded (STOPped by #432). Judged on any broker, at most
+# MAX_JUDGED (broker, arm) pairs a run by candidate count
+PRENAMED: tuple[str, ...] = ("RB15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P")
+STOP_MATCH = 0.10               # a matched-stop control's median stop within 10 % of the arm's (same timeframe)
 MIN_CONFIRM = 30                # the first passer's forward rows from which its forward edge must be >= 0
 # demotion reads the FROZEN active model's forward record (rows after its activation), not a refit: below 0 R on
 # MIN_FORWARD rows it goes. Lower than the OOS promotion edge on purpose (a forward record is shorter and noisier)
@@ -257,12 +263,22 @@ def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple
 _OOS_COLS = ["candidate_id", "block", "session_day", "decision_utc", "r", "r_mid", "r1", "kept", "p"]
 
 
-def walk_forward(arm_rows: pd.DataFrame) -> pd.DataFrame:
-    """Out-of-sample scores of one arm's candidates (module docstring step 2)."""
+def walk_forward(arm_rows: pd.DataFrame, *, oos_from: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Out-of-sample scores of one arm's candidates (module docstring step 2). `oos_from` (a pre-named retired arm:
+    the day after its retired_day): only rows decided from then are ever test rows, split over all their session days;
+    earlier rows (already read before the retirement) are training rows only."""
     tab = arm_rows.sort_values(["decision_utc", "candidate_id"]).reset_index(drop=True)
     days = np.array(sorted(set(tab["session_day"].astype(str))))
-    if len(days) < 2 * N_BLOCKS:
+    post = np.ones(len(tab), dtype=bool)
+    if oos_from is not None:
+        post = (pd.to_datetime(tab["decision_utc"], utc=True) >= oos_from).to_numpy()
+        test_days = np.array(sorted(set(tab.loc[post, "session_day"].astype(str))))
+        if len(test_days) < N_BLOCKS:
+            return pd.DataFrame(columns=_OOS_COLS)
+    elif len(days) < 2 * N_BLOCKS:
         return pd.DataFrame(columns=_OOS_COLS)
+    else:
+        test_days = days[len(days) // 2:]
     X_all, y_all = design(tab), (tab["label_sim_r"].to_numpy(dtype=float) > 0).astype(int)
     dec = pd.DatetimeIndex(pd.to_datetime(tab["decision_utc"], utc=True))
     ext = pd.DatetimeIndex(pd.to_datetime(tab["label_exit_utc"], utc=True))
@@ -270,8 +286,8 @@ def walk_forward(arm_rows: pd.DataFrame) -> pd.DataFrame:
     sd = tab["session_day"].astype(str).to_numpy()
     r1 = tab["label_r1"].to_numpy(dtype=float) if "label_r1" in tab else np.full(len(tab), np.nan)
     out: list[pd.DataFrame] = []
-    for b, block in enumerate(np.array_split(days[len(days) // 2:], N_BLOCKS)):
-        test = np.flatnonzero(np.isin(sd, block))
+    for b, block in enumerate(np.array_split(test_days, N_BLOCKS)):
+        test = np.flatnonzero(np.isin(sd, block) & post)
         if len(test) == 0:
             continue
         t0 = dec[test].min()
@@ -373,12 +389,20 @@ def holm(p: Mapping[Any, float]) -> dict[Any, float]:
 def control_rows(rows: pd.DataFrame, arm_id: str, *, named: Mapping[str, str], since: pd.Timestamp,
                  rules: Mapping[str, Mapping[str, Any]] | None = None) -> pd.DataFrame:
     """The arm's random baseline over its OOS window: its named control's candidates when it has rows, else the
-    control candidates of its style admitted by `baseline_rows` (same broker: `rows` is one broker's)."""
+    MATCHED-STOP controls (same timeframe, median stop within STOP_MATCH of the arm's; quant Bias 3: never a
+    small-stop style fallback) admitted by `baseline_rows`; none: no baseline (insufficient). Same broker: `rows` is
+    one broker's."""
     ctrl = rows[rows["is_control"].astype(bool) & (pd.to_datetime(rows["decision_utc"], utc=True) >= since)]
     mine = ctrl[ctrl["arm_id"] == named[arm_id]] if arm_id in named else ctrl.iloc[0:0]
-    if mine.empty:
-        style = rows.loc[rows["arm_id"] == arm_id, "style"]
-        mine = ctrl[ctrl["style"] == (style.iloc[0] if len(style) else None)]
+    if mine.empty and len(ctrl):
+        arm = rows[rows["arm_id"] == arm_id]
+        stop = float(arm["stop_dist"].median()) if len(arm) else float("nan")
+        tf = arm["tf"].iloc[0] if len(arm) else None
+        med = ctrl.groupby("arm_id")["stop_dist"].median()
+        same_tf = set(ctrl.loc[ctrl["tf"] == tf, "arm_id"].astype(str))
+        matched = [str(a) for a, m in med.items() if str(a) in same_tf and np.isfinite(stop) and stop > 0
+                   and abs(float(m) - stop) <= STOP_MATCH * stop]
+        mine = ctrl[ctrl["arm_id"].astype(str).isin(matched)]
         if len(mine):
             mine = mine[baseline_rows(mine, rules or {}, set(named.values())).to_numpy()]
     return pd.DataFrame({"session_day": mine["session_day"].astype(str).to_numpy(),
@@ -427,11 +451,12 @@ def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: M
     if rows.empty:
         return {}
     strat = rows[~rows["is_control"].astype(bool)]
-    strat = strat[[not strategy_excluded(str(a), rules) for a in strat["arm_id"]]]
+    strat = strat[[str(a) in PRENAMED or not strategy_excluded(str(a), rules) for a in strat["arm_id"]]]
     out: dict[str, dict[str, Any]] = {}
     for arm_id, ar in strat.groupby("arm_id"):
         arm = str(arm_id)
-        oos = walk_forward(ar)
+        rd = (rules.get(arm) or {}).get("retired_day") if arm in PRENAMED else None
+        oos = walk_forward(ar, oos_from=None if rd is None else pd.Timestamp(str(rd), tz="UTC") + pd.Timedelta(days=1))
         since = pd.Timestamp(oos["decision_utc"].min()) if len(oos) else cutoff
         m = oos_metrics(oos, control_rows(rows, arm, named=named_controls, since=since, rules=rules), boot=boot)
         m["n_rows"] = int(len(ar))
@@ -461,12 +486,11 @@ def compute_broker(db: Database, *, broker: str, cutoff: pd.Timestamp,
 
 
 def judged_pairs(reads: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
-    """The run's judged (broker, arm) pairs: PRENAMED among the eligible, else the MAX_JUDGED eligible pairs with the
-    most candidates (label-blind ranking; ties by broker then arm)."""
+    """The run's judged (broker, arm) pairs: eligible pairs of a PRENAMED arm, at most MAX_JUDGED, most candidates
+    first (label-blind ranking; ties by broker then arm)."""
     ok = [(str(rd["broker"]), a, int(v["metrics"].get("n_rows") or 0)) for rd in reads
           for a, v in rd["arms"].items() if eligible(v["metrics"]) is None and v["model"] is not None]
-    if PRENAMED:
-        return [(b, a) for b, a, _ in ok if (b, a) in set(PRENAMED)][:MAX_JUDGED]
+    ok = [t for t in ok if t[1] in PRENAMED]
     return [(b, a) for b, a, _ in sorted(ok, key=lambda t: (-t[2], t[0], t[1]))[:MAX_JUDGED]]
 
 
@@ -491,7 +515,7 @@ def decide(reads: Sequence[Mapping[str, Any]], *, serve: bool) -> dict[tuple[str
             if why is not None:
                 fails.append(f"insufficient: {why}")
             elif key not in adj:
-                fails.append(f"not judged: outside the run's {MAX_JUDGED} judged pairs")
+                fails.append(f"not judged: not a pre-named arm, or outside the run's {MAX_JUDGED} judged pairs")
             else:
                 if float(m["edge_vs_nomodel"]) < MIN_EDGE_R:
                     fails.append(f"edge vs no-model {m['edge_vs_nomodel']:+.3f} R < {MIN_EDGE_R}")
@@ -564,6 +588,7 @@ def apply(db: Database, read: Mapping[str, Any], decisions: Mapping[tuple[str, s
                      json.dumps(v["metrics"] | {k: d[k] for k in ("judged", "p_holm")}, default=float), now_ns(),
                      now_ns()))
             detail[arm] = {"decision": d["status"], "reason": d["reason"], "judged": d["judged"],
+                           "reactivation_candidate": d["status"] == "active",
                            "p_holm": d["p_holm"], "previous": d["previous"], "forward": v["forward"],
                            "confirm": v["confirm"],
                            **{k: v["metrics"].get(k) for k in ("n_rows", "n_oos", "n_kept", "auc", "edge_vs_nomodel",
@@ -655,7 +680,7 @@ def health(runs: Sequence[Mapping[str, Any]], now: pd.Timestamp, *, enabled: boo
     arms = sum(int(r["n_arms"] or 0) for r in runs)
     bad = [f"{r['broker']}:{r['status']}" for r in runs if r["status"] != "ok"]
     msg = (f"last run {last:%Y-%m-%d %H:%M} UTC: {labels} labels, {feats} with features, {arms} arms, {weights} "
-           f"weights, {active} active")
+           f"weights, {active} active (re-activation candidates: nothing trades)")
     if now - last > RUN_MAX_AGE:
         return "warn", f"no self-retrain run for {(now - last).days} d (> {RUN_MAX_AGE.days} d); {msg}"
     if bad:

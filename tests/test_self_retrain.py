@@ -20,7 +20,14 @@ from goldbot.db.migrations import AUX, compat_back_to
 from goldbot.research import exploration_data as ex
 from goldbot.research import self_retrain as sr
 
-pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")
+pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold", "_test_arms_prenamed")
+PRENAMED_REAL = sr.PRENAMED                          # the card's list, before the fixture adds the made-up test arms
+
+
+@pytest.fixture
+def _test_arms_prenamed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The made-up arm ids of these tests are judged like the card's pre-named arms."""
+    monkeypatch.setattr(sr, "PRENAMED", (*PRENAMED_REAL, "A", "N", "B", *(f"A{i}" for i in range(10))))
 START = pd.Timestamp("2026-10-26 08:00", tz="UTC")
 DAYS = 40
 PER_DAY = 16
@@ -118,7 +125,8 @@ def _frame(rng: np.random.Generator, *, arms: int, days: int, per_day: int, ctrl
                 rows.append({"candidate_id": f"{a}-{d}-{k}", "arm_id": a, "style": "intraday",
                              "is_control": a == "CTRL", "decision_utc": at, "label_exit_utc": at + pd.Timedelta(hours=1),
                              "session_day": ex.session_day(at), "side": int(rng.choice([1, -1])), "max_hold_s": 3600,
-                             "label_sim_r": r, "label_mid_r": r + 0.1, "label_r1": r, **_feats(rng)})
+                             "label_sim_r": r, "label_mid_r": r + 0.1, "label_r1": r, "stop_dist": 3.0,
+                             "tf": "15m", **_feats(rng)})
     return pd.DataFrame(rows)
 
 
@@ -154,7 +162,9 @@ def test_the_pre_registered_constants_are_the_cards():
         0.1, 1 / 3, 4, pd.Timedelta(days=1), 100, pd.Timedelta(seconds=60))
     assert (sr.MIN_OOS, sr.MIN_KEPT, sr.MIN_OOS_DAYS, sr.MIN_CONTROL, sr.MIN_EDGE_R, sr.ALPHA, sr.BOOT, sr.SEED) == (
         200, 100, 10, 50, 0.05, 0.10, 10_000, 20261124)
-    assert (sr.DEMOTE_EDGE_R, sr.MIN_FORWARD, sr.MIN_CONFIRM, sr.MAX_JUDGED, sr.PRENAMED) == (0.0, 60, 30, 10, ())
+    assert (sr.DEMOTE_EDGE_R, sr.MIN_FORWARD, sr.MIN_CONFIRM, sr.MAX_JUDGED, sr.STOP_MATCH) == (0.0, 60, 30, 10, 0.10)
+    assert PRENAMED_REAL == ("RB15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P")
+    assert not {"RBR1H", "RBR4H", "G1A"} & set(PRENAMED_REAL)
     assert sr.NOMINAL_FROM == pd.Timestamp("2026-11-15", tz="UTC")
     assert (Path(__file__).resolve().parents[1] / sr.PREREG).exists()
 
@@ -217,13 +227,14 @@ def test_an_active_model_whose_edge_decays_is_demoted_and_nothing_is_left_active
         assert conn.execute("SELECT COUNT(*) FROM self_retrain_models WHERE status = 'active'").fetchone()[0] == 0
 
 
-def test_an_active_model_whose_arm_has_no_rows_in_a_run_is_demoted_and_health_counts_the_table(db):
+def test_an_active_model_whose_arm_has_no_rows_in_a_run_is_demoted_and_health_counts_the_table(db, monkeypatch):
     _populate(db)
     _run(db)
     _populate(db, day_from=DAYS, days=7)
     _run(db, days=DAYS + 7)
     with db.connection() as conn:
         assert sr.latest_runs(conn)[0]["n_active"] == 1
+    monkeypatch.setattr(sr, "PRENAMED", ("N",))           # A leaves the list and is retired: no rows this run
     _run(db, days=DAYS + 8, rules={"A": {"retired_day": "2026-12-01", "control_mode": "broker", "role": "strategy"}})
     assert _models(db)["A"][-1][1] == "demoted"
     assert _detail(db)["decisions"]["A"]["reason"] == "no rows in run"
@@ -344,21 +355,52 @@ def test_a_candidate_inside_the_sealed_holdout_fails_the_run(db):
 
 
 def test_retired_replay_only_arms_are_neither_judged_nor_baseline():
-    """Quant C1 (review of #435): S1A is retired in the spec (2026-11-13); its 300 labelled rows train nothing and are
-    no judged arm; a retired control's rows after its retired_day are no style-fallback baseline."""
+    """Quant C1 (review of #435): a retired arm that is NOT pre-named (S2A, retired 2026-10-30) trains nothing and is
+    no judged arm; a retired control's rows after its retired_day are no baseline."""
     rules = sr.arm_rules()
-    assert rules["S1A"]["retired_day"] is not None and rules["I0"]["role"] == "control"
+    assert rules["S2A"]["retired_day"] is not None and rules["I0"]["role"] == "control"
+    assert "S2A" not in PRENAMED_REAL
     rng = np.random.default_rng(8)
     f = _frame(rng, arms=1, days=30, per_day=10, ctrl_per_day=10, start=pd.Timestamp("2026-11-14 08:00", tz="UTC"))
-    f.loc[f["arm_id"] == "A0", "arm_id"] = "S1A"
+    f.loc[f["arm_id"] == "A0", "arm_id"] = "S2A"
     f.loc[f["arm_id"] == "CTRL", "arm_id"] = "I0"
-    assert int((f["arm_id"] == "S1A").sum()) == 300
+    assert int((f["arm_id"] == "S2A").sum()) == 300
     got = sr.read_arms(f, named_controls={}, rules=rules, cutoff=pd.Timestamp("2026-12-20", tz="UTC"), boot=200)
-    assert "S1A" not in got
+    assert "S2A" not in got
     f.loc[f["arm_id"] == "I0", "is_control"] = True
-    f2 = pd.concat([f, f[f["arm_id"] == "S1A"].assign(arm_id="LIVE1", candidate_id=lambda d: "L" + d["candidate_id"])])
+    f2 = pd.concat([f, f[f["arm_id"] == "S2A"].assign(arm_id="LIVE1", candidate_id=lambda d: "L" + d["candidate_id"])])
     ctrl = sr.control_rows(f2, "LIVE1", named={}, since=pd.Timestamp("2026-11-01", tz="UTC"), rules=rules)
     assert ctrl.empty                                          # I0 retired 2026-11-06: every row after it is out
+
+
+def test_a_pre_named_retired_arm_is_judged_out_of_sample_only_after_its_retired_day():
+    """PD + research-director 2026-11-24: S1A (retired 2026-11-13) is pre-named; its rows before the retirement were
+    already read, so they only train; every OOS row is decided after its retired_day."""
+    rules = sr.arm_rules()
+    assert rules["S1A"]["retired_day"] == "2026-11-13" and "S1A" in PRENAMED_REAL
+    f = _frame(np.random.default_rng(11), arms=1, days=40, per_day=20, ctrl_per_day=10,
+               start=pd.Timestamp("2026-10-27 08:00", tz="UTC"))
+    f.loc[f["arm_id"] == "A0", "arm_id"] = "S1A"
+    f.loc[f["arm_id"] == "CTRL", "arm_id"] = "LIVECTRL"
+    got = sr.read_arms(f, named_controls={"S1A": "LIVECTRL"}, rules=rules, cutoff=pd.Timestamp("2026-12-20", tz="UTC"),
+                       boot=200)
+    assert "S1A" in got and got["S1A"]["metrics"]["n_oos"] > 0
+    oos = sr.walk_forward(f[f["arm_id"] == "S1A"], oos_from=pd.Timestamp("2026-11-14", tz="UTC"))
+    assert (oos["decision_utc"] >= pd.Timestamp("2026-11-14", tz="UTC")).all()
+    assert 0 in set(oos["block"])                  # the first block trains on the pre-retirement rows alone
+    pre = f[(f["arm_id"] == "S1A") & (f["decision_utc"] < pd.Timestamp("2026-11-14", tz="UTC"))]
+    assert not set(pre["candidate_id"]) & set(oos["candidate_id"])
+
+
+def test_the_baseline_is_the_named_or_a_matched_stop_control_never_a_style_fallback():
+    f = _frame(np.random.default_rng(12), arms=1, days=5, per_day=5, ctrl_per_day=5)
+    since = START - pd.Timedelta(days=1)
+    f.loc[f["arm_id"] == "CTRL", "stop_dist"] = 1.0                   # a small-stop control of the same style
+    assert sr.control_rows(f, "A0", named={}, since=since).empty
+    f.loc[f["arm_id"] == "CTRL", "stop_dist"] = 3.2                   # within 10 % of the arm's 3.0
+    assert len(sr.control_rows(f, "A0", named={}, since=since)) == 25
+    f.loc[f["arm_id"] == "CTRL", "tf"] = "1h"                          # another timeframe: no match
+    assert sr.control_rows(f, "A0", named={}, since=since).empty
 
 
 def test_the_stored_model_is_numbers_only_and_scores_the_same_after_a_round_trip(db):

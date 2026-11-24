@@ -39,7 +39,25 @@ R-07, R-20 and MLNET all trained on Dukascopy proxies with prior costs.
 
 ### Rows, per broker (never pooled across brokers)
 
-**Population.** Every gold exploration candidate, taken or not, from strategy arms only.
+**Population (PD + research-director, 2026-11-24; quant to sign).** Measured on the brain on 2026-11-24:
+- since 13 Nov, about 230 non-control gold candidates: RB15 146, RB1H 20, Z3D 16, RB4H 10, GS1 9, Z1P 6, Z9D 6,
+  Z10D 5, and others;
+- since 23 Nov, only 2 (GD1D / GD1P);
+- after #424 there is no live strategy arm left.
+
+Restricting to live, non-retired arms would therefore judge nothing, ever. So the **judged arms are a pre-named list
+of 10 retired gold arms** (PR #435 makes them `replay_only`), constant `PRENAMED`:
+RB15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P.
+- **Why these ten.** They are the 10 of PR #435's 11 with the most candidates. G1A is dropped: it is the smallest,
+  with 11 fills and absent from the post-13-Nov counts.
+- **Excluded:** RBR1H and RBR4H, which #432 STOPped.
+- **Each pairing of "retired arm + learned filter" is a NEW pre-registered hypothesis.** It is not a re-read of the
+  arm's retired verdict.
+- **Rows of a pre-named arm, split in two:**
+  - Rows decided **after its `retired_day`** (forward rows, never read) are the only out-of-sample and forward rows.
+  - Rows decided before the retirement were already read, so they are **training rows only, never OOS**.
+- **Judged on any broker.** At most 10 (broker, arm) pairs are judged a run, ranked by candidate count.
+- **Live arms.** A live strategy arm, should one exist, is fitted and reported but not judged.
 
 **Label.** The **r2** replay label, from `exploration_replay`: measured legs per session and leg, never a credit, the
 stop's overshoot included.
@@ -58,11 +76,17 @@ stop's overshoot included.
 - quarantined rows;
 - rows void as posterior evidence;
 - rows held out by an unresolved quarantine span;
-- **arms retired in the spec (`retired_day`), and `control_mode: replay_only` strategy or learning rows.** Their
-  candidates are neither training rows, nor judged arms, nor style-fallback controls. A named control always stays.
-  An ACTIVE model whose arm has no rows in a run is demoted ("no rows in run").
+- **arms retired in the spec (`retired_day`), and `control_mode: replay_only` strategy or learning rows, unless the
+  arm is pre-named.** Their candidates are neither training rows, nor judged arms, nor controls. A named control
+  always stays. An ACTIVE model whose arm has no rows in a run is demoted ("no rows in run").
 
-**Controls.** Control arms are the baseline only, never a training row.
+**Controls (quant Bias 3).** Control arms are the baseline only, never a training row. The baseline is the arm's
+**named** control. Failing that, it is the **matched-stop** random controls:
+- same timeframe;
+- median stop within 10 % of the arm's (`STOP_MATCH`).
+
+There is **no style fallback**, so a small-stop control can never flatter an arm. With no matched control the arm reads
+"insufficient".
 
 **Holdout.** A row inside the sealed holdout (2025-10-01..2026-09-30), or a snapshot available after its decision,
 fails the run.
@@ -124,12 +148,10 @@ label decided or resolved at or after a block's start leaves that block's scores
 
 ## 3. Gate (reading rule, written before any data is seen)
 
-**The judged set (K, section 5).** At most `MAX_JUDGED` = 10 (broker, arm) pairs a run.
-- These are the pairs meeting the minimum counts, ranked by candidate count. The ranking is label-blind, with ties
-  broken by broker and then arm.
-- **PD and quant pre-name them.** `PRENAMED` is empty, so the count rule applies. From here I cannot see the brain's
-  per-arm counts, so the first catch-up run records its judged set in `self_retrain_runs.detail`. PD and quant may pin
-  that list in `PRENAMED` by amendment. No owner escalation is needed.
+**The judged set (K, section 5).** At most `MAX_JUDGED` = 10 (broker, arm) pairs a run:
+- only pairs of the pre-named arms (section 2);
+- only pairs meeting the minimum counts;
+- ranked by candidate count. The ranking is label-blind, with ties broken by broker and then arm.
 
 **A pass.** Out of sample, for a judged pair, all of the following hold:
 
@@ -182,6 +204,15 @@ activates in the past.
 - With 6 runs left in Q4, the expected number of false activations in the quarter is at most 6 x that rate. Most
   expanding-window passes repeat on overlapping data, so that bound is loose upward, not tight.
 
+**What ACTIVE means here.** The judged arms are retired, so ACTIVE is a **re-activation candidate. Nothing trades.**
+- The run records it (`reactivation_candidate`).
+- The health line and the job output name it, and the job logs a warning. The #34 note is carried by the health and
+  weekly report; this change adds no new poster.
+- Re-activation as a demo learning arm goes through the existing learning-class route (ADR 0061 amendment), with
+  trading-safety review. That is out of scope here.
+
+The rest of this section describes the filter as it would apply to a re-activated arm.
+
 **What ACTIVE may do.** It may only drop candidates of a demo strategy arm before the RiskGate.
 - **A dropped candidate is still recorded** in `exploration_obs` (`taken = 0`, `blocked_reason =
   self_retrain:<model_version>`, propensity 0) **and still replay-labelled. It is never removed.** So the learner
@@ -199,26 +230,44 @@ that only selects wider stops (cheaper in R) with no gross edge cannot pass.
 
 ## 4. Expectation (stated honestly)
 
-- **Prior.** That any arm reaches ACTIVE within Q4: **5-10 %**. This is lower than under sr-v1, because two
-  consecutive passes and intersection-union are now required.
-- **Earliest possible ACTIVE.** The gate needs at least 10 OOS session days. That means about 20 session days of
-  admitted rows from 2026-11-15, so the first possible pass is the run of about 12-13 December. ACTIVE needs a second
-  consecutive pass, so the run of about 19-20 December.
-- **Runs before that** are expected to read "insufficient". That is the correct output, not a fault.
+**Expected rows for the judged arms.** These come from the brain counts in section 2. They are not measured per
+broker.
+- **Forward rows (OOS-eligible) on hand today:**
+  - Z3D 16, Z1P 6, Z9D 6, Z10D 5;
+  - RB15 about 0 (retired 2026-11-22: its 146 candidates since 13 Nov are pre-retirement rows, so training only);
+  - S1A, S1B, F1A, Z2P, Z5P about 0.
+- **New forward rows need PR #435.** Since 23 Nov the engine records almost no candidates for retired arms (2 in
+  all). Forward rows accrue only once PR #435 makes these arms `replay_only`, so their candidates are recorded and
+  replay-labelled again.
+- **Rates after #435.** At the pre-retirement rates, RB15 would add about 13 candidates a session day. The other nine
+  would add 0.5-2 a day each.
+- **The gate needs 200 OOS rows over at least 10 session days.**
+  - RB15 reaches that about 16 session days after #435 deploys, so about the 2026-12-20 run.
+  - No other pre-named arm reaches 200 forward rows in Q4.
+
+**What that means for Q4:**
+- The first judged pair is about RB15 on its broker at the 2026-12-20 run.
+- The earliest re-activation candidate is the 2026-12-27 run, because two consecutive passes are needed.
+- Every earlier run reads "insufficient". That is the correct output, not a fault.
+
+**Prior.** That RB15 plus its filter becomes a re-activation candidate within Q4: **about 5 %**. RB15 was retired on
+its own evidence (#424), and the new information is the forward replay plus a cost-first filter.
 
 ## 5. K (multiple testing)
 
 **K booked:**
-- **One registry row per judged (broker, arm) pair in each run.** If arms were fitted but none was judged, one row
-  is booked, because the run still looked. The results carry `n_judged`.
-- The rows are written **before** any status change. If they cannot be written, the run fails closed: no model
-  becomes or stays active.
+- **One registry row per judged (broker, arm) pair in each run.** If arms were fitted but none was judged, one row is
+  booked, because the run still looked. The results carry `n_judged`.
+- The rows are written **before** any status change. If they cannot be written, the run fails closed: no model becomes
+  or stays active.
 
 **Q4 cost:**
-- At most 10 per run, across 6 runs (the catch-up run for slot 2026-11-22, then the Sundays 11-29 to 12-27): 60 at
-  most.
-- Runs before about 12-13 December judge no pair and book 1 each, so the realistic total is about 4 + 2 x (at most 10).
-- That fits the roughly 82 left (ADR 0073). ADR 0088 is still Proposed.
+- **Worst case: 60.** That is at most 10 pre-named pairs a run, over 6 runs (the catch-up run for slot 2026-11-22,
+  then the Sundays 11-29 to 12-27).
+- **Realistic: about 6.**
+  - The 4 runs up to 12-13 judge nothing and book 1 each.
+  - The 12-20 and 12-27 runs each judge about 1 pair (RB15).
+- Both fit the roughly 82 left (ADR 0073). ADR 0088 is still Proposed. A run never books more than 10.
 
 **Not promotion evidence.** It is never ledger-stamped and never reaches real money (learning-class rules, ADR 0061
 amendment).
@@ -242,4 +291,4 @@ None are assumed. It is demo only, adds no spend, and changes no sizing or risk 
 ## Sign-off
 
 - Principal ML researcher: 2026-11-24 (author, sr-v2).
-- Quant-reviewer: _pending (sr-v1 review: sign with changes; this version answers R1-R11 and C1)_.
+- Quant-reviewer: _pending (sr-v1 review: sign with changes; this version answers R1-R11, C1 and the PD + research-director scope ruling of 2026-11-24)_.
