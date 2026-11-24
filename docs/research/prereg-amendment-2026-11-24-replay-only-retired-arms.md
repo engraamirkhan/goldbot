@@ -21,10 +21,20 @@ cheapest data there is: the rule's own forward candidates, labelled by the r2 re
    (`engine.exploration._signal` -> `_replay`). The queue sweep in `_enter` and the first check of `_send` stay as two
    further guards. Nothing reaches the budget, the RiskGate, an order intent or the order core
    (`tests/test_replay_only_retired_arms.py`). The RiskGate stays the only path to an order.
-3. **What does not record:** a row whose hash does not match (edited after it was frozen), a bad row kept from its
-   last good one, and an arm on a dark timeframe. A replay-only arm is never dormant and never de-registered.
-4. **Bound.** At most `REPLAY_RETIRED_DAILY_CAP` = 1,000 records a UTC day per engine from arms that may send no
-   entry. The first record over the cap is journalled `exploration_replay_cap`. Estimate below: about 280 a day over
+3. **What does not record:**
+   - a row whose hash does not match (edited after it was frozen);
+   - a bad row kept from its last good one;
+   - an arm on a dark timeframe, and any 1d or 1w arm (long_bars stamps its decision after its close; such a row is
+     refused at load);
+   - a dedicated control with no `retired_day` of its own, once its learning arm stops at runtime (its read, loss cap
+     or expiry; `exploration_learning`). It falls silent with its arm, as GD1CD does with GD1D, so twin rows never
+     outlive the arm's.
+
+   A replay-only arm that records is never dormant and never de-registered.
+4. **Bound.** At most `REPLAY_RETIRED_DAILY_CAP` = 1,000 records a UTC day (the engine clock's) per book from arms
+   that may send no
+   entry, skipped candidates included (RBRC* and spec controls arrive skipped). The counter is seeded at the start from
+   today's rows, so a restart keeps the bound. The first record over the cap is journalled `exploration_replay_cap`. Estimate below: about 280 a day over
    all hosts, so the cap only stops a runaway rule on the 2-core brain. It is a module constant, not a setting.
 
 ## Rows
@@ -82,6 +92,19 @@ row at registration). Recording without reading is not a look:
 
 A row recorded after its arm's `retired_day` with blocked `replay_only` is a replay record, never a fill, and never
 part of the arm's pre-registered read window. Readers split on `decision_utc` against `retired_day`.
+
+- **RBR1H, RBR4H, RBRC1H and RBRC4H record a rule STOPped by EVIDENCE-RB-HISTORY** (#432, trials 3451-3452). Any edge
+  read of them is a re-test of a rejected hypothesis. It needs a new card, is charged, and cites #432. These rows are
+  excluded from the self-retrain (prereg-2026-11-24-self-retrain.md section 2).
+- **A UTC day with `exploration_replay_cap` journalled is void** for every reader of retired-arm replay rows. Drop the
+  whole day, never just the truncated tail.
+- Disclosure (engine change): a replay-only candidate is now recorded at its signal, never queued. Two things follow:
+  - Candidates decided in the startup window, before the first arm-status read, are recorded `replay_only` where they
+    used to be `arm_status_unread`.
+  - The journal and the `arm_share` timestamps are the bar close, no longer the pass time. This holds for every
+    replay-only arm, the existing controls included.
+  - While a book's history backfill is still running, a replay candidate is recorded `book_warming`, not
+    `replay_only`.
 
 ## Rollback
 

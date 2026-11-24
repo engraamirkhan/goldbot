@@ -1041,6 +1041,9 @@ class Arm(FrozenRecord):
         if (self.retired_day is None) != (not self.retired_rule):
             raise ValueError(f"{self.id}: a retirement names both its retired_day and its retired_rule (the rule that "
                              "retired it), or neither")
+        if self.control_mode == "replay_only" and self.timeframe in ("1d", "1w"):
+            # trading-safety L2 (amendment 2026-11-24): long_bars stamps a 1d/1w decision after its close
+            raise ValueError(f"{self.id}: control_mode replay_only is refused on a 1d/1w arm")
         if self.control_mode == "replay_only" and self.params.get("instrument", "XAUUSD") != "XAUUSD":
             raise ValueError(f"{self.id}: control_mode replay_only is for gold controls only (the r2 replay is gold's)")
         if self.status == "blocked" and not self.note:

@@ -11,8 +11,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     entry anywhere). The rule runs again only to record: taken 0, blocked `replay_only`, labelled by the r2 replay.
   - Engine: a replay-only candidate is recorded at its signal (`exploration._signal` -> `_replay`) and never queued.
     The `_enter` sweep and `_send`'s first check stay as guards. `Exploration.recording` holds the arms whose rule
-    runs although their entries are refused (not hash-refused, invalid or dark). They are never dormant or
-    de-registered. `REPLAY_RETIRED_DAILY_CAP` (1,000 a UTC day per engine) bounds the records; the first record over
+    runs although their entries are refused. Excluded: hash-refused, invalid, dark or 1d/1w arms, and a dedicated control without its own retirement, which falls silent with its learning arm (quant C2). They are never dormant or
+    de-registered. `REPLAY_RETIRED_DAILY_CAP` (1,000 a UTC day per book, on the engine clock) bounds the records, skipped ones included, with the counter seeded from today's rows at the start; the first record over
     it is journalled `exploration_replay_cap`.
   - Switched to replay-only: S1A, S1B, F1A, F1C, G1A, G1C, Z1P, Z2P, Z5P, LCZ1P, LCZ2P, LCZ5P, Z3D, Z9D, Z10D, LCZ3D,
     LCZ9D, LCZ10D, ZCD, IEX15. New rows: RBR15/RBR1H/RBR4H and RBRC15/RBRC1H/RBRC4H on icm-probe. These carry the

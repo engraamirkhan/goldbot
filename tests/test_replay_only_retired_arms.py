@@ -217,3 +217,114 @@ def test_replay_records_of_retired_arms_stop_at_the_daily_cap_and_say_so_once(tm
     obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
     assert len(obs[obs["arm_id"] == "R"]) == 2
     assert len(_actions(eng, "exploration_replay_cap")) == 1
+
+
+# ------------------------------------------------------------------------------------------------ review round
+def _dedicated_control(arm_id: str, serves: str) -> Arm:
+    a = _arm(arm_id, max_open=10, control_share=0.05)
+    spec = a.spec.model_copy(update={"role": "control", "control_mode": "replay_only",
+                                     "params": {**a.spec.params, "control": "learning:" + serves}})
+    return a.model_copy(update={"spec": spec})
+
+
+def test_a_dedicated_replay_only_control_stops_recording_when_its_learning_arm_retires(tmp_path):
+    """Quant C2: a runtime stop of the learning arm (`exploration_learning._stop`: its read, loss cap or expiry) puts
+    its dedicated control in `retired`; with no `retired_day` of its own the control is not `recording`, so it falls
+    silent with its arm (as GD1CD with GD1D)."""
+    from goldbot.engine import exploration_learning
+    eng, pb = _engine(tmp_path, [_arm("L", max_open=10), _dedicated_control("C", "L")], None)
+    ex = eng.exploration
+    assert ex is not None and "C" not in ex.recording
+    exploration.on_pass(eng, _at(eng, pb, START))
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert list(obs[obs["arm_id"] == "C"]["blocked_reason"]) == ["replay_only"]     # live: it records its twin
+    exploration_learning._stop(eng, ex, {"L": ("exploration_arm_learning_loss_cap", "test cap", {})}, START)
+    exploration_learning._stop(eng, ex, exploration_learning._controls(ex, set()), START)
+    assert "C" in ex.retired
+    exploration.on_pass(eng, _at(eng, pb, START + pd.Timedelta(minutes=15)))
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert len(obs[obs["arm_id"] == "C"]) == 1                                       # silent from the stop
+
+
+def test_a_1d_or_1w_replay_only_arm_never_records_as_a_refused_arm(tmp_path):
+    """Code LOW-3: long_bars stamps a 1d/1w decision later than its close, so `recording` leaves those timeframes
+    out."""
+    for tf in ("1d", "1w"):
+        eng, pb = _engine(tmp_path / tf, [_retired_replay(_arm("D", tf=tf, max_open=10))], None)
+        ex = eng.exploration
+        assert ex is not None and "D" in ex.arms and "D" not in ex.recording, tf
+
+
+def test_the_daily_cap_counts_todays_records_already_written_before_a_restart(tmp_path, monkeypatch):
+    """Code LOW-1: the counter is seeded at the start from today's rows of the refused recording arms, so a restart
+    does not reset the day's bound."""
+    monkeypatch.setattr(exploration, "REPLAY_RETIRED_DAILY_CAP", 3)
+    db = exploration.ledger_db(str(tmp_path))
+    for i in range(2):
+        ed.record_candidate(db, candidate_id=f"seed{i}", account_id="icm-probe", broker="icm", arm_id="R",
+                            family="random_bracket", style="intraday", tf="15m", side=1,
+                            decision_utc=START - pd.Timedelta(minutes=15 * (i + 1)), stop_dist=5.0, target_dist=10.0,
+                            max_hold_s=3600, taken=False, is_control=False, mu=0.0, branch="blocked", u=0.5,
+                            blocked_reason="replay_only")
+    monkeypatch.setattr(exploration, "_utc_day", lambda eng: START.strftime("%Y-%m-%d"))
+    eng, pb = _engine(tmp_path, [_retired_replay(_arm("R", max_open=10))], None)
+    assert eng.exploration is not None and eng.exploration.replay_day == (START.strftime("%Y-%m-%d"), 2)
+    for k in range(3):
+        exploration.on_pass(eng, _at(eng, pb, START + pd.Timedelta(minutes=15 * k)))
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert len(obs[obs["arm_id"] == "R"]) == 3                                       # 2 before + 1 under the cap
+
+
+def test_skipped_candidates_of_a_refused_recording_arm_count_against_the_daily_cap(tmp_path, monkeypatch):
+    """Code LOW-2: RBRC* and spec_control candidates arrive skipped (`_skipped`), so they count as well."""
+    monkeypatch.setattr(exploration, "REPLAY_RETIRED_DAILY_CAP", 1)
+    eng, pb = _engine(tmp_path, [_retired_replay(_arm("R", max_open=10))], None)
+    ex = eng.exploration
+    assert ex is not None
+    for k in range(3):
+        s = exploration.Pending(arm_id="R", side=1, bar_ts=START + pd.Timedelta(minutes=15 * k), stop_usd=5.0,
+                                target_usd=10.0, hold_bars=4)
+        exploration._skipped(eng, ex, ex.arms["R"], s, "replay_only")
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert len(obs[obs["arm_id"] == "R"]) == 1
+    assert len(_actions(eng, "exploration_replay_cap")) == 1
+
+
+def test_the_daily_cap_is_keyed_on_the_engine_clocks_day_so_interleaved_bar_days_never_reset_it(tmp_path, monkeypatch):
+    """Trading-safety L1: mixed timeframes interleave bar closes either side of midnight (a 4h bar of 23:59 after a
+    15m bar of 00:00); keyed on the bar's day the counter would flip back and forth and never bind."""
+    monkeypatch.setattr(exploration, "REPLAY_RETIRED_DAILY_CAP", 2)
+    monkeypatch.setattr(exploration, "_utc_day", lambda eng: "2025-03-05")
+    eng, pb = _engine(tmp_path, [_retired_replay(_arm("R", max_open=10))], None)
+    ex = eng.exploration
+    assert ex is not None
+    midnight = pd.Timestamp("2025-03-05", tz="UTC")
+    for k, at in enumerate([midnight, midnight - pd.Timedelta(minutes=15), midnight + pd.Timedelta(minutes=15),
+                            midnight - pd.Timedelta(minutes=30)]):
+        s = exploration.Pending(arm_id="R", side=1, bar_ts=at, stop_usd=5.0, target_usd=10.0, hold_bars=4 + k)
+        exploration._replay(eng, ex, ex.arms["R"], s)
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert len(obs[obs["arm_id"] == "R"]) == 2
+    assert len(_actions(eng, "exploration_replay_cap")) == 1
+
+
+def test_replay_only_is_refused_on_a_1d_or_1w_arm():
+    """Trading-safety L2: long_bars stamps a 1d/1w decision after its close; no such arm records replay-only."""
+    from pydantic import ValidationError
+    for tf in ("1d", "1w"):
+        with pytest.raises(ValidationError, match="1d/1w"):
+            SpecArm(id="X", rule="random_bracket", timeframe=tf, role="control", control_mode="replay_only",
+                    params={"minutes": [0], "window_utc": ["00:00", "23:45"], "stop_usd": 3.0, "target_r": 1.0,
+                            "hold_bars": 4})
+
+
+def test_a_replay_candidate_while_the_book_warms_is_recorded_book_warming(tmp_path, monkeypatch):
+    """Trading-safety L3: before the book's history backfill completes its bars are not the history run's, so its
+    replay candidates are recorded blocked `book_warming`, as a queued signal would be, never `replay_only`."""
+    from goldbot.engine import books
+    eng, pb = _engine(tmp_path, [_retired_replay(_arm("R", max_open=10))], None)
+    monkeypatch.setattr(books, "warming", lambda eng: True)
+    exploration.on_pass(eng, _at(eng, pb, START))
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    assert list(obs[obs["arm_id"] == "R"]["blocked_reason"]) == ["book_warming"]
+    assert not _sent(eng)
