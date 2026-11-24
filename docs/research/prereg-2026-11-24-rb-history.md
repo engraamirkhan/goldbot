@@ -162,3 +162,42 @@ None taken. A return of any red-box arm to demo would be a research-director dec
 delegated); real money, sizing and budget stay owner-only.
 
 ## 10. Results (stage 1, learn) — appended after the run, below this line, in a separate commit
+
+Run 2026-11-24 on commits `77e39caf` (card) and `712bf54b` (job cache, mechanical), `rb_history.py run --window
+learn` then `read`; per-trade output kept local (`~/tmp/rb-history/`, never committed). Entries 2010-01-04..2017-12-28.
+Confirm, test_old and the holdout were not read.
+
+**Primary population (every replayed candidate), primary cost (bps), paired day-block bootstrap:**
+
+| TF | n arm / control | gross arm / control | net arm (95 % CI) | net control | Delta (95 % CI) | SE(Delta) | t net / t Delta | stress net arm | years net > 0 / Delta > 0 | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1h | 8,245 / 7,891 | -0.046 / -0.038 | **-0.159** (-0.187, -0.132) | -0.151 | **-0.008** (-0.046, +0.031) | 0.020 | -11.4 / -0.39 | -0.378 | 0 / 4 of 8 | **STOP** |
+| 4h | 3,193 / 3,040 | -0.072 / -0.022 | **-0.162** (-0.214, -0.109) | -0.107 | **-0.054** (-0.120, +0.011) | 0.034 | -6.0 / -1.63 | -0.340 | 0 / 4 of 8 | **STOP** |
+
+STOP fires on both legs of the rule: SE(Delta) <= 0.06 R, UB90(Delta) +0.018 R (1h) and -0.012 R (4h), both < +0.05
+R, and UB90(net) < 0 (-0.141, -0.127). No CONTINUE condition holds.
+
+Reported, not gating:
+- One-at-a-time population (`max_open: 1`): 1h n 8,089, net -0.163, Delta -0.018 (SE 0.021); 4h n 3,096, net -0.160,
+  Delta -0.058 (SE 0.037). Brackets are tight (median stop 13.5 bp 1h, 20.6 bp 4h), so trades rarely overlap and the
+  slot limit barely binds: the section 7 lower bound (822 / 419) was far too conservative, and the realised SEs confirm
+  the primary power row.
+- Exits: stop 49 % / target 51 % (1h), 55 % / 45 % (4h); time exits under 0.5 %. The rule is close to a 1:1 bracket
+  around the break; the random ladder with the same spacing does as well or better.
+- By year, net arm / control (1h): 2010 -0.206/-0.177, 2011 -0.137/-0.163, 2012 -0.184/-0.167, 2013 -0.153/-0.156,
+  2014 -0.160/-0.162, 2015 -0.144/-0.162, 2016 -0.094/-0.076, 2017 -0.208/-0.140. (4h): 2010 -0.223/-0.101, 2011
+  -0.015/-0.048, 2012 -0.296/-0.162, 2013 -0.134/-0.136, 2014 -0.121/+0.015, 2015 -0.186/-0.253, 2016 -0.219/-0.095,
+  2017 -0.081/-0.084.
+- Consistent with the red-box week (pooled replay -0.15 R vs control -0.17 R): history and forward agree.
+
+**Verdict (stage 1): STOP at 1h and 4h.** EVIDENCE-RB-HISTORY is closed "no edge": the red boxes' placement adds
+nothing over random boxes with the same spacing (Delta CI excludes +0.05 R at 1h and +0.02 R at 4h), and the rule
+loses about 0.16 R a candidate net. RB1H/RB4H do not return to demo. Confirm and test_old stay unread for this family
+(not needed: no CONTINUE). Any red-box variant needs a new mechanism, not a new filter, exit or timeframe (R-10).
+
+**15m (finding asked "include 15m or state why not"; stated after the read, for a reason independent of it):** 15m
+own-timeframe box breaks are already closed by R-15 (2010-25, STOP) and H-80 R2 (2018-25), and RB15's week read was
+-0.077 vs -0.061; a 15m stop is about half the 1h one, so costs in R about double. A 15m read would spend K to confirm
+a closed result.
+
+**K:** +2 to book on the brain registry with this result (status evaluated, rule_ref this file); 2026Q4 84 -> 82 left.
