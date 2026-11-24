@@ -1042,10 +1042,10 @@ def _utc_day(eng: Engine) -> str:
 def _replay_seed(eng: Engine, ex: Exploration) -> tuple[str, int]:
     """(today, the records already written today by this book's refused recording arms): the cap's counter at the
     start (code review LOW-1). Unreadable: (today, 0), logged; the cap is a load bound, not a safety one."""
-    day = _utc_day(eng)
     arms = sorted(ex.recording & ex.retired)
     if not arms:
-        return day, 0
+        return "", 0                                   # nothing to bound: the clock is read at the first record
+    day = _utc_day(eng)
     lo = pd.Timestamp(day, tz="UTC")
     try:
         with ex.db.connection() as conn:
