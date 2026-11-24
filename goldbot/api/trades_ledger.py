@@ -337,6 +337,9 @@ def exploration_records(state_dir: str | Path) -> dict[str, ExplorationRecord]:
     return {arm_trade_id(t): t for t in recs}
 
 
+COHORT_EVIDENCE = "learning_cohort"     # `engine.exploration_cohort.EVIDENCE_CLASS` (ADR 0095)
+
+
 def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow:
     info = ctx.cat.arm(t.arm_id)
     family = info.family if info is not None else (t.family or "unknown")
@@ -353,6 +356,10 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
     evidence: TradeEvidence
     if not closed or t.pnl is None:
         evidence = "pending"
+    elif t.evidence_class == COHORT_EVIDENCE:
+        # ADR 0095 (quant C2): a demo learning cohort fill is execution evidence of a retired arm: listed, never in a
+        # ranking, a read's n or the board's n
+        evidence = "not_evidence"
     elif t.client_order_id in voids:
         evidence = "excluded"
     elif t.censored:

@@ -18,17 +18,26 @@ is a control or not at the minimum lot). In the engine:
   suspension (`cost_suspended`) and no learning-class start or read (`exploration_learning`). Every other cap binds as
   for any arm: the RiskGate, the per-trade cap, the exploration budget, the daily entry budget, slots, the global and
   margin caps, the account's daily and weekly limits.
-* Once a minute, and again whenever a member's position leaves the book (`refresh`), this account's ledger is read: each member's net P&L over the fills sent since `since`
-  and the cohort's net P&L over the fills sent since this ISO week's Monday 00:00 UTC (`read`; a close without a
-  readable P&L counts as a loss at its stop plus its round trip, never as 0). A member whose loss reaches
-  `arm_loss_cap_gbp` retires for good (`exploration_arm_cohort_loss_cap`); past `until` every member retires
-  (`exploration_arm_cohort_expired`). A stopped member records replay-only again (`Exploration.recording`), as it
-  did before the cohort, so the self-retrain's candidate rows never stop. A week loss at `week_loss_cap_gbp` holds every member until next Monday
+* Every named arm that may record (not hash-refused, invalid, dark or 1d/1w) is in `Exploration.recording`
+  (quant C1): a member that is stopped, or a named arm refused only by the date window, records replay-only as it did
+  before the cohort, so the self-retrain's candidate rows never stop.
+* Once a minute, again whenever a member's position leaves the book and whenever the unrecorded closes change
+  (`refresh`), this account's ledger is read (`read`): each member's net P&L over the fills sent since `since`, and the
+  cohort's net P&L over the fills sent since `since` and closed since this ISO week's Monday 00:00 UTC (by exit,
+  trading-safety L2). A close without a readable P&L counts as a loss at its stop plus its round trip, never as 0; a
+  close whose record is not written yet (`exploration.pending_charges`, shared with `realised`) counts the same way
+  until it lands (trading-safety M1), and a given-up close of unknown arm fails the read closed. A member whose loss
+  reaches `arm_loss_cap_gbp` retires for good (`exploration_arm_cohort_loss_cap`); past `until` every member retires
+  (`exploration_arm_cohort_expired`). A week loss at `week_loss_cap_gbp` holds every member until next Monday
   (journalled `exploration_cohort_week_cap` once a week; the next week's read starts from 0).
 * At the send (`send_refusal`, in `exploration._send`): nothing until a read has succeeded (`cohort_unread`, fail
-  closed); at most `max_open_per_arm` open per member (`cohort_max_open`); the member's loss + its open risk at its
-  stops + the new trade's loss and round trip must stay below its cap (`cohort_loss_cap`), and the week's loss + every
-  member's open risk + the new trade's below the weekly cap (`cohort_week_cap`).
+  closed); at most `max_open_per_arm` open per member (`cohort_max_open`); at most `max_per_day` / `max_per_hour`
+  cohort fills (`cohort_daily_entries`, `cohort_hourly_entries`; trading-safety M2: the account's hour stays open for
+  GD1P); the member's loss + its open risk at its stops + the new trade's loss and round trip must stay below its cap
+  (`cohort_loss_cap`), and the week's loss + every member's open risk + the new trade's below the weekly cap
+  (`cohort_week_cap`); both again on the loss at the RiskGate's stop (`rooms`).
+* Only the daily review's evidence stops are waived for a member (`evidence_stop`); any other aux.db retirement (the
+  arm lifecycle's, a future writer's) is honoured (trading-safety L3).
 * The fills carry `evidence_class` "learning_cohort" (never "qualified"): demo learning evidence, never a
   qualification and never in a family ranking.
 
@@ -46,7 +55,7 @@ import pandas as pd
 from goldbot.instruments import GOLD
 
 if TYPE_CHECKING:
-    from goldbot.engine.exploration import Arm, Exploration
+    from goldbot.engine.exploration import Arm, Exploration, PendingCharge
     from goldbot.engine.runner import Engine
     from goldbot.ops.accounts import LearningCohort
 
@@ -73,6 +82,23 @@ def week_start(now: pd.Timestamp) -> pd.Timestamp:
     return day - pd.Timedelta(days=day.weekday())
 
 
+def evidence_stop(rule: str) -> bool:
+    """Whether an aux.db `exploration_arm_status` retirement is one of the daily review's evidence stops (its H-61,
+    family, futility, cost, follow and edge-cap rules: `research.daily_review`), the stops a member's cohort caps
+    replace. Anything else is honoured for a member too (trading-safety L3)."""
+    from goldbot.research import daily_review as dr
+    return rule in {*dr.RULES.values(), dr.FOLLOW_RULE, dr.COST_RULE, dr.CONTROL_COST_RULE, dr.EDGE_CAP_RULE}
+
+
+def window_refusal(cohort: LearningCohort, today: pd.Timestamp) -> str | None:
+    """Why the cohort's date window refuses a start on `today`, None inside since..until."""
+    if today < pd.Timestamp(cohort.since, tz="UTC"):
+        return f"the cohort starts on {cohort.since}"
+    if today > pd.Timestamp(cohort.until, tz="UTC"):
+        return f"the cohort ended after {cohort.until}"
+    return None
+
+
 def refusal(eng: Engine, ex: Exploration, arm: Arm, cohort: LearningCohort, today: pd.Timestamp) -> str | None:
     """Why a named arm may not join the cohort at this start, None when it may (the module docstring's rule)."""
     from goldbot.engine.long_bars import LONG_TFS
@@ -93,11 +119,7 @@ def refusal(eng: Engine, ex: Exploration, arm: Arm, cohort: LearningCohort, toda
         return "its row is hash-refused or invalid"
     if arm.tf not in set(eng.cfg.timeframes_live) or arm.tf in LONG_TFS:
         return f"timeframe {arm.tf} is dark or 1d/1w"
-    if today < pd.Timestamp(cohort.since, tz="UTC"):
-        return f"the cohort starts on {cohort.since}"
-    if today > pd.Timestamp(cohort.until, tz="UTC"):
-        return f"the cohort ended after {cohort.until}"
-    return None
+    return window_refusal(cohort, today)
 
 
 def start(eng: Engine, ex: Exploration) -> None:
@@ -142,21 +164,35 @@ class CohortRead(NamedTuple):
 
 
 def read(conn: Any, cohort: LearningCohort, arms: Collection[str], now: pd.Timestamp,
-         caps: Mapping[str, float], accounts: Collection[str] | None = None) -> CohortRead:
-    """The cohort's ledger read at `now` (`exploration_learning.read`'s rule per arm: every filled close sent on or after
-    the start; a close without a readable P&L is a loss at its stop plus its round trip, `caps` its per-trade cap when
-    its stop loss was not recorded). `accounts`: only these accounts' rows (None: every account in the ledger)."""
-    from goldbot.engine.exploration_learning import read as arm_read
+         caps: Mapping[str, float], accounts: Collection[str] | None = None,
+         pending: Collection[PendingCharge] = ()) -> CohortRead:
+    """The cohort's ledger read at `now`: every filled close of `arms` sent on or after `since`, per arm in all and,
+    for the week, those closed since this week's Monday 00:00 UTC (by exit, trading-safety L2). A close without a
+    readable P&L is a loss at its stop plus its round trip (`caps`: its per-trade cap when its stop loss was not
+    recorded). `pending`: the unrecorded closes (`exploration.pending_charges`), each charged at its loss by its close
+    time (trading-safety M1). `accounts`: only these accounts' rows (None: every account in the ledger)."""
+    from goldbot.engine.exploration import LEDGER, _ns
     since = pd.Timestamp(cohort.since, tz="UTC")
     week = max(week_start(now), since)
     loss: dict[str, float] = {}
     week_pnl, fills = 0.0, 0
     for a in sorted(arms):
         cap = float(caps.get(a, max(caps.values(), default=0.0)))
-        loss[a] = max(0.0, -arm_read(conn, a, cap, since, accounts).pnl)
-        got = arm_read(conn, a, cap, week, accounts)
-        week_pnl += got.pnl
-        fills += got.fills + got.censored
+        pnl = 0.0
+        for t in LEDGER.select(conn, "arm_id = ? AND closed = 1 AND ts_ns >= ?", (a, _ns(since))):
+            if t.fill_price is None or t.exit_utc is None or (accounts is not None and t.account_id not in accounts):
+                continue
+            v = t.pnl if t.pnl is not None else -((t.stop_loss if t.stop_loss is not None else cap) + (t.cost or 0.0))
+            pnl += v
+            if t.exit_utc >= week:
+                week_pnl += v
+                fills += 1
+        for c in pending:
+            if c.arm_id == a and c.at >= since:
+                pnl -= c.loss
+                if c.at >= week:
+                    week_pnl -= c.loss
+        loss[a] = max(0.0, -pnl)
     return CohortRead(loss, round(week_pnl, 2), fills)
 
 
@@ -170,15 +206,24 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         return
     # once a minute, and again as soon as a member's position leaves the book (its close is then read before the
     # member's next entry, not up to a minute later: a 5m arm can stop out and signal again on one bar close)
+    from goldbot.engine.exploration import pending_charges, unrecorded
     tags = {"explore:" + a for a in members(ex)}
-    key = (now.floor("min"), tuple(sorted(pid for pid, t in eng.open.items() if t.agent_id in tags)))
+    pending = unrecorded(eng)
+    key = (now.floor("min"), tuple(sorted(pid for pid, t in eng.open.items() if t.agent_id in tags)),
+           tuple(sorted(pending)))
     if ex.cohort_read_at == key:
         return
     ex.cohort_read_at = key
     live = sorted(members(ex) - ex.retired)
     try:
         with ex.db.connection() as conn:
-            got = read(conn, cohort, members(ex), now, eng.gate.limits.exploration_arms, [eng.cfg.account_id])
+            charges, bare = pending_charges(eng, conn, pending)
+            if bare:
+                # trading-safety M1: a given-up close whose arm is unknown could be a member's: fail closed until the
+                # record is repaired (RUNBOOK, the lost-record repair)
+                raise LookupError(f"{len(bare)} given-up close(s) of unknown arm")
+            got = read(conn, cohort, members(ex), now, eng.gate.limits.exploration_arms, [eng.cfg.account_id],
+                       [c for c in charges if c.arm_id in members(ex)])
     except Exception as exc:
         ex.cohort_ok = False
         log.warning("learning cohort's ledger unreadable (%s): cohort entries refused", type(exc).__name__)
@@ -197,9 +242,7 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
             stops[a] = (EXPIRED, f"{COHORT_RULE}: the cohort ended after {cohort.until}", detail)
         elif got.loss.get(a, 0.0) >= cohort.arm_loss_cap_gbp - 1e-9:
             stops[a] = (LOSS_CAP, f"{COHORT_RULE}: arm loss cap {cohort.arm_loss_cap_gbp:g} reached", detail)
-    _stop(eng, ex, stops, now)
-    # a stopped member records replay-only again, as it did before the cohort: the self-retrain's rows never stop
-    ex.recording = ex.recording | frozenset(stops)
+    _stop(eng, ex, stops, now)          # a stopped member is in `recording` from the start: it records replay-only
     week = week_start(now)
     if ex.cohort_week_loss >= cohort.week_loss_cap_gbp - 1e-9 and ex.cohort_week_told != week:
         ex.cohort_week_told = week
@@ -219,16 +262,22 @@ def max_open_refusal(ex: Exploration, arm_id: str, open_now: int) -> str | None:
     return "cohort_max_open" if open_now >= cohort.max_open_per_arm else None
 
 
-def send_refusal(ex: Exploration, arm_id: str, new_loss: float, held: Mapping[str, float | None]) -> str | None:
+def send_refusal(ex: Exploration, arm_id: str, new_loss: float, held: Mapping[str, float | None],
+                 entries: Mapping[str, int] | None = None) -> str | None:
     """Why a member's entry losing `new_loss` at its stop (with its round trip) is refused, None when it may go:
-    unread, its own cap (its loss + its open risk + the new trade), the weekly cap (the week's loss + every member's
-    open risk + the new trade). `held`: open risk at the stops by arm id (`exploration._Pass.held`)."""
+    unread, the cohort's fills today and this hour (`entries`: `exploration_budget.entries_today`'s `cohort_day` and
+    `cohort_hour`; None: unread), its own cap (its loss + its open risk + the new trade), the weekly cap (the week's
+    loss + every member's open risk + the new trade). `held`: open risk at the stops by arm id."""
     cohort = ex.cfg.cohort if arm_id in members(ex) else None
     if cohort is None or arm_id not in members(ex):
         return None
     lost, week = ex.cohort_loss.get(arm_id), ex.cohort_week_loss
-    if not ex.cohort_ok or lost is None or week is None:
+    if not ex.cohort_ok or lost is None or week is None or entries is None:
         return "cohort_unread"
+    if entries.get("cohort_day", 0) >= cohort.max_per_day:
+        return "cohort_daily_entries"
+    if entries.get("cohort_hour", 0) >= cohort.max_per_hour:
+        return "cohort_hourly_entries"
     open_arm = held.get(arm_id, 0.0)
     open_all = [held.get(a, 0.0) for a in members(ex)]
     if open_arm is None or any(v is None for v in open_all):

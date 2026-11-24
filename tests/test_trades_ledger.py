@@ -557,3 +557,22 @@ def test_mfe_and_mae_are_none_never_zero_on_rows_without_a_record_and_on_every_o
     assert rows
     for r in rows:
         assert (r.mfe_r, r.mae_r, r.mfe_usd, r.mae_usd, r.excursion_approx) == (None, None, None, None, None), r.trade_id
+
+
+
+def test_a_learning_cohort_fill_is_listed_but_never_in_a_ranking_row_read_progress_or_board_n(tmp_path):
+    """ADR 0095, quant C2: a demo learning cohort fill is execution evidence of a retired arm. It is listed (money),
+    `not_evidence`, and never in a ranking row, a read's progress, H-61/H-81 stops or the board's n."""
+    from goldbot.api import strategy_ranking as sr
+    from goldbot.telegram import labs
+    _engine(tmp_path, SCALP)
+    _arm(tmp_path, "plain", "S1A", pnl=1.0)
+    _arm(tmp_path, "cohort", "S1A", pnl=-2.0, evidence_class="learning_cohort")
+    cat = _catalog(tmp_path)
+    rows = [r for r in _ledger(tmp_path, cat).rows if r.arm_id == "S1A"]
+    assert sorted(r.evidence for r in rows) == ["counted", "not_evidence"]
+    view = sr.rank(rows, cat, NOW)
+    assert sum(r.figures.n for r in [*view.rows, *view.controls, *view.retired]) == 1
+    with _db(tmp_path).connection() as conn:
+        [st] = [s for s in labs.arm_statuses(conn, [SCALP], now=NOW, held_out=()) if s.arm_id == "S1A"]
+    assert st.n == 1

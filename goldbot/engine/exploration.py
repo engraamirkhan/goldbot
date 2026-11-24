@@ -110,7 +110,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 import numpy as np
 import pandas as pd
@@ -790,7 +790,8 @@ class Exploration:
         from goldbot.engine import exploration_cohort
         self.cohort: frozenset[str] = frozenset()
         self.cohort_ok = False
-        self.cohort_read_at: tuple[pd.Timestamp, tuple[int, ...]] | None = None    # (minute, open member positions)
+        # (minute, open member positions, unrecorded closes): the cohort's read is redone when any of them changes
+        self.cohort_read_at: tuple[pd.Timestamp, tuple[int, ...], tuple[int, ...]] | None = None
         self.cohort_warned = False
         self.cohort_loss: dict[str, float] = {}        # member -> its net loss since the cohort's start, last read
         self.cohort_week_loss: float | None = None     # the cohort's net loss this ISO week, last read
@@ -802,7 +803,9 @@ class Exploration:
         # control without a retirement of its own: it stops with its learning arm at a runtime stop
         # (`exploration_learning._stop` puts it in `retired`), so its twin rows end with the arm's (quant C2)
         self.recording: frozenset[str] = frozenset(
-            a for a, arm in self.arms.items() if arm.spec.control_mode == "replay_only" and arm.tf in live
+            a for a, arm in self.arms.items()
+            if (arm.spec.control_mode == "replay_only" or (cfg.cohort is not None and a in cfg.cohort.arms))
+            and arm.tf in live
             and arm.tf not in LONG_TFS and a not in cfg.hash_refused and a not in cfg.invalid
             and not (dedicated_control_of(arm.spec) and not arm.spec.retired))
         for a in sorted(self.recording & self.retired):
@@ -1522,16 +1525,19 @@ def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     ex.retired_read = minute
     try:
         with ex.db.connection() as conn:
-            got = {str(a) for (a,) in conn.execute(
-                "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired'", (ex.broker,))}
+            rules = {str(a): str(r) for a, r in conn.execute(
+                "SELECT arm_id, rule FROM exploration_arm_status WHERE broker = ? AND status = 'retired'",
+                (ex.broker,))}
     except Exception as exc:
         log.warning("exploration retired arms unreadable (%s): the known set stands%s", type(exc).__name__,
                     "" if ex.retired_ok else "; no entry until it is read")
         return
     ex.retired_ok = True
-    # ADR 0095: a cohort member is retired already; its cohort caps replace the daily review's evidence stops
-    from goldbot.engine.exploration_cohort import members
-    new = sorted((got & set(ex.arms)) - ex.retired - members(ex))
+    # ADR 0095: a cohort member is retired already; its cohort caps replace the daily review's evidence stops, and
+    # only those (any other retirement, e.g. the arm lifecycle's, is honoured: trading-safety L3)
+    from goldbot.engine.exploration_cohort import evidence_stop, members
+    got = {a for a, rule in rules.items() if a not in members(ex) or not evidence_stop(rule)}
+    new = sorted((got & set(ex.arms)) - ex.retired)
     if not new:
         return
     ex.retired = ex.retired | frozenset(new)
@@ -1829,34 +1835,62 @@ def realised(eng: Engine, ex: Exploration, since: pd.Timestamp,
     with ex.db.connection() as conn:
         rows = LEDGER.select(conn, "account_id = ? AND closed = 1 AND exit_ns >= ?",
                              (eng.cfg.account_id, _ns(since)))
-        marks = ",".join("?" * len(pending))
-        mine = LEDGER.select(conn, f"account_id = ? AND position_id IN ({marks})",
-                             (eng.cfg.account_id, *pending)) if pending else []
+        charges, _bare = pending_charges(eng, conn, pending)
     pnl: dict[str, float] = {}
     for r in rows:
         v = r.pnl if r.pnl is not None else -((r.stop_loss or 0.0) + (r.cost or 0.0))
         pnl[r.arm_id] = pnl.get(r.arm_id, 0.0) + v
+    for c in charges:
+        if c.at < since:
+            pnl.setdefault(c.arm_id, 0.0)       # an earlier day's: spent, never charged again
+        else:
+            pnl[c.arm_id] = pnl.get(c.arm_id, 0.0) - c.loss
+        if c.lost and lost is not None:
+            lost.append((c.position_id, c.arm_id))
+    return {a: max(0.0, -v) for a, v in pnl.items()}
+
+
+class PendingCharge(NamedTuple):
+    """An exploration close whose record is not in the ledger yet (`unrecorded`), as a loss charged until it lands."""
+    position_id: int
+    arm_id: str
+    at: pd.Timestamp            # its close time; for a lost id after a restart, its row's sent time plus its hold
+    loss: float                 # its ledger row's loss at the stop plus its cost, else its arm's per-trade cap
+    lost: bool                  # given up (`Engine._records_lost`)
+
+
+def pending_charges(eng: Engine, conn: Any, pending: Mapping[int, tuple[str | None, pd.Timestamp | None, bool]]
+                    ) -> tuple[list[PendingCharge], list[int]]:
+    """`realised`'s never-optimistic charge of each unrecorded close (trading-safety HIGH 2026-10-26), shared with the
+    demo learning cohort's caps (`exploration_cohort.refresh`, ADR 0095): the charges, and the bare ids (given up in an
+    earlier process with no exploration ledger row: arm unknown, another ledger's to `realised`). A close whose record
+    has landed is left out (the ledger counts it: no double count)."""
+    marks = ",".join("?" * len(pending))
+    mine = LEDGER.select(conn, f"account_id = ? AND position_id IN ({marks})",
+                         (eng.cfg.account_id, *pending)) if pending else []
     done = {r.position_id for r in mine if r.exit_utc is not None}
     sent = {r.position_id: r for r in mine if r.exit_utc is None}
     caps = eng.gate.limits.exploration_arms
+    out: list[PendingCharge] = []
+    bare: list[int] = []
     for pid, (arm_id, at, gone) in pending.items():
         row = sent.get(pid)
-        if pid in done or (row is None and arm_id is None):
-            continue                            # recorded (counted from the ledger), or not an exploration trade
+        if pid in done:
+            continue                            # recorded: counted from the ledger
+        if row is None and arm_id is None:
+            bare.append(pid)                    # not this ledger's as far as can be told
+            continue
         if row is not None:
             arm_id = row.arm_id
             at = at if at is not None else row.sent_utc + pd.Timedelta(seconds=row.hold_s)
         if arm_id is None or at is None:        # unreachable: a bare id is kept only with its ledger row
             continue
-        if at < since:
-            pnl.setdefault(arm_id, 0.0)         # an earlier day's: spent, never charged again
-        elif row is not None and row.stop_loss is not None and row.cost is not None:
-            pnl[arm_id] = pnl.get(arm_id, 0.0) - (row.stop_loss + row.cost)
+        if row is not None and row.stop_loss is not None and row.cost is not None:
+            loss = row.stop_loss + row.cost
         else:
-            pnl[arm_id] = pnl.get(arm_id, 0.0) - caps.get(arm_id, max(caps.values(), default=0.0))
-        if gone and lost is not None:
-            lost.append((pid, arm_id))
-    return {a: max(0.0, -v) for a, v in pnl.items()}
+            loss = caps.get(arm_id, max(caps.values(), default=0.0))
+        out.append(PendingCharge(pid, arm_id, at, float(loss), gone))
+    return out, bare
 
 
 def unrecorded(eng: Engine) -> dict[int, tuple[str | None, pd.Timestamp | None, bool]]:
@@ -2070,10 +2104,11 @@ class _Pass:
         self.sessions: dict[str, int] = {}
         self.pairs: dict[str, tuple[str, ...]] = {}
         self.active: frozenset[str] = frozenset()
-        if ex.cfg.daily is not None:
+        from goldbot.engine.exploration_cohort import members
+        if ex.cfg.daily is not None or members(ex):        # ADR 0095: the cohort's own day and hour read them too
             self.entries = budget.entries_today(eng, ex, self.since, now, self.arms)
+        if ex.cfg.daily is not None:
             self.pairs = budget.pairs(self.arms)
-            from goldbot.engine.exploration_cohort import members
             cohort = members(ex) - ex.retired              # ADR 0095: a live cohort member enters though retired
             self.active = frozenset(a for a, arm in self.arms.items() if a in cohort or (
                 not arm.spec.retired and a not in ex.retired and not (arm.spec.entry_refused
@@ -2431,7 +2466,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         if lost + held_arm + loss + cost >= cap_l - 1e-9:
             refuse("learning_loss_cap")
             return "refused"
-    if in_cohort and (why := exploration_cohort.send_refusal(ex, arm.arm_id, loss + cost, ps.held)) is not None:
+    if in_cohort and (why := exploration_cohort.send_refusal(ex, arm.arm_id, loss + cost, ps.held,
+                                                               ps.entries)) is not None:
         # ADR 0095: the member's own cap and the cohort's weekly cap, each on realised loss + open risk + this trade
         refuse(why)
         return "refused"
@@ -2522,10 +2558,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     ex.open_loss[pos] = at_gate[0] if at_gate else loss
     ps.note(arm, ex.open_loss[pos], slot=not add)
-    if ex.cfg.daily is not None:
+    if ex.cfg.daily is not None or in_cohort:
         from goldbot.engine import exploration_budget as budget
-        budget.counted(ps.entries, arm, s.bar_ts, now)
-        budget.cell_counted(eng, ex, arm)
+        budget.counted(ps.entries, arm, s.bar_ts, now, cohort=in_cohort)
+        if ex.cfg.daily is not None:
+            budget.cell_counted(eng, ex, arm)
     if plan is not None:
         pyr.heal(eng, ex, arm, plan.group, now, force=True)     # again from the add's fill and the stop it got
     open_twins(eng, ex, arm, s, pid, pos)

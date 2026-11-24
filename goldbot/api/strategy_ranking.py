@@ -192,7 +192,7 @@ def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
                 prog_unit.append(units(to[0]))
                 prog_at.append(at)
                 prog_day.append(_oday(r.opened_utc.timestamp()))       # a session day "with a counted fill"
-        if r.r is None or r.pnl is None or r.evidence == "excluded":
+        if r.r is None or r.pnl is None or r.evidence in ("excluded", "not_evidence"):    # ADR 0095: cohort fills
             continue
         tf = r.timeframe or ""
         meta: _Meta

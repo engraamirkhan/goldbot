@@ -249,6 +249,10 @@ class LearningCohort(FrozenRecord):
     week_loss_cap_gbp: float = Field(gt=0)
     # positions of one cohort arm open at once (the frozen row's own max_open still binds when smaller)
     max_open_per_arm: int = Field(1, ge=1)
+    # the cohort's own fills a UTC day and a clock hour, every member together, inside the account's daily budget
+    # (trading-safety M2: the cohort never takes the account's whole hour from GD1P)
+    max_per_day: int = Field(ge=1)
+    max_per_hour: int = Field(ge=1)
 
     @model_validator(mode="after")
     def _bounded(self) -> LearningCohort:
@@ -260,6 +264,8 @@ class LearningCohort(FrozenRecord):
             raise ValueError("a learning cohort names each arm once")
         if self.arm_loss_cap_gbp > self.week_loss_cap_gbp:
             raise ValueError("a cohort arm's loss cap is at most the cohort's weekly loss cap")
+        if self.max_per_hour > self.max_per_day:
+            raise ValueError("a cohort's max_per_hour is at most its max_per_day")
         return self
 
 

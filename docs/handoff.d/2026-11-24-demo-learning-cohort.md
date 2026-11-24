@@ -7,10 +7,13 @@
   - Engine (`engine/exploration_cohort.py`): at start a named retired gold broker-mode arm joins and leaves
     `retired`. Its caps replace the evidence stops: daily review, cost read, cost or edge-cap suspension, learning
     block.
-  - Cohort caps: one open per arm, GBP 15 net per arm since 2026-11-24 (stops it for good), GBP 50 net for the ten
-    per ISO week (held to Monday 00:00 UTC), until 2027-01-15. Each check counts realised loss + open risk + the new
-    trade. It fails closed until the ledger is read. Fills are stamped `evidence_class: learning_cohort`. An arm
-    stopped by its cap or by the end records replay-only again.
+  - Cohort caps: one open per arm, 30 fills a day and 4 an hour for the ten, GBP 15 net per arm since 2026-11-24
+    (stops it for good), GBP 50 net for the ten per ISO week by exit (held to Monday 00:00 UTC), until 2027-01-15.
+    Unrecorded closes are charged at their stop loss plus cost; a given-up close of unknown arm holds the cohort. Each check counts realised loss + open risk + the new
+    trade. It fails closed until the ledger is read. Fills are stamped `evidence_class: learning_cohort`, listed as
+    `not_evidence` in the trade ledger and left out of every ranking, read and H-61/H-81 stop. Every named arm is in
+    `recording`, so a stopped arm, or one refused at start by the date window, records replay-only. Only the daily
+    review's evidence stops are waived (an arm-lifecycle retirement still stops a member).
   - Every existing cap still binds.
   - Arms: RBR15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P; their spec rows go back to `control_mode: broker`
     and keep their `retired_day`.

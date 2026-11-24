@@ -49,7 +49,7 @@ def check_entry_silence(ctx: HealthContext, account_id: str) -> Check | None:
     reason = es.describe(v)
     try:                                               # ADR 0095: the cohort's week so far, where the account has one
         line = es.cohort_line(s, ctx.state_dir / "aux.db", ctx.now)
-    except sqlite3.Error as exc:
+    except Exception as exc:                       # noqa: BLE001 - reporting only: never fails the check
         line = f"cohort week unreadable ({type(exc).__name__})"
     if line:
         reason = f"{reason[:380]}; {line}"

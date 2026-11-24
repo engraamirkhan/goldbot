@@ -114,7 +114,7 @@ def test_no_live_account_names_a_cohort_and_a_cohort_off_a_demo_probe_only_accou
 
 def _cohort(**kw: Any) -> dict[str, Any]:
     return {"prereg": "p.md", "arms": ["Z1P"], "since": "2026-11-24", "until": "2027-01-15", "arm_loss_cap_gbp": 15.0,
-            "week_loss_cap_gbp": 50.0, **kw}
+            "week_loss_cap_gbp": 50.0, "max_per_day": 30, "max_per_hour": 4, **kw}
 
 
 @pytest.mark.parametrize("change, why", [
@@ -171,7 +171,8 @@ def _arm(arm_id: str, *, retired: bool = True, role: str = "strategy", control_m
 
 def _cohort_cfg(arms: tuple[str, ...], **kw: Any) -> LearningCohort:
     return LearningCohort(**{"prereg": "p.md", "arms": arms, "since": "2025-03-01", "until": "2025-04-15",
-                             "arm_loss_cap_gbp": 15.0, "week_loss_cap_gbp": 50.0, "max_open_per_arm": 1, **kw})
+                             "arm_loss_cap_gbp": 15.0, "week_loss_cap_gbp": 50.0, "max_open_per_arm": 1,
+                             "max_per_day": 30, "max_per_hour": 4, **kw})
 
 
 def _engine(tmp_path: Path, arm_list: list[Arm], cohort: LearningCohort | None) -> tuple[Engine, Any]:
@@ -347,9 +348,10 @@ def test_the_evidence_stops_it_was_retired_by_do_not_stop_a_cohort_member(tmp_pa
     ex = eng.exploration
     assert ex is not None and ex.cohort == {"Z3D", "F1A"} and not ({"Z3D", "F1A"} & ex.retired)
     assert not ({"Z3D", "F1A"} & ex.learning_group)
+    from goldbot.research import daily_review
     with Database.open(tmp_path, "aux").write() as conn:
         conn.execute("INSERT INTO exploration_arm_status (broker, arm_id, status, day, rule, recorded_ns) VALUES "
-                     "('icm', 'Z3D', 'retired', '2025-03-04', 'test', 0)")
+                     "('icm', 'Z3D', 'retired', '2025-03-04', ?, 0)", (daily_review.RULES["Z"],))
     for i in range(arms_mod.COST_ARMS["F1A"][1]):
         _fill(tmp_path, f"c{i}", "F1A", 0.0, pd.Timestamp("2025-03-03 08:00", tz="UTC"))
     ex.cost_scale = {"Z3D": 0.0, "F1A": 0.0}
@@ -402,3 +404,113 @@ def test_the_health_detail_shows_the_cohort_week_to_date_pnl_and_the_weekly_hold
     assert line is not None and "week to date -51.00 of the -50 cap over 2 closes" in line
     assert "held to Mon 2025-03-10 00:00 UTC" in line and "cap: Z1P, Z2P" in line
     assert es.cohort_line(es.AccountSupply(broker="icm"), tmp_path / "aux.db", CLOSE) is None
+
+
+
+# ------------------------------------------------------------------------------------------------ review round 1
+def test_every_self_retrain_arm_is_replay_only_or_named_in_a_cohort_on_an_account_that_registers_it() -> None:
+    """Quant C1: the self-retrain's candidate rows never stop, whatever the cohort does."""
+    rows = _spec_rows()
+    accounts = acc_mod.load_accounts(ROOT / "config" / "accounts.yaml", logins=False)
+    for arm_id in PRENAMED:
+        named = [n for n, a in accounts.items() if a.exploration.cohort is not None
+                 and arm_id in a.exploration.cohort.arms and arm_id in a.exploration.arms]
+        assert rows[arm_id].control_mode == "replay_only" or named, arm_id
+
+
+@pytest.mark.parametrize("since, until", [("2025-03-01", "2025-03-03"), ("2025-03-05", "2025-04-15")])
+def test_a_named_cohort_arm_refused_at_start_past_until_records_replay_only_and_never_queues(tmp_path, since, until):
+    """Quant C1 / trading-safety L1 (and the start's date gate both ways): refused by the window only, it records."""
+    from goldbot.research import exploration_data as ed
+    eng, pb = _engine(tmp_path, [_arm("Z1P")], _cohort_cfg(("Z1P",), since=since, until=until))
+    ex = eng.exploration
+    assert ex is not None and ex.cohort == frozenset() and "Z1P" in ex.retired and "Z1P" in ex.recording
+    [j] = _actions(eng, exploration_cohort.REFUSED)
+    assert ("ended after" if until < "2025-03-04" else "starts on") in j["why"]
+    for k in range(3):
+        exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15 * k)))
+        assert not [s for s in ex.queue if s.arm_id == "Z1P"]
+    assert _arms_sent(eng) == []
+    obs = ed.read_obs(exploration.ledger_db(str(tmp_path)))
+    z = obs[obs["arm_id"] == "Z1P"]
+    assert len(z) == 3 and not z["taken"].any() and set(z["blocked_reason"]) == {"replay_only"}
+
+
+def test_a_close_not_yet_recorded_counts_toward_the_arm_cap_so_a_same_pass_re_entry_is_refused(tmp_path):
+    """Trading-safety M1: the sweep queues the close, its record is written after `on_pass`; until it lands the close
+    is charged at its row's loss at the stop plus its cost (1 + 1 here): 12 + 2 + the new 2 reaches 15."""
+    from tests.test_exploration_engine import _stopped_at_the_broker
+    _fill(tmp_path, "a", "Z1P", -12.0, pd.Timestamp("2025-03-03 10:00", tz="UTC"))
+    eng, pb = _engine(tmp_path, [_arm("Z1P")], _cohort_cfg(("Z1P",)))
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))                     # 12 + 0 open + 2 = 14: sent
+    assert _arms_sent(eng) == ["Z1P"]
+    _stopped_at_the_broker(eng, pb)                                   # in eng._closes, no ledger close yet
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
+    assert _arms_sent(eng) == ["Z1P"] and _refusals(eng, "Z1P") == ["cohort_loss_cap"]
+
+
+def test_a_given_up_close_of_unknown_arm_holds_every_cohort_entry(tmp_path):
+    eng, pb = _engine(tmp_path, [_arm("Z1P")], _cohort_cfg(("Z1P",)))
+    eng._records_lost = [999]                                         # no ledger row: whose it was is unknown
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert _arms_sent(eng) == [] and _refusals(eng, "Z1P") == ["cohort_unread"]
+    assert _actions(eng, exploration_cohort.UNREAD)[0]["error"] == "LookupError"
+
+
+def test_the_cohort_at_its_hourly_count_leaves_the_accounts_hour_to_other_arms(tmp_path, monkeypatch):
+    """Trading-safety M2: 4 cohort fills this hour stop the cohort (its own max_per_hour 4), while the account's 8 an
+    hour still admits a GD1P-like arm outside the cohort."""
+    from goldbot.engine import exploration_budget as budget
+    from goldbot.ops.accounts import DailyEntries
+    monkeypatch.setattr(budget, "session_budgets", lambda *a, **k: {s: 100 for s in budget.SEGMENTS})
+    with Database.open(tmp_path, "aux").write() as conn:
+        for i in range(4):
+            exploration.LEDGER.upsert(conn, ExplorationRecord(
+                client_order_id=f"h{i}", account_id="icm-probe", arm_id="Z1P", family="x", tf="15m", side=1, lots=0.01,
+                signal_utc=CLOSE, sent_utc=CLOSE, atr_usd=5.0, stop_usd=5.0, target_usd=10.0, hold_s=3600,
+                position_id=100 + i, fill_price=2400.0, stop_loss=1.0, cost=0.5,
+                exit_utc=CLOSE + pd.Timedelta(seconds=1), exit_price=2400.0, exit_reason="target", pnl=0.0))
+    eng, pb = _engine(tmp_path, [_arm("Z1P"), _arm("G", retired=False)], _cohort_cfg(("Z1P",)))
+    assert eng.exploration is not None
+    eng.exploration.cfg = eng.exploration.cfg.model_copy(update={"daily": DailyEntries(
+        max_per_day=85, max_per_hour=8, scalp_day_cap=None)})
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert _arms_sent(eng) == ["G"] and _refusals(eng, "Z1P") == ["cohort_hourly_entries"]
+
+
+def test_a_restart_re_admits_a_capped_member_but_sends_nothing_before_the_first_read(tmp_path):
+    _fill(tmp_path, "a", "Z1P", -15.0, pd.Timestamp("2025-03-03 10:00", tz="UTC"))
+    eng, pb = _engine(tmp_path, [_arm("Z1P")], _cohort_cfg(("Z1P",)))
+    ex = eng.exploration
+    assert ex is not None and ex.cohort == {"Z1P"} and not ex.cohort_ok        # re-admitted, its losses not read
+    assert exploration_cohort.send_refusal(ex, "Z1P", 1.0, {}, {}) == "cohort_unread"
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert _arms_sent(eng) == [] and _actions(eng, exploration_cohort.LOSS_CAP)
+
+
+def test_the_weekly_cap_charges_a_loss_in_the_week_it_closed(tmp_path):
+    """Trading-safety L2: sent on Friday, closed on Monday, the loss is this week's."""
+    rec = ExplorationRecord(
+        client_order_id="fri", account_id="icm-probe", arm_id="Z1P", family="x", tf="15m", side=1, lots=0.01,
+        signal_utc=pd.Timestamp("2025-02-28 20:00", tz="UTC"), sent_utc=pd.Timestamp("2025-02-28 20:00", tz="UTC"),
+        atr_usd=5.0, stop_usd=5.0, target_usd=10.0, hold_s=3600, fill_price=2400.0, stop_loss=2.0, cost=0.5,
+        exit_utc=pd.Timestamp("2025-03-03 00:05", tz="UTC"), exit_price=2399.0, exit_reason="stop", pnl=-7.0)
+    with Database.open(tmp_path, "aux").write() as conn:
+        exploration.LEDGER.upsert(conn, rec)
+        got = exploration_cohort.read(conn, _cohort_cfg(("Z1P",), since="2025-02-24"), ("Z1P",), CLOSE, {})
+    assert got.week_pnl == -7.0 and got.loss["Z1P"] == 7.0
+
+
+def test_only_the_daily_reviews_evidence_stops_are_waived_for_a_member(tmp_path):
+    """Trading-safety L3: an arm-lifecycle (or any other) retirement of a member is honoured; the daily review's
+    evidence stops are what the cohort's caps replace."""
+    from goldbot.research import arm_lifecycle, daily_review
+    eng, pb = _engine(tmp_path, [_arm("Z1P"), _arm("Z2P")], _cohort_cfg(("Z1P", "Z2P")))
+    ex = eng.exploration
+    assert ex is not None
+    with Database.open(tmp_path, "aux").write() as conn:
+        for arm_id, rule in (("Z1P", daily_review.COST_RULE), ("Z2P", f"{arm_lifecycle.RULE}: kill rule")):
+            conn.execute("INSERT INTO exploration_arm_status (broker, arm_id, status, day, rule, recorded_ns) "
+                         "VALUES ('icm', ?, 'retired', '2025-03-04', ?, 0)", (arm_id, rule))
+    exploration.refresh_retired(eng, ex, CLOSE)
+    assert "Z1P" not in ex.retired and "Z2P" in ex.retired

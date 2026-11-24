@@ -346,8 +346,8 @@ accounts:
       # this account has (the RiskGate, the £220 day, the weekly limit, the daily entry budget, slots: none loosened):
       # one open per arm; an arm stops for good at a £15 net loss since `since`; the ten together are held to next
       # Monday 00:00 UTC at a £50 net loss in the ISO week. Each check counts realised loss + open risk at the stops +
-      # the new trade. Exits are never gated. Rollback: drop `cohort` (the ten send nothing again; open positions keep
-      # every exit), restart
+      # the new trade. At most 30 cohort fills a day and 4 an hour (the account keeps its other 4 an hour for GD1P).
+      # Exits are never gated. Rollback: drop `cohort`, set the ten rows back to control_mode: replay_only, restart
       cohort:
         prereg: docs/research/prereg-amendment-2026-11-24-demo-learning-cohort.md
         arms: [RBR15, Z3D, Z1P, Z9D, Z10D, S1A, S1B, F1A, Z2P, Z5P]
@@ -356,6 +356,8 @@ accounts:
         arm_loss_cap_gbp: 15.0
         week_loss_cap_gbp: 50.0
         max_open_per_arm: 1
+        max_per_day: 30
+        max_per_hour: 4
       # Daily entry budget (owner decision 2026-10-30: demo 150-250 fills a day in total; PD 2026-11-06, measured
       # 830-860 a day on 2026-11-04..06, 69% random controls): icm-probe 85 (scalp, instrument pairs).
       # At most `max_per_day` exploration fills a day on this account (every book, by signal close), `max_per_hour`

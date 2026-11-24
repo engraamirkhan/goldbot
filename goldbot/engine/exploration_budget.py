@@ -197,6 +197,12 @@ def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Tim
         rows = conn.execute(f"SELECT arm_id, {SIGNAL} FROM exploration_trades WHERE account_id = ? AND {SIGNAL} >= ? "
                             "AND position_id IS NOT NULL", (eng.cfg.account_id, _ns(since))).fetchall()
     out = {"day": len(rows), "hour": sum(int(t) >= _ns(hour) for _, t in rows)}
+    # ADR 0095: the demo learning cohort's own day and hour (`exploration_cohort.send_refusal`), over its members
+    from goldbot.engine.exploration_cohort import members
+    cohort = members(ex)
+    if cohort:
+        mine = [int(t) for a, t in rows if str(a) in cohort]
+        out["cohort_day"], out["cohort_hour"] = len(mine), sum(t >= _ns(hour) for t in mine)
     for arm_id, _ in rows:
         if (arm := arms.get(str(arm_id))) is not None:
             for k in (entry_kind(arm), *(("fast",) if arm.tf in FAST_TFS else ())):
@@ -204,10 +210,11 @@ def entries_today(eng: Engine, ex: Exploration, since: pd.Timestamp, now: pd.Tim
     return out
 
 
-def counted(n: dict[str, int], arm: Arm, signal: pd.Timestamp, now: pd.Timestamp) -> None:
-    """A fill this pass sent, into the pass's counts."""
-    for k in ("day", entry_kind(arm), *(("hour",) if signal >= now.floor("h") else ()),
-              *(("fast",) if arm.tf in FAST_TFS else ())):
+def counted(n: dict[str, int], arm: Arm, signal: pd.Timestamp, now: pd.Timestamp, *, cohort: bool = False) -> None:
+    """A fill this pass sent, into the pass's counts (`cohort`: a demo learning cohort member's, ADR 0095)."""
+    hour = signal >= now.floor("h")
+    for k in ("day", entry_kind(arm), *(("hour",) if hour else ()), *(("fast",) if arm.tf in FAST_TFS else ()),
+              *(("cohort_day",) if cohort else ()), *(("cohort_hour",) if cohort and hour else ())):
         n[k] = n.get(k, 0) + 1
 
 
