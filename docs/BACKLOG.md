@@ -145,6 +145,7 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 264 | Reject commits whose author email is not a noreply address | Security · public repo hygiene | S | proposed 2026-11-14 (security review of fix/weekly-read-due) · accountable: implementer, release-manager · reviews: security-reviewer |
 | 265 | H-81 cost stop: reprice every row on the cost version in force (ADR 0092) | Research integrity · costs | S | done 2026-11-20 (branch fix/true-costs, quant C2) · accountable: data-engineer · reviews: quant-reviewer |
 | 266 | Engine cost of record: next version from quote-measured exits (P6 coverage >= 95%) | Data · costs | S | proposed 2026-11-20 (data-engineer, ADR 0092) · accountable: data-engineer · reviews: quant-reviewer |
+| 267 | Snapshot writer stores the count of unstamped minutes in the last 24 h | Research data (learning loop) | S | proposed |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1783,6 +1784,18 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   3. the report sets that version's cells beside `ecr-2026-11-20.1`, cell by cell. `costs.engine_record` moves only
      after a quant review;
   4. a drift alert fires when a full cell's 14-day mean leaves the charged version's 95% interval.
+- **267. Snapshot writer stores the count of unstamped minutes in the last 24 h.**
+  - **Value.** Quant S5 on PR #434 asked for this. Today a nominal-pit snapshot only says that some minute in its
+    90,000-minute window lacks a write stamp. Release minutes never get one. So the self-retrain re-reads the store
+    every Sunday (`goldbot/research/snapshot_audit.py`) to find the snapshots with an unstamped minute in
+    [decision - 24 h, decision].
+  - **The change.** `research/feature_snapshots.py` stores that count per snapshot at write time, in a new nullable
+    column of `exploration_feature_snapshots` (additive migration).
+  - **Payoff.** The trainer can then admit a nominal snapshot from the row alone.
+  - **Acceptance:**
+    1. The column is NULL for snapshots written before the change.
+    2. Its value equals `snapshot_audit.audit` on the same minutes, checked in a parity test over 12 cuts.
+    3. The self-retrain uses the column where it is set and keeps the audit only for NULL rows.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

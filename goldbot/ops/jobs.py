@@ -1935,35 +1935,57 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             sr.demote_all(db, "research.self_retrain.serve is off")
         _, held = evidence_exclusions(ctx, db, slot)
         controls, rules = named_controls(), sr.arm_rules()
+        with db.connection() as conn:
+            accounts = {str(a) for (a,) in conn.execute("SELECT DISTINCT account_id FROM exploration_obs")}
+        # quant S1: a book's replay record truncated by the daily cap voids that (account, UTC day); unreadable: fail
+        capped = sr.capped_days(ctx.store, accounts, start=sr.CAP_FROM, end=slot)
     except Exception as exc:       # noqa: BLE001 - fail closed and recorded: health WARNs on the failed run
         log.exception("self-retrain: run setup failed")
         for broker in brokers or ["unknown"]:
             sr.record_failure(db, broker=broker, slot=slot, cutoff=cutoff, status="error",
                               error=f"setup:{type(exc).__name__}: {exc}")
         return {"error": f"setup:{type(exc).__name__}"}
+    try:                           # quant S5: nominal snapshots admitted only when audited clean; failure: none admitted
+        from goldbot.research.snapshot_audit import audit
+        audited = audit(db, ctx.store, since=sr.NOMINAL_FROM)
+        nominal_ok: set[str] = set(audited["clean"])
+        audit_counts: dict[str, Any] = audited["counts"]
+    except Exception as exc:       # noqa: BLE001 - written-pit rows only this run, reported
+        log.warning("self-retrain: nominal snapshot audit failed (%s): no nominal snapshot admitted", type(exc).__name__)
+        nominal_ok, audit_counts = set(), {"error": type(exc).__name__}
     reads: list[dict[str, Any]] = []
     out: dict[str, Any] = {}
     for broker in brokers:
         try:                       # one broker's failure never skips another's read
             reads.append(sr.compute_broker(db, broker=broker, cutoff=cutoff,
                                            holdout=ctx.settings.research.holdout_window(), named_controls=controls,
-                                           rules=rules, held_out=held))
+                                           rules=rules, held_out=held, nominal_ok=nominal_ok, capped=capped))
         except Exception as exc:   # noqa: BLE001 - recorded: health WARNs on a failed run
             log.exception("self-retrain failed for broker %s", broker)
             sr.record_failure(db, broker=broker, slot=slot, cutoff=cutoff, status="error",
                               error=f"{type(exc).__name__}: {exc}")
-            out[broker] = {"error": type(exc).__name__}
+            demoted = sr.demote_broker(db, broker, f"read failed in the run of {cutoff:%Y-%m-%d}: fail closed")
+            out[broker] = {"error": type(exc).__name__, "demoted": demoted}
     decisions = sr.decide(reads, serve=cfg.serve)
+    failed = sorted(b for b, o in out.items() if "error" in o)
+    hold = f"broker read failed this run ({', '.join(failed)})" if failed else None   # quant (a): incomplete Holm family
     judged = [k for k, d in decisions.items() if d["judged"]]
     fitted = any(v["model"] is not None for rd in reads for v in rd["arms"].values())
     k_ok, k_rows = True, 0
     if fitted:                     # K = judged pairs (at least 1: the run looked), written before any status change
         try:
+            # code review L4: a rerun of the same slot books no second row for a pair already booked
+            have = {r.get("config_hash") for r in (getattr(ctx.trials, "by_family", lambda _f: [])(sr.REGISTRY_FAMILY))}
+            from goldbot.research.registry import config_hash
             for broker, arm in judged or [("-", "-")]:
                 d = decisions.get((broker, arm))
+                config = {"spec": sr.SPEC_VERSION, "cutoff": cutoff.isoformat(), "broker": broker, "arm": arm}
+                if config_hash(config) in have:
+                    k_rows += 1
+                    continue
                 ctx.trials.record(
                     agent_id="self_retrain", family=sr.REGISTRY_FAMILY, rule_ref=sr.PREREG,
-                    config={"spec": sr.SPEC_VERSION, "cutoff": cutoff.isoformat(), "broker": broker, "arm": arm},
+                    config=config,
                     feature_version=sr.SPEC_VERSION,
                     rationale="weekly self-retrain: one judged (broker, arm) of the run (Holm across the run)",
                     results={"n_judged": len(judged),
@@ -1975,7 +1997,7 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     for rd in reads:
         try:
             out[rd["broker"]] = sr.apply(db, rd, decisions, slot=slot, cutoff=cutoff, activation=activation,
-                                         k_ok=k_ok)
+                                         k_ok=k_ok, hold=hold)
         except Exception as exc:   # noqa: BLE001 - recorded
             log.exception("self-retrain: writing broker %s failed", rd["broker"])
             sr.record_failure(db, broker=rd["broker"], slot=slot, cutoff=cutoff, status="error",
@@ -1983,11 +2005,13 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[rd["broker"]] = {"error": type(exc).__name__}
     with db.connection() as conn:
         status, reason = sr.health(sr.latest_runs(conn), slot, enabled=True)
-    candidates = sorted(f"{b}:{a}" for (b, a), d in decisions.items() if d["status"] == "active" and k_ok)
+    candidates = sorted(f"{b}:{a}" for (b, a), d in decisions.items()
+                        if d["status"] == "active" and k_ok and hold is None)
     if candidates:
         log.warning("self-retrain: re-activation candidate(s) %s (nothing trades; learning-class route)", candidates)
     return {"brokers": out, "cutoff": cutoff.isoformat(), "activation": activation.isoformat(),
-            "reactivation_candidates": candidates, "n_judged": len(judged), "k_rows": k_rows, "k_ok": k_ok, "health": f"{status.upper()}: {reason}"}
+            "reactivation_candidates": candidates, "n_judged": len(judged), "nominal_audit": audit_counts,
+            "capped_days": len(capped), "hold": hold, "k_rows": k_rows, "k_ok": k_ok, "health": f"{status.upper()}: {reason}"}
 
 
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {

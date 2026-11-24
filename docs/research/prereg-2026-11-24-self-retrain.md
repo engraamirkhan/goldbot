@@ -105,27 +105,36 @@ fails the run.
 - Stamping began on 2026-11-13.
 - So under a written-only rule the trainer would read 0 rows until about February.
 
-**The rule.** Admit `pit = written` rows. Also admit `pit = nominal` rows decided on or after `NOMINAL_FROM` =
-2026-11-15 00:00 UTC.
+**The rule (quant S5).** Admit `pit = written` rows. Also admit a `pit = nominal` row only when **both** hold:
+- it was decided on or after `NOMINAL_FROM` = 2026-11-15 00:00 UTC;
+- the audit (`goldbot/research/snapshot_audit.py`) found every minute visible at its decision in [decision - 24 h,
+  decision] carrying its write time.
 
-**Justification: the repo's standard nominal-availability convention for stored bars.**
-- A minute without a write stamp is taken at its nominal close, as `feature_snapshots.py` and the history research
-  do.
-- From 2026-11-15, every minute in the last day before a decision carries its write time. Stamping started on
-  2026-11-13, and a day of margin was added.
-- So a minute revised or written late is resolved as of the decision, through `minute_versions`, or not read at all.
-- The unstamped minutes such a snapshot still reads are more than a day old. The daily broker-M1 reconcile had
-  already settled them (23:20 UTC, last day) before the decision.
-- Restart windows are excluded twice over:
-  - spans with a recorded engine restart are voided as evidence (`evidence_exclusions`);
-  - open spans are held out (`held_out`).
+**How the audit runs.**
+- The weekly job runs it in memory before the trainer reads. If it fails, no nominal row is admitted that run.
+- `scripts/research/audit_nominal_snapshots.py` runs it once by hand. It writes the excluded candidate ids and the
+  counts.
+- Backlog 267 moves the count into the snapshot writer itself.
+
+**Correction to the sr-v1 / early sr-v2 text.** Earlier drafts said that from 2026-11-15 "every minute of the last day
+before a decision carries its write time". That is false. Release minutes, from the reference feed the engine loads
+after a restart, never get a write stamp, so a date alone proves nothing. The per-candidate audit replaces that claim.
+
+**Justification for the minutes still unstamped.** These are minutes more than a day old. The rule rests on the repo's
+standard nominal-availability convention for stored bars: a minute without a write stamp is taken at its nominal close,
+as `feature_snapshots.py` and the history research do.
+- The daily broker-M1 reconcile (23:20 UTC) had settled those minutes before the decision.
+- A minute revised or written late inside the last day is resolved as of the decision, or not read at all
+  (`minute_versions`).
+- Restart windows are voided (`evidence_exclusions`) or held out (`held_out`).
 - The DB CHECK keeps `available_utc_max_ns <= decision_ns`.
 
 **Residual risk.** A minute more than a day old revised after the decision with no stamp. Its effect on 40 features
-built mostly from recent bars is small, and it is the same on both sides of the gate.
+built mostly from recent bars is small, and it falls the same on both sides of the gate.
 
-**Alternative, if quant rejects this rule.** Recompute features at train time from stored bars through `asof_join`
-on `available_utc`. It is not implemented here.
+**Capped book days (quant S1).** A book whose replay records of refused arms reached the daily cap journals
+`exploration_replay_cap` (PR #435). After that the rest of its day is not recorded. **Every row of that (account, UTC
+day) is dropped**, counted as `capped_day`. If a journal cannot be read, the run fails (recorded; health WARNs).
 
 ### Model, filter and walk-forward
 
@@ -164,9 +173,10 @@ label decided or resolved at or after a block's start leaves that block's scores
 | Condition | Threshold |
 |---|---|
 | OOS candidates / kept / OOS session days | >= 200 / >= 100 / >= 10 |
-| Control candidates in the same OOS window | >= 50 (the named control; otherwise admitted controls of the arm's style on its broker) |
+| Control candidates in the same OOS window | >= 50: the named control; otherwise matched-stop controls (same timeframe, median stop within 10 %); none: insufficient |
 | Edge over **no-model**: kept mean minus all candidates' mean, r2 net R | >= +0.05 R |
 | Edge over the **random control**: kept mean minus control mean, r2 net R | >= +0.05 R |
+| Kept mean, r2 net R (quant S2: a filter that only loses less does not pass) | > 0 |
 | Gross sanity: kept minus all on `label_mid_r` | >= 0 |
 | Bootstrap p = (1 + #draws <= 0) / (1 + B), B = 10,000 day-block draws, seed 20261124 | see the next row |
 | **max(p vs no-model, p vs control)**, intersection-union, **Holm-adjusted across every judged pair of the RUN** (all brokers) | <= 0.10 |
@@ -176,9 +186,13 @@ On the bootstrap:
 - A draw with no kept row counts against the pass. The run records how many draws had none (`boot_no_kept`).
 
 **ACTIVE.** All of the following must hold:
-- a pass in **two consecutive runs** of the broker;
-- the first passer's frozen model has a forward edge over no-model >= 0, once it has at least 30 forward rows (rows
-  decided after its activation);
+- a pass in **two consecutive runs** of the broker, where the earlier run's cutoff is **exactly 7 days** before this
+  one's, so a missed week breaks the chain;
+- the first passer's frozen model has a forward edge over no-model >= 0, once it has at least 30 forward rows. Forward
+  rows are those decided after **its data cutoff**, not after its activation (code review L3): a catch-up pass
+  activates late, so measured from activation its record would always be empty;
+- no broker read of the run failed (quant (a)). A failed read leaves the Holm family incomplete, so nothing activates
+  that run, and the failing broker's active models are demoted;
 - serving is on (`research.self_retrain.serve`).
 
 Otherwise the model stays SHADOW.
@@ -207,6 +221,17 @@ activates in the past.
   (broker, arm) reads. The one-sided 95 % upper bound is about 1.5 % a run.
 - ACTIVE needs two consecutive passes, plus a non-negative forward edge for the first passer. So per run, the null
   activation rate is at most the single-run pass rate.
+- **The realistic regime (quant S4): m = 1.**
+  - Setup: 1 broker and 1 pre-named arm with `oos_from` set; 20 pre-retirement days, training only; 16 post-retirement
+    days at 13 rows a day, then 21; a named control at 13 a day.
+  - Every label is null, with mean **0**. That is the strictest null for the kept-mean condition: true costs make it
+    about -0.1 R.
+  - Gate: sr-v2 with S2.
+  - **Measured on 2026-11-24 (seeds 9000-9999, 1,000 sims):**
+    - single-run pass rate **2 / 1,000 = 0.2 %**;
+    - two consecutive passes (16 days, then 21) **1 / 1,000 = 0.1 %**.
+  - `tests/test_self_retrain.py::test_m1_null_single_run_pass_rate_is_at_most_ten_percent` (integration) asserts a
+    single-run rate of at most 10 %.
 - With 6 runs left in Q4, the expected number of false activations in the quarter is at most 6 x that rate. Most
   expanding-window passes repeat on overlapping data, so that bound is loose upward, not tight.
 
@@ -266,6 +291,8 @@ its own evidence (#424), and the new information is the forward replay plus a co
   booked, because the run still looked. The results carry `n_judged`.
 - The rows are written **before** any status change. If they cannot be written, the run fails closed: no model becomes
   or stays active.
+- The rows are keyed by (spec, the run's cutoff, broker, arm). A rerun of the same slot books no second row (code
+  review L4).
 
 **Q4 cost:**
 - **Worst case: 60.** That is at most 10 pre-named pairs a run, over 6 runs (the catch-up run for slot 2026-11-22,
@@ -297,4 +324,4 @@ None are assumed. It is demo only, adds no spend, and changes no sizing or risk 
 ## Sign-off
 
 - Principal ML researcher: 2026-11-24 (author, sr-v2).
-- Quant-reviewer: _pending (sr-v1 review: sign with changes; this version answers R1-R11, C1 and the PD + research-director scope ruling of 2026-11-24)_.
+- Quant-reviewer: signed 2026-11-24 for sr-v2, conditional on S1-S5 (all landed in this PR: capped book days dropped, kept mean > 0, matched-stop control text, m = 1 null Monte Carlo, nominal-snapshot audit; with quant (a) and (b) and code review L1-L4).

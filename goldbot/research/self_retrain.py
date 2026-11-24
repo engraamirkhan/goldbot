@@ -237,10 +237,14 @@ def _snapshots(db: Database) -> pd.DataFrame:
 
 
 def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
-              held_out: Collection[str] = (), instruments: Mapping[str, str] | None = None
+              held_out: Collection[str] = (), instruments: Mapping[str, str] | None = None,
+              nominal_ok: Collection[str] = (), capped: Collection[tuple[str, str]] = ()
               ) -> tuple[pd.DataFrame, dict[str, int]]:
     """(rows, counts): the broker's gold candidates with an r2 label and a full horizon by `cutoff` and an admitted
-    snapshot (module docstring step 1). A holdout row or a snapshot after its decision fails (ValueError)."""
+    snapshot (module docstring step 1). A nominal snapshot is admitted only when the audit found it clean
+    (`nominal_ok`, research/snapshot_audit.py; quant S5). Every row of an (account, UTC day) the engine journalled
+    `exploration_replay_cap` is dropped: that day's replay record is truncated (`capped`; quant S1). A holdout row or a
+    snapshot after its decision fails (ValueError)."""
     obs = read_obs(db, broker=broker, as_of=cutoff, evidence="posterior", held_out=held_out, instrument=GOLD,
                    instruments=instruments, replay_version=REPLAY_V2)
     obs = obs[obs["label_sim_r"].notna()].reset_index(drop=True)
@@ -248,19 +252,54 @@ def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple
     if holdout is not None and len(obs) and ((dec >= holdout[0]) & (dec < holdout[1])).any():
         raise ValueError("self-retrain: a candidate decided inside the sealed holdout window: refused")
     n_labels = len(obs)
+    cap = {(str(a), str(d)) for a, d in capped}
+    if cap and len(obs):
+        days = pd.to_datetime(obs["decision_utc"], utc=True).dt.strftime("%Y-%m-%d")
+        hit = np.array([(str(a), d) in cap for a, d in zip(obs["account_id"], days, strict=True)], dtype=bool)
+    else:
+        hit = np.zeros(len(obs), dtype=bool)
+    obs = obs[~hit].reset_index(drop=True)
     open_h = horizon_end(obs) > cutoff if len(obs) else np.zeros(0, dtype=bool)
     obs = obs[~np.asarray(open_h)].reset_index(drop=True)
     r1 = read_obs(db, broker=broker, as_of=cutoff, evidence="posterior", held_out=held_out, instrument=GOLD,
                   instruments=instruments, replay_version=REPLAY_V1)[["candidate_id", "label_sim_r"]]
     obs = obs.merge(r1.rename(columns={"label_sim_r": "label_r1"}), on="candidate_id", how="left")
     rows = obs.merge(_snapshots(db), on="candidate_id", how="inner")
+    n_snap = len(rows)
+    ok = set(nominal_ok)
+    rows = rows[(rows["_pit"] == "written") | rows["candidate_id"].isin(ok)].reset_index(drop=True)
     if len(rows) and (rows["_avail_ns"].notna() & (rows["_avail_ns"] > rows["_snap_decision_ns"])).any():
         raise ValueError("self-retrain: a snapshot available after its decision (look-ahead): refused")
-    counts = {"labels": int(n_labels), "open_horizon": int(np.asarray(open_h).sum()),
-              "with_features": int(len(rows)), "no_snapshot": int(len(obs) - len(rows)),
+    counts = {"labels": int(n_labels), "capped_day": int(hit.sum()), "open_horizon": int(np.asarray(open_h).sum()),
+              "with_features": int(len(rows)), "no_snapshot": int(len(obs) - n_snap),
+              "nominal_not_audited_clean": int(n_snap - len(rows)),
               "nominal": int((rows["_pit"] == "nominal").sum()) if len(rows) else 0,
               "controls": int(rows["is_control"].sum()) if len(rows) else 0}
     return rows.sort_values(["decision_utc", "candidate_id"]).reset_index(drop=True), counts
+
+
+CAP_ACTION = "exploration_replay_cap"        # engine/exploration.py `_replay_room` (PR #435), once a UTC day per book
+CAP_FROM = pd.Timestamp("2026-11-24", tz="UTC")   # the cap exists from PR #435 (2026-11-24): no earlier day can carry it
+
+
+def capped_days(store: Any, accounts: Collection[str], *, start: pd.Timestamp, end: pd.Timestamp
+                ) -> set[tuple[str, str]]:
+    """(account, UTC day) pairs whose engine journalled CAP_ACTION in [start, end). Raises when an account's journal
+    cannot be read (fail closed: a truncated day must never be read as complete)."""
+    out: set[tuple[str, str]] = set()
+    for account in sorted(set(accounts)):
+        d = store.read("decisions", source=account, symbol=None, start=start, end=end)
+        if d is None:
+            raise ValueError(f"self-retrain: {account} decisions journal unreadable")
+        if d.empty or "action" not in d.columns:
+            continue
+        for _, r in d[d["action"].astype(str) == CAP_ACTION].iterrows():
+            try:
+                day = json.loads(str(r.get("detail") or "{}")).get("day")
+            except ValueError:
+                day = None
+            out.add((account, str(day) if day else pd.Timestamp(r["ts_utc"]).tz_convert("UTC").strftime("%Y-%m-%d")))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- walk-forward
@@ -438,15 +477,18 @@ def active_models(db: Database, broker: str) -> dict[str, dict[str, Any]]:
 
 
 def previous_passes(db: Database, broker: str, cutoff: pd.Timestamp) -> dict[str, dict[str, Any]]:
-    """The arms whose model passed the gate in the broker's previous ok run (strictly earlier cutoff)."""
+    """The arms whose model passed the gate in the broker's ok run of the week before (cutoff exactly 7 days
+    earlier: a missed week breaks "two consecutive passes")."""
     with db.connection() as conn:
-        r = conn.execute("SELECT run_id FROM self_retrain_runs WHERE broker = ? AND status = 'ok' AND cutoff_ns < ? "
-                         "ORDER BY cutoff_ns DESC LIMIT 1", (broker, int(cutoff.value))).fetchone()
+        r = conn.execute("SELECT run_id FROM self_retrain_runs WHERE broker = ? AND status = 'ok' AND cutoff_ns = ? "
+                         "ORDER BY run_ns DESC LIMIT 1",
+                         (broker, int((cutoff - pd.Timedelta(days=7)).value))).fetchone()
         if r is None:
             return {}
-        got = conn.execute("SELECT arm_id, model_version, activation_ns, model FROM self_retrain_models "
+        got = conn.execute("SELECT arm_id, model_version, activation_ns, cutoff_ns, model FROM self_retrain_models "
                            "WHERE run_id = ? AND gate_pass = 1", (r[0],)).fetchall()
-    return {str(a): {"model_version": v, "activation_ns": int(t), "model": _model(m)} for a, v, t, m in got}
+    return {str(a): {"model_version": v, "activation_ns": int(t), "cutoff_ns": int(c), "model": _model(m)}
+            for a, v, t, c, m in got}
 
 
 def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: Mapping[str, Mapping[str, Any]],
@@ -482,7 +524,9 @@ def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: M
         out[arm] = {"metrics": m, "model": model,
                     "active": act, "forward": forward_read(rows, arm, act["model"], act["activation_ns"]) if act
                     else None,
-                    "first_pass": first, "confirm": forward_read(rows, arm, first["model"], first["activation_ns"])
+                    # code review L3: from the first passer's DATA cutoff, not its (late, for a catch-up) activation
+                    "first_pass": first, "confirm": forward_read(rows, arm, first["model"],
+                                                                 first.get("cutoff_ns", first["activation_ns"]))
                     if first else None}
     return out
 
@@ -490,10 +534,11 @@ def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: M
 def compute_broker(db: Database, *, broker: str, cutoff: pd.Timestamp,
                    holdout: tuple[pd.Timestamp, pd.Timestamp] | None, named_controls: Mapping[str, str],
                    rules: Mapping[str, Mapping[str, Any]], held_out: Collection[str] = (),
-                   instruments: Mapping[str, str] | None = None) -> dict[str, Any]:
+                   instruments: Mapping[str, str] | None = None, nominal_ok: Collection[str] = (),
+                   capped: Collection[tuple[str, str]] = ()) -> dict[str, Any]:
     """One broker's reads (nothing written)."""
     rows, counts = load_rows(db, broker=broker, cutoff=cutoff, holdout=holdout, held_out=held_out,
-                             instruments=instruments)
+                             instruments=instruments, nominal_ok=nominal_ok, capped=capped)
     active = active_models(db, broker)
     arms = read_arms(rows, named_controls=named_controls, rules=rules, cutoff=cutoff, active=active,
                      passes=previous_passes(db, broker, cutoff))
@@ -536,6 +581,8 @@ def decide(reads: Sequence[Mapping[str, Any]], *, serve: bool) -> dict[tuple[str
                     fails.append(f"edge vs no-model {m['edge_vs_nomodel']:+.3f} R < {MIN_EDGE_R}")
                 if m["edge_vs_control"] is None or float(m["edge_vs_control"]) < MIN_EDGE_R:
                     fails.append(f"edge vs control {m['edge_vs_control']} R < {MIN_EDGE_R}")
+                if m["mean_kept"] is None or float(m["mean_kept"]) <= 0:
+                    fails.append(f"kept mean {m['mean_kept']} R <= 0")
                 if m["edge_gross"] is None or float(m["edge_gross"]) < 0:
                     fails.append(f"gross edge {m['edge_gross']} R < 0")
                 if adj[key] > ALPHA:
@@ -574,8 +621,10 @@ def _set_status(conn: Any, version: str, status: Status, reason: str) -> None:
 
 
 def apply(db: Database, read: Mapping[str, Any], decisions: Mapping[tuple[str, str], Mapping[str, Any]], *,
-          slot: pd.Timestamp, cutoff: pd.Timestamp, activation: pd.Timestamp, k_ok: bool) -> dict[str, Any]:
-    """Write one broker's models, status changes and run row. `k_ok` False: nothing becomes active (fail closed)."""
+          slot: pd.Timestamp, cutoff: pd.Timestamp, activation: pd.Timestamp, k_ok: bool,
+          hold: str | None = None) -> dict[str, Any]:
+    """Write one broker's models, status changes and run row. `k_ok` False, or a `hold` reason (a broker read of the
+    run failed, so its Holm family is incomplete): nothing becomes active (fail closed)."""
     broker = str(read["broker"])
     run_id = f"{SPEC_VERSION}-{broker}-{cutoff:%Y%m%dT%H%M}"
     counts = read["counts"]
@@ -584,10 +633,11 @@ def apply(db: Database, read: Mapping[str, Any], decisions: Mapping[tuple[str, s
     with db.write() as conn:
         for arm, v in read["arms"].items():
             d = dict(decisions[(broker, arm)])
-            if d["status"] == "active" and not k_ok:
-                d["status"], d["reason"] = "shadow", "passed; K rows not written: fail closed"
+            if d["status"] == "active" and (not k_ok or hold):
+                why = "K rows not written" if not k_ok else str(hold)
+                d["status"], d["reason"] = "shadow", f"passed; {why}: fail closed"
                 if d["previous"] is not None:
-                    d["previous"] = ("demoted", "K rows not written: fail closed")
+                    d["previous"] = ("demoted", f"{why}: fail closed")
             if v["active"] is not None and d["previous"] is not None:
                 _set_status(conn, v["active"]["model_version"], d["previous"][0], d["previous"][1])
             model: LogitModel | None = v["model"]
@@ -651,6 +701,13 @@ def record_failure(db: Database, *, broker: str, slot: pd.Timestamp, cutoff: pd.
             "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, 0, 0, 0, 0, ?)",
             (f"{SPEC_VERSION}-{broker}-{cutoff:%Y%m%dT%H%M}", broker, SPEC_VERSION, int(slot.value), int(cutoff.value),
              now_ns(), status, len(INPUTS), json.dumps({"error": error[:500]})))
+
+
+def demote_broker(db: Database, broker: str, reason: str) -> int:
+    """Every ACTIVE model of one broker demoted (its read failed this run: code review L1, fail closed)."""
+    with db.write() as conn:
+        return int(conn.execute("UPDATE self_retrain_models SET status = 'demoted', status_reason = ?, status_ns = ? "
+                                "WHERE status = 'active' AND broker = ?", (reason, now_ns(), broker)).rowcount)
 
 
 def demote_all(db: Database, reason: str) -> int:

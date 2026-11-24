@@ -132,7 +132,7 @@ def _frame(rng: np.random.Generator, *, arms: int, days: int, per_day: int, ctrl
 
 def _passing_read(broker: str, p: float, **extra: Any) -> dict[str, Any]:
     m = {"n_oos": 400, "n_kept": 260, "n_days": 20, "n_control": 200, "n_rows": 800, "edge_vs_nomodel": 0.2,
-         "edge_vs_control": 0.3, "edge_gross": 0.2, "p_nomodel": p, "p_control": p}
+         "edge_vs_control": 0.3, "edge_gross": 0.2, "mean_kept": 0.1, "p_nomodel": p, "p_control": p}
     m.update(extra.pop("metrics", {}))
     arm = {"metrics": m, "model": object(), "active": None, "forward": None,
            "first_pass": {"model_version": "x"}, "confirm": None, **extra}
@@ -261,6 +261,38 @@ def test_a_bootstrap_p_is_never_zero_and_a_draw_with_no_kept_row_counts_against(
     assert sr._p_value(np.array([np.nan, 0.3, 0.3])) == pytest.approx(2 / 4)
 
 
+def test_a_filter_that_only_loses_less_fails_the_gate():
+    """Quant S2: arm -0.30, control -0.20, kept -0.12 R: both edges clear +0.05 R, but kept candidates still lose."""
+    rd = _passing_read("icm", 0.001, metrics={"mean_all": -0.30, "mean_control": -0.20, "mean_kept": -0.12,
+                                              "edge_vs_nomodel": 0.18, "edge_vs_control": 0.08})
+    d = sr.decide([rd], serve=True)[("icm", "A")]
+    assert not d["gate_pass"] and "kept mean -0.12 R <= 0" in d["reason"]
+
+
+def test_a_held_run_activates_nothing(db):
+    """Quant (a): a broker read failed, so the run's Holm family is incomplete: a passer stays shadow."""
+    _populate(db)
+    _run(db)
+    _populate(db, day_from=DAYS, days=7)
+    cutoff = START + pd.Timedelta(days=DAYS + 8)
+    read = sr.compute_broker(db, broker="icm", cutoff=cutoff, holdout=None, named_controls={}, rules={})
+    dec = sr.decide([read], serve=True)
+    assert dec[("icm", "A")]["status"] == "active"
+    sr.apply(db, read, dec, slot=cutoff, cutoff=cutoff, activation=cutoff + pd.Timedelta(days=2), k_ok=True,
+             hold="broker read failed this run (vantage)")
+    assert _models(db)["A"][-1][1] == "shadow"
+
+
+def test_a_pass_needs_the_run_exactly_one_week_before(db):
+    """Quant (b): two passes a fortnight apart are not consecutive."""
+    _populate(db)
+    _run(db)
+    _populate(db, day_from=DAYS, days=14)
+    _run(db, days=DAYS + 14)
+    assert _models(db)["A"][-1][1] == "shadow"
+    assert _detail(db)["decisions"]["A"]["reason"].startswith("passed; awaiting")
+
+
 def test_a_negative_gross_edge_fails_the_gate():
     d = sr.decide([_passing_read("icm", 0.001, metrics={"edge_gross": -0.01})], serve=True)[("icm", "A")]
     assert not d["gate_pass"] and "gross edge" in d["reason"]
@@ -339,13 +371,43 @@ def test_a_label_exiting_after_the_cutoff_is_excluded_as_unresolved(db):
     assert cid not in set(rows["candidate_id"])
 
 
-def test_nominal_snapshots_are_admitted_only_from_nominal_from(db):
+def test_nominal_snapshots_are_admitted_only_from_nominal_from_and_only_when_audited_clean(db):
     late = sr.NOMINAL_FROM + pd.Timedelta(hours=8)
     early_id = _write(db, arm="A", day=0, k=0, r=1.0, x=_feats(np.random.default_rng(0)), pit="nominal")
     late_id = _write(db, arm="A", day=0, k=1, r=1.0, x=_feats(np.random.default_rng(1)), pit="nominal", start=late)
-    rows, counts = sr.load_rows(db, broker="icm", cutoff=late + pd.Timedelta(days=2), holdout=None)
+    cut = late + pd.Timedelta(days=2)
+    rows, counts = sr.load_rows(db, broker="icm", cutoff=cut, holdout=None)
+    assert rows.empty and counts["nominal_not_audited_clean"] == 1          # quant S5: no audit, no nominal row
+    rows, counts = sr.load_rows(db, broker="icm", cutoff=cut, holdout=None, nominal_ok={late_id, early_id})
     assert set(rows["candidate_id"]) == {late_id} and early_id not in set(rows["candidate_id"])
     assert counts["nominal"] == 1 and counts["no_snapshot"] == 1
+
+
+def test_the_audit_excludes_a_nominal_snapshot_with_any_unstamped_minute_in_its_last_day(db, monkeypatch):
+    from goldbot.research import snapshot_audit as sa
+    at = sr.NOMINAL_FROM + pd.Timedelta(days=2)
+    a = _write(db, arm="A", day=0, k=0, r=1.0, x=_feats(np.random.default_rng(0)), pit="nominal", start=at)
+    b = _write(db, arm="A", day=0, k=1, r=1.0, x=_feats(np.random.default_rng(1)), pit="nominal", start=at)
+    ts = pd.date_range(at - pd.Timedelta(days=2), at + pd.Timedelta(hours=1), freq="1min", tz="UTC")
+    written = np.ones(len(ts), dtype=bool)
+    written[(ts > at + pd.Timedelta(minutes=5)) & (ts <= at + pd.Timedelta(minutes=20))] = False   # only b reads it
+    written[ts < at - pd.Timedelta(days=1, hours=1)] = False                                        # outside a's day
+    v = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1), "written": written, "rank": 0})
+    monkeypatch.setattr(sa, "minute_versions", lambda store, **kw: v)
+    got = sa.audit(db, object(), since=sr.NOMINAL_FROM)
+    assert got["clean"] == {a} and got["excluded"] == {b} and got["counts"]["nominal"] == 2
+
+
+def test_every_row_of_a_capped_book_day_is_dropped(db):
+    _populate(db, days=3)
+    day = (START + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    cut = START + pd.Timedelta(days=4)
+    rows, counts = sr.load_rows(db, broker="icm", cutoff=cut, holdout=None, capped={("icm-probe", day)})
+    days = pd.to_datetime(rows["decision_utc"], utc=True).dt.strftime("%Y-%m-%d")
+    assert day not in set(days) and counts["capped_day"] == PER_DAY * 3
+    journal = pd.DataFrame({"ts_utc": [START + pd.Timedelta(days=1, hours=9)], "action": [sr.CAP_ACTION],
+                            "detail": [json.dumps({"day": day, "cap": 200})], "agent_id": [None]})
+    assert sr.capped_days(_Store(journal), {"icm-probe"}, start=START, end=cut) == {("icm-probe", day)}
 
 
 def test_a_candidate_inside_the_sealed_holdout_fails_the_run(db):
@@ -432,6 +494,35 @@ def test_the_stored_model_is_numbers_only_and_scores_the_same_after_a_round_trip
 
 
 # ---------------------------------------------------------------------------------------------- the null rate (R9)
+def _null_single(seed: int) -> tuple[bool, bool]:
+    """Quant S4, m = 1: one broker, one pre-named arm with oos_from, 20 pre-retirement days (training only), 16 then 21
+    post-retirement days at 13 rows a day, a named control at 13 a day; every label null (mean 0, day-clustered sd
+    1.2 R: the strictest null for the kept-mean condition). (pass at 16 days, pass at 16 and at 21 days)."""
+    rng = np.random.default_rng(seed)
+    f = _frame(rng, arms=1, days=41, per_day=13, ctrl_per_day=13, start=pd.Timestamp("2026-10-23 08:00", tz="UTC"))
+    f[["label_sim_r", "label_mid_r", "label_r1"]] += 0.1                       # mean 0 instead of -0.1
+    f = f.replace({"arm_id": {"A0": "Z3D", "CTRL": "ZC"}})
+    rules = {"Z3D": {"retired_day": "2026-11-12", "control_mode": "replay_only", "role": "learning"}}
+    out = []
+    for post_days in (16, 21):
+        end = pd.Timestamp("2026-11-13", tz="UTC") + pd.Timedelta(days=post_days)
+        fr = f[f["decision_utc"] < end]
+        arms = sr.read_arms(fr, named_controls={"Z3D": "ZC"}, rules=rules, cutoff=end)
+        out.append(any(d["gate_pass"] for d in sr.decide([{"broker": "b0", "counts": {}, "active": {},
+                                                             "arms": arms}], serve=True).values()))
+    return out[0], out[0] and out[1]
+
+
+@pytest.mark.integration
+def test_m1_null_single_run_pass_rate_is_at_most_ten_percent():
+    """Quant S4: measured 2026-11-24 (card section 3)."""
+    import multiprocessing as mp
+    sims = 200
+    with mp.get_context("fork").Pool(4) as pool:
+        got = pool.map(_null_single, range(7000, 7000 + sims))
+    assert sum(a for a, _ in got) / sims <= 0.10, got
+
+
 def _null_run(seed: int) -> int:
     """One null run (4 brokers x 10 arms, 20 days, day-clustered noise sd 1.2 R): its number of gate passes."""
     rng = np.random.default_rng(seed)
@@ -482,10 +573,14 @@ class _Trials:
         self.fail = fail
 
     def record(self, **kw: Any) -> dict[str, Any]:
+        from goldbot.research.registry import config_hash
         if self.fail:
             raise PermissionError("read-only mirror")
-        self.rows.append(kw)
+        self.rows.append({**kw, "config_hash": config_hash(kw["config"])})
         return {"trial": len(self.rows)}
+
+    def by_family(self, family: str) -> list[dict[str, Any]]:
+        return [r for r in self.rows if r["family"] == family]
 
 
 def _ctx(tmp_path: Path, trials: _Trials, *, enabled: bool = True, clock: Any = None) -> Any:
@@ -493,7 +588,17 @@ def _ctx(tmp_path: Path, trials: _Trials, *, enabled: bool = True, clock: Any = 
     s = load_settings()
     s = s.model_copy(update={"research": s.research.model_copy(update={
         "self_retrain": s.research.self_retrain.model_copy(update={"enabled": enabled})})})
-    return SimpleNamespace(settings=s, state_dir=tmp_path, accounts=[], trials=trials, clock=clock, store=None)
+    return SimpleNamespace(settings=s, state_dir=tmp_path, accounts=[], trials=trials, clock=clock, store=_Store())
+
+
+class _Store:
+    """No journal rows and no minutes: no capped day, no nominal snapshot audited."""
+
+    def __init__(self, decisions: pd.DataFrame | None = None) -> None:
+        self.decisions = decisions
+
+    def read(self, table: str, **_: Any) -> pd.DataFrame:
+        return self.decisions if (table == "decisions" and self.decisions is not None) else pd.DataFrame()
 
 
 def test_the_job_books_one_k_row_per_judged_pair_and_fails_closed_when_it_cannot(tmp_path, db):
@@ -511,6 +616,38 @@ def test_the_job_books_one_k_row_per_judged_pair_and_fails_closed_when_it_cannot
     with db.connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM self_retrain_models WHERE status = 'active'").fetchone()[0] == 0
     assert _detail(db)["k_ok"] is False
+
+
+def test_a_rerun_of_the_same_slot_books_no_second_k_row(tmp_path, db):
+    """Code review L4: K rows are keyed by the run's cutoff and the pair."""
+    from goldbot.ops.jobs import self_retrain
+    _populate(db)
+    trials = _Trials()
+    slot = START + pd.Timedelta(days=DAYS + 6, hours=7)
+    self_retrain(_ctx(tmp_path, trials, clock=lambda: slot), slot)
+    n = len(trials.rows)
+    assert n >= 1
+    self_retrain(_ctx(tmp_path, trials, clock=lambda: slot), slot)
+    assert len(trials.rows) == n
+
+
+def test_a_broker_whose_read_fails_has_its_active_models_demoted_and_the_run_holds(tmp_path, db, monkeypatch):
+    """Code review L1 and quant (a): fail closed on a failed broker read."""
+    from goldbot.ops.jobs import self_retrain
+    _populate(db)
+    _run(db)
+    _populate(db, day_from=DAYS, days=7)
+    _run(db, days=DAYS + 7)
+    assert _models(db)["A"][-1][1] == "active"
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise OSError("store unreadable")
+    monkeypatch.setattr(sr, "compute_broker", boom)
+    slot = pd.Timestamp("2027-01-03 15:00", tz="UTC")
+    out = self_retrain(_ctx(tmp_path, _Trials(), clock=lambda: slot), slot)
+    assert out["hold"] and out["brokers"]["icm"]["demoted"] == 1
+    with db.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM self_retrain_models WHERE status = 'active'").fetchone()[0] == 0
 
 
 def test_a_catch_up_run_activates_at_the_next_sunday_open_after_now(tmp_path, db):
