@@ -60,8 +60,22 @@ class DukascopySource(FrozenRecord):
 
 
 class HistDataSource(FrozenRecord):
+    """One HistData code over an era. `to` (YYYY or YYYY-MM, inclusive) ends it: HistData reuses a code for another
+    series (UDXUSD is the Dow to 2018 and the US dollar index from 2019; GRXEUR leaves DAX levels after 2020-06),
+    found by the era bands on 2026-11-25. Minutes after `to` are dropped and counted (out_of_era)."""
+
     code: str
     from_: int = Field(alias="from")
+    to: int | str | None = None
+
+    def covers(self, year: int) -> bool:
+        return self.from_ <= year and (self.to is None or year <= int(str(self.to)[:4]))
+
+    def end(self) -> pd.Timestamp | None:
+        """Exclusive UTC end of the era (None: open)."""
+        if self.to is None:
+            return None
+        return (_period(self.to, True) + 1).to_timestamp().tz_localize("UTC")
 
 
 class ReferenceEra(FrozenRecord):
@@ -92,7 +106,7 @@ class HistorySource(FrozenRecord):
     weekend: bool
     session_minutes: int
     dukascopy: DukascopySource | None
-    histdata: HistDataSource | None
+    histdata: list[HistDataSource] | None
     source_tz: dict[str, str]
     price_bands: list[tuple[int | str, int | str, float, float]]
     reference: list[ReferenceEra]
@@ -108,9 +122,15 @@ class HistorySource(FrozenRecord):
                 raise ValueError(f"band {a}-{b} runs backwards")
         if self.cfd_type == "rolling_future" and not self.roll:
             raise ValueError("a rolling_future needs its roll calendar")
-        if self.dukascopy is None and self.histdata is None and not self.synthetic:
+        if self.dukascopy is None and not self.histdata and not self.synthetic:
             raise ValueError("no source and no synthetic recipe")
         return self
+
+    def histdata_for(self, year: int) -> HistDataSource | None:
+        return next((h for h in self.histdata or [] if h.covers(year)), None)
+
+    def histdata_years(self, first: int, last: int) -> list[int]:
+        return [y for y in range(first, last + 1) if self.histdata_for(y) is not None]
 
     def band(self, month: pd.Period | dt.date | str) -> tuple[float, float] | None:
         p = pd.Period(month, freq="M")

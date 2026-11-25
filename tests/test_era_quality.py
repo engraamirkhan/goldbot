@@ -26,11 +26,18 @@ def test_every_owner_instrument_is_mapped_and_nothing_else():
     assert set(HS.instruments) == owner and len(owner) == 25
 
 
-def test_histdata_covers_the_22_instruments_of_the_plan():
-    with_hd = {k for k, s in HS.instruments.items() if s.histdata is not None}
-    assert len(with_hd) == 22
-    assert set(HS.instruments) - with_hd == {"US30", "BTCUSD", "XAUJPY"}
+def test_histdata_covers_23_instruments_with_its_code_reuse_split_by_era():
+    """The plan said 22 with UDX = USINDEX; the first pull's era bands showed UDXUSD is the Dow to 2018 and the dollar
+    index from 2019, and GRXEUR leaves DAX levels after 2020-06 (2026-11-25)."""
+    with_hd = {k for k, s in HS.instruments.items() if s.histdata}
+    assert set(HS.instruments) - with_hd == {"BTCUSD", "XAUJPY"}
     assert all(HS.instruments[k].source_tz.get("histdata") == "America/New_York" for k in with_hd)
+    us30, usdx, de40 = (HS.instruments[k] for k in ("US30", "USINDEX", "DE40"))
+    assert us30.histdata_for(2018).code == "UDXUSD" and us30.histdata_for(2019) is None
+    assert usdx.histdata_for(2019).code == "UDXUSD" and usdx.histdata_for(2018) is None
+    assert de40.histdata_for(2020).end() == pd.Timestamp("2020-07-01", tz="UTC") and de40.histdata_for(2021) is None
+    assert HS.instruments["XTIUSD"].histdata_years(2003, 2025)[-1] == 2023
+    assert HS.instruments["XAUEUR"].histdata_years(2003, 2025) == list(range(2009, 2019))
 
 
 @pytest.mark.parametrize("key", sorted(HS.instruments))

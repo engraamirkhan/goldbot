@@ -19,8 +19,11 @@
 #   UK100 1320 (01:00-23:00 UK), DE40 1305 (01:15-23:00 CET), BTC 1440 on 7 days.
 # - dukascopy: {code, point, from}: bi5 code, the integer divisor (bi5 prices are integers in 1/point), first month
 #   the hourly archive serves (checked against raw/daily/_cache on 2026-11-25). null when Dukascopy has no series.
-# - histdata: {code, from}: HistData free M1 ASCII code and its first year (read from histdata.com's pair pages on
-#   2026-11-25). Stamps are New York local time WITH daylight saving (repo finding 2026-11-01, re-verified per
+# - histdata: list of {code, from, to}: HistData free M1 ASCII code, its first year (histdata.com's pair pages,
+#   2026-11-25) and, where HistData stops or reuses the code for another series, its last year or month (`to`,
+#   inclusive). Found by the era bands on the first pull (2026-11-25): UDXUSD is the DOW (US30 levels 11k-26k) in
+#   2010-2018 and the US dollar index (~96) from 2019; GRXEUR leaves DAX levels after 2020-06 (~3,300, a Euro Stoxx 50
+#   level); XAUEUR is served to 2018 and WTIUSD to 2023 (later pages issue no download token). Stamps are New York local time WITH daylight saving (repo finding 2026-11-01, re-verified per
 #   instrument-year by the clock check in scripts/histdata_m1.py); prices are decimals (divisor 1). null when absent.
 # - source_tz: per source, the zone its stamps are in before conversion to UTC (we always store UTC).
 # - price_bands: [from, to, low, high]: inclusive periods (YYYY or YYYY-MM), the band a month's MEDIAN close must lie
@@ -40,19 +43,19 @@ holdout_cut: "2025-10-01T00:00:00+00:00"
 instruments:
   XAUUSD:
     { asset_class: metal, cfd_type: spot, roll: null, weekend: false, session_minutes: 1380,
-      dukascopy: { code: XAUUSD, point: 1000, from: "2003-05" }, histdata: { code: XAUUSD, from: 2009 },
+      dukascopy: { code: XAUUSD, point: 1000, from: "2003-05" }, histdata: [ { code: XAUUSD, from: 2009 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2007, 250, 1100], [2008, 2018, 600, 2200], [2019, 2026, 1150, 6000] ],
       reference: [ { from: "2003-05", dukascopy_1m: true } ], synthetic: null }
   XAGUSD:
     { asset_class: metal, cfd_type: spot, roll: null, weekend: false, session_minutes: 1380,
-      dukascopy: { code: XAGUSD, point: 1000, from: "2003-05" }, histdata: { code: XAGUSD, from: 2009 },
+      dukascopy: { code: XAGUSD, point: 1000, from: "2003-05" }, histdata: [ { code: XAGUSD, from: 2009 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2007, 3, 20], [2008, 2018, 8, 55], [2019, 2026, 11, 105] ],
       reference: [ { from: "2003-05", legs: { XAGUSD: 1 } } ], synthetic: null }
   XAUEUR:
     { asset_class: metal, cfd_type: spot, roll: null, weekend: false, session_minutes: 1380,
-      dukascopy: { code: XAUEUR, point: 1000, from: "2023-03" }, histdata: { code: XAUEUR, from: 2009 },
+      dukascopy: { code: XAUEUR, point: 1000, from: "2023-03" }, histdata: [ { code: XAUEUR, from: 2009, to: 2018 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2010, 250, 1100], [2011, 2018, 750, 1500], [2019, 2026, 1050, 5000] ],
       reference: [ { from: "2003-05", legs: { XAUUSD: 1, EURUSD: -1 } } ], synthetic: null }
@@ -64,124 +67,124 @@ instruments:
       synthetic: "1m legs XAUUSD x USDJPY on common minutes (Dukascopy 1m, D3); source=synthetic, dq_flag=synthetic_hl" }
   EURUSD:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: EURUSD, point: 100000, from: "2003-05" }, histdata: { code: EURUSD, from: 2000 },
+      dukascopy: { code: EURUSD, point: 100000, from: "2003-05" }, histdata: [ { code: EURUSD, from: 2000 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 0.8, 1.8] ], reference: [ { from: "2003-05", legs: { EURUSD: 1 } } ], synthetic: null }
   GBPUSD:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: GBPUSD, point: 100000, from: "2003-05" }, histdata: { code: GBPUSD, from: 2000 },
+      dukascopy: { code: GBPUSD, point: 100000, from: "2003-05" }, histdata: [ { code: GBPUSD, from: 2000 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 1.0, 2.2] ], reference: [ { from: "2003-05", legs: { GBPUSD: 1 } } ], synthetic: null }
   USDJPY:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: USDJPY, point: 1000, from: "2003-05" }, histdata: { code: USDJPY, from: 2000 },
+      dukascopy: { code: USDJPY, point: 1000, from: "2003-05" }, histdata: [ { code: USDJPY, from: 2000 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 70, 170] ], reference: [ { from: "2003-05", legs: { USDJPY: 1 } } ], synthetic: null }
   GBPJPY:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: GBPJPY, point: 1000, from: "2003-08" }, histdata: { code: GBPJPY, from: 2002 },
+      dukascopy: { code: GBPJPY, point: 1000, from: "2003-08" }, histdata: [ { code: GBPJPY, from: 2002 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 110, 260] ],
       reference: [ { from: "2003-08", legs: { GBPJPY: 1 } }, { from: "2003-05", legs: { GBPUSD: 1, USDJPY: 1 } } ],
       synthetic: null }
   EURGBP:   # the Dukascopy hourly cache stops at 2004-10 (native refetch is D3); reference = EURUSD / GBPUSD after
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: EURGBP, point: 100000, from: "2003-08" }, histdata: { code: EURGBP, from: 2002 },
+      dukascopy: { code: EURGBP, point: 100000, from: "2003-08" }, histdata: [ { code: EURGBP, from: 2002 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 0.55, 1.05] ],
       reference: [ { from: "2004-11", legs: { EURUSD: 1, GBPUSD: -1 } }, { from: "2003-08", legs: { EURGBP: 1 } },
                    { from: "2003-05", legs: { EURUSD: 1, GBPUSD: -1 } } ], synthetic: null }
   EURJPY:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: EURJPY, point: 1000, from: "2003-08" }, histdata: { code: EURJPY, from: 2002 },
+      dukascopy: { code: EURJPY, point: 1000, from: "2003-08" }, histdata: [ { code: EURJPY, from: 2002 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 85, 200] ],
       reference: [ { from: "2003-08", legs: { EURJPY: 1 } }, { from: "2003-05", legs: { EURUSD: 1, USDJPY: 1 } } ],
       synthetic: null }
   AUDJPY:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: AUDJPY, point: 1000, from: "2003-11" }, histdata: { code: AUDJPY, from: 2002 },
+      dukascopy: { code: AUDJPY, point: 1000, from: "2003-11" }, histdata: [ { code: AUDJPY, from: 2002 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 50, 120] ],
       reference: [ { from: "2003-11", legs: { AUDJPY: 1 } }, { from: "2003-08", legs: { AUDUSD: 1, USDJPY: 1 } } ],
       synthetic: null }
   AUDUSD:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: AUDUSD, point: 100000, from: "2003-08" }, histdata: { code: AUDUSD, from: 2000 },
+      dukascopy: { code: AUDUSD, point: 100000, from: "2003-08" }, histdata: [ { code: AUDUSD, from: 2000 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 0.45, 1.15] ], reference: [ { from: "2003-08", legs: { AUDUSD: 1 } } ], synthetic: null }
   NZDUSD:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: NZDUSD, point: 100000, from: "2003-08" }, histdata: { code: NZDUSD, from: 2005 },
+      dukascopy: { code: NZDUSD, point: 100000, from: "2003-08" }, histdata: [ { code: NZDUSD, from: 2005 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 0.38, 1.0] ], reference: [ { from: "2003-08", legs: { NZDUSD: 1 } } ], synthetic: null }
   USDCAD:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: USDCAD, point: 100000, from: "2003-08" }, histdata: { code: USDCAD, from: 2000 },
+      dukascopy: { code: USDCAD, point: 100000, from: "2003-08" }, histdata: [ { code: USDCAD, from: 2000 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 0.85, 1.7] ], reference: [ { from: "2003-08", legs: { USDCAD: 1 } } ], synthetic: null }
   USDCHF:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: USDCHF, point: 100000, from: "2003-05" }, histdata: { code: USDCHF, from: 2000 },
+      dukascopy: { code: USDCHF, point: 100000, from: "2003-05" }, histdata: [ { code: USDCHF, from: 2000 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 0.6, 1.9] ], reference: [ { from: "2003-05", legs: { USDCHF: 1 } } ], synthetic: null }
   EURAUD:   # no Dukascopy hourly cache yet: reference = EURUSD / AUDUSD
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: EURAUD, point: 100000, from: "2003-08" }, histdata: { code: EURAUD, from: 2002 },
+      dukascopy: { code: EURAUD, point: 100000, from: "2003-08" }, histdata: [ { code: EURAUD, from: 2002 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 1.05, 2.3] ], reference: [ { from: "2003-08", legs: { EURUSD: 1, AUDUSD: -1 } } ],
       synthetic: null }
   GBPAUD:   # no Dukascopy hourly cache yet: reference = GBPUSD / AUDUSD
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
-      dukascopy: { code: GBPAUD, point: 100000, from: "2003-08" }, histdata: { code: GBPAUD, from: 2007 },
+      dukascopy: { code: GBPAUD, point: 100000, from: "2003-08" }, histdata: [ { code: GBPAUD, from: 2007 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
-      price_bands: [ [2000, 2026, 1.5, 3.0] ], reference: [ { from: "2003-08", legs: { GBPUSD: 1, AUDUSD: -1 } } ],
+      price_bands: [ [2000, 2026, 1.4, 3.0] ], reference: [ { from: "2003-08", legs: { GBPUSD: 1, AUDUSD: -1 } } ],
       synthetic: null }
   XTIUSD:
     { owner_name: USOIL, asset_class: energy, cfd_type: rolling_future, weekend: false, session_minutes: 1380,
       roll: "NYMEX CL front month, rolled monthly a few business days before last trade (broker-specific dates; the roll
         gap is a price jump, not a return)",
-      dukascopy: { code: LIGHTCMDUSD, point: 1000, from: "2011-09" }, histdata: { code: WTIUSD, from: 2010 },
+      dukascopy: { code: LIGHTCMDUSD, point: 1000, from: "2011-09" }, histdata: [ { code: WTIUSD, from: 2010, to: 2023 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2014, 45, 150], [2015, 2019, 25, 80], [2020, 2020, 8, 70], [2021, 2022, 35, 135],
                      [2023, 2026, 40, 110] ],
       reference: [ { from: "2011-09", legs: { LIGHTCMDUSD: 1 } } ], synthetic: null }
   US500:
     { asset_class: index, cfd_type: cash_index, roll: null, weekend: false, session_minutes: 1380,
-      dukascopy: { code: USA500IDXUSD, point: 1000, from: "2011-09" }, histdata: { code: SPXUSD, from: 2010 },
+      dukascopy: { code: USA500IDXUSD, point: 1000, from: "2011-09" }, histdata: [ { code: SPXUSD, from: 2010 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2012, 600, 1600], [2013, 2017, 1350, 2800], [2018, 2021, 2100, 4900],
                      [2022, 2026, 3400, 8500] ],
       reference: [ { from: "2011-09", legs: { USA500IDXUSD: 1 } } ], synthetic: null }
   USTEC:
     { owner_name: NAS100, asset_class: index, cfd_type: cash_index, roll: null, weekend: false, session_minutes: 1380,
-      dukascopy: { code: USATECHIDXUSD, point: 1000, from: "2011-09" }, histdata: { code: NSXUSD, from: 2010 },
+      dukascopy: { code: USATECHIDXUSD, point: 1000, from: "2011-09" }, histdata: [ { code: NSXUSD, from: 2010 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2012, 900, 3000], [2013, 2017, 2500, 7000], [2018, 2021, 5500, 17500],
                      [2022, 2026, 9500, 32000] ],
       reference: [ { from: "2011-09", legs: { USATECHIDXUSD: 1 } } ], synthetic: null }
   UK100:
     { asset_class: index, cfd_type: cash_index, roll: null, weekend: false, session_minutes: 1320,
-      dukascopy: { code: GBRIDXGBP, point: 1000, from: "2011-09" }, histdata: { code: UKXGBP, from: 2010 },
+      dukascopy: { code: GBRIDXGBP, point: 1000, from: "2011-09" }, histdata: [ { code: UKXGBP, from: 2010 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2026, 3000, 13000] ],
       reference: [ { from: "2011-09", legs: { GBRIDXGBP: 1 } } ], synthetic: null }
   DE40:
     { owner_name: GER40, asset_class: index, cfd_type: cash_index, roll: null, weekend: false, session_minutes: 1305,
-      dukascopy: { code: DEUIDXEUR, point: 1000, from: "2013-09" }, histdata: { code: GRXEUR, from: 2010 },
+      dukascopy: { code: DEUIDXEUR, point: 1000, from: "2013-09" }, histdata: [ { code: GRXEUR, from: 2010, to: "2020-06" } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2014, 2000, 11000], [2015, 2021, 8000, 17000], [2022, 2026, 11500, 32000] ],
       reference: [ { from: "2013-09", legs: { DEUIDXEUR: 1 } } ], synthetic: null }
   US30:
     { asset_class: index, cfd_type: cash_index, roll: null, weekend: false, session_minutes: 1380,
-      dukascopy: { code: USA30IDXUSD, point: 1000, from: "2013-09" }, histdata: null,
-      source_tz: { dukascopy: UTC },
+      dukascopy: { code: USA30IDXUSD, point: 1000, from: "2013-09" }, histdata: [ { code: UDXUSD, from: 2010, to: 2018 } ],
+      source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2016, 6000, 20000], [2017, 2021, 17000, 37000], [2022, 2026, 27000, 65000] ],
       reference: [ { from: "2013-09", legs: { USA30IDXUSD: 1 } } ], synthetic: null }
   USINDEX:  # Vantage's continuous USDX (ICE DX futures based); Dukascopy native from 2017-12, ICE formula before
     { asset_class: dollar_index, cfd_type: rolling_future, weekend: false, session_minutes: 1380,
       roll: "ICE DX quarterly (Mar, Jun, Sep, Dec), rolled before first notice (broker-specific dates)",
-      dukascopy: { code: DOLLARIDXUSD, point: 1000, from: "2017-12" }, histdata: { code: UDXUSD, from: 2010 },
+      dukascopy: { code: DOLLARIDXUSD, point: 1000, from: "2017-12" }, histdata: [ { code: UDXUSD, from: 2019 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2000, 2026, 65, 125] ],
       reference: [ { from: "2017-12", legs: { DOLLARIDXUSD: 1 } },

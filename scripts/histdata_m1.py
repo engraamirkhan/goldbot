@@ -216,9 +216,11 @@ def pull_one(task: tuple[str, int, str]) -> dict[str, object]:
     key, year, base_s = task
     base = Path(base_s)
     src = history_sources().instruments[key]
-    assert src.histdata is not None
-    code = src.histdata.code
+    era = src.histdata_for(year)
+    assert era is not None
+    code = era.code
     rec: dict[str, object] = {"key": key, "year": year, "source": f"histdata:{code}", "tz": "America/New_York",
+                              "era_to": era.to,
                               "holdout_cut": HOLDOUT_CUT.isoformat(), "at": dt.datetime.now(dt.UTC).isoformat()}
     zpath, how = download_zip(code, year, base / "_zips")
     if zpath is None:
@@ -232,6 +234,11 @@ def pull_one(task: tuple[str, int, str]) -> dict[str, object]:
     df, sealed = drop_holdout(df)
     df = df[pd.DatetimeIndex(df["ts_utc"]).year == year].reset_index(drop=True)   # stamps that crossed New Year
     rec["sealed_dropped"] = sealed
+    end = era.end()
+    if end is not None:
+        inside = df["ts_utc"] < end
+        rec["out_of_era_dropped"] = int((~inside).sum())     # the code carries another series after `to`
+        df = df[inside].reset_index(drop=True)
     if df.empty:
         return {**rec, "status": "empty"}
     bad = scale_errors(df, src)
@@ -286,9 +293,7 @@ def tasks_for(keys: list[str], base: Path) -> list[tuple[str, int, str]]:
     out = []
     for key in keys:
         src = history_sources().instruments[key]
-        if src.histdata is None:
-            continue
-        for y in range(max(FIRST_YEAR, src.histdata.from_), LAST_YEAR + 1):
+        for y in src.histdata_years(FIRST_YEAR, LAST_YEAR):
             if not done(base, man, key, y):
                 out.append((key, y, str(base)))
     return out
@@ -465,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--root", default=str(DEFAULT_ROOT), help="the git-ignored raw/ directory")
     a = ap.parse_args(argv)
-    hd = [k for k, s in history_sources().instruments.items() if s.histdata is not None]
+    hd = [k for k, s in history_sources().instruments.items() if s.histdata]
     a.keys = [k.strip() for k in a.keys.split(",")] if a.keys else hd
     unknown = set(a.keys) - set(hd)
     if unknown:
