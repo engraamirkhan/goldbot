@@ -687,3 +687,14 @@ def test_no_node_fallback_never_calls_dukascopy_node(monkeypatch, tmp_path):
     monkeypatch.setattr(dy, "NODE_FALLBACK", False)
     df, err = dy._fetch(dt.date(2004, 2, 9), dt.date(2004, 2, 16), "bid", tmp_path)
     assert df is None and "node fallback off" in err and "503" in err and not called
+
+
+def test_map_instruments_join_with_era_bands_and_the_holdout_cut():
+    """D3 (lane W1-E): every owner instrument with a Dukascopy code is pullable; its band is the month's era band."""
+    us30, btc = dy.INSTRUMENTS["us30"], dy.INSTRUMENTS["btcusd"]
+    assert (us30.code, us30.point, us30.history_start) == ("USA30IDXUSD", 1000.0, dt.date(2013, 9, 1))
+    assert btc.point == 10.0 and btc.era_key == "BTCUSD"
+    assert us30.price_ok(16_000.0, dt.date(2014, 1, 1)) and not us30.price_ok(160_000.0, dt.date(2014, 1, 1))
+    assert not us30.price_ok(16_000.0, dt.date(2024, 1, 1))          # a 2014 level in 2024: wrong era
+    assert dy.INSTRUMENTS["xauusd"].era_key is None                   # gold's weekly pipeline is unchanged
+    assert {"us30", "btcusd", "usindex", "xaueur", "eurgbp", "eurusd", "de40"} <= set(dy.INSTRUMENTS)

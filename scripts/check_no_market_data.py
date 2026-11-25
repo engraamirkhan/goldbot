@@ -5,6 +5,11 @@ Refused, whatever the file is called:
   (`PAR1`, `ARROW1`), outside the fixture folders;
 * delimited text (CSV/TSV, also gzipped) whose header row looks like price bars or ticks: a time column plus open/high/
   low/close, or bid/ask, as whole cells; outside the fixture folders;
+* headerless delimited rows that are price bars: a date-time cell followed by four or more numbers (HistData's M1
+  ASCII `20100103 170000;1.4303;1.4304;1.4302;1.4303;0`, MT4/MT5 exports), which carry no header to recognise;
+* zip archives (HistData ships zips) holding any member the rules above refuse, or any zip under the data folders;
+* anything at all under the data folders (DATA_DIRS: raw/, data/, sealed/), whatever its type: they are gitignored,
+  so a staged file there was forced in, and manifests and sums of market data stay local too (lane W1-E);
 * inside the fixture folders (FIXTURE_DIRS: small synthetic test data, never market data) any such file larger than
   MAX_FIXTURE_BYTES: a real year of 1m bars is about 13 MB, a synthetic golden fixture a few hundred KB.
 
@@ -21,12 +26,19 @@ import gzip
 import io
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 DATA_EXT = (".parquet", ".pq", ".feather", ".arrow", ".ipc", ".bi5")
 TEXT_EXT = (".csv", ".tsv", ".csv.gz", ".tsv.gz", ".txt")
 MAGIC = (b"PAR1", b"ARROW1")
 FIXTURE_DIRS = ("tests/data/", "tests/fixtures/")
+DATA_DIRS = ("raw/", "data/", "sealed/", "raw-")
+ZIP_MAGIC = b"PK\x03\x04"
+# a date-time first cell (20100103 170000 | 2010.01.03,17:00 | 2010-01-03 17:00:00 ...) then >= 4 numeric cells
+_DT = r"\d{4}[-./]?\d{2}[-./]?\d{2}(?:[ T,;]\d{2}:?\d{2}(?::?\d{2})?(?:\.\d+)?)?"
+_NUM = r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+PRICE_ROW = re.compile(rf"^\s*{_DT}(?:[,;\t|]\s*{_NUM}){{4,}}\s*$")
 MAX_FIXTURE_BYTES = 1_000_000
 HEAD_BYTES = 64 * 1024
 TIME_COLS = frozenset({"ts", "ts_utc", "time", "timestamp", "datetime", "date", "gmt time", "local time", "visible_at"})
@@ -50,6 +62,35 @@ def looks_like_price_header(line: str) -> bool:
     return has_time and (OHLC <= cells or OHLC <= prices or QUOTE <= cells or QUOTE <= prices)
 
 
+def looks_like_price_row(line: str) -> bool:
+    """A headerless bar row: date-time then at least four numbers (open, high, low, close[, volume])."""
+    return bool(PRICE_ROW.match(line.strip().lstrip("\ufeff")))
+
+
+def _text_reason(head: bytes) -> bool:
+    lines = io.StringIO(head.decode("utf-8", "replace")).read().splitlines()
+    lines = [x for x in lines if x.strip()][:3]
+    if not lines:
+        return False
+    return looks_like_price_header(lines[0]) or all(looks_like_price_row(x) for x in lines)
+
+
+def _zip_reason(path: Path) -> bool:
+    try:
+        with zipfile.ZipFile(path) as z:
+            for info in z.infolist():
+                low = info.filename.lower()
+                if low.endswith(DATA_EXT):
+                    return True
+                with z.open(info) as fh:
+                    head = fh.read(HEAD_BYTES)
+                if head.startswith(MAGIC) or _text_reason(head):
+                    return True
+    except (zipfile.BadZipFile, OSError):
+        return False
+    return False
+
+
 def _head(path: Path) -> bytes:
     with open(path, "rb") as fh:
         raw = fh.read(HEAD_BYTES)
@@ -68,15 +109,17 @@ def reason(path: Path, rel: str | None = None) -> str | None:
     low = name.lower()
     if not path.is_file():
         return None
+    if any(low.startswith(d) for d in DATA_DIRS):
+        return "file under a gitignored data folder (raw/, data/, sealed/): market data and its manifests stay local"
     head = _head(path)
     is_data = low.endswith(DATA_EXT) or head.startswith(MAGIC)
+    is_zip = head.startswith(ZIP_MAGIC) and _zip_reason(path)
     is_price_text = False
-    if not is_data and (low.endswith(TEXT_EXT) or b"," in head[:4096]):
-        first = io.StringIO(head.decode("utf-8", "replace")).readline()
-        is_price_text = looks_like_price_header(first)
-    if not (is_data or is_price_text):
+    if not (is_data or is_zip) and (low.endswith(TEXT_EXT) or any(c in head[:4096] for c in (b",", b";", b"\t"))):
+        is_price_text = _text_reason(head)
+    if not (is_data or is_zip or is_price_text):
         return None
-    kind = "columnar data file" if is_data else "price-bar/tick table"
+    kind = "columnar data file" if is_data else "zip of market data" if is_zip else "price-bar/tick table"
     if any(low.startswith(d) for d in FIXTURE_DIRS):
         size = path.stat().st_size
         if size > MAX_FIXTURE_BYTES:
