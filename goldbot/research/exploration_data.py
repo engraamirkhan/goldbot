@@ -102,6 +102,14 @@ PRIOR_SD_R = 1.0                                # net-R spread of one trade unde
 # through a tight 1m stop must stay; quant review of 75824e5c), counted per arm in the run's detail and logged
 MAX_LABEL_R = 20.0
 GOLD = "XAUUSD"                                 # ReplayCosts is gold's per-oz model: the only instrument it prices
+# brain 2026-11-25: 1,038 of the 1,039 labels beyond 20 R were stops of 0.0001-0.02 (FX, sugar, coffee, copper ...)
+# replayed on gold bars before the 2026-11-04 instrument guard (all void, `void_non_gold_labels`). A stop below the
+# instrument's floor prices the spread, not the trade: never labelled into R by r1 or r2, voided instead
+# (`void_inside_spread`, reason VOID_INSIDE_SPREAD). A frozen research constant per instrument (quant review of #442:
+# never the RiskGate's max_spread_points, which is retuned for trading): gold's is its spread ceiling of 2026-11-25,
+# 45 points x $0.01. Only gold is labelled, so only gold has one
+MIN_LABEL_STOP: dict[str, float] = {GOLD: 0.45}
+VOID_INSIDE_SPREAD = "stop_inside_spread"
 
 # H-60 priors: history 2019-01-01..2025-09-30 only (the current cost era); the holdout is never read
 PRIOR_HISTORY_START = pd.Timestamp("2019-01-01", tz="UTC")
@@ -503,6 +511,37 @@ def instrument_key(symbol: str, broker: str | None = None) -> str:
     return spec.key if spec is not None else symbol
 
 
+def min_label_stop(symbol: str = GOLD) -> float:
+    """The smallest stop distance (price units) a candidate of instrument key `symbol` is labelled at (MIN_LABEL_STOP;
+    KeyError for an instrument with no floor: it is never labelled)."""
+    return MIN_LABEL_STOP[symbol]
+
+
+def void_inside_spread(db: Database, candidate_ids: Collection[str], *, now: pd.Timestamp | None = None) -> int:
+    """Void the r1 and r2 label of each candidate (reason VOID_INSIDE_SPREAD): excluded on purpose, never read as a
+    label still to come. Append-only and idempotent; returns the candidates newly voided."""
+    decided = _ns(now) if now is not None else now_ns()
+    new = 0
+    with db.write() as conn:
+        for cid in candidate_ids:
+            n = sum(conn.execute("INSERT OR IGNORE INTO exploration_label_void VALUES (?, ?, ?, ?)",
+                                 (str(cid), v, VOID_INSIDE_SPREAD, decided)).rowcount for v in REPLAY_VERSIONS)
+            new += int(n > 0)
+    return new
+
+
+def _drop_inside_spread(db: Database, obs: pd.DataFrame, floor: float, replay: str) -> pd.DataFrame:
+    """`obs` without the candidates whose stop is below `floor`, which are voided (`void_inside_spread`); the newly
+    voided ones are counted in one warning."""
+    tiny = ~(obs["stop_dist"] >= floor)
+    if not tiny.any():
+        return obs
+    if n := void_inside_spread(db, obs.loc[tiny, "candidate_id"].astype(str).tolist()):
+        log.warning("exploration %s: %d candidates voided (%s), stop below the spread ceiling %.5g (arms %s)", replay,
+                    n, VOID_INSIDE_SPREAD, floor, sorted(obs.loc[tiny, "arm_id"].astype(str).unique()))
+    return obs[~tiny]
+
+
 def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *, cutoff: pd.Timestamp,
                      account_id: str | None = None, symbol: str = GOLD,
                      instruments: Mapping[str, str] | None = None) -> int:
@@ -515,7 +554,8 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
     instrument, default the spec's `arms.arm_instruments`; an arm it does not name is never replayed). `costs` is gold's per-oz
     model, so nothing is labelled for another symbol: brain 2026-11-04, the multi-instrument controls (S0-NZDUSD stop
     0.00019, S0-SUGAR 0.00026) were replayed on the account's XAUUSD bars with gold's costs, mean -2,679 R and
-    -1,882 R. Another instrument's candidate stays NULL (unresolved, never censored) until its own replay exists."""
+    -1,882 R. Another instrument's candidate stays NULL (unresolved, never censored) until its own replay exists.
+    A candidate whose stop is below `min_label_stop` is voided (`void_inside_spread`), never labelled."""
     if costs.effective_utc > cutoff:
         raise ValueError("cost model effective after the labelling cutoff: labels must be point in time")
     key = instrument_key(symbol, costs.broker)
@@ -523,7 +563,8 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
         return 0
     bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff]
     obs = read_obs(db, broker=costs.broker, instrument=key, instruments=instruments)
-    obs = obs[obs["label_sim_r"].isna()]
+    obs = obs[obs["label_sim_r"].isna() & ~obs["candidate_id"].isin(void_ids(db))]
+    obs = _drop_inside_spread(db, obs, min_label_stop(key), REPLAY_V1)
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
     rows = []
@@ -871,11 +912,13 @@ def label_candidates_v2(db: Database, bars_1m: pd.DataFrame, cost_of_day: CostOf
     """r2 for every unquarantined gold candidate of `broker` (and `account_id`) with no r2 row, whose label resolves
     by `cutoff` on the bars before it (`replay_frame_v2`: each with its session day's model, `daily_costs_v2`): one
     `exploration_replay` row each, written once. Gold only, as r1 since 2026-11-04 (`label_candidates`); a candidate
-    whose r1 label is void is never replayed (its ledger traded another instrument). Returns the rows written."""
+    whose r1 label is void is never replayed (its ledger traded another instrument); one whose stop is below
+    `min_label_stop` is voided (`void_inside_spread`). Returns the rows written."""
     if bars_1m.empty or instrument_key(symbol, broker) != GOLD:
         return 0
     obs = read_obs(db, broker=broker, instrument=GOLD, instruments=instruments, replay_version=REPLAY_V2)
-    obs = obs[obs["label_sim_r"].isna() & ~obs["candidate_id"].isin(void_ids(db))]
+    obs = _drop_inside_spread(db, obs[obs["label_sim_r"].isna() & ~obs["candidate_id"].isin(void_ids(db))],
+                              min_label_stop(GOLD), REPLAY_V2)
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
     f = replay_frame_v2(bars_1m, obs, cost_of_day, cutoff=cutoff)
