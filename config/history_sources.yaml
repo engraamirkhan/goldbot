@@ -55,28 +55,28 @@ instruments:
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2007, 250, 1100], [2008, 2018, 600, 2200], [2019, 2026, 1150, 6000] ],
       reference: [ { from: "2003-05", dukascopy_1m: true } ], synthetic: null,
-      fix: { pending: "LBMA PM (15:00 London): prices.lbma.org.uk answered 403 from the brain on 2026-11-25 and FRED dropped the LBMA series in 2022" } }
+      fix: { pending: "PERMANENT (quant: never upgraded by decision; research uses Dukascopy for these years). Attempts from the brain, read-only, 2026-11-25: LBMA PM prices.lbma.org.uk/json/gold_pm.json -> HTTP 403; SPDR GLD archive GLD_US_archive_EN.csv -> redirected to a bar-list PDF, no NAV/fix history; ALFRED vintages of GOLDPMGBD228NLBM (2019..2022-01) -> alfred.stlouisfed.org timed out, fredgraph vintage_date -> no data; COMEX settlement not acceptable" } }
   XAGUSD:
     { asset_class: metal, cfd_type: spot, roll: null, weekend: false, session_minutes: 1380,
       dukascopy: { code: XAGUSD, point: 1000, from: "2003-05" }, histdata: [ { code: XAGUSD, from: 2009 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2007, 3, 20], [2008, 2018, 8, 55], [2019, 2026, 11, 105] ],
       reference: [ { from: "2003-05", legs: { XAGUSD: 1 } } ], synthetic: null,
-      fix: { pending: "LBMA silver (12:00 London): prices.lbma.org.uk answered 403 from the brain on 2026-11-25 and FRED dropped the LBMA series in 2022" } }
+      fix: { pending: "PERMANENT (quant: never upgraded by decision; research uses Dukascopy for these years). Attempts from the brain, read-only, 2026-11-25: LBMA silver -> HTTP 403; iShares SLV NAV / ounces per share (fund ajax xls) -> HTML page, needs a browser session; ALFRED vintages of the discontinued FRED LBMA silver series -> timed out; COMEX settlement not acceptable" } }
   XAUEUR:
     { asset_class: metal, cfd_type: spot, roll: null, weekend: false, session_minutes: 1380,
       dukascopy: { code: XAUEUR, point: 1000, from: "2023-03" }, histdata: [ { code: XAUEUR, from: 2009, to: 2018 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2010, 250, 1100], [2011, 2018, 750, 1500], [2019, 2026, 1050, 5000] ],
       reference: [ { from: "2003-05", legs: { XAUUSD: 1, EURUSD: -1 } } ], synthetic: null,
-      fix: { pending: "LBMA PM (15:00 London): prices.lbma.org.uk answered 403 from the brain on 2026-11-25 and FRED dropped the LBMA series in 2022" } }
+      fix: { pending: "PERMANENT (quant: never upgraded by decision). Attempts 2026-11-25: ECB EUR/USD 14:15 CET reference rate is reachable (data-api.ecb.europa.eu, HTTP 200) but no gold fix exists at 14:15 CET (LBMA PM is 15:00 London; and it is 403 anyway), so no same-timestamp XAUEUR fix can be built" } }
   XAUJPY:
     { asset_class: metal, cfd_type: synthetic_cross, roll: null, weekend: false, session_minutes: 1380,
       dukascopy: null, histdata: null, source_tz: { },
       price_bands: [ [2003, 2010, 25000, 120000], [2011, 2019, 90000, 220000], [2020, 2026, 150000, 900000] ],
       reference: [ { from: "2003-05", legs: { XAUUSD: 1, USDJPY: 1 } } ],
       synthetic: "1m legs XAUUSD x USDJPY on common minutes (Dukascopy 1m, D3); source=synthetic, dq_flag=synthetic_hl",
-      fix: { pending: "LBMA PM (15:00 London): prices.lbma.org.uk answered 403 from the brain on 2026-11-25 and FRED dropped the LBMA series in 2022" } }
+      fix: { pending: "PERMANENT (quant: never upgraded by decision; research uses Dukascopy for these years). Attempts from the brain, read-only, 2026-11-25: LBMA PM prices.lbma.org.uk/json/gold_pm.json -> HTTP 403; SPDR GLD archive GLD_US_archive_EN.csv -> redirected to a bar-list PDF, no NAV/fix history; ALFRED vintages of GOLDPMGBD228NLBM (2019..2022-01) -> alfred.stlouisfed.org timed out, fredgraph vintage_date -> no data; COMEX settlement not acceptable" } }
   EURUSD:
     { asset_class: fx, cfd_type: spot, roll: null, weekend: false, session_minutes: 1440,
       dukascopy: { code: EURUSD, point: 100000, from: "2003-05" }, histdata: [ { code: EURUSD, from: 2000 } ],

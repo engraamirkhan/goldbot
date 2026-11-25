@@ -51,6 +51,8 @@ from goldbot.data.era_quality import (  # noqa: E402
     HOLDOUT_CUT,
     R11_V2,
     R11_V2_ID,
+    R11_V21,
+    R11_V21_ID,
     ClockCheck,
     HistorySource,
     clock_check,
@@ -391,7 +393,16 @@ def write_sums(base: Path) -> int:
 
 def cmd_pull(a: argparse.Namespace) -> int:
     base = Path(a.root) / "histdata_m1"
-    tasks = tasks_for(a.keys, base)
+    if a.reparse:
+        # re-parse every stored year from its cached zip (no download): a parse-rule change reaches the store, e.g.
+        # keeping the New York evening of Dec 31 (review of #453). The year comes back stamped "ny"; `check` then
+        # stamps it by its era's rule, re-flags spikes and regrades.
+        man0 = read_manifest(base)
+        tasks = [(k, y, str(base)) for (k, y), r in sorted(man0.items())
+                 if k in a.keys and r["status"] in ("ok", "quarantined")
+                 and history_sources().instruments[k].histdata_for(y) is not None]
+    else:
+        tasks = tasks_for(a.keys, base)
     print(f"{len(tasks)} instrument-years to pull with {a.workers} workers", flush=True)
     with ProcessPoolExecutor(max_workers=a.workers, initializer=_nice) as ex:
         man = read_manifest(base)
@@ -586,7 +597,7 @@ def load_fix(key: str, year: int, raw: Path) -> tuple[pd.DataFrame | None, str]:
     return out[out["fix_utc"] < HOLDOUT_CUT].reset_index(drop=True), "ok"
 
 
-def check_one(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, object], list[dict[str, object]]]:
+def check_one(task: tuple[str, int, str, str, str, bool, bool]) -> tuple[dict[str, object], list[dict[str, object]]]:
     """check_one_ with any exception recorded as a failed clock row (the run and its reports go on)."""
     try:
         return check_one_(task)
@@ -595,10 +606,10 @@ def check_one(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, obj
                 "manifest": ""}, []
 
 
-def check_one_(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, object], list[dict[str, object]]]:
+def check_one_(task: tuple[str, int, str, str, str, bool, bool]) -> tuple[dict[str, object], list[dict[str, object]]]:
     """R11 v2 for one stored instrument-year: stamp it under its era's DST rule (re-stamp if stored otherwise), clock
     check per year, per month and per US/EU gap window, confirmed-spike flags, then one grade per session month."""
-    key, year, base_s, raw_s, stored, same_source = task
+    key, year, base_s, raw_s, stored, same_source, partial = task
     base, raw = Path(base_s), Path(raw_s)
     hs = history_sources()
     src = hs.instruments[key]
@@ -630,14 +641,14 @@ def check_one_(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, ob
     for per, idx in bars.groupby(month).groups.items():
         if str(per) >= HOLDOUT_CUT.strftime("%Y-%m"):
             continue                    # the stub of the first sealed session day (Sep 30 21:00-24:00 UTC)
-        if per.year != year:
+        if str(per)[:4] != str(year):
             continue                    # hours after Dec 31 21:00 UTC open next year's first session: that month is
             #                             graded from its own file (a stub grade of 26-47 bars duplicated 301 months)
         b = bars.loc[idx]
         r = ref.loc[np.asarray(ref_month == per)] if ref_month is not None else None
         g = grade_month_v2(key, str(per), b, r, src.session_minutes, native.get(str(per), False),
                            weekend=src.weekend, quarantined=quarantined, clock_offset=offsets.get(str(per)),
-                           same_source=same_source, fix=fix, fix_status=fix_status)
+                           same_source=same_source, fix=fix, fix_status=fix_status, partial_share=partial)
         grades.append(g.model_dump())
         if r is not None and len(r):
             conf = spike_confirmed(b, spike_mask(b["bid_close"]), r)
@@ -650,7 +661,7 @@ def check_one_(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, ob
         sha = _write_parquet(bars, p)
         new_rec = {"key": key, "year": year, "status": "ok", "tz": rule, "rows": len(bars),
                    "first": str(bars["ts_utc"].iloc[0]), "last": str(bars["ts_utc"].iloc[-1]),
-                   "parquet": str(p.relative_to(base)), "parquet_sha256": sha, "rewritten_by": f"check {R11_V2_ID}",
+                   "parquet": str(p.relative_to(base)), "parquet_sha256": sha, "rewritten_by": f"check {R11_V21_ID}",
                    "holdout_cut": HOLDOUT_CUT.isoformat(), "at": dt.datetime.now(dt.UTC).isoformat()}
     if quarantined:
         dst = base / "_quarantine" / key / p.name
@@ -679,9 +690,19 @@ def same_source_decisions(ev: pd.DataFrame) -> dict[tuple[str, int], bool]:
     return out
 
 
+def partial_share_years(ev: pd.DataFrame) -> set[tuple[str, int]]:
+    """Instrument-years sharing >= 0.10 of hour-ending closes with Dukascopy (quant re-verify B3)."""
+    sh = pd.to_numeric(ev["same_source_share"], errors="coerce")
+    sel = sh >= R11_V21["partial_share"]
+    return {(str(k), int(y)) for k, y in zip(ev.loc[sel, "key"], ev.loc[sel, "year"])}
+
+
 def write_v2_reports(rep: Path, clocks: list[dict[str, object]], tiers: list[dict[str, object]], sha: str) -> None:
-    pd.DataFrame(clocks).assign(git_sha=sha, dirty=False, r11_id=R11_V2_ID).to_csv(rep / "clock_r11-v2.csv",
-                                                                                  index=False)
+    """Reports of the current grade id (R11_V21_ID), next to the kept earlier ones: v1 and v2 files are never
+    overwritten (quant condition 3); the diff carries the earlier tiers and reasons."""
+    tag = R11_V21_ID.split("-2026")[0]                      # r11-v2.1
+    pd.DataFrame(clocks).assign(git_sha=sha, dirty=False, r11_id=R11_V21_ID).to_csv(rep / f"clock_{tag}.csv",
+                                                                                   index=False)
     t2 = pd.DataFrame(tiers)
     if t2.empty:
         return
@@ -690,18 +711,22 @@ def write_v2_reports(rep: Path, clocks: list[dict[str, object]], tiers: list[dic
     # volatility regime: tercile of the month's realised 1m volatility within the instrument (outcome-blind)
     t2["rv_tercile"] = t2.groupby("key")["rv"].transform(
         lambda x: pd.qcut(x.rank(method="first"), 3, labels=["low", "mid", "high"]) if x.notna().sum() >= 3 else None)
-    t2.to_csv(rep / "tiers_r11-v2.csv", index=False)
+    t2.to_csv(rep / f"tiers_{tag}.csv", index=False)
     t2["year"] = t2["month"].str[:4]
-    pd.crosstab([t2["year"], t2["rv_tercile"]], t2["tier"]).to_csv(rep / "tier_mix_r11-v2.csv")
-    v1p = rep / "tiers_r11-v1.csv"
-    if v1p.exists():
-        v1 = pd.read_csv(v1p).sort_values("bars").drop_duplicates(["key", "month"], keep="last")   # drop v1 stubs
-        v1 = v1[["key", "month", "tier", "reasons"]].rename(columns={"tier": "tier_v1", "reasons": "reasons_v1"})
-        m = v1.merge(t2[["key", "month", "tier"]].rename(columns={"tier": "tier_v2"}), on=["key", "month"],
-                     how="outer").fillna({"tier_v1": "-", "tier_v2": "-"})
-        m.to_csv(rep / "tiers_v1_v2_diff.csv", index=False)
-        pd.crosstab(m["tier_v1"], m["tier_v2"], margins=True).to_csv(rep / "tiers_v1_v2_matrix.csv")
-        pd.crosstab(m["key"], [m["tier_v1"], m["tier_v2"]]).to_csv(rep / "tiers_v1_v2_by_key.csv")
+    pd.crosstab([t2["year"], t2["rv_tercile"]], t2["tier"]).to_csv(rep / f"tier_mix_{tag}.csv")
+    m = t2[["key", "month", "tier", "reasons"]].rename(columns={"tier": "tier_v21", "reasons": "reasons_v21"})
+    for old in ("v2", "v1"):
+        op = rep / f"tiers_r11-{old}.csv"
+        if op.exists():
+            o = pd.read_csv(op).sort_values("bars").drop_duplicates(["key", "month"], keep="last")   # v1 stubs
+            o = o[["key", "month", "tier", "reasons"]].rename(columns={"tier": f"tier_{old}",
+                                                                       "reasons": f"reasons_{old}"})
+            m = m.merge(o, on=["key", "month"], how="left")
+    m = m.fillna({"tier_v1": "-", "tier_v2": "-"})
+    m.to_csv(rep / "tiers_v2_v21_diff.csv", index=False)
+    if "tier_v2" in m:
+        pd.crosstab(m["tier_v2"], m["tier_v21"], margins=True).to_csv(rep / "tiers_v2_v21_matrix.csv")
+        pd.crosstab(m["key"], [m["tier_v2"], m["tier_v21"]]).to_csv(rep / "tiers_v2_v21_by_key.csv")
 
 
 def cmd_check(a: argparse.Namespace) -> int:
@@ -730,7 +755,9 @@ def cmd_check(a: argparse.Namespace) -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             os.replace(q, dst)
     man = read_manifest(base)
-    tasks = [(k, y, str(base), str(raw), _stored_rule(man, k, y), same.get((k, y), False)) for k in a.keys
+    partial = partial_share_years(pd.read_csv(evp))
+    tasks = [(k, y, str(base), str(raw), _stored_rule(man, k, y), same.get((k, y), False),
+              (k, y) in partial and not same.get((k, y), False)) for k in a.keys
              for y in range(FIRST_YEAR, LAST_YEAR + 1) if year_path(base, k, y).exists()]
     clocks, tiers = [], []
     with ProcessPoolExecutor(max_workers=a.workers, initializer=_nice) as ex:
@@ -744,7 +771,7 @@ def cmd_check(a: argparse.Namespace) -> int:
             print(f"{cc['key']} {cc['year']} rule={cc.get('tz_rule')} same={cc.get('same_source')} "
                   f"clock={cc.get('offset_min')} {cc.get('reason')} tiers={t}", flush=True)
     write_v2_reports(rep, clocks, tiers, sha)
-    print(f"r11 {R11_V2_ID} at {sha[:8]}: {len(tiers)} instrument-months graded; "
+    print(f"r11 {R11_V21_ID} at {sha[:8]}: {len(tiers)} instrument-months graded; "
           f"quarantined {sum(bool(c.get('quarantined')) for c in clocks)}; failed "
           f"{sum(c.get('status') == 'failed' for c in clocks)}", flush=True)
     print(f"SHA256SUMS: {write_sums(base)} files", flush=True)
@@ -755,7 +782,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cmd", choices=["pull", "evidence", "check", "sums", "trim-cache"])
     ap.add_argument("--keys", default=None, help="comma-separated owner keys (default: every key with a HistData code)")
-    ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--reparse", action="store_true",
+                    help="pull: re-parse every stored year from the cached zips (no network)")
     ap.add_argument("--root", default=str(DEFAULT_ROOT), help="the git-ignored raw/ directory")
     a = ap.parse_args(argv)
     hd = [k for k, s in history_sources().instruments.items() if s.histdata]

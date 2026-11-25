@@ -543,6 +543,19 @@ R11_V2: dict[str, float] = {
 }
 
 
+# r11-v2.1 (quant re-verify of v2, 2026-11-25; v2 grades kept as tiers_r11-v2.csv at afbba08e). Mechanisms:
+# * B1: touch_extremes dropped every v1 candidate, i.e. genuine news minutes (EURUSD 2016: 132 candidates, 0
+#   confirmed) -> only confirmed spikes are left out of barrier touches.
+# * B2: A-consistent accepted months whose closes disagreed with Dukascopy on > 2 % of days (22 A-consistent + 127 B
+#   months below 0.98) -> a same-source month needs the fix AND the Dukascopy close check, and >= 15 fix days.
+# * B3: 2015-18 FX years share 10-34 % of hour-ending closes with Dukascopy (partial sharing, 41 instrument-years in
+#   evidence_r11-v2.csv) -> FX years with share >= 0.10 also need the H.10 fix for A; other partial years (XTIUSD
+#   2011, 0.14) cap at B.
+R11_V21_ID = "r11-v2.1-2026-11-25"
+R11_V21: dict[str, float] = {**R11_V2, "fix_days_min": 15.0, "partial_share": 0.10}
+SPIKE_CONFIRMED = "warning:spike_confirmed"
+
+
 def gap_windows(year: int) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """UTC [start, end) windows of `year` in which New York time and EET-7 differ (the weeks between the US and EU
     daylight-saving switches). Derived from the tz database, not hard-coded dates."""
@@ -702,10 +715,10 @@ def fix_close_share(bars: pd.DataFrame, fix: pd.DataFrame) -> tuple[float | None
 
 
 def touch_extremes(bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-    """High and low a label factory may use for barrier touches: bars flagged as spikes (v1 candidates or v2
-    confirmed, `dq_flag` starting with warning:spike) are left out (NaN), so a confirmed spike crossing a barrier never
-    makes a touch (quant ruling 3)."""
-    spike = bars.get("dq_flag", pd.Series("", index=bars.index)).astype(str).str.startswith("warning:spike")
+    """High and low a label factory may use for barrier touches: only CONFIRMED spikes (dq_flag ==
+    warning:spike_confirmed) are left out (NaN). An unconfirmed v1 candidate (warning:spike_15mad) is usually a genuine
+    news minute inside the reference's own range and still makes a touch (quant re-verify B1, r11-v2.1)."""
+    spike = bars.get("dq_flag", pd.Series("", index=bars.index)).astype(str) == SPIKE_CONFIRMED
     return bars["bid_high"].where(~spike), bars["bid_low"].where(~spike)
 
 
@@ -734,14 +747,16 @@ class MonthGradeV2(FrozenRecord):
     fix_status: str
     reference: Literal["native", "synthetic", "none"]
     rv: float | None
-    r11_id: str = R11_V2_ID
+    partial_share: bool = False
+    r11_id: str = R11_V21_ID
 
 
 def grade_month_v2(key: str, month: str, bars: pd.DataFrame, ref: pd.DataFrame | None, session_minutes: int,
                    reference_native: bool, *, weekend: bool = False, quarantined: bool = False,
                    clock_offset: int | None = None, same_source: bool = False, fix: pd.DataFrame | None = None,
-                   fix_status: str = "none") -> MonthGradeV2:
-    """One instrument-month's R11 v2 tier. `ref`: the reference HOURLY bars of at least this month (ts_utc, high, low,
+                   fix_status: str = "none", partial_share: bool = False) -> MonthGradeV2:
+    """One instrument-month's R11 v2.1 tier. `partial_share`: the year shares >= 0.10 (but < 0.50) of its
+    hour-ending closes with Dukascopy (B3): A then also needs the independent fix (FX), else the month caps at B. `ref`: the reference HOURLY bars of at least this month (ts_utc, high, low,
     close, spread). `fix_status`: "ok" (fix given), "cap_b" (only fix carries a CFD basis), "pending" (not fetched)."""
     reasons: list[str] = []
     n = len(bars)
@@ -779,12 +794,17 @@ def grade_month_v2(key: str, month: str, bars: pd.DataFrame, ref: pd.DataFrame |
     # close checks
     rate_ok = (int(conf.sum()) / max(n, 1)) <= R11_V2["spike_rate_max"] or same_source
     if same_source:
+        dk_ok = close_share is not None and close_share >= R11_V21["close_day_share_min"]
+        if not dk_ok:
+            reasons.append(f"close_vs_ref {close_share}")
         if fix_status == "ok":
-            close_ok_core = fix_share is not None and fix_share >= R11_V2["fix_day_share_min"]
-            if not close_ok_core:
-                reasons.append(f"fix_vs_close {fix_share}")
+            fx_ok = fix_share is not None and fix_share >= R11_V21["fix_day_share_min"] \
+                and fix_days >= R11_V21["fix_days_min"]
+            if not fx_ok:
+                reasons.append(f"fix_vs_close {fix_share} days={fix_days}")
+            close_ok_core = fx_ok and dk_ok                       # B2: both, never the fix alone
         elif fix_status == "cap_b":
-            close_ok_core = close_share is not None and close_share >= R11_V2["close_day_share_min"]
+            close_ok_core = dk_ok
         else:
             close_ok_core = False
             reasons.append("independent_fix_pending")
@@ -835,10 +855,17 @@ def grade_month_v2(key: str, month: str, bars: pd.DataFrame, ref: pd.DataFrame |
             tier = "A-consistent" if fix_status == "ok" else "B"
         if same_source and fix_status == "cap_b" and tier == "A-consistent":
             tier = "B"
+        if partial_share and not same_source and tier == "A":
+            fx_ok = fix_status == "ok" and fix_share is not None and fix_share >= R11_V21["fix_day_share_min"] \
+                and fix_days >= R11_V21["fix_days_min"]
+            if not fx_ok:
+                tier = "B"
+                reasons.append(f"partial_share needs fix (status={fix_status}, share={fix_share}, days={fix_days})")
     if same_source:
         reasons.append(f"same_source fix={fix_status}")
     return MonthGradeV2(key=key, month=month, tier=tier, reasons=reasons, bars=n, days=len(d), same_source=same_source,
                         coverage_median=cov_med, thin_day_share=thin, flat_share=flat, stale_runs=stale,
                         spike_candidates=int(cand.sum()), spikes_confirmed=int(conf.sum()), range2_share=r2_share,
                         range2_ratio_median=r2_ratio, close_day_share=close_share, fix_share=fix_share,
-                        fix_days=fix_days, fix_status=fix_status, reference=kind, rv=rv)
+                        fix_days=fix_days, fix_status=fix_status, reference=kind, rv=rv,
+                        partial_share=partial_share)

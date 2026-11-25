@@ -411,7 +411,7 @@ def test_v2_same_source_years_cap_at_a_consistent_or_wait_for_the_fix():
     capped = eq.grade_month_v2("US500", "2019-03", bars, ref, 1440, True, same_source=True, fix_status="cap_b")
     assert capped.tier == "B"
     indep = eq.grade_month_v2("EURUSD", "2010-03", bars, ref, 1440, True)
-    assert indep.tier == "A" and indep.r11_id == "r11-v2-2026-11-25"
+    assert indep.tier == "A" and indep.r11_id == "r11-v2.1-2026-11-25"
 
 
 def test_confirmed_spike_crossing_a_barrier_makes_no_touch():
@@ -444,3 +444,65 @@ def test_fix_spec_is_exactly_one_kind():
         eq.FixSpec(series={"DEXUSEU": 1.0})                            # no timestamp
     with pytest.raises(ValueError):
         eq.FixSpec(cap="B", pending="x")
+
+
+# ------------------------------------------------------------------------------- r11-v2.1 (quant re-verify of v2)
+def _noon_fix(bars: pd.DataFrame, start: str, end: str, bump: float = 0.0) -> pd.DataFrame:
+    noon = pd.date_range(f"{start} 17:00", f"{end} 17:00", freq="B", tz="UTC")
+    v = np.interp(eq.epoch_ns_utc(noon), eq.epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy())
+    return pd.DataFrame({"fix_utc": noon, "value": v * (1 + bump)})
+
+
+def test_unconfirmed_candidate_crossing_a_barrier_makes_a_touch():
+    """B1: a v1 candidate (a news minute inside the reference range) is real price action and still touches."""
+    bars = _walk("2010-03-01", "2010-03-02", seed=6)
+    level = float(bars["bid_high"].max()) * 1.002
+    i = bars.index[300]
+    bars.loc[i, "bid_high"] = level * 1.001
+    bars["dq_flag"] = ""
+    bars.loc[i, "dq_flag"] = "warning:spike_15mad"
+    assert (eq.touch_extremes(bars)[0] >= level).any()
+
+
+def test_a_consistent_needs_the_dukascopy_close_check_too():
+    """B2: fix_share 1.0 but closes off Dukascopy on 5 % of days -> not A-consistent."""
+    bars = _walk("2019-03-01", "2019-04-01", seed=3)
+    ref = _ref_hourly_hl(bars)
+    days = eq.daily_from_minutes(bars).index
+    bad_days = set(days[::20])                                         # ~1 day in 20 -> close_share ~0.95
+    rd_shift = ref.copy()
+    sd = eq.day_of(rd_shift["ts_utc"])
+    rd_shift.loc[np.isin(sd, list(bad_days)), "close"] *= 1.003
+    fix = _noon_fix(bars, "2019-03-01", "2019-03-29")
+    g = eq.grade_month_v2("EURUSD", "2019-03", bars, rd_shift, 1440, True, same_source=True, fix=fix, fix_status="ok")
+    assert g.fix_share == 1.0 and g.close_day_share is not None and g.close_day_share < 0.98
+    assert g.tier != "A-consistent"
+
+
+def test_a_consistent_needs_15_fix_days():
+    bars = _walk("2019-03-01", "2019-04-01", seed=3)
+    ref = _ref_hourly_hl(bars)
+    short = _noon_fix(bars, "2019-03-01", "2019-03-14")                # 10 business days
+    g = eq.grade_month_v2("EURUSD", "2019-03", bars, ref, 1440, True, same_source=True, fix=short, fix_status="ok")
+    assert g.fix_days < 15 and g.tier != "A-consistent"
+
+
+def test_partial_share_years_need_the_fix_for_a_or_cap_at_b():
+    """B3: FX 2015-18 years sharing >= 10 % of closes need the H.10 fix for A; XTIUSD 2011 (no fix) caps at B."""
+    bars = _walk("2016-03-01", "2016-04-01", seed=8)
+    ref = _ref_hourly_hl(bars)
+    good = _noon_fix(bars, "2016-03-01", "2016-03-31")
+    off = _noon_fix(bars, "2016-03-01", "2016-03-31", bump=0.003)      # 30 bp from every fix
+    assert eq.grade_month_v2("EURUSD", "2016-03", bars, ref, 1440, True, partial_share=True, fix=good,
+                             fix_status="ok").tier == "A"
+    assert eq.grade_month_v2("EURUSD", "2016-03", bars, ref, 1440, True, partial_share=True, fix=off,
+                             fix_status="ok").tier == "B"
+    assert eq.grade_month_v2("XTIUSD", "2016-03", bars, ref, 1440, True, partial_share=True,
+                             fix_status="cap_b").tier == "B"
+    assert eq.grade_month_v2("EURUSD", "2016-03", bars, ref, 1440, True).tier == "A"   # not partial: unchanged
+
+
+def test_v21_thresholds_are_frozen():
+    assert eq.R11_V21_ID == "r11-v2.1-2026-11-25"
+    assert eq.R11_V21 == {**eq.R11_V2, "fix_days_min": 15.0, "partial_share": 0.10}
+    assert eq.R11_V2_ID == "r11-v2-2026-11-25" and eq.SPIKE_CONFIRMED == "warning:spike_confirmed"
