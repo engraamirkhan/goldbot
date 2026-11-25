@@ -1,6 +1,6 @@
 # 0100: Holdout minutes as lookback warm-up for post-holdout decisions
 
-Status: proposed (data engineer, 2026-11-25; quant ruling on PR #451)
+Status: accepted (quant ruling, PR #451)
 
 ## Context
 The sealed holdout is 2025-10-01..2026-09-30 (quant R10; `goldbot/data/holdout_guard.py`). The live store keeps those

@@ -73,8 +73,9 @@ MINUTE_NS = 60_000_000_000
 GOLD = "XAUUSD"
 # decision bars a night per timeframe, slowest first (label unlock 2026-11-25; the nine timeframes of
 # self_retrain.CELL_TFS). 950 a night at 0.46 s median each (brain, measured 2026-11-25) is about 7-8 min
-TF_QUOTAS: dict[str, int] = {"4h": 100, "2h": 100, "1h": 150, "30m": 100, "15m": 200, "5m": 150, "1m": 150}
-# 1d / 1w have no quota: ENGINE_MINUTES (about 65 trading days) never holds MIN_BARS daily bars (a closed-HTF-bar store
+TF_QUOTAS: dict[str, int] = {"1w": 0, "1d": 0, "4h": 100, "2h": 100, "1h": 150, "30m": 100, "15m": 200, "5m": 150,
+                             "1m": 150}
+# 1d / 1w have quota 0 (skipped): ENGINE_MINUTES (about 65 trading days) never holds MIN_BARS daily bars (a closed-HTF-bar store
 # would seed them, W3-3). The quotas sum to 950; `scaled_quotas` fits them to the configured nightly cap
 DEFAULT_TF_QUOTA = 50          # a timeframe not named above
 SNAPSHOT_BUDGET = pd.Timedelta(minutes=25)
@@ -176,17 +177,18 @@ def select_keys(keys: pd.DataFrame, *, quotas: Mapping[str, int] | None, limit: 
         return _fair(keys, limit)
     parts = [_fair(g, int(quotas.get(str(tf), DEFAULT_TF_QUOTA)))
              for tf, g in sorted(keys.groupby("tf", sort=False), key=lambda t: (-_tf_seconds(str(t[0])), str(t[0])))]
+    parts = [p for p in parts if len(p)]          # a timeframe with quota 0 is skipped
     return pd.concat(parts, ignore_index=True).head(limit) if parts else keys.iloc[0:0]
 
 
 def scaled_quotas(quotas: Mapping[str, int], cap: int) -> dict[str, int]:
-    """`quotas` scaled down in proportion so they sum to at most `cap` (each at least 1); unchanged when they fit. So a
+    """`quotas` scaled down in proportion so they sum to at most `cap` (each at least 1, a 0 stays 0); unchanged when they fit. So a
     cap below the quotas' sum (settings snapshot_max_decisions 600) still serves every timeframe, never only the slow
     ones."""
     total = sum(quotas.values())
     if total <= cap:
         return dict(quotas)
-    return {tf: max(1, int(q * cap // total)) for tf, q in quotas.items()}
+    return {tf: q and max(1, int(q * cap // total)) for tf, q in quotas.items()}
 
 
 def snapshot_deadline(start: pd.Timestamp) -> pd.Timestamp | None:

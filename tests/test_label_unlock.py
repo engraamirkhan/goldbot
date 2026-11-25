@@ -71,9 +71,15 @@ def test_per_timeframe_quotas_serve_the_slow_timeframes_first_and_share_each_fai
     assert list(got["tf"].iloc[:5]) == ["4h", "4h", "4h", "1h", "1h"]
     one = got[got["tf"] == "1m"]
     assert len(one) == 10 and (one["account_id"] == "a").sum() == 5
-    assert set(fs.TF_QUOTAS) == set(sr.CELL_TFS) - {"1d", "1w"} and len(sr.CELL_TFS) == 9   # 1d/1w: no history
+    assert set(fs.TF_QUOTAS) == set(sr.CELL_TFS) and len(sr.CELL_TFS) == 9
+    assert fs.TF_QUOTAS["1d"] == fs.TF_QUOTAS["1w"] == 0                     # no daily history in the engine memory
     small = fs.scaled_quotas(fs.TF_QUOTAS, 600)
-    assert sum(small.values()) <= 600 and all(v >= 1 for v in small.values()) and set(small) == set(fs.TF_QUOTAS)
+    assert sum(small.values()) <= 600 and small["1d"] == small["1w"] == 0
+    assert all(v >= 1 for tf, v in small.items() if tf not in ("1d", "1w"))
+    every = _keys([(acc, tf, i * 10 + n) for tf in sr.CELL_TFS for n, acc in enumerate(("a", "b"))
+                   for i in range(150)])                                     # 300 pending per timeframe, all nine
+    night = fs.select_keys(every, quotas=small, limit=600)
+    assert len(night) <= 600 and not night["tf"].isin(["1d", "1w"]).any() and (night["tf"] == "1m").sum() >= 1
     assert fs.scaled_quotas(fs.TF_QUOTAS, 5000) == fs.TF_QUOTAS
     assert len(fs.select_keys(_keys(rows), quotas={"1m": 10, "1h": 2, "4h": 5}, limit=4)) == 4   # the night's cap
 
