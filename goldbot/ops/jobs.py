@@ -357,7 +357,14 @@ def gold_symbols(accounts: Sequence[Any]) -> dict[str, str]:
     """Each account's gold store symbol: its traded symbol, under which its engine and the broker-M1 reconcile store
     its minutes (engine/books.py `store_symbol` of the primary book; Vantage: XAUUSD+). Never a default: the weekly
     audit read vantage under XAUUSD and excluded every vantage snapshot (label unlock 2026-11-25)."""
-    return {str(acc.account_id): str(acc.symbol) for acc in accounts}
+    return {str(acc.account_id): _gold_symbol(acc) for acc in accounts}
+
+
+def _gold_symbol(acc: Any) -> str:
+    """The account's traded gold symbol; an account record without one (test doubles, old records) reads the
+    canonical XAUUSD, as before. A configured Account always carries its own (vantage: XAUUSD+)."""
+    sym = getattr(acc, "symbol", None)
+    return str(sym) if sym else "XAUUSD"
 
 
 def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
@@ -637,8 +644,8 @@ def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> tu
     (over-voiding cannot be undone) and its decisions from the span's start are returned to be held out in memory."""
     from goldbot.research import evidence_exclusions as ev
     inserted, held, open_ = 0, set[str](), list[str]()
-    for symbol in sorted({str(acc.symbol) for acc in ctx.accounts}):
-        hosts = {acc.account_id: acc.broker for acc in ctx.accounts if str(acc.symbol) == symbol}
+    for symbol in sorted({_gold_symbol(acc) for acc in ctx.accounts}):
+        hosts = {acc.account_id: acc.broker for acc in ctx.accounts if _gold_symbol(acc) == symbol}
         found = ev.screen(db, ctx.store, hosts=hosts, symbol=symbol, now=slot)
         inserted += ev.record(db, found.exclusions)
         held |= found.held_out
