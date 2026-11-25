@@ -201,11 +201,37 @@ def evaluate(card: PowerCard, settings: Settings) -> PowerVerdict:
                         min_joint_power=pf.min_joint_power, n_eff_floor=pf.n_eff_floor, reasons=reasons)
 
 
-def start_or_refuse(registry: TrialRegistry, card: PowerCard, settings: Settings, *, agent_id: str) -> PowerVerdict:
+def _check_given(v: PowerVerdict, card: PowerCard, settings: Settings) -> None:
+    """A passed verdict: the card's, thresholds >= the settings' (the rule only tightens), and `started` only when
+    every gate power, the joint power and every fresh gate's n_eff clear its own thresholds."""
+    if (v.card_id, v.family) != (card.card_id, card.family):
+        raise ValueError(f"verdict {v.card_id!r}/{v.family!r} is not card {card.card_id!r}/{card.family!r}")
+    pf = settings.research.power_first
+    loose = [k for k, mine, floor in (("min_gate_power", v.min_gate_power, pf.min_gate_power),
+                                      ("min_joint_power", v.min_joint_power, pf.min_joint_power),
+                                      ("n_eff_floor", v.n_eff_floor, pf.n_eff_floor), ("delta_r", v.delta_r, pf.delta_r),
+                                      ("sd_r", v.sd_r, pf.sd_r_floor)) if mine < floor]
+    if loose:
+        raise ValueError(f"verdict thresholds looser than research.power_first: {loose}")
+    fails = (any(g.power < v.min_gate_power for g in v.gates) or v.joint_power < v.min_joint_power
+             or any(g.fresh and g.n_eff < v.n_eff_floor for g in v.gates))
+    if v.started and fails:
+        raise ValueError("verdict says started but its gates contradict it")
+
+
+def start_or_refuse(registry: TrialRegistry, card: PowerCard, settings: Settings, *, agent_id: str,
+                    verdict: PowerVerdict | None = None) -> PowerVerdict:
     """The rule at registration: evaluate `card`; a refusal is written as a "NOT STARTED (power)" registry row (no K,
     no data read; the caller must not read) and logged (e). A started card writes nothing here: its pre-registration
-    and trial rows follow the usual path."""
-    v = evaluate(card, settings)
+    and trial rows follow the usual path.
+
+    `verdict`: a card whose signed power section defines its own per-gate inputs (measured outcome-blind counts per
+    window, a keep-share SE: H-101, research/model_zoo.py `stage0`) passes its verdict, computed with these settings'
+    thresholds, so its refusal is recorded by this same path. It must name the card, carry thresholds no looser than
+    these settings, and a start must agree with its own gates (`_check_given`)."""
+    if verdict is not None:
+        _check_given(verdict, card, settings)
+    v = verdict if verdict is not None else evaluate(card, settings)
     if v.started:
         return v
     results: dict[str, Any] = {"power_first": v.model_dump(mode="json"), "card": card.model_dump(mode="json")}
