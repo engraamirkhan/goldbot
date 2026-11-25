@@ -232,3 +232,15 @@ def test_spike_threshold_uses_mad_of_signed_returns():
     """A 1m random walk has no 15-MAD reverting spikes (the |r| MAD would flag hundreds a month)."""
     bars = _walk("2010-03-01", "2010-04-01", seed=5)
     assert eq.spike_mask(bars["bid_close"]).sum() == 0
+
+
+def test_an_empty_form_token_is_a_throttle_not_an_absent_year(tmp_path, monkeypatch):
+    """HistData answers its per-IP throttle with the year page and an empty token; that year must be retried, not
+    recorded as absent (absent years are never asked again)."""
+    monkeypatch.setattr(hd, "PAUSE_S", 0.0)
+    monkeypatch.setattr(hd, "THROTTLE_WAIT_S", 0.0)
+    throttled = b'<a>HISTDATA_COM_ASCII_XAUEUR_M1_2020.zip</a><input name="tk" id="tk" value="" />'
+    monkeypatch.setattr(hd, "_get", lambda *a, **k: throttled)
+    assert hd.download_zip("XAUEUR", 2020, tmp_path) == (None, "throttled")
+    monkeypatch.setattr(hd, "_get", lambda *a, **k: b'<input name="tk" id="tk" value="" />')
+    assert hd.download_zip("XAUEUR", 2001, tmp_path) == (None, "absent")

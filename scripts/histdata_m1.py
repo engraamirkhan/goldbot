@@ -68,6 +68,8 @@ UA = {"User-Agent": "goldbot-data/1"}
 FIRST_YEAR = 2003            # D2: research history from 2003
 LAST_YEAR = HOLDOUT_CUT.year  # 2025: its file holds Jan-Sep research minutes; the rest is dropped at the cut
 PAUSE_S = 2.0                # per request per worker: polite to a free archive
+THROTTLE_TRIES = 4           # an empty form token means throttled: wait 2, 4, 6 min, then give the year up for now
+THROTTLE_WAIT_S = 120.0
 EXTRA_POINTS = {"USDSEK": 100000.0}   # reference legs that are not owner instruments (ICE USDX formula)
 DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "raw"
 
@@ -157,13 +159,22 @@ def download_zip(code: str, year: int, zdir: Path) -> tuple[Path | None, str]:
     if out.exists() and zipfile.is_zipfile(out):
         return out, "cached"
     page = HD_PAGE.format(pair=code.lower(), year=year)
-    html = _get(page)
-    time.sleep(PAUSE_S)
-    if html is None:
-        return None, "page_failed"
-    m = re.search(rb'name="tk" id="tk" value="([0-9a-f]+)"', html or b"")
+    m = None
+    for k in range(THROTTLE_TRIES):
+        html = _get(page)
+        time.sleep(PAUSE_S)
+        if html is None:
+            return None, "page_failed"
+        m = re.search(rb'name="tk" id="tk" value="([0-9a-f]+)"', html)
+        if m:
+            break
+        if f"_M1_{year}.zip".encode() not in html:
+            return None, "absent"       # the year page offers no file: HistData has no such year
+        # the page offers the file but an empty form token: HistData's per-IP throttle (seen 2026-11-25 after ~100
+        # downloads). Back off; a year that stays throttled is "throttled" and retried by the next run.
+        time.sleep(THROTTLE_WAIT_S * (k + 1))
     if not m:
-        return None, "absent"
+        return None, "throttled"
     body = urllib.parse.urlencode({"tk": m.group(1).decode(), "date": year, "datemonth": year, "platform": "ASCII",
                                    "timeframe": "M1", "fxpair": code}).encode()
     blob = _get(HISTDATA + "/get.php", data=body, referer=page)
