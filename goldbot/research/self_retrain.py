@@ -182,6 +182,16 @@ class LogitModel(FrozenRecord):
         z = (m - np.asarray(self.means)) / np.asarray(self.scales)
         return 1.0 / (1.0 + np.exp(-(z @ np.asarray(self.coef) + self.intercept)))
 
+    def score_row(self, x: np.ndarray) -> float:
+        """`score` of one `design_row` vector (in INPUTS order) without pandas: the gate decides on the tick (shadow
+        scoring's "under 5 ms once the vector is built"). The same operations on a (1, n) array, so the same bits."""
+        if self.inputs != INPUTS:
+            raise ValueError("score_row needs a model on the frozen INPUTS")
+        m = x.reshape(1, -1)
+        m = np.where(np.isfinite(m), m, np.asarray(self.medians))
+        z = (m - np.asarray(self.means)) / np.asarray(self.scales)
+        return float((1.0 / (1.0 + np.exp(-(z @ np.asarray(self.coef) + self.intercept))))[0])
+
     def keep(self, X: pd.DataFrame) -> np.ndarray:
         return self.score(X) >= self.tau
 
@@ -253,6 +263,21 @@ def design(rows: pd.DataFrame) -> pd.DataFrame:
         X[c] = (X[c] - centre) * side
     X["side"] = side
     return X.reset_index(drop=True)
+
+
+def design_row(features: Mapping[str, Any], side: int) -> np.ndarray:
+    """`design` of one vector without pandas, in INPUTS order: a missing, None or infinite feature is NaN (imputed by
+    the model), the SIGNED columns centred and signed, then side."""
+    sign = float(side)
+    out = np.empty(len(INPUTS))
+    for i, c in enumerate(FEATURES):
+        v = features.get(c)
+        f = np.nan if v is None else float(v)
+        if not np.isfinite(f):
+            f = np.nan
+        out[i] = (f - SIGNED[c]) * sign if c in SIGNED else f
+    out[-1] = sign
+    return out
 
 
 def horizon_end(rows: pd.DataFrame) -> pd.DatetimeIndex:

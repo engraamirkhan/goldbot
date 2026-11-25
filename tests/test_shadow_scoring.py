@@ -5,6 +5,7 @@ the way the weekly job writes them, with their provenance."""
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import json
 import math
@@ -18,11 +19,12 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from goldbot.data.resample import ticks_to_1m
 from goldbot.engine import exploration, long_bars, shadow_scoring
 from goldbot.engine.exploration import Pending
 from goldbot.research import feature_snapshots as fs
 from goldbot.research import self_retrain as sr
-from tests.test_exploration_engine import CLOSE, _actions, _arm, _at, _engine, _sent
+from tests.test_exploration_engine import CLOSE, TICKS, _actions, _arm, _at, _engine, _sent
 from tests.test_exploration_engine import (
     _rules as _rules,  # noqa: F401  (autouse: the test arms' fixed rules)
 )
@@ -47,16 +49,14 @@ def _model(p: float = 0.5, tau: float = 0.5, inputs: tuple[str, ...] = sr.INPUTS
                          coef=coef if coef is not None else (0.0,) * n, intercept=math.log(p / (1 - p)), tau=tau)
 
 
-_FV: dict[str, str] = {}
-
-
-def _feature_version(eng: Any) -> str:
-    """The feature version of the test engine's vectors (what a trainer on those snapshots records)."""
-    if "v" not in _FV:
-        snap = fs.decision_features(eng.bars_1m, "15m", CLOSE)
-        assert snap is not None
-        _FV["v"] = snap.feature_version
-    return _FV["v"]
+@functools.cache
+def _feature_version() -> str:
+    """The feature version of the test engine's vectors (what a trainer on those snapshots records), built from the
+    synthetic minutes before CLOSE themselves, never from an engine: a test whose engine has no bars yet (or that
+    runs first on its xdist worker) gets the same version as every other test."""
+    snap = fs.decision_features(ticks_to_1m(TICKS[TICKS["ts_utc"] < CLOSE]), "15m", CLOSE)
+    assert snap is not None
+    return snap.feature_version
 
 
 def _store(tmp_path: Path, arm_id: str, model: sr.LogitModel, *, status: str = "shadow", broker: str = "icm",
@@ -72,13 +72,12 @@ def _store(tmp_path: Path, arm_id: str, model: sr.LogitModel, *, status: str = "
             "VALUES (?, 'run', ?, ?, ?, ?, 'test', 0, ?, ?, 300, 40, 41, ?, '{}', 0, 0, ?, ?)",
             (v, broker, arm_id, spec, status, int(cutoff.value), int((cutoff + pd.Timedelta(days=2)).value), body,
              sr.model_sha256(model.model_dump_json()) if sha == "auto" else sha,
-             json.dumps(feature_versions if feature_versions is not None else [_FV.get("v", "fv-test")])))
+             json.dumps(feature_versions if feature_versions is not None else [_feature_version()])))
     return v
 
 
 def _scoring(eng: Any, on: bool = True) -> Any:
     eng.cfg.shadow_score = on
-    _feature_version(eng)
     return eng
 
 
@@ -129,9 +128,9 @@ def test_every_candidate_of_an_arm_with_frozen_models_gets_each_models_score_sha
     assert all(s["candidate_id"] == obs["a"]["candidate_id"] for s in got)
     assert all(s["model_sha256"] == sr.model_sha256(_model(0.3 if s["model_version"] == old else 0.6)
                                                     .model_dump_json()) for s in got)
-    assert all(s["spec_version"] == sr.SPEC_VERSION and s["feature_version"] == _FV["v"] for s in got)
+    assert all(s["spec_version"] == sr.SPEC_VERSION and s["feature_version"] == _feature_version() for s in got)
     assert obs["a"]["meta_p"] == pytest.approx(0.6) and obs["a"]["model_version"] == new
-    assert obs["a"]["feature_version"] == _FV["v"]
+    assert obs["a"]["feature_version"] == _feature_version()
     assert obs["b"]["meta_p"] is None and obs["b"]["model_version"] is None        # an arm without a model
 
 
@@ -734,6 +733,28 @@ def test_the_gate_decides_in_under_5_ms_once_the_vector_is_built(tmp_path, monke
     with capsys.disabled():
         print(f"\nmodel gate on the tick: median {statistics.median(took):.3f} ms")
     assert statistics.median(took) < 5.0
+
+
+def test_the_one_row_design_and_score_equal_the_frame_design_and_score_bit_for_bit():
+    """The gate and the shadow worker score one vector without pandas (`sr.design_row`, `LogitModel.score_row`); the
+    numbers must be the trainer's (`sr.design` then `LogitModel.score`): missing, None, inf and NaN features imputed
+    alike, SIGNED columns centred and signed, both sides."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    n = len(sr.INPUTS)
+    model = sr.LogitModel(inputs=sr.INPUTS, medians=tuple(rng.normal(size=n)), means=tuple(rng.normal(size=n)),
+                          scales=tuple(rng.uniform(0.5, 2.0, size=n)), coef=tuple(rng.normal(size=n)),
+                          intercept=0.3, tau=0.5)
+    feats: dict[str, float | None] = {f: float(v) for f, v in zip(sr.FEATURES, rng.normal(size=len(sr.FEATURES)))}
+    feats["rsi14"], feats["ret_4"], feats["adx14"] = 61.0, None, math.inf
+    feats["bb_z_20"] = math.nan
+    del feats["hour_utc"]
+    feats["not_an_input"] = 3.0
+    for side in (1, -1):
+        frame = sr.design(pd.DataFrame([{**feats, "side": float(side)}]))
+        row = sr.design_row(feats, side)
+        assert np.array_equal(frame.to_numpy(dtype=float)[0], row, equal_nan=True)
+        assert model.score_row(row) == float(model.score(frame)[0])
 
 
 def test_explore_sample_fills_are_excluded_from_edge_reads_like_cohort_fills():

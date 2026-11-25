@@ -30,7 +30,8 @@ The plan's rule (ml-researcher W1): "Every candidate gets the scores of every fr
   - its training feature versions are recorded.
   A refused row is logged once and named in the published state. A vector whose feature version the model never
   trained on is not scored by that model.
-* Parity: scores use the trainer's functions, `self_retrain.design` (signed columns, side) and `LogitModel.score`. The
+* Parity: scores use the trainer's arithmetic without pandas, `self_retrain.design_row` (signed columns, side) and
+  `LogitModel.score_row`, bit for bit `design` then `LogitModel.score` (tested), so the gate decides on the tick. The
   vector's sha256 is the nightly snapshot's (`feature_snapshots.vector_sha256`), so an engine-vs-snapshot parity read
   is a join on `vector_sha256`.
 * Write-once. Rows go to `exploration_model_scores`, which is append-only. `exploration_obs` gets `meta_p`,
@@ -79,7 +80,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from goldbot.base import FrozenRecord, load_record_json
+from goldbot.base import FrozenRecord, Record, load_record_json
 from goldbot.db.connection import now_ns
 from goldbot.instruments import GOLD
 
@@ -111,6 +112,17 @@ GATE_WAIT_S = 5.0                # a gated signal waits at most this long after 
 # a 1m/5m signal never waits for a vector (trading-safety F3 of #463): the sr-v3 card allows them only after its three
 # conditions, so they stay out of the gate in code
 GATE_EXCLUDED_TFS = ("1m", "5m")
+
+
+class ModelScoringConfig(Record):
+    """The engine's two model switches (`runner.EngineConfig` inherits them; ADR 0023: runner.py only shrinks)."""
+    # settings research.self_retrain.shadow_score (lifecycle W1, ADR 0101): every frozen self-retrain model scores each
+    # gold exploration candidate of its arm on a background thread and the score is logged; no decision reads it.
+    # Off by default (tests, tools); production switches it with the settings (ops/services/engine.py)
+    shadow_score: bool = False
+    # accounts.yaml `model_gate` on a demo account (ADR 0101; shipped off on every account): a gating model may refuse
+    # exploration entries before the RiskGate, with a 10 % exploration sample still taken (module docstring)
+    model_gate: bool = False
 
 
 @dataclass(frozen=True)
@@ -231,10 +243,10 @@ def score(models: tuple[ServedModel, ...], snap: Snapshot, side: int, decision_n
             usable.append(m)
     if not usable:
         return [], skipped
-    X = sr.design(pd.DataFrame([{**snap.features, "side": float(side)}]))
+    x = sr.design_row(snap.features, side)              # one vector, no pandas: the gate scores on the tick
     got: list[tuple[ServedModel, float]] = []
     for m in usable:
-        p = float(m.model.score(X)[0])
+        p = m.model.score_row(x)
         if math.isfinite(p):
             got.append((m, p))
         else:
