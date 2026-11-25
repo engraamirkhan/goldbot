@@ -68,7 +68,7 @@ def _synthetic(n: int = 40_000, seed: int = 7) -> tuple[np.ndarray, np.ndarray, 
 
 def test_offset_form_keeps_iff_predicted_gross_minus_known_cost_is_positive_on_a_known_dgp():
     X, gross, cost, mu = _synthetic()
-    m = O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0)
+    m = O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0, design_effect=1.0)
     keep = m.keep(X, cost)
     truth = mu - cost > 0
     assert (keep == truth).mean() > 0.95
@@ -78,21 +78,21 @@ def test_offset_form_keeps_iff_predicted_gross_minus_known_cost_is_positive_on_a
 
 def test_the_fit_target_is_gross_r_clipped_at_ten_r():
     X = np.zeros((4, 1))
-    m = O.fit_offset(X, np.array([40.0, 0.0, 0.0, 0.0]), np.ones(4), lam0=1.0)
+    m = O.fit_offset(X, np.array([40.0, 0.0, 0.0, 0.0]), np.ones(4), lam0=1.0, design_effect=1.0)
     assert m.intercept == pytest.approx(10.0 / 4)
 
 
 def test_multiplying_the_weights_by_ten_gives_an_identical_fit():
     X, gross, _, _ = _synthetic(5_000)
     w = np.random.default_rng(1).uniform(0.2, 1.0, len(gross))
-    a = O.fit_offset(X, gross, w, lam0=50.0)
-    b = O.fit_offset(X, gross, w * 10, lam0=50.0)
+    a = O.fit_offset(X, gross, w, lam0=50.0, design_effect=1.0)
+    b = O.fit_offset(X, gross, w * 10, lam0=50.0, design_effect=1.0)
     assert np.allclose(a.coef, b.coef) and a.intercept == pytest.approx(b.intercept)
 
 
 def test_p_phase_copies_at_uniqueness_one_over_p_with_design_effect_p_reproduce_the_real_only_fit():
     X, gross, _, _ = _synthetic(3_000)
-    real = O.fit_offset(X, gross, np.ones(len(gross)), lam0=200.0)
+    real = O.fit_offset(X, gross, np.ones(len(gross)), lam0=200.0, design_effect=1.0)
     P = 4
     copies = O.fit_offset(np.repeat(X, P, axis=0), np.repeat(gross, P), np.full(len(gross) * P, 1.0 / P),
                           lam0=200.0, design_effect=P)
@@ -103,12 +103,12 @@ def test_an_overlap_design_effect_of_h_scales_the_penalty_by_h():
     X, gross, _, _ = _synthetic(3_000)
     w = np.ones(len(gross))
     assert np.allclose(O.fit_offset(X, gross, w, lam0=100.0, design_effect=3.0).coef,
-                       O.fit_offset(X, gross, w, lam0=300.0).coef)
+                       O.fit_offset(X, gross, w, lam0=300.0, design_effect=1.0).coef)
 
 
 def test_a_model_artifact_without_objective_id_or_with_another_id_does_not_load():
     X, gross, _, _ = _synthetic(500)
-    m = O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0)
+    m = O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0, design_effect=1.0)
     doc = m.model_dump()
     assert O.OffsetModel.model_validate(doc) == m
     doc.pop("objective_id")
@@ -116,6 +116,46 @@ def test_a_model_artifact_without_objective_id_or_with_another_id_does_not_load(
         O.OffsetModel.model_validate(doc)
     with pytest.raises(ValidationError):
         O.OffsetModel.model_validate({**m.model_dump(), "objective_id": "auc-v0"})
+
+
+def test_fit_offset_needs_an_explicit_design_effect():
+    X, gross, _, _ = _synthetic(200)
+    with pytest.raises(TypeError):
+        O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0)  # type: ignore[call-arg]
+
+
+def test_fit_offset_refuses_a_non_finite_label_or_weight_and_a_zero_penalty():
+    X, gross, _, _ = _synthetic(200)
+    w = np.ones(len(gross))
+    bad = gross.copy()
+    bad[3] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        O.fit_offset(X, bad, w, lam0=1.0, design_effect=1.0)
+    w2 = w.copy()
+    w2[0] = np.inf
+    with pytest.raises(ValueError, match="finite"):
+        O.fit_offset(X, gross, w2, lam0=1.0, design_effect=1.0)
+    with pytest.raises(ValueError, match="lam0"):
+        O.fit_offset(X, gross, w, lam0=0.0, design_effect=1.0)
+
+
+def test_an_infinite_input_is_imputed_as_missing_and_the_artifact_round_trips():
+    X, gross, _, _ = _synthetic(500)
+    X[7, 0] = np.inf
+    m = O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0, design_effect=1.0)
+    assert np.isfinite(m.coef).all() and np.isfinite(m.predict_gross(X)).all()
+    assert O.OffsetModel.model_validate_json(m.model_dump_json()) == m
+
+
+def test_a_constant_or_duplicated_column_still_fits_under_the_ridge():
+    X, gross, _, _ = _synthetic(500)
+    X = np.column_stack([X, X[:, 0], np.ones(len(X))])
+    m = O.fit_offset(X, gross, np.ones(len(gross)), lam0=1.0, design_effect=1.0)
+    assert np.isfinite(m.coef).all()
+
+
+def test_the_implied_shrinkage_is_n_eff_over_h_against_lambda():
+    assert O.shrinkage(10_000.0, 2.0, 100.0) == pytest.approx(5_000 / 5_100)
 
 
 # ------------------------------------------------------------------------------------------------ the read
@@ -159,20 +199,31 @@ def test_s_is_mean_net_times_keep_minus_max_zero_and_mean_net():
     assert rd.kept_mean == pytest.approx(net[keep].mean())
 
 
-def test_s_splits_exactly_into_gross_skill_cost_avoidance_and_the_base_term():
+def test_s_splits_exactly_into_gross_skill_cost_avoidance_path_cost_and_the_base_term():
     rng = np.random.default_rng(4)
     n = 4_000
     gross = rng.normal(0.03, 1.0, n)
-    cost = rng.uniform(0.02, 0.15, n)
-    net = gross - cost
-    keep = cost < 0.08                                   # a pure cost-avoidance rule
-    rd = O.read(net, gross, keep, _days(n, 300), boot=0)
+    cost_x = rng.uniform(0.02, 0.15, n)                 # known at decision
+    stop = gross < -0.9
+    realised = cost_x + np.where(stop, 0.05, -0.01)       # the exit path charges more on a stop
+    net = gross - realised
+    keep = cost_x < 0.08                                 # a pure cost-avoidance rule
+    rd = O.read(net, gross, keep, _days(n, 300), cost_x=cost_x, boot=0)
     d = rd.decomposition
-    assert d.gross_skill + d.cost_avoidance + d.base == pytest.approx(rd.s)
+    assert d.cost_avoidance is not None and d.path_cost is not None
+    assert d.gross_skill + d.cost_avoidance + d.path_cost + d.base == pytest.approx(rd.s)
+    assert d.cost_avoidance + d.path_cost == pytest.approx(d.realised_cost_avoidance)
     q = keep.mean()
     assert d.gross_skill == pytest.approx(q * (gross[keep].mean() - gross.mean()))
-    assert d.cost_avoidance == pytest.approx(q * (cost.mean() - cost[keep].mean()))
+    assert d.cost_avoidance == pytest.approx(q * (cost_x.mean() - cost_x[keep].mean()))
     assert d.cost_avoidance > 0 and abs(d.gross_skill) < d.cost_avoidance
+
+
+def test_without_a_decision_time_cost_the_split_is_missing_and_the_gate_fails_closed():
+    n = 2_000
+    rd = O.read(np.full(n, 0.2), np.full(n, 0.3), np.ones(n, dtype=bool), _days(n, 100), boot=0)
+    assert rd.decomposition.cost_avoidance is None and rd.decomposition.path_cost is None
+    assert not O.gate(rd).legs["decision_cost"]
 
 
 def test_the_two_x_cost_stress_doubles_the_cost_leg_with_the_same_keep():
@@ -181,6 +232,15 @@ def test_the_two_x_cost_stress_doubles_the_cost_leg_with_the_same_keep():
     net = gross - 0.04
     rd = O.read(net, gross, np.ones(n, dtype=bool), _days(n, 100), boot=0)
     assert rd.s_stress == pytest.approx((0.10 - 0.08) - 0.02)
+
+
+def test_the_stress_takes_the_cost_from_raw_gross_minus_raw_net_and_clips_after():
+    n = 200
+    gross, net = np.full(n, 12.0), np.full(n, 9.0)        # raw cost 3; the clipped legs would say 10 - 9 = 1
+    keep = np.arange(n) < 100
+    rd = O.read(net, gross, keep, _days(n, 50), boot=0)
+    # stressed net clip(12 - 2 x 3) = 6 on every row: S = 0.5 x 6 - max(0, 6) = -3 (from clipped legs: 4 - 8 = -4)
+    assert rd.s_stress == pytest.approx(-3.0)
 
 
 def test_the_day_block_lower_bound_sits_below_s_and_is_reproducible():
@@ -212,36 +272,64 @@ def test_the_read_reports_kish_n_eff_of_the_uniqueness_weights():
     assert rd.n_eff == pytest.approx(O.kish_n_eff(w))
 
 
+def test_the_bootstrap_orders_days_by_value_not_as_strings():
+    rng = np.random.default_rng(6)
+    n = 3_000
+    net = rng.normal(0.05, 1.0, n)
+    keep = rng.random(n) < 0.6
+    d_int = np.arange(n) % 300                          # 0..299: as strings "10" < "9"
+    d_str = np.array([f"{v:04d}" for v in d_int])
+    a = O.read(net, net, keep, d_int, boot=300, seed=3)
+    b = O.read(net, net, keep, d_str, boot=300, seed=3)
+    assert a.s_lo == b.s_lo
+
+
 # ------------------------------------------------------------------------------------------------ the gate
 def _read(net_mean: float, gross_add: float = 0.05, n: int = 20_000, keep_share: float = 0.5,
-          seed: int = 9) -> O.ObjectiveRead:
+          seed: int = 9, control: float | None = -0.10, boot: int = O.BOOT) -> O.ObjectiveRead:
     rng = np.random.default_rng(seed)
     net = rng.normal(-0.20, 0.3, n)
     keep = rng.random(n) < keep_share
     net[keep] += net_mean + 0.20
     gross = net + gross_add
     gross[keep] += 0.02
-    return O.read(net, gross, keep, _days(n, 1000), boot=400, seed=seed)
+    days = _days(n, 1000)
+    ctrl = None if control is None else rng.normal(control, 0.3, 4_000)
+    return O.read(net, gross, keep, days, cost_x=np.full(n, gross_add), boot=boot, seed=seed,
+                  control_net=ctrl, control_day=None if ctrl is None else _days(4_000, 1000))
 
 
-def test_the_gate_passes_only_when_every_leg_holds():
-    rd = _read(0.20)
-    v = O.gate(rd, control_kept_mean=-0.05)
-    assert v.passed, v.reasons
-    assert set(v.legs) == {"not_abstained", "s_min", "s_lower_bound", "kept_mean", "gross", "control", "cost_stress"}
+def test_the_gate_passes_its_legs_only_when_every_leg_holds():
+    v = O.gate(_read(0.20))
+    assert v.legs_passed, v.reasons
+    assert set(v.legs) == {"not_abstained", "full_bootstrap", "s_min", "s_lower_bound", "kept_mean", "gross",
+                           "control", "cost_stress", "decision_cost"}
 
 
 def test_the_gate_fails_closed_without_a_control_leg():
-    v = O.gate(_read(0.20), control_kept_mean=None)
-    assert not v.passed and not v.legs["control"]
+    v = O.gate(_read(0.20, control=None))
+    assert not v.legs_passed and not v.legs["control"]
+
+
+def test_the_control_leg_needs_kept_minus_control_of_min_s_with_a_positive_lower_bound():
+    rd = _read(0.20, control=0.18)                        # kept beats control by only ~0.02 R
+    assert rd.control_diff is not None and rd.control_diff < O.MIN_S_R
+    assert not O.gate(rd).legs["control"]
+    rd2 = _read(0.20, control=-0.10)
+    assert rd2.control_lo is not None and rd2.control_lo > 0 and O.gate(rd2).legs["control"]
+
+
+def test_a_read_with_fewer_than_boot_draws_fails_the_gate():
+    v = O.gate(_read(0.20, boot=400))
+    assert not v.legs_passed and v.reasons == ("full_bootstrap",)
 
 
 def test_the_gate_fails_a_negative_kept_mean_and_an_abstained_unit():
-    assert not O.gate(_read(-0.01), control_kept_mean=-0.5).passed
+    assert not O.gate(_read(-0.01)).legs_passed
     n = 500
     ab = O.read(np.ones(n), np.ones(n), np.zeros(n, dtype=bool), _days(n, 100), boot=0)
-    v = O.gate(ab, control_kept_mean=-1.0)
-    assert not v.passed and not v.legs["not_abstained"]
+    v = O.gate(ab)
+    assert not v.legs_passed and not v.legs["not_abstained"]
 
 
 def test_paired_delta_of_identical_keeps_is_zero():
@@ -268,9 +356,50 @@ def test_the_import_guard_catches_a_planted_auc_import(tmp_path: Path):
 
 
 def test_the_guard_also_bans_library_defaults_that_select_on_their_own_metric():
-    src = "from sklearn.linear_model import LogisticRegressionCV\nimport lightgbm\nlightgbm.early_stopping(5)\n"
-    found = O.guard_violations_in_source(src, "x.py")
-    assert any("LogisticRegressionCV" in f for f in found) and any("early_stopping" in f for f in found)
+    src = ("from sklearn.linear_model import LogisticRegressionCV, RidgeCV\nimport lightgbm\nlightgbm.early_stopping(5)\n"
+           "from sklearn.model_selection import GridSearchCV, cross_val_score\n"
+           "m = lightgbm.train({}, d, early_stopping_rounds=5)\nf(x, scoring='roc_auc')\n")
+    found = " ".join(O.guard_violations_in_source(src, "x.py"))
+    for name in ("LogisticRegressionCV", "RidgeCV", "early_stopping", "GridSearchCV", "cross_val_score",
+                 "early_stopping_rounds=", "scoring="):
+        assert name in found, name
+
+
+def test_the_guard_flags_hist_gradient_boosting_unless_early_stopping_is_off():
+    bad = "from sklearn.ensemble import HistGradientBoostingRegressor as H\nm = HistGradientBoostingRegressor()\n"
+    ok = "m = HistGradientBoostingRegressor(early_stopping=False)\n"
+    assert any("early_stopping=False" in f for f in O.guard_violations_in_source(bad, "x.py"))
+    assert O.guard_violations_in_source(ok, "x.py") == []
+
+
+def test_the_guard_resolves_relative_and_dynamic_imports():
+    rel = "from .diagnostics import within_arm_auc\nfrom . import diagnostics\n"
+    found = O.guard_violations_in_source(rel, "goldbot/research/x.py", "goldbot.research")
+    assert any("goldbot.research.diagnostics" in f for f in found)
+    dyn = "import importlib\nm = importlib.import_module('sklearn.metrics')\n"
+    assert any("dynamically" in f for f in O.guard_violations_in_source(dyn, "x.py"))
+
+
+def _py_files() -> list[Path]:
+    root = Path(O.__file__).resolve().parents[2]
+    return [p for d in ("goldbot", "scripts") for p in sorted((root / d).rglob("*.py"))]
+
+
+def test_every_user_of_fit_offset_keep_rule_or_gate_is_guarded_or_listed_with_its_reason():
+    root = Path(O.__file__).resolve().parents[2]
+    guarded = {m.replace(".", "/") + ".py" for m in O.GUARDED_MODULES}
+    users = {p.relative_to(root).as_posix() for p in _py_files() if O.objective_users(p.read_text())}
+    users.discard("goldbot/research/objective.py")
+    assert users, "the scan found no user at all: it is broken"
+    assert users - guarded - set(O.UNGUARDED_USERS) == set()
+    assert all(len(why) > 30 for why in O.UNGUARDED_USERS.values())
+    assert set(O.UNGUARDED_USERS) <= users, "a listed user no longer uses obj-v1: drop it"
+
+
+def test_the_reverse_dependency_scan_catches_a_planted_user():
+    assert O.objective_users("from goldbot.research import objective as Q\nQ.gate(r)\n") == {"gate"}
+    assert O.objective_users("from goldbot.research.objective import fit_offset\n") == {"fit_offset"}
+    assert O.objective_users("from goldbot.research import objective\nobjective.read(1)\n") == set()
 
 
 # ------------------------------------------------------------------------------------------------ H-101 acceptance
@@ -285,4 +414,4 @@ def test_h101_stage_l_rows_recompute_to_s_about_minus_0_021_r():
     best = j["keep_B5"].to_numpy(dtype=bool)
     rd = O.read(j["r"].to_numpy(float), j["r_mid"].to_numpy(float), best, j["session_day"].to_numpy(), boot=0)
     assert rd.s == pytest.approx(-0.021, abs=0.003)
-    assert not O.gate(rd, control_kept_mean=None).passed
+    assert not O.gate(rd).legs_passed

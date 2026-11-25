@@ -104,3 +104,39 @@ def test_every_baseline_goes_through_the_same_abstain_rule():
     ev = _rows(300, 2014, 18)
     lad = B.ladder(ev, _rows(3_000, 2013, 19), model_keep=np.ones(len(ev), dtype=bool), cells=("arm", "session"))
     assert all(r.abstain == (r.n_kept < O.MIN_KEPT or r.n_kept_days < O.MIN_KEPT_DAYS) for r in lad.values())
+
+
+def test_best_bar_reports_the_best_rung_with_and_without_the_in_sample_b8():
+    ev, lr = _rows(6_000, 2014, 20), _rows(6_000, 2013, 21)
+    lad = B.ladder(ev, lr, model_keep=np.ones(len(ev), dtype=bool))
+    name_t, s_t = B.best_bar(lad, include_b8=False)
+    assert name_t != "B8" and s_t == max(float(lad[b].s or -1e9) for b in B.BAR if b != "B8")
+    assert B.best_bar(lad)[1] >= s_t
+
+
+def test_the_ladder_refuses_learn_rows_whose_label_closes_after_the_first_judged_decision():
+    ev, lr = _rows(2_000, 2014, 22), _rows(2_000, 2013, 23)
+    late = lr.copy()
+    late.loc[late.index[0], "t1"] = ev["t0"].min()
+    with pytest.raises(ValueError, match="closes at or after"):
+        B.ladder_keeps(ev, late, model_keep=np.ones(len(ev), dtype=bool))
+    with pytest.raises(ValueError, match="closes at or after"):
+        B.ladder_keeps(ev, pd.concat([lr, ev]), model_keep=np.ones(len(ev), dtype=bool))
+
+
+def test_b2_keeps_rows_whose_cell_key_is_missing():
+    ev = _rows(1_000, 2014, 24).astype({"session": float})
+    ev.loc[ev.index[:200], "session"] = np.nan
+    model_keep = np.zeros(len(ev), dtype=bool)
+    model_keep[:50] = True                               # all inside the NaN cell
+    keep = B.keep_random_matched(ev, model_keep, cells=("session",), seed=1)
+    assert keep[:200].sum() == 50
+
+
+def test_every_rung_reads_with_the_decision_time_cost_so_its_s_is_decomposed():
+    ev, lr = _rows(3_000, 2014, 25), _rows(3_000, 2013, 26)
+    keep = B.keep_arm_intercept(ev, lr)
+    rd = O.read(ev["net"].to_numpy(), ev["gross"].to_numpy(), keep, ev["day"].to_numpy(),
+                cost_x=ev["cost"].to_numpy(), boot=0)
+    assert B.ladder(ev, lr, model_keep=keep)["B3"].s == pytest.approx(rd.s)
+    assert rd.decomposition.cost_avoidance is not None

@@ -64,21 +64,22 @@ def _cells(n: int, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nd
 def test_shuffled_labels_keep_at_most_five_percent_beyond_the_intercept_rule_with_a_sound_penalty():
     X, gross, cost, days, w = _cells(30_000, 3)
     cells = np.where(X[:, 0] > 0, "hi", "lo")
-    chk = D.shuffled_keep_check(X, gross, cost, w, days, cells, lam0=50.0, seed=4)
-    assert chk.passed, chk.excess_keep_share
+    chk = D.shuffled_keep_check(X, gross, cost, w, days, cells, lam0=50.0, design_effect=1.0, seed=4)
+    assert chk.passed, chk.false_keep_share
 
 
 def test_the_shuffled_check_flags_a_penalty_that_is_too_loose_on_noise_features():
     X, gross, cost, days, w = _cells(400, 5)
     X = np.random.default_rng(6).normal(size=(400, 150))
     gross = gross * 4 - 1.0                              # the intercept rule keeps nothing
-    chk = D.shuffled_keep_check(X, gross, cost, w, days, np.full(400, "all"), lam0=1e-6, seed=7, min_kept=0)
+    chk = D.shuffled_keep_check(X, gross, cost, w, days, np.full(400, "all"), lam0=1e-6, design_effect=1.0,
+                                 seed=7, min_kept=0)
     assert not chk.passed
 
 
 def test_the_oracle_canary_recovers_a_planted_ten_basis_point_signal():
     X, gross, cost, days, w = _cells(40_000, 8)
-    can = D.oracle_canary(X, gross, cost, w, days, delta=0.10, lam0=10.0, seed=9)
+    can = D.oracle_canary(X, gross, cost, w, days, delta=0.10, lam0=10.0, design_effect=1.0, seed=9)
     assert can.s_oracle > can.s_null and can.recovered
 
 
@@ -89,3 +90,19 @@ def test_score_deciles_tabulate_win_rate_and_mean_net_r_per_decile():
     t = D.score_deciles(s, net)
     assert len(t) == 10 and list(t.columns) == ["n", "win_rate", "mean_net_r"]
     assert t["mean_net_r"].is_monotonic_increasing
+
+
+def test_the_false_keep_metric_fails_noise_keeps_that_a_net_excess_would_cancel():
+    """Quant ruling 3 on PR #461: lam0 = 1e-6, 150 noise columns, an intercept rule keeping 30-70 %: the fit keeps
+    about as many rows as the intercept rule, but different ones; the net excess is ~0, the false-keep share is not."""
+    rng = np.random.default_rng(11)
+    n = 400
+    X = rng.normal(size=(n, 150))
+    gross = rng.normal(0.08, 1.0, n)
+    cost = rng.uniform(0.02, 0.14, n)                    # the intercept (~0.08) beats about half the costs
+    days = np.array([f"d{i % 120:04d}" for i in range(n)])
+    assert 0.3 < (gross.mean() - cost > 0).mean() < 0.7
+    chk = D.shuffled_keep_check(X, gross, cost, np.ones(n), days, np.full(n, "all"), lam0=1e-6, design_effect=1.0,
+                                seed=12, min_kept=0)
+    assert not chk.passed and chk.false_keep_share["all"] > 0.05
+    assert chk.xor_share["all"] >= chk.false_keep_share["all"]

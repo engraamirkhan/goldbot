@@ -20,7 +20,11 @@ named by the caller. `twin_net` (the side- and hour-matched control twin's net R
 - B7 matched twin (descriptive, not on the bar): the model's keep applied to the twin's net R. Prices out "the model
   picks good times, not good trades".
 - B8 arm × year intercept, IN SAMPLE on the judged rows (keep an arm-year iff its own mean net R > 0). Not tradeable;
-  it prices out regime switching ("keep_shares swing 0.42-0.99 by arm × year"), so S(B8) >= 0 always.
+  it prices out regime switching ("keep_shares swing 0.42-0.99 by arm × year"), so S(B8) >= 0 always. `best_bar`
+  reports the best rung with and without it.
+
+Learn rows must all have closed before the first judged decision (`ladder_keeps` refuses otherwise), so a learn row
+is never also a judged row and B6 never counts a row twice.
 
 Every arm judged here is a retired, learn-selected arm, so any edge over this ladder is conditional on that selection
 (S9S gap); a card states it.
@@ -70,7 +74,7 @@ def keep_random_matched(rows: pd.DataFrame, model_keep: np.ndarray, *, cells: Se
     mk = np.asarray(model_keep, dtype=bool)
     rng = np.random.default_rng(seed)
     out = np.zeros(len(rows), dtype=bool)
-    for _, idx in rows.reset_index(drop=True).groupby(list(cells), sort=True).indices.items():
+    for _, idx in rows.reset_index(drop=True).groupby(list(cells), sort=True, dropna=False).indices.items():
         k = int(mk[idx].sum())
         if k:
             out[rng.choice(idx, size=k, replace=False)] = True
@@ -154,8 +158,9 @@ def keep_arm_year_in_sample(rows: pd.DataFrame) -> np.ndarray:
 # ---------------------------------------------------------------------------------------------- the ladder
 def _rung(name: str, rows: pd.DataFrame, keep: np.ndarray, *, in_sample: bool = False, net_col: str = "net",
           gross_col: str = "gross", note: str = "") -> BaselineRead:
+    cx = rows["cost"].to_numpy(dtype=float) if net_col == "net" else None
     rd = O.read(rows[net_col].to_numpy(dtype=float), rows[gross_col].to_numpy(dtype=float), keep,
-                rows["day"].to_numpy(), boot=0)
+                rows["day"].to_numpy(), cost_x=cx, boot=0)
     return BaselineRead(name=name, available=True, in_sample=in_sample, s=rd.s, keep_share=rd.keep_share,
                         n_kept=rd.n_kept, n_kept_days=rd.n_kept_days, abstain=rd.abstain, note=note)
 
@@ -167,6 +172,8 @@ def ladder_keeps(eval_rows: pd.DataFrame, learn_rows: pd.DataFrame, *, model_kee
     keeps of several blocks and read the pooled unit once (the max(0, ·) is per judged unit, R-M)."""
     ev = eval_rows.reset_index(drop=True)
     lr = learn_rows.reset_index(drop=True)
+    if len(ev) and len(lr) and (pd.DatetimeIndex(lr["t1"]) >= pd.DatetimeIndex(ev["t0"]).min()).any():
+        raise ValueError("ladder_keeps: a learn label closes at or after the first judged decision")
     n = len(ev)
     rule = choose_rule(lr, rule_cols=rule_cols)
     keeps = {
@@ -208,9 +215,11 @@ def ladder(eval_rows: pd.DataFrame, learn_rows: pd.DataFrame, *, model_keep: np.
     return read_ladder(eval_rows, keeps, model_keep=model_keep, notes=notes)
 
 
-def best_bar(lad: Mapping[str, BaselineRead]) -> tuple[str, float]:
-    """(name, S) of the best available rung on the bar; ties go to the earlier rung."""
-    avail = [(b, float(s)) for b in BAR if b in lad and lad[b].available and (s := lad[b].s) is not None]
+def best_bar(lad: Mapping[str, BaselineRead], *, include_b8: bool = True) -> tuple[str, float]:
+    """(name, S) of the best available rung on the bar; ties go to the earlier rung. `include_b8=False` gives the best
+    tradeable rung (B8 is in sample); a card reports both (quant ruling 4 on PR #461), and the serve rule uses B8."""
+    bar = [b for b in BAR if include_b8 or b != "B8"]
+    avail = [(b, float(s)) for b in bar if b in lad and lad[b].available and (s := lad[b].s) is not None]
     return max(avail, key=lambda t: t[1])
 
 

@@ -13,7 +13,9 @@ Reading rules (N10), applied by the card, not by this code:
 Two translations to the offset form (R-I), recorded in ADR 0102:
 - N6's "keep share <= 5 % in every cell whose weighted base rate is below 0.5" was written for the p_w >= 0.5 logit.
   Under the offset form a model fitted to shuffled gross R collapses to its intercept, and intercept − cost(x) > 0 is
-  a legitimate cost-only keep. The check therefore bounds the keep share IN EXCESS of that intercept-only rule.
+  a legitimate cost-only keep. The check is therefore relative to that intercept-only rule (quant-signed), and its
+  metric is the FALSE-KEEP share mean(keep & ~keep0) <= 5 % per cell (quant ruling 3 on PR #461: a net excess lets
+  noise keeps cancel against noise drops); mean(keep XOR keep0) is reported beside it.
 - BSS is for a probability; the offset form's prediction is in R, so `mse_skill` is its analogue.
 """
 from __future__ import annotations
@@ -27,7 +29,7 @@ from scipy import stats
 from goldbot.base import FrozenRecord
 from goldbot.research import objective as O
 
-MAX_EXCESS_KEEP = 0.05
+MAX_FALSE_KEEP = 0.05
 
 
 class Calibration(FrozenRecord):
@@ -48,8 +50,10 @@ class CurvePoint(FrozenRecord):
 
 
 class ShuffleCheck(FrozenRecord):
-    """Per cell: OOF keep share of the fit on shuffled gross R minus the intercept-only rule's keep share."""
-    excess_keep_share: dict[str, float]
+    """Per cell, for the OOF fit on shuffled gross R against the intercept-only rule: the false-keep share
+    mean(keep & ~keep0) (the check) and the disagreement share mean(keep XOR keep0) (reported)."""
+    false_keep_share: dict[str, float]
+    xor_share: dict[str, float]
     kept: dict[str, int]
     passed: bool
 
@@ -145,40 +149,42 @@ def _folds(day: np.ndarray) -> np.ndarray:
     return (inv % 2).astype(bool)
 
 
-def _oof(X: np.ndarray, y: np.ndarray, w: np.ndarray, day: np.ndarray, lam0: float) -> tuple[np.ndarray, np.ndarray]:
+def _oof(X: np.ndarray, y: np.ndarray, w: np.ndarray, day: np.ndarray, lam0: float,
+         design_effect: float) -> tuple[np.ndarray, np.ndarray]:
     """(OOF predicted gross R, OOF intercept-only prediction) over the two day folds."""
     f = _folds(day)
     pred, base = np.empty(len(y)), np.empty(len(y))
     for tr in (f, ~f):
-        m = O.fit_offset(X[tr], y[tr], w[tr], lam0=lam0)
+        m = O.fit_offset(X[tr], y[tr], w[tr], lam0=lam0, design_effect=design_effect)
         pred[~tr] = m.predict_gross(X[~tr])
         base[~tr] = float(np.average(O.clip_r(y[tr]), weights=w[tr]))
     return pred, base
 
 
 def shuffled_keep_check(X: np.ndarray, gross_r: np.ndarray, cost: np.ndarray, w: np.ndarray, day: np.ndarray,
-                        cells: np.ndarray, *, lam0: float, seed: int = O.SEED,
+                        cells: np.ndarray, *, lam0: float, design_effect: float, seed: int = O.SEED,
                         min_kept: int = O.MIN_KEPT) -> ShuffleCheck:
     """N6: shuffle gross R (seeded), fit through the full offset pipeline out of fold, keep iff pred − cost > 0. Per
-    cell the keep share in excess of the intercept-only rule must be <= 5 %, or the cell keeps fewer than `min_kept`
-    rows (it would ABSTAIN). Otherwise the penalty is too loose."""
+    cell the share of rows kept that the intercept-only rule drops must be <= 5 %, or the cell keeps fewer than
+    `min_kept` rows (it would ABSTAIN). Otherwise the penalty is too loose."""
     M = np.asarray(X, dtype=float)
     y = np.random.default_rng(seed).permutation(np.asarray(gross_r, dtype=float))
     c = np.asarray(cost, dtype=float)
-    pred, base = _oof(M, y, np.asarray(w, dtype=float), day, lam0)
+    pred, base = _oof(M, y, np.asarray(w, dtype=float), day, lam0, design_effect)
     keep, keep0 = O.keep_rule(pred, c), O.keep_rule(base, c)
     cl = np.asarray(cells).astype(str)
-    excess, kept = {}, {}
+    false, xor, kept = {}, {}, {}
     for g in np.unique(cl):
         m = cl == g
-        excess[g] = float(keep[m].mean() - keep0[m].mean())
+        false[g] = float((keep[m] & ~keep0[m]).mean())
+        xor[g] = float((keep[m] ^ keep0[m]).mean())
         kept[g] = int(keep[m].sum())
-    ok = all(excess[g] <= MAX_EXCESS_KEEP or kept[g] < min_kept for g in excess)
-    return ShuffleCheck(excess_keep_share=excess, kept=kept, passed=ok)
+    ok = all(false[g] <= MAX_FALSE_KEEP or kept[g] < min_kept for g in false)
+    return ShuffleCheck(false_keep_share=false, xor_share=xor, kept=kept, passed=ok)
 
 
 def oracle_canary(X: np.ndarray, gross_r: np.ndarray, cost: np.ndarray, w: np.ndarray, day: np.ndarray, *,
-                  delta: float, lam0: float, seed: int = O.SEED) -> Canary:
+                  delta: float, lam0: float, design_effect: float, seed: int = O.SEED) -> Canary:
     """Plant gross + delta · (2z − 1) on a fresh fair coin z, add z as an input, fit out of fold and read S. Recovered
     iff the oracle beats the null and the model closes at least half of the oracle's gap over the null."""
     rng = np.random.default_rng(seed)
@@ -187,7 +193,8 @@ def oracle_canary(X: np.ndarray, gross_r: np.ndarray, cost: np.ndarray, w: np.nd
     gc = g + delta * (2 * z - 1)
     c = np.asarray(cost, dtype=float)
     net = gc - c
-    pred, base = _oof(np.column_stack([np.asarray(X, dtype=float), z]), gc, np.asarray(w, dtype=float), day, lam0)
+    pred, base = _oof(np.column_stack([np.asarray(X, dtype=float), z]), gc, np.asarray(w, dtype=float), day, lam0,
+                      design_effect)
     oracle = float(np.average(O.clip_r(g), weights=w)) + delta * (2 * z - 1)
 
     def s(keep: np.ndarray) -> float:

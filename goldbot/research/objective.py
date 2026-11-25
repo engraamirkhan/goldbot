@@ -18,19 +18,24 @@ The pieces, as the ADR words them:
 - **The statistic (D3).** "S = mean(net R x keep) − max(0, mean(net R)), per candidate, day-block bootstrap", the
   max(0, ·) taken per judged unit (R-M), never per arm.
 - **Gate legs.** "S ≥ +0.05 R with lower bound > 0, kept mean > 0, gross ≥ 0, a side-matched control leg"; R-H: "the
-  2x cost stress row must keep S ≥ 0". Deflation at the K of record and the two consecutive judged reads are the
-  caller's (the registry), not this module's.
-- **Decomposition (R-I).** "Every read reports S split into gross skill (kept gross − all gross) and cost avoidance
-  (the rest)." The rest is split once more so the three parts add up exactly (`Decomposition`).
+  2x cost stress row must keep S ≥ 0". The control leg (quant C5): kept mean − control mean ≥ MIN_S_R with a
+  day-block lower bound > 0. A read without the full BOOT draws, a control or a decision-time cost fails closed.
+  Deflation at the K of record and the two consecutive judged reads are the caller's (the registry).
+- **Decomposition (R-I, quant C3).** "Every read reports S split into gross skill (kept gross − all gross) and cost
+  avoidance (the rest)." With the decision-time cost(x) the rest splits into cost avoidance (on cost(x)), path cost
+  (realised − cost(x): what the exit path charged beyond the expectation) and the base; the four add to S exactly.
 - **Weights (section 3, N5).** Kish n_eff = (Σw)²/Σw². Fit weights are normalised to sum to n_eff / H, where H is the
   overlap design effect the caller states (H = P for P phase copies of one label). The ridge penalty λ0 is a prior worth
   λ0 effective rows per standardised coefficient (`fit_offset`): weights x 10 give the identical fit, P phase copies at
-  1/P with H = P reproduce the real-only fit, and an overlap H scales the penalty by H (ADR 0102 records why this, and
-  not the plan's C_fold = 1/(λ0 · n_eff), is the unit convention).
+  1/P with H = P reproduce the real-only fit, and an overlap H scales the penalty by H (ADR 0102, quant-signed with
+  conditions: `design_effect` has no default; every card states λ0, H, how H is measured and the implied shrinkage
+  (n_eff/H) / (n_eff/H + λ0) >= 0.9 at its smallest fold, `shrinkage`).
 
 Guard: AUC, accuracy, win rate and *unweighted* log-loss "are banned from selection, threshold and gate, and are
-reported as diagnostics only" (`research/diagnostics.py`). `guard_violations` checks every module in
-`GUARDED_MODULES` and the goldbot modules it imports; a new fit/threshold/select/gate module adds itself there.
+reported as diagnostics only" (`research/diagnostics.py`), as are library defaults that select on their own metric
+(CV searches, `*CV` estimators, early stopping, a `scoring=` argument). `guard_violations` checks every module in
+`GUARDED_MODULES` and the goldbot modules it imports (absolute, relative and `importlib` imports). Every module that
+uses `fit_offset`, `keep_rule` or `gate` is guarded or listed with its reason in `UNGUARDED_USERS` (test).
 """
 from __future__ import annotations
 
@@ -60,12 +65,24 @@ LOWER_Q = 0.05              # one-sided 95 % lower bound
 _BOOT_CHUNK = 500           # draws held in memory at once
 
 # modules on a fit, threshold, select or gate path (each new one adds itself; diagnostics.py must never be here)
-GUARDED_MODULES: tuple[str, ...] = ("goldbot.research.objective", "goldbot.research.baselines")
+GUARDED_MODULES: tuple[str, ...] = ("goldbot.research.objective", "goldbot.research.baselines",
+                                    "goldbot.research.decision_cost")
+# users of fit_offset / keep_rule / gate that are NOT on a select or gate path, each with its reason
+UNGUARDED_USERS: dict[str, str] = {
+    "goldbot/research/diagnostics.py": "the descriptive battery: fits only for the shuffle check and the canary, "
+                                       "never selects, thresholds or gates (N10: never a selector)",
+    "scripts/research/obj_v1_h101_recompute.py": "descriptive retro of the seen H-101 Stage L read (0 K); reads "
+                                                 "zoo-v1's judged-row definition, which carries its own AUC leak check",
+}
+GUARDED_CALLS: frozenset[str] = frozenset({"fit_offset", "keep_rule", "gate"})
 # names that may not appear on those paths, nor in any goldbot module they import
 BANNED_NAMES: frozenset[str] = frozenset({
     "roc_auc_score", "roc_curve", "auc", "accuracy_score", "balanced_accuracy_score", "log_loss", "brier_score_loss",
     "win_rate", "within_arm_auc", "LogisticRegressionCV", "CalibratedClassifierCV", "early_stopping",
+    "GridSearchCV", "RandomizedSearchCV", "HalvingGridSearchCV", "HalvingRandomSearchCV", "RidgeCV", "LassoCV",
+    "ElasticNetCV", "cross_val_score", "cross_validate",
 })
+BANNED_KWARGS: frozenset[str] = frozenset({"early_stopping_rounds", "scoring"})
 BANNED_MODULES: frozenset[str] = frozenset({"sklearn.metrics", "sklearn.calibration", "goldbot.research.diagnostics",
                                             "goldbot.research.metrics"})
 
@@ -133,7 +150,7 @@ class OffsetModel(FrozenRecord):
     artifact without `objective_id` or with another id (ADR 0098 section 4)."""
     objective_id: Literal["obj-v1"]
     features: tuple[str, ...]
-    impute: tuple[float, ...]       # per-column median of the training rows (NaN inputs take it)
+    impute: tuple[float, ...]       # per-column median of the training rows (NaN or ±inf inputs take it)
     center: tuple[float, ...]       # weighted mean after imputation
     scale: tuple[float, ...]        # weighted SD after imputation (1 where constant)
     coef: tuple[float, ...]         # per standardised column, gross R per SD
@@ -148,16 +165,18 @@ class OffsetModel(FrozenRecord):
         return self.intercept + _standardise(_matrix(X, self.features), self) @ np.asarray(self.coef)
 
     def keep(self, X: np.ndarray | pd.DataFrame, cost: np.ndarray) -> np.ndarray:
-        """The obj-v1 keep rule on these rows at their known ub95 cost."""
+        """The obj-v1 keep rule on these rows at their known decision-time cost."""
         return keep_rule(self.predict_gross(X), cost)
 
 
 def _matrix(X: np.ndarray | pd.DataFrame, features: tuple[str, ...] | None = None) -> np.ndarray:
     if isinstance(X, pd.DataFrame):
         X = X[list(features)] if features else X
-        return X.to_numpy(dtype=float)
-    M = np.asarray(X, dtype=float)
-    return M.reshape(-1, 1) if M.ndim == 1 else M
+        M = X.to_numpy(dtype=float)
+    else:
+        M = np.asarray(X, dtype=float)
+        M = M.reshape(-1, 1) if M.ndim == 1 else M
+    return np.where(np.isinf(M), np.nan, M)          # ±inf is missing, never a value
 
 
 def _standardise(M: np.ndarray, m: OffsetModel) -> np.ndarray:
@@ -165,19 +184,29 @@ def _standardise(M: np.ndarray, m: OffsetModel) -> np.ndarray:
     return (M - np.asarray(m.center)) / np.asarray(m.scale)
 
 
+def shrinkage(n_eff: float, design_effect: float, lam0: float) -> float:
+    """The implied shrinkage (n_eff/H) / (n_eff/H + λ0) a card states at its smallest fold (quant N5 condition: >= 0.9)."""
+    n = n_eff / design_effect
+    return n / (n + lam0)
+
+
 def fit_offset(X: np.ndarray | pd.DataFrame, gross_r: np.ndarray, weights: np.ndarray, *, lam0: float,
-               design_effect: float = 1.0) -> OffsetModel:
+               design_effect: float) -> OffsetModel:
     """R-I's primary form: minimise Σ w̃ (clip(gross R) − b − zβ)² + λ0 ||β||², w̃ = `normalise_weights(weights,
-    design_effect)` (Σw̃ = n_eff / H effective rows), z the inputs median-imputed and standardised with the weights,
-    the intercept unpenalised. λ0 is fixed in the card before data; nothing here selects it."""
-    if lam0 < 0:
-        raise ValueError("fit_offset: lam0 >= 0")
+    design_effect)` (Σw̃ = n_eff / H effective rows), z the inputs median-imputed (NaN and ±inf) and standardised with
+    the weights, the intercept unpenalised. λ0 > 0 and H are fixed in the card before data; nothing here selects them.
+    A non-finite label or weight, or a non-finite solution, raises: an artifact is never written from one."""
+    if not lam0 > 0:
+        raise ValueError("fit_offset: lam0 > 0 (a ridge penalty keeps collinear or constant columns solvable)")
     features = tuple(str(c) for c in X.columns) if isinstance(X, pd.DataFrame) else ()
     M = _matrix(X)
-    y = clip_r(gross_r)
+    g = np.asarray(gross_r, dtype=float)
     w = np.asarray(weights, dtype=float)
-    if not (len(M) == len(y) == len(w)) or len(y) == 0:
+    if not (len(M) == len(g) == len(w)) or len(g) == 0:
         raise ValueError("fit_offset: X, gross_r and weights need the same, non-zero length")
+    if not (np.isfinite(g).all() and np.isfinite(w).all()):
+        raise ValueError("fit_offset: gross_r and weights must be finite")
+    y = clip_r(g)
     wn = normalise_weights(w, design_effect)
     impute = np.array([float(np.nanmedian(c)) if np.isfinite(c).any() else 0.0 for c in M.T])
     M = np.where(np.isnan(M), impute, M)
@@ -189,6 +218,8 @@ def fit_offset(X: np.ndarray | pd.DataFrame, gross_r: np.ndarray, weights: np.nd
     A = Z.T @ (Z * wn[:, None])
     A[1:, 1:] += lam0 * np.eye(Z.shape[1] - 1)
     theta = np.linalg.solve(A, Z.T @ (wn * y))
+    if not np.isfinite(theta).all():
+        raise ValueError("fit_offset: the solution is not finite")
     return OffsetModel(objective_id=OBJECTIVE_ID, features=features, impute=tuple(impute.tolist()),
                        center=tuple(center.tolist()), scale=tuple(scale.tolist()), coef=tuple(theta[1:].tolist()),
                        intercept=float(theta[0]), lam0=float(lam0), design_effect=float(design_effect),
@@ -208,11 +239,15 @@ def net_logit_weights(net_r: np.ndarray, uniqueness: np.ndarray) -> np.ndarray:
 
 # ---------------------------------------------------------------------------------------------- the read
 class Decomposition(FrozenRecord):
-    """S = gross_skill + cost_avoidance + base, per candidate (q = keep share):
-    gross_skill = q (kept gross − all gross), cost_avoidance = q (all cost − kept cost),
-    base = q · mean net − max(0, mean net) (what keeping a random q-share of the unit would earn over the bar)."""
+    """S per candidate (q = keep share; on clipped gross and net, realised cost c = gross − net):
+    gross_skill = q (kept gross − all gross); base = q · mean net − max(0, mean net);
+    realised_cost_avoidance = q (all c − kept c), which splits, given the decision-time cost(x), into
+    cost_avoidance = q (all cost(x) − kept cost(x)) and path_cost = q (all e − kept e), e = c − cost(x).
+    S = gross_skill + cost_avoidance + path_cost + base exactly. Without cost(x) the last split is None."""
     gross_skill: float
-    cost_avoidance: float
+    realised_cost_avoidance: float
+    cost_avoidance: float | None
+    path_cost: float | None
     base: float
 
 
@@ -221,7 +256,7 @@ class ObjectiveRead(FrozenRecord):
     −max(0, mean net) and `kept_mean` is None."""
     objective_id: Literal["obj-v1"] = OBJECTIVE_ID
     n: int
-    n_days: int
+    n_days: int                     # session days with at least one candidate in the unit
     n_kept: int                     # as decided, before abstention
     n_kept_days: int
     abstain: bool
@@ -232,11 +267,15 @@ class ObjectiveRead(FrozenRecord):
     kept_gross_minus_all: float | None
     s: float
     s_lo: float | None              # day-block one-sided 95 % lower bound (None: boot = 0)
-    s_stress: float                 # S with the cost leg x STRESS_COST_MULT, same keep unless a stress keep was given
+    boot: int                       # bootstrap draws behind s_lo and control_lo
+    s_stress: float                 # S with the realised cost leg x STRESS_COST_MULT, same keep unless given
     decomposition: Decomposition
+    control_n: int                  # side-matched control rows (0: none given)
+    control_diff: float | None      # kept mean − control mean net R
+    control_lo: float | None        # its day-block one-sided 95 % lower bound
     n_eff: float | None             # Kish n_eff of the uniqueness weights, if given
     quarantined: int
-    gbp_per_day: float | None
+    gbp_per_day: float | None       # unclipped kept net R x £/R per session day with candidates
 
 
 def abstains(keep: np.ndarray, day: np.ndarray) -> bool:
@@ -262,14 +301,21 @@ def s_statistic(net: np.ndarray, keep: np.ndarray) -> float:
     return float((net * keep).mean() - max(0.0, float(net.mean())))
 
 
+def _mean(x: np.ndarray, m: np.ndarray) -> float:
+    return float(x[m].mean()) if m.any() else 0.0
+
+
 def read(net_r: np.ndarray, gross_r: np.ndarray, keep: np.ndarray, day: np.ndarray, *,
-         weights: np.ndarray | None = None, gbp_per_r: float | None = None, stress_keep: np.ndarray | None = None,
-         boot: int = BOOT, seed: int = SEED, mean_block: int = MEAN_BLOCK_DAYS) -> ObjectiveRead:
-    """The obj-v1 read of one judged unit. `net_r` and `gross_r` are unclipped R per candidate (cost = gross − net is
-    the cost leg charged); `day` the session day; `keep` the decided keep. Abstention first, from counts."""
-    raw = np.asarray(net_r, dtype=float)
-    net, gross = clip_r(raw), clip_r(gross_r)
-    day = np.asarray(day).astype(str)
+         cost_x: np.ndarray | None = None, control_net: np.ndarray | None = None,
+         control_day: np.ndarray | None = None, weights: np.ndarray | None = None, gbp_per_r: float | None = None,
+         stress_keep: np.ndarray | None = None, boot: int = BOOT, seed: int = SEED,
+         mean_block: int = MEAN_BLOCK_DAYS) -> ObjectiveRead:
+    """The obj-v1 read of one judged unit. `net_r` and `gross_r` are unclipped R per candidate (gross − net is the
+    realised cost charged); `day` the session day; `keep` the decided keep; `cost_x` the decision-time cost(x);
+    `control_net` / `control_day` the side-matched control's rows. Abstention first, from counts."""
+    raw_net, raw_gross = np.asarray(net_r, dtype=float), np.asarray(gross_r, dtype=float)
+    net, gross = clip_r(raw_net), clip_r(raw_gross)
+    day = np.asarray(day)
     k_dec = np.asarray(keep, dtype=bool)
     if not (len(net) == len(gross) == len(k_dec) == len(day)) or len(net) == 0:
         raise ValueError("read: net_r, gross_r, keep and day need the same, non-zero length")
@@ -277,35 +323,53 @@ def read(net_r: np.ndarray, gross_r: np.ndarray, keep: np.ndarray, day: np.ndarr
     ab = abstains(k_dec, day)
     k = np.zeros(len(net), dtype=bool) if ab else k_dec
     kf = k.astype(float)
-    cost = gross - net
     q = float(kf.mean())
     s = s_statistic(net, kf)
     mean_net = float(net.mean())
-    dec = Decomposition(
-        gross_skill=q * (float(gross[k].mean()) - float(gross.mean())) if k.any() else 0.0,
-        cost_avoidance=q * (float(cost.mean()) - float(cost[k].mean())) if k.any() else 0.0,
-        base=q * mean_net - max(0.0, mean_net))
+    c = gross - net
+    ca = cp = None
+    if cost_x is not None:
+        cx = np.asarray(cost_x, dtype=float)
+        if len(cx) != len(net) or not np.isfinite(cx).all():
+            raise ValueError("read: cost_x must be finite, one per candidate")
+        e = c - cx
+        ca = q * (float(cx.mean()) - _mean(cx, k)) if k.any() else 0.0
+        cp = q * (float(e.mean()) - _mean(e, k)) if k.any() else 0.0
+    dec = Decomposition(gross_skill=q * (_mean(gross, k) - float(gross.mean())) if k.any() else 0.0,
+                        realised_cost_avoidance=q * (float(c.mean()) - _mean(c, k)) if k.any() else 0.0,
+                        cost_avoidance=ca, path_cost=cp, base=q * mean_net - max(0.0, mean_net))
     ks = k if stress_keep is None else (np.zeros(len(net), bool) if abstains(stress_keep, day)
                                         else np.asarray(stress_keep, dtype=bool))
-    s_stress = s_statistic(clip_r(gross - STRESS_COST_MULT * cost), ks.astype(float))
+    # C8: the cost leg from raw gross − raw net, doubled, then clipped
+    s_stress = s_statistic(clip_r(raw_gross - STRESS_COST_MULT * (raw_gross - raw_net)), ks.astype(float))
     s_lo = None
     if boot > 0:
-        draws = _boot_s(net, kf, day, boot=boot, seed=seed, mean_block=mean_block)
-        s_lo = float(np.quantile(draws, LOWER_Q))
+        s_lo = float(np.quantile(_boot_s(net, kf, day, boot=boot, seed=seed, mean_block=mean_block), LOWER_Q))
+    control_n, c_diff, c_lo = 0, None, None
+    if control_net is not None:
+        cn = clip_r(control_net)
+        if control_day is None or len(control_day) != len(cn):
+            raise ValueError("read: control_day must give one session day per control row")
+        control_n = len(cn)
+        if k.any() and control_n:
+            c_diff = _mean(net, k) - float(cn.mean())
+            if boot > 0:
+                c_lo = float(np.quantile(_boot_control(net[k], day[k], cn, np.asarray(control_day), boot=boot,
+                                                       seed=seed, mean_block=mean_block), LOWER_Q))
     n_days = len(np.unique(day))
     return ObjectiveRead(
         n=len(net), n_days=n_days, n_kept=n_kept, n_kept_days=n_kept_days, abstain=ab, keep_share=q,
-        mean_net=mean_net, mean_gross=float(gross.mean()), kept_mean=float(net[k].mean()) if k.any() else None,
-        kept_gross_minus_all=float(gross[k].mean() - gross.mean()) if k.any() else None, s=s, s_lo=s_lo,
-        s_stress=s_stress, decomposition=dec, n_eff=None if weights is None else kish_n_eff(weights),
-        quarantined=quarantine_count(raw),
-        gbp_per_day=None if gbp_per_r is None else float((raw * kf).sum()) / n_days * gbp_per_r)
+        mean_net=mean_net, mean_gross=float(gross.mean()), kept_mean=_mean(net, k) if k.any() else None,
+        kept_gross_minus_all=_mean(gross, k) - float(gross.mean()) if k.any() else None, s=s, s_lo=s_lo,
+        boot=max(0, int(boot)), s_stress=s_stress, decomposition=dec, control_n=control_n, control_diff=c_diff,
+        control_lo=c_lo, n_eff=None if weights is None else kish_n_eff(weights), quarantined=quarantine_count(raw_net),
+        gbp_per_day=None if gbp_per_r is None else float((raw_net * kf).sum()) / n_days * gbp_per_r)
 
 
 # ---------------------------------------------------------------------------------------------- day-block bootstrap
 def _day_weights(n_days: int, *, boot: int, seed: int, mean_block: int) -> Iterator[np.ndarray]:
-    """Stationary bootstrap (Politis-Romano 1994) over session days, circular, mean block `mean_block`: yields
-    (chunk x n_days) day-count matrices, `boot` draws in all, seeded and reproducible."""
+    """Stationary bootstrap (Politis-Romano 1994) over session days in their natural order, circular, mean block
+    `mean_block`: yields (chunk x n_days) day-count matrices, `boot` draws in all, seeded and reproducible."""
     rng = np.random.default_rng(seed)
     p = 1.0 / mean_block
     done = 0
@@ -321,18 +385,41 @@ def _day_weights(n_days: int, *, boot: int, seed: int, mean_block: int) -> Itera
         done += b
 
 
-def _day_sums(day: np.ndarray, *cols: np.ndarray) -> tuple[int, list[np.ndarray]]:
-    _, inv = np.unique(day, return_inverse=True)
-    nd = int(inv.max()) + 1
-    return nd, [np.bincount(inv, weights=c, minlength=nd) for c in cols]
+def _day_index(*days: np.ndarray) -> tuple[int, list[np.ndarray]]:
+    """Positions of each day array in the sorted union of their values (dates sort as dates, not as strings)."""
+    allv = np.concatenate([np.asarray(d) for d in days])
+    _, inv = np.unique(allv, return_inverse=True)
+    cuts = np.cumsum([len(d) for d in days])[:-1]
+    return int(inv.max()) + 1, list(np.split(inv, cuts))
+
+
+def _sums(inv: np.ndarray, nd: int, *cols: np.ndarray) -> list[np.ndarray]:
+    return [np.bincount(inv, weights=c, minlength=nd) for c in cols]
 
 
 def _boot_s(net: np.ndarray, kf: np.ndarray, day: np.ndarray, *, boot: int, seed: int, mean_block: int) -> np.ndarray:
-    nd, (cnt, s_all, s_kept) = _day_sums(day, np.ones(len(net)), net, net * kf)
+    nd, (inv,) = _day_index(day)
+    cnt, s_all, s_kept = _sums(inv, nd, np.ones(len(net)), net, net * kf)
     out = []
     for W in _day_weights(nd, boot=boot, seed=seed, mean_block=mean_block):
         n = W @ cnt
         out.append((W @ s_kept) / n - np.maximum(0.0, (W @ s_all) / n))
+    return np.concatenate(out)
+
+
+def _boot_control(kept: np.ndarray, kept_day: np.ndarray, ctrl: np.ndarray, ctrl_day: np.ndarray, *, boot: int,
+                  seed: int, mean_block: int) -> np.ndarray:
+    """Kept mean − control mean on joint day draws over the union of both day sets; a draw with no kept or no control
+    row is −inf (counts against)."""
+    nd, (ik, ic) = _day_index(kept_day, ctrl_day)
+    kn, ks = _sums(ik, nd, np.ones(len(kept)), kept)
+    cn, cs = _sums(ic, nd, np.ones(len(ctrl)), ctrl)
+    out = []
+    for W in _day_weights(nd, boot=boot, seed=seed, mean_block=mean_block):
+        a, b = W @ kn, W @ cn
+        with np.errstate(invalid="ignore", divide="ignore"):
+            d = (W @ ks) / a - (W @ cs) / b
+        out.append(np.where((a > 0) & (b > 0), d, -np.inf))
     return np.concatenate(out)
 
 
@@ -342,68 +429,108 @@ def paired_delta(net_r: np.ndarray, keep_a: np.ndarray, keep_b: np.ndarray, day:
     cancel, so this is mean(net x (keep_a − keep_b)). Keeps are used as given (abstain them first)."""
     net = clip_r(net_r)
     d = net * (np.asarray(keep_a, dtype=float) - np.asarray(keep_b, dtype=float))
-    d0 = float(d.mean())
-    nd, (cnt, sd) = _day_sums(np.asarray(day).astype(str), np.ones(len(net)), d)
+    nd, (inv,) = _day_index(np.asarray(day))
+    cnt, sd = _sums(inv, nd, np.ones(len(net)), d)
     draws = np.concatenate([(W @ sd) / (W @ cnt) for W in _day_weights(nd, boot=boot, seed=seed,
                                                                          mean_block=mean_block)])
-    return d0, float(np.quantile(draws, LOWER_Q))
+    return float(d.mean()), float(np.quantile(draws, LOWER_Q))
 
 
 # ---------------------------------------------------------------------------------------------- the gate
 class GateVerdict(FrozenRecord):
-    """Every leg named; `passed` only when all hold. The K-of-record deflation and the two consecutive judged reads
-    of >= 100 unseen rows are applied by the registry on top of this."""
+    """Every leg named; `legs_passed` only when all hold. It is not a promotion: the K-of-record deflation and the two
+    consecutive judged reads of >= 100 unseen rows are applied by the registry on top of this."""
     objective_id: Literal["obj-v1"] = OBJECTIVE_ID
-    passed: bool
+    legs_passed: bool
     legs: dict[str, bool]
     reasons: tuple[str, ...]
 
 
-def gate(rd: ObjectiveRead, *, control_kept_mean: float | None) -> GateVerdict:
-    """ADR 0098 section 2 + R-H: not abstained; S >= MIN_S_R with a lower bound > 0; kept mean > 0; gross (kept gross
-    − all gross) >= 0; kept mean beats the side-matched control's mean net R; 2x-cost S >= 0. No control or no lower
-    bound fails closed."""
+def gate(rd: ObjectiveRead) -> GateVerdict:
+    """ADR 0098 section 2 + R-H + quant C3/C5/C8: not abstained; the full BOOT draws; S >= MIN_S_R with a lower bound
+    > 0; kept mean > 0; gross (kept gross − all gross) >= 0; kept mean − side-matched control mean >= MIN_S_R with a
+    lower bound > 0; 2x-cost S >= 0; S decomposed on a decision-time cost(x). Anything missing fails closed."""
     legs = {
         "not_abstained": not rd.abstain,
+        "full_bootstrap": rd.boot >= BOOT,
         "s_min": rd.s >= MIN_S_R,
         "s_lower_bound": rd.s_lo is not None and rd.s_lo > 0,
         "kept_mean": rd.kept_mean is not None and rd.kept_mean > 0,
         "gross": rd.kept_gross_minus_all is not None and rd.kept_gross_minus_all >= 0,
-        "control": (control_kept_mean is not None and rd.kept_mean is not None
-                    and rd.kept_mean > control_kept_mean),
+        "control": (rd.control_diff is not None and rd.control_diff >= MIN_S_R
+                    and rd.control_lo is not None and rd.control_lo > 0),
         "cost_stress": rd.s_stress >= 0,
+        "decision_cost": rd.decomposition.cost_avoidance is not None,
     }
-    return GateVerdict(passed=all(legs.values()), legs=legs, reasons=tuple(k for k, ok in legs.items() if not ok))
+    return GateVerdict(legs_passed=all(legs.values()), legs=legs,
+                       reasons=tuple(k for k, ok in legs.items() if not ok))
 
 
 # ---------------------------------------------------------------------------------------------- the import guard
-def guard_violations_in_source(src: str, where: str) -> list[str]:
-    """Banned names or modules imported or referenced in this source (AST, so strings and comments are free)."""
+def _absolute(node: ast.ImportFrom, package: str) -> str:
+    """The module an ImportFrom names, relative levels resolved against `package`."""
+    if not node.level:
+        return node.module or ""
+    base = package.split(".")
+    base = base[:len(base) - (node.level - 1)] if node.level > 1 else base
+    return ".".join([*base, *([node.module] if node.module else [])])
+
+
+def _dotted(n: ast.expr) -> str:
+    if isinstance(n, ast.Name):
+        return n.id
+    if isinstance(n, ast.Attribute):
+        return f"{_dotted(n.value)}.{n.attr}"
+    return ""
+
+
+def _banned_module(name: str) -> bool:
+    return any(name == b or name.startswith(b + ".") for b in BANNED_MODULES)
+
+
+def guard_violations_in_source(src: str, where: str, package: str = "") -> list[str]:
+    """Banned names, modules, keyword arguments and self-selecting estimators in this source (AST, so strings and
+    comments are free; relative imports resolved against `package`; `importlib.import_module` / `__import__` of a
+    literal name checked too)."""
     out: list[str] = []
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.ImportFrom):
-            mod = node.module or ""
-            if mod in BANNED_MODULES:
+            mod = _absolute(node, package)
+            if _banned_module(mod):
                 out.append(f"{where}:{node.lineno} imports {mod}")
             for a in node.names:
                 full = f"{mod}.{a.name}"
-                if a.name in BANNED_NAMES or full in BANNED_MODULES:
+                if a.name in BANNED_NAMES or (_banned_module(full) and not _banned_module(mod)):
                     out.append(f"{where}:{node.lineno} imports {full}")
         elif isinstance(node, ast.Import):
-            out += [f"{where}:{node.lineno} imports {a.name}" for a in node.names if a.name in BANNED_MODULES]
+            out += [f"{where}:{node.lineno} imports {a.name}" for a in node.names if _banned_module(a.name)]
         elif isinstance(node, ast.Attribute) and node.attr in BANNED_NAMES:
             out.append(f"{where}:{node.lineno} uses .{node.attr}")
         elif isinstance(node, ast.Name) and node.id in BANNED_NAMES:
             out.append(f"{where}:{node.lineno} uses {node.id}")
+        elif isinstance(node, ast.Call):
+            fn = _dotted(node.func)
+            out += [f"{where}:{node.lineno} passes {kw.arg}=" for kw in node.keywords if kw.arg in BANNED_KWARGS]
+            if fn.rsplit(".", 1)[-1] in ("import_module", "__import__") and node.args:
+                arg = node.args[0]
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and (
+                        _banned_module(arg.value) or arg.value.rsplit(".", 1)[-1] in BANNED_NAMES):
+                    out.append(f"{where}:{node.lineno} imports {arg.value} dynamically")
+            if fn.rsplit(".", 1)[-1].startswith("HistGradientBoosting") and not any(
+                    kw.arg == "early_stopping" and isinstance(kw.value, ast.Constant) and kw.value.value is False
+                    for kw in node.keywords):
+                out.append(f"{where}:{node.lineno} builds {fn} without early_stopping=False")
     return out
 
 
-def _goldbot_imports(src: str) -> set[str]:
+def _goldbot_imports(src: str, package: str) -> set[str]:
     mods: set[str] = set()
     for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("goldbot"):
-            mods.add(node.module)
-            mods.update(f"{node.module}.{a.name}" for a in node.names)
+        if isinstance(node, ast.ImportFrom):
+            mod = _absolute(node, package)
+            if mod.startswith("goldbot"):
+                mods.add(mod)
+                mods.update(f"{mod}.{a.name}" for a in node.names)
         elif isinstance(node, ast.Import):
             mods.update(a.name for a in node.names if a.name.startswith("goldbot"))
     return mods
@@ -419,16 +546,36 @@ def guard_violations(module: str) -> list[str]:
         if name in seen:
             continue
         seen.add(name)
-        if name in BANNED_MODULES and name != module:
+        if _banned_module(name) and name != module:
             out.append(f"{module} reaches {name}")
             continue
         spec = _find(name)
         if spec is None or spec.origin is None or not spec.origin.endswith(".py"):
             continue
         src = Path(spec.origin).read_text()
-        out += guard_violations_in_source(src, spec.origin)
-        todo += sorted(_goldbot_imports(src) - seen)
+        package = name if spec.origin.endswith("__init__.py") else name.rpartition(".")[0]
+        out += guard_violations_in_source(src, spec.origin, package)
+        todo += sorted(_goldbot_imports(src, package) - seen)
     return out
+
+
+def objective_users(src: str) -> set[str]:
+    """Which of GUARDED_CALLS this source takes from goldbot.research.objective (imported by name, or used as an
+    attribute of the imported module)."""
+    tree = ast.parse(src)
+    aliases: set[str] = set()
+    used: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "goldbot.research.objective":
+            used |= {a.name for a in node.names if a.name in GUARDED_CALLS}
+        elif isinstance(node, ast.ImportFrom) and node.module == "goldbot.research":
+            aliases |= {a.asname or a.name for a in node.names if a.name == "objective"}
+        elif isinstance(node, ast.Import):
+            aliases |= {a.asname or a.name for a in node.names if a.name == "goldbot.research.objective"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in GUARDED_CALLS and _dotted(node.value) in aliases:
+            used.add(node.attr)
+    return used
 
 
 def _find(name: str) -> importlib.machinery.ModuleSpec | None:
