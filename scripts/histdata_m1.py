@@ -630,6 +630,9 @@ def check_one_(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, ob
     for per, idx in bars.groupby(month).groups.items():
         if str(per) >= HOLDOUT_CUT.strftime("%Y-%m"):
             continue                    # the stub of the first sealed session day (Sep 30 21:00-24:00 UTC)
+        if per.year != year:
+            continue                    # hours after Dec 31 21:00 UTC open next year's first session: that month is
+            #                             graded from its own file (a stub grade of 26-47 bars duplicated 301 months)
         b = bars.loc[idx]
         r = ref.loc[np.asarray(ref_month == per)] if ref_month is not None else None
         g = grade_month_v2(key, str(per), b, r, src.session_minutes, native.get(str(per), False),
@@ -692,8 +695,8 @@ def write_v2_reports(rep: Path, clocks: list[dict[str, object]], tiers: list[dic
     pd.crosstab([t2["year"], t2["rv_tercile"]], t2["tier"]).to_csv(rep / "tier_mix_r11-v2.csv")
     v1p = rep / "tiers_r11-v1.csv"
     if v1p.exists():
-        v1 = pd.read_csv(v1p)[["key", "month", "tier", "reasons"]].rename(columns={"tier": "tier_v1",
-                                                                                    "reasons": "reasons_v1"})
+        v1 = pd.read_csv(v1p).sort_values("bars").drop_duplicates(["key", "month"], keep="last")   # drop v1 stubs
+        v1 = v1[["key", "month", "tier", "reasons"]].rename(columns={"tier": "tier_v1", "reasons": "reasons_v1"})
         m = v1.merge(t2[["key", "month", "tier"]].rename(columns={"tier": "tier_v2"}), on=["key", "month"],
                      how="outer").fillna({"tier_v1": "-", "tier_v2": "-"})
         m.to_csv(rep / "tiers_v1_v2_diff.csv", index=False)
