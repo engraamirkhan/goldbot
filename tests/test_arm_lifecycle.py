@@ -494,3 +494,16 @@ def test_a_discovered_arm_read_without_the_journal_or_a_recompute_is_never_evide
     r = L.decide(L.read_arm(db, obs, _disc(), broker="icm", control="C1", accounts={"icm-probe"}, parity=PASS_1H,
                             cap=5.0, day=DAY, now=SETTLED))
     assert r.decision == "HOLD" and not r.validated and "bracket integrity unverified" in r.reason
+
+
+def test_a_candidate_voided_for_a_stop_inside_the_spread_is_not_counted_as_unlabelled(db):
+    """Quant review of #442 (LOW 3): a deliberate void is no missing label, so it never pushes a settled day over
+    VOID_UNLABELLED."""
+    from goldbot.research import exploration_data as ex
+    for cid, stop in (("ok", 3.0), ("tiny", 0.0002)):
+        ex.record_candidate(db, candidate_id=cid, account_id="icm-probe", broker="icm", arm_id="A1", family="f",
+                            style="intraday", tf="15m", side=1, decision_utc=pd.Timestamp("2026-11-02 09:00", tz="UTC"),
+                            stop_dist=stop, target_dist=stop, max_hold_s=3600, taken=False)
+    ex.void_inside_spread(db, ["tiny"])
+    obs = L.lifecycle_obs(db, "icm", instruments={"A1": "XAUUSD"})
+    assert list(obs["candidate_id"]) == ["ok"]

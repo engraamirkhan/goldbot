@@ -280,6 +280,46 @@ def test_label_candidates_v2_never_replays_another_instrument_on_gold_bars(tmp_p
         assert {r[0] for r in conn.execute("SELECT candidate_id FROM exploration_replay")} == {"gold"}
 
 
+def test_label_candidates_v2_never_labels_a_stop_inside_the_spread_ceiling(tmp_path):
+    db = _db(tmp_path)
+    _cand(db, "ok", arm="G1")
+    _cand(db, "tiny", arm="G1", stop=0.0002, target=0.0002)
+    bars = _m1(T0, [(2000.0, 2000.0, 2000.0)] * 30)
+    assert ex.label_candidates_v2(db, bars, _fixed(_v2()), broker="icm", cutoff=T0 + pd.Timedelta(minutes=30),
+                                  instruments={"G1": "XAUUSD"}) == 1
+    with db.connection() as conn:
+        assert {r[0] for r in conn.execute("SELECT candidate_id FROM exploration_replay")} == {"ok"}
+
+
+# one instrument per asset class, at the stop scale its arm wrote on the brain (2026-11-02/03 void rows)
+_CLASS_STOPS = {"fx": ("AUDUSD", 0.0001), "rates": ("UST10Y", 0.05), "energy": ("XTIUSD", 0.3),
+                "ags": ("SUGAR", 0.00015), "index": ("US500", 5.0), "metal": ("XAGUSD", 0.05)}
+
+
+@pytest.mark.parametrize("asset_class", sorted(_CLASS_STOPS))
+def test_no_non_gold_class_is_labelled_on_gold_bars_and_its_old_gold_bar_label_reads_as_void(tmp_path, asset_class):
+    """Brain 2026-11-25: every non-gold label in exploration_obs (last session day 2026-11-03, none written since) is a
+    stop in the instrument's own price units replayed on XAUUSD bars with gold's per-oz costs (USDJPY -12.7 R mean,
+    BUND10Y/UST10Y -9.9 R, sugar to -5,455 R, against fills of -0.1..-1.9 R). The root cause is the bars and costs,
+    not the stop's units: r1 and r2 label no non-gold candidate on gold bars, and an old gold-bar label of each class
+    is void for every reader."""
+    db = _db(tmp_path)
+    key, stop = _CLASS_STOPS[asset_class]
+    arm = f"S0-{key}"
+    inst = {"G1": "XAUUSD", arm: key}
+    _cand(db, "new", arm=arm, stop=stop, target=stop)
+    bars = _m1(T0, [(2000.0, 2000.5, 1999.5)] * 30)
+    cutoff = T0 + pd.Timedelta(minutes=30)
+    assert ex.label_candidates(db, bars, ex.ReplayCosts(broker="icm", version="c1",
+                                                         effective_utc=T0 - pd.Timedelta(days=1)),
+                               cutoff=cutoff, instruments=inst) == 0
+    assert ex.label_candidates_v2(db, bars, _fixed(_v2()), broker="icm", cutoff=cutoff, instruments=inst) == 0
+    _cand(db, "old", arm=arm, stop=stop, target=stop, decision=T0 + pd.Timedelta(minutes=1))
+    _label_v1(db, "old", -12.7)
+    assert ex.void_non_gold_labels(db, instruments=inst, now=T0)["voided"] == 1
+    assert ex.read_obs(db)["label_sim_r"].isna().all()
+
+
 def test_every_non_gold_v1_label_is_voided_once_with_its_paired_and_beyond_20r_counts(tmp_path):
     db = _db(tmp_path)
     inst = {"G1": "XAUUSD", "S0-SUGAR": "SUGAR", "S0-NZDUSD": "NZDUSD"}

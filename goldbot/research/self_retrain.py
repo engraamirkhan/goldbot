@@ -51,8 +51,9 @@ import pandas as pd
 import yaml
 
 from goldbot.base import FrozenRecord, load_record_json
+from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database, now_ns
-from goldbot.research.exploration_data import GOLD, REPLAY_V1, REPLAY_V2, read_obs
+from goldbot.research.exploration_data import GOLD, REPLAY_V1, REPLAY_V2, VOID_INSIDE_SPREAD, read_obs
 from goldbot.research.model import check_feature_cap
 
 log = logging.getLogger("goldbot.self_retrain")
@@ -270,7 +271,13 @@ def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple
     rows = rows[(rows["_pit"] == "written") | rows["candidate_id"].isin(ok)].reset_index(drop=True)
     if len(rows) and (rows["_avail_ns"].notna() & (rows["_avail_ns"] > rows["_snap_decision_ns"])).any():
         raise ValueError("self-retrain: a snapshot available after its decision (look-ahead): refused")
-    counts = {"labels": int(n_labels), "capped_day": int(hit.sum()), "open_horizon": int(np.asarray(open_h).sum()),
+    with db.connection() as conn:      # prereg amendment (quant review of #442): never labelled, counted here
+        inside = int(conn.execute(
+            "SELECT COUNT(*) FROM exploration_label_void v JOIN exploration_obs o ON o.candidate_id = v.candidate_id "
+            "WHERE v.replay_version = ? AND v.reason = ? AND o.broker = ? AND o.decision_ns <= ?",
+            (REPLAY_V2, VOID_INSIDE_SPREAD, broker, int(epoch_ns(pd.DatetimeIndex([cutoff]))[0]))).fetchone()[0])
+    counts = {"labels": int(n_labels), "stop_inside_spread": inside, "capped_day": int(hit.sum()),
+              "open_horizon": int(np.asarray(open_h).sum()),
               "with_features": int(len(rows)), "no_snapshot": int(len(obs) - n_snap),
               "nominal_not_audited_clean": int(n_snap - len(rows)),
               "nominal": int((rows["_pit"] == "nominal").sum()) if len(rows) else 0,
