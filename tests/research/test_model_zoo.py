@@ -458,7 +458,8 @@ def test_the_h101_card_holds_at_most_one_day_so_hold_overlap_leaves_its_verdict_
              for a in Z.ARMS]
     assert max(holds) / 86_400 <= Z.HOLD_DAYS == 1.0
     v, card = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
-    assert card.hold_days == Z.HOLD_DAYS and pf.concurrency(card, SETTINGS.research.power_first.trading_days_per_year) <= 1
+    assert card.hold_days == Z.HOLD_DAYS
+    assert pf.across_day_overlap(card, SETTINGS.research.power_first.trading_days_per_year) == 1.0
     assert v.overlap_effect == 1.0
 
 

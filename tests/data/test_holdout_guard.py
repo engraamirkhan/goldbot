@@ -5,7 +5,6 @@ never asks for it; live paths are exempt only when listed. All data here is synt
 from __future__ import annotations
 
 import ast
-import importlib
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +70,26 @@ def test_a_pull_span_is_split_around_the_holdout_so_no_sealed_minute_is_asked_fo
     assert G.pull_spans(start, end) == want
 
 
+def test_a_label_decided_before_the_holdout_but_still_open_in_it_is_refused_or_cut():
+    """Quant N1: 2025-09-30 23:30 held 1 h reads holdout bars; held 20 min it does not."""
+    d = pd.Timestamp("2025-09-30 23:30", tz="UTC")
+    labels = pd.DataFrame({"decision_utc": [d, d, HE - MIN, HE], "max_hold_s": [3600, 1200, 60, 3600]})
+    assert G.label_in_holdout(labels).tolist() == [True, False, True, False]
+    with pytest.raises(G.HoldoutSealed, match="still open"):
+        G.refuse_labels(labels.iloc[:1], what="t")
+    G.refuse_labels(labels.iloc[[1, 3]], what="t")
+    assert G.cut_labels(labels, what="t")["max_hold_s"].tolist() == [1200, 3600]
+
+
+def _straddling_replay():
+    from goldbot.research import exploration_data as ex
+    rows = pd.DataFrame({"candidate_id": ["c"], "arm_id": ["a"], "tf": ["15m"], "side": [1],
+                         "decision_utc": [pd.Timestamp("2025-09-30 23:30", tz="UTC")], "session_day": ["2025-09-30"],
+                         "stop_dist": [5.0], "target_dist": [5.0], "max_hold_s": [3600]})
+    bars = pd.DataFrame({"ts_utc": pd.date_range(HS - pd.Timedelta(hours=1), periods=10, freq="1min")})
+    ex.replay_frame_v2(bars, rows, lambda _s: None, cutoff=HE)   # type: ignore[arg-type,return-value]
+
+
 # ------------------------------------------------------------------ every loader outside windows.py refuses it
 def _exploration_prior():
     from goldbot.research import exploration_data as ex
@@ -99,6 +118,7 @@ def _model_zoo():
 
 LOADERS = {"exploration_data.prior_from_history (H-60 prior seed)": _exploration_prior,
            "exploration_data.replay_frame_v2 (forward replay)": _forward_replay,
+           "exploration_data.replay_frame_v2 (label straddling the holdout start)": _straddling_replay,
            "arms.assert_no_holdout_rows (arm history replay)": _arms_assert,
            "model_zoo._refuse_holdout (H-101 candidates)": _model_zoo}
 
@@ -120,8 +140,11 @@ def test_the_m1_backfill_never_asks_the_broker_for_a_holdout_minute(monkeypatch,
         first_stored, minutes_added, chunks_pulled, chunks_needed, chunks = None, 0, 0, 0, 0
         open_missing, max_open_hole, stopped, errors = 0, 0, None, []
 
+    budgets: list[float | None] = []
+
     def backfill(store, broker, acc_id, symbol, *, start, end, budget_s, pause_s):
         asked.append((start, end))
+        budgets.append(budget_s)
         return R()
     monkeypatch.setattr(MB, "_accounts", lambda ids: [Acc()])
     monkeypatch.setattr(MB, "_store", lambda root: object())
@@ -131,17 +154,44 @@ def test_the_m1_backfill_never_asks_the_broker_for_a_holdout_minute(monkeypatch,
     assert MB.main(["--all", "--days", "500", "--pause-s", "0"]) == 0
     assert asked and all(not (s < HE and e > HS) for s, e in asked)
     assert asked[-1] == (HE, pd.Timestamp("2026-11-25 10:00", tz="UTC"))
-    assert "holdout" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "holdout" in out and out.count("minutes added") == 2                 # one line per span
+    budgets.clear()
+    assert MB.main(["--all", "--days", "500", "--pause-s", "0", "--budget-s", "100"]) == 0
+    b0, b1 = budgets
+    assert b0 is not None and b1 is not None and b1 <= b0 <= 100                # one budget shared by both spans
     asked.clear()
     monkeypatch.setattr(MB, "_now", lambda: pd.Timestamp("2026-09-20 10:00", tz="UTC"))
     assert MB.main(["--all", "--days", "30"]) == 2 and not asked          # all inside the holdout: refused
+
+
+def _year(folder: Path, year: int) -> None:
+    from goldbot.data.resample import BAR_COLUMNS
+    ts = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="6h", tz="UTC")
+    df = pd.DataFrame({"ts_utc": ts, "visible_at": ts + MIN})
+    for c in BAR_COLUMNS[2:]:
+        df[c] = 1000.0
+    df["dq_flag"] = ""
+    df.to_parquet(folder / f"xauusd_1m_dukascopy_{year}.parquet", index=False)
+
+
+def test_the_default_raw_loader_cuts_the_holdout_and_only_a_gated_read_asks_for_it(tmp_path):
+    """W1-E (PR #453): raw/ holds the 2025 and 2026 files, holdout and forward minutes included, in the directory
+    research reads by default. `read_bar_files` drops the holdout unless the caller is a gated holdout read
+    (`include_holdout=True`: autodisc's holdout stage, research_pass --score-holdout); forward minutes are kept."""
+    from goldbot.data.release import read_bar_files
+    for y in (2025, 2026):
+        _year(tmp_path, y)
+    b = read_bar_files(tmp_path, 2025, 2026)
+    assert not G.in_holdout(b).any() and b["ts_utc"].min() < HS and b["ts_utc"].max() >= HE
+    assert G.in_holdout(read_bar_files(tmp_path, 2025, 2026, include_holdout=True)).any()
 
 
 # ------------------------------------------------------------------ live paths are exempt only when listed
 def test_every_live_exemption_names_a_real_module_and_says_why():
     assert G.LIVE_EXEMPT
     for mod, why in G.LIVE_EXEMPT.items():
-        importlib.import_module(mod)
+        assert (ROOT / (mod.replace(".", "/") + ".py")).is_file(), mod
         assert len(why) > 20, mod
 
 

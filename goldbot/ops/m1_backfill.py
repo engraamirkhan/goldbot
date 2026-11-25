@@ -21,6 +21,7 @@ Exit 0 when every account ran without a failed call, 1 otherwise, 2 on a refused
 from __future__ import annotations
 
 import argparse
+import time
 from typing import Any
 
 import pandas as pd
@@ -52,6 +53,17 @@ def _broker(acc: Any) -> Any:
 
 def _now() -> pd.Timestamp:
     return pd.Timestamp.now("UTC")
+
+
+def _report(account_id: str, r: Any) -> int:
+    """Print one span's result as it finishes; 1 when it failed or stopped short, else 0."""
+    first = "-" if r.first_stored is None else f"{r.first_stored:%Y-%m-%d %H:%M}"
+    print(f"{account_id}: {r.minutes_added} minutes added; {r.chunks_pulled} of {r.chunks_needed} days with holes "
+          f"pulled ({r.chunks} days checked); first stored minute {first}; {r.open_missing} open minutes still "
+          f"missing, longest hole {r.max_open_hole} min (the arm read needs <= 120)"
+          + (f"; stopped: {r.stopped}" if r.stopped else "")
+          + (f"; {len(r.errors)} failed calls, first: {r.errors[0]}" if r.errors else ""))
+    return 1 if r.errors or r.stopped in ("no_range", "errors") else 0
 
 
 def main(argv: list[str]) -> int:
@@ -86,14 +98,18 @@ def main(argv: list[str]) -> int:
     code = 0
     for acc in accs:
         broker = None
+        t0 = time.monotonic()
         try:
             broker = _broker(acc)
             if broker is None:
                 print(f"{acc.account_id}: skipped, no read-only broker connection (bridge endpoint in the keyring)")
                 code = 1
                 continue
-            results = [backfill_broker_m1(store, broker, acc.account_id, acc.symbol, start=s0, end=e0,
-                                          budget_s=a.budget_s, pause_s=a.pause_s) for s0, e0 in spans]
+            for s0, e0 in spans:             # one --budget-s per account, shared by its spans
+                left = None if a.budget_s is None else max(0.0, a.budget_s - (time.monotonic() - t0))
+                r = backfill_broker_m1(store, broker, acc.account_id, acc.symbol, start=s0, end=e0,
+                                       budget_s=left, pause_s=a.pause_s)
+                code = max(code, _report(acc.account_id, r))
         except Exception as exc:          # one account's failure does not stop the others
             print(f"{acc.account_id}: failed, {type(exc).__name__}: {exc}")
             code = 1
@@ -101,13 +117,4 @@ def main(argv: list[str]) -> int:
         finally:
             if broker is not None and hasattr(broker, "shutdown"):
                 broker.shutdown()
-        for r in results:
-            first = "-" if r.first_stored is None else f"{r.first_stored:%Y-%m-%d %H:%M}"
-            print(f"{acc.account_id}: {r.minutes_added} minutes added; {r.chunks_pulled} of {r.chunks_needed} days "
-                  f"with holes pulled ({r.chunks} days checked); first stored minute {first}; {r.open_missing} open "
-                  f"minutes still missing, longest hole {r.max_open_hole} min (the arm read needs <= 120)"
-                  + (f"; stopped: {r.stopped}" if r.stopped else "")
-                  + (f"; {len(r.errors)} failed calls, first: {r.errors[0]}" if r.errors else ""))
-            if r.errors or r.stopped in ("no_range", "errors"):
-                code = 1
     return code

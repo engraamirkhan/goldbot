@@ -859,7 +859,7 @@ def replay_frame_v2(bars_1m: pd.DataFrame, rows: pd.DataFrame, cost_of_day: Cost
     candidate decided before the first bar, or whose label does not resolve by `cutoff`, gets no row."""
     cols = ["candidate_id", "label_exit_ns", "sim_r", "mid_r", "barrier", "entry_price", "exit_price",
             "entry_charge_usd", "exit_charge_usd", "cost_model_version", "cost_effective_ns"]
-    holdout_guard.refuse(rows, what="forward replay rows", col="decision_utc")     # S1: a label is never a holdout read
+    holdout_guard.refuse_labels(rows, what="forward replay rows")     # S1, N1: no label reads a holdout bar
     bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff] if not bars_1m.empty else bars_1m
     if not bars.empty:                                 # a broker store holds holdout minutes; no row reads them
         bars = holdout_guard.cut(bars, what="forward replay bars")
@@ -928,7 +928,7 @@ def label_candidates_v2(db: Database, bars_1m: pd.DataFrame, cost_of_day: CostOf
                               min_label_stop(GOLD), REPLAY_V2)
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
-    obs = holdout_guard.cut(obs, what="r2 labels", col="decision_utc")      # L-10: never labelled, never trained on
+    obs = holdout_guard.cut_labels(obs, what="r2 labels")      # L-10, N1: never labelled, never trained on
     f = replay_frame_v2(bars_1m, obs, cost_of_day, cutoff=cutoff)
     if f.empty:
         return 0
@@ -1076,8 +1076,7 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
     check_feature_cap([*cols, "side", "arm_id"])
     obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of, evidence="posterior",
                    held_out=held_out, instrument=GOLD, instruments=instruments, replay_version=REPLAY_V1)
-    dec = pd.DatetimeIndex(obs["decision_utc"])
-    obs = obs[~holdout_guard.in_holdout(dec)].reset_index(drop=True)      # L-10
+    obs = holdout_guard.cut_labels(obs, what=f"{style} training rows")      # L-10, N1: no label reaching it
     if n_sus := int(suspect(obs["label_sim_r"]).sum()):          # kept: logged, never dropped
         log.warning("exploration %s %s training rows: %d labels beyond %.0f R (suspect, kept)", broker, style, n_sus,
                     MAX_LABEL_R)

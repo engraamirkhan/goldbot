@@ -11,6 +11,8 @@ closed-bar seed, dense/augment generators, free 1m pulls, broker backfills) - li
 * A pull never asks for a holdout minute (`pull_spans`): the span is split around the holdout.
 * The holdout seal is irreversible. Once a minute of it is read, no later read of it is fresh, so the guard runs
   where the data comes in, not where a result goes out.
+* `release.read_bar_files`, the default raw/ loader, cuts the holdout unless a gated holdout read asks for it
+  (`include_holdout=True`), so every research caller of it is covered (W1-E, PR #453).
 * Live paths are exempt only when listed (`LIVE_EXEMPT`, with the reason). Research scripts written before this
   guard that open bar files without one are frozen in `UNGUARDED`: none may join, and a script leaves the list by
   calling the guard (tests/data/test_holdout_guard.py holds both lists to the code).
@@ -28,8 +30,8 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-__all__ = ["HOLDOUT_END", "HOLDOUT_START", "LIVE_EXEMPT", "UNGUARDED", "HoldoutSealed", "cut", "in_holdout",
-           "pull_spans", "refuse", "split"]
+__all__ = ["HOLDOUT_END", "HOLDOUT_START", "LIVE_EXEMPT", "UNGUARDED", "HoldoutSealed", "cut", "cut_labels",
+           "in_holdout", "label_in_holdout", "pull_spans", "refuse", "refuse_labels", "split"]
 
 HOLDOUT_START = pd.Timestamp("2025-10-01", tz="UTC")
 HOLDOUT_END = pd.Timestamp("2026-10-01", tz="UTC")       # exclusive: the holdout is 2025-10-01 .. 2026-09-30
@@ -82,6 +84,33 @@ def split(frame: pd.DataFrame, col: str = "ts_utc") -> tuple[pd.DataFrame, pd.Da
     return frame.loc[~hit].reset_index(drop=True), frame.loc[hit].reset_index(drop=True)
 
 
+def label_in_holdout(labels: pd.DataFrame, *, decision_col: str = "decision_utc",
+                     hold_col: str = "max_hold_s") -> np.ndarray:
+    """True per label whose [decision, decision + max hold] intersects the holdout: a label decided on 2025-09-30
+    23:30 and held 1 h reads holdout bars (quant N1 on PR #450)."""
+    d = _utc(labels, decision_col)
+    end = d + pd.to_timedelta(labels[hold_col].to_numpy(dtype=float), unit="s")
+    return np.asarray((d < HOLDOUT_END) & (end > HOLDOUT_START), dtype=bool)
+
+
+def refuse_labels(labels: pd.DataFrame, *, what: str, decision_col: str = "decision_utc",
+                  hold_col: str = "max_hold_s") -> None:
+    """Raise `HoldoutSealed` when any label's span reaches into the holdout (`label_in_holdout`)."""
+    hit = label_in_holdout(labels, decision_col=decision_col, hold_col=hold_col)
+    if hit.any():
+        raise HoldoutSealed(f"{what}: {int(hit.sum())} label(s) decided or still open inside the sealed holdout, first "
+                            f"decided {_utc(labels, decision_col)[hit].min()}: refused")
+
+
+def cut_labels(labels: pd.DataFrame, *, what: str, decision_col: str = "decision_utc",
+               hold_col: str = "max_hold_s") -> pd.DataFrame:
+    """`labels` without those whose span reaches into the holdout (logged when any are dropped)."""
+    hit = label_in_holdout(labels, decision_col=decision_col, hold_col=hold_col)
+    if hit.any():
+        log.info("%s: %d label(s) reaching the holdout dropped", what, int(hit.sum()))
+    return labels.loc[~hit].reset_index(drop=True)
+
+
 def pull_spans(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """The parts of the pull [start, end) outside the holdout, in time order (empty when it lies inside it)."""
     a, z = pd.Timestamp(start), pd.Timestamp(end)
@@ -98,9 +127,6 @@ LIVE_EXEMPT: dict[str, str] = {
     "goldbot.data.quarantine": "moves live-store rows that failed a data-quality check aside; no research output",
     "goldbot.data.ticks": "the live tick store reader the engine and reconcile use; research reads bars through "
                           "windows.py or a guarded loader",
-    "goldbot.data.release": "read_bar_files: the shared yearly-file reader; every research caller cuts or refuses "
-                            "the holdout (tests/test_holdout_seal.py static check), and the gated --score-holdout "
-                            "read goes through it",
     "goldbot.data.daily": "daily bars for the engine's 1d/1w warm-up; research daily readers filter < holdout",
     "goldbot.data.long_history": "the long daily history the engine's 1d/1w warm-up reads to today; research "
                                  "position loaders filter < holdout at read",
@@ -112,20 +138,39 @@ LIVE_EXEMPT: dict[str, str] = {
     "goldbot.ops.long_history": "appends the live store's complete days to raw/daily (the engine's 1d/1w warm-up); "
                                 "research readers of raw/daily filter < holdout",
     "goldbot.engine.long_bars": "the engine's 1d/1w bars from raw/daily up to now, live trading only",
+    # live-store readers (store.read / store.sql / account_bars_1m), quant C2 on PR #450
+    "goldbot.data.account_bars": "account_bars_1m: the account's live 1m bars as of a time, for the engine and the "
+                                 "live labellers; research callers guard",
+    "goldbot.data.crossfeed": "the nightly feed reconcile and broker M1 back-fill of the live store",
+    "goldbot.data.news": "live news rows for the engine's blackout and news features",
+    "goldbot.data.news_collector": "the live news collector's own dedupe reads",
+    "goldbot.data.news_coverage": "the news collector's coverage readout, a health check",
+    "goldbot.ops.checks.engine": "engine health check on today's live rows",
+    "goldbot.ops.checks.feeds": "feed health check on today's live rows",
+    "goldbot.ops.jobs": "scheduler jobs on live rows; research jobs read through their own guarded modules",
+    "goldbot.ops.limits_job": "daily limit job on the live account's fills and bars",
+    "goldbot.ops.limits_replay": "replays today's limit decisions on the live store",
+    "goldbot.ops.observe": "the observe service's live bars",
+    "goldbot.ops.perf_report": "performance report on live fills",
+    "goldbot.ops.smoke": "smoke test of the live store after a deploy",
+    "goldbot.engine.exploration_context": "the engine's live context for exploration entries",
+    "goldbot.engine.history": "the engine's warm-up from the live store",
+    "goldbot.engine.key_zones": "the engine's live key zones",
+    "goldbot.engine.replica_context": "the engine's live replica context",
+    "goldbot.engine.runner": "the engine loop's live bars",
+    "scripts.crossfeed_check": "operator check of the live store's feeds",
+    "scripts.store_parts_report": "operator report of the live store's parts",
 }
 
 # Scripts that open bar files with no guard call the static check recognises, written before this guard (2026-11-25
 # inventory; some cut by other means, e.g. model_zoo_history's min(end, HOLDOUT_FROM), unverified here). Frozen: none
 # may join; each calls `refuse`/`cut` (or windows.py) before its next research run, and then leaves the list.
 UNGUARDED: frozenset[str] = frozenset({
-    "scripts/check_coverage.py", "scripts/count_owed_events.py", "scripts/cross_asset_fetch.py",
-    "scripts/daily_fetch.py", "scripts/dukascopy_year.py", "scripts/fred_macro.py", "scripts/kb1_retest_selection.py",
-    "scripts/kb5_magnet_base_rate.py", "scripts/kb_prereg_counts.py", "scripts/mlprob/h94_gate.py",
-    "scripts/mlprob/mlnet_pool.py", "scripts/mlprob/probtrend_screen.py", "scripts/pa_claims_check.py",
-    "scripts/profile_arm_rules.py", "scripts/quarantine_tz_ticks_2026_10_26.py", "scripts/replica_backtest_parity.py",
-    "scripts/replica_parity.py", "scripts/replica_render.py", "scripts/research/h16_screen.py",
-    "scripts/research/h17_screen.py", "scripts/research/h84_macro_screen.py", "scripts/research/meta_label_screen.py",
-    "scripts/research/micro_tick_screen.py", "scripts/research/model_zoo_history.py",
-    "scripts/research/positioning_screen.py", "scripts/research/tight_stop_entry_study.py", "scripts/research_pass.py",
-    "scripts/ship_long_history.py", "scripts/smc_counts.py", "scripts/sprint200/patterns_ctrl_diag.py",
+    "scripts/check_coverage.py", "scripts/cross_asset_fetch.py", "scripts/daily_fetch.py",
+    "scripts/dukascopy_year.py", "scripts/fred_macro.py", "scripts/mlprob/h94_gate.py",
+    "scripts/mlprob/mlnet_pool.py", "scripts/mlprob/probtrend_screen.py", "scripts/profile_arm_rules.py",
+    "scripts/quarantine_tz_ticks_2026_10_26.py", "scripts/replica_backtest_parity.py", "scripts/replica_parity.py",
+    "scripts/replica_render.py", "scripts/research/meta_label_screen.py", "scripts/research/micro_tick_screen.py",
+    "scripts/research/model_zoo_history.py", "scripts/research/tight_stop_entry_study.py", "scripts/research_pass.py",
+    "scripts/ship_long_history.py", "scripts/sprint200/patterns_ctrl_diag.py",
 })

@@ -12,9 +12,10 @@ The quant-reviewer's re-ruling of 2026-11-15 (on docs/research/power-first-gates
   u_i = average uniqueness over label horizon pooled across tfs/arms per instrument; DEFF_day = 1+(m_w-1)*rho_day,
   m_w = sum M_d^2/sum M_d, M_d = sum u_i in day; then rho_inst factor" (`uniqueness`, Lopez de Prado 2018 ch. 4). A
   card that states its learn labels' measured `Uniqueness` is read with it; one that states counts only is read with
-  its expectation, c = signal days per instrument per trading day x `PowerCard.hold_days` (`concurrency`, Little's
-  law): n_eff = n / [(1 + (m_day - 1) rho_day) x max(1, c) x (1 + (k - 1) rho_inst)], which is n / H for a decision
-  every day held H days (lag-j autocorrelation 1 - j/H, Hansen & Hodrick 1980) and unchanged for holds of <= 1 day.
+  its expectation on even arrivals of signals within and across days (quant C1): c = max(1, signals per instrument
+  per trading day x `PowerCard.hold_days`) (`concurrency`, Little's law), m_eff = max(1, m_day / c), n_eff = n /
+  [(1 + (m_eff - 1) rho_day) x c x (1 + (k - 1) rho_inst)]. That is n / H for a decision every day held H days
+  (lag-j autocorrelation 1 - j/H, Hansen & Hodrick 1980) and unchanged while under one label is open on average.
   Clone arms and duplicated bets share their uniqueness, so they count once.
 * rho_day per horizon (quant Q1, 2026-11-25): labels of <= 60 min use `rho_day_le_60m` (floor 0.05, set from the
   day-clustered ICC's upper 95 % CI on other families' learn candidates); longer horizons keep rho_day (floor 0.25)
@@ -49,7 +50,7 @@ from goldbot.research.registry import NOT_STARTED_POWER, TrialRegistry
 log = logging.getLogger(__name__)
 
 __all__ = ["NOT_STARTED_POWER", "Gate", "GatePower", "PowerCard", "PowerVerdict", "Segment", "Uniqueness",
-           "concurrency", "design_effect", "evaluate", "goal_edge_r", "holm_first_z", "is_precious_metal", "joint_power",
+           "across_day_overlap", "concurrency", "design_effect", "evaluate", "goal_edge_r", "holm_first_z", "is_precious_metal", "joint_power",
            "overlap_effect", "rho_instrument", "start_or_refuse", "uniqueness"]
 
 
@@ -215,11 +216,19 @@ def overlap_effect(card: PowerCard, trading_days_per_year: float) -> float:
     return max(concurrency(card, trading_days_per_year), 1.0)
 
 
-def concurrency(card: PowerCard, trading_days_per_year: float) -> float:
-    """c: the mean number of a card's (instrument, day) signal clusters whose holds are open at once, by Little's law
-    = signal days per instrument per trading day (at most 1) x hold_days. Outcome-blind: counts and the horizon."""
+def across_day_overlap(card: PowerCard, trading_days_per_year: float) -> float:
+    """max(1, signal days per instrument per trading day x hold_days): the overlap of holds ACROSS days only, the
+    floor a given verdict must credit (`_check_given`). A card that passes its own verdict (H-101, signed before quant
+    C1) prices within-day overlap with its own rho_day; the measured `Uniqueness` replaces both when stated."""
     per_day = card.learn_signal_clusters / (len(card.instruments) * card.learn_years * trading_days_per_year)
-    return min(per_day, 1.0) * card.hold_days
+    return max(1.0, min(per_day, 1.0) * card.hold_days)
+
+
+def concurrency(card: PowerCard, trading_days_per_year: float) -> float:
+    """c: the mean number of a card's labels open at once on one instrument, by Little's law on signals (quant C1):
+    signals per instrument per trading day x hold_days. Outcome-blind: counts and the horizon."""
+    per_day = card.learn_signals / (len(card.instruments) * card.learn_years * trading_days_per_year)
+    return per_day * card.hold_days
 
 
 def design_effect(mean_cluster: float, rho_day: float, instruments: int, rho_instrument: float, *,
@@ -270,11 +279,12 @@ def evaluate(card: PowerCard, settings: Settings) -> PowerVerdict:
     risk_gbp = settings.research.lot_fit_equity * settings.risk.risk_per_trade
     goal = goal_edge_r(rate / pf.trading_days_per_year, settings.research.north_star_daily_gbp, risk_gbp)
     u = card.learn_uniqueness
+    c = overlap_effect(card, pf.trading_days_per_year)
+    # Q3 measured: m_w; count-only (quant C1): the unique mass a day, m_eff = max(1, m_day / c)
     m_day = (u.m_w if u is not None else
-             card.learn_signals / card.learn_signal_clusters if card.learn_signal_clusters else 1.0)
+             max(1.0, (card.learn_signals / card.learn_signal_clusters if card.learn_signal_clusters else 1.0) / c))
     rho_i = rho_instrument(card.instruments, pf.rho_instrument, pf.rho_instrument_metals)
     rho_d = pf.rho_day_for(card.hold_days)
-    c = overlap_effect(card, pf.trading_days_per_year)
     de = design_effect(m_day, rho_d, len(card.instruments), rho_i, concurrency=c)
     years = {s.name: s.years for s in card.segments}
     n_eff = {s: rate * y / de for s, y in years.items()}
@@ -313,7 +323,8 @@ def _check_given(v: PowerVerdict, card: PowerCard, settings: Settings) -> None:
                                       ("rho_day", v.rho_day, pf.rho_day_for(card.hold_days))) if mine < floor]
     if loose:
         raise ValueError(f"verdict thresholds looser than research.power_first: {loose}")
-    held = overlap_effect(card, pf.trading_days_per_year)
+    held = (overlap_effect(card, pf.trading_days_per_year) if card.learn_uniqueness is not None
+            else across_day_overlap(card, pf.trading_days_per_year))
     if min(v.overlap_effect, v.design_effect) < held * (1 - 1e-9):
         raise ValueError(f"verdict credits less hold overlap than its card holds: overlap {v.overlap_effect:.3f}, "
                          f"design effect {v.design_effect:.3f} < {held:.3f} (quant Q3)")

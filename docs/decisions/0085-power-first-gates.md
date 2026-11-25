@@ -144,12 +144,17 @@ counted twice.
    - `power_first.uniqueness(events)` computes it exactly from the learn labels' entry and exit times (outcome-blind).
      m_w is floored at 1, as m_day is. Labels on different instruments never share uniqueness (rho_inst prices that).
    - A card states it as `PowerCard.learn_uniqueness`.
-2. A card that states counts only is read with the expectation of Q3 under even arrivals. `PowerCard.hold_days`
-   (required, the label horizon, its time barrier) gives c = signal days per instrument per trading day x hold_days
-   (Little's law); n_eff = n / [(1 + (m_day - 1) rho_day) x max(1, c) x (1 + (k - 1) rho_inst)]. This is n / H for a
-   decision every day held H days and unchanged for holds of 1 day or less.
-3. `PowerVerdict.overlap_effect` (n / sum u, or max(1, c)) and `rho_day` record what was used. A given verdict (H-101)
-   that credits less overlap, or a lower rho_day, than its card implies is refused by `start_or_refuse`.
+2. A card that states counts only is read with Q3's expectation on even arrivals of signals within and across days
+   (quant C1 on PR #450). `PowerCard.hold_days` is required: the label horizon, its time barrier.
+   - c = max(1, signals per instrument per trading day x hold_days) (Little's law on signals).
+   - m_eff = max(1, m_day / c).
+   - n_eff = n / [(1 + (m_eff - 1) rho_day) x c x (1 + (k - 1) rho_inst)].
+   - This is n / H for a decision every day held H days, within 10 % of the measured Q3 at 77 labels a day (60 and
+     240 min holds, rho_day 0.25 and 0.05), and unchanged while under one label is open on average.
+3. `PowerVerdict.overlap_effect` (n / sum u, or c) and `rho_day` record what was used. A given verdict (H-101) is
+   refused by `start_or_refuse` when it credits a lower rho_day than its card implies, or less overlap than the
+   card's holds across days (`across_day_overlap`). Within-day overlap of a given verdict stays priced by its own
+   rho_day, as signed before C1.
 4. Q1: labels of 60 min or less take `rho_day_le_60m` = max(0.05, upper 95 % CI of the day-clustered ICC, week-block
    bootstrap, other families' learn candidates); floor 0.05. Longer labels keep rho_day, floor 0.25. Shipped at 0.25
    until the measurement (RD lane) lands, so no verdict changes today.
@@ -157,13 +162,16 @@ counted twice.
    `model_zoo.HOLD_DAYS = 1.0` (longest arm RBR15, 96 x 15m; a test holds every replayed arm to it).
 
 **Acceptance tests (Q3).** Daily H = 20 within +-5 % of n / 20; max_open = 1 unchanged; 15m + 30m pooled <= 15m alone
-x (1 + unique share); a clone pair counts once (tests/research/test_power_first.py, `test_q3_*`).
+x (1 + unique share); a clone pair counts once; count-only matches measured within 10 % on even arrivals
+(tests/research/test_power_first.py, `test_q3_*`).
 
 **Consequences.**
-- H-101: no change. Its stage 0 card holds 1 day, so the overlap factor is 1 and rho_day is 0.25.
-- Autodiscovery (stopped by plan S6 in the same change): 4h becomes unreachable (an every-bar spec's fresh n_eff is
-  about 659, it was 2,634), 1h specs signalling on most days lose half their n_eff, 15m is unchanged, 1d was already
-  unreachable.
+- H-101: its signed stage 0 verdict stands (across-day overlap 1, rho_day 0.25). Its within-day overlap is priced by
+  rho_day 0.25 alone; under C1's count-only formula it would be higher. Open for the quant (N2: H-102 onward states
+  measured uniqueness).
+- Autodiscovery (stopped by plan S6 in the same change): with each spec's real time barrier, a spec that signals
+  many times a day is about n / (signals a day x hold) independent labels. An every-bar 1h spec (48-bar hold) and
+  4h are no longer reachable; 1d was already unreachable.
 - The horizon overstates the hold of target exits (1R/2R/3R), so the count-only path is conservative for them. A card
   that wants the credit states its measured uniqueness.
 - H-102's power must be recomputed with Q3 before it starts (W1-F card revision).

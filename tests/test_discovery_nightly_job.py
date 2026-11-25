@@ -91,6 +91,19 @@ def test_an_enabled_job_without_bars_fails_through_its_child_instead_of_skipping
         discovery_nightly(ctx, SLOT)  # type: ignore[arg-type]
 
 
+def test_a_stopped_job_skips_before_starting_a_child_even_where_a_host_enables_it(tmp_path, monkeypatch):
+    """Plan S6: no child process, no run row (code review of PR #450)."""
+    s = load_settings()
+    on = s.model_copy(update={"research": s.research.model_copy(update={
+        "discovery": s.research.discovery.model_copy(update={"enabled": True, "stopped": True})})})
+
+    def no_child(*a, **k):
+        raise AssertionError("a child was started")
+    monkeypatch.setattr(B, "run_bounded", no_child)
+    out = discovery_nightly(SimpleNamespace(settings=on, state_dir=tmp_path), SLOT)  # type: ignore[arg-type]
+    assert "stopped" in out["skipped"] and not list(tmp_path.iterdir())
+
+
 # ------------------------------------------------------------------ review round 1 (sre b, c; code review 1, 2)
 def enabled_ctx(tmp_path):
     s = load_settings()

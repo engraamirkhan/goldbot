@@ -16,10 +16,10 @@ from goldbot.ops.checks import discovery as D
 NOW = pd.Timestamp("2026-11-24 09:00", tz="UTC")
 
 
-def settings(enabled: bool = True):
+def settings(enabled: bool = True, stopped: bool = False):
     s = load_settings()
     return s.model_copy(update={"research": s.research.model_copy(update={
-        "discovery": s.research.discovery.model_copy(update={"enabled": enabled})})})
+        "discovery": s.research.discovery.model_copy(update={"enabled": enabled, "stopped": stopped})})})
 
 
 def ctx(tmp_path, enabled: bool = True, settings_changed: pd.Timestamp | None = None) -> Hm.HealthContext:
@@ -43,6 +43,14 @@ def test_a_disabled_discovery_job_is_not_checked_and_never_alerts(tmp_path):
     assert not D.discovery_enabled(ctx(tmp_path, enabled=False))
     names = {c.name for c in Hm.run_checks(ctx(tmp_path, enabled=False)).checks}
     assert D.NAME not in names
+
+
+def test_a_stopped_discovery_job_is_not_checked_even_where_a_host_enables_it(tmp_path):
+    """Plan S6: stopped wins over enabled, so the stale-night check never warns (code review of PR #450)."""
+    add_run(tmp_path, "ok", NOW - pd.Timedelta(days=30))
+    c = Hm.HealthContext(state_dir=tmp_path, now=NOW, settings=settings(True, stopped=True), get_secret=lambda k: None)
+    assert not D.discovery_enabled(c)
+    assert D.NAME not in {x.name for x in Hm.run_checks(c).checks}
 
 
 def test_an_enabled_job_with_a_successful_night_inside_26_hours_is_ok(tmp_path):

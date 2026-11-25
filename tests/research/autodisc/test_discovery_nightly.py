@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from goldbot.config import load_settings
+from goldbot.config import TF_SECONDS, load_settings
 from goldbot.db.connection import Database
 from goldbot.research.autodisc import SearchLedger
 from goldbot.research.autodisc import discovery as DN
@@ -26,6 +26,19 @@ from goldbot.research.autodisc.windows import WindowViolation
 FAMS = ("tsmom", "nr4_break")
 N = 3000
 SLOT = pd.Timestamp("2026-11-18 01:00", tz="UTC")
+
+
+REAL_HOLDS = {"test_a_spec_power_card_states_its_label_horizon_so_multi_day_holds_count_their_overlap",
+              "test_with_its_real_time_barrier_an_every_bar_1h_spec_is_no_longer_reachable"}
+
+
+@pytest.fixture(autouse=True)
+def _one_bar_holds(monkeypatch, request):
+    """Machinery tests (search, ledger, hand-off, K) on synthetic specs that signal many times a day: with each spec's
+    real time barrier (MAX_BARS bars) Little's law on signals (quant C1) leaves none reachable, so here a spec holds one
+    bar. The overlap term itself is tested in test_power_first and by REAL_HOLDS here."""
+    if request.node.originalname not in REAL_HOLDS:
+        monkeypatch.setattr(DN, "hold_days", lambda tf: TF_SECONDS[tf] / 86_400)
 
 
 def settings(**disc):
@@ -122,6 +135,12 @@ def test_the_power_verdict_reads_only_signal_counts_never_an_outcome():
     v1 = gate.verdict(spec, mask, side)
     v2 = gate.verdict(spec, mask, side)
     assert v1 == v2 and v1.timeframe == "1h" and v1.gates[-1].name == "test_old" and v1.gates[-1].fresh
+
+
+def test_with_its_real_time_barrier_an_every_bar_1h_spec_is_no_longer_reachable():
+    """Quant C1: 23 signals a day held 48 bars (2 days) are ~46 open at once: n_eff ~ n / 46."""
+    assert not DN.timeframe_reachable(load_settings(), "1h", n_bars=47_000, n_days=2080, learn_years=8.0,
+                                      now=SLOT).started
 
 
 def test_a_timeframe_no_spec_could_power_is_not_searched_at_all():

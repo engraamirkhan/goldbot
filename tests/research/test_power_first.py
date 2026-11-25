@@ -25,7 +25,7 @@ HOLM_Z = P.holm_first_z(0.00625, 3)
 def card(*, learn_signals: int = 2_960, clusters: int | None = None, learn_years: float = 8.0,
          instruments: list[str] | None = None, tf: str = "1h", test_old_years: float = 2.0,
          gates: list[P.Gate] | None = None, segments: list[P.Segment] | None = None,
-         hold_days: float = 1.0) -> P.PowerCard:
+         hold_days: float = 1.0 / 24) -> P.PowerCard:
     return P.PowerCard(
         card_id="C-1", family="fam", timeframe=tf, learn_signals=learn_signals, hold_days=hold_days,
         learn_signal_clusters=clusters if clusters is not None else learn_signals, learn_years=learn_years,
@@ -136,16 +136,40 @@ def test_a_daily_card_with_20_day_overlapping_holds_is_refused_where_counting_ea
     assert not v.started and any("n_eff" in r for r in v.reasons)
 
 
-def test_holds_inside_one_day_or_sparse_enough_not_to_overlap_change_nothing():
-    """Concurrency is counted between (instrument, day) clusters, whose within-day overlap rho_day already prices: a
-    hold of <= 1 day, or signal days rare enough that fewer than one hold is open on average, adds nothing."""
+def test_holds_short_or_sparse_enough_that_under_one_label_is_open_change_nothing():
+    """Little's law on signals (quant C1): c = signals per instrument per trading day x hold_days. Below one open
+    label on average the overlap term is 1; at 1.49 signals a day a 1-day hold is no longer free."""
     base = P.evaluate(card(learn_signals=3_000, clusters=1_000), SETTINGS)
-    for hold in (1.0 / 24, 0.5, 1.0):
+    for hold in (1.0 / 24, 0.5):
         assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=hold), SETTINGS) == base
+    day = P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=1.0), SETTINGS)
+    c = 3_000 / (8 * PF.trading_days_per_year)
+    assert day.overlap_effect == pytest.approx(c)
+    assert day.design_effect == pytest.approx((1 + (3 / c - 1) * PF.rho_day) * c)
     quarter = DAYS8 // 4                                                    # a signal day in four
     assert P.evaluate(card(learn_signals=quarter, tf="1d", hold_days=3.0), SETTINGS).overlap_effect == 1.0
     assert P.evaluate(card(learn_signals=quarter, tf="1d", hold_days=8.0), SETTINGS).overlap_effect == \
         pytest.approx(2.0, rel=1e-3)
+
+
+@pytest.mark.parametrize("hold_min", [60, 240])
+@pytest.mark.parametrize("rho", [0.25, 0.05])
+def test_q3_count_only_matches_measured_uniqueness_on_even_arrivals(hold_min, rho):
+    """Quant C1: on even arrivals of signals within and across days the count-only expectation is Q3's measured
+    n_eff within 10 % (77 labels a day, every day; holds of 60 and 240 min; rho_day 0.25 and 0.05)."""
+    days = pd.bdate_range("2012-01-02", periods=250, tz="UTC")
+    offs = pd.to_timedelta(np.arange(77) * (1440 / 77), unit="min")
+    entries = pd.DatetimeIndex([d + o for d in days for o in offs])
+    hold = pd.Timedelta(minutes=hold_min)
+    u = P.uniqueness(_events(entries, hold))
+    pf = PF.model_copy(update={"rho_day": rho, "rho_day_le_60m": rho})     # unvalidated copy: rho at both horizons
+    s = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(update={"power_first": pf})})
+    years = len(days) / PF.trading_days_per_year
+    measured = P.evaluate(_ucard(u, hold_days=hold_min / 1440, years=years), s)
+    count = P.evaluate(card(learn_signals=u.n, clusters=u.days, learn_years=years, tf="1d",
+                            hold_days=hold_min / 1440), s)
+    for gm, gc in zip(measured.gates, count.gates, strict=True):
+        assert gc.n_eff == pytest.approx(gm.n_eff, rel=0.10)
 
 
 def test_concurrency_is_counted_per_instrument_so_pooling_instruments_does_not_inflate_it():
