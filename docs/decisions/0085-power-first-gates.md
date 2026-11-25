@@ -285,3 +285,7 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
 - The vol-tercile mix is reported before and after the filter. The sha256 of the produced tiers file is recorded here
   before any labelled count. The same filter applies in learn, test_old and confirm.
 - Any change to the rule after a labelled count is a new id and costs K (A2).
+
+**N26 addition (quant issue 12 on PR #460, 2026-11-26).** "Learning-class demo serving at K 0 is not a go decision,
+provided deployment is unconditional on any Stage L/C outcome (every cell with a merged report and a Stage 0 pass
+deploys)."

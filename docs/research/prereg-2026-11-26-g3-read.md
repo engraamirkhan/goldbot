@@ -62,7 +62,7 @@ are already booked). The holdout 2025-10-01..2026-09-30 is not read.
 - **Pass:** after the **2027-01-10** run, at least one `self_retrain_models` row has `status = active`, under one of:
   - **sr-v2** as signed on 2026-11-24 (unchanged in flight);
   - **sr-v3**, only if its promotion rule is quant-signed by **2026-12-06** and its spec is frozen and merged by
-    **2026-12-18**, with its first counted run no later than **2026-12-20**. Otherwise sr-v3 cannot count.
+    **2026-12-18**, with its first learning-class run no later than **2026-12-20**; sr-v3 cannot be ACTIVE before its 2027-01-08 confirm pass. Otherwise sr-v3 cannot count.
 - **The signed gate, restated (not changed):** edge vs no-model ≥ +0.05 R and vs the control ≥ +0.05 R (sr-v3:
   the ADR 0098 statistic of record), kept mean net R > 0, Holm-adjusted max(p) ≤ 0.10 across the run's judged pairs,
   **two consecutive passes** with cutoffs exactly 7 days apart, and a **frozen forward edge ≥ 0** for the first
@@ -118,7 +118,7 @@ An owner override is recorded on #34 as an override. The published verdict stays
 
 P(continue) **3-6 %** (restated by the evaluator and quant on 2026-11-25; ruling D19 published 5-10 %). Route A: expected
 empty (above). Route B: an sr-v2 pair (RBR15, Z3D, Z2P) about 3 %; an H-102/OMB-1 winner forward-ACTIVE by 01-10:
-about 0 % (its forward rule needs >= 200 unseen rows); an sr-v3 model on sr-v2's arms about 1-3 %.
+about 0 % (its forward rule needs >= 200 unseen rows); an sr-v3 model on sr-v2's arms 0 %.
 
 Evaluator's measurement (2026-11-25, counts only): the realistic route-B pairs are RBR15, Z3D and Z2P. Snapshot
 coverage is 52-67 % (not 85 %), so the first judged runs slip about a week. RBR15 stops adding rows on 12-31. Vantage's
