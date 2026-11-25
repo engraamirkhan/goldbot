@@ -36,12 +36,32 @@ Design rules:
 - A tick read that fails while our order is in flight (or within EXCUSE_S of its late reply) is not a tick error
   (`excused`): entries are refused `unconfirmed_order_pending` then anyway, and the no-quote pass still runs. Exits
   never pass through this module.
+
+Exits before entries on a demo account without limits (ADR 0097; trading-safety H1/H2 of 2026-11-25: "no entry send
+while any exit or stop-modify is pending; an entry yields at the next safe point", "an entry duty-cycle ceiling", "an
+exit-latency SLO with an alert (p99 < 5 s)", "classify 10040/10033 as refusals, never a retry loop"). Once the caps
+are lifted, entries could hold the tick thread (it waits for each reply) and the serial MT5 box most of the time, so a
+software exit would wait behind entry after entry. On such an account (`RiskGate.unlimited`):
+- exit-first (`EXIT_FIRST`): no entry while any book has a close the engine decided and has not got filled (one backing
+  off because the broker says the market is closed excepted: it is not contending for the box), a kill-switch flatten
+  pending, or a stop modify whose retry is due;
+- the duty ceiling (`ENTRY_DUTY`): no entry starts once this pass's entries held the tick thread ENTRY_PASS_S, or while
+  entries held it DUTY_MAX of the last DUTY_WINDOW_S, so every pass reaches its exits within about one order's hold;
+- broker capacity (`BROKER_CAPACITY`): a 10033 (orders) or 10040 (positions) refusal holds entries while the account
+  holds at least as many positions as it did then; the order is a definite reject (nothing re-sent).
+`entry_yield` says which, `ready` raises it as `EntryYield` (an `OrderInFlight`: every caller journals it as a refusal,
+`refusal_action`, never a tick error), and the exploration send loop checks it before each signal and keeps the rest
+queued for the next pass. These decide when an entry goes, never whether a trade is allowed: engineering, not risk.
+Every account's loop passes are timed (`pass_started`): the gap between two passes with a position open is the
+longest an exit that became due could wait; the p99 of the last EXIT_GAPS is published (`published`) and health
+alerts above EXIT_SLO_S (goldbot/ops/checks/risk.py `check_exit_latency`).
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -64,10 +84,142 @@ READ_TIMEOUT_S, READ_ATTEMPTS = 10.0, 2       # the engine's bridge client (Remo
 EXIT_BOUND_LANE_S = 5.0     # BACKLOG 135 acceptance: an exit reaches the terminal within this with an order in flight
 PASS_S = 1.0                # one engine tick pass on the bridge (a tick read, the stop check, the close)
 NO_ANSWER = (ConnectionError, TimeoutError)     # BridgeUnavailable is a ConnectionError
+# ADR 0097 (module docstring, "Exits before entries"): engineering bounds, not risk limits
+EXIT_FIRST, ENTRY_DUTY, BROKER_CAPACITY = "exit_first", "entry_duty", "broker_capacity"
+ENTRY_PASS_S = 1.5          # no entry starts once this pass's entries held the tick thread this long (bridge RTT p95)
+DUTY_WINDOW_S, DUTY_MAX = 10.0, 0.5     # ... nor while entries held it half of the last 10 s
+EXIT_SLO_S = 5.0            # trading-safety H1: exit wait p99 below this (health alerts above it)
+EXIT_GAPS = 600             # the loop-pass gaps the p99 is read over (about 10 min at a pass a second)
+CAPACITY_RETCODES = frozenset({10033, 10040})   # TRADE_RETCODE_LIMIT_ORDERS, TRADE_RETCODE_LIMIT_POSITIONS
+YIELD_LOG_S = 60.0          # a yield is journalled at most this often per reason (a binding ceiling repeats per pass)
+_clock: Callable[[], float] = time.monotonic     # the host clock of the duty and the gaps (a test models it)
 
 
 class OrderInFlight(RuntimeError):
     """An order was asked for while this account's previous one is still in flight: nothing was sent."""
+
+
+class EntryYield(OrderInFlight):
+    """ADR 0097: nothing was sent because exits, the duty ceiling or the broker's capacity go first (`entry_yield`)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"entry yields ({reason}): nothing sent")
+        self.reason = reason
+
+
+class Duty:
+    """The account's entry and loop-pass timing (one per engine, multi-book included: the MT5 box is the account's).
+    `spans` are the entries' (start, end) on the host clock, `gaps` the loop-pass gaps with a position open."""
+
+    def __init__(self) -> None:
+        self.spans: deque[tuple[float, float]] = deque()
+        self.pass_at: float | None = None       # this loop pass's start
+        self.pass_busy = 0.0                    # this pass's entries' time
+        self.gaps: deque[float] = deque(maxlen=EXIT_GAPS)
+        self.capacity_hold: int | None = None   # open positions when the broker refused for capacity
+        self.logged: dict[str, float] = {}
+
+    def busy(self, now: float) -> float:
+        """Seconds of the last DUTY_WINDOW_S the entries held the tick thread."""
+        start = now - DUTY_WINDOW_S
+        while self.spans and self.spans[0][1] <= start:
+            self.spans.popleft()
+        return sum(min(b, now) - max(a, start) for a, b in self.spans if b > start)
+
+    def note(self, start: float, end: float) -> None:
+        self.spans.append((start, end))
+        self.pass_busy += max(0.0, end - start)
+
+
+def duty(eng: Any) -> Duty:
+    """The engine's `Duty` (in the engine's own attributes, never a book's)."""
+    d = eng.__dict__.get("_entry_duty")
+    if d is None:
+        d = eng.__dict__["_entry_duty"] = Duty()
+    return d
+
+
+def _unlimited(eng: Any) -> bool:
+    try:
+        return bool(eng.gate.unlimited())
+    except Exception:                     # noqa: BLE001 - no answer: the account's caps stand, nothing changes here
+        return False
+
+
+def _holds(eng: Any) -> bool:
+    return any(b.__dict__.get("open") for b in eng.books.values())
+
+
+def exits_pending(eng: Any) -> bool:
+    """Any book's close due (not backing off for a closed market), kill-switch flatten or stop modify due now."""
+    t = getattr(eng, "_last_tick", None)
+    now = t.ts_utc if t is not None else pd.Timestamp.now("UTC")
+    for b in eng.books.values():
+        d = b.__dict__
+        if d.get("_kill_pending"):
+            return True
+        backoff = d.get("_close_backoff") or {}
+        if any(not (pid in backoff and now < backoff[pid][1]) for pid in d.get("_close_due") or {}):
+            return True
+        if any(due is not None and now >= due for _, due in (d.get("_modify_backoff") or {}).values()):
+            return True
+    return False
+
+
+def entry_yield(eng: Any) -> str | None:
+    """Why an entry must not start now on a demo account without limits (module docstring), or None. None on every
+    other account: its caps bound the entry rate, and its behaviour is unchanged."""
+    if not _unlimited(eng):
+        return None
+    if exits_pending(eng):
+        return EXIT_FIRST
+    d = duty(eng)
+    if d.capacity_hold is not None:
+        if eng.state.open_positions >= d.capacity_hold:
+            return BROKER_CAPACITY
+        d.capacity_hold = None
+    if d.pass_at is not None and d.pass_busy >= ENTRY_PASS_S - 1e-9:
+        return ENTRY_DUTY
+    if d.busy(_clock()) >= DUTY_MAX * DUTY_WINDOW_S - 1e-9:
+        return ENTRY_DUTY
+    return None
+
+
+def note_yield(eng: Any, why: str, waiting: int) -> None:
+    """Journal a yield (`entry_yield`), at most once per YIELD_LOG_S per reason."""
+    d, now = duty(eng), _clock()
+    if now - d.logged.get(why, -YIELD_LOG_S) < YIELD_LOG_S:
+        return
+    d.logged[why] = now
+    eng.decisions.append({"ts": time.time(), "action": "entry_yield", "reason": why, "waiting": waiting})
+
+
+def pass_started(eng: Any) -> None:
+    """At the top of every engine loop pass (ops.services.engine): this pass's entry time starts at 0, and the gap since
+    the last pass is an exit wait when a position is open. Never raises."""
+    try:
+        d, now = duty(eng), _clock()
+        if d.pass_at is not None and _holds(eng):
+            d.gaps.append(now - d.pass_at)
+        d.pass_at, d.pass_busy = now, 0.0
+    except Exception:                     # noqa: BLE001 - timing only: the pass and its exits go on
+        log.exception("loop pass timing failed")
+
+
+def published(eng: Any) -> dict[str, Any]:
+    """The engine state's exit-latency figures (health `check_exit_latency`): p99 and max of the last EXIT_GAPS loop
+    gaps with a position open, their count, the SLO, the entries' share of the last window and the account's flag."""
+    d = duty(eng)
+    gaps = list(d.gaps)
+    return {"exit_wait_p99_s": round(float(np.percentile(gaps, 99)), 3) if gaps else None,
+            "exit_wait_max_s": round(max(gaps), 3) if gaps else None, "exit_wait_n": len(gaps),
+            "exit_slo_s": EXIT_SLO_S, "entry_duty": round(d.busy(_clock()) / DUTY_WINDOW_S, 3),
+            "demo_unlimited": _unlimited(eng)}
+
+
+def refusal_action(exc: BaseException) -> str:
+    """The journal's action for an order refused before it was sent: `entry_refused:<reason>` for a yield."""
+    return f"entry_refused:{exc.reason}" if isinstance(exc, EntryYield) else REFUSED
 
 
 def exit_delay_bound_s(order_timeout_s: float, *, order_lane: bool) -> float:
@@ -77,10 +229,11 @@ def exit_delay_bound_s(order_timeout_s: float, *, order_lane: bool) -> float:
 
 
 def refused(eng: Engine, exc: BaseException, agent_id: str, proposal_id: str) -> bool:
-    """An `OrderInFlight` journalled as the refusal it is (`REFUSED`); False for any other error."""
+    """An `OrderInFlight` journalled as the refusal it is (`refusal_action`); False for any other error."""
     if not isinstance(exc, OrderInFlight):
         return False
-    eng.decisions.append({"ts": time.time(), "agent": agent_id, "action": REFUSED, "proposal": proposal_id})
+    eng.decisions.append({"ts": time.time(), "agent": agent_id, "action": refusal_action(exc),
+                          "proposal": proposal_id})
     return True
 
 
@@ -134,17 +287,37 @@ def bridge_sender(url: str, token: str, *, name: str, timeout_s: float) -> Sende
 
 
 def ready(eng: Engine) -> None:
-    """Before an order's row is written: refuse it while this account's previous order is in flight."""
+    """Before an order's row is written: refuse it while this account's previous order is in flight, and, on a demo
+    account without limits, while exits, the duty ceiling or the broker's capacity go first (`EntryYield`)."""
     sender = eng.order_sender
-    if sender is None:
-        return
-    if sender.busy():
-        raise OrderInFlight("an order is still in flight on this account: nothing sent")
-    poll(eng)                             # a late reply not yet collected is journalled first
+    if sender is not None:
+        if sender.busy():
+            raise OrderInFlight("an order is still in flight on this account: nothing sent")
+        poll(eng)                         # a late reply not yet collected is journalled first
+    if (why := entry_yield(eng)) is not None:
+        raise EntryYield(why)
 
 
 def send(eng: Engine, intent: OrderIntent) -> OrderResult:
-    """The broker's result, or an unanswered result (see the module docstring). Raises what the broker answered with."""
+    """The broker's result, or an unanswered result (see the module docstring). Raises what the broker answered with.
+    The time the tick thread waited counts to the entry duty (`Duty.note`); a broker capacity refusal (10033/10040) on
+    a demo account without limits holds the next entries (`entry_yield`)."""
+    start = _clock()
+    try:
+        res = _send(eng, intent)
+    finally:
+        duty(eng).note(start, _clock())
+    if res.retcode in CAPACITY_RETCODES and _unlimited(eng):
+        held = max(1, int(eng.state.open_positions))
+        duty(eng).capacity_hold = held
+        log.warning("order %s refused for broker capacity (retcode %s) at %d open positions: entries held until "
+                    "one closes", intent.client_order_id, res.retcode, held)
+        eng.decisions.append({"ts": time.time(), "action": BROKER_CAPACITY, "proposal": intent.client_order_id,
+                              "retcode": res.retcode, "open_positions": held})
+    return res
+
+
+def _send(eng: Engine, intent: OrderIntent) -> OrderResult:
     sender = eng.order_sender
     if sender is None:
         try:

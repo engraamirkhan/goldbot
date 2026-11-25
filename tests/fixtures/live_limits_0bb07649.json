@@ -1,0 +1,278 @@
+{
+ "icm-depth": {
+  "blackout_entries": true,
+  "daily_cap": 0.02,
+  "daily_loss_limit_abs": null,
+  "dd_stage1": 0.08,
+  "dd_stage1_clear": 0.05,
+  "dd_stage2": 0.12,
+  "equity_check_tolerance": 0.02,
+  "equity_recovery_s": 60.0,
+  "exploration_arms": {},
+  "growth_arms": [],
+  "heat": {
+   "enabled": false,
+   "max_open_risk": 0.02,
+   "max_same_direction": 2
+  },
+  "holidays": {
+   "enabled": false,
+   "file": "config/holidays_cme_metals.yaml"
+  },
+  "hwm_rise_tolerance": 0.001,
+  "leverage_cap": 20.0,
+  "margin_level_floor": 3.0,
+  "max_combined_lots": 3.0,
+  "max_combined_notional_frac": 0.3,
+  "max_positions": 2,
+  "max_risk_per_trade": 0.01,
+  "max_spread_points": 45.0,
+  "max_spread_stop_frac": 0.3,
+  "max_tick_ahead_s": 10.0,
+  "min_lot_risk_cap": null,
+  "min_target_over_cost": 2.5,
+  "multi_symbol": false,
+  "multiplier_bounds": [
+   0.25,
+   1.5
+  ],
+  "pilot": null,
+  "point": 0.01,
+  "probe_only": false,
+  "project_open_risk": false,
+  "reopen": {
+   "after_daily_reopen_min": 10,
+   "after_monday_open_min": 30,
+   "enabled": false
+  },
+  "risk_per_trade": 0.005,
+  "risk_scale": 1.0,
+  "stale_tick_seconds": 20,
+  "standard_edge_over_cost": 1.5,
+  "strategy_risk": {},
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tier2": {
+   "after_min": 15,
+   "before_min": 5,
+   "enabled": false
+  },
+  "weekly_cap": 0.05
+ },
+ "icm-live": {
+  "blackout_entries": true,
+  "daily_cap": 0.25,
+  "daily_loss_limit_abs": 6.25,
+  "dd_stage1": 1.0,
+  "dd_stage1_clear": 1.0,
+  "dd_stage2": 1.0,
+  "equity_check_tolerance": 0.02,
+  "equity_recovery_s": 60.0,
+  "exploration_arms": {},
+  "growth_arms": [],
+  "heat": {
+   "enabled": false,
+   "max_open_risk": 0.02,
+   "max_same_direction": 2
+  },
+  "holidays": {
+   "enabled": false,
+   "file": "config/holidays_cme_metals.yaml"
+  },
+  "hwm_rise_tolerance": 0.001,
+  "leverage_cap": 500.0,
+  "margin_level_floor": 3.0,
+  "max_combined_lots": 3.0,
+  "max_combined_notional_frac": 0.3,
+  "max_positions": 1,
+  "max_risk_per_trade": 0.125,
+  "max_spread_points": 45.0,
+  "max_spread_stop_frac": 0.3,
+  "max_tick_ahead_s": 10.0,
+  "min_lot_risk_cap": null,
+  "min_target_over_cost": 2.5,
+  "multi_symbol": false,
+  "multiplier_bounds": [
+   0.25,
+   1.5
+  ],
+  "pilot": {
+   "adr": 55,
+   "daily_cap_frac": 0.25,
+   "drawdown_stages": false,
+   "enabled": true,
+   "leverage_cap": 500.0,
+   "lot": 0.01,
+   "max_entries": 30,
+   "max_positions": 1,
+   "max_risk_frac": 0.125,
+   "max_risk_per_trade_abs": 3.12,
+   "max_stop_usd": 4.0,
+   "pilot_id": "icm-live-adr55",
+   "start_utc": "2026-10-29T00:00:00+00:00",
+   "stop_loss_abs": 25.0,
+   "timeframes": [
+    "15m"
+   ],
+   "weekend_flat": true,
+   "weekly_cap_frac": 0.25
+  },
+  "point": 0.01,
+  "probe_only": false,
+  "project_open_risk": false,
+  "reopen": {
+   "after_daily_reopen_min": 10,
+   "after_monday_open_min": 30,
+   "enabled": false
+  },
+  "risk_per_trade": 0.001,
+  "risk_scale": 1.0,
+  "stale_tick_seconds": 20,
+  "standard_edge_over_cost": 1.5,
+  "strategy_risk": {},
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tier2": {
+   "after_min": 15,
+   "before_min": 5,
+   "enabled": false
+  },
+  "weekly_cap": 0.25
+ },
+ "vantage-live": {
+  "blackout_entries": true,
+  "daily_cap": 0.02,
+  "daily_loss_limit_abs": null,
+  "dd_stage1": 0.08,
+  "dd_stage1_clear": 0.05,
+  "dd_stage2": 0.12,
+  "equity_check_tolerance": 0.02,
+  "equity_recovery_s": 60.0,
+  "exploration_arms": {},
+  "growth_arms": [],
+  "heat": {
+   "enabled": false,
+   "max_open_risk": 0.02,
+   "max_same_direction": 2
+  },
+  "holidays": {
+   "enabled": false,
+   "file": "config/holidays_cme_metals.yaml"
+  },
+  "hwm_rise_tolerance": 0.001,
+  "leverage_cap": 20.0,
+  "margin_level_floor": 3.0,
+  "max_combined_lots": 3.0,
+  "max_combined_notional_frac": 0.3,
+  "max_positions": 2,
+  "max_risk_per_trade": 0.01,
+  "max_spread_points": 45.0,
+  "max_spread_stop_frac": 0.3,
+  "max_tick_ahead_s": 10.0,
+  "min_lot_risk_cap": null,
+  "min_target_over_cost": 2.5,
+  "multi_symbol": false,
+  "multiplier_bounds": [
+   0.25,
+   1.5
+  ],
+  "pilot": null,
+  "point": 0.01,
+  "probe_only": false,
+  "project_open_risk": false,
+  "reopen": {
+   "after_daily_reopen_min": 10,
+   "after_monday_open_min": 30,
+   "enabled": false
+  },
+  "risk_per_trade": 0.001,
+  "risk_scale": 1.0,
+  "stale_tick_seconds": 20,
+  "standard_edge_over_cost": 1.5,
+  "strategy_risk": {},
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tier2": {
+   "after_min": 15,
+   "before_min": 5,
+   "enabled": false
+  },
+  "weekly_cap": 0.05
+ },
+ "vantage-live-obs": {
+  "blackout_entries": true,
+  "daily_cap": 0.02,
+  "daily_loss_limit_abs": null,
+  "dd_stage1": 0.08,
+  "dd_stage1_clear": 0.05,
+  "dd_stage2": 0.12,
+  "equity_check_tolerance": 0.02,
+  "equity_recovery_s": 60.0,
+  "exploration_arms": {},
+  "growth_arms": [],
+  "heat": {
+   "enabled": false,
+   "max_open_risk": 0.02,
+   "max_same_direction": 2
+  },
+  "holidays": {
+   "enabled": false,
+   "file": "config/holidays_cme_metals.yaml"
+  },
+  "hwm_rise_tolerance": 0.001,
+  "leverage_cap": 20.0,
+  "margin_level_floor": 3.0,
+  "max_combined_lots": 3.0,
+  "max_combined_notional_frac": 0.3,
+  "max_positions": 2,
+  "max_risk_per_trade": 0.01,
+  "max_spread_points": 45.0,
+  "max_spread_stop_frac": 0.3,
+  "max_tick_ahead_s": 10.0,
+  "min_lot_risk_cap": null,
+  "min_target_over_cost": 2.5,
+  "multi_symbol": false,
+  "multiplier_bounds": [
+   0.25,
+   1.5
+  ],
+  "pilot": null,
+  "point": 0.01,
+  "probe_only": false,
+  "project_open_risk": false,
+  "reopen": {
+   "after_daily_reopen_min": 10,
+   "after_monday_open_min": 30,
+   "enabled": false
+  },
+  "risk_per_trade": 0.001,
+  "risk_scale": 1.0,
+  "stale_tick_seconds": 20,
+  "standard_edge_over_cost": 1.5,
+  "strategy_risk": {},
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tier2": {
+   "after_min": 15,
+   "before_min": 5,
+   "enabled": false
+  },
+  "weekly_cap": 0.05
+ }
+}

@@ -18,6 +18,7 @@ from pydantic import Field
 
 from goldbot.base import Record
 from goldbot.config import (
+    DemoFloor,
     HeatSettings,
     HolidaySettings,
     ReopenSettings,
@@ -137,6 +138,17 @@ class RiskLimits(Record):
     # against the effective daily limit even when no absolute limit is set, so symbols deciding on the same bar cannot
     # together pass it; the engine books each allowed entry on the shared state (`RiskGate.book`). False: as before
     multi_symbol: bool = False
+    # ADR 0097 (owner 2026-11-25: "there are no limits anymore for demo accounts", "allow absolutely anything"): every
+    # cap is lifted on this account (`RiskGate.unlimited`): open positions, the daily, weekly and absolute daily loss
+    # limits, the drawdown stages and kill switch, the news and entry windows, the absolute spread cap, the throttle,
+    # the heat, combined-exposure and 300 % margin caps, the minimum-lot risk rule and an exploration arm's per-trade
+    # cap; the engineering capacity ceiling (CAPACITY_CEILING) takes their place for K3. Only when the intent is demo by
+    # the one predicate (`is_demo`). Set only by
+    # ops.services.engine.engine_limits for a demo probe_only account with accounts.yaml `demo_unlimited: true`, against
+    # its real terminal; False (every limit, as before) on every other account
+    demo_unlimited: bool = False
+    # ...and the one guard such an account keeps (settings.yaml `risk.demo_floor`): a wiped demo stops all learning
+    demo_floor: DemoFloor = Field(default_factory=DemoFloor)
 
     @property
     def dynamic(self) -> bool:
@@ -376,6 +388,13 @@ class OperationalIntent(Record):
     phase_file: Path
 
 
+# ADR 0097 (trading-safety H2, 2026-11-25): the engineering capacity ceiling of a demo account without limits. Not a
+# risk limit: the open-position count at which the exit SLO (exit wait p99 under 5 s) was measured to hold on the paper
+# bridge with the bridge's modelled call times (tests/test_exit_first.py; quiet passes cost about 4.5 us of CPU per
+# open position, and a pass's bridge calls do not grow with it). Above it the exit SLO is unmeasured, so an entry is
+# refused `capacity_ceiling` until a position closes. Raised only on a new measurement recorded in the ADR
+CAPACITY_CEILING = 300
+
 # ADR 0021 (F2): an operational stop is never closer than this (USD per oz), nor than the stops level plus the spread.
 # 0.01 lot x 100 oz x $1.00 = $1 at the stop: the smoke's whole risk
 OPERATIONAL_MIN_STOP_USD = 1.0
@@ -487,6 +506,15 @@ def is_demo(mode: str | None, gates: list[str] | None, terminal_trade_mode: str 
             and terminal_trade_mode == "demo" and probe_only is True)
 
 
+def on_step(lots: float, step: float) -> float:
+    """Trading-safety L4 (2026-11-25): the sized lot on the instrument's own volume step. Sizing has floored it to the
+    step already (`sizing.lots`), so this only clears float noise: for a 0.01 step it is exactly what `round(lots, 2)`
+    gave, and a 0.001-step minimum lot (some crypto CFDs) stays 0.001 instead of becoming 0.0."""
+    if not step > 0:
+        return round(lots, 2)
+    return round(round(lots / step) * step, 10)
+
+
 def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
     """The exploration purpose's fence before sizing (see `Intent.purpose`): a probe_only account
     (`exploration_not_probe_only`); the demo lock by the registry and the phase file, F1's rule
@@ -507,17 +535,19 @@ def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
     return out
 
 
-def _exploration_sized(intent: Intent, limits: RiskLimits, d: GateDecision) -> list[str]:
+def _exploration_sized(intent: Intent, limits: RiskLimits, d: GateDecision, *, unlimited: bool = False) -> list[str]:
     """The fence on the sized order: exactly the minimum lot, and the loss at the stop the gate set (stops level and
     spread floored) within the arm's per-trade cap; equal is allowed (1e-9 absorbs float noise). A growth arm
-    (`RiskLimits.growth_arms`) is sized by the gate between the minimum lot and the intent's `volume_max`."""
+    (`RiskLimits.growth_arms`) is sized by the gate between the minimum lot and the intent's `volume_max`. ADR 0097
+    (`unlimited`): no per-trade cap for a minimum-lot arm; a growth arm keeps its cap, which is its sizing."""
     out: list[str] = []
     if intent.arm_id in limits.growth_arms:
         if d.lots < intent.volume_min - 1e-9 or d.lots > intent.volume_max + 1e-9:
             out.append("exploration_growth_lots")
     elif abs(d.lots - intent.volume_min) > 1e-9:
         out.append("exploration_not_min_lot")
-    if d.risk_amount > limits.exploration_arms.get(intent.arm_id or "", 0.0) + 1e-9:
+    capped = not unlimited or intent.arm_id in limits.growth_arms
+    if capped and d.risk_amount > limits.exploration_arms.get(intent.arm_id or "", 0.0) + 1e-9:
         out.append("exploration_arm_cap")
     return out
 
@@ -686,7 +716,28 @@ class RiskGate:
         st.balance_closed_hwm = st.equity
         return True
 
+    def stage_step(self, st: AccountState) -> Stage:
+        """The stage machine as the engine and the entry checks run it: `update_stage`, except on a demo account without
+        limits (ADR 0097), where the stage does not move (no size-down, no drawdown halt, no kill switch; the demo floor
+        is the guard). `update_stage` itself stays byte-identical (the owner's re-arm path, tests/test_demo_roll.py).
+        Trading-safety L1: once the flag is off, the next read takes the computed stage at once (fail closed)."""
+        return st.stage if self.unlimited() else self.update_stage(st)
+
     # ---------------------------------------------------------------- entry check + sizing
+    def unlimited(self, intent: Intent | None = None) -> bool:
+        """ADR 0097 (owner 2026-11-25, "there are no limits anymore for demo accounts"): whether this account's caps are
+        lifted. The account's facts (`RiskLimits.demo_unlimited` on a probe_only account); with an intent, also the
+        one demo predicate on its own facts (`is_demo`: the registry, the phase file, the terminal), so any non-demo
+        fact puts every cap back (fail closed)."""
+        L = self.limits
+        if not (L.demo_unlimited and L.probe_only):
+            return False
+        if intent is None:
+            return True
+        gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" and intent.phase_file is not None \
+            else None
+        return is_demo(intent.account_mode, gates, intent.terminal_trade_mode, L.probe_only)
+
     def daily_loss_limit(self, st: AccountState) -> float:
         """The effective daily loss limit in the account currency (ADR 0004 section 3): min(daily_cap x day-start
         equity, daily_loss_limit_abs); the absolute alone before the day start is known, the percentage alone when the
@@ -778,11 +829,15 @@ class RiskGate:
         return min(cap, lev) if lev is not None and math.isfinite(lev) and lev > 0 else cap
 
     def margin_for(self, intent: Intent | OperationalIntent, lots: float, notional: float,
-                   margin_required: MarginFn | None, st: AccountState | None = None) -> tuple[float, str]:
+                   margin_required: MarginFn | None, st: AccountState | None = None, *,
+                   broker_only: bool = False) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
         `notional` is in the account currency (BACKLOG 28), as is the broker's figure. The larger of the broker's
         figure and notional / 20 is used; when the broker cannot answer (no source, None, a non-finite or negative figure, or an error) the 1:20 figure is used and the reason recorded. Never smaller
-        than 1:20, so a broker fault can only make the check stricter-or-equal, never fail open."""
+        than 1:20, so a broker fault can only make the check stricter-or-equal, never fail open.
+
+        `broker_only` (ADR 0097, an unlimited demo account): the broker's own figure when it answers, which is what the
+        broker holds; the 1:20 figure only when it cannot (fail closed)."""
         lev = self.leverage(st, getattr(intent, "leverage_class", "gold_index"),
                             getattr(intent, "correlation_group", "gold"))
         cap = notional / lev
@@ -801,12 +856,14 @@ class RiskGate:
             why = f"fallback {tag}: broker margin unusable ({raw!r})"
             log.warning("%s", why)
             return cap, why
+        if broker_only:
+            return broker, f"broker {broker:.2f} (demo floor)"
         if broker > cap:
             return broker, f"broker {broker:.2f} > {tag} {cap:.2f}"
         return cap, f"{tag} {cap:.2f} >= broker {broker:.2f}"
 
     def account_reasons(self, st: AccountState, now_utc: pd.Timestamp | None = None,
-                        throttle: AgentThrottle | None = None) -> list[str]:
+                        throttle: AgentThrottle | None = None, *, unlimited: bool | None = None) -> list[str]:
         """BACKLOG 43 (ADR 0011: the engine publishes "the gate's account-level reasons at each refresh, including
         rollover and the weekend cut"): every reason `check()` refuses an entry for that does not depend on the intent,
         in the order `check()` gives them. `check()` starts from this list, so the two cannot drift; the engine
@@ -815,8 +872,14 @@ class RiskGate:
 
         Reads only: the stage machine runs in `check()` and in the engine's account refresh, never here. A state number
         the gate cannot compare (`invalid_state_fields`) ends the list with `invalid_state` and `invalid:<field>`, and
-        the loss caps, which read those numbers, are not judged on it. Entries only; exits never call the gate."""
+        the loss caps, which read those numbers, are not judged on it. Entries only; exits never call the gate.
+
+        ADR 0097: `unlimited` (default: the account's facts, `unlimited()`) leaves every cap out (the drawdown halt, the
+        news and entry windows, the spread cap, max positions, the throttle, the daily and weekly caps and what the
+        projections need) and adds the demo floor's `demo_equity_floor` instead; halts, rollover, the weekend and data
+        and terminal integrity still refuse."""
         L = self.limits
+        free = self.unlimited() if unlimited is None else unlimited
         reasons: list[str] = []
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
@@ -824,15 +887,15 @@ class RiskGate:
             reasons.append("owner_halt")
         if st.account_disabled:
             reasons.append("account_disabled")
-        if st.stage == Stage.HALTED:
+        if st.stage == Stage.HALTED and not free:
             reasons.append("drawdown_halt")
         if st.equity_unconfirmed:
             reasons.append("equity_unconfirmed")
         if st.dq_error:
             reasons.append("data_quality_error")
-        if st.in_blackout and (L.blackout_entries or st.blackout_kind != "tier1"):    # M2: a shock always refuses
+        if st.in_blackout and (L.blackout_entries or st.blackout_kind != "tier1") and not free:  # M2: a shock refuses
             reasons.append("news_blackout")
-        reasons += self.window_reasons(st)
+        reasons += [] if free else self.window_reasons(st)
         if st.in_rollover:
             reasons.append("rollover")
         if st.weekend:
@@ -859,15 +922,20 @@ class RiskGate:
             reasons.append("exposure_unknown")
         if st.data_recovering:
             reasons.append("data_recovering")
-        if st.spread_points > L.max_spread_points:
+        if st.spread_points > L.max_spread_points and not free:
             reasons.append("spread_too_wide")
-        if st.open_positions >= L.max_positions:
+        if st.open_positions >= L.max_positions and not free:
             reasons.append("max_positions")
+        if free and st.open_positions >= CAPACITY_CEILING:
+            reasons.append("capacity_ceiling")       # ADR 0097: engineering (the exit SLO), not a risk limit
         if L.pilot is not None:
             reasons += _pilot_account_reasons(L.pilot, st)
-        reasons += self.throttle_reasons(throttle, now_utc)
+        reasons += [] if free else self.throttle_reasons(throttle, now_utc)
         bad = invalid_state_fields(st)
-        if not bad:
+        if free and not bad and L.demo_floor.enabled \
+                and st.equity < L.demo_floor.min_equity_frac * st.balance_closed_hwm - 1e-9:
+            reasons.append("demo_equity_floor")      # ADR 0097: a wiped demo stops all learning
+        if not bad and not free:
             day_loss = 1 - st.equity / st.day_start_equity if st.day_start_equity else 0.0
             week_loss = 1 - st.equity / st.week_start_equity if st.week_start_equity else 0.0
             if day_loss >= L.daily_cap:
@@ -877,12 +945,12 @@ class RiskGate:
         if st.account_class == "unknown":
             reasons.append("account_class_unknown")
         # review M1: a multi-symbol account projects against the daily limit, which needs the day's start equity
-        if L.multi_symbol and not st.day_start_equity > 0:
+        if L.multi_symbol and not st.day_start_equity > 0 and not free:
             reasons.append("day_start_unknown")
         # BACKLOG 19/35: the heat cap, or the projection with an absolute daily limit, needs the open risk; unknown, or not
         # a finite amount >= 0, refuses (fail closed). Nothing while both are off, so the fact is never read then
-        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None) or L.pilot is not None \
-            or L.multi_symbol
+        needs = L.pilot is not None or (not free and (L.heat.enabled or L.multi_symbol
+                                                      or (L.project_open_risk and L.daily_loss_limit_abs is not None)))
         if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
             reasons.append("open_risk_unknown")
         if bad:
@@ -891,13 +959,14 @@ class RiskGate:
         return reasons
 
     def _account_gate(self, st: AccountState, bad: list[str], now_utc: pd.Timestamp | None,
-                      throttle: AgentThrottle | None) -> tuple[list[str], GateDecision | None]:
+                      throttle: AgentThrottle | None, *, unlimited: bool = False
+                      ) -> tuple[list[str], GateDecision | None]:
         """The start both entry checks share (ADR 0021: one code path for every account check): the stage machine on a
         comparable state, then `account_reasons`. A number outside its domain (`bad`) ends it with the refusal
         (`invalid_state`, then `invalid:<field>`); the stage machine does not run on it."""
         if not bad:
-            self.update_stage(st)
-        reasons = self.account_reasons(st, now_utc, throttle)
+            self.stage_step(st)
+        reasons = self.account_reasons(st, now_utc, throttle, unlimited=unlimited)
         if not bad:
             return reasons, None
         log.warning("entry refused: invalid state %s", bad)
@@ -906,25 +975,36 @@ class RiskGate:
         return reasons, GateDecision(allowed=False, reasons=[*reasons, *(f"invalid:{f}" for f in bad
                                                                          if f"invalid:{f}" not in reasons)])
 
-    def _same_direction(self, st: AccountState, side: int) -> list[str]:
-        """BACKLOG 19 (playbook G-4: "same-side positions of different agents count as one bet")."""
+    def _same_direction(self, st: AccountState, side: int, unlimited: bool = False) -> list[str]:
+        """BACKLOG 19 (playbook G-4: "same-side positions of different agents count as one bet"); none when
+        `unlimited` (ADR 0097)."""
         L = self.limits
-        if L.heat.enabled and (st.open_long if side > 0 else st.open_short) >= L.heat.max_same_direction:
+        if L.heat.enabled and not unlimited and (st.open_long if side > 0 else st.open_short) >= L.heat.max_same_direction:
             return ["same_direction_cap"]
         return []
 
     def _sized_limits(self, intent: Intent | OperationalIntent, st: AccountState, *, lots: float, risk_per_lot: float,
                       fx: float, cost_per_oz: float, stop_distance: float, realised_risk: float, notes: list[str],
-                      margin_required: MarginFn | None) -> GateDecision:
+                      margin_required: MarginFn | None, unlimited: bool = False) -> GateDecision:
         """Every limit both entry checks apply once the trade is sized (ADR 0021: "Every sizing limit still applies"):
         the margin level floor, the combined exposure cap, the absolute daily loss limit and the heat cap, in that order.
         `cost_per_oz` is the round trip and swap per oz (USD) the daily projection adds; 0 for an operational order,
-        which has no cost parameter."""
+        which has no cost parameter.
+
+        ADR 0097 (`unlimited`): only the demo floor's margin level (`demo_margin_floor`, on the broker's own figure,
+        1:20 when it cannot answer; nothing when the floor is off); no exposure cap, daily projection or heat cap."""
         L = self.limits
         notional = lots * intent.contract_oz * intent.price * fx          # account currency
         # margin: the stricter of the broker's order_calc_margin and the FCA cap (1:20); level must stay >= 300%
-        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required, st)
+        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required, st, broker_only=unlimited)
         level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
+        if unlimited:
+            if L.demo_floor.enabled and level_after < L.demo_floor.min_margin_level - 1e-9:
+                return GateDecision(allowed=False, reasons=["demo_margin_floor"], stop_distance=stop_distance,
+                                    margin_needed=margin_needed, margin_note=margin_note)
+            return GateDecision(allowed=True, lots=on_step(lots, intent.volume_step), reasons=notes, risk_fraction=realised_risk,
+                                stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
+                                risk_amount=lots * risk_per_lot, cost_amount=cost_per_oz * lots * intent.contract_oz * fx)
         if level_after < L.margin_level_floor:
             return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
@@ -977,7 +1057,7 @@ class RiskGate:
         if L.heat.enabled and (st.open_risk or 0.0) + risk_amount > L.heat.max_open_risk * st.equity + 1e-9:
             return GateDecision(allowed=False, reasons=["heat_cap"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
-        return GateDecision(allowed=True, lots=round(lots, 2), reasons=notes, risk_fraction=realised_risk,
+        return GateDecision(allowed=True, lots=on_step(lots, intent.volume_step), reasons=notes, risk_fraction=realised_risk,
                             stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
                             risk_amount=risk_amount, cost_amount=cost_amount)
 
@@ -997,7 +1077,8 @@ class RiskGate:
         (`_sized_limits`) are shared with `check_operational`; the model checks are this method's alone.
         tests/test_risk_gate_split.py pins the decisions on a state grid captured before the split (F5)."""
         L = self.limits
-        reasons, refused = self._account_gate(st, invalid_fields(intent, st), now_utc, throttle)
+        free = self.unlimited(intent)        # ADR 0097: an unlimited demo account, by the one demo predicate
+        reasons, refused = self._account_gate(st, invalid_fields(intent, st), now_utc, throttle, unlimited=free)
         if refused is not None:
             return refused
         # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
@@ -1031,7 +1112,7 @@ class RiskGate:
             edge = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr      # gross, before costs
             if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
                 reasons.append("standard_account_edge")
-        reasons += self._same_direction(st, intent.side)
+        reasons += self._same_direction(st, intent.side, free)
         if spread_over_stop(intent, st, L):
             reasons.append("spread_over_stop")
         if intent.symbol != "XAUUSD" and REGISTRY_TERMS - intent.model_fields_set:
@@ -1079,8 +1160,9 @@ class RiskGate:
             notes = ["pilot_min_lot"]
         elif sz.refused:
             # minimum-lot exception (BACKLOG 25, ADR 0004): exactly the minimum lot, only within the cap (half of it
-            # in size-down), never above the per-trade maximum; every check below still applies to it
-            cap = self.min_lot_cap(size_down)
+            # in size-down), never above the per-trade maximum; every check below still applies to it. ADR 0097: on an
+            # unlimited demo account the minimum lot whatever its risk against equity (the demo floor still binds)
+            cap = math.inf if free else self.min_lot_cap(size_down)
             lots = intent.volume_min
             realised_risk = lots * sz.risk_per_lot / st.equity
             if cap is None or lots > intent.volume_max or realised_risk > cap:
@@ -1089,11 +1171,11 @@ class RiskGate:
         per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
         d = self._sized_limits(intent, st, lots=lots, risk_per_lot=sz.risk_per_lot, fx=fx, cost_per_oz=per_oz,
                                stop_distance=stop_distance, realised_risk=realised_risk, notes=notes,
-                               margin_required=margin_required)
+                               margin_required=margin_required, unlimited=free)
         if d.allowed and measuring and (fence := _cost_measurement_sized(intent, d)):
             return GateDecision(allowed=False, reasons=fence, stop_distance=d.stop_distance,
                                 margin_needed=d.margin_needed, margin_note=d.margin_note)
-        if d.allowed and exploring and (fence := _exploration_sized(intent, L, d)):
+        if d.allowed and exploring and (fence := _exploration_sized(intent, L, d, unlimited=free)):
             return GateDecision(allowed=False, reasons=fence, stop_distance=d.stop_distance,
                                 margin_needed=d.margin_needed, margin_note=d.margin_note, risk_amount=d.risk_amount)
         if d.allowed and L.pilot is not None and st.pilot is not None and st.pilot.realised_loss is not None \
@@ -1158,15 +1240,20 @@ class RiskGate:
           `min_lot_exceeds_risk`. The stop is `sizing.stop_distance` floored at OPERATIONAL_MIN_STOP_USD: at or beyond
           the stops level plus the spread.
         * S10: the boundaries are `check`'s: the daily cap refuses at equality, the absolute projection allows it.
+        * ADR 0097 (trading-safety M2): on a demo account without limits (`unlimited`), and only when F1 found it demo,
+          no cap refuses it either (account caps, same direction, `min_lot_exceeds_risk`, the sized caps); the demo
+          floor, halts and integrity still do.
         Entries only; exits never call it."""
         L = self.limits
         gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" else None
         head = [] if gates is not None and not LIVE_GATES & set(gates) else ["operational_not_demo"]
+        # ADR 0097 (trading-safety M2): unlimited too on a demo account by the registry and the phase file (F1)
+        free = not head and self.unlimited()
         bad = invalid_state_fields(st) + [f for f in _OPERATIONAL_NUMBERS if _bad(intent, f, _POSITIVE_OPERATIONAL)]
-        reasons, refused = self._account_gate(st, bad, now_utc, None)
+        reasons, refused = self._account_gate(st, bad, now_utc, None, unlimited=free)
         if refused is not None:
             return refused.model_copy(update={"reasons": [*head, *refused.reasons]})
-        reasons = [*head, *reasons, *self._same_direction(st, intent.side)]
+        reasons = [*head, *reasons, *self._same_direction(st, intent.side, free)]
         steps = math.floor(intent.volume_min / intent.volume_step + 1e-9)
         lots = steps * intent.volume_step
         if steps < 1 or lots > intent.volume_max + 1e-9:
@@ -1181,11 +1268,11 @@ class RiskGate:
         risk_per_lot = stop_distance * intent.contract_oz * fx
         realised_risk = lots * risk_per_lot / st.equity
         size_down = st.stage == Stage.SIZE_DOWN or st.combined_size_down
-        if realised_risk > L.max_risk_per_trade * (sizing.SIZE_DOWN_RISK if size_down else 1.0) + 1e-12:
+        if not free and realised_risk > L.max_risk_per_trade * (sizing.SIZE_DOWN_RISK if size_down else 1.0) + 1e-12:
             return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
         return self._sized_limits(intent, st, lots=lots, risk_per_lot=risk_per_lot, fx=fx, cost_per_oz=0.0,
                                   stop_distance=stop_distance, realised_risk=realised_risk, notes=[],
-                                  margin_required=margin_required)
+                                  margin_required=margin_required, unlimited=free)
 
 
 def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:

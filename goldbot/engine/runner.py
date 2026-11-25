@@ -1171,7 +1171,8 @@ class Engine:
                     res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
                 except Exception as exc:
                     if isinstance(exc, order_send.OrderInFlight):    # nothing sent: a refusal, never a tick error
-                        decisions.append(self._record(agent, close_ts, p, mult, order_send.REFUSED, pid, scored_fv=sfv))
+                        decisions.append(self._record(agent, close_ts, p, mult, order_send.refusal_action(exc), pid,
+                                                      scored_fv=sfv))
                         continue
                     # review LOW-C: the order may be at the broker: its row stays "sending" (reconciliation resolves it),
                     # entries blocked (tick_error), no further auto entry this close; other agents journalled, exits go on
@@ -1356,7 +1357,9 @@ class Engine:
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order",
                                "proposal": prop.proposal_id, "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
-                               "message": res.message})
+                               "message": res.message,
+                               # ADR 0097: the evidence tag of an entry on a demo account without limits
+                               **({"limits_epoch": "unlimited"} if self.gate.unlimited() else {})})
         auto_entry.note_refusal(self, prop, agent, res, lots)     # the bridge's ceiling or a switched terminal
         order_send.record_fill(self, prop, agent, res, requested)     # the nightly slippage table
         return res
@@ -1981,7 +1984,7 @@ class Engine:
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         pilot.refresh(self, acc, now)        # ADR 0055: the live pilot's record and stop from the deals (engine/pilot.py)
         stage = st.stage
-        if self.gate.update_stage(st) != stage:
+        if self.gate.stage_step(st) != stage:          # ADR 0097: no stage move on a demo account without limits
             if st.stage == Stage.HALTED:
                 self._halted_at = now
                 self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument
@@ -3017,6 +3020,8 @@ class Engine:
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],
             "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
+            # ADR 0097 (trading-safety H1): the loop-pass gap p99 with a position open, the exit SLO, the entry duty
+            **order_send.published(self),
             # BACKLOG 72: orders the broker neither filled nor refused (health WARNs from 600 s; entry status "since")
             "unconfirmed_orders": unconfirmed.summary(self._orders, pd.Timestamp.now("UTC"), self.cfg.symbol),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,

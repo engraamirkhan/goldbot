@@ -363,6 +363,11 @@ class Account(Record):
     # every entry). Off their defaults only on a demo probe_only account (refused at load otherwise)
     demo_weekend_flat: bool = False
     news_blackout_entries: bool = True
+    # ADR 0097 (owner 2026-11-25: "there are no limits anymore for demo accounts", "allow absolutely anything"): every
+    # RiskGate and exploration cap is lifted on this account (`RiskLimits.demo_unlimited`); the RiskGate path, a stop
+    # on every order, exits, the exploration fence, evidence classes and the demo floor (settings.yaml
+    # `risk.demo_floor`) stay. Demo probe_only accounts only (refused at load otherwise)
+    demo_unlimited: bool = False
     # owner 2026-10-19 (docs/design/dynamic-limits-2026-10-19.md): "loss per trade, daily loss ... dynamic according to
     # strategy". On: per-strategy risk per trade from the nightly controller, tighten-only intraday factors and the
     # probes' loss and count from their own stops and the budget (cost_probe.probe_limits); the configured values stay
@@ -514,7 +519,8 @@ class Account(Record):
         the weekend-flat and news-blackout flags leave their defaults only on a demo probe_only account, where nothing
         real is at stake; anywhere else the config is refused at load, never ignored quietly."""
         off = [k for k, v in (("demo_weekend_flat", self.demo_weekend_flat),
-                              ("news_blackout_entries", not self.news_blackout_entries)) if v]
+                              ("news_blackout_entries", not self.news_blackout_entries),
+                              ("demo_unlimited", self.demo_unlimited)) if v]
         if off and (self.mode != "demo" or not self.probe_only):
             raise ValueError(f"{', '.join(off)} off its default is allowed on demo probe_only accounts only "
                              "(demo-limits ADR 2026-11-02)")
@@ -912,6 +918,7 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                                # demo-limits ADR 2026-11-02 (demo probe_only only; refused elsewhere at load)
                                demo_weekend_flat=a.get("demo_weekend_flat", False),
                                news_blackout_entries=a.get("news_blackout_entries", True),
+                               demo_unlimited=bool(a.get("demo_unlimited", False)),     # ADR 0097
                                pilot=PilotRules(**(a.get("pilot") or {})),
                                order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
                                store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),

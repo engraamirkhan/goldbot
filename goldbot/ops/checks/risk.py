@@ -319,6 +319,8 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
             caps = {p: float(current[f"{p}_cap"]) if current.get(f"{p}_cap") is not None else caps[p] for p in caps}
     except (ValueError, OSError, AttributeError, TypeError):
         return []                                   # check_engine reports the unreadable file
+    if e.get("demo_unlimited") is True:
+        return []                                   # ADR 0097: no loss cap on this account (check_demo_floor instead)
     out = []
     for period in ("daily", "weekly"):
         start = starts[period]
@@ -466,3 +468,65 @@ def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
 # ADR 0031: the nightly adaptive-limits decision lives with its job (goldbot/ops/limits_job.py); per account, right
 # after the risk state, nothing for an account that is not adaptive
 register_check("account", block=BLOCK_ACCOUNT, pos=22)(check_limits_controller)
+
+
+# ADR 0097 (trading-safety H1): too few loop-pass gaps say nothing about a p99
+EXIT_LATENCY_MIN_N = 30
+# ADR 0097 (trading-safety M5): equity below this share of the closed-balance mark warns, well before the demo floor
+DEMO_FLOOR_WARN_FRAC = 0.5
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=52)
+def check_exit_latency(ctx: HealthContext, account_id: str) -> list[Check]:
+    """ADR 0097 (trading-safety H1: "an exit-latency SLO with an alert (p99 < 5 s)"): the engine's published p99 of its
+    loop-pass gaps with a position open (engine/order_send.py `published`), the longest an exit that became due waited
+    for its pass. Above the SLO: FAIL on a demo account without limits (exits-first and the entry duty ceiling exist to
+    hold it), WARN on any other. Fewer than EXIT_LATENCY_MIN_N gaps, or an engine that does not publish them, is not
+    judged; an unreadable file is check_engine's. Reporting only."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        p99, n = e.get("exit_wait_p99_s"), int(e.get("exit_wait_n") or 0)
+        slo = float(e.get("exit_slo_s") or 5.0)
+        unlimited = e.get("demo_unlimited") is True
+        worst = e.get("exit_wait_max_s")
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []
+    if p99 is None or n < EXIT_LATENCY_MIN_N:
+        return []
+    name = f"exit_latency:{account_id}"
+    what = f"exit wait p99 {float(p99):.1f} s over the last {n} passes with a position open (max {worst} s, SLO {slo:g} s)"
+    if float(p99) <= slo:
+        return [Check(name=name, status="ok", reason=what)]
+    status: Status = "fail" if unlimited else "warn"
+    return [Check(name=name, status=status,
+                  reason=f"{what}: software exits (time barrier, weekend cut, trail, kill switch) are late; broker "
+                         "stops still fire. RUNBOOK 'Exit latency'")]
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=54)
+def check_demo_floor(ctx: HealthContext, account_id: str) -> list[Check]:
+    """ADR 0097 (trading-safety M4/M5): on a demo account without limits the floor is the one guard left. WARN once
+    equity is below DEMO_FLOOR_WARN_FRAC of the closed-balance mark (before the floor); FAIL at the floor, where every
+    entry is refused `demo_equity_floor` and learning has stopped (a reset the deal history did not reconcile keeps the
+    old mark there too). Nothing on any other account. Reporting only."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        if e.get("demo_unlimited") is not True:
+            return []
+        eq, mark = float(e.get("equity") or 0.0), float(e.get("balance_closed_hwm") or 0.0)
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []
+    from goldbot.config import DemoFloor
+    floor = ctx.settings.risk.demo_floor if ctx.settings is not None else DemoFloor()
+    name = f"demo_floor:{account_id}"
+    if mark <= 0:
+        return [Check(name=name, status="warn", reason="no closed-balance mark yet: the demo floor cannot be judged")]
+    what = f"equity {eq:,.2f} is {100 * eq / mark:.0f}% of the mark {mark:,.2f}"
+    if floor.enabled and eq < floor.min_equity_frac * mark:
+        return [Check(name=name, status="fail",
+                      reason=f"{what}: below the demo floor ({100 * floor.min_equity_frac:.0f}%), every entry refused "
+                             "demo_equity_floor and learning has stopped. RUNBOOK 'Demo floor'")]
+    if eq < DEMO_FLOOR_WARN_FRAC * mark:
+        return [Check(name=name, status="warn", reason=f"{what}: half the mark lost; the demo floor is "
+                                                       f"{100 * floor.min_equity_frac:.0f}%")]
+    return [Check(name=name, status="ok", reason=what)]

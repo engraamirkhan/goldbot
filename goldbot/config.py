@@ -163,6 +163,19 @@ class HeatSettings(_Section):
     max_same_direction: int = Field(2, ge=1)
 
 
+class DemoFloor(_Section):
+    """ADR 0097 (owner 2026-11-25: "there are no limits anymore for demo accounts", "allow absolutely anything"): the
+    one guard left on a `demo_unlimited` account, because a wiped demo balance stops all learning. New entries are
+    refused `demo_equity_floor` while equity is below `min_equity_frac` x the closed-balance high-water mark, and
+    `demo_margin_floor` when the margin level after the trade (equity / (margin used + its margin), the broker's own
+    figure; 1:20 when the broker cannot answer) would fall below `min_margin_level`. Entries only; exits are never
+    gated. `enabled: false` switches it off (the broker's own margin call and stop-out remain)."""
+
+    enabled: bool = True
+    min_equity_frac: float = Field(0.2, gt=0, lt=1)
+    min_margin_level: float = Field(2.0, ge=1.0)
+
+
 class RiskSettings(_Section):
     risk_per_trade: float = Field(gt=0, le=0.01)
     risk_per_trade_tiny_live: float = Field(gt=0, le=0.01)
@@ -214,6 +227,8 @@ class RiskSettings(_Section):
     # BACKLOG 17: entry windows after the daily reopen / weekly open and on thin-liquidity days; off by default
     reopen: ReopenSettings = Field(default_factory=ReopenSettings)
     holidays: HolidaySettings = Field(default_factory=HolidaySettings)
+    # ADR 0097: the margin-safety floor of a demo account whose accounts.yaml says `demo_unlimited: true`
+    demo_floor: DemoFloor = Field(default_factory=DemoFloor)
 
 
 class CostSettings(_Section):

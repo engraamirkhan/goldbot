@@ -98,6 +98,7 @@ accounts:
     max_positions: 24
     demo_weekend_flat: true
     news_blackout_entries: false
+    demo_unlimited: false     # ADR 0097: after a clean 24 h icm-probe canary and the W2-4 EDF dispatch (D22)
     # exploration (plan 2026-10-25, ADR 0043 sleeves; the rules are the frozen ARM-SPEC, config/exploration_arms.yaml):
     # budget_share 0.9 x 220 = £198 = intraday £108 + swing £90 (ADR 0043's £48 : £40 ratio, scaled to the host's
     # budget); slots and per-trade caps unchanged (intraday 5 open at £17, swing 1 open at £40; I0 30% of intraday,
@@ -307,6 +308,7 @@ accounts:
     max_positions: 24
     demo_weekend_flat: true
     news_blackout_entries: false
+    demo_unlimited: false     # ADR 0097 (owner 2026-11-25, "allow absolutely anything"): set true at the canary only
     # dynamic limits (design 2026-10-19 item 4): each probe's loss is its own stop's at 0.01 lot, at most max_loss
     # and budget_share x the day's limit / max_open; the probe count is budget_share x the day's limit / the median
     # loss at the stop of the last 20 probes, 1 to max_open. max_loss and max_open are the ceilings and the fallback
@@ -580,6 +582,7 @@ accounts:
     max_positions: 24         # PD 2026-10-26 host cap 18; demo-limits ADR 2026-11-02: 24, as icm-demo and icm-probe
     demo_weekend_flat: true   # demo-limits ADR 2026-11-02, as icm-demo
     news_blackout_entries: false
+    demo_unlimited: false     # ADR 0097: after a clean 24 h icm-probe canary and the W2-4 EDF dispatch (D22)
     dynamic_limits: true      # probes' loss and count from their own stops and the budget; the values above are ceilings
     # live issue 2026-10-27 (SRE: Vantage fills 2.6-5.3 s p95, up to 31 s): an entry order waits this long for the
     # terminal's reply on its own worker thread (goldbot/engine/order_send.py); the default 15 s timed out while the
@@ -779,6 +782,7 @@ accounts:
     cost_probe: { enabled: true, budget_share: 0.1, max_open: 1, max_loss: 1.0, scheduled: { enabled: true, budget_share: 0.5 } }
     shadow_host: false
     probe_only: true
+    demo_unlimited: false     # ADR 0097: after a clean 24 h icm-probe canary and the W2-4 EDF dispatch (D22)
     max_positions: 8
     dynamic_limits: true
     order_timeout_s: 35       # as vantage-demo (Vantage fills up to 31 s)

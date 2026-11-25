@@ -236,15 +236,16 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     ex.cohort_loss, ex.cohort_week_loss = got.loss, max(0.0, -got.week_pnl)
     stops: dict[str, tuple[str, str, dict[str, Any]]] = {}
     expired = now.tz_convert("UTC").normalize() > pd.Timestamp(cohort.until, tz="UTC")
+    free = eng.gate.unlimited()         # ADR 0097: no loss cap or weekly hold on an unlimited demo account
     for a in live:
         detail: dict[str, Any] = {"loss": round(got.loss.get(a, 0.0), 2), "loss_cap": cohort.arm_loss_cap_gbp}
         if expired:
             stops[a] = (EXPIRED, f"{COHORT_RULE}: the cohort ended after {cohort.until}", detail)
-        elif got.loss.get(a, 0.0) >= cohort.arm_loss_cap_gbp - 1e-9:
+        elif not free and got.loss.get(a, 0.0) >= cohort.arm_loss_cap_gbp - 1e-9:
             stops[a] = (LOSS_CAP, f"{COHORT_RULE}: arm loss cap {cohort.arm_loss_cap_gbp:g} reached", detail)
     _stop(eng, ex, stops, now)          # a stopped member is in `recording` from the start: it records replay-only
     week = week_start(now)
-    if ex.cohort_week_loss >= cohort.week_loss_cap_gbp - 1e-9 and ex.cohort_week_told != week:
+    if not free and ex.cohort_week_loss >= cohort.week_loss_cap_gbp - 1e-9 and ex.cohort_week_told != week:
         ex.cohort_week_told = week
         log.warning("learning cohort held until next Monday: week loss %.2f at the cap %.2f", ex.cohort_week_loss,
                     cohort.week_loss_cap_gbp)

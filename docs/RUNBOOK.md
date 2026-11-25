@@ -3120,3 +3120,51 @@ up-to-date file is left alone. While 1d/1w are dark nothing reads it.
   than 120 days old: copy a current one by hand, never rebuilt), `no_minutes` (the store has no minutes after the
   file: check the engine's history) or lists `holes` (weekdays without minutes). The next run (21:40 UTC) appends
   what the store holds after a copied file.
+
+### Demo accounts without limits (ADR 0097)
+
+`demo_unlimited: true` in config/accounts.yaml lifts every account-configured cap on a demo probe_only account. Every
+account ships with it **false**. Turn it on for icm-probe only at its canary (one line, then the normal deploy). Turn it
+on for the other demo accounts only after a clean 24 h canary and the W2-4 dispatch. To turn it off, set it to false
+and deploy. On the first read after that, the drawdown stage jumps to whatever the drawdown says, which may be HALTED;
+the owner's /rearm clears that as usual.
+
+The canary is clean when all of these hold over 24 h with the market open:
+- `exit_latency:icm-probe` is ok;
+- `demo_floor:icm-probe` is ok;
+- no orphan positions (no `adopt_orphan` journal rows);
+- every open position has its broker stop;
+- `entry_yield` journal rows are present but no signal went stale because of them (`exploration_stale` count not up
+  against the week before).
+
+### Exit latency (`exit_latency:<account>`)
+
+What it measures: the engine publishes the p99 of the gaps between loop passes while a position is open
+(`exit_wait_p99_s` in engine_<account>.json). That gap is the longest a software exit waited (time barrier, weekend
+cut, trail close, kill switch); broker stops fire regardless. The check FAILs above 5 s on an unlimited account and
+WARNs on any other.
+
+What to do:
+1. In the deferral warning in the engine log ("pass budget ... phases"), read which phase is slow.
+2. If the cause is entries, `entry_duty` in the engine state will be near 0.5. Set `demo_unlimited: false` on that
+   account until the W2-4 dispatch lands.
+3. If the cause is the bridge, follow "Bridge contention on an MT5 box".
+4. Never raise `gate.CAPACITY_CEILING` (300 open positions) without a new measurement recorded in ADR 0097.
+
+### Demo floor (`demo_floor:<account>`)
+
+On an unlimited account:
+- WARN: equity has fallen below half the closed-balance mark.
+- FAIL: equity is below the floor (`risk.demo_floor.min_equity_frac`, 20 %). From that point every entry is refused
+  `demo_equity_floor` and learning has stopped. Exits keep running.
+
+What to do:
+1. Check that the mark is right. A demo reset or top-up should show as a `capital_flow` journal row and move the mark.
+2. If the reset was not reconciled (a `capital flow not applied` warning in the log), the mark is still the old one.
+   No automated path resets it on an unlimited account, because its stage never moves:
+   a. set `demo_unlimited: false` and deploy; the next read shows HALTED;
+   b. the owner re-arms on the dashboard (TOTP, the usual re-arm conditions), which sets the mark to equity;
+   c. set the flag back to true.
+3. A genuine loss to the floor is a finding for the performance-analyst before anyone resets.
+4. `risk.demo_floor.enabled: false` switches the floor off. After that, the broker's own margin call and stop-out are
+   the only guards left; that decision is the owner's.

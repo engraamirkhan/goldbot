@@ -791,6 +791,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     watch.ready()                                  # READY=1: from here only this loop feeds the watchdog
     while True:
         watch.tick()                               # every pass, ticks or none: a stuck loop stops beating
+        order_send.pass_started(eng)               # ADR 0097: the pass gap is the exit wait; entries' pass time from 0
         if feed is None:
             resolve(engine_pass)(eng, broker, acc.symbol)
         else:                                      # every book in turn, one thread: the serial gate (engine/books.py)
@@ -914,6 +915,14 @@ def blackout_entries(acc: Account, *, paper: bool = False) -> bool:
     return not (acc.mode == "demo" and acc.probe_only and not acc.news_blackout_entries and not paper)
 
 
+def demo_unlimited(acc: Account, *, paper: bool = False) -> bool:
+    """ADR 0097 (owner 2026-11-25: "there are no limits anymore for demo accounts"; `RiskLimits.demo_unlimited`): True
+    only on a demo probe_only account whose accounts.yaml says `demo_unlimited: true` (refused at load anywhere else;
+    checked again here), against its real terminal, never the paper stand-in. The gate checks the intent's own demo
+    facts again (`RiskGate.unlimited`)."""
+    return bool(acc.demo_unlimited and acc.mode == "demo" and acc.probe_only and not paper)
+
+
 def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> RiskLimits:
     """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
     file) gets the tiny-live risk per trade (and no minimum-lot exception). The account's own absolute daily loss
@@ -949,7 +958,10 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      # growth sprint 2026-11-01: the arms the gate sizes (demo probe_only only)
                                      "growth_arms": frozenset() if paper else accounts.growth_arm_ids(acc),
                                      # demo-limits ADR 2026-11-02: news blackout entries (demo probe_only only)
-                                     "blackout_entries": blackout_entries(acc, paper=paper)})
+                                     "blackout_entries": blackout_entries(acc, paper=paper),
+                                     # ADR 0097: no limits on a demo probe_only account that says so, the floor kept
+                                     "demo_unlimited": demo_unlimited(acc, paper=paper),
+                                     "demo_floor": settings.risk.demo_floor})
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

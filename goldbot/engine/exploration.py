@@ -122,7 +122,15 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import arm_snapshot, auto_entry, cost_probe, entry_refusals, long_bars, weekend_lane
+from goldbot.engine import (
+    arm_snapshot,
+    auto_entry,
+    cost_probe,
+    entry_refusals,
+    long_bars,
+    order_send,
+    weekend_lane,
+)
 from goldbot.engine.cost_record import version as cost_version_of
 from goldbot.engine.long_bars import LONG_TFS, LongHistory, is_bar_close
 from goldbot.engine.store import Resolution
@@ -185,6 +193,11 @@ REPLAY_RETIRED_DAILY_CAP = 1000
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side lots on gold's book; other books net_lot_cap
 MAX_NET_MIN_LOTS = 10               # the same cap in minimum lots, for an instrument whose minimum lot is not gold's 0.01
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
+# ADR 0097 (trading-safety M5) on a demo account without limits: no pause; a warning at half the mark, well before the
+# demo floor (`risk.demo_floor`, 80 %), and one arm's day held within a tenth of the mark (containment, not a cap:
+# £1,000 a day on a £10,000 demo is 30-200 minimum-lot stops, only a fault reaches it)
+DD_WARN_UNLIMITED, ARM_RUNAWAY_FRAC = 0.5, 0.10
+LIMITS_EPOCH = "unlimited"          # ADR 0097: the evidence tag of every entry on such an account (`limits_epoch`)
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
 # ADR 0057: a strategy arm's day holds at least this many of its per-trade cap plus the round trip, never more than
 # SHARE_CAP x its pot (quant C4: a wide-stop arm takes no disproportionate slice). 17 scalp arms in the 55% the controls
@@ -622,6 +635,9 @@ class ExplorationRecord(FrozenRecord):
     # P5 (engine/cost_record.py `version`): the basis `cost` was charged on: an engine cost of record version,
     # `table:<day>` (the nightly legacy table) or `fallback`; None on rows before it. A read prices a row on its own
     cost_version: str | None = None
+    # ADR 0097: `unlimited` when sent on a demo account without limits (sizes, concurrency and shock-window fills there
+    # do not transfer to a capped or live account; reads keep or drop them by this tag), None on every other. JSON body
+    limits_epoch: str | None = None
 
 
 class TwinRecord(FrozenRecord):
@@ -1924,10 +1940,11 @@ def paused(eng: Engine, now: pd.Timestamp) -> bool:
     if not eng.cfg.probe_only:
         return False
     dd = drawdown(eng)
-    if dd is None or dd >= DD_PAUSE - 1e-12:
+    free = eng.gate.unlimited()            # ADR 0097: no pause (the demo floor binds); an unknown drawdown still pauses
+    if dd is None or (dd >= DD_PAUSE - 1e-12 and not free):
         return True
     day = now.floor("D")
-    if dd >= DD_WARN - 1e-12 and _warned.get(id(eng)) != day:
+    if dd >= (DD_WARN_UNLIMITED if free else DD_WARN) - 1e-12 and _warned.get(id(eng)) != day:
         _warned[id(eng)] = day
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_dd_warning",
                               "drawdown": round(dd, 4)})
@@ -2192,6 +2209,11 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: i
             # lots, slots), so nothing else goes out until it is settled; the rest are blocked candidates now
             _block(eng, ex, order[i:], now, "order_unsettled")
             return sent
+        if (why := order_send.entry_yield(eng)) is not None:
+            # ADR 0097 (trading-safety H1): exits, the entry duty ceiling or the broker's capacity go first; the rest
+            # stay queued for the next pass (their staleness limit still applies), never refused for it
+            order_send.note_yield(eng, why, len(order) - i)
+            return sent
         arm = ex.arms[s.arm_id]
         if shift_due(eng, ex, arm):
             defer(eng, ex, s, now)
@@ -2330,6 +2352,12 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                               "action": "exploration_refused:" + why, **applied})
 
     ps.why = None
+    # ADR 0097 (owner 2026-11-25: "there are no limits anymore for demo accounts", "allow absolutely anything"): on an
+    # unlimited demo account no account-configured count, slot, room or loss cap below refuses. What the arm's frozen,
+    # registered spec says stays (its max_open and a learning arm's loss cap: the protocol its evidence is judged on),
+    # as do replay_only, the registry, the entry refusals, retirements, the Friday cut, the demo/auto lock, the
+    # per-arm runaway containment (ARM_RUNAWAY_FRAC) and the RiskGate
+    free = eng.gate.unlimited()
     if arm.spec.control_mode == "replay_only":
         # amendment 2026-11-15: recorded and labelled, never sent (`_enter` records them first; this is the guard).
         # First of all checks, so nothing below (the budget, the gate, `_intent`, the order core) ever sees it
@@ -2367,7 +2395,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         from goldbot.engine import exploration_budget as budget
         from goldbot.research.arm_rules import hash_u
         kind = budget.entry_kind(arm)
-        if (why := budget.daily_refusal(daily, kind, ps.entries, segment=budget.day_segment(s.bar_ts),
+        if not free and (why := budget.daily_refusal(daily, kind, ps.entries, segment=budget.day_segment(s.bar_ts),
                                         budgets=ps.sessions,
                                         cell_fills=budget.cell_fills(eng, ex, now).get(arm.instrument, 0),
                                         fast=arm.tf in budget.FAST_TFS, prior_day=s.bar_ts < ps.since)) is not None:
@@ -2389,7 +2417,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     from goldbot.engine import exploration_cohort
     in_cohort = arm.arm_id in exploration_cohort.members(ex)
-    if in_cohort and not ex.cohort_ok:
+    if in_cohort and not ex.cohort_ok and not free:
         # ADR 0095: the cohort's losses are not known (no read of the ledger yet, or it failed)
         refuse("cohort_unread")
         return "refused"
@@ -2401,28 +2429,29 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     terms = eng._sizing_terms(side, price, stop_d, cycle=s.bar_ts)
     lot = terms.get("volume_min")
-    if ps.cap == -1:
+    if ps.cap == -1 and not free:
         ps.cap = global_cap(eng, ex, price, terms)
-    if ps.cap is None:
+    if ps.cap is None and not free:
         refuse("cap_unknown")
         return "refused"
-    if ps.count.get("*", 0) >= ps.cap:
+    if not free and ps.count.get("*", 0) >= (ps.cap or 0):
         refuse("global_cap")
         return "cap"
-    if ps.count["host"] >= eng.gate.limits.max_positions - probe_slot(eng):
+    if not free and ps.count["host"] >= eng.gate.limits.max_positions - probe_slot(eng):
         refuse("probe_slot")
         return "cap"
     add = s.group_id is not None                    # a pyramid add joins its group's slots (`exploration_pyramid`)
-    if not add and ps.count.get("pot:" + arm.style, 0) >= pot.max_open:
+    if not free and not add and ps.count.get("pot:" + arm.style, 0) >= pot.max_open:
         refuse("pot_slots")
         return "refused"
-    if not add and ps.count.get(arm.arm_id, 0) >= arm.max_open:
+    if not add and ps.count.get(arm.arm_id, 0) >= arm.max_open:      # the frozen spec's: kept (ADR 0097)
         refuse("arm_max_open")
         return "refused"
-    if not add and (why := exploration_cohort.max_open_refusal(ex, arm.arm_id, ps.count.get(arm.arm_id, 0))):
+    if not free and not add and \
+            (why := exploration_cohort.max_open_refusal(ex, arm.arm_id, ps.count.get(arm.arm_id, 0))):
         refuse(why)
         return "refused"
-    if arm.spec.role == "learning" and ps.count.get(LEARNING_SLOT, 0) >= ex.cfg.learning_max_open:
+    if not free and arm.spec.role == "learning" and ps.count.get(LEARNING_SLOT, 0) >= ex.cfg.learning_max_open:
         refuse("learning_slots")
         return "refused"
     # quant Q2: every style, swing included; a rule whose exit is the cut may hold across it, never into the weekend
@@ -2433,7 +2462,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         refuse("loss_unknown")
         return "refused"
     net = sum(t.side * t.lots for t in eng.open.values()) + side * float(lot)
-    if abs(net) > net_lot_cap(lot) + 1e-9:
+    if not free and abs(net) > net_lot_cap(lot) + 1e-9:
         refuse("same_side")
         return "refused"
     if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, now):
@@ -2455,7 +2484,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if held_arm is None or held_pot is None or held_all is None:
         refuse("open_risk_unknown")
         return "refused"
-    if arm.spec.role == "learning" and not in_cohort:
+    if arm.spec.role == "learning" and not in_cohort:           # the registered kill rule: kept (ADR 0097)
         # trading-safety L1: realised loss (since registration) + this arm's open risk at its stops + the new trade's
         # loss at its stop and round trip may not reach the arm's loss cap; an arm not read yet is refused
         from goldbot.engine.exploration_learning import loss_cap
@@ -2466,7 +2495,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         if lost + held_arm + loss + cost >= cap_l - 1e-9:
             refuse("learning_loss_cap")
             return "refused"
-    if in_cohort and (why := exploration_cohort.send_refusal(ex, arm.arm_id, loss + cost, ps.held,
+    if in_cohort and not free and (why := exploration_cohort.send_refusal(ex, arm.arm_id, loss + cost, ps.held,
                                                                ps.entries)) is not None:
         # ADR 0095: the member's own cap and the cohort's weekly cap, each on realised loss + open risk + this trade
         refuse(why)
@@ -2499,6 +2528,13 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
 
     volume_max = float(lot)
     growth = arm.arm_id in eng.gate.limits.growth_arms
+    if free and not growth:
+        # ADR 0097: no configured room binds a minimum-lot entry (a growth arm keeps its rooms: its sizing). Trading-
+        # safety M5: one runaway arm (a rule or sizing fault, gaps on 1d/1w) may not take the shared demo to its floor
+        # and halt every arm's learning: the arm's realised loss today + its open risk at its stops + this trade's
+        # loss and round trip stay within ARM_RUNAWAY_FRAC of the closed-balance high-water mark
+        rooms = {"arm_runaway": ARM_RUNAWAY_FRAC * eng.state.balance_closed_hwm - ps.lost.get(arm.arm_id, 0.0)
+                 - held_arm - cost}
     if growth:
         sized = growth_lots(rooms, arm_cap, loss / float(lot), cost / float(lot), terms, side,
                             sum(t.side * t.lots for t in eng.open.values()),
@@ -2515,7 +2551,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if (why := binding(loss)) is not None:
         refuse(why)
         return "refused"
-    room = min(rooms.values())
+    room = min(rooms.values(), default=math.inf)
     intent = _intent(eng, arm, side, price, s, now, terms, room, volume_max)
     if intent is None:
         refuse("gate_unsupported")
@@ -2538,7 +2574,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             evidence_class=exploration_cohort.EVIDENCE_CLASS if in_cohort else
             EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
             blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
-            symbol=eng.cfg.instrument)      # the instrument KEY (never the store symbol): never pooled with XAUUSD
+            symbol=eng.cfg.instrument,      # the instrument KEY (never the store symbol): never pooled with XAUUSD
+            limits_epoch=LIMITS_EPOCH if free else None)
 
     from goldbot.engine import exploration_pyramid as pyr
     try:
