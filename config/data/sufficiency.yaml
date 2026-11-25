@@ -3,7 +3,7 @@
 # requirement: stated by the ML side (sr-v3 card rev 2, PR #460: Riley 430 n_eff/input, A22 power row at keep 0.33).
 # supply: n_eff by the card's method (2.2, rho_day 0.25, outcome-blind counts of 2026-11-26) until D-5 measures each
 # cell; null = not counted yet. Counts only: no market data lives in this file.
-counts_as_of: "2026-11-26"
+card_dated: "2026-11-26"
 counted_by: "sr-v3 card rev 2 section 2.2 (outcome-blind; gold untiered until D-1)"
 requirement: {inputs: 10, keep_share: 0.33, objective: obj-v1, label_templates: "T0-T7 (D-4)"}
 tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w]

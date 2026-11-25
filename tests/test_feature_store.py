@@ -252,8 +252,11 @@ def test_a_revised_minute_never_reaches_any_row_and_a_stale_row_is_not_served(mi
     assert bar_close not in set(pd.DatetimeIndex(out[0]["decision_utc"]))
     rows = out[0]
     last = pd.Timestamp(rows["decision_utc"].iloc[-1])
-    got = F.features_for(rows, [last, last + pd.Timedelta(minutes=30), last + pd.Timedelta(hours=3)])
-    assert got["rsi14"].notna().tolist() == [True, True, False] and got.attrs["stale"] == 1
+    held = rows.copy()                                    # the last three rows held back by a later revision
+    held.loc[held.index[-3:], "available_utc"] = pd.Timestamp("2028-01-03", tz="UTC")
+    got = F.features_for(held, [last - pd.Timedelta(hours=2), last])
+    assert got["rsi14"].notna().tolist() == [True, False] and got.attrs["stale"] == 1
+    assert F.features_for(rows, [last, last + pd.Timedelta(minutes=30)])["rsi14"].notna().all()
     with pytest.raises(ValueError, match="phase"):
         F.features_for(pd.concat([rows, rows.assign(phase=5)]), [last])
 
@@ -483,6 +486,18 @@ def test_the_spec_columns_are_exactly_what_its_registered_features_produce():
     ctx = set(build_features(m, list(F.SPEC.context_features)).columns)
     for c in F.SPEC.columns:
         assert (c[3:] in ctx) if c.startswith("d1_") else (c in dec), c
+
+
+def test_staleness_counts_rows_so_a_market_gap_never_blanks_a_decision(minutes):
+    """Quant re-verify R1: after the daily break or the weekend the engine reads the last bar before the gap; so
+    does fs-v1 (staleness in rows, not wall-clock time)."""
+    rows = F.compute(minutes, "15m")
+    sunday = pd.Timestamp("2023-10-01 22:07", tz="UTC")             # weekly reopen + 7 min
+    tuesday = pd.Timestamp("2023-10-03 22:07", tz="UTC")            # after the 21:00-22:00 break
+    got = F.features_for(rows, [sunday, tuesday])
+    assert got.attrs["stale"] == 0 and got["rsi14"].notna().all()
+    assert list(pd.DatetimeIndex(got["decision_utc"])) == [pd.Timestamp("2023-09-29 21:00", tz="UTC"),
+                                                           pd.Timestamp("2023-10-03 21:00", tz="UTC")]
 
 
 def test_the_code_hash_covers_the_import_closure_but_not_the_whole_repo():

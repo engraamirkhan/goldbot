@@ -375,15 +375,17 @@ def _typed(rows: pd.DataFrame) -> pd.DataFrame:
     return rows.reset_index(drop=True)
 
 
-STALE_BARS = 2          # a row older than this many decision bars at the decision is not served (quant L1)
+STALE_BARS = 2          # more newer rows than this held back at the decision: the row is not served (quant L1, R1)
 
 
 def features_for(rows: pd.DataFrame, decisions: Iterable[pd.Timestamp] | pd.DatetimeIndex) -> pd.DataFrame:
     """The row each decision reads: the last row of `rows` (ONE instrument x tf x phase; mixed phases are refused)
     with `available_utc` at or before it (`data.store.asof_join`, the repo's one join on availability). One row per
-    distinct decision, in time order, `at` = the decision. Feature columns are NaN where no row was available yet
-    or the available row closed more than STALE_BARS decision bars before the decision (a revision held the
-    newer rows back); `attrs["stale"]` counts those."""
+    distinct decision, in time order, `at` = the decision. Feature columns are NaN where no row was available yet,
+    or where more than STALE_BARS rows that closed by the decision (decision_utc <= at) were still unavailable at
+    it (a revision held them back); `attrs["stale"]` counts those. Staleness counts ROWS, never wall-clock time: a
+    decision after the daily break, a weekend or a holiday reads the last bar before it, as the engine does
+    (quant re-verify R1)."""
     if len(rows) and (rows["phase"].nunique() > 1 or rows["tf"].nunique() > 1 or rows["instrument"].nunique() > 1):
         raise ValueError("features_for joins one instrument x tf x phase at a time")
     dec = pd.DatetimeIndex(pd.to_datetime(pd.Series(list(decisions)), utc=True)).unique().sort_values()
@@ -392,10 +394,12 @@ def features_for(rows: pd.DataFrame, decisions: Iterable[pd.Timestamp] | pd.Date
     j = j.rename(columns={"ts_utc": "at", "_row_available": "available_utc"})
     stale = np.zeros(len(j), dtype=bool)
     if len(rows) and len(j):
-        limit = STALE_BARS * tf_seconds(str(rows["tf"].iloc[0])) * 10**9
+        closes = np.sort(_ns(pd.DatetimeIndex(rows["decision_utc"])))
         got = j["decision_utc"].notna().to_numpy()
-        age = np.where(got, _ns(dec) - np.where(got, _ns(pd.DatetimeIndex(j["decision_utc"].where(got, dec))), 0), 0)
-        stale = got & (age > limit)
+        sel = _ns(pd.DatetimeIndex(j["decision_utc"].where(got, dec)))
+        pos = np.searchsorted(closes, sel, side="left")                 # the served row's position
+        n_newer = np.searchsorted(closes, _ns(dec), side="right") - 1 - pos
+        stale = got & (n_newer > STALE_BARS)
         j.loc[stale, [c for c in rows.columns if c not in ROW_META]] = np.nan
     j.attrs["stale"] = int(stale.sum())
     return j
