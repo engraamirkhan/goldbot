@@ -29,16 +29,19 @@ One weekly run (the job `self_retrain` in goldbot/ops/jobs.py drives it):
 4. Demotion is read first: a previous ACTIVE model whose forward edge is missing or below DEMOTE_EDGE_R on at least
    MIN_FORWARD rows is demoted and this run's model of the arm is forced to shadow. An ACTIVE model is otherwise
    superseded by a new active one or demoted (gate failed, or no rows this run).
-5. `apply` writes `self_retrain_models` (coefficients as JSON, never a pickle) and `self_retrain_runs`; the job writes
-   the K rows BEFORE it (one per judged pair); if they cannot be written nothing becomes active (fail closed).
+5. `apply` writes `self_retrain_models` (coefficients as JSON, never a pickle, with its provenance: the sha256 of that
+   JSON text and the feature versions of the snapshots it trained on) and `self_retrain_runs`; the job writes the K
+   rows BEFORE it (one per judged pair); if they cannot be written nothing becomes active (fail closed).
 
 Scope and safety: reads aux.db, writes only its own two tables. The judged arms are retired, so ACTIVE means a
 RE-ACTIVATION CANDIDATE: nothing trades; the run records it (`reactivation_candidate`), health and the job output name
 it, and re-activation as a demo learning arm goes through the existing learning-class route with trading-safety review
-(out of scope here). Nothing in goldbot/engine reads these tables.
+(out of scope here). goldbot/engine reads the models table for shadow scoring only (engine/shadow_scoring.py, ADR 0101:
+a score is logged on each candidate of the model's arm and never read by a decision).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -153,6 +156,12 @@ SR_V3 = Spec(version="sr-v3", nominal_from=NOMINAL_FROM, nominal_early_brokers=(
              horizon_embargo=True, exclude_rank3_beyond_24h=True)
 
 
+def model_sha256(text: str) -> str:
+    """The provenance hash of a stored model: SHA-256 of its JSON text exactly as written to `self_retrain_models.model`
+    (the shadow scorer recomputes it from the column and refuses a mismatch)."""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 class LogitModel(FrozenRecord):
     """A fitted filter, fully described by numbers (no pickle): impute, standardise, score, compare with tau."""
     inputs: tuple[str, ...]
@@ -261,14 +270,15 @@ def _snapshots(db: Database, nominal_from: pd.Timestamp | None = NOMINAL_FROM) -
     since = np.iinfo(np.int64).min if nominal_from is None else int(nominal_from.value)
     with db.connection() as conn:
         rows = conn.execute(
-            "SELECT s.candidate_id, s.decision_ns, s.available_utc_max_ns, s.pit, v.features "
+            "SELECT s.candidate_id, s.decision_ns, s.available_utc_max_ns, s.pit, v.feature_version, v.features "
             "FROM exploration_feature_snapshots s JOIN exploration_feature_vectors v ON v.sha256 = s.vector_sha256 "
             "WHERE s.status = 'ok' AND (s.pit = 'written' OR (s.pit = 'nominal' AND s.decision_ns >= ?))",
             (since,)).fetchall()
+    head_cols = ["candidate_id", "_snap_decision_ns", "_avail_ns", "_pit", "_feature_version"]
     if not rows:
-        return pd.DataFrame(columns=["candidate_id", "_snap_decision_ns", "_avail_ns", "_pit", *FEATURES])
+        return pd.DataFrame(columns=[*head_cols, *FEATURES])
     vals = pd.DataFrame([json.loads(f) for *_, f in rows]).reindex(columns=list(FEATURES)).astype(float)
-    head = pd.DataFrame([r[:4] for r in rows], columns=["candidate_id", "_snap_decision_ns", "_avail_ns", "_pit"])
+    head = pd.DataFrame([r[:5] for r in rows], columns=head_cols)
     return pd.concat([head, vals], axis=1)
 
 
@@ -618,7 +628,8 @@ def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: M
         model = fit_logit(design(ar), y) if len(ar) >= MIN_TRAIN and len(set(y.tolist())) == 2 else None
         act = (active or {}).get(arm)
         first = (passes or {}).get(arm)
-        out[arm] = {"metrics": m, "model": model,
+        fv = ar["_feature_version"].dropna().astype(str) if "_feature_version" in ar else pd.Series(dtype=str)
+        out[arm] = {"metrics": m, "model": model, "feature_versions": tuple(sorted(set(fv))),
                     "active": act, "forward": forward_read(rows, arm, act["model"], act["activation_ns"]) if act
                     else None,
                     # code review L3: from the first passer's DATA cutoff, not its (late, for a catch-up) activation
@@ -792,15 +803,17 @@ def apply(db: Database, read: Mapping[str, Any], decisions: Mapping[tuple[str, s
             model: LogitModel | None = v["model"]
             if model is not None:
                 n_weights += model.n_weights
+                text = model.model_dump_json()
                 conn.execute(
                     "INSERT OR REPLACE INTO self_retrain_models (model_version, run_id, broker, arm_id, spec_version, "
                     "status, status_reason, gate_pass, cutoff_ns, activation_ns, n_train, n_features, n_weights, "
-                    "model, oos, recorded_ns, status_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "model, oos, recorded_ns, status_ns, model_sha256, feature_versions) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (f"{run_id}-{arm}", run_id, broker, arm, SPEC_VERSION, d["status"], d["reason"],
                      int(bool(d["gate_pass"])), int(cutoff.value), int(activation.value),
-                     int(v["metrics"]["n_rows"]), len(INPUTS), model.n_weights, model.model_dump_json(),
+                     int(v["metrics"]["n_rows"]), len(INPUTS), model.n_weights, text,
                      json.dumps(v["metrics"] | {k: d[k] for k in ("judged", "p_holm")}, default=float), now_ns(),
-                     now_ns()))
+                     now_ns(), model_sha256(text), json.dumps(list(v.get("feature_versions") or ()))))
             detail[arm] = {"decision": d["status"], "reason": d["reason"], "judged": d["judged"],
                            "reactivation_candidate": d["status"] == "active",
                            "p_holm": d["p_holm"], "previous": d["previous"], "forward": v["forward"],

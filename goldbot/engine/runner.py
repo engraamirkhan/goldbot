@@ -60,6 +60,7 @@ from goldbot.engine import (
     order_send,
     pilot,
     shadow_replay,
+    shadow_scoring,
     state_heartbeat,
     terminal_account,
     unconfirmed,
@@ -224,6 +225,13 @@ class EngineConfig(Record):
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
+    # settings research.self_retrain.shadow_score (lifecycle W1, ADR 0101): every frozen self-retrain model scores each
+    # gold exploration candidate of its arm on a background thread and the score is logged; no decision reads it.
+    # Off by default (tests, tools); production switches it with the settings (ops/services/engine.py)
+    shadow_score: bool = False
+    # accounts.yaml `model_gate` on a demo account (ADR 0101; shipped off on every account): a gating model may refuse
+    # exploration entries before the RiskGate, with a 10 % exploration sample still taken (engine/shadow_scoring.py)
+    model_gate: bool = False
     cost_record: str | None = None   # settings costs.engine_record: the versioned engine cost of record (cost_record)
     # broker commission per lot per side, USD, until the cost table measures it (ADR 0075; 0 = none configured)
     commission_per_lot_side_usd: float = Field(0.0, ge=0)
@@ -3043,6 +3051,7 @@ class Engine:
             "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self), **broker_bars.published(self),
             **key_zones.published(self),     # the dashboard's key zones: display only, never read for an order
             **books.published(self),               # each instrument's own view; gold's hot-loaded arm registry (R7)
+            **shadow_scoring.published(self),      # ADR 0101: shadow scoring counts (no decision reads a score)
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

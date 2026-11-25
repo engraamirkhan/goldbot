@@ -165,8 +165,11 @@ def counts_toward_reads(t: ExplorationRecord) -> bool:
     """`admissible` and not a demo learning cohort fill (ADR 0095, quant C2: "fill P&L is never compared with a
     control or counted toward any H-61/H-81 unit"), nor an unlimited-epoch market-state fill (ADR 0097, quant F1):
     what an arm's n and its stops read."""
-    from goldbot.research.evidence_exclusions import unlimited_market_state
-    return admissible(t) and t.evidence_class != "learning_cohort" and not unlimited_market_state(t)
+    from goldbot.research.evidence_exclusions import (  # + samples, ADR 0101
+        NOT_EDGE_EVIDENCE,
+        unlimited_market_state,
+    )
+    return admissible(t) and t.evidence_class not in NOT_EDGE_EVIDENCE and not unlimited_market_state(t)
 
 
 def trades(conn: sqlite3.Connection, where: str = "", params: Sequence[object] = ()) -> list[ExplorationRecord]:

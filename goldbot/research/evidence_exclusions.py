@@ -320,6 +320,11 @@ __all__ = ["CRITERION_VERSION", "EXPLORATION_SCOPE", "PROBE_SCOPE", "SCOPES", "E
            "screen", "span_ref", "spans_of", "unresolved"]
 
 
+# fills that are never an edge read, an arm's n or an H-81 cost stop: a demo learning cohort fill (ADR 0095 quant C2)
+# and a model-gate exploration sample fill (ADR 0098 section 3, ADR 0101: "as for `learning_cohort`")
+NOT_EDGE_EVIDENCE: tuple[str, ...] = ("learning_cohort", "explore_sample")
+
+
 def unlimited_market_state(r: Any) -> bool:
     """ADR 0097: a fill a capped account could not have had, because of the market's state: sent on the unlimited
     epoch (`limits_epoch`) in a news shock, or with a market-state reason a capped account would have refused it for
