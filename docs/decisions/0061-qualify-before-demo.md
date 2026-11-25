@@ -135,3 +135,14 @@ qualified yet, so this rule had stopped every demo strategy arm.
 Consequences: unqualified strategies trade on demo again, labelled and bounded; the rule above stands for every other
 arm and for every account that is not a demo probe_only host. Each learning arm and its control need their K rows on
 the brain first (30 rows, `scripts/record_learning_k_rows.py`, inside the quarter's budget).
+
+## Amendment 2026-11-26 (quant ruling 4 on PR #460; sr-v3 learning-version demo gating)
+
+- A model may gate demo entries as a **learning version** at **K 0** only when all of the following hold:
+  - deployment is unconditional on any Stage L or Stage C outcome. Every cell with a merged training report and a
+    Stage 0 pass deploys, including an intercept-only body;
+  - updates and rollbacks are automatic and pre-specified in the card;
+  - every record carries `evidence_class: learning_version` and `counts_toward_reads = false`.
+- Any human choice made after seeing a learning version's outcomes is a look and costs K +1 (ADR 0085 A2).
+- Learning versions never reach real money, and never pool into a judged read.
+- The 10 % explore sample of model-rejected candidates follows ADR 0098 §3.
