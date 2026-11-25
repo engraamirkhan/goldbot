@@ -132,6 +132,16 @@ def test_a_hold_across_the_weekend_gets_its_wall_clock_horizon_in_candidates_and
     assert exit_ts <= dec + pd.Timedelta(seconds=float(c["max_hold_s"].iloc[0]))
 
 
+def test_a_label_persists_entry_risk_and_the_barrier_hit_for_the_decision_time_cost(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    _friday_candidate(monkeypatch)
+    arm = H.load_arm("RBR15", replay_as=Z.REPLAY_AS["RBR15"])
+    lab = H.label("RBR15", arm, _weekend_bars(), *SPAN, NO_BLACKOUT)
+    assert set(H.LABEL_COST_COLS) <= set(lab.columns)
+    assert lab["risk_usd"].iloc[0] == pytest.approx(1000.0) and lab["entry"].iloc[0] > 0
+    assert lab["barrier_hit"].iloc[0] == "time"
+
+
 def test_a_hold_without_a_gap_keeps_its_nominal_horizon(monkeypatch: pytest.MonkeyPatch) -> None:
     _friday_candidate(monkeypatch)
     arm = H.load_arm("RBR15", replay_as=Z.REPLAY_AS["RBR15"])
