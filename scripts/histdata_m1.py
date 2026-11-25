@@ -190,6 +190,8 @@ def download_zip(code: str, year: int, zdir: Path) -> tuple[Path | None, str]:
     """The pair-year zip, cached (atomic write). (None, why) when HistData has no such year or the fetch failed."""
     out = zdir / f"{code}_{year}.zip"
     if out.exists() and zipfile.is_zipfile(out):
+        if year >= HOLDOUT_CUT.year:
+            trim_zip_to_cut(out)
         return out, "cached"
     page = HD_PAGE.format(pair=code.lower(), year=year)
     m = None
@@ -219,7 +221,34 @@ def download_zip(code: str, year: int, zdir: Path) -> tuple[Path | None, str]:
     tmp = out.with_suffix(".part")
     tmp.write_bytes(blob)
     os.replace(tmp, out)
+    if year >= HOLDOUT_CUT.year:
+        trim_zip_to_cut(out)            # never keep sealed minutes, not even in the source cache
     return out, "downloaded"
+
+
+# Local stamps at or after this are at or after the holdout cut under BOTH stamp rules (in late September New York
+# and EET-7 are both UTC-4): 2025-09-30 20:00 local = 2025-10-01 00:00 UTC.
+LOCAL_CUT = (HOLDOUT_CUT - pd.Timedelta(hours=4)).tz_localize(None)
+
+
+def trim_zip_to_cut(path: Path) -> tuple[int, int]:
+    """Rewrite a cached HistData zip in place with only the rows stamped before the holdout cut (quant R10: the source
+    cache is a research store too; review of PR #453). (rows kept, rows dropped). Atomic; a zip already trimmed
+    drops 0 and is left byte-identical."""
+    with zipfile.ZipFile(path) as z:
+        names = [n for n in z.namelist() if n.lower().endswith(".csv")]
+        if not names:
+            return 0, 0
+        lines = z.read(names[0]).decode().splitlines()
+    cut = LOCAL_CUT.strftime("%Y%m%d %H%M%S")
+    keep = [ln for ln in lines if ln.strip() and ln[:15] < cut]
+    dropped = sum(1 for ln in lines if ln.strip()) - len(keep)
+    if dropped:
+        tmp = path.with_suffix(".part")
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr(names[0], "\n".join(keep) + "\n")
+        os.replace(tmp, path)
+    return len(keep), dropped
 
 
 def _write_parquet(df: pd.DataFrame, path: Path) -> str:
@@ -293,7 +322,8 @@ def read_manifest(base: Path) -> dict[tuple[str, int], dict[str, object]]:
         for line in p.read_text().splitlines():
             if line.strip():
                 r = json.loads(line)
-                out[(str(r["key"]), int(r["year"]))] = r     # the last line for a pair-year wins
+                if "key" in r and "year" in r:            # event lines (zip_trimmed) carry no instrument-year
+                    out[(str(r["key"]), int(r["year"]))] = r     # the last line for a pair-year wins
     return out
 
 
@@ -516,7 +546,7 @@ def cmd_check(a: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("cmd", choices=["pull", "check", "sums"])
+    ap.add_argument("cmd", choices=["pull", "check", "sums", "trim-cache"])
     ap.add_argument("--keys", default=None, help="comma-separated owner keys (default: every key with a HistData code)")
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--root", default=str(DEFAULT_ROOT), help="the git-ignored raw/ directory")
@@ -527,6 +557,16 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         ap.error(f"no HistData source for {sorted(unknown)}")
     a.workers = max(1, min(a.workers, 3))
+    if a.cmd == "trim-cache":
+        base = Path(a.root) / "histdata_m1"
+        for z in sorted((base / "_zips").glob(f"*_{HOLDOUT_CUT.year}.zip")):
+            kept, dropped = trim_zip_to_cut(z)
+            print(f"{z.name}: kept {kept} rows, dropped {dropped} sealed rows", flush=True)
+            if dropped:
+                append_manifest(base, {"event": "zip_trimmed", "zip": z.name, "sealed_rows_dropped": dropped,
+                                       "zip_sha256": _sha256(z), "at": dt.datetime.now(dt.UTC).isoformat()})
+        print(f"SHA256SUMS: {write_sums(base)} files")
+        return 0
     if a.cmd == "pull":
         return cmd_pull(a)
     if a.cmd == "check":

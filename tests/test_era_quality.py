@@ -302,3 +302,17 @@ def test_reconvert_round_trips_ny_stamps():
     alt = hd.reconvert(bars, "eet-7")
     moved = alt["ts_utc"].between(pd.Timestamp("2019-03-11", tz="UTC"), pd.Timestamp("2019-03-29", tz="UTC"))
     assert moved.any() and (alt["visible_at"] - alt["ts_utc"] == pd.Timedelta(seconds=60)).all()
+
+
+def test_cached_zip_is_trimmed_to_the_holdout_cut(tmp_path):
+    """Review of #453: the 2025 source zips held Oct-Dec 2025. Both stamp rules are UTC-4 in late September."""
+    import zipfile
+    z = tmp_path / "EURUSD_2025.zip"
+    rows = ["20250930 195900;1.17;1.17;1.17;1.17;0", "20250930 200000;1.17;1.17;1.17;1.17;0",
+            "20251215 120000;1.17;1.17;1.17;1.17;0"]
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("DAT_ASCII_EURUSD_M1_2025.csv", "\n".join(rows) + "\n")
+    assert hd.trim_zip_to_cut(z) == (1, 2)
+    assert hd.trim_zip_to_cut(z) == (1, 0)
+    kept = hd.parse_histdata(zipfile.ZipFile(z).read("DAT_ASCII_EURUSD_M1_2025.csv"), "EURUSD")
+    assert kept["ts_utc"].max() < eq.HOLDOUT_CUT
