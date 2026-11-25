@@ -164,8 +164,9 @@ nothing non-gold is read under this card.
   control. History has no such control for every arm, so the second leg here is kept > 0. This is a deliberate
   deviation.
 
-**Stage 0, count and power (outcome-blind, 0 K).** Count candidates and session days per arm and block (learn
-2012-17, confirm, test_old), with no label read. The card is **NOT STARTED (power), 0 K**, written through
+**Stage 0, count and power (outcome-blind, 0 K).** Count candidates and session days per arm and block on learn
+2012-17 and confirm, with no label read. test_old is not opened: n_T = each arm's learn 2012-17 rate x 1.92 years,
+summed over the arms left after the ledger exclusion; m_day_T = the learn m_day. The card is **NOT STARTED (power), 0 K**, written through
 `power_first.start_or_refuse`, unless:
 - every 2012-17 block has at least 60 judged rows (C10); and
 - section 4a holds: every power_g >= 0.5, simulated joint power >= 0.25, and n_eff >= 200 at confirm and at test_old.
@@ -208,7 +209,7 @@ Computed at Stage 0 from outcome-blind counts only, and evaluated by `power_firs
 
 | Input | Definition |
 |---|---|
-| n per gate | judged rows: L = learn OOF 2012-17; C = confirm 2018-01..2025-09; T = test_old 2008-02..2009-12 (after the ledger exclusion) |
+| n per gate | judged rows: L = learn OOF 2012-17; C = confirm 2018-01..2025-09; T = learn 2012-17 rate per arm x 1.92 years (test_old stays sealed; after the ledger exclusion) |
 | m_day | mean judged rows per session day (one instrument), floored at 1 |
 | n_eff | n / (1 + (m_day - 1) x rho_day), rho_day = 0.25 (ADR 0085 prior); one instrument, so no rho_inst term |
 | SE | sd x sqrt((1 - k) / (k x n_eff)), the SE of kept minus all, with k = keep share 2/3 (not ADR 0085's instrument count) and sd = 1.2 R (ADR 0085 floor) |
@@ -254,7 +255,8 @@ quant review, one read by the evaluator.
    RB-history card does).
 5. `tests/research/test_model_zoo.py` (new): constants pinned; 40-input cap; truncation invariance for all 8 at
    both edges; OOF-only stacking; purge of every fit, cell-edge and tau row; `test_keep_share_per_arm` (each arm keeps
-   about 2/3 for every candidate); determinism (same seed, same scores); bootstrap: same seed gives the same p, and
+   about 2/3 for every candidate, and two synthetic arms with different means and no within-arm signal give pooled
+   edge_nm of about 0 for all 8); determinism (same seed, same scores); bootstrap: same seed gives the same p, and
    paired D uses identical index draws; holdout refusal; gold-only guard; NOT STARTED (power) path writes 0 K.
 6. Phase 2 only, after a non-B1 winner: `goldbot/research/self_retrain.py` challenger class (`sr-v3`), an aux.db
    migration adding `model_class` to `self_retrain_models` (model stored as text, never a pickle: LightGBM
