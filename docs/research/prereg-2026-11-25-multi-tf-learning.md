@@ -33,7 +33,8 @@ tsmom or box row on a new timeframe.
   intraday gold arms. It does **not** retire trees, the money objective (ADR 0098) or new information.
 - **Consequence here:** part (c) loses its H-101 route and stays off. Part (b), the gold 1h+4h unit, runs as
   pre-registered. Its prior is not raised; if anything the null on 104k rows says price-only filters on these arms
-  sort almost nothing, so the unit's value rests on the cost lever and on OMB-1's block.
+  sort almost nothing: a real but economically nil sort (1/10 of the bar). The unit's value rests on the cost lever
+  and on OMB-1's block.
 
 ## 1. Card (research-director rule 2) for the judged unit
 
@@ -91,17 +92,24 @@ tsmom or box row on a new timeframe.
   the cost gate per timeframe (cost of record ≤ 0.035 R, as OMB-1 section 4); the size rule; power-first. A refusal is
   NOT STARTED, 0 K.
 - **Size, quant Q6:** the 40-feature cap counts distinct source columns; p_eff (coefficients incl. one-hot levels,
-  interactions and copies) must meet Riley et al. 2019 at shrinkage ≥ 0.9 on n_eff. At anticipated AUC 0.57 that is
-  about 4,400-4,500 n_eff for p_eff 8 and about 2,200-2,300 for p_eff 4 (re-derived for this revision). The unit's
-  learn rows are about 4,500 raw before uniqueness, so **level 2 (p_eff 4) or a refusal is the likely outcome.** The
-  draft's 30m-4h units with p ≤ 10 fail this rule at AUC 0.57 and are withdrawn. An anticipated AUC of 0.60 would
-  need written justification; none exists in-house.
+  interactions and copies) must meet Riley et al. 2019 at shrinkage ≥ 0.9 on n_eff. p_eff counts the intercept-free
+  main effect and the x-side term of a column separately; there are no arm or timeframe dummies, and if any are
+  added each one counts. Riley holds on the smallest training fold's Kish-weighted n_eff (n_eff x (Σw)²/(nΣw²),
+  ADR 0098); otherwise the first out-of-fold year moves to the first year where it holds, fixed at Stage 0 on counts.
+  At design AUC 0.57 that is about 4,400-4,500 n_eff for p_eff 8 and about 2,200-2,300 for p_eff 4 (re-derived for
+  this revision). The unit's learn n_eff is about 0.5-0.7 x 4,500 raw rows with the 1h/4h overlap. **NOT STARTED
+  (size) is the expected outcome.** The draft's 30m-4h units with p ≤ 10 fail this rule and are withdrawn.
+- **0.57 is the design AUC: the lowest at which S >= +0.05 R is reachable. It is not a forecast. In-house evidence is
+  0.50.**
 - **Stage L (K 1), out-of-fold 2012-17.** CONTINUE needs all of:
   - S ≥ +0.05 R with a one-sided 95 % lower bound > 0 (stationary day-block bootstrap, mean block 5 days, B 10,000);
   - kept mean net R > 0 and kept gross ≥ 0;
-  - kept mean minus the side-matched control mean ≥ +0.05 R;
+  - kept mean minus the side-matched control mean ≥ +0.05 R with one-sided p <= 0.05; intersection-union with the S
+    leg;
   - the DSR at the K of record reported beside it.
-- **Stage C (K 1, passers only):** confirm 2018-01..2025-09 read once: S > 0, kept mean > 0, p ≤ 0.10.
+- **Stage C (K 1, passers only):** confirm 2018-01..2025-09 read once: S > 0, kept mean > 0, p ≤ 0.10, and kept
+  mean minus side-matched control > 0 (p <= 0.10). No Stage C or confirm read runs before the K-of-record
+  reconciliation (quant, due 2026-11-27, ruling D5).
 - **Forward (K ≤ 3):** served in shadow through the W2-3 path, then **two consecutive judged reads of ≥ 100 unseen
   rows each**, both passing the Stage L tests, before any demo influence. For G3 it counts only as an sr-v3 model
   that is ACTIVE by the 2027-01-10 run.
@@ -113,8 +121,12 @@ tsmom or box row on a new timeframe.
 
 - Base per cell on learn history, stored with the window, code hash and data sha256; built off the brain, shipped as
   JSON coefficients with provenance (data manifest sha, commit, `objective_id`); load refuses a mismatch.
+- **Part (a) bases serve shadow scores only; they change no demo or live decision until their cell passes a judged
+  read.**
 - **Live update:** prior-centred L2 (history coefficients as the prior, intercept free), N0 = min(0.5 x the base's
   training n_eff, 1,000) pseudo-rows; recency half-life 30 d (1m), 60 d (5m), 180 d (15m-2h), none above.
+- **Live-update rows (D21) are dated >= 2026-10-01 and after the cell's frozen cutoff; confirm-window and holdout rows
+  never enter.**
 - **Feature parity** must pass before a base serves a score (abs 1e-6 or rel 1e-4 on ≥ 99 % of rows, equal NaN).
 
 ## 5. Serving and abstention (ruling D2)
