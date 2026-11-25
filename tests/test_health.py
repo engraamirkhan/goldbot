@@ -62,7 +62,7 @@ def test_secrets_report_names_never_values(tmp_path):
     assert "anthropic-api-key" in c.reason and "mt5-icm-demo" in c.reason
     assert "telegram-bot-token" not in c.reason and "s3cr3t" not in c.reason
     c = health.check_secrets(make_ctx(tmp_path, secrets=ALL_SECRETS - {"github-token"}))
-    assert c.status == "warn" and "github-token" in c.reason
+    assert c.status == "ok" and "optional missing: github-token" in c.reason   # SRE item 8: a choice, not noise
 
     def broken(key: str) -> str | None:
         raise RuntimeError("keyring locked")

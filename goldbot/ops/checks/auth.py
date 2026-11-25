@@ -12,7 +12,8 @@ if TYPE_CHECKING:
 
 @register_check("static", block=BLOCK_STATIC, pos=30)
 def check_secrets(ctx: HealthContext) -> Check:
-    """Presence only. Values are never returned, compared or logged."""
+    """Presence only. Values are never returned, compared or logged. A missing required key FAILs; a missing
+    optional key (OPTIONAL_SECRETS: its feature switches off) is named in an ok line."""
     def present(key: str) -> bool:
         try:
             return bool(ctx.get_secret(key))
@@ -32,9 +33,12 @@ def check_secrets(ctx: HealthContext) -> Check:
     if missing:
         extra = f"; optional missing: {', '.join(optional)}" if optional else ""
         return Check(name="secrets", status="fail", reason=f"missing in keyring: {', '.join(missing)}{extra}{hint}")
-    if optional:
-        return Check(name="secrets", status="warn", reason=f"optional missing: {', '.join(optional)}{hint}")
-    return Check(name="secrets", status="ok", reason=f"{len(required) + len(OPTIONAL_SECRETS)} keys present")
+    have = len(required) + len(OPTIONAL_SECRETS) - len(optional)
+    if optional:      # SRE plan item 8 (alert fatigue): a feature that switches off without its key is a choice, not a
+        # fault; a WARN for it was permanent noise that hid real warnings, so it reads ok and names what is off
+        return Check(name="secrets", status="ok",
+                     reason=f"{have} keys present; optional missing: {', '.join(optional)} (its feature is off){hint}")
+    return Check(name="secrets", status="ok", reason=f"{have} keys present")
 
 
 @register_check("global", block=BLOCK_TAIL, pos=120)

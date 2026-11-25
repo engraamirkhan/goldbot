@@ -2134,6 +2134,32 @@ and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
 
+### Learning liveness, model influence and stop coverage (`learning_liveness`, `model_influence`, `stop_coverage`)
+
+These checks judge learning by what it wrote, not by whether a job ran (plan 2026-11-25 S5). Claude runs every step
+below. The owner does nothing.
+
+- **`learning_liveness` WARN `<learner>: 0 rows` or `no output for ...`**: a learner that is switched on wrote
+  nothing within its cadence. Read the job (`python -m goldbot.ops.run health`: `job:<name>`) and its log. Then revive
+  the learner, or delete it from `LEARNERS` (goldbot/ops/checks/learning.py) and record the reason in the commit and
+  HANDOFF. After 48 h the WARN becomes a FAIL and goes to Telegram. Never switch a learner off just to quiet the
+  check: an off learner still WARNs, with its flag.
+- **`<watcher>: watches 0 of N model(s)`**: drift_watch or model_watch does not cover a self-retrain shadow or active
+  model. Drift and halts are blind for that model. Wire the watcher (goldbot/ops/jobs.py) or demote the model.
+- **`exploration_weights: computed, not applied`**: the nightly weights reach no decision (`allocator: equal`). This
+  is a recorded choice, and it stays a WARN so that influence 0 is never silent.
+- **`model_influence` WARN `0 of N candidates ... scored`**: no model touches a decision. It never FAILs. The fix is
+  a model that passes its gate and an engine path that reads it. Never a looser gate.
+- **`self_retrain` WARN**: a late run, under 50 % of labels used, a broker with 0 labels, or 0 active models. These
+  are inputs for the label-unlock work (W1-D), not engine faults.
+- **`stop_coverage:<account>` FAIL**: an open position has no broker-side stop. Open MT5 on that account now, confirm
+  the position, and put its stop back (the engine re-sends a stop it knows at reconcile). An adopted orphan gets
+  `orphan_stop_atr`. This is the one guarantee that survives the brain, so treat it as an incident.
+- **Weekly numbers**: `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/learning_kpis.py --state-dir
+  /opt/goldbot/state [--to "2026-11-27 21:00"] [--json]` prints K1 usable rows (broker x class x 9 tf), K2 influence
+  with its money effect, K4 liveness and self-retrain drift. It is read-only, and it goes at the top of the Friday
+  #34 report.
+
 ### needrestart
 
 Health WARN `needrestart` (outage 2026-11-14: unattended-upgrades restarted 12 goldbot units at 06:58 on a

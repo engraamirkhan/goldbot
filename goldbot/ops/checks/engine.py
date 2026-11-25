@@ -135,9 +135,12 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail")
         parts.append(f"the engine's history holds {short.get('bars')} 1m bars of the {short.get('min')} a warm start "
                      "needs: every entry refused (history_short) until it does; is the store synced?")
-    for w in e.get("dq_warnings") or []:
+    warnings, late_note = late_minutes(e.get("dq_warnings") or [])
+    for w in warnings:
         statuses.append("warn")
         parts.append(f"data-quality warning: {w}")
+    if late_note:
+        parts.append(late_note)
     # design (D10): bars close by clock at close + grace; a broker clock off the wall clock by more than the grace
     # closes bars before their last ticks (dropped from the live bars as late ticks). A warning only: no entry block
     skew, grace = e.get("clock_skew_s"), float(e.get("bar_close_grace_s") or 1.5)
@@ -187,6 +190,76 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if isinstance(b, dict) and b:
         parts.append(f"news blackout: {b.get('title', '?')}")
     return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
+
+
+LATE_MINUTES_WARN = 3       # SRE plan item 8: more late broker minutes than this in the engine's dq window warn
+
+
+def late_minutes(dq_warnings: list[Any]) -> tuple[list[str], str | None]:
+    """(warnings that still warn, an info note) from the engine's `dq_warnings` (SRE plan item 8, alert fatigue: on
+    11-25 all 3 engine WARNs were one late broker minute that was then replaced). A sampled minute standing in for a
+    late broker bar (`broker_bar_late`) and its replacement (`broker_bar_replaced`) are the design working
+    (engine/broker_bars.py: the sampled bar is what the engine always used; a decision taken on it stands), so up to
+    LATE_MINUTES_WARN late minutes in the window read as an info note; a burst above it still warns, as does every
+    other warning. Steady state is 0 WARN, so a real one is not missed."""
+    keep: list[str] = []
+    late = replaced = 0
+    for w in dq_warnings:
+        text = str(w)
+        check, _, detail = text.partition(": ")
+        if check in ("broker_bar_late", "broker_bar_replaced"):
+            try:
+                n = int(detail.split(" ", 1)[0])
+            except ValueError:
+                keep.append(text)
+                continue
+            if check == "broker_bar_late":
+                late += n
+            else:
+                replaced += n
+            continue
+        keep.append(text)
+    if late > LATE_MINUTES_WARN:
+        keep.append(f"broker_bar_late: {late} late broker minute(s) in the window (> {LATE_MINUTES_WARN}): the "
+                    "broker's 1m bars are lagging, sampled bars stand in")
+        return keep, None
+    if late or replaced:
+        return keep, f"{late} late broker minute(s), {replaced} replaced by the broker's bar (info)"
+    return keep, None
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=12)
+def check_stop_coverage(ctx: HealthContext, account_id: str) -> Check | None:
+    """stop_coverage:<account>: the share of open positions that carry a broker-side stop NOW (plan S5: "SL coverage
+    is the main real guarantee under no-limits"), from the engine's `open_risk_positions` (every position the broker
+    reported this pass, with its `sl`). Any position without a finite positive stop FAILs, naming it: a stop that
+    rests with the broker survives the engine, the bridge and the brain; nothing else does. A newly sent order carries
+    its stop in the same request, so a gap is never a normal transient; the alert loop's confirm_polls is the "more
+    than one pass" hysteresis. Nothing before the engine publishes the rows (an older engine or a torn file)."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    try:
+        rows = _read_json(f).get("open_risk_positions")
+    except (OSError, ValueError, AttributeError):
+        return None                                 # check_engine reports the missing or unreadable file
+    if not isinstance(rows, list):
+        return None
+    name = f"stop_coverage:{account_id}"
+    if not rows:
+        return Check(name=name, status="ok", reason="no open position")
+
+    def stopped(r: Any) -> bool:
+        try:
+            sl = float(r.get("sl"))
+        except (TypeError, ValueError, AttributeError):
+            return False
+        return math.isfinite(sl) and sl > 0
+    bare = [str(r.get("position_id")) if isinstance(r, dict) else "?" for r in rows if not stopped(r)]
+    covered = len(rows) - len(bare)
+    if bare:
+        return Check(name=name, status="fail",
+                     reason=f"{covered} of {len(rows)} open position(s) carry a broker stop; NO STOP on "
+                            f"{', '.join(bare)}: the engine re-sends a stop it knows at reconcile; check MT5 now")
+    return Check(name=name, status="ok", reason=f"{covered} of {len(rows)} open position(s) carry a broker stop")
 
 
 TICK_ERROR_CURRENT_S = 120             # a tick error this recent is current: the cause may still be there
