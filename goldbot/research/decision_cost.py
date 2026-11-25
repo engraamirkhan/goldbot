@@ -91,6 +91,8 @@ def legacy_k(labels: pd.DataFrame, swap: SwapSpec | None = None) -> np.ndarray:
     realised = (labels["r_mid"] - labels["r"]).to_numpy(dtype=float)
     per_k = (RT_BP + OVERSHOOT_BP * is_stop(labels)
              - 1e4 * nights_held(labels, sw) * _rate_signed(labels["side"].to_numpy(dtype=float), sw))
+    if not (per_k > 0).all():  # a future short-swap credit must not flip k's sign unnoticed (quant, PR #461)
+        raise ValueError("legacy_k: non-positive cost divisor; check the swap specification")
     return realised / per_k
 
 

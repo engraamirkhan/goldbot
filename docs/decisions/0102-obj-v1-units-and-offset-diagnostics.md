@@ -41,8 +41,7 @@ plan could not be coded as written:
    E[nights] = rollover nights over [decision, decision + max_hold_s] x the arm's learn ratio realised / full-hold
    nights, the swap rate from `SwapSpec.research_shipped()` as a fraction of price, absolute. `history_replay.label`
    persists `entry`, `risk_usd` and `barrier_hit` from now on; caches labelled before it back k out of the realised
-   leg exactly (stop flag r_mid <= −1, nights held, signed swap rate). RT_BP / OVERSHOOT_BP are the W2 point values the
-   replay charges; a measured ub95 per broker x session replaces them where a card names one.
+   leg exactly (stop flag r_mid <= −1, nights held, signed swap rate). RT_BP / OVERSHOOT_BP are the W2 point values; they serve the descriptive H-101 retro and tests only. Before the first OMB-1 / H-102 Stage 0 or sr-v3 fit, cost(x) charges per broker x session x tf max(W2 bps, the engine cost of record's ub95 converted to bps at its window's mean price), the ecr version pinned in the card; a cell below min_fills takes W2. A judged read on W2 point values alone is not a gate read.
 4. **S decomposition (four parts).** gross skill q (kept gross − all gross); cost avoidance q (all cost(x) − kept
    cost(x)); path cost q (all e − kept e), e = realised − cost(x); base q · mean net − max(0, mean net). They add to S
    exactly. A read without cost(x) has no split and fails the gate (`decision_cost` leg).
