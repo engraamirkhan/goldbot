@@ -241,7 +241,8 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
   only if each child's update stayed inside the pre-registered head and max_shift (checked from lineage); otherwise
   the child is a new version with its own read. The body is frozen for the whole read. Fit-only retrains are K 0 and
   are never judged mid-read.
-- Test: a forward read spanning a child outside max_shift is refused by the registry.
+- Test: a forward read spanning a child outside max_shift is refused by the registry, and a pooled read whose rows
+  carry a sha with no lineage record raises.
 
 **N26. 2012-17 is a SEEN development set; reads happen once; one confirm date (R-Q).**
 - The 2012-17 out-of-fold window is declared **seen** (H-101's per-arm and per-year tables have been read, and the
@@ -252,9 +253,9 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
   question. Test: a second judged read raises.
 - **One batched confirm date** for sr-v3, H-102 and zoo-v2 (and OMB-1 if it continues), owned by the evaluator. The
   evaluator fixes it in docs/ROADMAP.md by 2026-12-06, before any Stage L read of the batch, and it never moves after
-  a Stage L read. No per-card confirm read. Multiplicity: N26 proposed BH across the batch; this text keeps **Holm
-  within the batch on the section 2 ledger**, because BH controls the false discovery rate and the ledger is a
-  family-wise pot. The quant may rule otherwise at signature, before any Stage L read.
+  a Stage L read. No per-card confirm read. Multiplicity: **Holm within the batch on the section 2 ledger** (quant
+  ruling, review of #458; N26's BH proposal is not adopted, because the ledger is a family-wise pot). Each card's own
+  confirm threshold still applies; Holm adjusts its p within the batch.
 - No confirm read runs before the K-of-record reconciliation (ruling D5, due 2026-11-27).
 
 **N12. Forward reserve weeks.**
@@ -262,11 +263,14 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
   never used to train, update or calibrate any model until the read that uses them is recorded. Even ISO weeks may
   train (2026-10-01 is in ISO week 40, a training week).
 - Scope: sr-v3, H-102, OMB-1, zoo-v2 and every card signed after this amendment. sr-v2 runs as signed.
+- Training rows whose label horizon ends at or after the start of the next reserve week are purged (full horizon,
+  calendar time). A judged reserve-week row whose features use a row trained on is fine; its label is never trained
+  on.
 - Test: a training loader given a reserve-week row raises.
 
 **A2. K rules.**
-- An objective or loss swap on the **same arms and inputs** carries the cumulative K of that series. It is not a
-  new series and does not restart the count.
+- An objective or loss swap on the **same arms and inputs** carries the cumulative K of that series and books K +1.
+  It is not a new series and does not restart the count.
 - Fit-only and record-only runs are 0 K **only if** their out-of-fold and outcome statistics are blind to whoever
   picks the spec (quant Q2, Q4). Otherwise they are looks and count.
 - Each D-40 variant and each dense-head choice counts as one trial per variant.
@@ -274,10 +278,10 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
 
 **A4. OHLC quality tiers frozen by hash (R-J, quant R11).**
 - The tier rule is r11-v2.1 (`R11_V21_ID = "r11-v2.1-2026-11-25"`, `goldbot/data/era_quality.py`, PR #453). It is
-  frozen by hash at the commit the quant signs. At 1b125c7f (not yet signed) the file's git blob is
-  c6f283d763718bcf32f1c3971acd812a868fce63 (sha256 ff1cb0c62c096e47dee684a117962856c7cf40395ef7c6172924731093a7db2a);
-  the quant records the signed blob and the sha256 of the produced tiers file here at signature.
-- Use: tiers F and P are excluded from labels in every window. Tier C is excluded below 1h (bracket labels read the
-  highs and lows that C distorts) and kept at ≥ 1h with a down-weight. The vol-tercile mix is reported before and
-  after the filter. The same filter applies in learn, test_old and confirm.
+  frozen by hash. **Signed by the quant (review of #458):** git blob c6f283d763718bcf32f1c3971acd812a868fce63, sha256
+  ff1cb0c62c096e47dee684a117962856c7cf40395ef7c6172924731093a7db2a (the same at 1b125c7f and 810acc60).
+- A: barrier labels and intraday features. A-consistent: used as A, and every read is also reported without it.
+- B: close-to-close labels and daily features only, at every timeframe. C, F and P: excluded in every window.
+- The vol-tercile mix is reported before and after the filter. The sha256 of the produced tiers file is recorded here
+  before any labelled count. The same filter applies in learn, test_old and confirm.
 - Any change to the rule after a labelled count is a new id and costs K (A2).

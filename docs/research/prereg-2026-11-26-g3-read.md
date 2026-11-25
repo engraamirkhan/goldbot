@@ -143,13 +143,16 @@ it says what the existing checks are and which rows they may read. The quant sig
   alpha 0.025). A route-A pass at that n is reported with that power.
 - **A22, the n every judged read states:** about 2,950 candidates for S = +0.05 R at 80 % power, one-sided
   alpha 0.025, SD 0.97 R (re-derived); the lifecycle plan gives about 1,700 unadjusted and about 7,500 deflated at
-  K 21,333 (not re-derived). A read that cannot reach its n by its date is refused K. Class x timeframe forward cells
-  are labelled **descriptive / underpowered**.
+  K 21,333 (not re-derived). Class x timeframe forward cells are labelled **descriptive / underpowered**.
+  n is in n_eff (ADR 0085 Q1/Q3), not raw candidates. A read that cannot reach its n by its date is NOT STARTED
+  (0 K); if it is run anyway it books K. This applies to cards signed after 2026-11-27. Reads already signed (sr-v2,
+  G3 route A) keep their n and report their power. Harm checks are not judged reads.
 
 **N18. Forward-read version rule (route B).**
 - Every forward row is tagged with the sha of the model that scored it.
-- sr-v2 keeps its signed per-run K and its signed rule: the forward check reads only rows scored by the first
-  passer's frozen model (sr-v2 card, ACTIVE). A row scored by any other sha does not count toward it.
+- sr-v2 keeps its signed per-run K and its signed check: the first passer's frozen model re-scores every candidate
+  decided after its data cutoff (sr-v2 card, ACTIVE). The serving sha is recorded, but it does not filter sr-v2's
+  rows.
 - sr-v3 (and any history winner reaching route B through sr-v3): the **procedure** (pretrain + frozen a0 + head scope
   + cadence) is the judged unit for K, K 1 per procedure per judged unit. A forward read may pool rows scored by
   retrained children **only** if each child's update stayed inside the pre-registered head and max_shift, checked
