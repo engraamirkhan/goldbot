@@ -62,3 +62,15 @@ def test_no_loss_cap_alert_on_an_unlimited_account(tmp_path) -> None:
     assert health.check_loss_caps(ctx, "icm-demo") == []
     engine(tmp_path, 5, equity=4_000.0, day_start_equity=5_000.0, week_start_equity=5_000.0)
     assert by_name(health.check_loss_caps(ctx, "icm-demo"))["daily_cap:icm-demo"].status == "warn"
+
+
+def test_capped_reasons_unread_on_more_than_1_percent_of_the_days_orders_warns(tmp_path) -> None:
+    """Quant R2: an `unread` fill is left out of every cost and stop read; more than 1 % of the day's orders so is
+    evidence lost, a WARN. Silent on an account without the flag."""
+    ctx = make_ctx(tmp_path)
+    engine(tmp_path, 5, demo_unlimited=True, capped_reasons_orders=200, capped_reasons_unread=2)
+    assert by_name(health.check_capped_reasons(ctx, "icm-demo"))["capped_reasons_unread:icm-demo"].status == "ok"
+    engine(tmp_path, 5, demo_unlimited=True, capped_reasons_orders=200, capped_reasons_unread=3)
+    assert by_name(health.check_capped_reasons(ctx, "icm-demo"))["capped_reasons_unread:icm-demo"].status == "warn"
+    engine(tmp_path, 5, capped_reasons_orders=200, capped_reasons_unread=50)
+    assert health.check_capped_reasons(ctx, "icm-demo") == []

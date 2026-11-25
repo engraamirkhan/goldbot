@@ -188,10 +188,9 @@ def _ledger(conn: Any, arm_id: str, accounts: Collection[str], since: pd.Timesta
         where, args = where + " AND ts_ns >= ?", [*args, _ns(since)]
     n, pnl = 0, 0.0
     for t in LEDGER.select(conn, where, tuple(args)):
-        # ADR 0097 §7 (b): a kill read keeps the unlimited epoch's fills but its market-state ones
-        if t.account_id in accounts and t.fill_price is not None and t.exit_utc is not None \
-                and not unlimited_market_state(t):
-            n += 1
+        # ADR 0097 §7 (b), quant R1: the P&L (a money bound) counts every fill; n leaves market-state fills out
+        if t.account_id in accounts and t.fill_price is not None and t.exit_utc is not None:
+            n += not unlimited_market_state(t)
             pnl += t.pnl if t.pnl is not None else -((t.stop_loss or 0.0) + (t.cost or 0.0))
     return n, pnl
 

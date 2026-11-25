@@ -138,3 +138,23 @@ def test_a_cost_probe_on_an_unlimited_account_carries_the_epoch_and_blackout_tag
     assert unlimited_market_state(rec)
     capped = _paper(tmp_path / "capped", free=False)
     assert cost_probe.evidence_tags(capped) == {}
+
+
+def test_a_news_shock_loss_counts_toward_the_learning_loss_cap_but_not_toward_the_300_fills(tmp_path) -> None:
+    """ADR 0097 §7 (b), quant R1: money bounds count every closed fill of every epoch; only n and fill counts leave
+    market-state fills out."""
+    db = Database.open(tmp_path, "aux")
+    for i in range(3):
+        _fill(db, f"clean{i}", minutes=30 * i)
+    _fill(db, "shock", minutes=200, **SHOCK)
+    with db.write() as conn:
+        t = exploration.LEDGER.get(conn, "shock")
+        assert t is not None
+        exploration.LEDGER.upsert(conn, t.model_copy(update={"pnl": -50.0}))
+    from goldbot.engine.exploration_learning import read
+    from goldbot.research.arm_lifecycle import _ledger
+    with db.connection() as conn:
+        r = read(conn, ARM, 3.0)
+        n, pnl = _ledger(conn, ARM, ["icm-probe"], None)
+    assert r.fills == 3 and r.pnl == pytest.approx(3 * -3.2 - 50.0)
+    assert n == 3 and pnl == pytest.approx(3 * -3.2 - 50.0)

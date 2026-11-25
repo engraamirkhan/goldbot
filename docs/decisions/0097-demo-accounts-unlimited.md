@@ -69,6 +69,8 @@ the live unlock.
     on normal learning: £1,000 a day on a £10,000 demo is 30-200 minimum-lot stops, so only a fault reaches it.
   - Isolation of high-variance families (RL sizing, 1d/1w gaps) on their own demo account is the structural fix. It is
     recorded here for the W2/W3 lanes that introduce them.
+  - Quant R3: an icm-probe strategy arm whose losses all fall in market-state windows is bounded only by `arm_runaway`
+    and the demo floor, not by H-61 (its stop units leave those fills out).
   - Trading-safety L4 and quant F7: `arm_runaway` covers exploration arms only. Runner strategy arms and cost probes
     on such an account are not contained per arm; the demo floor and the 50 % warning are their guards. Their entries
     carry `limits_epoch` into the closed-trade record (`EntryAudit`/`ClosedTrade`), so they are tagged before any read.
@@ -181,7 +183,9 @@ Reads by default (quant review of #454):
 - (a) Judged and edge reads use the r2 replay labels of every candidate, so the epoch never enters them. Their r2
   costs come from (c).
 - (b) Kill-only fill reads keep unlimited-epoch fills, except `unlimited_market_state` ones. These are the H-61 units,
-  H-81, the edge cap, the GD-1 checks, the learning-class caps and reads, and the lifecycle ledger.
+  H-81, the edge cap, the GD-1 checks, the learning-class reads, and the lifecycle ledger's n. Money bounds (a learning
+  arm's loss cap, the cohort's £ caps, arm_runaway, the demo floor) count every closed fill of every epoch; only n, fill
+  counts and R or bp statistics leave market-state fills out (quant R1).
 - (c) Cost reads exclude market-state fills and report them only as a separate `shock` diagnostic stratum. These are
   the cost cells, r2 legs, fill-to-bar and realised costs; the count is `unlimited_market_state`.
 - (d) Rankings, board n, read progress and every £/rate figure claiming to transfer exclude unlimited-epoch rows. They
@@ -222,10 +226,12 @@ shadow. GD-1's kill checks follow (b) (amendment disclosure in prereg-amendment-
   learning.
 - A wiped shared demo halts all learning. The floor at 20 % is a last resort; the 50 % warning and `arm_runaway` come
   first.
-- The engine state file gains six keys on every account: `exit_wait_p99_s`, `exit_wait_max_s`, `exit_wait_n`,
-  `exit_slo_s`, `entry_duty` and `demo_unlimited`. tests/data/engine_store_golden was regenerated for that. A
-  per-case check found the six keys to be the only difference in all 192 cases.
-- New health rows `exit_latency:<account>` and `demo_floor:<account>`.
+- The engine state file gains eight keys on every account: `exit_wait_p99_s`, `exit_wait_max_s`, `exit_wait_n`,
+  `exit_slo_s`, `entry_duty`, `demo_unlimited`, `capped_reasons_orders` and `capped_reasons_unread`.
+  tests/data/engine_store_golden was regenerated for them. A per-case check found these keys to be the only difference
+  in all 192 cases.
+- New health rows `exit_latency:<account>`, `demo_floor:<account>` and `capped_reasons_unread:<account>` (quant R2:
+  WARN when more than 1 % of the day's orders on an unlimited account have their capped reasons unread).
 - Trading-safety M2, owner information: on an unlimited account the drawdown kill switch no longer flattens. The
   guards left are:
   - the broker's stops on every order;

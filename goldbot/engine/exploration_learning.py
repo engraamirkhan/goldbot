@@ -142,8 +142,9 @@ def read(conn: Any, arm_id: str, cap: float, since: pd.Timestamp | None = None,
     registration day, quant ruling 2026-11-02 (1)). The P&L sums every filled close; a close without a readable P&L
     counts as a loss at its stop plus its round trip (`cap`, the arm's per-trade cap, when its loss at the stop was
     not recorded). Censored fills are counted apart, never in the 300 (quant ruling (5)). `accounts`: only these
-    accounts' rows (the nightly lifecycle reads one broker's accounts; the engine, None, reads every account). An
-    unlimited-epoch market-state fill (ADR 0097 §7 (b), quant F5) is left out of the cap and the 300."""
+    accounts' rows (the nightly lifecycle reads one broker's accounts; the engine, None, reads every account). ADR
+    0097 §7 (b) (quant R1): the P&L, a money bound, counts every closed fill; an unlimited-epoch market-state fill is
+    left out of the 300 fills only."""
     from goldbot.engine.exploration import LEDGER, _ns
     from goldbot.research.evidence_exclusions import unlimited_market_state
     where, args = "arm_id = ? AND closed = 1", list[Any]([arm_id])
@@ -151,8 +152,7 @@ def read(conn: Any, arm_id: str, cap: float, since: pd.Timestamp | None = None,
         where, args = where + " AND ts_ns >= ?", [*args, _ns(since)]
     fills, censored, pnl = 0, 0, 0.0
     for t in LEDGER.select(conn, where, tuple(args)):
-        if t.fill_price is None or t.exit_utc is None or (accounts is not None and t.account_id not in accounts) \
-                or unlimited_market_state(t):
+        if t.fill_price is None or t.exit_utc is None or (accounts is not None and t.account_id not in accounts):
             continue
         if t.pnl is not None:
             pnl += t.pnl
@@ -160,7 +160,7 @@ def read(conn: Any, arm_id: str, cap: float, since: pd.Timestamp | None = None,
             pnl -= (t.stop_loss if t.stop_loss is not None else cap) + (t.cost or 0.0)
         if t.censored:
             censored += 1
-        elif t.pnl is not None:
+        elif t.pnl is not None and not unlimited_market_state(t):
             fills += 1
     return LearningRead(fills, censored, pnl)
 

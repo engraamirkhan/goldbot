@@ -116,14 +116,25 @@ def test_with_demo_unlimited_the_drawdown_stage_machine_never_moves_so_no_kill_s
         _state(equity=500.0, balance_closed_hwm=1_000.0), _phase(tmp_path)) == Stage.HALTED
 
 
-@pytest.mark.parametrize("phase", ["live_gate", "unreadable", "none"])
-def test_the_stage_moves_again_once_the_phase_file_is_not_demo_or_cannot_be_read(tmp_path, phase) -> None:
-    """Code review C-L1: the freeze needs the roadmap phase file to say demo (F1's rule); a live gate recorded, an
-    unreadable file or none given and the stage machine runs (fail closed)."""
+@pytest.mark.parametrize("phase, moves", [("none", False), ("unreadable", False), ("demo", False),
+                                           ("live_gate", True)])
+def test_only_a_live_gate_in_the_phase_file_moves_the_stage_again(tmp_path, phase, moves) -> None:
+    """Trading-safety N1 (re-verify of #454): a runner strategy intent passes no phase file, and an unreadable one is
+    no live gate; either moving the stage would read a 15 % demo drawdown as HALTED and flatten the account. Code
+    review C-L1: a live gate recorded does move it."""
     f = tmp_path / "phase_state.json"
-    f.write_text(json.dumps({"gates_passed": ["paper_to_tiny_live"]}) if phase == "live_gate" else "{not json")
-    st = _state(equity=500.0, balance_closed_hwm=1_000.0)
-    assert RiskGate(_free()).stage_step(st, None if phase == "none" else f) == Stage.HALTED
+    f.write_text({"live_gate": json.dumps({"gates_passed": ["paper_to_tiny_live"]}), "unreadable": "{not json",
+                  "demo": json.dumps({"gates_passed": []})}.get(phase, ""))
+    st = _state(equity=850.0, balance_closed_hwm=1_000.0)
+    got = RiskGate(_free()).stage_step(st, None if phase == "none" else f)
+    assert got == (Stage.HALTED if moves else Stage.NORMAL)
+
+
+def test_a_strategy_intent_without_a_phase_file_on_an_unlimited_account_at_15_percent_drawdown_keeps_the_stage(
+        tmp_path) -> None:
+    st = _state(equity=850.0, balance_closed_hwm=1_000.0, day_start_equity=850.0, week_start_equity=850.0)
+    RiskGate(_free()).check(_arm(tmp_path).model_copy(update={"phase_file": None}), st, NOW)
+    assert st.stage == Stage.NORMAL
 
 
 def test_a_halt_from_before_the_flag_keeps_every_cap_and_says_drawdown_halt(tmp_path) -> None:

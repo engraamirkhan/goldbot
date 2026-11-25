@@ -533,3 +533,29 @@ def check_demo_floor(ctx: HealthContext, account_id: str) -> list[Check]:
         return [Check(name=name, status="warn", reason=f"{what}: half the mark lost; the demo floor is "
                                                        f"{100 * floor.min_equity_frac:.0f}%")]
     return [Check(name=name, status="ok", reason=what)]
+
+
+# ADR 0097 (quant R2): above this share of the day's tagged orders, unread capped reasons warn
+CAPPED_UNREAD_WARN = 0.01
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=56)
+def check_capped_reasons(ctx: HealthContext, account_id: str) -> list[Check]:
+    """ADR 0097 (quant R2): on a demo account without limits every entry carries the market-state reasons a capped
+    account would have refused it for (`capped_reasons`). When they could not be read the fill is tagged `unread` and
+    left out of every cost and stop read (fail closed), so more than CAPPED_UNREAD_WARN of the day's orders unread
+    WARNs: evidence is being lost. Nothing on any other account or before an order today. Reporting only."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        if e.get("demo_unlimited") is not True:
+            return []
+        total, unread = int(e.get("capped_reasons_orders") or 0), int(e.get("capped_reasons_unread") or 0)
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []
+    if total <= 0:
+        return []
+    name = f"capped_reasons_unread:{account_id}"
+    what = f"{unread} of {total} orders today with capped reasons unread"
+    if unread / total > CAPPED_UNREAD_WARN:
+        return [Check(name=name, status="warn", reason=f"{what}: those fills are left out of every cost and stop read")]
+    return [Check(name=name, status="ok", reason=what)]

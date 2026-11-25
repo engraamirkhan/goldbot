@@ -378,3 +378,14 @@ def test_the_engine_loop_times_every_pass_before_its_exits() -> None:
     src = inspect.getsource(service._run_engine)
     assert src.count("order_send.pass_started(eng)") == 1
     assert src.index("order_send.pass_started(eng)") < src.index("resolve(engine_pass)(eng, broker, acc.symbol)")
+
+
+def test_orders_whose_capped_reasons_cannot_be_read_are_counted_apart_for_the_day(tmp_path, monkeypatch) -> None:
+    """Quant R2: `capped_reasons == ["unread"]` is counted (`capped_reasons_unread`) beside the day's tagged orders."""
+    eng = _paper(tmp_path)
+    _send(eng, "e1")
+    monkeypatch.setattr(eng.gate, "account_reasons", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
+    _send(eng, "e2")
+    pub = order_send.published(eng)
+    assert (pub["capped_reasons_orders"], pub["capped_reasons_unread"]) == (2, 1)
+    assert [d.get("capped_reasons") for d in eng.decisions if d.get("action") == "order"] == [[], ["unread"]]

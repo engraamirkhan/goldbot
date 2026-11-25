@@ -722,12 +722,14 @@ class RiskGate:
         limits (ADR 0097), where the stage does not move (no size-down, no drawdown halt, no kill switch; the demo floor
         is the guard). `update_stage` itself stays byte-identical (the owner's re-arm path, tests/test_demo_roll.py).
         Trading-safety L1: once the flag is off, the next read takes the computed stage at once (fail closed).
-        Code review C-L1: frozen only while the roadmap phase file says demo (no gate from paper_to_tiny_live on; F1's
-        rule); no phase file, an unreadable one or a live gate recorded and the stage moves again (fail closed). A stage
-        already HALTED stays HALTED: only the owner's /rearm clears it, flag or not (trading-safety L1)."""
+        Code review C-L1: a phase file recording a live gate (paper_to_tiny_live on) moves the stage again. Trading-safety
+        N1 (re-verify of #454): only a live gate does: no phase file (a runner strategy intent passes none) or an
+        unreadable one must not move the stage, or a 15 % demo drawdown would read HALTED and the kill switch would
+        flatten the whole account. A stage already HALTED stays HALTED: only the owner's /rearm clears it, flag or not
+        (trading-safety L1)."""
         gates = phase_gates(phase_file) if phase_file is not None else None
-        demo = gates is not None and not LIVE_GATES & set(gates)
-        return st.stage if demo and st.stage != Stage.HALTED and self.unlimited() else self.update_stage(st)
+        live = gates is not None and bool(LIVE_GATES & set(gates))
+        return st.stage if self.unlimited() and not live and st.stage != Stage.HALTED else self.update_stage(st)
 
     # ---------------------------------------------------------------- entry check + sizing
     def unlimited(self, intent: Intent | None = None) -> bool:

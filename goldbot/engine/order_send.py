@@ -126,6 +126,10 @@ class Duty:
         self.gaps: deque[tuple[float, float]] = deque(maxlen=EXIT_GAPS)     # (when, gap)
         self.capacity_hold: int | None = None   # open positions when the broker refused for capacity
         self.capacity_until = 0.0               # ... and the earliest time the hold may end
+        # quant R2: the UTC day, its tagged orders and those whose capped reasons could not be read (`unread`)
+        self.tag_day: str | None = None
+        self.tagged = 0
+        self.unread = 0
         self.logged: dict[str, float] = {}
 
     def busy(self, now: float) -> float:
@@ -221,7 +225,9 @@ def published(eng: Any) -> dict[str, Any]:
     return {"exit_wait_p99_s": round(float(np.percentile(gaps, 99)), 3) if gaps else None,
             "exit_wait_max_s": round(max(gaps), 3) if gaps else None, "exit_wait_n": len(gaps),
             "exit_slo_s": exit_slo_s(eng), "entry_duty": round(d.busy(now) / DUTY_WINDOW_S, 3),
-            "demo_unlimited": _unlimited(eng)}
+            "demo_unlimited": _unlimited(eng),
+            # quant R2: today's (UTC) tagged orders and those with capped reasons unread (health warns above 1 %)
+            "capped_reasons_orders": d.tagged, "capped_reasons_unread": d.unread}
 
 
 def exit_slo_s(eng: Any) -> float:
@@ -236,7 +242,15 @@ def exit_slo_s(eng: Any) -> float:
 def epoch_tag(eng: Any) -> dict[str, Any]:
     """ADR 0097: the evidence tags an entry carries on a demo account without limits (`limits_epoch`, and quant F2's
     `capped_reasons`); nothing on any other account."""
-    return {"limits_epoch": "unlimited", "capped_reasons": capped_reasons(eng)} if _unlimited(eng) else {}
+    if not _unlimited(eng):
+        return {}
+    got = capped_reasons(eng)
+    d, day = duty(eng), pd.Timestamp.now("UTC").strftime("%Y-%m-%d")
+    if d.tag_day != day:
+        d.tag_day, d.tagged, d.unread = day, 0, 0
+    d.tagged += 1
+    d.unread += got == ["unread"]
+    return {"limits_epoch": "unlimited", "capped_reasons": got}
 
 
 def capped_reasons(eng: Any) -> list[str]:
