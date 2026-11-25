@@ -77,3 +77,40 @@ def test_gitignore_keeps_local_data_out():
              "raw-macro/fred.parquet", "raw-calendar/us_calendar.parquet", "raw/dukascopy/2026-01.csv"]
     out = subprocess.run(["git", "check-ignore", "--no-index", *paths], cwd=ROOT, capture_output=True, text=True).stdout
     assert sorted(out.split()) == sorted(paths)
+
+
+def test_headerless_histdata_rows_are_refused(tmp_path):
+    """HistData's M1 ASCII has no header row; the header rule alone let it through (lane W1-E)."""
+    p = tmp_path / "DAT_ASCII_EURUSD_M1_2010.csv"
+    p.write_text("20100103 170000;1.430100;1.430400;1.430100;1.430400;0\n"
+                 "20100103 170100;1.430400;1.430500;1.430300;1.430300;0\n")
+    assert guard.reason(p, "notes/DAT_ASCII_EURUSD_M1_2010.csv")
+    q = tmp_path / "mt5.txt"
+    q.write_text("2010.01.04,00:00,1.4303,1.4310,1.4299,1.4305,120\n2010.01.04,00:01,1.4305,1.4306,1.4301,1.4302,88\n")
+    assert guard.reason(q, "docs/mt5.txt")
+
+
+def test_zip_of_histdata_is_refused(tmp_path):
+    import zipfile
+    p = tmp_path / "HISTDATA_COM_ASCII_EURUSD_M12010.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("DAT_ASCII_EURUSD_M1_2010.csv", "20100103 170000;1.4301;1.4304;1.4301;1.4304;0\n" * 3)
+    assert guard.reason(p, "scripts/HISTDATA.zip")
+    ok = tmp_path / "docs.zip"
+    with zipfile.ZipFile(ok, "w") as z:
+        z.writestr("readme.md", "# notes\nno prices here\n")
+    assert guard.reason(ok, "docs/docs.zip") is None
+
+
+def test_anything_under_the_data_folders_is_refused(tmp_path):
+    p = tmp_path / "MANIFEST.jsonl"
+    p.write_text('{"key": "EURUSD", "year": 2010}\n')
+    for rel in ("raw/histdata_m1/MANIFEST.jsonl", "data/x.json", "sealed/SHA256SUMS"):
+        assert guard.reason(p, rel)
+    assert guard.reason(p, "goldbot/data/MANIFEST.jsonl") is None
+
+
+def test_prose_and_tables_with_dates_pass(tmp_path):
+    p = tmp_path / "ledger.csv"
+    p.write_text("date,item,amount_gbp\n2026-10-01,vps,3.57\n2026-10-02,claude,12.00\n")
+    assert guard.reason(p, "docs/finance/ledger.csv") is None

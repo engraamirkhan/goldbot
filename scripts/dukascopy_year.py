@@ -24,9 +24,14 @@ With --months (targeted refetch, G1/G2) exactly the listed months of this year a
 size or flags, and every other month is kept from --existing (required). Each listed month goes through
 merge_never_shrink, so a refetch can only add or repair days, never lose one.
 
-Instruments (`--symbol`, INSTRUMENTS): xauusd (default) and xagusd, same archive and bar schema. A month whose median
-bid lies outside the instrument's price band is reported SCALE and never published (a wrong point size), and months
-before the instrument's first archive day are not downloaded (before_history; issue #108).
+Instruments (`--symbol`, INSTRUMENTS): xauusd (default) and xagusd, same archive and bar schema, plus every owner
+instrument with a Dukascopy code in config/history_sources.yaml (D1/D3, lane W1-E), keyed by its lower-case owner key
+(us30, btcusd, usindex, xaueur, eurgbp, ...). A month whose median bid lies outside the instrument's price band is
+reported SCALE and never published (a wrong point size); map instruments are checked against their ERA band (each
+under a 10x span, so a x10 or x100 point error is caught in every era). Months before the instrument's first archive
+day are not downloaded (before_history; issue #108). Map instruments are research history: months at or after the
+holdout cut (2025-10-01, quant R10) are refused unless --sealed is given (a separate, sealed output; never a research
+store). xauusd and xagusd keep their own weekly/live pipeline and are not cut.
 
   python scripts/dukascopy_year.py 2025 [--symbol xauusd] [--out xauusd_1m_dukascopy_2025.parquet] [--report report.md]
                                         [--existing xauusd_1m_dukascopy_2025.parquet] [--months 2025-02,2025-03]
@@ -55,6 +60,7 @@ from dukascopy_months import parse_months  # noqa: E402
 
 from goldbot.base import FrozenRecord  # noqa: E402
 from goldbot.data.calendar import DEFAULT_SESSIONS  # noqa: E402
+from goldbot.data.era_quality import HOLDOUT_CUT, history_sources  # noqa: E402
 from goldbot.data.quality import check_bars, quarantine  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, OPTIONAL_BAR_COLUMNS  # noqa: E402
 
@@ -128,8 +134,11 @@ class Instrument(FrozenRecord):
     point: float
     price_band: tuple[float, float]
     history_start: dt.date | None = None
+    era_key: str | None = None   # owner key in config/history_sources.yaml: era bands and the holdout cut apply
 
-    def price_ok(self, price: float) -> bool:
+    def price_ok(self, price: float, month: dt.date | None = None) -> bool:
+        if self.era_key is not None and month is not None:
+            return history_sources().instruments[self.era_key].price_ok(price, month)
         return self.price_band[0] <= price <= self.price_band[1]
 
 
@@ -141,6 +150,32 @@ INSTRUMENTS: dict[str, Instrument] = {
     "xagusd": Instrument(code="XAGUSD", point=1000.0, price_band=(2.0, 200.0), history_start=None),
 }
 XAUUSD = INSTRUMENTS["xauusd"]
+
+
+def _map_instruments() -> dict[str, Instrument]:
+    """Owner instruments with a Dukascopy code (D1 map), except the two above; band = the widest era band (the era
+    band of the month is what price_ok checks); history_start = the hourly archive's first month."""
+    out = {}
+    for key, src in history_sources().instruments.items():
+        if src.dukascopy is None or key.lower() in INSTRUMENTS:
+            continue
+        lo = min(b[2] for b in src.price_bands)
+        hi = max(b[3] for b in src.price_bands)
+        y, m = (int(x) for x in src.dukascopy.from_.split("-"))
+        out[key.lower()] = Instrument(code=src.dukascopy.code, point=src.dukascopy.point, price_band=(lo, hi),
+                                      history_start=dt.date(y, m, 1), era_key=key)
+    return out
+
+
+def instrument(symbol: str) -> Instrument:
+    """xauusd/xagusd from INSTRUMENTS; any other symbol from the history source map, read only now (lazily): a broken
+    config/history_sources.yaml must not stop gold's weekly pull (review of #453)."""
+    if symbol in INSTRUMENTS:
+        return INSTRUMENTS[symbol]
+    mapped = _map_instruments()
+    if symbol not in mapped:
+        raise KeyError(f"{symbol!r}: not xauusd/xagusd and not a mapped instrument with a Dukascopy code")
+    return mapped[symbol]
 
 
 def datafeed_url(day: dt.date, side: str, inst: Instrument | None = None) -> str:
@@ -401,7 +436,7 @@ def merge_never_shrink(published: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataF
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("year", type=int)
-    ap.add_argument("--symbol", default="xauusd", choices=sorted(INSTRUMENTS),
+    ap.add_argument("--symbol", default="xauusd",
                     help="Dukascopy instrument (default xauusd); names the output file <symbol>_1m_dukascopy_<year>.parquet")
     ap.add_argument("--out", default=None)
     ap.add_argument("--tmp", default="raw/dukascopy")
@@ -418,14 +453,27 @@ def main() -> int:
     ap.add_argument("--checkpoint-dir", default=None,
                     help="resumable run: each closed month is saved here once built and reused by the next run "
                          "(local backfill; never a published location)")
+    ap.add_argument("--sealed", action="store_true",
+                    help="map instruments only: allow months at or after the holdout cut 2025-10-01 (sealed output, "
+                         "never a research store; quant R10)")
     ap.add_argument("--no-node-fallback", action="store_true",
                     help="read the bi5 archive only; never fall back to dukascopy-node (npx)")
     args = ap.parse_args()
     global REQUEST_PAUSE_S, NODE_FALLBACK
     REQUEST_PAUSE_S = max(0.0, args.pause)
     NODE_FALLBACK = not args.no_node_fallback
-    inst = INSTRUMENTS[args.symbol]
+    try:
+        inst = instrument(args.symbol)
+    except KeyError as e:
+        ap.error(str(e))
     months = list(month_range(args.year))
+    if inst.era_key is not None and not args.sealed:
+        cut = HOLDOUT_CUT.date()
+        sealed = [s for s, _ in months if s >= cut]
+        months = [(s, min(e, cut)) for s, e in months if s < cut]
+        if sealed:
+            print(f"{len(sealed)} month(s) at or after the holdout cut {cut} not requested (quant R10; --sealed for a "
+                  "sealed output)", flush=True)
     wanted: set[str] | None = None
     if args.months is not None:
         if args.refetch_all or args.retry_flagged:
@@ -503,7 +551,7 @@ def main() -> int:
         median = float(b["bid_close"].median()) if b is not None and len(b) else float("nan")
         if b is None:
             status = "MISSING"
-        elif not inst.price_ok(median):
+        elif not inst.price_ok(median, start):
             # a wrong point size or a foreign series: never published (exit 2 opens the failure issue)
             status = "SCALE"
             print(f"  {k}: median bid {median:.4f} is outside {inst.code}'s band {inst.price_band}; month NOT published",
