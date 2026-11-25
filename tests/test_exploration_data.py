@@ -230,6 +230,24 @@ def test_an_fx_or_sugar_candidate_is_never_replayed_on_gold_bars_with_golds_cost
                                instruments=inst) == 0      # gold's per-oz cost model never prices another instrument
 
 
+def test_a_gold_candidate_whose_stop_is_inside_the_spread_ceiling_is_never_labelled_into_r(tmp_path, caplog):
+    """Brain 2026-11-25: 1,039 rows of exploration_obs at |label_sim_r| > 20 R, down to -5,455 R, every one but a real
+    gold tail a stop of 0.0001-0.02 replayed on gold bars (R = pnl / stop explodes). A stop below the instrument's
+    spread ceiling (`min_label_stop`: max_spread_points x point, gold $0.45) prices the spread, not the trade: such a
+    candidate is not labelled (NULL, logged) by r1 or r2, whatever its arm says its instrument is."""
+    db = _db(tmp_path)
+    floor = ex.min_label_stop()
+    assert floor == pytest.approx(0.45)
+    _cand(db, "ok", stop=floor, target=floor)
+    _cand(db, "tiny", stop=0.0002, target=0.0002, is_control=True)
+    bars = _m1(T0, [(2000.0, 2000.5, 1999.5)] * 60)
+    with caplog.at_level("WARNING", logger="goldbot.exploration"):
+        assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30)) == 1
+    obs = ex.read_obs(db).set_index("candidate_id")
+    assert pd.notna(obs.loc["ok", "label_sim_r"]) and pd.isna(obs.loc["tiny", "label_sim_r"])
+    assert any("spread ceiling" in r.getMessage() for r in caplog.records)
+
+
 def test_a_non_gold_row_labelled_on_gold_bars_never_reaches_the_training_table_or_the_retrain_count(tmp_path):
     """Quant review of 75824e5c (HIGH): rows of XAUEUR, XAUAUD, JP225, DE40, US500, XTIUSD and XAGUSD were replayed on
     gold bars before 2026-11-04 at plausible but wrong R (an XAUEUR control at 1.3 R). The learners read gold arms' rows
