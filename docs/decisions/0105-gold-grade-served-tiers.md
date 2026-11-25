@@ -47,3 +47,43 @@ LBMA Gold Price PM, so NAV per share / ounces per share is the PM price less acc
 - 2003-2008 stays C under any fix-only rule unless the quant rules that a daily fix alone can carry B for
   close-to-close use. The fix evidence for those years (median -1 to -12 bp, MAD 6-12 bp: wide early spreads, bid
   below the fix) is in fix_evidence.csv.
+
+## Ruling r11-v2.2-2026-11-26 (quant, on D-1)
+Only the GOLD fix check changes. The FX H.10 check and every other v2.1 constant stay as they are
+(`goldbot.data.era_quality.R11_V22`, `gold_fix_window_d`, `calibrate_gold_tol`, `power_check`).
+- **Per-day statistic.** d = the minimum, over the Dukascopy 1m bid closes of bars closing in (15:00, 15:10]
+  Europe/London, of |ln(close / fix)| × 1e4.
+  - A day with fewer than 5 of those 10 bars is dropped and counted.
+  - There is no other window and no per-minute alignment, and the GLD bias is not corrected.
+- **Month pass.** The share of days with d ≤ tol is at least 0.98, over at least 15 fix days.
+- **Calibration set.** Dukascopy XAUUSD months graded A under v2.1 against independent HistData minutes, 2015-04..2018-12
+  (IBA era, 38 months). Calibration never uses 2009-01..2015-03 or 2019-25.
+- **tol.** The smallest value on a 0.5 bp grid at which at least 37 of the 38 calibration months pass.
+- **Power check.** With the fix shifted by +2·tol and by −2·tol in every calibration month, at least 95 % of the shifted
+  months must fail.
+- **Void.** If tol > 15 bp or the power check fails, v2.2 is void and nothing is regraded.
+- **One command.** `scripts/dukascopy_gold_grade.py grade` calibrates, records tol and the power result (summary and the
+  block below), then regrades. It refuses unless the imported era_quality module is the v2.2 blob and the tree is clean,
+  including untracked files under goldbot/ and scripts/.
+- 2003-08 stays C.
+
+**Disclosure.** Every gold confirm report lists:
+- the C months of the confirm window;
+- the realised-vol tercile mix of excluded vs kept months.
+
+The helper is `confirm_disclosure` in `scripts/dukascopy_gold_grade.py`. Its output for 2018-01..2025-09 is written to
+`confirm_disclosure_r11-v2.2.json`.
+
+**Single use.**
+- There will be no r11-v2.3 on the gold fix for 2018-25.
+- Any later change to the gold fix check sends gold's confirm to the fallback, in this order:
+  1. a second independent 1m source graded under v2.1;
+  2. otherwise, a forward window from 2026-10-01, pre-registered with the same gates.
+- The holdout is never confirm.
+
+**Raw source archives are not sealed (code review L4).**
+- The cut at 2025-10-01 applies to everything stored for research and to every derived file: the fix CSV, the grades,
+  and the D-13 day-candle cache.
+- The source archives as served are kept for lineage and still contain later rows: the GLD XLSX, the HistData 2025 zips
+  and the Dukascopy year files.
+- Nothing reads those archives except the parsers, and every parser cuts before computing.

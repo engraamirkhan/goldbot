@@ -1,26 +1,30 @@
-"""D-13 (read-only): rank candidate additional instruments by how many INDEPENDENT graded days they could add, outcome-
-blind: |daily close-to-close log-return correlation with gold| and the A/B days the r11-v2.1 rule could grant them.
+"""D-13 PRE-SCREEN (read-only): order candidate additional instruments by how many INDEPENDENT graded learn days they
+could add, outcome-blind. A pre-screen only: it decides what to pull and measure first, never admission.
 
 Nothing here reads a label, a signal or a P&L, and nothing is written to raw/ or the repo: Dukascopy day candles (one
-bi5 per instrument-year, bid) are cached under ~/tmp/d13/cache and the ranking goes to --out.
+bi5 per instrument-year, bid, capped at the last research day 2025-09-30 before caching) go to ~/tmp/d13/cache and the
+pre-screen to --out.
 
-Per candidate:
-* corr_learn / corr_judge: Pearson correlation of daily log returns with Dukascopy XAUUSD (same source, same day
-  boundary) over learn 2010-01..2017-12 and judge 2018-01..2025-09 (the holdout cut); Spearman beside it.
-* days_learn / days_judge: weekdays with a traded day candle.
-* route: what r11-v2.1 can grade it against. A month needs an independent hourly reference (HistData, independent
-  through 2018, the same source from 2019) and, for 2019 on, an independent fix: FRED H.10 noon rates for FX
-  (A-consistent possible), cap B for index/energy CFDs (cash close or settlement carries a basis); with no HistData
-  series every month is C (no_reference) under the frozen rule, whatever its quality.
-* ab_learn / ab_judge (projection, labelled so): days x the A/A-consistent/B share of months that the already graded
-  instruments of the same route reached under r11-v2.1 (the served tiers file), per window.
-* info_judge = ab_judge x (1 - corr_judge^2): judge days of information not already in gold's own moves.
+Per candidate (quant CH3, 2026-11-26):
+* rho_learn: Dimson correlation of daily log returns with Dukascopy XAUUSD over learn 2010-01..2017-12, the sum of the
+  lag -1, 0 and +1 correlations (non-synchronous closes: an index closing hours before gold's day boundary puts part of
+  its co-movement in the next day), |rho| capped at 1. Pearson at lag 0 and Spearman beside it.
+* route: what r11-v2.x can grade it against (HistData independent through 2018, same source from 2019; FRED H.10 fix for
+  FX -> A-consistent possible; cap B for index/energy; no HistData -> every month C under the rule).
+* ab_learn (projection, labelled so): learn days x the A/A-consistent/B share of months the graded instruments of the
+  same route reached (served tiers file).
+* info_learn = ab_learn x (1 - rho_learn^2). THE ORDER IS info_learn ONLY.
+* judge columns (rho_judge, days_judge, ab_judge) are REPORTED ONLY: they never sort, filter or admit.
+* missing_years: years with no day candle file (404 or a fetch that kept failing); never dropped silently.
+Admission (not here): scripts/research/measure_rho.py on the learn window: the day-mean rho_u,inst of the candidate vs
+gold, upper 95 % bound, max over PC1 and the per-instrument sign, <= 0.2 in every hold bucket.
 
-    uv run python scripts/research/d13_independent_rank.py --tiers raw/tiers/tiers_served_r11-v2.1.csv --out ~/tmp/d13
+    uv run python scripts/research/d13_independent_rank.py --tiers raw/tiers/tiers_served_r11-v2.2.csv --out ~/tmp/d13
 """
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import lzma
 import time
@@ -31,10 +35,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from goldbot.data.holdout_guard import HOLDOUT_START
+
 DATAFEED = "https://datafeed.dukascopy.com/datafeed"
 UA = {"User-Agent": "goldbot-data/1"}
 YEARS = range(2010, 2026)
-CUT = pd.Timestamp("2025-10-01")
+CUT = HOLDOUT_START.tz_localize(None)            # day candles are naive UTC dates
 LEARN = (pd.Timestamp("2010-01-01"), pd.Timestamp("2018-01-01"))
 JUDGE = (pd.Timestamp("2018-01-01"), CUT)
 REC = np.dtype([("sec", ">i4"), ("open", ">i4"), ("close", ">i4"), ("low", ">i4"), ("high", ">i4"),
@@ -94,18 +100,31 @@ def route(cls: str, code: str, hd: str | None) -> str:
     return "histdata+cap_b"
 
 
+def cap(body: bytes, year: int) -> bytes:
+    """The day records strictly before CUT, re-compressed: a year file never holds a sealed day on disk (L4)."""
+    raw = lzma.decompress(body)
+    rec = np.frombuffer(raw[: len(raw) // 24 * 24], dtype=REC)
+    day = pd.Timestamp(f"{year}-01-01") + pd.to_timedelta(rec["sec"].astype("int64"), unit="s")
+    keep = np.asarray(day < CUT)
+    return body if keep.all() else lzma.compress(rec[keep].tobytes(), format=lzma.FORMAT_ALONE)
+
+
 def fetch(code: str, year: int, cache: Path, pause: float) -> bytes | None:
     p = cache / code / f"{year}.bi5"
     miss = p.with_suffix(".404")
     if p.exists():
-        return p.read_bytes()
+        body = p.read_bytes()
+        capped = cap(body, year)
+        if capped != body:                       # a file cached before the cap existed
+            p.write_bytes(capped)
+        return capped
     if miss.exists():
         return None
     url = f"{DATAFEED}/{code}/{year}/BID_candles_day_1.bi5"
     for k in range(6):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:  # noqa: S310
-                body = r.read()
+                body = cap(r.read(), year)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(body)
             time.sleep(pause)
@@ -116,16 +135,18 @@ def fetch(code: str, year: int, cache: Path, pause: float) -> bytes | None:
                 miss.write_bytes(b"")
                 return None
             time.sleep(min(60.0, 5.0 * 2 ** k))
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, lzma.LZMAError):
             time.sleep(min(60.0, 5.0 * 2 ** k))
     return None
 
 
-def daily_closes(code: str, cache: Path, pause: float) -> pd.Series:
-    parts = []
+def daily_closes(code: str, cache: Path, pause: float) -> tuple[pd.Series, list[int]]:
+    """(weekday closes before CUT, years with no file): a missing year is recorded, never dropped silently (L3)."""
+    parts, missing = [], []
     for y in YEARS:
         b = fetch(code, y, cache, pause)
         if not b:
+            missing.append(y)
             continue
         raw = lzma.decompress(b)
         rec = np.frombuffer(raw[: len(raw) // 24 * 24], dtype=REC)
@@ -135,20 +156,24 @@ def daily_closes(code: str, cache: Path, pause: float) -> pd.Series:
         day = pd.Timestamp(f"{y}-01-01") + pd.to_timedelta(f["sec"].to_numpy(), unit="s")
         parts.append(pd.Series(f["close"].to_numpy(), index=pd.DatetimeIndex(day).normalize()))
     if not parts:
-        return pd.Series(dtype="float64")
+        return pd.Series(dtype="float64"), missing
     s = pd.concat(parts)
     s = s[~s.index.duplicated(keep="last")].sort_index()
     idx = pd.DatetimeIndex(s.index)
-    return s[(idx < CUT) & (idx.dayofweek < 5)]
+    return s[(idx < CUT) & (idx.dayofweek < 5)], missing
 
 
-def _corr(a: pd.Series, b: pd.Series, lo: pd.Timestamp, hi: pd.Timestamp) -> tuple[float | None, float | None, int]:
-    ra, rb = np.log(a).diff(), np.log(b).diff()
-    j = pd.concat([ra, rb], axis=1, join="inner").dropna()
+def _corr(a: pd.Series, b: pd.Series, lo: pd.Timestamp, hi: pd.Timestamp
+          ) -> tuple[float | None, float | None, float | None, int]:
+    """(Dimson rho = sum of the lag -1, 0, +1 correlations of daily log returns, Pearson lag 0, Spearman lag 0, pairs)
+    on the common days in [lo, hi)."""
+    j = pd.concat([np.log(a).diff(), np.log(b).diff()], axis=1, join="inner").dropna()
+    j.columns = ["x", "g"]
     j = j[(j.index >= lo) & (j.index < hi)]
     if len(j) < 60:
-        return None, None, len(j)
-    return float(j.iloc[:, 0].corr(j.iloc[:, 1])), float(j.iloc[:, 0].corr(j.iloc[:, 1], method="spearman")), len(j)
+        return None, None, None, len(j)
+    dimson = sum(float(j["x"].corr(j["g"].shift(-k))) for k in (-1, 0, 1))
+    return dimson, float(j["x"].corr(j["g"])), float(j["x"].corr(j["g"], method="spearman")), len(j)
 
 
 def ab_rates(tiers: Path) -> dict[str, dict[str, float]]:
@@ -182,14 +207,15 @@ def main() -> int:
     ap.add_argument("--pause", type=float, default=0.5)
     a = ap.parse_args()
     cache = a.out / "cache"
-    gold = daily_closes("XAUUSD", cache, a.pause)
+    gold, _ = daily_closes("XAUUSD", cache, a.pause)
     rates = ab_rates(a.tiers)
     rows = []
     todo = [(c, cls, hd, False) for c, (cls, hd) in CANDIDATES.items()] + \
         [(code, "stored", key, True) for key, code in STORED.items()]
     for code, cls, hd, stored in todo:
-        s = daily_closes(code, cache, a.pause)
-        rec: dict[str, object] = {"code": code, "class": cls, "stored": stored}
+        s, missing = daily_closes(code, cache, a.pause)
+        rec: dict[str, object] = {"code": code, "class": cls, "stored": stored, "missing_years": missing,
+                                  "screen": "pre-screen (admission: measure_rho.py)"}
         if stored:
             rec["route"] = ROUTE_OF_STORED[str(hd)]
             rec["key"] = hd
@@ -197,23 +223,25 @@ def main() -> int:
             rec["route"] = route(cls, code, hd)
             rec["histdata"] = hd if hd in HISTDATA else None
         for name, (lo, hi) in (("learn", LEARN), ("judge", JUDGE)):
-            p, sp, n = _corr(s, gold, lo, hi) if len(s) else (None, None, 0)
+            dim, p, sp, n = _corr(s, gold, lo, hi) if len(s) else (None, None, None, 0)
             days = int(((s.index >= lo) & (s.index < hi)).sum()) if len(s) else 0
-            rec.update({f"corr_{name}": p, f"spearman_{name}": sp, f"days_{name}": days, f"pairs_{name}": n})
+            rec.update({f"rho_{name}": dim, f"pearson_{name}": p, f"spearman_{name}": sp, f"days_{name}": days,
+                        f"pairs_{name}": n})
             rec[f"ab_{name}"] = round(days * rates.get(str(rec["route"]), {}).get(name, 0.0))
         if stored:
             rec["ab_learn_actual"], rec["ab_judge_actual"] = actual_ab_days(a.tiers, str(hd))
-        cj = rec["corr_judge"]
-        rec["info_judge"] = round(float(str(rec["ab_judge"])) * (1 - float(str(cj)) ** 2)) if cj is not None else 0
+        rl = rec["rho_learn"]
+        r = min(abs(float(str(rl))), 1.0) if rl is not None else None
+        rec["info_learn"] = round(float(str(rec["ab_learn"])) * (1 - r ** 2)) if r is not None else 0
         rec["first_day"] = str(s.index.min().date()) if len(s) else None
         rows.append(rec)
         print(json.dumps(rec, default=str), flush=True)
-    df = pd.DataFrame(rows).sort_values(["stored", "info_judge"], ascending=[True, False])
+    df = pd.DataFrame(rows).sort_values(["stored", "info_learn"], ascending=[True, False])   # learn only
     a.out.mkdir(parents=True, exist_ok=True)
-    df.to_csv(a.out / "d13_rank.csv", index=False)
+    df.to_csv(a.out / "d13_prescreen.csv", index=False)
     (a.out / "d13_ab_rates.json").write_text(json.dumps(rates, indent=1))
-    cols = ["code", "class", "route", "corr_learn", "corr_judge", "days_learn", "days_judge", "ab_learn", "ab_judge",
-            "info_judge", "first_day"]
+    cols = ["code", "class", "route", "rho_learn", "days_learn", "ab_learn", "info_learn", "missing_years",
+            "rho_judge", "days_judge", "ab_judge"]                     # judge columns: reported only
     print(json.dumps(rates))
     print(df[cols].round(3).to_string(index=False))
     return 0

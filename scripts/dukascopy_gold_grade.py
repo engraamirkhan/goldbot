@@ -1,29 +1,27 @@
-"""D-1: grade Dukascopy XAUUSD (the gold the system trains and trades on) under the frozen r11-v2.1 tier rule, against
-independent references, and write the A16 source-precedence manifest. Outcome-blind: prices against prices only.
+"""D-1: grade Dukascopy XAUUSD (the gold the system trains and trades on) under r11-v2.2 against independent
+references, and write the A16 source-precedence manifest. Outcome-blind: prices against prices only.
 
-The tier rule is `goldbot.data.era_quality.grade_month_v2` at the frozen blob c6f283d7 (r11-v2.1); this script refuses
-to grade if the module's bytes differ or the tree is dirty (quant ruling 5). Here the subject is Dukascopy 1m and the
-references are, per year:
-* 2009-2018: HistData XAUUSD (an independent feed: hour-ending closes shared with Dukascopy 0.00-0.04,
-  evidence_r11-v2.csv), hourly from its 1m bid bars, native (its own high/low), its confirmed-spike minutes left out.
-  Clock, per-month and US/EU gap-window offsets are checked exactly as scripts/histdata_m1.py does.
-* 2019-2025-09: HistData is the SAME source (shares 0.91-0.97): the Dukascopy close check is circular, so the month also
-  needs the independent fix (B2) and can reach A-consistent at best; without a fix it is P.
-* 2003-2008: no HistData gold. Under r11-v2.1 a month with no independent hourly reference is C (no_reference): the
-  daily fix is evidence only (fix_share is reported), it cannot carry a tier until a rule says so (quant).
-The fix: raw/fixes/GLDNAV_XAU_PM.csv (scripts/gold_fix_gld.py: the LBMA Gold Price PM as implied by the SPDR Gold Trust
-NAV, 15:00 London, 2004-11-18 on; low-side bias <= ~3.3 bp, measured here per year).
+Rule: `goldbot.data.era_quality.grade_month_v2` with the r11-v2.2 gold fix check (quant ruling 2026-11-26, ADR 0105;
+only the gold fix check differs from v2.1). The run refuses unless the IMPORTED era_quality module is blob RULE_BLOB
+and the tree is clean, including untracked files under goldbot/ and scripts/ (quant ruling 5, code review L1).
+References per year:
+* 2009-2018: HistData XAUUSD (independent: hour-ending closes shared with Dukascopy 0.00-0.04, evidence_r11-v2.csv),
+  hourly from its 1m bid bars, native, its confirmed-spike minutes left out; clock, month and gap-window offsets.
+* 2019-2025-09: HistData is the SAME source (0.91-0.97): the month needs the independent fix as well (B2) and reaches
+  A-consistent at best.
+* 2003-2008: no HistData gold: C (no_reference), whatever the fix says.
+The fix: raw/fixes/GLDNAV_XAU_PM.csv (scripts/gold_fix_gld.py: the LBMA Gold Price PM implied by the SPDR Gold Trust
+NAV, 15:00 London; low-side bias <= ~3.3 bp, not corrected). v2.2 fix statistic per day: the min over the bars closing
+in (15:00, 15:10] London of |ln(bid_close / fix)| x 1e4 (days with < 5 bars dropped and counted); tol calibrated once
+on the 38 months graded A under v2.1 in 2015-04..2018-12, power-checked at +-2 tol, void above 15 bp.
 
-Writes (local, raw/dukascopy_grade/_reports/, never committed):
-  tiers_dukascopy_r11-v2.1.csv     one row per session month, MonthGradeV2 + source + git sha
-  clock_dukascopy_r11-v2.1.csv     clock check per year, month and gap-window offsets, same-source decision
-  fix_evidence.csv                 per year: fix days, bp of the Dukascopy bid vs the fix (median, p02, p98, within
-                                   10 bp, MAD) at 15:00 London (the nominal time r11-v2.1 checks) and at
-                                   +2..+30 min (alignment control: the auction's price is set after 15:00)
-  summary.json                     months per tier per year, reason counts, sha256 of every file
-and raw/tiers/tiers_served_r11-v2.1.csv: the tiers of the SERVING source per instrument-month (HistData tiers for every
-key but XAUUSD, these Dukascopy tiers for XAUUSD), the one file fs-v1 loads (Tiers.load refuses two tiers per month).
-Commits nothing itself; `--manifest` (re)writes config/data/source_precedence.yaml (A16) from the reports.
+`grade` (one command): calibrate tol, power check, write summary_r11-v2.2.json and the ADR 0105 block; if void stop
+(exit 3), else regrade every year and write (local, raw/dukascopy_grade/_reports/, never committed):
+  tiers_dukascopy_r11-v2.2.csv, clock_dukascopy_r11-v2.2.csv, fix_evidence_r11-v2.2.csv, confirm_disclosure_r11-v2.2.json
+  (C months and vol-tercile mix of excluded vs kept, 2018-01..2025-09: every gold confirm report carries it)
+and raw/tiers/tiers_served_r11-v2.2.csv (HistData tiers for every key but XAUUSD + these gold tiers; the one file fs-v1
+loads). The v2.1 reports stay on disk next to them. `manifest` writes config/data/source_precedence.yaml from a valid,
+complete v2.2 summary only.
 
     uv run python scripts/dukascopy_gold_grade.py grade [--root raw] [--workers 1]
     uv run python scripts/dukascopy_gold_grade.py manifest [--root raw]
@@ -45,30 +43,44 @@ import pandas as pd
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from goldbot.data import era_quality  # noqa: E402
 from goldbot.data.era_quality import (  # noqa: E402
+    GOLD_CALIB_MONTHS,  # noqa: E402
     HOLDOUT_CUT,
     R11_V2,
     R11_V21,
     R11_V21_ID,
+    R11_V22,
+    R11_V22_ID,
     ClockCheck,
+    GoldFixCalibration,
+    calibrate_gold_tol,
     clock_check,
     day_of,
     epoch_ns_utc,
     gap_week_offsets,
+    gold_fix_window_d,
     grade_month_v2,
     month_offsets,
+    power_check,
     same_source_share,
+    shift_fix,
 )
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = REPO / "raw"
-FROZEN_BLOB = "c6f283d763718bcf32f1c3971acd812a868fce63"     # goldbot/data/era_quality.py, r11-v2.1
+V21_BLOB = "c6f283d763718bcf32f1c3971acd812a868fce63"        # era_quality.py of the v2.1 grade (kept on disk)
+RULE_BLOB = "9ea9be33655487b095d76cdc11af589e0ce583c8"       # era_quality.py with r11-v2.2 (gold fix window)
 KEY = "XAUUSD"
 SESSION_MINUTES = 1380
 FIRST_YEAR, LAST_YEAR = 2003, HOLDOUT_CUT.year
 FIX_ID = "GLDNAV_XAU_PM"
 FIX_SCAN_MIN = (0, 2, 4, 6, 10, 30)
-TAG = R11_V21_ID.split("-2026")[0]                            # r11-v2.1
+TAG_V21 = R11_V21_ID.split("-2026")[0]                        # r11-v2.1 (the D-1 grade before the ruling)
+TAG = R11_V22_ID.split("-2026")[0]                            # r11-v2.2
+ADR = REPO / "docs" / "decisions" / "0105-gold-grade-served-tiers.md"
+ADR_BEGIN, ADR_END = "<!-- r11-v2.2 calibration (generated by scripts/dukascopy_gold_grade.py) -->", "<!-- end -->"
+CONFIRM = ("2018-01", "2025-09")
 MANIFEST = REPO / "config" / "data" / "source_precedence.yaml"
 
 
@@ -84,9 +96,14 @@ def _nice() -> None:
 
 
 def git_state() -> tuple[str, bool, str]:
+    """(HEAD sha, dirty, blob of the era_quality module ACTUALLY imported). Dirty: a tracked change anywhere, or an
+    untracked file under goldbot/ or scripts/ (an untracked era_quality/__init__.py would shadow the tracked module;
+    code review L1). The blob hashes `era_quality.__file__`, not a fixed path."""
     run = lambda *a: subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()  # noqa: E731
-    return (run("rev-parse", "HEAD"), bool(run("status", "--porcelain", "--untracked-files=no")),
-            run("hash-object", "goldbot/data/era_quality.py"))
+    untracked = [ln for ln in run("status", "--porcelain", "--", "goldbot", "scripts").splitlines()
+                 if ln.startswith("??")]
+    dirty = bool(run("status", "--porcelain", "--untracked-files=no")) or bool(untracked)
+    return run("rev-parse", "HEAD"), dirty, run("hash-object", str(Path(era_quality.__file__).resolve()))
 
 
 # ---------------------------------------------------------------------------------------------------------- inputs
@@ -174,9 +191,22 @@ def fix_bp(bars: pd.DataFrame, at_utc: pd.Series, value: np.ndarray) -> np.ndarr
 
 
 # ----------------------------------------------------------------------------------------------------------- grade
-def grade_year(task: tuple[int, str, bool, bool]) -> tuple[dict[str, object], list[dict[str, object]],
-                                                          dict[str, object]]:
-    year, raw_s, same, partial = task
+def month_fix(fix: pd.DataFrame, per: str) -> pd.DataFrame:
+    """The fix days of one session month (the 15:00 London fix is before the 21:00 UTC session close: its date's
+    month)."""
+    m = pd.DatetimeIndex(fix["fix_utc"]).tz_convert("Europe/London").strftime("%Y-%m")
+    return fix[np.asarray(m == per)].reset_index(drop=True)
+
+
+def v22_fix_result(bars: pd.DataFrame, fix: pd.DataFrame, tol: float) -> tuple[tuple[float | None, int], int]:
+    """((share of kept days with d <= tol, kept days), days dropped for < 5 bars in the window)."""
+    d, dropped = gold_fix_window_d(bars, fix)
+    return ((float((d <= tol).mean()) if len(d) else None, len(d)), dropped)
+
+
+def grade_year(task: tuple[int, str, bool, bool, float]) -> tuple[dict[str, object], list[dict[str, object]],
+                                                                 dict[str, object]]:
+    year, raw_s, same, partial, tol = task
     raw = Path(raw_s)
     try:
         bars = subject_bars(raw, year)
@@ -205,10 +235,12 @@ def grade_year(task: tuple[int, str, bool, bool]) -> tuple[dict[str, object], li
             b = bars.loc[idx]
             r = ref.loc[np.asarray(ref_month == per)] if ref_month is not None else None
             r = r if r is not None and len(r) else None
+            fres, dropped = v22_fix_result(b, month_fix(fix, str(per)), tol) if fix is not None else ((None, 0), 0)
             g = grade_month_v2(KEY, str(per), b, r, SESSION_MINUTES, True, quarantined=quarantined,
                                clock_offset=offsets.get(str(per)), same_source=same, fix=fix,
-                               fix_status=fix_status, partial_share=partial)
-            grades.append({**g.model_dump(), "source": "dukascopy",
+                               fix_status=fix_status, partial_share=partial, fix_result=fres)
+            g = g.model_copy(update={"r11_id": R11_V22_ID})
+            grades.append({**g.model_dump(), "fix_days_dropped": dropped, "fix_tol_bp": tol, "source": "dukascopy",
                            "reference_source": "histdata:XAUUSD" if r is not None else "none",
                            "fix_source": FIX_ID if fix_status == "ok" else "none"})
         ev: dict[str, object] = {"year": year, "fix_days": 0 if fix is None else len(fix)}
@@ -235,17 +267,108 @@ def grade_year(task: tuple[int, str, bool, bool]) -> tuple[dict[str, object], li
             {"year": year}
 
 
+def calibration_months(raw: Path) -> list[str]:
+    """Dukascopy XAUUSD months graded A under r11-v2.1 against independent HistData minutes in GOLD_CALIB_MONTHS
+    (2015-04..2018-12). Never 2009-01..2015-03 (pre-IBA fix) or 2019-25 (same source)."""
+    t = pd.read_csv(raw / "dukascopy_grade" / "_reports" / f"tiers_dukascopy_{TAG_V21}.csv", dtype={"month": str})
+    return select_calibration(t)
+
+
+def select_calibration(t: pd.DataFrame) -> list[str]:
+    lo, hi = GOLD_CALIB_MONTHS
+    ok = (t["tier"] == "A") & ~t["same_source"].astype(bool) & (t["reference"] == "native") \
+        & (t["month"] >= lo) & (t["month"] <= hi)
+    return sorted(t.loc[ok, "month"].astype(str))
+
+
+def calibrate(raw: Path, months: list[str]) -> tuple[GoldFixCalibration, dict[str, dict[str, object]]]:
+    """tol on the 0.5 bp grid and the +-2 tol power check (r11-v2.2 items 3-6); per-month detail for the report."""
+    fix_all = load_fix(raw)
+    if fix_all is None:
+        raise SystemExit("no fix file: run scripts/gold_fix_gld.py first")
+    years = sorted({int(m[:4]) for m in months})
+    per: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+    for y in years:
+        bars = subject_bars(raw, y)
+        month = day_of(bars["ts_utc"]).to_period("M").astype(str)
+        for m in months:
+            if int(m[:4]) == y:
+                per[m] = (bars[np.asarray(month == m)], month_fix(fix_all, m))
+    month_d = {m: gold_fix_window_d(b, f)[0] for m, (b, f) in per.items()}
+    cal = calibrate_gold_tol(month_d)
+    if not cal.void and cal.tol_bp is not None:
+        k = R11_V22["gold_power_shift_tol_mult"] * cal.tol_bp
+        shifted = {m: (gold_fix_window_d(b, shift_fix(f, +k))[0], gold_fix_window_d(b, shift_fix(f, -k))[0])
+                   for m, (b, f) in per.items()}
+        cal = power_check(cal, shifted)
+    detail: dict[str, dict[str, object]] = {m: {"days": len(month_d[m]), "dropped": gold_fix_window_d(*per[m])[1],
+                  "share_at_tol": float((month_d[m] <= cal.tol_bp).mean()) if cal.tol_bp and len(month_d[m]) else None,
+                  "d_p98": float(np.quantile(month_d[m], 0.98)) if len(month_d[m]) else None} for m in months}
+    return cal, detail
+
+
+def confirm_disclosure(tiers: pd.DataFrame, lo: str = CONFIRM[0], hi: str = CONFIRM[1]) -> dict[str, object]:
+    """What a gold confirm report must list (r11-v2.2 item 8): the C months of the window and the realised-vol tercile
+    mix (terciles of the month's 1m realised vol over every graded gold month) of excluded vs kept months; kept = the
+    tiers intraday rows load (A, A-consistent)."""
+    t = tiers.copy()
+    t["rv_tercile"] = pd.qcut(t["rv"].rank(method="first"), 3, labels=["low", "mid", "high"]).astype(str)
+    w = t[(t["month"] >= lo) & (t["month"] <= hi)]
+    kept = w["tier"].isin(["A", "A-consistent"])
+    mix = {name: {k: int(v) for k, v in g["rv_tercile"].value_counts().reindex(["low", "mid", "high"],
+                                                                                fill_value=0).items()}
+           for name, g in (("kept", w[kept]), ("excluded", w[~kept]))}
+    return {"window": [lo, hi], "c_months": sorted(w.loc[w["tier"] == "C", "month"].astype(str)),
+            "tiers": {k: int(v) for k, v in w["tier"].value_counts().items()}, "rv_tercile_mix": mix}
+
+
+def write_adr(cal: GoldFixCalibration, extra: dict[str, object]) -> None:
+    body = "\n".join([
+        ADR_BEGIN,
+        f"- Rule {R11_V22_ID}, rule blob `{extra['rule_blob']}`, script sha256 `{extra['script_sha256']}`, run at "
+        f"`{extra['git_sha']}`.",
+        f"- Calibration months ({len(cal.months)}): {cal.months[0]}..{cal.months[-1]}, Dukascopy A under v2.1 against "
+        "independent HistData minutes.",
+        f"- tol = {cal.tol_bp} bp; {cal.passing} of {len(cal.months)} calibration months pass.",
+        f"- Power (fix shifted by +-2 tol): {cal.power_fail_plus} (+) and {cal.power_fail_minus} (-) of "
+        f"{len(cal.months)} months fail, share {cal.power_fail_share}; v2.2 {'VOID: ' + cal.reason if cal.void else 'valid'}.",
+        *([f"- Regraded tiers sha256 `{extra['tiers_sha256']}`, served `{extra['served_sha256']}`."]
+          if "tiers_sha256" in extra else ["- Not regraded (void)."]),
+        ADR_END])
+    text = ADR.read_text()
+    if ADR_BEGIN in text:
+        a, b = text.index(ADR_BEGIN), text.index(ADR_END) + len(ADR_END)
+        text = text[:a] + body + text[b:]
+    else:
+        text = text.rstrip("\n") + "\n\n## r11-v2.2 calibration result\n" + body + "\n"
+    ADR.write_text(text if text.endswith("\n") else text + "\n")
+
+
 def cmd_grade(a: argparse.Namespace) -> int:
+    """r11-v2.2 in one command: calibrate tol, power check, record both (summary.json, ADR 0105), then regrade."""
     sha, dirty, blob = git_state()
-    if blob != FROZEN_BLOB:
-        print(f"REFUSED: goldbot/data/era_quality.py is blob {blob}, the frozen r11-v2.1 rule is {FROZEN_BLOB}")
+    if blob != RULE_BLOB:
+        print(f"REFUSED: goldbot/data/era_quality.py is blob {blob}, the r11-v2.2 rule is {RULE_BLOB}")
         return 2
     if dirty:
         print("REFUSED: the working tree has uncommitted changes; grades are stamped with a commit (quant ruling 5)")
         return 2
     raw = Path(a.root)
+    rep = raw / "dukascopy_grade" / "_reports"
+    months = calibration_months(raw)
+    cal, detail = calibrate(raw, months)
+    extra: dict[str, object] = {"rule_blob": blob, "git_sha": sha,
+                                "script_sha256": _sha(Path(__file__).resolve())}
+    print(json.dumps(cal.model_dump(), default=str), flush=True)
+    base = {"r11_id": R11_V22_ID, "calibration": cal.model_dump(), "calibration_months": detail, **extra}
+    if cal.void:
+        (rep / f"summary_{TAG}.json").write_text(json.dumps({**base, "regraded": False}, indent=1, default=str))
+        write_adr(cal, extra)
+        print(f"VOID: {cal.reason}; not regraded")
+        return 3
+    assert cal.tol_bp is not None
     same, part, _ = same_source_years(raw)
-    tasks = [(y, str(raw), same.get(y, False), part.get(y, False) and not same.get(y, False))
+    tasks = [(y, str(raw), same.get(y, False), part.get(y, False) and not same.get(y, False), cal.tol_bp)
              for y in range(FIRST_YEAR, LAST_YEAR + 1)]
     clocks, tiers, evs = [], [], []
     with ProcessPoolExecutor(max_workers=max(1, min(a.workers, 3)), initializer=_nice) as ex:
@@ -254,53 +377,53 @@ def cmd_grade(a: argparse.Namespace) -> int:
             tiers.extend(grades)
             evs.append(ev)
             mix = pd.Series([g["tier"] for g in grades]).value_counts().to_dict()
-            print(f"{cc['year']} same={cc.get('same_source')} clock={cc.get('offset_min')} {cc.get('reason')} "
-                  f"fix_w10={ev.get('london_1500_plus00_within_10bp')} tiers={mix}", flush=True)
-    rep = raw / "dukascopy_grade" / "_reports"
-    rep.mkdir(parents=True, exist_ok=True)
+            print(f"{cc['year']} same={cc.get('same_source')} {cc.get('reason')} tiers={mix}", flush=True)
     t = pd.DataFrame(tiers)
     t["reasons"] = t["reasons"].map(";".join)
     t = t.assign(git_sha=sha, dirty=False, rule_blob=blob)
-    t.to_csv(rep / f"tiers_dukascopy_{TAG}.csv", index=False)
-    pd.DataFrame(clocks).assign(git_sha=sha, r11_id=R11_V21_ID).to_csv(rep / f"clock_dukascopy_{TAG}.csv", index=False)
-    pd.DataFrame(evs).assign(git_sha=sha).to_csv(rep / "fix_evidence.csv", index=False)
+    tp = rep / f"tiers_dukascopy_{TAG}.csv"
+    t.to_csv(tp, index=False)
+    pd.DataFrame(clocks).assign(git_sha=sha, r11_id=R11_V22_ID).to_csv(rep / f"clock_dukascopy_{TAG}.csv", index=False)
+    pd.DataFrame(evs).assign(git_sha=sha).to_csv(rep / f"fix_evidence_{TAG}.csv", index=False)
+    old = pd.read_csv(rep / f"tiers_dukascopy_{TAG_V21}.csv", dtype={"month": str})[["month", "tier"]]
+    diff = t[["month", "tier"]].merge(old, on="month", suffixes=("", "_v21"))
+    changed_pre2019 = diff[(diff["month"] < "2019-01") & (diff["tier"] != diff["tier_v21"])]
     served = write_served(raw, t)
+    disclosure = confirm_disclosure(t)
+    (rep / f"confirm_disclosure_{TAG}.json").write_text(json.dumps(disclosure, indent=1))
     t["year"] = t["month"].str[:4]
-    reasons: dict[str, int] = {}
-    for r in t["reasons"]:
-        for x in str(r).split(";"):
-            if x:
-                k = x.split(" ")[0]
-                reasons[k] = reasons.get(k, 0) + 1
-    # calibration control (outcome-blind): months graded A against the independent minute reference, and whether
-    # the frozen fix check (>= 0.98 of >= 15 fix days within 10 bp) would pass them too
-    ind_a = t[(t["tier"] == "A") & ~t["same_source"].astype(bool)]
-    fix_pass = (ind_a["fix_share"] >= R11_V21["fix_day_share_min"]) & (ind_a["fix_days"] >= R11_V21["fix_days_min"])
-    control = {"independent_A_months": len(ind_a), "of_which_pass_fix_check": int(fix_pass.sum()),
-               "fix_share_median_on_A": float(ind_a["fix_share"].median()) if len(ind_a) else None}
-    summary = {"r11_id": R11_V21_ID, "fix_check_control": control, "rule_blob": blob, "git_sha": sha, "months": len(t),
+    extra.update(tiers_sha256=_sha(tp), served_sha256=_sha(served))
+    summary = {**base, "regraded": True, "months": len(t), **extra,
                "per_year": {y: g["tier"].value_counts().to_dict() for y, g in t.groupby("year")},
-               "total": t["tier"].value_counts().to_dict(), "reasons": dict(sorted(reasons.items())),
-               "files": {p.name: _sha(p) for p in sorted(rep.glob("*.csv"))} | {served.name: _sha(served)},
+               "total": t["tier"].value_counts().to_dict(),
+               "changed_vs_v21_before_2019": changed_pre2019.to_dict("records"),
+               "fix_days_dropped": int(t["fix_days_dropped"].sum()), "confirm_disclosure": disclosure,
                "failed_years": [c["year"] for c in clocks if c.get("status") == "failed"],
                "written_utc": dt.datetime.now(dt.UTC).isoformat()}
-    (rep / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
-    print(json.dumps({k: summary[k] for k in ("total", "reasons", "failed_years", "fix_check_control")}, default=str))
+    (rep / f"summary_{TAG}.json").write_text(json.dumps(summary, indent=1, default=str))
+    write_adr(cal, extra)
+    print(json.dumps({k: summary[k] for k in ("total", "failed_years", "tiers_sha256", "served_sha256",
+                                               "fix_days_dropped")}, default=str))
     print(pd.crosstab(t["year"], t["tier"]).to_string())
+    if len(changed_pre2019):
+        print(f"WARNING: {len(changed_pre2019)} months before 2019 changed tier vs v2.1")
     return 0 if not summary["failed_years"] else 1
 
 
 def write_served(raw: Path, duk: pd.DataFrame) -> Path:
     """HistData tiers for every key but XAUUSD + the Dukascopy XAUUSD tiers: the tier of the source that serves each
-    instrument-month (A16; fs-v1 history_minutes serves XAUUSD from Dukascopy and every other key from HistData)."""
-    hd = pd.read_csv(raw / "histdata_m1" / "_reports" / f"tiers_{TAG}.csv")
-    ids = set(hd["r11_id"].dropna().astype(str)) | set(duk["r11_id"].dropna().astype(str))
-    if ids != {R11_V21_ID}:
-        raise ValueError(f"mixed r11 ids {ids}")
+    instrument-month (A16; fs-v1 history_minutes serves XAUUSD from Dukascopy and every other key from HistData).
+    One r11 id per file (Tiers.from_csv): r11-v2.2. v2.2 changes only the gold fix check, so a HistData row graded
+    under v2.1 is its v2.2 grade (HistData XAUUSD, the one key the gold fix reaches, is not served);
+    `graded_r11_id` keeps the id each row was computed under."""
+    hd = pd.read_csv(raw / "histdata_m1" / "_reports" / f"tiers_{TAG_V21}.csv")
+    if set(hd["r11_id"].dropna().astype(str)) != {R11_V21_ID} or set(duk["r11_id"].dropna().astype(str)) != {R11_V22_ID}:
+        raise ValueError("served tiers need HistData r11-v2.1 rows and Dukascopy gold r11-v2.2 rows")
     hd = hd[hd["key"] != KEY].sort_values("bars").drop_duplicates(["key", "month"], keep="last").assign(
         source="histdata")
     cols = ["key", "month", "tier", "reasons", "source", "r11_id", "bars", "days", "same_source", "fix_status"]
     out = pd.concat([hd[cols], duk[cols]], ignore_index=True).sort_values(["key", "month"]).reset_index(drop=True)
+    out = out.rename(columns={"r11_id": "graded_r11_id"}).assign(r11_id=R11_V22_ID)
     p = raw / "tiers" / f"tiers_served_{TAG}.csv"
     p.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(p, index=False)
@@ -323,9 +446,17 @@ def cmd_manifest(a: argparse.Namespace) -> int:
     raw = Path(a.root)
     served = raw / "tiers" / f"tiers_served_{TAG}.csv"
     duk = raw / "dukascopy_grade" / "_reports" / f"tiers_dukascopy_{TAG}.csv"
-    hd = raw / "histdata_m1" / "_reports" / f"tiers_{TAG}.csv"
+    hd = raw / "histdata_m1" / "_reports" / f"tiers_{TAG_V21}.csv"
     s = pd.read_csv(served, dtype={"month": str})
-    summary = json.loads((raw / "dukascopy_grade" / "_reports" / "summary.json").read_text())
+    summary = json.loads((raw / "dukascopy_grade" / "_reports" / f"summary_{TAG}.json").read_text())
+    # code review L2: the manifest carries the blob the grade ran under, and only for a complete, valid grade
+    if summary.get("rule_blob") != RULE_BLOB or summary.get("failed_years") or not summary.get("regraded"):
+        print(f"REFUSED: summary rule_blob {summary.get('rule_blob')} (expected {RULE_BLOB}), failed_years "
+              f"{summary.get('failed_years')}, regraded {summary.get('regraded')}")
+        return 2
+    if summary.get("served_sha256") != _sha(served):
+        print("REFUSED: the served tiers file is not the one the summary recorded")
+        return 2
     span = pd.period_range("2003-01", (HOLDOUT_CUT - pd.Timedelta(days=1)).strftime("%Y-%m"), freq="M").astype(str)
     usable = {"A": "intraday+daily", "A-consistent": "intraday+daily", "B": "daily", "C": "none", "F": "none",
               "P": "none"}
@@ -336,7 +467,7 @@ def cmd_manifest(a: argparse.Namespace) -> int:
         lab = [f"{src}:{usable.get(tier[m], 'none')}" if m in tier else "none:no_data" for m in span]
         inst[str(key)] = {"source": src, "tiers": {k: int(v) for k, v in g["tier"].value_counts().items()},
                           "runs": _runs(list(span), lab)}
-    doc = {"id": "a16-source-precedence-v1", "r11_id": R11_V21_ID, "rule_blob": FROZEN_BLOB,
+    doc = {"id": "a16-source-precedence-v1", "r11_id": R11_V22_ID, "rule_blob": summary["rule_blob"],
            "graded_at_git_sha": summary["git_sha"], "holdout_cut": HOLDOUT_CUT.isoformat(),
            "rule": ("one source per instrument-minute: XAUUSD from Dukascopy 1m (bid+ask), every other key from "
                     "HistData 1m bid (goldbot.research.feature_store.history_minutes); a month serves intraday rows "
@@ -349,7 +480,7 @@ def cmd_manifest(a: argparse.Namespace) -> int:
            "not_served": {"histdata:XAUUSD": "same instrument as Dukascopy XAUUSD; Dukascopy serves (bid+ask, ticks)"},
            "instruments": inst}
     head = ("# A16 source-precedence manifest (D-1): which source serves each instrument-month and at what use, from the\n"
-            "# r11-v2.1 served tiers. Generated by `scripts/dukascopy_gold_grade.py manifest`; never edit by hand.\n"
+            "# r11-v2.2 served tiers. Generated by `scripts/dukascopy_gold_grade.py manifest`; never edit by hand.\n"
             "# Counts and sha256 only: no market data lives in this file (ADR 0048).\n")
     MANIFEST.write_text(head + yaml.safe_dump(doc, sort_keys=False, width=120, default_flow_style=None))
     print(f"wrote {MANIFEST.relative_to(REPO)}: {len(inst)} instruments")

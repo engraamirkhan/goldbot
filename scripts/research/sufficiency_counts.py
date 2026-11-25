@@ -7,10 +7,11 @@ Card 2.2 (ADR 0085 Q1/Q3), reproduced from the card's own table (gold learn 2,07
 * pooled over k instruments: / (1 + (k - 1) rho_inst), rho_inst 0.5.
 Hold per timeframe, solved from the card's gold row (exact to the unit): 1m 60 min, 5m 240, 15m 480, 30m 960, 1h 1,380
 (one session), 2h 2 days, 4h 5, 1d 10, 1w 20.
-Days per unit and window: the `days` of the instrument-months whose tier the unit may use (intraday cells: A and
-A-consistent, or B for a "B close-to-close" unit; 1d/1w: A, A-consistent, B).
+Days per unit and window: the `days` of the instrument-months whose tier the loader keeps at that timeframe: intraday
+cells A and A-consistent for EVERY unit (a B month loads no intraday row, also in a "B" unit: quant CH1); 1d/1w A,
+A-consistent and B.
 
-    uv run python scripts/research/sufficiency_counts.py --tiers raw/tiers/tiers_served_r11-v2.1.csv
+    uv run python scripts/research/sufficiency_counts.py --tiers raw/tiers/tiers_served_r11-v2.2.csv
 """
 from __future__ import annotations
 
@@ -27,14 +28,14 @@ HOLD_DAYS = {"2h": 2, "4h": 5, "1d": 10, "1w": 20}
 RHO_DAY, RHO_INST = 0.25, 0.5
 AB = ("A", "A-consistent", "B")
 AA = ("A", "A-consistent")
-# unit -> (keys, intraday tiers, windows)
-UNITS: dict[str, tuple[tuple[str, ...], tuple[str, ...], dict[str, tuple[str, str]]]] = {
-    "gold": (("XAUUSD",), AA, {"learn": ("2010-01", "2017-12"), "judge": ("2018-01", "2025-09")}),
-    "fx10": (("EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "AUDJPY"), AA,
+# unit -> (keys, windows)
+UNITS: dict[str, tuple[tuple[str, ...], dict[str, tuple[str, str]]]] = {
+    "gold": (("XAUUSD",), {"learn": ("2010-01", "2017-12"), "judge": ("2018-01", "2025-09")}),
+    "fx10": (("EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURJPY", "GBPJPY", "AUDJPY"),
              {"learn": ("2010-01", "2017-12"), "judge": ("2018-01", "2025-09")}),
-    "metals_crosses_b": (("XAGUSD", "XAUEUR", "EURAUD", "EURGBP", "GBPAUD"), AB,
+    "metals_crosses_b": (("XAGUSD", "XAUEUR", "EURAUD", "EURGBP", "GBPAUD"),
                          {"learn": ("2010-01", "2017-12"), "judge": ("2018-01", "2025-09")}),
-    "index_energy_b": (("US500", "USTEC", "UK100", "DE40", "XTIUSD", "USINDEX"), AB,
+    "index_energy_b": (("US500", "USTEC", "UK100", "DE40", "XTIUSD", "USINDEX"),
                        {"learn": ("2018-01", "2021-12"), "judge": ("2022-01", "2025-09"),
                         "card_confirm": ("2018-01", "2025-09")}),
 }
@@ -59,11 +60,11 @@ def unit_days(t: pd.DataFrame, keys: tuple[str, ...], tiers: tuple[str, ...], lo
 
 def counts(t: pd.DataFrame) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
-    for unit, (keys, intra, wins) in UNITS.items():
+    for unit, (keys, wins) in UNITS.items():
         k = len(keys)
         rec: dict[str, object] = {"k": k}
         for w, (lo, hi) in wins.items():
-            d_intra, d_daily = unit_days(t, keys, intra, lo, hi), unit_days(t, keys, AB, lo, hi)
+            d_intra, d_daily = unit_days(t, keys, AA, lo, hi), unit_days(t, keys, AB, lo, hi)
             rec[f"{w}_days_intraday"], rec[f"{w}_days_daily"] = d_intra, d_daily
             rec[w] = [n_eff(d_daily if tf in ("1d", "1w") else d_intra, k, tf) for tf in TFS]
         out[unit] = rec

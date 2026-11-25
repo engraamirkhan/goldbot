@@ -135,6 +135,13 @@ def implied_fix(rows: list[list[str | None]]) -> tuple[pd.DataFrame, dict[str, i
     f = pd.DataFrame(recs, columns=["observation_date", "value"]).drop_duplicates("observation_date", keep="last")
     f = f.sort_values("observation_date").reset_index(drop=True)
     counts = {"rows_read": len(rows) - 1, "rows_unparsed": bad}
+    hhmm, zone = FIX_AT.split(" ")
+    local = f["observation_date"] + pd.Timedelta(hours=int(hhmm[:2]), minutes=int(hhmm[3:]))
+    f["fix_utc"] = pd.DatetimeIndex(local).tz_localize(zone).tz_convert("UTC")
+    # the holdout cut first (code review L4): no later step computes on a sealed row, and the drop counts exclude them
+    sealed = (f["fix_utc"] >= HOLDOUT_CUT).to_numpy()
+    counts["dropped_holdout"] = int(sealed.sum())
+    f = f[~sealed].reset_index(drop=True)
     day = (f["observation_date"] - pd.Timestamp("1970-01-01")).dt.days.to_numpy()
     closed, _ = exchange_holidays("UK")
     early, _, _ = early_closes("UK")
@@ -144,15 +151,9 @@ def implied_fix(rows: list[list[str | None]]) -> tuple[pd.DataFrame, dict[str, i
     stale = np.r_[False, np.abs(np.diff(np.log(f["value"].to_numpy()))) * 1e4 < STALE_BP]
     counts["dropped_stale"] = int(stale.sum())
     f = f[~stale].reset_index(drop=True)
-    hhmm, zone = FIX_AT.split(" ")
-    local = f["observation_date"] + pd.Timedelta(hours=int(hhmm[:2]), minutes=int(hhmm[3:]))
-    f["fix_utc"] = pd.DatetimeIndex(local).tz_localize(zone).tz_convert("UTC")
     ny_close = pd.DatetimeIndex(f["observation_date"] + pd.Timedelta(hours=16)).tz_localize("America/New_York")
     f["available_utc"] = ny_close.tz_convert("UTC").normalize() + pd.Timedelta(days=1)
     f["source"] = "spdr_gld_nav_implied_lbma_pm"
-    sealed = f["fix_utc"] >= HOLDOUT_CUT
-    counts["dropped_holdout"] = int(sealed.sum())
-    f = f[~sealed].reset_index(drop=True)
     counts["rows_kept"] = len(f)
     return f, counts
 
