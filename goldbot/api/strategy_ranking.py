@@ -176,6 +176,7 @@ class _Index:
     units: list[str]
     ncell: int
     nday: int
+    unlimited: int = 0                  # ADR 0097 (quant F6): unlimited-epoch fills left out, shown on their own line
 
 
 def _index(rows: Iterable[TradeRow], cat: Catalog, class_void: Collection[str] = ()) -> _Index:
@@ -193,9 +194,13 @@ def _index(rows: Iterable[TradeRow], cat: Catalog, class_void: Collection[str] =
     prog_unit: list[int] = []
     prog_at: list[float] = []
     prog_day: list[int] = []
+    unlimited = 0
     for r in rows:
         if r.account is not None and r.kind in _ARM_KINDS | _ENGINE_KINDS:
             choices.setdefault(r.account, r.account_label)
+        if r.limits_epoch == "unlimited":        # ADR 0097 (quant F6): never ranked, never read progress; counted
+            unlimited += r.status == "closed"
+            continue
         arm = r.arm_id
         if r.status != "closed" or r.exit_utc is None:
             continue
@@ -264,7 +269,7 @@ def _index(rows: Iterable[TradeRow], cat: Catalog, class_void: Collection[str] =
         choices=[AccountChoice(account=a, label=lbl) for a, lbl in sorted(choices.items(), key=lambda kv: kv[1])],
         prog_unit=np.asarray(prog_unit, dtype=np.int64), prog_at=np.asarray(prog_at, dtype=float),
         prog_day=np.asarray(prog_day, dtype=np.int64), units=units.names,
-        ncell=max(1, len(accts.names) * nday), nday=nday)
+        ncell=max(1, len(accts.names) * nday), nday=nday, unlimited=unlimited)
 
 
 # ------------------------------------------------------------------------------------------------ statistics
@@ -648,7 +653,7 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
         t_adjusted=t_adj, min_fills=MIN_FILLS, min_days=MIN_DAYS, rows=[*ranked, *few],
         controls=sorted((r for r in built if r.band == "control"), key=lambda r: r.family_label),
         retired=sorted((r for r in built if r.band == "retired"), key=lambda r: r.family_label),
-        account_choices=ix.choices, by_class=view_cls,
+        account_choices=ix.choices, by_class=view_cls, unlimited_fills=ix.unlimited,
         class_splits=sorted(r.key for r in built if r.class_split and r.kind != "control"),
         unreadable=[*unreadable, *([] if cat.reads_ok or ARM_READS_UNREADABLE in unreadable else [ARM_READS_UNREADABLE])])
 

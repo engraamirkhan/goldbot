@@ -1982,7 +1982,7 @@ class Engine:
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         pilot.refresh(self, acc, now)        # ADR 0055: the live pilot's record and stop from the deals (engine/pilot.py)
         stage = st.stage
-        if self.gate.stage_step(st) != stage:          # ADR 0097: no stage move on a demo account without limits
+        if self.gate.stage_step(st, cost_probe._phase_file(self)) != stage:     # ADR 0097: frozen when unlimited
             if st.stage == Stage.HALTED:
                 self._halted_at = now
                 self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument

@@ -3128,6 +3128,8 @@ account ships with it **false**. Turn it on for icm-probe only at its canary (on
 on for the other demo accounts only after a clean 24 h canary and the W2-4 dispatch. To turn it off, set it to false
 and deploy. On the first read after that, the drawdown stage jumps to whatever the drawdown says, which may be HALTED;
 the owner's /rearm clears that as usual.
+Setting the flag on an account that is already HALTED changes nothing until the owner re-arms: it keeps every cap
+and `drawdown_halt` shows (trading-safety L1).
 
 The canary is clean when all of these hold over 24 h with the market open:
 - `exit_latency:icm-probe` is ok;

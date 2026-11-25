@@ -34,3 +34,16 @@ def test_with_the_flag_the_cohort_loss_cap_retires_no_member(tmp_path) -> None:
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert tc._arms_sent(eng) == ["Z1P"]
     assert _actions(eng, exploration_cohort.LOSS_CAP) == []
+
+
+def test_with_the_flag_the_cohort_week_cap_is_journalled_in_shadow_when_it_would_bind(tmp_path) -> None:
+    """prereg-amendment-2026-11-26-cohort-unlimited.md (quant F4): the weekly cap is lifted but judged in shadow once a
+    week (`exploration_cohort_week_cap_shadow`); the real hold is never journalled and members keep trading."""
+    tc._fill(tmp_path, "a", "Z1P", -60.0, pd.Timestamp("2025-03-03 10:00", tz="UTC"))     # GBP 60 > the GBP 50 cap
+    eng, pb = tc._engine(tmp_path, [tc._arm("Z1P")], tc._cohort_cfg(("Z1P",)))
+    eng.gate.limits = eng.gate.limits.model_copy(update={"demo_unlimited": True})
+    for k in range(2):
+        exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15 * k)))
+    assert len(_actions(eng, exploration_cohort.WEEK_CAP_SHADOW)) == 1
+    assert not [d for d in eng.decisions if d.get("action") == exploration_cohort.WEEK_CAP]     # no real hold
+    assert tc._arms_sent(eng)

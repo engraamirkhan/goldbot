@@ -48,6 +48,11 @@ the judged rule.
   dropped. Training and every read use replay labels for all candidates. Sample fills serve only replay-vs-fill and
   cost calibration, and never feed the H-81 cost stop or the edge cap (as ADR 0095 C2). Real-money accounts have no
   sample. The sample's real value is the replay-vs-fill check, not the money.
+- **Calibration per limits epoch (ADR 0097, quant review of #454).** Replay-vs-fill and cost calibration are
+  estimated per `limits_epoch`. A calibration applied to a capped or live account uses capped-epoch fills, or
+  unlimited-epoch fills for which `unlimited_market_state` is false; it never uses shock or wide-spread fills.
+  `explore_refused` rates are reported per epoch. Sample fills carry `evidence_class: explore_sample`, which
+  arm_stops.py and `labs.counts_toward_reads` exclude, as for `learning_cohort`.
 
 **4. What carries the id.** Every model artifact records `objective_id`. Loading refuses an artifact without it, or
 with an id its gate does not name.

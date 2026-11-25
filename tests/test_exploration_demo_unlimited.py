@@ -176,3 +176,19 @@ def test_while_exits_go_first_the_signals_stay_queued_for_the_next_pass(tmp_path
     eng._kill_pending = False
     exploration.on_pass(eng, _at(eng, pb, CLOSE, lag_s=4.0))
     assert len(_sent(eng)) == 2 and not ex.queue
+
+
+def test_a_fill_sent_at_a_spread_above_the_capped_ceiling_carries_spread_too_wide_in_capped_reasons(tmp_path):
+    """Quant F2: the market-state reasons a capped account would have refused the entry for travel with the fill, so
+    `evidence_exclusions.unlimited_market_state` can leave it out of cost and stop reads."""
+    from goldbot.research.evidence_exclusions import unlimited_market_state
+    eng, pb = _engine(tmp_path, [_arm("a")], unlimited=True, pot=Pot(gbp=50, max_open=9))
+    tick = _at(eng, pb, CLOSE)
+    eng.state.spread_points = eng.gate.limits.max_spread_points + 5.0
+    exploration.on_pass(eng, tick)
+    [rec] = exploration.trades(str(tmp_path), "icm-probe")
+    assert rec.capped_reasons == ["spread_too_wide"] and unlimited_market_state(rec)
+    eng2, pb2 = _engine(tmp_path / "ok", [_arm("a")], unlimited=True, pot=Pot(gbp=50, max_open=9))
+    exploration.on_pass(eng2, _at(eng2, pb2, CLOSE))
+    [ok] = exploration.trades(str(tmp_path / "ok"), "icm-probe")
+    assert ok.capped_reasons == [] and not unlimited_market_state(ok)

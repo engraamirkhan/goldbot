@@ -717,12 +717,17 @@ class RiskGate:
         st.balance_closed_hwm = st.equity
         return True
 
-    def stage_step(self, st: AccountState) -> Stage:
+    def stage_step(self, st: AccountState, phase_file: Path | None = None) -> Stage:
         """The stage machine as the engine and the entry checks run it: `update_stage`, except on a demo account without
         limits (ADR 0097), where the stage does not move (no size-down, no drawdown halt, no kill switch; the demo floor
         is the guard). `update_stage` itself stays byte-identical (the owner's re-arm path, tests/test_demo_roll.py).
-        Trading-safety L1: once the flag is off, the next read takes the computed stage at once (fail closed)."""
-        return st.stage if self.unlimited() else self.update_stage(st)
+        Trading-safety L1: once the flag is off, the next read takes the computed stage at once (fail closed).
+        Code review C-L1: frozen only while the roadmap phase file says demo (no gate from paper_to_tiny_live on; F1's
+        rule); no phase file, an unreadable one or a live gate recorded and the stage moves again (fail closed). A stage
+        already HALTED stays HALTED: only the owner's /rearm clears it, flag or not (trading-safety L1)."""
+        gates = phase_gates(phase_file) if phase_file is not None else None
+        demo = gates is not None and not LIVE_GATES & set(gates)
+        return st.stage if demo and st.stage != Stage.HALTED and self.unlimited() else self.update_stage(st)
 
     # ---------------------------------------------------------------- entry check + sizing
     def unlimited(self, intent: Intent | None = None) -> bool:
@@ -880,7 +885,8 @@ class RiskGate:
         projections need) and adds the demo floor's `demo_equity_floor` instead; halts, rollover, the weekend and data
         and terminal integrity still refuse."""
         L = self.limits
-        free = self.unlimited() if unlimited is None else unlimited
+        # trading-safety L1: a HALTED stage (from before the flag) keeps every cap, so `drawdown_halt` says why
+        free = (self.unlimited() if unlimited is None else unlimited) and st.stage != Stage.HALTED
         reasons: list[str] = []
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
@@ -960,13 +966,13 @@ class RiskGate:
         return reasons
 
     def _account_gate(self, st: AccountState, bad: list[str], now_utc: pd.Timestamp | None,
-                      throttle: AgentThrottle | None, *, unlimited: bool = False
+                      throttle: AgentThrottle | None, *, unlimited: bool = False, phase_file: Path | None = None
                       ) -> tuple[list[str], GateDecision | None]:
         """The start both entry checks share (ADR 0021: one code path for every account check): the stage machine on a
         comparable state, then `account_reasons`. A number outside its domain (`bad`) ends it with the refusal
         (`invalid_state`, then `invalid:<field>`); the stage machine does not run on it."""
         if not bad:
-            self.stage_step(st)
+            self.stage_step(st, phase_file)
         reasons = self.account_reasons(st, now_utc, throttle, unlimited=unlimited)
         if not bad:
             return reasons, None
@@ -1079,7 +1085,9 @@ class RiskGate:
         tests/test_risk_gate_split.py pins the decisions on a state grid captured before the split (F5)."""
         L = self.limits
         free = self.unlimited(intent)        # ADR 0097: an unlimited demo account, by the one demo predicate
-        reasons, refused = self._account_gate(st, invalid_fields(intent, st), now_utc, throttle, unlimited=free)
+        reasons, refused = self._account_gate(st, invalid_fields(intent, st), now_utc, throttle, unlimited=free,
+                                              phase_file=intent.phase_file)
+        free = free and st.stage != Stage.HALTED      # trading-safety L1: a halt from before the flag keeps every cap
         if refused is not None:
             return refused
         # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
@@ -1251,7 +1259,8 @@ class RiskGate:
         # ADR 0097 (trading-safety M2): unlimited too on a demo account by the registry and the phase file (F1)
         free = not head and self.unlimited()
         bad = invalid_state_fields(st) + [f for f in _OPERATIONAL_NUMBERS if _bad(intent, f, _POSITIVE_OPERATIONAL)]
-        reasons, refused = self._account_gate(st, bad, now_utc, None, unlimited=free)
+        reasons, refused = self._account_gate(st, bad, now_utc, None, unlimited=free, phase_file=intent.phase_file)
+        free = free and st.stage != Stage.HALTED
         if refused is not None:
             return refused.model_copy(update={"reasons": [*head, *refused.reasons]})
         reasons = [*head, *reasons, *self._same_direction(st, intent.side, free)]

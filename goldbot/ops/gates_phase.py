@@ -183,6 +183,8 @@ class ClosedTrade(FrozenRecord):
     # ADR 0031 (A1): the entry was the minimum-lot exception (BACKLOG 25), so the adaptive controller counts it toward
     # the 60-trade exploration budget. None on records from before the field and on adopted orphans
     min_lot_exception: bool | None = None
+    # ADR 0097 (quant F7): "unlimited" for an entry sent on a demo account without limits; None everywhere else
+    limits_epoch: str | None = None
     # multi-instrument demo (plan 2026-11-02, lanes L3/L4): the instrument the trade was on (a config/instruments.yaml
     # key); None on gold's and on every record before it, so the gates' gold evidence reads exactly as before
     symbol: str | None = None
@@ -208,6 +210,8 @@ class EntryAudit(FrozenRecord):
     # ADR 0031 (A1): the entry was the minimum-lot exception (BACKLOG 25), so the adaptive controller counts it toward
     # the 60-trade exploration budget. None on records from before the field and on adopted orphans
     min_lot_exception: bool | None = None
+    # ADR 0097 (quant F7): "unlimited" for an entry sent on a demo account without limits; None everywhere else
+    limits_epoch: str | None = None
 
 
 class GateProgress(FrozenRecord):

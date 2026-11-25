@@ -308,6 +308,8 @@ class EngineLimits:
                                          weekly_cap=built.weekly_cap, min_lot_risk_cap=built.min_lot_risk_cap,
                                          project_open_risk=built.project_open_risk, reason="default")
         self.logged = False                          # the first resolve is logged as a change from nothing
+        # ADR 0097 (quant F7): an unlimited demo account's entries carry the epoch into the closed-trade record
+        self.unlimited = bool(built.demo_unlimited and built.probe_only)
         # dynamic limits: the account's flag (accounts.yaml `dynamic_limits`, default off: today's fixed values)
         self.dynamic = policy is not None and getattr(policy.account, "dynamic_limits", False) is True
         self.risk = DayRisk()
@@ -438,7 +440,8 @@ class EngineLimits:
         of ADR 0031 (A1): whether the minimum-lot exception sized the order sent (`entry_exception`; the exploration
         budget counts these)."""
         return {"limits_profile": self.current.profile, "limits": self.current.tag(),
-                "min_lot_exception": entry_exception(prop, gd)}
+                "min_lot_exception": entry_exception(prop, gd),
+                **({"limits_epoch": "unlimited"} if self.unlimited else {})}
 
     def published(self) -> dict[str, Any]:
         """The engine file's ADR 0032 keys: the current limits and their profile; the supervisor's combined caps follow

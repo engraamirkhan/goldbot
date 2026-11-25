@@ -42,7 +42,6 @@ CAPPED_STATES = [
     (dict(open_positions=2), "max_positions"),
     (dict(equity=975.0, balance_closed_hwm=975.0), "daily_cap"),
     (dict(equity=940.0, balance_closed_hwm=940.0, day_start_equity=940.0), "weekly_cap"),
-    (dict(stage=Stage.HALTED), "drawdown_halt"),
     (dict(in_blackout=True, blackout_kind="tier1"), "news_blackout"),
     (dict(in_blackout=True, blackout_kind="news_shock"), "news_blackout"),
     (dict(spread_points=60.0), "spread_too_wide"),
@@ -104,11 +103,36 @@ def test_with_demo_unlimited_the_minimum_lot_is_placed_whatever_its_risk_against
     assert not capped.allowed and "min_lot_exceeds_risk" in capped.reasons
 
 
-def test_with_demo_unlimited_the_drawdown_stage_machine_never_moves_so_no_kill_switch_fires() -> None:
+def _phase(tmp_path: Path, gates: list[str] | None = None) -> Path:
+    f = tmp_path / "phase_state.json"
+    f.write_text(json.dumps({"gates_passed": gates or []}))
+    return f
+
+
+def test_with_demo_unlimited_the_drawdown_stage_machine_never_moves_so_no_kill_switch_fires(tmp_path) -> None:
     st = _state(equity=500.0, balance_closed_hwm=1_000.0)
-    assert RiskGate(_free()).stage_step(st) == Stage.NORMAL
+    assert RiskGate(_free()).stage_step(st, _phase(tmp_path)) == Stage.NORMAL
     assert RiskGate(_free(demo_unlimited=False)).stage_step(
-        _state(equity=500.0, balance_closed_hwm=1_000.0)) == Stage.HALTED
+        _state(equity=500.0, balance_closed_hwm=1_000.0), _phase(tmp_path)) == Stage.HALTED
+
+
+@pytest.mark.parametrize("phase", ["live_gate", "unreadable", "none"])
+def test_the_stage_moves_again_once_the_phase_file_is_not_demo_or_cannot_be_read(tmp_path, phase) -> None:
+    """Code review C-L1: the freeze needs the roadmap phase file to say demo (F1's rule); a live gate recorded, an
+    unreadable file or none given and the stage machine runs (fail closed)."""
+    f = tmp_path / "phase_state.json"
+    f.write_text(json.dumps({"gates_passed": ["paper_to_tiny_live"]}) if phase == "live_gate" else "{not json")
+    st = _state(equity=500.0, balance_closed_hwm=1_000.0)
+    assert RiskGate(_free()).stage_step(st, None if phase == "none" else f) == Stage.HALTED
+
+
+def test_a_halt_from_before_the_flag_keeps_every_cap_and_says_drawdown_halt(tmp_path) -> None:
+    """Trading-safety L1: the flag turned on while HALTED would otherwise trade nothing with no reason shown; the halt
+    stays (only /rearm clears it) and the gate refuses `drawdown_halt` until then."""
+    _phase(tmp_path)
+    d = _check(_arm(tmp_path), _free(), stage=Stage.HALTED)
+    assert not d.allowed and "drawdown_halt" in d.reasons
+    assert "drawdown_halt" in RiskGate(_free()).account_reasons(_state(stage=Stage.HALTED), NOW)
 
 
 @pytest.mark.parametrize("state, reason", [
@@ -262,14 +286,14 @@ def test_the_capacity_ceiling_refuses_an_entry_at_the_measured_open_position_cou
 
 
 # ---------------------------------------------------------------- L1: switching the flag off
-def test_switching_the_flag_off_lets_the_next_read_take_the_computed_stage_at_once_failing_closed() -> None:
+def test_switching_the_flag_off_lets_the_next_read_take_the_computed_stage_at_once_failing_closed(tmp_path) -> None:
     """Trading-safety L1: the stage machine does not move while unlimited; the first read after the flag goes off
     jumps straight to the stage the drawdown says (here HALTED, which only the owner's /rearm clears)."""
     gate = RiskGate(_free())
     st = _state(equity=500.0, balance_closed_hwm=1_000.0)
-    assert gate.stage_step(st) == Stage.NORMAL
+    assert gate.stage_step(st, _phase(tmp_path)) == Stage.NORMAL
     gate.limits = gate.limits.model_copy(update={"demo_unlimited": False})
-    assert gate.stage_step(st) == Stage.HALTED and st.stage == Stage.HALTED
+    assert gate.stage_step(st, _phase(tmp_path)) == Stage.HALTED and st.stage == Stage.HALTED
 
 
 # ---------------------------------------------------------------- L4: the lot is on the volume step

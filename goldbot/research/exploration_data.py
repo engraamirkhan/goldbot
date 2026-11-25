@@ -709,10 +709,12 @@ def ledger_legs(db: Database, *, broker_of: Mapping[str, str], as_of: pd.Timesta
     the prior). Left out and counted (quant vantage ruling 2026-11-09 (c): "Rows with `exit_price` None are excluded
     and counted. They are never imputed at the level"): `no_exit_price`, `censored` (the stop moved or something else
     closed it: the level is not the bracket's), `pyramid_add` exits, `non_gold`, `unknown_account`, `evidence_void`
-    (void for the cost cells)."""
+    (void for the cost cells), `unlimited_market_state` (ADR 0097, quant F1: a fill only a demo account without limits
+    could have had, in a news shock or a market state a capped account refuses)."""
+    from goldbot.research.evidence_exclusions import MARKET_STATE_COUNTER, unlimited_market_state
     cut = _ns(as_of)
     counts = dict.fromkeys(("no_exit_price", "censored", "pyramid_add", "non_gold", "unknown_account",
-                            "evidence_void"), 0)
+                            "evidence_void", MARKET_STATE_COUNTER), 0)
     with db.connection() as conn:
         rows = conn.execute("SELECT client_order_id, account_id, body FROM exploration_trades WHERE ts_ns <= ? "
                             "ORDER BY ts_ns, client_order_id", (cut,)).fetchall()
@@ -728,6 +730,9 @@ def ledger_legs(db: Database, *, broker_of: Mapping[str, str], as_of: pd.Timesta
             counts["evidence_void"] += 1
             continue
         r = json.loads(body)
+        if unlimited_market_state(r):
+            counts[MARKET_STATE_COUNTER] += 1
+            continue
         sym = str(r.get("symbol") or GOLD)
         if (key := keys.get((sym, broker))) is None:
             key = keys[(sym, broker)] = instrument_key(sym, broker)

@@ -5,14 +5,15 @@ which waits for each entry's reply) busy most of the time, so a software exit (t
 kill-switch flatten, engine stop) would wait behind entry after entry. The broker's own stop still fires, but K3
 ("exits never gated, never queued behind entries") would be broken in practice. The rules (goldbot/engine/order_send.py):
 
-* exit-first: no entry is sent while any book has a close the engine decided and has not got filled (unless it is
-  backing off because the broker says the market is closed), a kill-switch flatten pending, or a stop modify whose
-  retry is due;
+* exit-first: no entry is sent while any book has a close the engine decided and has not got filled (unless it is in
+  its back-off until its next attempt), or a kill-switch flatten pending; a stop-modify retry never holds entries
+  (the pass's reconcile sends it first; code review C-M1);
 * an entry duty-cycle ceiling: no entry starts once this pass's entries have held the tick thread ENTRY_PASS_S, or
   while entries held it DUTY_MAX of the last DUTY_WINDOW_S;
-* the broker's own capacity answers (10033 order limit, 10040 position limit) are refusals that hold entries until the
-  account holds fewer positions, never a retry loop;
-* every loop pass's gap is measured; its p99 is published in the engine state and health alerts above EXIT_SLO_S.
+* the broker's own capacity answers (10033 order limit, 10040 position limit) are refusals that hold entries at least
+  CAPACITY_HOLD_S, then until the account holds fewer positions, never a retry loop;
+* every loop pass's gap is measured; the p99 of the last 15 min is published with the account's SLO, and health
+  alerts above it on an unlimited account (a published baseline elsewhere).
 
 These are engineering rules, not risk limits: they decide when an entry goes, never whether a trade is allowed.
 Accounts without `demo_unlimited` keep their behaviour exactly (their caps bound the entry rate already)."""
@@ -83,14 +84,29 @@ def test_a_pending_kill_switch_flatten_holds_every_entry(tmp_path) -> None:
         _send(eng, "e1")
 
 
-def test_a_stop_modify_whose_retry_is_due_holds_entries_and_one_still_backing_off_does_not(tmp_path) -> None:
+@pytest.mark.parametrize("due_in_s", [-1.0, 60.0])
+def test_a_stop_modify_retry_never_holds_entries_due_or_backing_off(tmp_path, due_in_s) -> None:
+    """Code review C-M1: a modify retry is sent by the pass's reconcile, which runs before that pass's entries, so it is
+    never behind an entry. Counting it made a stale back-off entry (a reinstate rejected, then the stop tightened by
+    another path) hold every entry for good, and a due one stall entries until the next reconcile."""
+    eng = _paper(tmp_path)
+    pid = _open(eng, eng.broker, 1)[0]
+    eng._modify_backoff[pid] = (3, eng._last_tick.ts_utc + pd.Timedelta(seconds=due_in_s))
+    assert order_send.entry_yield(eng) is None
+    assert _send(eng, "e1") is not None
+
+
+def test_a_close_in_its_refusal_back_off_does_not_hold_entries_until_its_next_attempt(tmp_path) -> None:
+    """Trading-safety L3: any back-off (market closed, or 30 refusals in a row) means the close is not on the box
+    until its next attempt; the per-tick stop check and the broker's stop guard it meanwhile."""
     eng = _paper(tmp_path)
     pid = _open(eng, eng.broker, 1)[0]
     now = eng._last_tick.ts_utc
-    eng._modify_backoff[pid] = (1, now - pd.Timedelta(seconds=1))         # due: the reconcile pass sends it next
-    assert order_send.entry_yield(eng) == order_send.EXIT_FIRST
-    eng._modify_backoff[pid] = (1, now + pd.Timedelta(seconds=60))         # backing off: the stop check still guards
+    eng._close_due[pid] = ("time_exit", {"symbol": "XAUUSD"}, now)
+    eng._close_backoff[pid] = (31, now + pd.Timedelta(seconds=30))
     assert order_send.entry_yield(eng) is None
+    eng._close_backoff[pid] = (31, now - pd.Timedelta(seconds=1))         # its next attempt is due: exits first
+    assert order_send.entry_yield(eng) == order_send.EXIT_FIRST
 
 
 def test_a_close_backing_off_because_the_market_is_closed_does_not_hold_other_entries(tmp_path) -> None:
@@ -237,6 +253,21 @@ def test_the_brokers_capacity_refusal_holds_entries_until_a_position_closes_neve
     box.close(pids[0])
     eng.open.pop(pids[0])
     eng._refresh_account(eng._last_tick)
+    assert order_send.entry_yield(eng) == order_send.BROKER_CAPACITY   # trading-safety L2: at least CAPACITY_HOLD_S
+    clock.t += order_send.CAPACITY_HOLD_S
+    assert order_send.entry_yield(eng) is None
+
+
+def test_a_capacity_refusal_with_nothing_open_holds_for_the_minimum_then_lets_entries_try_again(tmp_path, clock):
+    """Trading-safety L2: at 0 open the position rule alone never holds, so the refusal repeated every pass."""
+    box = _Box(clock)
+    eng = _paper(tmp_path, box)
+    box.refuse_with = 10040
+    _send(eng, "e1")
+    box.refuse_with = None
+    clock.t += order_send.CAPACITY_HOLD_S - 1.0
+    assert order_send.entry_yield(eng) == order_send.BROKER_CAPACITY
+    clock.t += 2.0
     assert order_send.entry_yield(eng) is None
 
 
@@ -298,6 +329,29 @@ def test_the_pass_gap_p99_is_published_in_the_engine_state(tmp_path, clock) -> N
     eng._write_state()
     state = json.loads((tmp_path / "engine_icm-demo.json").read_text())
     assert state["exit_wait_p99_s"] == pytest.approx(pub["exit_wait_p99_s"])
+
+
+def test_gaps_older_than_the_window_are_not_published_so_a_flat_account_shows_no_stale_figure(tmp_path, clock):
+    """Code review C-M2: a slow pass an hour ago, then flat: nothing old enough is read."""
+    eng = _paper(tmp_path, _Box(clock))
+    pid = _open(eng, eng.broker, 1)[0]
+    for _ in range(3):
+        order_send.pass_started(eng)
+        clock.t += 9.0
+    order_send.pass_started(eng)
+    assert order_send.published(eng)["exit_wait_n"] == 3
+    eng.open.pop(pid)
+    clock.t += order_send.EXIT_WINDOW_S + 1
+    order_send.pass_started(eng)
+    assert order_send.published(eng)["exit_wait_n"] == 0 and order_send.published(eng)["exit_wait_p99_s"] is None
+
+
+def test_a_multi_book_account_is_judged_against_its_pass_budget_plus_one_entry_slot(tmp_path) -> None:
+    from goldbot.engine.books import PASS_BUDGET_S
+    eng = _paper(tmp_path)
+    assert order_send.exit_slo_s(eng) == order_send.EXIT_SLO_S
+    eng.books["EURUSD"] = object()
+    assert order_send.exit_slo_s(eng) == max(order_send.EXIT_SLO_S, PASS_BUDGET_S + order_send.ENTRY_PASS_S)
 
 
 def test_a_pass_gap_with_nothing_open_is_not_an_exit_wait(tmp_path, clock) -> None:

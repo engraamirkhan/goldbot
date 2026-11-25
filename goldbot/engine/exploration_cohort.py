@@ -68,6 +68,7 @@ REFUSED = "exploration_arm_cohort_refused"
 LOSS_CAP = "exploration_arm_cohort_loss_cap"
 EXPIRED = "exploration_arm_cohort_expired"
 WEEK_CAP = "exploration_cohort_week_cap"
+WEEK_CAP_SHADOW = "exploration_cohort_week_cap_shadow"   # ADR 0097: the weekly cap judged in shadow (quant F4)
 UNREAD = "exploration_cohort_unread"
 
 
@@ -253,6 +254,13 @@ def refresh(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
                               "week_from": week.isoformat(), "week_loss": round(ex.cohort_week_loss, 2),
                               "week_loss_cap": cohort.week_loss_cap_gbp,
                               "until": (week + pd.Timedelta(days=7)).isoformat()})
+    elif free and ex.cohort_week_loss >= cohort.week_loss_cap_gbp - 1e-9 and ex.cohort_week_told != week:
+        # ADR 0097, prereg-amendment-2026-11-26-cohort-unlimited.md (quant F4): the weekly cap is lifted but evaluated
+        # in shadow; the cohort's read ends it early once the shadow cap is reached 3 weeks in a row
+        ex.cohort_week_told = week
+        eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": WEEK_CAP_SHADOW, "rule": COHORT_RULE,
+                              "week_from": week.isoformat(), "week_loss": round(ex.cohort_week_loss, 2),
+                              "week_loss_cap": cohort.week_loss_cap_gbp})
 
 
 def max_open_refusal(ex: Exploration, arm_id: str, open_now: int) -> str | None:

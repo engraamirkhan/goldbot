@@ -98,3 +98,23 @@ def test_the_limits_of_every_account_that_is_not_demo_probe_only_are_byte_identi
            for k, a in sorted(_accounts().items()) if not (a.mode == "demo" and a.probe_only)}
     assert json.dumps(now, sort_keys=True) == json.dumps(json.loads(LIVE_FIXTURE.read_text()), sort_keys=True)
     assert {"icm-live", "vantage-live"} <= set(now)
+
+
+@pytest.mark.parametrize("change, ok", [({"order_timeout_s": 35.0}, False), ({"order_timeout_s": 15.0}, True),
+                                        ({"order_timeout_s": 35.0, "order_lane": True}, True)])
+def test_the_flag_needs_the_order_lane_or_an_order_timeout_of_15_s_at_most(change, ok) -> None:
+    """Trading-safety M1: on Vantage (35 s, no order lane) a slow fill would hold every exit behind it; the loader
+    refuses the flag there instead of relying on convention."""
+    probe = _accounts()["icm-probe"]
+    body = {**probe.model_dump(), **change, "demo_unlimited": True}
+    if ok:
+        assert probe.model_validate(body).demo_unlimited
+    else:
+        with pytest.raises(ValueError, match="order lane"):
+            probe.model_validate(body)
+
+
+def test_vantage_demo_cannot_take_the_flag_as_configured() -> None:
+    vd = _accounts()["vantage-demo"]
+    with pytest.raises(ValueError):
+        vd.model_validate({**vd.model_dump(), "demo_unlimited": True})

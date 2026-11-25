@@ -316,6 +316,10 @@ def exploration_arm_caps(acc: Account) -> dict[str, float]:
     return {arm: a.max_loss for arm, a in ex.arms.items()}
 
 
+# ADR 0097 (trading-safety M1): a demo account without limits needs the order lane, or an order timeout this short
+UNLIMITED_ORDER_TIMEOUT_S = 15.0
+
+
 class Account(Record):
     account_id: str
     broker: str
@@ -524,6 +528,10 @@ class Account(Record):
         if off and (self.mode != "demo" or not self.probe_only):
             raise ValueError(f"{', '.join(off)} off its default is allowed on demo probe_only accounts only "
                              "(demo-limits ADR 2026-11-02)")
+        if self.demo_unlimited and not self.order_lane and self.order_timeout_s > UNLIMITED_ORDER_TIMEOUT_S:
+            # ADR 0097 (trading-safety M1): without the order lane a slow fill holds the exits for its whole timeout
+            raise ValueError(f"demo_unlimited needs the order lane or order_timeout_s <= {UNLIMITED_ORDER_TIMEOUT_S:g} "
+                             "(ADR 0097: a slow fill would hold every exit behind it)")
         return self
 
     @model_validator(mode="after")

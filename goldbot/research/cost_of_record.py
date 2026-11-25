@@ -93,6 +93,7 @@ class Frames:
     legs: pd.DataFrame
     probes: pd.DataFrame
     n_void: int
+    n_market_state: int = 0      # ADR 0097 (quant F1): unlimited-epoch market-state fills left out, counted
 
 
 def _labels(ts: Sequence[pd.Timestamp]) -> list[str]:
@@ -118,17 +119,21 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
     """The window [lo, hi) of `hosts` (account -> broker): entries by send time, closes and exit legs by exit time."""
     from goldbot.engine import cost_probe
     from goldbot.engine.exploration import LEDGER
-    from goldbot.research.evidence_exclusions import excluded
+    from goldbot.research.evidence_exclusions import excluded, unlimited_market_state
     void = excluded(conn, "cost_cells")
     a, b = int(lo.value), int(hi.value)
     marks = ",".join("?" * len(hosts))
     sent = [t for t in LEDGER.select(conn, f"account_id IN ({marks}) AND ts_ns >= ? AND ts_ns < ?", (*hosts, a, b))
             if t.fill_price is not None and t.requested_price is not None]
     n_void = sum(t.client_order_id in void for t in sent)
-    sent = [t for t in sent if t.client_order_id not in void]
-    closed = [t for t in LEDGER.select(conn, f"account_id IN ({marks}) AND closed = 1 AND exit_ns >= ? AND exit_ns < ?",
-                                       (*hosts, a, b))
-              if t.fill_price is not None and t.client_order_id not in void]
+    closed_all = [t for t in LEDGER.select(conn, f"account_id IN ({marks}) AND closed = 1 AND exit_ns >= ? AND "
+                                                 "exit_ns < ?", (*hosts, a, b)) if t.fill_price is not None]
+    # ADR 0097 (quant F1): an unlimited-epoch market-state fill enters no frame (entries, closes, exit legs), counted
+    shock = {t.client_order_id for t in (*sent, *closed_all) if unlimited_market_state(t)}
+    n_market = sum(t.client_order_id in shock for t in sent)
+    sent = [t for t in sent if t.client_order_id not in void and t.client_order_id not in shock]
+    void = void | shock
+    closed = [t for t in closed_all if t.client_order_id not in void]
     entries = _frame({"broker": [hosts[t.account_id] for t in sent], "symbol": [t.symbol for t in sent],
                       "session": _labels([t.sent_utc for t in sent]),
                       "minute": _minute([t.sent_utc for t in sent]),
@@ -172,13 +177,14 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
     probes = [p for p in cost_probe.LEDGER.select(conn, f"account_id IN ({marks}) AND ts_ns >= ? AND ts_ns < ?",
                                                   (*hosts, a, b))
               if p.purpose == "cost_measurement" and p.client_order_id not in void and p.exit_price is not None
-              and p.exit_bid is not None and p.exit_ask is not None]
+              and p.exit_bid is not None and p.exit_ask is not None and not unlimited_market_state(p)]
     pr = _frame({"broker": [hosts[p.account_id] for p in probes], "symbol": [GOLD] * len(probes),   # gold probes only
                  "session": _labels([p.sent_utc for p in probes]),
                  "minute": _minute([p.sent_utc for p in probes]),
                  "xslip": [p.side * ((float(p.exit_bid or 0.0) if p.side > 0 else float(p.exit_ask or 0.0)) - float(p.exit_price or 0.0))
                            for p in probes]}, "probes")
-    return Frames(entries=entries, closes=closes, legs=_frame(leg_rows, "legs"), probes=pr, n_void=n_void)
+    return Frames(entries=entries, closes=closes, legs=_frame(leg_rows, "legs"), probes=pr, n_void=n_void,
+                  n_market_state=n_market)
 
 
 def clustered_means(values: np.ndarray, clusters: np.ndarray, rng: np.random.Generator, resamples: int = RESAMPLES,
@@ -423,16 +429,17 @@ def read_fill_to_bar(conn: sqlite3.Connection, hosts: Mapping[str, str], lo: pd.
     orders, pyramid adds and rows without the prices or P&L a replay needs are dropped."""
     from goldbot.engine import cost_probe
     from goldbot.engine.exploration import LEDGER
-    from goldbot.research.evidence_exclusions import excluded
+    from goldbot.research.evidence_exclusions import excluded, unlimited_market_state
     void = excluded(conn, "cost_cells")
     marks = ",".join("?" * len(hosts))
     args = (*hosts, int(lo.value), int(hi.value))
     fills = [t for t in LEDGER.select(conn, f"account_id IN ({marks}) AND closed = 1 AND ts_ns >= ? AND ts_ns < ?", args)
-             if t.client_order_id not in void and t.symbol == GOLD and not t.group_id and t.pnl is not None
+             if t.client_order_id not in void and not unlimited_market_state(t) and t.symbol == GOLD and not t.group_id and t.pnl is not None
              and t.fill_price is not None and t.exit_price is not None and t.exit_utc is not None and t.stop_usd
              and t.fx_acct_per_usd and t.lots > 0]
     probes = [p for p in cost_probe.LEDGER.select(conn, f"account_id IN ({marks}) AND ts_ns >= ? AND ts_ns < ?", args)
               if p.purpose == "cost_measurement" and p.client_order_id not in void and p.pnl is not None
+              and not unlimited_market_state(p)
               and p.fill_price is not None and p.exit_price is not None and p.exit_utc is not None
               and p.fx_acct_per_usd and p.lots > 0 and (getattr(p, "symbol", None) or GOLD) == GOLD]
     return fills, probes

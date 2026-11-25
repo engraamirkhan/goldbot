@@ -638,6 +638,9 @@ class ExplorationRecord(FrozenRecord):
     # ADR 0097: `unlimited` when sent on a demo account without limits (sizes, concurrency and shock-window fills there
     # do not transfer to a capped or live account; reads keep or drop them by this tag), None on every other. JSON body
     limits_epoch: str | None = None
+    # quant F2 (review of #454): on that epoch, the market-state reasons a capped account would have refused this entry
+    # for (`order_send.capped_reasons`); `evidence_exclusions.unlimited_market_state` reads it. JSON body only
+    capped_reasons: list[str] | None = None
 
 
 class TwinRecord(FrozenRecord):
@@ -2575,7 +2578,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
             blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
             symbol=eng.cfg.instrument,      # the instrument KEY (never the store symbol): never pooled with XAUUSD
-            limits_epoch=LIMITS_EPOCH if free else None)
+            limits_epoch=LIMITS_EPOCH if free else None,
+            capped_reasons=order_send.capped_reasons(eng) if free else None)
 
     from goldbot.engine import exploration_pyramid as pyr
     try:

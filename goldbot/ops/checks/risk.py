@@ -480,9 +480,11 @@ DEMO_FLOOR_WARN_FRAC = 0.5
 def check_exit_latency(ctx: HealthContext, account_id: str) -> list[Check]:
     """ADR 0097 (trading-safety H1: "an exit-latency SLO with an alert (p99 < 5 s)"): the engine's published p99 of its
     loop-pass gaps with a position open (engine/order_send.py `published`), the longest an exit that became due waited
-    for its pass. Above the SLO: FAIL on a demo account without limits (exits-first and the entry duty ceiling exist to
-    hold it), WARN on any other. Fewer than EXIT_LATENCY_MIN_N gaps, or an engine that does not publish them, is not
-    judged; an unreadable file is check_engine's. Reporting only."""
+    for its pass, against the account's own SLO (`exit_slo_s`: 5 s on one book, the multi-book pass budget plus one
+    entry slot on several). Above it: FAIL on a demo account without limits (exits-first and the entry duty ceiling
+    exist to hold it). Any other account is a published baseline, never judged (code review C-M2: no baseline existed
+    when this shipped). Fewer than EXIT_LATENCY_MIN_N gaps (the engine keeps the last 15 min only), or an engine that
+    does not publish them, is not judged; an unreadable file is check_engine's. Reporting only."""
     try:
         e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
         p99, n = e.get("exit_wait_p99_s"), int(e.get("exit_wait_n") or 0)
@@ -497,8 +499,9 @@ def check_exit_latency(ctx: HealthContext, account_id: str) -> list[Check]:
     what = f"exit wait p99 {float(p99):.1f} s over the last {n} passes with a position open (max {worst} s, SLO {slo:g} s)"
     if float(p99) <= slo:
         return [Check(name=name, status="ok", reason=what)]
-    status: Status = "fail" if unlimited else "warn"
-    return [Check(name=name, status=status,
+    if not unlimited:
+        return [Check(name=name, status="ok", reason=f"{what}: baseline, not judged on a capped account")]
+    return [Check(name=name, status="fail",
                   reason=f"{what}: software exits (time barrier, weekend cut, trail, kill switch) are late; broker "
                          "stops still fire. RUNBOOK 'Exit latency'")]
 
