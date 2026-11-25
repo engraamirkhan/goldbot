@@ -140,6 +140,8 @@ fully implemented.
   - The ICC is day-clustered, estimated with a week-block bootstrap on learn 2010-17, from **other families'**
     replayed candidates with the same stop and hold geometry. Never from the card's own arms or outcomes.
 - Horizons > 60 min keep the 0.25 prior until Q3 lands in full.
+- Until the ICC measurement is committed (script, data sha256, output file), rho_day stays at 0.25 for every horizon.
+  The validator accepts rho_day < 0.25 only with `rho_day_measurement` naming that file.
 - Every read still uses the day-block bootstrap. No p-value is ever taken from an analytic n_eff (a test pins it).
 - Unchanged: n_eff floor 200, delta 0.10 R, sd floor 1.2 R.
 - The validator floor `rho_day ≥ 0.25` (config.py, `PowerFirstSettings`) becomes a per-horizon floor: 0.05 for

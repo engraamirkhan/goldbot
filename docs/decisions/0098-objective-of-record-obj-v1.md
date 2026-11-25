@@ -1,7 +1,7 @@
 # 0098: Objective of record obj-v1: one money measure for every model
 
-Status: proposed (research-director, 2026-11-25). The quant-reviewer signs (it owns gates and amends its own R14 by
-D1-D3 below); the trading-safety-reviewer confirms the execution and sizing rows touch no RiskGate rule. Research and
+Status: proposed (research-director, 2026-11-25). The quant-reviewer signs the 10 R clip and withdraws its 3 R cap
+(review of 2026-11-25); it owns gates and amends its own R14 by D1-D3 below; the trading-safety-reviewer confirms the execution and sizing rows touch no RiskGate rule. Research and
 demo only. Real money, sizing and live unlock stay owner-only.
 
 ## Context
@@ -18,11 +18,11 @@ demo only. Real money, sizing and live unlock stay owner-only.
 ## Decision
 **1. The money measure of record (`objective_id = obj-v1`).**
 - net R = (exit − entry) x side / initial risk − (spread + commission + slippage including the latency leg + swap or
-  financing + the rollover cell) / initial risk.
+  financing + the rollover cell) / initial risk. Entry and exit are mid prices; spread enters only as the cost leg.
 - Costs come from the cost of record: the measured upper 95 % bound per broker x session x leg, in bps or ATR units.
   Never fixed dollars; never the Dukascopy spread or tick columns as a cost leg.
-- **Clip at ±10 R in every use** (D1). Rows beyond ±10 R are quarantined for label audit and counted, never silently
-  dropped. A −3 R clip is refused: gap-through-stop losses are real money.
+- **Clip at ±10 R in every use** (D1). Rows beyond ±10 R enter every statistic at ±10 R; quarantine is an audit flag,
+  never an exclusion. £ reports use unclipped net R. A −3 R clip is refused: gap-through-stop losses are real money.
 - £ = net R x £ per R at the decision size.
 - The **same** measure is used for training, threshold, selection and the gate.
 - AUC, accuracy, log-loss and win rate are **reported diagnostics only**. They never train, threshold, select or gate.
@@ -38,9 +38,16 @@ demo only. Real money, sizing and live unlock stay owner-only.
 | Execution (dispatch, order type, netting, passive variant) | minimise implementation shortfall in R: (fill − decision price) x side + spread + commission + latency drift + **missed-trade net R** | market at signal (default); a passive variant only under its own card | paired vs market-at-signal on the same signals, randomised assignment; controls get identical execution | Δ net R ≥ 0 with lower bound > 0 (passive card, K 1). Netting: £ saved by leg count net of re-materialisation, per-arm labels unchanged (parity test). No execution RL |
 
 **3. Abstention and learning (D2).** Full abstention is allowed: there is no keep floor, and the deployed rule equals
-the judged rule. On demo, learning does not starve: every abstained candidate is still replay-labelled, and a
-**randomised 10 % sample** of abstained candidates is traded with its propensity logged. That sample is excluded from
-the model's kept-money read and used only for off-policy evaluation.
+the judged rule.
+- **MIN_KEPT = 100 out-of-fold kept candidates and >= 30 kept days** (as self_retrain.py:99). ABSTAIN is decided from
+  kept counts before any out-of-fold net-R statistic is computed.
+- **Weighted fits:** Riley and power n_eff for a weighted fit are multiplied by the Kish factor (Σw)²/(nΣw²).
+- **Exploration sample on demo.** Every abstained candidate is still replay-labelled, and a randomised 10 % sample of
+  abstained candidates is traded. Assignment is hash_u(candidate id) < 0.10, made before the RiskGate. Propensity
+  0.10 is logged on every abstained candidate. A sample candidate the RiskGate refuses is logged explore_refused, not
+  dropped. Training and every read use replay labels for all candidates. Sample fills serve only replay-vs-fill and
+  cost calibration, and never feed the H-81 cost stop or the edge cap (as ADR 0095 C2). Real-money accounts have no
+  sample. The sample's real value is the replay-vs-fill check, not the money.
 
 **4. What carries the id.** Every model artifact records `objective_id`. Loading refuses an artifact without it, or
 with an id its gate does not name.
@@ -48,13 +55,14 @@ with an id its gate does not name.
 ## Consequences
 - **Tests (acceptance for A5):**
   - a guard test fails any training, threshold, selection or gate call that names AUC, accuracy, log-loss or win rate;
-  - a calibration test: per score bin, p_w ≥ 0.5 iff the out-of-fold mean net R ≥ 0;
+  - a calibration test: on a synthetic data-generating process with known E[R|x], p_w >= 0.5 iff
+    E[clip(R,10)|x] >= 0;
   - the ±10 R clip and the quarantine count are pinned;
   - an artifact without `objective_id` does not load.
 - **sr-v2 and H-101 are unchanged in flight.** They keep their signed objectives. sr-v3 and every new filter card use
   obj-v1. Changing a recipe or loss after a look costs K +1 (quant Q4).
-- **Ruled against the quant's own R14 draft, for its signature:** the weight cap is 10 R, not 3 R (D1: a 3 R cap
-  flips the sign of runner payoffs; brackets never reach 10 R, so it costs nothing there). The rest of R14 stands:
+- **The weight cap is 10 R, not 3 R** (D1; the quant signed the 10 R clip and withdrew its 3 R cap on 2026-11-25: a
+  3 R cap flips the sign of runner payoffs; brackets never reach 10 R, so it costs nothing there). The rest of R14 stands:
   no keep floor, ABSTAIN below MIN_KEPT, the statistic S.
 - **Expected effect, honest:** obj-v1 makes a model abstain where cost exceeds gross. With today's labels that means
   fewer trades and, most likely, no model passing. That is the point: it stops paying spread for noise.

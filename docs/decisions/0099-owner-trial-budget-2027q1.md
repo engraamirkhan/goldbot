@@ -19,11 +19,11 @@ registry K.
 - **2027Q1 trial budget ceiling: 250** (`research.trial_budget_overrides` "2027Q1": 250). 250 is under the 500 the
   validator allows without an owner ADR; the record exists so the override rests on the owner's decision and not on
   a settings edit.
-- **Plan: 120.**
+- **Plan: 120 expected, 164 worst case.**
 
   | 2027Q1 item | K |
   |---|---|
-  | sr-v2 as signed | ≤ 86 |
+  | sr-v2 as signed | ≤ 130 (13 runs x 10) |
   | sr-v3 weekly | 13 |
   | zoo-v2 core (conditional) | 4 |
   | H-102 class units (conditional) | ≤ 4 |
@@ -31,7 +31,7 @@ registry K.
   | abstain-v1, RL-2 (conditional), allocator read, augmentation ablation (conditional) | 4 |
   | O-11, O-12, FX-FIX, WFRI2 | 4 |
   | G3 read | 2 |
-  | **planned** | **120** |
+  | **planned** | **120 expected, 164 worst case** (the ceiling of 250 holds) |
 
 - **Checkpoints:** program director + quant at 60, 120 and 180 used. Discretionary items freeze at 180. Above 250
   needs a new owner decision.
@@ -44,6 +44,7 @@ registry K.
 - **Settings change, applied by the release-manager** in the integration commit after the W1-B lane merges (W1-B owns
   `config/settings.yaml` this wave): `trial_budget_overrides` gains `"2027Q1": 250` and `trial_budget_owner_decisions`
   gains `"2027Q1": "config/owner_decisions/2027Q1-trial-budget.md"` (the copy beside this file).
-- **The stale 2027Q1 reservation** (8 slots for H-02 and C4H, a tsmom 4h row from a retired family) should be
-  withdrawn before the 2027-01-01 freeze. That is a separate pre-registration edit, not this record.
+- **The 2027Q1 reservation** (4 queued rows + 4 H-02 slots) is withdrawn by its rule before the 2026-12-14 freeze:
+  family retired, no outcome read, 0 K. `reserved_trials_quarter."2027Q1"` becomes 0 in the same commit as the
+  settings change above. (H-02's config would re-screen OMB-1 columns 9-10.)
 - **Reversal:** a later owner decision may lower the quarter; trials already run stay counted.

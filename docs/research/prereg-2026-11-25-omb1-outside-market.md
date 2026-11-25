@@ -35,22 +35,27 @@ power-refused in every class (H-102 draft section 4.3), so they are context only
 
 | # | Column | Definition | History source | Live source | `available_utc` |
 |---|---|---|---|---|---|
-| 1 | `usd_basket_ret_1` | log return over one decision bar of the dollar basket: EURUSD, USDJPY, GBPUSD, USDCAD, USDCHF at ICE weights without SEK, renormalised; + = dollar up. **Not** the broker USINDEX (its source changes on 2017-12-01) and not FRED DTWEXBGS | Dukascopy 1m FX majors | icm-probe 1m | the bar's close |
+| 1 | `usd_basket_ret_1` | log return over one decision bar of the dollar basket: EURUSD, USDJPY, GBPUSD, USDCAD, USDCHF at ICE weights without SEK, renormalised over 95.8: EUR 57.6/95.8 = 0.6013, JPY 13.6/95.8 = 0.1420, GBP 11.9/95.8 = 0.1242, CAD 9.1/95.8 = 0.0950, CHF 3.6/95.8 = 0.0376 (the exact fractions decide); + = dollar up. **Not** the broker USINDEX (its source changes on 2017-12-01) and not FRED DTWEXBGS | Dukascopy 1m FX majors | icm-probe 1m | the bar's close |
 | 2 | `gold_resid_usd_6` | gold 6-bar log return minus a past-only 500-bar OLS beta x the basket's 6-bar return | as 1 + gold | as 1 | the bar's close |
 | 3 | `xag_rel_mom_6` | Δ log(XAG / XAU) over 6 bars | Dukascopy 1m XAGUSD | icm-probe 1m | the bar's close |
-| 4 | `xau_fair_resid_z` | z-score of gold's residual against the X3 fair value (XAG, EUR, JPY; past-only beta) | as 1 and 3 | as 1 and 3 | the bar's close |
+| 4 | `xau_fair_resid_z` | gold's residual against the X3 fair value (XAG, EUR, JPY): OLS without intercept over the sampled rows of the previous 20 trading days, strictly before day D (beta window = `cross_asset_screen.LOOKBACK_DAYS` 20); z = residual / the residual sd of the same 20-day window | as 1 and 3 | as 1 and 3 | the bar's close |
 | 5 | `gsr_z252d` | gold/silver ratio z-score over 252 daily closes; the previous 17:00 New York close (ruling D15) | daily from 1m | same | the previous daily close |
 | 6 | `corr_gold_usd_120` | rolling 120-bar correlation of gold and basket returns, past-only | as 2 | as 2 | the bar's close |
 | 7 | `macro_real_yield_chg20` | 20-business-day change of FRED DFII10 | FRED 2003+ | FRED | the macro feed's PIT release time; with no vintage stamp, the value date + 1 business day at 22:00 UTC |
 | 8 | `macro_real_yield_z252` | z-score of DFII10 over 252 business days | FRED | FRED | as 7 |
-| 9 | `macro_spx_dd20` | S&P 500 close below its 20-day high, in % | FRED SP500 or the local daily index file | FRED | as 7 |
+| 9 | `macro_spx_dd20` | S&P 500 close below its 20-day high, in % | ^GSPC daily from the local index file 2005+, history and live; FRED SP500 only as a parity check | as history | as 7 |
 | 10 | `macro_vix_chg5` | 5-day change of FRED VIXCLS | FRED | FRED | as 7 |
 
-- Columns that interact with the candidate's side enter as column x side; each still counts as one column (quant Q6).
+- **Frozen now:** columns 1, 2, 3, 5, 6, 7, 8, 10, and column 4 with its windows named above. Column 9 is frozen on
+  the ^GSPC source as stated.
+- Columns that interact with the candidate's side enter as column x side; each still counts as one column toward the
+  40 cap (quant Q6). **p_eff counts the intercept-free main effect and the x-side term of a column separately. There
+  are no arm or timeframe dummies; if any are added, each one counts.**
 - **Priority order for the subsets in section 4, fixed now** (by the in-house evidence above, before any OMB-1 read):
   3, 1, 2, 7, then 4, 5, 6, 8, 9, 10.
 - **Per-source standardisation** (quant R10): every column is standardised within its source era (Dukascopy history,
-  broker live). Serving later needs PSI < 0.10 between Dukascopy and broker per column (W1-M measures it).
+  broker live). Standardisation is fitted on each training fold only (expanding). Broker-era statistics come from a
+  frozen burn-in before serving. Serving later needs PSI < 0.10 between Dukascopy and broker per column (W1-M measures it).
 - Excluded, with reasons: oil and copper (unstable or null), equity intraday returns (sign flips), broker UST10Y and
   BUND10Y (no free intraday history, live feed dead since 11-04), COT (the positioning lane's).
 - A column with no Tier A/B history for an instrument-year (quant R11) is missing for that year. It is never
@@ -88,18 +93,25 @@ power-refused in every class (H-102 draft section 4.3), so they are context only
    - level 1: A = the 4 gold-price inputs; B = A + block columns 3, 1, 2, 7 (p_eff 8);
    - level 2: A = `side`, `tsmom_score` x side; B = A + columns 3, 1 (p_eff 4);
    - below level 2: NOT STARTED (size).
+   Riley holds on the smallest training fold's Kish-weighted n_eff (ADR 0098: n_eff x (Σw)²/(nΣw²)). Otherwise the
+   first out-of-fold year moves to the first year where it holds, fixed at Stage 0 on counts.
    Level is chosen by the unit's learn n_eff (quant Q3) on counts only. Expected: about 500 candidates a year over
    9 learn years, about 4,500 raw rows, lower after uniqueness. **Level 2 or a refusal is the likely outcome.**
 4. **Power** (`power_first.start_or_refuse`, ADR 0085 as amended 2026-11-25): delta 0.10 R, n_eff ≥ 200.
 
 ## 5. Reading rule and kill
 
+- **Stage L runs on a SEEN window and is a screen.** tr-10's screen is booked as one SEEN registry row with its cell
+  count (quant Q4).
 - **Stage L (one read, K 1):** CONTINUE needs Δ ≥ +0.03 R **and** one-sided p ≤ 0.10. Otherwise the line is
   **closed**: the columns stay as context only. It is never widened, never given new columns or a new timeframe, and
   never renamed.
 - **Joint with H-102:** OMB-1 and H-102's gold 1h+4h Stage L run in **one invocation on the same fitted artifacts**,
   on 12-09 if both Stage 0s are done by 12-05, otherwise both by 12-18. Neither is read before the other.
-- **Stage C (only after a continue, K ≤ 1):** confirm 2018-01..2025-09, read once: Δ > 0 and p ≤ 0.10.
+- **Stage C (K 1) is the evidential read** (only after a continue): confirm 2018-01..2025-09, read once; it needs
+  Δ > 0 with one-sided p <= 0.05. No Stage C read runs before the K-of-record reconciliation (quant, due 2026-11-27,
+  ruling D5).
+- **An OMB-1 continue licenses no trading. Only H-102's gate does.**
 - **Kill date 12-18:** with no Stage L read by then for any reason, the line closes.
 - **Report:** Δ, S_A, S_B, kept share, kept mean net R and £/day at 0.01 lot, with losers next to winners. AUC is a
   diagnostic only.

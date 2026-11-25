@@ -21,36 +21,41 @@ are already booked). The holdout 2025-10-01..2026-09-30 is not read.
 | Script | `scripts/research/g3_read.py`, deterministic, committed by **2026-12-06** |
 | Dry run | **2026-12-13**, counts and eligibility only; no outcome field is computed or printed |
 | Eligibility snapshot | **2027-01-10**, counts only, committed as the read's input |
-| Verdict | exactly one of `CONTINUE-A`, `CONTINUE-B`, `MAINTENANCE`; posted to #34 the same day |
+| Verdict | exactly one of `CONTINUE-A`, `CONTINUE-B`, `MAINTENANCE`; posted to #34 the same day. If both routes pass, the verdict is CONTINUE-B |
 
 ## G3-A Route A: a carded arm beats its matched replay twin, net of costs (ruling D20)
 
-- **Eligible** (all of them, judged on the 01-10 snapshot):
+- **Eligible** (all of them):
   - the arm is not retired (no `retired_day`) and its family is not on the retired list;
   - its card was pre-registered and merged on or before **2026-12-06**;
   - it records r2 replay labels (net R under the measured broker cost of record);
   - its card names a **side- and hour-matched replay twin** (a `control_mode: replay_only` row on the same timeframe,
     drawn in the arm's UTC hour cells and on the arm's side).
+- **The eligible set is closed on 2026-12-06** (arm_id, card path and merge SHA, twin id). An arm retired after that
+  stays in the Holm family and reads as fail. The 01-10 snapshot records counts only.
 - **Not eligible:** the 10 retired cohort arms (ADR 0095) and any retired family read raw against a twin. A retired
   arm counts only as "arm + filter" through route B. A raw re-read would be a re-test.
-- **Unit:** the candidate, not the fill. Each candidate's r2 `sim_r` (net R, clipped at ±10 R per ADR 0098).
+- **Unit:** the candidate, not the fill. Each candidate's r2 `sim_r` (net R). Clipped at ±10 R and kept in (ADR 0098
+  D1).
 - **Statistic:** arm and twin are each averaged per session day; d_t = arm_t − twin_t on days where both exist. The
   statistic is mean(d_t).
-- **Inference:** stationary day-block bootstrap, mean block 5 days, B = 10,000, seed 20270115; one-sided 95 % lower
-  bound; Holm across the eligible arms.
+- **Inference:** resample the ordered paired-day series d_t (pairs kept together) with a stationary bootstrap, mean
+  block 5, B = 10,000, one numpy default_rng(20270115) stream, arms in arm_id order.
+  p = (1 + #{boot mean <= 0})/(1 + B). Holm across eligible arms at alpha = 0.025 one-sided. Session day =
+  exploration_obs.session_day. The arm's own mean net R is per candidate.
 - **Pass needs all of:**
-  1. ≥ 30 paired days and ≥ 100 arm candidates (else `insufficient`, which is not a pass);
-  2. the Holm-adjusted one-sided 95 % lower bound of mean(d_t) > 0;
+  1. ≥ 30 paired days and ≥ 100 arm candidates (else `insufficient`, which is not a pass). `insufficient` is decided
+     from the 01-10 counts snapshot before any outcome is computed, and books 0 K;
+  2. the Holm-adjusted one-sided test passes (p at most the Holm level of alpha = 0.025);
   3. the arm's own mean net R > 0 (losing less than a losing twin is not a pass).
 
 **Known now (counts only, so the owner hears it before the read):**
-- GD-1 (GD1D, GD1P) is the only non-retired carded arm today. Its controls GD1CD and GD1CP are drawn at 07:00-13:00
-  UTC, not in the arm's 00:00 hour (its card, section 4), so they are **not hour-matched**. The quant rules at
-  signing whether GD-1 is eligible. This is an eligibility ruling under D20, not a new route.
-- Either way, GD-1 opens one candidate per arm per weekday: about **32 candidates per arm** by the cutoff (weekdays
-  2026-11-24..2027-01-08, less 12-25 and 01-01). That is below the 100-candidate minimum, so GD-1 reads
-  `insufficient` whatever its sign.
-- Route A can pass only through an arm carded by 12-06 that fires about 5 or more candidates a session day.
+- GD-1 is not eligible for route A (quant 2026-11-27): its controls are not hour-matched (D20). It books 0 K at the
+  G3 read. Its own card's read on 2027-02-16 is unchanged. (GD-1's card runs `until` 2027-01-04: a renewal is needed
+  for it to run past that date.)
+- Route A needs forward candidates from 2026-11-26 or earlier (>= 30 paired days by 01-08, less 12-25 and 01-01). No
+  arm carded after 11-25 can reach 30 paired days, and the only one that started earlier (GD-1) is not eligible.
+  Route A is therefore expected to be empty, and G3 rests on route B.
 
 ## G3-B Route B: a self-retrain model is ACTIVE under its signed gate
 
@@ -61,9 +66,12 @@ are already booked). The holdout 2025-10-01..2026-09-30 is not read.
 - **The signed gate, restated (not changed):** edge vs no-model ≥ +0.05 R and vs the control ≥ +0.05 R (sr-v3:
   the ADR 0098 statistic of record), kept mean net R > 0, Holm-adjusted max(p) ≤ 0.10 across the run's judged pairs,
   **two consecutive passes** with cutoffs exactly 7 days apart, and a **frozen forward edge ≥ 0** for the first
-  passer on ≥ 30 rows decided after its cutoff.
-- **A history winner** (H-101, H-102, OMB-1) counts only if it reaches forward ACTIVE as an sr-v3 model by the 01-10
-  run. A history-only result never counts.
+  passer on rows decided after its cutoff. The forward check binds once there are >= 30 rows.
+- This restatement is a summary. The signed sr-v2 card and its SPEC_VERSION code decide, including n >= 200/100/10,
+  controls >= 50, gross sanity (kept minus all on label_mid_r >= 0) and serve.
+- sr-v3 counts only if its signed gate also needs both edges, Holm and two consecutive passes.
+- **A history winner** (H-101, H-102, OMB-1) counts only if it is ACTIVE under sr-v3 and has met its own card's
+  forward rule. A history-only result never counts.
 - **The evaluator re-derives** the passing run by re-running the frozen module at the same cutoff; the decision must
   reproduce.
 - **Not a pass:** a model active at an earlier run but demoted or superseded at 01-10; a run with a failed broker
@@ -73,7 +81,8 @@ are already booked). The holdout 2025-10-01..2026-09-30 is not read.
 
 - Not read: the holdout (2025-10-01..2026-09-30), the confirm window (2018-01..2025-09) and test_old.
 - No synthetic, augmented, dense or phase≠0 row in any judged set (quant R7-R9).
-- Quarantined, void (`exploration_label_void`) and capped-day rows are excluded as in sr-v2. Holiday days are not
+- Quarantined, void (`exploration_label_void`) and capped-day rows are excluded as in sr-v2. "Quarantined" here
+  means sr-v2 label quarantine only; rows beyond ±10 R are clipped and kept in (ADR 0098 D1). Holiday days are not
   excluded. No day is dropped by hand.
 - Demo £, cohort fill P&L and netting savings are **reported next to** the verdict. They never count for it.
 
@@ -97,16 +106,27 @@ are already booked). The holdout 2025-10-01..2026-09-30 is not read.
 
 Full research resumes the day after any one of:
 1. a weekly self-retrain run at the frozen spec yields an ACTIVE model by the G3-B test;
-2. GD-1 passes its own card's promote rule;
-3. a new card with **new mechanism evidence** (not a re-parameterised closed line), quant-signed and counted in K;
-   one card at a time, budget ≤ $300.
+2. a GD-1 promotion card, quant-signed and counted in K, passes its read (GD-1's own card has no promote rule: its
+   section 5.3 defers it);
+3. a new card with **new mechanism evidence** (not a re-parameterised closed line), quant-signed and counted in K.
+   One such card at a time is allowed in maintenance (<= $300). Maintenance ends only when that card's
+   pre-registered read passes.
 
 An owner override is recorded on #34 as an override. The published verdict stays `MAINTENANCE`.
 
 ## Honest odds, published now
 
-P(continue) **5-10 %** (ruling D19). Route A: no eligible arm reaches its n by the cutoff (above). Route B: an sr-v2
-pair (RBR15, Z3D, Z2P) about 3 %; an sr-v3 or H-102 1h+4h winner forward-ACTIVE by 01-10 about 3-5 %.
+P(continue) **3-6 %** (restated by the evaluator and quant on 2026-11-25; ruling D19 published 5-10 %). Route A: expected
+empty (above). Route B: an sr-v2 pair (RBR15, Z3D, Z2P) about 3 %; an H-102/OMB-1 winner forward-ACTIVE by 01-10:
+about 0 % (its forward rule needs >= 200 unseen rows); an sr-v3 model on sr-v2's arms about 1-3 %.
+
+Evaluator's measurement (2026-11-25, counts only): the realistic route-B pairs are RBR15, Z3D and Z2P. Snapshot
+coverage is 52-67 % (not 85 %), so the first judged runs slip about a week. RBR15 stops adding rows on 12-31. Vantage's
+0 feature rows fail closed and block icm activations in the same run.
+
+## Precondition
+
+No Stage C or confirm read of any card runs before the K-of-record reconciliation (quant, due 2026-11-27, ruling D5).
 
 ## Signatures
 
