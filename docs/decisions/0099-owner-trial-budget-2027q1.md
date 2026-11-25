@@ -46,5 +46,5 @@ registry K.
   gains `"2027Q1": "config/owner_decisions/2027Q1-trial-budget.md"` (the copy beside this file).
 - **The 2027Q1 reservation** (4 queued rows + 4 H-02 slots) is withdrawn by its rule before the 2026-12-14 freeze:
   family retired, no outcome read, 0 K. `reserved_trials_quarter."2027Q1"` becomes 0 in the same commit as the
-  settings change above. (H-02's config would re-screen OMB-1 columns 9-10.)
+  settings change above. (H-02's config would re-screen OMB-1 columns 9-10.) In the same commit, `preregistration-2027Q1.yaml` sets `reservation: 0` and marks every row and slot `withdrawn` (family retired, no outcome read), and `preregistration-2027Q1.md` records the withdrawal with its date.
 - **Reversal:** a later owner decision may lower the quarter; trials already run stay counted.
