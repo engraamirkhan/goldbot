@@ -49,21 +49,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.data.daily import decode_hourly  # noqa: E402
 from goldbot.data.era_quality import (  # noqa: E402
     HOLDOUT_CUT,
-    R11_ID,
+    R11_V2,
     R11_V2_ID,
     ClockCheck,
     HistorySource,
     clock_check,
-    daily_from_hourly,
+    combine_legs,
     day_of,
     drop_holdout,
     epoch_ns_utc,
     gap_week_offsets,
     gap_week_score,
-    grade_month,
+    grade_month_v2,
     history_sources,
     month_offsets,
     same_source_share,
+    spike_confirmed,
     spike_mask,
 )
 
@@ -472,21 +473,7 @@ def reference_hourly(key: str, year: int, raw: Path) -> tuple[pd.DataFrame, dict
             legs = {c: _gold_hourly(raw, year) if c == "XAUUSD" else _leg_hourly(cache, c, year, pts[c]) for c in e.legs}
             if any(v.empty for v in legs.values()):
                 continue
-            h = None
-            for c, exp in e.legs.items():
-                v = legs[c].set_index("ts_utc")
-                part = pd.DataFrame({"close": v["close"] ** exp, "high": v["high"] ** exp, "low": v["low"] ** exp,
-                                     "rel": abs(exp) * v["spread"] / v["close"]})
-                if exp < 0:
-                    part["high"], part["low"] = part["low"], part["high"]
-                h = part if h is None else pd.DataFrame({
-                    "close": h["close"] * part["close"], "high": h["high"] * part["high"],
-                    "low": h["low"] * part["low"], "rel": h["rel"] + part["rel"]}).dropna(subset=["close"])
-            assert h is not None
-            for c in ("close", "high", "low"):
-                h[c] = h[c] * e.scale
-            h["spread"] = h["rel"] * h["close"]
-            h = h.drop(columns="rel").rename_axis("ts_utc").reset_index()
+            h = combine_legs({c: v.set_index("ts_utc") for c, v in legs.items()}, e.legs, e.scale).reset_index()
         if h is None or h.empty:
             continue
         mon = pd.DatetimeIndex(h["ts_utc"]).month
@@ -569,82 +556,187 @@ def cmd_evidence(a: argparse.Namespace) -> int:
     return 0
 
 
-def check_one(task: tuple[str, int, str, str, str]) -> tuple[dict[str, object], list[dict[str, object]]]:
-    """Clock check, tz-rule choice and R11 grades of one stored instrument-year. `stored_rule` (from the manifest) is
-    the rule its stamps are in; only a year still on "ny" is tried under "eet-7" (idempotent: a re-run never shifts a
-    re-stamped year twice)."""
-    key, year, base_s, raw_s, stored_rule = task
+FIX_DIR = "fixes"   # raw/fixes/<FRED id>.csv (observation_date, value), fetched off the Mac, cut at the holdout
+
+
+def load_fix(key: str, year: int, raw: Path) -> tuple[pd.DataFrame | None, str]:
+    """(fixes of `year` as fix_utc/value, status): "ok", "cap_b", or "pending" (no spec, a series file missing)."""
+    spec = history_sources().instruments[key].fix
+    if spec is None or spec.pending is not None:
+        return None, "pending"
+    if spec.cap is not None:
+        return None, "cap_b"
+    assert spec.at is not None
+    val: pd.Series | None = None
+    for sid, e in spec.series.items():
+        f = raw / FIX_DIR / f"{sid}.csv"
+        if not f.exists():
+            return None, "pending"
+        d = pd.read_csv(f)
+        v = pd.to_numeric(d.iloc[:, 1], errors="coerce")
+        v.index = pd.to_datetime(d.iloc[:, 0])
+        v = v.dropna() ** e
+        val = v if val is None else (val * v).dropna()
+    assert val is not None
+    val = val[pd.DatetimeIndex(val.index).year == year]
+    hhmm, zone = spec.at.split(" ")
+    local = val.index + pd.Timedelta(hours=int(hhmm[:2]), minutes=int(hhmm[3:]))
+    utc = pd.DatetimeIndex(local).tz_localize(zone, ambiguous="NaT", nonexistent="NaT").tz_convert("UTC")
+    out = pd.DataFrame({"fix_utc": utc, "value": val.to_numpy()}).dropna()
+    return out[out["fix_utc"] < HOLDOUT_CUT].reset_index(drop=True), "ok"
+
+
+def check_one(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """check_one_ with any exception recorded as a failed clock row (the run and its reports go on)."""
+    try:
+        return check_one_(task)
+    except Exception as exc:  # noqa: BLE001
+        return {"key": task[0], "year": task[1], "status": "failed", "reason": f"{type(exc).__name__}: {exc}"[:300],
+                "manifest": ""}, []
+
+
+def check_one_(task: tuple[str, int, str, str, str, bool]) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """R11 v2 for one stored instrument-year: stamp it under its era's DST rule (re-stamp if stored otherwise), clock
+    check per year, per month and per US/EU gap window, confirmed-spike flags, then one grade per session month."""
+    key, year, base_s, raw_s, stored, same_source = task
     base, raw = Path(base_s), Path(raw_s)
-    src = history_sources().instruments[key]
+    hs = history_sources()
+    src = hs.instruments[key]
     p = year_path(base, key, year)
     bars = pd.read_parquet(p)
-    bars_raw = bars                     # spikes are flagged in place, never removed (split_errors)
+    if "dq_flag" not in bars:
+        bars["dq_flag"] = ""
+    rule = hs.dst_rule(year)
+    changed = rule != stored
+    if changed:
+        bars = reconvert(bars, rule, stored)
     ref, native = reference_hourly(key, year, raw)
+    ts, c = epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64")
     if len(ref):
-        cc = clock_check(key, year, epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"), ref)
+        cc = clock_check(key, year, ts, c, ref)
+        offsets = month_offsets(ts, c, ref, src.weekend)
+        gaps = gap_week_offsets(ts, c, ref, year)
     else:
         cc = ClockCheck(key=key, year=year, offset_min=None, corr_at_offset=None, corr_at_zero=None, hours=0,
                         agree_share=None, agree_tol=None, passed=False, reason="no_reference")
-    offsets = month_offsets(epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"), ref,
-                            src.weekend) if len(ref) else {}
-    rule, new_rec = stored_rule, None
-    if stored_rule == "ny" and any(abs(o) > 1 for o in offsets.values()):
-        alt = reconvert(bars, "eet-7")
-        alt_off = month_offsets(epoch_ns_utc(alt["ts_utc"]), alt["bid_close"].to_numpy(dtype="float64"), ref,
-                                src.weekend)
-        if sum(abs(o) > 1 for o in alt_off.values()) < sum(abs(o) > 1 for o in offsets.values()):
-            rule, bars, offsets = "eet-7", alt, alt_off
-            cc = clock_check(key, year, epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"),
-                             ref)
-            sha = _write_parquet(bars, p)
-            new_rec = {"key": key, "year": year, "status": "ok", "tz": "eet-7", "rows": len(bars),
-                       "first": str(bars["ts_utc"].iloc[0]), "last": str(bars["ts_utc"].iloc[-1]),
-                       "parquet": str(p.relative_to(base)), "parquet_sha256": sha, "restamped_by": "check",
-                       "holdout_cut": HOLDOUT_CUT.isoformat(), "at": dt.datetime.now(dt.UTC).isoformat()}
-    bars_raw = bars
-    quarantined = cc.offset_min is not None and not cc.passed
-    ref_daily = daily_from_hourly(ref, src.weekend) if len(ref) else None
+        offsets, gaps = {}, {}
+    gap_bad = {k: o for k, o in gaps.items() if o is not None and abs(o) > 1}
+    quarantined = (cc.offset_min is not None and not cc.passed) or bool(gap_bad)
+    fix, fix_status = load_fix(key, year, raw)
     grades = []
-    month = day_of(bars_raw["ts_utc"], src.weekend).to_period("M")     # the session day's month
-    for per, idx in bars_raw.groupby(month).groups.items():
+    month = day_of(bars["ts_utc"], src.weekend).to_period("M")
+    ref_month = day_of(ref["ts_utc"], src.weekend).to_period("M") if len(ref) else None
+    flags = bars["dq_flag"].astype(str).copy()
+    for per, idx in bars.groupby(month).groups.items():
         if str(per) >= HOLDOUT_CUT.strftime("%Y-%m"):
             continue                    # the stub of the first sealed session day (Sep 30 21:00-24:00 UTC)
-        g = grade_month(key, str(per), bars_raw.loc[idx], ref_daily, src.session_minutes,
-                        native.get(str(per), False), src.weekend, quarantined, offsets.get(str(per)))
+        b = bars.loc[idx]
+        r = ref.loc[np.asarray(ref_month == per)] if ref_month is not None else None
+        g = grade_month_v2(key, str(per), b, r, src.session_minutes, native.get(str(per), False),
+                           weekend=src.weekend, quarantined=quarantined, clock_offset=offsets.get(str(per)),
+                           same_source=same_source, fix=fix, fix_status=fix_status)
         grades.append(g.model_dump())
+        if r is not None and len(r):
+            conf = spike_confirmed(b, spike_mask(b["bid_close"]), r)
+            flags.loc[conf[conf].index] = "warning:spike_confirmed"
+    if not flags.equals(bars["dq_flag"].astype(str)):
+        bars["dq_flag"] = flags
+        changed = True
+    new_rec: dict[str, object] | None = None
+    if changed:
+        sha = _write_parquet(bars, p)
+        new_rec = {"key": key, "year": year, "status": "ok", "tz": rule, "rows": len(bars),
+                   "first": str(bars["ts_utc"].iloc[0]), "last": str(bars["ts_utc"].iloc[-1]),
+                   "parquet": str(p.relative_to(base)), "parquet_sha256": sha, "rewritten_by": f"check {R11_V2_ID}",
+                   "holdout_cut": HOLDOUT_CUT.isoformat(), "at": dt.datetime.now(dt.UTC).isoformat()}
     if quarantined:
         dst = base / "_quarantine" / key / p.name
         dst.parent.mkdir(parents=True, exist_ok=True)
         os.replace(p, dst)
+        new_rec = {**(new_rec or {"key": key, "year": year, "tz": rule}), "status": "quarantined",
+                   "why": cc.reason if not gap_bad else f"gap-window offsets {gap_bad}",
+                   "parquet": str(dst.relative_to(base)), "at": dt.datetime.now(dt.UTC).isoformat()}
     bad_months = {m: o for m, o in offsets.items() if abs(o) > 1}
-    return {**cc.model_dump(), "quarantined": quarantined, "bad_months": json.dumps(bad_months), "tz_rule": rule,
-            "manifest": json.dumps(new_rec) if new_rec else ""}, grades
+    return {**cc.model_dump(), "status": "ok", "quarantined": quarantined, "bad_months": json.dumps(bad_months),
+            "gap_offsets": json.dumps(gaps), "tz_rule": rule, "same_source": same_source, "fix_status": fix_status,
+            "manifest": json.dumps(new_rec, default=str) if new_rec else ""}, grades
+
+
+def same_source_decisions(ev: pd.DataFrame) -> dict[tuple[str, int], bool]:
+    """Measured share >= 0.50 is same source; where the share cannot be measured (a synthetic reference), the year
+    takes the majority of the instruments measured that year (conservative: HistData is one feed)."""
+    ev = ev.copy()
+    thr = R11_V2["same_source_share"]
+    ev["same"] = ev["same_source_share"] >= thr
+    measured = ev.dropna(subset=["same_source_share"])
+    by_year = measured.groupby("year")["same"].mean()
+    out = {}
+    for key, year, share in zip(ev["key"], ev["year"], pd.to_numeric(ev["same_source_share"], errors="coerce")):
+        out[(str(key), int(year))] = bool(share >= thr) if np.isfinite(share) else bool(by_year.get(year, 0) >= 0.5)
+    return out
+
+
+def write_v2_reports(rep: Path, clocks: list[dict[str, object]], tiers: list[dict[str, object]], sha: str) -> None:
+    pd.DataFrame(clocks).assign(git_sha=sha, dirty=False, r11_id=R11_V2_ID).to_csv(rep / "clock_r11-v2.csv",
+                                                                                  index=False)
+    t2 = pd.DataFrame(tiers)
+    if t2.empty:
+        return
+    t2["reasons"] = t2["reasons"].map(";".join)
+    t2 = t2.assign(git_sha=sha, dirty=False)
+    # volatility regime: tercile of the month's realised 1m volatility within the instrument (outcome-blind)
+    t2["rv_tercile"] = t2.groupby("key")["rv"].transform(
+        lambda x: pd.qcut(x.rank(method="first"), 3, labels=["low", "mid", "high"]) if x.notna().sum() >= 3 else None)
+    t2.to_csv(rep / "tiers_r11-v2.csv", index=False)
+    t2["year"] = t2["month"].str[:4]
+    pd.crosstab([t2["year"], t2["rv_tercile"]], t2["tier"]).to_csv(rep / "tier_mix_r11-v2.csv")
+    v1p = rep / "tiers_r11-v1.csv"
+    if v1p.exists():
+        v1 = pd.read_csv(v1p)[["key", "month", "tier", "reasons"]].rename(columns={"tier": "tier_v1",
+                                                                                    "reasons": "reasons_v1"})
+        m = v1.merge(t2[["key", "month", "tier"]].rename(columns={"tier": "tier_v2"}), on=["key", "month"],
+                     how="outer").fillna({"tier_v1": "-", "tier_v2": "-"})
+        m.to_csv(rep / "tiers_v1_v2_diff.csv", index=False)
+        pd.crosstab(m["tier_v1"], m["tier_v2"], margins=True).to_csv(rep / "tiers_v1_v2_matrix.csv")
+        pd.crosstab(m["key"], [m["tier_v1"], m["tier_v2"]]).to_csv(rep / "tiers_v1_v2_by_key.csv")
 
 
 def cmd_check(a: argparse.Namespace) -> int:
+    sha, dirty = git_state()
+    if dirty:
+        print("REFUSED: the working tree has uncommitted changes; grades are stamped with a commit (quant ruling 5)",
+              flush=True)
+        return 2
     base, raw = Path(a.root) / "histdata_m1", Path(a.root)
+    rep = base / "_reports"
+    rep.mkdir(parents=True, exist_ok=True)
+    for name in ("tiers", "clock"):                      # keep the v1 grades next to v2 (quant condition 3)
+        old, kept = rep / f"{name}.csv", rep / f"{name}_r11-v1.csv"
+        if old.exists() and not kept.exists():
+            os.replace(old, kept)
+    evp = rep / "evidence_r11-v2.csv"
+    if not evp.exists():
+        print("REFUSED: run `evidence` first (same-source shares and the gap-window DST evidence)", flush=True)
+        return 2
+    same = same_source_decisions(pd.read_csv(evp))
     man = read_manifest(base)
-    tasks = [(k, y, str(base), str(raw), str(man.get((k, y), {}).get("tz", "ny")).replace("America/New_York", "ny"))
-             for k in a.keys for y in range(FIRST_YEAR, LAST_YEAR + 1) if year_path(base, k, y).exists()]
+    tasks = [(k, y, str(base), str(raw), _stored_rule(man, k, y), same.get((k, y), False)) for k in a.keys
+             for y in range(FIRST_YEAR, LAST_YEAR + 1) if year_path(base, k, y).exists()]
     clocks, tiers = [], []
     with ProcessPoolExecutor(max_workers=a.workers, initializer=_nice) as ex:
         for cc, grades in ex.map(check_one, tasks):
             m = cc.pop("manifest")
             if m:
-                append_manifest(base, json.loads(str(m)))     # a year re-stamped under the eet-7 rule
+                append_manifest(base, json.loads(str(m)))
             clocks.append(cc)
             tiers.extend(grades)
             t = pd.Series([g["tier"] for g in grades]).value_counts().to_dict()
-            print(f"{cc['key']} {cc['year']} clock={cc['offset_min']} agree={cc['agree_share']} "
-                  f"{cc['reason']} tiers={t}", flush=True)
-    rep = base / "_reports"
-    rep.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(clocks).to_csv(rep / "clock.csv", index=False)
-    tdf = pd.DataFrame(tiers)
-    if len(tdf):
-        tdf["reasons"] = tdf["reasons"].map(";".join)
-    tdf.to_csv(rep / "tiers.csv", index=False)
-    print(f"r11 {R11_ID}: {len(tdf)} instrument-months graded; clock fails {sum(bool(c['quarantined']) for c in clocks)}")
+            print(f"{cc['key']} {cc['year']} rule={cc.get('tz_rule')} same={cc.get('same_source')} "
+                  f"clock={cc.get('offset_min')} {cc.get('reason')} tiers={t}", flush=True)
+    write_v2_reports(rep, clocks, tiers, sha)
+    print(f"r11 {R11_V2_ID} at {sha[:8]}: {len(tiers)} instrument-months graded; "
+          f"quarantined {sum(bool(c.get('quarantined')) for c in clocks)}; failed "
+          f"{sum(c.get('status') == 'failed' for c in clocks)}", flush=True)
     print(f"SHA256SUMS: {write_sums(base)} files", flush=True)
     return 0
 

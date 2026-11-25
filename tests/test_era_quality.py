@@ -316,3 +316,131 @@ def test_cached_zip_is_trimmed_to_the_holdout_cut(tmp_path):
     assert hd.trim_zip_to_cut(z) == (1, 0)
     kept = hd.parse_histdata(zipfile.ZipFile(z).read("DAT_ASCII_EURUSD_M1_2025.csv"), "EURUSD")
     assert kept["ts_utc"].max() < eq.HOLDOUT_CUT
+
+
+# ------------------------------------------------------------------------------------- r11-v2 (quant ruling, #453)
+def _ref_hourly_hl(bars: pd.DataFrame, spread: float = 1e-4) -> pd.DataFrame:
+    h = _hourly(bars)
+    return h.assign(spread=spread)
+
+
+def test_v2_news_spike_inside_the_reference_range_is_not_confirmed():
+    bars = _walk("2010-03-01", "2010-03-03", seed=11)
+    i = bars.index[700]
+    bars.loc[i, ["bid_close", "bid_high"]] = float(bars["bid_close"].iloc[700]) * 1.004   # a 40 bp news minute
+    ref = _ref_hourly_hl(bars)                                         # the reference saw the same move
+    cand = eq.spike_mask(bars["bid_close"])
+    assert cand.loc[i]
+    assert not eq.spike_confirmed(bars, cand, ref).loc[i]
+
+
+def test_v2_off_market_print_outside_range_plus_tol_is_confirmed():
+    bars = _walk("2010-03-01", "2010-03-03", seed=11)
+    ref = _ref_hourly_hl(bars)                                         # reference built BEFORE the bad print
+    i = bars.index[700]
+    bars.loc[i, ["bid_close", "bid_high"]] = float(bars["bid_close"].iloc[700]) * 1.004
+    cand = eq.spike_mask(bars["bid_close"])
+    assert eq.spike_confirmed(bars, cand, ref).loc[i]
+
+
+def test_v2_synthetic_leg_bounds_bracket_the_cross():
+    """XAUEUR from legs: high <= XAU_H / EUR_L, low >= XAU_L / EUR_H; a print above the bound is confirmed."""
+    xau = pd.DataFrame({"high": [1210.0], "low": [1190.0], "close": [1200.0], "spread": [0.3]},
+                       index=pd.DatetimeIndex([pd.Timestamp("2010-03-02 10:00", tz="UTC")], name="ts_utc"))
+    eur = pd.DataFrame({"high": [1.36], "low": [1.34], "close": [1.35], "spread": [1e-4]}, index=xau.index)
+    ref = eq.combine_legs({"XAUUSD": xau, "EURUSD": eur}, {"XAUUSD": 1.0, "EURUSD": -1.0})
+    assert ref["high"].iloc[0] == pytest.approx(1210 / 1.34) and ref["low"].iloc[0] == pytest.approx(1190 / 1.36)
+    t = pd.date_range("2010-03-02 10:00", periods=5, freq="1min", tz="UTC")
+    bars = pd.DataFrame({"ts_utc": t, "bid_close": [889.0, 889.2, 905.0, 889.1, 889.0]})
+    cand = pd.Series([False, False, True, False, False])
+    assert eq.spike_confirmed(bars, cand, ref.reset_index()).tolist() == [False, False, True, False, False]
+
+
+def test_v2_offsetting_high_and_low_errors_fail_range_v2():
+    """A high too high and a low too high keep R/R_ref near 1 (v1 passed it); v2 compares each extreme."""
+    bars = _walk("2010-03-01", "2010-04-01", seed=4)
+    ref = _ref_hourly_hl(bars)
+    d = eq.daily_from_minutes(bars)
+    rd = eq.daily_from_hourly(ref)
+    shift = (rd["high"] - rd["low"]).median() * 0.5
+    bad = d.assign(high=d["high"] + shift, low=d["low"] + shift)
+    share, ratio = eq.range_v2(bad, rd, ref)
+    assert ratio == pytest.approx(1.0, abs=0.05) and share is not None and share < 0.9
+    good_share, _ = eq.range_v2(d, rd, ref)
+    assert good_share == 1.0
+
+
+def test_v2_gap_week_60_min_shift_is_rejected():
+    """2021: the spring gap is 2 weeks (03-14..03-28). A year shifted 60 min ONLY in the gap weeks still peaks at 0
+    per month; the per-gap-window check sees 60."""
+    bars = _walk("2021-03-01", "2021-04-12", seed=21)
+    ref = _hourly(bars)
+    wins = eq.gap_windows(2021)
+    assert wins[0][0] == pd.Timestamp("2021-03-14 07:00", tz="UTC")
+    a, b = wins[0]
+    in_gap = (ref["ts_utc"] >= a) & (ref["ts_utc"] < b)
+    shifted = _hourly(bars, shift_min=60)
+    ref2 = pd.concat([ref[~in_gap], shifted[(shifted["ts_utc"] >= a) & (shifted["ts_utc"] < b)]])
+    ref2 = ref2.sort_values("ts_utc").reset_index(drop=True)
+    ts, c = eq.epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy()
+    assert eq.gap_week_offsets(ts, c, ref2, 2021)[str(a.date())] == 60     # the gap-window check is not
+    assert eq.gap_week_offsets(ts, c, ref, 2021)[str(a.date())] == 0
+
+
+def test_v2_same_source_detector():
+    bars = _walk("2019-03-01", "2019-04-01", seed=3)
+    ts, c = eq.epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy()
+    same = _hourly(bars)
+    assert eq.same_source_share(ts, c, same, 1e5) == 1.0
+    other = same.assign(close=same["close"] * (1 + np.random.default_rng(0).normal(0, 3e-5, len(same))))
+    share = eq.same_source_share(ts, c, other, 1e5)
+    assert share is not None and share < eq.R11_V2["same_source_share"]
+
+
+def test_v2_same_source_years_cap_at_a_consistent_or_wait_for_the_fix():
+    bars = _walk("2019-03-01", "2019-04-01", seed=3)
+    ref = _ref_hourly_hl(bars)
+    noon = pd.date_range("2019-03-01 17:00", "2019-03-29 17:00", freq="B", tz="UTC")
+    fix = pd.DataFrame({"fix_utc": noon,
+                        "value": np.interp(eq.epoch_ns_utc(noon), eq.epoch_ns_utc(bars["ts_utc"]),
+                                           bars["bid_close"].to_numpy())})
+    g = eq.grade_month_v2("EURUSD", "2019-03", bars, ref, 1440, True, same_source=True, fix=fix, fix_status="ok")
+    assert g.tier == "A-consistent", g.reasons
+    p = eq.grade_month_v2("XAUUSD", "2019-03", bars, ref, 1440, True, same_source=True, fix_status="pending")
+    assert p.tier == "P"
+    capped = eq.grade_month_v2("US500", "2019-03", bars, ref, 1440, True, same_source=True, fix_status="cap_b")
+    assert capped.tier == "B"
+    indep = eq.grade_month_v2("EURUSD", "2010-03", bars, ref, 1440, True)
+    assert indep.tier == "A" and indep.r11_id == "r11-v2-2026-11-25"
+
+
+def test_confirmed_spike_crossing_a_barrier_makes_no_touch():
+    bars = _walk("2010-03-01", "2010-03-02", seed=6)
+    level = float(bars["bid_high"].max()) * 1.002
+    i = bars.index[300]
+    bars.loc[i, "bid_high"] = level * 1.001                            # the only bar above the barrier
+    bars["dq_flag"] = ""
+    bars.loc[i, "dq_flag"] = "warning:spike_confirmed"
+    hi, _ = eq.touch_extremes(bars)
+    assert not (hi >= level).any()
+    bars.loc[i, "dq_flag"] = ""
+    assert (eq.touch_extremes(bars)[0] >= level).any()
+
+
+def test_v2_thresholds_are_frozen():
+    assert eq.R11_V2_ID == "r11-v2-2026-11-25"
+    assert {k: eq.R11_V2[k] for k in ("same_source_share", "fix_bp", "fix_day_share_min", "spike_tol_spread_mult",
+                                     "spike_tol_bp", "range2_tol_spread_mult", "range2_tol_range_frac",
+                                     "range2_day_share_min", "range2_ratio_lo", "range2_ratio_hi",
+                                     "gap_week_offset_max")} == {
+        "same_source_share": 0.50, "fix_bp": 10.0, "fix_day_share_min": 0.98, "spike_tol_spread_mult": 2.0,
+        "spike_tol_bp": 2.0, "range2_tol_spread_mult": 3.0, "range2_tol_range_frac": 0.05,
+        "range2_day_share_min": 0.90, "range2_ratio_lo": 0.90, "range2_ratio_hi": 1.10, "gap_week_offset_max": 1.0}
+    assert eq.R11_ID == "r11-v1-2026-11-25"                            # v1 kept for its grades
+
+
+def test_fix_spec_is_exactly_one_kind():
+    with pytest.raises(ValueError):
+        eq.FixSpec(series={"DEXUSEU": 1.0})                            # no timestamp
+    with pytest.raises(ValueError):
+        eq.FixSpec(cap="B", pending="x")

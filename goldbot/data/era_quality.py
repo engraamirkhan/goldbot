@@ -204,7 +204,8 @@ def load_history_sources(path: str | Path = DEFAULT_HISTORY_SOURCES) -> HistoryS
 
 @lru_cache(maxsize=1)
 def history_sources() -> HistorySources:
-    return load_history_sources()
+    """The map, read once per process on first use (never at import: a broken map must not stop gold's weekly pull)."""
+    return load_history_sources(DEFAULT_HISTORY_SOURCES)
 
 
 def drop_holdout(frame: pd.DataFrame, ts_col: str = "ts_utc") -> tuple[pd.DataFrame, int]:
@@ -642,6 +643,27 @@ def spike_confirmed(bars: pd.DataFrame, candidates: pd.Series, ref: pd.DataFrame
         tol = max(R11_V2["spike_tol_spread_mult"] * (ms if np.isfinite(ms) else 0.0), R11_V2["spike_tol_bp"] * 1e-4 * c)
         out.at[i] = c > float(got["high"].max()) + tol or c < float(got["low"].min()) - tol
     return out
+
+
+def combine_legs(legs: dict[str, pd.DataFrame], exps: dict[str, float], scale: float = 1.0) -> pd.DataFrame:
+    """Hourly reference of a cross from its legs (each indexed by ts_utc with high, low, close, spread):
+    close = scale x prod(close^e); high/low are the BOUNDS a true cross high/low cannot exceed (leg high for a positive
+    exponent, leg low for a negative one, and the reverse for the low); spread propagates in relative terms.
+    The bounds are what spike v2 checks against; they are not the cross's high/low (no range check on them)."""
+    h: pd.DataFrame | None = None
+    for c, e in exps.items():
+        v = legs[c]
+        hi, lo = (v["high"], v["low"]) if e > 0 else (v["low"], v["high"])
+        part = pd.DataFrame({"close": v["close"] ** e, "high": hi ** e, "low": lo ** e,
+                             "rel": abs(e) * v["spread"] / v["close"]})
+        h = part if h is None else pd.DataFrame({
+            "close": h["close"] * part["close"], "high": h["high"] * part["high"], "low": h["low"] * part["low"],
+            "rel": h["rel"] + part["rel"]}).dropna(subset=["close"])
+    assert h is not None
+    for c in ("close", "high", "low"):
+        h[c] = h[c] * scale
+    h["spread"] = h["rel"] * h["close"]
+    return h.drop(columns="rel").rename_axis("ts_utc")
 
 
 def range_v2(d: pd.DataFrame, ref_daily: pd.DataFrame, ref_month: pd.DataFrame) -> tuple[float | None, float | None]:

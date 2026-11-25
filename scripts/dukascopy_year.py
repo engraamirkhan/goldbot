@@ -167,7 +167,15 @@ def _map_instruments() -> dict[str, Instrument]:
     return out
 
 
-INSTRUMENTS.update(_map_instruments())
+def instrument(symbol: str) -> Instrument:
+    """xauusd/xagusd from INSTRUMENTS; any other symbol from the history source map, read only now (lazily): a broken
+    config/history_sources.yaml must not stop gold's weekly pull (review of #453)."""
+    if symbol in INSTRUMENTS:
+        return INSTRUMENTS[symbol]
+    mapped = _map_instruments()
+    if symbol not in mapped:
+        raise KeyError(f"{symbol!r}: not xauusd/xagusd and not a mapped instrument with a Dukascopy code")
+    return mapped[symbol]
 
 
 def datafeed_url(day: dt.date, side: str, inst: Instrument | None = None) -> str:
@@ -428,7 +436,7 @@ def merge_never_shrink(published: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataF
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("year", type=int)
-    ap.add_argument("--symbol", default="xauusd", choices=sorted(INSTRUMENTS),
+    ap.add_argument("--symbol", default="xauusd",
                     help="Dukascopy instrument (default xauusd); names the output file <symbol>_1m_dukascopy_<year>.parquet")
     ap.add_argument("--out", default=None)
     ap.add_argument("--tmp", default="raw/dukascopy")
@@ -454,7 +462,10 @@ def main() -> int:
     global REQUEST_PAUSE_S, NODE_FALLBACK
     REQUEST_PAUSE_S = max(0.0, args.pause)
     NODE_FALLBACK = not args.no_node_fallback
-    inst = INSTRUMENTS[args.symbol]
+    try:
+        inst = instrument(args.symbol)
+    except KeyError as e:
+        ap.error(str(e))
     months = list(month_range(args.year))
     if inst.era_key is not None and not args.sealed:
         cut = HOLDOUT_CUT.date()
