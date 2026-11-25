@@ -88,3 +88,67 @@ def test_features_report_where_their_minute_memory_starts() -> None:
 def test_code_hash_changes_with_the_replay_code() -> None:
     k = H.code_hash()
     assert len(k) == 64 and k == H.code_hash()
+
+
+def _weekend_bars() -> pd.DataFrame:
+    """Mon 2012-03-05 .. Wed 2012-03-14 1m bars with the market shut Fri 22:00 - Sun 22:00 UTC (no rows), as Dukascopy."""
+    b = bars(10 * 1440, start="2012-03-05")
+    ts = pd.to_datetime(b["ts_utc"], utc=True)
+    shut = (ts >= pd.Timestamp("2012-03-09 22:00", tz="UTC")) & (ts < pd.Timestamp("2012-03-11 22:00", tz="UTC"))
+    return b.loc[~shut].reset_index(drop=True)
+
+
+def _friday_candidate(monkeypatch: pytest.MonkeyPatch, max_bars: int = 96) -> pd.Timestamp:
+    """RBR15-like: one 15m long decided Fri 18:00 UTC, its time barrier 96 decision bars later (past the weekend), a
+    stop and target no path reaches, so the label exits on the time barrier, after the weekend."""
+    from goldbot.research import arm_rules as R
+
+    def one(arm: object, ctx: R.RuleContext) -> pd.DataFrame:
+        close = pd.DatetimeIndex(pd.to_datetime(ctx.bars["visible_at"], utc=True))
+        idx = int(close.searchsorted(pd.Timestamp("2012-03-09 18:00", tz="UTC")))
+        return pd.DataFrame({"idx": [idx], "side": [1.0], "max_bars": [max_bars], "target_r": [1000.0],
+                             "risk_usd": [1000.0]})
+    monkeypatch.setattr(R, "candidates", one)
+    return pd.Timestamp("2012-03-09 18:00", tz="UTC")
+
+
+NO_BLACKOUT = (np.zeros(0, np.int64), np.zeros(0, np.int64))
+SPAN = (pd.Timestamp("2012-03-06", tz="UTC"), pd.Timestamp("2012-03-13", tz="UTC"))
+
+
+def test_a_hold_across_the_weekend_gets_its_wall_clock_horizon_in_candidates_and_label(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    dec = _friday_candidate(monkeypatch)
+    arm = H.load_arm("RBR15", replay_as=Z.REPLAY_AS["RBR15"])
+    b = _weekend_bars()
+    c = H.candidates("RBR15", arm, b, *SPAN, NO_BLACKOUT)
+    lab = H.label("RBR15", arm, b, *SPAN, NO_BLACKOUT)            # a label exit past the nominal 24.25 h no longer raises
+    assert list(c["decision_utc"]) == [dec] == list(lab["decision_utc"])
+    # the barrier closes 97 decision bars on: 16 bars (4 h) to Fri 22:00, the 48 h shut, 81 bars (20.25 h) to Mon 18:15
+    assert c["max_hold_s"].iloc[0] == pytest.approx((4 + 48 + 20.25) * 3600)
+    assert lab["max_hold_s"].iloc[0] == c["max_hold_s"].iloc[0]
+    exit_ts = pd.Timestamp(lab["label_exit_utc"].iloc[0])
+    assert exit_ts > dec + pd.Timedelta(seconds=(96 + 1) * 900)  # past the nominal horizon: the weekend is inside the hold
+    assert exit_ts <= dec + pd.Timedelta(seconds=float(c["max_hold_s"].iloc[0]))
+
+
+def test_a_hold_without_a_gap_keeps_its_nominal_horizon(monkeypatch: pytest.MonkeyPatch) -> None:
+    _friday_candidate(monkeypatch)
+    arm = H.load_arm("RBR15", replay_as=Z.REPLAY_AS["RBR15"])
+    c = H.candidates("RBR15", arm, bars(10 * 1440, start="2012-03-05"), *SPAN, NO_BLACKOUT)
+    assert c["max_hold_s"].iloc[0] == (96 + 1) * 900
+
+
+def test_a_label_exit_past_even_the_wall_clock_horizon_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _friday_candidate(monkeypatch)
+    real = H._run_arm_module()
+
+    class Late:
+        @staticmethod
+        def run_arm(*args: object, **kw: object) -> tuple[pd.DataFrame, dict]:
+            trades, info = real.run_arm(*args, **kw)
+            return trades.assign(ts_exit=pd.to_datetime(trades["ts_exit"], utc=True) + pd.Timedelta(hours=1)), info
+    monkeypatch.setattr(H, "_run_arm_module", lambda: Late)
+    arm = H.load_arm("RBR15", replay_as=Z.REPLAY_AS["RBR15"])
+    with pytest.raises(ValueError, match="after its horizon"):
+        H.label("RBR15", arm, _weekend_bars(), *SPAN, NO_BLACKOUT)

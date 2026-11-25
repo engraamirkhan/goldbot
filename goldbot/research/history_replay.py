@@ -97,14 +97,22 @@ def load_blackout(calendar_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     return R.blackout_windows(cal)
 
 
-def hold_seconds(arm: A.Arm, max_bars: np.ndarray | None = None) -> np.ndarray | float:
-    """A candidate's max_hold_s: (the larger of the arm's hold_bars and the candidate's max_bars) + 1 decision bars,
-    the entry minute included, so the full horizon is never short (the label stage asserts every exit inside it)."""
-    hold = float(arm.params["hold_bars"])
-    tf = TF_SECONDS[arm.timeframe]
-    if max_bars is None:
-        return (hold + 1) * tf
-    return (np.maximum(np.asarray(max_bars, dtype=float), hold) + 1) * tf
+def horizon_seconds(arm: A.Arm, bars: pd.DataFrame, idx: np.ndarray, max_bars: np.ndarray) -> np.ndarray:
+    """Each candidate's max_hold_s: its true maximum wall-clock exposure, from its decision close to the close of the
+    decision bar its time barrier ends on. The label's time barrier counts decision bars ("the close of decision bar
+    idx + 1 + max_bars", `triple_barrier_next_open_1m`, with the larger of the arm's hold_bars and the candidate's
+    max_bars here so it is never short) and the bar frame has no rows while the market is shut, so a hold across a
+    weekend, the daily break, a holiday or a data gap lasts longer on the clock than (bars + 1) x the timeframe. Never
+    less than that nominal span (a barrier clipped at the end of the frame). The label stage asserts every exit
+    inside it."""
+    idx = np.asarray(idx, dtype=int)
+    held = np.maximum(np.asarray(max_bars, dtype=float), float(arm.params["hold_bars"])).astype(int)
+    nominal = (held + 1) * float(TF_SECONDS[arm.timeframe])
+    if not len(idx):
+        return nominal
+    close = epoch_ns(utc_index(bars["visible_at"]))
+    last = np.minimum(idx + 1 + held, len(bars) - 1)
+    return np.maximum((close[last] - close[idx]) / 1e9, nominal)
 
 
 def decision_bars(b1: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -120,19 +128,30 @@ def session_day(ts: pd.Series | pd.DatetimeIndex) -> np.ndarray:
 def candidates(arm_id: str, arm: A.Arm, b1: pd.DataFrame, lo: pd.Timestamp, hi: pd.Timestamp,
                blackout: tuple[np.ndarray, np.ndarray]) -> pd.DataFrame:
     """Outcome-blind: the arm's candidates decided in [lo, hi) (decision = the decision bar's close), with side,
-    max_hold_s (`hold_seconds`) and session
-    day. No barrier, no label."""
-    bars = decision_bars(b1, arm.timeframe)
-    c = R.candidates(arm, R.RuleContext(bars=bars, b1=b1, blackout_lo=blackout[0], blackout_hi=blackout[1]))
+    max_hold_s (`horizon_seconds`: the true
+    wall-clock exposure, market-shut gaps included) and session day. No barrier, no label."""
+    c = _horizons(arm, b1, blackout)
     cols = ["arm", "decision_utc", "side", "max_hold_s", "session_day"]
     if c.empty:
         return pd.DataFrame(columns=cols)
-    dec = utc_index(bars["visible_at"])[c["idx"].to_numpy(int)]
-    inside = np.asarray((dec >= lo) & (dec < hi))
-    c, dec = c[inside].reset_index(drop=True), dec[inside]
-    hold_s = hold_seconds(arm, c["max_bars"].to_numpy(dtype=float))
+    dec = utc_index(c["decision_utc"])
+    c = c[np.asarray((dec >= lo) & (dec < hi))].reset_index(drop=True)
+    dec = utc_index(c["decision_utc"])
     return pd.DataFrame({"arm": arm_id, "decision_utc": dec, "side": c["side"].to_numpy(dtype=float),
-                         "max_hold_s": hold_s, "session_day": session_day(dec).astype(str)})
+                         "max_hold_s": c["max_hold_s"].to_numpy(dtype=float), "session_day": session_day(dec).astype(str)})
+
+
+def _horizons(arm: A.Arm, b1: pd.DataFrame, blackout: tuple[np.ndarray, np.ndarray]) -> pd.DataFrame:
+    """Every candidate of the arm's rule on `b1`: decision_utc, side and max_hold_s (`horizon_seconds`). The one
+    source of the horizon for `candidates` and `label`, so the count's purge and the label's are the same."""
+    bars = decision_bars(b1, arm.timeframe)
+    c = R.candidates(arm, R.RuleContext(bars=bars, b1=b1, blackout_lo=blackout[0], blackout_hi=blackout[1]))
+    if c.empty:
+        return pd.DataFrame({"decision_utc": pd.DatetimeIndex([], tz="UTC"), "side": np.zeros(0),
+                             "max_hold_s": np.zeros(0)})
+    idx = c["idx"].to_numpy(int)
+    return pd.DataFrame({"decision_utc": utc_index(bars["visible_at"])[idx], "side": c["side"].to_numpy(dtype=float),
+                         "max_hold_s": horizon_seconds(arm, bars, idx, c["max_bars"].to_numpy(dtype=float))})
 
 
 def bps_net(trades: pd.DataFrame) -> np.ndarray:
@@ -156,14 +175,12 @@ def _run_arm_module() -> ModuleType:
 
 def _trade_hold_s(arm: A.Arm, b1: pd.DataFrame, blackout: tuple[np.ndarray, np.ndarray], dec: pd.DatetimeIndex,
                   side: np.ndarray) -> np.ndarray:
-    """Each trade's max_hold_s from its own candidate's max_bars (`hold_seconds`, as `candidates`), matched on
-    (decision, side); a trade without its candidate raises."""
-    bars = decision_bars(b1, arm.timeframe)
-    c = R.candidates(arm, R.RuleContext(bars=bars, b1=b1, blackout_lo=blackout[0], blackout_hi=blackout[1]))
-    cdec = epoch_ns(utc_index(bars["visible_at"])[c["idx"].to_numpy(int)]) if len(c) else np.zeros(0, np.int64)
-    held = hold_seconds(arm, c["max_bars"].to_numpy(dtype=float)) if len(c) else np.zeros(0)
-    table = {(int(t), float(sd)): float(h) for t, sd, h in zip(cdec, c["side"].to_numpy(dtype=float) if len(c)
-                                                                else np.zeros(0), np.atleast_1d(held), strict=True)}
+    """Each trade's max_hold_s from its own candidate (`_horizons`, as `candidates`), matched on (decision, side); a
+    trade without its candidate raises."""
+    c = _horizons(arm, b1, blackout)
+    table = {(int(t), float(sd)): float(h) for t, sd, h in zip(epoch_ns(utc_index(c["decision_utc"])),
+                                                                c["side"].to_numpy(dtype=float),
+                                                                c["max_hold_s"].to_numpy(dtype=float), strict=True)}
     out = np.array([table.get((int(t), float(sd)), np.nan) for t, sd in zip(epoch_ns(dec), side, strict=True)])
     if np.isnan(out).any():
         raise ValueError(f"{arm.id}: a replayed trade without its candidate: its horizon is unknown")

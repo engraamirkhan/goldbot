@@ -273,3 +273,12 @@ quant review, one read by the evaluator.
 ## 8. Quant-reviewer signature
 
 Quant-reviewer sign-off 2026-11-25 at 1943da01: C1-C10 closed; condition carried to code review: `test_keep_share_per_arm` asserts pooled edge_nm ≈ 0 with no within-arm signal.
+
+## 9. Amendments
+
+- 2026-11-25 clarification (before any Stage L read, 0 K booked; PR #447): `max_hold_s` is the candidate's wall-clock
+  exposure, from its decision close to the close of the decision bar its time barrier ends on
+  (`history_replay.horizon_seconds`), market-shut gaps included and never less than (bars + 1) x tf. Previously
+  (bars + 1) x tf, which understated holds across weekends and breaks (22 of 13,610 RBR15 learn trades). The purge and
+  embargo can only drop more rows. Stage 0 counts re-run with the new definition are identical per arm and block.
+  Quant-reviewer approved 2026-11-25 at 3bfe035e.
