@@ -272,4 +272,4 @@ quant review, one read by the evaluator.
 
 ## 8. Quant-reviewer signature
 
-(pending)
+Quant-reviewer sign-off 2026-11-25 at 1943da01: C1-C10 closed; condition carried to code review: `test_keep_share_per_arm` asserts pooled edge_nm ≈ 0 with no within-arm signal.
