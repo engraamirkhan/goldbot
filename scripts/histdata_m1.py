@@ -722,6 +722,13 @@ def cmd_check(a: argparse.Namespace) -> int:
         print("REFUSED: run `evidence` first (same-source shares and the gap-window DST evidence)", flush=True)
         return 2
     same = same_source_decisions(pd.read_csv(evp))
+    # every grade run regrades every stored year: a year a previous run quarantined comes back for the grade and goes
+    # back to _quarantine if it fails again (a report never silently loses its F rows)
+    for q in sorted((base / "_quarantine").glob("*/*_1m_bid_*.parquet")):
+        dst = base / q.parent.name / q.name
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(q, dst)
     man = read_manifest(base)
     tasks = [(k, y, str(base), str(raw), _stored_rule(man, k, y), same.get((k, y), False)) for k in a.keys
              for y in range(FIRST_YEAR, LAST_YEAR + 1) if year_path(base, k, y).exists()]
