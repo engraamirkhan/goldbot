@@ -70,3 +70,33 @@ with an id its gate does not name.
 
 ## Owner rules served
 A5 (objective), A2 (singles and fusions judged on the same measure), A8 (demo learning continues under abstention).
+
+## Amendment 2026-11-27 (ML lifecycle plan of 2026-11-25: A3, rulings R-H and R-I; written by the research director)
+
+Status: proposed; the quant-reviewer signs. It must be signed **before any OMB-1 or H-102 Stage 0 fit and before the
+sr-v3 fit of 2026-12-13**; a choice made after a look costs K +1.
+
+**R-H. One cost quantile.** The cost of record at its **upper 95 % bound (ub95)** is used for training, threshold,
+selection and the gate, for every model in section 2. FillModel p75 and the era-scaled Dukascopy spread are
+descriptive sensitivities only. The RL exit gate reads "at the ub95 cost of record", not "at FillModel p75" (amends
+the table in section 2 and ruling D14). The 2x cost stress row must keep S ≥ 0 (not ≥ +0.05 R).
+
+**R-I. The filter's implementation: cost-offset form first.**
+- **Primary (pre-registered):** the offset form. The learner predicts E[gross R | x] (clipped at ±10 R, obj-v1
+  weights), the cost of record cost(x) enters as a known offset, and a candidate is kept iff
+  E[gross R | x] − cost(x) > 0. It is the same Bayes rule as section 2 with lower variance, and the model never has to
+  learn the cost formula from labels.
+- **The single named alternative:** the weighted-net logit of section 2. The quant rules between the two before the
+  first fit named above. No third form.
+- **Every read reports S split into** gross skill (kept gross − all gross) and cost avoidance (the rest). A pass made
+  of cost avoidance alone is reported as such.
+
+**Clip text, single version.** Section 1 as amended by the review of 2026-11-25 is the only text: every statistic
+uses net R clipped at ±10 R; quarantine is an audit flag, never an exclusion; £ reports use unclipped net R.
+
+**Guard wording, replacing section 1's list.** *Unweighted* log-loss, AUC, accuracy and win rate are banned from
+selection, threshold and gate, and are reported as diagnostics only. **Weighted cross-entropy with the obj-v1 weights
+is the named training loss** (or, under the offset form, the weighted loss on gross R). Library defaults that select
+on their own metric are banned: LightGBM early stopping, `LogisticRegressionCV`, `CalibratedClassifierCV`. Fixed
+rounds and fixed regularisation are written into each card before data. Tree minimum-leaf sizes are stated in weight
+units (sum of obj-v1 weights), not row counts.
