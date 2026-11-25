@@ -576,3 +576,32 @@ def test_a_learning_cohort_fill_is_listed_but_never_in_a_ranking_row_read_progre
     with _db(tmp_path).connection() as conn:
         [st] = [s for s in labs.arm_statuses(conn, [SCALP], now=NOW, held_out=()) if s.arm_id == "S1A"]
     assert st.n == 1
+
+
+def test_a_page_breaks_its_closed_trades_down_by_asset_class_and_family_x_class_and_flags_a_split():
+    """Owner directive 2026-11-25: the List's filter, by asset class and by family x class (net, n, win rate,
+    money/trade, mean R, t), and a family positive in one class and negative in another flagged."""
+    from goldbot.ops.class_breakdown import MIN_SPLIT_FILLS
+    base: dict[str, Any] = dict(kind="exploration", status="closed", account="icm-probe", account_label="Scalp lab",
+                                mode="demo", family_label="Box", variant="15m", timeframe="15m", arm_id="S1A",
+                                is_control=False, side="long", lots=0.01, entry=1.0, stop=0.9, stop_now=None,
+                                target=1.2, exit=1.1, exit_reason="target", censored=False, held_s=600.0,
+                                hold_limit_s=3600.0, risk_amount=10.0, currency="GBP", gross=None, pnl_now=None,
+                                r_now=None, price_now=None, costs=None, why="x", evidence="counted",
+                                excluded_reason=None, stale=False)
+    spec = [("box", "XAUUSD", 0.5), ("box", "XAUUSD", -0.1), ("box", "EURUSD", -0.5), ("box", "EURUSD", 0.1),
+            ("vwap", "US500", 0.2), ("vwap", "US500", 0.2)]
+    rows = [TradeRow.model_construct(**base, trade_id=f"t{i}", family=fam, symbol=sym, r=r, pnl=r * 10.0,
+                                     opened_utc=NOW - pd.Timedelta(minutes=i + 20),
+                                     exit_utc=NOW - pd.Timedelta(minutes=i + 1), position_id=None)
+            for i, (fam, sym, r) in enumerate(spec * MIN_SPLIT_FILLS)]
+    rows.sort(key=lambda r: (r.exit_utc, r.trade_id), reverse=True)
+    page = tl.query(tl.Ledger(as_of=NOW, rows=rows, unreadable=[]), _q(period="all"))
+    assert [(c.asset_class, c.n) for c in page.by_class] == \
+        [("metal", 2 * MIN_SPLIT_FILLS), ("index", 2 * MIN_SPLIT_FILLS), ("fx", 2 * MIN_SPLIT_FILLS)]
+    metal = page.by_class[0]
+    assert (metal.net_pnl, metal.currency, metal.win_rate, metal.net_per_trade, metal.mean_r) == \
+        (round(4.0 * MIN_SPLIT_FILLS, 2), "GBP", 0.5, 2.0, 0.2)
+    assert {(c.family, c.asset_class) for c in page.by_family_class} == \
+        {("box", "metal"), ("box", "fx"), ("vwap", "index")}
+    assert page.class_splits == ["box"]

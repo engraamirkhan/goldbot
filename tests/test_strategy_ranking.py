@@ -457,3 +457,29 @@ def test_a_row_read_against_s0_is_tagged_as_an_unwired_replay_control_and_never_
                    cat, NOW)
     assert _by(view, "alpha").control_note == sr.S0_REPLAY_NOTE == "control: S0 replay (unwired) - not a verdict"
     assert _by(view, "beta").control_note is None
+
+
+# ------------------------------------------------------------------------------------------------ by asset class
+def test_each_family_row_breaks_down_by_asset_class_and_flags_a_family_split_across_classes():
+    """Owner directive 2026-11-25: a family's fills by asset class (net £, n, win rate, £/trade, mean R, t), the
+    view's totals by class, and a family positive in one class and negative in another flagged."""
+    metal = _spread("A1", [0.6, -0.2] * 30, 20)                                           # +0.2 R, 60 fills
+    fx = [r.model_copy(update={"symbol": "EURUSD"}) for r in _spread("A1", [-0.6, 0.2] * 30, 20)]    # -0.2 R
+    beta = _spread("B1", [0.3] * 40, 10, family="beta")
+    view = sr.rank([*metal, *fx, *beta], CAT, NOW)
+    alpha = _by(view, "alpha")
+    assert alpha.asset_classes == ["metal", "fx"]
+    m = next(c for c in alpha.by_class if c.asset_class == "metal")
+    assert (m.family, m.n, m.mean_r, m.win_rate, m.net_pnl, m.currency, m.net_per_trade) == \
+        ("alpha", 60, 0.2, 0.5, 120.0, "GBP", 2.0)
+    assert m.t is not None and m.t > 0
+    assert alpha.class_split and not _by(view, "beta").class_split
+    assert {c.asset_class: c.n for c in view.by_class} == {"metal": 100, "fx": 60}
+    assert view.class_splits == ["alpha"]
+
+
+def test_a_family_with_a_short_class_is_not_flagged_split():
+    rows = [*_spread("A1", [0.6, -0.2] * 30, 20),
+            *[r.model_copy(update={"symbol": "SUGAR"}) for r in _spread("A1", [-1.0] * 10, 5)]]
+    alpha = _by(sr.rank(rows, CAT, NOW), "alpha")
+    assert alpha.asset_classes == ["metal", "agri"] and not alpha.class_split

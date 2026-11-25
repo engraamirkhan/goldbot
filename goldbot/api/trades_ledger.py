@@ -20,6 +20,12 @@ Blinding retired (ADR 0053, backlog 139; ADR 0050 decisions 2-3 superseded): eve
 carry their results whatever an arm's read, so a family's filter shows what its ranking row shows. "early, not
 proven" with n and a CI lives on every per-strategy figure (goldbot/api/strategy_ranking.py). Rows come newest
 activity first, or by result (`sort`: best or worst R first, then the trades without a final R, newest first).
+
+By asset class (owner directive 2026-11-25: "a strategy can perform differently on different instruments"): a page
+carries its filter's closed trades by asset class and by family x class (goldbot/ops/class_breakdown.py: net, n, win
+rate, money/trade, mean R, t clustered by account and opportunity day) and the families split across classes. Shadow
+rows (paper: a gross R, no money), rows void as evidence and rows whose label is voided (`Ledger.class_void`, PR #442
+rule) are left out of the classes; the net totals keep their money.
 """
 from __future__ import annotations
 
@@ -30,7 +36,7 @@ import logging
 import math
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -67,6 +73,14 @@ from goldbot.engine.store import OpenTrade
 from goldbot.instruments import Instruments
 from goldbot.ops import gates_phase as gp
 from goldbot.ops.account_view import usd_to_account
+from goldbot.ops.class_breakdown import (
+    ClassFigures,
+    ClassFill,
+    asset_class_of,
+    class_figures,
+    class_splits,
+    class_voids,
+)
 from goldbot.ops.report_days import day_bounds, report_day
 from goldbot.research.attribution import family_of
 from goldbot.telegram import labs
@@ -538,6 +552,8 @@ class Ledger(FrozenRecord):
     as_of: pd.Timestamp
     rows: list[TradeRow]
     unreadable: list[TradeSource]
+    # exploration order ids never in a class figure: a voided label or void as evidence (class_breakdown.class_voids, PR #442)
+    class_void: frozenset[str] = frozenset()
     _index: Any = PrivateAttr(default=None)
 
     def model_post_init(self, context: Any, /) -> None:
@@ -580,7 +596,18 @@ def build_ledger(state_dir: str | Path, now: pd.Timestamp, engines: list[dict[st
             *_read("positions", lambda: _positions(state, ctx), unreadable),
             *_read("shadow", lambda: _shadow(state, ctx), unreadable)]
     rows.sort(key=_key, reverse=True)
-    return Ledger(as_of=now, rows=rows, unreadable=unreadable)
+    return Ledger(as_of=now, rows=rows, unreadable=unreadable, class_void=_class_void(state))
+
+
+def _class_void(state: Path) -> frozenset[str]:
+    """The exploration orders' ids kept out of the class figures; none when aux.db cannot be read (its rows are
+    then missing from the ledger too)."""
+    try:
+        with labs.aux(state) as conn:
+            ids = class_voids(conn) if conn is not None else frozenset()
+    except sqlite3.Error:
+        return frozenset()
+    return ids
 
 
 # ------------------------------------------------------------------------------------------------ query
@@ -741,6 +768,7 @@ class _Index:
     by_account: dict[str | None, _Closed]
     open: list[TradeRow]
     answers: dict[Any, tuple[list[TradeRow], TradeTotals]] = field(default_factory=dict)
+    classes: dict[Any, list[ClassFigures]] = field(default_factory=dict)       # by filter, as `answers`
 
     @classmethod
     def build(cls, rows: Sequence[TradeRow]) -> _Index:
@@ -842,6 +870,38 @@ def _answer(ledger: Ledger, q: TradeQuery) -> tuple[list[TradeRow], TradeTotals]
     return rows, t
 
 
+def order_id(r: TradeRow) -> str:
+    """An exploration or control row's order (candidate) id: the tail of its `trade_id` (`arm_trade_id`)."""
+    return r.trade_id.rsplit(":", 1)[-1]
+
+
+def by_class(rows: Sequence[TradeRow], void: Collection[str] = ()) -> list[ClassFigures]:
+    """The closed, non-shadow rows by asset class, then by family x class (goldbot/ops/class_breakdown.py); a row's
+    class from its symbol (`asset_class_of`, read once per symbol). Rows void as evidence, or whose order id is in
+    `void` (a voided label), are left out."""
+    cls: dict[str, str] = {}
+    fills = []
+    for r in rows:
+        if (r.status != "closed" or r.exit_utc is None or r.kind == "shadow" or r.evidence == "excluded"
+                or (r.kind in ("exploration", "control") and order_id(r) in void)):
+            continue
+        c = cls.get(r.symbol)
+        fills.append(ClassFill(r.family, c if c is not None else cls.setdefault(r.symbol, asset_class_of(r.symbol)),
+                               r.pnl, r.r, r.currency, (r.account, oday(r.exit_utc))))
+    return class_figures(fills)
+
+
+def _classes(ledger: Ledger, q: TradeQuery, rows: Sequence[TradeRow]) -> list[ClassFigures]:
+    idx = ledger.index()
+    key = q.model_copy(update={"cursor": None, "limit": PAGE})
+    hit = idx.classes.get(key)
+    if hit is None:
+        if len(idx.classes) >= ANSWERS_MAX:
+            idx.classes.clear()
+        hit = idx.classes[key] = by_class(rows, ledger.class_void)
+    return hit
+
+
 def query(ledger: Ledger, q: TradeQuery) -> TradesPage:
     """One page of the matching rows and the totals of all of them. The cursor names the last row given: the next
     page starts after it in the query's order (newest first, or by result)."""
@@ -858,8 +918,11 @@ def query(ledger: Ledger, q: TradeQuery) -> TradesPage:
     more = start + limit < len(rows)
     # the facet: the instruments under every filter but the instrument ones (the panel never offers an empty choice)
     facet = rows if not (q.symbol or q.group) else _answer(ledger, q.model_copy(update={"symbol": (), "group": ()}))[0]
+    figs = _classes(ledger, q, rows)
     return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1], q.sort) if more and page else None,
-                      totals=t, unreadable=ledger.unreadable, symbols=sorted({r.symbol for r in facet}))
+                      totals=t, unreadable=ledger.unreadable, symbols=sorted({r.symbol for r in facet}),
+                      by_class=[f for f in figs if f.family is None],
+                      by_family_class=[f for f in figs if f.family is not None], class_splits=class_splits(figs))
 
 
 def detail(ledger: Ledger, trade_id: str) -> TradeRow | None:

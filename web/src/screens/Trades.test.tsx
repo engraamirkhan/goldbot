@@ -235,6 +235,11 @@ describe("Trades > Strategies, ranked (136-138, ADR 0053)", () => {
     expect(first).toHaveTextContent(`vs random +0.10 R (interim`);
     expect(first).toHaveTextContent("early, not proven");
     expect(first).toHaveTextContent("120 of 300 to the read");    // the server's progress, on the row's own fills
+    expect(first).toHaveTextContent("intraday · exploration · metal");      // its asset class (owner 2026-11-25)
+    const split = within(card).getByRole("button", { name: /^2\. Box break \+ close/ });
+    expect(split).toHaveTextContent("metal, fx");
+    expect(split).toHaveTextContent(/split by class: metal \+0\.20.R, fx [−-]0\.20.R/);
+    expect(first).not.toHaveTextContent("split by class");
     // a phone: the rows too few to rank are one compact list, a line each, with the same progress as their fills
     const few = within(within(card).getByRole("region", { name: "Too few to rank" })).getByRole("button", { name: /^Sweep \+ absorb/ });
     expect(few).toHaveTextContent("Sweep + absorb avg +0.80 R · 12 fills, 4 days · 12 of 300 to the read");

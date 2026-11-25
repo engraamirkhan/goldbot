@@ -79,6 +79,10 @@ class LearningClose(FrozenRecord):
     mfe_usd: float | None = None
     mae_usd: float | None = None
     excursion_approx: bool | None = None  # part of the path came from 1m bars, not ticks (a restart, an adoption)
+    # owner directive 2026-11-25: the instrument key (its asset class: goldbot.instruments.asset_class_of), and whether
+    # its label is voided or it is void as evidence (class_breakdown.class_voids, PR #442: never in a class figure)
+    symbol: str = "XAUUSD"
+    class_void: bool = False
 
 
 class LearningCloses(FrozenRecord):
@@ -104,7 +108,7 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp, *, include_ex
     """Every closed, not voided exploration, control and cost-probe trade of the ledger (read-only: the cost-probe
     source is not migrated). Not yet de-duplicated against the closed-trade record: `without_recorded`.
     `include_excluded`: keep the rows voided as evidence too (money readers: they are still the account's P&L)."""
-    from goldbot.api.trades_ledger import build_ledger, exploration_records
+    from goldbot.api.trades_ledger import build_ledger, exploration_records, order_id
     ledger = build_ledger(state_dir, now, read_only=True)
     bodies: dict[str, ExplorationRecord] = {}
     if "exploration" not in ledger.unreadable:
@@ -127,7 +131,9 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp, *, include_ex
             position_id=r.position_id, opened_utc=pd.Timestamp(r.opened_utc), exit_utc=pd.Timestamp(r.exit_utc),
             side=r.side, currency=r.currency, pnl=r.pnl, r=r.r, gross=gross, risk=r.risk_amount, net=gross is not None,
             commission=c.commission if c is not None else None, swap=-c.swap if c is not None and c.swap is not None else None,
-            censored=r.censored, voided=r.evidence == "excluded", exit_reason=r.exit_reason, **_excursion(bodies.get(r.trade_id))))
+            censored=r.censored, voided=r.evidence == "excluded", exit_reason=r.exit_reason, symbol=r.symbol,
+            class_void=r.kind in ("exploration", "control") and order_id(r) in ledger.class_void,
+            **_excursion(bodies.get(r.trade_id))))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])
 
 

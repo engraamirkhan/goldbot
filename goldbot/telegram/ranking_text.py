@@ -38,7 +38,8 @@ def load_ranker(state_dir: str | Path, now: pd.Timestamp) -> Ranker:
     led = trades_ledger.build_ledger(state_dir, now)
     retired, ok = strategy_board.retired_arms(state_dir, now)
     return Ranker(led.rows, strategy_labels.catalog(), now, retired=retired,
-                  unreadable=[*led.unreadable, *([] if ok else ["arm status"])])
+                  unreadable=[*led.unreadable, *([] if ok else ["arm status"])],
+                  class_void=led.class_void)
 
 
 def _r(x: float) -> str:
@@ -62,6 +63,9 @@ def family_line(row: RankRow, move: str | None = None) -> str:
     if f.edge_vs_control_r is not None:
         parts.append(f"vs random {_r(f.edge_vs_control_r)} R ({f.edge_source})")
     parts.append(STATUS_WORDS[row.status])
+    if row.class_split:     # owner directive 2026-11-25: positive in one asset class, negative in another
+        parts.append("split by class: " + ", ".join(f"{c.asset_class} {_r(c.mean_r)} R" for c in row.by_class
+                                                     if c.mean_r is not None))
     return " · ".join(parts)
 
 

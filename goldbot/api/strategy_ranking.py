@@ -23,6 +23,12 @@ Design rules kept (ADR 0053 with the quant reviewer's binding conditions):
   when any module outside RANKING_READERS imports this one.
 Only closed fills with an R count (net of every cost); a fill voided as evidence (quarantine) is left out, as in the
 read's n. Money stays in the account currency and is never summed across currencies.
+
+By asset class (owner directive 2026-11-25: "a strategy can perform differently on different instruments"): every row
+also carries its fills by asset class (`goldbot.ops.class_breakdown.asset_class_of` of the fill's symbol) with the same
+clustered pass, and is flagged `class_split` when its mean net R is positive in one class and negative in another
+(goldbot/ops/class_breakdown.py `is_split`); the view carries the totals by class. Descriptive like the rest: the
+row is still the family pooled over its classes, ranked on the pooled key.
 """
 from __future__ import annotations
 
@@ -53,6 +59,7 @@ from goldbot.api.schema import (
 )
 from goldbot.api.strategy_labels import Catalog
 from goldbot.data.timeutil import ROLLOVER_UTC_H
+from goldbot.ops.class_breakdown import ClassFigures, asset_class_of, class_order, cr1_t, is_split
 from goldbot.ops.report_days import day_bounds, report_day
 from goldbot.telegram.labs import _TF_STYLE
 
@@ -145,6 +152,8 @@ class _Index:
     label: np.ndarray                   # the account's label
     group: np.ndarray                   # the row (key) code
     variant: np.ndarray                 # (group, timeframe, variant) code
+    cls: np.ndarray                     # asset class code (`cls_names`)
+    cvoid: np.ndarray                   # a voided label (class_breakdown.class_voids): never in a class figure
     arm: np.ndarray                     # -1: an engine fill
     counted: np.ndarray                 # its fills are the family's (not virtual exits on another arm's)
     explore: np.ndarray                 # an exploration (strategy) arm's fill
@@ -157,6 +166,7 @@ class _Index:
     styles: dict[str, int]
     style_names: list[str]
     labels: list[str]
+    cls_names: list[str]
     choices: list[AccountChoice]
     prog_unit: np.ndarray               # read progress: each counted fill's read unit code, its close and its day
     prog_at: np.ndarray
@@ -166,16 +176,18 @@ class _Index:
     nday: int
 
 
-def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
+def _index(rows: Iterable[TradeRow], cat: Catalog, class_void: Collection[str] = ()) -> _Index:
     """One pass over the ledger's rows. A row without its net (a gross-only engine record, unreadable deals) carries
     a gross R: never ranked (after costs only); voided evidence, shadow models and cost probes neither."""
     metas: dict[str, _Meta] = {}
     reads_to: dict[str, tuple[str, bool] | None] = {}
-    groups, variants, arms_c, accts, ccys, styles, labels, units = (_Codes() for _ in range(8))
+    groups, variants, arms_c, accts, ccys, styles, labels, units, classes = (_Codes() for _ in range(9))
+    sym_cls: dict[str, int] = {}
     uncounted = {a for a, i in cat.arms.items() if not i.counted}  # H-80: virtual exits on another arm's fills
     choices: dict[str, str] = {}
     cols: dict[str, list[Any]] = {k: [] for k in ("r", "pnl", "cost", "risk", "at", "day", "acct", "ccy", "style",
-                                                  "label", "group", "variant", "arm", "counted", "kind", "tid")}
+                                                  "label", "group", "variant", "arm", "counted", "kind", "tid",
+                                                  "cls", "cvoid")}
     prog_unit: list[int] = []
     prog_at: list[float] = []
     prog_day: list[int] = []
@@ -222,6 +234,9 @@ def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
         c["counted"].append(arm not in uncounted)
         c["kind"].append(kind)
         c["tid"].append(r.trade_id)
+        c["cvoid"].append(kind != "engine" and r.trade_id.rsplit(":", 1)[-1] in class_void)   # its order id
+        cc = sym_cls.get(r.symbol)
+        c["cls"].append(cc if cc is not None else sym_cls.setdefault(r.symbol, classes(asset_class_of(r.symbol))))
     day = np.asarray(cols["day"], dtype=np.int64)
     d0 = int(day.min()) if day.size else 0
     nday = int(day.max()) - d0 + 1 if day.size else 1
@@ -236,10 +251,12 @@ def _index(rows: Iterable[TradeRow], cat: Catalog) -> _Index:
         r=col("r", float), pnl=col("pnl", float), cost=col("cost", float), risk=col("risk", float),
         at=col("at", float), cell=(acct * nday + day - d0)[order], day=(day - d0)[order], acct=acct[order],
         ccy=col("ccy", np.int64), style=col("style", np.int64), label=col("label", np.int64),
-        group=col("group", np.int64), variant=col("variant", np.int64), arm=col("arm", np.int64),
+        group=col("group", np.int64), variant=col("variant", np.int64), cls=col("cls", np.int64),
+        cvoid=col("cvoid", bool),
+        arm=col("arm", np.int64),
         counted=col("counted", bool), explore=(kinds == "exploration")[order], control=(kinds == "control")[order],
         groups=groups.names, variants=variants.names, arms=arms_c.names, accounts=accts.code, ccys=ccys.names,
-        styles=styles.code, style_names=styles.names, labels=labels.names,
+        styles=styles.code, style_names=styles.names, labels=labels.names, cls_names=classes.names,
         choices=[AccountChoice(account=a, label=lbl) for a, lbl in sorted(choices.items(), key=lambda kv: kv[1])],
         prog_unit=np.asarray(prog_unit, dtype=np.int64), prog_at=np.asarray(prog_at, dtype=float),
         prog_day=np.asarray(prog_day, dtype=np.int64), units=units.names,
@@ -407,6 +424,19 @@ def _figures(p: _Pass, last_7d: RecentFigures, last_30d: RecentFigures, edge: _E
         last_7d=last_7d, last_30d=last_30d, trend=trend)
 
 
+def _class_figures(ix: _Index, passes: dict[int, _Pass], family: str | None) -> list[ClassFigures]:
+    """Class code -> pass, as ClassFigures in the registry's class order (goldbot/ops/class_breakdown.py)."""
+    out = []
+    for c, p in passes.items():
+        one = len(p.currencies) == 1 and None not in p.currencies
+        net = round(p.net, 2) if one else None
+        out.append(ClassFigures(
+            asset_class=ix.cls_names[c], family=family, n=p.n, net_pnl=net,
+            currency=next(iter(p.currencies)) if one else None, net_per_trade=round(net / p.n, 2) if net is not None
+            else None, win_rate=round(p.wins / p.n, 3), n_r=p.n, mean_r=round(p.mean, 3), t=cr1_t(p.mean, p.se)))
+    return sorted(out, key=lambda f: class_order(f.asset_class))
+
+
 # ------------------------------------------------------------------------------------------------ status and bands
 def _status(arms: Collection[str], kind: Kind, cat: Catalog, retired: Collection[str]) -> RankStatus:
     """The best recorded verdict once any read unit of the row's strategy arms is read and the others are read or
@@ -536,6 +566,13 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
     controls = {ix.arms[a]: p for a, p in _agg(ix, csel, ix.arm[csel]).items()}
     counted = gsel[ix.counted[gsel]]
     g_pass = _agg(ix, counted, ix.group[counted])
+    ncls = max(1, len(ix.cls_names))
+    gc_pass: dict[int, dict[int, _Pass]] = {}
+    csel_ok = counted[~ix.cvoid[counted]]                   # PR #442: a voided label never reaches a class figure
+    for code, p in _agg(ix, csel_ok, ix.group[csel_ok] * ncls + ix.cls[csel_ok]).items():
+        gc_pass.setdefault(code // ncls, {})[code % ncls] = p
+    tsel = csel_ok[~ix.control[csel_ok]]
+    view_cls = _class_figures(ix, _agg(ix, tsel, ix.cls[tsel]), None)
     v_pass = _agg(ix, gsel, ix.variant[gsel])
     esel = gsel[ix.explore[gsel]]
     own = {ix.arms[a]: p for a, p in _agg(ix, esel, ix.arm[esel]).items()}
@@ -570,6 +607,7 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
             variants.append(RankVariant(variant=name, timeframe=tf, status=_status(va, kind, cat, retired),
                                         figures=_figures(v_pass[v], v7.get(v, _NONE_RECENT), v30.get(v, _NONE_RECENT),
                                                          v_edge)))
+        by_class = _class_figures(ix, gc_pass.get(g, {}), family)
         ns = max(1, len(ix.style_names))
         counts = style_n[g * ns:(g + 1) * ns]
         built.append(RankRow(
@@ -580,7 +618,9 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
             unranked_reason=_why(fig) if band == "too_few" else None, status=status,
             read_progress=units[0] if units else None, read_units=units, figures=fig, variants=variants,
             control_note=S0_REPLAY_NOTE if kind == "exploration" and any(
-                getattr(cat.arm(a), "control_arm", None) == "S0" for a in strat) else None))
+                getattr(cat.arm(a), "control_arm", None) == "S0" for a in strat) else None,
+            asset_classes=[f.asset_class for f in sorted(by_class, key=lambda f: -f.n)], by_class=by_class,
+            class_split=is_split(by_class)))
     ranked = [r for r in built if r.band == "ranked"]
     k = len(ranked)
     passes = {ix.groups[g][0]: p for g, p in g_pass.items()}
@@ -600,17 +640,19 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
         t_adjusted=t_adj, min_fills=MIN_FILLS, min_days=MIN_DAYS, rows=[*ranked, *few],
         controls=sorted((r for r in built if r.band == "control"), key=lambda r: r.family_label),
         retired=sorted((r for r in built if r.band == "retired"), key=lambda r: r.family_label),
-        account_choices=ix.choices,
+        account_choices=ix.choices, by_class=view_cls,
+        class_splits=sorted(r.key for r in built if r.class_split and r.kind != "control"),
         unreadable=[*unreadable, *([] if cat.reads_ok or ARM_READS_UNREADABLE in unreadable else [ARM_READS_UNREADABLE])])
 
 
 def rank(rows: Iterable[TradeRow], cat: Catalog, as_of: pd.Timestamp, *, window: RankingWindow = "all",
          account: str | None = None, style: str | None = None, retired: Collection[str] = (),
-         unreadable: Sequence[str] = ()) -> RankingView:
+         unreadable: Sequence[str] = (), class_void: Collection[str] = ()) -> RankingView:
     """The ranking over `rows` (the trade ledger's) closed before `as_of` in `window`, filtered to one account (config
     name) and one style when given. `retired`: the arms at their pre-registered stop (labs.arm_statuses). One-off:
-    the API and the reports use a Ranker (the index built once per ledger build)."""
-    return _rank(_index(rows, cat), cat, as_of, window, account, style, retired, unreadable)
+    the API and the reports use a Ranker (the index built once per ledger build). `class_void`: trade ids kept out of
+    the class figures (the ledger's `class_void`)."""
+    return _rank(_index(rows, cat, class_void), cat, as_of, window, account, style, retired, unreadable)
 
 
 @dataclass
@@ -623,12 +665,13 @@ class Ranker:
     as_of: pd.Timestamp
     retired: Collection[str] = ()
     unreadable: Sequence[str] = ()
+    class_void: Collection[str] = ()
     answers: dict[tuple[str, str | None, str | None], RankingView] = field(default_factory=dict)
     index: _Index | None = None
 
     def __post_init__(self) -> None:
         if self.index is None:
-            self.index = _index(self.rows, self.cat)
+            self.index = _index(self.rows, self.cat, self.class_void)
 
     def __call__(self, window: RankingWindow = "all", account: str | None = None,
                  style: str | None = None) -> RankingView:

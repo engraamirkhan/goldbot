@@ -175,3 +175,22 @@ def test_the_morning_report_carries_the_ranking_after_its_lab_lines(tmp_path):
     _seed(state)
     text = build_digest(state, NOW + timedelta(days=1), roadmap=tmp_path / "none.md")
     assert f"🏁 {sr.HEADING}" in text and text.rstrip().endswith(rt.LINK)
+
+
+def test_a_family_split_across_asset_classes_says_so_with_each_classes_mean_r():
+    """Owner directive 2026-11-25: positive in one class and negative in another is named on the family's line."""
+    from goldbot.api.schema import RankFigures, RankRow, RecentFigures
+    from goldbot.ops.class_breakdown import ClassFigures
+    from goldbot.telegram.ranking_text import family_line
+    none = RecentFigures(n=0, net_r_per_trade=None)
+    f = RankFigures(n=80, days=12, clusters=12, net_r_per_trade=0.0, ci95=None, lower_adjusted=None, hit_rate=None,
+                    net_pnl=None, net_per_trade=None, currency=None, profit_factor=None, no_losses=False,
+                    max_drawdown_r=None, cost_per_trade=None, cost_per_trade_r=None, edge_vs_control_r=None,
+                    edge_ci=None, edge_ci_level=None, edge_source=None, last_7d=none, last_30d=none, trend=None)
+    cls = [ClassFigures(asset_class="metal", family="box", n=40, n_r=40, mean_r=0.2),
+           ClassFigures(asset_class="fx", family="box", n=40, n_r=40, mean_r=-0.2)]
+    row = RankRow(key="box", family="box", family_label="Box", version=1, style="intraday", kind="exploration",
+                  timeframes=["15m"], accounts=[], band="too_few", rank=None, unranked_reason="few", status="early",
+                  figures=f, variants=[], by_class=cls, asset_classes=["metal", "fx"], class_split=True)
+    assert "split by class: metal +0.20 R, fx −0.20 R" in family_line(row)
+    assert "split by class" not in family_line(row.model_copy(update={"class_split": False}))

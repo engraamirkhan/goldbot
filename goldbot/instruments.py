@@ -38,6 +38,10 @@ MAGIC_ACCOUNT_STEP = 10_000
 MAGIC_BLOCK_STEP = 100
 
 AssetClass = Literal["metal", "index", "fx", "energy", "bond", "agri", "crypto"]
+# owner directive 2026-11-25: "trading analysis must be broken down by instrument category"; the reports list the
+# classes in this order, a name the registry does not know as "unknown" (never gold)
+UNKNOWN_CLASS = "unknown"
+ASSET_CLASS_ORDER: tuple[str, ...] = ("metal", "index", "fx", "energy", "bond", "agri", "crypto", UNKNOWN_CLASS)
 CorrelationGroup = Literal["gold", "metals", "equity", "fx", "energy", "rates", "ags", "crypto"]
 LeverageClass = Literal["fx", "gold_index", "commodity", "bond", "crypto"]
 # the broker's trading-hours family; L2 checks each against the broker's own trading_sessions (TRACEABILITY D13)

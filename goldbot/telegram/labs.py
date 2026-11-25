@@ -16,6 +16,11 @@ The spec's rules, as built here:
   its admissible trade count and a band (running / within 50% of its stop / at its stop). The running R that decides
   the band is computed in memory and never leaves this module; no share, mean, sum, rank or sign does.
 * "Accounts appear by role label, not slug" (D6): `role` is the one table; an unmapped account is "Other account".
+* By asset class (owner directive 2026-11-25: "a strategy can perform differently on different instruments"): a lab's
+  net closes by the class of their instrument (`goldbot.ops.class_breakdown.asset_class_of`, goldbot/ops/class_breakdown.py),
+  one "by class" line when they span two classes or more. Lab totals only: the family x class view is the ranking's.
+  A close with a voided label or void as evidence (`class_voids`, PR #442 rule) is in no class; its money stays in
+  the lab's net.
 
 Reporting only: nothing here changes an order, a halt, a share or a setting, and aux.db is opened read-only (never
 created or migrated by a report).
@@ -37,6 +42,7 @@ from pydantic import Field
 from goldbot.base import Record
 from goldbot.db.connection import db_path
 from goldbot.engine.exploration import ExplorationRecord
+from goldbot.ops.class_breakdown import ClassFigures, ClassFill, asset_class_of, class_figures, class_voids
 from goldbot.ops.monthly_report import SYMBOLS
 from goldbot.research.arm_stops import (
     Fill,
@@ -197,6 +203,7 @@ class LabSpan(Record):
     # 0053 retired the quant 2026-10-26 3-arm rule: the ranking shows each family's figures)
     by_day: dict[str, float] = Field(default_factory=dict)
     closed_days: list[str] = Field(default_factory=list)          # opportunity days with a close (weekly: "none")
+    by_class: list[ClassFigures] = Field(default_factory=list)    # net closes by asset class (registry order)
 
 
 def refusal_word(code: str | None) -> str:
@@ -250,6 +257,7 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
     net = [t for t in closed if t.pnl is not None]
     apart = [t for t in closed if t.pnl is None]
     grosses = [_gross(t, oz_per_lot) for t in apart]
+    void = class_voids(conn)
     by_day: dict[str, float] = {}
     days: set[str] = set()
     for t in closed:
@@ -267,7 +275,31 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
         no_pnl=len(apart),
         gross_no_pnl=sum(g for g in grosses if g is not None) if apart and all(g is not None for g in grosses)
         else None,
-        costs=_costs(closed, oz_per_lot), by_day=by_day, closed_days=sorted(days))
+        costs=_costs(closed, oz_per_lot), by_day=by_day, closed_days=sorted(days),
+        by_class=class_figures((ClassFill(t.family, asset_class_of(t.symbol), t.pnl, trade_r(t), None,
+                                          report_day(t.exit_utc) if t.exit_utc is not None else None) for t in net
+                                if t.client_order_id not in void),
+                               families=False))
+
+
+def class_text(figs: Sequence[ClassFigures], ccy: str | None) -> str | None:
+    """"by class: metal 12 trades +£3.20 (+£0.27/trade) · 58% won · +0.1R avg (t=1.4) · fx ..."; None under two
+    classes (the lab's own result line already says it)."""
+    if len(figs) < 2:
+        return None
+    parts = []
+    for f in figs:
+        p = f"{f.asset_class} {plural(f.n, 'trade')}"
+        if f.net_pnl is not None:
+            p += f" {money(f.net_pnl, ccy)}"
+            if f.net_per_trade is not None:
+                p += f" ({money(f.net_per_trade, ccy)}/trade)"
+        if f.win_rate is not None:
+            p += f" · {f.win_rate:.0%} won"
+        if f.mean_r is not None:
+            p += f" · {r_text(f.mean_r, 2)} avg" + (f" (t={f.t:.1f})" if f.t is not None else "")
+        parts.append(p)
+    return "by class: " + " · ".join(parts)
 
 
 def paused_since(conn: sqlite3.Connection, account: str) -> pd.Timestamp | None:

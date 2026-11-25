@@ -88,6 +88,12 @@ const costMoney = (r: RankRow) => (r.figures.cost_per_trade == null ? "—" : mo
 const costR = (r: RankRow) => (r.figures.cost_per_trade_r != null ? `(${r.figures.cost_per_trade_r.toFixed(2)}${NBSP}R)` : "");
 const costPair = (r: RankRow) => `${costMoney(r)}${costR(r) ? ` ${costR(r)}` : ""}`;
 const ciWords = (r: RankRow) => ci(r.figures.ci95, 0.95);
+/** Owner directive 2026-11-25: the row's asset classes, most fills first; a family positive in one class and negative
+ * in another says so with each class's average (the server's flag, goldbot/ops/class_breakdown.py). */
+const classWords = (r: RankRow) => (r.asset_classes?.length ? r.asset_classes.join(", ") : "—");
+const splitWords = (r: RankRow) => (r.class_split
+  ? `split by class: ${(r.by_class ?? []).filter((c) => c.mean_r != null).map((c) => `${c.asset_class} ${signedR(c.mean_r ?? null)}`).join(", ")}`
+  : "");
 /** The primary cell: the lower bound, or "too few to rank" with its counts on their own line (the reason is said once). */
 function KeyCell({ r }: { r: RankRow }) {
   const m = r.figures.lower_adjusted == null ? /^(.*?) \((.+)\)$/.exec(r.unranked_reason ?? "") : null;
@@ -167,7 +173,8 @@ function Rows({ rows, wide, families, onFamily, caption }: {
           return (
             <li key={r.key} className={r.rank == null && r.band === "too_few" ? "greyed" : undefined}>
               <button type="button" className="family-card" onClick={() => onFamily(r.family)} aria-label={`${name(r)}, open its trades`}>
-                <span className="family-head"><strong>{name(r)}</strong><span className="muted small">{r.style} · {r.kind}</span></span>
+                <span className="family-head"><strong>{name(r)}</strong><span className="muted small">{r.style} · {r.kind} · {classWords(r)}</span></span>
+                {r.class_split && <span className="small state warn">{splitWords(r)}</span>}
                 <span className="num"><KeyCell r={r} /></span>
                 <span className="small num">avg {signedR(r.figures.net_r_per_trade)} ({ci(r.figures.ci95, 0.95)}) · {nWords(r)}</span>
                 <span className="small num">hit {pct(r.figures.hit_rate)} · {moneyPair(r)} · PF {pfWords(r.figures)} · max drawdown {r.figures.max_drawdown_r == null ? "—" : `${r.figures.max_drawdown_r.toFixed(1)}${NBSP}R`}</span>
@@ -189,9 +196,9 @@ function Rows({ rows, wide, families, onFamily, caption }: {
     <div className="trade-table-wrap">
       <table className="trade-table board-table rank-table">
         <caption className="sr-only">{caption}</caption>
-        <colgroup><col className="w-name" /><col className="w-key" /><col className="w-hit" /><col className="w-net" /><col className="w-pf" /><col /><col className="w-cost" /><col className="w-trend" /></colgroup>
+        <colgroup><col className="w-name" /><col /><col className="w-key" /><col className="w-hit" /><col className="w-net" /><col className="w-pf" /><col /><col className="w-cost" /><col className="w-trend" /></colgroup>
         <thead><tr>
-          <th scope="col">Strategy</th><th scope="col" className="num">Net R/trade at least</th><th scope="col" className="num">Hit · n</th>
+          <th scope="col">Strategy</th><th scope="col">Class</th><th scope="col" className="num">Net R/trade at least</th><th scope="col" className="num">Hit · n</th>
           <th scope="col" className="num">Net</th><th scope="col" className="num">PF · max DD</th><th scope="col" className="num">Vs random</th>
           <th scope="col" className="num">Cost/trade</th><th scope="col" className="num">7 d / 30 d</th>
         </tr></thead>
@@ -204,6 +211,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFamily(r.family); } }}>
                 <th scope="row"><strong>{name(r)}</strong><br /><span className="muted small">{r.style} · {r.kind} · {r.timeframes.join(", ")}</span>
                   <Progress r={r} /><StatusLine r={r} f={f} /><Variants r={r} /></th>
+                <td className="small">{classWords(r)}{r.class_split && <><br /><span className="state warn">{splitWords(r)}</span></>}</td>
                 <td className="num"><KeyCell r={r} /><br /><span className="small muted">avg {nw(signedR(r.figures.net_r_per_trade))} · {nw(ciWords(r))}</span></td>
                 <td className="num">{pct(r.figures.hit_rate)}<br /><span className="small muted">{nWords(r)}</span></td>
                 <td className="num">{moneyPair(r)}</td>

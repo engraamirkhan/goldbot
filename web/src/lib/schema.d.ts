@@ -1151,6 +1151,35 @@ export interface components {
              */
             t: string;
         };
+        /**
+         * ClassFigures
+         * @description One asset class's closed fills (`family` None), or one family's in one class: net of every cost.
+         */
+        ClassFigures: {
+            /** Asset Class */
+            asset_class: string;
+            /** Currency */
+            currency?: string | null;
+            /** Family */
+            family?: string | null;
+            /** Mean R */
+            mean_r?: number | null;
+            /** N */
+            n: number;
+            /**
+             * N R
+             * @default 0
+             */
+            n_r: number;
+            /** Net Per Trade */
+            net_per_trade?: number | null;
+            /** Net Pnl */
+            net_pnl?: number | null;
+            /** T */
+            t?: number | null;
+            /** Win Rate */
+            win_rate?: number | null;
+        };
         /** CodeSignIn */
         CodeSignIn: {
             /** At Utc */
@@ -2596,11 +2625,20 @@ export interface components {
         RankRow: {
             /** Accounts */
             accounts: string[];
+            /** Asset Classes */
+            asset_classes?: string[];
             /**
              * Band
              * @enum {string}
              */
             band: "ranked" | "too_few" | "control" | "retired";
+            /** By Class */
+            by_class?: components["schemas"]["ClassFigures"][];
+            /**
+             * Class Split
+             * @default false
+             */
+            class_split: boolean;
             /** Control Note */
             control_note?: string | null;
             /** Family */
@@ -2663,6 +2701,10 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            /** By Class */
+            by_class?: components["schemas"]["ClassFigures"][];
+            /** Class Splits */
+            class_splits?: string[];
             /** Controls */
             controls: components["schemas"]["RankRow"][];
             /** Heading */
@@ -3509,6 +3551,12 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            /** By Class */
+            by_class?: components["schemas"]["ClassFigures"][];
+            /** By Family Class */
+            by_family_class?: components["schemas"]["ClassFigures"][];
+            /** Class Splits */
+            class_splits?: string[];
             /** Next Cursor */
             next_cursor: string | null;
             /** Rows */
