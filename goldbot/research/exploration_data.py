@@ -72,12 +72,14 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.data import holdout_guard
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.store import asof_join
 from goldbot.data.timeutil import NEW_YORK, epoch_ns
 from goldbot.db.connection import Database, StateDbError, now_ns
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
 from goldbot.research import arms as arm_spec
+from goldbot.research import windows
 from goldbot.research.evidence_exclusions import Scope, excluded
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, check_feature_cap, fit_calibrator
 
@@ -111,10 +113,12 @@ GOLD = "XAUUSD"                                 # ReplayCosts is gold's per-oz m
 MIN_LABEL_STOP: dict[str, float] = {GOLD: 0.45}
 VOID_INSIDE_SPREAD = "stop_inside_spread"
 
-# H-60 priors: history 2019-01-01..2025-09-30 only (the current cost era); the holdout is never read
-PRIOR_HISTORY_START = pd.Timestamp("2019-01-01", tz="UTC")
-HOLDOUT_START = pd.Timestamp("2025-10-01", tz="UTC")
-HOLDOUT_END = pd.Timestamp("2026-10-01", tz="UTC")       # exclusive
+# H-60 priors: the learn window 2010-01-01..2017-12-31 only (plan 2026-11-25 S2: the old 2019-01..2025-09 span lay in
+# the confirm window 2018-01..2025-09, so every prior-seeded arm had seen its confirm data). A confirm-window row is
+# read only for an arm whose confirm read is recorded (`confirm_read_recorded`); the holdout never
+PRIOR_HISTORY_START, PRIOR_HISTORY_END = windows.bounds(windows.Window.LEARN)          # [2010-01-01, 2018-01-01)
+HOLDOUT_START = holdout_guard.HOLDOUT_START
+HOLDOUT_END = holdout_guard.HOLDOUT_END                                                 # exclusive
 PRIOR_SHRINK = 0.5
 PRIOR_N_MAX = 50.0
 PRIOR_N_PER_TRADES = 100.0
@@ -855,7 +859,10 @@ def replay_frame_v2(bars_1m: pd.DataFrame, rows: pd.DataFrame, cost_of_day: Cost
     candidate decided before the first bar, or whose label does not resolve by `cutoff`, gets no row."""
     cols = ["candidate_id", "label_exit_ns", "sim_r", "mid_r", "barrier", "entry_price", "exit_price",
             "entry_charge_usd", "exit_charge_usd", "cost_model_version", "cost_effective_ns"]
+    holdout_guard.refuse_labels(rows, what="forward replay rows")     # S1, N1: no label reads a holdout bar
     bars = bars_1m[pd.to_datetime(bars_1m["ts_utc"], utc=True) < cutoff] if not bars_1m.empty else bars_1m
+    if not bars.empty:                                 # a broker store holds holdout minutes; no row reads them
+        bars = holdout_guard.cut(bars, what="forward replay bars")
     if bars.empty or rows.empty:
         return pd.DataFrame(columns=cols)
     first = pd.Timestamp(pd.to_datetime(bars["ts_utc"], utc=True).min())
@@ -921,6 +928,7 @@ def label_candidates_v2(db: Database, bars_1m: pd.DataFrame, cost_of_day: CostOf
                               min_label_stop(GOLD), REPLAY_V2)
     if account_id is not None:
         obs = obs[obs["account_id"] == account_id]
+    obs = holdout_guard.cut_labels(obs, what="r2 labels")      # L-10, N1: never labelled, never trained on
     f = replay_frame_v2(bars_1m, obs, cost_of_day, cutoff=cutoff)
     if f.empty:
         return 0
@@ -1068,8 +1076,7 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
     check_feature_cap([*cols, "side", "arm_id"])
     obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of, evidence="posterior",
                    held_out=held_out, instrument=GOLD, instruments=instruments, replay_version=REPLAY_V1)
-    dec = pd.DatetimeIndex(obs["decision_utc"])
-    obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
+    obs = holdout_guard.cut_labels(obs, what=f"{style} training rows")      # L-10, N1: no label reaching it
     if n_sus := int(suspect(obs["label_sim_r"]).sum()):          # kept: logged, never dropped
         log.warning("exploration %s %s training rows: %d labels beyond %.0f R (suspect, kept)", broker, style, n_sus,
                     MAX_LABEL_R)
@@ -1263,16 +1270,27 @@ class ArmPrior(FrozenRecord):
     hist_end: UtcTimestamp
 
 
-def prior_from_history(arm_id: str, history: pd.DataFrame, *, prior_version: str) -> ArmPrior:
-    """`history`: the arm's H-60 out-of-sample trades (`decision_utc`, `r_net`). Every row must lie in
-    2019-01-01..2025-09-30: a holdout or later row, or one from the earlier cost era, is refused (ValueError)."""
+def confirm_read_recorded(ledger: Path | str, family: str) -> bool:
+    """True when the read-once ledger (windows.READS_LEDGER) holds a confirm read of `family` (an arm id here): only
+    then may its prior read confirm-window rows (S2)."""
+    return windows.Window.CONFIRM in windows.reads_of(ledger, family)
+
+
+def prior_from_history(arm_id: str, history: pd.DataFrame, *, prior_version: str,
+                       confirm_read: bool = False) -> ArmPrior:
+    """`history`: the arm's H-60 out-of-sample trades (`decision_utc`, `r_net`). Every row must lie in the learn window
+    2010-01-01..2017-12-31; a confirm-window row (2018-01..2025-09) only when `confirm_read` (from
+    `confirm_read_recorded`); a holdout row never (HoldoutSealed); else ValueError."""
     dec = pd.DatetimeIndex(pd.to_datetime(history["decision_utc"], utc=True))
     if len(dec) == 0:
         raise ValueError("an empty history gives no prior")
     if (dec >= HOLDOUT_START).any():
-        raise ValueError("history reaches the holdout (2025-10-01 on): never read for a prior")
+        raise holdout_guard.HoldoutSealed("history reaches the holdout (2025-10-01 on): never read for a prior")
     if (dec < PRIOR_HISTORY_START).any():
-        raise ValueError("history before 2019-01-01: the prior uses the current cost era only")
+        raise ValueError("history before 2010-01-01: the prior reads the learn window only")
+    if not confirm_read and (dec >= PRIOR_HISTORY_END).any():
+        raise ValueError(f"history reaches the confirm window ({PRIOR_HISTORY_END.date()} on) and the arm's confirm read "
+                         "is not recorded: the prior reads the learn window only (plan 2026-11-25 S2)")
     r = history["r_net"].to_numpy(dtype=float)
     r = r[np.isfinite(r)]
     sd = float(np.std(r, ddof=1)) if len(r) >= 2 else PRIOR_SD_R
@@ -1281,9 +1299,14 @@ def prior_from_history(arm_id: str, history: pd.DataFrame, *, prior_version: str
                     hist_start=dec.min(), hist_end=dec.max())
 
 
+def _learn_only(p: ArmPrior) -> bool:
+    return PRIOR_HISTORY_START <= p.hist_start and p.hist_end < PRIOR_HISTORY_END
+
+
 def write_prior(db: Database, p: ArmPrior) -> bool:
-    if p.hist_end >= HOLDOUT_START or p.hist_start < PRIOR_HISTORY_START:
-        raise ValueError("a prior's history must lie in 2019-01-01..2025-09-30")
+    """A stored prior seeds every later bandit run and the table has no record of a confirm read: learn-only."""
+    if not _learn_only(p):
+        raise ValueError("a stored prior's history must lie in the learn window 2010-01-01..2017-12-31")
     with db.write() as conn:
         return conn.execute("INSERT OR IGNORE INTO exploration_priors (arm_id, prior_version, mean_r, sd_r, n_eff, "
                             "n_hist, hist_start_ns, hist_end_ns, recorded_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1292,12 +1315,17 @@ def write_prior(db: Database, p: ArmPrior) -> bool:
 
 
 def read_priors(db: Database) -> dict[str, ArmPrior]:
-    """The newest prior per arm (by recording time)."""
+    """The newest learn-only prior per arm (by recording time). A row whose history reaches past 2017 (written by the
+    2019-2025 rule before plan 2026-11-25 S2) is never read: its arm starts from the flat prior, and it is logged."""
     with db.connection() as conn:
         rows = conn.execute("SELECT arm_id, prior_version, mean_r, sd_r, n_eff, n_hist, hist_start_ns, hist_end_ns "
                             "FROM exploration_priors ORDER BY recorded_ns").fetchall()
-    return {str(a): ArmPrior(arm_id=a, prior_version=v, mean_r=m, sd_r=sd, n_eff=n, n_hist=nh, hist_start=_ts(s),
-                             hist_end=_ts(e)) for a, v, m, sd, n, nh, s, e in rows}
+    newest = {str(a): ArmPrior(arm_id=a, prior_version=v, mean_r=m, sd_r=sd, n_eff=n, n_hist=nh, hist_start=_ts(s),
+                               hist_end=_ts(e)) for a, v, m, sd, n, nh, s, e in rows}
+    if leak := sorted(a for a, p in newest.items() if not _learn_only(p)):
+        log.warning("H-60 priors not read (history outside the learn window 2010-2017, seen confirm data): %s",
+                    ", ".join(leak))
+    return {a: p for a, p in newest.items() if a not in leak}
 
 
 # ---------------------------------------------------------------------------------------------- the bandit (H-61)

@@ -1,4 +1,4 @@
-- **Learning liveness judged by output (S5, plan 2026-11-25 W1-C; R180).** On 11-25, 7 learning tables held 0 rows,
+- **Learning liveness judged by output (S5, plan 2026-11-25 W1-C; R181).** On 11-25, 7 learning tables held 0 rows,
   drift_watch and model_watch watched 0 models, and 0 of 22,010 decisions carried a model. Health still said ok.
   - **`learning_liveness`** (goldbot/ops/checks/learning.py): one line for each learner (an aux.db output table and the
     rows that count) and each watcher. A learner that is switched on but has 0 rows, or nothing new within its cadence

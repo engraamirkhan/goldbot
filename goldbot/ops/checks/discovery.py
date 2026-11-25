@@ -38,7 +38,9 @@ SUCCESS = ("ok", "budget", "over_budget")
 
 
 def discovery_enabled(ctx: HealthContext) -> bool:
-    return ctx.settings is not None and ctx.settings.research.discovery.enabled
+    """Enabled and not stopped (plan 2026-11-25 S6: `stopped` wins over a host's `enabled`)."""
+    cfg = ctx.settings.research.discovery if ctx.settings is not None else None
+    return cfg is not None and cfg.enabled and not cfg.stopped
 
 
 def _runs(ctx: HealthContext) -> tuple[pd.Timestamp | None, pd.Timestamp | None, str | None]:
