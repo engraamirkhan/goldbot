@@ -8,7 +8,8 @@
                  (11-20: 812 of 9,289), a broker had 0 labels (vantage), or 0 models are active (nothing it learnt
                  reaches a decision). WARN only, never FAIL: an honest gate that activates nothing must not be pushed
                  to loosen (statistical gates are not limits); a run that stops altogether FAILs through
-                 learning_liveness. Otherwise ok, with the label, feature, arm, weight and active-model counts.
+                 learning:self_retrain. The reason names the run it comes from; these WARNs are expected until the
+                 label unlock (#451, plan W1-D) and sr-v3 (W3-2) land. Otherwise ok, with the label, feature, arm, weight and active-model counts.
 
 Present once the job has stored a run, or whenever the job is switched off; before the first run, job:self_retrain
 (the scheduler's check, `run_if_never_run`) says whether the job ran. Reads aux.db read-only. No order path.
@@ -18,6 +19,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
+
+import pandas as pd
 
 from goldbot.ops.checks._base import Check
 from goldbot.ops.checks.registry import BLOCK_TAIL, register_check
@@ -55,8 +58,10 @@ def check_self_retrain(ctx: HealthContext) -> Check | None:
     status, reason = sr.health(runs, ctx.now, enabled=enabled)
     sch = getattr(ctx.settings.scheduler, "self_retrain", None)
     extra = extra_warnings(runs, max_late_h=float(sch.max_late_hours) if sch is not None else 6.0) if enabled else []
-    if extra:
-        return Check(name=NAME, status="warn", reason=("; ".join(extra) + f"; {reason}")[:900])
+    if extra:          # dated (SRE review of #456 M4): the run they come from, so a stale WARN reads as one
+        run = pd.Timestamp(max(int(r["run_ns"]) for r in runs), unit="ns", tz="UTC")
+        return Check(name=NAME, status="warn",
+                     reason=(f"run of {run:%Y-%m-%d}: " + "; ".join(extra) + f"; {reason}")[:900])
     return Check(name=NAME, status="ok" if status == "ok" else "warn", reason=reason[:600])
 
 

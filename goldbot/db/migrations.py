@@ -995,6 +995,12 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS self_retrain_models_arm ON self_retrain_models(broker, arm_id, status)",
     )),
+    # additive (SRE review of PR #456 M1; goldbot/ops/checks/learning.py `influence`): the model_influence health
+    # check and learning_kpis read every candidate of a time window across arms and styles; the existing indexes lead
+    # with style, arm or account, so that read scanned the table. A release without it reads the same rows by a scan
+    Migration(version=44, name="exploration_obs_decision", additive=True, statements=(
+        "CREATE INDEX IF NOT EXISTS exploration_obs_decision ON exploration_obs(decision_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

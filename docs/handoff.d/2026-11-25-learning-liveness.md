@@ -1,20 +1,29 @@
 - **Learning liveness judged by output (S5, plan 2026-11-25 W1-C; R181).** On 11-25, 7 learning tables held 0 rows,
   drift_watch and model_watch watched 0 models, and 0 of 22,010 decisions carried a model. Health still said ok.
-  - **`learning_liveness`** (goldbot/ops/checks/learning.py): one line for each learner (an aux.db output table and the
-    rows that count) and each watcher. A learner that is switched on but has 0 rows, or nothing new within its cadence
-    + slack, WARNs. 48 h later it FAILs, and the alert loop sends the FAIL to Telegram. The 48 h clock starts at
-    `LIVENESS_FROM` (2026-11-26 22:00 UTC). A learner switched off in settings WARNs with its flag and reason but never
-    FAILs. Output that is computed but not applied (Thompson under `allocator: equal`) WARNs. A watcher that watches 0
-    models while self_retrain has a shadow or active model WARNs, then FAILs.
-  - **`model_influence`**: % of the last 24 h's candidates a model scored and % it changed. It WARNs at 0 % and never
-    FAILs, so it never pushes anyone to loosen a gate.
-  - **`self_retrain`** also WARNs on: a run more than max_late_hours late, under 50 % of labels used, a broker with 0
-    labels, and 0 active models.
-  - **`stop_coverage:<account>`**: FAILs when any open position has no broker-side stop.
-  - **Noise removed:** up to 3 late broker minutes (sampled bar, then replaced) are an info note on engine:<account>, and
-    a missing optional key reads ok with the key named. Target: 0 WARN in steady state.
-  - **`scripts/learning_kpis.py`** (read-only): K1 usable rows per broker x class x 9 tf (empty cells shown as 0, history
-    rows 0 with the reason), K2 influence with the money effect of changed decisions (day-clustered CI), K4 liveness,
-    and PSI of inputs and scores for every shadow or active self-retrain model (`drift.scored_model_drift`).
-  - **Open:** drift_watch itself does not yet cover self-retrain models. That needs a goldbot/ops/jobs.py hook
-    (another lane's file). The engine reads no self_retrain model, so an ACTIVE filter changes no decision.
+  - **`learning:<name>`** (goldbot/ops/checks/learning.py) is one check per learner: self_retrain,
+    exploration_weights, har_days, arm_lifecycle_verdicts and cost_cells.
+    - A learner that is on but has 0 output rows, or nothing new within its cadence, WARNs. It FAILs 48 h after
+      the grace start, and the existing alert loop sends the FAIL to Telegram.
+    - The grace starts at the first deploy at or after 2026-11-26 22:00 UTC (from state/deploys.jsonl).
+    - A learner switched off in settings WARNs with its flag but never FAILs.
+    - Fill-driven learners have a 72 h cadence, so a weekend is not a gap.
+    - Thompson weights under `allocator: equal` read ok, with the allocator named.
+  - **RETIRED** (read ok, with date and reason): meta_labeller (H-62, 2026-11-13) and arm_priors (H-60 was never
+    wired). long_tf_decisions and swap_reconciliations are not judged: they are bookkeeping, not learners.
+  - **`watch:drift_watch`** must cover every self-retrain model in shadow or active, matched by model id.
+    drift_watch (goldbot/ops/jobs.py) now stores PSI of their inputs and scores under drift.json `self_retrain`
+    (`drift.self_retrain_drift`). It reports only, and never sizes or halts.
+    `watch:model_watch` is the champions' CUSUM. A self-retrain filter is judged forward by its own demotion rule.
+  - **`model_influence`**: % of the last 24 h's candidates a model scored and % it changed. The count is cached
+    15 min, and a new index `exploration_obs_decision` (migration 44) serves it. It WARNs at 0 % and never FAILs.
+  - **`self_retrain`** gives dated WARNs ("run of <date>: ...") for a late run, under 50 % of labels used, a broker
+    with 0 labels, and 0 active models.
+  - **`stop_coverage:<account>`**: FAILs on any open position without a broker stop, separating the engine's own
+    positions from foreign ones. It WARNs "unknown" when positions are unreadable, partly listed, or the engine state
+    is stale.
+  - **Noise removed:** up to 3 late broker minutes are an info note on engine:<account> (replaced and still-sampled
+    counted apart), and a missing optional key reads ok. Steady state has 0 noise WARNs. The learning WARNs stay
+    until each learner is fixed.
+  - **`scripts/learning_kpis.py`** (read-only): K1 usable rows per broker x class x 9 tf, K2 influence with its money
+    effect, K4, and self-retrain drift.
+  - **Open:** the engine reads no self_retrain model, so an ACTIVE filter changes no decision.

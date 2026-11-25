@@ -14,8 +14,7 @@ brain's aux.db read-only (`mode=ro`: never a write, never a migration).
                    moves the book by -R. Influence is always shown next to its money (PO: Goodhart on influence %).
   K4 liveness      every learner and watcher with its verdict (the learning_liveness health check's own judgement).
   drift            PSI of inputs and of scores, live against training, for every self-retrain model in shadow or
-                   active (goldbot/research/drift.py `scored_model_drift`); training = the arm's admitted rows up
-                   to the model's cutoff (before the nominal audit), live = after it.
+                   active (goldbot/research/drift.py `self_retrain_drift`, the same read drift_watch stores).
 
 On the brain (read-only; prints JSON with --json, else a short markdown report):
 
@@ -137,44 +136,14 @@ def influence_effect(con: sqlite3.Connection, df: pd.DataFrame, *, since: pd.Tim
 def liveness(con: sqlite3.Connection, state_dir: Path, settings: Any, now: pd.Timestamp) -> list[dict[str, Any]]:
     """K4: the learning_liveness check's verdict per learner and watcher."""
     reads = {spec.name: learning.read_learner(con, spec) for spec in learning.LEARNERS}
-    n_models, since = learning.models_to_watch(con)
-    watchers = learning.watcher_reports(state_dir, settings)
-    verdicts = learning.judge_all(reads, settings=settings, now=now, watchers=watchers, models_to_watch=n_models,
-                                  models_since=since)
-    return [v.model_dump() for v in verdicts]
-
-
-def _features(con: sqlite3.Connection, broker: str, arm_id: str) -> pd.DataFrame:
-    """The arm's candidates with an admitted snapshot: decision time, side and the self-retrain FEATURES."""
-    rows = con.execute(
-        "SELECT o.decision_ns, o.side, v.features FROM exploration_obs o "
-        "JOIN exploration_feature_snapshots s ON s.candidate_id = o.candidate_id "
-        "JOIN exploration_feature_vectors v ON v.sha256 = s.vector_sha256 "
-        "WHERE o.broker = ? AND o.arm_id = ? AND s.status = 'ok' "
-        "AND (s.pit = 'written' OR (s.pit = 'nominal' AND s.decision_ns >= ?))",
-        (broker, arm_id, int(sr.NOMINAL_FROM.value))).fetchall()
-    if not rows:
-        return pd.DataFrame(columns=["decision_ns", "side", *sr.FEATURES])
-    vals = pd.DataFrame([json.loads(f) for *_, f in rows]).reindex(columns=list(sr.FEATURES))
-    head = pd.DataFrame([r[:2] for r in rows], columns=["decision_ns", "side"])
-    return pd.concat([head, vals], axis=1)
+    checks = learning.judge_all(reads, settings=settings, now=now, watchers=learning.watcher_reports(state_dir, settings),
+                                models=learning.sr_models(con), grace=learning.grace_start(state_dir))
+    return [c.model_dump() for c in checks]
 
 
 def model_drift(con: sqlite3.Connection, settings: Any) -> list[dict[str, Any]]:
-    """PSI of inputs and scores for every self-retrain model in shadow or active (training rows vs later rows)."""
-    if not con.execute("SELECT 1 FROM sqlite_master WHERE name = 'self_retrain_models'").fetchone():
-        return []
-    q = ", ".join("?" for _ in learning.WATCH_STATUSES)
-    models = con.execute(f"SELECT model_version, broker, arm_id, status, cutoff_ns, model FROM self_retrain_models "
-                         f"WHERE status IN ({q})", learning.WATCH_STATUSES).fetchall()
-    out: list[dict[str, Any]] = []
-    for version, broker, arm_id, status, cutoff_ns, text in models:
-        rows = _features(con, broker, arm_id)
-        model = sr.LogitModel.model_validate_json(text)
-        ref, live = rows[rows["decision_ns"] <= cutoff_ns], rows[rows["decision_ns"] > cutoff_ns]
-        d = drift.scored_model_drift(version, sr.design(ref), sr.design(live), model.score, settings.drift)
-        out.append({"broker": broker, "arm_id": arm_id, "status": status, **d.model_dump()})
-    return out
+    """PSI of inputs and scores for every self-retrain model in shadow or active (drift.self_retrain_drift)."""
+    return list(drift.self_retrain_drift(con, settings.drift).values())
 
 
 def build(state_dir: Path, *, until: pd.Timestamp, days: int) -> dict[str, Any]:
@@ -212,10 +181,10 @@ def markdown(r: dict[str, Any]) -> str:
                  f"candidates; effect of changed decisions {money}")
     dead = [v for v in r["k4_liveness"] if v["status"] != "ok"]
     lines.append(f"- K4 liveness: {len(dead)} of {len(r['k4_liveness'])} learners/watchers dead or off")
-    lines += [f"  - {v['status'].upper()} {v['reason']}" for v in dead]
+    lines += [f"  - {v['status'].upper()} {v['name']}: {v['reason']}" for v in dead]
     for d in r["drift"]:
         top = ", ".join(f"{k} {v}" for k, v in sorted(d["psi"].items(), key=lambda kv: -kv[1])[:3]) or "-"
-        lines.append(f"- drift {d['broker']} {d['arm_id']} ({d['status']}): score PSI {d['psi_score']}, top inputs "
+        lines.append(f"- drift {d['model_id']} ({d['status']}): score PSI {d['psi_score']}, top inputs "
                      f"{top}; {'; '.join(d['notes'])}")
     if not r["drift"]:
         lines.append("- drift: no self-retrain model in shadow or active")

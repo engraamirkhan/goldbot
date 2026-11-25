@@ -211,6 +211,7 @@ class ScoredModelDrift(Record):
     """PSI of a scored model's inputs and of its scores, live rows against its training rows."""
 
     model_id: str
+    status: str = ""                      # the model's own status (self-retrain: active or shadow)
     n_ref: int = 0
     n_live: int = 0
     psi: dict[str, float] = Field(default_factory=dict)
@@ -245,3 +246,42 @@ def scored_model_drift(model_id: str, ref: pd.DataFrame, live: pd.DataFrame,
         d.psi_score = round(psi(sb, np.asarray(score(live), dtype=float)), 4)
         d.score_shift = d.psi_score > s.psi_size_down
     return d
+
+
+def _sr_rows(con: Any, broker: str, arm_id: str, nominal_from_ns: int, features: tuple[str, ...]) -> pd.DataFrame:
+    """An arm's candidates with an admitted point-in-time snapshot: decision time, side and the model's features."""
+    import json
+    rows = con.execute(
+        "SELECT o.decision_ns, o.side, v.features FROM exploration_obs o "
+        "JOIN exploration_feature_snapshots s ON s.candidate_id = o.candidate_id "
+        "JOIN exploration_feature_vectors v ON v.sha256 = s.vector_sha256 "
+        "WHERE o.broker = ? AND o.arm_id = ? AND s.status = 'ok' "
+        "AND (s.pit = 'written' OR (s.pit = 'nominal' AND s.decision_ns >= ?))",
+        (broker, arm_id, nominal_from_ns)).fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["decision_ns", "side", *features])
+    vals = pd.DataFrame([json.loads(f) for *_, f in rows]).reindex(columns=list(features))
+    head = pd.DataFrame([r[:2] for r in rows], columns=["decision_ns", "side"])
+    return pd.concat([head, vals], axis=1)
+
+
+def self_retrain_drift(con: Any, s: Any, statuses: tuple[str, ...] = ("active", "shadow")) -> dict[str, dict[str, Any]]:
+    """{model_version: ScoredModelDrift dump} for every self-retrain model in `statuses`, from an open aux.db
+    connection (read-only is enough): training = the arm's admitted rows up to the model's cutoff (before the nominal
+    audit, so a superset of what it trained on), live = after it. Reported (drift.json `self_retrain`, learning_kpis),
+    never sizing or halting: a filter is judged forward by its own demotion rule (research/self_retrain.py)."""
+    from goldbot.research import self_retrain as sr
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'self_retrain_models'").fetchone():
+        return {}
+    q = ", ".join("?" for _ in statuses)
+    got = con.execute(f"SELECT model_version, broker, arm_id, status, cutoff_ns, model FROM self_retrain_models "
+                      f"WHERE status IN ({q})", statuses).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for version, broker, arm_id, status, cutoff_ns, text in got:
+        rows = _sr_rows(con, broker, arm_id, int(sr.NOMINAL_FROM.value), sr.FEATURES)
+        model = sr.LogitModel.model_validate_json(text)
+        ref, live = rows[rows["decision_ns"] <= cutoff_ns], rows[rows["decision_ns"] > cutoff_ns]
+        d = scored_model_drift(str(version), sr.design(ref), sr.design(live), model.score, s)
+        d.status = str(status)
+        out[str(version)] = {"broker": broker, "arm_id": arm_id, **d.model_dump()}
+    return out

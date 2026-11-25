@@ -224,7 +224,9 @@ def late_minutes(dq_warnings: list[Any]) -> tuple[list[str], str | None]:
                     "broker's 1m bars are lagging, sampled bars stand in")
         return keep, None
     if late or replaced:
-        return keep, f"{late} late broker minute(s), {replaced} replaced by the broker's bar (info)"
+        pending = max(late - replaced, 0)        # SRE review L2: the unreplaced ones named on their own
+        return keep, (f"{late} late broker minute(s): {replaced} replaced by the broker's bar, {pending} still "
+                      "sampled (info)")
     return keep, None
 
 
@@ -232,18 +234,40 @@ def late_minutes(dq_warnings: list[Any]) -> tuple[list[str], str | None]:
 def check_stop_coverage(ctx: HealthContext, account_id: str) -> Check | None:
     """stop_coverage:<account>: the share of open positions that carry a broker-side stop NOW (plan S5: "SL coverage
     is the main real guarantee under no-limits"), from the engine's `open_risk_positions` (every position the broker
-    reported this pass, with its `sl`). Any position without a finite positive stop FAILs, naming it: a stop that
-    rests with the broker survives the engine, the bridge and the brain; nothing else does. A newly sent order carries
-    its stop in the same request, so a gap is never a normal transient; the alert loop's confirm_polls is the "more
-    than one pass" hysteresis. Nothing before the engine publishes the rows (an older engine or a torn file)."""
+    reported this pass, with its `sl`). A stop that rests with the broker survives the engine, the bridge and the
+    brain; nothing else does.
+    * Any position without a finite positive stop FAILs, split by owner (SRE review of #456 M3): the engine's own
+      (it re-sends a stop it knows at reconcile) and foreign ones (`foreign_positions`: another magic, a manual trade;
+      the engine never touches them, so the stop is set in MT5). A new order carries its stop in the same request, so a
+      gap is never a normal transient; the alert loop's confirm_polls is the "more than one pass" hysteresis.
+    * Coverage is UNKNOWN, a WARN, never "no open position" (SRE review H2): while the broker's positions are unreadable
+      (`positions_unreadable`; the engine then publishes an empty list), when the engine counted more open positions
+      than it listed, or when engine_<account>.json is older than ENGINE_WARN_S with the market open.
+    Nothing before the engine publishes the rows (an older engine or a torn file: check_engine reports those)."""
     f = ctx.state_dir / f"engine_{account_id}.json"
     try:
-        rows = _read_json(f).get("open_risk_positions")
+        e = _read_json(f)
+        rows = e.get("open_risk_positions")
     except (OSError, ValueError, AttributeError):
-        return None                                 # check_engine reports the missing or unreadable file
+        return None
     if not isinstance(rows, list):
         return None
     name = f"stop_coverage:{account_id}"
+    try:
+        age = _epoch(ctx.now) - float(e.get("ts", 0))
+    except (TypeError, ValueError):
+        age = float("inf")
+    counted = e.get("open_positions")
+    unknown: str | None = None
+    if int(e.get("positions_unreadable") or 0):
+        unknown = "the broker's positions are unreadable"
+    elif isinstance(counted, int) and counted > len(rows):
+        unknown = f"the engine counts {counted} open position(s) but listed {len(rows)}"
+    elif age > ENGINE_WARN_S and _market_open_throughout(ctx, ENGINE_WARN_S):
+        unknown = f"engine state {_age(age)} old"
+    if unknown is not None:
+        return Check(name=name, status="warn", reason=f"stop coverage unknown: {unknown}; check MT5 for open "
+                                                      "positions without a stop")
     if not rows:
         return Check(name=name, status="ok", reason="no open position")
 
@@ -253,13 +277,21 @@ def check_stop_coverage(ctx: HealthContext, account_id: str) -> Check | None:
         except (TypeError, ValueError, AttributeError):
             return False
         return math.isfinite(sl) and sl > 0
+    foreign = {str(x) for x in (e.get("foreign_positions") or [])}
     bare = [str(r.get("position_id")) if isinstance(r, dict) else "?" for r in rows if not stopped(r)]
     covered = len(rows) - len(bare)
-    if bare:
-        return Check(name=name, status="fail",
-                     reason=f"{covered} of {len(rows)} open position(s) carry a broker stop; NO STOP on "
-                            f"{', '.join(bare)}: the engine re-sends a stop it knows at reconcile; check MT5 now")
-    return Check(name=name, status="ok", reason=f"{covered} of {len(rows)} open position(s) carry a broker stop")
+    head = f"{covered} of {len(rows)} open position(s) carry a broker stop"
+    if not bare:
+        return Check(name=name, status="ok", reason=head)
+    own, other = [p for p in bare if p not in foreign], [p for p in bare if p in foreign]
+    parts = [head]
+    if own:
+        parts.append(f"NO STOP on own {', '.join(own)}: the engine re-sends a stop it knows at reconcile; if it "
+                     "persists, set it in MT5 now")
+    if other:
+        parts.append(f"NO STOP on foreign (other magic or manual) {', '.join(other)}: the engine never touches it; "
+                     "set the stop in MT5 now")
+    return Check(name=name, status="fail", reason="; ".join(parts))
 
 
 TICK_ERROR_CURRENT_S = 120             # a tick error this recent is current: the cause may still be there

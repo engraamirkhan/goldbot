@@ -3,6 +3,7 @@ warn, then fail; model influence is counted from the decisions; open positions w
 permanent noise warnings (a late broker minute that was replaced, an optional key) read OK."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -68,50 +69,57 @@ def _seed_today(tmp_path: Path, now: pd.Timestamp = TODAY) -> None:
     write(tmp_path / "model_watch.json", {"ts": stamp, "agents": {}})
 
 
-def _liveness(tmp_path: Path, now: pd.Timestamp, settings: Any = None) -> Any:
-    return health.check_learning_liveness(make_ctx(tmp_path, now=now, settings=settings or _today_settings()))
+def _liveness(tmp_path: Path, now: pd.Timestamp, settings: Any = None) -> dict[str, Any]:
+    out = health.check_learning_liveness(make_ctx(tmp_path, now=now, settings=settings or _today_settings()))
+    return {c.name: c for c in out}
 
 
-# ---------------------------------------------------------------------------------------------- liveness
-def test_todays_brain_warns_on_every_empty_learning_table_and_both_watchers_watching_no_model(tmp_path):
+def test_todays_brain_gives_one_check_per_learner_and_watcher_and_warns_on_each_dead_one(tmp_path):
     _seed_today(tmp_path)
-    c = _liveness(tmp_path, TODAY)
-    assert c.status == "warn"
-    for name in ("meta_labeller", "arm_priors", "har_days", "long_tf_decisions", "arm_lifecycle_verdicts",
-                 "swap_reconcile", "cost_cells", "drift_watch", "model_watch"):
-        assert name in c.reason, name
-    assert "0 rows" in c.reason
-    assert "watches 0 of 1 model" in c.reason
-    # the allocator's weights are computed every night but never applied: influence 0 counts as dead
-    assert "exploration_weights: computed, not applied" in c.reason
+    by = _liveness(tmp_path, TODAY)
+    for name in ("learning:har_days", "learning:arm_lifecycle_verdicts", "learning:cost_cells", "watch:drift_watch"):
+        assert by[name].status == "warn", (name, by[name].reason)
+    assert "0 rows" in by["learning:cost_cells"].reason
+    assert "watches 0 of 1 self-retrain model" in by["watch:drift_watch"].reason and "m1" in \
+        by["watch:drift_watch"].reason
+    # SRE review H1: computed-not-applied is model_influence's to report; retired learners read ok with their reason;
+    # model_watch is the champions' CUSUM (a filter is judged forward by its own demotion rule)
+    assert by["learning:exploration_weights"].status == "ok"
+    assert "computed, not applied" in by["learning:exploration_weights"].reason
+    assert by["learning:meta_labeller"].status == "ok" and "retired 2026-11-13" in by["learning:meta_labeller"].reason
+    assert by["learning:arm_priors"].status == "ok" and "never wired" in by["learning:arm_priors"].reason
+    assert by["watch:model_watch"].status == "ok"
+    assert "learning:long_tf_decisions" not in by and "learning:swap_reconcile" not in by
+    assert by["learning:self_retrain"].status == "ok"
 
 
-def test_a_learner_silent_for_48_hours_past_the_grace_start_fails(tmp_path):
+def test_a_dead_learner_fails_48_hours_after_the_grace_start_and_each_check_stands_alone(tmp_path):
     _seed_today(tmp_path)
-    later = learning.LIVENESS_FROM + pd.Timedelta(hours=49)
-    c = _liveness(tmp_path, later)
-    assert c.status == "fail"
-    assert "long_tf_decisions" in c.reason
+    by = _liveness(tmp_path, learning.LIVENESS_FROM + pd.Timedelta(hours=49))
+    assert by["learning:arm_lifecycle_verdicts"].status == "fail"
+    assert by["learning:cost_cells"].status == "fail"
+    assert by["watch:drift_watch"].status == "fail"
+    assert by["learning:har_days"].status == "warn"           # switched off: never FAILs
 
 
-def test_a_learner_switched_off_in_settings_warns_with_its_reason_and_never_fails(tmp_path):
+def test_the_grace_starts_at_the_first_deploy_after_liveness_from_so_a_slipped_release_still_gets_48_hours(tmp_path):
+    late = learning.LIVENESS_FROM + pd.Timedelta(days=3)
+    (tmp_path / "deploys.jsonl").write_text("\n".join(json.dumps(r) for r in (
+        {"ts": (learning.LIVENESS_FROM - pd.Timedelta(days=5)).isoformat(), "result": "deployed"},
+        {"ts": late.isoformat(), "result": "rolled_back"},
+        {"ts": (late + pd.Timedelta(hours=1)).isoformat(), "result": "deployed"})) + "\n")
+    assert learning.grace_start(tmp_path) == late + pd.Timedelta(hours=1)
     _seed_today(tmp_path)
-    later = learning.LIVENESS_FROM + pd.Timedelta(days=30)
-    report = learning.judge_all(_reads_for(tmp_path), settings=_today_settings(), now=later,
-                                watchers=[], models_to_watch=0, models_since=None)
-    by = {r.name: r for r in report}
-    assert by["meta_labeller"].status == "warn"
-    assert "switched off" in by["meta_labeller"].reason and "research.exploration.meta_labeller" in \
-        by["meta_labeller"].reason
-    assert by["har_days"].status == "warn"
+    by = _liveness(tmp_path, late + pd.Timedelta(hours=10))
+    assert by["learning:cost_cells"].status == "warn"
+    assert learning.grace_start(tmp_path / "nowhere") == learning.LIVENESS_FROM
 
 
-def _reads_for(tmp_path: Path) -> dict[str, learning.LearnerRead]:
-    con = sqlite3.connect(f"file:{tmp_path / 'aux.db'}?mode=ro", uri=True)
-    try:
-        return {spec.name: learning.read_learner(con, spec) for spec in learning.LEARNERS}
-    finally:
-        con.close()
+def test_a_learner_switched_off_in_settings_warns_with_its_flag_and_never_fails(tmp_path):
+    _seed_today(tmp_path)
+    by = _liveness(tmp_path, learning.LIVENESS_FROM + pd.Timedelta(days=30))
+    assert by["learning:har_days"].status == "warn"
+    assert "switched off (research.har_abstention.enabled)" in by["learning:har_days"].reason
 
 
 def test_a_learner_writing_inside_its_cadence_is_ok_and_one_overdue_warns_then_fails():
@@ -125,21 +133,31 @@ def test_a_learner_writing_inside_its_cadence_is_ok_and_one_overdue_warns_then_f
     assert learning.judge_learner(spec, dead, enabled=True, applied=True, now=now).status == "fail"
 
 
-def test_a_watcher_with_no_model_to_watch_is_ok_and_one_watching_none_of_its_models_warns():
+def test_a_fill_driven_learner_survives_a_weekend_without_output():
+    spec = next(x for x in learning.LEARNERS if x.name == "cost_cells")
+    cad, slack = learning.cadence(spec, SETTINGS)
+    assert cad >= learning.FILL_DRIVEN_CADENCE_H
+    friday_night = pd.Timestamp("2026-12-04 23:00", tz="UTC")
+    read = learning.LearnerRead(name="cost_cells", rows=9, last=friday_night)
+    monday = pd.Timestamp("2026-12-07 07:00", tz="UTC")
+    assert learning.judge_learner(spec, read, enabled=True, applied=True, now=monday, cadence_h=cad,
+                                  slack_h=slack).status == "ok"
+
+
+def test_a_watcher_is_judged_by_model_ids_not_by_its_count():
     now = TODAY
-    idle = learning.judge_watcher("drift_watch", subjects=0, ts=now, models_to_watch=0, models_since=None,
-                                  cadence_h=24, now=now)
-    blind = learning.judge_watcher("drift_watch", subjects=0, ts=now, models_to_watch=2,
-                                   models_since=now - pd.Timedelta(days=1), cadence_h=24, now=now)
-    stale = learning.judge_watcher("drift_watch", subjects=1, ts=now - pd.Timedelta(days=3), models_to_watch=1,
-                                   models_since=None, cadence_h=24, now=now)
-    assert idle.status == "ok"
-    assert blind.status == "warn" and "watches 0 of 2" in blind.reason
-    assert stale.status == "warn" and "old" in stale.reason
-    gone = learning.judge_watcher("drift_watch", subjects=0, ts=now, models_to_watch=2,
-                                  models_since=learning.LIVENESS_FROM,
-                                  cadence_h=24, now=learning.LIVENESS_FROM + pd.Timedelta(hours=49))
-    assert gone.status == "fail"
+    models = {"m1": now - pd.Timedelta(days=1), "m2": now - pd.Timedelta(days=1)}
+    other = learning.WatcherReport(name="drift_watch", subjects=frozenset({"agent-x"}), ts=now)
+    both = learning.WatcherReport(name="drift_watch", subjects=frozenset({"m1", "m2"}), ts=now)
+    stale = learning.WatcherReport(name="drift_watch", subjects=frozenset({"m1", "m2"}), ts=now - pd.Timedelta(days=3))
+    blind = learning.judge_watcher(other, must_cover=models, now=now)
+    assert blind.status == "warn" and "watches 0 of 2" in blind.reason and "m1, m2" in blind.reason
+    assert learning.judge_watcher(both, must_cover=models, now=now).status == "ok"
+    assert learning.judge_watcher(stale, must_cover=models, now=now).status == "warn"
+    idle = learning.WatcherReport(name="drift_watch", subjects=frozenset(), ts=now)
+    assert learning.judge_watcher(idle, must_cover={}, now=now).status == "ok"
+    later = learning.LIVENESS_FROM + pd.Timedelta(hours=49)
+    assert learning.judge_watcher(other, must_cover=models, now=later).status == "fail"
 
 
 def test_liveness_is_absent_where_no_aux_db_lives_or_no_candidate_was_ever_recorded(tmp_path):
@@ -184,6 +202,18 @@ def test_influence_counts_scored_and_changed_decisions(tmp_path):
     assert c.status == "ok"
 
 
+def test_influence_is_read_at_most_every_15_minutes(tmp_path):
+    db = _aux(tmp_path)
+    _obs(db, 10, TODAY)
+    ctx = make_ctx(tmp_path, now=TODAY, settings=_today_settings())
+    assert "0 of 10" in health.check_model_influence(ctx).reason
+    with db.write() as c:
+        c.execute("UPDATE exploration_obs SET meta_p = 0.7")
+    assert "0 of 10" in health.check_model_influence(ctx).reason            # cached
+    later = make_ctx(tmp_path, now=TODAY + pd.Timedelta(minutes=16), settings=_today_settings())
+    assert "10 of 10" in health.check_model_influence(later).reason
+
+
 def test_influence_is_ok_with_no_candidates_in_the_window(tmp_path):
     _seed_today(tmp_path)          # one candidate five days ago, none in the last 24 h
     c = health.check_model_influence(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
@@ -195,6 +225,7 @@ def test_self_retrain_warns_on_a_late_run_low_label_use_a_broker_with_no_rows_an
     _seed_today(tmp_path)
     c = health.check_self_retrain(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
     assert c is not None and c.status == "warn"
+    assert c.reason.startswith("run of 2026-11-24: ")
     assert "40.9 h late" in c.reason
     assert "8.7 % of labels" in c.reason
     assert "vantage: 0 labels" in c.reason
@@ -232,6 +263,27 @@ def test_stop_coverage_is_absent_before_the_engine_publishes_its_positions(tmp_p
     assert _coverage(tmp_path) is None
 
 
+def test_stop_coverage_is_unknown_not_ok_while_positions_are_unreadable_short_listed_or_stale(tmp_path):
+    engine(tmp_path, 60, open_risk_positions=[], positions_unreadable=2)
+    c = health.check_stop_coverage(make_ctx(tmp_path), "icm-demo")
+    assert c is not None and c.status == "warn" and "unknown" in c.reason and "unreadable" in c.reason
+    engine(tmp_path, 60, open_risk_positions=[], open_positions=2)
+    c = health.check_stop_coverage(make_ctx(tmp_path), "icm-demo")
+    assert c is not None and c.status == "warn" and "counts 2" in c.reason
+    engine(tmp_path, 30 * 60, open_risk_positions=[])          # market open (Wednesday afternoon), 30 min old
+    c = health.check_stop_coverage(make_ctx(tmp_path), "icm-demo")
+    assert c is not None and c.status == "warn" and "old" in c.reason
+
+
+def test_a_foreign_position_without_a_stop_fails_and_says_to_set_it_in_mt5(tmp_path):
+    engine(tmp_path, 60, foreign_positions=[7], open_risk_positions=[
+        {"position_id": 6, "side": 1, "lots": 0.01, "sl": None}, {"position_id": 7, "side": 1, "lots": 0.01, "sl": None}])
+    c = health.check_stop_coverage(make_ctx(tmp_path), "icm-demo")
+    assert c is not None and c.status == "fail"
+    assert "own 6" in c.reason and "re-sends" in c.reason
+    assert "foreign (other magic or manual) 7" in c.reason and "never touches" in c.reason
+
+
 def test_stop_coverage_is_ok_with_no_open_position(tmp_path):
     engine(tmp_path, 60, open_risk_positions=[])
     assert _coverage(tmp_path) == "ok"
@@ -246,7 +298,7 @@ def test_one_late_broker_minute_then_replaced_reads_ok(tmp_path):
         "decisions already taken on them stand"])
     c = health.check_engine(make_ctx(tmp_path), "icm-demo")
     assert c.status == "ok", c.reason
-    assert "late broker minute" in c.reason
+    assert "1 late broker minute(s): 1 replaced by the broker's bar, 0 still sampled" in c.reason
 
 
 def test_a_burst_of_late_broker_minutes_still_warns(tmp_path):
@@ -288,3 +340,17 @@ def test_scored_model_drift_says_why_it_computed_nothing_on_too_few_live_rows():
     ref = pd.DataFrame({"a": np.arange(100.0)})
     d = drift.scored_model_drift("m", ref, ref.head(3), lambda X: X["a"].to_numpy(dtype=float), SETTINGS.drift)
     assert d.psi == {} and d.psi_score is None and "PSI not computed" in d.notes[0]
+
+
+def test_the_decision_time_index_is_additive_so_a_rollback_still_opens_aux_db(tmp_path):
+    from goldbot.db.migrations import AUX, compat_back_to
+    mig = next(m for m in AUX if m.name == "exploration_obs_decision")
+    assert mig.additive and compat_back_to(AUX, mig.version) < mig.version
+    _aux(tmp_path)
+    con = sqlite3.connect(tmp_path / "aux.db")
+    try:
+        plan = " ".join(str(r) for r in con.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM exploration_obs WHERE decision_ns >= 0 AND decision_ns < 1"))
+    finally:
+        con.close()
+    assert "exploration_obs_decision" in plan

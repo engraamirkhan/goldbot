@@ -107,6 +107,30 @@ def test_the_report_lists_dead_learners_and_reads_without_writing(tmp_path):
     before = (tmp_path / "aux.db").stat().st_mtime_ns
     mod = _script()
     text = mod.markdown(mod.build(tmp_path, until=NOW, days=7))
-    assert "K4 liveness" in text and "meta_labeller" in text
+    assert "K4 liveness" in text and "learning:cost_cells: 0 rows" in text
     assert "| metal |" in text and "| fx |" in text
     assert (tmp_path / "aux.db").stat().st_mtime_ns == before
+
+
+def test_drift_watch_stores_every_self_retrain_model_so_health_sees_it_covered(tmp_path):
+    from goldbot.config import load_settings
+    from goldbot.data.store import Store
+    from goldbot.ops import health
+    from goldbot.ops.checks import learning
+    from goldbot.ops.jobs import JobContext, drift_watch
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.population import Population
+    from goldbot.research.registry import TrialRegistry
+    from tests.test_health import make_ctx
+    _seed(tmp_path)
+    s = load_settings()
+    ctx = JobContext(settings=s, store=Store(tmp_path / "data"), state_dir=tmp_path,
+                     models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "t.jsonl"),
+                     accounts=[], population=Population(tmp_path / "population.json"))
+    out = drift_watch(ctx, NOW)
+    assert out["self_retrain"] == 1 and out["halted"] == [] and not out["system_halt"]
+    d = json.loads((tmp_path / "drift.json").read_text())
+    assert d["self_retrain"]["m1"]["score_shift"] and d["size_factor"] == {}     # reported, never sized or halted
+    checks = {c.name: c for c in health.check_learning_liveness(make_ctx(tmp_path, now=NOW, settings=s))}
+    assert checks["watch:drift_watch"].status == "ok", checks["watch:drift_watch"].reason
+    assert learning.DRIFT_SR_KEY == "self_retrain"
