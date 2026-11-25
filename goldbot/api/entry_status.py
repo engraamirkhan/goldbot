@@ -259,6 +259,16 @@ REASONS: dict[str, Reason] = {
                                 "Run the symbol check on the brain (python -m goldbot.ops.symbol_check <account>); "
                                 "open trades keep closing.", "act"),
     "margin_level_floor": _r("Not enough free margin", f"{NOTHING}: wait for open trades to close.", "wait"),
+    # ADR 0097: a demo account without limits keeps only its floor and the engineering capacity ceiling
+    "demo_equity_floor": _r("Demo balance at its floor: no new trades until it is reset or re-armed",
+                            "Learning has stopped on this account; the Runbook says how to check the mark and reset.",
+                            "act", "Demo floor (`demo_floor:<account>`)"),
+    "demo_margin_floor": _r("Not enough free margin on this demo account for another trade",
+                            f"{NOTHING}: a new entry is possible once open trades close.", "wait",
+                            "Demo floor (`demo_floor:<account>`)"),
+    "capacity_ceiling": _r("As many trades open as the engine can manage on time (300)",
+                           f"{NOTHING}: a new entry is possible once one closes; exits stay on time.", "wait",
+                           "Exit latency (`exit_latency:<account>`)"),
     "min_lot_exceeds_risk": _r("The smallest trade would risk too much for this balance",
                                "Normal on a small account; the Runbook explains the minimum-lot setting.", "wait"),
     "standard_account_15m": _r("Standard account: no 15-minute trades", f"{NOTHING}: by design on this account type.",
@@ -311,6 +321,7 @@ _ORDER = {code: i for i, code in enumerate(REASONS)}
 REFUSAL_TEXT: dict[str, str] = {
     "daily_loss_limit_abs": "this trade could lose more than is left of today's loss limit",
     "margin_level_floor": "not enough free margin",
+    "demo_margin_floor": "not enough free margin on this demo account",
     "heat_cap": "too much risk already open",
     "combined_exposure_cap": "enough gold already open across accounts",
     "group_exposure_cap": "enough already open in this market group",

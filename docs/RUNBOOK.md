@@ -2134,6 +2134,39 @@ and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
 
+### Learning liveness, model influence and stop coverage (`learning:<name>`, `watch:<name>`, `model_influence`, `stop_coverage`)
+
+These checks judge learning by what it wrote, not by whether a job ran (plan 2026-11-25 S5). Each learner and
+watcher has its own check. Claude runs every step below; the owner does nothing.
+
+- **`learning:<name>` WARN `0 rows` or `no output for ...`**: a learner that is switched on wrote nothing within its
+  cadence (72 h for the fill-driven cost_cells and arm_lifecycle_verdicts). Read the job (`job:<name>` in
+  `python -m goldbot.ops.run health`) and its log. Then revive the learner, or move it from `LEARNERS` to `RETIRED`
+  (goldbot/ops/checks/learning.py) with its date and reason, recorded in HANDOFF. The WARN becomes a FAIL (Telegram)
+  48 h after the grace start, which is the first deploy at or after 2026-11-26 22:00 UTC. Never switch a learner off
+  just to quiet it: an off learner still WARNs, with its flag.
+- **`learning:<name>` ok `retired <date>: ...`**: deleted from judgement on purpose. To revive it, move it back to
+  `LEARNERS`.
+- **`watch:drift_watch` WARN `watches k of n self-retrain model(s); missing ...`**: drift.json `self_retrain` lacks
+  those model ids. Check `job:drift_watch` and drift.json `errors.self_retrain`. Until it is fixed, drift is blind for
+  those models; demote them if the fix takes longer than the FAIL window.
+- **`model_influence` WARN `0 of N candidates ... scored`**: no model touches a decision. It never FAILs. The fix is a
+  model that passes its gate and an engine path that reads it, never a looser gate. The count is refreshed every
+  15 min.
+- **`self_retrain` WARN `run of <date>: ...`**: a late run, under 50 % of labels used, a broker with 0 labels, or 0
+  active models. These are expected until the label unlock (#451) and sr-v3 land. They are inputs for that work,
+  not engine faults.
+- **`stop_coverage:<account>` FAIL**: an open position has no broker-side stop. An `own` one: the engine re-sends a
+  stop it knows at reconcile; if the FAIL persists, set the stop in MT5 now. A `foreign` one (another magic or a
+  manual trade): the engine never touches it, so set the stop in MT5 on that account now. Treat either as an
+  incident: the broker stop is the one guarantee that survives the brain.
+- **`stop_coverage:<account>` WARN `stop coverage unknown`**: the positions are unreadable, partly listed, or the
+  engine state is stale. Look in MT5 directly until the engine reads again.
+- **Weekly numbers**: `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/learning_kpis.py --state-dir
+  /opt/goldbot/state [--to "2026-11-27 21:00"] [--json]` prints K1 usable rows (broker x class x 9 tf), K2 influence
+  with its money effect, K4 liveness and self-retrain drift. It is read-only, and it goes at the top of the Friday
+  #34 report.
+
 ### needrestart
 
 Health WARN `needrestart` (outage 2026-11-14: unattended-upgrades restarted 12 goldbot units at 06:58 on a
@@ -3120,3 +3153,53 @@ up-to-date file is left alone. While 1d/1w are dark nothing reads it.
   than 120 days old: copy a current one by hand, never rebuilt), `no_minutes` (the store has no minutes after the
   file: check the engine's history) or lists `holes` (weekdays without minutes). The next run (21:40 UTC) appends
   what the store holds after a copied file.
+
+### Demo accounts without limits (ADR 0097)
+
+`demo_unlimited: true` in config/accounts.yaml lifts every account-configured cap on a demo probe_only account. Every
+account ships with it **false**. Turn it on for icm-probe only at its canary (one line, then the normal deploy). Turn it
+on for the other demo accounts only after a clean 24 h canary and the W2-4 dispatch. To turn it off, set it to false
+and deploy. On the first read after that, the drawdown stage jumps to whatever the drawdown says, which may be HALTED;
+the owner's /rearm clears that as usual.
+Setting the flag on an account that is already HALTED changes nothing until the owner re-arms: it keeps every cap
+and `drawdown_halt` shows (trading-safety L1).
+
+The canary is clean when all of these hold over 24 h with the market open:
+- `exit_latency:icm-probe` is ok;
+- `demo_floor:icm-probe` is ok;
+- no orphan positions (no `adopt_orphan` journal rows);
+- every open position has its broker stop;
+- `entry_yield` journal rows are present but no signal went stale because of them (`exploration_stale` count not up
+  against the week before).
+
+### Exit latency (`exit_latency:<account>`)
+
+What it measures: the engine publishes the p99 of the gaps between loop passes while a position is open
+(`exit_wait_p99_s` in engine_<account>.json). That gap is the longest a software exit waited (time barrier, weekend
+cut, trail close, kill switch); broker stops fire regardless. The check FAILs above 5 s on an unlimited account and
+WARNs on any other.
+
+What to do:
+1. In the deferral warning in the engine log ("pass budget ... phases"), read which phase is slow.
+2. If the cause is entries, `entry_duty` in the engine state will be near 0.5. Set `demo_unlimited: false` on that
+   account until the W2-4 dispatch lands.
+3. If the cause is the bridge, follow "Bridge contention on an MT5 box".
+4. Never raise `gate.CAPACITY_CEILING` (300 open positions) without a new measurement recorded in ADR 0097.
+
+### Demo floor (`demo_floor:<account>`)
+
+On an unlimited account:
+- WARN: equity has fallen below half the closed-balance mark.
+- FAIL: equity is below the floor (`risk.demo_floor.min_equity_frac`, 20 %). From that point every entry is refused
+  `demo_equity_floor` and learning has stopped. Exits keep running.
+
+What to do:
+1. Check that the mark is right. A demo reset or top-up should show as a `capital_flow` journal row and move the mark.
+2. If the reset was not reconciled (a `capital flow not applied` warning in the log), the mark is still the old one.
+   No automated path resets it on an unlimited account, because its stage never moves:
+   a. set `demo_unlimited: false` and deploy; the next read shows HALTED;
+   b. the owner re-arms on the dashboard (TOTP, the usual re-arm conditions), which sets the mark to equity;
+   c. set the flag back to true.
+3. A genuine loss to the floor is a finding for the performance-analyst before anyone resets.
+4. `risk.demo_floor.enabled: false` switches the floor off. After that, the broker's own margin call and stop-out are
+   the only guards left; that decision is the owner's.

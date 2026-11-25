@@ -154,6 +154,15 @@ risk:
   # 24/26/31 Dec, 1/2 Jan), by broker server date (= the CME trading day). A missing or expired list refuses entries
   # `calendar_unavailable` (health warns 90 days ahead). Entries only. OFF until the owner adopts it.
   holidays: { enabled: false, file: config/holidays_cme_metals.yaml }
+  # Demo margin-safety floor (ADR 0097, owner 2026-11-25: "there are no limits anymore for demo accounts", "allow
+  # absolutely anything"). On an account with `demo_unlimited: true` in config/accounts.yaml (demo probe_only only)
+  # every cap above is lifted; this is the one guard left, because a wiped demo balance stops all learning. Entries are
+  # refused `demo_equity_floor` while equity is below min_equity_frac x the closed-balance high-water mark (0.2: an
+  # 80% drawdown; £2,000 on a £10,000 demo), and `demo_margin_floor` when the margin level after the trade would fall
+  # below min_margin_level (2.0 = 200%, on the broker's own margin figure, 1:20 when it cannot answer: four times a
+  # 50% stop-out, twice a 100% margin call). Entries only; exits are never gated. enabled: false switches it off (the
+  # broker's own margin call and stop-out remain). Live, observe-only and paper accounts never read it.
+  demo_floor: { enabled: true, min_equity_frac: 0.2, min_margin_level: 2.0 }
 
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist

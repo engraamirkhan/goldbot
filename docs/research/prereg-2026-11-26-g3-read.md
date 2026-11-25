@@ -128,6 +128,39 @@ coverage is 52-67 % (not 85 %), so the first judged runs slip about a week. RBR1
 
 No Stage C or confirm read of any card runs before the K-of-record reconciliation (quant, due 2026-11-27, ruling D5).
 
+## Amendment before the 2026-11-27 freeze (ML lifecycle plan of 2026-11-25: A1, A22, N18)
+
+Written by the research director before any route-B forward row was read. It adds no route and moves no threshold;
+it says what the existing checks are and which rows they may read. The quant signs it with the card.
+
+**A1. Forward checks are harm and futility checks, not confirmation.**
+- Route B's "frozen forward edge ≥ 0 on ≥ 30 rows" is a **harm check**. It stops a model that is doing damage. It
+  does not confirm an edge.
+- Its power, re-derived for this amendment (SD of the edge about 1.16 x sqrt(keep), about 0.97 R at keep 0.7, to
+  1.16 R): at 30 rows a model with a true +0.05 R edge **fails** the check 39-41 % of the time, and a model with a true
+  −0.10 R edge **passes** it 29-32 % of the time. It is a coarse screen and is reported with these figures.
+- Route A at its 100-candidate minimum has about 6 % power for a true +0.05 R excess (SD 1.16 R, one-sided
+  alpha 0.025). A route-A pass at that n is reported with that power.
+- **A22, the n every judged read states:** about 2,950 candidates for S = +0.05 R at 80 % power, one-sided
+  alpha 0.025, SD 0.97 R (re-derived); the lifecycle plan gives about 1,700 unadjusted and about 7,500 deflated at
+  K 21,333 (not re-derived). Class x timeframe forward cells are labelled **descriptive / underpowered**.
+  n is in n_eff (ADR 0085 Q1/Q3), not raw candidates. A read that cannot reach its n by its date is NOT STARTED
+  (0 K); if it is run anyway it books K. This applies to cards signed after 2026-11-27. Reads already signed (sr-v2,
+  G3 route A) keep their n and report their power. Harm checks are not judged reads.
+
+**N18. Forward-read version rule (route B).**
+- Every forward row is tagged with the sha of the model that scored it.
+- sr-v2 keeps its signed per-run K and its signed check: the first passer's frozen model re-scores every candidate
+  decided after its data cutoff (sr-v2 card, ACTIVE). The serving sha is recorded, but it does not filter sr-v2's
+  rows.
+- sr-v3 (and any history winner reaching route B through sr-v3): the **procedure** (pretrain + frozen a0 + head scope
+  + cadence) is the judged unit for K, K 1 per procedure per judged unit. A forward read may pool rows scored by
+  retrained children **only** if each child's update stayed inside the pre-registered head and max_shift, checked
+  mechanically from lineage. Otherwise the child is a new version with its own read. The body stays frozen for the
+  whole read. Fit-only retrains are K 0 and are never judged in the middle of a read.
+- A route-B pass that pools rows across a child outside max_shift is not a pass (the registry refuses such a read;
+  ADR 0085 amendment 2026-11-27).
+
 ## Signatures
 
 - Evaluator check: pending.

@@ -440,9 +440,12 @@ def current_record(path: str | Path | None) -> EngineCostRecord | None:
 
 
 def read_rows(conn: sqlite3.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
-    """(closed exploration rows, cost probe rows, ids void for the cost cells) as plain JSON bodies, read-only."""
-    trades = [json.loads(b) for (b,) in conn.execute("SELECT body FROM exploration_trades WHERE closed = 1")]
-    probes = [json.loads(b) for (b,) in conn.execute("SELECT body FROM cost_probes")]
+    """(closed exploration rows, cost probe rows, ids void for the cost cells) as plain JSON bodies, read-only. An
+    unlimited-epoch market-state fill (ADR 0097, quant F1) is in neither list."""
+    from goldbot.research.evidence_exclusions import unlimited_market_state
+    trades = [r for (b,) in conn.execute("SELECT body FROM exploration_trades WHERE closed = 1")
+              if not unlimited_market_state(r := json.loads(b))]
+    probes = [r for (b,) in conn.execute("SELECT body FROM cost_probes") if not unlimited_market_state(r := json.loads(b))]
     try:
         void = {str(c) for c, s in conn.execute("SELECT client_order_id, scope FROM evidence_exclusions")
                 if "cost_cells" in json.loads(s)}

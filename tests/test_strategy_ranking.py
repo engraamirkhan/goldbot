@@ -506,3 +506,14 @@ def test_engine_strategies_rank_with_their_ledger_evidence_and_cohort_fills_neve
     assert row.figures.n == 40 and row.band == "ranked"
     assert all(r.key != "alpha" for r in [*view.rows, *view.controls, *view.retired])
     assert {c.asset_class: c.n for c in view.by_class} == {"metal": 40}
+
+
+def test_strategy_ranking_excludes_unlimited_epoch_rows_by_default_and_lists_them_separately():
+    """ADR 0097 §7 (d), quant F6: fills of a demo account without limits do not transfer; they are in no ranked row,
+    no board n and no read progress, and the view counts them for their own line ("unlimited demo, does not
+    transfer")."""
+    capped = _spread("A1", [0.1] * 40, 10)
+    free = [r.model_copy(update={"limits_epoch": "unlimited"}) for r in _spread("A1", [5.0] * 40, 10)]
+    with_free, alone = sr.rank([*capped, *free], CAT, NOW), sr.rank(capped, CAT, NOW)
+    assert (with_free.unlimited_fills, alone.unlimited_fills) == (40, 0)
+    assert with_free.rows == alone.rows and with_free.controls == alone.controls

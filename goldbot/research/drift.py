@@ -10,6 +10,10 @@
   its decision interval tuned to a 5% quarterly false-alarm rate at the backtest's trade rate, on two-point trade
   residuals at the mean p of the trades in the CUSUM (row M25, research/cusum.py).
   An alarm halts that agent's entries until the owner reviews it or a new champion replaces the version.
+* Scored-model drift (S5, plan 2026-11-25 W1-C: "drift watches every shadow and active model, PSI of inputs and
+  scores"): `scored_model_drift` for a model that keeps no reference bins (the self-retrain LogitModel): the reference
+  is rebuilt from its own training rows, PSI per input and PSI of the model's scores, live against training. Reported
+  (learning_kpis, #34), never sizing or halting by itself: a filter's halt rule is its pre-registered forward read.
 * System halt: two agents halted at once, or an agent's 30-day shadow drawdown above 1.5x its backtest drawdown, halts
   every entry pending the owner's review (`python -m goldbot.ops.run drift-review --clear`).
 
@@ -17,13 +21,14 @@ Exits are never affected: halts and size-downs act on new entries only.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import Record
+from goldbot.base import Record, load_record_json
 from goldbot.research.cusum import DEFAULT_K, FALSE_ALARM_QUARTER, calibrated_h
 from goldbot.research.metrics import calibration_ece
 
@@ -199,4 +204,85 @@ def system_halt_reasons(health: list[AgentHealth], s: Any) -> list[str]:
     for h in health:
         if h.backtest_dd and h.backtest_dd > 0 and h.dd_30d > s.dd_mult * h.backtest_dd:
             out.append(f"{h.agent_id}: 30-day drawdown {h.dd_30d:.1%} > {s.dd_mult}x backtest {h.backtest_dd:.1%}")
+    return out
+
+
+class ScoredModelDrift(Record):
+    """PSI of a scored model's inputs and of its scores, live rows against its training rows."""
+
+    model_id: str
+    status: str = ""                      # the model's own status (self-retrain: active or shadow)
+    n_ref: int = 0
+    n_live: int = 0
+    psi: dict[str, float] = Field(default_factory=dict)
+    psi_warn: list[str] = Field(default_factory=list)
+    psi_size_down: list[str] = Field(default_factory=list)      # the size-down band, named so; reported, never acted on
+    psi_score: float | None = None
+    score_shift: bool = False             # the score PSI above psi_size_down: the model sees a different population
+    notes: list[str] = Field(default_factory=list)
+
+
+def scored_model_drift(model_id: str, ref: pd.DataFrame, live: pd.DataFrame,
+                       score: Callable[[pd.DataFrame], np.ndarray], s: Any) -> ScoredModelDrift:
+    """PSI per input column of `ref` (the model's training design) and of `score` on both, `live` against `ref`.
+    `s`: DriftSettings (psi_warn, psi_size_down, min_rows). Nothing is computed under `min_rows` live rows (said)."""
+    d = ScoredModelDrift(model_id=model_id, n_ref=len(ref), n_live=len(live))
+    if len(live) < s.min_rows or len(ref) < s.min_rows:
+        d.notes.append(f"{len(live)} live / {len(ref)} training rows (< {s.min_rows}): PSI not computed")
+        return d
+    bins = reference_bins(ref)
+    for c, b in bins.items():
+        if c not in live.columns:
+            continue
+        v = psi(b, pd.to_numeric(live[c], errors="coerce").to_numpy(dtype=float))
+        d.psi[c] = round(v, 4)
+        if v > s.psi_size_down:
+            d.psi_size_down.append(c)
+        elif v > s.psi_warn:
+            d.psi_warn.append(c)
+    ref_scores = pd.DataFrame({"score": np.asarray(score(ref), dtype=float)})
+    sb = reference_bins(ref_scores).get("score")
+    if sb is not None:
+        d.psi_score = round(psi(sb, np.asarray(score(live), dtype=float)), 4)
+        d.score_shift = d.psi_score > s.psi_size_down
+    return d
+
+
+def _sr_rows(con: Any, broker: str, arm_id: str, nominal_from_ns: int, features: tuple[str, ...]) -> pd.DataFrame:
+    """An arm's candidates with an admitted point-in-time snapshot: decision time, side and the model's features."""
+    import json
+    rows = con.execute(
+        "SELECT o.decision_ns, o.side, v.features FROM exploration_obs o "
+        "JOIN exploration_feature_snapshots s ON s.candidate_id = o.candidate_id "
+        "JOIN exploration_feature_vectors v ON v.sha256 = s.vector_sha256 "
+        "WHERE o.broker = ? AND o.arm_id = ? AND s.status = 'ok' "
+        "AND (s.pit = 'written' OR (s.pit = 'nominal' AND s.decision_ns >= ?))",
+        (broker, arm_id, nominal_from_ns)).fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["decision_ns", "side", *features])
+    vals = pd.DataFrame([json.loads(f) for *_, f in rows]).reindex(columns=list(features))
+    head = pd.DataFrame([r[:2] for r in rows], columns=["decision_ns", "side"])
+    return pd.concat([head, vals], axis=1)
+
+
+def self_retrain_drift(con: Any, s: Any, statuses: tuple[str, ...] = ("active", "shadow")) -> dict[str, dict[str, Any]]:
+    """{model_version: ScoredModelDrift dump} for every self-retrain model in `statuses`, from an open aux.db
+    connection (read-only is enough): training = the arm's admitted rows up to the model's cutoff (before the nominal
+    audit, so a superset of what it trained on), live = after it. Reported (drift.json `self_retrain`, learning_kpis),
+    never sizing or halting: a filter is judged forward by its own demotion rule (research/self_retrain.py)."""
+    from goldbot.research import self_retrain as sr
+    from goldbot.research.self_retrain import LogitModel
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'self_retrain_models'").fetchone():
+        return {}
+    q = ", ".join("?" for _ in statuses)
+    got = con.execute(f"SELECT model_version, broker, arm_id, status, cutoff_ns, model FROM self_retrain_models "
+                      f"WHERE status IN ({q})", statuses).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for version, broker, arm_id, status, cutoff_ns, text in got:
+        rows = _sr_rows(con, broker, arm_id, int(sr.NOMINAL_FROM.value), sr.FEATURES)
+        model = load_record_json(LogitModel, text, source="aux.db self_retrain_models")   # ADR 0010
+        ref, live = rows[rows["decision_ns"] <= cutoff_ns], rows[rows["decision_ns"] > cutoff_ns]
+        d = scored_model_drift(str(version), sr.design(ref), sr.design(live), model.score, s)
+        d.status = str(status)
+        out[str(version)] = {"broker": broker, "arm_id": arm_id, **d.model_dump()}
     return out

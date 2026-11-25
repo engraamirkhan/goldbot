@@ -63,6 +63,7 @@ power-refused in every class (H-102 draft section 4.3), so they are context only
 
 ## 3. Population, models and statistic
 
+- Implementation per ADR 0098 R-I (offset form).
 - **Population:** the H-102 gold 1h+4h unit, history replay (`history_replay.py`, Dukascopy XAUUSD 1m, cost of
   record in bps), arms G1A, PDC1, MB1H (1h) and DON4, PDC4, KSQ4, BXF4H (4h), each with its matched control.
   MB1H and BXF4H are retired box-family arms; "retired arm + learned filter" is a new hypothesis (ruling of

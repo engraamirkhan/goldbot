@@ -319,6 +319,8 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
             caps = {p: float(current[f"{p}_cap"]) if current.get(f"{p}_cap") is not None else caps[p] for p in caps}
     except (ValueError, OSError, AttributeError, TypeError):
         return []                                   # check_engine reports the unreadable file
+    if e.get("demo_unlimited") is True:
+        return []                                   # ADR 0097: no loss cap on this account (check_demo_floor instead)
     out = []
     for period in ("daily", "weekly"):
         start = starts[period]
@@ -466,3 +468,94 @@ def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
 # ADR 0031: the nightly adaptive-limits decision lives with its job (goldbot/ops/limits_job.py); per account, right
 # after the risk state, nothing for an account that is not adaptive
 register_check("account", block=BLOCK_ACCOUNT, pos=22)(check_limits_controller)
+
+
+# ADR 0097 (trading-safety H1): too few loop-pass gaps say nothing about a p99
+EXIT_LATENCY_MIN_N = 30
+# ADR 0097 (trading-safety M5): equity below this share of the closed-balance mark warns, well before the demo floor
+DEMO_FLOOR_WARN_FRAC = 0.5
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=52)
+def check_exit_latency(ctx: HealthContext, account_id: str) -> list[Check]:
+    """ADR 0097 (trading-safety H1: "an exit-latency SLO with an alert (p99 < 5 s)"): the engine's published p99 of its
+    loop-pass gaps with a position open (engine/order_send.py `published`), the longest an exit that became due waited
+    for its pass, against the account's own SLO (`exit_slo_s`: 5 s on one book, the multi-book pass budget plus one
+    entry slot on several). Above it: FAIL on a demo account without limits (exits-first and the entry duty ceiling
+    exist to hold it). Any other account is a published baseline, never judged (code review C-M2: no baseline existed
+    when this shipped). Fewer than EXIT_LATENCY_MIN_N gaps (the engine keeps the last 15 min only), or an engine that
+    does not publish them, is not judged; an unreadable file is check_engine's. Reporting only."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        p99, n = e.get("exit_wait_p99_s"), int(e.get("exit_wait_n") or 0)
+        slo = float(e.get("exit_slo_s") or 5.0)
+        unlimited = e.get("demo_unlimited") is True
+        worst = e.get("exit_wait_max_s")
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []
+    if p99 is None or n < EXIT_LATENCY_MIN_N:
+        return []
+    name = f"exit_latency:{account_id}"
+    what = f"exit wait p99 {float(p99):.1f} s over the last {n} passes with a position open (max {worst} s, SLO {slo:g} s)"
+    if float(p99) <= slo:
+        return [Check(name=name, status="ok", reason=what)]
+    if not unlimited:
+        return [Check(name=name, status="ok", reason=f"{what}: baseline, not judged on a capped account")]
+    return [Check(name=name, status="fail",
+                  reason=f"{what}: software exits (time barrier, weekend cut, trail, kill switch) are late; broker "
+                         "stops still fire. RUNBOOK 'Exit latency'")]
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=54)
+def check_demo_floor(ctx: HealthContext, account_id: str) -> list[Check]:
+    """ADR 0097 (trading-safety M4/M5): on a demo account without limits the floor is the one guard left. WARN once
+    equity is below DEMO_FLOOR_WARN_FRAC of the closed-balance mark (before the floor); FAIL at the floor, where every
+    entry is refused `demo_equity_floor` and learning has stopped (a reset the deal history did not reconcile keeps the
+    old mark there too). Nothing on any other account. Reporting only."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        if e.get("demo_unlimited") is not True:
+            return []
+        eq, mark = float(e.get("equity") or 0.0), float(e.get("balance_closed_hwm") or 0.0)
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []
+    from goldbot.config import DemoFloor
+    floor = ctx.settings.risk.demo_floor if ctx.settings is not None else DemoFloor()
+    name = f"demo_floor:{account_id}"
+    if mark <= 0:
+        return [Check(name=name, status="warn", reason="no closed-balance mark yet: the demo floor cannot be judged")]
+    what = f"equity {eq:,.2f} is {100 * eq / mark:.0f}% of the mark {mark:,.2f}"
+    if floor.enabled and eq < floor.min_equity_frac * mark:
+        return [Check(name=name, status="fail",
+                      reason=f"{what}: below the demo floor ({100 * floor.min_equity_frac:.0f}%), every entry refused "
+                             "demo_equity_floor and learning has stopped. RUNBOOK 'Demo floor'")]
+    if eq < DEMO_FLOOR_WARN_FRAC * mark:
+        return [Check(name=name, status="warn", reason=f"{what}: half the mark lost; the demo floor is "
+                                                       f"{100 * floor.min_equity_frac:.0f}%")]
+    return [Check(name=name, status="ok", reason=what)]
+
+
+# ADR 0097 (quant R2): above this share of the day's tagged orders, unread capped reasons warn
+CAPPED_UNREAD_WARN = 0.01
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=56)
+def check_capped_reasons(ctx: HealthContext, account_id: str) -> list[Check]:
+    """ADR 0097 (quant R2): on a demo account without limits every entry carries the market-state reasons a capped
+    account would have refused it for (`capped_reasons`). When they could not be read the fill is tagged `unread` and
+    left out of every cost and stop read (fail closed), so more than CAPPED_UNREAD_WARN of the day's orders unread
+    WARNs: evidence is being lost. Nothing on any other account or before an order today. Reporting only."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        if e.get("demo_unlimited") is not True:
+            return []
+        total, unread = int(e.get("capped_reasons_orders") or 0), int(e.get("capped_reasons_unread") or 0)
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []
+    if total <= 0:
+        return []
+    name = f"capped_reasons_unread:{account_id}"
+    what = f"{unread} of {total} orders today with capped reasons unread"
+    if unread / total > CAPPED_UNREAD_WARN:
+        return [Check(name=name, status="warn", reason=f"{what}: those fills are left out of every cost and stop read")]
+    return [Check(name=name, status="ok", reason=what)]

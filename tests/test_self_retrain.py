@@ -146,8 +146,8 @@ def test_the_model_reads_at_most_forty_inputs_side_included_and_every_signed_col
 
 
 def test_the_migration_adds_both_tables_additively_so_a_rollback_still_opens_aux_db(tmp_path):
-    mig = AUX[-1]
-    assert mig.name == "self_retrain" and mig.additive
+    mig = next(m for m in AUX if m.name == "self_retrain")      # not AUX[-1]: later migrations follow it
+    assert mig.additive
     assert compat_back_to(AUX, mig.version) < mig.version
     Database.open(tmp_path, "aux")
     con = sqlite3.connect(tmp_path / "aux.db")

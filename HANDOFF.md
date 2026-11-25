@@ -18,6 +18,41 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     So are demo learning cohort fills. Their money stays in the totals.
   - **Engine ranking fix.** Cohort fills now carry evidence `learning_cohort`. Before this, the ranking skipped
     `not_evidence`, which hid every engine strategy (#440).
+- **Demo accounts without limits, made safe (ADR 0097; owner 2026-11-25 "allow absolutely anything"). The flag is
+  false everywhere until the icm-probe canary.**
+  - **Switch.** `demo_unlimited` in config/accounts.yaml applies only to a demo probe_only account that has the
+    order lane or `order_timeout_s` <= 15 s; Vantage cannot take it as configured. It lifts every
+    account-configured cap in the RiskGate and in exploration.
+  - **What stays.**
+    - The RiskGate path, the broker stop on every order, halts (a HALTED stage stays until /rearm), integrity
+      checks, rollover and the weekend.
+    - Statistical rules: the frozen spec's `max_open`, a learning arm's registered loss cap and `until`, prereg
+      entry refusals, H-81 cost suspension and retirements.
+  - **What is lifted.** The drawdown kill switch no longer flattens there (trading-safety M2, owner information).
+  - **Guards.**
+    - The demo floor: equity at least 20 % of the mark, margin at least 200 % on the broker's figure.
+    - Health warns at 50 % of the mark.
+    - `arm_runaway` (exploration arms): one arm's day stays within 10 % of the mark.
+  - **Exits before entries (trading-safety H1/H2), engine/order_send.py.**
+    - No entry while a close (outside its back-off) or a kill flatten is pending.
+    - Entry duty ceiling: 1.5 s of entries a pass, half of every 10 s.
+    - A 10033/10040 refusal holds entries for at least 60 s, then until a position closes.
+    - The 15-minute pass-gap p99 is published, and health `exit_latency` judges unlimited accounts only (5 s on
+      one book, 6.5 s on several).
+    - Capacity ceiling: 300 open positions, measured.
+  - **Evidence (quant review of #454; ADR 0097 §7, reads (a)-(e)).**
+    - Every entry carries `limits_epoch=unlimited` and `capped_reasons`, on exploration, probe, journal and
+      closed-trade records.
+    - `evidence_exclusions.unlimited_market_state` keeps shock and wide-spread fills out of every cost, stop,
+      edge-cap and kill read.
+    - Rankings and perf_report leave unlimited rows out and show them on their own line.
+    - Cohort amendment: docs/research/prereg-amendment-2026-11-26-cohort-unlimited.md (the weekly cap is judged in
+      shadow). GD-1 disclosure added. ADR 0098 calibrates per epoch.
+  - **Live unchanged.** `engine_limits` of every non-probe account is pinned to origin/main (fixture test), and
+    `update_stage` is byte-identical.
+  - **Next.**
+    - Set the flag on icm-probe at the canary (Sun 2026-11-29 22:00 UTC) and read it 24 h later (RUNBOOK).
+    - The other demo accounts follow after W2-4.
 - **Exploration labels: a stop inside the spread is voided, never labelled (2026-11-25).**
   - **Finding.** On the brain, 1,039 `exploration_obs` rows have |label_sim_r| > 20 R. 1,038 of them are non-gold
     candidates (FX, rates, energy, ags, metals; session days 2026-11-02..03). They were replayed on XAUUSD bars with
@@ -35,6 +70,42 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - Brain check on 2026-11-25: there are 0 gold rows with a label, no void row and a stop below $0.45.
   - **Rule for ad-hoc reads.** Read labels through `exploration_data.read_obs`. A raw SQL read of
     `exploration_obs.label_sim_r` must anti-join `exploration_label_void`.
+- **Learning liveness judged by output (S5, plan 2026-11-25 W1-C; R182).** On 11-25, 7 learning tables held 0 rows,
+  drift_watch and model_watch watched 0 models, and 0 of 22,010 decisions carried a model. Health still said ok.
+  - **`learning:<name>`** (goldbot/ops/checks/learning.py) is one check per learner: self_retrain,
+    exploration_weights, har_days, arm_lifecycle_verdicts and cost_cells.
+    - A learner that is on but has 0 output rows, or nothing new within its cadence, WARNs. It FAILs 48 h after
+      the grace start, and the existing alert loop sends the FAIL to Telegram.
+    - The grace starts at the first deploy at or after 2026-11-26 22:00 UTC (from state/deploys.jsonl).
+    - A learner switched off in settings WARNs with its flag but never FAILs.
+    - Fill-driven learners have a 72 h cadence, so a weekend is not a gap.
+    - Thompson weights under `allocator: equal` read ok, with the allocator named.
+  - **RETIRED** (read ok, with date and reason): meta_labeller (H-62, 2026-11-13) and arm_priors (H-60 was never
+    wired). long_tf_decisions and swap_reconciliations are not judged: they are bookkeeping, not learners.
+  - **`watch:drift_watch`** must cover every self-retrain model in shadow or active, matched by model id.
+    drift_watch (goldbot/ops/jobs.py) now stores PSI of their inputs and scores under drift.json `self_retrain`
+    (`drift.self_retrain_drift`). It reports only, and never sizes or halts.
+    `watch:model_watch` is the champions' CUSUM. A self-retrain filter is judged forward by its own demotion rule.
+  - **`model_influence`**: % of the last 24 h's candidates a model scored and % it changed. The count is cached
+    15 min, and a new index `exploration_obs_decision` (migration 44) serves it. It WARNs at 0 % and never FAILs.
+  - **`self_retrain`** gives dated WARNs ("run of <date>: ...") for a late run, under 50 % of labels used, a broker
+    with 0 labels, and 0 active models.
+  - **`stop_coverage:<account>`**: FAILs on any open position without a broker stop, separating the engine's own
+    positions from foreign ones. It WARNs "unknown" when positions are unreadable, partly listed, or the engine state
+    is stale.
+  - **Noise removed:** up to 3 late broker minutes are an info note on engine:<account> (replaced and still-sampled
+    counted apart), and a missing optional key reads ok. Steady state has 0 noise WARNs. The learning WARNs stay
+    until each learner is fixed.
+  - **`scripts/learning_kpis.py`** (read-only): K1 usable rows per broker x class x 9 tf, K2 influence with its money
+    effect, K4, and self-retrain drift.
+  - **Open:** the engine reads no self_retrain model, so an ACTIVE filter changes no decision.
+  - **Revisit:** "model_watch need not cover self-retrain filters" must be revisited when the engine starts reading a
+    filter. A filter that acts on decisions needs a champion-grade CUSUM watch.
+  - **Deploy note:** migration 44 builds `exploration_obs_decision` on the brain's large exploration_obs. Before the
+    deploy, build it as the service user outside market hours (`CREATE INDEX IF NOT EXISTS exploration_obs_decision
+    ON exploration_obs(decision_ns)` on state/aux.db), or time it on a copy first. The migration is then a no-op.
+  - **Grace start:** the 48 h FAIL clock starts at the first deploy whose `to` commit contains 67a2fa46 (git
+    ancestry, state/deploys.jsonl), never before 2026-11-26 22:00 UTC.
 - **H-101 model zoo and fusion, code (card `docs/research/prereg-2026-11-25-model-zoo-fusion.md`, zoo-v1).**
   - **What.** `goldbot/research/model_zoo.py` holds the 8 pre-named candidates on the sr-v2 40 inputs: B1 LOGIT, B2
     GBT (LightGBM with fixed hyperparameters), B3 POOL, B4 REGIME, B5 KNN, F1 AVG, F2 STACK and F3 GATE. It also holds

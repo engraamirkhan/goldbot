@@ -144,6 +144,7 @@ from goldbot.ops.checks.engine import (
     check_failed_orders,
     check_history_gap,
     check_quote_age,
+    check_stop_coverage,
     check_symbols,
     check_tick_errors,
     check_weekend_247,
@@ -169,6 +170,7 @@ from goldbot.ops.checks.feeds import (
 )
 from goldbot.ops.checks.findings import check_findings  # owner 2026-11-20 findings register (registers it)
 from goldbot.ops.checks.host import PROC_STAT, StealSampler, check_cpu_steal, check_needrestart
+from goldbot.ops.checks.learning import check_learning_liveness, check_model_influence  # S5 (registers them)
 from goldbot.ops.checks.long_history import check_long_history  # BACKLOG 251 (registers it)
 from goldbot.ops.checks.loop import check_feedback_loop
 from goldbot.ops.checks.operations import (
@@ -190,7 +192,10 @@ from goldbot.ops.checks.risk import (
     WINDOWS_HOLIDAY_WARN_DAYS,
     WINDOWS_UNAVAILABLE_FAIL,
     _control,
+    check_capped_reasons,
+    check_demo_floor,
     check_entry_windows,
+    check_exit_latency,
     check_halt,
     check_kill_switch,
     check_loss_caps,
@@ -375,6 +380,12 @@ __all__ = [
     "check_limits_controller",
     "check_long_history",
     "check_self_retrain",
+    "check_learning_liveness",
+    "check_model_influence",
+    "check_stop_coverage",
+    "check_capped_reasons",
+    "check_demo_floor",
+    "check_exit_latency",
     "check_loss_caps",
     "check_model_watch",
     "check_monthly_review",

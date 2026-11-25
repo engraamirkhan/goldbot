@@ -5412,6 +5412,11 @@
       ],
       "title": "T Adjusted"
      },
+     "unlimited_fills": {
+      "default": 0,
+      "title": "Unlimited Fills",
+      "type": "integer"
+     },
      "unreadable": {
       "items": {
        "type": "string"
@@ -7502,6 +7507,17 @@
       ],
       "title": "Kind",
       "type": "string"
+     },
+     "limits_epoch": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Limits Epoch"
      },
      "lots": {
       "anyOf": [

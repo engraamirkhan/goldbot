@@ -166,6 +166,7 @@ const rankRow = (o: Omit<Partial<RankRow>, "figures"> & { figures?: Partial<Rank
 /** In the server's order (strategy_ranking.py): ranked by the adjusted bound, then too few to rank by n. */
 export const ranking = (): RankingView => ({
   as_of: iso(0), window: "all", account: null, style: null, k_ranked: 2, t_adjusted: 2.32, min_fills: 30, min_days: 10,
+  unlimited_fills: 0,
   heading: "Ranked by the least each trade is likely earning after costs. Early results move a lot; nothing is proven before its read.",
   rows: [
     rankRow(),
