@@ -165,6 +165,12 @@ The RiskGate, the trial budget rules, the holdout (no bar at or after 2025-10-01
 the phase gate, the live unlock and every other arm. No threshold, window or reading rule of GD-1's card changes; this
 amendment adds a forward measurement only.
 
+## Disclosure, 2026-11-26: demo accounts without limits (ADR 0097)
+
+From the ADR 0097 flip, GD1P's kill checks 1-3, the learning-class loss cap read and the 300-fill read count only
+fills for which `unlimited_market_state` is false. Excluded fills are counted and reported. The arm-versus-control read
+(replay labels) is unchanged.
+
 ## Bias statement
 
 Written after GD-1's result (A1 PASS on 2003-09, decayed since 2010) and the pre-arming checks were read, and before

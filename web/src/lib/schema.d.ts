@@ -2723,6 +2723,11 @@ export interface components {
             style: string | null;
             /** T Adjusted */
             t_adjusted: number | null;
+            /**
+             * Unlimited Fills
+             * @default 0
+             */
+            unlimited_fills: number;
             /** Unreadable */
             unreadable: string[];
             /**
@@ -3386,6 +3391,8 @@ export interface components {
              * @enum {string}
              */
             kind: "real" | "strategy" | "exploration" | "control" | "cost_probe" | "shadow";
+            /** Limits Epoch */
+            limits_epoch?: string | null;
             /** Lots */
             lots: number | null;
             /** Mae R */

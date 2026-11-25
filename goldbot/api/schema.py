@@ -1087,6 +1087,9 @@ class TradeRow(BaseModel):
     mfe_usd: float | None = None
     mae_usd: float | None = None
     excursion_approx: bool | None = None
+    # ADR 0097 (quant F6): "unlimited" for a fill sent on a demo account without limits; rankings, board n, read
+    # progress and every figure claiming to transfer leave such rows out by default
+    limits_epoch: str | None = None
 
 
 class TradeTotals(BaseModel):
@@ -1404,6 +1407,9 @@ class RankingView(BaseModel):
     # classes (owner directive 2026-11-25)
     by_class: list[ClassFigures] = Field(default_factory=list)
     class_splits: list[str] = Field(default_factory=list)
+    # ADR 0097 (quant F6): closed fills of the unlimited demo epoch, left out of every row above and of read progress;
+    # shown on their own line, "unlimited demo, does not transfer"
+    unlimited_fills: int = 0
 
 
 class KindDay(BaseModel):

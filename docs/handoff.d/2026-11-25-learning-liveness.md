@@ -1,4 +1,4 @@
-- **Learning liveness judged by output (S5, plan 2026-11-25 W1-C; R181).** On 11-25, 7 learning tables held 0 rows,
+- **Learning liveness judged by output (S5, plan 2026-11-25 W1-C; R182).** On 11-25, 7 learning tables held 0 rows,
   drift_watch and model_watch watched 0 models, and 0 of 22,010 decisions carried a model. Health still said ok.
   - **`learning:<name>`** (goldbot/ops/checks/learning.py) is one check per learner: self_retrain,
     exploration_weights, har_days, arm_lifecycle_verdicts and cost_cells.

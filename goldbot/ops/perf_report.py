@@ -391,6 +391,9 @@ class PerformanceReport(FrozenRecord):
     learning_groups: int = 0                   # exploration, control and probe rows (kind, family and class rows overlap)
     accounts: list[AccountReport]
     errors: list[str] = []
+    # ADR 0097 (quant F6): closed trades of the unlimited demo epoch in the range, left out of every figure above
+    # (they do not transfer to a capped or live account); shown on their own line
+    unlimited_trades: int = 0
     # growth sprint 2026-11-01: this risk week's growth test (GS1 against GS1C, the virtual ledgers); None when
     # nothing of it is recorded (`ops.growth_report`)
     growth_test: GrowthTest | None = None
@@ -1261,8 +1264,12 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
         learning_ids = frozenset()
         errors.append(f"exploration spec unreadable ({type(exc).__name__}): learning arms not split out")
     learn_by: dict[str, list[LearningClose]] = {}
+    unlimited = 0
     for c in learn.rows if learn is not None else []:
         if start <= report_day(c.exit_utc) <= end:
+            if c.limits_epoch == "unlimited":      # ADR 0097 (quant F6): does not transfer; its own line
+                unlimited += 1
+                continue
             learn_by.setdefault(ids.get(c.account, c.account), []).append(c)
     store = _store(Path(data_root) if data_root is not None else None)
     day_types, classified, opp = _day_types(store, start, end, bars_source)
@@ -1350,7 +1357,8 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
             errors.append(f"growth test unreadable ({type(exc).__name__})")
     return PerformanceReport(start=start, end=end, as_of_utc=now.isoformat(), weekdays=weekdays, accounts=out,
                              groups=len(groups), groups_with_reading=sum(g.sufficient for g in groups),
-                             learning_groups=learning_groups, errors=errors, growth_test=growth)
+                             learning_groups=learning_groups, errors=errors, growth_test=growth,
+                             unlimited_trades=unlimited)
 
 
 # ---------------------------------------------------------------------------------------------- markdown
@@ -1645,6 +1653,9 @@ def format_markdown(rep: PerformanceReport) -> str:
     if rep.growth_test is not None:
         L += ["## Growth test (growth sprint 2026-11-01; demo only)", "",
               *(f"- {line}" for line in growth_lines(rep.growth_test)), ""]
+    if rep.unlimited_trades:
+        L += [f"Unlimited demo, does not transfer: {rep.unlimited_trades} closed trades (ADR 0097), in no figure above.",
+              ""]
     for e in rep.errors:
         L.append(f"Warning: {e}")
     return "\n".join(L).rstrip() + "\n"

@@ -84,6 +84,9 @@ class LearningClose(FrozenRecord):
     # cohort fill (ADR 0095): never in a class figure
     symbol: str = "XAUUSD"
     class_void: bool = False
+    # ADR 0097 (quant F6): "unlimited" for a fill of a demo account without limits: money readers keep it, every read
+    # claiming to transfer (perf_report's per-day figures, rankings) leaves it out by default
+    limits_epoch: str | None = None
 
 
 class LearningCloses(FrozenRecord):
@@ -134,7 +137,7 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp, *, include_ex
             commission=c.commission if c is not None else None, swap=-c.swap if c is not None and c.swap is not None else None,
             censored=r.censored, voided=r.evidence == "excluded", exit_reason=r.exit_reason, symbol=r.symbol,
             class_void=r.evidence == "learning_cohort"
-            or (r.kind in ("exploration", "control") and order_id(r) in ledger.class_void),
+            or (r.kind in ("exploration", "control") and order_id(r) in ledger.class_void), limits_epoch=r.limits_epoch,
             **_excursion(bodies.get(r.trade_id))))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])
 

@@ -291,6 +291,12 @@ class ProbeRecord(FrozenRecord):
     # (retcode -1, a timeout; engine/unconfirmed.py): adopted (found open), opened_closed (found already closed) or
     # unfilled (no trade). `retcode` stays as the broker answered. JSON body only (no migration); None: settled at send
     resolution: Resolution | None = None
+    # ADR 0097 (quant F3): as ExplorationRecord, stamped at send on a demo account without limits (`evidence_tags`);
+    # None on every other account and every older row. JSON body only
+    limits_epoch: str | None = None
+    in_blackout: bool | None = None
+    blackout_kind: str | None = None
+    capped_reasons: list[str] | None = None
 
     @property
     def slippage_usd(self) -> float | None:
@@ -305,6 +311,17 @@ class ProbeRecord(FrozenRecord):
         if self.fill_price is None or self.requested_price is None:
             return None
         return self.side * (self.fill_price - self.requested_price)
+
+
+def evidence_tags(eng: Engine) -> dict[str, Any]:
+    """ADR 0097 (quant F2/F3): a record's evidence tags on a demo account without limits: the epoch, the market-state
+    reasons a capped account would have refused it for, and the blackout in force; {} on every other account."""
+    from goldbot.engine import order_send
+    tags = order_send.epoch_tag(eng)
+    if tags:
+        tags.update(in_blackout=bool(eng.state.in_blackout),
+                    blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None)
+    return tags
 
 
 def _ns(ts: pd.Timestamp) -> int:
@@ -860,7 +877,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                            fill_price=(res.price if res.price is not None else price) if filled else None,
                            stop_loss=round(loss, 2), taken=t.taken, probe_max_loss=applied["probe_max_loss"],
                            probe_max_open=lim.max_open, basis=applied["basis"], native_stop_loss=round(native, 2),
-                           fx_acct_per_usd=terms.get("acct_per_usd"))
+                           fx_acct_per_usd=terms.get("acct_per_usd"), **evidence_tags(eng))
 
     _place(eng, probe.db, intent, cast("Specialist", order_agent), pid=pid, close_ts=close_ts, entry=t.entry,
            target=price + side * ls.target_atr * atr_usd, max_loss=lim.max_loss, headroom=headroom,
@@ -921,9 +938,9 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     t0 = time.perf_counter()
     try:
         res = eng._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
-    except order_send.OrderInFlight:    # nothing sent (the gate's unconfirmed_order_pending refuses it first)
+    except order_send.OrderInFlight as exc:   # nothing sent (the gate's unconfirmed_order_pending refuses it first)
         eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
-                              "action": f"{action}{order_send.REFUSED}", **applied()})
+                              "action": f"{action}{order_send.refusal_action(exc)}", **applied()})
         return None
     except Exception as exc:        # as an auto entry (review LOW-C): the row stays "sending", reconciliation resolves it
         eng._auto_paused = (close_ts, "order_raised")
@@ -1093,7 +1110,7 @@ def _send_scheduled(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick:
                            position_id=res.position_id if filled else None,
                            fill_price=(res.price if res.price is not None else price) if filled else None,
                            stop_loss=round(loss, 2), probe_max_loss=applied["probe_max_loss"], basis=SCHEDULED_BASIS,
-                           fx_acct_per_usd=terms.get("acct_per_usd"))
+                           fx_acct_per_usd=terms.get("acct_per_usd"), **evidence_tags(eng))
 
     pos = _place(eng, probe.db, intent, cast("Specialist", _ScheduledAgent(eng.cfg.decision_tf)), pid=pid,
                  close_ts=close_ts, entry=price, target=price + side * sch.stop_usd, max_loss=lim.max_loss,

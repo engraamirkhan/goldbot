@@ -46,6 +46,12 @@ EXPLORATION_SCOPE: tuple[Scope, ...] = SCOPES                  # Amendment 4: ev
 PROBE_SCOPE: tuple[Scope, ...] = ("cost_cells",)               # a scheduled probe feeds the cost cells only
 SCHEDULED_PURPOSE = "cost_measurement"                         # cost_probe.ProbeRecord.purpose of a scheduled probe
 TABLE = "evidence_exclusions"
+# ADR 0097 (quant F1/F2, review of #454): the market states a capped account refuses entries in. On a demo account
+# without limits such a fill happens anyway; it is a fill no capped or live account could have had, so cost, stop and
+# edge reads leave it out (and count it), money reads keep it
+MARKET_STATE = frozenset({"news_shock", "spread_too_wide", "reopen_window", "holiday_thin", "tier2_blackout"})
+MARKET_STATE_COUNTER = "unlimited_market_state"
+_EXCLUDED_REASONS = MARKET_STATE | {"news_blackout", "unread"}
 RELOADS = "evidence_reloads"
 
 Span = tuple[pd.Timestamp, pd.Timestamp, str]                  # [start, end) and its reference
@@ -312,3 +318,13 @@ __all__ = ["CRITERION_VERSION", "EXPLORATION_SCOPE", "PROBE_SCOPE", "SCOPES", "E
            "all_candidates", "decide", "excluded", "excluded_ids", "held_out", "held_out_in", "record", "record_reload",
            "recorded_spans", "reloads",
            "screen", "span_ref", "spans_of", "unresolved"]
+
+
+def unlimited_market_state(r: Any) -> bool:
+    """ADR 0097: a fill a capped account could not have had, because of the market's state: sent on the unlimited
+    epoch (`limits_epoch`) in a news shock, or with a market-state reason a capped account would have refused it for
+    (`capped_reasons`; `unread` counts, fail closed). Takes a record or its JSON body."""
+    def get(k: str) -> Any:
+        return r.get(k) if isinstance(r, Mapping) else getattr(r, k, None)
+    return get("limits_epoch") == "unlimited" and (
+        get("blackout_kind") == "news_shock" or bool(set(get("capped_reasons") or ()) & _EXCLUDED_REASONS))
