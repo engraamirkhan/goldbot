@@ -44,6 +44,7 @@ TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14_400}
 CACHE = Path.home() / "tmp" / "history-replay"
 
 
+LABEL_COST_COLS: tuple[str, ...] = ("entry", "risk_usd", "barrier_hit")   # decision-time cost inputs, persisted
 CODE_FILES = ("goldbot/research/history_replay.py", "goldbot/research/feature_snapshots.py", "scripts/run_arm_backtest.py")
 
 
@@ -190,12 +191,15 @@ def _trade_hold_s(arm: A.Arm, b1: pd.DataFrame, blackout: tuple[np.ndarray, np.n
 def label(arm_id: str, arm: A.Arm, b1: pd.DataFrame, lo: pd.Timestamp, hi: pd.Timestamp,
           blackout: tuple[np.ndarray, np.ndarray]) -> pd.DataFrame:
     """The labelled candidates decided in [lo, hi): candidate_id, decision, side, label exit, max_hold_s, session day,
-    net R `r` (W2 bps) and mid R `r_mid`. Called only by a booked stage (Stage L / C / T), never by a count. A label exit
-    after the candidate's horizon raises (the purge would be wrong)."""
+    net R `r` (W2 bps) and mid R `r_mid`, plus `entry`, `risk_usd` and `barrier_hit` (from 2026-11-25: the
+    decision-time cost(x) of research/decision_cost.py needs entry / risk_usd, and the stop flag must not be guessed
+    from r_mid). Called only by a booked stage (Stage L / C / T), never by a count. A label exit after the candidate's
+    horizon raises (the purge would be wrong)."""
     run = _run_arm_module()
     trades, _ = run.run_arm(b1, arm, lo, hi - pd.Timedelta(days=1), A.load_costs(ROOT / "config" / "arm_costs.yaml"),
                             blackout)
-    cols = ["candidate_id", "arm", "decision_utc", "side", "label_exit_utc", "max_hold_s", "session_day", "r", "r_mid"]
+    cols = ["candidate_id", "arm", "decision_utc", "side", "label_exit_utc", "max_hold_s", "session_day", "r", "r_mid",
+            *LABEL_COST_COLS]
     if trades.empty:
         return pd.DataFrame(columns=cols)
     dec = utc_index(trades["ts_utc"])
@@ -212,7 +216,9 @@ def label(arm_id: str, arm: A.Arm, b1: pd.DataFrame, lo: pd.Timestamp, hi: pd.Ti
     return pd.DataFrame({"candidate_id": [f"{arm_id}:{int(t)}:{int(s)}" for t, s in zip(ns, side, strict=True)],
                          "arm": arm_id, "decision_utc": dec, "side": side, "label_exit_utc": exit_ts,
                          "max_hold_s": hold_s, "session_day": session_day(dec).astype(str),
-                         "r": bps_net(trades), "r_mid": mid_r})
+                         "r": bps_net(trades), "r_mid": mid_r, "entry": trades["entry"].to_numpy(float),
+                         "risk_usd": trades["risk_usd"].to_numpy(float),
+                         "barrier_hit": trades["barrier_hit"].astype(str).to_numpy()})
 
 
 def history_minutes(b1: pd.DataFrame) -> pd.DataFrame:
@@ -251,5 +257,5 @@ def features_at(minutes: pd.DataFrame, timeframe: str, decisions: pd.Series | pd
     return pd.DataFrame(rows)
 
 
-__all__ = ["CACHE", "code_hash", "OVERSHOOT_BP", "RT_BP", "bps_net", "candidates", "features_at", "history_minutes", "label",
+__all__ = ["CACHE", "LABEL_COST_COLS", "code_hash", "OVERSHOOT_BP", "RT_BP", "bps_net", "candidates", "features_at", "history_minutes", "label",
            "load_arm", "load_blackout", "session_day", "year_bars", "year_span"]
