@@ -21,12 +21,19 @@ Guards are explicit exceptions, not `assert` (stripped under `python -O`):
 - test_old is returned or read only with `allow_test_old=True` (from `allow_test_old_for`); otherwise `TestOldSealed`.
 - holdout is never returned or read: `HoldoutSealed`, whatever the flags; the confirm window's 2025 file is cut at
   HOLDOUT_FROM before it leaves this module. The embargo is never a window to read (`EmbargoSealed`).
+
+Read-once ledger (`READ_ONCE_FAMILIES`, `record_read_once`): a registered family's confirm and test_old are each read
+once, recorded in a JSONL ledger BEFORE the read; a second read of the same family and window raises `AlreadyRead`.
+H-101 (prereg-2026-11-25-model-zoo-fusion.md, family `model_zoo_fusion`): "Stage C, confirm 2018-01..2025-09, read
+once"; "Stage T, test_old ..., read once, winner only (`windows.allow_test_old_for`, CONFIRM-SEEN rule)".
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+import json
+from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -161,3 +168,42 @@ def allow_test_old_for(strategy_id: str, confirm_passed: Iterable[str]) -> bool:
     if strategy_id not in set(confirm_passed):
         raise TestOldSealed(f"{strategy_id!r} has not passed confirm; test_old stays sealed for it")
     return True
+
+
+class AlreadyRead(PermissionError):
+    """A read-once window of a registered family was asked for a second time."""
+
+
+# family -> the windows it reads once (pre-registered cards only; a new card adds its family in its own commit)
+READ_ONCE_FAMILIES: dict[str, frozenset[Window]] = {
+    "model_zoo_fusion": frozenset({Window.CONFIRM, Window.TEST_OLD}),    # H-101, prereg-2026-11-25-model-zoo-fusion.md
+}
+READS_LEDGER = "window_reads.jsonl"     # beside the research registry (state/), never committed
+
+
+def reads_of(ledger: Path | str, family: str) -> set[Window]:
+    """The read-once windows `family` has already read according to `ledger` (a missing ledger holds none)."""
+    p = Path(ledger)
+    if not p.exists():
+        return set()
+    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+    return {Window(r["window"]) for r in rows if r.get("family") == family}
+
+
+def record_read_once(ledger: Path | str, family: str, window: Window | str, *, ref: Mapping[str, Any]) -> None:
+    """Record `family`'s single read of `window` BEFORE the read. Unregistered family or window: ValueError; the holdout
+    and embargo: their sealed errors; a second read: AlreadyRead."""
+    w = _window(window)
+    if w is Window.HOLDOUT:
+        raise HoldoutSealed("the holdout (2025-10-01 onward) is sealed; no research path reads it")
+    if w is Window.EMBARGO:
+        raise EmbargoSealed("2006-01 is the embargo between learn_old and test_old; it is never read as a window")
+    if w not in READ_ONCE_FAMILIES.get(family, frozenset()):
+        raise ValueError(f"{family!r} has no read-once registration for {w.value} (windows.READ_ONCE_FAMILIES)")
+    if w in reads_of(ledger, family):
+        raise AlreadyRead(f"{family!r} already read {w.value}: read once")
+    p = Path(ledger)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    row = {"family": family, "window": w.value, "ts": pd.Timestamp.now(tz="UTC").isoformat(), "ref": dict(ref)}
+    with open(p, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, default=str) + "\n")

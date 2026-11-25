@@ -28,12 +28,13 @@ from goldbot.data.resample import resample_bars  # noqa: E402
 from goldbot.data.timeutil import utc_index  # noqa: E402
 from goldbot.research import arm_rules as R  # noqa: E402
 from goldbot.research import arms as A  # noqa: E402
+from goldbot.research import history_replay as H  # noqa: E402
 from goldbot.research import windows as W  # noqa: E402
 
 ARMS = ("RB1H", "RBC1H", "RB4H", "RBC4H")
 PAIRS = {"1h": ("RB1H", "RBC1H"), "4h": ("RB4H", "RBC4H")}
-RT_BP = 0.575            # W2 bps round trip ($0.23 at $4,000), cost of record scale
-OVERSHOOT_BP = 1.75      # stop-exit overshoot in bp ($0.70 at $4,000)
+RT_BP = H.RT_BP                # W2 bps round trip ($0.23 at $4,000), cost of record scale
+OVERSHOOT_BP = H.OVERSHOOT_BP  # stop-exit overshoot in bp ($0.70 at $4,000)
 WORKERS = 5
 
 
@@ -58,16 +59,9 @@ def _replayed_control() -> None:
 
 def _bars(bars_dir: Path, window: str, year: int) -> tuple[pd.DataFrame, pd.Timestamp, pd.Timestamp]:
     """One calendar year of the window's entries, 120 days of warm-up (the channel state needs 313 bars: about 75
-    calendar days at 4h) and 14 days of tail for the exits; nothing at or after the holdout."""
-    from goldbot.data.release import read_bar_files
-    lo, hi = W.bounds(window)
-    lo, hi = max(lo, pd.Timestamp(f"{year}-01-01", tz="UTC")), min(hi, pd.Timestamp(f"{year + 1}-01-01", tz="UTC"))
-    b = read_bar_files(bars_dir, year - 1, min(year + 1, W.HOLDOUT_FROM.year))
-    b = A.cut_at_holdout(b)
-    ts = utc_index(b["ts_utc"])
-    b = b.loc[np.asarray((ts >= lo - pd.Timedelta(days=120)) & (ts < hi + pd.Timedelta(days=14)))].reset_index(drop=True)
-    A.assert_no_holdout_rows(b)
-    return b, lo, hi
+    calendar days at 4h) and 14 days of tail for the exits; nothing at or after the holdout (`history_replay`)."""
+    lo, hi = H.year_span(*W.bounds(window), year)
+    return H.year_bars(bars_dir, lo, hi), lo, hi
 
 
 def _count_one(args: tuple[str, str, str, int]) -> dict[str, Any]:
@@ -111,10 +105,7 @@ def count(bars_dir: str, window: str) -> list[dict[str, Any]]:
 
 def _bps_net(trades: pd.DataFrame) -> np.ndarray:
     """Primary cost (card section 4): move (swap included) less RT_BP of the entry, less OVERSHOOT_BP on a stop exit."""
-    entry = trades["entry"].to_numpy(float)
-    stop = (trades["barrier_hit"] == "stop").to_numpy(float)
-    pnl = trades["move_usd"].to_numpy(float) - RT_BP * 1e-4 * entry - OVERSHOOT_BP * 1e-4 * entry * stop
-    return pnl / trades["risk_usd"].to_numpy(float)
+    return H.bps_net(trades)
 
 
 def _run_one(args: tuple[str, str, str, int, bool]) -> pd.DataFrame:
@@ -178,8 +169,7 @@ def _boot_idx(n_days: int, mean_block: int, rng: np.random.Generator) -> np.ndar
 
 def _day(ts: pd.Series) -> np.ndarray:
     """The session day of an entry: the New York date after the 17:00 roll (the broker's server day)."""
-    t = utc_index(ts).tz_convert("America/New_York") + pd.Timedelta(hours=7)
-    return np.asarray(t.normalize().tz_localize(None).to_numpy().astype("datetime64[D]"))
+    return H.session_day(ts)
 
 
 def read(trades: pd.DataFrame, col: str = "net_bp") -> dict[str, Any]:

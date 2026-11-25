@@ -5,6 +5,21 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **H-101 model zoo and fusion, code (card `docs/research/prereg-2026-11-25-model-zoo-fusion.md`, zoo-v1).**
+  - **What.** `goldbot/research/model_zoo.py` holds the 8 pre-named candidates on the sr-v2 40 inputs: B1 LOGIT, B2
+    GBT (LightGBM with fixed hyperparameters), B3 POOL, B4 REGIME, B5 KNN, F1 AVG, F2 STACK and F3 GATE. It also holds
+    the yearly purged walk-forward (2011-17), the per-arm tau, the new joint stationary bootstrap (mean block 5
+    session days), the Stage 0/L/C/T reading rule and the Stage L K booking.
+  - **Replay.** `goldbot/research/history_replay.py` replays any pre-named arm on Dukascopy 1m. It was factored out of
+    `scripts/research/rb_history.py`, which now uses it with identical output.
+  - **CLI.** `scripts/research/model_zoo_history.py count | learn | confirm | test_old`. It is gold only.
+  - **Read-once ledger.** `windows.READ_ONCE_FAMILIES` registers `model_zoo_fusion` for confirm and test_old.
+  - **Power hook.** `power_first.start_or_refuse(verdict=...)` records a card-specific verdict through the usual path.
+  - **Stage 0, local, outcome-blind (2026-11-25).** STARTED. All 10 arms replay; 104,503 judged learn rows 2012-17
+    (n_eff 5,929), 156,384 confirm rows (n_eff 7,693), test_old n 33,441 from the learn rate (n_eff 1,897). Power is
+    at least 0.9999 at every gate and the joint power is 0.953. Not yet recorded on the brain registry.
+  - **Not run.** Stage L, any label read and the K booking. Stage L runs on the goldbot-ops VM with `--registry`,
+    after Stage 0 is recorded there.
 - 2026-11-24 (branch feat/demo-learning-cohort; R177, ADR 0095): the self-retrain's ten retired arms send real demo
   orders again as a capped learning cohort on icm-probe. Owner 2026-11-24, "it is quite concerning that it is not
   trading at all"; card docs/research/prereg-amendment-2026-11-24-demo-learning-cohort.md.

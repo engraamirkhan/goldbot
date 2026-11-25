@@ -201,11 +201,18 @@ def evaluate(card: PowerCard, settings: Settings) -> PowerVerdict:
                         min_joint_power=pf.min_joint_power, n_eff_floor=pf.n_eff_floor, reasons=reasons)
 
 
-def start_or_refuse(registry: TrialRegistry, card: PowerCard, settings: Settings, *, agent_id: str) -> PowerVerdict:
+def start_or_refuse(registry: TrialRegistry, card: PowerCard, settings: Settings, *, agent_id: str,
+                    verdict: PowerVerdict | None = None) -> PowerVerdict:
     """The rule at registration: evaluate `card`; a refusal is written as a "NOT STARTED (power)" registry row (no K,
     no data read; the caller must not read) and logged (e). A started card writes nothing here: its pre-registration
-    and trial rows follow the usual path."""
-    v = evaluate(card, settings)
+    and trial rows follow the usual path.
+
+    `verdict`: a card whose signed power section defines its own per-gate inputs (measured outcome-blind counts per
+    window, a keep-share SE: H-101, research/model_zoo.py `stage0`) passes its verdict, computed with these settings'
+    thresholds, so its refusal is recorded by this same path. It must name the card."""
+    if verdict is not None and (verdict.card_id, verdict.family) != (card.card_id, card.family):
+        raise ValueError(f"verdict {verdict.card_id!r}/{verdict.family!r} is not card {card.card_id!r}/{card.family!r}")
+    v = verdict if verdict is not None else evaluate(card, settings)
     if v.started:
         return v
     results: dict[str, Any] = {"power_first": v.model_dump(mode="json"), "card": card.model_dump(mode="json")}
