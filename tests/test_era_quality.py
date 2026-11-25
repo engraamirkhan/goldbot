@@ -240,7 +240,10 @@ def test_an_empty_form_token_is_a_throttle_not_an_absent_year(tmp_path, monkeypa
     monkeypatch.setattr(hd, "PAUSE_S", 0.0)
     monkeypatch.setattr(hd, "THROTTLE_WAIT_S", 0.0)
     throttled = b'<a>HISTDATA_COM_ASCII_XAUEUR_M1_2020.zip</a><input name="tk" id="tk" value="" />'
-    monkeypatch.setattr(hd, "_get", lambda *a, **k: throttled)
+    monkeypatch.setattr(hd, "_get", lambda *a, **k: throttled)          # the control page is empty too
     assert hd.download_zip("XAUEUR", 2020, tmp_path) == (None, "throttled")
+    control = b'<input name="tk" id="tk" value="c79e36fd" />'
+    monkeypatch.setattr(hd, "_get", lambda url, *a, **k: control if url == hd.CONTROL_PAGE else throttled)
+    assert hd.download_zip("XAUEUR", 2020, tmp_path) == (None, "absent")   # only this pair-year has no token
     monkeypatch.setattr(hd, "_get", lambda *a, **k: b'<input name="tk" id="tk" value="" />')
     assert hd.download_zip("XAUEUR", 2001, tmp_path) == (None, "absent")

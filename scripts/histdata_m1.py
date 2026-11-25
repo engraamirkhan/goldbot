@@ -153,6 +153,15 @@ def _get(url: str, data: bytes | None = None, referer: str | None = None, tries:
     return None
 
 
+CONTROL_PAGE = HD_PAGE.format(pair="eurusd", year=2019)
+
+
+def _control_has_token() -> bool:
+    html = _get(CONTROL_PAGE)
+    time.sleep(PAUSE_S)
+    return bool(html and re.search(rb'name="tk" id="tk" value="[0-9a-f]+"', html))
+
+
 def download_zip(code: str, year: int, zdir: Path) -> tuple[Path | None, str]:
     """The pair-year zip, cached (atomic write). (None, why) when HistData has no such year or the fetch failed."""
     out = zdir / f"{code}_{year}.zip"
@@ -168,10 +177,11 @@ def download_zip(code: str, year: int, zdir: Path) -> tuple[Path | None, str]:
         m = re.search(rb'name="tk" id="tk" value="([0-9a-f]+)"', html)
         if m:
             break
-        if f"_M1_{year}.zip".encode() not in html:
-            return None, "absent"       # the year page offers no file: HistData has no such year
-        # the page offers the file but an empty form token: HistData's per-IP throttle (seen 2026-11-25 after ~100
-        # downloads). Back off; a year that stays throttled is "throttled" and retried by the next run.
+        if f"_M1_{year}.zip".encode() not in html or _control_has_token():
+            # no file offered, or an empty token while a control page still gets one: HistData does not serve this
+            # pair-year (XAUEUR 2019+ on 2026-11-25: the page names the zip but never issues a token)
+            return None, "absent"
+        # an empty token everywhere is a per-IP throttle: back off; a year that stays throttled is retried next run
         time.sleep(THROTTLE_WAIT_S * (k + 1))
     if not m:
         return None, "throttled"
