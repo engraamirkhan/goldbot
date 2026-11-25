@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from goldbot.data.holdout_guard import HOLDOUT_START, HoldoutSealed
 from goldbot.data.release import BAR_FILE_PREFIX, read_bar_files
 
 
@@ -59,10 +60,6 @@ class TestOldSealed(PermissionError):
     __test__ = False   # not a pytest class
 
 
-class HoldoutSealed(PermissionError):
-    """The holdout was asked for. Nothing in research reads it."""
-
-
 class EmbargoSealed(PermissionError):
     """The embargo month (2006-01) was asked for as a window. It is never a learn or test window."""
 
@@ -72,7 +69,7 @@ def _utc(s: str) -> pd.Timestamp:
 
 
 FIRST_BAR_FROM = _utc("2003-01-01")
-HOLDOUT_FROM = _utc("2025-10-01")      # = arms.HOLDOUT_FROM, exploration_data.HOLDOUT_START
+HOLDOUT_FROM = HOLDOUT_START          # 2025-10-01 = data.holdout_guard (its HoldoutSealed is this module's too)
 MAX_WARMUP_DAYS = 366
 
 # [start, end) per window, in time order; together they tile FIRST_BAR_FROM .. HOLDOUT_FROM with no hole or overlap
@@ -162,6 +159,15 @@ def read_window_bars(folder: Path | str, window: Window | str, *, allow_test_old
     if len(out) and out["ts_utc"].max() >= HOLDOUT_FROM:     # belt and braces: never let a holdout bar out
         raise HoldoutSealed("a holdout bar reached read_window_bars output")
     return out
+
+
+def label_embargo(max_hold: pd.Timedelta) -> pd.Timedelta:
+    """The purge/embargo between a training span and the span judged after it (plan 2026-11-25 W1-B, for sr-v3):
+    "EMBARGO = max(1 d, max hold)", so no still-open label and no day-scale feature crosses the cut."""
+    hold = pd.Timedelta(max_hold)
+    if hold < pd.Timedelta(0):
+        raise ValueError(f"a hold is >= 0, got {hold}")
+    return max(pd.Timedelta(days=1), hold)
 
 
 def allow_test_old_for(strategy_id: str, confirm_passed: Iterable[str]) -> bool:

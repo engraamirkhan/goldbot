@@ -234,7 +234,7 @@ def test_the_nightly_learner_labels_and_allocates_each_broker_on_its_own_costs_a
 def test_h60_history_priors_seed_only_the_icm_bandit_never_another_brokers(tmp_path):
     """Quant (review of c8433d3d): the H-60 priors rest on IC Markets' cost history; a Vantage run starts flat."""
     db = _db(tmp_path)
-    hist = pd.DataFrame({"decision_utc": pd.date_range("2019-01-02", "2025-09-29", periods=500, tz="UTC"),
+    hist = pd.DataFrame({"decision_utc": pd.date_range("2010-01-04", "2017-12-29", periods=500, tz="UTC"),
                          "r_net": [0.2] * 500})
     ex.write_prior(db, ex.prior_from_history("S1a", hist, prior_version="h60-v1"))
     _evidence(db, "icm", {"S1a": 0.1, "S1b": 0.0}, n=4)

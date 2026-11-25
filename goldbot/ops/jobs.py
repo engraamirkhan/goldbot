@@ -1863,6 +1863,8 @@ def discovery_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     The result carries the child's elapsed time and peak RSS; the health line warns past 80 % of budget_s and past the
     SRE's 2 GB memory budget (DISCOVERY_RSS_WARN_MB)."""
     cfg = ctx.settings.research.discovery
+    if cfg.stopped:                       # plan 2026-11-25 S6: no child, no run row
+        return {"skipped": "research.discovery.stopped (plan 2026-11-25 S6: discovery stops; no run is logged)"}
     if not cfg.enabled:
         return {"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"}
     from goldbot.ops import bounded

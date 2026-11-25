@@ -143,3 +143,12 @@ def test_error_rows_are_dropped_like_every_research_read(tmp_path):
     n = _year_file(tmp_path, 2011, flag_first="error:bid_gt_ask")
     b = w.read_window_bars(tmp_path, "learn")
     assert len(b) == n - 1
+
+
+def test_the_label_embargo_is_one_day_or_the_longest_hold_whichever_is_longer():
+    """Plan 2026-11-25 W1-B, exported for sr-v3: EMBARGO = max(1 d, max hold)."""
+    assert w.label_embargo(pd.Timedelta(hours=4)) == pd.Timedelta(days=1)
+    assert w.label_embargo(pd.Timedelta(days=10)) == pd.Timedelta(days=10)
+    assert w.label_embargo(pd.Timedelta(0)) == pd.Timedelta(days=1)
+    with pytest.raises(ValueError):
+        w.label_embargo(pd.Timedelta(hours=-1))

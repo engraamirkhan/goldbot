@@ -160,10 +160,11 @@ from goldbot.research.screen import (  # noqa: E402
 from goldbot.specialists import SPECIALISTS, Specialist  # noqa: E402
 
 
-def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
-    """Concatenate the yearly 1m files; bars with an error-level data-quality flag are dropped (`read_bar_files`)."""
+def load_bars(folder: Path, from_year: int, to_year: int, *, include_holdout: bool = False) -> pd.DataFrame:
+    """Concatenate the yearly 1m files; bars with an error-level data-quality flag are dropped (`read_bar_files`), and
+    holdout bars too unless `include_holdout` (only --score-holdout, the gated once-per-config read)."""
     try:
-        return read_bar_files(folder, from_year, to_year)
+        return read_bar_files(folder, from_year, to_year, include_holdout=include_holdout)
     except FileNotFoundError as exc:
         raise SystemExit(str(exc)) from None
 
@@ -685,7 +686,8 @@ def main() -> int:
         extra_cost, cost_source = float(args.extra_cost_usd), cost_source + f"; --extra-cost-usd {args.extra_cost_usd}"
     holdout = settings.research.holdout_window()
     t0 = time.time()
-    b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
+    b1 = load_bars(Path(args.bars), args.from_year, args.to_year,      # fails fast, before any registry file exists
+                   include_holdout=bool(getattr(args, "score_holdout", False)))
     macro, macro_info = load_macro(args.macro)
     print(_macro_line(macro_info)[2:], flush=True)
     positioning, positioning_info = load_positioning(args.positioning)
