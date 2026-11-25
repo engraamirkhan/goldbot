@@ -1,12 +1,12 @@
 ---
-number: 269
+number: 270
 rank: 94
 title: Trading performance by asset class and family x class
 stage: Learning loop
 size: M
 status: done
 ---
-- **269. Trading performance by asset class and family x class.** Value: the owner directive of 2026-11-25. Trading
+- **270. Trading performance by asset class and family x class.** Value: the owner directive of 2026-11-25. Trading
   analysis is broken down by instrument category, because a strategy can perform differently on different
   instruments. Acceptance:
   - (a) `goldbot.ops.class_breakdown.asset_class_of` is the only mapping. It maps an instrument key, a store or broker symbol,

@@ -1,4 +1,4 @@
-- **Performance by asset class (owner 2026-11-25, BACKLOG 269, R178).**
+- **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
   - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,
     `goldbot.ops.class_breakdown.asset_class_of`. Arm ids use their suffix (S0-SUGAR) or, for a gold arm, the spec row.
   - **Where it shows.** The ranking rows and view, the trades page, the lab "by class" line (only when a lab closed on
