@@ -73,7 +73,9 @@ class Gap(FrozenRecord):
 class Certificate(FrozenRecord):
     cell: str
     verdict: Verdict
-    projected: Verdict           # on the numbers alone, if every open item delivers as planned
+    # on the numbers alone if every open item delivers: SUFFICIENT / SHORT, INFEASIBLE (no pooling at rho_inst
+    # reaches the need), "UNMEASURED (D-1)" (supply not countable before grading), "n/a: B is daily-only"
+    projected: str
     n_eff_learn: int | None
     n_eff_judge: int | None
     need_train: int
@@ -95,7 +97,8 @@ class Certificate(FrozenRecord):
         return f"{head}; gap: {g.gap}; plan: {g.plan} ({g.owner}, due {g.due}){more}"
 
 
-def certify(req: Requirement, n_eff_learn: int | None, n_eff_judge: int | None, gaps: Sequence[Gap]) -> Certificate:
+def certify(req: Requirement, n_eff_learn: int | None, n_eff_judge: int | None, gaps: Sequence[Gap],
+            projected: str | None = None) -> Certificate:
     """SUFFICIENT when the learn n_eff carries the planned inputs, the judge n_eff meets the power row and no open
     item blocks; an unmeasured window is SHORT (its gap: measure it). `gaps`: the cell's open data items, most urgent
     first; non-blocking ones are listed but do not hold the certificate."""
@@ -106,10 +109,68 @@ def certify(req: Requirement, n_eff_learn: int | None, n_eff_judge: int | None, 
     if not ok and not gaps:
         raise ValueError(f"{req.cell}: a SHORT cell needs its gap, plan, owner and date")
     return Certificate(cell=req.cell, verdict="SUFFICIENT" if ok else "SHORT",
-                       projected="SUFFICIENT" if enough else "SHORT", n_eff_learn=n_eff_learn,
+                       projected=projected or ("SUFFICIENT" if enough else "SHORT"), n_eff_learn=n_eff_learn,
                        n_eff_judge=n_eff_judge, need_train=need_t, need_judge=need_j,
                        max_inputs=None if n_eff_learn is None else n_eff_learn // RILEY_PER_PARAM,
                        gaps=tuple(gaps), requirement=req.model_dump(mode="json"))
 
 
-__all__ = ["POWER_N_EFF", "RILEY_PER_PARAM", "Certificate", "Gap", "Requirement", "certify", "power_n", "r2_from_auc"]
+RHO_INST = 0.5            # card 2.2: pooled classes divide by 1 + (k - 1) rho, so pooling adds at most 1 / rho
+
+
+def _gap(item: str, d: dict[str, Any], blocks: bool = True) -> Gap:
+    return Gap(item=item, gap=d["gap"], plan=d["plan"], owner=str(d["owner"]), due=str(d["due"]), blocks=blocks)
+
+
+def certificates(cfg: dict[str, Any]) -> list[Certificate]:
+    """Every unit x tf cell of a sufficiency config (config/data/sufficiency.yaml)."""
+    from goldbot.config import TF_SECONDS
+    req0 = cfg["requirement"]
+    out = []
+    for unit, u in cfg["units"].items():
+        daily_only = u.get("tiers_kept") == "B"
+        for i, tf in enumerate(cfg["tfs"]):
+            req = Requirement(cell=f"{unit}/{tf}", unit=unit, tf=tf, inputs=int(req0["inputs"]),
+                              keep_share=float(req0["keep_share"]), objective=req0["objective"],
+                              label_templates=req0["label_templates"])
+            learn = None if u["learn"] is None else int(u["learn"][i])
+            judge = None if u["judge"] is None else int(u["judge"][i])
+            gaps = [_gap(k, cfg["items"][k]) for k in [*cfg.get("tf_items", {}).get(tf, []), *u["items"]]]
+            projected: str | None = None
+            if daily_only and TF_SECONDS.get(tf, 0) < TF_SECONDS["1d"]:
+                # quant C2: supply is what the loader keeps; B months load at 1d/1w only
+                learn = judge = 0
+                projected = "n/a: B is daily-only"
+                gaps.insert(0, Gap(item="B-DAILY", gap="B months carry close-to-close labels and daily features "
+                                   "only: no intraday rows load", plan="intraday rows need A months: D-14 second "
+                                   "source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+                                   owner="data-engineer", due="2026-12-09"))
+            need = req.n_train()
+            if learn is not None and learn and learn / RHO_INST < need:
+                bound = int(learn / RHO_INST)
+                k = learn // RILEY_PER_PARAM
+                projected = projected or "INFEASIBLE"
+                gaps.append(Gap(item="INFEASIBLE", gap=f"no pooling reaches {need:,} (bound {bound:,} at rho_inst "
+                                f"{RHO_INST})", plan="data remedies first: more independent instruments (D-13), "
+                                "learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may "
+                                f"raise the bound; meanwhile cap inputs at max_inputs ({k}) or no model at this tf "
+                                "(rule-only)", owner="data-engineer + ml-researcher", due="2026-12-11"))
+            elif learn is not None and learn < need:
+                gaps.append(Gap(item="POOL", gap=f"learn n_eff {learn:,} < {need:,} for a {req.inputs}-input block "
+                                f"(max {learn // RILEY_PER_PARAM} inputs)", plan="deliver the pooled cross-class set "
+                                f"at this tf (card 2.2 pooling, rho_inst {RHO_INST}; bound {int(learn / RHO_INST):,}) "
+                                "and the per-cell input cap to the card", owner="data-engineer + ml-researcher",
+                                due="2026-12-16"))
+            if judge is not None and judge and judge < req.n_judge():
+                gaps.append(Gap(item="POWER", gap=f"judge n_eff {judge:,} < {req.n_judge():,} at keep "
+                                f"{req.keep_share}", plan="judge at a lower label-blind keep share (A22 row) or "
+                                "pooled; the 2003-09 test_old years once D-1 grades them; more independent "
+                                "instruments (D-13)", owner="quant-reviewer + data-engineer", due="2026-12-11"))
+            if u.get("ungraded_projection") and projected is None:
+                projected = str(u["ungraded_projection"])          # quant C2: gold before D-1
+            out.append(certify(req, learn, judge, gaps, projected))
+    return out
+
+
+__all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "Certificate", "Gap", "Requirement", "certificates",
+           "certify", "power_n", "r2_from_auc"]

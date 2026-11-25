@@ -8,6 +8,7 @@ decisions; tiers are applied at load and their file hash recorded. Synthetic min
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -213,46 +214,50 @@ def test_window_exact_columns_match_a_per_window_build_bit_for_bit(minutes):
 
 
 # ---------------------------------------------------------------------------------------------- point in time
-def test_truncation_rows_known_by_t_never_change_when_everything_after_t_is_perturbed(minutes):
+@pytest.mark.parametrize(("tf", "phase"), [("15m", 0), ("4h", 0), ("1d", 0), ("15m", 5)])
+def test_truncation_rows_known_by_t_never_change_when_everything_after_t_is_perturbed(minutes, tf, phase):
     """No look-ahead: every row available by T is identical (values and NaN mask) whether the minutes after T are
-    absent or wildly different."""
-    T = START + pd.Timedelta(days=150, hours=13, minutes=7)
+    absent or wildly different (quant L2: intraday, 4h, daily and an offset phase)."""
+    T = START + pd.Timedelta(days=183, hours=13, minutes=7)
     before = minutes[minutes["visible_at"] <= T]
     after = minutes.copy()
     late = (after["visible_at"] > T).to_numpy()
     for c in [c for c in after.columns if c.startswith(("bid_", "ask_"))]:
         after.loc[late, c] = after.loc[late, c] * 1.7 + 50.0
     after.loc[late, "tick_count"] = 999.0
-    a, b = F.compute(before, "15m"), F.compute(after, "15m")
+    a, b = F.compute(before, tf, phase=phase), F.compute(after, tf, phase=phase)
     a = a[a["available_utc"] <= T].reset_index(drop=True)
     b = b[b["available_utc"] <= T].reset_index(drop=True)
-    assert len(a) == len(b) > 1000
+    assert len(a) == len(b) > 5
     pd.testing.assert_frame_equal(a, b, check_exact=True)
     # the check has power: rows after T do move
-    full_a, full_b = F.compute(minutes, "15m"), F.compute(after, "15m")
-    assert not full_a[SR_FEATURES[0]].tail(10).equals(full_b[SR_FEATURES[0]].tail(10))
+    full_a, full_b = F.compute(minutes, tf, phase=phase), F.compute(after, tf, phase=phase)
+    assert not full_a["rsi14"].tail(5).equals(full_b["rsi14"].tail(5))
 
 
-def test_a_seeded_future_release_is_never_joined_before_it_became_available(minutes):
-    """A minute revised later (available_utc days after its close) makes every row that reads it unavailable until
-    then: a decision before that availability joins an earlier row, never the revised value."""
-    rev = minutes.copy()
-    k = int(pd.DatetimeIndex(rev["ts_utc"]).searchsorted(START + pd.Timedelta(days=120, hours=10, minutes=3)))
-    released = pd.Timestamp(rev.loc[k, "visible_at"]) + pd.Timedelta(days=2)
-    rev["available_utc"] = rev["visible_at"]
-    rev.loc[k, "available_utc"] = released
-    rev.loc[k, ["bid_close", "ask_close", "bid_high", "ask_high"]] += 25.0     # the revision
-    rows = F.compute(rev, "1h")
-    bar_close = pd.Timestamp(rev.loc[k, "ts_utc"]).floor("1h") + pd.Timedelta(hours=1)
-    reads = rows[(rows["window_from_utc"] <= rev.loc[k, "ts_utc"]) & (rows["decision_utc"] >= bar_close)]
-    assert len(reads) and (reads["available_utc"] >= released).all()
-    at = bar_close + pd.Timedelta(hours=5)
-    got = F.features_for(rows, pd.DatetimeIndex([at]))
-    assert pd.Timestamp(got["available_utc"].iloc[0]) <= at
-    assert pd.Timestamp(got["decision_utc"].iloc[0]) < bar_close
+def test_a_revised_minute_never_reaches_any_row_and_a_stale_row_is_not_served(minutes):
+    """Quant L1: a minute revised years later (available_utc 2028) puts its decision bar and its daily bar out of
+    every frame (drop_late), so no row depends on the revised value; a decision whose last available row is more
+    than two bars old reads NaN, counted."""
+    k = int(pd.DatetimeIndex(minutes["ts_utc"]).searchsorted(START + pd.Timedelta(days=120, hours=10, minutes=3)))
+    out = []
+    for bump in (25.0, 400.0):
+        rev = minutes.copy()
+        rev["available_utc"] = rev["visible_at"]
+        rev.loc[k, "available_utc"] = pd.Timestamp("2028-01-03", tz="UTC")
+        rev.loc[k, ["bid_close", "ask_close", "bid_high", "ask_high"]] += bump
+        out.append(F.compute(rev, "1h"))
+    pd.testing.assert_frame_equal(out[0], out[1], check_exact=True)
+    bar_close = pd.Timestamp(minutes.loc[k, "ts_utc"]).floor("1h") + pd.Timedelta(hours=1)
+    assert bar_close not in set(pd.DatetimeIndex(out[0]["decision_utc"]))
+    rows = out[0]
+    last = pd.Timestamp(rows["decision_utc"].iloc[-1])
+    got = F.features_for(rows, [last, last + pd.Timedelta(minutes=30), last + pd.Timedelta(hours=3)])
+    assert got["rsi14"].notna().tolist() == [True, True, False] and got.attrs["stale"] == 1
+    with pytest.raises(ValueError, match="phase"):
+        F.features_for(pd.concat([rows, rows.assign(phase=5)]), [last])
 
 
-# ---------------------------------------------------------------------------------------------- years, cache, guard
 def test_a_year_built_with_its_warm_up_equals_the_single_pass_over_the_whole_history(tmp_path):
     m = make_minutes(days=400, start=pd.Timestamp("2023-05-01", tz="UTC"), seed=5)
     whole = F.compute(m, "1h")
@@ -305,7 +310,7 @@ def _tiers(tmp_path, tiers: dict[str, str]) -> F.Tiers:
     p = tmp_path / "tiers_r11-v2.1.csv"
     pd.DataFrame({"key": "XAUUSD", "month": list(tiers), "tier": list(tiers.values()),
                   "r11_id": "r11-v2.1-2026-11-25"}).to_csv(p, index=False)
-    return F.Tiers.from_csv(p)
+    return F.Tiers.from_csv(p, source="synthetic")       # the fixture's minutes are graded as their own source
 
 
 def test_tier_aware_loading_keeps_a_for_intraday_b_only_daily_and_excludes_c_f_p_and_ungraded(tmp_path, minutes):
@@ -313,7 +318,7 @@ def test_tier_aware_loading_keeps_a_for_intraday_b_only_daily_and_excludes_c_f_p
                               "2023-10": "F", "2023-11": "P"})
     assert len(tiers.sha256) == 64 and tiers.r11_id == "r11-v2.1-2026-11-25"
     F.build_year(minutes, instrument="XAUUSD", tf="1h", year=2023, cache_dir=tmp_path / "c")
-    rows, man = F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers)
+    rows, man = F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers, minutes=minutes)
     assert set(rows["tier"]) <= {"A", "A-consistent"} and len(rows)
     assert man["tiers_sha256"] == tiers.sha256 and man["r11_id"] == tiers.r11_id
     assert man["dropped"]["B"] > 0 and man["dropped"]["C"] + man["dropped"]["F"] + man["dropped"]["P"] > 0
@@ -323,16 +328,94 @@ def test_tier_aware_loading_keeps_a_for_intraday_b_only_daily_and_excludes_c_f_p
     # the daily timeframe keeps B (its first rows come after 120 daily bars: November)
     b_all = _tiers(tmp_path, {f"2023-{mo:02d}": "B" for mo in range(6, 13)})
     F.build_year(minutes, instrument="XAUUSD", tf="1d", year=2023, cache_dir=tmp_path / "d")
-    daily, dm = F.load(tmp_path / "d", instrument="XAUUSD", tf="1d", years=[2023], tiers=b_all)
+    daily, dm = F.load(tmp_path / "d", instrument="XAUUSD", tf="1d", years=[2023], tiers=b_all, minutes=minutes)
     assert len(daily) and set(daily["tier"]) == {"B"} and dm["dropped"]["B"] == 0
 
 
-def test_loading_without_tiers_is_refused_unless_asked_for_explicitly(tmp_path, minutes):
+def test_a_judged_or_training_read_always_needs_tiers_and_the_data_key_only_parity_may_skip_them(tmp_path, minutes):
     F.build_year(minutes, instrument="XAUUSD", tf="1h", year=2023, cache_dir=tmp_path)
-    with pytest.raises(ValueError, match="tiers"):
-        F.load(tmp_path, instrument="XAUUSD", tf="1h", years=[2023], tiers=None)
-    rows, man = F.load(tmp_path, instrument="XAUUSD", tf="1h", years=[2023], tiers=None, untiered_ok=True)
-    assert len(rows) and man["tiers_sha256"] is None
+    tiers = _tiers(tmp_path, {f"2023-{mo:02d}": "A" for mo in range(6, 13)})
+    for purpose in ("judge", "train"):
+        with pytest.raises(ValueError, match="tiers"):
+            F.load(tmp_path, instrument="XAUUSD", tf="1h", years=[2023], tiers=None, minutes=minutes, purpose=purpose)
+        with pytest.raises(ValueError, match="minutes"):
+            F.load(tmp_path, instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers, purpose=purpose)
+    rows, man = F.load(tmp_path, instrument="XAUUSD", tf="1h", years=[2023], tiers=None, purpose="parity")
+    assert len(rows) and man["tiers_sha256"] is None and man["purpose"] == "parity"
+
+
+def test_a_revised_minute_makes_the_cached_partition_unreadable_until_rebuilt(tmp_path, minutes):
+    """Code review M2: load takes the key the data gives, never the newest file."""
+    tiers = _tiers(tmp_path, {f"2023-{mo:02d}": "A" for mo in range(6, 13)})
+    F.build_year(minutes, instrument="XAUUSD", tf="1h", year=2023, cache_dir=tmp_path / "c")
+    revised = minutes.copy()
+    revised.loc[len(revised) // 3, ["bid_high", "ask_high"]] += 5.0        # moves its hour's high
+    with pytest.raises(FileNotFoundError, match="key"):
+        F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers, minutes=revised)
+    F.build_year(revised, instrument="XAUUSD", tf="1h", year=2023, cache_dir=tmp_path / "c")
+    old, _ = F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers, minutes=minutes)
+    new, _ = F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers, minutes=revised)
+    assert not old["atr_ratio_14_100"].equals(new["atr_ratio_14_100"])
+
+
+def test_load_refuses_rows_that_reach_a_moved_holdout(tmp_path, minutes, monkeypatch):
+    """Code review M1: the guard runs at load too, on decisions and on window starts."""
+    tiers = _tiers(tmp_path, {f"2023-{mo:02d}": "A" for mo in range(6, 13)})
+    F.build_year(minutes, instrument="XAUUSD", tf="1h", year=2023, cache_dir=tmp_path)
+    keys = {(2023, 0): F.cache_key(minutes, instrument="XAUUSD", tf="1h", year=2023)}
+    monkeypatch.setattr(holdout_guard, "HOLDOUT_START", pd.Timestamp("2023-11-01", tz="UTC"))
+    with pytest.raises(holdout_guard.HoldoutSealed):
+        F.load(tmp_path, instrument="XAUUSD", tf="1h", years=[2023], tiers=tiers, expect_keys=keys)
+    assert "goldbot/data/holdout_guard.py" in {p.relative_to(F.ROOT).as_posix() for p in F.code_files()}
+
+
+def test_tiers_of_another_source_are_refused_unless_named_as_a_recorded_proxy(tmp_path, minutes):
+    """Quant C3: Dukascopy gold read through the HistData grade only as an explicit, recorded proxy."""
+    p = tmp_path / "tiers.csv"
+    pd.DataFrame({"key": "XAUUSD", "month": [f"2023-{mo:02d}" for mo in range(6, 13)], "tier": "A",
+                  "r11_id": "r11-v2.1-2026-11-25"}).to_csv(p, index=False)
+    hist = F.Tiers.from_csv(p)                                    # grades histdata:XAUUSD
+    duka = minutes.assign(source="dukascopy")
+    F.build_year(duka, instrument="XAUUSD", tf="1h", year=2023, cache_dir=tmp_path / "c")
+    with pytest.raises(ValueError, match="proxy_source"):
+        F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=hist, minutes=duka)
+    rows, man = F.load(tmp_path / "c", instrument="XAUUSD", tf="1h", years=[2023], tiers=hist, minutes=duka,
+                       proxy_source="histdata:XAUUSD")
+    assert len(rows) and man["tier_proxy"] == "histdata:XAUUSD"
+
+
+def test_the_purge_drops_a_phase_5_copy_of_a_test_row_from_training(minutes):
+    """Quant C6: group_id counts n_eff, it does not replace the purge."""
+    p0, p5 = F.compute(minutes, "15m"), F.compute(minutes, "15m", phase=5)
+    hold = pd.Timedelta(hours=4)
+    test = p0.iloc[3000:3200].assign(label_end_utc=lambda d: d["decision_utc"] + hold)
+    copy = p5[p5["group_id"].isin(test["group_id"])].assign(label_end_utc=lambda d: d["decision_utc"] + hold)
+    far = p0.iloc[:500].assign(label_end_utc=lambda d: d["decision_utc"] + hold)
+    assert len(copy) > 100
+    assert not F.purge(copy, test).any()
+    assert F.purge(far, test).all()
+
+
+def test_a_model_at_4h_or_reading_d1_columns_serves_only_when_the_serving_path_matches_fs_v1(tmp_path):
+    """Quant C4: the promotion gate's check reads the parity oracle's deployed-path block."""
+    rep = {"tf": "4h", "snapshot_as_deployed_90k": {"n": 300, "columns_over_1e-9": {"atr_ratio_14_100": 0.049},
+                                                    "columns_mask_differs": {"d1_rv_ratio": 300}}}
+    p = tmp_path / "XAUUSD_4h.json"
+    p.write_text(json.dumps(rep))
+    assert F.serve_ready("15m", ["rsi14"], None)[0]
+    assert not F.serve_ready("15m", ["rsi14", "d1_rv_ratio"], None)[0]
+    assert not F.serve_ready("4h", ["atr_ratio_14_100"], p)[0]
+    rep["snapshot_as_deployed_90k"] = {"n": 300, "columns_over_1e-9": {}, "columns_mask_differs": {}}
+    p.write_text(json.dumps(rep))
+    assert F.serve_ready("4h", ["atr_ratio_14_100"], p)[0]
+
+
+def test_pooled_bid_only_and_bid_ask_rows_drop_the_spread_and_tick_columns(minutes):
+    """Quant L3."""
+    a = F.compute(minutes, "1h")
+    mixed = pd.concat([a, a.assign(bid_only=True)])
+    assert set(F.columns_for(a)) == set(F.SPEC.columns)
+    assert set(F.SPEC.columns) - set(F.columns_for(mixed)) == set(F.BID_ONLY_MISSING)
 
 
 def test_every_row_carries_its_availability_source_and_window_start(minutes):
@@ -358,9 +441,10 @@ def test_offset_phase_candles_share_the_group_id_of_their_phase_0_bar_and_judged
         F.compute(minutes, "15m", phase=15)
     F.build_year(minutes, instrument="XAUUSD", tf="15m", year=2023, cache_dir=tmp_path, phase=5)
     F.build_year(minutes, instrument="XAUUSD", tf="15m", year=2023, cache_dir=tmp_path)
+    tiers = _tiers(tmp_path, {f"2023-{mo:02d}": "A" for mo in range(6, 13)})
     with pytest.raises(ValueError, match="phase 0"):
-        F.load(tmp_path, instrument="XAUUSD", tf="15m", years=[2023], tiers=None, untiered_ok=True, phases=(0, 5))
-    rows, _ = F.load(tmp_path, instrument="XAUUSD", tf="15m", years=[2023], tiers=None, untiered_ok=True,
+        F.load(tmp_path, instrument="XAUUSD", tf="15m", years=[2023], tiers=tiers, minutes=minutes, phases=(0, 5))
+    rows, _ = F.load(tmp_path, instrument="XAUUSD", tf="15m", years=[2023], tiers=tiers, minutes=minutes,
                      phases=(0, 5), purpose="train")
     assert set(rows["phase"]) == {0, 5}
 
@@ -399,3 +483,13 @@ def test_the_spec_columns_are_exactly_what_its_registered_features_produce():
     ctx = set(build_features(m, list(F.SPEC.context_features)).columns)
     for c in F.SPEC.columns:
         assert (c[3:] in ctx) if c.startswith("d1_") else (c in dec), c
+
+
+def test_the_code_hash_covers_the_import_closure_but_not_the_whole_repo():
+    """Quant L4: store, calendars, daily, config, instruments and the guard are in; jobs, engine and UI are not."""
+    fs = {p.relative_to(F.ROOT).as_posix() for p in F.code_files()}
+    for need in ("goldbot/data/store.py", "goldbot/data/us_calendar.py", "goldbot/data/daily.py", "goldbot/config.py",
+                 "goldbot/instruments.py", "goldbot/data/holdout_guard.py", "goldbot/features/technical.py"):
+        assert need in fs, need
+    assert not any(f.startswith(("goldbot/engine/", "goldbot/ops/", "goldbot/telegram/", "goldbot/api/")) for f in fs)
+    assert "goldbot/research/self_retrain.py" not in fs            # its FEATURES are in the spec hash

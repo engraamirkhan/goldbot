@@ -11,7 +11,8 @@ Contract:
   read): one implementation, so a closed bar here equals the engine's bar on the same minutes.
 - Closed only: a bar is kept when its `visible_at` is at or before `as_of` (default: the last minute's visibility).
   A minute's visibility is the later of its `visible_at` and its `available_utc` when the frame carries one (a revised
-  minute), and the bar's `visible_at` carries it (resample_bars), so a revision never makes a bar visible early.
+  minute). A bar holding a minute visible after its close (a revision) is left out (`drop_late`, as fs-v1's
+  decision bars): its revised value never enters a context frame, and no later bar waits on it.
 - Every row carries `available_utc` (= its `visible_at`: when it became knowable) and `source` (the minutes' sources,
   sorted and joined with '+').
 - The holdout is refused (`holdout_guard.refuse`): research stores never hold a sealed minute.
@@ -81,7 +82,7 @@ def closed_bars(minutes: pd.DataFrame, tf: str, *, as_of: pd.Timestamp | None = 
     m = effective_minutes(minutes)
     cut = pd.Timestamp(as_of).tz_convert("UTC") if as_of is not None else pd.Timestamp(m["visible_at"].max())
     m = m[m["visible_at"] <= cut]
-    bars = resample_bars(m[BAR_COLUMNS], tf)
+    bars = resample_bars(m[BAR_COLUMNS], tf, drop_late=True)
     vis = utc_index(bars["visible_at"]).as_unit("ns")
     bars = bars[np.asarray(vis <= cut)].reset_index(drop=True)
     bars["available_utc"] = utc_index(bars["visible_at"]).as_unit("ns")

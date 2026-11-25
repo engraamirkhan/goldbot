@@ -22,19 +22,24 @@ The contract (spec `SPEC`, id fs-v1):
   engine as deployed: its 90,000-minute memory leaves `d1_atr_ratio_14_100` and `d1_rv_ratio` NaN on every decision
   (backlog 271). The oracle compares against the engine frame on the same, complete, minutes. Serving these columns
   live needs the engine/snapshots to read the same store (W3-2), not done here.
-- Point in time: a minute counts from max(visible_at, available_utc) (a revised minute from its write time). A row's
-  `available_utc` is the latest such time over the bars its window reads (and the daily bars its context reads), so a
-  revision makes every row that reads it unavailable until then: the as-of join serves an earlier row, never a value
-  from the future. History minutes: `available_utc` = the bar close, and every row is available at its close.
+- Point in time: a minute counts from max(visible_at, available_utc) (a revised minute from its write time). A bar
+  holding a minute visible after its close is no decision point and no context bar (`drop_late`): the revised value
+  never enters any window. A row's `available_utc` is the latest visibility over the bars its window and context
+  read; `features_for` serves the last available row and NaN when that row is more than STALE_BARS bars old.
+  History minutes: `available_utc` = the bar close, and every row is available at its close.
 - Partitions: one (instrument, tf, year) per cache file, computed on the year's minutes plus a warm-up of
   `feature_window + warmup_bars` decision bars (or the whole history when shorter). Cache key = sha256 of the spec,
   the code hash (feature, resample and store code), instrument, tf, year and the data (the span's minutes and the
   daily bars it reads). No decision enters a key: an arm change recomputes 0 feature years.
 - Holdout: minutes in it are refused (`holdout_guard.refuse`); a year is cut at its start.
-- Tiers (r11-v2.1, ADR 0085 A4) are applied at LOAD, not in the cache: intraday timeframes keep A and A-consistent
-  months, 1d/1w keep B too, C/F/P and ungraded months are never loaded; the tiers file's sha256 and r11 id are
-  returned with the rows. A row's tier is its decision's session month (data.daily.session_date, R11's month);
-  `tier_window` is the worst tier over the months its 800-bar window reads (provenance, not a filter).
+- `load` reads a partition only under the key its data gives (never the newest file), runs the holdout guard on
+  decisions and window starts, and applies the tiers (r11-v2.1, ADR 0085 A4): intraday A/A-consistent, 1d/1w also B,
+  C/F/P/ungraded never. The tiers must grade the rows' own source, or be named as a recorded proxy. A judged read
+  is phase 0 and tiered; "parity" is the only purpose that may skip tiers. A row's tier is the session month of its
+  bar's last instant; `tier_window` is the worst tier its 800-bar window reads (provenance, not a filter).
+- Labels, folds and serving (ADR 0103): labels start strictly after `decision_utc`; folds `purge` on
+  [window_from_utc, label end] overlap plus one horizon of embargo; `serve_ready` gates 4h/1d/1w and any d1_ column on
+  the deployed serving path's parity; `columns_for` drops the spread/tick columns from pooled bid-only + bid/ask rows.
 
 Market data and the cache stay local (~/tmp or the VM's data dir), never committed or published (ADR 0048).
 """
@@ -113,9 +118,58 @@ BID_ONLY_MISSING: tuple[str, ...] = ("em_atr_cost", "em_yz_4_cost", "em_yz_16_co
                                      "spread_rel_median_48", "tick_count_z_48", "tick_vol_ratio_20", "dist_vwap48_atr")
 
 # ------------------------------------------------------------------------------------------------- hashes
-CODE_FILES: tuple[str, ...] = ("goldbot/research/feature_store.py", "goldbot/data/htf_bars.py",
-                               "goldbot/data/resample.py", "goldbot/data/timeutil.py", "goldbot/data/calendar.py")
+# the code a row depends on: the static import closure (module- and function-level `goldbot.*` imports) of this
+# module, plus every feature module (registered by goldbot.features at import) (quant L4)
+CODE_ROOTS: tuple[str, ...] = ("goldbot/research/feature_store.py",)
 CODE_DIRS: tuple[str, ...] = ("goldbot/features",)
+# modules fs-v1 reads only constants from, all captured in `spec_hash` (FEATURES, FEATURE_WINDOW, MIN_BARS,
+# MIN_CONTEXT_BARS): hashing them, and walking on through them, would make every unrelated repo change recompute
+# every feature year
+CLOSURE_STOP: frozenset[str] = frozenset({"goldbot/research/self_retrain.py", "goldbot/research/feature_snapshots.py"})
+
+
+def _module_file(mod: str) -> Path | None:
+    base = ROOT / Path(*mod.split("."))
+    for p in (base.with_suffix(".py"), base / "__init__.py"):
+        if p.is_file():
+            return p
+    return None
+
+
+LAZY_FOLLOW: tuple[str, ...] = ("goldbot.features", "goldbot.data")
+
+
+def code_files() -> list[Path]:
+    """The goldbot source files a feature row depends on (quant L4): the import closure of CODE_ROOTS and every
+    feature module, following module-level imports everywhere and function-level (lazy) imports into
+    goldbot.features / goldbot.data only (a lazy import elsewhere is a job or report path, not a value a row reads;
+    following those reaches the whole repo and would recompute every year on any change). CLOSURE_STOP modules are
+    left out (their values are in the spec hash)."""
+    import ast
+    todo = [ROOT / f for f in CODE_ROOTS] + sorted(p for d in CODE_DIRS for p in (ROOT / d).glob("*.py"))
+    seen: set[Path] = set()
+    while todo:
+        p = todo.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        if p.relative_to(ROOT).as_posix() in CLOSURE_STOP:
+            continue
+        tree = ast.parse(p.read_text())
+        top = {id(n) for n in tree.body}
+        for n in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(n, ast.ImportFrom) and n.module and n.module.startswith("goldbot"):
+                names = [n.module, *(f"{n.module}.{a.name}" for a in n.names)]
+            elif isinstance(n, ast.Import):
+                names = [a.name for a in n.names if a.name.startswith("goldbot")]
+            if id(n) not in top:
+                names = [m for m in names if m.startswith(LAZY_FOLLOW)]
+            for mod in names:
+                f = _module_file(mod)
+                if f is not None and f not in seen:
+                    todo.append(f)
+    return sorted(q for q in seen if q.relative_to(ROOT).as_posix() not in CLOSURE_STOP)
 
 
 def _blob_sha(path: Path) -> str:
@@ -125,14 +179,14 @@ def _blob_sha(path: Path) -> str:
 
 @lru_cache(maxsize=1)
 def _code_hash() -> str:
-    files = [ROOT / f for f in CODE_FILES] + sorted(p for d in CODE_DIRS for p in (ROOT / d).glob("*.py"))
+    files = code_files()
     return hashlib.sha256("|".join(f"{p.relative_to(ROOT).as_posix()}:{_blob_sha(p)}" for p in files)
                           .encode()).hexdigest()
 
 
 def code_hash() -> str:
-    """sha256 over the git blob SHAs of this module, the HTF store, resample/timeutil/calendar and every feature
-    module: a changed feature or bar rule never reads a stale cached row."""
+    """sha256 over the git blob SHAs of `code_files()` (the import closure, holdout guard and config included): a
+    changed feature, bar rule, guard or setting never reads a stale cached row."""
     return _code_hash()
 
 
@@ -238,7 +292,9 @@ def compute(minutes: pd.DataFrame, tf: str, *, spec: FeatureSpec = SPEC, instrum
     shift = pd.Timedelta(minutes=phase)
     src = m1[BAR_COLUMNS] if not phase else m1[BAR_COLUMNS].assign(ts_utc=m1["ts_utc"] - shift,
                                                                     visible_at=m1["visible_at"] - shift)
-    dec = resample_bars(src, tf)
+    # a bar holding a minute visible after the bar's close (a revision) is no decision point (quant L1): no decision
+    # could have read its values at its close, and dropping it keeps the revised value out of every window
+    dec = resample_bars(src, tf, drop_late=True)
     if phase:
         dec["ts_utc"] = utc_index(dec["ts_utc"]) + shift
         dec["visible_at"] = utc_index(dec["visible_at"]) + shift
@@ -319,14 +375,30 @@ def _typed(rows: pd.DataFrame) -> pd.DataFrame:
     return rows.reset_index(drop=True)
 
 
+STALE_BARS = 2          # a row older than this many decision bars at the decision is not served (quant L1)
+
+
 def features_for(rows: pd.DataFrame, decisions: Iterable[pd.Timestamp] | pd.DatetimeIndex) -> pd.DataFrame:
-    """The row each decision reads: the last row of `rows` (one instrument x tf) with `available_utc` at or before
-    it (`data.store.asof_join`, the repo's one join on availability). One row per distinct decision, in time order,
-    `at` = the decision; feature columns NaN where no row was available yet."""
+    """The row each decision reads: the last row of `rows` (ONE instrument x tf x phase; mixed phases are refused)
+    with `available_utc` at or before it (`data.store.asof_join`, the repo's one join on availability). One row per
+    distinct decision, in time order, `at` = the decision. Feature columns are NaN where no row was available yet
+    or the available row closed more than STALE_BARS decision bars before the decision (a revision held the
+    newer rows back); `attrs["stale"]` counts those."""
+    if len(rows) and (rows["phase"].nunique() > 1 or rows["tf"].nunique() > 1 or rows["instrument"].nunique() > 1):
+        raise ValueError("features_for joins one instrument x tf x phase at a time")
     dec = pd.DatetimeIndex(pd.to_datetime(pd.Series(list(decisions)), utc=True)).unique().sort_values()
     right = rows.assign(_avail=rows["available_utc"]).rename(columns={"available_utc": "_row_available"})
     j = asof_join(pd.DataFrame({"ts_utc": dec}), right, available_col="_avail")
-    return j.rename(columns={"ts_utc": "at", "_row_available": "available_utc"})
+    j = j.rename(columns={"ts_utc": "at", "_row_available": "available_utc"})
+    stale = np.zeros(len(j), dtype=bool)
+    if len(rows) and len(j):
+        limit = STALE_BARS * tf_seconds(str(rows["tf"].iloc[0])) * 10**9
+        got = j["decision_utc"].notna().to_numpy()
+        age = np.where(got, _ns(dec) - np.where(got, _ns(pd.DatetimeIndex(j["decision_utc"].where(got, dec))), 0), 0)
+        stale = got & (age > limit)
+        j.loc[stale, [c for c in rows.columns if c not in ROW_META]] = np.nan
+    j.attrs["stale"] = int(stale.sum())
+    return j
 
 
 # ------------------------------------------------------------------------------------------------- partitions
@@ -515,14 +587,16 @@ DAILY_TIERS = frozenset({"A", "A-consistent", "B"})       # close-to-close and d
 
 @dataclass(frozen=True)
 class Tiers:
-    """An r11 tiers file (scripts/histdata_m1.py `tiers_r11-v2.1.csv`): tier per instrument x month, its sha256."""
+    """An r11 tiers file (scripts/histdata_m1.py `tiers_r11-v2.1.csv`): tier per instrument x month of ONE source
+    (`source`: whose minutes were graded; the r11-v2.1 file grades HistData), its sha256."""
     path: str
     sha256: str
     r11_id: str | None
     table: dict[str, dict[str, str]] = field(hash=False)
+    source: str = "histdata"
 
     @classmethod
-    def from_csv(cls, path: Path) -> Tiers:
+    def from_csv(cls, path: Path, *, source: str = "histdata") -> Tiers:
         raw = Path(path).read_bytes()
         t = pd.read_csv(path, dtype={"key": str, "month": str, "tier": str})
         if t.duplicated(["key", "month"]).any():
@@ -533,7 +607,10 @@ class Tiers:
         table: dict[str, dict[str, str]] = {}
         for k, mo, tier in zip(t["key"], t["month"], t["tier"], strict=True):
             table.setdefault(str(k), {})[str(mo)] = str(tier)
-        return cls(str(path), hashlib.sha256(raw).hexdigest(), ids[0] if ids else None, table)
+        return cls(str(path), hashlib.sha256(raw).hexdigest(), ids[0] if ids else None, table, source)
+
+    def key(self, instrument: str) -> str:
+        return f"{self.source}:{instrument}"
 
     def tier_of(self, instrument: str, months: Sequence[str]) -> np.ndarray:
         t = self.table.get(instrument, {})
@@ -544,14 +621,30 @@ def _month(ts: pd.Series) -> np.ndarray:
     return np.asarray(session_date(ts).to_period("M").astype(str))
 
 
-def apply_tiers(rows: pd.DataFrame, tiers: Tiers, tf: str) -> tuple[pd.DataFrame, dict[str, int]]:
+def row_source(rows: pd.DataFrame) -> str:
+    """`<source>:<instrument>` of a frame of one instrument and one source (refused otherwise)."""
+    inst, src = rows["instrument"].unique(), rows["source"].unique()
+    if len(inst) != 1 or len(src) != 1 or "+" in str(src[0]):
+        raise ValueError(f"one instrument and one source per tiered read (A16), got {list(inst)} / {list(src)}")
+    s = str(src[0])
+    return s if ":" in s else f"{s}:{inst[0]}"
+
+
+def apply_tiers(rows: pd.DataFrame, tiers: Tiers, tf: str, *,
+                proxy_source: str | None = None) -> tuple[pd.DataFrame, dict[str, int]]:
     """Rows of the tiers each timeframe may use (intraday: A, A-consistent; 1d/1w: and B), with `tier` and
-    `tier_window`; the dropped count per tier."""
+    `tier_window`; the dropped count per tier. The tiers must grade the rows' own source (`row_source`), unless
+    `proxy_source` names the graded source explicitly (e.g. "histdata:XAUUSD" for Dukascopy gold before D-1),
+    which the caller records (quant C3). A row's month is the session month of its bar's last instant."""
     dropped = dict.fromkeys(TIER_RANK, 0)
     if rows.empty:
         return rows.assign(tier=pd.Series(dtype=str), tier_window=pd.Series(dtype=str)), dropped
     inst = str(rows["instrument"].iloc[0])
-    end_m = _month(rows["bar_open_utc"])
+    src = row_source(rows)
+    if src != tiers.key(inst) and proxy_source != tiers.key(inst):
+        raise ValueError(f"the tiers grade {tiers.key(inst)}, the rows are {src}: pass proxy_source="
+                         f"{tiers.key(inst)!r} to read them as a recorded proxy")
+    end_m = _month(pd.Series(pd.DatetimeIndex(rows["decision_utc"]) - pd.Timedelta(1, "ns")))
     start_m = _month(rows["window_from_utc"])
     tier = tiers.tier_of(inst, list(end_m))
     rank_of = {m: TIER_RANK.get(x, 6) for m, x in zip(end_m, tier, strict=True)}
@@ -571,48 +664,118 @@ def apply_tiers(rows: pd.DataFrame, tiers: Tiers, tf: str) -> tuple[pd.DataFrame
     return out[ok].reset_index(drop=True), dropped
 
 
+PURPOSES = ("judge", "train", "parity")
+
+
 def load(cache_dir: Path, *, instrument: str, tf: str, years: Iterable[int], tiers: Tiers | None,
-         spec: FeatureSpec = SPEC, untiered_ok: bool = False, phases: Sequence[int] = (0,),
-         purpose: str = "judge") -> tuple[pd.DataFrame, dict[str, Any]]:
-    """The cached partitions of the current spec and code, with the tiers applied (`apply_tiers`), and a manifest:
-    the partition keys, the tiers file sha256 and r11 id, rows kept and dropped per tier. Refuses to load without
-    tiers unless `untiered_ok` (a parity or throughput check, never a labelled count). `purpose` "judge" (default:
-    any read that scores, selects, thresholds or gates) loads phase 0 only; offset phases are for "train"."""
-    if purpose not in ("judge", "train"):
-        raise ValueError(f"purpose {purpose!r}: judge or train")
+         spec: FeatureSpec = SPEC, phases: Sequence[int] = (0,), purpose: str = "judge",
+         minutes: pd.DataFrame | None = None, expect_keys: dict[tuple[int, int], str] | None = None,
+         proxy_source: str | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """The cached partitions whose key is EXACTLY the one the current spec, code and data give (code review M2: a
+    revised minute never serves a stale row): from `minutes` (the instrument's history, keys recomputed by
+    `cache_key`) or `expect_keys` {(year, phase): key}. Then the holdout guard (code review M1) and the tiers
+    (`apply_tiers`), and a manifest: the keys, the tiers sha256 and r11 id, any tier proxy, rows kept and dropped.
+    `purpose`: "judge" (default: anything that scores, selects, thresholds or gates) loads phase 0 only and always
+    with tiers; "train" may add offset phases, with tiers; "parity" (parity and throughput checks only, never a
+    labelled count) may read without tiers or keys."""
+    if purpose not in PURPOSES:
+        raise ValueError(f"purpose {purpose!r}: one of {PURPOSES}")
     if purpose == "judge" and any(int(p) != 0 for p in phases):
         raise ValueError("a judged read loads phase 0 only: offset candles are training augmentation")
-    if tiers is None and not untiered_ok:
-        raise ValueError("fs-v1 rows for a labelled count load with the r11 tiers (ADR 0085 A4); pass tiers")
+    if tiers is None and purpose != "parity":
+        raise ValueError(f"a {purpose} read of fs-v1 rows loads with the r11 tiers (ADR 0085 A4); pass tiers")
+    if minutes is None and expect_keys is None and purpose != "parity":
+        raise ValueError("pass `minutes` or `expect_keys`: a partition is read only under the key its data gives")
     want_spec, want_code = spec_hash(spec), code_hash()
     parts, keys = [], []
     for y, ph in ((y, int(p)) for y in sorted(years) for p in phases):
+        want = (expect_keys or {}).get((y, ph))
+        if want is None and minutes is not None:
+            want = cache_key(minutes, instrument=instrument, tf=tf, year=y, spec=spec, phase=ph)
         cands = []
         for mp in sorted(_part_dir(cache_dir, spec, instrument, tf, y, ph).glob("*.json")):
             man = json.loads(mp.read_text())
-            if man.get("spec_hash") == want_spec and man.get("code_hash") == want_code:
-                cands.append((str(man.get("built_utc")), mp, man))
+            if man.get("spec_hash") != want_spec or man.get("code_hash") != want_code:
+                continue
+            if want is not None and man.get("key") != want:
+                continue
+            cands.append((str(man.get("built_utc")), mp, man))
         if not cands:
-            raise FileNotFoundError(f"no fs-v1 partition {instrument} {tf} p{ph} {y} for this spec and code in "
-                                    f"{cache_dir}")
-        if len(cands) > 1:
-            log.warning("%s %s %d: %d partitions for this code (data revised); the newest is read", instrument, tf, y,
-                        len(cands))
+            raise FileNotFoundError(f"no fs-v1 partition {instrument} {tf} p{ph} {y} under the key of this spec, code "
+                                    f"and data in {cache_dir}: build it")
+        if want is None and len(cands) > 1:
+            raise ValueError(f"{instrument} {tf} p{ph} {y}: {len(cands)} partitions and no data key to choose by")
         _, mp, man = max(cands, key=lambda c: c[0])
         parts.append(_typed(pd.read_parquet(mp.with_suffix(".parquet"))))
         keys.append(man["key"])
     rows = _typed(pd.concat(parts, ignore_index=True))
+    holdout_guard.refuse(rows, what="fs-v1 load", col="decision_utc")
+    holdout_guard.refuse(rows, what="fs-v1 load (window)", col="window_from_utc")
     meta: dict[str, Any] = {"spec_id": spec.spec_id, "spec_hash": want_spec, "code_hash": want_code, "keys": keys,
-                            "rows_read": len(rows), "tiers_sha256": None, "r11_id": None, "tiers_path": None,
-                            "dropped": dict.fromkeys(TIER_RANK, 0)}
+                            "purpose": purpose, "rows_read": len(rows), "tiers_sha256": None, "r11_id": None,
+                            "tiers_path": None, "tier_proxy": None, "dropped": dict.fromkeys(TIER_RANK, 0)}
     if tiers is not None:
-        rows, dropped = apply_tiers(rows, tiers, tf)
+        src = row_source(rows) if len(rows) else None
+        rows, dropped = apply_tiers(rows, tiers, tf, proxy_source=proxy_source)
+        proxy = tiers.key(instrument) if src is not None and src != tiers.key(instrument) else None
         meta.update(tiers_sha256=tiers.sha256, r11_id=tiers.r11_id, tiers_path=tiers.path, dropped=dropped,
-                    kept={str(k): int(v) for k, v in rows["tier"].value_counts().items()})
+                    tier_proxy=proxy, kept={str(k): int(v) for k, v in rows["tier"].value_counts().items()})
     meta["rows"] = len(rows)
     return rows, meta
 
 
-__all__ = ["BID_ONLY_MISSING", "CACHE", "SPEC", "history_minutes", "histdata_instruments", "TIER_RANK", "WINDOW_EXACT", "FeatureSpec", "Tiers", "apply_tiers", "build",
+# ------------------------------------------------------------------------------------------------- folds, serving
+def purge(train: pd.DataFrame, test: pd.DataFrame, *, label_end: str = "label_end_utc",
+          embargo: pd.Timedelta | None = None) -> np.ndarray:
+    """True per TRAIN row to keep (quant C6): a training row is purged when its [window_from_utc, label end] overlaps
+    any test row's [decision_utc, label end + embargo] (embargo default: the test set's longest label horizon).
+    group_id counts n_eff; it is no substitute for this purge (a phase-5 copy of a test row overlaps and goes)."""
+    if test.empty or train.empty:
+        return np.ones(len(train), dtype=bool)
+    t0, t1 = _ns(pd.DatetimeIndex(test["decision_utc"])), _ns(pd.DatetimeIndex(test[label_end]))
+    emb = int((embargo if embargo is not None else pd.Timedelta(int((t1 - t0).max()), "ns")).value)
+    order = np.argsort(t0, kind="stable")
+    t0, t1 = t0[order], t1[order] + emb
+    reach = np.maximum.accumulate(t1)                       # the furthest test end among tests starting <= x
+    a = _ns(pd.DatetimeIndex(train["window_from_utc"]))
+    b = _ns(pd.DatetimeIndex(train[label_end]))
+    k = np.searchsorted(t0, b, side="right") - 1            # last test starting at or before the train row's end
+    overlap = (k >= 0) & (reach[np.clip(k, 0, None)] >= a)
+    return ~overlap
+
+
+SERVE_GATED_TFS = frozenset({"4h", "1d", "1w"})
+
+
+def serve_ready(tf: str, columns: Sequence[str], parity_json: Path | None) -> tuple[bool, str]:
+    """May a model trained on fs-v1 rows at `tf` with `columns` serve (quant C4)? At 4h/1d/1w, or with any d1_
+    column, only when the parity oracle's `snapshot_as_deployed_90k` block (scripts/research/feature_store_parity.py
+    on the serving path) shows max abs diff <= 1e-9 and no NaN-mask difference on every served column. The promotion
+    of any fs-v1-trained model calls this; a missing report is a refusal."""
+    gated = tf in SERVE_GATED_TFS or any(str(c).startswith("d1_") for c in columns)
+    if not gated:
+        return True, "not gated"
+    if parity_json is None or not Path(parity_json).exists():
+        return False, f"{tf}: no serving-path parity report"
+    rep = json.loads(Path(parity_json).read_text())
+    if rep.get("tf") != tf:
+        return False, f"parity report is for {rep.get('tf')}, not {tf}"
+    blk = rep.get("snapshot_as_deployed_90k") or {}
+    over = set(blk.get("columns_over_1e-9", {})) | set(blk.get("columns_mask_differs", {}))
+    bad = sorted(over & set(columns))
+    if not blk.get("n") or bad:
+        return False, f"{tf}: deployed serving path differs from fs-v1 on {bad or 'every row (no snapshot)'}"
+    return True, "serving path equals fs-v1"
+
+
+def columns_for(rows: pd.DataFrame, columns: Sequence[str] = SR_FEATURES) -> list[str]:
+    """The model columns `rows` may carry (quant L3): rows mixing bid-only and bid+ask sources drop
+    BID_ONLY_MISSING (a pooled model never learns 'NaN means HistData'); one source keeps them all."""
+    mixed = "bid_only" in rows.columns and rows["bid_only"].nunique() > 1
+    return [c for c in columns if not (mixed and c in BID_ONLY_MISSING)]
+
+
+__all__ = ["BID_ONLY_MISSING", "CACHE", "PURPOSES", "SPEC", "columns_for", "code_files", "purge", "row_source",
+           "serve_ready", "history_minutes", "histdata_instruments", "TIER_RANK", "WINDOW_EXACT", "FeatureSpec", "Tiers", "apply_tiers", "build",
            "build_year", "cache_key", "code_hash", "compute", "features_for", "job_order", "load", "read_manifests",
            "spec_hash", "window_exact", "year_span"]
