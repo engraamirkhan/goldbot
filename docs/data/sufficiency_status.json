@@ -1,0 +1,2385 @@
+{
+ "as_of": "2026-11-26",
+ "cells": [
+  {
+   "cell": "gold/1m",
+   "verdict": "SHORT",
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 7328,
+   "n_eff_judge": 7085,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 17,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/1m",
+    "unit": "gold",
+    "tf": "1m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/5m",
+   "verdict": "SHORT",
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 5443,
+   "n_eff_judge": 5263,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 12,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/5m",
+    "unit": "gold",
+    "tf": "5m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/15m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 4054,
+   "n_eff_judge": 3919,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 9,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 4,054 < 4,300 for a 10-input block (max 9 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/15m",
+    "unit": "gold",
+    "tf": "15m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/30m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 2683,
+   "n_eff_judge": 2594,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 6,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 2,683 < 4,300 for a 10-input block (max 6 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/30m",
+    "unit": "gold",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/1h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 2071,
+   "n_eff_judge": 2002,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 4,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 2,071 < 4,300 for a 10-input block (max 4 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/1h",
+    "unit": "gold",
+    "tf": "1h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/2h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 1035,
+   "n_eff_judge": 1001,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 2,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 1,035 < 4,300 for a 10-input block (max 2 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 1,001 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/2h",
+    "unit": "gold",
+    "tf": "2h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/4h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 414,
+   "n_eff_judge": 400,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 0,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 414 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 400 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/4h",
+    "unit": "gold",
+    "tf": "4h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/1d",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 207,
+   "n_eff_judge": 200,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 0,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 207 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 200 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/1d",
+    "unit": "gold",
+    "tf": "1d",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/1w",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 104,
+   "n_eff_judge": 100,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 0,
+   "gaps": [
+    {
+     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
+     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
+     "owner": "data-engineer",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 104 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 100 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/1w",
+    "unit": "gold",
+    "tf": "1w",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/1m",
+   "verdict": "SHORT",
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 11399,
+   "n_eff_judge": 10948,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 26,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/1m",
+    "unit": "fx10",
+    "tf": "1m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/5m",
+   "verdict": "SHORT",
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 8468,
+   "n_eff_judge": 8133,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 19,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/5m",
+    "unit": "fx10",
+    "tf": "5m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/15m",
+   "verdict": "SHORT",
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 6306,
+   "n_eff_judge": 6056,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 14,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/15m",
+    "unit": "fx10",
+    "tf": "15m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/30m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 4174,
+   "n_eff_judge": 4009,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 9,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "learn n_eff 4,174 < 4,300 for a 10-input block (max 9 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/30m",
+    "unit": "fx10",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/1h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 7,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "learn n_eff 3,221 < 4,300 for a 10-input block (max 7 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/1h",
+    "unit": "fx10",
+    "tf": "1h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/2h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 1611,
+   "n_eff_judge": 1547,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 3,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "learn n_eff 1,611 < 4,300 for a 10-input block (max 3 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/2h",
+    "unit": "fx10",
+    "tf": "2h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/4h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 1,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "learn n_eff 644 < 4,300 for a 10-input block (max 1 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 619 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/4h",
+    "unit": "fx10",
+    "tf": "4h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/1d",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 322,
+   "n_eff_judge": 309,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 0,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "learn n_eff 322 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 309 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/1d",
+    "unit": "fx10",
+    "tf": "1d",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "fx10/1w",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": 161,
+   "n_eff_judge": 155,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 0,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "learn n_eff 161 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 155 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "fx10/1w",
+    "unit": "fx10",
+    "tf": "1w",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/1m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/1m",
+    "unit": "metals_crosses_b",
+    "tf": "1m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/5m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/5m",
+    "unit": "metals_crosses_b",
+    "tf": "5m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/15m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/15m",
+    "unit": "metals_crosses_b",
+    "tf": "15m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/30m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/30m",
+    "unit": "metals_crosses_b",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/1h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/1h",
+    "unit": "metals_crosses_b",
+    "tf": "1h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/2h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/2h",
+    "unit": "metals_crosses_b",
+    "tf": "2h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/4h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/4h",
+    "unit": "metals_crosses_b",
+    "tf": "4h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/1d",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/1d",
+    "unit": "metals_crosses_b",
+    "tf": "1d",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "metals_crosses_b/1w",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for FX10 and metals/crosses",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "D-5fx"
+    },
+    {
+     "gap": "metals/crosses n_eff not counted",
+     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-mc"
+    }
+   ],
+   "requirement": {
+    "cell": "metals_crosses_b/1w",
+    "unit": "metals_crosses_b",
+    "tf": "1w",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/1m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 8332,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/1m",
+    "unit": "index_energy_b",
+    "tf": "1m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/5m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 6189,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/5m",
+    "unit": "index_energy_b",
+    "tf": "5m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/15m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 4609,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/15m",
+    "unit": "index_energy_b",
+    "tf": "15m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/30m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 3051,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/30m",
+    "unit": "index_energy_b",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/1h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 2355,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/1h",
+    "unit": "index_energy_b",
+    "tf": "1h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/2h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 1177,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/2h",
+    "unit": "index_energy_b",
+    "tf": "2h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/4h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 471,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    },
+    {
+     "gap": "judge n_eff 471 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/4h",
+    "unit": "index_energy_b",
+    "tf": "4h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/1d",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 235,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    },
+    {
+     "gap": "judge n_eff 235 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/1d",
+    "unit": "index_energy_b",
+    "tf": "1d",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "index_energy_b/1w",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": 118,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    },
+    {
+     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
+     "plan": "outcome-blind count, after the N8 class-window card is frozen",
+     "owner": "data-engineer",
+     "due": "2026-11-28",
+     "blocks": true,
+     "item": "COUNT-ie"
+    },
+    {
+     "gap": "judge n_eff 118 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "index_energy_b/1w",
+    "unit": "index_energy_b",
+    "tf": "1w",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  }
+ ]
+}
