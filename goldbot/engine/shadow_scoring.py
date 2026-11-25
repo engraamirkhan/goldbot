@@ -58,7 +58,8 @@ What it does, in `exploration._send`, before the RiskGate:
 - it keeps a candidate iff the model's stored rule keeps it (sr-v2: score >= tau);
 - a rejected candidate with `explore_u(candidate) < EXPLORE_P` is still sent as an exploration sample (ADR 0098
   section 3). Its propensity is EXPLORE_P, logged on every rejected candidate, and its fill carries evidence class
-  `explore_sample`, which no edge read, arm n or cost stop counts (evidence_exclusions.NOT_EDGE_EVIDENCE);
+  `explore_sample`, which no edge read or arm n counts (evidence_exclusions.NOT_EDGE_EVIDENCE); the money and
+  kill stops do count it (NOT_STOP_EVIDENCE excludes only the cohort);
 - the rest are refused with `model_gate:<model_version>`, recorded and replay-labelled like any refused candidate.
 
 The vector is built on the worker. The queue holds the signal (`gate_waits`) at most GATE_WAIT_S after its bar
