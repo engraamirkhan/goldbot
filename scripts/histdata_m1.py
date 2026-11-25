@@ -50,6 +50,7 @@ from goldbot.data.daily import decode_hourly  # noqa: E402
 from goldbot.data.era_quality import (  # noqa: E402
     HOLDOUT_CUT,
     R11_ID,
+    R11_V2_ID,
     ClockCheck,
     HistorySource,
     clock_check,
@@ -57,9 +58,12 @@ from goldbot.data.era_quality import (  # noqa: E402
     day_of,
     drop_holdout,
     epoch_ns_utc,
+    gap_week_offsets,
+    gap_week_score,
     grade_month,
     history_sources,
     month_offsets,
+    same_source_share,
     spike_mask,
 )
 
@@ -94,12 +98,22 @@ def histdata_to_utc(local: pd.Series, rule: str = "ny") -> pd.Series:
     return pd.Series(loc.tz_convert("UTC").as_unit("ns"), index=local.index)
 
 
-def reconvert(bars: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """A year stored under the "ny" rule re-stamped under `rule` (the New York local stamps are recovered exactly by
-    the inverse conversion), re-sorted, de-duplicated and cut at the holdout again."""
-    local = pd.Series(pd.DatetimeIndex(bars["ts_utc"]).tz_convert("America/New_York").tz_localize(None),
-                      index=bars.index)
-    out = bars.assign(ts_utc=histdata_to_utc(local, rule)).dropna(subset=["ts_utc"])
+def to_local(ts_utc: pd.Series, rule: str) -> pd.Series:
+    """The HistData local stamp a UTC time came from under `rule` (exact inverse of histdata_to_utc)."""
+    t = pd.DatetimeIndex(pd.to_datetime(ts_utc, utc=True))
+    if rule == "eet-7":
+        loc = t.tz_convert("Europe/Helsinki").tz_localize(None) - pd.Timedelta(hours=7)
+    else:
+        loc = t.tz_convert("America/New_York").tz_localize(None)
+    return pd.Series(loc, index=ts_utc.index)
+
+
+def reconvert(bars: pd.DataFrame, rule: str, stored: str = "ny") -> pd.DataFrame:
+    """A year stored under `stored` re-stamped under `rule` (local stamps recovered exactly), re-sorted,
+    de-duplicated and cut at the holdout again."""
+    if rule == stored:
+        return bars
+    out = bars.assign(ts_utc=histdata_to_utc(to_local(bars["ts_utc"], stored), rule)).dropna(subset=["ts_utc"])
     out = out.sort_values("ts_utc", kind="stable").drop_duplicates("ts_utc").reset_index(drop=True)
     out["visible_at"] = out["ts_utc"] + pd.Timedelta(seconds=60)
     return drop_holdout(out)[0]
@@ -264,6 +278,15 @@ def year_path(base: Path, key: str, year: int) -> Path:
 
 
 def pull_one(task: tuple[str, int, str]) -> dict[str, object]:
+    """pull_one_ with any exception recorded as status failed (the run and its reports go on)."""
+    try:
+        return pull_one_(task)
+    except Exception as exc:  # noqa: BLE001 (one bad pair-year must not end a 400-task run)
+        return {"key": task[0], "year": task[1], "status": "failed", "why": f"{type(exc).__name__}: {exc}"[:300],
+                "at": dt.datetime.now(dt.UTC).isoformat()}
+
+
+def pull_one_(task: tuple[str, int, str]) -> dict[str, object]:
     """One instrument-year: download, parse, holdout cut, error quarantine, scale check, write. Returns its manifest
     line (status ok | absent | scale | empty | failed)."""
     key, year, base_s = task
@@ -285,7 +308,8 @@ def pull_one(task: tuple[str, int, str]) -> dict[str, object]:
             return {**rec, "status": "failed", "why": "no csv in zip"}
         df = parse_histdata(z.read(names[0]), code)
     df, sealed = drop_holdout(df)
-    df = df[pd.DatetimeIndex(df["ts_utc"]).year == year].reset_index(drop=True)   # stamps that crossed New Year
+    # every row of the file is kept, also the New York evening of Dec 31 (UTC Jan 1 of the next year): the next
+    # year's file starts at its own local Jan 1, so nothing overlaps (review of #453: those hours were dropped)
     rec["sealed_dropped"] = sealed
     end = era.end()
     if end is not None:
@@ -339,7 +363,11 @@ def done(base: Path, man: dict[tuple[str, int], dict[str, object]], key: str, ye
         return False
     if r["status"] == "ok":
         return year_path(base, key, year).exists()
-    return r["status"] in ("absent", "empty")       # failed and scale years are retried
+    if r["status"] == "quarantined":
+        return True                                   # failed its clock check: never pulled back into the partition
+    if r["status"] == "absent":
+        return int(str(r.get("absent_seen", 1))) >= 2  # one disagreeing page is not proof; absent twice is
+    return r["status"] == "empty"                     # failed and scale years are retried
 
 
 def tasks_for(keys: list[str], base: Path) -> list[tuple[str, int, str]]:
@@ -365,7 +393,12 @@ def cmd_pull(a: argparse.Namespace) -> int:
     tasks = tasks_for(a.keys, base)
     print(f"{len(tasks)} instrument-years to pull with {a.workers} workers", flush=True)
     with ProcessPoolExecutor(max_workers=a.workers, initializer=_nice) as ex:
+        man = read_manifest(base)
         for rec in ex.map(pull_one, tasks):
+            prev = man.get((str(rec["key"]), int(str(rec["year"]))))
+            if rec["status"] == "absent":
+                rec["absent_seen"] = int(str(prev.get("absent_seen", 1))) + 1 if prev and prev["status"] == "absent" \
+                    else 1
             append_manifest(base, rec)
             print(f"{rec['key']} {rec['year']} {rec['status']} rows={rec.get('rows')} "
                   f"sealed={rec.get('sealed_dropped')} q={rec.get('quarantined_rows')} {rec.get('why', '')}", flush=True)
@@ -464,6 +497,78 @@ def reference_hourly(key: str, year: int, raw: Path) -> tuple[pd.DataFrame, dict
     return ref.reset_index(drop=True), native
 
 
+REPO = Path(__file__).resolve().parents[1]
+
+
+def git_state() -> tuple[str, bool]:
+    """(HEAD sha, dirty): every report carries both; grading refuses a dirty tree (quant ruling 5)."""
+    import subprocess
+    sha = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    dirty = bool(subprocess.run(["git", "-C", str(REPO), "status", "--porcelain", "--untracked-files=no"],
+                                capture_output=True, text=True).stdout.strip())
+    return sha, dirty
+
+
+def _stored_rule(man: dict[tuple[str, int], dict[str, object]], key: str, year: int) -> str:
+    return str(man.get((key, year), {}).get("tz", "ny")).replace("America/New_York", "ny")
+
+
+def evidence_one(task: tuple[str, int, str, str, str]) -> dict[str, object]:
+    """Outcome-blind evidence for one stored instrument-year: offset-0 rank correlation over the US/EU gap-window
+    hours under each stamp rule, the best offset per gap window under each, and the same-source share (quant rulings
+    1 and 2). Nothing is written."""
+    key, year, base_s, raw_s, stored = task
+    out: dict[str, object] = {"key": key, "year": year, "stored_rule": stored}
+    try:
+        base, raw = Path(base_s), Path(raw_s)
+        src = history_sources().instruments[key]
+        bars = pd.read_parquet(year_path(base, key, year))
+        ref, native = reference_hourly(key, year, raw)
+        if not len(ref):
+            return {**out, "status": "no_reference"}
+        for rule in TZ_RULES:
+            b = reconvert(bars, rule, stored)
+            ts, c = epoch_ns_utc(b["ts_utc"]), b["bid_close"].to_numpy(dtype="float64")
+            out[f"gap_score_{rule}"] = gap_week_score(ts, c, ref, year)
+            out[f"gap_offsets_{rule}"] = json.dumps(gap_week_offsets(ts, c, ref, year))
+        nat = all(native.values()) and src.dukascopy is not None and not any(
+            e.dukascopy_1m for e in src.reference)
+        gold = any(e.dukascopy_1m for e in src.reference)
+        point = src.dukascopy.point if src.dukascopy is not None else None
+        out["same_source_share"] = same_source_share(epoch_ns_utc(bars["ts_utc"]),
+                                                     bars["bid_close"].to_numpy(dtype="float64"), ref, point) \
+            if (nat or gold) and point else None
+        return {**out, "status": "ok"}
+    except Exception as exc:  # noqa: BLE001
+        return {**out, "status": "failed", "why": f"{type(exc).__name__}: {exc}"[:300]}
+
+
+def cmd_evidence(a: argparse.Namespace) -> int:
+    sha, dirty = git_state()
+    if dirty:
+        print("REFUSED: the working tree has uncommitted changes; evidence is stamped with a commit", flush=True)
+        return 2
+    base, raw = Path(a.root) / "histdata_m1", Path(a.root)
+    man = read_manifest(base)
+    tasks = [(k, y, str(base), str(raw), _stored_rule(man, k, y)) for k in a.keys
+             for y in range(FIRST_YEAR, LAST_YEAR + 1) if year_path(base, k, y).exists()]
+    rows = []
+    with ProcessPoolExecutor(max_workers=a.workers, initializer=_nice) as ex:
+        for r in ex.map(evidence_one, tasks):
+            rows.append(r)
+            print(f"{r['key']} {r['year']} ny={r.get('gap_score_ny')} eet7={r.get('gap_score_eet-7')} "
+                  f"same={r.get('same_source_share')} {r['status']}", flush=True)
+    df = pd.DataFrame(rows).assign(git_sha=sha, dirty=dirty, r11_id=R11_V2_ID)
+    rep = base / "_reports"
+    rep.mkdir(parents=True, exist_ok=True)
+    df.to_csv(rep / "evidence_r11-v2.csv", index=False)
+    d = df.dropna(subset=["gap_score_ny", "gap_score_eet-7"])
+    win = np.where(d["gap_score_eet-7"] - d["gap_score_ny"] > 0.05, "eet-7",
+                   np.where(d["gap_score_ny"] - d["gap_score_eet-7"] > 0.05, "ny", "tie"))
+    print(pd.crosstab(d["year"], win).to_string(), flush=True)
+    return 0
+
+
 def check_one(task: tuple[str, int, str, str, str]) -> tuple[dict[str, object], list[dict[str, object]]]:
     """Clock check, tz-rule choice and R11 grades of one stored instrument-year. `stored_rule` (from the manifest) is
     the rule its stamps are in; only a year still on "ny" is tried under "eet-7" (idempotent: a re-run never shifts a
@@ -546,7 +651,7 @@ def cmd_check(a: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("cmd", choices=["pull", "check", "sums", "trim-cache"])
+    ap.add_argument("cmd", choices=["pull", "evidence", "check", "sums", "trim-cache"])
     ap.add_argument("--keys", default=None, help="comma-separated owner keys (default: every key with a HistData code)")
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--root", default=str(DEFAULT_ROOT), help="the git-ignored raw/ directory")
@@ -557,6 +662,8 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         ap.error(f"no HistData source for {sorted(unknown)}")
     a.workers = max(1, min(a.workers, 3))
+    if a.cmd == "evidence":
+        return cmd_evidence(a)
     if a.cmd == "trim-cache":
         base = Path(a.root) / "histdata_m1"
         for z in sorted((base / "_zips").glob(f"*_{HOLDOUT_CUT.year}.zip")):
