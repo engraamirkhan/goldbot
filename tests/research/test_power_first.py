@@ -6,6 +6,8 @@ from __future__ import annotations
 import logging
 import math
 
+import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 from scipy import stats
@@ -22,9 +24,10 @@ HOLM_Z = P.holm_first_z(0.00625, 3)
 
 def card(*, learn_signals: int = 2_960, clusters: int | None = None, learn_years: float = 8.0,
          instruments: list[str] | None = None, tf: str = "1h", test_old_years: float = 2.0,
-         gates: list[P.Gate] | None = None, segments: list[P.Segment] | None = None) -> P.PowerCard:
+         gates: list[P.Gate] | None = None, segments: list[P.Segment] | None = None,
+         hold_days: float = 1.0 / 24) -> P.PowerCard:
     return P.PowerCard(
-        card_id="C-1", family="fam", timeframe=tf, learn_signals=learn_signals,
+        card_id="C-1", family="fam", timeframe=tf, learn_signals=learn_signals, hold_days=hold_days,
         learn_signal_clusters=clusters if clusters is not None else learn_signals, learn_years=learn_years,
         instruments=instruments or ["XAUUSD"],
         segments=segments or [P.Segment(name="learn", years=learn_years),
@@ -97,14 +100,208 @@ def test_expected_trades_on_later_gates_are_extrapolated_from_the_learn_signal_r
 
 def test_n_eff_divides_by_the_day_cluster_and_the_instrument_design_effects():
     """n_eff = n / (1 + (m_day - 1) rho_day) / (1 + (k - 1) rho_inst); m_day floored at 1."""
-    assert P.design_effect(1.0, 0.25, 1, 0.5) == 1.0
-    assert P.design_effect(0.4, 0.25, 1, 0.5) == 1.0
-    assert P.design_effect(3.0, 0.25, 10, 0.5) == pytest.approx(1.5 * 5.5)
+    assert P.design_effect(1.0, 0.25, 1, 0.5, concurrency=1.0) == 1.0
+    assert P.design_effect(0.4, 0.25, 1, 0.5, concurrency=0.3) == 1.0
+    assert P.design_effect(3.0, 0.25, 10, 0.5, concurrency=1.0) == pytest.approx(1.5 * 5.5)
     fx = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "US500", "GER40", "XAUUSD", "XAGUSD", "WTI", "UK100"]
     v = P.evaluate(card(learn_signals=3_000, clusters=1_000, instruments=fx), SETTINGS)
     assert v.rho_instrument == PF.rho_instrument == 0.5
     assert v.design_effect == pytest.approx((1 + 2 * PF.rho_day) * (1 + 9 * 0.5))
     assert next(g for g in v.gates if g.name == "explore").n_eff == pytest.approx(3_000 / v.design_effect)
+
+
+# ------------------------------------------------------------------------------------------------ hold overlap
+DAYS8 = round(8 * PF.trading_days_per_year)         # a signal every trading day of an 8-year learn window
+
+
+def test_n_eff_also_divides_by_the_mean_concurrency_of_overlapping_holds():
+    """A decision every day held H days: lag-j autocorrelation 1 - j/H, so n_eff ~ n / H (Hansen & Hodrick 1980)."""
+    assert P.design_effect(1.0, 0.25, 1, 0.5, concurrency=20.0) == pytest.approx(20.0)
+    assert P.design_effect(3.0, 0.25, 10, 0.5, concurrency=4.0) == pytest.approx(1.5 * 4.0 * 5.5)
+    flat = P.evaluate(card(learn_signals=DAYS8, tf="1d", hold_days=1.0), SETTINGS)
+    held = P.evaluate(card(learn_signals=DAYS8, tf="1d", hold_days=20.0), SETTINGS)
+    assert held.overlap_effect == pytest.approx(20.0) and flat.overlap_effect == 1.0
+    assert held.design_effect == pytest.approx(20.0 * flat.design_effect)
+    for g, f in zip(held.gates, flat.gates, strict=True):
+        assert g.n_expected == f.n_expected and g.n_eff == pytest.approx(f.n_eff / 20.0)
+
+
+def test_a_daily_card_with_20_day_overlapping_holds_is_refused_where_counting_each_hold_once_would_start_it():
+    """The defect (daily researcher, 2026-11-25): m_day is 1 for a daily card, so 20-day holds were credited n_eff ~ 20
+    times too large and the card started."""
+    segs = [P.Segment(name="learn", years=8.0), P.Segment(name="test_old", years=8.0)]
+    one = P.evaluate(card(learn_signals=DAYS8, tf="1d", segments=segs, hold_days=1.0), SETTINGS)
+    assert one.started
+    v = P.evaluate(card(learn_signals=DAYS8, tf="1d", segments=segs, hold_days=20.0), SETTINGS)
+    assert not v.started and any("n_eff" in r for r in v.reasons)
+
+
+def test_holds_short_or_sparse_enough_that_under_one_label_is_open_change_nothing():
+    """Little's law on signals (quant C1): c = signals per instrument per trading day x hold_days. Below one open
+    label on average the overlap term is 1; at 1.49 signals a day a 1-day hold is no longer free."""
+    base = P.evaluate(card(learn_signals=3_000, clusters=1_000), SETTINGS)
+    for hold in (1.0 / 24, 0.5):
+        assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=hold), SETTINGS) == base
+    day = P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=1.0), SETTINGS)
+    c = 3_000 / (8 * PF.trading_days_per_year)
+    assert day.overlap_effect == pytest.approx(c)
+    assert day.design_effect == pytest.approx((1 + (3 / c - 1) * PF.rho_day) * c)
+    quarter = DAYS8 // 4                                                    # a signal day in four
+    assert P.evaluate(card(learn_signals=quarter, tf="1d", hold_days=3.0), SETTINGS).overlap_effect == 1.0
+    assert P.evaluate(card(learn_signals=quarter, tf="1d", hold_days=8.0), SETTINGS).overlap_effect == \
+        pytest.approx(2.0, rel=1e-3)
+
+
+@pytest.mark.parametrize("hold_min", [60, 240])
+@pytest.mark.parametrize("rho", [0.25, 0.05])
+def test_q3_count_only_matches_measured_uniqueness_on_even_arrivals(hold_min, rho):
+    """Quant C1: on even arrivals of signals within and across days the count-only expectation is Q3's measured
+    n_eff within 10 % (77 labels a day, every day; holds of 60 and 240 min; rho_day 0.25 and 0.05)."""
+    days = pd.bdate_range("2012-01-02", periods=250, tz="UTC")
+    offs = pd.to_timedelta(np.arange(77) * (1440 / 77), unit="min")
+    entries = pd.DatetimeIndex([d + o for d in days for o in offs])
+    hold = pd.Timedelta(minutes=hold_min)
+    u = P.uniqueness(_events(entries, hold))
+    pf = PF.model_copy(update={"rho_day": rho, "rho_day_le_60m": rho})     # unvalidated copy: rho at both horizons
+    s = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(update={"power_first": pf})})
+    years = len(days) / PF.trading_days_per_year
+    measured = P.evaluate(_ucard(u, hold_days=hold_min / 1440, years=years), s)
+    count = P.evaluate(card(learn_signals=u.n, clusters=u.days, learn_years=years, tf="1d",
+                            hold_days=hold_min / 1440), s)
+    for gm, gc in zip(measured.gates, count.gates, strict=True):
+        assert gc.n_eff == pytest.approx(gm.n_eff, rel=0.10)
+
+
+def test_concurrency_is_counted_per_instrument_so_pooling_instruments_does_not_inflate_it():
+    """Overlap between instruments is rho_inst's; the overlap term reads signal days per instrument."""
+    metals4 = ["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD"]
+    v = P.evaluate(card(learn_signals=4 * DAYS8, tf="1d", instruments=metals4, hold_days=5.0), SETTINGS)
+    assert v.overlap_effect == pytest.approx(5.0)
+
+
+def test_a_card_must_state_its_hold():
+    with pytest.raises(ValidationError, match="hold_days"):
+        P.PowerCard(**{k: v for k, v in card().model_dump().items() if k != "hold_days"})
+    with pytest.raises(ValidationError):
+        card(hold_days=0.0)
+
+
+def test_a_given_verdict_that_credits_less_overlap_than_its_card_holds_is_refused(tmp_path):
+    reg = TrialRegistry(tmp_path / "reg.jsonl")
+    held = card(learn_signals=DAYS8, tf="1d", hold_days=20.0)
+    v = P.evaluate(held, SETTINGS)
+    with pytest.raises(ValueError, match="overlap"):
+        P.start_or_refuse(reg, held, SETTINGS, agent_id="rd", verdict=v.model_copy(update={"design_effect": 1.0}))
+    assert not P.start_or_refuse(reg, held, SETTINGS, agent_id="rd", verdict=v).started
+
+
+# ------------------------------------------------------------------- measured uniqueness (quant Q3, 2026-11-25)
+def _events(entries, hold: pd.Timedelta, instrument: str = "XAUUSD") -> pd.DataFrame:
+    e = pd.DatetimeIndex(entries)
+    return pd.DataFrame({"instrument": instrument, "entry_utc": e, "exit_utc": e + hold})
+
+
+def _ucard(u: P.Uniqueness, *, hold_days: float, tf: str = "1d", years: float = 8.0) -> P.PowerCard:
+    return card(learn_signals=u.n, clusters=u.days, learn_years=years, tf=tf, hold_days=hold_days).model_copy(
+        update={"learn_uniqueness": u})
+
+
+def test_q3_a_daily_decision_held_20_days_has_n_eff_within_5_percent_of_n_over_20():
+    """Q3: n_eff = sum(u_i) / DEFF_day, u_i the average uniqueness of label i over its horizon (Lopez de Prado 2018,
+    ch. 4); acceptance: daily H = 20 within +-5 % of n / 20."""
+    days = pd.bdate_range("2010-01-04", "2017-12-29", tz="UTC")
+    u = P.uniqueness(_events(days, pd.Timedelta(days=28)))     # 20 trading days ~ 28 calendar days
+    assert u.n == len(days) and u.sum_u == pytest.approx(len(days) / 20, rel=0.05)
+    v = P.evaluate(_ucard(u, hold_days=20.0), SETTINGS)
+    assert v.overlap_effect == pytest.approx(20.0, rel=0.05) and v.design_effect == pytest.approx(u.n / u.sum_u)
+    for g in v.gates:                                   # every gate's n_eff is its expected trades / 20, +-5 %
+        assert g.n_eff == pytest.approx(g.n_expected / 20, rel=0.05)
+
+
+def test_q3_one_position_at_a_time_max_open_1_leaves_n_eff_unchanged():
+    """max_open = 1: no two labels overlap, every u_i = 1, so the verdict equals the count-only one."""
+    days = pd.bdate_range("2010-01-04", "2017-12-29", tz="UTC")[::3]
+    ev = _events(days, pd.Timedelta(hours=20))
+    u = P.uniqueness(ev)
+    assert u.sum_u == pytest.approx(u.n) and u.m_w == pytest.approx(1.0)
+    plain = P.evaluate(card(learn_signals=u.n, clusters=u.days, tf="1d", hold_days=20 / 24), SETTINGS)
+    assert P.evaluate(_ucard(u, hold_days=20 / 24), SETTINGS).gates == plain.gates
+
+
+def test_q3_pooling_15m_and_30m_arms_counts_at_most_15m_alone_times_one_plus_the_30m_unique_share():
+    """Q3 acceptance: pooled (15m + 30m arms on one instrument) <= 15m alone x (1 + unique share), the unique share =
+    the 30m labels' time no 15m label covers, in 30m horizons, over the 15m arm's sum of uniqueness."""
+    rng = np.random.default_rng(3)
+    base = pd.Timestamp("2012-01-02", tz="UTC")
+    m15 = np.sort(rng.choice(20_000, 3_000, replace=False)) * 15            # entry minute offsets
+    m30 = np.sort(rng.choice(10_000, 2_000, replace=False)) * 30
+    a = _events(base + pd.to_timedelta(m15, unit="min"), pd.Timedelta(hours=4))
+    b = _events(base + pd.to_timedelta(m30, unit="min"), pd.Timedelta(hours=8))
+    covered = np.zeros(400_000, bool)
+    for m in m15:
+        covered[m:m + 240] = True
+    b_only = sum(int((~covered[m:m + 480]).sum()) for m in m30) / 480       # in 30m-arm horizons
+    ua, pooled = P.uniqueness(a), P.uniqueness(pd.concat([a, b], ignore_index=True))
+    share = b_only / ua.sum_u
+    assert 0 < share < 1
+    assert pooled.sum_u <= ua.sum_u * (1 + share) * (1 + 1e-9)
+    assert pooled.n_eff_day(0.0) == pytest.approx(pooled.sum_u)
+    assert pooled.sum_u < ua.sum_u + P.uniqueness(b).sum_u
+
+
+def test_q3_a_clone_pair_and_a_duplicated_bet_count_once():
+    days = pd.bdate_range("2012-01-02", periods=400, tz="UTC")
+    one = _events(days, pd.Timedelta(hours=6))
+    twice = pd.concat([one, one], ignore_index=True)                  # two arms, the same bets
+    assert P.uniqueness(twice).sum_u == pytest.approx(P.uniqueness(one).sum_u)
+    assert P.uniqueness(twice).n_eff_day(0.25) == pytest.approx(P.uniqueness(one).n_eff_day(0.25))
+
+
+def test_q3_labels_on_different_instruments_never_share_uniqueness_rho_inst_prices_them():
+    days = pd.bdate_range("2012-01-02", periods=400, tz="UTC")
+    both = pd.concat([_events(days, pd.Timedelta(hours=6)), _events(days, pd.Timedelta(hours=6), "XAGUSD")])
+    assert P.uniqueness(both).sum_u == pytest.approx(800)
+
+
+def test_q3_the_day_term_weights_days_by_their_unique_mass():
+    """DEFF_day = 1 + (m_w - 1) rho_day, m_w = sum M_d^2 / sum M_d, M_d = sum of u_i decided that day."""
+    t = pd.Timestamp("2012-01-03 08:00", tz="UTC")
+    ev = _events([t, t + pd.Timedelta(hours=2), t + pd.Timedelta(hours=4), t + pd.Timedelta(days=1)],
+                 pd.Timedelta(hours=1))
+    u = P.uniqueness(ev)
+    assert (u.n, u.days) == (4, 2) and u.sum_u == pytest.approx(4.0)
+    assert u.m_w == pytest.approx((9 + 1) / 4) and u.n_eff_day(0.25) == pytest.approx(4 / (1 + 1.5 * 0.25))
+
+
+def test_a_card_whose_measured_uniqueness_disagrees_with_its_counts_is_invalid():
+    u = P.uniqueness(_events(pd.bdate_range("2012-01-02", periods=50, tz="UTC"), pd.Timedelta(hours=1)))
+    raw = card(learn_signals=60, clusters=50, hold_days=0.1).model_dump()
+    with pytest.raises(ValidationError, match="uniqueness"):
+        P.PowerCard.model_validate(raw | {"learn_uniqueness": u.model_dump()})
+    ok = card(learn_signals=50, clusters=50, hold_days=0.1).model_dump() | {"learn_uniqueness": u.model_dump()}
+    assert P.PowerCard.model_validate(ok).learn_uniqueness == u
+
+
+def test_a_label_must_end_after_it_starts():
+    t = pd.Timestamp("2012-01-03", tz="UTC")
+    with pytest.raises(ValueError, match="exit"):
+        P.uniqueness(pd.DataFrame({"instrument": ["XAUUSD"], "entry_utc": [t], "exit_utc": [t]}))
+
+
+# ------------------------------------------------------------------- rho_day per horizon (quant Q1, 2026-11-25)
+def test_q1_rho_day_for_horizons_up_to_60_minutes_may_go_down_to_0_05_longer_keep_the_0_25_floor():
+    assert PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05}).rho_day_le_60m == 0.05
+    for bad in ({"rho_day_le_60m": 0.04}, {"rho_day": 0.2}):
+        with pytest.raises(ValidationError):
+            PowerFirstSettings.model_validate(bad)
+    assert PF.rho_day_le_60m == PF.rho_day == 0.25          # shipped: the prior until the Q1 measurement lands
+    pf = PF.model_copy(update={"rho_day_le_60m": 0.05})
+    assert pf.rho_day_for(60 / 1440) == 0.05 and pf.rho_day_for(61 / 1440) == 0.25 and pf.rho_day_for(1.0) == 0.25
+    s = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(update={"power_first": pf})})
+    short = card(learn_signals=3_000, clusters=1_000, hold_days=1 / 24)
+    assert P.evaluate(short, s).design_effect == pytest.approx(1 + 2 * 0.05)
+    assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=2 / 24), s).design_effect == \
+        pytest.approx(1 + 2 * 0.25)
 
 
 def test_rho_inst_is_0_7_when_at_least_half_the_pooled_instruments_are_precious_metals():
