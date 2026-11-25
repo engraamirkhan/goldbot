@@ -10,6 +10,8 @@
   services.py    services and heartbeats: scheduler and jobs, heartbeats, schema skew, approvals, alerts, dead man
   auth.py        auth and mail: keyring secrets (presence only), the email sign-in link
   cpcv.py        CPCV/PBO evidence of gate-passing trials (M16, the promotion gate's input)
+  learning.py    learning liveness judged by output (S5): every learner writes, every watcher watches, model
+                 influence % of the decisions
   loop.py        the feedback loop (R140): learner weights, daily/weekly reviews, proposals read, registry sync, jobs
   findings.py    the findings register (R175): a critical/high finding past due and not closed (registered through
                  goldbot/ops/health.py's import, as discovery.py and compaction.py are)
@@ -28,6 +30,7 @@ from goldbot.ops.checks import (  # noqa: F401 - registers the checks
     entries,
     feeds,
     host,
+    learning,
     loop,
     operations,
     risk,

@@ -1132,12 +1132,37 @@ def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         system = {"since": slot.isoformat(), "reasons": reasons}
     else:
         system = None
+    sr_drift = _self_retrain_drift(ctx, errors)
     out = {"ts": slot.isoformat(), "agents": {h.agent_id: h.model_dump() for h in health}, "halted": halted,
            "size_factor": {h.agent_id: h.size_factor for h in health if h.size_factor < 1}, "system_halt": system,
-           "errors": errors}
+           "errors": errors, "self_retrain": sr_drift}
     write_atomic(ctx.state_dir / "drift.json", json.dumps(out, default=str))
-    return {"agents": len(health), "halted": sorted(halted), "size_down": sorted(out["size_factor"]),
-            "system_halt": bool(system), "errors": errors}
+    return {"agents": len(health), "self_retrain": len(sr_drift), "halted": sorted(halted),
+            "size_down": sorted(out["size_factor"]), "system_halt": bool(system), "errors": errors}
+
+
+def _self_retrain_drift(ctx: JobContext, errors: dict[str, str]) -> dict[str, Any]:
+    """S5 (plan 2026-11-25 W1-C, SRE review of #456 H1/M2): PSI of inputs and scores of every self-retrain model in
+    shadow or active (research/drift.py `self_retrain_drift`), read-only from aux.db, stored under drift.json
+    `self_retrain` so health watch:drift_watch sees each model id covered. Reported only: never a halt or a size-down
+    (a filter is judged forward by its own demotion rule). A failed read is an error entry, never a missing report."""
+    import sqlite3
+
+    from goldbot.db.connection import db_path
+    from goldbot.research.drift import self_retrain_drift
+    path = db_path(ctx.state_dir, "aux")
+    if not path.exists():
+        return {}
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+        try:
+            return self_retrain_drift(con, ctx.settings.drift)
+        finally:
+            con.close()
+    except Exception as exc:                      # one broken read must not lose the champions' report
+        log.exception("drift_watch: self-retrain models")
+        errors["self_retrain"] = f"{type(exc).__name__}: {exc}"
+        return {}
 
 
 # ---------------------------------------------------------------------------------------------- tournament

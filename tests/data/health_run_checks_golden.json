@@ -441,8 +441,8 @@
   ],
   [
    "secrets",
-   "warn",
-   "optional missing: anthropic-api-key, github-token (python -m goldbot.ops.accounts set <key>)"
+   "ok",
+   "3 keys present; optional missing: anthropic-api-key, github-token (its feature is off) (python -m goldbot.ops.accounts set <key>)"
   ],
   [
    "disk",
@@ -968,8 +968,8 @@
   ],
   [
    "secrets",
-   "warn",
-   "optional missing: anthropic-api-key, github-token (python -m goldbot.ops.accounts set <key>)"
+   "ok",
+   "3 keys present; optional missing: anthropic-api-key, github-token (its feature is off) (python -m goldbot.ops.accounts set <key>)"
   ],
   [
    "disk",

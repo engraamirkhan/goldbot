@@ -2134,6 +2134,39 @@ and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
 
+### Learning liveness, model influence and stop coverage (`learning:<name>`, `watch:<name>`, `model_influence`, `stop_coverage`)
+
+These checks judge learning by what it wrote, not by whether a job ran (plan 2026-11-25 S5). Each learner and
+watcher has its own check. Claude runs every step below; the owner does nothing.
+
+- **`learning:<name>` WARN `0 rows` or `no output for ...`**: a learner that is switched on wrote nothing within its
+  cadence (72 h for the fill-driven cost_cells and arm_lifecycle_verdicts). Read the job (`job:<name>` in
+  `python -m goldbot.ops.run health`) and its log. Then revive the learner, or move it from `LEARNERS` to `RETIRED`
+  (goldbot/ops/checks/learning.py) with its date and reason, recorded in HANDOFF. The WARN becomes a FAIL (Telegram)
+  48 h after the grace start, which is the first deploy at or after 2026-11-26 22:00 UTC. Never switch a learner off
+  just to quiet it: an off learner still WARNs, with its flag.
+- **`learning:<name>` ok `retired <date>: ...`**: deleted from judgement on purpose. To revive it, move it back to
+  `LEARNERS`.
+- **`watch:drift_watch` WARN `watches k of n self-retrain model(s); missing ...`**: drift.json `self_retrain` lacks
+  those model ids. Check `job:drift_watch` and drift.json `errors.self_retrain`. Until it is fixed, drift is blind for
+  those models; demote them if the fix takes longer than the FAIL window.
+- **`model_influence` WARN `0 of N candidates ... scored`**: no model touches a decision. It never FAILs. The fix is a
+  model that passes its gate and an engine path that reads it, never a looser gate. The count is refreshed every
+  15 min.
+- **`self_retrain` WARN `run of <date>: ...`**: a late run, under 50 % of labels used, a broker with 0 labels, or 0
+  active models. These are expected until the label unlock (#451) and sr-v3 land. They are inputs for that work,
+  not engine faults.
+- **`stop_coverage:<account>` FAIL**: an open position has no broker-side stop. An `own` one: the engine re-sends a
+  stop it knows at reconcile; if the FAIL persists, set the stop in MT5 now. A `foreign` one (another magic or a
+  manual trade): the engine never touches it, so set the stop in MT5 on that account now. Treat either as an
+  incident: the broker stop is the one guarantee that survives the brain.
+- **`stop_coverage:<account>` WARN `stop coverage unknown`**: the positions are unreadable, partly listed, or the
+  engine state is stale. Look in MT5 directly until the engine reads again.
+- **Weekly numbers**: `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/learning_kpis.py --state-dir
+  /opt/goldbot/state [--to "2026-11-27 21:00"] [--json]` prints K1 usable rows (broker x class x 9 tf), K2 influence
+  with its money effect, K4 liveness and self-retrain drift. It is read-only, and it goes at the top of the Friday
+  #34 report.
+
 ### needrestart
 
 Health WARN `needrestart` (outage 2026-11-14: unattended-upgrades restarted 12 goldbot units at 06:58 on a
