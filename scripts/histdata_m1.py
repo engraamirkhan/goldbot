@@ -76,10 +76,33 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "raw"
 
 
 # ------------------------------------------------------------------------------------------------------------ parse
-def histdata_to_utc(local: pd.Series) -> pd.Series:
-    """New York local stamps (with DST) -> UTC; the two DST switch hours (Sunday night, market shut) become NaT."""
-    loc = pd.DatetimeIndex(local).tz_localize("America/New_York", ambiguous="NaT", nonexistent="NaT")
+TZ_RULES = ("ny", "eet-7")
+
+
+def histdata_to_utc(local: pd.Series, rule: str = "ny") -> pd.Series:
+    """HistData local stamps -> UTC; the DST switch hours (Sunday night, market shut) become NaT.
+    "ny": New York time with US daylight saving (repo finding 2026-11-01; every year checked to 2008).
+    "eet-7": an EET server clock (UTC+2/+3, EU daylight saving) minus 7 h, i.e. New York-like stamps that switch on
+    the EU dates: the clock check found HistData on this rule in later years (+60 min in the weeks between the US and
+    EU switches: EURUSD 2019-03-11..03-31 and 2019-10-28; XAUUSD 2023 the same). `check` picks the rule per
+    instrument-year from the per-month clock offsets."""
+    if rule == "eet-7":
+        loc = (pd.DatetimeIndex(local) + pd.Timedelta(hours=7)).tz_localize("Europe/Helsinki", ambiguous="NaT",
+                                                                          nonexistent="NaT")
+    else:
+        loc = pd.DatetimeIndex(local).tz_localize("America/New_York", ambiguous="NaT", nonexistent="NaT")
     return pd.Series(loc.tz_convert("UTC").as_unit("ns"), index=local.index)
+
+
+def reconvert(bars: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """A year stored under the "ny" rule re-stamped under `rule` (the New York local stamps are recovered exactly by
+    the inverse conversion), re-sorted, de-duplicated and cut at the holdout again."""
+    local = pd.Series(pd.DatetimeIndex(bars["ts_utc"]).tz_convert("America/New_York").tz_localize(None),
+                      index=bars.index)
+    out = bars.assign(ts_utc=histdata_to_utc(local, rule)).dropna(subset=["ts_utc"])
+    out = out.sort_values("ts_utc", kind="stable").drop_duplicates("ts_utc").reset_index(drop=True)
+    out["visible_at"] = out["ts_utc"] + pd.Timedelta(seconds=60)
+    return drop_holdout(out)[0]
 
 
 def parse_histdata(text: str | bytes, code: str) -> pd.DataFrame:
@@ -411,8 +434,11 @@ def reference_hourly(key: str, year: int, raw: Path) -> tuple[pd.DataFrame, dict
     return ref.reset_index(drop=True), native
 
 
-def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[dict[str, object]]]:
-    key, year, base_s, raw_s = task
+def check_one(task: tuple[str, int, str, str, str]) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Clock check, tz-rule choice and R11 grades of one stored instrument-year. `stored_rule` (from the manifest) is
+    the rule its stamps are in; only a year still on "ny" is tried under "eet-7" (idempotent: a re-run never shifts a
+    re-stamped year twice)."""
+    key, year, base_s, raw_s, stored_rule = task
     base, raw = Path(base_s), Path(raw_s)
     src = history_sources().instruments[key]
     p = year_path(base, key, year)
@@ -424,9 +450,24 @@ def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[
     else:
         cc = ClockCheck(key=key, year=year, offset_min=None, corr_at_offset=None, corr_at_zero=None, hours=0,
                         agree_share=None, agree_tol=None, passed=False, reason="no_reference")
-    quarantined = cc.offset_min is not None and not cc.passed
     offsets = month_offsets(epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"), ref,
                             src.weekend) if len(ref) else {}
+    rule, new_rec = stored_rule, None
+    if stored_rule == "ny" and any(abs(o) > 1 for o in offsets.values()):
+        alt = reconvert(bars, "eet-7")
+        alt_off = month_offsets(epoch_ns_utc(alt["ts_utc"]), alt["bid_close"].to_numpy(dtype="float64"), ref,
+                                src.weekend)
+        if sum(abs(o) > 1 for o in alt_off.values()) < sum(abs(o) > 1 for o in offsets.values()):
+            rule, bars, offsets = "eet-7", alt, alt_off
+            cc = clock_check(key, year, epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"),
+                             ref)
+            sha = _write_parquet(bars, p)
+            new_rec = {"key": key, "year": year, "status": "ok", "tz": "eet-7", "rows": len(bars),
+                       "first": str(bars["ts_utc"].iloc[0]), "last": str(bars["ts_utc"].iloc[-1]),
+                       "parquet": str(p.relative_to(base)), "parquet_sha256": sha, "restamped_by": "check",
+                       "holdout_cut": HOLDOUT_CUT.isoformat(), "at": dt.datetime.now(dt.UTC).isoformat()}
+    bars_raw = bars
+    quarantined = cc.offset_min is not None and not cc.passed
     ref_daily = daily_from_hourly(ref, src.weekend) if len(ref) else None
     grades = []
     month = day_of(bars_raw["ts_utc"], src.weekend).to_period("M")     # the session day's month
@@ -441,16 +482,21 @@ def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[
         dst.parent.mkdir(parents=True, exist_ok=True)
         os.replace(p, dst)
     bad_months = {m: o for m, o in offsets.items() if abs(o) > 1}
-    return {**cc.model_dump(), "quarantined": quarantined, "bad_months": json.dumps(bad_months)}, grades
+    return {**cc.model_dump(), "quarantined": quarantined, "bad_months": json.dumps(bad_months), "tz_rule": rule,
+            "manifest": json.dumps(new_rec) if new_rec else ""}, grades
 
 
 def cmd_check(a: argparse.Namespace) -> int:
     base, raw = Path(a.root) / "histdata_m1", Path(a.root)
-    tasks = [(k, y, str(base), str(raw)) for k in a.keys for y in range(FIRST_YEAR, LAST_YEAR + 1)
-             if year_path(base, k, y).exists()]
+    man = read_manifest(base)
+    tasks = [(k, y, str(base), str(raw), str(man.get((k, y), {}).get("tz", "ny")).replace("America/New_York", "ny"))
+             for k in a.keys for y in range(FIRST_YEAR, LAST_YEAR + 1) if year_path(base, k, y).exists()]
     clocks, tiers = [], []
     with ProcessPoolExecutor(max_workers=a.workers, initializer=_nice) as ex:
         for cc, grades in ex.map(check_one, tasks):
+            m = cc.pop("manifest")
+            if m:
+                append_manifest(base, json.loads(str(m)))     # a year re-stamped under the eet-7 rule
             clocks.append(cc)
             tiers.extend(grades)
             t = pd.Series([g["tier"] for g in grades]).value_counts().to_dict()

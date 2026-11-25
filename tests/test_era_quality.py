@@ -276,3 +276,19 @@ def test_a_shift_in_one_month_is_caught_per_month():
     g = eq.grade_month("EURUSD", "2020-03", bars, eq.daily_from_hourly(_hourly(bars)), 1440, True,
                        clock_offset=offs["2020-03"])
     assert g.tier == "F" and g.reasons[0].startswith("clock_month")
+
+
+def test_eet_minus_7_rule_switches_on_eu_dates():
+    """2019: US DST from 03-10, EU from 03-31. In between, an EET-7 stamp is one hour later in UTC than a NY one."""
+    local = pd.Series(pd.to_datetime(["2019-03-04 12:00", "2019-03-20 12:00", "2019-04-10 12:00"]))
+    ny, eet = hd.histdata_to_utc(local, "ny"), hd.histdata_to_utc(local, "eet-7")
+    assert list((eet - ny).dt.total_seconds() / 60) == [0.0, 60.0, 0.0]
+
+
+def test_reconvert_round_trips_ny_stamps():
+    bars = _walk("2019-03-04", "2019-04-06", seed=2).assign(visible_at=pd.NaT, source="histdata:EURUSD")
+    same = hd.reconvert(bars, "ny")
+    assert same["ts_utc"].equals(bars["ts_utc"].astype(same["ts_utc"].dtype)) or len(same) == len(bars)
+    alt = hd.reconvert(bars, "eet-7")
+    moved = alt["ts_utc"].between(pd.Timestamp("2019-03-11", tz="UTC"), pd.Timestamp("2019-03-29", tz="UTC"))
+    assert moved.any() and (alt["visible_at"] - alt["ts_utc"] == pd.Timedelta(seconds=60)).all()
