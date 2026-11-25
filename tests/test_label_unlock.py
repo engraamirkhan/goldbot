@@ -71,7 +71,10 @@ def test_per_timeframe_quotas_serve_the_slow_timeframes_first_and_share_each_fai
     assert list(got["tf"].iloc[:5]) == ["4h", "4h", "4h", "1h", "1h"]
     one = got[got["tf"] == "1m"]
     assert len(one) == 10 and (one["account_id"] == "a").sum() == 5
-    assert set(fs.TF_QUOTAS) == set(sr.CELL_TFS) and len(sr.CELL_TFS) == 9
+    assert set(fs.TF_QUOTAS) == set(sr.CELL_TFS) - {"1d", "1w"} and len(sr.CELL_TFS) == 9   # 1d/1w: no history
+    small = fs.scaled_quotas(fs.TF_QUOTAS, 600)
+    assert sum(small.values()) <= 600 and all(v >= 1 for v in small.values()) and set(small) == set(fs.TF_QUOTAS)
+    assert fs.scaled_quotas(fs.TF_QUOTAS, 5000) == fs.TF_QUOTAS
     assert len(fs.select_keys(_keys(rows), quotas={"1m": 10, "1h": 2, "4h": 5}, limit=4)) == 4   # the night's cap
 
 
@@ -129,7 +132,7 @@ def test_the_live_feed_audit_admits_an_early_nominal_row_only_when_its_last_day_
     at = START + pd.Timedelta(days=2)
     a = _write(db, arm="A", day=0, k=0, r=1.0, x=_feats(np.random.default_rng(0)), pit="nominal", start=at)
     b = _write(db, arm="A", day=0, k=1, r=1.0, x=_feats(np.random.default_rng(1)), pit="nominal", start=at)
-    ts = pd.date_range(at - pd.Timedelta(days=2), at + pd.Timedelta(hours=1), freq="1min", tz="UTC")
+    ts = pd.date_range(at - pd.Timedelta(days=5), at + pd.Timedelta(hours=1), freq="1min", tz="UTC")
     rank = np.zeros(len(ts), dtype=int)
     rank[(ts > at + pd.Timedelta(minutes=5)) & (ts <= at + pd.Timedelta(minutes=20))] = 1   # a back-fill b reads
     v = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1), "written": False, "rank": rank})
@@ -201,10 +204,46 @@ def test_the_job_records_the_cells_for_sr_v2_and_the_sr_v3_census_in_the_run_det
     assert all(set(c) <= set(sr.CELL_KEYS) for c in d["cells"] + d["cells_sr_v3"])
 
 
-def test_a_snapshot_never_reads_a_sealed_holdout_minute_and_says_so_in_its_feature_version(tmp_path):
-    """Quant R10 (W1-B goldbot/data/holdout_guard): the live store holds 2025-10..2026-09 minutes; the history seed
-    drops them before any frame is built, and the shorter history is tagged."""
+def test_live_feed_audit_excludes_a_backfill_three_days_before_the_decision(db, monkeypatch):
+    """Quant M1 (review of #451): every minute the snapshot read (ENGINE_MINUTES), not only the last day."""
+    from goldbot.research import snapshot_audit as sa
+    at = START + pd.Timedelta(days=4)
+    cid = _write(db, arm="A", day=0, k=0, r=1.0, x=_feats(np.random.default_rng(0)), pit="nominal", start=at)
+    ts = pd.date_range(at - pd.Timedelta(days=5), at, freq="1min", tz="UTC")
+    rank = np.zeros(len(ts), dtype=int)
+    rank[(ts >= at - pd.Timedelta(days=3)) & (ts < at - pd.Timedelta(days=3) + pd.Timedelta(minutes=10))] = 1
+    v = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1), "written": False, "rank": rank})
+    monkeypatch.setattr(sa, "minute_versions", lambda store, **kw: v)
+    got = sa.live_feed_audit(db, object(), before=sr.NOMINAL_FROM, brokers={"icm"}, symbol_of={"icm-probe": "XAUUSD"})
+    assert got["excluded"] == {cid} and got["clean"] == set()
+
+
+def test_a_reselection_never_snapshots_a_decision_outside_its_accounts_read(tmp_path):
+    """Code review HIGH of #451 (its repro): another account dropping out must not hand a loaded account a decision
+    its minutes were never read for (a stale frame stored ok)."""
+    store = Store(tmp_path / "data")
+    store.append("bars_1m_live", _minutes(), source="icm", symbol="XAUUSD")
+    db = Database.open(tmp_path, "aux")
+    t0, t1 = FS_START + pd.Timedelta(days=20), DECISIONS[-1]
+    _cand(db, "a4h", t0, tf="4h")
+    _cand(db, "b4h", t0, account="vantage-x", tf="4h")
+    _cand(db, "a1h", t1, tf="1h")
+    fs.snapshot_pending(db, store, broker_of={"icm-probe": "icm", "vantage-x": "vantage"},
+                        symbol_of={"icm-probe": "XAUUSD", "vantage-x": "XAUUSD+"},
+                        as_of=FS_START + pd.Timedelta(days=40), quotas={"4h": 2, "1h": 5}, max_decisions=2)
+    with db.connection() as conn:
+        got = conn.execute("SELECT candidate_id, decision_ns, available_utc_max_ns FROM exploration_feature_snapshots "
+                           "WHERE status = 'ok'").fetchall()
+    assert got
+    for _cid, dec, avail in got:          # the frame's last bar is at most one 4h bar before its decision
+        assert int(dec) - int(avail) <= pd.Timedelta(hours=4).value
+
+
+def test_a_snapshot_decided_inside_the_holdout_is_refused_and_one_after_it_reads_the_engines_full_memory(tmp_path):
+    """ADR 0100 (quant ruling on #451): holdout minutes only as the engine's lookback of a post-holdout decision; the
+    stored row equals engine.frames.frame on the same minutes; a decision inside the holdout is refused."""
     from goldbot.data import holdout_guard
+    from tests.test_feature_snapshots_pit import _engine_row
     shift = pd.Timedelta(days=30)
     m = _minutes()
     m["ts_utc"], m["visible_at"] = m["ts_utc"] - shift, m["visible_at"] - shift
@@ -212,22 +251,66 @@ def test_a_snapshot_never_reads_a_sealed_holdout_minute_and_says_so_in_its_featu
     store = Store(tmp_path / "data")
     store.append("bars_1m_live", m, source="icm", symbol="XAUUSD")
     db = Database.open(tmp_path, "aux")
-    at = DECISIONS[0] - shift
-    _cand(db, "c", at)
-    seen: list[pd.DataFrame] = []
-    real = fs.decision_features
-
-    def spy(minutes: pd.DataFrame, tf: str, when: pd.Timestamp, **kw: Any) -> Any:
-        seen.append(minutes)
-        return real(minutes, tf, when, **kw)
-    import pytest as _p
-    with _p.MonkeyPatch.context() as mp:
-        mp.setattr(fs, "decision_features", spy)
-        rep = fs.snapshot_pending(db, store, broker_of={"icm-probe": "icm"}, symbol_of={"icm-probe": "XAUUSD"},
-                                  as_of=at + pd.Timedelta(days=1), quotas=fs.TF_QUOTAS)
-    assert rep["written"] == 1 and rep["holdout_cut"]["icm-probe"] > 0
-    assert seen and not holdout_guard.in_holdout(seen[0]).any()
+    after = DECISIONS[0] - shift
+    inside = holdout_guard.HOLDOUT_END - pd.Timedelta(days=2)
+    _cand(db, "after", after)
+    _cand(db, "inside", inside)
+    fs.snapshot_pending(db, store, broker_of={"icm-probe": "icm"}, symbol_of={"icm-probe": "XAUUSD"},
+                        as_of=after + pd.Timedelta(days=1), quotas=fs.TF_QUOTAS)
     with db.connection() as conn:
-        version = conn.execute("SELECT v.feature_version FROM exploration_feature_snapshots s JOIN "
-                               "exploration_feature_vectors v ON v.sha256 = s.vector_sha256").fetchone()[0]
-    assert str(version).endswith(fs.HOLDOUT_CUT_TAG)
+        st = dict(conn.execute("SELECT candidate_id, status || ':' || COALESCE(detail, '') "
+                               "FROM exploration_feature_snapshots").fetchall())
+    assert st["inside"] == "error:HoldoutSealed" and st["after"].startswith("ok")
+    row: dict[Any, Any] = fs.read_snapshots(db).loc["after"].astype(float).to_dict()
+    engine = _engine_row(m, "1h", after)
+    assert set(engine) <= set(row)
+    for k, v in engine.items():
+        assert (v is None and pd.isna(row[k])) or np.isclose(float(row[k]), v, rtol=1e-9, atol=1e-12), k
+
+
+def test_icm_admitted_ids_are_identical_with_and_without_symbol_of(db, monkeypatch):
+    """Quant ruling (1) on #451: the vantage symbol fix is a bug fix inside sr-v2; icm's admission is unchanged."""
+    from goldbot.research import snapshot_audit as sa
+    at = sr.NOMINAL_FROM + pd.Timedelta(days=2)
+    ids = [_write(db, arm="A", day=0, k=k, r=1.0, x=_feats(np.random.default_rng(k)), pit="nominal", start=at)
+           for k in range(3)]
+    ts = pd.date_range(at - pd.Timedelta(days=3), at + pd.Timedelta(hours=2), freq="1min", tz="UTC")
+    v = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1), "written": True, "rank": 0})
+    seen: list[str] = []
+
+    def versions(store: Any, **kw: Any) -> pd.DataFrame:
+        seen.append(kw["symbol"])
+        return v
+    monkeypatch.setattr(sa, "minute_versions", versions)
+    a = sa.audit(db, object(), since=sr.NOMINAL_FROM)
+    b = sa.audit(db, object(), since=sr.NOMINAL_FROM, symbol_of={"icm-probe": "XAUUSD", "vantage-demo": "XAUUSD+"})
+    assert a["clean"] == b["clean"] == set(ids) and seen == ["XAUUSD", "XAUUSD"]
+
+
+def test_reference_minutes_older_than_a_day_are_counted_in_sr_v2_and_excluded_from_sr_v3(db, monkeypatch):
+    """Quant H2 of #451: sr-v2's remaining exposure is counted every run (nominal_rank3_beyond_24h)."""
+    from goldbot.research import snapshot_audit as sa
+    at = sr.NOMINAL_FROM + pd.Timedelta(days=2)
+    cid = _write(db, arm="A", day=0, k=0, r=1.0, x=_feats(np.random.default_rng(0)), pit="nominal", start=at)
+    ts = pd.date_range(sa.STAMPS_FROM, at, freq="1min", tz="UTC")
+    rank = np.where((ts >= at - pd.Timedelta(days=2)) & (ts < at - pd.Timedelta(days=2) + pd.Timedelta(minutes=5)),
+                    3, 0)
+    v = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1), "written": rank == 0, "rank": rank})
+    monkeypatch.setattr(sa, "minute_versions", lambda store, **kw: v)
+    got = sa.audit(db, object(), since=sr.NOMINAL_FROM)
+    assert got["clean"] == {cid} and got["rank3_beyond_24h"] == {cid}
+    cut = at + pd.Timedelta(days=2)
+    rows, c = sr.load_rows(db, broker="icm", cutoff=cut, holdout=None, nominal_ok=got["clean"],
+                           rank3_beyond_24h=got["rank3_beyond_24h"])
+    assert len(rows) == 1 and c["nominal_rank3_beyond_24h"] == 1
+    rows, c = sr.load_rows(db, broker="icm", cutoff=cut, holdout=None, nominal_ok=got["clean"], spec=sr.SR_V3,
+                           rank3_beyond_24h=got["rank3_beyond_24h"])
+    assert rows.empty and c["nominal_rank3_beyond_24h"] == 1
+
+
+def test_the_duplicate_bar_share_counts_an_arms_bars_decided_on_two_accounts():
+    at = pd.Timestamp("2026-11-20 10:00", tz="UTC")
+    rows = pd.DataFrame({"tf": ["15m"] * 4, "account_id": ["icm-demo", "icm-probe", "icm-demo", "icm-demo"],
+                         "decision_utc": [at, at + pd.Timedelta(seconds=3), at + pd.Timedelta(minutes=15),
+                                          at + pd.Timedelta(minutes=30)]})
+    assert sr.dup_bar_share(rows) == 0.5

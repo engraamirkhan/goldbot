@@ -123,9 +123,9 @@ def main() -> None:
         last = pd.Timestamp(int(mine["decision_ns"].max()), tz="UTC")
         pit = minute_versions(store, account_id=account, broker=broker, symbol=symbol,
                               start=first - pd.Timedelta(days=READ_DAYS), end=last, as_of=now)
-        # quant R10: never read sealed-holdout minutes (added after the 2026-11-25 run, whose 100-day snapshot seed
-        # reached into Aug-Sep 2026; disclosed in the prereg amendment section 6)
-        pit = holdout_guard.cut(pit, what=f"revision audit snapshot seed of {account}")
+        # ADR 0100: holdout minutes only as the engine's lookback of post-holdout decisions (the decisions here are
+        # 2026-11-17..11-24); a decision inside the holdout is refused
+        holdout_guard.refuse(pd.DatetimeIndex(pd.to_datetime(mine["decision_ns"], utc=True)), what="audit decisions")
         nom = strip(pit)
         for tf, dec_ns in zip(mine["tf"].astype(str), mine["decision_ns"].astype("int64"), strict=True):
             at = pd.Timestamp(int(dec_ns), tz="UTC")

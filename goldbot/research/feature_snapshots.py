@@ -70,12 +70,12 @@ MAX_ATTEMPTS = 3               # nights a too-short history is retried before in
 RETRY_AFTER = pd.Timedelta(hours=12)              # at most one attempt per candidate a night
 ACCOUNT_RETRY_AFTER = pd.Timedelta(days=1)        # an account with no bars / not configured: tried again after this
 MINUTE_NS = 60_000_000_000
-HOLDOUT_CUT_TAG = "|holdout-cut"   # feature_version suffix: the history read had sealed-holdout minutes removed
 GOLD = "XAUUSD"
 # decision bars a night per timeframe, slowest first (label unlock 2026-11-25; the nine timeframes of
-# self_retrain.CELL_TFS). About 1,050 a night at about 0.6 s each (brain, measured 2026-11-25) is about 11 min
-TF_QUOTAS: dict[str, int] = {"1w": 50, "1d": 50, "4h": 100, "2h": 100, "1h": 150, "30m": 100, "15m": 200,
-                             "5m": 150, "1m": 150}
+# self_retrain.CELL_TFS). 950 a night at 0.46 s median each (brain, measured 2026-11-25) is about 7-8 min
+TF_QUOTAS: dict[str, int] = {"4h": 100, "2h": 100, "1h": 150, "30m": 100, "15m": 200, "5m": 150, "1m": 150}
+# 1d / 1w have no quota: ENGINE_MINUTES (about 65 trading days) never holds MIN_BARS daily bars (a closed-HTF-bar store
+# would seed them, W3-3). The quotas sum to 950; `scaled_quotas` fits them to the configured nightly cap
 DEFAULT_TF_QUOTA = 50          # a timeframe not named above
 SNAPSHOT_BUDGET = pd.Timedelta(minutes=25)
 QUIET_FROM, QUIET_TO = pd.Timedelta(minutes=45), pd.Timedelta(hours=4, minutes=5)   # UTC time of day: research window
@@ -179,6 +179,16 @@ def select_keys(keys: pd.DataFrame, *, quotas: Mapping[str, int] | None, limit: 
     return pd.concat(parts, ignore_index=True).head(limit) if parts else keys.iloc[0:0]
 
 
+def scaled_quotas(quotas: Mapping[str, int], cap: int) -> dict[str, int]:
+    """`quotas` scaled down in proportion so they sum to at most `cap` (each at least 1); unchanged when they fit. So a
+    cap below the quotas' sum (settings snapshot_max_decisions 600) still serves every timeframe, never only the slow
+    ones."""
+    total = sum(quotas.values())
+    if total <= cap:
+        return dict(quotas)
+    return {tf: max(1, int(q * cap // total)) for tf, q in quotas.items()}
+
+
 def snapshot_deadline(start: pd.Timestamp) -> pd.Timestamp | None:
     """When a snapshot night started at `start` must stop: start + SNAPSHOT_BUDGET, never past the research window's
     start (00:45 UTC); None when `start` is inside that window (00:45-04:05 UTC: no snapshot work then)."""
@@ -242,12 +252,12 @@ def snapshot_pending(db: Database, store: Any, *, broker_of: Mapping[str, str], 
                      clock: Callable[[], pd.Timestamp] | None = None) -> dict[str, Any]:
     """Snapshot the gold candidates that have none: at most `max_decisions` decision bars (per timeframe at most its
     `quotas` entry when given), shared between the accounts that may be read (`select_keys`); one snapshot per
-    decision bar. Each account's stored minute versions over its chosen decisions are read once (visible by `as_of`)
+    decision bar. Each account's stored minute versions over all its pending decisions are read once (visible by `as_of`)
     and resolved at each decision (`decision_features`). Stops at `deadline` (by `clock`, default now)."""
     as_of = pd.Timestamp(as_of).tz_convert("UTC")
     now = clock or (lambda: pd.Timestamp.now(tz="UTC"))
     out: dict[str, Any] = {"written": 0, "decisions": 0, "status": {}, "no_bars": [], "unknown_account": [],
-                           "deferred": [], "stopped": None, "holdout_cut": {}}
+                           "deferred": [], "stopped": None}
     todo = _pending(db, as_of, instruments)
     if todo.empty:
         return out
@@ -264,36 +274,28 @@ def snapshot_pending(db: Database, store: Any, *, broker_of: Mapping[str, str], 
     # one key per decision bar: (account, tf, decision minute), at its earliest decision
     todo = todo.assign(_bar=todo["decision_ns"].astype("int64") // MINUTE_NS)
     bars = todo.groupby(["account_id", "tf", "_bar"])["decision_ns"].min().reset_index()
-    # accounts with no bars are found before the batch is shared, so they never take a healthy account's turns; only
-    # the minutes the chosen decisions need are read
+    # accounts with no bars are found before the batch is shared, so they never take a healthy account's turns. Each
+    # account is read over the WHOLE range of its pending decisions before any is chosen (code review of #451: a
+    # re-selection could hand an account decisions outside a narrower read, built from stale minutes and stored ok)
     minutes_of: dict[str, pd.DataFrame] = {}
-    while True:
-        keys = select_keys(bars[["account_id", "tf", "decision_ns", "_bar"]], quotas=quotas, limit=max_decisions)
-        fresh = sorted(set(keys["account_id"].astype(str)) - set(minutes_of))
-        for account in fresh:
-            part = keys[keys["account_id"].astype(str) == account]
-            first = pd.Timestamp(int(part["decision_ns"].min()), tz="UTC")
-            last = pd.Timestamp(int(part["decision_ns"].max()), tz="UTC")
-            minutes = minute_versions(store, account_id=account, broker=broker_of[account],
-                                      symbol=symbol_of.get(account, GOLD), start=first - pd.Timedelta(days=READ_DAYS),
-                                      end=last, as_of=as_of)
-            # quant R10 (W1-B holdout_guard): the live store holds 2025-10-01..2026-09-30 minutes; a research read
-            # never sees them. A snapshot whose window reached them is tagged HOLDOUT_CUT_TAG (a shorter history
-            # than the engine's: train/serve skew until the window clears the holdout, about January 2027)
-            n0 = len(minutes)
-            minutes = holdout_guard.cut(minutes, what=f"feature snapshot history of {account}")
-            if len(minutes) < n0:
-                out["holdout_cut"][account] = n0 - len(minutes)
-            if minutes.empty:
-                out["no_bars"].append(account)
-                _defer(db, account, "no_bars", as_of)
-                log.warning("no 1m bars for %s: its candidates get feature snapshots after %s", account,
-                            as_of + ACCOUNT_RETRY_AFTER)
-                bars = bars[bars["account_id"].astype(str) != account]
-                continue
-            minutes_of[account] = minutes
-        if set(keys["account_id"].astype(str)) <= set(minutes_of):
-            break
+    for key, part in todo.groupby("account_id", sort=True):
+        account = str(key)
+        first = pd.Timestamp(int(part["decision_ns"].min()), tz="UTC")
+        last = pd.Timestamp(int(part["decision_ns"].max()), tz="UTC")
+        # ADR holdout-lookback-warmup: holdout minutes are read only as lookback of a decision on/after HOLDOUT_END
+        # (the engine's own memory); a decision inside the holdout is refused below
+        minutes = minute_versions(store, account_id=account, broker=broker_of[account],
+                                  symbol=symbol_of.get(account, GOLD), start=first - pd.Timedelta(days=READ_DAYS),
+                                  end=last, as_of=as_of)
+        if minutes.empty:
+            out["no_bars"].append(account)
+            _defer(db, account, "no_bars", as_of)
+            log.warning("no 1m bars for %s: its candidates get feature snapshots after %s", account,
+                        as_of + ACCOUNT_RETRY_AFTER)
+            continue
+        minutes_of[account] = minutes
+    bars = bars[bars["account_id"].astype(str).isin(set(minutes_of))]
+    keys = select_keys(bars[["account_id", "tf", "decision_ns", "_bar"]], quotas=quotas, limit=max_decisions)
     for account, tf, dec_ns, bar in zip(keys["account_id"].astype(str), keys["tf"].astype(str),
                                         keys["decision_ns"].astype("int64"), keys["_bar"].astype("int64"),
                                         strict=True):
@@ -306,10 +308,8 @@ def snapshot_pending(db: Database, store: Any, *, broker_of: Mapping[str, str], 
         snap: Snapshot | None = None
         detail: str | None = None
         try:
+            holdout_guard.refuse(pd.DatetimeIndex([at]), what="feature snapshot decision")   # recorded as error
             snap = decision_features(minutes_of[account], tf, at)
-            if snap is not None and account in out["holdout_cut"] and \
-                    at - pd.Timedelta(days=READ_DAYS) < holdout_guard.HOLDOUT_END:
-                snap = snap.model_copy(update={"feature_version": snap.feature_version + HOLDOUT_CUT_TAG})
             st = "ok" if snap is not None else "insufficient_bars"
         except Exception as exc:   # noqa: BLE001 - one bar's failure is recorded; the others go on
             log.exception("feature snapshot of %s %s at %s failed", account, tf, at)
@@ -395,5 +395,6 @@ def shuffled_label_auc(X: pd.DataFrame, y: np.ndarray, *, seed: int = 0, columns
 
 
 __all__ = ["ACCOUNT_RETRY_AFTER", "ENGINE_MINUTES", "FEATURE_WINDOW", "MAX_ATTEMPTS", "SNAPSHOT_BUDGET", "TF_QUOTAS",
+           "scaled_quotas",
            "Snapshot", "coverage", "decision_features", "label_auc", "read_snapshots", "select_keys",
            "shuffled_label_auc", "snapshot_deadline", "snapshot_pending", "snapshot_pit"]

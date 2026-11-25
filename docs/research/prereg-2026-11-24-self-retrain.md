@@ -119,6 +119,10 @@ fails the run.
   counts.
 - Backlog 267 moves the count into the snapshot writer itself.
 
+*Bug fix 2026-11-25 (PR #451, quant ruling): the audit reads each account's own store symbol (vantage-demo: XAUUSD+).
+It had read XAUUSD and excluded every vantage nominal snapshot. The admission criterion is unchanged. The judged set
+and icm's admitted ids are unchanged at both the 11-24 and 11-29 cutoffs. No K, no chain reset.*
+
 **Correction to the sr-v1 / early sr-v2 text.** Earlier drafts said that from 2026-11-15 "every minute of the last day
 before a decision carries its write time". That is false. Release minutes, from the reference feed the engine loads
 after a restart, never get a write stamp, so a date alone proves nothing. The per-candidate audit replaces that claim.
@@ -132,8 +136,9 @@ as `feature_snapshots.py` and the history research do.
 - Restart windows are voided (`evidence_exclusions`) or held out (`held_out`).
 - The DB CHECK keeps `available_utc_max_ns <= decision_ns`.
 
-**Residual risk.** A minute more than a day old revised after the decision with no stamp. Its effect on 40 features
-built mostly from recent bars is small, and it falls the same on both sides of the gate.
+**Residual risk.** Measured 2026-11-25 (prereg amendment §6): back-filled minutes days old move the long-window
+volatility features materially. The exposure left in sr-v2 is reference (rank-3) minutes older than 24 h, counted every
+run as `nominal_rank3_beyond_24h`. Rows with any such minute are excluded from sr-v3.
 
 **Capped book days (quant S1).** A book whose replay records of refused arms reached the daily cap journals
 `exploration_replay_cap` (PR #435). After that the rest of its day is not recorded. **Every row of that (account, UTC

@@ -55,8 +55,8 @@ These numbers are fixed here and are not revised after the audit is seen. A fail
 
 ## 3. What sr-v3 admits
 
-- **Broker passed:** a nominal snapshot decided before 2026-11-15 is admitted when, in [decision - 24 h, decision],
-  every minute it read in the nominal view came from the live feed (rank 0): no broker-M1 back-fill (rank 1-2, written
+- **Broker passed:** a nominal snapshot decided before 2026-11-15 is admitted when, over every minute the snapshot
+  read (the ENGINE_MINUTES window), every minute in the nominal view came from the live feed (rank 0): no broker-M1 back-fill (rank 1-2, written
   by the nightly reconcile, often after the decision) and no reference minute (rank 3, never stamped). This check
   needs no write stamp, so it can be run on the old rows. Snapshots decided on or after 2026-11-15 keep sr-v2's
   per-candidate audit (every minute of the last 24 h written).
@@ -81,6 +81,11 @@ decision", which means the account's minutes), or an sr-v3 change.
   n control). Eligibility already uses counts only, so the judged set is unchanged.
 - **Horizon embargo.** A training row must be decided at least max(1 day, the arm's longest horizon) before the
   test block's first decision (sr-v2: 1 day, too short for multi-day holds).
+- **One bar, one row in the gates (quant M2).** Duplicate decision bars across accounts on one feed (icm-demo and
+  icm-probe) count once in the MIN_TRAIN / MIN_OOS / MIN_KEPT / MIN_OOS_DAYS gates. Labels on one bar are averaged
+  into one row. sr-v2 reports the share per arm as `dup_bar_share` (0 K).
+- **Stale reference minutes out (quant H2).** A nominal row that read a reference (rank-3) minute stamped-era old
+  (ts in [2026-11-13, decision - 24 h)) is excluded; sr-v2 counts them as `nominal_rank3_beyond_24h`.
 - **Labels unchanged.** No label definition changes, so r2 stays the target and no r3 is written; the sr-v2 chain
   is not reset.
 
@@ -124,13 +129,14 @@ only, no label value read):
 The fix gives vantage admitted rows, but every one is a control row, so no vantage arm can be fitted. Vantage reads
 **insufficient** in every run until a vantage strategy arm records gold candidates.
 
-**Holdout disclosure (quant R10, ruled the same day).** The S half of this audit built snapshots from 100 days of
-minutes before each decision (11-17..11-24), so its history seed read minutes from August and September 2026, inside
-the sealed holdout. Only feature values computed from prices were read; no label, return or outcome. The nightly
-snapshot job has read the same window for every snapshot since 2026-11-13. From this PR on, the job and both audits
-drop holdout minutes (`holdout_guard.cut`), and a snapshot whose window reached them is tagged
-`feature_version ...|holdout-cut`. The quant must rule on the stored snapshots built before the cut: keep them, or
-refuse them, which would leave 0 usable rows until about January 2027.
+**Holdout (quant ruling on PR #451, ADR 0100).** The S half of this audit and every snapshot since 2026-11-13 read
+minutes from August and September 2026, inside the sealed holdout, as the engine's lookback of post-holdout decisions.
+Ruling: **keep** the stored snapshots; the snapshot history is **not** cut; the holdout window is unchanged. A holdout
+minute may be read only as lookback input to a feature at a decision on/after 2026-10-01 whose label lies wholly
+after it, never as a decision, label, outcome, or in any selection or threshold statistic. Self-retrain models are
+forward-only and never scored on the holdout. Any model trained on rows decided before 2027-01-08 that is ever scored
+on the holdout excludes 2026-06-23..2026-09-30 from that score. A snapshot decision inside the holdout is refused. The
+overlap is one-off and ends about 2027-01-08 (not an owner decision; reported on #34 as information).
 
 What still unlocks rows: the vantage audit-symbol fix (item 4), the per-timeframe quotas (slow timeframes no longer
 wait behind the 1m backlog), and time: every new candidate gets a strictly written snapshot once its 90,000 trailing

@@ -126,7 +126,7 @@ Status = Literal["active", "shadow", "demoted", "superseded"]
 # the nine decision timeframes every run reports a cell for (label unlock 2026-11-25), whether or not a row exists
 CELL_TFS: tuple[str, ...] = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 # what a non-judged arm's read may carry under quant Q2 (counts, never an outcome)
-COUNT_KEYS: tuple[str, ...] = ("n_oos", "n_kept", "n_days", "n_control", "n_rows")
+COUNT_KEYS: tuple[str, ...] = ("n_oos", "n_kept", "n_days", "n_control", "n_rows", "dup_bar_share")
 # the funnel of one (broker, class, timeframe) cell: counts only, never a label value
 FUNNEL: tuple[str, ...] = ("labels", "capped_day", "open_horizon", "no_snapshot", "nominal_not_audited_clean",
                            "with_features", "nominal", "controls")
@@ -143,12 +143,14 @@ class Spec(FrozenRecord):
     nominal_early_brokers: tuple[str, ...] = ()
     oos_judged_only: bool = False        # quant Q2: OOS outcomes are computed only for the run's judged pairs
     horizon_embargo: bool = False        # embargo = max(EMBARGO, the arm's longest horizon)
+    # quant H2 of #451: a nominal row that read a reference (rank-3) minute older than 24 h in the stamped era is out
+    exclude_rank3_beyond_24h: bool = False
 
 
 SR_V2 = Spec(version=SPEC_VERSION, nominal_from=NOMINAL_FROM)
 # the audit result fills nominal_early_brokers (prereg amendment section 6); () = sr-v2's admission for every broker
 SR_V3 = Spec(version="sr-v3", nominal_from=NOMINAL_FROM, nominal_early_brokers=(), oos_judged_only=True,
-             horizon_embargo=True)
+             horizon_embargo=True, exclude_rank3_beyond_24h=True)
 
 
 class LogitModel(FrozenRecord):
@@ -272,8 +274,8 @@ def _snapshots(db: Database, nominal_from: pd.Timestamp | None = NOMINAL_FROM) -
 
 def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
               held_out: Collection[str] = (), instruments: Mapping[str, str] | None = None,
-              nominal_ok: Collection[str] = (), capped: Collection[tuple[str, str]] = (), spec: Spec = SR_V2
-              ) -> tuple[pd.DataFrame, dict[str, Any]]:
+              nominal_ok: Collection[str] = (), capped: Collection[tuple[str, str]] = (), spec: Spec = SR_V2,
+              rank3_beyond_24h: Collection[str] = ()) -> tuple[pd.DataFrame, dict[str, Any]]:
     """(rows, counts): the broker's gold candidates with an r2 label and a full horizon by `cutoff` and an admitted
     snapshot (module docstring step 1). A nominal snapshot is admitted only when the audit found it clean
     (`nominal_ok`, research/snapshot_audit.py; quant S5). Every row of an (account, UTC day) the engine journalled
@@ -308,6 +310,11 @@ def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple
     tf_snap = _tf_counts(rows["tf"].astype(str)) if len(rows) else {}
     ok = set(nominal_ok)
     rows = rows[(rows["_pit"] == "written") | rows["candidate_id"].isin(ok)].reset_index(drop=True)
+    r3 = rows["candidate_id"].isin(set(rank3_beyond_24h)) & (rows["_pit"] == "nominal") if len(rows) else \
+        pd.Series(dtype=bool)
+    n_rank3 = int(r3.sum()) if len(rows) else 0
+    if spec.exclude_rank3_beyond_24h and n_rank3:
+        rows = rows[~r3.to_numpy()].reset_index(drop=True)
     if len(rows) and (rows["_avail_ns"].notna() & (rows["_avail_ns"] > rows["_snap_decision_ns"])).any():
         raise ValueError("self-retrain: a snapshot available after its decision (look-ahead): refused")
     with db.connection() as conn:      # prereg amendment (quant review of #442): never labelled, counted here
@@ -320,7 +327,8 @@ def load_rows(db: Database, *, broker: str, cutoff: pd.Timestamp, holdout: tuple
               "with_features": int(len(rows)), "no_snapshot": int(len(obs) - n_snap),
               "nominal_not_audited_clean": int(n_snap - len(rows)),
               "nominal": int((rows["_pit"] == "nominal").sum()) if len(rows) else 0,
-              "controls": int(rows["is_control"].sum()) if len(rows) else 0}
+              "controls": int(rows["is_control"].sum()) if len(rows) else 0,
+              "nominal_rank3_beyond_24h": n_rank3}
     tf_rows = rows["tf"].astype(str) if len(rows) else pd.Series(dtype=str)
     by_tf: dict[str, dict[str, int]] = {}
     for tf in sorted(set(tf_all) | set(CELL_TFS)):
@@ -477,6 +485,17 @@ def oos_metrics(oos: pd.DataFrame, control: pd.DataFrame, *, seed: int = SEED, b
                   "boot_no_kept": int((nk == 0).sum())}
 
 
+def dup_bar_share(arm_rows: pd.DataFrame) -> float | None:
+    """Share of an arm's rows whose (tf, decision minute) the arm also decided on another account of the broker
+    (icm-demo and icm-probe read one live feed: quant M2 of #451, reported, 0 K). None without rows."""
+    if arm_rows.empty or "account_id" not in arm_rows:
+        return None
+    bar = pd.to_datetime(arm_rows["decision_utc"], utc=True).dt.floor("1min")
+    key = arm_rows["tf"].astype(str) + "|" + bar.astype(str)
+    accounts = arm_rows.groupby(key)["account_id"].transform("nunique")
+    return float((accounts > 1).mean())
+
+
 def count_metrics(oos: pd.DataFrame, control: pd.DataFrame) -> dict[str, Any]:
     """The label-blind part of an arm's OOS read (quant Q2): row, kept, day and control counts, no outcome."""
     n = len(oos)
@@ -594,6 +613,7 @@ def read_arms(rows: pd.DataFrame, *, named_controls: Mapping[str, str], rules: M
         ctrl = control_rows(rows, arm, named=named_controls, since=since, rules=rules)
         m = count_metrics(oos, ctrl) if spec.oos_judged_only else oos_metrics(oos, ctrl, boot=boot)
         m["n_rows"] = int(len(ar))
+        m["dup_bar_share"] = dup_bar_share(ar)
         y = (ar["label_sim_r"].to_numpy(dtype=float) > 0).astype(int)
         model = fit_logit(design(ar), y) if len(ar) >= MIN_TRAIN and len(set(y.tolist())) == 2 else None
         act = (active or {}).get(arm)
@@ -618,7 +638,7 @@ def complete_judged(reads: Sequence[dict[str, Any]]) -> list[tuple[str, str]]:
         for a, v in rd["arms"].items():
             if (str(rd["broker"]), a) in judged and "_oos" in v:
                 v["metrics"] = oos_metrics(v["_oos"], v["_control"], boot=int(v["_boot"])) | {
-                    "n_rows": v["metrics"]["n_rows"]}
+                    k: v["metrics"][k] for k in ("n_rows", "dup_bar_share")}
     return judged
 
 
@@ -626,10 +646,12 @@ def compute_broker(db: Database, *, broker: str, cutoff: pd.Timestamp,
                    holdout: tuple[pd.Timestamp, pd.Timestamp] | None, named_controls: Mapping[str, str],
                    rules: Mapping[str, Mapping[str, Any]], held_out: Collection[str] = (),
                    instruments: Mapping[str, str] | None = None, nominal_ok: Collection[str] = (),
-                   capped: Collection[tuple[str, str]] = (), spec: Spec = SR_V2) -> dict[str, Any]:
+                   capped: Collection[tuple[str, str]] = (), spec: Spec = SR_V2,
+                   rank3_beyond_24h: Collection[str] = ()) -> dict[str, Any]:
     """One broker's reads (nothing written)."""
     rows, counts = load_rows(db, broker=broker, cutoff=cutoff, holdout=holdout, held_out=held_out,
-                             instruments=instruments, nominal_ok=nominal_ok, capped=capped, spec=spec)
+                             instruments=instruments, nominal_ok=nominal_ok, capped=capped, spec=spec,
+                             rank3_beyond_24h=rank3_beyond_24h)
     active = active_models(db, broker)
     arms = read_arms(rows, named_controls=named_controls, rules=rules, cutoff=cutoff, active=active,
                      passes=previous_passes(db, broker, cutoff), spec=spec)
@@ -783,7 +805,8 @@ def apply(db: Database, read: Mapping[str, Any], decisions: Mapping[tuple[str, s
                            "reactivation_candidate": d["status"] == "active",
                            "p_holm": d["p_holm"], "previous": d["previous"], "forward": v["forward"],
                            "confirm": v["confirm"],
-                           **{k: v["metrics"].get(k) for k in ("n_rows", "n_oos", "n_kept", "auc", "edge_vs_nomodel",
+                           **{k: v["metrics"].get(k) for k in ("n_rows", "dup_bar_share", "n_oos", "n_kept", "auc",
+                                                                "edge_vs_nomodel",
                                                                 "edge_vs_control", "edge_gross", "edge_r1",
                                                                 "p_nomodel", "p_control", "boot_no_kept")}}
         # an active model whose arm had no rows this run is demoted: it is never left active unjudged

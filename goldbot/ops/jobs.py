@@ -378,7 +378,7 @@ def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     db = Database.open(ctx.state_dir, "aux")
     rep = fs.snapshot_pending(db, ctx.store, broker_of={acc.account_id: acc.broker for acc in ctx.accounts},
                               symbol_of=gold_symbols(ctx.accounts), as_of=slot, max_decisions=e.snapshot_max_decisions,
-                              quotas=fs.TF_QUOTAS, deadline=deadline)
+                              quotas=fs.scaled_quotas(fs.TF_QUOTAS, e.snapshot_max_decisions), deadline=deadline)
     rep["coverage_1d"] = fs.coverage(db, since=slot - pd.Timedelta(days=1))
     return rep
 
@@ -1963,10 +1963,11 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         symbol_of = gold_symbols(ctx.accounts)      # vantage: XAUUSD+ (label unlock: never the XAUUSD default)
         audited = audit(db, ctx.store, since=sr.NOMINAL_FROM, symbol_of=symbol_of)
         nominal_ok: set[str] = set(audited["clean"])
+        rank3: set[str] = set(audited.get("rank3_beyond_24h", set()))      # quant H2 of #451: counted every run
         audit_counts: dict[str, Any] = audited["counts"]
     except Exception as exc:       # noqa: BLE001 - written-pit rows only this run, reported
         log.warning("self-retrain: nominal snapshot audit failed (%s): no nominal snapshot admitted", type(exc).__name__)
-        nominal_ok, audit_counts = set(), {"error": type(exc).__name__}
+        nominal_ok, audit_counts, rank3 = set(), {"error": type(exc).__name__}, set()
     early_ok: set[str] = set()
     if sr.SR_V3.nominal_early_brokers:      # the sr-v3 census only (counts): early rows of a broker that passed
         try:
@@ -1983,7 +1984,7 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         try:                       # one broker's failure never skips another's read
             rd = sr.compute_broker(db, broker=broker, cutoff=cutoff, holdout=ctx.settings.research.holdout_window(),
                                    named_controls=controls, rules=rules, held_out=held, nominal_ok=nominal_ok,
-                                   capped=capped)
+                                   capped=capped, rank3_beyond_24h=rank3)
             reads.append(rd)
         except Exception as exc:   # noqa: BLE001 - recorded: health WARNs on a failed run
             log.exception("self-retrain failed for broker %s", broker)
@@ -1996,7 +1997,8 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             rd["cells"] = sr.cells(db, broker=broker, by_tf=rd["counts"].get("by_tf", {}))
             if sr.SR_V3.nominal_early_brokers:
                 _, c3 = sr.load_rows(db, broker=broker, cutoff=cutoff, holdout=ctx.settings.research.holdout_window(),
-                                     held_out=held, nominal_ok=nominal_ok | early_ok, capped=capped, spec=sr.SR_V3)
+                                     held_out=held, nominal_ok=nominal_ok | early_ok, capped=capped, spec=sr.SR_V3,
+                                     rank3_beyond_24h=rank3)
                 rd["cells_sr_v3"] = sr.cells(db, broker=broker, by_tf=c3["by_tf"], spec=sr.SR_V3)
             else:                  # the same admission as sr-v2 while no broker passed the revision audit
                 rd["cells_sr_v3"] = [c | {"spec": sr.SR_V3.version} for c in rd["cells"]]
