@@ -121,6 +121,9 @@ RHO_DAY = 0.25
 MIN_GATE_POWER = 0.5
 MIN_JOINT_POWER = 0.25
 N_EFF_FLOOR = 200.0
+# the longest hold of any replayed arm (RBR15: 96 x 15m), in days: stage 0's own n_eff has no hold-overlap term, which
+# is exact only while this is <= 1 day (ADR 0096: the overlap factor max(1, signal days a day x hold) is then 1)
+HOLD_DAYS = 1.0
 Z_L = pf.holm_first_z(ALPHA, len(CANDIDATES))     # 0.10 / 8 at Holm rank 1: 2.24
 Z_C = pf.holm_first_z(ALPHA, len(CANDIDATES))     # worst case: all 8 continue
 Z_T = pf.holm_first_z(ALPHA, 1)                   # the winner only: 1.28
@@ -857,7 +860,7 @@ def stage0(counts: pd.DataFrame, *, excluded: Collection[str], settings: Setting
         reasons.append(f"joint power {joint:.3f} < {p.min_joint_power} (both IUT legs at L, C, T)")
     card = pf.PowerCard(card_id=f"H-101 {SPEC_VERSION}", family=REGISTRY_FAMILY, timeframe="1m-15m",
                         learn_signals=int(n_l), learn_signal_clusters=int(min(d_l, n_l)), learn_years=years,
-                        instruments=[GOLD],
+                        hold_days=HOLD_DAYS, instruments=[GOLD],
                         segments=[pf.Segment(name="L", years=years), pf.Segment(name="C", years=CONFIRM_YEARS),
                                   pf.Segment(name="T", years=TEST_OLD_YEARS)],
                         gates=[pf.Gate(name=n, segments=(n,), z=z, fresh=f) for n, _, _, z, f in gates_in])

@@ -514,6 +514,8 @@ class DiscoverySettings(_Section):
     budget and its planned K the quarter's discovery K cap (`k_cap_quarter`). Explore window only: the 1m bars come
     through `cost_of_record.load_research_bars`, which refuses the holdout."""
     enabled: bool = False                           # on per host in settings.local.yaml, with bars_path (RUNBOOK)
+    # plan 2026-11-25 S6 (D4, "what stops now"): stopped wins over a host's `enabled`, which the repo cannot edit
+    stopped: bool = True
     bars_path: str | None = None                    # the research 1m bid/ask parquet; enabled without it fails the job
     # quant GO 2026-11-18 condition (b): while true an enabled night books its K (ledger, registry) and writes its run
     # record and report, but hands nothing off (no candidate_arms rows); a quant reviewer flips it after reading that
@@ -667,9 +669,13 @@ class PowerFirstSettings(_Section):
     sd_r_floor: float = Field(1.2, ge=1.2)
     sd_r_measured_by_tf: dict[str, float | None] = Field(
         default_factory=lambda: dict.fromkeys(("5m", "15m", "1h", "4h", "1d"), None))
-    # n_eff = n / (1 + (m_day - 1) rho_day) / (1 + (k - 1) rho_inst): PRIORS until a pooled estimate from other
-    # families' learn outcomes replaces them; rho_inst is the metals value when >= half the pool is XAU/XAG/XPT/XPD
+    # n_eff = sum(u_i) / (1 + (m_w - 1) rho_day) / (1 + (k - 1) rho_inst) (quant Q3; for a count-only card
+    # n / (1 + (m_day - 1) rho_day) / max(1, c), c from its signal days and hold_days, never a setting). The rhos are
+    # PRIORS until a pooled estimate from other families' learn outcomes replaces them; rho_inst is the metals value
+    # when >= half the pool is XAU/XAG/XPT/XPD. Quant Q1: labels of <= 60 min take rho_day_le_60m = max(0.05, the upper
+    # 95 % CI of the day-clustered ICC), floor 0.05; longer labels keep rho_day, floor 0.25
     rho_day: float = Field(0.25, ge=0.25, le=1)
+    rho_day_le_60m: float = Field(0.25, ge=0.05, le=1)
     rho_instrument: float = Field(0.5, ge=0.5, le=1)
     rho_instrument_metals: float = Field(0.7, ge=0.7, le=1)
     sims: int = Field(20_000, ge=2_000)                        # joint-power Monte Carlo draws
@@ -682,6 +688,10 @@ class PowerFirstSettings(_Section):
         if bad:
             raise ValueError(f"a measured sd is > 0, got {bad}")
         return v
+
+    def rho_day_for(self, hold_days: float) -> float:
+        """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value."""
+        return self.rho_day_le_60m if hold_days * 1440.0 <= 60.0 + 1e-9 else self.rho_day
 
     def sd_r(self, timeframe: str) -> float:
         """sd_tf = max(sd_r_floor, the demo-measured sd); a timeframe not in the table is refused."""

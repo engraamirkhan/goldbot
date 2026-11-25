@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from goldbot.data import holdout_guard
 from goldbot.data.resample import BAR_COLUMNS, resample_bars
 from goldbot.data.store import Store
 
@@ -152,11 +153,15 @@ def bar_digest_refusal(pinned: dict[str, str], folder: Path, from_year: int, to_
     return "; ".join(out) or None
 
 
-def read_bar_files(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
+def read_bar_files(folder: Path, from_year: int, to_year: int, *, include_holdout: bool = False) -> pd.DataFrame:
     """The yearly 1m files (xauusd_1m_dukascopy_<year>.parquet, release data-v1) for `from_year`..`to_year` as one
     frame in time order (BAR_COLUMNS, timestamps UTC), de-duplicated on ts_utc; bars with an error-level data-quality
     flag are dropped (quarantined at ingest, never used). FileNotFoundError when no file matches. The one bar loader
-    research shares (scripts/research_pass.py, scripts/count_owed_events.py)."""
+    research shares (scripts/research_pass.py, scripts/count_owed_events.py).
+
+    The 2025 and 2026 files hold holdout minutes (2025-10-01 .. 2026-09-30): they are cut here (holdout_guard.cut)
+    unless `include_holdout`, which only a gated holdout read passes (autodisc's holdout stage, research_pass
+    --score-holdout). Minutes after the holdout (forward) are kept; research windows exclude them."""
     frames = []
     for f in sorted(Path(folder).glob(BAR_FILE_GLOB)):
         year = int(f.stem.rsplit("_", 1)[1])
@@ -169,7 +174,8 @@ def read_bar_files(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
     b["visible_at"] = pd.to_datetime(b["visible_at"], utc=True)
     flags = b["dq_flag"].fillna("").astype(str) if "dq_flag" in b else pd.Series("", index=b.index)
     b = b[~flags.str.startswith("error")]
-    return b.drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)[BAR_COLUMNS]
+    b = b.drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)[BAR_COLUMNS]
+    return b if include_holdout else holdout_guard.cut(b, what=f"read_bar_files {from_year}-{to_year}")
 
 
 # ------------------------------------------------------------------ macro series (data-macro workflow, release macro-v1)

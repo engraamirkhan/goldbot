@@ -9,6 +9,10 @@ safe to run again or next to the scheduler. A day the store already holds (all b
 never asked. How far back a terminal serves M1 is bounded by its "Max bars in chart" setting and the broker's history:
 `broker-history-depth <account> --tf 1m` shows it; what it could not serve stays in `max_open_hole`.
 
+The holdout (2025-10-01 .. 2026-09-30, goldbot/data/holdout_guard.py) is never asked for (quant R10: "m1_backfill
+--days N and 'to present' pulls put holdout minutes into stores"): the span is split around it (`pull_spans`), and a
+span that lies wholly inside it is refused.
+
   python -m goldbot.ops.run m1-backfill (--all | <account_id> ...) [--days 100] [--pause-s 1] [--budget-s S]
                                         [--data-root DIR]
 
@@ -17,6 +21,7 @@ Exit 0 when every account ran without a failed call, 1 otherwise, 2 on a refused
 from __future__ import annotations
 
 import argparse
+import time
 from typing import Any
 
 import pandas as pd
@@ -50,6 +55,17 @@ def _now() -> pd.Timestamp:
     return pd.Timestamp.now("UTC")
 
 
+def _report(account_id: str, r: Any) -> int:
+    """Print one span's result as it finishes; 1 when it failed or stopped short, else 0."""
+    first = "-" if r.first_stored is None else f"{r.first_stored:%Y-%m-%d %H:%M}"
+    print(f"{account_id}: {r.minutes_added} minutes added; {r.chunks_pulled} of {r.chunks_needed} days with holes "
+          f"pulled ({r.chunks} days checked); first stored minute {first}; {r.open_missing} open minutes still "
+          f"missing, longest hole {r.max_open_hole} min (the arm read needs <= 120)"
+          + (f"; stopped: {r.stopped}" if r.stopped else "")
+          + (f"; {len(r.errors)} failed calls, first: {r.errors[0]}" if r.errors else ""))
+    return 1 if r.errors or r.stopped in ("no_range", "errors") else 0
+
+
 def main(argv: list[str]) -> int:
     from goldbot.data.crossfeed import backfill_broker_m1
     ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run m1-backfill",
@@ -68,20 +84,32 @@ def main(argv: list[str]) -> int:
     if not accs:
         print("refused: no such enabled account")
         return 2
-    store = _store(a.data_root)
+    from goldbot.data import holdout_guard
     end = _now().floor("min")
     start = end - pd.Timedelta(days=a.days)
+    spans = holdout_guard.pull_spans(start, end)
+    if not spans:
+        print(f"refused: {start:%Y-%m-%d} .. {end:%Y-%m-%d} lies inside the sealed holdout")
+        return 2
+    if spans != [(start, end)]:
+        print("holdout minutes are never pulled: " + ", ".join(f"{s:%Y-%m-%d %H:%M} .. {e:%Y-%m-%d %H:%M}"
+                                                                 for s, e in spans))
+    store = _store(a.data_root)
     code = 0
     for acc in accs:
         broker = None
+        t0 = time.monotonic()
         try:
             broker = _broker(acc)
             if broker is None:
                 print(f"{acc.account_id}: skipped, no read-only broker connection (bridge endpoint in the keyring)")
                 code = 1
                 continue
-            r = backfill_broker_m1(store, broker, acc.account_id, acc.symbol, start=start, end=end,
-                                   budget_s=a.budget_s, pause_s=a.pause_s)
+            for s0, e0 in spans:             # one --budget-s per account, shared by its spans
+                left = None if a.budget_s is None else max(0.0, a.budget_s - (time.monotonic() - t0))
+                r = backfill_broker_m1(store, broker, acc.account_id, acc.symbol, start=s0, end=e0,
+                                       budget_s=left, pause_s=a.pause_s)
+                code = max(code, _report(acc.account_id, r))
         except Exception as exc:          # one account's failure does not stop the others
             print(f"{acc.account_id}: failed, {type(exc).__name__}: {exc}")
             code = 1
@@ -89,12 +117,4 @@ def main(argv: list[str]) -> int:
         finally:
             if broker is not None and hasattr(broker, "shutdown"):
                 broker.shutdown()
-        first = "-" if r.first_stored is None else f"{r.first_stored:%Y-%m-%d %H:%M}"
-        print(f"{acc.account_id}: {r.minutes_added} minutes added; {r.chunks_pulled} of {r.chunks_needed} days with "
-              f"holes pulled ({r.chunks} days checked); first stored minute {first}; {r.open_missing} open minutes "
-              f"still missing, longest hole {r.max_open_hole} min (the arm read needs <= 120)"
-              + (f"; stopped: {r.stopped}" if r.stopped else "")
-              + (f"; {len(r.errors)} failed calls, first: {r.errors[0]}" if r.errors else ""))
-        if r.errors or r.stopped in ("no_range", "errors"):
-            code = 1
     return code

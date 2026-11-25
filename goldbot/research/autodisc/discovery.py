@@ -76,8 +76,9 @@ import pandas as pd
 import yaml
 
 from goldbot.base import FrozenRecord, write_atomic
-from goldbot.config import DiscoverySettings, Settings
+from goldbot.config import TF_SECONDS, DiscoverySettings, Settings
 from goldbot.research.autodisc import handoff as H
+from goldbot.research.autodisc.gen_combine import MAX_BARS
 from goldbot.research.autodisc.gen_gp import GPConfig, node_key
 from goldbot.research.autodisc.nightly import (
     LEDGER_FILE,
@@ -279,6 +280,12 @@ def node_evidence(obs: pd.DataFrame, *, families: Sequence[str], registered: Map
 
 
 # ------------------------------------------------------------------ the ADR 0085 power gate
+def hold_days(timeframe: str) -> float:
+    """A spec's label horizon in days, the card's `hold_days` (ADR 0096): its time barrier, MAX_BARS bars of its
+    timeframe (every exit of the menu is capped there). The longest hold, not the mean: the mean needs outcomes."""
+    return MAX_BARS[timeframe] * TF_SECONDS[timeframe] / 86_400
+
+
 def power_card(settings: Settings, *, card_id: str, timeframe: str, signals: int, clusters: int, learn_years: float,
                now: pd.Timestamp) -> PowerCard:
     """A G2 spec's (or a card's) power card: XAUUSD alone, the explore window as learn, one fresh gate, TEST-OLD, at
@@ -288,7 +295,7 @@ def power_card(settings: Settings, *, card_id: str, timeframe: str, signals: int
     z = holm_first_z(batch_alpha(ledger_year(pd.Timestamp(now).to_pydatetime())), cfg.confirm_configs_per_batch)
     return PowerCard(card_id=card_id, family=FAMILY, timeframe=timeframe, learn_signals=int(signals),
                      learn_signal_clusters=min(int(clusters), int(signals)), learn_years=float(learn_years),
-                     instruments=[INSTRUMENT],
+                     hold_days=hold_days(timeframe), instruments=[INSTRUMENT],
                      segments=[Segment(name=LEARN, years=float(learn_years)), Segment(name=TEST_OLD,
                                                                                       years=cfg.test_old_years)],
                      gates=[Gate(name=TEST_OLD, segments=(TEST_OLD,), z=z, fresh=True)])
@@ -321,7 +328,7 @@ def forward_verdict(settings: Settings, timeframe: str, *, signals: int, cluster
     years = min(days, LEARNING_READ_FILLS / rate) if rate > 0 else days
     card = PowerCard(card_id=f"G2 {timeframe} forward n{signals} d{clusters}", family=FAMILY, timeframe=timeframe,
                      learn_signals=int(signals), learn_signal_clusters=min(int(clusters), int(signals)),
-                     learn_years=float(learn_years), instruments=[INSTRUMENT],
+                     learn_years=float(learn_years), hold_days=hold_days(timeframe), instruments=[INSTRUMENT],
                      segments=[Segment(name=LEARN, years=float(learn_years)), Segment(name=FORWARD, years=years)],
                      gates=[Gate(name=FORWARD, segments=(FORWARD,), z=FORWARD_Z, fresh=True)])
     return evaluate(card, settings)
@@ -916,9 +923,11 @@ def run_lock(state_dir: Path) -> Iterator[None]:
 
 
 def run_job(settings: Settings, state_dir: Path, slot: pd.Timestamp) -> dict[str, Any]:
-    """The child's entry point (ops/bounded.py): skip when off; refused while another run holds the lock; enabled
+    """The child's entry point (ops/bounded.py): skip when stopped or off; refused while another run holds the lock; enabled
     without bars fails (never a silent skip, which is what retired `autodisc_nightly`)."""
     cfg = settings.research.discovery
+    if cfg.stopped:
+        return {"skipped": "research.discovery.stopped (plan 2026-11-25 S6: discovery stops; no run is logged)"}
     if not cfg.enabled:
         return {"skipped": "research.discovery.enabled is false (ADR 0090: on per host with bars_path)"}
     with run_lock(Path(state_dir)):
@@ -938,6 +947,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     s = load_settings()
     if a.dry_run:
         run = run_discovery(s, a.state_dir, pd.Timestamp.now("UTC"), dry_run=True)
+    elif s.research.discovery.stopped:
+        print("refused: research.discovery.stopped (plan 2026-11-25 S6); --dry-run writes nothing and still runs")
+        return 2
     else:
         with run_lock(a.state_dir):
             run = run_discovery(s, a.state_dir, pd.Timestamp.now("UTC"))

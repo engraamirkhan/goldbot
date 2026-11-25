@@ -206,7 +206,7 @@ shadow. GD-1's kill checks follow (b) (amendment disclosure in prereg-amendment-
 - L2: `unlimited()` without an intent in exploration is backstopped by the demo/auto lock and the gate's `is_demo`.
   This is accepted as is.
 - L3: this ADR's number was reserved through docs_assemble (0096 is held by the statistics-integrity lane).
-  Traceability row R180 covers this change and K1-K6. The rows of the caps it lifts keep their text: they still hold
+  Traceability row R181 covers this change and K1-K6. The rows of the caps it lifts keep their text: they still hold
   on every account without the flag.
 - L4: the gate snaps the sized lot to the instrument's own `volume_step` (`gate.on_step`). For gold (0.01) this is the
   same float as before. A 0.001-step minimum lot no longer becomes 0.0.
