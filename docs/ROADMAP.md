@@ -27,6 +27,7 @@ RiskGate the only path to an order, no limit loosened, live needs the owner's `u
 | N7 | **GD-1 continue gate → first real candidate** | research-director, evaluator | 250 fills, earliest ≈ 2027-05-18 | Mean net >= +3.5 bp and above its random twin; then and only then a paper-gate card (design gates, holdout once) |
 | N8 | **KoG weekly red-box shadow review** | research-director | weekly Friday reads; review **2027-05-23** | Zero-order forward shadow; edge over its random ladder with power admitted, or closed. Never orders before that |
 | N9 | Paper → tiny-live gate | program-director | not before N7 passes plus the design's paper period | Design gates unchanged; owner records the gate, `unlock_live`, typed phrase |
+| N10 | **Batched confirm** 2018-01..2025-09 (sr-v3, H-102, zoo-v2, OMB-1) | evaluator | **2027-01-08 12:00 UTC** | Members and frozen artifact hashes recorded by 2027-01-06 23:59 UTC. Requires D5 recorded. Fixed before any Stage L read of the batch; never moves after one. If D5 is not recorded by 01-06, the read is refused and the evaluator records the refusal and the new date the same day (the only allowed move) |
 
 ## 2. Critical path
 
