@@ -59,6 +59,7 @@ from goldbot.data.era_quality import (  # noqa: E402
     epoch_ns_utc,
     grade_month,
     history_sources,
+    month_offsets,
     spike_mask,
 )
 
@@ -381,7 +382,8 @@ def reference_hourly(key: str, year: int, raw: Path) -> tuple[pd.DataFrame, dict
         if e.dukascopy_1m:
             h = _gold_hourly(raw, year)
         else:
-            legs = {c: _leg_hourly(cache, c, year, pts[c]) for c in e.legs}
+            # gold's hourly cache starts 2025-05: its leg comes from the Dukascopy 1m yearly files
+            legs = {c: _gold_hourly(raw, year) if c == "XAUUSD" else _leg_hourly(cache, c, year, pts[c]) for c in e.legs}
             if any(v.empty for v in legs.values()):
                 continue
             h = None
@@ -423,6 +425,8 @@ def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[
         cc = ClockCheck(key=key, year=year, offset_min=None, corr_at_offset=None, corr_at_zero=None, hours=0,
                         agree_share=None, agree_tol=None, passed=False, reason="no_reference")
     quarantined = cc.offset_min is not None and not cc.passed
+    offsets = month_offsets(epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"), ref,
+                            src.weekend) if len(ref) else {}
     ref_daily = daily_from_hourly(ref, src.weekend) if len(ref) else None
     grades = []
     month = day_of(bars_raw["ts_utc"], src.weekend).to_period("M")     # the session day's month
@@ -430,13 +434,14 @@ def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[
         if str(per) >= HOLDOUT_CUT.strftime("%Y-%m"):
             continue                    # the stub of the first sealed session day (Sep 30 21:00-24:00 UTC)
         g = grade_month(key, str(per), bars_raw.loc[idx], ref_daily, src.session_minutes,
-                        native.get(str(per), False), src.weekend, quarantined)
+                        native.get(str(per), False), src.weekend, quarantined, offsets.get(str(per)))
         grades.append(g.model_dump())
     if quarantined:
         dst = base / "_quarantine" / key / p.name
         dst.parent.mkdir(parents=True, exist_ok=True)
         os.replace(p, dst)
-    return {**cc.model_dump(), "quarantined": quarantined}, grades
+    bad_months = {m: o for m, o in offsets.items() if abs(o) > 1}
+    return {**cc.model_dump(), "quarantined": quarantined, "bad_months": json.dumps(bad_months)}, grades
 
 
 def cmd_check(a: argparse.Namespace) -> int:

@@ -254,3 +254,25 @@ def test_an_empty_form_token_is_a_throttle_not_an_absent_year(tmp_path, monkeypa
     assert hd.download_zip("XAUEUR", 2020, tmp_path) == (None, "absent")   # only this pair-year has no token
     monkeypatch.setattr(hd, "_get", lambda *a, **k: b'<input name="tk" id="tk" value="" />')
     assert hd.download_zip("XAUEUR", 2001, tmp_path) == (None, "absent")
+
+
+def test_one_news_hour_does_not_move_the_clock_peak():
+    """Rank correlation: a single huge hourly move (SNB 2015) must not pull the offset off 0."""
+    bars = _walk("2015-01-05", "2015-02-28", seed=7)
+    i = bars.index[len(bars) // 2]
+    bars.loc[i:, ["bid_open", "bid_high", "bid_low", "bid_close"]] *= 0.85        # a 15 % jump, both sources
+    cc = eq.clock_check("USDCHF", 2015, eq.epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(), _hourly(bars))
+    assert cc.offset_min == 0 and cc.passed
+
+
+def test_a_shift_in_one_month_is_caught_per_month():
+    bars = _walk("2020-01-01", "2020-05-01", seed=9)
+    ref = _hourly(bars)
+    march = ref["ts_utc"].dt.month == 3
+    shifted = _hourly(bars, shift_min=60)
+    ref = pd.concat([ref[~march], shifted[shifted["ts_utc"].dt.month == 3]]).sort_values("ts_utc").reset_index(drop=True)
+    offs = eq.month_offsets(eq.epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(), ref)
+    assert offs["2020-03"] == 60 and offs["2020-02"] == 0 and offs["2020-04"] == 0
+    g = eq.grade_month("EURUSD", "2020-03", bars, eq.daily_from_hourly(_hourly(bars)), 1440, True,
+                       clock_offset=offs["2020-03"])
+    assert g.tier == "F" and g.reasons[0].startswith("clock_month")

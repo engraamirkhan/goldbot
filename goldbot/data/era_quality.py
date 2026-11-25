@@ -289,7 +289,8 @@ class MonthGrade(FrozenRecord):
 
 
 def grade_month(key: str, month: str, bars: pd.DataFrame, ref_daily: pd.DataFrame | None, session_minutes: int,
-                reference_native: bool, weekend: bool = False, quarantined: bool = False) -> MonthGrade:
+                reference_native: bool, weekend: bool = False, quarantined: bool = False,
+                clock_offset: int | None = None) -> MonthGrade:
     """One instrument-month's R11 tier. `bars`: the month's 1m bid bars BEFORE spike quarantine (the spike rate is a
     check on the raw feed). `ref_daily`: daily_from_hourly of the reference for at least these session dates."""
     reasons: list[str] = []
@@ -349,9 +350,10 @@ def grade_month(key: str, month: str, bars: pd.DataFrame, ref_daily: pd.DataFram
         range_ok = False
         reasons.append(f"range_vs_ref {range_share:.3f}")
     tier: Literal["A", "B", "C", "F"]
-    if quarantined:
+    month_clock_bad = clock_offset is not None and abs(clock_offset) > R11["clock_offset_max_min"]
+    if quarantined or month_clock_bad:
         tier = "F"
-        reasons.insert(0, "clock_quarantine")
+        reasons.insert(0, "clock_quarantine" if quarantined else f"clock_month offset {clock_offset} min")
     elif n == 0:
         tier = "C"
         reasons.insert(0, "no_bars")
@@ -379,6 +381,44 @@ def hourly_close_at_offset(ts_ns: np.ndarray, close: np.ndarray, hours_ns: np.nd
     return out
 
 
+def _rank(x: np.ndarray) -> np.ndarray:
+    return pd.Series(x).rank().to_numpy()
+
+
+def offset_profile(ts_ns: np.ndarray, close: np.ndarray, hours: np.ndarray, ref_close: np.ndarray,
+                   min_pairs: int = 100) -> dict[int, float]:
+    """offset (minutes) -> RANK correlation of consecutive-hour log returns, 1m series shifted vs reference. Rank,
+    not Pearson: one news hour (SNB 2015-01-15, March 2020) dominates a Pearson correlation and moved its peak to
+    -33..+61 min on years whose every month peaks at 0 (diagnosed 2026-11-25 before any tier was used)."""
+    span = int(R11["clock_search_min"])
+    b = np.diff(np.log(ref_close))
+    consecutive = np.diff(hours) == 3_600_000_000_000
+    out: dict[int, float] = {}
+    for k in range(-span, span + 1):
+        a = np.diff(np.log(hourly_close_at_offset(ts_ns, close, hours, k)))
+        m = consecutive & np.isfinite(a) & np.isfinite(b)
+        if m.sum() < min_pairs:
+            continue
+        out[k] = float(np.corrcoef(_rank(a[m]), _rank(b[m]))[0, 1])
+    return out
+
+
+def month_offsets(ts_ns: np.ndarray, close: np.ndarray, ref: pd.DataFrame, weekend: bool = False) -> dict[str, int]:
+    """Best offset per month (YYYY-MM of the session day): a partial-year shift (a DST rule applied on the wrong
+    dates, a feed switch) hides inside a year-level peak at 0. Months with fewer than 50 hour pairs are left out."""
+    t = pd.DatetimeIndex(pd.to_datetime(ref["ts_utc"], utc=True))
+    month = day_of(t, weekend).to_period("M").astype(str)
+    out: dict[str, int] = {}
+    for mon in sorted(set(month)):
+        sel = np.asarray(month == mon)
+        r = ref.loc[sel]
+        prof = offset_profile(ts_ns, close, epoch_ns_utc(r["ts_utc"]), r["close"].to_numpy(dtype="float64"),
+                              min_pairs=50)
+        if prof:
+            out[mon] = max(prof, key=lambda k: prof[k])
+    return out
+
+
 class ClockCheck(FrozenRecord):
     key: str
     year: int
@@ -402,16 +442,7 @@ def clock_check(key: str, year: int, ts_ns: np.ndarray, close: np.ndarray, ref: 
                           agree_share=None, agree_tol=None, passed=False, reason="no_reference")
     hours = epoch_ns_utc(ref["ts_utc"])
     rc = ref["close"].to_numpy(dtype="float64")
-    span = int(R11["clock_search_min"])
-    corr: dict[int, float] = {}
-    for k in range(-span, span + 1):
-        hc = hourly_close_at_offset(ts_ns, close, hours, k)
-        a, b = np.diff(np.log(hc)), np.diff(np.log(rc))
-        consecutive = np.diff(hours) == 3_600_000_000_000
-        m = consecutive & np.isfinite(a) & np.isfinite(b)
-        if m.sum() < 100:
-            continue
-        corr[k] = float(np.corrcoef(a[m], b[m])[0, 1])
+    corr = offset_profile(ts_ns, close, hours, rc, min_pairs=100)
     if not corr:
         return ClockCheck(key=key, year=year, offset_min=None, corr_at_offset=None, corr_at_zero=None,
                           hours=len(ref), agree_share=None, agree_tol=None, passed=False, reason="no_overlap")
