@@ -599,6 +599,9 @@ def test_every_persisted_record_model_has_a_compat_case():
 # Direct model_validate / model_validate_json calls allowed in goldbot/, keyed by (file, enclosing function, receiver).
 # Everything else must use load_record / load_record_json. Keep each entry's reason; remove it when its call goes away.
 STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
+    ("goldbot/data/era_quality.py", "load_history_sources", "HistorySources"):
+        "strict: config/history_sources.yaml, versioned config (a misspelt key, a band that cannot catch a x10 error "
+        "or a moved holdout cut must fail the load; lane W1-E, PR #453)",
     ("goldbot/research/arm_rules_spec.py", "_parse", "StrategySpec"):
         "strict: a frozen spec_rule arm's canonical spec (config/spec_arms.yaml, hash-checked; ADR 0058)",
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
