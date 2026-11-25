@@ -77,7 +77,7 @@ from goldbot.research.arm_integrity import (
 )
 from goldbot.research.arms import Arm, Learning
 from goldbot.research.eval2.forward import TF_BAND, e_edge
-from goldbot.research.exploration_data import GOLD, REPLAY_V2, read_obs
+from goldbot.research.exploration_data import GOLD, REPLAY_V2, read_obs, void_ids
 
 log = logging.getLogger(__name__)
 
@@ -281,6 +281,16 @@ def day_terms(obs: pd.DataFrame, arm: Arm, *, control: str | None, day: str) -> 
     return out[cols], fig
 
 
+def lifecycle_obs(db: Database, broker: str, *, instruments: Mapping[str, str] | None = None) -> pd.DataFrame:
+    """The broker's gold candidates the arm reads count (r2, evidence `posterior`), without those whose r2 label is
+    void: a deliberate exclusion (e.g. `exploration_data.void_inside_spread`) is no missing label and never counts
+    toward VOID_UNLABELLED (quant review of #442)."""
+    obs = read_obs(db, broker=broker, replay_version=REPLAY_V2, evidence="posterior", instrument=GOLD,
+                   instruments=instruments)
+    void = void_ids(db, REPLAY_V2)
+    return obs[~obs["candidate_id"].isin(void)].reset_index(drop=True) if void else obs
+
+
 def freeze(db: Database, broker: str, arm: Arm, days: pd.DataFrame, *, now: pd.Timestamp) -> pd.DataFrame:
     """Write each SETTLED day not stored yet (B5: `settled_at` with the longer of its candidates' holds and the arm's
     own, `arm_hold`; INSERT OR IGNORE: the first settled read stands), void when more than VOID_UNLABELLED of its
@@ -432,7 +442,7 @@ def run(db: Database, *, hosts: Mapping[str, str], arms: Collection[Arm], contro
     out: list[ArmRead] = []
     for broker in brokers:
         accounts = {a for a, b in hosts.items() if b == broker}
-        obs = read_obs(db, broker=broker, replay_version=REPLAY_V2, evidence="posterior", instrument=GOLD)
+        obs = lifecycle_obs(db, broker)
         for arm in sorted(arms, key=lambda a: a.id):
             if not decided(arm):
                 continue

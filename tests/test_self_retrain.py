@@ -688,3 +688,16 @@ def test_no_engine_or_execution_module_reads_the_self_retrain_tables():
             text = f.read_text()
             assert "self_retrain" not in text, f
             ast.parse(text)
+
+
+def test_the_run_counts_the_candidates_voided_for_a_stop_inside_the_spread(db):
+    """Quant review of #442 (LOW 3): prereg amendment, excluded rows: "candidates whose stop is below min_label_stop
+    (never labelled; counted in the run detail)"."""
+    _populate(db, days=3)
+    ex.record_candidate(db, candidate_id="tiny", account_id="icm-probe", broker="icm", arm_id="D1", family="fam",
+                        style="intraday", tf="15m", side=1, decision_utc=START + pd.Timedelta(days=1, minutes=7),
+                        stop_dist=0.0002, target_dist=0.0002, max_hold_s=7200, taken=False, mu=0.0, branch="blocked",
+                        u=0.5, blocked_reason="cap")
+    ex.void_inside_spread(db, ["tiny"])
+    _, counts = sr.load_rows(db, broker="icm", cutoff=START + pd.Timedelta(days=4), holdout=None)
+    assert counts["stop_inside_spread"] == 1
