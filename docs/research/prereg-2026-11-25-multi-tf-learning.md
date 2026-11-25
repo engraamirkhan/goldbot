@@ -84,6 +84,7 @@ tsmom or box row on a new timeframe.
 
 ## 3. The judged unit (b): gold 1h+4h
 
+- Implementation per ADR 0098 R-I (offset form).
 - **Population:** history replay of G1A, PDC1, MB1H (1h) and DON4, PDC4, KSQ4, BXF4H (4h), each with its matched
   control (VEX1H/IEX1H, W0); cost of record in bps; one Friday-cut rule; price-scaled stop clamps.
 - **Inputs:** OMB-1's model B (one frozen block used twice, ruling D10): the gold-price inputs plus the block subset
