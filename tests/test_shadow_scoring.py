@@ -28,6 +28,14 @@ from tests.test_exploration_engine import (
 )
 
 ROOT = Path(__file__).parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _quick_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker's GIL courtesy (DEFER_S after queueing, one job per pass end or IDLE_S) shortened for the tests;
+    test_the_worker_waits_out_the_deferral_and_every_pass checks the real rule."""
+    monkeypatch.setattr(shadow_scoring, "DEFER_S", 0.0)
+    monkeypatch.setattr(shadow_scoring, "IDLE_S", 0.005)
 CUTOFF = pd.Timestamp("2025-02-28 21:00", tz="UTC")           # before CLOSE: CLOSE's candidates are out of sample
 
 
@@ -256,7 +264,7 @@ def test_queueing_a_candidate_costs_the_tick_under_5_ms_and_never_builds_a_vecto
     s = Pending(arm_id="a", side=1, bar_ts=CLOSE, stop_usd=5.0, target_usd=10.0, hold_bars=4)
     shadow_scoring.submit(eng, ex, arm, s, "warm", CLOSE)                # starts the thread
     took: list[float] = []
-    for i in range(300):
+    for i in range(150):
         t0 = time.perf_counter()
         shadow_scoring.submit(eng, ex, arm, s, f"c{i}", CLOSE)
         took.append((time.perf_counter() - t0) * 1000)
@@ -273,13 +281,86 @@ def test_queueing_a_candidate_costs_the_tick_under_5_ms_and_never_builds_a_vecto
 def test_a_full_queue_drops_the_candidate_unscored_counts_it_and_never_blocks(tmp_path, caplog):
     db = exploration.ledger_db(str(tmp_path))
     sc = shadow_scoring.ShadowScorer(db, "icm", queue_max=1, start=False)
-    job = shadow_scoring.Job(candidate_id="x", arm_id="a", tf="15m", side=1, decision=CLOSE, minutes=pd.DataFrame())
+    job = shadow_scoring.Job(candidate_id="x", arm_id="a", tf="15m", side=1, decision=CLOSE)
     t0 = time.perf_counter()
-    sc.submit(job)
-    sc.submit(job.__class__(**{**job.__dict__, "candidate_id": "y"}))
+    assert sc.submit(job, pd.DataFrame())
+    assert not sc.submit(shadow_scoring.Job(**{**job.__dict__, "candidate_id": "y"}), pd.DataFrame())
     assert (time.perf_counter() - t0) < 0.05
     assert sc.counts["dropped"] == 1 and sc.counts["submitted"] == 2
-    assert any("queue full" in r.getMessage() for r in caplog.records)
+    assert any("shadow scoring full" in r.getMessage() for r in caplog.records)
+    assert shadow_scoring.QUEUE_MAX == 200
+
+
+def test_jobs_of_one_decision_share_one_pinned_frame_and_new_decisions_over_the_cap_are_dropped(tmp_path):
+    """F4 / code review LOW of #463: a 1m frame is 5-15 MB; one is held per (timeframe, decision), at most FRAMES_MAX."""
+    db = exploration.ledger_db(str(tmp_path))
+    sc = shadow_scoring.ShadowScorer(db, "icm", start=False)
+    frame = pd.DataFrame({"x": [1]})
+    for i in range(5):
+        assert sc.submit(shadow_scoring.Job(candidate_id=f"c{i}", arm_id="a", tf="15m", side=1, decision=CLOSE), frame)
+    assert len(sc.frames) == 1 and sc.frames[("15m", int(CLOSE.value))][1] == 5
+    for k in range(1, shadow_scoring.FRAMES_MAX):
+        at = CLOSE + pd.Timedelta(minutes=15 * k)
+        assert sc.submit(shadow_scoring.Job(candidate_id=f"d{k}", arm_id="a", tf="15m", side=1, decision=at), frame)
+    over = CLOSE + pd.Timedelta(days=1)
+    assert not sc.submit(shadow_scoring.Job(candidate_id="z", arm_id="a", tf="15m", side=1, decision=over), frame)
+    assert len(sc.frames) == shadow_scoring.FRAMES_MAX and sc.counts["dropped"] == 1
+
+
+def test_a_job_older_than_one_bar_is_dropped_unscored_and_its_frame_released(tmp_path, monkeypatch):
+    db = exploration.ledger_db(str(tmp_path))
+    sc = shadow_scoring.ShadowScorer(db, "icm")
+    ran: list[str] = []
+    monkeypatch.setattr(sc, "run", lambda job: ran.append(job.candidate_id))
+    monkeypatch.setattr(shadow_scoring, "_bar_s", lambda tf: -1.0)            # every job already a bar old
+    assert sc.submit(shadow_scoring.Job(candidate_id="old", arm_id="a", tf="1m", side=1, decision=CLOSE),
+                     pd.DataFrame())
+    assert sc.drain(10.0)
+    assert ran == [] and sc.counts["expired"] == 1 and sc.frames == {}
+
+
+def test_the_worker_waits_out_the_deferral_and_every_pass(tmp_path, monkeypatch):
+    """F1 of #463: a scoring job runs DEFER_S after it was queued, never while an exploration pass runs, and one per
+    pass end (or IDLE_S without a pass)."""
+    monkeypatch.setattr(shadow_scoring, "DEFER_S", 0.3)
+    monkeypatch.setattr(shadow_scoring, "IDLE_S", 60.0)
+    db = exploration.ledger_db(str(tmp_path))
+    sc = shadow_scoring.ShadowScorer(db, "icm")
+    ran: list[tuple[str, float]] = []
+    monkeypatch.setattr(sc, "run", lambda job: ran.append((job.candidate_id, time.monotonic())))
+    sc._last_turn = time.monotonic()                     # a job just ran: the next waits for a pass end
+    sc.mark_pass(True)
+    t0 = time.monotonic()
+    for cid in ("a", "b"):
+        assert sc.submit(shadow_scoring.Job(candidate_id=cid, arm_id="a", tf="15m", side=1, decision=CLOSE),
+                         pd.DataFrame())
+    time.sleep(0.6)
+    assert ran == []                                     # deferral over, but a pass is running
+    sc.mark_pass(False)                                  # one pass end: one job
+    time.sleep(0.2)
+    assert [c for c, _ in ran] == ["a"] and ran[0][1] - t0 >= 0.3
+    sc.mark_pass(True)
+    sc.mark_pass(False)                                  # the next pass end: the next job
+    assert sc.drain(5.0) and [c for c, _ in ran] == ["a", "b"]
+
+
+def test_the_models_are_reloaded_after_a_failed_read_not_cached_as_loaded(tmp_path, monkeypatch):
+    db = exploration.ledger_db(str(tmp_path))
+    sc = shadow_scoring.ShadowScorer(db, "icm", start=False)
+    calls: list[int] = []
+
+    def flaky(*_: Any, **__: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("locked")
+        return {}, []
+
+    monkeypatch.setattr(shadow_scoring, "load_models", flaky)
+    job = shadow_scoring.Job(candidate_id="x", arm_id="a", tf="15m", side=1, decision=CLOSE)
+    sc.run(job)
+    assert sc.loaded_at is None and sc.counts["failed"] == 1
+    sc.run(job)
+    assert len(calls) == 2 and sc.loaded_at is not None
 
 
 # ------------------------------------------------------------------------------------------------ provenance
@@ -450,7 +531,9 @@ def test_the_engine_calls_the_scorer_only_from_candidate_after_the_record_and_ga
              for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
              and isinstance(n.func.value, ast.Name) and n.func.value.id == "shadow_scoring"]
     assert sorted((f, a) for f, a, _ in calls) == [("_enter", "gate_waits"), ("_send", "gate"),
-                                                   ("candidate", "submit")]
+                                                   ("candidate", "submit"), ("on_pass", "mark_pass"),
+                                                   ("on_pass", "mark_pass"), ("on_pass_slow", "mark_pass"),
+                                                   ("on_pass_slow", "mark_pass")]
     line = {a: ln for _, a, ln in calls}
     cand = next(fn for fn in ast.walk(ex) if isinstance(fn, ast.FunctionDef) and fn.name == "candidate")
     record = [n.lineno for n in ast.walk(cand) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
@@ -666,3 +749,103 @@ def test_a_live_account_with_model_gate_fails_at_load():
     assert Account.model_validate({**base, "mode": "demo", "model_gate": True}).model_gate
     with pytest.raises(ValueError, match="model_gate is allowed on demo accounts only"):
         Account.model_validate({**base, "mode": "live", "model_gate": True})
+
+
+def test_a_1m_or_5m_arm_is_never_gated(tmp_path, monkeypatch):
+    """Trading-safety F3 of #463: a gated scalp would wait up to GATE_WAIT_S past its close."""
+    eng, _pb = _engine(tmp_path, [_arm("a", tf="1m"), _arm("b", tf="5m"), _arm("c", tf="15m")])
+    _gating(monkeypatch, eng)
+    ex = eng.exploration
+    assert ex is not None
+
+    def sig(a: str) -> Pending:
+        return Pending(arm_id=a, side=1, bar_ts=CLOSE, stop_usd=5.0, target_usd=10.0, hold_bars=4)
+    assert not shadow_scoring.gate_applies(eng, ex.arms["a"], sig("a"))
+    assert not shadow_scoring.gate_applies(eng, ex.arms["b"], sig("b"))
+    assert shadow_scoring.gate_applies(eng, ex.arms["c"], sig("c"))
+
+
+def test_the_sample_draw_is_journalled_and_recomputable_from_the_candidate_id(tmp_path, monkeypatch):
+    """F6 of #463: the draw an off-policy read needs."""
+    eng, pb = _engine(tmp_path, [_arm("a")])
+    tick = _at(eng, pb, CLOSE)
+    _gating(monkeypatch, eng)
+    monkeypatch.setattr(shadow_scoring, "explore_u", lambda cid: 0.5 if cid else 0.0)
+    _store(tmp_path, "a", _model(0.2, tau=0.5), status="active")
+    _gated_pass(eng, tick)
+    [row] = _actions(eng, "exploration_refused:model_gate")
+    [obs] = _obs(tmp_path)
+    assert row["proposal"] == obs["candidate_id"] and row["explore_u"] == pytest.approx(0.5)
+
+
+def test_the_real_draw_is_a_uniform_hash_of_the_candidate_id():
+    us = [shadow_scoring.explore_u(f"cand-{i}") for i in range(4000)]
+    assert all(0 <= u < 1 for u in us) and shadow_scoring.explore_u("x") == shadow_scoring.explore_u("x")
+    assert 0.08 < sum(u < shadow_scoring.EXPLORE_P for u in us) / len(us) < 0.12
+
+
+def test_model_influence_counts_eligible_candidates_from_the_database_and_warns_when_they_go_unscored(tmp_path):
+    """F5 of #463: eligible = an arm with a served model with provenance, decided after its cutoff."""
+    from goldbot.ops.checks.learning import influence
+    from goldbot.research.exploration_data import record_candidate
+    db = exploration.ledger_db(str(tmp_path))
+    _store(tmp_path, "a", _model(0.6))
+    _store(tmp_path, "b", _model(0.6), sha=None)                       # no provenance: not eligible
+    for i, (arm, at) in enumerate([("a", CLOSE), ("a", CLOSE), ("a", CUTOFF - pd.Timedelta(days=1)), ("b", CLOSE),
+                                   ("c", CLOSE)]):
+        record_candidate(db, candidate_id=f"k{i}", account_id="icm-probe", broker="icm", arm_id=arm, family="f",
+                         style="intraday", tf="15m", side=1, decision_utc=at, stop_dist=5.0, target_dist=10.0,
+                         max_hold_s=3600, taken=False, mu=0.0, blocked_reason="cap", branch="blocked",
+                         meta_p=0.6 if i == 0 else None)
+    con = sqlite3.connect(tmp_path / "aux.db")
+    try:
+        got = influence(con, since=CUTOFF - pd.Timedelta(days=5), until=CLOSE + pd.Timedelta(days=1))
+    finally:
+        con.close()
+    assert (got.eligible, got.eligible_scored) == (2, 1)
+
+
+def test_explore_samples_count_toward_the_arms_stops_but_never_its_n_or_edge_reads():
+    """F2 of #463: the sample's P&L is the arm's money (H-81 cost stop, H-61 unit stop); it is never n, a ranking, an
+    edge read or a class figure. The cohort counts toward none of them (ADR 0095)."""
+    from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE, NOT_STOP_EVIDENCE
+    from goldbot.telegram import labs
+    assert "explore_sample" in NOT_EDGE_EVIDENCE and "explore_sample" not in NOT_STOP_EVIDENCE
+    assert "learning_cohort" in NOT_EDGE_EVIDENCE and "learning_cohort" in NOT_STOP_EVIDENCE
+    base = exploration.ExplorationRecord(
+        client_order_id="o", account_id="icm-probe", arm_id="a", family="f", tf="15m", side=1, lots=0.01,
+        signal_utc=CLOSE, sent_utc=CLOSE, atr_usd=5.0, stop_usd=5.0, target_usd=10.0, hold_s=3600,
+        requested_price=2000.0, spread_usd=0.2, latency_ms=10.0, retcode=10009, position_id=1, fill_price=2000.0,
+        stop_loss=5.0, cost=0.5, exit_utc=CLOSE + pd.Timedelta(hours=1), exit_price=2001.0, pnl=1.0, censored=False)
+    sample = base.model_copy(update={"evidence_class": "explore_sample"})
+    cohort = base.model_copy(update={"evidence_class": "learning_cohort"})
+    assert labs.counts_toward_stops(sample) and not labs.counts_toward_reads(sample)
+    assert not labs.counts_toward_stops(cohort) and not labs.counts_toward_reads(cohort)
+    assert labs.counts_toward_stops(base) and labs.counts_toward_reads(base)
+
+
+def test_no_reader_names_a_non_edge_evidence_class_literally():
+    """Code review MEDIUM of #463: every evidence reader goes through evidence_exclusions.NOT_EDGE_EVIDENCE /
+    NOT_STOP_EVIDENCE, so a new class (explore_sample) can never be counted by a reader that forgot it."""
+    pat = re.compile(r"""(==|!=|\bin\b)\s*\(?[^\n]*["'](learning_cohort|explore_sample)["']|"""
+                     r"""["'](learning_cohort|explore_sample)["']\s*(==|!=)|==\s*COHORT_EVIDENCE""")
+    allowed = {"evidence_exclusions.py"}
+    bad = []
+    for path in sorted((ROOT / "goldbot").rglob("*.py")):
+        if path.name in allowed:
+            continue
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if pat.search(code):
+                bad.append(f"{path.relative_to(ROOT)}:{i}: {line.strip()}")
+    assert bad == []
+
+
+def test_a_sample_fill_is_listed_with_its_own_evidence_in_the_trades_ledger():
+    from typing import get_args
+
+    from goldbot.api.schema import TradeEvidence
+    from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE
+    assert set(NOT_EDGE_EVIDENCE) <= set(get_args(TradeEvidence))       # trades_ledger lists them by their own name
+    web = (ROOT / "web" / "src" / "lib" / "schema.d.ts").read_text()
+    assert '"learning_cohort" | "explore_sample"' in web

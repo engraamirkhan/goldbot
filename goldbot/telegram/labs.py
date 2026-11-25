@@ -165,11 +165,19 @@ def counts_toward_reads(t: ExplorationRecord) -> bool:
     """`admissible` and not a demo learning cohort fill (ADR 0095, quant C2: "fill P&L is never compared with a
     control or counted toward any H-61/H-81 unit"), nor an unlimited-epoch market-state fill (ADR 0097, quant F1):
     what an arm's n and its stops read."""
-    from goldbot.research.evidence_exclusions import (  # + samples, ADR 0101
+    from goldbot.research.evidence_exclusions import (  # + model-gate samples, ADR 0101
         NOT_EDGE_EVIDENCE,
         unlimited_market_state,
     )
     return admissible(t) and t.evidence_class not in NOT_EDGE_EVIDENCE and not unlimited_market_state(t)
+
+
+def counts_toward_stops(t: ExplorationRecord) -> bool:
+    """`admissible` and not a cohort fill, nor an unlimited-epoch market-state fill: what an arm's and a unit's H-61
+    stop reads. A model-gate exploration sample (ADR 0101) counts here (its P&L is the arm's money: trading-safety F2
+    of #463) but never toward n (`counts_toward_reads`)."""
+    from goldbot.research.evidence_exclusions import NOT_STOP_EVIDENCE, unlimited_market_state
+    return admissible(t) and t.evidence_class not in NOT_STOP_EVIDENCE and not unlimited_market_state(t)
 
 
 def trades(conn: sqlite3.Connection, where: str = "", params: Sequence[object] = ()) -> list[ExplorationRecord]:
@@ -246,6 +254,7 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
              oz_per_lot: float = CONTRACT_OZ) -> LabSpan:
     """`account`'s exploration over [lo, hi) (UTC): signals by `decision_ns`, fills by send time, closes by exit."""
     from goldbot.ops.report_days import report_day
+    from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE
     a, b = _ns(lo), _ns(hi)
     obs = conn.execute(
         "SELECT taken, blocked_reason FROM exploration_obs WHERE account_id = ? AND decision_ns >= ? AND "
@@ -283,7 +292,7 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
         costs=_costs(closed, oz_per_lot), by_day=by_day, closed_days=sorted(days),
         by_class=class_figures((ClassFill(t.family, asset_class_of(t.symbol), t.pnl, trade_r(t), None,
                                           report_day(t.exit_utc) if t.exit_utc is not None else None) for t in net
-                                if t.client_order_id not in void and t.evidence_class != "learning_cohort"),
+                                if t.client_order_id not in void and t.evidence_class not in NOT_EDGE_EVIDENCE),
                                families=False))
 
 
@@ -393,7 +402,7 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
     by_arm: dict[str, list[ExplorationRecord]] = {}
     cut, upto = ("", ()) if until is None else (" AND exit_ns < ?", (_ns(until),))
     for t in trades(conn, f"account_id IN ({marks}) AND closed = 1{cut}", (*accounts, *upto)):
-        if counts_toward_reads(t):
+        if counts_toward_stops(t):                 # samples feed the stop; `counted` below keeps them out of n
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
     spec_controls = control_arm_ids()
@@ -407,8 +416,8 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
         if name not in units:
             u = rules.units[name]
             m = ",".join("?" * len(u.arms))
-            pooled = [_fill(t, t.client_order_id not in void) for t in trades(
-                conn, f"arm_id IN ({m}) AND closed = 1{cut}", (*u.arms, *upto)) if counts_toward_reads(t)]
+            pooled = [_fill(t, t.client_order_id not in void and counts_toward_reads(t)) for t in trades(
+                conn, f"arm_id IN ({m}) AND closed = 1{cut}", (*u.arms, *upto)) if counts_toward_stops(t)]
             units[name] = unit_stop(u, [f for f in pooled if f is not None], BAND_SHARE)
         return units[name]
 
@@ -430,11 +439,12 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
         else:
             stop_r, within = ARM_STOP.get(style, ARM_STOP["scalp"])
             st = unit_stop(StopUnit(arms=(arm,), stop_r=stop_r, within=within, source="HV"),
-                           [f for f in (_fill(t, True) for t in rows) if f is not None], BAND_SHARE)
+                           [f for f in (_fill(t, counts_toward_reads(t)) for t in rows) if f is not None],
+                           BAND_SHARE)
         rule = None
         if st.band == "at_stop":
             rule = f"with {leader}" if leader else rules.units[name].source if name is not None else "HV"
-        n = sum(t.client_order_id not in void for t in rows)
+        n = sum(t.client_order_id not in void and counts_toward_reads(t) for t in rows)
         out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=n, band=st.band,
                              stop_at=st.stop_at, stop_utc=st.stop_utc, stop_r=st.stop_r, rule=rule))
     return out

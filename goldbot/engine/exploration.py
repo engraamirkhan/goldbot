@@ -1415,15 +1415,19 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     ex = eng.exploration
     if ex is None:
         return
-    now = eng._now(tick)
-    _pyramid(eng, ex, now, tick)        # safety S3: the group stops first, in their own try, whatever fails after
-    sent = _fast(eng, ex, now, tick)
-    if sent is None:                    # it raised: no 15m+ work this pass either, as before
-        return
-    if eng.__dict__.get(SPLIT):
-        ex.slow_owed = (tick, now, sent)
-        return
-    _slow(eng, ex, tick, now, sent)
+    shadow_scoring.mark_pass(ex, True)  # ADR 0101 (F1 of #463): the scoring worker waits while a pass runs
+    try:
+        now = eng._now(tick)
+        _pyramid(eng, ex, now, tick)    # safety S3: the group stops first, in their own try, whatever fails after
+        sent = _fast(eng, ex, now, tick)
+        if sent is None:                # it raised: no 15m+ work this pass either, as before
+            return
+        if eng.__dict__.get(SPLIT):
+            ex.slow_owed = (tick, now, sent)
+            return
+        _slow(eng, ex, tick, now, sent)
+    finally:
+        shadow_scoring.mark_pass(ex, False)
 
 
 def on_pass_slow(eng: Engine) -> None:
@@ -1434,7 +1438,11 @@ def on_pass_slow(eng: Engine) -> None:
         return
     tick, at, sent = ex.slow_owed
     ex.slow_owed = None
-    _slow(eng, ex, tick, at, sent)
+    shadow_scoring.mark_pass(ex, True)
+    try:
+        _slow(eng, ex, tick, at, sent)
+    finally:
+        shadow_scoring.mark_pass(ex, False)
 
 
 def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | None:
@@ -2434,7 +2442,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     # or a fail-open, the existing rule decides. Drop-only: it never adds an order or changes a size
     sampled = False
     if (gv := shadow_scoring.gate(eng, ex, arm, s, pid)) is not None and not gv.keep:
-        applied.update(meta_p=round(gv.score, 6), model_version=gv.model_version, admission_p=gv.propensity)
+        # F6 of #463: the draw is journalled; `pid` is the candidate id, so research can recompute it (`explore_u`)
+        applied.update(meta_p=round(gv.score, 6), model_version=gv.model_version, admission_p=gv.propensity,
+                       explore_u=None if gv.u is None else round(gv.u, 9))
         base = ps.mu if ps.mu is not None else PI_RANDOM
         ps.mu = base * shadow_scoring.EXPLORE_P
         if not gv.sample:

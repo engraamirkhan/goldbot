@@ -85,9 +85,20 @@ cheaper vector that differs from the trainer's.
 - Models written before this change carry no `model_sha256` and are refused. The first scores come after the next
   weekly run (Sunday 15:00 UTC) writes models with provenance. There is no backfill: hashing today's text would
   certify it on first use and prove nothing.
-- The worker shares the GIL with the tick. Each vector build (0.1-0.5 s, mostly numpy/pandas) runs only for
-  candidates of arms with a served model, once per (timeframe, decision). The tick-side cost measured in tests is the
-  queue put alone.
+- **The worker shares the GIL with the tick.** Trading-safety F1 of #463 measured a pure-Python tick running 1.6x
+  slower during a build. The worker therefore:
+  - waits 10 s after a job is queued, so a bar close's send burst is over;
+  - never runs during an exploration pass;
+  - runs one job per pass end.
+
+  The tick-side cost is the queue put alone. If builds grow, the next step is a subprocess worker.
+- **Bounded memory.** At most 200 jobs and 8 pinned 1m frames (one per decision). A job older than one bar is
+  dropped. Jobs lost to a full queue, an expiry or a restart show in `model_influence` as eligible but unscored (WARN
+  below 90 %).
+- **Explore-sample fills** count toward the money and kill stops (H-81 cost stop, H-61 unit stops). They are excluded
+  only from n, rankings, edge reads and class figures (`evidence_exclusions.NOT_EDGE_EVIDENCE`; the cohort is in
+  `NOT_STOP_EVIDENCE` as well). The draw is journalled as `explore_u`.
+- **1m/5m arms are never gated.** The sr-v3 card allows them only after its three conditions are met.
 - When the gate is enabled, a gated demo entry can go out up to 5 s later than today while its vector is built. A
   sampled candidate that a later cap refuses is recorded with that cap's reason and mu 0, as any refused candidate.
 - Trading-safety review covers the gate's order-path placement (drop-only, before `cost_probe._place`) before any

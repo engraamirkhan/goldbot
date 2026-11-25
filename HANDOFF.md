@@ -132,6 +132,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - `risk.gate.is_demo` at the signal.
 
     A gated signal waits up to 5 s for its vector; any failure falls back to the existing rule.
+  - **Review round 1 (#463).**
+    - **Worker vs tick (F1, F4).** The worker defers each job 10 s, never runs during an exploration pass, and runs
+      one job per pass end. Queue cap 200; one 1m frame per decision, at most 8 frames. Jobs older than one bar
+      are dropped and counted.
+    - **Explore samples (F2).** Their P&L counts toward the H-81 cost stop and H-61 unit stops. They are excluded
+      only from n, rankings, edge reads and class figures (`NOT_EDGE_EVIDENCE` / `NOT_STOP_EVIDENCE`, used by every
+      reader; `TradeEvidence` gains `explore_sample`).
+    - **Gate scope (F3).** 1m/5m arms are never gated.
+    - **Health (F5).** `model_influence` adds eligible-vs-scored from the database and WARNs below 90 %.
+    - **Sample draw (F6).** The draw is journalled as `explore_u`.
+  - **Expected after deploy.** `model_influence` WARNs "0 % scored" until the Sunday weekly retrain writes models with
+    `model_sha256`. Today's models are refused by design (no hash backfill).
 - **H-101 model zoo and fusion, code (card `docs/research/prereg-2026-11-25-model-zoo-fusion.md`, zoo-v1).**
   - **What.** `goldbot/research/model_zoo.py` holds the 8 pre-named candidates on the sr-v2 40 inputs: B1 LOGIT, B2
     GBT (LightGBM with fixed hyperparameters), B3 POOL, B4 REGIME, B5 KNN, F1 AVG, F2 STACK and F3 GATE. It also holds

@@ -8,10 +8,16 @@ The plan's rule (ml-researcher W1): "Every candidate gets the scores of every fr
 * No gating. `submit` is called by `exploration.candidate` AFTER the candidate's row is written and returns nothing.
   The queue, `_send`, the budget, the caps and the RiskGate never read a score. A test runs one engine with models and
   one without and finds the same orders, refusals, gate calls and records.
-* Never on the tick. The vector is `feature_snapshots.decision_features`, the nightly snapshot's own function, and it
-  takes 0.1-0.5 s per decision. It is built on one background thread per exploration block. The tick only puts a job on
-  a bounded queue (well under 5 ms per candidate, measured in tests/test_shadow_scoring.py). When the queue is full the
-  job is dropped, counted and logged, and the candidate stays unscored.
+* Never on the tick, and never beside it. The vector is `feature_snapshots.decision_features`, the nightly snapshot's
+  own function, and it takes 0.1-0.5 s per decision. It is built on one background thread per exploration block. The
+  tick only puts a job on a bounded queue (well under 5 ms per candidate, measured in tests/test_shadow_scoring.py).
+  The worker shares the GIL with the tick (trading-safety F1 of #463: a pure-Python tick ran 1.6x slower during a
+  build). So a job waits DEFER_S after it was queued (a bar close's send burst is over by then), never runs while an
+  exploration pass is in progress, and runs one job per pass end (or per IDLE_S without a pass).
+* Bounded memory (F4): at most QUEUE_MAX jobs, and one pinned 1m frame per (timeframe, decision), at most FRAMES_MAX
+  of them. A job older than one bar of its timeframe (plus DEFER_S) is dropped. A full queue, a frame over the cap or
+  an expired job is counted, logged and left unscored. Jobs queued at a restart are lost; health's model_influence
+  counts them as eligible but unscored.
 * Decision-time numbers, written once afterwards (ADR 0101). The vector reads only minutes visible at the decision. A
   model scores only candidates decided after its data cutoff (`cutoff_ns`), so every score is out of sample. The score
   is the number a synchronous scorer would have logged before the decision; it lands on the row a moment after the
@@ -86,7 +92,10 @@ log = logging.getLogger("goldbot.shadow_scoring")
 
 SERVED_STATUSES = ("active", "shadow")   # the frozen models scored (demoted and superseded ones are not)
 RELOAD_S = 300.0                 # the models are re-read at most this often (worker's monotonic clock)
-QUEUE_MAX = 2_000                # jobs waiting at most; a full queue drops the job unscored (counted)
+QUEUE_MAX = 200                  # jobs waiting at most; a full queue drops the job unscored (counted)
+FRAMES_MAX = 8                   # distinct (timeframe, decision) 1m frames pinned by waiting jobs at most
+DEFER_S = 10.0                   # a scoring job waits this long after it was queued (after the close's send burst)
+IDLE_S = 2.0                     # the worker runs one job per exploration pass end, or per IDLE_S with no pass
 VECTORS_KEPT = 64                # (timeframe, decision) vectors kept: arms deciding on one bar share one build
 ERROR_WINDOW_S = 900.0           # the published state names the last failure while it is this recent (wall clock)
 DROP_LOG_EVERY_S = 60.0          # a full queue is logged at most this often
@@ -98,19 +107,27 @@ EXPLORE_P = 0.10                 # ADR 0098 section 3: the randomised share of m
 EXPLORE_EVIDENCE = "explore_sample"
 GATE_REFUSAL = "model_gate:"     # blocked_reason prefix (health model_influence counts it as "changed")
 GATE_WAIT_S = 5.0                # a gated signal waits at most this long after its bar close for its vector
+# a 1m/5m signal never waits for a vector (trading-safety F3 of #463): the sr-v3 card allows them only after its three
+# conditions, so they stay out of the gate in code
+GATE_EXCLUDED_TFS = ("1m", "5m")
 
 
 @dataclass(frozen=True)
 class Job:
-    """One candidate to score: what the engine knew at its decision. `minutes` is the engine's 1m frame as it was when
-    the candidate was recorded. The engine replaces that frame on every update and never mutates it in place
-    (broker_bars.append_bars, _replace; history), so the worker reads a frame no one writes."""
+    """One candidate to score (no candidate id: a gate's vector build). Its 1m frame is held once per (timeframe,
+    decision) by the scorer (`ShadowScorer.frames`): the engine's frame as it was at the first job of that decision.
+    The engine replaces that frame on every update and never mutates it in place (broker_bars.append_bars, _replace;
+    history), so the worker reads a frame no one writes."""
     candidate_id: str
     arm_id: str
     tf: str
     side: int
     decision: pd.Timestamp
-    minutes: pd.DataFrame
+    queued_at: float = 0.0           # monotonic, set by `ShadowScorer.submit`
+
+    @property
+    def key(self) -> tuple[str, int]:
+        return self.tf, int(self.decision.value)
 
 
 class ServedModel(FrozenRecord):
@@ -263,26 +280,51 @@ class ShadowScorer:
         self.error: str | None = None
         self.error_at: float | None = None
         self._dropped_logged: float = 0.0
-        self.lock = threading.Lock()                       # guards `vectors` and `warming` (worker vs tick)
+        self.counts |= {"expired": 0}
+        self.lock = threading.Lock()                       # guards `vectors`, `frames` and `warming`
         self.warming: set[tuple[str, int]] = set()
+        self.frames: dict[tuple[str, int], tuple[pd.DataFrame, int]] = {}   # key -> (frame, jobs waiting on it)
+        self.cv = threading.Condition()                    # the engine's pass marks (F1)
+        self.in_pass = False
+        self.pass_ends = 0
+        self._used_gap = -1
+        self._last_turn = 0.0
         self.thread = threading.Thread(target=self._loop, name=f"shadow-score-{broker}", daemon=True)
         if start:
             self.thread.start()
 
     # ------------------------------------------------------------------------------------------ the tick's side
-    def submit(self, job: Job) -> bool:
-        """Queue one job; never blocks, never raises. False when the queue was full (the job dropped)."""
+    def submit(self, job: Job, minutes: pd.DataFrame) -> bool:
+        """Queue one job with the engine's 1m frame; never blocks, never raises. False when it was dropped (the queue
+        full, or a new decision's frame over FRAMES_MAX)."""
         self.counts["submitted"] += 1
-        try:
-            self.jobs.put_nowait(job)
-            return True
-        except queue.Full:
+        job = Job(**{**job.__dict__, "queued_at": time.monotonic()})
+        with self.lock:
+            have = job.key in self.frames or job.key in self.vectors
+            ok = have or len(self.frames) < FRAMES_MAX
+            if ok:
+                try:
+                    self.jobs.put_nowait(job)
+                except queue.Full:
+                    ok = False
+            if ok and job.key not in self.vectors:
+                frame, n = self.frames.get(job.key, (minutes, 0))
+                self.frames[job.key] = (frame, n + 1)
+        if not ok:
             self.counts["dropped"] += 1
             if time.monotonic() - self._dropped_logged >= DROP_LOG_EVERY_S:
                 self._dropped_logged = time.monotonic()
-                log.warning("shadow scoring queue full (%d): candidate %s left unscored (%d dropped so far)",
-                            self.jobs.maxsize, job.candidate_id, self.counts["dropped"])
-            return False
+                log.warning("shadow scoring full (%d jobs, %d frames): candidate %s left unscored (%d dropped so far)",
+                            self.jobs.qsize(), len(self.frames), job.candidate_id, self.counts["dropped"])
+        return ok
+
+    def mark_pass(self, running: bool) -> None:
+        """The engine's exploration pass started (True) or ended (False): the worker never runs during one (F1)."""
+        with self.cv:
+            self.in_pass = running
+            if not running:
+                self.pass_ends += 1
+                self.cv.notify_all()
 
     def cached(self, tf: str, decision_ns: int) -> tuple[bool, Snapshot | None]:
         """(built, vector) of a (timeframe, decision): never builds."""
@@ -302,7 +344,7 @@ class ShadowScorer:
             if key in self.warming:
                 return True
             self.warming.add(key)
-        if self.submit(Job(candidate_id="", arm_id=arm_id, tf=tf, side=1, decision=decision, minutes=minutes)):
+        if self.submit(Job(candidate_id="", arm_id=arm_id, tf=tf, side=1, decision=decision), minutes):
             return True
         self._warmed(key)                                  # dropped: no wait, the gate fails open
         return False
@@ -323,11 +365,40 @@ class ShadowScorer:
         while True:
             job = self.jobs.get()
             try:
-                self.run(job)
+                self._turn(job)
+                if time.monotonic() - job.queued_at > _bar_s(job.tf) + DEFER_S:
+                    self.counts["expired"] += 1
+                    log.info("shadow scoring of %s expired (older than one %s bar): skipped", job.candidate_id, job.tf)
+                else:
+                    self.run(job)
             except Exception as exc:          # noqa: BLE001 - one job's failure is logged and skipped
                 self.fail(job.candidate_id, f"{type(exc).__name__}: {exc}")
             finally:
+                self._release(job.key)
+                if not job.candidate_id:
+                    self._warmed(job.key)
                 self.jobs.task_done()
+
+    def _turn(self, job: Job) -> None:
+        """Wait for this job's turn (F1): DEFER_S after it was queued (a gate's build does not wait for that), then
+        outside a pass, one job per pass end or per IDLE_S without one."""
+        if job.candidate_id:
+            while (left := job.queued_at + DEFER_S - time.monotonic()) > 0:
+                time.sleep(min(left, 1.0))
+        with self.cv:
+            while self.in_pass or (self.pass_ends == self._used_gap
+                                   and time.monotonic() - self._last_turn < IDLE_S):
+                self.cv.wait(timeout=IDLE_S)
+            self._used_gap, self._last_turn = self.pass_ends, time.monotonic()
+
+    def _release(self, key: tuple[str, int]) -> None:
+        with self.lock:
+            got = self.frames.get(key)
+            if got is not None:
+                if got[1] <= 1:
+                    del self.frames[key]
+                else:
+                    self.frames[key] = (got[0], got[1] - 1)
 
     def fail(self, candidate_id: str, why: str) -> None:
         self.counts["failed"] += 1
@@ -337,9 +408,8 @@ class ShadowScorer:
     def _models(self) -> dict[str, tuple[ServedModel, ...]]:
         now = time.monotonic()
         if self.loaded_at is None or now - self.loaded_at >= RELOAD_S:
-            self.loaded_at = now
-            self.models = {}                                  # an unreadable table scores nothing
-            self.models, problems = load_models(self.db, self.broker)
+            models, problems = load_models(self.db, self.broker)   # raises: no models, retried at the next job
+            self.models, self.loaded_at = models, now
             if problems and problems != self.problems:
                 log.warning("shadow scoring: %d model row(s) refused: %s", len(problems), "; ".join(problems)[:800])
             self.problems = problems
@@ -347,10 +417,14 @@ class ShadowScorer:
 
     def _vector(self, job: Job) -> Snapshot | None:
         from goldbot.research import feature_snapshots as fs
-        key = (job.tf, int(job.decision.value))
+        key = job.key
         built, snap = self.cached(*key)
         if not built:
-            snap = fs.decision_features(job.minutes, job.tf, job.decision)
+            with self.lock:
+                got = self.frames.get(key)
+            if got is None:
+                raise RuntimeError("no 1m frame held for the decision")
+            snap = fs.decision_features(got[0], job.tf, job.decision)
             with self.lock:
                 self.vectors[key] = snap
                 while len(self.vectors) > VECTORS_KEPT:
@@ -360,20 +434,15 @@ class ShadowScorer:
     def run(self, job: Job) -> None:
         """Score one job (the worker; tests call it directly). Raises only to `_loop`, which logs and skips. A job
         without a candidate id only loads the models and builds the vector a gate waits for."""
-        key = (job.tf, int(job.decision.value))
         try:
             models = self._models().get(job.arm_id)
         except Exception as exc:              # noqa: BLE001 - an unreadable table scores nothing this round
             self.models = {}
             self.fail(job.candidate_id or job.arm_id, f"model table unreadable: {type(exc).__name__}")
-            self._warmed(key)
             return
         if not job.candidate_id:
-            try:
-                if gating_models(models or ()):
-                    self._vector(job)
-            finally:
-                self._warmed(key)
+            if gating_models(models or ()):
+                self._vector(job)
             return
         if not models:
             self.counts["no_model"] += 1
@@ -401,6 +470,24 @@ class ShadowScorer:
             self.warming.discard(key)
 
 
+def _bar_s(tf: str) -> float:
+    from goldbot.config import tf_seconds
+    try:
+        return float(tf_seconds(tf))
+    except Exception:                         # noqa: BLE001 - an unknown timeframe: a day
+        return 86_400.0
+
+
+def mark_pass(ex: Exploration | None, running: bool) -> None:
+    """`exploration.on_pass` / `on_pass_slow` bracket their work with this (F1); never raises."""
+    sc: ShadowScorer | None = getattr(ex, "shadow_scorer", None)
+    if sc is not None:
+        try:
+            sc.mark_pass(running)
+        except Exception:                     # noqa: BLE001 - a mark never stops a pass
+            log.warning("shadow scoring: pass mark failed")
+
+
 def scorer(eng: Engine, ex: Exploration) -> ShadowScorer:
     """The block's scorer, started at first use."""
     sc: ShadowScorer | None = getattr(ex, "shadow_scorer", None)
@@ -417,7 +504,7 @@ def submit(eng: Engine, ex: Exploration, arm: Arm, s: Pending, candidate_id: str
         if not eng.cfg.shadow_score or arm.instrument != GOLD:
             return
         scorer(eng, ex).submit(Job(candidate_id=candidate_id, arm_id=arm.arm_id, tf=arm.tf, side=int(s.side),
-                      decision=pd.Timestamp(decision).tz_convert("UTC"), minutes=eng.bars_1m))
+                                   decision=pd.Timestamp(decision).tz_convert("UTC")), eng.bars_1m)
     except Exception as exc:                  # noqa: BLE001 - scoring never reaches the engine's path
         log.warning("shadow scoring: candidate %s not queued (%s)", candidate_id, type(exc).__name__)
 
@@ -431,6 +518,7 @@ class GateVerdict(FrozenRecord):
     score: float
     model_version: str
     propensity: float | None = None          # EXPLORE_P on every rejected candidate
+    u: float | None = None                   # the draw (`explore_u(candidate_id)`), journalled (F6)
 
 
 def gating_models(models: tuple[ServedModel, ...]) -> tuple[ServedModel, ...]:
@@ -450,6 +538,7 @@ def gate_applies(eng: Engine, arm: Arm, s: Pending) -> bool:
     from goldbot.research.arm_rules_spec import SPEC_CONTROL
     spec = arm.spec
     return bool(eng.cfg.model_gate) and eng.cfg.mode == "demo" and arm.instrument == GOLD \
+        and arm.tf not in GATE_EXCLUDED_TFS \
         and spec.role in GATED_ROLES and arm.control_share is None and spec.control_mode != "replay_only" \
         and spec.rule != SPEC_CONTROL and s.group_id is None
 
@@ -494,10 +583,11 @@ def gate(eng: Engine, ex: Exploration, arm: Arm, s: Pending, candidate_id: str) 
         if head.score >= float(model.tau):
             sc.counts["gate_kept"] += 1
             return GateVerdict(keep=True, sample=False, score=head.score, model_version=head.model_version)
-        sample = explore_u(candidate_id) < EXPLORE_P
+        u = explore_u(candidate_id)
+        sample = u < EXPLORE_P
         sc.counts["gate_sampled" if sample else "gate_refused"] += 1
         return GateVerdict(keep=False, sample=sample, score=head.score, model_version=head.model_version,
-                           propensity=EXPLORE_P)
+                           propensity=EXPLORE_P, u=u)
     except Exception as exc:                  # noqa: BLE001 - fail open: the existing rule decides
         return _open(sc, candidate_id, f"{type(exc).__name__}: {exc}") if sc is not None else None
 
@@ -517,7 +607,7 @@ def published(eng: Engine) -> dict[str, Any]:
     sc: ShadowScorer | None = getattr(ex, "shadow_scorer", None)
     if sc is None:
         return {}
-    out: dict[str, Any] = {**sc.counts, "queued": sc.jobs.qsize(),
+    out: dict[str, Any] = {**sc.counts, "queued": sc.jobs.qsize(), "frames": len(sc.frames),
                            "models": sum(len(m) for m in sc.models.values()), "refused_models": len(sc.problems)}
     if sc.error is not None and sc.error_at is not None and time.time() - sc.error_at <= ERROR_WINDOW_S:
         out |= {"last_error": sc.error, "last_error_at": float(sc.error_at)}

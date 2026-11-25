@@ -46,7 +46,7 @@ import yaml
 from pydantic import Field, field_validator, model_validator
 
 from goldbot.base import FrozenRecord
-from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE, unlimited_market_state
+from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE, NOT_STOP_EVIDENCE, unlimited_market_state
 
 if TYPE_CHECKING:
     from goldbot.engine.exploration import ExplorationRecord
@@ -341,7 +341,7 @@ def cost_states(conn: sqlite3.Connection, arms: Collection[str], *, until: pd.Ti
     by_arm: dict[str, list[ExplorationRecord]] = {a: [] for a in want}
     for t in LEDGER.select(conn, f"arm_id IN ({marks}){cut}", args):
         # ADR 0095 quant C2: cohort fills never feed an H-81 stop; ADR 0097 F1: nor an unlimited market-state fill
-        if t.evidence_class not in NOT_EDGE_EVIDENCE and not unlimited_market_state(t):   # + ADR 0101 samples
+        if t.evidence_class not in NOT_STOP_EVIDENCE and not unlimited_market_state(t):   # samples count (#463 F2)
             by_arm[t.arm_id].append(t)
     return {a: cost_state(rows, rules.cost_stop, record) for a, rows in by_arm.items()}
 
