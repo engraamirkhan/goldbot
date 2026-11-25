@@ -39,13 +39,13 @@ def test_a_demo_floor_that_cannot_protect_the_balance_is_refused(bad) -> None:
         DemoFloor(**bad)
 
 
-def test_no_account_in_the_repo_config_is_unlimited_until_the_canary_sets_it() -> None:
+def test_only_icm_probe_is_unlimited_during_its_canary() -> None:
     """ADR 0097 rollout (D22): the flag defaults to false everywhere and is set true on icm-probe only at its canary
-    (once exits-first and the capacity ceiling are merged), the other demo accounts after a clean 24 h canary and the
+    (owner 2026-11-25 "deploy and switch asap"); the other demo accounts follow after a clean 24 h canary and the
     W2-4 dispatch. A config that turned it on anywhere else first would fail here."""
     accounts = _accounts()
     assert acc_mod.Account.model_fields["demo_unlimited"].default is False
-    assert not {k for k, a in accounts.items() if a.demo_unlimited}
+    assert {k for k, a in accounts.items() if a.demo_unlimited} == {"icm-probe"}
     raw = yaml.safe_load((ROOT / "config" / "accounts.yaml").read_text())["accounts"]
     assert {k for k, a in raw.items() if "demo_unlimited" in a} == {"icm-demo", "icm-probe", "vantage-demo", "vantage-247"}
 
