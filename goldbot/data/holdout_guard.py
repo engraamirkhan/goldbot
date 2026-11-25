@@ -138,6 +138,8 @@ LIVE_EXEMPT: dict[str, str] = {
     "goldbot.ops.long_history": "appends the live store's complete days to raw/daily (the engine's 1d/1w warm-up); "
                                 "research readers of raw/daily filter < holdout",
     "goldbot.engine.long_bars": "the engine's 1d/1w bars from raw/daily up to now, live trading only",
+    "goldbot.research.feature_snapshots": "lookback warm-up only for decisions on/after HOLDOUT_END (ADR 0100); a "
+                                          "decision inside the holdout is refused",
     # live-store readers (store.read / store.sql / account_bars_1m), quant C2 on PR #450
     "goldbot.data.account_bars": "account_bars_1m: the account's live 1m bars as of a time, for the engine and the "
                                  "live labellers; research callers guard",

@@ -20,7 +20,7 @@ from goldbot.research import exploration_data as ex
 from goldbot.research import feature_snapshots as fs
 
 pytestmark = pytest.mark.usefixtures("unknown_arms_are_gold")     # made-up arm ids read as gold (tests/conftest.py)
-START = pd.Timestamp("2026-09-01", tz="UTC")
+START = pd.Timestamp("2026-10-05", tz="UTC")     # after the sealed holdout (quant R10: snapshots never read it)
 DAYS = 40
 
 

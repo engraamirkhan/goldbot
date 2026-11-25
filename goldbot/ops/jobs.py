@@ -353,6 +353,20 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+def gold_symbols(accounts: Sequence[Any]) -> dict[str, str]:
+    """Each account's gold store symbol: its traded symbol, under which its engine and the broker-M1 reconcile store
+    its minutes (engine/books.py `store_symbol` of the primary book; Vantage: XAUUSD+). Never a default: the weekly
+    audit read vantage under XAUUSD and excluded every vantage snapshot (label unlock 2026-11-25)."""
+    return {str(acc.account_id): _gold_symbol(acc) for acc in accounts}
+
+
+def _gold_symbol(acc: Any) -> str:
+    """The account's traded gold symbol; an account record without one (test doubles, old records) reads the
+    canonical XAUUSD, as before. A configured Account always carries its own (vantage: XAUUSD+)."""
+    sym = getattr(acc, "symbol", None)
+    return str(sym) if sym else "XAUUSD"
+
+
 def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """The gold exploration candidates' point-in-time default-feature rows (research/feature_snapshots.py, ML review
     2026-11-13 improvement B), at most research.exploration.snapshot_max_decisions decision bars a night, newest first,
@@ -362,10 +376,16 @@ def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     e = ctx.settings.research.exploration
     if not e.feature_snapshots:
         return {"enabled": False}
+    # label unlock 2026-11-25: per-timeframe quotas (fs.TF_QUOTAS, the slowest first) under the settings cap, and a
+    # wall-clock budget that never runs into the 00:45-04:05 UTC research window
+    clock = getattr(ctx, "clock", None)
+    deadline = fs.snapshot_deadline(clock() if clock is not None else pd.Timestamp.now(tz="UTC"))
+    if deadline is None:
+        return {"skipped": "inside the 00:45-04:05 UTC research window: the candidates are snapshotted another night"}
     db = Database.open(ctx.state_dir, "aux")
     rep = fs.snapshot_pending(db, ctx.store, broker_of={acc.account_id: acc.broker for acc in ctx.accounts},
-                              symbol_of={acc.account_id: getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts},
-                              as_of=slot, max_decisions=e.snapshot_max_decisions)
+                              symbol_of=gold_symbols(ctx.accounts), as_of=slot, max_decisions=e.snapshot_max_decisions,
+                              quotas=fs.scaled_quotas(fs.TF_QUOTAS, e.snapshot_max_decisions), deadline=deadline)
     rep["coverage_1d"] = fs.coverage(db, since=slot - pd.Timedelta(days=1))
     return rep
 
@@ -521,7 +541,7 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     start = slot - pd.Timedelta(days=EXPLORATION_LABEL_DAYS)
     keys = sorted({(str(a), str(b)) for a, b in zip(both["account_id"], both["broker"], strict=True)})
     broker_of = {acc.account_id: acc.broker for acc in ctx.accounts}
-    symbol_of = {acc.account_id: getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts}
+    symbol_of = gold_symbols(ctx.accounts)
     r2_error: str | None = None if voided_ok else "label_void failed"
     legs, leg_excluded = pd.DataFrame(), dict[str, int]()
     if voided_ok:
@@ -624,8 +644,8 @@ def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> tu
     (over-voiding cannot be undone) and its decisions from the span's start are returned to be held out in memory."""
     from goldbot.research import evidence_exclusions as ev
     inserted, held, open_ = 0, set[str](), list[str]()
-    for symbol in sorted({getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts}):
-        hosts = {acc.account_id: acc.broker for acc in ctx.accounts if getattr(acc, "symbol", "XAUUSD") == symbol}
+    for symbol in sorted({_gold_symbol(acc) for acc in ctx.accounts}):
+        hosts = {acc.account_id: acc.broker for acc in ctx.accounts if _gold_symbol(acc) == symbol}
         found = ev.screen(db, ctx.store, hosts=hosts, symbol=symbol, now=slot)
         inserted += ev.record(db, found.exclusions)
         held |= found.held_out
@@ -1949,25 +1969,50 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         return {"error": f"setup:{type(exc).__name__}"}
     try:                           # quant S5: nominal snapshots admitted only when audited clean; failure: none admitted
         from goldbot.research.snapshot_audit import audit
-        audited = audit(db, ctx.store, since=sr.NOMINAL_FROM)
+        symbol_of = gold_symbols(ctx.accounts)      # vantage: XAUUSD+ (label unlock: never the XAUUSD default)
+        audited = audit(db, ctx.store, since=sr.NOMINAL_FROM, symbol_of=symbol_of)
         nominal_ok: set[str] = set(audited["clean"])
+        rank3: set[str] = set(audited.get("rank3_beyond_24h", set()))      # quant H2 of #451: counted every run
         audit_counts: dict[str, Any] = audited["counts"]
     except Exception as exc:       # noqa: BLE001 - written-pit rows only this run, reported
         log.warning("self-retrain: nominal snapshot audit failed (%s): no nominal snapshot admitted", type(exc).__name__)
-        nominal_ok, audit_counts = set(), {"error": type(exc).__name__}
+        nominal_ok, audit_counts, rank3 = set(), {"error": type(exc).__name__}, set()
+    early_ok: set[str] = set()
+    if sr.SR_V3.nominal_early_brokers:      # the sr-v3 census only (counts): early rows of a broker that passed
+        try:
+            from goldbot.research.snapshot_audit import live_feed_audit
+            early_ok = set(live_feed_audit(db, ctx.store, before=sr.SR_V3.nominal_from,
+                                           brokers=sr.SR_V3.nominal_early_brokers,
+                                           symbol_of=gold_symbols(ctx.accounts))["clean"])
+        except Exception as exc:   # noqa: BLE001 - the census then admits no early row
+            log.warning("self-retrain: live-feed audit failed (%s): no early nominal row in the census",
+                        type(exc).__name__)
     reads: list[dict[str, Any]] = []
     out: dict[str, Any] = {}
     for broker in brokers:
         try:                       # one broker's failure never skips another's read
-            reads.append(sr.compute_broker(db, broker=broker, cutoff=cutoff,
-                                           holdout=ctx.settings.research.holdout_window(), named_controls=controls,
-                                           rules=rules, held_out=held, nominal_ok=nominal_ok, capped=capped))
+            rd = sr.compute_broker(db, broker=broker, cutoff=cutoff, holdout=ctx.settings.research.holdout_window(),
+                                   named_controls=controls, rules=rules, held_out=held, nominal_ok=nominal_ok,
+                                   capped=capped, rank3_beyond_24h=rank3)
+            reads.append(rd)
         except Exception as exc:   # noqa: BLE001 - recorded: health WARNs on a failed run
             log.exception("self-retrain failed for broker %s", broker)
             sr.record_failure(db, broker=broker, slot=slot, cutoff=cutoff, status="error",
                               error=f"{type(exc).__name__}: {exc}")
             demoted = sr.demote_broker(db, broker, f"read failed in the run of {cutoff:%Y-%m-%d}: fail closed")
             out[broker] = {"error": type(exc).__name__, "demoted": demoted}
+            continue
+        try:                       # label unlock: per-(broker, class, tf) counts, sr-v2 and the sr-v3 census (0 K)
+            rd["cells"] = sr.cells(db, broker=broker, by_tf=rd["counts"].get("by_tf", {}))
+            if sr.SR_V3.nominal_early_brokers:
+                _, c3 = sr.load_rows(db, broker=broker, cutoff=cutoff, holdout=ctx.settings.research.holdout_window(),
+                                     held_out=held, nominal_ok=nominal_ok | early_ok, capped=capped, spec=sr.SR_V3,
+                                     rank3_beyond_24h=rank3)
+                rd["cells_sr_v3"] = sr.cells(db, broker=broker, by_tf=c3["by_tf"], spec=sr.SR_V3)
+            else:                  # the same admission as sr-v2 while no broker passed the revision audit
+                rd["cells_sr_v3"] = [c | {"spec": sr.SR_V3.version} for c in rd["cells"]]
+        except Exception as exc:   # noqa: BLE001 - counts are a report; the run goes on without them
+            log.warning("self-retrain: cell counts for %s failed (%s)", broker, type(exc).__name__)
     decisions = sr.decide(reads, serve=cfg.serve)
     failed = sorted(b for b, o in out.items() if "error" in o)
     hold = f"broker read failed this run ({', '.join(failed)})" if failed else None   # quant (a): incomplete Holm family
