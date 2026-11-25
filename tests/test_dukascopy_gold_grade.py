@@ -1,17 +1,28 @@
 """D-1 grading helpers: the GLD-implied fix parse (London closures, stale NAV, holdout) and the A16 run encoding."""
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
 
-import dukascopy_gold_grade as G  # noqa: E402
-import gold_fix_gld as F  # noqa: E402
+
+def _load(name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+G = _load("dukascopy_gold_grade")
+F = _load("gold_fix_gld")
 
 HEAD = ["Date", "Closing Price", "Ounces of Gold per Share", "NAV/Share at 10:30am NYT"]
 
