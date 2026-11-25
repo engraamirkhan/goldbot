@@ -64,3 +64,20 @@ def test_runs_merge_consecutive_months_of_one_label() -> None:
     r = G._runs(m, ["a", "a", "b", "a"])
     assert [(x["from"], x["to"], x["serves"], x["months"]) for x in r] == [
         ("2009-11", "2009-12", "a", 2), ("2010-01", "2010-01", "b", 1), ("2010-02", "2010-02", "a", 1)]
+
+
+def test_sufficiency_counts_reproduce_the_card_fx10_learn_row() -> None:
+    C = _load_research("sufficiency_counts")
+    assert [C.n_eff(17718, 10, tf) for tf in C.TFS] == [11399, 8468, 6306, 4174, 3221, 1611, 644, 322, 161]
+    t = pd.DataFrame({"key": ["EURGBP", "EURGBP", "XAGUSD", "EURGBP"], "month": ["2012-01", "2012-02", "2012-01", "2019-01"],
+                      "tier": ["B", "C", "A", "B"], "days": [20, 21, 22, 23]})
+    assert C.unit_days(t, ("EURGBP", "XAGUSD"), C.AB, "2010-01", "2017-12") == 42
+
+
+def _load_research(name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "research" / f"{name}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
