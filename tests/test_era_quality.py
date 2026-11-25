@@ -33,9 +33,11 @@ def test_histdata_covers_23_instruments_with_its_code_reuse_split_by_era():
     assert set(HS.instruments) - with_hd == {"BTCUSD", "XAUJPY"}
     assert all(HS.instruments[k].source_tz.get("histdata") == "America/New_York" for k in with_hd)
     us30, usdx, de40 = (HS.instruments[k] for k in ("US30", "USINDEX", "DE40"))
-    assert us30.histdata_for(2018).code == "UDXUSD" and us30.histdata_for(2019) is None
-    assert usdx.histdata_for(2019).code == "UDXUSD" and usdx.histdata_for(2018) is None
-    assert de40.histdata_for(2020).end() == pd.Timestamp("2020-07-01", tz="UTC") and de40.histdata_for(2021) is None
+    h18, h19, h20 = us30.histdata_for(2018), usdx.histdata_for(2019), de40.histdata_for(2020)
+    assert h18 is not None and h19 is not None and h20 is not None
+    assert h18.code == "UDXUSD" and us30.histdata_for(2019) is None
+    assert h19.code == "UDXUSD" and usdx.histdata_for(2018) is None
+    assert h20.end() == pd.Timestamp("2020-07-01", tz="UTC") and de40.histdata_for(2021) is None
     assert de40.histdata_years(2003, 2025) == [*range(2010, 2021), 2024, 2025]
     assert HS.instruments["XTIUSD"].histdata_years(2003, 2025)[-1] == 2023
     assert HS.instruments["XAUEUR"].histdata_years(2003, 2025) == list(range(2009, 2019))
@@ -70,14 +72,20 @@ def test_holdout_cut_is_the_quant_r10_date_and_cannot_move_in_yaml():
         eq.HistorySources.model_validate(raw)
 
 
+def _ref(key: str, month: str) -> eq.ReferenceEra:
+    e = HS.instruments[key].reference_for(month)
+    assert e is not None
+    return e
+
+
 def test_synthetic_references_are_not_native():
-    assert HS.instruments["EURUSD"].reference_for("2010-01").native
-    assert HS.instruments["XAUUSD"].reference_for("2010-01").native
-    assert not HS.instruments["XAUEUR"].reference_for("2010-01").native
-    assert HS.instruments["USINDEX"].reference_for("2018-01").native
-    assert not HS.instruments["USINDEX"].reference_for("2017-11").native
-    assert HS.instruments["EURGBP"].reference_for("2004-05").legs == {"EURGBP": 1.0}
-    assert not HS.instruments["EURGBP"].reference_for("2010-05").native
+    assert _ref("EURUSD", "2010-01").native
+    assert _ref("XAUUSD", "2010-01").native
+    assert not _ref("XAUEUR", "2010-01").native
+    assert _ref("USINDEX", "2018-01").native
+    assert not _ref("USINDEX", "2017-11").native
+    assert _ref("EURGBP", "2004-05").legs == {"EURGBP": 1.0}
+    assert not _ref("EURGBP", "2010-05").native
 
 
 def test_r11_thresholds_are_frozen():
@@ -197,7 +205,7 @@ def test_minutes_at_or_after_the_holdout_cut_are_never_kept():
 
 def test_split_errors_quarantines_broken_rows_and_keeps_the_rest():
     bars = _walk("2010-03-01", "2010-03-03")
-    bars.loc[10, "bid_low"] = bars.loc[10, "bid_high"] * 1.01        # low above high
+    bars.loc[10, "bid_low"] = float(bars["bid_high"].iloc[10]) * 1.01   # low above high
     bars = pd.concat([bars, bars.iloc[[20]]], ignore_index=True).sort_values("ts_utc", kind="stable")
     i = bars.index[600]
     bars.loc[i, "bid_close"] *= 1.02                                   # a reverting spike: flagged, kept
@@ -287,7 +295,8 @@ def test_eet_minus_7_rule_switches_on_eu_dates():
 
 
 def test_reconvert_round_trips_ny_stamps():
-    bars = _walk("2019-03-04", "2019-04-06", seed=2).assign(visible_at=pd.NaT, source="histdata:EURUSD")
+    bars = _walk("2019-03-04", "2019-04-06", seed=2)
+    bars["source"] = "histdata:EURUSD"
     same = hd.reconvert(bars, "ny")
     assert same["ts_utc"].equals(bars["ts_utc"].astype(same["ts_utc"].dtype)) or len(same) == len(bars)
     alt = hd.reconvert(bars, "eet-7")
