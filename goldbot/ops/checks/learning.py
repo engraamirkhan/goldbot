@@ -9,7 +9,8 @@ switch failing on any one of them):
   learning:<name>  a learner (LEARNERS: an aux.db output table and the rows that count as output). Switched on with 0
                    output rows, or none within its cadence + slack, WARNs; once that has held FAIL_AFTER_H (48 h) it
                    FAILs and the alert loop tells the owner on Telegram. Its grace starts at `grace_start`: the first
-                   deploy at or after LIVENESS_FROM (state/deploys.jsonl), so a slipped release still gets 48 h.
+                   deploy whose commit contains this change (state/deploys.jsonl, git ancestry), never before
+                   LIVENESS_FROM, so a slipped release still gets its 48 h.
                    Switched off in settings WARNs with its flag and never FAILs (off is a recorded decision, but never
                    silent). Output computed but not applied (the nightly weights under `allocator: equal`) reads ok and
                    names the allocator: that choice is model_influence's to report. Fill-driven learners
@@ -28,12 +29,14 @@ switch failing on any one of them):
                    with candidates in the window; never FAIL: a statistical gate that lets no model through is honest,
                    and a FAIL would push to loosen it (statistical gates are not limits).
 
-Reads aux.db read-only (`mode=ro`), the watcher files and state/deploys.jsonl. No order path, no write.
+Reads aux.db read-only (`mode=ro`), the watcher files, state/deploys.jsonl and git ancestry (read-only, cached). No
+order path, no write.
 """
 from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,6 +51,10 @@ if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
 
 LIVENESS_FROM = pd.Timestamp("2026-11-26 22:00", tz="UTC")   # release train 1 (plan W1-C): the earliest grace start
+CHANGE_COMMIT = "67a2fa46b536c836c193c4d42ba38efccd500ab4"   # the commit that added these checks (PR #456)
+REPO = Path(__file__).resolve().parents[3]                    # this checkout (/opt/goldbot on the brain)
+GIT_TIMEOUT_S = 5.0
+_CONTAINS: dict[str, bool | None] = {}                        # deploy commit -> contains CHANGE_COMMIT
 FAIL_AFTER_H = 48.0                # a WARN that has held this long FAILs (SRE plan item 1: "FAIL after 48 h of WARN")
 FILL_DRIVEN_CADENCE_H = 72.0       # SRE review M5: a learner fed by fills writes nothing over a weekend
 INFLUENCE_WINDOW_H = 24.0          # SRE plan item 1: "model-influence % is 0 over 24 h"
@@ -220,11 +227,27 @@ def influence(con: sqlite3.Connection, *, since: pd.Timestamp, until: pd.Timesta
     return Influence(n=int(row[0] or 0), scored=int(row[1] or 0), changed=int(row[2] or 0))
 
 
-def grace_start(state_dir: Path) -> pd.Timestamp:
-    """When the 48 h grace of a learner that never wrote begins (SRE review L1): the first deploy recorded at or
-    after LIVENESS_FROM - 24 h (state/deploys.jsonl, append-only, goldbot/ops/deploy.py), never before LIVENESS_FROM;
-    LIVENESS_FROM itself when none is recorded (a host without the deploy tool, a test)."""
-    from_ = LIVENESS_FROM - pd.Timedelta(hours=24)
+def _contains_change(to: str, repo: Path) -> bool | None:
+    """True when commit `to` contains this change (CHANGE_COMMIT is its ancestor), False when it does not, None when
+    git cannot tell (no repo, unknown commit, timeout). Read-only git, cached per commit for the process."""
+    hit = _CONTAINS.get(to)
+    if hit is not None or to in _CONTAINS:
+        return hit
+    try:
+        r = subprocess.run(["git", "-c", f"safe.directory={repo}", "-C", str(repo), "merge-base", "--is-ancestor",
+                            CHANGE_COMMIT, to], capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
+        got: bool | None = {0: True, 1: False}.get(r.returncode)
+    except (OSError, subprocess.SubprocessError):
+        got = None
+    _CONTAINS[to] = got
+    return got
+
+
+def grace_start(state_dir: Path, repo: Path = REPO) -> pd.Timestamp:
+    """When the 48 h grace of a learner that never wrote begins (SRE review of #456 L1): the first successful deploy
+    whose commit contains this change (`git merge-base --is-ancestor CHANGE_COMMIT <to>`, state/deploys.jsonl is
+    append-only, goldbot/ops/deploy.py), never before LIVENESS_FROM. A deploy git cannot judge is skipped; with none
+    found (a host without the deploy tool, a test) LIVENESS_FROM."""
     try:
         lines = (state_dir / "deploys.jsonl").read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -232,11 +255,12 @@ def grace_start(state_dir: Path) -> pd.Timestamp:
     for line in lines:
         try:
             rec = json.loads(line)
-            if str(rec.get("result", "")).startswith("deployed"):
+            if not str(rec.get("result", "")).startswith("deployed") or not rec.get("to"):
+                continue
+            if _contains_change(str(rec["to"]), repo):
                 ts = pd.Timestamp(rec["ts"])
                 ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-                if ts >= from_:
-                    return max(ts, LIVENESS_FROM)
+                return max(ts, LIVENESS_FROM)
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
     return LIVENESS_FROM

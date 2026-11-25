@@ -102,17 +102,30 @@ def test_a_dead_learner_fails_48_hours_after_the_grace_start_and_each_check_stan
     assert by["learning:har_days"].status == "warn"           # switched off: never FAILs
 
 
-def test_the_grace_starts_at_the_first_deploy_after_liveness_from_so_a_slipped_release_still_gets_48_hours(tmp_path):
+def test_the_grace_starts_at_the_first_deploy_whose_commit_contains_this_change(tmp_path, monkeypatch):
     late = learning.LIVENESS_FROM + pd.Timedelta(days=3)
+    contains = {"old": False, "new": True, "unknown": None}
+    monkeypatch.setattr(learning, "_contains_change", lambda to, repo: contains[to])
     (tmp_path / "deploys.jsonl").write_text("\n".join(json.dumps(r) for r in (
-        {"ts": (learning.LIVENESS_FROM - pd.Timedelta(days=5)).isoformat(), "result": "deployed"},
-        {"ts": late.isoformat(), "result": "rolled_back"},
-        {"ts": (late + pd.Timedelta(hours=1)).isoformat(), "result": "deployed"})) + "\n")
+        {"ts": (learning.LIVENESS_FROM + pd.Timedelta(hours=1)).isoformat(), "result": "deployed", "to": "old"},
+        {"ts": (late - pd.Timedelta(hours=2)).isoformat(), "result": "deployed", "to": "unknown"},
+        {"ts": late.isoformat(), "result": "rolled_back", "to": "new"},
+        {"ts": (late + pd.Timedelta(hours=1)).isoformat(), "result": "deployed", "to": "new"})) + "\n")
     assert learning.grace_start(tmp_path) == late + pd.Timedelta(hours=1)
     _seed_today(tmp_path)
     by = _liveness(tmp_path, late + pd.Timedelta(hours=10))
     assert by["learning:cost_cells"].status == "warn"
     assert learning.grace_start(tmp_path / "nowhere") == learning.LIVENESS_FROM
+
+
+def test_git_ancestry_says_whether_a_deploy_contains_the_change(monkeypatch):
+    import subprocess
+    head = subprocess.run(["git", "-C", str(learning.REPO), "rev-parse", "HEAD"], capture_output=True, text=True,
+                          check=True).stdout.strip()          # present in a shallow CI checkout too
+    monkeypatch.setattr(learning, "CHANGE_COMMIT", head)
+    monkeypatch.setattr(learning, "_CONTAINS", {})
+    assert learning._contains_change(head, learning.REPO) is True
+    assert learning._contains_change("0" * 40, learning.REPO) is None
 
 
 def test_a_learner_switched_off_in_settings_warns_with_its_flag_and_never_fails(tmp_path):

@@ -27,3 +27,10 @@
   - **`scripts/learning_kpis.py`** (read-only): K1 usable rows per broker x class x 9 tf, K2 influence with its money
     effect, K4, and self-retrain drift.
   - **Open:** the engine reads no self_retrain model, so an ACTIVE filter changes no decision.
+  - **Revisit:** "model_watch need not cover self-retrain filters" must be revisited when the engine starts reading a
+    filter. A filter that acts on decisions needs a champion-grade CUSUM watch.
+  - **Deploy note:** migration 44 builds `exploration_obs_decision` on the brain's large exploration_obs. Before the
+    deploy, build it as the service user outside market hours (`CREATE INDEX IF NOT EXISTS exploration_obs_decision
+    ON exploration_obs(decision_ns)` on state/aux.db), or time it on a copy first. The migration is then a no-op.
+  - **Grace start:** the 48 h FAIL clock starts at the first deploy whose `to` commit contains 67a2fa46 (git
+    ancestry, state/deploys.jsonl), never before 2026-11-26 22:00 UTC.

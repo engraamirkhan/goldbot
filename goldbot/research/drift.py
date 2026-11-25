@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import Record
+from goldbot.base import Record, load_record_json
 from goldbot.research.cusum import DEFAULT_K, FALSE_ALARM_QUARTER, calibrated_h
 from goldbot.research.metrics import calibration_ece
 
@@ -271,6 +271,7 @@ def self_retrain_drift(con: Any, s: Any, statuses: tuple[str, ...] = ("active", 
     audit, so a superset of what it trained on), live = after it. Reported (drift.json `self_retrain`, learning_kpis),
     never sizing or halting: a filter is judged forward by its own demotion rule (research/self_retrain.py)."""
     from goldbot.research import self_retrain as sr
+    from goldbot.research.self_retrain import LogitModel
     if not con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'self_retrain_models'").fetchone():
         return {}
     q = ", ".join("?" for _ in statuses)
@@ -279,7 +280,7 @@ def self_retrain_drift(con: Any, s: Any, statuses: tuple[str, ...] = ("active", 
     out: dict[str, dict[str, Any]] = {}
     for version, broker, arm_id, status, cutoff_ns, text in got:
         rows = _sr_rows(con, broker, arm_id, int(sr.NOMINAL_FROM.value), sr.FEATURES)
-        model = sr.LogitModel.model_validate_json(text)
+        model = load_record_json(LogitModel, text, source="aux.db self_retrain_models")   # ADR 0010
         ref, live = rows[rows["decision_ns"] <= cutoff_ns], rows[rows["decision_ns"] > cutoff_ns]
         d = scored_model_drift(str(version), sr.design(ref), sr.design(live), model.score, s)
         d.status = str(status)
