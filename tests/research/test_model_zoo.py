@@ -698,3 +698,19 @@ def test_input_coverage_names_the_informative_inputs() -> None:
     r[list(Z.STRUCTURAL_NAN)] = np.nan
     cov = Z.check_inputs(r)
     assert cov["informative_inputs"] == 38 and set(cov["nan_share"]) == set(sr.FEATURES)
+
+
+def test_learn_is_refused_once_a_stage_l_outcome_was_written_back(tmp_path: Path) -> None:
+    """Quant residual: a crash between the write-back and stage_l.json must not let a resume read Stage L again."""
+    reg_path = tmp_path / "registry.jsonl"
+    reg = TrialRegistry(reg_path)
+    good, _ = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    Z.book_stage_l(reg, SETTINGS, stage0=good, agent_id="t")
+    assert not Z.stage_l_written_back(reg)
+    Z.write_back_stage_l(reg, {"verdict": "NULL"}, frozen_hash="h")
+    assert Z.stage_l_written_back(reg)
+    W.record_read_once(reg_path.with_name(W.READS_LEDGER), Z.REGISTRY_FAMILY, "learn", ref={}, resume_key="k")
+    with pytest.raises(SystemExit, match="written back"):
+        _cli().main(["learn", "--out", str(tmp_path), "--cache", str(tmp_path), "--registry", str(reg_path)])
+    with pytest.raises(ValueError, match="already"):
+        Z.write_back_stage_l(reg, {"verdict": "NULL"}, frozen_hash="h")

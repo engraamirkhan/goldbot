@@ -224,6 +224,8 @@ def learn(a: argparse.Namespace) -> dict[str, Any]:
     _not_done(a, "stage_l.json")
     reg, settings = TrialRegistry(Path(a.registry)), load_settings()
     booked_before = [r for r in reg.by_family(Z.REGISTRY_FAMILY) if (r.get("config") or {}).get("spec") == Z.SPEC_VERSION]
+    if Z.stage_l_written_back(reg):
+        raise SystemExit(f"a {Z.SPEC_VERSION} Stage L outcome was already written back to the registry: no second read")
     if booked_before and W.Window.LEARN not in W.reads_of(a.ledger, Z.REGISTRY_FAMILY):
         raise SystemExit(f"{Z.SPEC_VERSION} Stage L rows are already in the registry: Stage L was already read")
     s0 = _read(a, "stage0.json", "Stage L needs the Stage 0 record")
@@ -248,12 +250,12 @@ def learn(a: argparse.Namespace) -> dict[str, Any]:
     res = Z.stage_l(Z.judged(wf.oof)) | {"unjudged_by_arm": Z.unjudged(wf.oof)}
     frozen = Z.freeze(rows, wf.oof, t0=Z.CONFIRM_FROM)
     fh = Z.frozen_hash(frozen)
-    Z.write_back_stage_l(reg, res, frozen_hash=fh)
     out = {"stage": "L", "spec": Z.SPEC_VERSION, "k_booked": len(booked), "leakage": leak, **res,
            "frozen_hash": fh, "arms": _arms_used(s0), "ledger": str(a.ledger), "dropped_at_learn_edge": dropped,
            "inputs": coverage, "note": f"{coverage['informative_inputs']} informative inputs: "
            f"{', '.join(Z.STRUCTURAL_NAN)} are always NaN on the engine's 90k-minute memory", **provenance}
-    _write(a, "stage_l.json", out)
+    _write(a, "stage_l.json", out)        # the record first, then the registry write-back
+    Z.write_back_stage_l(reg, res, frozen_hash=fh)
     return out
 
 

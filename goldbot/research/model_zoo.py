@@ -919,9 +919,18 @@ def book_stage_l(registry: TrialRegistry, settings: Settings, *, stage0: pf.Powe
                 for c in todo]
 
 
+def stage_l_written_back(registry: TrialRegistry) -> bool:
+    """Whether a Stage L outcome of this spec was already attached to its K rows (the read happened)."""
+    mine = {config_hash(candidate_config(c)) for c in CANDIDATES}
+    return any(e.get("family") == REGISTRY_FAMILY and e.get("config_hash") in mine
+               for e in registry.evidence(kind="stage_l_outcome"))
+
+
 def write_back_stage_l(registry: TrialRegistry, outcome: Mapping[str, Any], *, frozen_hash: str) -> int:
     """The Stage L outcome and the frozen confirm-model hash, attached to each of this spec's K rows as evidence
     (kind `stage_l_outcome`: the registry is append-only, the trial count is unchanged). Returns rows written."""
+    if stage_l_written_back(registry):
+        raise ValueError(f"a Stage L outcome of {SPEC_VERSION} was already written back: Stage L reads once")
     keep = ("verdict", "continuing", "best_base", "holm", "n_judged", "metrics")
     payload = {"frozen_hash": frozen_hash, **{k: outcome[k] for k in keep if k in outcome}}
     n = 0
@@ -935,4 +944,4 @@ def write_back_stage_l(registry: TrialRegistry, outcome: Mapping[str, Any], *, f
 __all__ = ["ARMS", "BASES", "CANDIDATES", "FUSIONS", "Frozen", "GoldOnly", "JointBootstrap", "PowerRefused",
            "WalkForward", "book_stage_l", "count_table", "decide_c", "decide_l", "decide_t", "freeze", "frozen_hash",
            "check_inputs", "gold_only", "judged", "keep_shares", "metrics", "paired", "pooled_edge", "read_rows", "score", "stage0",
-           "stage0_record", "stage_c", "write_back_stage_l", "stage_l", "stage_t", "test_old_excluded", "walk_forward"]
+           "stage0_record", "stage_c", "stage_l_written_back", "write_back_stage_l", "stage_l", "stage_t", "test_old_excluded", "walk_forward"]
