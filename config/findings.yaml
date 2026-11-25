@@ -307,7 +307,7 @@ findings:
     severity: low
     due: 2026-11-25
     source: audit 2026-11-20 SRE risk 8, finance running costs
-    check: {fn: manual, params: {}}
+    check: {fn: manual, params: {done_on: 2026-11-25, evidence: "OCI listing 2026-11-25: 4 instances running (brain + 3 MT5 hosts), 4 boot volumes totalling 194 GB, under the 200 GB free block storage; the old MT5 VM and its boot volume are gone"}}
 
   - id: SRE-REBUILD-DRILL
     title: Bare-host brain rebuild rehearsed with the measured recovery time in the RUNBOOK
