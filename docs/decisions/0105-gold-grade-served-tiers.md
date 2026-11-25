@@ -90,7 +90,7 @@ The helper is `confirm_disclosure` in `scripts/dukascopy_gold_grade.py`. Its out
 - Rule r11-v2.2-2026-11-26, rule blob `9ea9be33655487b095d76cdc11af589e0ce583c8`, script sha256 `56a49042f357270bf3b8b8d4f2e1ac85aa7b3c92a8f26b4504239b749ef7ba99`, run at `a343592d6ebe801290cf4cc1bfc00299542e0b57`.
 - Calibration months (38): 2015-04..2018-12, Dukascopy A under v2.1 against independent HistData minutes.
 - tol = 39.0 bp; 37 of 38 calibration months pass.
-- Power (fix shifted by +-2 tol): 0 (+) and 0 (-) of 38 months fail, share None; v2.2 VOID: tol 39.0 bp > 15.0 bp (or none on the grid).
+- Power not run (void on tol): tol 39.0 bp > 15.0 bp, so v2.2 is VOID.
 - Not regraded (void).
 <!-- end -->
 
@@ -102,3 +102,34 @@ The helper is `confirm_disclosure` in `scripts/dukascopy_gold_grade.py`. Its out
 - Nothing was regraded: the served tiers stay the r11-v2.1 file (sha256 ff653ea7).
 - Under the single-use rule, gold's confirm moves to the fallback: (i) a second independent 1m source graded under v2.1,
   else (ii) a forward window from 2026-10-01, pre-registered with the same gates. The holdout is never confirm.
+
+## Fallback rules (quant, signed 2026-11-26; written before any candidate source is measured)
+**Lesson (verbatim).** "Any share threshold in a future grading rule is checked for granularity before freezing: with n
+days a month, a share s tolerates floor((1 − s)·n) bad days; state that number in the rule."
+
+**(i) Admission precondition for a second independent 1m XAUUSD source (2019-01..2025-09).** A candidate counts only
+if every year 2019-2025 passes all three:
+- (a) its hour-ending exact-close share vs Dukascopy, after r11 clock alignment, is < 0.10;
+- (b) its share of identical 1m close-to-close changes (in source points) vs Dukascopy is < 0.10;
+- (c) there is no documented Dukascopy liquidity-provider or backfill relation; with unknown provenance, (a) and (b)
+  decide.
+
+What this admits and refuses:
+- Broker MT5 history is admissible if it passes (a)-(c) each year. After the EET-with-DST conversion, its clock offset
+  must be at most 1 min, else the month is C.
+- CME GC is not admissible (futures basis).
+
+**No shopping across sources.** ONE source is chosen BEFORE any grading: the one that passes (a)-(c) with the most
+2019-25 coverage.
+- The choice is recorded in this ADR.
+- Only then is the source graded, under r11-v2.1-2026-11-25 unchanged, with the reference sha256 in the tiers rows.
+- The A16 manifest is regenerated only after that.
+- Candidates are measured on (a)-(c) only; none is graded before the choice is recorded.
+
+**(ii) Backstop pre-registration (verbatim).** "Gold confirm forward window starts 2026-10-01 (after the holdout). Data:
+Dukascopy 1m graded monthly under r11-v2.1 against the (i) reference if admitted, else against the traded broker's MT5
+minutes under (a)-(c). Same gates as the card. The read happens once, at the first month-end where outcome-blind graded
+n_eff ≥ the card's judge requirement (counted from graded days only, never from labels); no interim reads. The holdout
+is never confirm."
+
+**Source choice (i):** not yet made.

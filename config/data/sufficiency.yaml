@@ -40,7 +40,7 @@ units:
     judge: [0, 0, 0, 0, 0, 0, 0, 121, 60]
     items: [D-2, D-3, D-4, D-5ie]
   independent_new:
-    label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); ranked by |daily corr with gold| and independent graded days"
+    label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); pre-screened by Dimson ρ on learn and independent graded days"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: null
     judge: null

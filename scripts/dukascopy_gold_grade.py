@@ -330,8 +330,10 @@ def write_adr(cal: GoldFixCalibration, extra: dict[str, object]) -> None:
         f"- Calibration months ({len(cal.months)}): {cal.months[0]}..{cal.months[-1]}, Dukascopy A under v2.1 against "
         "independent HistData minutes.",
         f"- tol = {cal.tol_bp} bp; {cal.passing} of {len(cal.months)} calibration months pass.",
-        f"- Power (fix shifted by +-2 tol): {cal.power_fail_plus} (+) and {cal.power_fail_minus} (-) of "
-        f"{len(cal.months)} months fail, share {cal.power_fail_share}; v2.2 {'VOID: ' + cal.reason if cal.void else 'valid'}.",
+        (f"- Power not run (void on tol): {cal.reason}, so v2.2 is VOID." if cal.void and cal.power_fail_share is None
+         else f"- Power (fix shifted by +-2 tol): {cal.power_fail_plus} (+) and {cal.power_fail_minus} (-) of "
+         f"{len(cal.months)} months fail, share {cal.power_fail_share}; v2.2 "
+         f"{'VOID: ' + cal.reason if cal.void else 'valid'}."),
         *([f"- Regraded tiers sha256 `{extra['tiers_sha256']}`, served `{extra['served_sha256']}`."]
           if "tiers_sha256" in extra else ["- Not regraded (void)."]),
         ADR_END])

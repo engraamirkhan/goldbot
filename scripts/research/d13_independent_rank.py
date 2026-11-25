@@ -172,7 +172,7 @@ def _corr(a: pd.Series, b: pd.Series, lo: pd.Timestamp, hi: pd.Timestamp
     j = j[(j.index >= lo) & (j.index < hi)]
     if len(j) < 60:
         return None, None, None, len(j)
-    dimson = sum(float(j["x"].corr(j["g"].shift(-k))) for k in (-1, 0, 1))
+    dimson = max(-1.0, min(1.0, sum(float(j["x"].corr(j["g"].shift(-k))) for k in (-1, 0, 1))))   # |rho| <= 1
     return dimson, float(j["x"].corr(j["g"])), float(j["x"].corr(j["g"], method="spearman")), len(j)
 
 

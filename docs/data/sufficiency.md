@@ -83,4 +83,4 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 - `fx10`: FX10 pooled (HistData, A/A-cons); learn 2010-01..2017-12, judge 2018-01..2025-09.
 - `metals_crosses_b`: Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close); learn 2010-01..2017-12, judge 2018-01..2025-09.
 - `index_energy_b`: Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows); learn 2018-01..2021-12, judge 2022-01..2025-09.
-- `independent_new`: Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); ranked by |daily corr with gold| and independent graded days; learn 2010-01..2017-12, judge 2018-01..2025-09.
+- `independent_new`: Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); pre-screened by Dimson ρ on learn and independent graded days; learn 2010-01..2017-12, judge 2018-01..2025-09.
