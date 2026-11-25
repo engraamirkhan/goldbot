@@ -128,7 +128,7 @@ touched.
 - **What would change this:** a quant ruling that TEST-OLD or the forward replay is not independent of learn (regime
   overlap). D would then rest on the holdout alone, which has too little power for anything slower than 15m.
 
-## Amendment 2026-11-25: label overlap (quant Q3) and rho_day per horizon (quant Q1)
+## Amendment 2026-11-25 (code, W1-B): label overlap (quant Q3) and rho_day per horizon (quant Q1)
 Status: implemented (branch fix/power-overlap-design-effect, plan 2026-11-25 S3), for quant-reviewer re-verify.
 The phase gate, live unlock and RiskGate are not touched.
 
@@ -175,3 +175,55 @@ x (1 + unique share); a clone pair counts once; count-only matches measured with
 - The horizon overstates the hold of target exits (1R/2R/3R), so the count-only path is conservative for them. A card
   that wants the credit states its measured uniqueness.
 - H-102's power must be recomputed with Q3 before it starts (W1-F card revision).
+
+## Amendment 2026-11-25 (quant-reviewer rulings Q1, Q3, Q5, R13; written by the research director)
+
+Status: proposed; the quant-reviewer signs. Research and demo promotion only; the phase gate, live unlock, real-money
+confirmation and RiskGate are untouched. Settings can still only tighten, except where Q1 replaces a prior with a
+measured bound (below). Source: quant-reviewer plan 2026-11-25, section 0. Closes follow-up (iv) for rho_day at
+horizons of 60 minutes or less and for rho_inst; follow-up (iv) stays open for rho_day above 60 minutes until Q3 is
+fully implemented.
+
+**Q1. rho_day for short horizons.**
+- For label horizons ≤ 60 min: rho_day = max(0.05, the upper 95 % CI of the ICC).
+  - The ICC is day-clustered, estimated with a week-block bootstrap on learn 2010-17, from **other families'**
+    replayed candidates with the same stop and hold geometry. Never from the card's own arms or outcomes.
+- Horizons > 60 min keep the 0.25 prior until Q3 lands in full.
+- Until the ICC measurement is committed (script, data sha256, output file), rho_day stays at 0.25 for every horizon.
+  The validator accepts rho_day < 0.25 only with `rho_day_measurement` naming that file.
+- Every read still uses the day-block bootstrap. No p-value is ever taken from an analytic n_eff (a test pins it).
+- Unchanged: n_eff floor 200, delta 0.10 R, sd floor 1.2 R.
+- The validator floor `rho_day ≥ 0.25` (config.py, `PowerFirstSettings`) becomes a per-horizon floor: 0.05 for
+  ≤ 60 min, 0.25 above.
+- Effect, re-derived here from the ADR's own formula: at 77 candidates a day, n_eff/day = 77 / (1 + 76 x 0.25) = 3.9
+  under the prior and 77 / (1 + 76 x 0.05) = 16.0 at the floor.
+- This is the one place a bound moves down. It is a measured upper confidence bound replacing a prior, and the reads
+  stay on the bootstrap, so the false-pass rate is held by the read and not by n_eff.
+
+**Q3. n_eff counts label overlap (design effect).**
+- n_eff = sum(u_i) / DEFF_day, then divided by the rho_inst factor.
+  - u_i: average uniqueness of row i over its label horizon, pooled across timeframes and arms per instrument
+    (López de Prado 2018, ch. 4).
+  - DEFF_day = 1 + (m_w − 1) rho_day, with m_w = sum(M_d^2) / sum(M_d) and M_d = sum of u_i in day d.
+- `power_first.design_effect` gets a concurrency input. ADR 0096 implements the cluster-level part (a stated hold,
+  Little's law). The label-level pooling across timeframes and arms is still to build.
+- Tests: a daily decision held H = 20 gives n_eff within ±5 % of n/20; max_open = 1 is unchanged; 15m and 30m pooled
+  give at most the 15m n_eff x (1 + the unique share); clone pairs count once.
+
+**Q5. Daily-P&L (position) reads.**
+- n_eff = trading days, then the rho_inst factor.
+- Inference: Newey-West with lag max(5, ceil(1.5 x mean episode length)), or the stationary block bootstrap.
+- Mandatory excess over an episode-sign-randomised control **and** over a drift- and beta-matched book.
+- About 1.03 annual net Sharpe on one instrument is needed for 50 % power.
+- This opens one honest 1d judged route (position reads). 1d **bracket** reads stay never judged.
+
+**R13. Multi-asset pooling.**
+- n_eff_pool = sum of n_eff per instrument / (1 + (k − 1) rho_inst).
+- rho_inst: prior 0.5 (0.7 for metals), unless replaced by the upper 95 % CI of the within-class same-day ICC (the Q1
+  method).
+- One joint day bootstrap across instruments.
+- An instrument enters only with a cost of record and Tier A/B history (quant R11).
+- Brokers are pooled for gross labels only, with a broker indicator and each broker's own cost legs. Judging is per
+  broker.
+
+**What this does not change:** delta, the n_eff floor, the sd floor, Holm, the alpha-spending ledger, the phase gate.
