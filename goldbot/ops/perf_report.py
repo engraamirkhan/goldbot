@@ -48,6 +48,15 @@ Sunday reopen belongs to Monday; default the month so far); trades are in the ra
   sections above are exactly what they were; a trade in both sources (same account and broker position) is counted
   once, in the record. Same honesty rules: net only where commission and swap are both recorded, no interval under
   MIN_TRADES net R, and the groups count in the multiple-groups note.
+* by asset class (owner directive 2026-11-25: "a strategy can perform differently on different instruments"): the
+  record's trades by `asset_class` and `family_class` (dimensions; the record carries no symbol, every engine strategy
+  trades XAUUSD), and the learning closes (exploration and control, learning arms apart) by asset class and by family
+  x asset class (`goldbot.ops.class_breakdown.asset_class_of` of the trade's instrument), each with net, trades, win rate,
+  money per trade, mean R and t; a family positive in one class and negative in another (each from MIN_TRADES net
+  R, and the clustered t of best minus worst at the Bonferroni bar) is listed as "split (significant)"
+  (goldbot/ops/class_breakdown.py split_test). Every t is CR1-clustered by (account, opportunity day), as the other
+  readers'. A close whose label is voided or that is void as evidence
+  is in no class row (PR #442 rule);
 * their excursions (BACKLOG 195, R135 `mfe_r` / `mae_r` / `mfe_usd` / `mae_usd` / `excursion_approx` on the closed
   exploration body), per family and per arm: median MFE and MAE in R with n, the losers' median MFE (the move the
   bracket gave back), the winners' median MAE (how near the stop came), the time exits' share, and the stop exits'
@@ -94,6 +103,8 @@ from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
 from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
+from goldbot.instruments import GOLD
+from goldbot.ops.class_breakdown import asset_class_of, class_order, clustered_t, split_test
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
 from goldbot.ops.growth_report import GROWTH_ACCOUNT, GrowthTest, growth_test
 from goldbot.ops.growth_report import lines as growth_lines
@@ -117,7 +128,7 @@ CAPTURE_R = 1.0                  # ... on which the system made >= 1 R
 BARS_SOURCE = "dukascopy"        # the bars_1m source the day types are read from (data/release.py load_into_store)
 NOT_RECORDED = "not recorded"
 OPPORTUNITY, ORDINARY = "opportunity (ex post)", "ordinary (ex post)"
-DIMENSIONS = ("family", "agent", "timeframe", "session", "side", "day_type")
+DIMENSIONS = ("family", "agent", "timeframe", "session", "side", "day_type", "asset_class", "family_class")
 SESSION_NAMES = {"asia": "asia (Tokyo)", "london": "london (London)", "newyork": "newyork (New York)"}
 AGENT_ID = re.compile(r"^([a-z0-9_]+)-g\d+-[0-9a-f]{10}$")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -150,6 +161,7 @@ class GroupStats(FrozenRecord):
     r_per_day: float | None = None
     win_rate: float | None = None          # share of net R > 0
     r_ci90: tuple[float, float] | None = None   # Student-t, only from MIN_TRADES net R
+    t_r: float | None = None               # mean net R / its CR1 SE, clustered by (account, opportunity day)
     sufficient: bool
     verdict: str
     # exploration, control and probe rows only (None / 0 elsewhere): trades closed by anything but the arm's own stop,
@@ -343,6 +355,11 @@ class LearningReport(FrozenRecord):
     # never a ranking); exploration and control only (a probe has no bracket)
     excursion_families: list[ExcursionStats] = []
     excursion_arms: list[ExcursionStats] = []
+    # owner directive 2026-11-25: exploration and control closes (learning arms apart, class voids left out) by asset
+    # class and by "<family> / <class>", and the families split across classes (class_breakdown.splits)
+    asset_classes: list[GroupStats] = []
+    family_classes: list[GroupStats] = []
+    class_splits: list[str] = []
 
 
 class AccountReport(FrozenRecord):
@@ -371,7 +388,7 @@ class PerformanceReport(FrozenRecord):
     min_trades: int = MIN_TRADES
     groups: int = 0                            # group rows across every account and dimension
     groups_with_reading: int = 0
-    learning_groups: int = 0                   # exploration, control and probe rows (kind rows overlap family rows)
+    learning_groups: int = 0                   # exploration, control and probe rows (kind, family and class rows overlap)
     accounts: list[AccountReport]
     errors: list[str] = []
     # growth sprint 2026-11-01: this risk week's growth test (GS1 against GS1C, the virtual ledgers); None when
@@ -393,6 +410,11 @@ class _Row(FrozenRecord):
     gross_r: float | None
     risk: float | None                         # initial risk in account currency (P&L / R of the same basis)
     dims: dict[str, str]
+
+    @property
+    def cluster(self) -> tuple[str, str]:
+        """(account, opportunity day of the exit): the CR1 cluster of a group's t, as the other readers'."""
+        return self.trade.account_id, self.exit_day
 
 
 # ---------------------------------------------------------------------------------------------- helpers
@@ -432,6 +454,8 @@ class _Measured(Protocol):
     def gross_pnl(self) -> float | None: ...
     @property
     def gross_r(self) -> float | None: ...
+    @property
+    def cluster(self) -> tuple[str, str]: ...
 
 
 class _LRow(FrozenRecord):
@@ -444,6 +468,11 @@ class _LRow(FrozenRecord):
     net_r: float | None
     gross_pnl: float | None
     gross_r: float | None
+
+    @property
+    def cluster(self) -> tuple[str, str]:
+        """(account, opportunity day of the exit), as `_Row.cluster`."""
+        return self.trade.account, report_day(self.trade.exit_utc)
 
 
 def _group(key: str, rows: Sequence[_Measured], weekdays: int, censored: int = 0) -> GroupStats:
@@ -463,6 +492,7 @@ def _group(key: str, rows: Sequence[_Measured], weekdays: int, censored: int = 0
         pnl_per_day=net_sum / weekdays if net_sum is not None and weekdays else None,
         r_per_day=net_r / weekdays if net_r is not None and weekdays else None,
         win_rate=sum(x > 0 for x in rs) / len(rs) if rs else None, r_ci90=ci,
+        t_r=clustered_t([(r.net_r, r.cluster) for r in rows if r.net_r is not None]),
         sufficient=len(rs) >= MIN_TRADES and ci is not None, verdict=_reading(len(rs), ci), censored=censored)
 
 
@@ -499,7 +529,8 @@ def _dims(t: ClosedTrade, population: dict[str, dict[str, Any]], day_types: dict
         else None
     day_type = day_types.get(entry_day) if day_types is not None and entry_day is not None else None
     side = {1: "long", -1: "short"}.get(t.side or 0)
-    return {"family": family or NOT_RECORDED, "agent": t.agent_id or NOT_RECORDED, "timeframe": tf or NOT_RECORDED,
+    cls = asset_class_of(t.symbol or GOLD)  # code review of PR #445 (M1): a non-gold engine records its symbol
+    return {"asset_class": cls, "family_class": f"{family or NOT_RECORDED} / {cls}", "family": family or NOT_RECORDED, "agent": t.agent_id or NOT_RECORDED, "timeframe": tf or NOT_RECORDED,
             "session": session or NOT_RECORDED, "side": side or NOT_RECORDED, "day_type": day_type or NOT_RECORDED}
 
 
@@ -1162,11 +1193,37 @@ def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str 
     north = _north_star_of([_Entry(r.trade.opened_utc, report_day(r.trade.opened_utc), r.net_pnl, r.net_r)
                             for r in book], ccy, classified, opp or set(), have_bars, [], source)
     exc_families, exc_arms = _excursion_rows(book, order, learning_ids)
+    classes, family_classes, split = _class_rows(rows, censored, weekdays)
     return LearningReport(
+        asset_classes=classes, family_classes=family_classes, class_splits=split,
         currency=ccy, kinds=kinds, families=families,
         days=_days_of([(r.trade.exit_utc, r.net_pnl) for r in book], weekdays, ccy),
         north_star=north.model_copy(update={"pending_open": None}), costs=_learning_costs(book),
         unqualified=unqualified, excursion_families=exc_families, excursion_arms=exc_arms)
+
+
+def _class_rows(rows: list[_LRow], censored: list[_LRow], weekdays: int
+                ) -> tuple[list[GroupStats], list[GroupStats], list[str]]:
+    """Exploration and control closes by asset class and by "<family> / <class>" (class voids and cohort fills left
+    out), and the families split across classes ("split (significant)", class_breakdown.split_test)."""
+    def cls(r: _LRow) -> str:
+        return asset_class_of(r.trade.symbol)
+
+    def keep(xs: list[_LRow]) -> list[_LRow]:
+        return [r for r in xs if r.trade.kind in ("exploration", "control") and not r.trade.class_void]
+    rows, censored = keep(rows), keep(censored)
+    both = [*rows, *censored]
+    classes = [_group(c, [r for r in rows if cls(r) == c], weekdays, sum(cls(r) == c for r in censored))
+               for c in sorted({cls(r) for r in both}, key=class_order)]
+    keys = sorted({(r.trade.family, cls(r)) for r in both}, key=lambda k: (k[0], class_order(k[1])))
+    fam = {k: _group(f"{k[0]} / {k[1]}", [r for r in rows if (r.trade.family, cls(r)) == k], weekdays,
+                     sum((r.trade.family, cls(r)) == k for r in censored)) for k in keys}
+    netr = [r for r in rows if r.net_r is not None]
+    split = sorted(f for f in {k[0] for k in keys}
+                   if split_test([r.net_r for r in netr if r.trade.family == f and r.net_r is not None],
+                                 [cls(r) for r in netr if r.trade.family == f],
+                                 [r.cluster for r in netr if r.trade.family == f], MIN_TRADES))
+    return classes, list(fam.values()), split
 
 
 # ---------------------------------------------------------------------------------------------- build
@@ -1283,6 +1340,7 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
             if excluded else None, learning=learning))
     groups = [g for a in out for gs in a.by.values() for g in gs]
     learning_groups = sum(len(a.learning.kinds) + len(a.learning.families) + len(a.learning.unqualified)
+                          + len(a.learning.asset_classes) + len(a.learning.family_classes)
                           for a in out if a.learning is not None)
     growth = None
     if state.is_dir() and account in (None, GROWTH_ACCOUNT):
@@ -1316,7 +1374,8 @@ def _label(dim: str, key: str) -> str:
     return SESSION_NAMES.get(key, key) if dim == "session" else key
 
 
-def _table(dim: str, groups: list[GroupStats], ccy: str | None, learning: bool = False) -> list[str]:
+def _table(dim: str, groups: list[GroupStats], ccy: str | None, learning: bool = False, t: bool = False) -> list[str]:
+    """`t`: the mean R cell carries its t (the asset-class tables, owner directive 2026-11-25)."""
     lines = ["| " + dim.replace("_", " ") + " | trades | net | gross | net R | gross R | mean R | per trade | per day "
              "| R per day | win | 90% interval | reading |", "|" + " --- |" * 13]
     for g in groups:
@@ -1332,7 +1391,7 @@ def _table(dim: str, groups: list[GroupStats], ccy: str | None, learning: bool =
         win = f"{100 * g.win_rate:.0f}%" if g.win_rate is not None else NOT_RECORDED
         trades = f"{g.trades}" + (f" (+{g.censored} censored)" if g.censored else "")
         lines.append(f"| {_label(dim, g.key)} | {trades} | {net} | {gross} | {nr} | {gr} | "
-                     f"{_r(g.mean_r)} | {_money(g.mean_pnl, ccy)} | {_money(g.pnl_per_day, ccy)} | {_r(g.r_per_day)} | "
+                     f"{_r(g.mean_r)}{f' (t {g.t_r:.1f})' if t and g.t_r is not None else ''} | {_money(g.mean_pnl, ccy)} | {_money(g.pnl_per_day, ccy)} | {_r(g.r_per_day)} | "
                      f"{win} | {ci} | {g.verdict} |")
     return lines
 
@@ -1434,7 +1493,7 @@ def format_markdown(rep: PerformanceReport) -> str:
          f"{rep.groups} groups across {len(DIMENSIONS)} dimensions, {rep.groups_with_reading} with a reading. With many "
          "groups some 90% intervals exclude zero by chance alone (about 1 group in 10 with no edge at all): read a "
          "single group's interval as a lead to test, not a finding"
-         + (f", plus {rep.learning_groups} learning groups (kind rows overlap family rows); about 1 in 10 groups shows "
+         + (f", plus {rep.learning_groups} learning groups (kind, family and class rows overlap); about 1 in 10 groups shows "
             "an interval by chance" if rep.learning_groups else "") + ".", ""]
     if not rep.accounts:
         L.append("No closed trades or proposals in this range.")
@@ -1448,7 +1507,7 @@ def format_markdown(rep: PerformanceReport) -> str:
             L += ["Money source: " + ", ".join(f"{k} {v}" for k, v in a.money_sources.items()) + ".", ""]
         L += ["### Overall", ""] + _table("all", [o], c) + [""]
         for dim in DIMENSIONS:
-            L += [f"### {_heading(dim)}", ""] + _table(dim, a.by[dim], c) + [""]
+            L += [f"### {_heading(dim)}", ""] + _table(dim, a.by[dim], c, t=dim in ("asset_class", "family_class")) + [""]
         if a.learning is not None:
             L += ["### Exploration, control and cost-probe closes (not in the phase-gate record)", "",
                   "These trades are never written to the closed-trade record the phase gate, stop rule and throttle "
@@ -1458,6 +1517,13 @@ def format_markdown(rep: PerformanceReport) -> str:
             lc = a.learning.currency
             L += _table("kind", a.learning.kinds, lc, True) + [""]
             L += _table("kind / family", a.learning.families, lc, True) + [""]
+            if a.learning.asset_classes:
+                L += ["By asset class (exploration and control; learning arms and voided labels left out)", ""]
+                L += _table("asset class", a.learning.asset_classes, lc, t=True) + [""]
+                L += _table("family / asset class", a.learning.family_classes, lc, t=True) + [""]
+                L += [("Split (significant) across classes (best class positive, worst negative, each from "
+                       f"{rep.min_trades} net R, clustered t of the difference at the Bonferroni bar): "
+                       + (", ".join(a.learning.class_splits) or "none")), ""]
             L += ["A family's reading is its mean net R less the random control's on the same risk day, session and side "
                   "(the 90% interval is on that difference, only from "
                   f"{rep.min_trades} trades on each side; \"unmatched\" trades had no control trade in their cell). "

@@ -605,3 +605,71 @@ def test_sunday_sends_the_weekly_and_saturday_sends_fridays_daily(tmp_path: Path
     assert report_text(tmp_path, saturday, saturday, **kw).startswith("☀️ Fri 23 Oct results")
     late = pd.Timestamp("2026-10-27 12:44", tz="UTC")                          # 6 h late, the slot's day kept
     assert report_text(tmp_path, late, NOW, **kw).startswith("☀️ Mon 26 Oct results")
+
+
+# ---------------------------------------------------------------------------------------------- by asset class
+def test_a_lab_that_closed_on_two_asset_classes_gets_a_by_class_line_with_net_n_win_rate_and_r(tmp_path: Path) -> None:
+    """Owner directive 2026-11-25: a lab's closes by asset class (net £, trades, win rate, £/trade, mean R)."""
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.obs("icm-probe", "S1A", DAY, 3, taken=True)
+    lab.trade("icm-probe", "S1A", DAY, pnl=4.5).trade("icm-probe", "S1A", DAY, pnl=-4.5)
+    lab.trade("icm-probe", "S0-US500", DAY, pnl=9.0, symbol="US500")
+    with labs.aux(tmp_path) as conn:
+        assert conn is not None
+        span = labs.lab_span(conn, "icm-probe", DAY - pd.Timedelta(hours=1), DAY + pd.Timedelta(hours=2))
+    assert [(c.asset_class, c.n, c.net_pnl, c.win_rate, c.mean_r) for c in span.by_class] == \
+        [("metal", 2, 0.0, 0.5, 0.0), ("index", 1, 9.0, 1.0, 2.0)]
+    line = next(x for x in daily(tmp_path).splitlines() if x.strip().startswith("by class:"))
+    assert "metal 2 trades +£0.00" in line and "index 1 trade +£9.00" in line and "50% won" in line
+
+
+def test_a_lab_on_one_asset_class_gets_no_by_class_line(tmp_path: Path) -> None:
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.obs("icm-probe", "S1A", DAY, 2, taken=True)
+    lab.trade("icm-probe", "S1A", DAY, pnl=4.5).trade("icm-probe", "S1A", DAY, pnl=-4.5)
+    assert "by class:" not in daily(tmp_path)
+
+
+def test_a_voided_label_never_reaches_a_labs_class_summary(tmp_path: Path) -> None:
+    """PR #442 rule: a close whose label is voided (non-gold labelled at -10..-16 R) is in no class figure; its money
+    stays in the lab's net."""
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.obs("icm-probe", "S1A", DAY, 2, taken=True)
+    lab.trade("icm-probe", "S1A", DAY, pnl=4.5).trade("icm-probe", "S0-UST10Y", DAY, pnl=-72.0, symbol="UST10Y")
+    with lab.db.write() as conn:
+        conn.execute("INSERT INTO exploration_label_void VALUES (?, 'v2', 'non-gold on gold bars', 0)",
+                     (f"ex{lab.n:05d}",))
+    with labs.aux(tmp_path) as conn:
+        assert conn is not None
+        span = labs.lab_span(conn, "icm-probe", DAY - pd.Timedelta(hours=1), DAY + pd.Timedelta(hours=2))
+    assert [(c.asset_class, c.n) for c in span.by_class] == [("metal", 1)]
+    assert span.pnl == pytest.approx(4.5 - 72.0)
+
+
+def test_a_voided_label_never_reaches_the_trades_or_ranking_class_summaries(tmp_path: Path) -> None:
+    from goldbot.api import strategy_labels
+    from goldbot.api import strategy_ranking as sr
+    from goldbot.api import trades_ledger as tl
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.trade("icm-probe", "S1A", DAY, pnl=4.5).trade("icm-probe", "S0-BUND10Y", DAY, pnl=-72.0, symbol="BUND10Y")
+    with lab.db.write() as conn:
+        conn.execute("INSERT INTO exploration_label_void VALUES (?, 'v2', 'non-gold on gold bars', 0)",
+                     (f"ex{lab.n:05d}",))
+    led = tl.build_ledger(tmp_path, NOW, cat=strategy_labels.catalog())
+    assert f"ex{lab.n:05d}" in led.class_void
+    page = tl.query(led, tl.TradeQuery(period="all"))
+    assert [c.asset_class for c in page.by_class] == ["metal"] and page.totals.net_pnl == pytest.approx(-67.5)
+    view = sr.rank(led.rows, strategy_labels.catalog(), NOW, class_void=led.class_void)
+    assert {c.asset_class for c in view.by_class} == {"metal"}
+
+
+def test_a_learning_cohort_fill_never_reaches_a_labs_class_summary(tmp_path: Path) -> None:
+    """Code review of PR #445 (M2): ADR 0095 cohort fills are in no class figure; their money stays in the net."""
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.trade("icm-probe", "S1A", DAY, pnl=4.5)
+    lab.trade("icm-probe", "S0-US500", DAY, pnl=-9.0, symbol="US500", evidence_class="learning_cohort")
+    with labs.aux(tmp_path) as conn:
+        assert conn is not None
+        span = labs.lab_span(conn, "icm-probe", DAY - pd.Timedelta(hours=1), DAY + pd.Timedelta(hours=2))
+    assert [(c.asset_class, c.n) for c in span.by_class] == [("metal", 1)]
+    assert span.pnl == pytest.approx(4.5 - 9.0)

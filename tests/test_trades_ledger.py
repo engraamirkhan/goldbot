@@ -562,7 +562,8 @@ def test_mfe_and_mae_are_none_never_zero_on_rows_without_a_record_and_on_every_o
 
 def test_a_learning_cohort_fill_is_listed_but_never_in_a_ranking_row_read_progress_or_board_n(tmp_path):
     """ADR 0095, quant C2: a demo learning cohort fill is execution evidence of a retired arm. It is listed (money),
-    `not_evidence`, and never in a ranking row, a read's progress, H-61/H-81 stops or the board's n."""
+    `learning_cohort` (code review of PR #445: its own value, so engine rows' `not_evidence` still rank), and never in
+    a ranking row, a read's progress, H-61/H-81 stops, the board's n or a class figure."""
     from goldbot.api import strategy_ranking as sr
     from goldbot.telegram import labs
     _engine(tmp_path, SCALP)
@@ -570,9 +571,45 @@ def test_a_learning_cohort_fill_is_listed_but_never_in_a_ranking_row_read_progre
     _arm(tmp_path, "cohort", "S1A", pnl=-2.0, evidence_class="learning_cohort")
     cat = _catalog(tmp_path)
     rows = [r for r in _ledger(tmp_path, cat).rows if r.arm_id == "S1A"]
-    assert sorted(r.evidence for r in rows) == ["counted", "not_evidence"]
+    assert sorted(r.evidence for r in rows) == ["counted", "learning_cohort"]
     view = sr.rank(rows, cat, NOW)
     assert sum(r.figures.n for r in [*view.rows, *view.controls, *view.retired]) == 1
+    page = tl.query(_ledger(tmp_path, cat), _q(period="all", arm=("S1A",)))
+    assert [c.n for c in page.by_class] == [1] and page.totals.net_pnl == pytest.approx(-1.0)   # money kept
     with _db(tmp_path).connection() as conn:
         [st] = [s for s in labs.arm_statuses(conn, [SCALP], now=NOW, held_out=()) if s.arm_id == "S1A"]
     assert st.n == 1
+
+
+def test_a_page_breaks_its_closed_trades_down_by_asset_class_and_family_x_class_and_flags_a_split():
+    """Owner directive 2026-11-25: the List's filter, by asset class and by family x class (net, n, win rate,
+    money/trade, mean R, t), and a family positive in one class and negative in another flagged."""
+    from goldbot.ops.class_breakdown import MIN_SPLIT_FILLS
+    base: dict[str, Any] = dict(kind="exploration", status="closed", account="icm-probe", account_label="Scalp lab",
+                                mode="demo", family_label="Box", variant="15m", timeframe="15m", arm_id="S1A",
+                                is_control=False, side="long", lots=0.01, entry=1.0, stop=0.9, stop_now=None,
+                                target=1.2, exit=1.1, exit_reason="target", censored=False, held_s=600.0,
+                                hold_limit_s=3600.0, risk_amount=10.0, currency="GBP", gross=None, pnl_now=None,
+                                r_now=None, price_now=None, costs=None, why="x", evidence="counted",
+                                excluded_reason=None, stale=False)
+    spec = [("box", "XAUUSD", 0.5), ("box", "XAUUSD", -0.1), ("box", "EURUSD", -0.5), ("box", "EURUSD", 0.1),
+            ("vwap", "US500", 0.2), ("vwap", "US500", 0.2)]
+    rows = [TradeRow.model_construct(**base, trade_id=f"t{i}", family=fam, symbol=sym, r=r, pnl=r * 10.0,
+                                     opened_utc=NOW - pd.Timedelta(minutes=i + 20),
+                                     exit_utc=NOW - pd.Timedelta(days=i, minutes=1), position_id=None)
+            for i, (fam, sym, r) in enumerate(spec * MIN_SPLIT_FILLS)]
+    # code review of PR #445 (M2): a gross-only row (no net) has no R in a class
+    rows.append(TradeRow.model_construct(**base, trade_id="gross", family="box", symbol="XAUUSD", r=9.0, pnl=None,
+                                         opened_utc=NOW - pd.Timedelta(minutes=30),
+                                         exit_utc=NOW - pd.Timedelta(minutes=2), position_id=None))
+    rows.sort(key=lambda r: (r.exit_utc, r.trade_id), reverse=True)
+    page = tl.query(tl.Ledger(as_of=NOW, rows=rows, unreadable=[]), _q(period="all"))
+    assert [(c.asset_class, c.n) for c in page.by_class] == \
+        [("metal", 2 * MIN_SPLIT_FILLS + 1), ("index", 2 * MIN_SPLIT_FILLS), ("fx", 2 * MIN_SPLIT_FILLS)]
+    metal = page.by_class[0]
+    assert metal.n_r == 2 * MIN_SPLIT_FILLS
+    assert (metal.net_pnl, metal.currency, metal.win_rate, metal.net_per_trade, metal.mean_r) == \
+        (round(4.0 * MIN_SPLIT_FILLS, 2), "GBP", 0.5, 2.0, 0.2)
+    assert {(c.family, c.asset_class) for c in page.by_family_class} == \
+        {("box", "metal"), ("box", "fx"), ("vwap", "index")}
+    assert page.class_splits == ["box"]

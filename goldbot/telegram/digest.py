@@ -588,6 +588,9 @@ def lab_block(state_dir: Path, conn: sqlite3.Connection | None, e: dict[str, Any
         out = [Line(f"{name}: no signals in {hours} h of open market ⚠️ Warning: check the feed", 1, acct)]
     else:
         out = [Line(result_text(name, s, ccy), 1, acct)]
+        by_cls = labs.class_text(s.by_class, ccy)
+        if by_cls:
+            out.append(Line(f"  {by_cls}", 2, acct, True))
 
     def day_r(x: str) -> str:
         return labs.r_text(s.by_day.get(x, 0.0)) if x in s.closed_days else "none"
