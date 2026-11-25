@@ -16,6 +16,11 @@ spikes > 15 x MAD <= 1 per 10,000 bars. Range checks: median session-minute cove
 range ratio needs a native reference (one Dukascopy leg): the high/low of a cross built from legs is not the cross's
 high/low, so on a synthetic reference the month can reach B, never A.
 
+Measurement definitions (fixed 2026-11-25 after a smoke test of two instrument-years, before the full grade run; the
+thresholds did not change): a month is the month of the session day (a bar after 21:00 UTC on the 31st belongs to the
+next month's first day); MAD is the median absolute deviation of the month's nonzero SIGNED 1m log returns; a stale run
+breaks at a gap longer than the stale limit.
+
 Day convention: the daily bar of goldbot.data.daily (closes 21:00 UTC; `session_date`). Session days are Mon-Fri
 (every day for a `weekend: true` instrument). Days excluded from the day-share denominators, decided by calendar and
 reference data only: 25 Dec, 1 Jan, and days the reference itself holds under 60 % of its session hours.
@@ -185,24 +190,26 @@ def spike_mask(close: pd.Series) -> pd.Series:
     if len(c) < 3:
         return pd.Series(out, index=close.index)
     r = np.diff(np.log(c))
-    nz = np.abs(r[r != 0])
+    nz = r[r != 0]
     if nz.size == 0:
         return pd.Series(out, index=close.index)
-    mad = float(np.median(np.abs(nz - np.median(nz))))
-    mad = mad if mad > 0 else float(np.median(nz))
-    big = np.abs(r[:-1]) > R11["spike_mad_k"] * mad
+    mad = float(np.median(np.abs(nz - np.median(nz))))      # MAD of the signed returns (not of |r|)
+    mad = mad if mad > 0 else float(np.median(np.abs(nz)))
+    big = np.abs(r[:-1] - np.median(nz)) > R11["spike_mad_k"] * mad
     revert = (np.sign(r[1:]) == -np.sign(r[:-1])) & (np.abs(r[1:]) >= R11["spike_revert_frac"] * np.abs(r[:-1]))
     out[1:-1] = big & revert        # r[i] is the move into bar i + 1
     return pd.Series(out, index=close.index)
 
 
 def stale_runs(ts: pd.Series, close: pd.Series, minutes: float | None = None) -> int:
-    """Runs of an unchanged close spanning more than `minutes` across consecutive bars of one session day."""
+    """Runs of an unchanged close spanning more than `minutes` across consecutive bars of one session day. A run also
+    breaks at a gap longer than `minutes` (a daily break or a hole is a coverage matter, not a repeated price)."""
     limit = pd.Timedelta(minutes=minutes if minutes is not None else R11["stale_minutes"])
     t = pd.DatetimeIndex(pd.to_datetime(ts, utc=True))
     day = session_date(t)
     c = close.to_numpy()
-    new_run = np.r_[True, (c[1:] != c[:-1]) | (day[1:] != day[:-1])]
+    gap = np.diff(epoch_ns(t)) > limit.value
+    new_run = np.r_[True, (c[1:] != c[:-1]) | (day[1:] != day[:-1]) | gap]
     run_id = np.cumsum(new_run)
     g = pd.Series(t).groupby(run_id)
     span = g.max() - g.min()

@@ -6,10 +6,10 @@ converted to UTC here and re-verified per instrument-year by `check` against the
 
 Layout under <root>/histdata_m1/ (root = the git-ignored raw/; ADR 0048, data-local-only):
   _zips/<CODE>_<year>.zip                the source archive as served (kept: lineage, re-parse without a download)
-  <KEY>/<key>_1m_bid_<year>.parquet      research partition: ts_utc, visible_at, bid_open..bid_close, source;
+  <KEY>/<key>_1m_bid_<year>.parquet      research partition: ts_utc, visible_at, bid_open..bid_close, source, dq_flag;
                                          strictly before the holdout cut 2025-10-01 (quant R10: sealed minutes are
                                          dropped and counted, never stored)
-  _quarantine/<KEY>/...                  error rows (reverting spikes, broken OHLC, duplicate minutes) and whole years
+  _quarantine/<KEY>/...                  error rows (broken OHLC, duplicate minutes) and whole years
                                          that failed the clock check; kept, never loaded
   MANIFEST.jsonl                         one line per instrument-year: status, rows, first/last ts, sha256 of zip and
                                          parquet, sealed minutes dropped, quarantined rows
@@ -54,6 +54,7 @@ from goldbot.data.era_quality import (  # noqa: E402
     HistorySource,
     clock_check,
     daily_from_hourly,
+    day_of,
     drop_holdout,
     epoch_ns_utc,
     grade_month,
@@ -93,22 +94,27 @@ def parse_histdata(text: str | bytes, code: str) -> pd.DataFrame:
 
 
 def split_errors(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(clean rows, error rows with `dq_reason`). Errors: non-positive or broken OHLC (low > open/close or high below),
-    duplicate minutes (the later copy), reverting spikes (era_quality.spike_mask per month). Errors are quarantined,
-    never silently dropped; warnings (thin or flat minutes) stay in the clean rows and are graded per month."""
+    """(kept rows with `dq_flag`, error rows with `dq_reason`). Errors, quarantined (kept on disk, never loaded):
+    non-positive or broken OHLC (low above open/close, high below), duplicate minutes (the later copy). Warnings stay
+    in the kept rows with a flag, never dropped: `warning:spike_15mad`, a reverting spike by era_quality.spike_mask
+    per month. R11 says spikes are "removed, logged"; the removal is left to the reader (label factory) because the
+    15-MAD rule also fires on genuine news minutes (smoke test 2026-11-25: EURUSD 2025 has 4-5 a month), and a
+    removal at ingest could not be undone if the quant re-rules the definition."""
     reason = pd.Series("", index=df.index, dtype=object)
     px = df[["bid_open", "bid_high", "bid_low", "bid_close"]]
     bad = (px <= 0).any(axis=1) | (df["bid_low"] > px.min(axis=1)) | (df["bid_high"] < px.max(axis=1))
     reason[bad] = "ohlc"
     dup = df["ts_utc"].duplicated(keep="first") & (reason == "")
     reason[dup] = "duplicate_minute"
-    ok = reason == ""
-    month = pd.DatetimeIndex(df["ts_utc"]).tz_localize(None).to_period("M")
-    for _, idx in df[ok].groupby(month[ok.to_numpy()]).groups.items():
-        m = spike_mask(df.loc[idx, "bid_close"])
-        reason[m[m].index] = "spike"
+    kept = df[reason == ""].reset_index(drop=True)
+    flag = pd.Series("", index=kept.index, dtype=object)
+    month = pd.DatetimeIndex(kept["ts_utc"]).tz_localize(None).to_period("M")
+    for _, idx in kept.groupby(month).groups.items():
+        m = spike_mask(kept.loc[idx, "bid_close"])
+        flag[m[m].index] = "warning:spike_15mad"
+    kept["dq_flag"] = flag.astype(str)
     q = df[reason != ""].assign(dq_reason=reason[reason != ""])
-    return df[reason == ""].reset_index(drop=True), q.reset_index(drop=True)
+    return kept, q.reset_index(drop=True)
 
 
 def scale_errors(df: pd.DataFrame, src: HistorySource) -> list[str]:
@@ -215,6 +221,7 @@ def pull_one(task: tuple[str, int, str]) -> dict[str, object]:
         _write_parquet(err, base / "_quarantine" / key / f"{key.lower()}_errors_{year}.parquet")
     sha = _write_parquet(clean, year_path(base, key, year))
     return {**rec, "status": "ok", "rows": len(clean), "quarantined_rows": len(err),
+            "flagged_rows": int((clean["dq_flag"] != "").sum()),
             "quarantine_reasons": err["dq_reason"].value_counts().to_dict() if len(err) else {},
             "first": str(clean["ts_utc"].iloc[0]), "last": str(clean["ts_utc"].iloc[-1]),
             "parquet": str(year_path(base, key, year).relative_to(base)), "parquet_sha256": sha}
@@ -382,13 +389,7 @@ def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[
     src = history_sources().instruments[key]
     p = year_path(base, key, year)
     bars = pd.read_parquet(p)
-    q = base / "_quarantine" / key / f"{key.lower()}_errors_{year}.parquet"
-    spikes = pd.read_parquet(q) if q.exists() else pd.DataFrame()
-    if len(spikes):
-        spikes = spikes[spikes["dq_reason"] == "spike"].drop(columns="dq_reason")
-        bars_raw = pd.concat([bars, spikes], ignore_index=True).sort_values("ts_utc", kind="stable")
-    else:
-        bars_raw = bars
+    bars_raw = bars                     # spikes are flagged in place, never removed (split_errors)
     ref, native = reference_hourly(key, year, raw)
     if len(ref):
         cc = clock_check(key, year, epoch_ns_utc(bars["ts_utc"]), bars["bid_close"].to_numpy(dtype="float64"), ref)
@@ -398,8 +399,10 @@ def check_one(task: tuple[str, int, str, str]) -> tuple[dict[str, object], list[
     quarantined = cc.offset_min is not None and not cc.passed
     ref_daily = daily_from_hourly(ref, src.weekend) if len(ref) else None
     grades = []
-    month = pd.DatetimeIndex(bars_raw["ts_utc"]).tz_localize(None).to_period("M")
+    month = day_of(bars_raw["ts_utc"], src.weekend).to_period("M")     # the session day's month
     for per, idx in bars_raw.groupby(month).groups.items():
+        if str(per) >= HOLDOUT_CUT.strftime("%Y-%m"):
+            continue                    # the stub of the first sealed session day (Sep 30 21:00-24:00 UTC)
         g = grade_month(key, str(per), bars_raw.loc[idx], ref_daily, src.session_minutes,
                         native.get(str(per), False), src.weekend, quarantined)
         grades.append(g.model_dump())

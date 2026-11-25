@@ -191,9 +191,13 @@ def test_split_errors_quarantines_broken_rows_and_keeps_the_rest():
     bars = _walk("2010-03-01", "2010-03-03")
     bars.loc[10, "bid_low"] = bars.loc[10, "bid_high"] * 1.01        # low above high
     bars = pd.concat([bars, bars.iloc[[20]]], ignore_index=True).sort_values("ts_utc", kind="stable")
+    i = bars.index[600]
+    bars.loc[i, "bid_close"] *= 1.02                                   # a reverting spike: flagged, kept
+    bars.loc[i, "bid_high"] = bars.loc[i, "bid_close"]
     clean, err = hd.split_errors(bars.reset_index(drop=True))
     assert set(err["dq_reason"]) == {"ohlc", "duplicate_minute"}
     assert len(clean) + len(err) == len(bars) and not clean["ts_utc"].duplicated().any()
+    assert (clean["dq_flag"] == "warning:spike_15mad").sum() == 1
 
 
 def test_scale_error_year_is_reported():
@@ -213,3 +217,18 @@ def test_pull_is_a_no_op_once_done(tmp_path):
     todo = {(k, y) for k, y, _ in hd.tasks_for(["EURUSD"], base)}
     assert ("EURUSD", 2010) not in todo and ("EURUSD", 2011) in todo
     assert min(y for _, y in todo) == 2003 and max(y for _, y in todo) == 2025
+
+
+def test_a_daily_break_is_not_a_stale_run():
+    bars = _walk("2010-03-02", "2010-03-03")
+    c = bars["bid_close"].copy()
+    keep = ~bars["ts_utc"].between(pd.Timestamp("2010-03-02 10:00", tz="UTC"), pd.Timestamp("2010-03-02 10:59", tz="UTC"))
+    c.loc[bars["ts_utc"] == pd.Timestamp("2010-03-02 11:00", tz="UTC")] = c.loc[
+        bars["ts_utc"] == pd.Timestamp("2010-03-02 09:59", tz="UTC")].iloc[0]
+    assert eq.stale_runs(bars.loc[keep, "ts_utc"], c[keep]) == 0
+
+
+def test_spike_threshold_uses_mad_of_signed_returns():
+    """A 1m random walk has no 15-MAD reverting spikes (the |r| MAD would flag hundreds a month)."""
+    bars = _walk("2010-03-01", "2010-04-01", seed=5)
+    assert eq.spike_mask(bars["bid_close"]).sum() == 0
