@@ -22,8 +22,8 @@
 # - histdata: list of {code, from, to}: HistData free M1 ASCII code, its first year (histdata.com's pair pages,
 #   2026-11-25) and, where HistData stops or reuses the code for another series, its last year or month (`to`,
 #   inclusive). Found by the era bands on the first pull (2026-11-25): UDXUSD is the DOW (US30 levels 11k-26k) in
-#   2010-2018 and the US dollar index (~96) from 2019; GRXEUR leaves DAX levels after 2020-06 (~3,300, a Euro Stoxx 50
-#   level); XAUEUR is served to 2018 and WTIUSD to 2023 (later pages issue no download token). Stamps are New York local time WITH daylight saving (repo finding 2026-11-01, re-verified per
+#   2010-2018 and the US dollar index (~96) from 2019; GRXEUR leaves DAX levels for 2020-07..2023 (~3,300, a Euro Stoxx 50
+#   level) and is DAX again from 2024; XAUEUR is served to 2018 and WTIUSD to 2023 (later pages issue no download token). Stamps are New York local time WITH daylight saving (repo finding 2026-11-01, re-verified per
 #   instrument-year by the clock check in scripts/histdata_m1.py); prices are decimals (divisor 1). null when absent.
 # - source_tz: per source, the zone its stamps are in before conversion to UTC (we always store UTC).
 # - price_bands: [from, to, low, high]: inclusive periods (YYYY or YYYY-MM), the band a month's MEDIAN close must lie
@@ -171,7 +171,7 @@ instruments:
       reference: [ { from: "2011-09", legs: { GBRIDXGBP: 1 } } ], synthetic: null }
   DE40:
     { owner_name: GER40, asset_class: index, cfd_type: cash_index, roll: null, weekend: false, session_minutes: 1305,
-      dukascopy: { code: DEUIDXEUR, point: 1000, from: "2013-09" }, histdata: [ { code: GRXEUR, from: 2010, to: "2020-06" } ],
+      dukascopy: { code: DEUIDXEUR, point: 1000, from: "2013-09" }, histdata: [ { code: GRXEUR, from: 2010, to: "2020-06" }, { code: GRXEUR, from: 2024 } ],
       source_tz: { dukascopy: UTC, histdata: America/New_York },
       price_bands: [ [2003, 2014, 2000, 11000], [2015, 2021, 8000, 17000], [2022, 2026, 11500, 32000] ],
       reference: [ { from: "2013-09", legs: { DEUIDXEUR: 1 } } ], synthetic: null }

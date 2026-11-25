@@ -36,6 +36,7 @@ def test_histdata_covers_23_instruments_with_its_code_reuse_split_by_era():
     assert us30.histdata_for(2018).code == "UDXUSD" and us30.histdata_for(2019) is None
     assert usdx.histdata_for(2019).code == "UDXUSD" and usdx.histdata_for(2018) is None
     assert de40.histdata_for(2020).end() == pd.Timestamp("2020-07-01", tz="UTC") and de40.histdata_for(2021) is None
+    assert de40.histdata_years(2003, 2025) == [*range(2010, 2021), 2024, 2025]
     assert HS.instruments["XTIUSD"].histdata_years(2003, 2025)[-1] == 2023
     assert HS.instruments["XAUEUR"].histdata_years(2003, 2025) == list(range(2009, 2019))
 
