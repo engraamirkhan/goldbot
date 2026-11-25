@@ -937,6 +937,108 @@
     "title": "ChartBar",
     "type": "object"
    },
+   "ClassFigures": {
+    "additionalProperties": false,
+    "description": "One asset class's closed fills (`family` None), or one family's in one class: net of every cost.",
+    "properties": {
+     "asset_class": {
+      "title": "Asset Class",
+      "type": "string"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "family": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Family"
+     },
+     "mean_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "n_r": {
+      "default": 0,
+      "title": "N R",
+      "type": "integer"
+     },
+     "net_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Per Trade"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "t": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T"
+     },
+     "win_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Win Rate"
+     }
+    },
+    "required": [
+     "asset_class",
+     "n"
+    ],
+    "title": "ClassFigures",
+    "type": "object"
+   },
    "CodeSignIn": {
     "properties": {
      "at_utc": {
@@ -5021,6 +5123,13 @@
       "title": "Accounts",
       "type": "array"
      },
+     "asset_classes": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Asset Classes",
+      "type": "array"
+     },
      "band": {
       "enum": [
        "ranked",
@@ -5030,6 +5139,18 @@
       ],
       "title": "Band",
       "type": "string"
+     },
+     "by_class": {
+      "items": {
+       "$ref": "#/components/schemas/ClassFigures"
+      },
+      "title": "By Class",
+      "type": "array"
+     },
+     "class_split": {
+      "default": false,
+      "title": "Class Split",
+      "type": "boolean"
      },
      "control_note": {
       "anyOf": [
@@ -5217,6 +5338,20 @@
       "format": "date-time",
       "title": "As Of",
       "type": "string"
+     },
+     "by_class": {
+      "items": {
+       "$ref": "#/components/schemas/ClassFigures"
+      },
+      "title": "By Class",
+      "type": "array"
+     },
+     "class_splits": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Class Splits",
+      "type": "array"
      },
      "controls": {
       "items": {
@@ -7238,7 +7373,8 @@
        "excluded",
        "censored",
        "pending",
-       "not_evidence"
+       "not_evidence",
+       "learning_cohort"
       ],
       "title": "Evidence",
       "type": "string"
@@ -7947,6 +8083,27 @@
       "format": "date-time",
       "title": "As Of",
       "type": "string"
+     },
+     "by_class": {
+      "items": {
+       "$ref": "#/components/schemas/ClassFigures"
+      },
+      "title": "By Class",
+      "type": "array"
+     },
+     "by_family_class": {
+      "items": {
+       "$ref": "#/components/schemas/ClassFigures"
+      },
+      "title": "By Family Class",
+      "type": "array"
+     },
+     "class_splits": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Class Splits",
+      "type": "array"
      },
      "next_cursor": {
       "anyOf": [
@@ -9763,7 +9920,8 @@
          "excluded",
          "censored",
          "pending",
-         "not_evidence"
+         "not_evidence",
+         "learning_cohort"
         ],
         "type": "string"
        },

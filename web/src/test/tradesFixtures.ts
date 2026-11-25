@@ -159,7 +159,7 @@ const rankRow = (o: Omit<Partial<RankRow>, "figures"> & { figures?: Partial<Rank
               read_units: [{ unit: "OR1H", n_counted: 120, n_read_at: 300, n_days: 9, min_days: 0 }], variants: [
       { variant: "15m", timeframe: "15m", status: "early", figures: figures({ n: 300 }) },
       { variant: "1h", timeframe: "1h", status: "early", figures: figures({ n: 112 }) },
-    ], ...rest, figures: figures(f),
+    ], asset_classes: ["metal"], by_class: [], class_split: false, ...rest, figures: figures(f),
   };
 };
 
@@ -170,6 +170,9 @@ export const ranking = (): RankingView => ({
   rows: [
     rankRow(),
     rankRow({ key: "box_break_close", family: "box_break_close", family_label: "Box break + close", rank: 2,
+      asset_classes: ["metal", "fx"], class_split: true, by_class: [
+        { asset_class: "metal", family: "box_break_close", n: 40, n_r: 40, mean_r: 0.2 },
+        { asset_class: "fx", family: "box_break_close", n: 40, n_r: 40, mean_r: -0.2 }],
               figures: { lower_adjusted: -0.09, net_r_per_trade: -0.02, hit_rate: 0.7, net_pnl: -12.5, no_losses: false } }),
     rankRow({ key: "sweep_absorb", family: "sweep_absorb", family_label: "Sweep + absorb", rank: null, band: "too_few",
               unranked_reason: "too few to rank (12 of 30 fills, 4 of 10 days)", variants: [],

@@ -1037,7 +1037,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             led = ledger()
             retired, ok = strategy_board.retired_arms(st.dir, led.as_of, store=st.store())
             return strategy_ranking.Ranker(led.rows, strategy_labels.catalog(), led.as_of, retired=retired,
-                                           unreadable=[*led.unreadable, *([] if ok else ["arm status"])])
+                                           unreadable=[*led.unreadable, *([] if ok else ["arm status"])],
+                                           class_void=led.class_void)
         return ranker_cache.get(build)
 
     @app.get("/api/strategies/ranking", response_model=RankingView)

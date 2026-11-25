@@ -129,8 +129,9 @@ def test_learning_groups_are_counted_apart_in_the_multiple_groups_note(tmp_path)
     [a] = rep.accounts
     assert a.learning is not None
     assert rep.groups == sum(len(gs) for gs in a.by.values())                  # the closed-trade count is as before
-    assert rep.learning_groups == len(a.learning.kinds) + len(a.learning.families)
-    assert (f"plus {rep.learning_groups} learning groups (kind rows overlap family rows); about 1 in 10 groups "
+    assert rep.learning_groups == (len(a.learning.kinds) + len(a.learning.families) + len(a.learning.asset_classes)
+                                   + len(a.learning.family_classes))     # owner 2026-11-25: the class rows count too
+    assert (f"plus {rep.learning_groups} learning groups (kind, family and class rows overlap); about 1 in 10 groups "
             "shows an interval by chance") in format_markdown(rep)
 
 

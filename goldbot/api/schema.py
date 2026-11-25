@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from goldbot.execution.not_confirmed import NotConfirmed
 from goldbot.execution.not_placed import NotPlaced
 from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
+from goldbot.ops.class_breakdown import ClassFigures
 from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN, AskKind
 
 
@@ -1009,8 +1010,9 @@ TradeKind = Literal["real", "strategy", "exploration", "control", "cost_probe", 
 ExitReason = Literal["target", "stop", "trail", "time_limit", "friday_cut", "manual", "kill_switch",
                      "broker_stop_out", "other"]
 # counted: admissible toward its arm's read; excluded: void as evidence (quarantine); censored: closed by anything but
-# its own stop, target or hold; pending: still open; not_evidence: a strategy, real, probe or shadow trade
-TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence"]
+# its own stop, target or hold; pending: still open; not_evidence: a strategy, real, probe or shadow trade;
+# learning_cohort: a demo learning cohort fill (ADR 0095): listed, never in a ranking, a read, the board or a class
+TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence", "learning_cohort"]
 TradeStatus = Literal["open", "closed"]
 TradeSource = Literal["shadow", "positions", "probes", "exploration", "orders"]
 TradeListPeriod = Literal["today", "7d", "30d", "all"]
@@ -1114,6 +1116,11 @@ class TradesPage(BaseModel):
     unreadable: list[TradeSource]           # their trades are missing, not zero
     # the instruments with a trade under every filter but the symbol and group ones (the filter panel's facet)
     symbols: list[str] = Field(default_factory=list)
+    # owner directive 2026-11-25 (goldbot/ops/class_breakdown.py): the filter's closed trades by asset class and by
+    # family x asset class (net, n, win rate, money/trade, mean R, t), and the families split across classes
+    by_class: list[ClassFigures] = Field(default_factory=list)
+    by_family_class: list[ClassFigures] = Field(default_factory=list)
+    class_splits: list[str] = Field(default_factory=list)
 
 
 # ============================================================================= Trade chart (GET /api/trades/{id}/bars)
@@ -1364,6 +1371,13 @@ class RankRow(BaseModel):
     # prereg-amendment-2026-11-15-hv-rule3-replay-control.md: a row read against S0, a replay-only control whose matched
     # read is not wired to its replay labels yet, says so ("control: S0 replay (unwired) - not a verdict"); else None
     control_note: str | None = None
+    # owner directive 2026-11-25 (goldbot/ops/class_breakdown.py): the row's fills by asset class, most fills first
+    # (`asset_classes`), each with net, n, win rate, money/trade, mean R and t; `class_split`: "split (significant)",
+    # best class positive, worst negative, each from MIN_SPLIT_FILLS fills, and the clustered t of the difference at
+    # the Bonferroni bar over class pairs (class_breakdown.split_test; descriptive, never a verdict)
+    asset_classes: list[str] = Field(default_factory=list)
+    by_class: list[ClassFigures] = Field(default_factory=list)
+    class_split: bool = False
 
 
 class AccountChoice(BaseModel):
@@ -1386,6 +1400,10 @@ class RankingView(BaseModel):
     retired: list[RankRow]                  # stopped by their rule, never ranked
     account_choices: list[AccountChoice]    # the accounts with a ranked kind's fill, for the account filter
     unreadable: list[str]
+    # every row's (ranked, too few, retired; not the controls) fills by asset class, and the families split across
+    # classes (owner directive 2026-11-25)
+    by_class: list[ClassFigures] = Field(default_factory=list)
+    class_splits: list[str] = Field(default_factory=list)
 
 
 class KindDay(BaseModel):

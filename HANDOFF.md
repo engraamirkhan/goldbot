@@ -5,6 +5,19 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
+  - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,
+    `goldbot.ops.class_breakdown.asset_class_of`. Arm ids use their suffix (S0-SUGAR) or, for a gold arm, the spec row.
+  - **Where it shows.** The ranking rows and view, the trades page, the lab "by class" line (only when a lab closed on
+    two classes or more), the ranking's Telegram family line, the performance report tables and the web ranking's
+    Class column.
+  - **Figures and flag.** The figures and the split flag are in `goldbot/ops/class_breakdown.py`. A family is flagged
+    "split (significant)" when its best class is positive and its worst negative, each class with at least 30 fills
+    that have an R. The clustered t of the difference must also reach the Bonferroni bar over class pairs.
+  - **Voids.** Voided labels and fills void as evidence are kept out of every class figure (`class_voids`, PR #442).
+    So are demo learning cohort fills. Their money stays in the totals.
+  - **Engine ranking fix.** Cohort fills now carry evidence `learning_cohort`. Before this, the ranking skipped
+    `not_evidence`, which hid every engine strategy (#440).
 - **Exploration labels: a stop inside the spread is voided, never labelled (2026-11-25).**
   - **Finding.** On the brain, 1,039 `exploration_obs` rows have |label_sim_r| > 20 R. 1,038 of them are non-gold
     candidates (FX, rates, energy, ags, metals; session days 2026-11-02..03). They were replayed on XAUUSD bars with
@@ -49,7 +62,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
       Stage T discloses test_old feature memory that reaches before 2008-02.
     - **Finding.** Realised keep shares run about 0.72-0.86, not 2/3, with no signal. A refit on more data shrinks a
       noise model below the earlier OOF scores that tau comes from. The edge stays unbiased; this goes to the quant.
-    - **Backlog.** Item 270 covers the 100-daily-bar inputs.
+    - **Backlog.** Item 271 covers the 100-daily-bar inputs.
   - **Not run.** Stage L, any label read and the K booking. Stage L runs on the goldbot-ops VM with `--registry`,
     after Stage 0 is recorded there.
 - 2026-11-24 (branch feat/demo-learning-cohort; R177, ADR 0095): the self-retrain's ten retired arms send real demo
