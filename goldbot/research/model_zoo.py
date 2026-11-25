@@ -100,6 +100,18 @@ ALPHA = 0.10
 BOOT = 10_000
 MEAN_BLOCK_DAYS = 5
 MIN_BLOCK_ROWS = 60               # Stage 0: every 2012-17 block has at least this many judged rows
+# the 8 K are allocated from this quarter (card header: "8 K from 2026Q4"); booking in any other is refused
+ALLOCATED_QUARTER = "2026Q4"
+# inputs the engine's 90k-minute memory can never compute (they need 100 daily bars; it holds about 80): always NaN, in
+# sr-v2 production too, so 38 of the 40 inputs are informative. Named, never silently imputed; fixing them is a new spec
+STRUCTURAL_NAN: tuple[str, ...] = ("d1_atr_ratio_14_100", "d1_rv_ratio")
+MAX_NAN_SHARE = 0.05              # any other input missing on more rows than this: the read is refused
+STAGE0_NOTES: tuple[str, ...] = (
+    "joint power simulates the two IUT legs (edge_nm, kept) as independent draws per window; their true correlation "
+    "is about 0.58 (k = 2/3), so the joint power is understated (conservative): a recorded deviation from a joint draw",
+    "n per gate counts every in-window candidate; a thin arm's first blocks without a model or tau are later left "
+    "out of the judged set, so the judged n is slightly lower",
+)
 SHUFFLED_AUC_BAND = (0.47, 0.53)  # leakage check 1: every base learner's OOF AUC on shuffled labels inside this
 # power (section 4a; the ADR 0085 settings may only tighten these, tests hold them equal)
 KEEP_SHARE = 2.0 / 3.0
@@ -122,7 +134,28 @@ class GoldOnly(PermissionError):
 
 
 class PowerRefused(PermissionError):
-    """Stage L was asked for without a started Stage 0 power verdict."""
+    """Stage L was asked for without a started Stage 0 power verdict, or after a NOT STARTED (power) row of this
+    spec."""
+
+
+class QuarterRefused(PermissionError):
+    """Stage L was asked for outside the quarter its K is allocated from."""
+
+
+def check_inputs(rows: pd.DataFrame) -> dict[str, Any]:
+    """Before any read: every row has a snapshot time at or before its decision (a missing one fails: card section
+    3.4), and no input outside STRUCTURAL_NAN is missing on more than MAX_NAN_SHARE of the rows (refused, never
+    median-imputed in silence). Returns the NaN share per input and the informative input count."""
+    avail = pd.to_datetime(rows["available_utc_max"], utc=True)
+    dec = _ts(rows["decision_utc"])
+    if avail.isna().any() or (pd.DatetimeIndex(avail) > dec).any():
+        raise ValueError("point in time: a candidate without a feature snapshot time or with one after its decision")
+    nan = {c: float(rows[c].isna().mean()) if c in rows else 1.0 for c in sr.FEATURES}
+    bad = {c: v for c, v in nan.items() if v > MAX_NAN_SHARE and c not in STRUCTURAL_NAN}
+    if bad:
+        raise ValueError(f"inputs missing on more than {MAX_NAN_SHARE:.0%} of rows: {bad}")
+    informative = sum(1 for c in INPUTS if c == "side" or nan.get(c, 0.0) < 1.0)
+    return {"nan_share": nan, "informative_inputs": informative, "structural_nan": list(STRUCTURAL_NAN)}
 
 
 def gold_only(instrument: str) -> None:
@@ -683,7 +716,8 @@ def decide_c(m: Mapping[str, Mapping[str, float]], *, continuing: Sequence[str],
              pairs: Mapping[str, Mapping[str, float]]) -> dict[str, Any]:
     """Stage C: a continuing candidate passes as at Stage L (Holm across the continuing set). A fusion beats B* only if
     it passes, its paired D(F, B*) has Holm p_D <= 0.10 (family: the fusions that continued), D > 0 and kept > 0.
-    Winner: the largest D among those, else the simplest passing candidate, else NULL."""
+    Winner: the largest D among those, else the simplest passing BASE (a fusion that passes but does not beat B*
+    through the paired test never wins by the fallback), else NULL."""
     cont = list(continuing)
     adj = sr.holm({c: float(m[c]["p"]) for c in cont}) if cont else {}
     passing = [c for c in cont if _passes(m[c], adj[c])]
@@ -692,8 +726,9 @@ def decide_c(m: Mapping[str, Mapping[str, float]], *, continuing: Sequence[str],
     beats = [f for f in fus if f in passing and adj_d[f] <= ALPHA and pairs[f]["d"] > 0 and m[f]["kept"] > 0]
     if beats:
         winner: str | None = max(beats, key=lambda f: (pairs[f]["d"], -SIMPLICITY[f]))
-    else:
-        winner = min(passing, key=lambda c: SIMPLICITY[c]) if passing else None
+    else:      # quant 1: the fallback is the simplest passing BASE; a fusion wins only through the paired test
+        bases = [c for c in passing if c in BASES]
+        winner = min(bases, key=lambda c: SIMPLICITY[c]) if bases else None
     return {"holm": adj, "holm_d": adj_d, "passing": passing, "beats_b_star": beats, "best_base": best_base,
             "winner": winner, "verdict": "PASS" if winner else "NULL",
             "note": "the winner's confirm D is max-selected, not an effect estimate (C10)"}
@@ -849,28 +884,55 @@ def candidate_config(c: str) -> dict[str, Any]:
     return {"spec": SPEC_VERSION, "candidate": c, "name": NAMES[c], "arms": list(ARMS), "instrument": GOLD}
 
 
+def _not_started(registry: TrialRegistry) -> bool:
+    from goldbot.research.registry import NOT_STARTED_POWER
+    card_id = f"H-101 {SPEC_VERSION}"
+    return any(r.get("status") == NOT_STARTED_POWER and (r.get("config") or {}).get("card_id") == card_id
+               for r in registry.by_family(REGISTRY_FAMILY))
+
+
 def book_stage_l(registry: TrialRegistry, settings: Settings, *, stage0: pf.PowerVerdict, agent_id: str,
-                 now: Any = None) -> list[dict[str, Any]]:
+                 now: Any = None, provenance: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     """K = 8 at Stage L, before any label is read: one registry row per candidate (family `model_zoo_fusion`), after
-    the budget check against `research.trial_budget_quarter` (refused over it). Only with a started Stage 0; a
-    candidate already booked is not booked again."""
+    the budget check against `research.trial_budget_quarter` (refused over it). Only with a started Stage 0 and no
+    NOT STARTED (power) row of this spec, and only in ALLOCATED_QUARTER. Each row carries `provenance` (git SHA,
+    learn-rows sha256) and the Stage 0 verdict. A candidate already booked is not booked again."""
     if not stage0.started:
         raise PowerRefused("H-101 Stage 0 did not start (power): Stage L is not booked and nothing is read")
     with registry.locked():
+        if _not_started(registry):
+            raise PowerRefused(f"H-101 {SPEC_VERSION} has a NOT STARTED (power) row: Stage L is never booked")
+        q = quarter_of(now)
+        if q != ALLOCATED_QUARTER:
+            raise QuarterRefused(f"H-101's 8 K are allocated from {ALLOCATED_QUARTER}, not {q}: a new allocation first")
         have = {r.get("config_hash") for r in registry.by_family(REGISTRY_FAMILY)}
         todo = [c for c in CANDIDATES if config_hash(candidate_config(c)) not in have]
         if not todo:
             return []
-        q = quarter_of(now)
         registry.check_budget(len(todo), settings.research.budget_for(q), now)
+        results = {"stage": "L", "booked_before_read": True, **dict(provenance or {}),
+                   "stage0": stage0.model_dump(mode="json")}
         return [registry.record(agent_id=agent_id, family=REGISTRY_FAMILY, config=candidate_config(c),
                                 feature_version=SPEC_VERSION, rule_ref=PREREG, budget_quarter=q,
                                 rationale=f"H-101 Stage L candidate {c} ({NAMES[c]}), booked before any label is read",
-                                results={"stage": "L", "booked_before_read": True})
+                                results=results)
                 for c in todo]
+
+
+def write_back_stage_l(registry: TrialRegistry, outcome: Mapping[str, Any], *, frozen_hash: str) -> int:
+    """The Stage L outcome and the frozen confirm-model hash, attached to each of this spec's K rows as evidence
+    (kind `stage_l_outcome`: the registry is append-only, the trial count is unchanged). Returns rows written."""
+    keep = ("verdict", "continuing", "best_base", "holm", "n_judged", "metrics")
+    payload = {"frozen_hash": frozen_hash, **{k: outcome[k] for k in keep if k in outcome}}
+    n = 0
+    for r in registry.by_family(REGISTRY_FAMILY):
+        if r.get("trial") and (r.get("config") or {}).get("spec") == SPEC_VERSION:
+            registry.attach_evidence(int(r["trial"]), "stage_l_outcome", payload)
+            n += 1
+    return n
 
 
 __all__ = ["ARMS", "BASES", "CANDIDATES", "FUSIONS", "Frozen", "GoldOnly", "JointBootstrap", "PowerRefused",
            "WalkForward", "book_stage_l", "count_table", "decide_c", "decide_l", "decide_t", "freeze", "frozen_hash",
-           "gold_only", "judged", "keep_shares", "metrics", "paired", "pooled_edge", "read_rows", "score", "stage0",
-           "stage0_record", "stage_c", "stage_l", "stage_t", "test_old_excluded", "walk_forward"]
+           "check_inputs", "gold_only", "judged", "keep_shares", "metrics", "paired", "pooled_edge", "read_rows", "score", "stage0",
+           "stage0_record", "stage_c", "write_back_stage_l", "stage_l", "stage_t", "test_old_excluded", "walk_forward"]

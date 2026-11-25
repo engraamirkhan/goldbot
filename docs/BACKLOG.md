@@ -148,6 +148,7 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 267 | Snapshot writer stores the count of unstamped minutes in the last 24 h | Research data (learning loop) | S | proposed |
 | 268 | Learning-class fills (evidence_class learning) stay out of rankings, read progress and board n | Research integrity · API | S | proposed |
 | 269 | Model zoo and fusion pre-registration (H-101): implement phase 1 history screen | Research (ML) · implement after quant signature and RD K allocation | M | proposed |
+| 270 | Daily-context inputs need 100 daily bars: engine memory gives ~80 (sr + zoo new spec) | Research (ML) · new spec for sr and zoo, quant review | S | proposed |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1811,6 +1812,14 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   - a test shows a learning fill is listed but in no ranking row, read progress or board n where the ruling says
     not.
 - **269. Model zoo and fusion pre-registration (H-101): implement phase 1 history screen.** Value: answers the owner's 2026-11-25 question (do several models, or fusions of them, beat one model?) for the 10 retired gold arms on the frozen sr-v2 40 inputs, for 8 K; a null retires the family. Card: `docs/research/prereg-2026-11-25-model-zoo-fusion.md`. Acceptance: card section 6 items 1-5 built (`goldbot/research/model_zoo.py`, `goldbot/research/history_replay.py`, `scripts/research/model_zoo_history.py`, `windows.py` registration, `tests/research/test_model_zoo.py`); the four leakage checks of card section 3 pass in tests; Stage 0 count and ADR 0085 power check run outcome-blind through `power_first.start_or_refuse` (NOT STARTED (power) = 0 K); 8 K from 2026Q4 booked at Stage L only after power passes and the registry budget check; gold only until `fix/label-r-quarantine` merges; no stage runs without the quant signature; nothing in goldbot/engine changes.
+- **270. Daily-context inputs need 100 daily bars: engine memory gives ~80 (sr + zoo new spec).**
+  - **Problem.** `d1_atr_ratio_14_100` and `d1_rv_ratio` are in sr-v2's frozen 40 inputs and H-101's, and they are always NaN. `feature_snapshots.decision_features` reads `ENGINE_MINUTES` = 90,000 minutes, which is about 80 daily bars, and these inputs need 100. So only 38 inputs carry information, in production and in history alike. Found while implementing H-101 (PR #444).
+  - **Value.** Two daily-regime inputs become usable, or are replaced.
+  - **Acceptance.**
+    - A new spec version (sr-v3 / zoo-v2, never an edit of a frozen spec) either reads enough daily history for its d1 context (a separate daily-bar memory, point in time) or swaps the two inputs for computable ones.
+    - The quant signs the change.
+    - A test asserts that every input of the new spec is non-NaN on a full-memory decision.
+    - Nothing in the engine's trading path changes.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

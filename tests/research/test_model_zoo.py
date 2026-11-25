@@ -48,7 +48,9 @@ def synth(*, arms: tuple[str, ...] = ("A", "B"), years: range = range(2010, 2014
 
 @pytest.fixture(scope="module")
 def rows() -> pd.DataFrame:
-    return synth(means={"A": 0.4, "B": -0.4}, per_year=600)
+    r = synth(means={"A": 0.4, "B": -0.4}, per_year=1000)
+    r.loc[r["arm"] == "A", "atr14_pct"] += 2.0     # arm identity readable from an input (quant item 4)
+    return r
 
 
 @pytest.fixture(scope="module")
@@ -210,17 +212,24 @@ def test_a_row_decided_in_the_holdout_is_refused() -> None:
 
 
 def test_keep_share_per_arm(walk: Z.WalkForward) -> None:
-    """Each arm keeps about 2/3 for every candidate (per-arm tau, C1 / C4); and two synthetic arms with different
-    means and no within-arm signal give a pooled edge_nm of about 0 for all 8 (quant condition at code review)."""
+    """Each arm keeps about 2/3 for every candidate (per-arm tau, C1 / C4); two synthetic arms with different means,
+    one input that reveals the arm and no within-arm signal give a pooled edge_nm within 0.04 of 0 for all 8 (quant
+    condition at code review). Negative control: one global tau breaks the keep-share band."""
     j = Z.judged(walk.oof, blocks=BLOCKS[1:])
     for c in Z.CANDIDATES:
-        for arm, g in j.groupby("arm"):
-            share = float(g[f"keep_{c}"].mean())
-            assert 0.5 <= share <= 0.8, (c, arm, share)
+        share = {str(a): float(g[f"keep_{c}"].mean()) for a, g in j.groupby("arm")}
+        # about 2/3 and the arms alike; realised shares run above 2/3 because a refit on more data shrinks a noise
+        # model, so later scores sit tighter than the earlier OOF scores tau came from (reported per block and arm)
+        assert all(0.6 <= v <= 0.9 for v in share.values()), (c, share)
+        assert abs(share["A"] - share["B"]) <= 0.1, (c, share)
         e = Z.pooled_edge(j["r"].to_numpy(), j[f"keep_{c}"].to_numpy(bool), j["arm"].to_numpy())
-        assert abs(e) < 0.08, (c, e)
+        assert abs(e) <= 0.04, (c, e)
     shares = Z.keep_shares(j)
     assert set(shares) == set(Z.CANDIDATES) and set(shares["F2"]) == {(t, a) for t in BLOCKS[1:] for a in ("A", "B")}
+    s3 = j["B3"].to_numpy()
+    glob = s3 >= np.quantile(s3, Z.KEEP_QUANTILE)
+    by_arm = {a: float(glob[j["arm"].to_numpy() == a].mean()) for a in ("A", "B")}
+    assert abs(by_arm["A"] - by_arm["B"]) > 0.3 and not all(0.6 <= v <= 0.9 for v in by_arm.values()), by_arm
 
 
 def test_pooled_edge_is_the_candidate_weighted_mean_of_per_arm_edges() -> None:
@@ -329,6 +338,13 @@ def test_stage_c_fusion_beats_b_star_only_through_the_paired_holm_test() -> None
     assert d["beats_b_star"] == [] and d["winner"] == "B1"          # the simplest passing candidate
 
 
+def test_stage_c_a_fusion_never_wins_by_the_fallback_when_b_star_fails() -> None:
+    """Quant 1: the fallback is the simplest passing BASE; a fusion wins only through the paired test."""
+    m = {"B1": _m(0.01, -0.02, 0.0, 0.5), "F1": _m(0.10, 0.08, 0.02, 0.001)}
+    d = Z.decide_c(m, continuing=["B1", "F1"], best_base="B1", pairs={"F1": {"d": 0.1, "p_d": 0.3}})
+    assert d["passing"] == ["F1"] and d["winner"] is None and d["verdict"] == "NULL"
+
+
 def test_stage_c_none_passing_is_a_null() -> None:
     m = {"B1": _m(0.01, 0.05, 0.01, 0.001)}
     d = Z.decide_c(m, continuing=["B1"], best_base="B1", pairs={})
@@ -355,7 +371,7 @@ def test_gold_only_guard_refuses_any_non_metal_instrument() -> None:
 
 
 def test_windows_register_the_card_for_read_once_confirm_and_test_old(tmp_path: Path) -> None:
-    assert W.READ_ONCE_FAMILIES["model_zoo_fusion"] == frozenset({W.Window.CONFIRM, W.Window.TEST_OLD})
+    assert W.READ_ONCE_FAMILIES["model_zoo_fusion"] == frozenset({W.Window.LEARN, W.Window.CONFIRM, W.Window.TEST_OLD})
     ledger = tmp_path / "window_reads.jsonl"
     W.record_read_once(ledger, "model_zoo_fusion", "confirm", ref={"hash": "x"})
     with pytest.raises(W.AlreadyRead):
@@ -467,7 +483,7 @@ def test_cli_refuses_a_non_gold_instrument_before_reading(tmp_path: Path) -> Non
 
 def test_cli_refuses_learn_without_a_started_stage_zero_and_confirm_without_stage_l(tmp_path: Path) -> None:
     cli = _cli()
-    base = ["--out", str(tmp_path), "--cache", str(tmp_path)]
+    base = ["--out", str(tmp_path), "--cache", str(tmp_path), "--registry", str(tmp_path / "registry.jsonl")]
     with pytest.raises(SystemExit, match="Stage 0"):
         cli.main(["learn", *base])
     (tmp_path / "stage0.json").write_text(json.dumps({"started": False, "recorded_in_registry": True,
@@ -476,16 +492,88 @@ def test_cli_refuses_learn_without_a_started_stage_zero_and_confirm_without_stag
         cli.main(["learn", *base])
     with pytest.raises(SystemExit, match="Stage L"):
         cli.main(["confirm", *base])
-    (tmp_path / "stage_l.json").write_text(json.dumps({"verdict": "NULL", "frozen_hash": None}))
+    (tmp_path / "stage_l.json").write_text(json.dumps({"verdict": "NULL", "frozen_hash": None,
+                                                       "ledger": str(tmp_path / W.READS_LEDGER)}))
     with pytest.raises(SystemExit, match="confirm stays closed"):
         cli.main(["confirm", *base])
 
 
 def test_cli_refuses_test_old_without_a_confirm_winner(tmp_path: Path) -> None:
-    (tmp_path / "stage_l.json").write_text(json.dumps({"verdict": "CONTINUE", "frozen_hash": "x", "arms": []}))
+    (tmp_path / "stage_l.json").write_text(json.dumps({"verdict": "CONTINUE", "frozen_hash": "x", "arms": [],
+                                                       "ledger": str(tmp_path / W.READS_LEDGER)}))
     (tmp_path / "stage_c.json").write_text(json.dumps({"winner": None}))
     with pytest.raises(W.TestOldSealed):
-        _cli().main(["test_old", "--out", str(tmp_path), "--cache", str(tmp_path)])
+        _cli().main(["test_old", "--out", str(tmp_path), "--cache", str(tmp_path),
+                     "--registry", str(tmp_path / "registry.jsonl")])
+
+
+@pytest.mark.parametrize("mode", ["learn", "confirm", "test_old"])
+def test_cli_label_stages_require_the_registry_of_record(tmp_path: Path, mode: str) -> None:
+    with pytest.raises(SystemExit, match="--registry"):
+        _cli().main([mode, "--out", str(tmp_path), "--cache", str(tmp_path)])
+
+
+def test_cli_has_no_ledger_override(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as e:
+        _cli().main(["confirm", "--ledger", str(tmp_path / "other.jsonl"), "--out", str(tmp_path)])
+    assert e.value.code == 2
+
+
+def test_confirm_twice_through_a_different_ledger_is_refused(tmp_path: Path) -> None:
+    """M1: the ledger is the registry's; a confirm against another registry (so another ledger) than the one Stage L
+    recorded is refused before anything is read."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (tmp_path / "stage_l.json").write_text(json.dumps({"verdict": "CONTINUE", "frozen_hash": "h", "arms": [],
+                                                       "continuing": ["B1"], "best_base": "B1",
+                                                       "ledger": str(a / W.READS_LEDGER)}))
+    W.record_read_once(a / W.READS_LEDGER, Z.REGISTRY_FAMILY, "confirm", ref={}, resume_key="h")
+    with pytest.raises(SystemExit, match="ledger"):
+        _cli().main(["confirm", "--out", str(tmp_path), "--cache", str(tmp_path), "--registry", str(b / "registry.jsonl")])
+
+
+def test_a_second_learn_is_refused(tmp_path: Path) -> None:
+    """M2: Stage L reads the learn labels once: a written Stage L record, a learn row in the read-once ledger without
+    a resumable crash, or Stage L rows of this spec in the registry refuse a second learn."""
+    cli, reg = _cli(), tmp_path / "registry.jsonl"
+    base = ["learn", "--out", str(tmp_path), "--cache", str(tmp_path), "--registry", str(reg)]
+    (tmp_path / "stage_l.json").write_text("{}")
+    with pytest.raises(SystemExit, match="already"):
+        cli.main(base)
+    (tmp_path / "stage_l.json").unlink()
+    TrialRegistry(reg).record(agent_id="t", family=Z.REGISTRY_FAMILY, config=Z.candidate_config("B1"),
+                              feature_version=Z.SPEC_VERSION, rationale="x", results={})
+    with pytest.raises(SystemExit, match="already"):
+        cli.main(base)
+
+
+def test_a_stage_whose_record_exists_is_never_resumed(tmp_path: Path) -> None:
+    (tmp_path / "stage_l.json").write_text(json.dumps({"verdict": "CONTINUE", "frozen_hash": "h", "arms": [],
+                                                       "ledger": str(tmp_path / W.READS_LEDGER)}))
+    (tmp_path / "stage_c.json").write_text("{}")
+    with pytest.raises(SystemExit, match="already"):
+        _cli().main(["confirm", "--out", str(tmp_path), "--cache", str(tmp_path),
+                     "--registry", str(tmp_path / "registry.jsonl")])
+
+
+def test_learn_rows_exiting_after_the_learn_window_are_dropped_not_judged() -> None:
+    """L4: a 2017 candidate whose horizon or exit reaches 2018 is dropped before the walk-forward."""
+    r = synth(years=range(2017, 2018), per_year=50, seed=41)
+    r.loc[0, "decision_utc"] = pd.Timestamp("2017-12-31 23:00", tz="UTC")
+    r.loc[0, "label_exit_utc"] = pd.Timestamp("2018-01-01 01:00", tz="UTC")
+    kept, dropped = Z.read_rows(r, *_cli().LEARN)
+    assert dropped >= 1 and r.loc[0, "candidate_id"] not in set(kept["candidate_id"])
+
+
+def test_feature_cache_key_changes_with_the_decisions_and_the_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli = _cli()
+    d1 = pd.DatetimeIndex(["2012-01-03 10:00", "2012-01-03 10:05"], tz="UTC")
+    d2 = pd.DatetimeIndex(["2012-01-03 10:00", "2012-01-03 10:10"], tz="UTC")
+    k1 = cli.feature_key("5m", 2012, d1)
+    assert k1 != cli.feature_key("5m", 2012, d2) and k1 == cli.feature_key("5m", 2012, d1)
+    monkeypatch.setattr(Z, "SPEC_VERSION", "zoo-v2")
+    assert k1 != cli.feature_key("5m", 2012, d1)
 
 
 def _verdict_json(started: bool) -> dict:
@@ -511,3 +599,102 @@ def test_an_arm_with_no_kept_row_in_a_draw_leaves_that_draw_but_does_not_void_it
     ks = np.array([[1.0, 0.0], [0.0, 0.0]])
     edge, kept = Z._stats(W_, n, s, kn, ks)
     assert edge[0] == pytest.approx(1.0 - 0.5) and kept[0] == 1.0
+
+
+
+def test_read_once_allows_one_resume_with_the_same_key_after_a_crash(tmp_path: Path) -> None:
+    """L3: the ledger row is written as started before the read; a crash before the stage record lets the same run
+    (same key) resume once, never with another key and never twice."""
+    led = tmp_path / "l.jsonl"
+    W.record_read_once(led, Z.REGISTRY_FAMILY, "confirm", ref={}, resume_key="h1")
+    with pytest.raises(W.AlreadyRead):
+        W.record_read_once(led, Z.REGISTRY_FAMILY, "confirm", ref={}, resume_key="h2")
+    W.record_read_once(led, Z.REGISTRY_FAMILY, "confirm", ref={}, resume_key="h1")
+    with pytest.raises(W.AlreadyRead):
+        W.record_read_once(led, Z.REGISTRY_FAMILY, "confirm", ref={}, resume_key="h1")
+    rows = [json.loads(x) for x in led.read_text().splitlines()]
+    assert [r["status"] for r in rows] == ["started", "resumed"]
+
+
+def _inputs(n: int = 50) -> pd.DataFrame:
+    r = synth(years=range(2012, 2013), per_year=n, seed=51)
+    return r.assign(available_utc_max=r["decision_utc"] - pd.Timedelta(minutes=1))
+
+
+def test_inputs_with_a_missing_snapshot_time_fail_the_look_ahead_check() -> None:
+    r = _inputs()
+    Z.check_inputs(r)
+    r.loc[3, "available_utc_max"] = pd.NaT
+    with pytest.raises(ValueError, match="point in time"):
+        Z.check_inputs(r)
+    r = _inputs()
+    r.loc[3, "available_utc_max"] = pd.Timestamp(r["decision_utc"].iloc[3]) + pd.Timedelta(seconds=1)
+    with pytest.raises(ValueError, match="point in time"):
+        Z.check_inputs(r)
+
+
+def test_a_feature_column_mostly_missing_is_refused_not_median_imputed() -> None:
+    r = _inputs(200)
+    r[list(Z.STRUCTURAL_NAN)] = np.nan          # never computable on the engine's 90k-minute window: allowed, named
+    Z.check_inputs(r)
+    r.loc[r.index[:40], "rsi14"] = np.nan        # 10 % > MAX_NAN_SHARE
+    with pytest.raises(ValueError, match="rsi14"):
+        Z.check_inputs(r)
+
+
+
+def test_stage_l_is_refused_after_a_not_started_power_row_of_this_spec(tmp_path: Path) -> None:
+    """Quant 3: a NOT STARTED (power) row of this spec blocks Stage L whatever verdict is passed in."""
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    Z.stage0_record(reg, Z.count_table(_counts(1, 5)), excluded=(), settings=SETTINGS, agent_id="test")
+    good, _ = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    with pytest.raises(Z.PowerRefused):
+        Z.book_stage_l(reg, SETTINGS, stage0=good, agent_id="test")
+    assert reg.n_trials == 0
+
+
+def test_stage_l_books_only_in_the_allocated_quarter(tmp_path: Path) -> None:
+    """Quant 5: the 8 K are allocated from 2026Q4; any other quarter is refused."""
+    from datetime import datetime, timezone
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    good, _ = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    with pytest.raises(Z.QuarterRefused):
+        Z.book_stage_l(reg, SETTINGS, stage0=good, agent_id="t", now=datetime(2027, 1, 5, tzinfo=timezone.utc))
+    assert reg.n_trials == 0
+
+
+def test_stage_l_rows_carry_the_provenance(tmp_path: Path) -> None:
+    """Quant 2: the K rows carry the git SHA, the learn-rows sha256 and the Stage 0 verdict; the outcome and the
+    frozen hash are written back as evidence."""
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    good, _ = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    rows = Z.book_stage_l(reg, SETTINGS, stage0=good, agent_id="t", provenance={"git_sha": "abc", "learn_rows_sha256": "f00"})
+    assert all(r["results"]["git_sha"] == "abc" and r["results"]["learn_rows_sha256"] == "f00"
+               and r["results"]["stage0"]["started"] for r in rows)
+    Z.write_back_stage_l(reg, {"verdict": "NULL", "continuing": []}, frozen_hash="h")
+    ev = reg.evidence(kind="stage_l_outcome")
+    assert len(ev) == 8 and ev[0]["payload"]["frozen_hash"] == "h" and ev[0]["payload"]["verdict"] == "NULL"
+
+
+def test_power_first_refuses_a_given_verdict_looser_than_settings_or_inconsistent(tmp_path: Path) -> None:
+    """Quant 9: a passed verdict cannot carry looser thresholds than the settings, nor claim a start its gates
+    contradict."""
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    v, card = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    with pytest.raises(ValueError, match="looser"):
+        pf.start_or_refuse(reg, card, SETTINGS, agent_id="t", verdict=v.model_copy(update={"min_gate_power": 0.4}))
+    bad = v.model_copy(update={"joint_power": 0.1})
+    with pytest.raises(ValueError, match="contradict"):
+        pf.start_or_refuse(reg, card, SETTINGS, agent_id="t", verdict=bad)
+
+
+def test_stage_zero_records_the_joint_power_independence_deviation() -> None:
+    v, _ = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    assert any("independent" in n for n in Z.STAGE0_NOTES)
+
+
+def test_input_coverage_names_the_informative_inputs() -> None:
+    r = _inputs(200)
+    r[list(Z.STRUCTURAL_NAN)] = np.nan
+    cov = Z.check_inputs(r)
+    assert cov["informative_inputs"] == 38 and set(cov["nan_share"]) == set(sr.FEATURES)

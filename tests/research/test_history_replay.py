@@ -77,3 +77,14 @@ def test_bps_net_charges_the_round_trip_and_the_stop_overshoot() -> None:
 def test_session_day_rolls_at_five_pm_new_york() -> None:
     d = H.session_day(pd.DatetimeIndex(["2012-03-07 21:59", "2012-03-07 22:01"], tz="UTC"))   # EST: 17:00 = 22:00 UTC
     assert [str(x) for x in d] == ["2012-03-07", "2012-03-08"]
+
+
+def test_features_report_where_their_minute_memory_starts() -> None:
+    m = H.history_minutes(bars())
+    f = H.features_at(m, "5m", pd.DatetimeIndex(["2012-03-08 10:00"], tz="UTC"))
+    assert pd.Timestamp(f["memory_from_utc"].iloc[0]) == pd.Timestamp("2012-03-05", tz="UTC")
+
+
+def test_code_hash_changes_with_the_replay_code() -> None:
+    k = H.code_hash()
+    assert len(k) == 64 and k == H.code_hash()

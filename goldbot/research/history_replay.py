@@ -18,6 +18,7 @@ parquet cache stay local (`~/tmp` or the VM's data dir): never committed, never 
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -41,6 +42,21 @@ TAIL_DAYS = 14           # bars after the span so a late entry can exit (still c
 MAX_OPEN_EVERY = 1_000_000
 TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14_400}
 CACHE = Path.home() / "tmp" / "history-replay"
+
+
+CODE_FILES = ("goldbot/research/history_replay.py", "goldbot/research/feature_snapshots.py", "scripts/run_arm_backtest.py")
+
+
+def _blob_sha(path: Path) -> str:
+    """The git blob SHA of a file (what `git hash-object` prints), computed without git."""
+    data = path.read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
+
+
+def code_hash() -> str:
+    """sha256 over the git blob SHAs of the replay, feature and label code: part of every cache key, so a changed
+    rule, feature or barrier search never reads a stale cached label or feature."""
+    return hashlib.sha256("|".join(f"{f}:{_blob_sha(ROOT / f)}" for f in CODE_FILES).encode()).hexdigest()
 
 
 def load_arm(arm_id: str, *, replay_as: str | None = None) -> A.Arm:
@@ -138,6 +154,22 @@ def _run_arm_module() -> ModuleType:
     return mod
 
 
+def _trade_hold_s(arm: A.Arm, b1: pd.DataFrame, blackout: tuple[np.ndarray, np.ndarray], dec: pd.DatetimeIndex,
+                  side: np.ndarray) -> np.ndarray:
+    """Each trade's max_hold_s from its own candidate's max_bars (`hold_seconds`, as `candidates`), matched on
+    (decision, side); a trade without its candidate raises."""
+    bars = decision_bars(b1, arm.timeframe)
+    c = R.candidates(arm, R.RuleContext(bars=bars, b1=b1, blackout_lo=blackout[0], blackout_hi=blackout[1]))
+    cdec = epoch_ns(utc_index(bars["visible_at"])[c["idx"].to_numpy(int)]) if len(c) else np.zeros(0, np.int64)
+    held = hold_seconds(arm, c["max_bars"].to_numpy(dtype=float)) if len(c) else np.zeros(0)
+    table = {(int(t), float(sd)): float(h) for t, sd, h in zip(cdec, c["side"].to_numpy(dtype=float) if len(c)
+                                                                else np.zeros(0), np.atleast_1d(held), strict=True)}
+    out = np.array([table.get((int(t), float(sd)), np.nan) for t, sd in zip(epoch_ns(dec), side, strict=True)])
+    if np.isnan(out).any():
+        raise ValueError(f"{arm.id}: a replayed trade without its candidate: its horizon is unknown")
+    return out
+
+
 def label(arm_id: str, arm: A.Arm, b1: pd.DataFrame, lo: pd.Timestamp, hi: pd.Timestamp,
           blackout: tuple[np.ndarray, np.ndarray]) -> pd.DataFrame:
     """The labelled candidates decided in [lo, hi): candidate_id, decision, side, label exit, max_hold_s, session day,
@@ -153,11 +185,11 @@ def label(arm_id: str, arm: A.Arm, b1: pd.DataFrame, lo: pd.Timestamp, hi: pd.Ti
     trades = trades[np.asarray((dec >= lo) & (dec < hi))].reset_index(drop=True)
     dec = utc_index(trades["ts_utc"])
     side = trades["side"].to_numpy(dtype=float)
-    hold_s = float(hold_seconds(arm))
+    hold_s = _trade_hold_s(arm, b1, blackout, dec, side)
     exit_ts = utc_index(trades["ts_exit"])
     from goldbot.research.self_retrain import MAX_SEND_DELAY
-    if (exit_ts > dec + MAX_SEND_DELAY + pd.Timedelta(seconds=hold_s)).any():
-        raise ValueError(f"{arm_id}: a label exit after its horizon (decision + delay + {hold_s:.0f} s)")
+    if (exit_ts > dec + MAX_SEND_DELAY + pd.to_timedelta(hold_s, unit="s")).any():
+        raise ValueError(f"{arm_id}: a label exit after its horizon (decision + delay + max_hold_s)")
     mid_r = side * (trades["exit_px"].to_numpy(float) - trades["entry"].to_numpy(float)) / trades["risk_usd"].to_numpy(float)
     ns = epoch_ns(dec)
     return pd.DataFrame({"candidate_id": [f"{arm_id}:{int(t)}:{int(s)}" for t, s in zip(ns, side, strict=True)],
@@ -176,18 +208,22 @@ def history_minutes(b1: pd.DataFrame) -> pd.DataFrame:
 def features_at(minutes: pd.DataFrame, timeframe: str, decisions: pd.Series | pd.DatetimeIndex) -> pd.DataFrame:
     """The engine's default feature row at each decision (`decision_features` of `timeframe`), reading only minutes
     joined with `asof_join` on `available_utc` at the decision. One row per distinct decision: `decision_utc`,
-    `available_utc_max` and the feature columns (NaN where the history is too short)."""
+    `available_utc_max`, `memory_from_utc` (the first minute of its ENGINE_MINUTES memory) and the feature columns
+    (NaN where the history is too short). Prices only: a learn decision in early 2010 reads late-2009 minutes (test_old
+    prices as indicator state, never a test_old label); a test_old decision early in 2008 may read pre-2008-02 minutes
+    (disclosed by Stage T as `memory_before_test_old`)."""
     dec = pd.DatetimeIndex(pd.to_datetime(pd.Series(decisions), utc=True)).unique().sort_values()
     if len(dec) == 0:
-        return pd.DataFrame(columns=["decision_utc", "available_utc_max"])
+        return pd.DataFrame(columns=["decision_utc", "available_utc_max", "memory_from_utc"])
     right = pd.DataFrame({"available_utc": minutes["available_utc"].to_numpy(), "pos": np.arange(len(minutes))})
     j = asof_join(pd.DataFrame({"ts_utc": dec}), right)
     rows: list[dict[str, Any]] = []
     for at, pos in zip(dec, j["pos"].to_numpy(), strict=True):
-        row: dict[str, Any] = {"decision_utc": at, "available_utc_max": pd.NaT}
+        row: dict[str, Any] = {"decision_utc": at, "available_utc_max": pd.NaT, "memory_from_utc": pd.NaT}
         if np.isfinite(pos):
             p = int(pos)
             seen = minutes.iloc[max(0, p + 1 - ENGINE_MINUTES):p + 1]
+            row["memory_from_utc"] = pd.Timestamp(seen["ts_utc"].iloc[0])
             snap = decision_features(seen, timeframe, at)
             if snap is not None:
                 if snap.available_utc_max > at:
@@ -198,5 +234,5 @@ def features_at(minutes: pd.DataFrame, timeframe: str, decisions: pd.Series | pd
     return pd.DataFrame(rows)
 
 
-__all__ = ["CACHE", "OVERSHOOT_BP", "RT_BP", "bps_net", "candidates", "features_at", "history_minutes", "label",
+__all__ = ["CACHE", "code_hash", "OVERSHOOT_BP", "RT_BP", "bps_net", "candidates", "features_at", "history_minutes", "label",
            "load_arm", "load_blackout", "session_day", "year_bars", "year_span"]
