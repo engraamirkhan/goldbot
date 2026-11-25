@@ -362,6 +362,9 @@ research:
                                      #   spec power-gated (ADR 0085) before it is ledgered, the night's planned K inside the
                                      #   quarter's trial budget; survivors -> candidate arm rows for the registration hand-off
     enabled: false                   # on per host in settings.local.yaml together with bars_path (RUNBOOK); on without bars fails
+    stopped: true                    # plan 2026-11-25 S6 / D4: discovery stops (its K, 3,850 in 6 nights, outran the whole Q4
+                                     #   ledger; CPU on the trading host). Wins over a host's enabled: true; the night is skipped
+                                     #   and no run is logged. Restarting it is a new research-line decision (plan section 7)
     bars_path: null                  # research 1m bid/ask parquet (local only, never committed)
     first_night_dry: true            # quant GO (b): an enabled night books its K (ledger + registry) and writes its report, but
                                      #   offers no candidate arm; a quant reviewer sets false after reading the first report
@@ -464,7 +467,10 @@ research:
     sd_r_measured_by_tf: {5m: null, 15m: null, 1h: null, 4h: null, 1d: null}   # TODO(ADR 0085 follow-up v): demo
                                      #   measured 1.10-1.51 R overall, not yet split by timeframe; null = the 1.2 floor
     rho_day: 0.25                    # PRIOR: same-instrument same-day correlation; to be replaced by a pooled estimate
-                                     #   from other families' learn outcomes, never the card's own
+                                     #   from other families' learn outcomes, never the card's own. Label overlap is the
+                                     #   card's measured uniqueness or its hold_days, not a setting (quant Q3)
+    rho_day_le_60m: 0.25             # quant Q1: rho_day for labels of <= 60 min = max(0.05, upper 95 % CI of the day-clustered
+                                     #   ICC on other families' learn candidates); 0.25 (the prior) until that is measured
     rho_instrument: 0.5              # PRIOR: cross-instrument same-day correlation of a pooled family
     rho_instrument_metals: 0.7       # PRIOR: the same when >= half the pooled instruments are XAU/XAG/XPT/XPD
     sims: 20000                      # joint-power Monte Carlo draws (seeded)

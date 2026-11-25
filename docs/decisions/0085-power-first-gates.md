@@ -2,7 +2,8 @@
 
 Status: accepted for research and demo promotion (panel ruling 2026-11-15, quant-reviewer, on the evaluator memo
 docs/research/power-first-gates-2026-11.md, "Option A"). Amends ADR 0003 and ADR 0083 for research and demo
-promotion only. **The owner's paper -> tiny-live phase gate is unchanged.**
+promotion only. **The owner's paper -> tiny-live phase gate is unchanged.** n_eff amended 2026-11-25 (label overlap, quant
+Q3; rho_day per horizon, quant Q1): see "Amendment 2026-11-25" below.
 
 ## Context
 The evaluator's memo (base 9d1abbc7, K +0) re-derived the gate audit. A true 0.10 R edge (sd 1.2 R) has 0.000-0.008
@@ -126,3 +127,43 @@ touched.
   years (n_eff about 304) it starts.
 - **What would change this:** a quant ruling that TEST-OLD or the forward replay is not independent of learn (regime
   overlap). D would then rest on the holdout alone, which has too little power for anything slower than 15m.
+
+## Amendment 2026-11-25: label overlap (quant Q3) and rho_day per horizon (quant Q1)
+Status: implemented (branch fix/power-overlap-design-effect, plan 2026-11-25 S3), for quant-reviewer re-verify.
+The phase gate, live unlock and RiskGate are not touched.
+
+**Context.** n_eff above prices overlap within a day only (m_day). A daily card has m_day = 1, so a decision every
+day held H = 20 days was credited n_eff = n. Its overlapping labels have lag-j autocorrelation 1 - j/H, so the true
+n_eff is about n / H (Hansen & Hodrick 1980): power was overstated by about sqrt(H), and such a card could start where
+it cannot pass (daily-timeframe researcher, 2026-11-25). Clone arms and the same bet on two timeframes were also
+counted twice.
+
+**Decision.**
+1. Q3, as ruled: "n_eff = sum(u_i)/DEFF_day; u_i = average uniqueness over label horizon pooled across tfs/arms per
+   instrument; DEFF_day = 1+(m_w-1)*rho_day, m_w = sum M_d^2/sum M_d, M_d = sum u_i in day; then rho_inst factor".
+   - `power_first.uniqueness(events)` computes it exactly from the learn labels' entry and exit times (outcome-blind).
+     m_w is floored at 1, as m_day is. Labels on different instruments never share uniqueness (rho_inst prices that).
+   - A card states it as `PowerCard.learn_uniqueness`.
+2. A card that states counts only is read with the expectation of Q3 under even arrivals. `PowerCard.hold_days`
+   (required, the label horizon, its time barrier) gives c = signal days per instrument per trading day x hold_days
+   (Little's law); n_eff = n / [(1 + (m_day - 1) rho_day) x max(1, c) x (1 + (k - 1) rho_inst)]. This is n / H for a
+   decision every day held H days and unchanged for holds of 1 day or less.
+3. `PowerVerdict.overlap_effect` (n / sum u, or max(1, c)) and `rho_day` record what was used. A given verdict (H-101)
+   that credits less overlap, or a lower rho_day, than its card implies is refused by `start_or_refuse`.
+4. Q1: labels of 60 min or less take `rho_day_le_60m` = max(0.05, upper 95 % CI of the day-clustered ICC, week-block
+   bootstrap, other families' learn candidates); floor 0.05. Longer labels keep rho_day, floor 0.25. Shipped at 0.25
+   until the measurement (RD lane) lands, so no verdict changes today.
+5. Callers: autodiscovery states its specs' time barrier (MAX_BARS bars: 15m 1 day, 1h 2, 4h 4, 1d 10); H-101 states
+   `model_zoo.HOLD_DAYS = 1.0` (longest arm RBR15, 96 x 15m; a test holds every replayed arm to it).
+
+**Acceptance tests (Q3).** Daily H = 20 within +-5 % of n / 20; max_open = 1 unchanged; 15m + 30m pooled <= 15m alone
+x (1 + unique share); a clone pair counts once (tests/research/test_power_first.py, `test_q3_*`).
+
+**Consequences.**
+- H-101: no change. Its stage 0 card holds 1 day, so the overlap factor is 1 and rho_day is 0.25.
+- Autodiscovery (stopped by plan S6 in the same change): 4h becomes unreachable (an every-bar spec's fresh n_eff is
+  about 659, it was 2,634), 1h specs signalling on most days lose half their n_eff, 15m is unchanged, 1d was already
+  unreachable.
+- The horizon overstates the hold of target exits (1R/2R/3R), so the count-only path is conservative for them. A card
+  that wants the credit states its measured uniqueness.
+- H-102's power must be recomputed with Q3 before it starts (W1-F card revision).

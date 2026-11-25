@@ -32,7 +32,7 @@ def settings(**disc):
     s = load_settings()
     d = s.research.discovery.model_copy(update={"enabled": True, "population": 8, "generations": 2, "null_reps": 2,
                                                 "max_candidates": 4, "k_cap_quarter": {"2026Q4": 1_000_000},
-                                                "first_night_dry": False, **disc})
+                                                "first_night_dry": False, "stopped": False, **disc})
     # the shipped 2026Q4 owner budget (tests/conftest.py strips it so other tests see the base 20)
     research = s.research.model_copy(update={"discovery": d, "trial_budget_overrides": {"2026Q4": 3500}})
     return s.model_copy(update={"research": research})
@@ -128,6 +128,20 @@ def test_a_timeframe_no_spec_could_power_is_not_searched_at_all():
     v = DN.timeframe_reachable(load_settings(), "1d", n_bars=2080, n_days=2080, learn_years=8.0, now=SLOT)
     assert not v.started and any("n_eff" in r or "power" in r for r in v.reasons)
     assert DN.timeframe_reachable(load_settings(), "1h", n_bars=47_000, n_days=2080, learn_years=8.0, now=SLOT).started
+
+
+def test_a_spec_power_card_states_its_label_horizon_so_multi_day_holds_count_their_overlap():
+    """ADR 0096: the card's hold is the spec's time barrier, MAX_BARS bars of its timeframe (15m 1 day, 1h 2, 4h 4,
+    1d 10); a daily spec signalling every day gets a tenth of the n_eff it had without the overlap term."""
+    from goldbot.research.autodisc.gen_combine import MAX_BARS
+    s = load_settings()
+    for tf, days in (("15m", 1.0), ("1h", 2.0), ("4h", 4.0), ("1d", 10.0)):
+        c = DN.power_card(s, card_id="x", timeframe=tf, signals=2_000, clusters=2_000, learn_years=8.0, now=SLOT)
+        assert c.hold_days == pytest.approx(days) and MAX_BARS[tf] > 0
+    v = DN.timeframe_reachable(s, "1d", n_bars=2016, n_days=2016, learn_years=8.0, now=SLOT)
+    assert v.overlap_effect == pytest.approx(10.0)
+    assert DN.forward_verdict(s, "1d", signals=2016, clusters=2016, learn_years=8.0).overlap_effect == \
+        pytest.approx(10.0)
 
 
 # ------------------------------------------------------------------ priors and feedback
@@ -260,6 +274,14 @@ def test_catalogue_cards_get_a_power_verdict_and_cost_no_k(tmp_path):
         "- {id: C-4, tf: 4h, rule: {entry: text only}}\n")
     tri = DN.card_triage(cards, load_settings(), SLOT)
     assert tri.started == ["C-1"] and tri.refused == ["C-2"] and tri.unscorable == ["C-4"] and tri.out_of_focus == 1
+
+
+def test_the_shipped_settings_stop_discovery_even_on_a_host_that_enables_it(tmp_path):
+    """Plan 2026-11-25 S6 / D4: discovery_nightly stops (K bleed, CPU on the trading host). The brain enables it in
+    settings.local.yaml, which the repo cannot edit: `stopped` (shipped true) wins over `enabled`; no run is logged."""
+    assert load_settings().research.discovery.stopped is True
+    out = DN.run_job(settings(stopped=True), tmp_path, SLOT)
+    assert "stopped" in out["skipped"] and not list(tmp_path.iterdir())
 
 
 def test_the_job_skips_when_off_and_fails_loudly_when_on_without_bars(tmp_path):
@@ -767,3 +789,9 @@ def test_with_first_night_dry_off_the_same_night_hands_its_survivors_off(tmp_pat
                            **kw(tmp_path, obs_reader=lambda *a, **k: TSMOM_LABELS))
     assert not run.withheld and run.candidate_arms == run.would_offer == len(run.survivors) >= 1
     assert {c.spec_hash for c in H.pending(tmp_path / NT.LEDGER_FILE["synthetic"])} == set(run.survivors)
+
+
+def test_a_foreground_night_that_would_write_is_refused_while_discovery_is_stopped(tmp_path, capsys):
+    """S6: the stop covers the hand-run night too; only --dry-run (writes nothing) still runs."""
+    assert DN.main(["--state-dir", str(tmp_path)]) == 2
+    assert "stopped" in capsys.readouterr().out and not list(tmp_path.iterdir())
