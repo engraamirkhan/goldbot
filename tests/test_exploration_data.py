@@ -245,7 +245,38 @@ def test_a_gold_candidate_whose_stop_is_inside_the_spread_ceiling_is_never_label
         assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30)) == 1
     obs = ex.read_obs(db).set_index("candidate_id")
     assert pd.notna(obs.loc["ok", "label_sim_r"]) and pd.isna(obs.loc["tiny", "label_sim_r"])
-    assert any("spread ceiling" in r.getMessage() for r in caplog.records)
+    assert sum("spread ceiling" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_stop_inside_the_spread_is_voided_deliberately_for_r1_and_r2_and_logged_once(tmp_path, caplog):
+    """Quant review of #442 (LOW 3): a candidate below the floor is excluded on purpose, never left NULL as if its
+    label were still to come: one `exploration_label_void` row per replay version, reason `stop_inside_spread`."""
+    db = _db(tmp_path)
+    _cand(db, "tiny", stop=0.0002, target=0.0002)
+    bars = _m1(T0, [(2000.0, 2000.5, 1999.5)] * 60)
+    with caplog.at_level("WARNING", logger="goldbot.exploration"):
+        for _ in range(2):
+            assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30)) == 0
+    assert sum("spread ceiling" in r.getMessage() for r in caplog.records) == 1
+    with db.connection() as conn:
+        got = conn.execute("SELECT candidate_id, replay_version, reason FROM exploration_label_void "
+                           "ORDER BY replay_version").fetchall()
+    assert got == [("tiny", "r1", ex.VOID_INSIDE_SPREAD), ("tiny", "r2", ex.VOID_INSIDE_SPREAD)]
+    assert ex.VOID_INSIDE_SPREAD == "stop_inside_spread"
+
+
+def test_the_label_floor_is_a_frozen_research_constant_not_the_riskgates_spread_ceiling(tmp_path, monkeypatch):
+    """Quant review of #442 (LOW 2): retuning the RiskGate's max_spread_points never changes which rows are labelled."""
+    import goldbot.instruments as instruments
+    real = instruments.registry()
+    wide = real.model_copy(update={"instruments": {**real.instruments, "XAUUSD": real.instruments["XAUUSD"].model_copy(
+        update={"max_spread_points": 450.0})}})
+    monkeypatch.setattr(instruments, "registry", lambda: wide)
+    assert ex.min_label_stop() == ex.MIN_LABEL_STOP[ex.GOLD] == pytest.approx(0.45)
+    db = _db(tmp_path)
+    _cand(db, "ok", stop=0.45, target=0.45)
+    bars = _m1(T0, [(2000.0, 2000.5, 1999.5)] * 60)
+    assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30)) == 1
 
 
 def test_a_non_gold_row_labelled_on_gold_bars_never_reaches_the_training_table_or_the_retrain_count(tmp_path):

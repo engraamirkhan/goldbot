@@ -85,6 +85,9 @@ stop's overshoot included.
 - **arms retired in the spec (`retired_day`), and `control_mode: replay_only` strategy or learning rows, unless the
   arm is pre-named.** Their candidates are neither training rows, nor judged arms, nor controls. A named control
   always stays. An ACTIVE model whose arm has no rows in a run is demoted ("no rows in run").
+- candidates whose stop is below min_label_stop (never labelled; counted in the run detail). *Amendment 2026-11-25,
+  quant review of #442: voided as `stop_inside_spread`, counted as `stop_inside_spread` in the run's counts. No such
+  gold row existed when the amendment was made.*
 
 **Controls (quant Bias 3).** Control arms are the baseline only, never a training row. The baseline is the arm's
 **named** control. Failing that, it is the **matched-stop** random controls:
