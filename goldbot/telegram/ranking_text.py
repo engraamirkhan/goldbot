@@ -19,6 +19,7 @@ import pandas as pd
 from goldbot.api import strategy_board, strategy_labels, trades_ledger
 from goldbot.api.schema import RankingView, RankRow, RankStatus
 from goldbot.api.strategy_ranking import MIN_DAYS, MIN_FILLS, Ranker, rank_moves
+from goldbot.ops.class_breakdown import SPLIT_LABEL
 from goldbot.telegram.labs import money, pct, signed
 
 __all__ = ["LINES_MAX", "LINK", "STATUS_WORDS", "daily_lines", "family_line", "load_ranker", "ranking_lines",
@@ -63,8 +64,8 @@ def family_line(row: RankRow, move: str | None = None) -> str:
     if f.edge_vs_control_r is not None:
         parts.append(f"vs random {_r(f.edge_vs_control_r)} R ({f.edge_source})")
     parts.append(STATUS_WORDS[row.status])
-    if row.class_split:     # owner directive 2026-11-25: positive in one asset class, negative in another
-        parts.append("split by class: " + ", ".join(f"{c.asset_class} {_r(c.mean_r)} R" for c in row.by_class
+    if row.class_split:     # owner 2026-11-25; PR #445 review M3: best class positive, worst negative, t at the bar
+        parts.append(f"{SPLIT_LABEL} by class: " + ", ".join(f"{c.asset_class} {_r(c.mean_r)} R" for c in row.by_class
                                                      if c.mean_r is not None))
     return " · ".join(parts)
 

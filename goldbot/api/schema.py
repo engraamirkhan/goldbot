@@ -1010,8 +1010,9 @@ TradeKind = Literal["real", "strategy", "exploration", "control", "cost_probe", 
 ExitReason = Literal["target", "stop", "trail", "time_limit", "friday_cut", "manual", "kill_switch",
                      "broker_stop_out", "other"]
 # counted: admissible toward its arm's read; excluded: void as evidence (quarantine); censored: closed by anything but
-# its own stop, target or hold; pending: still open; not_evidence: a strategy, real, probe or shadow trade
-TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence"]
+# its own stop, target or hold; pending: still open; not_evidence: a strategy, real, probe or shadow trade;
+# learning_cohort: a demo learning cohort fill (ADR 0095): listed, never in a ranking, a read, the board or a class
+TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence", "learning_cohort"]
 TradeStatus = Literal["open", "closed"]
 TradeSource = Literal["shadow", "positions", "probes", "exploration", "orders"]
 TradeListPeriod = Literal["today", "7d", "30d", "all"]
@@ -1371,8 +1372,9 @@ class RankRow(BaseModel):
     # read is not wired to its replay labels yet, says so ("control: S0 replay (unwired) - not a verdict"); else None
     control_note: str | None = None
     # owner directive 2026-11-25 (goldbot/ops/class_breakdown.py): the row's fills by asset class, most fills first
-    # (`asset_classes`), each with net, n, win rate, money/trade, mean R and t; `class_split`: positive mean net R in
-    # one class and negative in another, each from MIN_SPLIT_FILLS fills (descriptive, never a verdict)
+    # (`asset_classes`), each with net, n, win rate, money/trade, mean R and t; `class_split`: "split (significant)",
+    # best class positive, worst negative, each from MIN_SPLIT_FILLS fills, and the clustered t of the difference at
+    # the Bonferroni bar over class pairs (class_breakdown.split_test; descriptive, never a verdict)
     asset_classes: list[str] = Field(default_factory=list)
     by_class: list[ClassFigures] = Field(default_factory=list)
     class_split: bool = False

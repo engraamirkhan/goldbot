@@ -3358,7 +3358,7 @@ export interface components {
              * Evidence
              * @enum {string}
              */
-            evidence: "counted" | "excluded" | "censored" | "pending" | "not_evidence";
+            evidence: "counted" | "excluded" | "censored" | "pending" | "not_evidence" | "learning_cohort";
             /** Excluded Reason */
             excluded_reason: string | null;
             /** Excursion Approx */
@@ -4699,7 +4699,7 @@ export interface operations {
                 kind?: ("real" | "strategy" | "exploration" | "control" | "cost_probe" | "shadow")[];
                 status?: ("open" | "closed") | null;
                 exit_reason?: ("target" | "stop" | "trail" | "time_limit" | "friday_cut" | "manual" | "kill_switch" | "broker_stop_out" | "other")[];
-                evidence?: ("counted" | "excluded" | "censored" | "pending" | "not_evidence")[];
+                evidence?: ("counted" | "excluded" | "censored" | "pending" | "not_evidence" | "learning_cohort")[];
                 control?: boolean | null;
                 sort?: "newest" | "best" | "worst";
                 cursor?: string | null;

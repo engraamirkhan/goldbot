@@ -80,7 +80,8 @@ class LearningClose(FrozenRecord):
     mae_usd: float | None = None
     excursion_approx: bool | None = None  # part of the path came from 1m bars, not ticks (a restart, an adoption)
     # owner directive 2026-11-25: the instrument key (its asset class: goldbot.instruments.asset_class_of), and whether
-    # its label is voided or it is void as evidence (class_breakdown.class_voids, PR #442: never in a class figure)
+    # its label is voided or it is void as evidence (class_breakdown.class_voids, PR #442), or it is a demo learning
+    # cohort fill (ADR 0095): never in a class figure
     symbol: str = "XAUUSD"
     class_void: bool = False
 
@@ -132,7 +133,8 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp, *, include_ex
             side=r.side, currency=r.currency, pnl=r.pnl, r=r.r, gross=gross, risk=r.risk_amount, net=gross is not None,
             commission=c.commission if c is not None else None, swap=-c.swap if c is not None and c.swap is not None else None,
             censored=r.censored, voided=r.evidence == "excluded", exit_reason=r.exit_reason, symbol=r.symbol,
-            class_void=r.kind in ("exploration", "control") and order_id(r) in ledger.class_void,
+            class_void=r.evidence == "learning_cohort"
+            or (r.kind in ("exploration", "control") and order_id(r) in ledger.class_void),
             **_excursion(bodies.get(r.trade_id))))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])
 

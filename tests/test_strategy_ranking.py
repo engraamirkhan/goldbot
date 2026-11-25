@@ -462,9 +462,10 @@ def test_a_row_read_against_s0_is_tagged_as_an_unwired_replay_control_and_never_
 # ------------------------------------------------------------------------------------------------ by asset class
 def test_each_family_row_breaks_down_by_asset_class_and_flags_a_family_split_across_classes():
     """Owner directive 2026-11-25: a family's fills by asset class (net £, n, win rate, £/trade, mean R, t), the
-    view's totals by class, and a family positive in one class and negative in another flagged."""
-    metal = _spread("A1", [0.6, -0.2] * 30, 20)                                           # +0.2 R, 60 fills
-    fx = [r.model_copy(update={"symbol": "EURUSD"}) for r in _spread("A1", [-0.6, 0.2] * 30, 20)]    # -0.2 R
+    view's totals by class, and a family significantly positive in one class and negative in another flagged
+    (code review of PR #445, M3: clustered t of best minus worst)."""
+    metal = _spread("A1", [0.6, -0.2] * 30, 60)                                           # +0.2 R, 60 fills
+    fx = [r.model_copy(update={"symbol": "EURUSD"}) for r in _spread("A1", [-0.6, 0.2] * 30, 60)]    # -0.2 R
     beta = _spread("B1", [0.3] * 40, 10, family="beta")
     view = sr.rank([*metal, *fx, *beta], CAT, NOW)
     alpha = _by(view, "alpha")
@@ -483,3 +484,25 @@ def test_a_family_with_a_short_class_is_not_flagged_split():
             *[r.model_copy(update={"symbol": "SUGAR"}) for r in _spread("A1", [-1.0] * 10, 5)]]
     alpha = _by(sr.rank(rows, CAT, NOW), "alpha")
     assert alpha.asset_classes == ["metal", "agri"] and not alpha.class_split
+
+
+
+def test_a_family_whose_opposite_signs_are_noise_is_not_flagged_split():
+    """Code review of PR #445 (M3): signs differ but the clustered difference is not significant."""
+    rows = [*_spread("A1", [0.6, -0.5] * 30, 60),
+            *[r.model_copy(update={"symbol": "EURUSD"}) for r in _spread("A1", [-0.6, 0.5] * 30, 60)]]
+    alpha = _by(sr.rank(rows, CAT, NOW), "alpha")
+    assert alpha.asset_classes == ["metal", "fx"] and not alpha.class_split
+
+
+def test_engine_strategies_rank_with_their_ledger_evidence_and_cohort_fills_never_do():
+    """Code review of PR #445 (HIGH, from #440): every engine row carries evidence "not_evidence" (trades_ledger
+    _positions), so skipping that value dropped every engine strategy. Only "excluded" and the ADR 0095 cohort's own
+    "learning_cohort" are skipped, from the row and from every class figure."""
+    engine = _spread(None, [0.2] * 40, 10, kind="strategy", family="box_break", evidence="not_evidence")
+    cohort = _spread("A1", [5.0] * 40, 10, evidence="learning_cohort")
+    view = sr.rank([*engine, *cohort], CAT, NOW)
+    row = _by(view, "engine:box_break")
+    assert row.figures.n == 40 and row.band == "ranked"
+    assert all(r.key != "alpha" for r in [*view.rows, *view.controls, *view.retired])
+    assert {c.asset_class: c.n for c in view.by_class} == {"metal": 40}

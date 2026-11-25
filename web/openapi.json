@@ -7373,7 +7373,8 @@
        "excluded",
        "censored",
        "pending",
-       "not_evidence"
+       "not_evidence",
+       "learning_cohort"
       ],
       "title": "Evidence",
       "type": "string"
@@ -9919,7 +9920,8 @@
          "excluded",
          "censored",
          "pending",
-         "not_evidence"
+         "not_evidence",
+         "learning_cohort"
         ],
         "type": "string"
        },

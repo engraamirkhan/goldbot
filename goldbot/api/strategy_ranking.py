@@ -26,8 +26,10 @@ read's n. Money stays in the account currency and is never summed across currenc
 
 By asset class (owner directive 2026-11-25: "a strategy can perform differently on different instruments"): every row
 also carries its fills by asset class (`goldbot.ops.class_breakdown.asset_class_of` of the fill's symbol) with the same
-clustered pass, and is flagged `class_split` when its mean net R is positive in one class and negative in another
-(goldbot/ops/class_breakdown.py `is_split`); the view carries the totals by class. Descriptive like the rest: the
+clustered pass, and is flagged `class_split` ("split (significant)") when its best class is positive, its worst
+negative and the clustered t of the difference reaches the Bonferroni bar (goldbot/ops/class_breakdown.py
+`split_test`); the view carries the totals by class. Demo learning cohort fills (evidence "learning_cohort", ADR 0095)
+are in no row and no class. Descriptive like the rest: the
 row is still the family pooled over its classes, ranked on the pooled key.
 """
 from __future__ import annotations
@@ -59,7 +61,7 @@ from goldbot.api.schema import (
 )
 from goldbot.api.strategy_labels import Catalog
 from goldbot.data.timeutil import ROLLOVER_UTC_H
-from goldbot.ops.class_breakdown import ClassFigures, asset_class_of, class_order, cr1_t, is_split
+from goldbot.ops.class_breakdown import ClassFigures, asset_class_of, class_order, cr1_t, split_test
 from goldbot.ops.report_days import day_bounds, report_day
 from goldbot.telegram.labs import _TF_STYLE
 
@@ -204,7 +206,9 @@ def _index(rows: Iterable[TradeRow], cat: Catalog, class_void: Collection[str] =
                 prog_unit.append(units(to[0]))
                 prog_at.append(at)
                 prog_day.append(_oday(r.opened_utc.timestamp()))       # a session day "with a counted fill"
-        if r.r is None or r.pnl is None or r.evidence in ("excluded", "not_evidence"):    # ADR 0095: cohort fills
+        # ADR 0095: cohort fills ("learning_cohort") are never ranked; engine rows are "not_evidence" and rank (code
+        # review of PR #445, HIGH: skipping "not_evidence" dropped every engine strategy)
+        if r.r is None or r.pnl is None or r.evidence in ("excluded", "learning_cohort"):
             continue
         tf = r.timeframe or ""
         meta: _Meta
@@ -572,6 +576,10 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
     for code, p in _agg(ix, csel_ok, ix.group[csel_ok] * ncls + ix.cls[csel_ok]).items():
         gc_pass.setdefault(code // ncls, {})[code % ncls] = p
     tsel = csel_ok[~ix.control[csel_ok]]
+    by_g = csel_ok[np.argsort(ix.group[csel_ok], kind="stable")]
+    cuts = np.flatnonzero(np.diff(ix.group[by_g])) + 1
+    g_split = {int(ix.group[part[0]]): split_test(ix.r[part], ix.cls[part].tolist(), ix.cell[part].tolist())
+               for part in (np.split(by_g, cuts) if by_g.size else [])}
     view_cls = _class_figures(ix, _agg(ix, tsel, ix.cls[tsel]), None)
     v_pass = _agg(ix, gsel, ix.variant[gsel])
     esel = gsel[ix.explore[gsel]]
@@ -620,7 +628,7 @@ def _rank(ix: _Index, cat: Catalog, as_of: pd.Timestamp, window: RankingWindow, 
             control_note=S0_REPLAY_NOTE if kind == "exploration" and any(
                 getattr(cat.arm(a), "control_arm", None) == "S0" for a in strat) else None,
             asset_classes=[f.asset_class for f in sorted(by_class, key=lambda f: -f.n)], by_class=by_class,
-            class_split=is_split(by_class)))
+            class_split=g_split.get(g, False)))
     ranked = [r for r in built if r.band == "ranked"]
     k = len(ranked)
     passes = {ix.groups[g][0]: p for g, p in g_pass.items()}

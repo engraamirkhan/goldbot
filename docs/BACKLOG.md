@@ -1821,10 +1821,15 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   - (b) The strategy ranking (each row and the view), the trades API page, the lab "by class" line in the daily and
     weekly messages, the ranking's Telegram family line and the performance report all give each asset class and each
     family x class: net money after costs, trades, win rate, money per trade, mean R and t.
-  - (c) A family is flagged as split when its mean net R is positive in one class and negative in another, each class
-    with at least 30 fills that have an R.
+  - (c) A family is flagged "split (significant)" when its best class's mean net R is positive and its worst's is
+    negative, each class with at least 30 fills that have an R. The CR1-clustered t of best minus worst must also
+    reach max(2, the Bonferroni critical t over the class pairs). A null simulation keeps the false-flag rate at 5% or
+    under for 2 and 4 classes.
   - (d) A voided label (`exploration_label_void`) or a fill void as evidence for n never reaches a class figure
-    (PR #442 rule).
+    (PR #442 rule). Neither does a demo learning cohort fill, in any reader; its money stays in the totals. A
+    gross-only row has no R.
+  - (g) Review fix from #440: cohort fills get their own evidence value, `learning_cohort`. Engine strategies, whose
+    rows carry `not_evidence`, rank again.
   - (e) The web ranking table shows a Class column.
   - (f) ETF has no class because no ETF is listed. "Commodities" is split into metal, energy and agri.
 

@@ -19,8 +19,8 @@ The spec's rules, as built here:
 * By asset class (owner directive 2026-11-25: "a strategy can perform differently on different instruments"): a lab's
   net closes by the class of their instrument (`goldbot.ops.class_breakdown.asset_class_of`, goldbot/ops/class_breakdown.py),
   one "by class" line when they span two classes or more. Lab totals only: the family x class view is the ranking's.
-  A close with a voided label or void as evidence (`class_voids`, PR #442 rule) is in no class; its money stays in
-  the lab's net.
+  A close with a voided label or void as evidence (`class_voids`, PR #442 rule), or a demo learning cohort fill (ADR
+  0095), is in no class; its money stays in the lab's net.
 
 Reporting only: nothing here changes an order, a halt, a share or a setting, and aux.db is opened read-only (never
 created or migrated by a report).
@@ -278,7 +278,7 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
         costs=_costs(closed, oz_per_lot), by_day=by_day, closed_days=sorted(days),
         by_class=class_figures((ClassFill(t.family, asset_class_of(t.symbol), t.pnl, trade_r(t), None,
                                           report_day(t.exit_utc) if t.exit_utc is not None else None) for t in net
-                                if t.client_order_id not in void),
+                                if t.client_order_id not in void and t.evidence_class != "learning_cohort"),
                                families=False))
 
 

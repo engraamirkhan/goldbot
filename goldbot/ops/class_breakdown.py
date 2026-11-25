@@ -4,7 +4,7 @@ crypto), because a strategy can perform differently on different instruments").
 
 One figure record (`ClassFigures`), one builder over closed fills (`class_figures`) and one split flag
 (`class_splits`), shared by the trades API, the lab messages and the performance report; the strategy ranking fills
-the same record from its own numpy index (its clustered pass is the same CR1 estimator as `_cr1_t` here). The class
+the same record from its own numpy index (its clustered pass is the same CR1 estimator as `clustered_t` here). The class
 of a fill comes from `asset_class_of` below only: the ONE mapping, kept out of goldbot/instruments.py (a bridge file
 that must not import the research arm spec, tests/test_bridge_files.py). The registry has no ETF class (no ETF is
 listed) and splits "commodities" into metal, energy and agri.
@@ -20,23 +20,34 @@ Design rules kept:
   No class figure here reads `exploration_obs` labels at all: R is the fill's own broker net over its stop.
 * t is the mean net R over its clustered standard error (CR1, clusters as the caller gives them: the ranking's and the
   lab's (account, opportunity day)); None under 2 clusters or with no spread (never infinity).
-* "no conclusion drawn from fewer than ~30 trades" (performance-analyst brief): a family is flagged as split across
-  classes only when it has a positive mean net R in one class and a negative one in another, each from at least
-  MIN_SPLIT_FILLS fills with an R. Descriptive: the flag changes no read, gate, share or order.
+* "no conclusion drawn from fewer than ~30 trades" (performance-analyst brief) and code review of PR #445 (M3): a
+  family is flagged "split (significant)" only when its best class has a positive mean net R, its worst a negative
+  one, each from at least MIN_SPLIT_FILLS fills with an R, and the CR1-clustered t of best minus worst reaches
+  max(2, the Bonferroni critical t over the class pairs) (`split_test`; a null simulation in
+  tests/test_asset_class_reporting.py keeps the false-flag rate near 5% or under). Descriptive: the flag changes no
+  read, gate, share or order.
+* A gross-only fill (no net P&L) carries no R here: nothing gross is read as net. Demo learning cohort fills (ADR
+  0095, evidence `learning_cohort`) are in no class figure in any reader; their money stays in the totals.
 """
 from __future__ import annotations
 
 import json
 import math
 import sqlite3
-from collections.abc import Hashable, Iterable
+from collections.abc import Hashable, Iterable, Sequence
 from functools import lru_cache
 from typing import NamedTuple
+
+import numpy as np
+from scipy.stats import t as student_t
 
 from goldbot.base import FrozenRecord
 from goldbot.instruments import ASSET_CLASS_ORDER, UNKNOWN_CLASS, registry
 
 MIN_SPLIT_FILLS = 30                # per class, as the ranking's MIN_FILLS and the perf report's MIN_TRADES
+SPLIT_T = 2.0                       # code review of PR #445 (M3): the best-minus-worst class difference's t floor
+SPLIT_ALPHA = 0.05                  # ... and the two-sided level, Bonferroni over the class pairs
+SPLIT_LABEL = "split (significant)"
 
 
 def asset_class_of(name: str | None) -> str:
@@ -114,7 +125,7 @@ def cr1_t(mean: float, se: float | None) -> float | None:
     return round(mean / se, 2) if se is not None and se > 0 else None
 
 
-def _cr1_t(rs: list[tuple[float, Hashable]]) -> float | None:
+def clustered_t(rs: Sequence[tuple[float, Hashable]]) -> float | None:
     """The CR1 clustered t of the mean: SE^2 = G/(G-1) x sum over clusters of (cluster sum - n_g x mean)^2 / N^2."""
     n = len(rs)
     if n == 0:
@@ -141,7 +152,7 @@ def _figures(cls: str, family: str | None, fills: list[ClassFill]) -> ClassFigur
         asset_class=cls, family=family, n=len(fills), net_pnl=net, currency=next(iter(ccys)) if one else None,
         net_per_trade=round(net / len(money), 2) if net is not None else None,
         win_rate=round(sum((f.pnl or 0.0) > 0 for f in money) / len(money), 3) if money else None,
-        n_r=len(rs), mean_r=round(mean, 3) if mean is not None else None, t=_cr1_t(rs))
+        n_r=len(rs), mean_r=round(mean, 3) if mean is not None else None, t=clustered_t(rs))
 
 
 def class_order(cls: str) -> int:
@@ -162,22 +173,47 @@ def class_figures(fills: Iterable[ClassFill], *, families: bool = True) -> list[
     return out
 
 
-def splits(classes: Iterable[tuple[int, float | None]], min_n: int = MIN_SPLIT_FILLS) -> bool:
-    """One family's classes as (fills with an R, mean net R): positive in one class and negative in another, each from
-    `min_n` fills with an R."""
-    signs = {math.copysign(1, m) for n, m in classes if m is not None and m != 0 and n >= min_n}
-    return len(signs) == 2
+def split_test(rs: Sequence[float], classes: Sequence[Hashable], clusters: Sequence[Hashable],
+               min_n: int = MIN_SPLIT_FILLS, alpha: float = SPLIT_ALPHA) -> bool:
+    """One family's fills with an R (net R, asset class, cluster): "split (significant)" when, over its classes with
+    `min_n` fills or more, the best class's mean net R is positive, the worst's negative, and the CR1-clustered t of
+    best minus worst reaches max(2, t(1 - alpha / (2 m), G - 1)), m the class pairs (Bonferroni: the best and worst
+    are picked after looking). The difference's SE takes each fill's influence ((r - mean_best) / n_best, or
+    -(r - mean_worst) / n_worst) summed per cluster, so a cluster shared by both classes is one draw:
+    SE^2 = G/(G-1) x sum over clusters of u_g^2."""
+    r = np.asarray(rs, dtype=float)
+    if r.size == 0:
+        return False
+    _, cls = np.unique(np.asarray([str(c) for c in classes]), return_inverse=True)
+    n = np.bincount(cls)
+    means = np.bincount(cls, r) / np.maximum(n, 1)
+    ok = np.flatnonzero(n >= min_n)
+    k = ok.size
+    if k < 2:
+        return False
+    best, worst = ok[np.argmax(means[ok])], ok[np.argmin(means[ok])]
+    if not (means[best] > 0 > means[worst]):
+        return False
+    sel = (cls == best) | (cls == worst)
+    u = np.where(cls == best, (r - means[best]) / n[best], -(r - means[worst]) / n[worst])[sel]
+    _, cell = np.unique(np.asarray([str(c) for c in clusters], dtype=object)[sel].astype(str), return_inverse=True)
+    g = int(cell.max()) + 1
+    if g < 2:
+        return False
+    se = math.sqrt(g / (g - 1) * float(np.sum(np.bincount(cell, u) ** 2)))
+    if se <= 0:
+        return False
+    pairs = k * (k - 1) / 2
+    crit = max(SPLIT_T, float(student_t.ppf(1 - alpha / (2 * pairs), g - 1)))
+    return float(means[best] - means[worst]) / se >= crit
 
 
-def is_split(figs: Iterable[ClassFigures], min_n: int = MIN_SPLIT_FILLS) -> bool:
-    """`splits` over one family's ClassFigures."""
-    return splits(((f.n_r, f.mean_r) for f in figs), min_n)
-
-
-def class_splits(figs: Iterable[ClassFigures], min_n: int = MIN_SPLIT_FILLS) -> list[str]:
-    """The families (family x class rows; class totals are ignored) that are split across classes, by name."""
-    by_fam: dict[str, list[ClassFigures]] = {}
-    for f in figs:
-        if f.family is not None:
+def class_splits(fills: Iterable[ClassFill], min_n: int = MIN_SPLIT_FILLS) -> list[str]:
+    """The families split across classes ("split (significant)", `split_test` on their fills with an R), by name."""
+    by_fam: dict[str, list[ClassFill]] = {}
+    for f in fills:
+        if f.r is not None:
             by_fam.setdefault(f.family, []).append(f)
-    return sorted(fam for fam, fs in by_fam.items() if is_split(fs, min_n))
+    return sorted(fam for fam, fs in by_fam.items()
+                  if split_test([f.r for f in fs if f.r is not None], [f.asset_class for f in fs],
+                                [f.cluster for f in fs], min_n))

@@ -192,5 +192,5 @@ def test_a_family_split_across_asset_classes_says_so_with_each_classes_mean_r():
     row = RankRow(key="box", family="box", family_label="Box", version=1, style="intraday", kind="exploration",
                   timeframes=["15m"], accounts=[], band="too_few", rank=None, unranked_reason="few", status="early",
                   figures=f, variants=[], by_class=cls, asset_classes=["metal", "fx"], class_split=True)
-    assert "split by class: metal +0.20 R, fx −0.20 R" in family_line(row)
+    assert "split (significant) by class: metal +0.20 R, fx −0.20 R" in family_line(row)
     assert "split by class" not in family_line(row.model_copy(update={"class_split": False}))

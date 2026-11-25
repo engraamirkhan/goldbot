@@ -17,6 +17,7 @@ from goldbot.ops.class_breakdown import (
     class_figures,
     class_splits,
     class_voids,
+    split_test,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -89,17 +90,44 @@ def test_money_is_never_summed_across_currencies_in_a_class() -> None:
     assert (f.net_pnl, f.currency, f.net_per_trade, f.n, f.mean_r) == (None, None, None, 2, 1.0)
 
 
-def test_a_family_positive_in_one_class_and_negative_in_another_is_flagged() -> None:
+def test_a_family_positive_in_one_class_and_significantly_negative_in_another_is_flagged_split() -> None:
+    """Code review of PR #445 (M3): signs differ AND the clustered t of best minus worst reaches the bar."""
     n = MIN_SPLIT_FILLS
-    figs = class_figures([*_fills("box", "metal", [0.6, -0.2] * n), *_fills("box", "fx", [-0.6, 0.2] * n),
-                          *_fills("vwap", "metal", [0.3] * n * 2), *_fills("vwap", "fx", [0.1] * n * 2)])
-    assert class_splits(figs) == ["box"]
+    fills = [*_fills("box", "metal", [0.6, -0.2] * n, days=60), *_fills("box", "fx", [-0.6, 0.2] * n, days=60),
+             *_fills("vwap", "metal", [0.3, 0.1] * n, days=60), *_fills("vwap", "fx", [0.1, 0.3] * n, days=60)]
+    assert class_splits(fills) == ["box"]
+
+
+def test_opposite_signs_that_are_noise_are_not_flagged_split() -> None:
+    n = MIN_SPLIT_FILLS
+    fills = [*_fills("box", "metal", [0.6, -0.5] * n, days=60), *_fills("box", "fx", [-0.6, 0.5] * n, days=60)]
+    assert class_splits(fills) == []
 
 
 def test_a_class_under_the_minimum_fills_never_flags_a_split() -> None:
-    figs = class_figures([*_fills("box", "metal", [0.6, -0.2] * MIN_SPLIT_FILLS),
-                          *_fills("box", "fx", [-1.0] * (MIN_SPLIT_FILLS - 1))])
-    assert class_splits(figs) == []
+    fills = [*_fills("box", "metal", [0.6, -0.2] * MIN_SPLIT_FILLS, days=60),
+             *_fills("box", "fx", [-1.0, -0.8] * ((MIN_SPLIT_FILLS - 1) // 2), days=60)]
+    assert class_splits(fills) == []
+
+
+@pytest.mark.parametrize("k", [2, 4])
+def test_under_the_null_the_split_flag_fires_on_about_5_percent_of_families_or_fewer(k: int) -> None:
+    """Mean 0 in every class, fills clustered by day (shared across classes): best-minus-worst with the Bonferroni bar
+    over the class pairs keeps the false-flag rate near 5% or under."""
+    import numpy as np
+    rng = np.random.default_rng(445 + k)
+    sims, per_class, days = 600, 40, 20
+    flags = 0
+    for _ in range(sims):
+        day_effect = rng.normal(0, 0.5, days)
+        rs, cls, cl = [], [], []
+        for c in range(k):
+            d = rng.integers(0, days, per_class)
+            rs += list(day_effect[d] + rng.normal(0, 1, per_class))
+            cls += [f"c{c}"] * per_class
+            cl += list(d)
+        flags += split_test(rs, cls, cl)
+    assert flags / sims <= 0.06
 
 
 def test_class_voids_reads_every_voided_label_and_every_n_evidence_void_and_tolerates_an_old_file() -> None:

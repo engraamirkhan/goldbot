@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -25,7 +26,7 @@ def _accounts(enabled_accounts):
 
 
 def _arm(state: Path, cid: str, arm: str, symbol: str, pnl: float, minute: int) -> None:
-    sent = pd.Timestamp("2026-11-17 10:00", tz="UTC") + pd.Timedelta(minutes=minute)
+    sent = pd.Timestamp("2026-11-16 08:00", tz="UTC") + pd.Timedelta(hours=3 * minute)   # spread over the days
     rec = ExplorationRecord(
         client_order_id=cid, account_id=ACC, arm_id=arm, family="x", tf="5m", side=1, lots=0.01, signal_utc=sent,
         sent_utc=sent, atr_usd=3.0, stop_usd=3.0, target_usd=6.0, hold_s=3600, requested_price=1.0, spread_usd=0.0,
@@ -41,7 +42,7 @@ def _state(tmp_path: Path) -> Path:
     for i in range(MIN_TRADES):
         _arm(tmp_path, f"g{i}", "ZZ1", "XAUUSD", 1.0 if i % 2 else 0.6, i)          # +0.4 R mean, gold
         _arm(tmp_path, f"f{i}", "ZZ1-EURUSD", "EURUSD", -1.0 if i % 2 else -0.6, i)  # -0.4 R mean, fx
-    _arm(tmp_path, "void", "ZZ1-UST10Y", "UST10Y", -30.0, 99)                       # a voided label: bond, -15 R
+    _arm(tmp_path, "void", "ZZ1-UST10Y", "UST10Y", -30.0, 31)                       # a voided label: bond, -15 R
     with Database.open(tmp_path, "aux").write() as conn:
         conn.execute("INSERT INTO exploration_label_void VALUES ('void', 'v2', 'non-gold on gold bars', 0)")
     return tmp_path
@@ -62,8 +63,30 @@ def test_learning_closes_by_asset_class_and_family_x_class_flag_a_split_and_leav
     assert len(fam) == 2 and all(k.endswith((" / metal", " / fx")) for k in fam)
     assert lr.class_splits == ["x"]
     md = format_markdown(rep)
-    assert "| asset class |" in md and "Split across classes" in md and "(t " in md
+    assert "| asset class |" in md and "Split (significant) across classes" in md and "(t " in md
 
 
-def test_the_record_trades_have_asset_class_and_family_class_dimensions():
+def test_the_record_trades_have_asset_class_and_family_class_dimensions_from_their_symbol():
+    """Code review of PR #445 (M1): a non-gold engine's closed trade records its symbol; it is classed by it."""
+    from goldbot.ops.gates_phase import ClosedTrade
+    from goldbot.ops.perf_report import _dims
     assert {"asset_class", "family_class"} <= set(DIMENSIONS)
+    base: dict[str, Any] = dict(account_id="icm-demo", broker="icm", mode="demo", exit_utc=NOW, ret=0.001, pnl=1.0,
+                equity_before=1000.0, family="box_break")
+    fx = _dims(ClosedTrade(**base, symbol="EURUSD"), {}, None, None)
+    gold = _dims(ClosedTrade(**base), {}, None, None)
+    assert (fx["asset_class"], fx["family_class"]) == ("fx", "box_break / fx")
+    assert gold["asset_class"] == "metal"
+
+
+def test_a_groups_t_is_clustered_by_account_and_day_like_the_other_readers(tmp_path):
+    """Code review of PR #445 (L): the class rows' t is the CR1 clustered t (account x opportunity day)."""
+    from goldbot.ops.class_breakdown import clustered_t
+    rep = build_performance_report(_state(tmp_path), start=START, end=END, now=NOW)
+    [a] = rep.accounts
+    assert a.learning is not None
+    metal = next(g for g in a.learning.asset_classes if g.key == "metal")
+    rs = [(0.5 if i % 2 else 0.3, ("icm-probe", str((pd.Timestamp("2026-11-16 08:00", tz="UTC")
+                                                       + pd.Timedelta(hours=3 * i + 2, minutes=10)).date())))
+          for i in range(MIN_TRADES)]
+    assert metal.t_r == clustered_t(rs)

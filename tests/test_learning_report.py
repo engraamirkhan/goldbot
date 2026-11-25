@@ -661,3 +661,15 @@ def test_a_voided_label_never_reaches_the_trades_or_ranking_class_summaries(tmp_
     assert [c.asset_class for c in page.by_class] == ["metal"] and page.totals.net_pnl == pytest.approx(-67.5)
     view = sr.rank(led.rows, strategy_labels.catalog(), NOW, class_void=led.class_void)
     assert {c.asset_class for c in view.by_class} == {"metal"}
+
+
+def test_a_learning_cohort_fill_never_reaches_a_labs_class_summary(tmp_path: Path) -> None:
+    """Code review of PR #445 (M2): ADR 0095 cohort fills are in no class figure; their money stays in the net."""
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.trade("icm-probe", "S1A", DAY, pnl=4.5)
+    lab.trade("icm-probe", "S0-US500", DAY, pnl=-9.0, symbol="US500", evidence_class="learning_cohort")
+    with labs.aux(tmp_path) as conn:
+        assert conn is not None
+        span = labs.lab_span(conn, "icm-probe", DAY - pd.Timedelta(hours=1), DAY + pd.Timedelta(hours=2))
+    assert [(c.asset_class, c.n) for c in span.by_class] == [("metal", 1)]
+    assert span.pnl == pytest.approx(4.5 - 9.0)

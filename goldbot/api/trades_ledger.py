@@ -40,7 +40,7 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Final, Literal, TypeVar
 
 import pandas as pd
 from pydantic import PrivateAttr
@@ -351,7 +351,7 @@ def exploration_records(state_dir: str | Path) -> dict[str, ExplorationRecord]:
     return {arm_trade_id(t): t for t in recs}
 
 
-COHORT_EVIDENCE = "learning_cohort"     # `engine.exploration_cohort.EVIDENCE_CLASS` (ADR 0095)
+COHORT_EVIDENCE: Final = "learning_cohort"   # `engine.exploration_cohort.EVIDENCE_CLASS` (ADR 0095)
 
 
 def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow:
@@ -373,7 +373,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
     elif t.evidence_class == COHORT_EVIDENCE:
         # ADR 0095 (quant C2): a demo learning cohort fill is execution evidence of a retired arm: listed, never in a
         # ranking, a read's n or the board's n
-        evidence = "not_evidence"
+        evidence = COHORT_EVIDENCE
     elif t.client_order_id in voids:
         evidence = "excluded"
     elif t.censored:
@@ -768,7 +768,7 @@ class _Index:
     by_account: dict[str | None, _Closed]
     open: list[TradeRow]
     answers: dict[Any, tuple[list[TradeRow], TradeTotals]] = field(default_factory=dict)
-    classes: dict[Any, list[ClassFigures]] = field(default_factory=dict)       # by filter, as `answers`
+    classes: dict[Any, tuple[list[ClassFigures], list[str]]] = field(default_factory=dict)  # by filter, as `answers`
 
     @classmethod
     def build(cls, rows: Sequence[TradeRow]) -> _Index:
@@ -875,30 +875,34 @@ def order_id(r: TradeRow) -> str:
     return r.trade_id.rsplit(":", 1)[-1]
 
 
-def by_class(rows: Sequence[TradeRow], void: Collection[str] = ()) -> list[ClassFigures]:
+def class_fills(rows: Sequence[TradeRow], void: Collection[str] = ()) -> list[ClassFill]:
     """The closed, non-shadow rows by asset class, then by family x class (goldbot/ops/class_breakdown.py); a row's
     class from its symbol (`asset_class_of`, read once per symbol). Rows void as evidence, or whose order id is in
-    `void` (a voided label), are left out."""
+    `void` (a voided label), and demo learning cohort fills (ADR 0095) are left out: their money stays in the totals."""
     cls: dict[str, str] = {}
     fills = []
     for r in rows:
-        if (r.status != "closed" or r.exit_utc is None or r.kind == "shadow" or r.evidence == "excluded"
+        if (r.status != "closed" or r.exit_utc is None or r.kind == "shadow"
+                or r.evidence in ("excluded", COHORT_EVIDENCE)
                 or (r.kind in ("exploration", "control") and order_id(r) in void)):
             continue
         c = cls.get(r.symbol)
+        # code review of PR #445 (M2): a gross-only row (no net) carries no R, never read as net
         fills.append(ClassFill(r.family, c if c is not None else cls.setdefault(r.symbol, asset_class_of(r.symbol)),
-                               r.pnl, r.r, r.currency, (r.account, oday(r.exit_utc))))
-    return class_figures(fills)
+                               r.pnl, r.r if r.pnl is not None else None, r.currency, (r.account, oday(r.exit_utc))))
+    return fills
 
 
-def _classes(ledger: Ledger, q: TradeQuery, rows: Sequence[TradeRow]) -> list[ClassFigures]:
+def _classes(ledger: Ledger, q: TradeQuery, rows: Sequence[TradeRow]) -> tuple[list[ClassFigures], list[str]]:
+    """The filter's class figures and split families, remembered per filter for the life of the build."""
     idx = ledger.index()
     key = q.model_copy(update={"cursor": None, "limit": PAGE})
     hit = idx.classes.get(key)
     if hit is None:
         if len(idx.classes) >= ANSWERS_MAX:
             idx.classes.clear()
-        hit = idx.classes[key] = by_class(rows, ledger.class_void)
+        fills = class_fills(rows, ledger.class_void)
+        hit = idx.classes[key] = (class_figures(fills), class_splits(fills))
     return hit
 
 
@@ -918,11 +922,11 @@ def query(ledger: Ledger, q: TradeQuery) -> TradesPage:
     more = start + limit < len(rows)
     # the facet: the instruments under every filter but the instrument ones (the panel never offers an empty choice)
     facet = rows if not (q.symbol or q.group) else _answer(ledger, q.model_copy(update={"symbol": (), "group": ()}))[0]
-    figs = _classes(ledger, q, rows)
+    figs, splits = _classes(ledger, q, rows)
     return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1], q.sort) if more and page else None,
                       totals=t, unreadable=ledger.unreadable, symbols=sorted({r.symbol for r in facet}),
                       by_class=[f for f in figs if f.family is None],
-                      by_family_class=[f for f in figs if f.family is not None], class_splits=class_splits(figs))
+                      by_family_class=[f for f in figs if f.family is not None], class_splits=splits)
 
 
 def detail(ledger: Ledger, trade_id: str) -> TradeRow | None:

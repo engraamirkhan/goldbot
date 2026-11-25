@@ -89,10 +89,11 @@ const costR = (r: RankRow) => (r.figures.cost_per_trade_r != null ? `(${r.figure
 const costPair = (r: RankRow) => `${costMoney(r)}${costR(r) ? ` ${costR(r)}` : ""}`;
 const ciWords = (r: RankRow) => ci(r.figures.ci95, 0.95);
 /** Owner directive 2026-11-25: the row's asset classes, most fills first; a family positive in one class and negative
- * in another says so with each class's average (the server's flag, goldbot/ops/class_breakdown.py). */
+ * in another, significantly ("split (significant)": the server's flag, goldbot/ops/class_breakdown.py split_test),
+ * says so with each class's average. */
 const classWords = (r: RankRow) => (r.asset_classes?.length ? r.asset_classes.join(", ") : "—");
 const splitWords = (r: RankRow) => (r.class_split
-  ? `split by class: ${(r.by_class ?? []).filter((c) => c.mean_r != null).map((c) => `${c.asset_class} ${signedR(c.mean_r ?? null)}`).join(", ")}`
+  ? `split (significant) by class: ${(r.by_class ?? []).filter((c) => c.mean_r != null).map((c) => `${c.asset_class} ${signedR(c.mean_r ?? null)}`).join(", ")}`
   : "");
 /** The primary cell: the lower bound, or "too few to rank" with its counts on their own line (the reason is said once). */
 function KeyCell({ r }: { r: RankRow }) {
