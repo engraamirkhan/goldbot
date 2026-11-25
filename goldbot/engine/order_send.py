@@ -217,6 +217,11 @@ def published(eng: Any) -> dict[str, Any]:
             "demo_unlimited": _unlimited(eng)}
 
 
+def epoch_tag(eng: Any) -> dict[str, str]:
+    """ADR 0097: the evidence tag an entry carries on a demo account without limits; nothing on any other account."""
+    return {"limits_epoch": "unlimited"} if _unlimited(eng) else {}
+
+
 def refusal_action(exc: BaseException) -> str:
     """The journal's action for an order refused before it was sent: `entry_refused:<reason>` for a yield."""
     return f"entry_refused:{exc.reason}" if isinstance(exc, EntryYield) else REFUSED

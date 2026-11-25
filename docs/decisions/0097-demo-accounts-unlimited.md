@@ -180,6 +180,9 @@ reads keep them.
   learning.
 - A wiped shared demo halts all learning. The floor at 20 % is a last resort; the 50 % warning and `arm_runaway` come
   first.
+- The engine state file gains six keys on every account: `exit_wait_p99_s`, `exit_wait_max_s`, `exit_wait_n`,
+  `exit_slo_s`, `entry_duty` and `demo_unlimited`. tests/data/engine_store_golden was regenerated for that. A
+  per-case check found the six keys to be the only difference in all 192 cases.
 - New health rows `exit_latency:<account>` and `demo_floor:<account>`. `daily_cap`/`weekly_cap` rows are not shown for
   an unlimited account (no such cap there). RUNBOOK sections "Exit latency" and "Demo floor" say what to do.
 - Demo results under this epoch are not live evidence. The live unlock, the phase gate, the trial budget and the

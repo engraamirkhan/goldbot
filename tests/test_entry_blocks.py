@@ -124,7 +124,7 @@ def test_the_per_trade_refusals_are_the_sizing_refusals_of_the_gate():
                                   "combined_exposure_cap", "group_exposure_cap", "daily_loss_limit_abs",
                                   "daily_limit_projected", "heat_cap",
                                   "pilot_stop_above_cap", "pilot_trade_risk_above_cap",
-                                  "pilot_stop_projected"}
+                                  "pilot_stop_projected", "demo_margin_floor"}     # ADR 0097: the demo floor's
     assert not PER_TRADE_REFUSALS & set(RiskGate(LIMITS).account_reasons(
         _state(**{k: v for over, _ in FLAGS if "equity" not in over for k, v in over.items()}), NOW))
 

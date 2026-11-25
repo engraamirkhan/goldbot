@@ -592,7 +592,8 @@ _POSITIVE_OPERATIONAL = ("price", "contract_oz", "volume_step", "volume_min", "v
 PER_TRADE_REFUSALS = frozenset({"fx_conversion_unavailable", "min_lot_exceeds_risk", "margin_level_floor",
                                 "combined_exposure_cap", "group_exposure_cap", "daily_loss_limit_abs",
                                 "daily_limit_projected", "heat_cap",
-                                "pilot_stop_above_cap", "pilot_trade_risk_above_cap", "pilot_stop_projected"})
+                                "pilot_stop_above_cap", "pilot_trade_risk_above_cap", "pilot_stop_projected",
+                                "demo_margin_floor"})                # ADR 0097: sized, like margin_level_floor
 
 
 def _bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:

@@ -1357,9 +1357,7 @@ class Engine:
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order",
                                "proposal": prop.proposal_id, "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
-                               "message": res.message,
-                               # ADR 0097: the evidence tag of an entry on a demo account without limits
-                               **({"limits_epoch": "unlimited"} if self.gate.unlimited() else {})})
+                               "message": res.message, **order_send.epoch_tag(self)})      # ADR 0097
         auto_entry.note_refusal(self, prop, agent, res, lots)     # the bridge's ceiling or a switched terminal
         order_send.record_fill(self, prop, agent, res, requested)     # the nightly slippage table
         return res
@@ -3020,8 +3018,7 @@ class Engine:
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],
             "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
-            # ADR 0097 (trading-safety H1): the loop-pass gap p99 with a position open, the exit SLO, the entry duty
-            **order_send.published(self),
+            **order_send.published(self),            # ADR 0097 (trading-safety H1): exit wait p99, SLO, entry duty
             # BACKLOG 72: orders the broker neither filled nor refused (health WARNs from 600 s; entry status "since")
             "unconfirmed_orders": unconfirmed.summary(self._orders, pd.Timestamp.now("UTC"), self.cfg.symbol),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
