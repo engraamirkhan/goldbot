@@ -351,6 +351,14 @@
    "max_inputs": 2,
    "gaps": [
     {
+     "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
+     "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
+     "owner": "data-engineer (raise), architect + implementer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "TF-2h"
+    },
+    {
      "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
      "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
      "owner": "data-engineer",
@@ -958,6 +966,14 @@
    "max_inputs": 3,
    "gaps": [
     {
+     "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
+     "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
+     "owner": "data-engineer (raise), architect + implementer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "TF-2h"
+    },
+    {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
      "owner": "data-engineer",
@@ -1549,6 +1565,14 @@
    "max_inputs": null,
    "gaps": [
     {
+     "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
+     "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
+     "owner": "data-engineer (raise), architect + implementer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "TF-2h"
+    },
+    {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
      "owner": "data-engineer",
@@ -2116,6 +2140,14 @@
    "max_inputs": null,
    "gaps": [
     {
+     "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
+     "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
+     "owner": "data-engineer (raise), architect + implementer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "TF-2h"
+    },
+    {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
      "owner": "data-engineer",
@@ -2372,6 +2404,509 @@
    "requirement": {
     "cell": "index_energy_b/1w",
     "unit": "index_energy_b",
+    "tf": "1w",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/1m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/1m",
+    "unit": "independent_new",
+    "tf": "1m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/5m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/5m",
+    "unit": "independent_new",
+    "tf": "5m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/15m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/15m",
+    "unit": "independent_new",
+    "tf": "15m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/30m",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/30m",
+    "unit": "independent_new",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/1h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/1h",
+    "unit": "independent_new",
+    "tf": "1h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/2h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
+     "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
+     "owner": "data-engineer (raise), architect + implementer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "TF-2h"
+    },
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/2h",
+    "unit": "independent_new",
+    "tf": "2h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/4h",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/4h",
+    "unit": "independent_new",
+    "tf": "4h",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/1d",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/1d",
+    "unit": "independent_new",
+    "tf": "1d",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "independent_new/1w",
+   "verdict": "SHORT",
+   "projected": "SHORT",
+   "n_eff_learn": null,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": null,
+   "gaps": [
+    {
+     "gap": "too few independent instruments x days: the binding constraint, not rows",
+     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "owner": "data-engineer; quant (references)",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-13"
+    },
+    {
+     "gap": "HistData months graded C have no second source",
+     "plan": "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "D-14"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no dense labels for index and energy",
+     "plan": "dense label factory, index + energy (B close-to-close)",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-21",
+     "blocks": true,
+     "item": "D-5ie"
+    }
+   ],
+   "requirement": {
+    "cell": "independent_new/1w",
+    "unit": "independent_new",
     "tf": "1w",
     "objective": "obj-v1",
     "inputs": 10,

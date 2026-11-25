@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from goldbot.config import TF_SECONDS
 from goldbot.research import feature_store as F
 from goldbot.research.self_retrain import CELL_TFS
 
@@ -48,6 +49,10 @@ def main() -> int:
     a = ap.parse_args()
     insts = [F.GOLD, *F.histdata_instruments(a.raw)] if a.instruments == "all" else a.instruments.split(",")
     tfs = list(CELL_TFS) if a.tfs == "all" else a.tfs.split(",")
+    known = [tf for tf in tfs if tf in TF_SECONDS]
+    if len(known) < len(tfs):        # 2h is a cell timeframe with no bar rule (config.TF_SECONDS, resample_bars)
+        print(f"skipped, no bar rule in config.TF_SECONDS: {sorted(set(tfs) - set(known))}", flush=True)
+    tfs = known
     phases = [int(p) for p in a.phases.split(",")]
     want = _years(a.years)
     out = []

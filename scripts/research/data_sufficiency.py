@@ -37,7 +37,7 @@ def certificates(cfg: dict[str, Any]) -> list[D.Certificate]:
                                 label_templates=req0["label_templates"])
             learn = None if u["learn"] is None else int(u["learn"][i])
             judge = None if u["judge"] is None else int(u["judge"][i])
-            gaps = [_gap(k, cfg["items"][k]) for k in u["items"]]
+            gaps = [_gap(k, cfg["items"][k]) for k in [*cfg.get("tf_items", {}).get(tf, []), *u["items"]]]
             if learn is not None and learn < req.n_train():
                 gaps.append(D.Gap(item="POOL", gap=f"learn n_eff {learn:,} < {req.n_train():,} for a "
                                   f"{req.inputs}-input block (max {learn // D.RILEY_PER_PARAM} inputs)",

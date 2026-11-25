@@ -13,7 +13,7 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | gold/15m | SHORT | SHORT | 4,054 / 4,300 | 9 | 3,919 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
 | gold/30m | SHORT | SHORT | 2,683 / 4,300 | 6 | 2,594 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
 | gold/1h | SHORT | SHORT | 2,071 / 4,300 | 4 | 2,002 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
-| gold/2h | SHORT | SHORT | 1,035 / 4,300 | 2 | 1,001 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
+| gold/2h | SHORT | SHORT | 1,035 / 4,300 | 2 | 1,001 / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
 | gold/4h | SHORT | SHORT | 414 / 4,300 | 0 | 400 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
 | gold/1d | SHORT | SHORT | 207 / 4,300 | 0 | 200 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
 | gold/1w | SHORT | SHORT | 104 / 4,300 | 0 | 100 / 1,109 | D-1: Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered (2026-12-02) |
@@ -22,7 +22,7 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | fx10/15m | SHORT | SUFFICIENT | 6,306 / 4,300 | 14 | 6,056 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | fx10/30m | SHORT | SHORT | 4,174 / 4,300 | 9 | 4,009 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | fx10/1h | SHORT | SHORT | 3,221 / 4,300 | 7 | 3,094 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
-| fx10/2h | SHORT | SHORT | 1,611 / 4,300 | 3 | 1,547 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
+| fx10/2h | SHORT | SHORT | 1,611 / 4,300 | 3 | 1,547 / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
 | fx10/4h | SHORT | SHORT | 644 / 4,300 | 1 | 619 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | fx10/1d | SHORT | SHORT | 322 / 4,300 | 0 | 309 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | fx10/1w | SHORT | SHORT | 161 / 4,300 | 0 | 155 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
@@ -31,7 +31,7 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | metals_crosses_b/15m | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | metals_crosses_b/30m | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | metals_crosses_b/1h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
-| metals_crosses_b/2h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
+| metals_crosses_b/2h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
 | metals_crosses_b/4h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | metals_crosses_b/1d | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | metals_crosses_b/1w | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
@@ -40,15 +40,26 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | index_energy_b/15m | SHORT | SHORT | - / 4,300 | - | 4,609 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | index_energy_b/30m | SHORT | SHORT | - / 4,300 | - | 3,051 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | index_energy_b/1h | SHORT | SHORT | - / 4,300 | - | 2,355 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
-| index_energy_b/2h | SHORT | SHORT | - / 4,300 | - | 1,177 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
+| index_energy_b/2h | SHORT | SHORT | - / 4,300 | - | 1,177 / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
 | index_energy_b/4h | SHORT | SHORT | - / 4,300 | - | 471 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | index_energy_b/1d | SHORT | SHORT | - / 4,300 | - | 235 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
 | index_energy_b/1w | SHORT | SHORT | - / 4,300 | - | 118 / 1,109 | D-2: fs-v1 feature store not merged (2026-12-04) |
+| independent_new/1m | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/5m | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/15m | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/30m | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/1h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/2h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
+| independent_new/4h | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/1d | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
+| independent_new/1w | SHORT | SHORT | - / 4,300 | - | - / 1,109 | D-13: too few independent instruments x days: the binding constraint, not rows (2026-12-11) |
 
 ## Data items (sr-v3 card 9a) and date risk
 
 | Item | Gap | Plan | Owner | Due | Status | Risk |
 |---|---|---|---|---|---|---|
+| D-13 | too few independent instruments x days: the binding constraint, not rows | rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first | data-engineer; quant (references) | 2026-12-11 | not started | AT RISK |
+| D-14 | HistData months graded C have no second source | pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one) | data-engineer | 2026-12-09 | not started | AT RISK |
 | D-1 | Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered | grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest | data-engineer | 2026-12-02 | not started | AT RISK |
 | D-2 | fs-v1 feature store not merged | PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf) | data-engineer | 2026-12-04 | PR open | on track |
 | D-3 | no side-aware r3 labels, synthetic ask, ub95 cost per class | W2-2 / A9 implementation | implementer + microstructure-researcher | 2026-12-04 | not started (not data-owned) | AT RISK |
@@ -58,6 +69,7 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | D-5ie | no dense labels for index and energy | dense label factory, index + energy (B close-to-close) | data-engineer + implementer | 2026-12-21 | not started | watch |
 | COUNT-mc | metals/crosses n_eff not counted | outcome-blind n_eff count by the card 2.2 method from the r11 tiers | data-engineer | 2026-11-28 | not started | on track |
 | COUNT-ie | index/energy learn 2018-2021 (R-L) n_eff not counted | outcome-blind count, after the N8 class-window card is frozen | data-engineer | 2026-11-28 | not started | on track |
+| TF-2h | 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) | add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change | data-engineer (raise), architect + implementer | 2026-12-04 | found 2026-11-25 | AT RISK |
 | D-6 | X1 macro series lack actual release times | point-in-time X1 with release times (D9) | macro-researcher + data-engineer | 2026-12-05 | not started | watch |
 | D-7 | live engine serves d1 from 90k minutes (2 d1 inputs NaN) | X2 closed-HTF store live parity (W3-3); engine reads goldbot/data/htf_bars | implementer; trading-safety, sre | 2026-12-14 | store built in fs-v1; engine side not started | watch |
 | D-8 | no X3 baskets, X4 calendar as-of, X5 COT release-time join | build on fs-v1 as blocks | data-engineer | 2026-12-11 | not started | watch |
@@ -71,3 +83,4 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 - `fx10`: FX10 pooled (HistData, A/A-cons); learn 2010-01..2017-12, judge 2018-01..2025-09.
 - `metals_crosses_b`: Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close); learn 2010-01..2017-12, judge 2018-01..2025-09.
 - `index_energy_b`: Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows); learn 2018-01..2021-12, judge 2022-01..2025-09.
+- `independent_new`: Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); ranked by |daily corr with gold| and independent graded days; learn 2010-01..2017-12, judge 2018-01..2025-09.
