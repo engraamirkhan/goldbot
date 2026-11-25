@@ -79,6 +79,7 @@ def main() -> None:
     import yaml
 
     from goldbot.config import load_settings
+    from goldbot.data import holdout_guard
     from goldbot.data.account_bars import PRICE_COLUMNS, minute_versions
     from goldbot.data.store import Store
     from goldbot.research import arms as arm_spec
@@ -122,6 +123,9 @@ def main() -> None:
         last = pd.Timestamp(int(mine["decision_ns"].max()), tz="UTC")
         pit = minute_versions(store, account_id=account, broker=broker, symbol=symbol,
                               start=first - pd.Timedelta(days=READ_DAYS), end=last, as_of=now)
+        # quant R10: never read sealed-holdout minutes (added after the 2026-11-25 run, whose 100-day snapshot seed
+        # reached into Aug-Sep 2026; disclosed in the prereg amendment section 6)
+        pit = holdout_guard.cut(pit, what=f"revision audit snapshot seed of {account}")
         nom = strip(pit)
         for tf, dec_ns in zip(mine["tf"].astype(str), mine["decision_ns"].astype("int64"), strict=True):
             at = pd.Timestamp(int(dec_ns), tz="UTC")

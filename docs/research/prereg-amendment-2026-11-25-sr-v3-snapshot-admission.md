@@ -90,7 +90,51 @@ timeframe), counts only: 0 K (quant Q2/Q4: no OOS, net-R or label outcome is com
 
 ## 6. Result (filled in after the audit; the rule above is not edited)
 
-_Pending._
+Run 2026-11-25 07:54 UTC on the brain (`scripts/research/minute_revision_audit.py` at commit dd7b97e6, after the
+threshold commit 6ccb552f was pushed). Read-only; no label or outcome read. 248 snapshot pairs, 0.46 s median each.
+
+| Broker | Minutes | R at close (differ) | R upper 95 % | R 1 h / 24 h | Snapshots | S material | S upper 95 % | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| icm (icm-demo + icm-probe) | 16,636 | 0.08 % (14, all absent at close) | 0.14 % | 0.04 % / 0 % | 168 | 14.9 % (25) | 21.0 % | **fail** (S) |
+| vantage (vantage-demo) | 8,327 | 4.1 % (345: 341 absent, 4 revised) | 4.6 % | 1.7 % / 0.05 % | 80 | 53.8 % (43) | 64.3 % | **fail** (R and S) |
+
+- 152 of 168 icm snapshots and all 80 vantage snapshots differ in at least one feature. The material differences sit
+  in the long-window volatility columns (`vol_of_vol_60` 28, `vol_ts_yz_20_60` 26, the `em_yz_*_cost` columns 6
+  each). These read minutes from days back, and those minutes include back-fills written after the decision. With
+  the write stamps removed, the back-fills are read as if known at their close.
+- Vantage's live feed misses about 4 % of minutes at their close. The nightly reconcile fills them later, so a
+  snapshot without stamps reads minutes that vantage's engine did not have.
+
+**Decision under section 3:** both brokers fail, so `NOMINAL_FROM` stays at 2026-11-15 for every broker
+(`SR_V3.nominal_early_brokers = ()`), and there is no drain night. Rows decided before 2026-11-15 stay out of
+sr-v2 and sr-v3. The old backlog is still snapshotted inside the nightly quotas, newest first and after the newer
+candidates, so that the record is complete, but no run admits those rows. The rule is not re-run with a looser
+threshold. A new audit would need a new pre-registration and a reason other than this result.
+
+**Usable rows under sr-v2 admission** (brain 2026-11-25 on a copy of aux.db taken from a `mode=ro` connection; counts
+only, no label value read):
+
+| Cutoff | Broker | Labels | Usable before the fix | Usable after | Of which strategy rows |
+|---|---|---|---|---|---|
+| 2026-11-20 (the 11-24 run) | icm | 7,821 | 812 | 812 | 161 (RB15 132, RB1H 16, GS1 8, RB4H 5) |
+| 2026-11-20 | vantage | 1,468 | 0 | 316 (15m 259, 1h 57) | **0**: every vantage row is a control |
+| 2026-11-27 (the 11-29 run) | icm | 8,274 | 1,316 | 1,316 | 274 (RB15 146, RBR15 28, RB1H 20, Z3D 19, ...) |
+| 2026-11-27 | vantage | 1,599 | 0 | 454 (15m 370, 1h 84) | **0** |
+
+The fix gives vantage admitted rows, but every one is a control row, so no vantage arm can be fitted. Vantage reads
+**insufficient** in every run until a vantage strategy arm records gold candidates.
+
+**Holdout disclosure (quant R10, ruled the same day).** The S half of this audit built snapshots from 100 days of
+minutes before each decision (11-17..11-24), so its history seed read minutes from August and September 2026, inside
+the sealed holdout. Only feature values computed from prices were read; no label, return or outcome. The nightly
+snapshot job has read the same window for every snapshot since 2026-11-13. From this PR on, the job and both audits
+drop holdout minutes (`holdout_guard.cut`), and a snapshot whose window reached them is tagged
+`feature_version ...|holdout-cut`. The quant must rule on the stored snapshots built before the cut: keep them, or
+refuse them, which would leave 0 usable rows until about January 2027.
+
+What still unlocks rows: the vantage audit-symbol fix (item 4), the per-timeframe quotas (slow timeframes no longer
+wait behind the 1m backlog), and time: every new candidate gets a strictly written snapshot once its 90,000 trailing
+minutes are all stamped (from about February), and an audited-clean nominal one before then.
 
 ## Sign-off
 
