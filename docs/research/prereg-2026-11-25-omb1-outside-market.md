@@ -4,6 +4,12 @@ Research director (card), macro-researcher (columns), ml-researcher (model). Wri
 feature row, label or score was computed. **Status: proposed; the quant-reviewer signs before Stage 0.** The block
 in section 2 is **frozen on signature, no later than 2026-11-28** (ruling D10). Line 4 of the five research lines.
 
+**H-101 was NULL on 2026-11-25** (Stage L, K 8: edge vs no-model at most +0.0065 R on 104,367 OOF candidates,
+kept mean −0.029 to −0.034 R, Holm p 1.0 for all eight). Price-only filters on sr-v2's inputs sort almost nothing.
+OMB-1 is therefore the **main research line**: it is the only judged test of new information this quarter, and
+H-102's further units (part (c)) now open only if OMB-1 continues or H-102's gold 1h+4h unit passes. This changes no
+threshold, column or date in this card.
+
 ## 1. Card (research-director rule 2)
 
 | Item | Value |
