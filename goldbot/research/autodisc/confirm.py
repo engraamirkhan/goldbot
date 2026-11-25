@@ -488,7 +488,7 @@ def stage_bars(raw: Path, stage: StageName) -> StageFrame:
     also holds the next window's first months; they are dropped here, before any reader sees them)."""
     from goldbot.data.release import read_bar_files
     lo, hi = WINDOWS[stage]
-    b = read_bar_files(raw, *stage_years(stage))
+    b = read_bar_files(raw, *stage_years(stage), include_holdout=stage == "holdout")   # the gated holdout read
     ns, vis = (epoch_ns(pd.DatetimeIndex(b[c])) for c in ("ts_utc", "visible_at"))
     lo_ns, hi_ns = (int(epoch_ns(pd.DatetimeIndex([x]))[0]) for x in (lo - pd.Timedelta(days=WARMUP_DAYS), hi))
     return StageFrame(b.loc[(ns >= lo_ns) & (vis < hi_ns)].reset_index(drop=True), stage)   # visible before the end

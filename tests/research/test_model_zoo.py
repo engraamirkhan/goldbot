@@ -448,6 +448,21 @@ def test_a_started_stage_zero_writes_nothing_and_stage_l_books_eight_once(tmp_pa
     assert Z.book_stage_l(reg, s, stage0=v, agent_id="test") == [] and reg.n_trials == 8
 
 
+def test_the_h101_card_holds_at_most_one_day_so_hold_overlap_leaves_its_verdict_unchanged() -> None:
+    """ADR 0096: H-101's own stage-0 formula has no overlap term; that is right only while every arm it replays holds
+    <= 1 day (RBR15: 96 x 15m), where the overlap factor is 1. A longer arm must fail here first."""
+    from goldbot.config import tf_seconds
+    from goldbot.research.arms import load_arms
+    arms = {a.id: a for a in load_arms(Path("config/exploration_arms.yaml"), check_hash=False)}
+    holds = [int(arms[Z.REPLAY_AS.get(a, a)].params["hold_bars"]) * tf_seconds(arms[Z.REPLAY_AS.get(a, a)].timeframe)
+             for a in Z.ARMS]
+    assert max(holds) / 86_400 <= Z.HOLD_DAYS == 1.0
+    v, card = Z.stage0(Z.count_table(_counts(3, 120)), excluded=(), settings=SETTINGS)
+    assert card.hold_days == Z.HOLD_DAYS
+    assert pf.across_day_overlap(card, SETTINGS.research.power_first.trading_days_per_year) == 1.0
+    assert v.overlap_effect == 1.0
+
+
 def test_power_first_start_or_refuse_records_a_given_verdict(tmp_path: Path) -> None:
     reg = TrialRegistry(tmp_path / "registry.jsonl")
     v, card = Z.stage0(Z.count_table(_counts(1, 5)), excluded=(), settings=SETTINGS)

@@ -2,7 +2,8 @@
 
 Status: accepted for research and demo promotion (panel ruling 2026-11-15, quant-reviewer, on the evaluator memo
 docs/research/power-first-gates-2026-11.md, "Option A"). Amends ADR 0003 and ADR 0083 for research and demo
-promotion only. **The owner's paper -> tiny-live phase gate is unchanged.**
+promotion only. **The owner's paper -> tiny-live phase gate is unchanged.** n_eff amended 2026-11-25 (label overlap, quant
+Q3; rho_day per horizon, quant Q1): see "Amendment 2026-11-25" below.
 
 ## Context
 The evaluator's memo (base 9d1abbc7, K +0) re-derived the gate audit. A true 0.10 R edge (sd 1.2 R) has 0.000-0.008
@@ -126,3 +127,103 @@ touched.
   years (n_eff about 304) it starts.
 - **What would change this:** a quant ruling that TEST-OLD or the forward replay is not independent of learn (regime
   overlap). D would then rest on the holdout alone, which has too little power for anything slower than 15m.
+
+## Amendment 2026-11-25 (code, W1-B): label overlap (quant Q3) and rho_day per horizon (quant Q1)
+Status: implemented (branch fix/power-overlap-design-effect, plan 2026-11-25 S3), for quant-reviewer re-verify.
+The phase gate, live unlock and RiskGate are not touched.
+
+**Context.** n_eff above prices overlap within a day only (m_day). A daily card has m_day = 1, so a decision every
+day held H = 20 days was credited n_eff = n. Its overlapping labels have lag-j autocorrelation 1 - j/H, so the true
+n_eff is about n / H (Hansen & Hodrick 1980): power was overstated by about sqrt(H), and such a card could start where
+it cannot pass (daily-timeframe researcher, 2026-11-25). Clone arms and the same bet on two timeframes were also
+counted twice.
+
+**Decision.**
+1. Q3, as ruled: "n_eff = sum(u_i)/DEFF_day; u_i = average uniqueness over label horizon pooled across tfs/arms per
+   instrument; DEFF_day = 1+(m_w-1)*rho_day, m_w = sum M_d^2/sum M_d, M_d = sum u_i in day; then rho_inst factor".
+   - `power_first.uniqueness(events)` computes it exactly from the learn labels' entry and exit times (outcome-blind).
+     m_w is floored at 1, as m_day is. Labels on different instruments never share uniqueness (rho_inst prices that).
+   - A card states it as `PowerCard.learn_uniqueness`.
+2. A card that states counts only is read with Q3's expectation on even arrivals of signals within and across days
+   (quant C1 on PR #450). `PowerCard.hold_days` is required: the label horizon, its time barrier.
+   - c = max(1, signals per instrument per trading day x hold_days) (Little's law on signals).
+   - m_eff = max(1, m_day / c).
+   - n_eff = n / [(1 + (m_eff - 1) rho_day) x c x (1 + (k - 1) rho_inst)].
+   - This is n / H for a decision every day held H days, within 10 % of the measured Q3 at 77 labels a day (60 and
+     240 min holds, rho_day 0.25 and 0.05), and unchanged while under one label is open on average.
+3. `PowerVerdict.overlap_effect` (n / sum u, or c) and `rho_day` record what was used. A given verdict (H-101) is
+   refused by `start_or_refuse` when it credits a lower rho_day than its card implies, or less overlap than the
+   card's holds across days (`across_day_overlap`). Within-day overlap of a given verdict stays priced by its own
+   rho_day, as signed before C1.
+4. Q1: labels of 60 min or less take `rho_day_le_60m` = max(0.05, upper 95 % CI of the day-clustered ICC, week-block
+   bootstrap, other families' learn candidates); floor 0.05. Longer labels keep rho_day, floor 0.25. Shipped at 0.25
+   until the measurement (RD lane) lands, so no verdict changes today.
+5. Callers: autodiscovery states its specs' time barrier (MAX_BARS bars: 15m 1 day, 1h 2, 4h 4, 1d 10); H-101 states
+   `model_zoo.HOLD_DAYS = 1.0` (longest arm RBR15, 96 x 15m; a test holds every replayed arm to it).
+
+**Acceptance tests (Q3).** Daily H = 20 within +-5 % of n / 20; max_open = 1 unchanged; 15m + 30m pooled <= 15m alone
+x (1 + unique share); a clone pair counts once; count-only matches measured within 10 % on even arrivals
+(tests/research/test_power_first.py, `test_q3_*`).
+
+**Consequences.**
+- H-101: its signed stage 0 verdict stands (across-day overlap 1, rho_day 0.25). Its within-day overlap is priced by
+  rho_day 0.25 alone; under C1's count-only formula it would be higher. Open for the quant (N2: H-102 onward states
+  measured uniqueness).
+- Autodiscovery (stopped by plan S6 in the same change): with each spec's real time barrier, a spec that signals
+  many times a day is about n / (signals a day x hold) independent labels. An every-bar 1h spec (48-bar hold) and
+  4h are no longer reachable; 1d was already unreachable.
+- The horizon overstates the hold of target exits (1R/2R/3R), so the count-only path is conservative for them. A card
+  that wants the credit states its measured uniqueness.
+- H-102's power must be recomputed with Q3 before it starts (W1-F card revision).
+
+## Amendment 2026-11-25 (quant-reviewer rulings Q1, Q3, Q5, R13; written by the research director)
+
+Status: proposed; the quant-reviewer signs. Research and demo promotion only; the phase gate, live unlock, real-money
+confirmation and RiskGate are untouched. Settings can still only tighten, except where Q1 replaces a prior with a
+measured bound (below). Source: quant-reviewer plan 2026-11-25, section 0. Closes follow-up (iv) for rho_day at
+horizons of 60 minutes or less and for rho_inst; follow-up (iv) stays open for rho_day above 60 minutes until Q3 is
+fully implemented.
+
+**Q1. rho_day for short horizons.**
+- For label horizons ≤ 60 min: rho_day = max(0.05, the upper 95 % CI of the ICC).
+  - The ICC is day-clustered, estimated with a week-block bootstrap on learn 2010-17, from **other families'**
+    replayed candidates with the same stop and hold geometry. Never from the card's own arms or outcomes.
+- Horizons > 60 min keep the 0.25 prior until Q3 lands in full.
+- Until the ICC measurement is committed (script, data sha256, output file), rho_day stays at 0.25 for every horizon.
+  The validator accepts rho_day < 0.25 only with `rho_day_measurement` naming that file.
+- Every read still uses the day-block bootstrap. No p-value is ever taken from an analytic n_eff (a test pins it).
+- Unchanged: n_eff floor 200, delta 0.10 R, sd floor 1.2 R.
+- The validator floor `rho_day ≥ 0.25` (config.py, `PowerFirstSettings`) becomes a per-horizon floor: 0.05 for
+  ≤ 60 min, 0.25 above.
+- Effect, re-derived here from the ADR's own formula: at 77 candidates a day, n_eff/day = 77 / (1 + 76 x 0.25) = 3.9
+  under the prior and 77 / (1 + 76 x 0.05) = 16.0 at the floor.
+- This is the one place a bound moves down. It is a measured upper confidence bound replacing a prior, and the reads
+  stay on the bootstrap, so the false-pass rate is held by the read and not by n_eff.
+
+**Q3. n_eff counts label overlap (design effect).**
+- n_eff = sum(u_i) / DEFF_day, then divided by the rho_inst factor.
+  - u_i: average uniqueness of row i over its label horizon, pooled across timeframes and arms per instrument
+    (López de Prado 2018, ch. 4).
+  - DEFF_day = 1 + (m_w − 1) rho_day, with m_w = sum(M_d^2) / sum(M_d) and M_d = sum of u_i in day d.
+- `power_first.design_effect` gets a concurrency input. ADR 0096 implements the cluster-level part (a stated hold,
+  Little's law). The label-level pooling across timeframes and arms is still to build.
+- Tests: a daily decision held H = 20 gives n_eff within ±5 % of n/20; max_open = 1 is unchanged; 15m and 30m pooled
+  give at most the 15m n_eff x (1 + the unique share); clone pairs count once.
+
+**Q5. Daily-P&L (position) reads.**
+- n_eff = trading days, then the rho_inst factor.
+- Inference: Newey-West with lag max(5, ceil(1.5 x mean episode length)), or the stationary block bootstrap.
+- Mandatory excess over an episode-sign-randomised control **and** over a drift- and beta-matched book.
+- About 1.03 annual net Sharpe on one instrument is needed for 50 % power.
+- This opens one honest 1d judged route (position reads). 1d **bracket** reads stay never judged.
+
+**R13. Multi-asset pooling.**
+- n_eff_pool = sum of n_eff per instrument / (1 + (k − 1) rho_inst).
+- rho_inst: prior 0.5 (0.7 for metals), unless replaced by the upper 95 % CI of the within-class same-day ICC (the Q1
+  method).
+- One joint day bootstrap across instruments.
+- An instrument enters only with a cost of record and Tier A/B history (quant R11).
+- Brokers are pooled for gross labels only, with a broker indicator and each broker's own cost legs. Judging is per
+  broker.
+
+**What this does not change:** delta, the n_eff floor, the sd floor, Holm, the alpha-spending ledger, the phase gate.

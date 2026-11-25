@@ -446,20 +446,59 @@ def test_the_model_cutoff_is_friday_close_and_activation_the_next_sunday_open():
 
 
 # ---------------------------------------------------------------------------------------------- priors and bandit
-def test_priors_use_2019_to_2025_09_only_shrunk_by_half_worth_n_over_100():
-    ok = pd.DataFrame({"decision_utc": pd.date_range("2019-01-02", "2025-09-29", periods=2000, tz="UTC"),
+def test_priors_use_the_learn_window_2010_to_2017_only_shrunk_by_half_worth_n_over_100():
+    from goldbot.data.holdout_guard import HoldoutSealed
+    """Plan 2026-11-25 S2: the prior window was 2019-01..2025-09, inside the confirm window (2018-01..2025-09), so every
+    prior-seeded arm had seen its confirm data. Now learn 2010-01..2017-12 only."""
+    ok = pd.DataFrame({"decision_utc": pd.date_range("2010-01-04", "2017-12-29", periods=2000, tz="UTC"),
                        "r_net": np.full(2000, 0.2)})
     p = ex.prior_from_history("S1a", ok, prior_version="h60-v1")
     assert p.mean_r == pytest.approx(0.1) and p.n_eff == pytest.approx(20.0)
-    big = pd.DataFrame({"decision_utc": pd.date_range("2019-01-02", "2025-09-29", periods=9000, tz="UTC"),
+    big = pd.DataFrame({"decision_utc": pd.date_range("2010-01-04", "2017-12-29", periods=9000, tz="UTC"),
                         "r_net": np.zeros(9000)})
     assert ex.prior_from_history("x", big, prior_version="v").n_eff == 50.0
-    with pytest.raises(ValueError, match="holdout"):
+    with pytest.raises(HoldoutSealed, match="holdout"):
         ex.prior_from_history("x", pd.concat([ok, pd.DataFrame({"decision_utc": [pd.Timestamp("2025-10-01", tz="UTC")],
-                                                                 "r_net": [0.0]})]), prior_version="v")
-    with pytest.raises(ValueError, match="2019"):
-        ex.prior_from_history("x", pd.DataFrame({"decision_utc": [pd.Timestamp("2018-12-31", tz="UTC")],
+                                                                 "r_net": [0.0]})]), prior_version="v",
+                              confirm_read=True)
+    with pytest.raises(ValueError, match="2010"):
+        ex.prior_from_history("x", pd.DataFrame({"decision_utc": [pd.Timestamp("2009-12-31", tz="UTC")],
                                                  "r_net": [0.0]}), prior_version="v")
+
+
+def test_a_prior_with_a_confirm_window_row_is_refused_unless_the_arms_confirm_read_is_recorded(tmp_path, monkeypatch):
+    from goldbot.research import windows as W
+    row = pd.DataFrame({"decision_utc": [pd.Timestamp("2012-05-01", tz="UTC"), pd.Timestamp("2019-03-04", tz="UTC")],
+                        "r_net": [0.1, 0.3]})
+    with pytest.raises(ValueError, match="confirm"):
+        ex.prior_from_history("S1a", row, prior_version="v")
+    ledger = tmp_path / W.READS_LEDGER
+    assert not ex.confirm_read_recorded(ledger, "S1a")
+    monkeypatch.setitem(W.READ_ONCE_FAMILIES, "S1a", frozenset({W.Window.CONFIRM}))
+    W.record_read_once(ledger, "S1a", W.Window.CONFIRM, ref={"why": "test"})
+    assert ex.confirm_read_recorded(ledger, "S1a") and not ex.confirm_read_recorded(ledger, "other")
+    p = ex.prior_from_history("S1a", row, prior_version="v", confirm_read=ex.confirm_read_recorded(ledger, "S1a"))
+    assert p.hist_end == pd.Timestamp("2019-03-04", tz="UTC")
+
+
+def test_stored_priors_reaching_past_the_learn_window_are_never_read_into_the_bandit(tmp_path, caplog):
+    """A prior row written before the fix (2019+ history) carries no record of a confirm read: dropped, logged."""
+    db = _db(tmp_path)
+    learn = ex.prior_from_history("a", pd.DataFrame({"decision_utc": pd.date_range("2011-01-03", "2016-01-01",
+                                                                                     periods=300, tz="UTC"),
+                                                     "r_net": np.full(300, 0.4)}), prior_version="v")
+    ex.write_prior(db, learn)
+    old = learn.model_copy(update={"arm_id": "b", "hist_start": pd.Timestamp("2019-01-02", tz="UTC"),
+                                   "hist_end": pd.Timestamp("2025-09-29", tz="UTC")})
+    with pytest.raises(ValueError, match="learn"):
+        ex.write_prior(db, old)
+    with db.write() as conn:                     # a row the old code wrote
+        conn.execute("INSERT INTO exploration_priors (arm_id, prior_version, mean_r, sd_r, n_eff, n_hist, "
+                     "hist_start_ns, hist_end_ns, recorded_ns) VALUES ('b', 'v', 0.5, 1.0, 20, 2000, ?, ?, 1)",
+                     (int(old.hist_start.value), int(old.hist_end.value)))
+    with caplog.at_level("WARNING"):
+        got = ex.read_priors(db)
+    assert set(got) == {"a"} and "b" in caplog.text
 
 
 def test_thompson_nig_prefers_the_better_arm_and_a_history_prior_moves_an_arm_without_live_data(tmp_path):
@@ -468,7 +507,7 @@ def test_thompson_nig_prefers_the_better_arm_and_a_history_prior_moves_an_arm_wi
     w = ex.thompson_shares({"good": good, "bad": bad, "new": [], "n2": []}, styles, seed=7)
     assert w["good"] >= w["new"] >= w["bad"] and sum(w.values()) == pytest.approx(1.0)
     db = _db(tmp_path)
-    hist = pd.DataFrame({"decision_utc": pd.date_range("2020-01-01", "2025-01-01", periods=3000, tz="UTC"),
+    hist = pd.DataFrame({"decision_utc": pd.date_range("2010-02-01", "2017-06-01", periods=3000, tz="UTC"),
                          "r_net": np.random.default_rng(0).normal(0.6, 1.0, 3000)})
     ex.write_prior(db, ex.prior_from_history("a", hist, prior_version="h60-v1"))
     pri = ex.read_priors(db)

@@ -150,6 +150,8 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 269 | Model zoo and fusion pre-registration (H-101): implement phase 1 history screen | Research (ML) · implement after quant signature and RD K allocation | M | proposed |
 | 270 | Trading performance by asset class and family x class | Learning loop | M | done |
 | 271 | Daily-context inputs need 100 daily bars: engine memory gives ~80 (sr + zoo new spec) | Research (ML) · new spec for sr and zoo, quant review | S | proposed |
+| 272 | Multi-timeframe learning mtf-v1: history-pretrained, live-updated models on 1m-1w (H-102) | Research (ML) · build lanes after quant signature | L | proposed |
+| 273 | Power-first Q3 follow-ups: clone arms on count-only cards, Q1 source field, unguarded scripts | research | S | proposed |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1841,6 +1843,34 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     - The quant signs the change.
     - A test asserts that every input of the new spec is non-NaN on a full-memory decision.
     - Nothing in the engine's trading path changes.
+- **272. Multi-timeframe learning mtf-v1: history-pretrained, live-updated models on 1m-1w (H-102).**
+  - **Card:** `docs/research/prereg-2026-11-25-multi-tf-learning.md`.
+  - **Value.** Every timeframe learns, retrains and reports, per the owner directives of 2026-11-25:
+    - 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d and 1w;
+    - every model history-pretrained first (rule HP-0, no exceptions), then updated by live labels;
+    - a cost-weighted net-R objective;
+    - judged only out of sample.
+  - **Today's gap:** sr-v2 fits on live rows only (812 with features), and 30m, 2h, 1d and 1w have no labels at all.
+  - **Acceptance (build, 0 K):**
+    - sr-v3, history-pretrained (build item 1);
+    - 2h added to every timeframe table, including `telegram/labs._TF_STYLE`;
+    - `history_replay` timeframes come from `config.tf_seconds`, with price-scaled stop clamps and one Friday-cut rule;
+    - research-replay rows recording (`config/research/multi_tf_arms.yaml`, which the engine never loads);
+    - forward replay labels, and the closed-bar store;
+    - `multi_tf_retrain` with daily per-cell triggers at 00:10 UTC, never overlapping `discovery_nightly`;
+    - weekly feature parity, history against the engine;
+    - per-tf `snapshot_max_decisions` quota;
+    - tests T1-T9.
+  - **Health and reports:**
+    - health shows one line per tf x asset_class: labels, new since the last fit, weights, active models;
+    - health warns when an enabled cell is stale;
+    - daily and weekly reviews are split by tf x asset_class.
+  - **K:** 0 in 2026Q4. 2027Q1: +5 Stage L, one per unit, each only if Stage 0 power passes and H-101 is not null.
+  - **Prerequisite:** the free 1m pull for non-gold classes (data-engineer).
+- **273. Power-first Q3 follow-ups: clone arms on count-only cards, Q1 source field, unguarded scripts.** Value: closes the non-blocking items of the quant re-verify of PR #450, so power stays honest from H-102 onward. Acceptance:
+  - **N2, clone arms on count-only cards.** `PowerCard.arms: int = Field(1, ge=1)`, with a validator that requires `learn_uniqueness` when arms > 1 or more than one timeframe is pooled. H-101 keeps its signed verdict. Test: a 2-arm count-only card is invalid.
+  - **N3, Q1 provenance.** `rho_day_le_60m_source: str | None`, required when the value is below 0.25 (the RD lane's measurement record, ADR 0085 item 4). Test: 0.05 with no source fails at load.
+  - **N4, unguarded scripts.** None of the 20 scripts in `holdout_guard.UNGUARDED` runs until it calls `refuse`/`cut` or windows.py. The RD checklist carries the rule, and each script leaves the list once it is guarded (the test enforces both).
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program

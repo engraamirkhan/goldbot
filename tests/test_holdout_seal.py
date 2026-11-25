@@ -293,12 +293,29 @@ def test_a_second_catalogue_confirm_read_is_refused(tmp_path: Path, monkeypatch:
 
 
 # ------------------------------------------------------------------ static: loaders call a guard
-READER_NAMES = {"read_parquet", "read_csv", "read_table", "read_feather", "read_bar_files", "read_ipc", "scan_parquet",
+READER_NAMES = {"read_parquet", "read_csv", "read_table", "read_feather", "read_ipc", "scan_parquet",
                 "scan_csv", "scan_ipc", "read_database"}
 GUARD_CALLS = {"assert_sealed", "assert_before_holdout", "assert_no_holdout_rows", "cut_at_holdout",
                "truncate_to_explore", "window", "bounds", "entry_mask", "assert_block_allowed", "checked_cache",
-               "read_window_bars", "get_window", "get_windows", "_check_span", "stage_bars"}
+               "read_window_bars", "get_window", "get_windows", "_check_span", "stage_bars",
+               "pull_spans", "refuse_labels", "cut_labels"}   # + any `holdout_guard.<fn>` call (goldbot/data/holdout_guard.py)
+LIVE_READERS = {"account_bars_1m", "read_bars"}    # live-store bar readers (quant C2 on PR #450)
 NO_BARS = {"goldbot/research/ruin.py": "reads a trades file (column r), not bars"}
+# research modules that read the live store on purpose (quant C2 on PR #450): each with why no holdout row reaches a
+# research selection; a new live-store reader in goldbot/research must guard or be added here with its reason
+LIVE_READ = {
+    "goldbot/research/har_abstention.py": "live HAR forecast for the next trading day; its fit_to <= HOLDOUT_START is "
+                                          "checked at load",
+    "goldbot/research/min_lot.py": "the tail of the live bars for today's lot sizing",
+    "goldbot/research/self_retrain.py": "live decisions only; candidates in the holdout are refused (holdout check in "
+                                        "the label read)",
+    "goldbot/research/arm_integrity.py": "live decisions, dq_events and quarantine rows of the last READ_DAYS; no bars",
+    "goldbot/research/daily_review.py": "the day's live tables for the daily review report; no selection",
+    "goldbot/research/owner_history.py": "the owner's own trades and the store around them for the owner benchmark "
+                                         "report (proof, not a research input)",
+    "goldbot/research/tv_ideas.py": "author-idea shadow scoring; its start is moved to the holdout's end before the "
+                                    "read (canonical_bars)",
+}
 
 
 def _dotted(node: ast.AST) -> str:
@@ -315,7 +332,11 @@ def _is_reader(call: ast.Call) -> bool:
     name = _dotted(call.func)
     last = name.rsplit(".", 1)[-1]
     base = name.rsplit(".", 1)[0] if "." in name else ""
+    if last == "read_bar_files":    # cuts the holdout itself unless asked for it (the gated holdout reads)
+        return any(k.arg == "include_holdout" for k in call.keywords)
     return (last in READER_NAMES or (last == "load" and base in ("np", "numpy"))
+            or (last in ("read", "sql") and base.rsplit(".", 1)[-1].lower().endswith("store"))   # the live store
+            or last in LIVE_READERS
             or (last == "dataset" and ("ds" == base or "pyarrow" in base))
             or (base.split(".")[0] == "duckdb") or (last in ("sql", "query", "execute") and "duckdb" in base)
             or (last.startswith(("read_", "scan_")) and base in ("pl", "polars")))
@@ -340,7 +361,8 @@ def guard_problem(src: str) -> str | None:
     if not readers:
         return None
     for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and _dotted(n.func).rsplit(".", 1)[-1] in GUARD_CALLS:
+        if isinstance(n, ast.Call) and (_dotted(n.func).rsplit(".", 1)[-1] in GUARD_CALLS
+                                        or _dotted(n.func).startswith("holdout_guard.")):
             return None
         if isinstance(n, ast.Compare) and _mentions_holdout(n):
             return None
@@ -354,7 +376,7 @@ def test_every_research_module_that_opens_bar_files_calls_a_holdout_guard() -> N
     for p in sorted((ROOT / "goldbot" / "research").rglob("*.py")):
         rel = p.relative_to(ROOT).as_posix()
         why = guard_problem(p.read_text())
-        if why and rel not in NO_BARS:
+        if why and rel not in NO_BARS and rel not in LIVE_READ:
             bad[rel] = why
     assert not bad, f"research loaders with no holdout guard: {bad}"
 
@@ -366,7 +388,11 @@ def test_every_research_module_that_opens_bar_files_calls_a_holdout_guard() -> N
     "import duckdb\ndef f(p):\n    return duckdb.sql(f'select * from {p}')\n",
     "import polars as pl\ndef f(p):\n    return pl.scan_parquet(p).collect()\n",
     "import numpy as np\ndef f(p):\n    return np.load(p)\n",
-], ids=["docstring-only", "comment-only", "pyarrow.dataset", "duckdb", "polars", "np.load"])
+    "def f(store):\n    return store.read('bars_1m_broker', start=None)\n",
+    "def f(ctx):\n    return ctx.store.sql('select * from bars_1m')\n",
+    "from x import account_bars_1m\ndef f(s):\n    return account_bars_1m(s, account_id='a')\n",
+], ids=["docstring-only", "comment-only", "pyarrow.dataset", "duckdb", "polars", "np.load", "store.read", "store.sql",
+        "account_bars_1m"])
 def test_the_static_guard_flags_readers_whose_holdout_mention_is_not_a_guard(src: str) -> None:
     assert guard_problem(src) is not None
 
