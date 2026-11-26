@@ -6722,7 +6722,7 @@
   {
    "id": "D-13",
    "kind": "organic",
-   "title": "admit independent instruments (index, energy, rates, crypto, agri, least-gold-correlated FX; Dimson rho vs gold <= 0.2 on learn) graded A on Dukascopy 1m bid+ask, pooled into the gold+FX body and the FX unit (projected by card 2.2 at rho 0.5: 6 instruments, 2,000 learn / 1,950 judge days)",
+   "title": "admit independent instruments (index, energy, rates, crypto, agri, least-gold-correlated FX): pre-screen by Dimson \u03c1 on learn; admission by measure_rho.py day-mean \u03c1_u,inst vs gold, upper 95 %, max over PC1 and per-instrument sign, \u2264 0.2 per hold bucket (ruling b); graded A on Dukascopy 1m bid+ask, pooled into the gold+FX body and the FX unit (projected by card 2.2 at rho 0.5: 6 instruments, 2,000 learn / 1,950 judge days)",
    "gain": {
     "pooled_gold_fx/1m": 12131,
     "pooled_gold_fx/1m:judge": 11828,
@@ -6922,7 +6922,7 @@
   {
    "id": "D-12a",
    "kind": "other",
-   "title": "D-12a: rho_x per column, label-blind (2010-11 fold, upper 95 % CI), frozen by hash for the Stage 0 per-column Riley charges (card 2.3 rev 4 Q1; R-e)",
+   "title": "D-12a: rho_x per column, label-blind (2010-11 fold, upper 95 % CI; the list includes rv_ratio at every tf, card 3.1 rev 8), frozen by hash for the Stage 0 per-column Riley charges (card 2.3 rev 4 Q1; R-e)",
    "gain": {},
    "training_gain": "no cell-divisor gain: per-column charges set each pooled body's served prefix at Stage 0",
    "effort_days": 2.0,
