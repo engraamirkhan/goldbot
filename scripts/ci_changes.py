@@ -22,6 +22,7 @@ RUNTIME_DOCS = (
     "docs/research/",          # research director, API explain, preregistration (runtime and integration tests)
     "docs/ROADMAP.md",         # goldbot/telegram/digest.py reads the owner decision queue
     "docs/RUNBOOK.md",         # test_us_calendar.py (a file with integration tests) reads it
+    "docs/data/",              # scripts/research/data_sufficiency.py renders and --check reads the sufficiency table
 )
 
 

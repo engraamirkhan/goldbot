@@ -1,0 +1,67 @@
+# Data-sufficiency contract inputs (owner 2026-11-25; goldbot/research/data_sufficiency.py). Rendered by
+# scripts/research/data_sufficiency.py into docs/data/sufficiency.md and docs/data/sufficiency_status.json.
+# requirement: stated by the ML side (sr-v3 card rev 2, PR #460: Riley 430 n_eff/input, A22 power row at keep 0.33).
+# supply: n_eff by the card's method (2.2, rho_day 0.25, outcome-blind counts of 2026-11-26) until D-5 measures each
+# cell; null = not counted yet. Counts only: no market data lives in this file.
+card_dated: "2026-11-26"
+counted_by: "sr-v3 card rev 2 section 2.2 (outcome-blind; gold untiered until D-1)"
+requirement: {inputs: 10, keep_share: 0.33, objective: obj-v1, label_templates: "T0-T7 (D-4)"}
+tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w]
+units:
+  gold:
+    label: "Gold (Dukascopy XAUUSD; A/A-cons once graded)"
+    windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
+    ungraded_projection: "UNMEASURED (D-1)"     # quant C2: no tier survival count before Dukascopy gold is graded
+    learn: [7328, 5443, 4054, 2683, 2071, 1035, 414, 207, 104]
+    judge: [7085, 5263, 3919, 2594, 2002, 1001, 400, 200, 100]
+    items: [D-1, D-2, D-3, D-4, D-5gold]
+  fx10:
+    label: "FX10 pooled (HistData, A/A-cons)"
+    windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
+    learn: [11399, 8468, 6306, 4174, 3221, 1611, 644, 322, 161]
+    judge: [10948, 8133, 6056, 4009, 3094, 1547, 619, 309, 155]
+    items: [D-2, D-3, D-4, D-5fx]
+  metals_crosses_b:
+    label: "Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close)"
+    tiers_kept: B
+    windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
+    learn: null
+    judge: null
+    items: [D-2, D-3, D-4, D-5fx, COUNT-mc]
+  index_energy_b:
+    label: "Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows)"
+    tiers_kept: B
+    windows: {learn: "2018-01..2021-12", judge: "2022-01..2025-09"}
+    learn: null
+    judge: [8332, 6189, 4609, 3051, 2355, 1177, 471, 235, 118]
+    items: [D-2, D-3, D-4, D-5ie, COUNT-ie]
+  independent_new:
+    label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); ranked by |daily corr with gold| and independent graded days"
+    windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
+    learn: null
+    judge: null
+    items: [D-13, D-14, D-2, D-5ie]
+items:
+  D-13: {gap: "too few independent instruments x days: the binding constraint, not rows", plan: "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first", owner: "data-engineer; quant (references)", due: "2026-12-11", status: not started, risk: AT RISK}
+  D-14: {gap: "HistData months graded C have no second source", plan: "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)", owner: data-engineer, due: "2026-12-09", status: not started, risk: AT RISK}
+  D-1: {gap: "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered", plan: "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest", owner: data-engineer, due: "2026-12-02", status: not started, risk: AT RISK}
+  D-2: {gap: "fs-v1 feature store not merged", plan: "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)", owner: data-engineer, due: "2026-12-04", status: PR open, risk: on track}
+  D-3: {gap: "no side-aware r3 labels, synthetic ask, ub95 cost per class", plan: "W2-2 / A9 implementation", owner: implementer + microstructure-researcher, due: "2026-12-04", status: not started (not data-owned), risk: AT RISK}
+  D-4: {gap: "exit templates T0-T7 not frozen", plan: "freeze W3-1 / RL-1 templates", owner: exits-researcher, due: "2026-12-02", status: unknown, risk: watch}
+  D-5gold: {gap: "no dense labels: gold n_eff is projected, not measured", plan: "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-11", status: "hook designed (fs-v1 phase, group_id, judge refusal); factory not started", risk: AT RISK}
+  D-5fx: {gap: "no dense labels for FX10 and metals/crosses", plan: "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-16", status: not started, risk: watch}
+  D-5ie: {gap: "no dense labels for index and energy", plan: "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-21", status: not started, risk: watch}
+  COUNT-mc: {gap: "metals/crosses n_eff not counted", plan: "outcome-blind n_eff count by the card 2.2 method from the r11 tiers", owner: data-engineer, due: "2026-11-28", status: not started, risk: on track}
+  COUNT-ie: {gap: "index/energy learn 2018-2021 (R-L) n_eff not counted", plan: "outcome-blind count, after the N8 class-window card is frozen", owner: data-engineer, due: "2026-11-28", status: not started, risk: on track}
+  TF-2h: {gap: "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)", plan: "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change", owner: "data-engineer (raise), architect + implementer", due: "2026-12-04", status: found 2026-11-25, risk: AT RISK}
+# per-timeframe items, added to every unit's cell at that tf
+tf_items:
+  2h: [TF-2h]
+# items that hold no training cell but are owned here (listed in the table, not in a cell's certificate)
+other_items:
+  D-6: {gap: "X1 macro series lack actual release times", plan: "point-in-time X1 with release times (D9)", owner: macro-researcher + data-engineer, due: "2026-12-05", status: not started, risk: watch}
+  D-7: {gap: "live engine serves 3 d1 inputs from 90k minutes (2 NaN, d1_slope_ema20 short-window) and, at 4h, decision columns from < 800 bars (tsmom_score NaN, atr_ratio_14_100 0.049, vol_tercile 1 class); 1d/1w get no snapshot",  plan: "X2 closed-HTF store live parity (W3-3); engine reads goldbot/data/htf_bars", owner: "implementer; trading-safety, sre", due: "2026-12-14", status: "store built in fs-v1; engine side not started", risk: watch}
+  D-8: {gap: "no X3 baskets, X4 calendar as-of, X5 COT release-time join", plan: "build on fs-v1 as blocks", owner: data-engineer, due: "2026-12-11", status: not started, risk: watch}
+  D-9: {gap: "no source-parity battery for served columns", plan: "A8: KS, rank corr, mean shift history vs ICM vs Vantage per column; serve only rank corr >= 0.9", owner: data-engineer, due: "2026-12-02", status: not started, risk: AT RISK}
+  D-10: {gap: "no N4 provenance tags", plan: "tag inputs designed after a 2018-25 read", owner: evaluator + ml-researcher-staff, due: "2026-12-09", status: unknown, risk: watch}
+  D-11: {gap: "label and feature caches have no backup", plan: "N13 backup to ops VM", owner: sre, due: "2026-12-11", status: unknown, risk: watch}
