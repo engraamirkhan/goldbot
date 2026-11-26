@@ -285,6 +285,14 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
 - The vol-tercile mix is reported before and after the filter. The sha256 of the produced tiers file is recorded here
   before any labelled count. The same filter applies in learn, test_old and confirm.
 - Any change to the rule after a labelled count is a new id and costs K (A2).
+- **Recorded 2026-11-26 (quant R-b on PR #472, verbatim):** "A4 records tiers_served_r11-v2.1.csv sha256 ff653ea7…
+  (r11-v2.1-2026-11-25, rule blob c6f283d7; grades dukascopy:XAUUSD and histdata:<FX>; gold 2019-01..2025-09 is C and
+  never usable). Recording unseals learn-window label reads only. Confirm and test_old reads need a booked read id
+  (ADR 0104 C-1). Rows with cost_version w2-point or h_ref = H are not gate reads until D-3 and D-4 freeze."
+  - Recorded tiers file sha256 ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
+    (`tiers_served_r11-v2.1.csv`, D-1, PR #467).
+  - `goldbot/research/dense_labels.py` `RECORDED_TIERS_SHA256` holds it. A test requires the full 64-hex value on
+    this recording line.
 
 **N26 addition (quant issue 12 on PR #460, 2026-11-26).** "Learning-class demo serving at K 0 is not a go decision,
 provided deployment is unconditional on any Stage L/C outcome (every cell with a merged report and a Stage 0 pass
