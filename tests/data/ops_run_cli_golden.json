@@ -487,7 +487,7 @@
   },
   "rollback-model": {
    "rc": 0,
-   "stdout": "usage: rollback-model [-h] [--reason REASON] [--models MODELS] agent_id\n\n`python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT] [--models DIR]`: restore the\nagent's previous champion in one command (ADR 0106 decision 7, \"every change is reversible\").\nRefused (exit 2, nothing changed) when there is no previous champion or when the serving rule\nwould refuse it. The engine picks the restored champion up at its next model reload or restart.\n\npositional arguments:\n  agent_id\n\noptions:\n  -h, --help       show this help message and exit\n  --reason REASON\n  --models MODELS  model registry folder (default: research.models_dir)\n"
+   "stdout": "usage: rollback-model [-h] [--reason REASON] [--models MODELS] agent_id\n\n`python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT] [--models DIR]`: restore the\nagent's previous champion in one command (ADR 0106 decision 7, \"every change is reversible\"); the\ndemoted champion is kept as previous, so running it again rolls forward. Under the registry lock.\nRefused (exit 2, nothing changed) when there is no previous champion or when the serving rule\nwould refuse it. The engine picks the restored champion up at its next model reload or restart.\n\npositional arguments:\n  agent_id\n\noptions:\n  -h, --help       show this help message and exit\n  --reason REASON\n  --models MODELS  model registry folder (default: research.models_dir)\n"
   },
   "ruin": {
    "rc": 0,

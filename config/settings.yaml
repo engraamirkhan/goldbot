@@ -718,9 +718,9 @@ findings:                            # findings register (goldbot/ops/findings.p
   telegram: true                     # plus one Telegram line a day when a critical or high row is new, regressed or overdue
 model_quality:                       # ADR 0106 model quality (goldbot/research/model_quality.py); the serving rule (>= 5 stable seeds, A/B/D beat C, a run manifest per fitted model) is code, these only tighten
   param_shifts: [0.1, 0.2]           # param_shift: net mean > 0 at -20/-10/+10/+20 % of each declared strategy parameter, grid fixed before reading
-  baseline_alpha: 0.05               # beats_baseline: paired after-cost difference vs the C-family model on the same OOS rows, day-block bootstrap p <= this
-  baseline_boot: 2000                # bootstrap draws for beats_baseline
-  monthly_trainers: []               # "package.module:function" trainers of the monthly_walkforward job (IF-1/IF-2 add theirs); empty: the job reports nothing refit
+  baseline_alpha: 0.05               # beats_baseline: paired after-cost difference vs the unit's C-family model on the same learn-window OOF rows, Holm across the unit's A/B/D reads of a cycle, p_holm <= this
+  baseline_boot: 10000               # bootstrap draws for beats_baseline (the card's minimum; mean block max(5, ceil(1.5 x longest horizon days)) is code)
+  monthly_trainers: []               # "package.module:function" trainers of the monthly_walkforward job; must stay empty until the job runs each in a niced, budgeted, killable child (trading-safety M1); empty: the job reports nothing refit
 
 trades_view:                         # trades screens' plan figures (goldbot/api/today_ledger.py, item 131); reporting only
   fills_target: 200                  # fills a day for a demo account not listed below; live accounts have none

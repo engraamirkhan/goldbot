@@ -12,10 +12,17 @@
     after 2026-11-27 without a manifest that passes `model_quality.require_servable`: a clean tree, a passing
     `seed_stability` over at least 5 of its own seeds, no failed verdict, and, for families A/B/D, a passing paired
     after-cost win over a C-family manifest. Older fitted entries and rule models serve as before.
+  - Review rulings (ADR 0109 item 8): seeds = `seed_list(manifest_key)`, `served` declared; `beats_baseline` on
+    learn-window OOF rows vs the unit's C manifest (same train_end and folds), block max(5, ceil(1.5 x horizon days)),
+    B >= 10,000, one registry trial per read, `holm_adjust` across the unit's A/B/D reads; manifests carry
+    `label_end_max`. A bad manifest or artefact refuses only its own model; the engine's reload catches every error.
   - Monthly walk-forward: scheduler job `monthly_walkforward` on the 1st at 04:30 UTC calls
-    `model_quality.monthly_trainers` (empty today: the run says nothing was refit) and never promotes.
-  - `python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT]` restores the previous champion; it refuses
-    when there is none or when that one would not serve.
+    `model_quality.monthly_trainers` (empty, and refused while non-empty until trainers run in a bounded child) and
+    never promotes; a manifest whose labels end at or after the window end fails it.
+  - `python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT]` restores the previous champion under the
+    registry lock and keeps the demoted one as previous (run it again to roll forward); it refuses when there is none or
+    when that one would not serve. A CUSUM alarm whose previous model would not serve retires the champion and fails
+    health `model_watch`.
   - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
     and seq hook PRs add it under trading-safety review.
   - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart

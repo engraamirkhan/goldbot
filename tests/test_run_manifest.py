@@ -47,7 +47,8 @@ def git_repo(path: Path) -> Path:
 def manifest_fields(**over: Any) -> dict[str, Any]:
     base: dict[str, Any] = {"model": "test:gbt", "family": "C", "artifact": b"artifact-bytes",
                             "data_version": "dv-" + "a" * 61, "settings": {"num_leaves": 4, "rounds": 5},
-                            "seeds": [1, 2, 3, 4, 5], "train_end": T_END, "scaler_fit_end": T_END,
+                            "manifest_key": "test:k", "served": "seed0", "train_end": T_END,
+                            "scaler_fit_end": T_END, "label_end_max": T_END + pd.Timedelta(hours=4),
                             "results": {"edge": 0.1}}
     base.update(over)
     return base
@@ -69,7 +70,8 @@ def test_a_recorded_manifest_carries_data_version_settings_hash_seeds_code_sha_l
     m = rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo)
     assert m.data_version == "dv-" + "a" * 61
     assert m.settings_hash == rm.settings_hash({"rounds": 5, "num_leaves": 4})       # key order does not matter
-    assert m.seeds == [1, 2, 3, 4, 5]
+    assert m.seeds == mq.seed_list("test:k") and m.manifest_key == "test:k" and m.served == "seed0"
+    assert m.label_end_max == T_END + pd.Timedelta(hours=4)
     assert m.code_sha == _git(repo, "rev-parse", "HEAD") and m.code_dirty is False
     assert m.uv_lock_hash == rm.file_sha256(repo / "uv.lock")
     assert m.scaler_fit_end == T_END and m.train_end == T_END
@@ -109,7 +111,7 @@ def test_a_manifest_file_edited_after_recording_is_refused_on_load(tmp_path: Pat
     m = rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo)
     f = tmp_path / "m" / f"{m.manifest_id}.json"
     doc = json.loads(f.read_text())
-    doc["seeds"] = [1, 2, 3, 4, 6]
+    doc["served"] = "ensemble"
     f.write_text(json.dumps(doc))
     with pytest.raises(rm.ManifestError, match="does not match"):
         rm.load(m.manifest_id, root=tmp_path / "m")
@@ -128,7 +130,7 @@ def test_recording_outside_a_git_checkout_or_without_a_lock_file_fails_loudly(tm
 def test_a_dirty_tree_is_recorded_as_dirty_and_never_served(tmp_path: Path) -> None:
     repo = git_repo(tmp_path / "repo")
     (repo / "trainer.py").write_text("X = 2\n")
-    m = rm.record(**manifest_fields(quality=[mq.seed_stability({s: 0.1 for s in range(1, 6)})]),
+    m = rm.record(**manifest_fields(quality=[mq.seed_stability({s: 0.1 for s in mq.seed_list("test:k")}, rows="r" * 64)]),
                   root=tmp_path / "m", repo=repo)
     assert m.code_dirty is True
     with pytest.raises(mq.ModelRefused, match="dirty"):
@@ -157,7 +159,8 @@ def test_rebuild_reproduces_the_artifact_byte_identical(tmp_path: Path, builder:
     repo = git_repo(tmp_path / "repo")
     _rows(tmp_path / "data" / "rows.csv")
     art, m = rm.fit_and_record(builder, model="t", family="C", data_version="dv1", data_root=tmp_path / "data",
-                               data_files=["rows.csv"], settings=settings, seeds=[7, 8, 9, 10, 11],
+                               data_files=["rows.csv"], settings=settings, manifest_key="t:mlp", served="seed0",
+                               label_end_max=T_END,
                                train_end=T_END, scaler_fit_end=T_END, root=tmp_path / "m", repo=repo)
     assert m.builder == builder and m.data_files == {"rows.csv": rm.file_sha256(tmp_path / "data" / "rows.csv")}
     assert rm.sha256_bytes(art) == m.artifact_sha256
@@ -168,7 +171,8 @@ def _recorded(tmp_path: Path, builder: str = "tests.rebuild_builders:tiny_lightg
     repo = git_repo(tmp_path / "repo")
     _rows(tmp_path / "data" / "rows.csv")
     _, m = rm.fit_and_record(builder, model="t", family="C", data_version="dv1", data_root=tmp_path / "data",
-                             data_files=["rows.csv"], settings={"num_leaves": 7, "rounds": 3}, seeds=[1, 2, 3, 4, 5],
+                             data_files=["rows.csv"], settings={"num_leaves": 7, "rounds": 3}, manifest_key="t:gbt",
+                             served="ensemble", label_end_max=T_END,
                              train_end=T_END, scaler_fit_end=T_END, root=tmp_path / "m", repo=repo)
     return repo, m
 
@@ -229,7 +233,8 @@ def test_the_rebuild_script_exits_0_on_identical_1_on_mismatch_and_2_when_refuse
     assert ok.returncode == 0, ok.stderr
     assert m.artifact_sha256 in ok.stdout
     _, drift = rm.fit_and_record("tests.rebuild_builders:drifting", model="t", family="C", data_version="dv1",
-                                 data_root=tmp_path / "data", data_files=["rows.csv"], settings={}, seeds=[1],
+                                 data_root=tmp_path / "data", data_files=["rows.csv"], settings={}, manifest_key="t:d",
+                                 served="seed0", label_end_max=T_END,
                                  train_end=T_END, scaler_fit_end=T_END, root=tmp_path / "m", repo=repo)
     mismatch = run(drift.manifest_id)
     assert mismatch.returncode == 1 and "does not match" in mismatch.stderr
@@ -244,7 +249,7 @@ def test_the_rebuild_script_accepts_a_registry_version(tmp_path: Path) -> None:
     model = RuleModel(rule="box_break")
     data = pickle.dumps(model)
     m2 = rm.record(**manifest_fields(artifact=data, builder=m.builder, data_files=m.data_files,
-                                     settings=m.settings, seeds=m.seeds),
+                                     settings=m.settings, manifest_key=m.manifest_key),
                    root=tmp_path / "models" / "manifests", repo=repo)
     e = reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m2)
     assert rm.resolve(e.version, models_dir=tmp_path / "models") == m2
@@ -256,7 +261,7 @@ FIT_AT = pd.Timestamp("2026-12-01 10:00", tz="UTC")
 
 
 def _servable_manifest(tmp_path: Path, repo: Path, data: bytes, **over: Any) -> rm.RunManifest:
-    q = [mq.seed_stability({s: 0.1 for s in range(1, 6)})]
+    q = [mq.seed_stability({s: 0.1 for s in mq.seed_list("test:k")}, rows="r" * 64)]
     return rm.record(**manifest_fields(artifact=data, quality=q, **over), root=tmp_path / "models" / "manifests",
                      repo=repo)
 
@@ -355,7 +360,7 @@ def test_rollback_model_restores_the_previous_champion_in_one_command(tmp_path: 
     reg = ModelRegistry(tmp_path / "models")
     champ = reg.champion("bb")
     assert champ is not None and champ.version == first
-    assert reg.get(second).status == "retired" and any("rollback-model: drill" in n for n in reg.get(second).notes)
+    assert reg.get(second).status == "previous" and any("rollback-model: drill" in n for n in reg.get(second).notes)
 
 
 def test_rollback_model_refuses_an_agent_without_a_previous_champion(tmp_path: Path,
@@ -475,3 +480,125 @@ def test_the_monthly_module_holds_no_promotion_path() -> None:
     names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | \
             {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
     assert not names & {"promote", "restore_previous", "ModelRegistry", "set_status", "_set_status"}
+
+
+def test_a_rollback_can_be_rolled_forward_with_the_same_command(tmp_path: Path) -> None:
+    _, first, second = _two_champions(tmp_path)
+    assert rollback_main(["bb", "--models", str(tmp_path / "models")]) == 0
+    reg = ModelRegistry(tmp_path / "models")
+    assert reg.get(second).status == "previous"
+    assert rollback_main(["bb", "--models", str(tmp_path / "models")]) == 0
+    champ = ModelRegistry(tmp_path / "models").champion("bb")
+    assert champ is not None and champ.version == second
+
+
+def test_the_cusum_restore_still_retires_the_alarmed_champion(tmp_path: Path) -> None:
+    reg, first, second = _two_champions(tmp_path)
+    reg.restore_previous("bb", "CUSUM alarm")
+    assert reg.get(second).status == "retired" and reg.get(first).status == "champion"
+
+
+def test_the_registry_lock_serialises_load_modify_save(tmp_path: Path) -> None:
+    _two_champions(tmp_path)
+    with ModelRegistry.locked(tmp_path / "models") as reg:
+        assert reg.champion("bb") is not None
+        assert (tmp_path / "models" / "registry.lock").exists()
+
+
+def test_a_recalibrated_entry_still_matches_its_manifest_by_the_fitted_artefact_sha(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    reg = ModelRegistry(tmp_path / "models")
+    model = MetaLabelModel(feature_names=["x"])
+    m = _servable_manifest(tmp_path, repo, pickle.dumps(model))
+    e = reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m, now=FIT_AT)
+    fitted = e.sha256
+    reg.recalibrate(e.version, MetaLabelModel(feature_names=["x"], params={"recal": 1}), {"n": 50})
+    assert e.recalibrations[0]["base_sha256"] == fitted and e.sha256 != fitted
+    assert reg.serving_refusal(e) is None
+    e.recalibrations[0]["base_sha256"] = "0" * 64
+    assert "another artefact" in (reg.serving_refusal(e) or "")
+
+
+def test_a_manifest_whose_labels_end_past_the_window_fails_the_monthly_job(tmp_path: Path,
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = git_repo(tmp_path / "repo")
+
+    def leaks(*, window_end: pd.Timestamp, manifests_root: Path) -> list[rm.RunManifest]:
+        before = window_end - pd.Timedelta(hours=1)
+        return [rm.record(**manifest_fields(train_end=before, scaler_fit_end=before,
+                                            label_end_max=window_end + pd.Timedelta(hours=3),
+                                            schedule="monthly_walkforward"), root=manifests_root, repo=repo)]
+    mod = type(sys)("fake_trainers4")
+    mod.leaks = leaks                                # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_trainers4", mod)
+    with pytest.raises(mwf.MonthlyRunFailed, match="label_end_max"):
+        mwf.run(pd.Timestamp("2027-01-01 04:30", tz="UTC"), trainers=["fake_trainers4:leaks"],
+                manifests_root=tmp_path / "m")
+
+
+# ---------------------------------------------------------------------------------------------- trading-safety #494
+@pytest.mark.parametrize("garbage", ["[1, 2, 3]", "not json", "", '"a string"'])
+def test_a_garbage_manifest_refuses_only_its_model_and_every_other_champion_still_loads(tmp_path: Path,
+                                                                                       garbage: str) -> None:
+    repo = git_repo(tmp_path / "repo")
+    reg = ModelRegistry(tmp_path / "models")
+    model = MetaLabelModel(feature_names=["x"])
+    m = _servable_manifest(tmp_path, repo, pickle.dumps(model))
+    bad = reg.add_challenger(model, family="box_break", agent_id="bad", backtest={}, manifest=m, now=FIT_AT)
+    reg.promote(bad.version, now=FIT_AT)
+    good = reg.ensure_rule_challenger(family="box_break", agent_id="good", now=FIT_AT)
+    assert good is not None
+    reg.promote(good.version, now=FIT_AT)
+    (tmp_path / "models" / "manifests" / f"{m.manifest_id}.json").write_text(garbage)
+    assert "bad" in (reg.serving_refusal(reg.get(bad.version)) or "")
+    assert set(reg.champion_models()) == {"good"}
+    assert set(reg.shadow_models()) == {good.version}
+    with pytest.raises(rm.ManifestError):
+        rm.load(m.manifest_id, root=tmp_path / "models" / "manifests")
+
+
+def test_an_artefact_failing_its_checksum_refuses_only_that_champion(tmp_path: Path) -> None:
+    reg = ModelRegistry(tmp_path / "models")
+    a = reg.ensure_rule_challenger(family="box_break", agent_id="a", now=FIT_AT)
+    b = reg.ensure_rule_challenger(family="box_break", agent_id="b", now=FIT_AT)
+    assert a is not None and b is not None
+    reg.promote(a.version, now=FIT_AT)
+    reg.promote(b.version, now=FIT_AT)
+    (tmp_path / "models" / a.artefact).write_bytes(b"swapped")
+    assert set(reg.champion_models()) == {"b"}
+
+
+def test_the_engines_model_reload_keeps_running_on_any_error() -> None:
+    """engine.py's reload loop: any exception keeps the current models (a narrower catch let one bad file kill the
+    engine and its exits)."""
+    src = (ROOT / "goldbot" / "ops" / "services" / "engine.py").read_text()
+    tree = ast.parse(src)
+    handlers = [h for h in ast.walk(tree) if isinstance(h, ast.ExceptHandler)
+                and "model reload refused" in ast.get_source_segment(src, h)]   # type: ignore[operator]
+    assert handlers and all(isinstance(h.type, ast.Name) and h.type.id == "Exception" for h in handlers)
+
+
+def test_monthly_trainers_are_refused_until_they_run_in_a_bounded_child() -> None:
+    from pydantic import ValidationError
+
+    from goldbot.config import ModelQualitySettings
+    with pytest.raises(ValidationError, match="niced child"):
+        ModelQualitySettings(monthly_trainers=["goldbot.research.sr_v3_train:monthly"])
+
+
+def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_path: Path) -> None:
+    from goldbot.ops.checks.feeds import check_model_watch
+    from goldbot.ops.health import HealthContext
+    from goldbot.ops.jobs import model_watch
+    from tests.test_shadow import _promote_pair, _shadow_rets, _watch_ctx
+    ctx = _watch_ctx(tmp_path)
+    t = FIT_AT                                        # both fitted after the cutoff, without a manifest
+    a, b = _promote_pair(ctx, t)
+    promoted = t + pd.Timedelta(days=30)
+    _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
+    out = model_watch(ctx, promoted + pd.Timedelta(days=6))
+    assert out["agent-x"]["action"] == "restore_refused"
+    assert ctx.models.champion("agent-x") is None
+    assert ctx.models.get(b).status == "retired" and ctx.models.get(a).status == "previous"
+    hc = HealthContext(state_dir=tmp_path, now=promoted + pd.Timedelta(days=6), get_secret=lambda k: None)
+    assert check_model_watch(hc).status == "fail"

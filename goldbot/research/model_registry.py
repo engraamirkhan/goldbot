@@ -23,8 +23,11 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import pickle
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -74,6 +77,23 @@ class ModelRegistry:
         raw = json.loads(self.path.read_text()) if self.path.exists() else []
         self.entries: list[ModelEntry] = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
 
+    @classmethod
+    @contextmanager
+    def locked(cls, root: str | Path) -> Iterator[ModelRegistry]:
+        """The registry loaded under an exclusive lock on <root>/registry.lock, for a load-modify-save that must not
+        lose a concurrent writer's change (code review LOW-1 on #494). flock on POSIX, msvcrt on Windows."""
+        from goldbot.research.windows import _lock_fd, _unlock_fd
+        Path(root).mkdir(parents=True, exist_ok=True)
+        fd = os.open(Path(root) / "registry.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            _lock_fd(fd)
+            try:
+                yield cls(root)
+            finally:
+                _unlock_fd(fd)
+        finally:
+            os.close(fd)
+
     # ------------------------------------------------------------------ queries
     def by_agent(self, agent_id: str, status: Status | None = None) -> list[ModelEntry]:
         return [e for e in self.entries if e.agent_id == agent_id and (status is None or e.status == status)]
@@ -103,7 +123,15 @@ class ModelRegistry:
         return model
 
     def serving_refusal(self, entry: ModelEntry) -> str | None:
-        """Why `entry` may not serve, or None. Reads the artefact's type (a rule model needs no manifest)."""
+        """Why `entry` may not serve, or None. Reads the artefact's type (a rule model needs no manifest). Never
+        raises (trading-safety H1 on #494): any failure to read the artefact, the manifest or the baseline is a
+        refusal of this one entry, so one bad file can never stop the engine from loading the others."""
+        try:
+            return self._serving_refusal(entry)
+        except Exception as exc:   # noqa: BLE001 - a refusal, never a crash of the loader
+            return f"{entry.version}: serving check failed: {type(exc).__name__}: {exc}"
+
+    def _serving_refusal(self, entry: ModelEntry) -> str | None:
         if entry.manifest_id is None:
             if entry.created_utc < MANIFEST_REQUIRED_FROM or isinstance(self.load(entry), RuleModel):
                 return None
@@ -113,7 +141,8 @@ class ModelRegistry:
             m = rm.load(entry.manifest_id, self.manifests)
         except rm.ManifestError as exc:
             return f"{entry.version}: {exc}"
-        if m.artifact_sha256 != entry.sha256 and not entry.recalibrations:
+        fitted = entry.recalibrations[0].get("base_sha256") if entry.recalibrations else entry.sha256
+        if m.artifact_sha256 != fitted:          # a recalibration keeps the fit's sha in its first record
             return f"{entry.version}: its manifest describes another artefact"
         reasons = servable_reasons(m, lookup=lambda i: rm.load(i, self.manifests))
         return f"{entry.version}: " + "; ".join(reasons) if reasons else None
@@ -130,8 +159,8 @@ class ModelRegistry:
         for e in entries:
             try:
                 out[e.version] = self.load_for_serving(e)
-            except ModelRefused as exc:
-                log.warning("model refused for serving: %s", exc)
+            except Exception as exc:   # noqa: BLE001 - ModelRefused, or an artefact that fails its checksum or unpickling
+                log.warning("model refused for serving: %s: %s", e.version, exc)
         return out
 
     def champion_models(self) -> dict[str, Any]:
@@ -200,17 +229,22 @@ class ModelRegistry:
         self._save()
         return e
 
-    def restore_previous(self, agent_id: str, reason: str) -> ModelEntry:
+    def restore_previous(self, agent_id: str, reason: str, *, demote_to: Status = "retired") -> ModelEntry:
+        """The previous champion becomes champion again. The current one is retired (the CUSUM watch's alarm), or kept
+        as `previous` (`demote_to="previous"`, rollback-model) so the rollback itself can be undone the same way."""
+        if demote_to not in ("retired", "previous"):
+            raise ValueError("a demoted champion becomes retired or previous")
         prev = self.by_agent(agent_id, "previous")
         if not prev:
             raise ValueError(f"no previous champion for {agent_id}")
+        back = prev[-1]
         for cur in self.by_agent(agent_id, "champion"):
-            cur.status = "retired"
+            cur.status = demote_to
             cur.notes.append(f"demoted: {reason}")
-        prev[-1].status = "champion"
-        prev[-1].notes.append(f"restored: {reason}")
+        back.status = "champion"
+        back.notes.append(f"restored: {reason}")
         self._save()
-        return prev[-1]
+        return back
 
     def recalibrate(self, version: str, model: MetaLabelModel, record: dict[str, Any]) -> ModelEntry:
         """Store `model` (same trees, new calibrator) as the next minor version of `version`: a new artefact with its
@@ -222,11 +256,12 @@ class ModelRegistry:
         if list(model.feature_names) != e.feature_names or model.feature_version != e.feature_version:
             raise ValueError("a recalibration may change only the calibrator, not the model's inputs")
         minor = len(e.recalibrations) + 1
+        base = {"base_sha256": e.sha256} if minor == 1 else {}      # the fitted artefact the run manifest describes
         rel = Path(e.family) / f"{e.version}-r{minor}.pkl"
         data = pickle.dumps(model)
         (self.root / rel).write_bytes(data)
         e.artefact, e.sha256 = str(rel), hashlib.sha256(data).hexdigest()
-        e.recalibrations.append({"minor": minor, **record})
+        e.recalibrations.append({"minor": minor, **base, **record})
         e.notes.append(f"recalibration r{minor}: ECE {record.get('ece_before', float('nan')):.4f} -> "
                        f"{record.get('ece_after', float('nan')):.4f} on {record.get('n', 0)} shadow outcomes")
         self._save()
@@ -255,7 +290,8 @@ class ModelRegistry:
 
 def rollback_main(argv: list[str] | None = None) -> int:
     """`python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT] [--models DIR]`: restore the agent's
-    previous champion in one command (ADR 0106 decision 7, "every change is reversible"). Refused (exit 2, nothing
+    previous champion in one command (ADR 0106 decision 7, "every change is reversible"); the demoted champion is kept
+    as previous, so running it again rolls forward. Under the registry lock. Refused (exit 2, nothing
     changed) when there is no previous champion or when the serving rule would refuse it. The engine picks the
     restored champion up at its next model reload or restart."""
     ap = argparse.ArgumentParser(prog="rollback-model", description=rollback_main.__doc__)
@@ -266,16 +302,17 @@ def rollback_main(argv: list[str] | None = None) -> int:
     if a.models is None:
         from goldbot.config import load_settings
         a.models = load_settings().research.models_dir
-    reg = ModelRegistry(a.models)
-    prev = reg.by_agent(a.agent_id, "previous")
-    if not prev:
-        print(f"rollback-model: no previous champion for {a.agent_id}; nothing changed", file=sys.stderr)
-        return 2
-    why = reg.serving_refusal(prev[-1])
-    if why is not None:
-        print(f"rollback-model: the previous champion would not serve ({why}); nothing changed", file=sys.stderr)
-        return 2
-    cur = reg.champion(a.agent_id)
-    restored = reg.restore_previous(a.agent_id, f"rollback-model: {a.reason}")
-    print(f"rollback-model: {a.agent_id} champion {cur.version if cur else '-'} -> {restored.version}")
+    with ModelRegistry.locked(a.models) as reg:
+        prev = reg.by_agent(a.agent_id, "previous")
+        if not prev:
+            print(f"rollback-model: no previous champion for {a.agent_id}; nothing changed", file=sys.stderr)
+            return 2
+        why = reg.serving_refusal(prev[-1])
+        if why is not None:
+            print(f"rollback-model: the previous champion would not serve ({why}); nothing changed", file=sys.stderr)
+            return 2
+        cur = reg.champion(a.agent_id)
+        restored = reg.restore_previous(a.agent_id, f"rollback-model: {a.reason}", demote_to="previous")
+    print(f"rollback-model: {a.agent_id} champion {cur.version if cur else '-'} -> {restored.version} "
+          f"(the demoted one is kept as previous: run rollback-model again to roll forward)")
     return 0

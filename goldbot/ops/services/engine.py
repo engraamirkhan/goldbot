@@ -843,7 +843,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                         eng.set_shadow_models(shadow_set())
                     log.info("reloaded: %d agents, %d live, models %s, shadow %s", len(eng.agents), len(live_shares),
                              sorted(eng.models), sorted(eng.shadow_models))
-                except (ValueError, TypeError, OSError) as exc:
+                except Exception as exc:   # noqa: BLE001 - one bad model or file never stops the engine (#494 H1)
                     log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
 

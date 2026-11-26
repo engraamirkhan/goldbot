@@ -5,6 +5,14 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-26 ADR 0085 A4 records the D-1 served tiers file `tiers_served_r11-v2.1.csv` (sha256 ff653ea7…, rule blob
+  c6f283d7), using the quant's text R-b on #472 verbatim.
+  - `dense_labels.RECORDED_TIERS_SHA256` now holds it, which unseals learn-window label reads only.
+  - Confirm and test_old reads still need a booked read id (ADR 0104 C-1).
+  - w2-point and h_ref = H rows are not gate reads until D-3 and D-4 freeze.
+  - The gold learn supply in `config/data/sufficiency.yaml` is now the measured core-12 T2 n_eff:
+    5,226 · 3,846 · 2,707 · 1,643 · 1,067 · 0 (2h) · 123 · 0 · 0.
+  - No label value was read.
 - 2026-11-26 ADR 0106 lane 3, reproducibility and model quality (ADR 0109). Every training run can now record one
   immutable run manifest (`goldbot/research/run_manifest.py`, `models/manifests/<sha256>.json`). It holds the data
   version and per-file sha256, the settings and their hash, the seeds, the git HEAD and whether the tree was clean, the
@@ -19,10 +27,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     after 2026-11-27 without a manifest that passes `model_quality.require_servable`: a clean tree, a passing
     `seed_stability` over at least 5 of its own seeds, no failed verdict, and, for families A/B/D, a passing paired
     after-cost win over a C-family manifest. Older fitted entries and rule models serve as before.
+  - Review rulings (ADR 0109 item 8): seeds = `seed_list(manifest_key)`, `served` declared; `beats_baseline` on
+    learn-window OOF rows vs the unit's C manifest (same train_end and folds), block max(5, ceil(1.5 x horizon days)),
+    B >= 10,000, one registry trial per read, `holm_adjust` across the unit's A/B/D reads; manifests carry
+    `label_end_max`. A bad manifest or artefact refuses only its own model; the engine's reload catches every error.
   - Monthly walk-forward: scheduler job `monthly_walkforward` on the 1st at 04:30 UTC calls
-    `model_quality.monthly_trainers` (empty today: the run says nothing was refit) and never promotes.
-  - `python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT]` restores the previous champion; it refuses
-    when there is none or when that one would not serve.
+    `model_quality.monthly_trainers` (empty, and refused while non-empty until trainers run in a bounded child) and
+    never promotes; a manifest whose labels end at or after the window end fails it.
+  - `python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT]` restores the previous champion under the
+    registry lock and keeps the demoted one as previous (run it again to roll forward); it refuses when there is none or
+    when that one would not serve. A CUSUM alarm whose previous model would not serve retires the champion and fails
+    health `model_watch`.
   - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
     and seq hook PRs add it under trading-safety review.
   - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart

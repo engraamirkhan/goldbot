@@ -459,6 +459,7 @@ dependencies = [
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "structlog" },
+    { name = "threadpoolctl" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -525,6 +526,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scikit-learn", specifier = ">=1.4" },
     { name = "structlog", specifier = ">=24.1" },
+    { name = "threadpoolctl", specifier = ">=3.5" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'dl'", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'dl'", specifier = ">=2.5" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },

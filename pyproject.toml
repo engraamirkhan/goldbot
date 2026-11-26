@@ -21,6 +21,7 @@ dependencies = [
     "requests>=2.31",
     "keyring>=25",       # secrets never fall back to plaintext on a dev Mac (goldbot/ops/accounts.py)
     "anthropic>=1.11",   # staff agents (goldbot/agents); key from the OS keyring, never config
+    "threadpoolctl>=3.5",
 ]
 
 [project.optional-dependencies]

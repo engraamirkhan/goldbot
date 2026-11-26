@@ -259,7 +259,8 @@ def check_drift(ctx: HealthContext) -> Check:
 @register_check("global", block=BLOCK_TAIL, pos=30)
 def check_model_watch(ctx: HealthContext) -> Check:
     """state/model_watch.json (daily model_watch): a new champion whose watch has too few trades for any CUSUM alarm
-    at the 5% rate (`cannot_alarm`) warns, so a silent "no alarm" is never mistaken for a healthy watch."""
+    at the 5% rate (`cannot_alarm`) warns, so a silent "no alarm" is never mistaken for a healthy watch; an alarm whose
+    previous model would not serve (`restore_refused`) fails."""
     f = ctx.state_dir / "model_watch.json"          # goldbot.ops.jobs.MODEL_WATCH_FILE
     if not f.exists():
         return Check(name="model_watch", status="ok", reason="no champion watch report yet")
@@ -267,6 +268,11 @@ def check_model_watch(ctx: HealthContext) -> Check:
         agents = (_read_json(f) or {}).get("agents") or {}
     except (ValueError, OSError, AttributeError) as exc:
         return Check(name="model_watch", status="warn", reason=f"model_watch.json unreadable: {exc}"[:300])
+    refused = sorted(a for a, v in agents.items() if isinstance(v, dict) and v.get("action") == "restore_refused")
+    if refused:      # #494 L1: an alarmed champion was retired and its previous model would not serve
+        return Check(name="model_watch", status="fail",
+                     reason=f"CUSUM alarm with no servable previous model for {', '.join(refused)}: the champion was "
+                            "retired and the agent trades no model until a servable one is promoted")
     blind = sorted(a for a, v in agents.items() if isinstance(v, dict) and v.get("action") == "cannot_alarm")
     if blind:
         return Check(name="model_watch", status="warn",
