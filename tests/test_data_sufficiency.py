@@ -131,3 +131,16 @@ def test_supply_uses_the_measured_judged_head_and_derived_gains_are_computed_not
     pooled_1h, gold_1h = sup["pooled_gold_fx"]["1h"][0], sup["gold"]["1h"][0]
     assert pooled_1h is not None and gold_1h is not None
     assert pool.gain["gold/1h"] == pooled_1h - gold_1h
+
+
+def test_a_cell_is_closed_by_the_first_ranked_route_whose_cumulative_gain_covers_it_else_residual_and_cap():
+    con = D.Consumer(id="m", label="m", inputs=10, tfs=("1h",), source="s")
+    sup = {"gold": {"1h": (1_000, 2_000)}, "pool": {"1h": (2_000, 2_000)}}
+    small = _route(id="small", gain={"gold/1h": 1_000}, effort_days=1)
+    big = _route(id="big", gain={"pool/1h": 2_500}, effort_days=10, due="2026-12-09")
+    cells = {c.cell: c for c in D.consumer_cells([con], sup, [small, big], {"gold": ["pool"]})}
+    g = cells["gold/1h"]
+    assert g.routes == ("small", "big") and g.closed_by == "big" and g.closed_due == "2026-12-09"
+    assert g.residual_learn == 0 and g.max_inputs_after == 10
+    p = D.consumer_cells([con], {"pool": {"1h": (1_000, 2_000)}}, [big])[0]
+    assert p.closed_by is None and p.residual_learn == 800 and p.max_inputs_after == 8

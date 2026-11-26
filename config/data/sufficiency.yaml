@@ -85,6 +85,8 @@ tf_items:
   2h: [TF-2h]
 # items that hold no training cell but are owned here (listed in the table, not in a cell's certificate)
 other_items:
+  ADV-REF: {gap: "ADR 0106 real-money rule 'order <= about 1 % of daily volume' has no market-volume reference (broker tick volume is not market volume)", plan: "config/data/adv_reference.yaml values (schema from ADR 0106 lane 1): per instrument the exchange or survey reference, in USD notional per day, conservative leg only: gold = COMEX GC all-month daily volume x 100 oz x price (CME daily bulletin; LBMA OTC not counted), silver SI, WTI CL, indices their benchmark future (ES, NQ, FDAX, Z), FX = BIS Triennial 2025 spot turnover per pair (data.bis.org, reachable 2026-11-26); 20-day median where daily data exist; each value with source URL, as_of and review_by = as_of + 92 days; a stale value refuses real money like an unknown one. Values are counts, not market data: no price series is committed", owner: "data-engineer (values), implementer lane 1 (loader, fail-closed placeholder)", due: "2026-12-03", status: "method set 2026-11-26; CME pages refuse scripted reads (HTTP 403), bulletin PDF route being checked; values land after lane 1's schema", risk: watch}
+  LANE5-QC: {gap: "no dataset-version record; trainers do not refuse a version that failed QC (ADR 0106 gap map lane 5: OD2, OD6, GD1, GD2, GD4, A6, A7)", plan: "dataset_versions record (sha of minutes, tiers, label spec, feature spec) with a QC row per version: missing-bar share <= 0.1 % against the exchange calendar per (instrument, month), zero duplicate (instrument, ts_utc), two-source cross-check status (r11 tier / D-1 / D-14), regime coverage per asset and tf (rising / falling / sideways by trailing 20-bar return and ADX, defined before any read; >= N days each), leak traps L1-L14 run per version; trainers and dl-v1 loaders raise on a version whose QC row is not PASS", owner: data-engineer, due: "2026-12-11", status: "starts after the sufficiency PRs (2026-11-27); sufficiency files of PR #482 untouched", risk: watch}
   D-2: {gap: "fs-v1 feature store not merged", plan: "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)", owner: data-engineer, due: "2026-12-04", status: "done: merged in PR #462 (553d1d70); dl-v1 builds on it", risk: done}
   COUNT-mc: {gap: "metals/crosses n_eff not counted", plan: "outcome-blind n_eff count by the card 2.2 method from the r11 tiers", owner: data-engineer, due: "2026-11-28", status: "done 2026-11-26 (scripts/research/sufficiency_counts.py)", risk: done}
   COUNT-ie: {gap: "index/energy learn 2018-2021 (R-L) n_eff not counted", plan: "outcome-blind count with the unit's R-L windows", owner: data-engineer, due: "2026-11-28", status: "done 2026-11-26; judge row corrected to 2022-01..2025-09", risk: done}
@@ -115,6 +117,7 @@ pooled:
   gold_fx:
     label: "gold + graded FX pairs, one body per tf (A2 real rows)"
     rho_inst: 0.5
+    serves: [gold]          # once A2 pools gold into this body, the body's route gains reach gold's cells
     learn_members:
       XAUUSD: [5226, 3847, 2708, 1644, 1068, null, 123, 0, 0]
       EURUSD: [6996, 5239, 3907, 2607, 1968, null, 422, 36, 0]

@@ -2738,10 +2738,16 @@
    "short_judge": 582,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "zoo-v2",
@@ -2754,10 +2760,16 @@
    "short_judge": 717,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 21
   },
   {
    "consumer": "zoo-v2",
@@ -2770,10 +2782,16 @@
    "short_judge": 817,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 16
   },
   {
    "consumer": "zoo-v2",
@@ -2786,10 +2804,16 @@
    "short_judge": 916,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "GOLD-TIER",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 11
   },
   {
    "consumer": "zoo-v2",
@@ -2802,10 +2826,16 @@
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 567,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "zoo-v2",
@@ -2818,8 +2848,14 @@
    "short_judge": 1035,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3564,
+   "residual_judge": 339,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -2832,9 +2868,15 @@
    "short_judge": 1079,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3365,
+   "residual_judge": 801,
+   "max_inputs_after": 2
   },
   {
    "consumer": "zoo-v2",
@@ -2847,10 +2889,16 @@
    "short_judge": 1094,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3336,
+   "residual_judge": 956,
+   "max_inputs_after": 2
   },
   {
    "consumer": "zoo-v2",
@@ -2863,10 +2911,16 @@
    "short_judge": 1102,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3777,
+   "residual_judge": 1033,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -2880,7 +2934,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 52
   },
   {
    "consumer": "zoo-v2",
@@ -2894,7 +2953,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 38
   },
   {
    "consumer": "zoo-v2",
@@ -2908,7 +2972,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "zoo-v2",
@@ -2922,7 +2991,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "zoo-v2",
@@ -2936,7 +3010,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "zoo-v2",
@@ -2950,7 +3029,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1136,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "zoo-v2",
@@ -2964,7 +3048,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3035,
+   "residual_judge": 0,
+   "max_inputs_after": 2
   },
   {
    "consumer": "zoo-v2",
@@ -2978,7 +3067,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3668,
+   "residual_judge": 503,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -2992,7 +3086,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3984,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "zoo-v2",
@@ -3006,7 +3105,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 26
   },
   {
    "consumer": "zoo-v2",
@@ -3020,7 +3124,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "zoo-v2",
@@ -3034,7 +3143,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "zoo-v2",
@@ -3048,7 +3162,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 154,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "zoo-v2",
@@ -3062,7 +3181,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1100,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "zoo-v2",
@@ -3076,7 +3200,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2700,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "zoo-v2",
@@ -3090,7 +3219,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3660,
+   "residual_judge": 485,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -3105,7 +3239,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3469,
+   "residual_judge": 920,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -3120,7 +3259,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3884,
+   "residual_judge": 1015,
+   "max_inputs_after": 0
   },
   {
    "consumer": "zoo-v2",
@@ -3134,7 +3278,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 13
   },
   {
    "consumer": "zoo-v2",
@@ -3148,7 +3297,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 95,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "zoo-v2",
@@ -3162,7 +3316,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1169,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "zoo-v2",
@@ -3176,7 +3335,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2227,
+   "residual_judge": 0,
+   "max_inputs_after": 4
   },
   {
    "consumer": "zoo-v2",
@@ -3190,7 +3354,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2700,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "zoo-v2",
@@ -3204,7 +3373,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3500,
+   "residual_judge": 349,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -3218,7 +3392,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3980,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "zoo-v2",
@@ -3233,7 +3412,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2896,
+   "residual_judge": 898,
+   "max_inputs_after": 3
   },
   {
    "consumer": "zoo-v2",
@@ -3248,7 +3432,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3599,
+   "residual_judge": 1004,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -3262,7 +3451,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 23
   },
   {
    "consumer": "zoo-v2",
@@ -3276,7 +3470,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 17
   },
   {
    "consumer": "zoo-v2",
@@ -3290,7 +3489,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 12
   },
   {
    "consumer": "zoo-v2",
@@ -3304,7 +3508,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 758,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "zoo-v2",
@@ -3318,7 +3527,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1770,
+   "residual_judge": 0,
+   "max_inputs_after": 5
   },
   {
    "consumer": "zoo-v2",
@@ -3332,7 +3546,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4300,
+   "residual_judge": 339,
+   "max_inputs_after": 0
   },
   {
    "consumer": "zoo-v2",
@@ -3346,7 +3565,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3846,
+   "residual_judge": 801,
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -3360,7 +3584,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4264,
+   "residual_judge": 956,
+   "max_inputs_after": 0
   },
   {
    "consumer": "zoo-v2",
@@ -3374,7 +3603,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4300,
+   "residual_judge": 1033,
+   "max_inputs_after": 0
   },
   {
    "consumer": "sr-v3",
@@ -3387,10 +3621,16 @@
    "short_judge": 582,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "sr-v3",
@@ -3403,10 +3643,16 @@
    "short_judge": 717,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 21
   },
   {
    "consumer": "sr-v3",
@@ -3419,10 +3665,16 @@
    "short_judge": 817,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 16
   },
   {
    "consumer": "sr-v3",
@@ -3435,10 +3687,16 @@
    "short_judge": 916,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 11
   },
   {
    "consumer": "sr-v3",
@@ -3451,10 +3709,16 @@
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "GOLD-TIER",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "sr-v3",
@@ -3467,8 +3731,14 @@
    "short_judge": 1035,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1844,
+   "residual_judge": 339,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3481,9 +3751,15 @@
    "short_judge": 1079,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1645,
+   "residual_judge": 801,
+   "max_inputs_after": 2
   },
   {
    "consumer": "sr-v3",
@@ -3496,10 +3772,16 @@
    "short_judge": 1094,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1616,
+   "residual_judge": 956,
+   "max_inputs_after": 2
   },
   {
    "consumer": "sr-v3",
@@ -3512,10 +3794,16 @@
    "short_judge": 1102,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2057,
+   "residual_judge": 1033,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3529,7 +3817,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 52
   },
   {
    "consumer": "sr-v3",
@@ -3543,7 +3836,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 38
   },
   {
    "consumer": "sr-v3",
@@ -3557,7 +3855,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "sr-v3",
@@ -3571,7 +3874,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "sr-v3",
@@ -3585,7 +3893,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "sr-v3",
@@ -3599,7 +3912,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "sr-v3",
@@ -3613,7 +3931,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1315,
+   "residual_judge": 0,
+   "max_inputs_after": 2
   },
   {
    "consumer": "sr-v3",
@@ -3627,7 +3950,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1948,
+   "residual_judge": 503,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3641,7 +3969,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2264,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "sr-v3",
@@ -3655,7 +3988,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 26
   },
   {
    "consumer": "sr-v3",
@@ -3669,7 +4007,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "sr-v3",
@@ -3683,7 +4026,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "sr-v3",
@@ -3697,7 +4045,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "sr-v3",
@@ -3711,7 +4064,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "sr-v3",
@@ -3725,7 +4083,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 980,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "sr-v3",
@@ -3739,7 +4102,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1940,
+   "residual_judge": 485,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3754,7 +4122,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1749,
+   "residual_judge": 920,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3769,7 +4142,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2164,
+   "residual_judge": 1015,
+   "max_inputs_after": 0
   },
   {
    "consumer": "sr-v3",
@@ -3783,7 +4161,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 13
   },
   {
    "consumer": "sr-v3",
@@ -3797,7 +4180,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "sr-v3",
@@ -3811,7 +4199,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "sr-v3",
@@ -3825,7 +4218,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 507,
+   "residual_judge": 0,
+   "max_inputs_after": 4
   },
   {
    "consumer": "sr-v3",
@@ -3839,7 +4237,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 980,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "sr-v3",
@@ -3853,7 +4256,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1780,
+   "residual_judge": 349,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3867,7 +4275,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2260,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "sr-v3",
@@ -3882,7 +4295,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1176,
+   "residual_judge": 898,
+   "max_inputs_after": 3
   },
   {
    "consumer": "sr-v3",
@@ -3897,7 +4315,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1879,
+   "residual_judge": 1004,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -3911,7 +4334,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 23
   },
   {
    "consumer": "sr-v3",
@@ -3925,7 +4353,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 17
   },
   {
    "consumer": "sr-v3",
@@ -3939,7 +4372,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 12
   },
   {
    "consumer": "sr-v3",
@@ -3953,7 +4391,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "sr-v3",
@@ -3967,7 +4410,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 50,
+   "residual_judge": 0,
+   "max_inputs_after": 5
   },
   {
    "consumer": "sr-v3",
@@ -3981,7 +4429,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2580,
+   "residual_judge": 339,
+   "max_inputs_after": 0
   },
   {
    "consumer": "sr-v3",
@@ -3995,7 +4448,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2126,
+   "residual_judge": 801,
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -4009,7 +4467,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2544,
+   "residual_judge": 956,
+   "max_inputs_after": 0
   },
   {
    "consumer": "sr-v3",
@@ -4023,7 +4486,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2580,
+   "residual_judge": 1033,
+   "max_inputs_after": 0
   },
   {
    "consumer": "x6",
@@ -4036,10 +4504,16 @@
    "short_judge": 582,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "x6",
@@ -4052,10 +4526,16 @@
    "short_judge": 717,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 21
   },
   {
    "consumer": "x6",
@@ -4068,10 +4548,16 @@
    "short_judge": 817,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 16
   },
   {
    "consumer": "x6",
@@ -4084,10 +4570,16 @@
    "short_judge": 916,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 411,
+   "residual_judge": 0,
+   "max_inputs_after": 11
   },
   {
    "consumer": "x6",
@@ -4100,10 +4592,16 @@
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1427,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "x6",
@@ -4116,8 +4614,14 @@
    "short_judge": 1035,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4424,
+   "residual_judge": 339,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4130,9 +4634,15 @@
    "short_judge": 1079,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4225,
+   "residual_judge": 801,
+   "max_inputs_after": 2
   },
   {
    "consumer": "x6",
@@ -4145,10 +4655,16 @@
    "short_judge": 1094,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4196,
+   "residual_judge": 956,
+   "max_inputs_after": 2
   },
   {
    "consumer": "x6",
@@ -4161,10 +4677,16 @@
    "short_judge": 1102,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4637,
+   "residual_judge": 1033,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4178,7 +4700,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 52
   },
   {
    "consumer": "x6",
@@ -4192,7 +4719,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 38
   },
   {
    "consumer": "x6",
@@ -4206,7 +4738,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "x6",
@@ -4220,7 +4757,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "x6",
@@ -4234,7 +4776,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "x6",
@@ -4248,7 +4795,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1996,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "x6",
@@ -4262,7 +4814,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3895,
+   "residual_judge": 0,
+   "max_inputs_after": 2
   },
   {
    "consumer": "x6",
@@ -4276,7 +4833,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4528,
+   "residual_judge": 503,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4290,7 +4852,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4844,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "x6",
@@ -4304,7 +4871,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 26
   },
   {
    "consumer": "x6",
@@ -4318,7 +4890,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "x6",
@@ -4332,7 +4909,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "x6",
@@ -4346,7 +4928,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1014,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "x6",
@@ -4360,7 +4947,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1960,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "x6",
@@ -4374,7 +4966,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3560,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "x6",
@@ -4388,7 +4985,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4520,
+   "residual_judge": 485,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4403,7 +5005,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4329,
+   "residual_judge": 920,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4418,7 +5025,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4744,
+   "residual_judge": 1015,
+   "max_inputs_after": 0
   },
   {
    "consumer": "x6",
@@ -4432,7 +5044,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 13
   },
   {
    "consumer": "x6",
@@ -4446,7 +5063,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 955,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "x6",
@@ -4460,7 +5082,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2029,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "x6",
@@ -4474,7 +5101,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3087,
+   "residual_judge": 0,
+   "max_inputs_after": 4
   },
   {
    "consumer": "x6",
@@ -4488,7 +5120,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3560,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "x6",
@@ -4502,7 +5139,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4360,
+   "residual_judge": 349,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4516,7 +5158,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4840,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "x6",
@@ -4531,7 +5178,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3756,
+   "residual_judge": 898,
+   "max_inputs_after": 3
   },
   {
    "consumer": "x6",
@@ -4546,7 +5198,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4459,
+   "residual_judge": 1004,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4560,7 +5217,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 23
   },
   {
    "consumer": "x6",
@@ -4574,7 +5236,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 17
   },
   {
    "consumer": "x6",
@@ -4588,7 +5255,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 12
   },
   {
    "consumer": "x6",
@@ -4602,7 +5274,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1618,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "x6",
@@ -4616,7 +5293,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2630,
+   "residual_judge": 0,
+   "max_inputs_after": 5
   },
   {
    "consumer": "x6",
@@ -4630,7 +5312,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 5160,
+   "residual_judge": 339,
+   "max_inputs_after": 0
   },
   {
    "consumer": "x6",
@@ -4644,7 +5331,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4706,
+   "residual_judge": 801,
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -4658,7 +5350,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 5124,
+   "residual_judge": 956,
+   "max_inputs_after": 0
   },
   {
    "consumer": "x6",
@@ -4672,7 +5369,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 5160,
+   "residual_judge": 1033,
+   "max_inputs_after": 0
   },
   {
    "consumer": "seq-1",
@@ -4685,10 +5387,16 @@
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 13467,
+   "residual_judge": 0,
+   "max_inputs_after": 8
   },
   {
    "consumer": "seq-1",
@@ -4701,8 +5409,14 @@
    "short_judge": 1035,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16464,
+   "residual_judge": 339,
+   "max_inputs_after": 1
   },
   {
    "consumer": "seq-1",
@@ -4715,9 +5429,15 @@
    "short_judge": 1079,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16265,
+   "residual_judge": 801,
+   "max_inputs_after": 2
   },
   {
    "consumer": "seq-1",
@@ -4730,10 +5450,16 @@
    "short_judge": 1094,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16236,
+   "residual_judge": 956,
+   "max_inputs_after": 2
   },
   {
    "consumer": "seq-1",
@@ -4747,7 +5473,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 10874,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "seq-1",
@@ -4761,7 +5492,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 14036,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "seq-1",
@@ -4775,7 +5511,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 15935,
+   "residual_judge": 0,
+   "max_inputs_after": 2
   },
   {
    "consumer": "seq-1",
@@ -4789,7 +5530,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16568,
+   "residual_judge": 503,
+   "max_inputs_after": 1
   },
   {
    "consumer": "seq-1",
@@ -4803,7 +5549,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 14000,
+   "residual_judge": 0,
+   "max_inputs_after": 7
   },
   {
    "consumer": "seq-1",
@@ -4817,7 +5568,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 15600,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "seq-1",
@@ -4831,7 +5587,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16560,
+   "residual_judge": 485,
+   "max_inputs_after": 1
   },
   {
    "consumer": "seq-1",
@@ -4846,7 +5607,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16369,
+   "residual_judge": 920,
+   "max_inputs_after": 1
   },
   {
    "consumer": "seq-1",
@@ -4860,7 +5626,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 15600,
+   "residual_judge": 0,
+   "max_inputs_after": 3
   },
   {
    "consumer": "seq-1",
@@ -4874,7 +5645,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16400,
+   "residual_judge": 349,
+   "max_inputs_after": 1
   },
   {
    "consumer": "seq-1",
@@ -4888,7 +5664,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16880,
+   "residual_judge": 805,
+   "max_inputs_after": 0
   },
   {
    "consumer": "seq-1",
@@ -4903,7 +5684,12 @@
    "routes": [
     "RHO-measure",
     "DEEP-DAILY"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 15796,
+   "residual_judge": 898,
+   "max_inputs_after": 3
   },
   {
    "consumer": "seq-1",
@@ -4917,7 +5703,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 14670,
+   "residual_judge": 0,
+   "max_inputs_after": 5
   },
   {
    "consumer": "seq-1",
@@ -4931,7 +5722,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 17200,
+   "residual_judge": 339,
+   "max_inputs_after": 0
   },
   {
    "consumer": "seq-1",
@@ -4945,7 +5741,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 16746,
+   "residual_judge": 801,
+   "max_inputs_after": 1
   },
   {
    "consumer": "seq-1",
@@ -4959,7 +5760,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 17164,
+   "residual_judge": 956,
+   "max_inputs_after": 0
   },
   {
    "consumer": "rl-x1",
@@ -4972,10 +5778,16 @@
    "short_judge": 2801,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": "GOLD-TIER",
+   "closed_due": "2026-12-04",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "rl-x1",
@@ -4988,10 +5800,16 @@
    "short_judge": 2936,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 1503,
+   "residual_judge": 0,
+   "max_inputs_after": 21
   },
   {
    "consumer": "rl-x1",
@@ -5004,10 +5822,16 @@
    "short_judge": 3036,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3767,
+   "residual_judge": 183,
+   "max_inputs_after": 16
   },
   {
    "consumer": "rl-x1",
@@ -5020,10 +5844,16 @@
    "short_judge": 3135,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 6001,
+   "residual_judge": 1247,
+   "max_inputs_after": 11
   },
   {
    "consumer": "rl-x1",
@@ -5036,10 +5866,16 @@
    "short_judge": 3179,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 7017,
+   "residual_judge": 1722,
+   "max_inputs_after": 8
   },
   {
    "consumer": "rl-x1",
@@ -5052,8 +5888,14 @@
    "short_judge": 3254,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 10014,
+   "residual_judge": 2558,
+   "max_inputs_after": 1
   },
   {
    "consumer": "rl-x1",
@@ -5066,9 +5908,15 @@
    "short_judge": 3298,
    "status": "SHORT",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 9815,
+   "residual_judge": 3020,
+   "max_inputs_after": 2
   },
   {
    "consumer": "rl-x1",
@@ -5082,7 +5930,12 @@
    "status": "MEETS",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 52
   },
   {
    "consumer": "rl-x1",
@@ -5096,7 +5949,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 38
   },
   {
    "consumer": "rl-x1",
@@ -5110,7 +5968,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": "RHO-measure",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 28
   },
   {
    "consumer": "rl-x1",
@@ -5124,7 +5987,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2552,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "rl-x1",
@@ -5138,7 +6006,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4424,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "rl-x1",
@@ -5152,7 +6025,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 7586,
+   "residual_judge": 290,
+   "max_inputs_after": 7
   },
   {
    "consumer": "rl-x1",
@@ -5166,7 +6044,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 9485,
+   "residual_judge": 2113,
+   "max_inputs_after": 2
   },
   {
    "consumer": "rl-x1",
@@ -5180,7 +6063,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": "D-14",
+   "closed_due": "2026-12-09",
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": 26
   },
   {
    "consumer": "rl-x1",
@@ -5194,7 +6082,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 2339,
+   "residual_judge": 0,
+   "max_inputs_after": 19
   },
   {
    "consumer": "rl-x1",
@@ -5208,7 +6101,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 4487,
+   "residual_judge": 0,
+   "max_inputs_after": 14
   },
   {
    "consumer": "rl-x1",
@@ -5222,7 +6120,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 6604,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "rl-x1",
@@ -5236,7 +6139,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 7550,
+   "residual_judge": 208,
+   "max_inputs_after": 7
   },
   {
    "consumer": "rl-x1",
@@ -5250,7 +6158,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 9150,
+   "residual_judge": 1768,
+   "max_inputs_after": 3
   },
   {
    "consumer": "rl-x1",
@@ -5264,7 +6177,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 10110,
+   "residual_judge": 2704,
+   "max_inputs_after": 1
   },
   {
    "consumer": "rl-x1",
@@ -5278,7 +6196,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 5089,
+   "residual_judge": 0,
+   "max_inputs_after": 13
   },
   {
    "consumer": "rl-x1",
@@ -5292,7 +6215,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 6545,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "rl-x1",
@@ -5306,7 +6234,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 7619,
+   "residual_judge": 353,
+   "max_inputs_after": 7
   },
   {
    "consumer": "rl-x1",
@@ -5320,7 +6253,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 8677,
+   "residual_judge": 1359,
+   "max_inputs_after": 4
   },
   {
    "consumer": "rl-x1",
@@ -5334,7 +6272,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 9150,
+   "residual_judge": 1808,
+   "max_inputs_after": 3
   },
   {
    "consumer": "rl-x1",
@@ -5348,7 +6291,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 9950,
+   "residual_judge": 2568,
+   "max_inputs_after": 1
   },
   {
    "consumer": "rl-x1",
@@ -5362,7 +6310,12 @@
    "status": "SHORT",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 10430,
+   "residual_judge": 3024,
+   "max_inputs_after": 0
   },
   {
    "consumer": "rl-x1",
@@ -5376,7 +6329,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 565,
+   "residual_judge": 0,
+   "max_inputs_after": 23
   },
   {
    "consumer": "rl-x1",
@@ -5390,7 +6348,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 3179,
+   "residual_judge": 0,
+   "max_inputs_after": 17
   },
   {
    "consumer": "rl-x1",
@@ -5404,7 +6367,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 5238,
+   "residual_judge": 310,
+   "max_inputs_after": 12
   },
   {
    "consumer": "rl-x1",
@@ -5418,7 +6386,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 7208,
+   "residual_judge": 1331,
+   "max_inputs_after": 8
   },
   {
    "consumer": "rl-x1",
@@ -5432,7 +6405,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 8220,
+   "residual_judge": 1787,
+   "max_inputs_after": 5
   },
   {
    "consumer": "rl-x1",
@@ -5446,7 +6424,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 10750,
+   "residual_judge": 2558,
+   "max_inputs_after": 0
   },
   {
    "consumer": "rl-x1",
@@ -5460,7 +6443,12 @@
    "status": "SHORT",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 10296,
+   "residual_judge": 3020,
+   "max_inputs_after": 1
   },
   {
    "consumer": "agg-v1",
@@ -5473,10 +6461,16 @@
    "short_judge": 0,
    "status": "FORWARD",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5489,10 +6483,16 @@
    "short_judge": 0,
    "status": "FORWARD",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER",
     "BROKER-M1"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5505,9 +6505,15 @@
    "short_judge": 0,
    "status": "FORWARD",
    "routes": [
+    "RHO-measure",
     "A2-pool",
     "GOLD-TIER"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5521,7 +6527,12 @@
    "status": "FORWARD",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5535,7 +6546,12 @@
    "status": "FORWARD",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5549,7 +6565,12 @@
    "status": "FORWARD",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5563,7 +6584,12 @@
    "status": "FORWARD",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5577,7 +6603,12 @@
    "status": "FORWARD",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5591,7 +6622,12 @@
    "status": "FORWARD",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5605,7 +6641,12 @@
    "status": "FORWARD",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5619,7 +6660,12 @@
    "status": "FORWARD",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5633,7 +6679,12 @@
    "status": "FORWARD",
    "routes": [
     "D-14"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5647,7 +6698,12 @@
    "status": "FORWARD",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5661,7 +6717,12 @@
    "status": "FORWARD",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   },
   {
    "consumer": "agg-v1",
@@ -5675,7 +6736,12 @@
    "status": "FORWARD",
    "routes": [
     "RHO-measure"
-   ]
+   ],
+   "closed_by": null,
+   "closed_due": null,
+   "residual_learn": 0,
+   "residual_judge": 0,
+   "max_inputs_after": null
   }
  ],
  "routes": [

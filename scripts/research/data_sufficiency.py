@@ -69,7 +69,7 @@ def consumer_sections(cfg: dict[str, Any]) -> list[str]:
     cons = D.consumers(cfg)
     sup = D.supply(cfg)
     rts = D.rank_routes(D.routes(cfg))
-    cells = D.consumer_cells(cons, sup, rts)
+    cells = D.consumer_cells(cons, sup, rts, D.inherit(cfg))
     by = {(c.consumer, c.cell): c for c in cells}
 
     def n(x: int | None) -> str:
@@ -86,8 +86,10 @@ def consumer_sections(cfg: dict[str, Any]) -> list[str]:
     out += ["", "## Consumer x cell", "",
             "Supply: learn = dl-v1 measured T2 core-6 n_eff where the unit has it, else the card count; judge = the "
             "card count. Each consumer column: `ok` when both needs are met, else the learn / judge shortfall "
-            "(`L` / `J`), then the first ranked route that adds counted n_eff to the cell. `fwd` = the consumer is "
-            "judged on forward rows only. Blank = the consumer does not use that timeframe.", "",
+            "(`L` / `J`), then the ranked route whose cumulative counted gain closes it (at full delivery) and its date, or "
+            "`open` with the residual after every route and the Riley input cap the data then carries (the consumer "
+            "serves at most that many inputs there, or abstains, until a new route is added). Gold cells take the "
+            "pooled body's gains once A2 pools them. `fwd` = judged on forward rows only. Blank = not used.", "",
             "| Cell | Learn | Judge | " + " | ".join(c.id for c in cons) + " |",
             "|---|---|---|" + "---|" * len(cons)]
     for unit, row in sup.items():
@@ -105,7 +107,12 @@ def consumer_sections(cfg: dict[str, Any]) -> list[str]:
                 else:
                     gap = " ".join(x for x in (f"L-{k(cc.short_learn)}" if cc.short_learn else "",
                                                f"J-{k(cc.short_judge)}" if cc.short_judge else "") if x)
-                    cols.append(f"{gap} ({cc.routes[0]})")
+                    if cc.closed_by:
+                        cols.append(f"{gap}: {cc.closed_by} {cc.closed_due}")
+                    else:
+                        res = " ".join(x for x in (f"L-{k(cc.residual_learn)}" if cc.residual_learn else "",
+                                                   f"J-{k(cc.residual_judge)}" if cc.residual_judge else "") if x)
+                        cols.append(f"{gap}: open {res}, cap {cc.max_inputs_after}")
             out.append(f"| {cell} | {n(lv)} | {n(jv)} | " + " | ".join(cols) + " |")
     out += ["", "## Routes, ranked by expected counted n_eff per day of work", "",
             "Counted = the card 2.2 n_eff the route adds summed over cells (learn and `:judge`); expected per day = "
@@ -137,7 +144,7 @@ def main() -> int:
     if cfg.get("consumers"):
         rts = D.rank_routes(D.routes(cfg))
         body["consumer_cells"] = [c.model_dump(mode="json") for c in
-                                  D.consumer_cells(D.consumers(cfg), D.supply(cfg), rts)]
+                                  D.consumer_cells(D.consumers(cfg), D.supply(cfg), rts, D.inherit(cfg))]
         body["routes"] = [{**r.model_dump(mode="json"), "counted": r.counted(), "per_day": round(r.per_day(), 1)}
                           for r in rts]
     js = json.dumps(body, indent=1) + "\n"

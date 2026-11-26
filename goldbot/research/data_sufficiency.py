@@ -283,13 +283,22 @@ class ConsumerCell(FrozenRecord):
     short_judge: int
     status: Literal["MEETS", "SHORT", "FORWARD"]
     routes: tuple[str, ...]                    # routes with a counted gain on this cell, ranked
+    closed_by: str | None = None               # the ranked route whose cumulative gain (at full delivery) closes it
+    closed_due: str | None = None
+    residual_learn: int = 0                    # shortfall left after every route delivers in full
+    residual_judge: int = 0
+    max_inputs_after: int | None = None        # Riley input cap on learn supply after every route
 
 
 def consumer_cells(consumers: Sequence[Consumer], supply: Mapping[str, Mapping[str, tuple[int | None, int | None]]],
-                   routes: Sequence[Route]) -> list[ConsumerCell]:
+                   routes: Sequence[Route], inherit: Mapping[str, Sequence[str]] | None = None) -> list[ConsumerCell]:
     """Every consumer x unit x tf it uses. `supply`: unit -> tf -> (learn, judge). A SHORT cell lists the ranked
-    routes that add counted n_eff to it; a cell with no such route raises (the owner rule: a gap always has a plan)."""
+    routes that add counted n_eff to it, the route whose cumulative gain closes it (`closed_by`, at full delivery) or
+    the residual after every route; a cell with no route at all raises (the owner rule: a gap always has a plan).
+    `inherit`: unit -> other units whose route gains also reach it (gold's cells become the pooled body's once A2
+    pools them, so a gain on the pooled body reaches gold too; it is not counted twice in a route's total)."""
     ranked = rank_routes(routes)
+    inherit = inherit or {}
     out = []
     for c in consumers:
         for unit, by_tf in supply.items():
@@ -298,7 +307,11 @@ def consumer_cells(consumers: Sequence[Consumer], supply: Mapping[str, Mapping[s
                     continue
                 learn, judge = by_tf[tf]
                 cell = f"{unit}/{tf}"
-                rs = tuple(r.id for r in ranked if r.gain.get(cell, 0) > 0 or r.gain.get(f"{cell}:judge", 0) > 0)
+                keys = [cell, *(f"{a}/{tf}" for a in inherit.get(unit, ()))]
+                steps = [(r, sum(r.gain.get(k, 0) for k in keys), sum(r.gain.get(f"{k}:judge", 0) for k in keys))
+                         for r in ranked]
+                steps = [x for x in steps if x[1] > 0 or x[2] > 0]
+                rs = tuple(r.id for r, _, _ in steps)
                 if c.forward_only:
                     out.append(ConsumerCell(consumer=c.id, cell=cell, n_eff_learn=learn, n_eff_judge=judge,
                                             need_train=c.n_train(), need_judge=c.forward_n_eff or c.n_judge(),
@@ -309,9 +322,19 @@ def consumer_cells(consumers: Sequence[Consumer], supply: Mapping[str, Mapping[s
                 status: Literal["MEETS", "SHORT"] = "SHORT" if sl or sj else "MEETS"
                 if status == "SHORT" and not rs:
                     raise ValueError(f"{c.id} {cell}: SHORT with no route (the gap needs a plan and a date)")
+                cl = cj = 0
+                closed: Route | None = None
+                for r, gl, gj in steps:
+                    cl, cj = cl + gl, cj + gj
+                    if closed is None and status == "SHORT" and cl >= sl and cj >= sj:
+                        closed = r
                 out.append(ConsumerCell(consumer=c.id, cell=cell, n_eff_learn=learn, n_eff_judge=judge,
                                         need_train=c.n_train(), need_judge=c.n_judge(), short_learn=sl,
-                                        short_judge=sj, status=status, routes=rs))
+                                        short_judge=sj, status=status, routes=rs,
+                                        closed_by=None if closed is None else closed.id,
+                                        closed_due=None if closed is None else closed.due,
+                                        residual_learn=max(0, sl - cl), residual_judge=max(0, sj - cj),
+                                        max_inputs_after=((learn or 0) + cl) // RILEY_PER_PARAM))
     return out
 
 
@@ -409,10 +432,19 @@ def routes(cfg: dict[str, Any]) -> list[Route]:
     return out
 
 
+def inherit(cfg: dict[str, Any]) -> dict[str, list[str]]:
+    """Units whose cells take a pooled body's route gains (`pooled.<name>.serves`)."""
+    out: dict[str, list[str]] = {}
+    for name, pdef in (cfg.get("pooled") or {}).items():
+        for unit in pdef.get("serves") or ():
+            out.setdefault(unit, []).append(f"pooled_{name}")
+    return out
+
+
 def consumers(cfg: dict[str, Any]) -> list[Consumer]:
     return [Consumer(id=k, **{**v, "tfs": tuple(v["tfs"])}) for k, v in (cfg.get("consumers") or {}).items()]
 
 
 __all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
            "ConsumerCell", "Gap", "Requirement", "Route", "certificates", "certify", "check_route", "consumer_cells",
-           "consumers", "pooled_supply", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]
+           "consumers", "inherit", "pooled_supply", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]
