@@ -38,9 +38,10 @@ minutes within its instrument x tf (phase 0 events only: phases add no concurren
 across every tf built for the instrument (the instrument-minute counted once, for cross-unit claims). A phase-p row's
 weight is its u / P. n_eff per cell (`n_eff`) follows the card's 2.2 method on the measured uniqueness.
 
-Tiers (ADR 0085 A4, r11-v2.1): the worst tier over the session months from (decision - `tier_lookback`) to the
-horizon end (card 2.1: decision month, label horizon, feature lookback). Intraday rows need A / A-consistent for every
-template (their features do); 1d/1w rows need A / A-consistent for barrier templates, T0 (close-to-close) takes B too.
+Tiers (ADR 0085 A4, r11-v2.1; ADR 0104 4): the worst tier over the session months from (decision - `input_lookback`
+of the requested column set) to the horizon end (quant C-3 / R-a: registry lookbacks, plus the d1 context). Intraday
+rows need A / A-consistent for every template (their features do); 1d/1w rows need A / A-consistent for barrier
+templates, T0 (close-to-close) takes B too.
 The tiers must grade the rows' own source (`<source>:<instrument>`, quant C3; the D-1 served file grades
 dukascopy:XAUUSD and histdata:<FX>). Every store is SEALED (card ruling 5): labels are produced and counted
 outcome-blind (`skeleton`), but `load_labels` refuses label values until the tiers file's sha256 is in
@@ -71,8 +72,12 @@ from goldbot.data import htf_bars as H
 from goldbot.data.daily import session_date
 from goldbot.data.resample import BAR_COLUMNS, resample_bars
 from goldbot.data.timeutil import epoch_ns, utc_index
+from goldbot.features import build_features
+from goldbot.features.registry import FEATURES as REGISTRY
 from goldbot.research import decision_cost as DC
 from goldbot.research import feature_store as F
+from goldbot.research import windows as WN
+from goldbot.research.self_retrain import FEATURES as SR_FEATURES
 
 log = logging.getLogger("goldbot.dense_labels")
 
@@ -200,15 +205,41 @@ class Minutes:
         self.ask = {k: m[f"ask_{k}"].to_numpy(dtype=float) for k in ("open", "high", "low", "close")}
         self.bid_only = bool(m["bid_only"].any()) if "bid_only" in m.columns else False
         mid = {k: (self.bid[k] + self.ask[k]) / 2 for k in ("open", "high", "low", "close")}
+        self.mid = mid
         self.mid_open = mid["open"]
-        prev = np.concatenate(([np.nan], mid["close"][:-1]))
-        tr = np.fmax(np.fmax(mid["high"] - mid["low"], np.abs(mid["high"] - prev)), np.abs(mid["low"] - prev))
-        self.tr_floor = (pd.Series(tr).rolling(spec.floor_window_min, min_periods=60).median()
-                         .to_numpy() * spec.floor_tr_mult)
+        self.spec = spec
+        self.tr_floor = _tr_median(mid, spec) * spec.floor_tr_mult
+        # the latest visibility over each floor window: a window holding a minute revised after the decision is
+        # recomputed on the minutes visible by then (`floor_at`), never read from the rolling value
+        self.win_vis_max = F._trailing_max(self.vis, spec.floor_window_min) if len(self.vis) else self.vis
         self.frame = m
 
     def __len__(self) -> int:
         return len(self.ts)
+
+    def floor_at(self, dec: np.ndarray) -> np.ndarray:
+        """1.5 x the median 1m true range over the `floor_window_min` minutes up to each decision, from the minutes
+        VISIBLE by the decision: the window ends at the last minute closed by the decision (time order; `vis` is not
+        sorted once a minute is revised) and a minute revised after the decision is left out (code review LOW-1)."""
+        mi = np.searchsorted(self.ts + MINUTE_NS, dec, side="right") - 1
+        out = np.where(mi >= 0, self.tr_floor[np.clip(mi, 0, None)], np.nan)
+        late = np.flatnonzero((mi >= 0) & (self.win_vis_max[np.clip(mi, 0, None)] > dec))
+        W = self.spec.floor_window_min
+        for i in late:
+            a = max(0, int(mi[i]) - W + 1)
+            seen = np.flatnonzero(self.vis[a:int(mi[i]) + 1] <= dec[i]) + a
+            sub = {k: v[seen] for k, v in self.mid.items()}
+            med = _tr_median(sub, self.spec, rolling=False)
+            out[i] = med * self.spec.floor_tr_mult if len(seen) >= 60 else np.nan
+        return out
+
+
+def _tr_median(mid: Mapping[str, np.ndarray], spec: LabelSpec, *, rolling: bool = True) -> Any:
+    prev = np.concatenate(([np.nan], mid["close"][:-1]))
+    tr = np.fmax(np.fmax(mid["high"] - mid["low"], np.abs(mid["high"] - prev)), np.abs(mid["low"] - prev))
+    if not rolling:
+        return float(np.nanmedian(tr)) if len(tr) else np.nan
+    return pd.Series(tr).rolling(spec.floor_window_min, min_periods=60).median().to_numpy()
 
 
 def decision_bars(m: Minutes, tf: str, phase: int = 0, spec: LabelSpec = SPEC) -> pd.DataFrame:
@@ -218,7 +249,7 @@ def decision_bars(m: Minutes, tf: str, phase: int = 0, spec: LabelSpec = SPEC) -
     src = m.frame[BAR_COLUMNS]
     if phase:
         src = src.assign(ts_utc=m.frame["ts_utc"] - shift, visible_at=m.frame["visible_at"] - shift)
-    dec = resample_bars(src, tf)
+    dec = resample_bars(src, tf, drop_late=True)       # as fs-v1: a bar holding a revised minute is no decision bar
     if phase:
         dec["ts_utc"] = utc_index(dec["ts_utc"]) + shift
         dec["visible_at"] = utc_index(dec["visible_at"]) + shift
@@ -337,8 +368,7 @@ def label_rows(m: Minutes, rows: pd.DataFrame, tf: str, *, bars: pd.DataFrame | 
     bi = np.searchsorted(bars["close_ns"].to_numpy(), dec, side="right") - 1
     atr = np.where(bi >= 0, bars["atr"].to_numpy()[np.clip(bi, 0, None)], np.nan)
     eh = entry_and_horizon(m, rows, tf, bars["close_ns"].to_numpy(), spec)
-    mi = np.searchsorted(m.vis, dec, side="right") - 1          # the last minute visible at the decision
-    floor = np.where(mi >= 0, m.tr_floor[np.clip(mi, 0, None)], np.nan)
+    floor = m.floor_at(dec)
     d0 = np.fmax(atr, floor)                                     # fmax: a NaN floor (warm-up) leaves the ATR
     ok = eh["ok"] & np.isfinite(d0) & (d0 > 0) & np.isfinite(atr)
     e, z = eh["e"], eh["z"]
@@ -404,20 +434,67 @@ def months_between(a: pd.Series, b: pd.Series) -> tuple[np.ndarray, np.ndarray]:
             np.asarray(session_date(b).to_period("M").astype(str)))
 
 
-def tier_lookback(tf: str, spec: LabelSpec = SPEC) -> pd.Timedelta:
-    """The feature lookback the tier check reads: `lookback_bars` decision bars (x 7/5 for the weekend below 1w), not
-    the whole 800-bar fs-v1 window (its start is provenance, fs-v1 `tier_window`). Quant ruling pending (ADR 0104)."""
+# card 3.1: the column sets every count is reported for (quant C-3 / R-a); `side` reads no market data
+CORE12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "atr_ratio_14_100", "er_30", "bb_z_20", "ret_16",
+                           "ret_96", "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
+COST8: tuple[str, ...] = ("em_atr_cost", "em_yz_4_cost", "em_yz_16_cost", "em_yz_48_cost", "spread_atr",
+                          "spread_rel_median_48", "tick_count_z_48", "tick_vol_ratio_20")
+D1_STRUCTURAL_NAN: tuple[str, ...] = ("d1_atr_ratio_14_100", "d1_rv_ratio")
+COLUMN_SETS: dict[str, tuple[str, ...]] = {
+    "core-6": CORE12[:6],
+    "core-12": CORE12,
+    "P30": (*(c for c in SR_FEATURES if c not in COST8 and c not in D1_STRUCTURAL_NAN), "side"),
+}
+CONTEXT = "d1"
+
+
+@lru_cache(maxsize=1)
+def column_producers() -> dict[str, tuple[str, str]]:
+    """column -> (registry feature that produces it, "decision" | "d1"), from fs-v1's feature lists, found by building
+    each feature alone on a synthetic mid frame (the registry records lookbacks per feature, not per column)."""
+    rng = np.random.default_rng(20261126)
+    n = 1_500
+    ts = pd.date_range("2015-01-05", periods=n, freq="15min", tz="UTC")
+    c = 1200 + np.cumsum(rng.normal(0, 0.5, n))
+    hi, lo = c + np.abs(rng.normal(0, 0.4, n)), c - np.abs(rng.normal(0, 0.4, n))
+    frame = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=15), "open": np.clip(
+        c + rng.normal(0, 0.1, n), lo, hi), "high": hi, "low": lo, "close": c, "spread": 0.2, "tick_count": 50.0})
+    out: dict[str, tuple[str, str]] = {}
+    for kind, feats in (("decision", F.SPEC.decision_features), (CONTEXT, F.SPEC.context_features)):
+        for f in feats:
+            cols = [x for x in build_features(frame, [f]).columns if x != "ts_utc"]
+            for col in cols:
+                out.setdefault(col if kind == "decision" else f"{CONTEXT}_{col}", (f, kind))
+    return out
+
+
+def input_lookback(tf: str, columns: Sequence[str], spec: LabelSpec = SPEC) -> pd.Timedelta:
+    """ADR 0104 4 (quant C-3 / R-a): the maximum over `columns` of the registry `lookback` of the feature producing
+    them, in decision bars x 7/5 below 1w; with any d1_ column on a tf that has the d1 context, the d1 context
+    lookback (max of `ctx_lookback_days` and the producing context feature's lookback in days x 7/5) is included."""
+    prod = column_producers()
+    cols = [c for c in columns if c != "side"]
+    unknown = sorted(set(cols) - set(prod))
+    if unknown:
+        raise ValueError(f"no fs-v1 feature produces {unknown}: the input lookback cannot be computed")
     sec = tf_seconds(tf)
-    return pd.Timedelta(seconds=spec.lookback_bars * sec * (1.0 if tf == "1w" else 7 / 5))
+    wk = 1.0 if tf == "1w" else 7 / 5
+    bars = max((REGISTRY[prod[c][0]].lookback for c in cols if prod[c][1] == "decision"), default=0)
+    t = bars * sec * wk
+    d1 = [c for c in cols if prod[c][1] == CONTEXT]
+    if d1 and sec < DAY_S:
+        ctx_bars = max(REGISTRY[prod[c][0]].lookback for c in d1)
+        t = max(t, spec.ctx_lookback_days * DAY_S, ctx_bars * DAY_S * 7 / 5)
+    return pd.Timedelta(seconds=round(t))
 
 
-def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, proxy_source: str | None = None,
-                 spec: LabelSpec = SPEC) -> pd.DataFrame:
-    """`tier` = the worst r11 tier over the session months from (decision - `tier_lookback`) to the horizon end (card
-    2.1: the decision month, the label horizon and the feature lookback); `usable` per the template rule (intraday:
-    A / A-consistent; 1d/1w barrier: A / A-consistent, T0 also B). The tiers must grade the rows' own source
-    (`<source>:<instrument>` = tiers.key, quant C3) unless `proxy_source` names the graded one; any other source is
-    `ungraded` and never usable."""
+def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, columns: Sequence[str],
+                 proxy_source: str | None = None, spec: LabelSpec = SPEC) -> pd.DataFrame:
+    """ADR 0104 4: a row is usable only if every session month its served inputs read (decision - `input_lookback`
+    of `columns`), its decision month and its label horizon are usable under the template rule (intraday: A /
+    A-consistent; 1d/1w barrier: A / A-consistent, T0 also B). `tier` = the worst tier over those months. The tiers
+    must grade the rows' own source (`<source>:<instrument>` = tiers.key, quant C3) unless `proxy_source` names the
+    graded one; any other source is `ungraded` and never usable."""
     if labels.empty:
         return labels.assign(tier=pd.Series(dtype=str), usable=pd.Series(dtype=bool))
     out = labels.copy()
@@ -429,7 +506,7 @@ def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, proxy_source: s
         graded = (key == tiers.key(inst)) | (proxy_source is not None and proxy_source == tiers.key(inst))
         if graded.any():
             g = out[graded]
-            lb = {t: tier_lookback(t, spec) for t in g["tf"].unique()}
+            lb = {t: input_lookback(t, columns, spec) for t in g["tf"].unique()}
             start = pd.DatetimeIndex(g["decision_utc"]) - pd.to_timedelta(g["tf"].map(lb).to_numpy())
             a, b = months_between(pd.Series(start), g["horizon_end_utc"])
             lo, hi = min(a.min(), b.min()), max(a.max(), b.max())
@@ -562,35 +639,48 @@ def _part_dir(cache: Path, spec: LabelSpec, instrument: str, tf: str, year: int,
     return Path(cache) / spec.spec_id / instrument / tf / f"p{phase}" / str(year)
 
 
+def label_key(parts: Mapping[str, Any], *, instrument: str, tf: str, year: int, phase: int,
+              spec: LabelSpec = SPEC) -> str:
+    """The partition key: label spec, code, instrument, tf, year, phase and `parts` (the fs-v1 partition key, the
+    minutes' sha256 and `minutes_to_utc`, so a revised or longer minute history never shares a key)."""
+    if "minutes_to_utc" not in parts or "fs_key" not in parts or "minutes_sha256" not in parts:
+        raise ValueError("label parts need fs_key, minutes_sha256 and minutes_to_utc")
+    return hashlib.sha256(json.dumps({**parts, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
+                                      "instrument": instrument, "tf": tf, "year": year, "phase": phase},
+                                     sort_keys=True, default=str).encode()).hexdigest()
+
+
+VALUE_KEYS = ("decision_utc", "side", "template")       # alignment columns repeated in the values file
+
+
 def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: str, year: int, phase: int,
-                    parts: Mapping[str, Any], spec: LabelSpec = SPEC) -> Path:
-    """Atomic parquet + manifest. The key hashes the label spec, the code, the fs-v1 partition key and the minutes."""
-    key = hashlib.sha256(json.dumps({**parts, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
-                                     "instrument": instrument, "tf": tf, "year": year, "phase": phase},
-                                    sort_keys=True, default=str).encode()).hexdigest()
+                    parts: Mapping[str, Any], spec: LabelSpec = SPEC) -> str:
+    """Atomic: `<key>.skeleton.parquet` (the outcome-blind `SKELETON` columns), `<key>.values.parquet` (the label
+    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`."""
+    key = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)
     d = _part_dir(cache, spec, instrument, tf, year, phase)
     d.mkdir(parents=True, exist_ok=True)
-    p = d / f"{key[:24]}.parquet"
-    tmp = p.with_name(p.name + f".tmp{os.getpid()}")
-    labels.to_parquet(tmp, index=False, compression="zstd")
-    os.replace(tmp, p)
+    stem = key[:24]
+    for suffix, cols in ((".skeleton.parquet", list(SKELETON)), (".values.parquet", [*VALUE_KEYS, *LABEL_VALUES])):
+        p = d / f"{stem}{suffix}"
+        tmp = p.with_name(p.name + f".tmp{os.getpid()}")
+        labels[cols].to_parquet(tmp, index=False, compression="zstd")
+        os.replace(tmp, p)
     man = {**parts, "key": key, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
            "instrument": instrument, "tf": tf, "year": year, "phase": phase, "rows": len(labels),
            "bars": int(labels["decision_utc"].nunique()) if len(labels) else 0,
            "sealed": True, "built_utc": str(pd.Timestamp.now(tz="UTC"))}
-    tmpm = d / f"{key[:24]}.json.tmp{os.getpid()}"
+    tmpm = d / f"{stem}.json.tmp{os.getpid()}"
     tmpm.write_text(json.dumps(man, indent=1, sort_keys=True, default=str))
-    os.replace(tmpm, d / f"{key[:24]}.json")
-    return p
+    os.replace(tmpm, d / f"{stem}.json")
+    return key
 
 
 def partition_exists(cache: Path, instrument: str, tf: str, year: int, phase: int, parts: Mapping[str, Any],
                      spec: LabelSpec = SPEC) -> bool:
-    key = hashlib.sha256(json.dumps({**parts, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
-                                     "instrument": instrument, "tf": tf, "year": year, "phase": phase},
-                                    sort_keys=True, default=str).encode()).hexdigest()
-    p = _part_dir(cache, spec, instrument, tf, year, phase) / f"{key[:24]}.parquet"
-    return p.exists() and p.with_suffix(".json").exists()
+    stem = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)[:24]
+    d = _part_dir(cache, spec, instrument, tf, year, phase)
+    return all((d / f"{stem}{x}").exists() for x in (".skeleton.parquet", ".values.parquet", ".json"))
 
 
 def readable(tiers: F.Tiers | None) -> bool:
@@ -598,61 +688,133 @@ def readable(tiers: F.Tiers | None) -> bool:
     return tiers is not None and tiers.sha256 in RECORDED_TIERS_SHA256
 
 
-def _paths(cache: Path, spec: LabelSpec, instrument: str, tf: str, years: Iterable[int],
-           phases: Sequence[int]) -> list[Path]:
+def _stems(cache: Path, spec: LabelSpec, instrument: str, tf: str, years: Iterable[int], phases: Sequence[int],
+           keys: Mapping[tuple[int, int], str] | None) -> list[Path]:
+    """The partition stem per (year, phase): the one whose key is `keys[(year, phase)]` (quant C-2), else the only
+    candidate of this spec and code; several candidates and no key to choose by raise (code review LOW-4)."""
     want_s, want_c = spec_hash(spec), code_hash()
     out = []
     for y in sorted(years):
         for ph in phases:
-            cands = []
-            for mp in sorted(_part_dir(cache, spec, instrument, tf, y, int(ph)).glob("*.json")):
-                man = json.loads(mp.read_text())
-                if man.get("spec_hash") == want_s and man.get("code_hash") == want_c:
-                    cands.append((str(man.get("built_utc")), mp))
+            d = _part_dir(cache, spec, instrument, tf, y, int(ph))
+            mans = [(mp, json.loads(mp.read_text())) for mp in sorted(d.glob("*.json"))]
+            cands = [mp for mp, m in mans if m.get("spec_hash") == want_s and m.get("code_hash") == want_c]
+            if keys is not None:
+                want = keys.get((y, int(ph)))
+                if want is None:
+                    raise KeyError(f"no expected key for {instrument} {tf} p{ph} {y}")
+                cands = [mp for mp, m in mans if m.get("key") == want and mp in cands]
             if not cands:
-                raise FileNotFoundError(f"no dl-v1 partition {instrument} {tf} p{ph} {y} for this spec and code")
-            out.append(max(cands)[1].with_suffix(".parquet"))
+                raise FileNotFoundError(f"no dl-v1 partition {instrument} {tf} p{ph} {y} under this spec, code"
+                                        + (" and data key" if keys is not None else ""))
+            if len(cands) > 1:
+                raise ValueError(f"dl-v1 {instrument} {tf} p{ph} {y}: {len(cands)} partitions and no data key to choose "
+                                 "by: pass keys (label_key of the current fs-v1 key and minutes)")
+            out.append(cands[0].with_suffix(""))
     return out
 
 
 def skeleton(cache: Path, *, instrument: str, tf: str, years: Iterable[int], phases: Sequence[int] = (0,),
-             spec: LabelSpec = SPEC) -> pd.DataFrame:
-    """The outcome-blind columns only (`SKELETON`: never a label value), for counts, weights and n_eff. Allowed on a
-    sealed store: a count is not a label read (it reads the decision, the horizon and the tier, as the card's 2.2)."""
-    cols = list(SKELETON)
-    parts = [pd.read_parquet(p, columns=cols) for p in _paths(cache, spec, instrument, tf, years, phases)]
-    return _typed(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame(columns=cols)
+             keys: Mapping[tuple[int, int], str] | None = None, spec: LabelSpec = SPEC) -> pd.DataFrame:
+    """The outcome-blind columns only (`SKELETON`: never a label value; the values live in another file), for counts,
+    weights and n_eff. Allowed on a sealed store: a count is not a label read."""
+    stems = _stems(cache, spec, instrument, tf, years, phases, keys)
+    parts = [pd.read_parquet(f"{st}.skeleton.parquet") for st in stems]
+    return _typed(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame(columns=list(SKELETON))
+
+
+# confirm / test_old per unit (quant C-1): a label read touching them needs a booked read id
+INDEX_ENERGY = frozenset({"US500", "USTEC", "UK100", "DE40", "US30", "XTIUSD", "USINDEX"})
+
+
+def judged_spans(instrument: str) -> tuple[tuple[pd.Timestamp, pd.Timestamp], ...]:
+    if instrument in INDEX_ENERGY:
+        return ((pd.Timestamp("2022-01-01", tz="UTC"), WN.HOLDOUT_FROM),)
+    return (WN.SPANS[WN.Window.CONFIRM], WN.SPANS[WN.Window.TEST_OLD])
+
+
+def learn_end(instrument: str) -> pd.Timestamp:
+    return pd.Timestamp("2022-01-01", tz="UTC") if instrument in INDEX_ENERGY else WN.SPANS[WN.Window.LEARN][1]
+
+
+def booked(ledger: Path, read_id: str, frozen_spec_hash: str) -> dict[str, Any]:
+    """The read-once ledger row (`windows.READS_LEDGER`, written before the read by `windows.record_read_once`) whose
+    key is `read_id`, for a confirm or test_old window, with `ref.spec_hash` = the frozen spec hash. Else raises."""
+    p = Path(ledger)
+    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    hit = [r for r in rows if r.get("key") == read_id and r.get("window") in (WN.Window.CONFIRM.value,
+                                                                               WN.Window.TEST_OLD.value)]
+    if not hit:
+        raise PermissionError(f"read {read_id!r} is not booked in {p} for confirm or test_old")
+    if not any((r.get("ref") or {}).get("spec_hash") == frozen_spec_hash for r in hit):
+        raise PermissionError(f"read {read_id!r} is booked under another spec hash than {frozen_spec_hash[:12]}")
+    return hit[-1]
+
+
+def _touches(lo: np.ndarray, hi: np.ndarray, spans: Iterable[tuple[pd.Timestamp, pd.Timestamp]]) -> np.ndarray:
+    hit = np.zeros(len(lo), bool)
+    for a, b in spans:
+        hit |= (lo < b.value) & (hi > a.value)
+    return hit
 
 
 def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], tiers: F.Tiers | None,
-                purpose: str = "judge", phases: Sequence[int] = (0,), window: tuple[pd.Timestamp, pd.Timestamp],
+                columns: Sequence[str] | None, keys: Mapping[tuple[int, int], str],
+                window: tuple[pd.Timestamp, pd.Timestamp], purpose: str = "judge", phases: Sequence[int] = (0,),
                 templates: Sequence[str] | None = None, proxy_source: str | None = None,
+                booked_read: str | None = None, ledger: Path | None = None, frozen_spec_hash: str | None = None,
                 spec: LabelSpec = SPEC) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Label rows for a booked read. Refuses: the holdout (any label span), a sealed store (an ungraded source before
-    its grade is recorded: gold Dukascopy until D-1), phase != 0 for a judged read, no tiers. Drops (counted in the
-    manifest): rows not usable under their tier, rows outside `window` (decision before its start or horizon after its
-    end), and for training reserve-week rows (N12)."""
+    """Label rows for a booked read. Refuses: a read without tiers or without `columns` (the served column set, ADR
+    0104 4); a sealed store (tiers sha256 not recorded in ADR 0085 A4); phase != 0 for a judged read; the holdout (any
+    label span); a `window` touching the unit's confirm or test_old span without `booked_read` booked in `ledger`
+    under `frozen_spec_hash` (quant C-1). Reads only the partitions of `keys` (quant C-2). Drops (counted): rows
+    outside `window`, rows touching confirm/test_old on an unbooked read (learn reads end at the learn end),
+    tier-unusable rows under `columns`, reserve-week rows of a training read (N12)."""
     if purpose not in ("judge", "train"):
         raise ValueError(f"purpose {purpose!r}: judge or train")
     if purpose == "judge" and any(int(p) != 0 for p in phases):
         raise ValueError("a judged read loads phase 0 only: offset candles are training augmentation")
     if tiers is None:
         raise ValueError("dl-v1 labels load with the r11 tiers (ADR 0085 A4, quant C3): pass tiers")
-    paths = _paths(cache, spec, instrument, tf, years, phases)
+    if not columns:
+        raise ValueError("dl-v1 judge and train reads name their served column set (ADR 0104 4): pass columns")
+    lo, hi = pd.Timestamp(window[0]), pd.Timestamp(window[1])
+    spans = judged_spans(instrument)
+    wants_judged = bool(_touches(np.array([lo.value]), np.array([hi.value]), spans)[0])
+    book = None
+    if wants_judged:
+        if booked_read is None or ledger is None or frozen_spec_hash is None:
+            raise PermissionError(f"dl-v1 {instrument}: window {lo.date()}..{hi.date()} touches confirm/test_old; "
+                                  "a booked read id, its ledger and the frozen spec hash are required (quant C-1)")
+        book = booked(ledger, booked_read, frozen_spec_hash)
+    stems = _stems(cache, spec, instrument, tf, years, phases, keys)
     if not readable(tiers):
         raise SealedStore(f"dl-v1 {instrument} {tf}: tiers sha256 {tiers.sha256[:12]} is not recorded in ADR 0085 A4 "
                           "(card ruling 5): label values are sealed; counts read `skeleton`")
-    lab = _typed(pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True))
+    frames = []
+    for st in stems:
+        sk = pd.read_parquet(f"{st}.skeleton.parquet")
+        va = pd.read_parquet(f"{st}.values.parquet")
+        if len(sk) != len(va) or not all((sk[k].to_numpy() == va[k].to_numpy()).all() for k in VALUE_KEYS):
+            raise ValueError(f"{st}: skeleton and values files are not row-aligned")
+        frames.append(pd.concat([sk, va[list(LABEL_VALUES)]], axis=1))
+    lab = _typed(pd.concat(frames, ignore_index=True))
     holdout_guard.refuse_labels(lab, what=f"dl-v1 {instrument} {tf}")
     if purpose == "judge" and (lab["phase"] != 0).any():
         raise ValueError("a judged read holds a phase != 0 row")
-    lab = attach_tiers(lab, tiers, proxy_source=proxy_source, spec=spec)
-    meta: dict[str, Any] = {"tier_proxy": proxy_source, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
-                            "tiers_sha256": tiers.sha256, "r11_id": tiers.r11_id, "rows_read": len(lab),
-                            "purpose": purpose, "window": [str(window[0]), str(window[1])]}
-    lo, hi = pd.Timestamp(window[0]), pd.Timestamp(window[1])
-    inside = (lab["decision_utc"] >= lo).to_numpy() & (lab["horizon_end_utc"] <= hi).to_numpy()
+    lab = attach_tiers(lab, tiers, columns=columns, proxy_source=proxy_source, spec=spec)
+    meta: dict[str, Any] = {"spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
+                            "tiers_sha256": tiers.sha256, "r11_id": tiers.r11_id, "tier_proxy": proxy_source,
+                            "columns": list(columns), "keys": dict((f"{y}:{p}", k) for (y, p), k in keys.items()),
+                            "booked_read": booked_read if book is not None else None, "rows_read": len(lab),
+                            "purpose": purpose, "window": [str(lo), str(hi)]}
+    d, e = _ns(lab["decision_utc"]), _ns(lab["horizon_end_utc"])
+    inside = (d >= lo.value) & (e <= hi.value)
     meta["dropped_window"] = int((~inside).sum())
+    if book is None:
+        judged = _touches(d, e, spans)
+        meta["dropped_judged"] = int((inside & judged).sum())
+        inside &= ~judged
     usable = lab["usable"].to_numpy(bool)
     meta["dropped_tier"] = int((inside & ~usable).sum())
     keep = inside & usable
@@ -667,8 +829,9 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     return out, meta
 
 
-__all__ = ["CACHE", "COLUMNS", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
+__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "column_producers", "input_lookback", "judged_spans",
+           "label_key", "learn_end", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
            "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "code_hash",
            "decision_bars", "embargo", "entry_and_horizon", "event_index", "first_passage", "iso_reserve",
-           "label_rows", "load_labels", "readable", "tier_lookback", "n_eff", "net_r", "partition_exists", "purge", "skeleton", "spec_hash",
+           "label_rows", "load_labels", "readable", "n_eff", "net_r", "partition_exists", "purge", "skeleton", "spec_hash",
            "uniqueness", "weights", "write_partition"]

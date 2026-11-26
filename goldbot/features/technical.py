@@ -88,7 +88,7 @@ def f_returns(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out.frame()
 
 
-@feature("atr", "volatility", lookback=200)
+@feature("atr", "volatility", lookback=459)    # Wilder 100: 1 %-weight horizon (test_feature_lookback_ewm)
 def f_atr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     a = atr(df, 14)
     out = Columns(df.index, {"atr14": a, "atr14_pct": a / df["close"]})
@@ -168,7 +168,7 @@ def _vol_tercile(rv: np.ndarray, window: int, min_periods: int, chunk: int = 819
 
 
 # --------------------------------------------------------------------------- moving averages
-@feature("moving_averages", "trend", lookback=300,
+@feature("moving_averages", "trend", lookback=461,   # EMA 200: 1 %-weight horizon
          signed={r"dist_(ema|sma|hma)\d+_atr": 0.0, r"slope_ema\d+": 0.0, "ribbon_state": 0.0, "sma50_ema50_cross": 0.0})
 def f_mas(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Several MA families and lengths; distances are in ATR so they compare across regimes."""
@@ -256,7 +256,7 @@ def f_breakout(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- microstructure
-@feature("microstructure", "microstructure", lookback=50)
+@feature("microstructure", "microstructure", lookback=63)
 def f_micro(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = Columns(df.index)
     out["spread_atr"] = df["spread"] / atr(df, 14)

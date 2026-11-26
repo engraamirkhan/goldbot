@@ -57,24 +57,52 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
    - n_eff follows card 2.2 on the measured u:
      - holds under a day: sum over session days of S_d / (1 + (max(S_d, 1) - 1) x 0.25);
      - holds of a day or more: sum of u.
-4. **Tiers.** A row's tier is the worst r11 tier over the session months from (decision − feature lookback) to the
-   horizon end.
-   - The feature lookback is 100 decision bars (x 7/5 below 1w). It is not the 800-bar fs-v1 window, whose start is
-     provenance only (fs-v1 `tier_window`).
-   - Measured on the first run: checking the whole 800-bar window cut EURUSD 1d/1w n_eff to 56/0, against 277/192
-     from the decision month to the horizon. **Quant ruling requested on which lookback the check reads.**
-   - Intraday: A / A-consistent for every template.
-   - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
-   - The tiers must grade the rows' own source, `<source>:<instrument>` (quant C3 on #462), unless the caller passes
-     a `proxy_source`. The D-1 served file (`tiers_served_r11-v2.1.csv`, sha256 ff653ea7..., PR #467) grades
-     dukascopy:XAUUSD and histdata:<FX>.
-   - **Every store is sealed** (card ruling 5, test 21). Labels are produced and counted outcome-blind (`skeleton`).
-     `load_labels` raises `SealedStore` until the tiers sha256 is in `RECORDED_TIERS_SHA256`, and a test holds every
-     member of that set to ADR 0085's text.
-5. **Reads.** `load_labels` behaves as follows:
-   - refuses: the holdout (any label span); a judged read with phase != 0; a read with no tiers; a sealed source;
-   - drops and counts: rows outside the window (decision before its start, or horizon after its end); tier-unusable
-     rows; reserve-week rows of a training read (N12).
+4. **Tiers.** A row's tier is the worst r11 tier over the months below.
+   - **Usability rule (quant C-3 / R-a on #472, verbatim):** "A row is usable only if every session month its served
+     inputs read, its decision month and its label horizon are usable under the template rule. The input lookback
+     is computed at read time from the requested column set: `load_labels(columns=...)` is required for judge and
+     train reads. The lookback is the maximum over those columns of the registry `lookback` of the feature producing
+     them (a test holds each registry lookback ≥ the 1 %-weight horizon of any EWM it uses), in decision bars × 7/5
+     below 1w. If any `d1_` column is requested, the d1 context lookback (`ctx_lookback_days`) is added. The 800-bar
+     fs-v1 window start stays provenance only. The column set is the unit's served or level-order prefix, fixed
+     label-blind at Stage 0, so the rule is mechanical. `skeleton` counts are reported per column set (core-6,
+     core-12, P30). Fixed 2026-11-26, before any label read."
+   - **How it is implemented:**
+     - The d1 context term is the longer of `ctx_lookback_days` and the producing context feature's registry
+       lookback in days × 7/5. It applies only on tfs that carry the d1 context (below 1d).
+     - `tests/test_feature_lookback_ewm.py` raised four registry lookbacks to their 1 %-weight EWM horizon:
+       `atr` 200 → 459, `moving_averages` 300 → 461, `microstructure` 50 → 63, `gaps` 20 → 63.
+   - **Template rule:**
+     - intraday: A / A-consistent for every template;
+     - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
+   - **Sources.** The tiers must grade the rows' own source, `<source>:<instrument>` (quant C3 on #462), unless the
+     caller passes a `proxy_source`. The D-1 served file (`tiers_served_r11-v2.1.csv`, sha256 ff653ea7..., PR #467)
+     grades dukascopy:XAUUSD and histdata:<FX>.
+   - **Every store is sealed** (card ruling 5, test 21).
+     - Labels are produced and counted outcome-blind (`skeleton`).
+     - The label values sit in their own `.values.parquet` file, apart from the skeleton (code review LOW-2).
+     - `load_labels` raises `SealedStore` until the tiers sha256 is in `RECORDED_TIERS_SHA256`. A test requires a
+       full 64-hex sha on an ADR 0085 line that records a tiers file.
+5. **Reads.** `load_labels` reads only the partitions whose key equals `label_key(parts)`: the current fs-v1
+   partition key, the minutes' sha256 and `minutes_to_utc` (quant C-2, code review LOW-4). Several candidates with no
+   key to choose by raise.
+   - It refuses:
+     - a read without tiers or without `columns`;
+     - a sealed store;
+     - a judged read with phase != 0;
+     - the holdout (any label span);
+     - a window touching the unit's confirm or test_old span without a `booked_read` id. The id must be booked in the
+       read-once ledger (`windows.record_read_once`) under the frozen spec hash, and it goes into the manifest (quant
+       C-1).
+   - The spans are per unit: gold/FX confirm 2018-01..2025-09 and test_old 2006-02..2009; index-energy judge
+     2022-01..2025-09.
+   - It drops and counts:
+     - rows outside the window;
+     - rows touching a judged span on an unbooked read (learn reads end at the learn end);
+     - tier-unusable rows under `columns`;
+     - reserve-week rows of a training read (N12).
+   - The d0 floor reads only minutes visible by the decision. Decision bars use `drop_late`, as fs-v1 does (code
+     review LOW-1).
 6. **Folds (C6).** `purge` is `feature_store.purge`, one rule repo-wide. A training row goes when its
    [window_from_utc, horizon_end_utc] overlaps a test row's [decision_utc, horizon_end_utc + embargo], whatever its
    phase.
