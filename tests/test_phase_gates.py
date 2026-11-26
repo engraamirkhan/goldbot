@@ -9,10 +9,12 @@ import pandas as pd
 import pytest
 
 from goldbot.config import load_settings
+from goldbot.instruments import GOLD
 from goldbot.ops import accounts, gates_phase, health
 from goldbot.ops.cost_imputation import CostImputer
 from goldbot.ops.gates_phase import ClosedTrade, GateReport, evaluate_gates
 from goldbot.ops.health import AccountRef, HealthContext
+from goldbot.research.benchmarks import BuyHoldRead
 
 NOW = pd.Timestamp("2026-10-07 14:00", tz="UTC")
 SETTINGS = load_settings()
@@ -35,9 +37,14 @@ def trade(ret: float, *, mode: str = "demo", broker: str = "icmarkets", days_ago
     costs: dict[str, Any] = (dict(commission=0.0, swap=0.0, pnl_basis="net") if gross_held_days is None else
                              dict(pnl_basis="gross", side=1, lots=0.1, entry_price=2_000.0,
                                   entry_utc=exit_utc - pd.Timedelta(days=gross_held_days)))
+    # ADR 0106 paper items (as-if sizing, cost share): long at $2,000 an hour before the exit, a $10 stop, a 20-point
+    # ($0.20) decision spread, and a net row's fill 1 bp better than its net return (its commission and swap)
+    fills = dict(side=1, entry_price=2_000.0, entry_utc=exit_utc - pd.Timedelta(hours=1), initial_sl=1_990.0,
+                 r=ret * 2_000.0 / 10.0, decision_spread_points=20.0,
+                 exit_price=2_000.0 * (1 + ret + (0.0001 if gross_held_days is None else 0.0)))
     return ClosedTrade(account_id=account or f"{broker}-{mode}", broker=broker, mode=mode,  # type: ignore[arg-type]
                        exit_utc=exit_utc, ret=ret, pnl=pnl if pnl is not None else ret * equity, equity_before=equity,
-                       **costs)
+                       **{**fills, **costs})
 
 
 def trades_over(n: int, ret: float | list[float], first_days_ago: float, last_days_ago: float, **kw: Any) -> list[ClosedTrade]:
@@ -133,11 +140,18 @@ def clean_cpcv(trials: Path, now: pd.Timestamp = NOW) -> None:
                                 now=now.to_pydatetime())
 
 
+# ADR 0106: gold's buy-and-hold over the paper window, below the paper book's as-if return, and gold's reference volume
+BUY_HOLD = {GOLD: BuyHoldRead(symbol=GOLD, start_utc=PAPER_START, end_utc=NOW, days=500, nights=700, entry_price=2_000.0,
+                              exit_price=2_100.0, gross_ret=0.05, cost_frac=0.0002, financing_frac=-0.04,
+                              net_ret=0.0098, sharpe_ann=0.2)}
+ADV = {GOLD: 1e11}
+
+
 def report(state: Path, trials: Path, now: pd.Timestamp = NOW, *, cpcv: bool = True) -> GateReport:
     """`cpcv`: attach clean CPCV evidence first (`clean_cpcv`); False leaves the evidence as the test wrote it."""
     if cpcv:
         clean_cpcv(trials, now)
-    return evaluate_gates(state, SETTINGS, now, trials_path=trials)
+    return evaluate_gates(state, SETTINGS, now, trials_path=trials, buy_hold=BUY_HOLD, adv_usd=ADV)
 
 
 def item(rep: GateReport, gate: str, name: str) -> bool:
@@ -641,7 +655,8 @@ def test_a_gross_row_that_cannot_be_priced_fails_the_expectancy_items_closed(tmp
     state, trials = full_state(tmp_path)
     trades = gates_phase.load_closed_trades(state)[0]
     unpriced = trade(0.01, days_ago=400.5).model_copy(update={"pnl_basis": "gross", "commission": None,
-                                                              "swap": None, "entry_price": None})
+                                                              "swap": None, "entry_price": None,
+                                                              "exit_price": None})
     write_trades(state, trades + [unpriced])
     rep = report(state, trials)
     assert not item(rep, "paper_to_tiny_live", "paper_expectancy")
@@ -690,7 +705,7 @@ def test_the_gross_share_item_decides_the_gate_when_the_owner_sets_a_limit(tmp_p
     mixed = paper[n_gross:] + paid(trades_over(n_gross, 0.0011, 600, 500, gross_held_days=0.1))
     write_trades(state, mixed + live)
     settings = SETTINGS.model_copy(update={"gates": CFG.model_copy(update={"max_gross_share": 0.05})})
-    rep = evaluate_gates(state, settings, NOW, trials_path=trials)
+    rep = evaluate_gates(state, settings, NOW, trials_path=trials, buy_hold=BUY_HOLD, adv_usd=ADV)
     it = item_of(rep, "paper_to_tiny_live", "paper_gross_share")
     assert it.required and it.met is met and gate_met(rep, "paper_to_tiny_live") is met
     assert f"{n_gross} of 150" in it.evidence
@@ -728,7 +743,8 @@ def test_an_unpriced_pooled_row_breaches_the_stop_rule_fail_closed():
     s = evaluate_stop_rule([*ok, btc], PAPER_START, CAP, CFG, NOW)
     assert s.breached and s.breach == ["unpriced"] and s.imputed.n_unpriced == 1
     assert "could not be priced" in s.reasons[0]
-    legacy = trade(0.001, days_ago=4.0, gross_held_days=0.1).model_copy(update={"entry_price": None})
+    legacy = trade(0.001, days_ago=4.0, gross_held_days=0.1).model_copy(update={"entry_price": None,
+                                                                                "exit_price": None})
     s = evaluate_stop_rule([*ok, legacy], PAPER_START, CAP, CFG, NOW)    # gold's unpriced rows: reported, as before
     assert not s.breached and s.imputed.n_unpriced == 1
 

@@ -7,7 +7,14 @@ met extends the phase rather than being waived". Its thresholds, verbatim from t
 * backtest_to_paper: DSR >= 1.0 on the true trial count; positive in 3 separate years; >= 500 backtest trades;
   live-tick spread model; CPCV/PBO evidence for the quarter, read only (ADR 0083 amendment, research/cpcv_gate.py).
 * paper_to_tiny_live: >= 150 paper trades; expectancy within 50% of backtest; fills within 30% of target; chaos drill
-  passed.
+  passed. ADR 0106 (owner 2026-11-26) adds the goals of record, "2-3 months of paper trading meeting these targets
+  before real money" (the 182-day minimum stays, stricter): `as_if_real_money` (the paper record re-sized as one
+  real-money account under 1 % risk / 2 % daily stop / 15 % drawdown / 1 % of daily volume breaches nothing, and at least
+  `paper_min_trades` trades could be sized: below the minimum lot they are reported and not counted),
+  `paper_sharpe` (as-if daily Sharpe above 1.0), `beats_buy_and_hold` ("Beats buy-and-hold of the same market over 6+
+  months, after costs": the as-if return over the paper window above every traded instrument's buy-and-hold net of a
+  round trip and the swap, research/benchmarks.py) and `paper_cost_share` ("Trading costs under one third of gross
+  profit").
 * tiny_live_to_full_size: >= 300 live trades; expectancy within 40% of paper; drawdown under 1.5x backtest; brokers
   within 15%.
 
@@ -37,7 +44,8 @@ What this module does and does not do:
 * It READS evidence: state/closed_trades.jsonl (one ClosedTrade per line: the paper and live record), the trial
   registry (DSR, positive years, backtest trades), state/costs_<account>.json (spread from own ticks, measured fills),
   state/gate_evidence.json (leakage audit, feed agreement, chaos drill: recorded with `run.py gate-evidence`),
-  state/shadow_book.json (informational) and state/phase_state.json (which gates are recorded and when).
+  state/shadow_book.json (informational) and state/phase_state.json (which gates are recorded and when); `run.py
+  gates` also reads gold's Dukascopy 1h bars from the local store for the buy-and-hold benchmark (`store_buy_hold`).
 * It WRITES only state/gate_report.json (the last report) and, through `record_evidence`, state/gate_evidence.json.
 * It never records a gate, never edits phase_state.json or accounts.yaml, never unlocks a live account, never halts,
   closes or resizes anything. Recording stays `run.py record-gate` (accounts.record_gate) and live still needs
@@ -53,6 +61,8 @@ import argparse
 import json
 import math
 import os
+from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -63,12 +73,24 @@ from scipy import stats
 
 from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json, write_atomic
 from goldbot.config import GateSettings, Settings
-from goldbot.instruments import GOLD
+from goldbot.data.timeutil import opportunity_day
+from goldbot.instruments import GOLD, point_of
 from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
 from goldbot.research import cpcv, cpcv_gate
+from goldbot.research.as_if_sizing import (
+    RM_DAILY_STOP,
+    RM_DD_HALT,
+    RM_MAX_ADV_SHARE,
+    RM_MAX_RISK_PER_TRADE,
+    AsIfInput,
+    AsIfReport,
+    as_if_real_money,
+)
+from goldbot.research.benchmarks import SESSION_DAYS_PER_YEAR, BuyHoldRead, buy_and_hold
 from goldbot.research.gates import current_dsr
 from goldbot.research.metrics import max_drawdown
+from goldbot.research.promotion import session_days
 from goldbot.research.registry import (
     TrialRegistry,
     costs_recorded,
@@ -91,6 +113,9 @@ EVIDENCE_NAMES = ("shuffle_auc", "asof_violations", "feed_mismatch_share", "chao
 MIN_TRADES_FOR_BOUND = 2           # fewer pooled trades: no lower bound (and no interval) can be estimated
 MAX_INCIDENTS = 5                  # stop-rule incidents listed (worst first); `incident_count` has them all
 TRADES_UNREADABLE = "closed-trade record"   # prefix of the error an unreadable closed-trade line gives
+# ADR 0106 cost share: the most of the paper trades whose cost cannot be measured (no side, fill prices or decision
+# spread) before the item fails closed; the share is measured on the rest (one in twenty, as `max_gross_share`'s 5%)
+COST_SHARE_MAX_UNMEASURED = 0.05
 NEVER_UNLOCKS = ("This report never records a gate or unlocks live: record with `run.py record-gate`, "
                  "enable live with `accounts unlock-live` and the typed phrase.")
 
@@ -507,6 +532,115 @@ def _fmt(v: float | None, spec: str = ".5f") -> str:
     return "n/a" if v is None else format(v, spec)
 
 
+# ---------------------------------------------------------------------------------------------- ADR 0106 paper goals
+def as_if_inputs(trades: list[ClosedTrade], imputer: CostImputer) -> tuple[list[AsIfInput], int]:
+    """The trades as the as-if replay reads them (research/as_if_sizing.py), with a gross row's R less its imputed
+    cost (unknown when the charge has no R); and how many had no entry time or price (they cannot be replayed)."""
+    out: list[AsIfInput] = []
+    unmapped = 0
+    for t in trades:
+        if t.entry_utc is None or t.entry_price is None or not t.entry_price > 0:
+            unmapped += 1
+            continue
+        c = imputer.charge(t)
+        r = None if t.r is None or c.r is None else t.r - c.r
+        out.append(AsIfInput(entry_utc=t.entry_utc, exit_utc=t.exit_utc, side=t.side, entry_price=t.entry_price,
+                             initial_sl=t.initial_sl, r=r, symbol=t.symbol or GOLD,
+                             spread_points=t.decision_spread_points))
+    return out, unmapped
+
+
+def daily_sharpe(daily: Mapping[date, float], start: date, end: date) -> float | None:
+    """Annualised Sharpe of a daily return series on every session day in [start, end] (a day without a close is 0),
+    SESSION_DAYS_PER_YEAR a year: the unit of the buy-and-hold Sharpe. None below two days or without dispersion."""
+    grid = sorted({*session_days(start, end), *(d for d in daily if start <= d <= end)})
+    x = np.array([float(daily.get(d, 0.0)) for d in grid])
+    if len(x) < 2:
+        return None
+    sd = float(np.std(x, ddof=1))
+    return float(np.mean(x)) / sd * math.sqrt(SESSION_DAYS_PER_YEAR) if sd > 0 else None
+
+
+def cost_share(trades: list[ClosedTrade], imputer: CostImputer) -> tuple[float | None, int]:
+    """(costs over gross profit, trades whose cost could not be measured), in per-trade return units (currency-free,
+    each trade weighted as the expectancy items weigh it). A trade's cost is its fill-to-fill price return less its net
+    return (commission, swap and any imputed charge) plus the decision quote's spread over the entry price (the round
+    trip's spread from mid); gross = net + cost. Exit slippage beyond the fills is inside the fills. None when the
+    measured gross is not positive (no gross profit to share). A trade without a side, fill prices or the decision
+    spread is unmeasured."""
+    cost = gross = 0.0
+    unmeasured = 0
+    for t in trades:
+        if (t.side not in (1, -1) or t.entry_price is None or not t.entry_price > 0 or t.exit_price is None
+                or t.decision_spread_points is None):
+            unmeasured += 1
+            continue
+        try:
+            point = point_of(t.symbol or GOLD)
+        except KeyError:
+            unmeasured += 1
+            continue
+        price_ret = t.side * (t.exit_price - t.entry_price) / t.entry_price
+        net = imputer.net_ret(t)
+        c = price_ret - net + t.decision_spread_points * point / t.entry_price
+        cost += c
+        gross += net + c
+    return (cost / gross if gross > 0 else None), unmeasured
+
+
+def _as_if_item(rep: AsIfReport, unmapped: int, cfg: GateSettings) -> GateItem:
+    met = rep.clean and rep.n_sized >= cfg.paper_min_trades
+    return GateItem(name="as_if_real_money", met=met,
+                    evidence=rep.text() + (f"; {unmapped} without an entry time or price" if unmapped else ""),
+                    need=f"re-sized on ${cfg.as_if_equity_usd:,.0f} as one real-money account: no breach of "
+                         f"{RM_MAX_RISK_PER_TRADE:.0%}/trade, {RM_DAILY_STOP:.0%} daily stop, {RM_DD_HALT:.0%} drawdown, "
+                         f"{RM_MAX_ADV_SHARE:.0%} of daily volume, and >= {cfg.paper_min_trades} sized trades "
+                         "(ADR 0106 decision 2)",
+                    threshold="as_if_equity_usd",
+                    progress=GateProgress(value=rep.n_sized, target=cfg.paper_min_trades, unit="trades"))
+
+
+def _buy_hold_item(rep: AsIfReport, symbols: list[str], buy_hold: Mapping[str, BuyHoldRead], p_days: float,
+                   cfg: GateSettings) -> GateItem:
+    ret = rep.equity_end / rep.equity_start - 1.0
+    missing = [s for s in symbols if s not in buy_hold]
+    reads = [buy_hold[s] for s in symbols if s in buy_hold]
+    best = max((b.net_ret for b in reads), default=None)
+    met = (p_days >= cfg.paper_min_days and not missing and best is not None and ret > best)
+    shown = "; ".join(b.text() for b in reads)
+    if missing:
+        shown = "; ".join(filter(None, [shown, f"no buy-and-hold read for {', '.join(missing)}"]))
+    return GateItem(name="beats_buy_and_hold", met=met,
+                    evidence=f"as-if paper return {ret:+.2%} over {p_days:.0f} days vs {shown or 'no paper trades'}",
+                    need=f"above the buy-and-hold of every traded instrument after a round trip and the swap, over >= "
+                         f"{cfg.paper_min_days} paper days (ADR 0106 goal)", threshold="paper_min_days")
+
+
+def store_buy_hold(settings: Settings, start: pd.Timestamp | None, end: pd.Timestamp) -> dict[str, BuyHoldRead]:
+    """Gold's buy-and-hold over [start, end] from the local store: the mid close of each session day's last
+    Dukascopy 1h bar, one round trip at the settings' extra cost (slippage prior and commission; the spread is left out,
+    so the benchmark's cost errs low and the item strict), the settings swap prior. {} before the paper clock starts,
+    without a store, or without bars (the item is then not met). Read only: a missing store root is never created."""
+    from goldbot.data.store import Store
+    from goldbot.execution.costs import settings_extra_cost_usd, settings_swap
+    root = Path(settings.data_root).expanduser()
+    if start is None or not root.exists():
+        return {}
+    try:
+        bars = Store(root).read("bars_1h", source="dukascopy", symbol=GOLD, start=start, end=end,
+                                columns=["ts_utc", "bid_close", "ask_close"])
+    except (OSError, ValueError, KeyError, TimeoutError):
+        return {}
+    if bars.empty:
+        return {}
+    ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True)) + pd.Timedelta(hours=1)    # the bar's close
+    mid = pd.Series(((bars["bid_close"] + bars["ask_close"]) / 2).to_numpy(float), index=ts)
+    last = mid.groupby(opportunity_day(ts)).tail(1)
+    bh = buy_and_hold(last, symbol=GOLD, round_trip_per_unit=settings_extra_cost_usd(settings),
+                      swap=settings_swap(settings))
+    return {GOLD: bh} if bh is not None else {}
+
+
 # ---------------------------------------------------------------------------------------------- stop rule (P6)
 def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | None, weekly_cap: float,
                        cfg: GateSettings, now: pd.Timestamp, *, imputer: CostImputer) -> StopRuleStatus:
@@ -600,8 +734,12 @@ def _gross_share_item(name: str, note: ImputationSummary, limit: float | None) -
     return GateItem(name=name, met=share <= limit, evidence=evidence, need=f"<= {limit:.0%} of trades gross")
 
 
-def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trials_path: Path | None = None) -> GateReport:
-    """Every gate's items against the evidence; never writes anything (see `write_report`)."""
+def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trials_path: Path | None = None, *,
+                   buy_hold: Mapping[str, BuyHoldRead] | None = None,
+                   adv_usd: Mapping[str, float] | None = None) -> GateReport:
+    """Every gate's items against the evidence; never writes anything (see `write_report`). `buy_hold`: buy-and-hold
+    over the paper window per instrument (`store_buy_hold`); `adv_usd`: reference daily volume per instrument, USD
+    (ADR 0106 lane 1's reference). Either missing leaves its ADR 0106 item unmet (fail closed)."""
     state_dir = Path(state_dir)
     cfg, cap = settings.gates, settings.risk.weekly_cap
     errors: list[str] = []
@@ -733,6 +871,28 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
         _evidence_item(ev, "chaos_drill", "passed", lambda e: e.get("passed") is True),
         _incident_item(stop, cap),
         _gross_share_item("paper_gross_share", p_note, cfg.max_gross_share),
+    ]
+    # ADR 0106: the goals of record on the paper record as if traded on real money
+    inputs, unmapped = as_if_inputs(paper, imputer)
+    as_if = as_if_real_money(inputs, equity=cfg.as_if_equity_usd, adv_usd=adv_usd or {})
+    d0 = opportunity_day(pd.DatetimeIndex([paper_start]))[0].date() if paper_start is not None else None
+    d1 = opportunity_day(pd.DatetimeIndex([now]))[0].date()
+    sharpe = daily_sharpe(as_if.daily, d0, d1) if d0 is not None else None
+    share, unmeasured = cost_share(paper, imputer)
+    share_ok = share is not None and (unmeasured <= COST_SHARE_MAX_UNMEASURED * len(paper))
+    items += [
+        _as_if_item(as_if, unmapped, cfg),
+        GateItem(name="paper_sharpe", met=sharpe is not None and sharpe > cfg.paper_min_sharpe,
+                 evidence=f"as-if daily Sharpe {_fmt(sharpe, '.2f')} over the session days since backtest_to_paper",
+                 need=f"> {cfg.paper_min_sharpe} (ADR 0106 goal)", threshold="paper_min_sharpe"),
+        _buy_hold_item(as_if, sorted({t.symbol or GOLD for t in paper}), buy_hold or {}, p_days, cfg),
+        GateItem(name="paper_cost_share", met=share_ok and share is not None and share <= cfg.paper_max_cost_share,
+                 evidence=(f"costs {_fmt(share, '.1%')} of gross on {len(paper) - unmeasured} measured trades"
+                           + (f" ({unmeasured} of {len(paper)} unmeasured: no side, fill prices or decision spread)"
+                              if unmeasured else "")),
+                 need=f"<= {cfg.paper_max_cost_share:.1%} of gross profit, at most "
+                      f"{COST_SHARE_MAX_UNMEASURED:.0%} of trades unmeasured (ADR 0106 goal)",
+                 threshold="paper_max_cost_share"),
         _shadow_item(state_dir),
     ]
     gates.append(_status(2, passed, items, when))
@@ -864,7 +1024,11 @@ def main(argv: list[str], state_dir: str | Path = "state", settings: Settings | 
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--no-write", action="store_true")
     args = ap.parse_args(argv)
-    rep = evaluate_gates(Path(state_dir), settings or load_settings(), now if now is not None else pd.Timestamp.now("UTC"))
+    settings = settings or load_settings()
+    now = now if now is not None else pd.Timestamp.now("UTC")
+    _, when, _ = phase_record(Path(state_dir))
+    rep = evaluate_gates(Path(state_dir), settings, now,
+                         buy_hold=store_buy_hold(settings, when.get("backtest_to_paper"), now))
     print(rep.model_dump_json(indent=1) if args.json else render(rep))
     if not args.no_write:
         write_report(Path(state_dir), rep)
