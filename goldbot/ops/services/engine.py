@@ -708,6 +708,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
                               swap_prior=settings_swap(settings), instruments=instruments, boot_id=boot_id,
+                              shadow_score=settings.research.self_retrain.shadow_score,   # ADR 0101
+                              model_gate=acc.model_gate and acc.mode == "demo",            # ADR 0101: demo only
                               cost_record=settings.costs.engine_record,     # P5: the versioned engine cost of record
                               # demo non-gold fill audit 2026-11-03: the cost and the planned risk count commission
                               commission_per_lot_side_usd=settings.costs.commission_per_lot_side_usd.get(acc.broker,

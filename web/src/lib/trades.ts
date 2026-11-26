@@ -48,6 +48,7 @@ export const EVIDENCE_WORDS: Record<Evidence, string> = {
   counted: "counted toward the read", excluded: "excluded", censored: "censored (closed by something other than its own exit)",
   pending: "open: counts once it closes", not_evidence: "not research evidence",
   learning_cohort: "demo learning cohort: not research evidence",
+  explore_sample: "model exploration sample: not research evidence",
 };
 
 /** The ledger's sources in words: what is missing (never zero) when one can't be read. */

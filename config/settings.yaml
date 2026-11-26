@@ -345,6 +345,8 @@ research:
                                      #   no-model AND the random control net of costs; thresholds are module constants
     enabled: true                    # off: a `disabled` run row, every active model demoted, health self_retrain WARNs
     serve: true                      # a gate-passing model becomes ACTIVE (demo entry filter only; drop, never add)
+    shadow_score: true               # ADR 0101: every active/shadow model scores each candidate of its arm off the
+                                     #   tick, logged (exploration_model_scores, meta_p); never gates an entry
   lot_fit_equity: 1000               # H-27 lot-fit overlay (research/lot_fit.py, opt-in, reporting only): the account the
   lot_fit_acct_per_usd: 0.75         #   research sizes trades for, in its currency; GBP per USD (GBPUSD ~1.33), a research
                                      #   assumption (the engine reads the broker's figure). Trades the gate would refuse
@@ -481,6 +483,9 @@ research:
                                      #   card's measured uniqueness or its hold_days, not a setting (quant Q3)
     rho_day_le_60m: 0.25             # quant Q1: rho_day for labels of <= 60 min = max(0.05, upper 95 % CI of the day-clustered
                                      #   ICC on other families' learn candidates); 0.25 (the prior) until that is measured
+    rho_day_measurement_sha256: null # sha256 of that file, pinned (code review of #466); both null at 0.25
+    rho_day_measurement: null        # D-12 ruling (c): a value < 0.25 above is refused unless this names the committed
+                                     #   measurement (docs/research/rho-measurement-2026-11.json; config.check_rho_measurement)
     rho_instrument: 0.5              # PRIOR: cross-instrument same-day correlation of a pooled family
     rho_instrument_metals: 0.7       # PRIOR: the same when >= half the pooled instruments are XAU/XAG/XPT/XPD
     sims: 20000                      # joint-power Monte Carlo draws (seeded)

@@ -320,6 +320,15 @@ __all__ = ["CRITERION_VERSION", "EXPLORATION_SCOPE", "PROBE_SCOPE", "SCOPES", "E
            "screen", "span_ref", "spans_of", "unresolved"]
 
 
+# Fill evidence classes that are never an edge read, a ranking, a class figure or an arm's n: a demo learning cohort
+# fill (ADR 0095 quant C2) and a model-gate exploration sample fill (ADR 0098 section 3, ADR 0101). Every reader
+# tests membership here, never a literal (tests/test_shadow_scoring.py guards it)
+NOT_EDGE_EVIDENCE: tuple[str, ...] = ("learning_cohort", "explore_sample")
+# ... and the ones that never feed a money or kill stop (H-81 cost stop, H-61 unit stop): the cohort only. A sample's
+# P&L is real demo money taken on the arm's behalf, so it counts toward the arm's stops (trading-safety F2, #463)
+NOT_STOP_EVIDENCE: tuple[str, ...] = ("learning_cohort",)
+
+
 def unlimited_market_state(r: Any) -> bool:
     """ADR 0097: a fill a capped account could not have had, because of the market's state: sent on the unlimited
     epoch (`limits_epoch`) in a news shock, or with a market-state reason a capped account would have refused it for

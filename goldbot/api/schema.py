@@ -1012,7 +1012,9 @@ ExitReason = Literal["target", "stop", "trail", "time_limit", "friday_cut", "man
 # counted: admissible toward its arm's read; excluded: void as evidence (quarantine); censored: closed by anything but
 # its own stop, target or hold; pending: still open; not_evidence: a strategy, real, probe or shadow trade;
 # learning_cohort: a demo learning cohort fill (ADR 0095): listed, never in a ranking, a read, the board or a class
-TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence", "learning_cohort"]
+# explore_sample: a model-gate exploration sample fill (ADR 0101, ADR 0098 section 3): listed like a cohort fill
+TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence", "learning_cohort",
+                        "explore_sample"]
 TradeStatus = Literal["open", "closed"]
 TradeSource = Literal["shadow", "positions", "probes", "exploration", "orders"]
 TradeListPeriod = Literal["today", "7d", "30d", "all"]

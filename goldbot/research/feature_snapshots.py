@@ -96,6 +96,13 @@ class Snapshot(FrozenRecord):
         return "nominal" if self.nominal_minutes else "written"
 
 
+def vector_sha256(snap: Snapshot) -> str:
+    """A vector's content address (`exploration_feature_vectors.sha256`): SHA-256 of its feature version and its
+    values as sorted JSON. The engine's shadow scorer stores the same hash, so engine-vs-snapshot parity is a join."""
+    body = json.dumps(snap.features, sort_keys=True)
+    return hashlib.sha256(f"{snap.feature_version}|{body}".encode()).hexdigest()
+
+
 def _num(v: Any) -> float | None:
     try:
         f = float(v)
@@ -232,7 +239,7 @@ def _write(db: Database, rows: list[Row], as_of: pd.Timestamp) -> int:
             sha = avail = pit = nominal = None
             if snap is not None:
                 body = json.dumps(snap.features, sort_keys=True)
-                sha = hashlib.sha256(f"{snap.feature_version}|{body}".encode()).hexdigest()
+                sha = vector_sha256(snap)
                 avail = int(epoch_ns(pd.DatetimeIndex([snap.available_utc_max]))[0])
                 pit, nominal = snap.pit, snap.nominal_minutes
                 conn.execute("INSERT OR IGNORE INTO exploration_feature_vectors (sha256, feature_version, n_columns, "

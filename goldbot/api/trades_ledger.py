@@ -40,7 +40,7 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Final, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 
 import pandas as pd
 from pydantic import PrivateAttr
@@ -83,6 +83,7 @@ from goldbot.ops.class_breakdown import (
 )
 from goldbot.ops.report_days import day_bounds, report_day
 from goldbot.research.attribution import family_of
+from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE
 from goldbot.telegram import labs
 from goldbot.telegram.entry_text import account_name
 
@@ -351,9 +352,6 @@ def exploration_records(state_dir: str | Path) -> dict[str, ExplorationRecord]:
     return {arm_trade_id(t): t for t in recs}
 
 
-COHORT_EVIDENCE: Final = "learning_cohort"   # `engine.exploration_cohort.EVIDENCE_CLASS` (ADR 0095)
-
-
 def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow:
     info = ctx.cat.arm(t.arm_id)
     family = info.family if info is not None else (t.family or "unknown")
@@ -370,10 +368,10 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
     evidence: TradeEvidence
     if not closed or t.pnl is None:
         evidence = "pending"
-    elif t.evidence_class == COHORT_EVIDENCE:
-        # ADR 0095 (quant C2): a demo learning cohort fill is execution evidence of a retired arm: listed, never in a
-        # ranking, a read's n or the board's n
-        evidence = COHORT_EVIDENCE
+    elif t.evidence_class in NOT_EDGE_EVIDENCE:
+        # ADR 0095 (quant C2): a demo learning cohort fill is execution evidence of a retired arm, and ADR 0101 a
+        # model-gate exploration sample: listed, never in a ranking, a read's n or the board's n
+        evidence = cast(TradeEvidence, t.evidence_class)   # each is a TradeEvidence value (tests/test_shadow_scoring)
     elif t.client_order_id in voids:
         evidence = "excluded"
     elif t.censored:
@@ -883,7 +881,7 @@ def class_fills(rows: Sequence[TradeRow], void: Collection[str] = ()) -> list[Cl
     fills = []
     for r in rows:
         if (r.status != "closed" or r.exit_utc is None or r.kind == "shadow"
-                or r.evidence in ("excluded", COHORT_EVIDENCE)
+                or r.evidence == "excluded" or r.evidence in NOT_EDGE_EVIDENCE
                 or (r.kind in ("exploration", "control") and order_id(r) in void)):
             continue
         c = cls.get(r.symbol)
