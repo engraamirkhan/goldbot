@@ -17,8 +17,12 @@ which copies it in.
 The trainer hook is one call per fit:
 
     art, m = run_manifest.fit_and_record("pkg.mod:build", model=..., family="A", data_version=..., data_root=...,
-                                         data_files=[...], settings=..., seeds=[...], train_end=...,
-                                         scaler_fit_end=..., quality=[...], root=...)
+                                         data_files=[...], settings=..., manifest_key=..., served="ensemble",
+                                         unit=..., fold_keys=[...], train_end=..., scaler_fit_end=...,
+                                         label_end_max=..., quality=[...], root=...)
+
+where the seeds are `model_quality.seed_list(manifest_key)` (quant Q1: fixed before the first fit, every seed fitted
+is recorded) and `label_end_max` is the latest label horizon end among the training rows (quant Q4).
 
 which runs the builder exactly as `rebuild` will (one BLAS/OpenMP thread), or, when the trainer fits by itself,
 `run_manifest.record(model=..., artifact=<bytes>, ...)`. A builder is a pure `Callable[[BuildSpec], bytes]`.
@@ -44,7 +48,7 @@ import pandas as pd
 from pydantic import Field, field_validator, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp, write_atomic
-from goldbot.research.model_quality import ModelFamily, QualityVerdict
+from goldbot.research.model_quality import MIN_SEEDS, ModelFamily, QualityVerdict, Served, seed_list
 
 __all__ = ["BuildSpec", "DEFAULT_ROOT", "ManifestError", "RebuildMismatch", "RebuildRefused", "RunManifest", "Schedule",
            "build", "code_state", "file_sha256", "fit_and_record", "load", "lock_hash", "record", "rebuild", "resolve",
@@ -147,6 +151,10 @@ class RunManifest(FrozenRecord):
     created_utc: UtcTimestamp
     model: str = Field(min_length=1)                 # learner name, e.g. "sr-v3:GBT-slow", "seq1:tcn"
     family: ModelFamily                              # ADR 0106 decision 3
+    manifest_key: str = Field(min_length=1)          # fixes the seeds: seeds == model_quality.seed_list(manifest_key)
+    served: Served                                   # declared before fitting: the seeds' ensemble or seed index 0
+    unit: str = ""                                   # the trained unit, e.g. "XAUUSD:15m" (the baseline must match)
+    fold_keys: list[str] = Field(default_factory=list)   # walk-forward folds (the baseline must match)
     spec_id: str = ""                                # the card / pre-registration the fit belongs to
     schedule: Schedule = "adhoc"
     data_version: str = Field(min_length=1)          # dataset version id or tiers sha (data/dataset_version)
@@ -158,7 +166,8 @@ class RunManifest(FrozenRecord):
     code_dirty: bool
     uv_lock_hash: str = Field(pattern=_HEX64)
     runtime: dict[str, str]
-    train_end: UtcTimestamp                          # the last label/decision instant the fit used
+    train_end: UtcTimestamp                          # the last decision instant the fit used
+    label_end_max: UtcTimestamp                      # the latest label horizon end among the training rows
     scaler_fit_end: UtcTimestamp                     # the last instant any fitted transform saw (<= train_end)
     artifact_sha256: str = Field(pattern=_HEX64)
     builder: str | None = Field(None, pattern=r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
@@ -179,6 +188,9 @@ class RunManifest(FrozenRecord):
         if self.scaler_fit_end > self.train_end:
             raise ValueError(f"scaler_fit_end {self.scaler_fit_end} is after train_end {self.train_end}: a transform "
                              "saw data the model may not (normalise with past data only)")
+        if self.seeds != seed_list(self.manifest_key, len(self.seeds)):
+            raise ValueError("seeds are not model_quality.seed_list(manifest_key): the seeds are fixed by the key "
+                             "before the first fit, every seed fitted is recorded, none is chosen after reading")
         if settings_hash(self.settings) != self.settings_hash:
             raise ValueError("settings_hash does not match the settings")
         if _id_of(self) != self.manifest_id:
@@ -210,6 +222,8 @@ def load(manifest_id: str, root: Path | str = DEFAULT_ROOT) -> RunManifest:
         doc = json.loads(p.read_text())
     except (OSError, ValueError) as exc:
         raise ManifestError(f"manifest {manifest_id[:12]} cannot be read from {p}: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ManifestError(f"{p} is not a JSON object (trading-safety H1 on #494): refused")
     if doc.get("manifest_id") != manifest_id:
         raise ManifestError(f"{p} names manifest {str(doc.get('manifest_id'))[:12]}, not {manifest_id[:12]}")
     try:
@@ -240,17 +254,22 @@ def _utc(t: pd.Timestamp) -> str:
 
 
 def record(*, model: str, family: ModelFamily, artifact: bytes, data_version: str, settings: Mapping[str, Any],
-           seeds: Sequence[int], train_end: pd.Timestamp, scaler_fit_end: pd.Timestamp,
-           data_files: Mapping[str, str] | None = None, builder: str | None = None,
+           manifest_key: str, served: Served, train_end: pd.Timestamp, scaler_fit_end: pd.Timestamp,
+           label_end_max: pd.Timestamp, seeds: Sequence[int] | None = None, unit: str = "",
+           fold_keys: Sequence[str] = (), data_files: Mapping[str, str] | None = None, builder: str | None = None,
            results: Mapping[str, Any] | None = None, quality: Sequence[QualityVerdict] = (),
            schedule: Schedule = "adhoc", spec_id: str = "", root: Path | str = DEFAULT_ROOT, repo: Path | str = ROOT,
            now: pd.Timestamp | None = None) -> RunManifest:
-    """Record the run that produced `artifact` (its exact bytes) and store the manifest under `root`. Fails loudly
-    (ManifestError, ValueError) rather than record a manifest that could not rebuild the model."""
+    """Record the run that produced `artifact` (its exact bytes) and store the manifest under `root`. `seeds`
+    defaults to `seed_list(manifest_key)` (MIN_SEEDS seeds); any other list is refused. Fails loudly (ManifestError,
+    ValueError) rather than record a manifest that could not rebuild the model."""
+    seeds = seed_list(manifest_key, MIN_SEEDS) if seeds is None else list(seeds)
     sha, dirty = code_state(repo)
     plain = json.loads(_canonical(dict(settings), "settings"))
     body: dict[str, Any] = {
         "created_utc": _utc(now or pd.Timestamp.now(tz="UTC")), "model": model, "family": family,
+        "manifest_key": manifest_key, "served": served, "unit": unit, "fold_keys": [str(k) for k in fold_keys],
+        "label_end_max": _utc(label_end_max),
         "spec_id": spec_id, "schedule": schedule, "data_version": data_version, "data_files": dict(data_files or {}),
         "settings": plain, "settings_hash": settings_hash(plain), "seeds": [int(s) for s in seeds], "code_sha": sha,
         "code_dirty": dirty, "uv_lock_hash": lock_hash(repo), "runtime": _runtime(),
@@ -304,18 +323,25 @@ def _spec(data_root: Path, files: Sequence[str] | Mapping[str, str], settings: M
 
 
 def fit_and_record(builder: str, *, model: str, family: ModelFamily, data_version: str, data_root: Path | str,
-                   data_files: Sequence[str], settings: Mapping[str, Any], seeds: Sequence[int],
-                   train_end: pd.Timestamp, scaler_fit_end: pd.Timestamp, results: Mapping[str, Any] | None = None,
+                   data_files: Sequence[str], settings: Mapping[str, Any], manifest_key: str, served: Served,
+                   train_end: pd.Timestamp, scaler_fit_end: pd.Timestamp, label_end_max: pd.Timestamp,
+                   seeds: Sequence[int] | None = None, unit: str = "", fold_keys: Sequence[str] = (),
+                   results: Mapping[str, Any] | None = None,
                    quality: Sequence[QualityVerdict] = (), schedule: Schedule = "adhoc", spec_id: str = "",
                    root: Path | str = DEFAULT_ROOT, repo: Path | str = ROOT,
                    now: pd.Timestamp | None = None) -> tuple[bytes, RunManifest]:
     """Fit through `builder` exactly as `rebuild` will, then `record` the run with each data file's sha256."""
     data_root = Path(data_root)
+    seeds = seed_list(manifest_key, MIN_SEEDS) if seeds is None else list(seeds)
+    if seeds != seed_list(manifest_key, len(seeds)):
+        raise ManifestError("seeds are not model_quality.seed_list(manifest_key)")
     shas = {f: file_sha256(data_root / f) for f in data_files}
     art = build(builder, _spec(data_root, data_files, settings, seeds, train_end, scaler_fit_end))
-    m = record(model=model, family=family, artifact=art, data_version=data_version, settings=settings, seeds=seeds,
-               train_end=train_end, scaler_fit_end=scaler_fit_end, data_files=shas, builder=builder, results=results,
-               quality=quality, schedule=schedule, spec_id=spec_id, root=root, repo=repo, now=now)
+    m = record(model=model, family=family, artifact=art, data_version=data_version, settings=settings,
+               manifest_key=manifest_key, served=served, seeds=seeds, train_end=train_end,
+               scaler_fit_end=scaler_fit_end, label_end_max=label_end_max, unit=unit, fold_keys=fold_keys,
+               data_files=shas, builder=builder, results=results, quality=quality, schedule=schedule,
+               spec_id=spec_id, root=root, repo=repo, now=now)
     return art, m
 
 

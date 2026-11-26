@@ -46,14 +46,30 @@ with the artefacts they describe.
 7. **Rollback** of a registry model is one command: `python -m goldbot.ops.run rollback-model <agent_id>`; refused when
    there is no previous champion or when the previous one would not serve.
 
+8. **Review rulings folded in (PR #494).** Quant Q1: seeds are `seed_list(manifest_key)` (sha256(key|i) mod 2^31),
+   all recorded, `served` (seed ensemble or seed 0) declared before fitting. Q2: `beats_baseline` reads the learn-window
+   walk-forward OOF rows (confirm/test_old only under a booked read id), against the unit's C-family manifest with the
+   same `train_end` and fold keys, mean block max(5, ceil(1.5 x the longest label horizon in session days)), B >= 10,000,
+   each read a registry trial (K +1), Holm across the unit's A/B/D reads of a cycle (`holm_adjust`); only a Holm pass
+   serves. Q3: every verdict carries the rows_key of the same OOF rows. Q4: manifests record `label_end_max`; the
+   monthly job refuses one at or past the window end. Trading-safety H1: a serving check never raises (any failure is
+   a refusal of that one model) and the engine's model reload catches every error. M1: `monthly_trainers` is refused
+   while non-empty until the job runs trainers in a niced, budgeted, killable child. L1: a CUSUM alarm never restores a
+   previous model that would not serve; the alarmed champion is retired and health `model_watch` fails. Code review:
+   rollback-model runs under a registry file lock and keeps the demoted champion as `previous` (roll forward with the
+   same command); a recalibration keeps the fitted sha in its first record; threadpoolctl is a declared dependency.
+
 ## Consequences
-- A model trained after 2026-11-27 without a manifest does not reach the engine. The retired specialist retrain, if
-  re-enabled, must record a manifest first.
+- A model trained after 2026-11-27 without a manifest does not reach the engine. Before `specialist_retrain` is
+  re-enabled, `saturday_retrain` must call `run_manifest.fit_and_record`, and health needs a WARN counting models refused
+  for serving (trading-safety M2).
 - `engine/shadow_scoring` (self_retrain_models in aux.db, where sr-v3 and seq models are expected to serve) does not
   read the registry; its loader must call `model_quality.require_servable` in the hook PR that admits a new spec
   (trading-safety review). Until then the rule covers the registry path only.
-- The monthly job runs on the scheduler's single thread: a trainer listed there must bound its own run (a niced child
-  with a budget, as discovery_nightly does) before it is added.
+- The monthly job runs on the scheduler's single thread, so settings refuse any trainer until the job runs each one in
+  a niced child with a budget and a kill (as discovery_nightly does).
+- Only rollback-model takes the registry lock; the other registry writers (engine rule challengers, the weekly jobs)
+  do not yet.
 - Byte-identical rebuilds hold on the same platform and lock; a rebuild on another CPU architecture may differ in the
   last float bits, and the mismatch message names the runtime difference.
 - Rebuilds read data files by path and sha256; a data file deleted or rewritten later makes the model unrebuildable,
