@@ -33,7 +33,12 @@ read once, winner only (`windows.allow_test_old_for`, CONFIRM-SEEN rule)".
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+import logging
+import os
+import sys
+import time
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -43,6 +48,44 @@ import pandas as pd
 
 from goldbot.data.holdout_guard import HOLDOUT_START, HoldoutSealed
 from goldbot.data.release import BAR_FILE_PREFIX, read_bar_files
+
+log = logging.getLogger(__name__)
+
+# The read ledger's lock (code review LOW-1 on PR #478): flock on POSIX, msvcrt.locking on byte 0 on Windows (the VPS
+# runs goldbot natively; as data/store.py). Neither available: a ledger write refuses (`LedgerLockUnavailable`).
+if sys.platform == "win32":                # pragma: no cover - exercised on the Windows VPS
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                time.sleep(0.01)
+
+    def _unlock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:
+    try:
+        import fcntl
+    except ImportError:                    # pragma: no cover - a platform with neither lock
+        fcntl = None  # type: ignore[assignment]
+
+    def _lock_fd(fd: int) -> None:
+        if fcntl is None:
+            raise LedgerLockUnavailable("no fcntl on this platform: the read ledger cannot be locked")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _unlock_fd(fd: int) -> None:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+class LedgerLockUnavailable(RuntimeError):
+    """The platform offers no file lock: a read-once ledger is never written unlocked."""
 
 
 class Window(StrEnum):
@@ -191,19 +234,106 @@ READ_ONCE_FAMILIES: dict[str, frozenset[Window]] = {
 READS_LEDGER = "window_reads.jsonl"     # beside the research registry (state/), never committed
 
 
+class LedgerCorrupt(ValueError):
+    """A read ledger line before the last one does not parse: the ledger is refused, never guessed around."""
+
+
+def _tail_row(torn: str) -> dict[str, Any] | None:
+    """An unterminated final line that parses as a JSON object is a complete row whose newline was lost."""
+    try:
+        v = json.loads(torn)
+    except json.JSONDecodeError:
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def parse_ledger(text: str, *, where: str = "ledger") -> list[dict[str, Any]]:
+    """The rows of a JSONL read ledger. Every newline-terminated line must parse (`LedgerCorrupt` otherwise). An
+    unterminated final line that parses as a JSON object is a real row (its newline was lost) and counts; only an
+    unparsable final fragment (a writer that died mid-write) is left out and reported (code review MEDIUM-1 on
+    PR #478: a recorded read never disappears)."""
+    parts = text.split("\n")
+    torn = parts.pop()                      # "" when the text ends with a newline
+    rows = []
+    for i, line in enumerate(parts):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise LedgerCorrupt(f"{where}: line {i + 1} does not parse: {exc}") from None
+    if torn.strip():
+        row = _tail_row(torn)
+        if row is not None:
+            rows.append(row)
+        else:
+            log.warning("%s: an unparsable unterminated final line (%d bytes) was left out: a torn write", where,
+                        len(torn))
+    return rows
+
+
+def read_ledger(path: Path | str) -> list[dict[str, Any]]:
+    p = Path(path)
+    return parse_ledger(p.read_text(encoding="utf-8"), where=str(p)) if p.exists() else []
+
+
+@contextmanager
+def locked_ledger(path: Path | str) -> Iterator[int]:
+    """An O_APPEND descriptor on the ledger under an exclusive lock, for read-check-append. An unterminated final
+    line that parses as a JSON object gets its newline (it stays a row); an unparsable one is moved to
+    `<ledger>.torn` and cut, so it never becomes a middle line."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(p, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+    locked = False
+    try:
+        _lock_fd(fd)
+        locked = True
+        data = p.read_bytes()
+        if data and not data.endswith(b"\n"):
+            keep = data.rfind(b"\n") + 1
+            tail = data[keep:].decode("utf-8", errors="replace")
+            if _tail_row(tail) is not None:
+                _write_all(fd, b"\n")
+            else:
+                with open(p.with_name(p.name + ".torn"), "ab") as fh:
+                    fh.write(data[keep:] + b"\n")
+                os.ftruncate(fd, keep)
+                log.warning("%s: a torn final line (%d bytes) moved to %s.torn", p, len(data) - keep, p.name)
+        yield fd
+    finally:
+        if locked:
+            _unlock_fd(fd)
+        os.close(fd)
+
+
+def _write_all(fd: int, buf: bytes) -> None:
+    """One os.write of `buf`; a short write is cut back to the size before it and raises (never a partial row)."""
+    before = os.fstat(fd).st_size
+    try:
+        n = os.write(fd, buf)
+    except OSError:
+        os.ftruncate(fd, before)
+        raise
+    if n != len(buf):
+        os.ftruncate(fd, before)
+        raise OSError(f"short write to the read ledger ({n} of {len(buf)} bytes): cut back, nothing recorded")
+    os.fsync(fd)
+
+
+def append_row(fd: int, row: Mapping[str, Any]) -> None:
+    """One row, one os.write on the O_APPEND descriptor (all of it or nothing), then fsync."""
+    _write_all(fd, (json.dumps(row, default=str) + "\n").encode("utf-8"))
+
+
 def reads_of(ledger: Path | str, family: str) -> set[Window]:
     """The read-once windows `family` has already read according to `ledger` (a missing ledger holds none)."""
-    p = Path(ledger)
-    if not p.exists():
-        return set()
-    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+    rows = read_ledger(ledger)
     return {Window(r["window"]) for r in rows if r.get("family") == family}
 
 
 def _rows_of(ledger: Path, family: str, window: Window) -> list[dict[str, Any]]:
-    if not ledger.exists():
-        return []
-    rows = [json.loads(x) for x in ledger.read_text().splitlines() if x.strip()]
+    rows = read_ledger(ledger)
     return [r for r in rows if r.get("family") == family and r.get("window") == window.value]
 
 
@@ -220,15 +350,14 @@ def record_read_once(ledger: Path | str, family: str, window: Window | str, *, r
     if w not in READ_ONCE_FAMILIES.get(family, frozenset()):
         raise ValueError(f"{family!r} has no read-once registration for {w.value} (windows.READ_ONCE_FAMILIES)")
     p = Path(ledger)
-    prior = _rows_of(p, family, w)
-    status = "started"
-    if prior:
-        resumable = (len(prior) == 1 and resume_key is not None and prior[0].get("key") == resume_key)
-        if not resumable:
-            raise AlreadyRead(f"{family!r} already read {w.value}: read once (one resume by the same run only)")
-        status = "resumed"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    row = {"family": family, "window": w.value, "status": status, "key": resume_key,
-           "ts": pd.Timestamp.now(tz="UTC").isoformat(), "ref": dict(ref)}
-    with open(p, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, default=str) + "\n")
+    with locked_ledger(p) as fd:            # read, check and append under one exclusive lock (LOW-A, LOW-B)
+        prior = _rows_of(p, family, w)
+        status = "started"
+        if prior:
+            resumable = (len(prior) == 1 and resume_key is not None and prior[0].get("key") == resume_key)
+            if not resumable:
+                raise AlreadyRead(f"{family!r} already read {w.value}: read once (one resume by the same run only)")
+            status = "resumed"
+        row = {"family": family, "window": w.value, "status": status, "key": resume_key,
+               "ts": pd.Timestamp.now(tz="UTC").isoformat(), "ref": dict(ref)}
+        append_row(fd, row)

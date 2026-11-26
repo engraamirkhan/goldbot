@@ -83,6 +83,24 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        passes, and one bar less fails on some seed.
      - `tests/test_feature_lookback_ewm.py` keeps the feature-level lookbacks at or above their 1 %-weight EWM
        horizon.
+   - **Appended by the quant sign-off of #472 (verbatim).** "The truncation measurement uses two perturbations of
+     every bar older than L, and L is the larger of the two lookbacks: (i) the continuous 3×-volatility replacement
+     path; (ii) a discontinuous error: every older bar shifted by +5 × the fixture's median bar range, with 1 % of
+     those bars replaced by spikes of ±20 × the median range. `measure` declares L on 32 seeds. The CI test
+     (`tests/test_column_lookbacks.py`) re-checks pass and tightness on 8 of them. Declared lookbacks never shrink
+     without a quant re-review. Counts are re-run after the change."
+     - A spike bar is displaced whole, open to close, by a random sign.
+     - Tightness looks for the bar-just-inside failure on the 8 CI seeds first, then on the rest of the 32, because
+       the seed that binds L can be any of them.
+     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`, floor sha256
+       b5505ff75cb9f314dd785bb59f30dc6ff214b61a2db05829c63fa874f13f7166. A test pins this sha, so the floor changes
+       only together with this ADR.
+     - A declared lookback below the floor needs a marker in `registry.COLUMN_LOOKBACK_REREVIEW` (code review LOW-3
+       on #478):
+       - the marker carries a "PR #N" or "ADR NNNN" reference;
+       - it carries the newly signed value for every floor tf, and the declaration must equal it;
+       - a marker with no value below the floor is stale and fails.
+     - Against the base branch (when the checkout has it), no floor value may go down without such a marker.
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
@@ -100,6 +118,20 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
    - Every load under a `booked_read` appends a consumption row (id, columns, label spec hash, keys, ts) to the
      ledger. The first consumption fixes the columns, the spec hash and the keys. A later load under the same id
      with any of them different raises (quant C-4).
+     - Columns are compared as a set (`sorted(columns)`), so their order does not matter.
+     - The keys bind one (instrument, tf, years) per booked id.
+     - Read, check and append run under an exclusive `fcntl.flock`. Each row is one `os.write` on an O_APPEND
+       descriptor followed by fsync (code review LOW-A on #472), so two concurrent first loads cannot both be
+       first.
+     - Read-once fails closed (code review MEDIUM-1 on #478):
+       - A write is complete or nothing: a short `os.write` is cut back to the size before it, and it raises.
+       - An unterminated final line that parses as a JSON object is a real row (its newline was lost). It counts,
+         and the next append gives it its newline.
+       - Only an unparsable final fragment is reported and moved to `<ledger>.torn`.
+       - A malformed line before the last one refuses the ledger (LOW-B).
+       - `windows.record_read_once` uses the same reader, lock and write.
+     - The lock is `fcntl.flock` on POSIX and `msvcrt.locking` on byte 0 on Windows, as `data/store.py` does (LOW-1).
+       With neither available, a ledger write raises; it is never done unlocked.
    - It refuses:
      - a read without tiers or without `columns`;
      - a sealed store;

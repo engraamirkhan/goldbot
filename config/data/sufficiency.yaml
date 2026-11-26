@@ -18,15 +18,15 @@ units:
     items: [D-1, D-2, D-3, D-4, D-5gold]
     # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
     # phase 0, `tfs` order (2h: no bar rule), judged head T2 after tier survival under the D-1 served tiers (sha256
-    # ff653ea7) with each column set's input lookback (per-column registry lookbacks proved by truncation; d1 in daily bars).
+    # ff653ea7) with each column set's input lookback (per-column registry lookbacks, two perturbations, 32 seeds; d1 in daily bars).
     # Outcome-blind skeleton counts; the label store stays sealed until ADR 0085 A4 records the sha. learn/judge above
     # stay the D-1 count until then. test_old labels: sealed, counts only.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      learn_T2_core6: [5226, 3847, 2708, 1644, 1068, null, 123, 0, 0]
-      learn_T2_core12: [5226, 3847, 2708, 1644, 1068, null, 123, 0, 0]
-      learn_T2_P30: [2316, 1743, 1317, 896, 711, null, 123, 0, 0]
+      learn_T2_core6: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+      learn_T2_core12: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+      learn_T2_P30: [2151, 1617, 1222, 831, 660, null, 123, 0, 0]
       learn_untiered: [7338, 5523, 4179, 2851, 2271, null, 604, 298, 208]
       test_old_T2_core6: [157, 104, 56, 13, 0, null, 0, 0, 0]
       test_old_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
@@ -43,9 +43,9 @@ units:
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      EURUSD_learn_T2_core6: [6996, 5239, 3907, 2607, 1968, null, 422, 36, 0]
-      EURUSD_learn_T2_core12: [6996, 5239, 3907, 2607, 1968, null, 422, 36, 0]
-      EURUSD_learn_T2_P30: [5753, 4331, 3278, 2235, 1769, null, 422, 36, 0]
+      EURUSD_learn_T2_core6: [6996, 5238, 3907, 2607, 1968, null, 422, 35, 0]
+      EURUSD_learn_T2_core12: [6996, 5238, 3907, 2607, 1968, null, 422, 35, 0]
+      EURUSD_learn_T2_P30: [5644, 4247, 3214, 2191, 1734, null, 422, 35, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:
     label: "Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close)"

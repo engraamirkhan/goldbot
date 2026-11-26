@@ -297,8 +297,10 @@ def test_confirm_and_test_old_need_a_booked_read(tmp_path: Path, monkeypatch: py
     assert len(got) and meta["booked_read"] == "read-1"
     rows = [json.loads(x) for x in ledger.read_text().splitlines()]
     cons = [r for r in rows if r.get("type") == "consumption"]
-    assert len(cons) == 1 and cons[0]["columns"] == list(CORE6) and cons[0]["keys"] == {"2018:0": k18}
+    assert len(cons) == 1 and cons[0]["columns"] == sorted(CORE6) and cons[0]["keys"] == {"2018:0": k18}
     load(2018, k18, confirm, read="read-1", frozen="frozen-1")          # the same consumption again: allowed
+    load(2018, k18, confirm, read="read-1", frozen="frozen-1",
+         columns=tuple(reversed(CORE6)))                                 # column order does not matter (a set)
     with pytest.raises(PermissionError, match="first consumed"):        # C-4: P30 after core-6 under one id
         load(2018, k18, confirm, read="read-1", frozen="frozen-1", columns=D.COLUMN_SETS["P30"])
     # a learn read whose window ends past the learn end still drops every row reaching confirm
@@ -478,3 +480,84 @@ def test_reserve_weeks() -> None:
     r = D.iso_reserve(a, b)
     # ISO week of 2026-10-05 is 41 (odd: reserve), 2026-10-12 is 42
     assert r.tolist() == [False, True, False]
+
+
+def _race_consume(ledger: str, columns: list[str], start: Any, out: Any) -> None:
+    start.wait()
+    try:
+        D.consume(Path(ledger), "race-1", columns=columns, label_spec_hash="h", keys={"2018:0": "k"})
+        out.put("ok")
+    except PermissionError:
+        out.put("refused")
+
+
+@pytest.mark.parametrize("locked", [True, False], ids=["with-lock", "lock-removed"])
+def test_consume_is_atomic_across_processes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, locked: bool) -> None:
+    """Code review LOW-A / LOW-2: two processes consume one booked id with different column sets, and a barrier right
+    after each one's read of the ledger forces the interleaving (both read before either appends, unless the lock
+    keeps the second out). With the lock exactly one is accepted and one consumption row is written; with the lock
+    removed both are accepted, which is the race the lock prevents."""
+    import contextlib
+    import multiprocessing as mp
+    import os
+    import threading
+    from collections.abc import Iterator
+
+    from goldbot.research import windows as WN
+    ctx = mp.get_context("fork")
+    barrier = ctx.Barrier(2)
+    orig = D._consumptions
+
+    def read_then_wait(ledger: Path, read_id: str) -> list[dict[str, Any]]:
+        rows = orig(ledger, read_id)
+        with contextlib.suppress(threading.BrokenBarrierError):
+            barrier.wait(timeout=2.0)          # with the lock the other process never gets here: timeout, go on
+        return rows
+
+    @contextlib.contextmanager
+    def no_lock(path: Path | str) -> Iterator[int]:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            yield fd
+        finally:
+            os.close(fd)
+
+    monkeypatch.setattr(D, "_consumptions", read_then_wait)
+    if not locked:
+        monkeypatch.setattr(WN, "locked_ledger", no_lock)
+    ledger = tmp_path / "window_reads.jsonl"
+    start, out = ctx.Event(), ctx.Queue()
+    ps = [ctx.Process(target=_race_consume, args=(str(ledger), cols, start, out))
+          for cols in (list(CORE6), list(D.COLUMN_SETS["P30"]))]
+    for p in ps:
+        p.start()
+    start.set()
+    for p in ps:
+        p.join(30)
+    got = sorted(out.get(timeout=5) for _ in ps)
+    rows = [json.loads(x) for x in ledger.read_text().splitlines()]
+    n_cons = sum(r.get("type") == "consumption" for r in rows)
+    if locked:
+        assert got == ["ok", "refused"] and n_cons == 1
+    else:
+        assert got == ["ok", "ok"] and n_cons == 2
+
+
+def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
+    """Code review LOW-B: one unparsable unterminated final line is left out and reported (and cut before the next
+    append); a malformed line in the middle refuses the ledger. The windows read-once ledger shares the reader."""
+    from goldbot.research import windows as WN
+    ledger = tmp_path / "window_reads.jsonl"
+    good = '{"family": "sr_v3", "window": "confirm", "status": "started", "key": "r", "ref": {"spec_hash": "s"}}'
+    ledger.write_text(good + "\n" + '{"type": "consumption", "id": "r", "colu')
+    assert len(WN.read_ledger(ledger)) == 1
+    assert D.booked(ledger, "r", "s")["key"] == "r"
+    D.consume(ledger, "r", columns=list(CORE6), label_spec_hash="h", keys={"2018:0": "k"})
+    rows = WN.read_ledger(ledger)
+    assert len(rows) == 2 and rows[-1]["type"] == "consumption"
+    assert (tmp_path / "window_reads.jsonl.torn").exists()
+    ledger.write_text(good + "\n" + "not json\n" + good + "\n")
+    with pytest.raises(WN.LedgerCorrupt):
+        WN.read_ledger(ledger)
+    with pytest.raises(WN.LedgerCorrupt):
+        D.booked(ledger, "r", "s")
