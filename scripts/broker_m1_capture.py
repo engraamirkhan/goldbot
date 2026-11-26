@@ -28,6 +28,9 @@ from pathlib import Path
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from goldbot.data import holdout_guard  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 START = "2026-10-01"
 REMOTE = """
@@ -51,7 +54,9 @@ def pull(ssh: list[str], account: str, start: str) -> pd.DataFrame:
     r = subprocess.run(cmd, input=REMOTE.encode(), capture_output=True, timeout=900)
     if r.returncode != 0:
         raise RuntimeError(f"{account}: remote read failed: {r.stderr.decode()[-300:]}")
-    return pd.read_parquet(io.BytesIO(r.stdout))
+    b = pd.read_parquet(io.BytesIO(r.stdout))
+    holdout_guard.refuse(b, what=f"broker M1 capture {account}")    # forward minutes only: a holdout row is refused
+    return b
 
 
 def gaps(ts: pd.Series) -> list[dict[str, object]]:

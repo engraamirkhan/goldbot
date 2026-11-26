@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from goldbot.data.holdout_guard import HOLDOUT_START
+
 TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 HOLD_MIN = {"1m": 60, "5m": 240, "15m": 480, "30m": 960, "1h": 1380}
 HOLD_DAYS = {"2h": 2, "4h": 5, "1d": 10, "1w": 20}
@@ -76,6 +78,7 @@ def main() -> int:
     ap.add_argument("--tiers", type=Path, required=True)
     a = ap.parse_args()
     t = pd.read_csv(a.tiers, dtype={"month": str})
+    t = t[t["month"] < HOLDOUT_START.strftime("%Y-%m")]        # no sealed month is ever counted (holdout guard)
     res = counts(t)
     print(json.dumps({"tiers_sha256": hashlib.sha256(a.tiers.read_bytes()).hexdigest(), "method_check": {
         "gold_learn_2070_days": [n_eff(2070, 1, tf) for tf in TFS],

@@ -224,8 +224,7 @@ How each claim holds (2026-11-26):
   - Until that PR is deployed, this claim is not live.
 
 **Capture guard requirements (quant, on #471, 2026-11-26).**
-- **Freeze rule.** A closed month freezes once its 5-day deadline passes. Any later rewrite gets a new sha256 and an
-  entry in that month's gap log (and in rewrites.jsonl), and is graded only under the sha recorded in its tiers rows.
+- **Freeze rule (quant ruling on the freeze window, verbatim).** A closed month's copy must exist within 5 days of month-end (`learning:broker_m1_copy` FAILs otherwise). It stays rewritable until the broker back-fill window closes and freezes at day 8, after the last daily copy. No fallback-(ii) grade reads a month before it freezes; the grade records the frozen copy's sha256 in its tiers rows. A rewrite after the freeze gets a new sha256 and an entry in the gap log and `rewrites.jsonl`, and is graded only under the sha recorded in its tiers rows. If the feed_reconcile back-fill window changes, the freeze moves to (window + 1) days, in the same PR.
 - **Gate.** No fallback-(ii) grade runs until `learning:broker_m1_capture` has passed at least once on the brain after
   #471 is deployed.
 - **Deadline.** If #471 is not live by 2026-12-05, October and November are copied from the Mac by that date

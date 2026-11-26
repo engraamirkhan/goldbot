@@ -105,7 +105,7 @@ def cap(body: bytes, year: int) -> bytes:
     raw = lzma.decompress(body)
     rec = np.frombuffer(raw[: len(raw) // 24 * 24], dtype=REC)
     day = pd.Timestamp(f"{year}-01-01") + pd.to_timedelta(rec["sec"].astype("int64"), unit="s")
-    keep = np.asarray(day < CUT)
+    keep = np.asarray(day < HOLDOUT_START.tz_localize(None))     # the holdout guard: no sealed day is cached
     return body if keep.all() else lzma.compress(rec[keep].tobytes(), format=lzma.FORMAT_ALONE)
 
 
@@ -160,7 +160,7 @@ def daily_closes(code: str, cache: Path, pause: float) -> tuple[pd.Series, list[
     s = pd.concat(parts)
     s = s[~s.index.duplicated(keep="last")].sort_index()
     idx = pd.DatetimeIndex(s.index)
-    return s[(idx < CUT) & (idx.dayofweek < 5)], missing
+    return s[(idx < HOLDOUT_START.tz_localize(None)) & (idx.dayofweek < 5)], missing
 
 
 def _corr(a: pd.Series, b: pd.Series, lo: pd.Timestamp, hi: pd.Timestamp
